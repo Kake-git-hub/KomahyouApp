@@ -1,4 +1,4 @@
-import { getStudentDisplayName, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
+import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../App'
@@ -15,6 +15,7 @@ type SerializedStudent = {
 type SerializedTeacher = {
   id: string
   name: string
+  fullName?: string
   entryDate: string
   withdrawDate: string
   isHidden: boolean
@@ -190,7 +191,8 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
     students: [],
     teachers: params.teachers.map((teacher) => ({
       id: teacher.id,
-      name: teacher.name,
+      name: getTeacherDisplayName(teacher),
+      fullName: teacher.name,
       entryDate: teacher.entryDate,
       withdrawDate: teacher.withdrawDate,
       isHidden: teacher.isHidden,
@@ -1234,7 +1236,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const tableDensityClass = getTableDensityClass(dateHeaders);
         const teachers = DATA.teachers.filter((teacher) => isVisibleInRange(teacher, startDate, endDate)).sort((left, right) => left.name.localeCompare(right.name, 'ja'));
         pagesElement.innerHTML = teachers.map((teacher, index) => {
-          const entries = assignmentMap.get(teacher.name) || [];
+          const entries = assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
           const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
           const regularCounts = {};
           const lectureCounts = {};

@@ -1,6 +1,7 @@
 import { type ChangeEvent, type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../App'
 import {
+  deriveManagedDisplayName,
   type GradeCeiling,
   type ManagerRow,
   type StudentRow,
@@ -9,6 +10,7 @@ import {
   formatManagedDateValue,
   getReferenceDateKey,
   getStudentDisplayName,
+  getTeacherDisplayName,
   initialStudents,
   initialTeachers,
   isActiveOnDate,
@@ -236,6 +238,14 @@ function getStudentOptionLabel(student: StudentRow) {
   return getStudentDisplayName(student)
 }
 
+function getTeacherOptionLabel(teacher: TeacherRow) {
+  return getTeacherDisplayName(teacher)
+}
+
+function getPersonOptionLabel(person: TeacherRow | StudentRow) {
+  return 'birthDate' in person ? getStudentDisplayName(person) : getTeacherDisplayName(person)
+}
+
 function formatSummaryValue(value: string, fallback = '未設定') {
   return normalizeText(value) || fallback
 }
@@ -414,7 +424,7 @@ function createTemplateBundle(): BasicDataBundle {
 
 function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   const workbook = xlsx.utils.book_new()
-  const teacherNameById = Object.fromEntries(bundle.teachers.map((teacher) => [teacher.id, teacher.name]))
+  const teacherNameById = Object.fromEntries(bundle.teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const studentNameById = Object.fromEntries(bundle.students.map((student) => [student.id, getStudentDisplayName(student)]))
 
   xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.managers.map((row) => ({
@@ -424,6 +434,7 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
 
   xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.teachers.map((row) => ({
     名前: row.name,
+    表示名: getTeacherDisplayName(row),
     メール: row.email,
     入塾日: row.entryDate,
     退塾日: formatManagedDateValue(row.withdrawDate),
@@ -520,6 +531,7 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
         .map((row) => ({
           id: createId('teacher'),
           name: normalizeText(row['名前']),
+          displayName: normalizeText(row['表示名']) || deriveManagedDisplayName(normalizeText(row['名前'])),
           email: normalizeText(row['メール']),
           entryDate: normalizeDateString(row['入塾日'], xlsx),
           withdrawDate: normalizeText(row['退塾日']) || '未定',
@@ -535,7 +547,7 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
         .map((row) => ({
           id: createId('student'),
           name: normalizeText(row['名前']),
-          displayName: normalizeText(row['表示名']),
+          displayName: normalizeText(row['表示名']) || deriveManagedDisplayName(normalizeText(row['名前'])),
           email: normalizeText(row['メール']),
           entryDate: normalizeDateString(row['入塾日'], xlsx),
           withdrawDate: normalizeText(row['退塾日']) || '未定',
@@ -545,7 +557,11 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
         .filter((row) => row.name)
     : fallback.students
 
-  const teacherIdByName = new Map(teachers.map((teacher) => [teacher.name, teacher.id]))
+  const teacherIdByName = new Map<string, string>()
+  for (const teacher of teachers) {
+    teacherIdByName.set(teacher.name, teacher.id)
+    teacherIdByName.set(getTeacherDisplayName(teacher), teacher.id)
+  }
   const studentIdByName = new Map<string, string>()
   for (const student of students) {
     studentIdByName.set(student.name, student.id)
@@ -844,7 +860,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const selectableSchoolYears = useMemo(() => buildSelectableSchoolYears(currentSchoolYear), [currentSchoolYear])
 
   const [managerDraft, setManagerDraft] = useState({ name: '', email: '' })
-  const [teacherDraft, setTeacherDraft] = useState({ name: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[] })
+  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[] })
   const [teacherDraftExpanded, setTeacherDraftExpanded] = useState(false)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
   const [regularLessonDraft, setRegularLessonDraft] = useState(() => createRegularLessonDraft(currentSchoolYear))
@@ -866,7 +882,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     classroomData: createDefaultTableControl(),
   })
 
-  const teacherNameById = useMemo(() => Object.fromEntries(teachers.map((teacher) => [teacher.id, teacher.name])), [teachers])
+  const teacherNameById = useMemo(() => Object.fromEntries(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [teachers])
   const studentNameById = useMemo(() => Object.fromEntries(students.map((student) => [student.id, getStudentDisplayName(student)])), [students])
   const todayReferenceDate = useMemo(() => getReferenceDateKey(new Date()), [])
   const activeStudentRows = useMemo(
@@ -1056,7 +1072,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       onUpdateRegularLessons(imported.regularLessons)
       setGroupLessons(imported.groupLessons)
       setConstraints(imported.constraints)
-    setTeacherDraft({ name: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] })
+    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] })
     } catch {
       setStatusMessage('Excel 取り込みに失敗しました。シート名と列名を確認してください。')
     } finally {
@@ -1078,6 +1094,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       {
         id: createId('teacher'),
         name: teacherDraft.name.trim(),
+        displayName: teacherDraft.displayName.trim() || deriveManagedDisplayName(teacherDraft.name),
         email: teacherDraft.email.trim(),
         entryDate: teacherDraft.entryDate,
         withdrawDate: teacherDraft.withdrawDate.trim() || '未定',
@@ -1086,7 +1103,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         memo: teacherDraft.memo.trim(),
       },
     ])
-    setTeacherDraft({ name: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [] })
+    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [] })
     setTeacherDraftExpanded(false)
     setStatusMessage('講師を追加しました。')
   }
@@ -1286,9 +1303,9 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     const filteredTeachers = filterAndSortRows(
       visibleTeachers,
       tableControls.teachers,
-      (row) => [row.name, row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities), row.memo],
+      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities), row.memo],
       {
-        name: (row) => row.name,
+        name: (row) => getTeacherDisplayName(row),
         entryDate: (row) => row.entryDate,
         withdrawDate: (row) => formatManagedDateValue(row.withdrawDate),
         status: (row) => resolveTeacherStatusLabel(row),
@@ -1306,6 +1323,10 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
             <label className="basic-data-inline-field basic-data-inline-field-short">
               <span>名前</span>
               <input value={teacherDraft.name} onChange={(event) => setTeacherDraft((current) => ({ ...current, name: event.target.value }))} placeholder="講師名" data-testid="basic-data-teacher-draft-name" />
+            </label>
+            <label className="basic-data-inline-field basic-data-inline-field-short">
+              <span>表示</span>
+              <input value={teacherDraft.displayName} onChange={(event) => setTeacherDraft((current) => ({ ...current, displayName: event.target.value }))} placeholder="表示名" data-testid="basic-data-teacher-draft-display-name" />
             </label>
             <div className="basic-data-inline-editor-slot basic-data-inline-editor-slot-teacher">
               <button
@@ -1352,8 +1373,8 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
               filterValue={tableControls.teachers.filterText}
               sortKey={tableControls.teachers.sortKey}
               direction={tableControls.teachers.direction}
-              filterPlaceholder={teacherRosterView === 'active' ? '講師名・メール・科目で絞り込み' : '退塾講師を名前・メールで絞り込み'}
-              sortOptions={[{ value: 'name', label: '名前' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }]}
+              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目で絞り込み' : '退塾講師を名前・表示名・メールで絞り込み'}
+              sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }]}
               onFilterChange={(value) => updateTableControl('teachers', { filterText: value })}
               onSortKeyChange={(value) => updateTableControl('teachers', { sortKey: value })}
               onDirectionChange={(value) => updateTableControl('teachers', { direction: value })}
@@ -1364,7 +1385,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
             </div>
           </div>
           <table className="basic-data-table" data-testid="basic-data-teachers-table">
-            <thead><tr><th>名前</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>メモ</th><th>操作</th></tr></thead>
+            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>メモ</th><th>操作</th></tr></thead>
             <tbody>
               {filteredTeachers.map((row) => (
                 <tr key={row.id}>
@@ -1372,6 +1393,11 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                     {isRowEditing('teacher', row.id)
                       ? <input value={row.name} onChange={(event) => updateTeacher(row.id, { name: event.target.value })} data-testid={`basic-data-teacher-name-input-${row.id}`} />
                       : <span className="basic-data-cell-summary" data-testid={`basic-data-teacher-name-${row.id}`}>{row.name}</span>}
+                  </td>
+                  <td>
+                    {isRowEditing('teacher', row.id)
+                      ? <input value={row.displayName ?? ''} onChange={(event) => updateTeacher(row.id, { displayName: event.target.value })} data-testid={`basic-data-teacher-display-name-input-${row.id}`} />
+                      : <span className="basic-data-cell-summary">{getTeacherDisplayName(row)}</span>}
                   </td>
                   <td>
                     {isRowEditing('teacher', row.id)
@@ -1407,7 +1433,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   </td>
                 </tr>
               ))}
-              {filteredTeachers.length === 0 ? <tr><td colSpan={8} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
+              {filteredTeachers.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
@@ -1550,7 +1576,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
             <span>講師</span>
             <select value={regularLessonDraft.teacherId} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, teacherId: event.target.value }))} data-testid="basic-data-regular-draft-teacher">
               <option value="">講師未割当</option>
-              {activeTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
+              {activeTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
             </select>
           </label>
           <label className="basic-data-stack-field">
@@ -1665,7 +1691,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                     ? (
                         <select value={row.teacherId} onChange={(event) => updateRegularLesson(row.id, { teacherId: event.target.value })}>
                           <option value="">講師未割当</option>
-                          {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
+                          {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
                         </select>
                       )
                     : <span className="basic-data-static-field">{formatSummaryValue(teacherNameById[row.teacherId] ?? '', '講師未割当')}</span>}
@@ -1776,7 +1802,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         <div className="basic-data-form-row wrap">
           <select value={groupLessonDraft.teacherId} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, teacherId: event.target.value }))} data-testid="basic-data-group-draft-teacher">
             <option value="">講師未割当</option>
-            {activeTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
+            {activeTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
           </select>
           <select value={String(selectedGroupLessonYear)} onChange={(event) => setSelectedGroupLessonYear(Number(event.target.value))} data-testid="basic-data-group-year-select">
             {groupLessonYears.map((schoolYear) => <option key={schoolYear} value={schoolYear}>{formatSchoolYearLabel(schoolYear)}</option>)}
@@ -1854,7 +1880,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                 <td>
                   <select value={row.teacherId} onChange={(event) => updateGroupLesson(row.id, { teacherId: event.target.value })} disabled={!isRowEditing('group', row.id)}>
                     <option value="">講師未割当</option>
-                    {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
+                    {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
                   </select>
                 </td>
                 <td>
@@ -1891,7 +1917,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           </select>
           <select value={constraintDraft.personAId} onChange={(event) => setConstraintDraft((current) => ({ ...current, personAId: event.target.value }))}>
             <option value="">人物Aを選択</option>
-            {(constraintDraft.personAType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{'displayName' in person ? getStudentDisplayName(person) : person.name}</option>)}
+            {(constraintDraft.personAType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
           </select>
           <span className="basic-data-xmark">×</span>
           <select value={constraintDraft.personBType} onChange={(event) => setConstraintDraft((current) => ({ ...current, personBType: event.target.value as 'teacher' | 'student', personBId: '' }))}>
@@ -1900,7 +1926,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           </select>
           <select value={constraintDraft.personBId} onChange={(event) => setConstraintDraft((current) => ({ ...current, personBId: event.target.value }))}>
             <option value="">人物Bを選択</option>
-            {(constraintDraft.personBType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{'displayName' in person ? getStudentDisplayName(person) : person.name}</option>)}
+            {(constraintDraft.personBType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
           </select>
           <button className="primary-button" type="button" onClick={addConstraint}>保存</button>
         </div>
@@ -1941,7 +1967,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                       </select>
                       <select value={row.personAId} onChange={(event) => updateConstraint(row.id, { personAId: event.target.value })} disabled={!isRowEditing('constraint', row.id)}>
                         <option value="">人物Aを選択</option>
-                        {(row.personAType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{'displayName' in person ? getStudentDisplayName(person) : person.name}</option>)}
+                        {(row.personAType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
                       </select>
                     </div>
                     {personAName ? <span className="basic-data-muted-inline">現在: {personAName}</span> : null}
@@ -1955,7 +1981,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                       </select>
                       <select value={row.personBId} onChange={(event) => updateConstraint(row.id, { personBId: event.target.value })} disabled={!isRowEditing('constraint', row.id)}>
                         <option value="">人物Bを選択</option>
-                        {(row.personBType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{'displayName' in person ? getStudentDisplayName(person) : person.name}</option>)}
+                        {(row.personBType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
                       </select>
                     </div>
                     {personBName ? <span className="basic-data-muted-inline">現在: {personBName}</span> : null}

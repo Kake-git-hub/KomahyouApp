@@ -4,6 +4,7 @@ export type TeacherSubjectCapability = { subject: string; maxGrade: GradeCeiling
 export type TeacherRow = {
   id: string
   name: string
+  displayName?: string
   email: string
   entryDate: string
   withdrawDate: string
@@ -83,8 +84,18 @@ export function formatManagedDateValue(value: string) {
   return value.trim() || '未定'
 }
 
+export function deriveManagedDisplayName(name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) return ''
+  return trimmed.split(/[\s\u3000]+/u)[0] ?? trimmed
+}
+
 export function getStudentDisplayName(student: StudentRow) {
-  return student.displayName.trim() || student.name.trim()
+  return student.displayName.trim() || deriveManagedDisplayName(student.name) || student.name.trim()
+}
+
+export function getTeacherDisplayName(teacher: TeacherRow) {
+  return teacher.displayName?.trim() || deriveManagedDisplayName(teacher.name) || teacher.name.trim()
 }
 
 export function getReferenceDateKey(date: Date) {

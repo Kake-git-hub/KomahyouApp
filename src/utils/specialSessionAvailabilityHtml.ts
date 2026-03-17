@@ -1,4 +1,4 @@
-import { getStudentDisplayName, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
+import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 
 type PopupWindowWithMarker = Window & typeof globalThis & {
@@ -58,8 +58,8 @@ function buildPayload(params: OpenSpecialSessionAvailabilityHtmlParams): PopupPa
     },
     teachers: teachers
       .filter((teacher) => isActiveDuringSession(teacher.entryDate, teacher.withdrawDate, teacher.isHidden, session.startDate, session.endDate))
-      .sort((left, right) => left.name.localeCompare(right.name, 'ja'))
-      .map((teacher) => ({ id: teacher.id, name: teacher.name, input: session.teacherInputs[teacher.id] ?? null })),
+      .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
+      .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher), input: session.teacherInputs[teacher.id] ?? null })),
     students: students
       .filter((student) => isActiveDuringSession(student.entryDate, student.withdrawDate, student.isHidden, session.startDate, session.endDate))
       .sort((left, right) => getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja'))

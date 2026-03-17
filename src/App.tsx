@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
 import { BasicDataScreen } from './components/basic-data/BasicDataScreen'
-import { initialStudents, initialTeachers } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, initialStudents, initialTeachers } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
 import { SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
@@ -76,6 +76,21 @@ function shouldUseImportedMasterData() {
   return importedMasterData.teachers.length > 0 && importedMasterData.students.length > 0
 }
 
+const normalizedImportedTeachers = importedMasterData.teachers.map((teacher) => ({
+  ...teacher,
+  displayName: deriveManagedDisplayName(teacher.name),
+}))
+
+const normalizedImportedStudents = importedMasterData.students.map((student) => ({
+  ...student,
+  displayName: deriveManagedDisplayName(student.name),
+}))
+
+const normalizedImportedRegularLessons = importedMasterData.regularLessons.map((row) => ({
+  ...row,
+  schoolYear: 2026,
+}))
+
 function createInitialClassroomSettings(): ClassroomSettings {
   if (!isGoogleHolidaySyncRuntimeEnabled()) {
     return {
@@ -107,9 +122,9 @@ function App() {
   const holidaySyncInFlightRef = useRef(false)
   const holidaySyncBootstrapRef = useRef(false)
   const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'backup-restore'>('board')
-  const [teachers, setTeachers] = useState(() => useImportedMasterData ? importedMasterData.teachers : initialTeachers)
-  const [students, setStudents] = useState(() => useImportedMasterData ? importedMasterData.students : initialStudents)
-  const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? importedMasterData.regularLessons : createInitialRegularLessons())
+  const [teachers, setTeachers] = useState(() => useImportedMasterData ? normalizedImportedTeachers : initialTeachers)
+  const [students, setStudents] = useState(() => useImportedMasterData ? normalizedImportedStudents : initialStudents)
+  const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? normalizedImportedRegularLessons : createInitialRegularLessons())
   const [specialSessions, setSpecialSessions] = useState(initialSpecialSessions)
   const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)

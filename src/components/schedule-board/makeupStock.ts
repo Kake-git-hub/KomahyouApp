@@ -1,5 +1,5 @@
 import type { ClassroomSettings } from '../../App'
-import { getStudentDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
@@ -471,9 +471,9 @@ function computeOccupiedSlotOrigins(params: {
       if (activeParticipants.length === 0) continue
 
       const participantStudentIds = new Set(activeParticipants.map((participant) => participant.studentId))
-      const teacherName = teacher?.name ?? ''
+      const teacherName = teacher ? getTeacherDisplayName(teacher) : ''
       const hasTeacherConflict = teacherName
-        ? cell.desks.some((desk) => desk.teacher === teacherName && Boolean(desk.lesson))
+        ? cell.desks.some((desk) => (desk.teacher === teacherName || desk.teacher === teacher?.name) && Boolean(desk.lesson))
         : false
       const hasStudentConflict = cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => {
         if (!student) return false

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { getReferenceDateKey, getStudentDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
@@ -377,8 +377,10 @@ function parseDeskOrder(deskId: string) {
 
 function hasRegularPlacementConflict(cell: SlotCell, teacherId: string, studentIds: string[], teacherById: Map<string, TeacherRow>) {
   return cell.desks.some((desk) => {
+    const teacher = teacherById.get(teacherId)
     const teacherConflict = Boolean(teacherId)
-      && teacherById.get(teacherId)?.name === desk.teacher
+      && Boolean(teacher)
+      && (getTeacherDisplayName(teacher as TeacherRow) === desk.teacher || teacher?.name === desk.teacher)
       && Boolean(desk.lesson)
 
     const studentConflict = desk.lesson?.studentSlots.some((student) => {
@@ -471,7 +473,7 @@ function buildManagedRegularLessonsRange(params: {
       const targetDesk = cell.desks.find((desk) => !desk.lesson)
       if (!targetDesk) continue
 
-      targetDesk.teacher = teacher?.name ?? '講師未割当'
+      targetDesk.teacher = teacher ? getTeacherDisplayName(teacher) : '講師未割当'
       targetDesk.lesson = {
         id: `managed_${row.id}_${dateKey}`,
         note: '管理データ反映',
@@ -1059,7 +1061,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const teacherOptions = useMemo(() => {
     if (!teacherMenuContext) return []
-    const currentTeacher = teachers.find((teacher) => teacher.name === teacherMenuContext.desk.teacher)
+    const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === teacherMenuContext.desk.teacher || teacher.name === teacherMenuContext.desk.teacher)
     const visibleTeachers = teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, teacherMenuContext.cell.dateKey) === '在籍')
     const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
       ? [...visibleTeachers, currentTeacher]
@@ -1067,8 +1069,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     return mergedTeachers
       .slice()
-      .sort((left, right) => left.name.localeCompare(right.name, 'ja'))
-      .map((teacher) => ({ id: teacher.id, name: teacher.name }))
+      .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
+      .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher) }))
   }, [teacherMenuContext, teachers])
 
   const isTransferDisabled = Boolean(menuStudent && isManualAddedLesson(menuStudent.student, menuStudent.desk.lesson))
@@ -1172,12 +1174,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       return
     }
 
+    const matchedTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
+
     setTeacherMenu({
       cellId,
       deskIndex,
       x,
       y,
-      selectedTeacherName: targetDesk.teacher,
+      selectedTeacherName: matchedTeacher ? getTeacherDisplayName(matchedTeacher) : targetDesk.teacher,
     })
     setStatusMessage(`講師選択を開きました: ${targetCell.dateLabel} ${targetCell.slotLabel} / ${deskIndex + 1}机目`)
   }
