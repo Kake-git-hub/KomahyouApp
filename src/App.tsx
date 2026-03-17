@@ -6,6 +6,7 @@ import { createInitialRegularLessons } from './components/basic-data/regularLess
 import { SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { importedMasterData } from './data/importedMasterData.generated'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, fetchGoogleHolidayDates, mergeSyncedHolidayDates, readGoogleHolidaySyncCache, shouldRefreshGoogleHolidayCache, writeGoogleHolidaySyncCache } from './utils/googleHolidayCalendar'
@@ -70,6 +71,11 @@ function isGoogleHolidaySyncRuntimeEnabled() {
   return true
 }
 
+function shouldUseImportedMasterData() {
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return false
+  return importedMasterData.teachers.length > 0 && importedMasterData.students.length > 0
+}
+
 function createInitialClassroomSettings(): ClassroomSettings {
   if (!isGoogleHolidaySyncRuntimeEnabled()) {
     return {
@@ -95,14 +101,15 @@ function createInitialClassroomSettings(): ClassroomSettings {
 
 function App() {
   const isGoogleHolidaySyncEnabled = isGoogleHolidaySyncRuntimeEnabled()
+  const useImportedMasterData = shouldUseImportedMasterData()
   const googleHolidayApiKey = (import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY ?? '').trim()
   const googleHolidayCalendarId = (import.meta.env.VITE_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID ?? DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID).trim()
   const holidaySyncInFlightRef = useRef(false)
   const holidaySyncBootstrapRef = useRef(false)
   const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'backup-restore'>('board')
-  const [teachers, setTeachers] = useState(initialTeachers)
-  const [students, setStudents] = useState(initialStudents)
-  const [regularLessons, setRegularLessons] = useState(() => createInitialRegularLessons())
+  const [teachers, setTeachers] = useState(() => useImportedMasterData ? importedMasterData.teachers : initialTeachers)
+  const [students, setStudents] = useState(() => useImportedMasterData ? importedMasterData.students : initialStudents)
+  const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? importedMasterData.regularLessons : createInitialRegularLessons())
   const [specialSessions, setSpecialSessions] = useState(initialSpecialSessions)
   const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
