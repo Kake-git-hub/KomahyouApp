@@ -1,9 +1,14 @@
-import type { ClassroomSettings } from '../../App'
+import type { ClassroomSettings } from '../../types/appState'
 import { getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
 type OriginMap = Record<string, string[]>
+
+export type ManualMakeupOrigin = {
+  dateKey: string
+  reasonLabel?: string
+}
 
 export type MakeupStockEntry = {
   key: string
@@ -77,8 +82,9 @@ function resolveOriginReasonLabel(dateKey: string, params: {
   conflictOriginDates: string[]
   occupiedOriginDates: string[]
   manualOriginDates: string[]
+  manualOriginReasonLabels: Record<string, string>
 }) {
-  const { classroomSettings, autoOriginDates, conflictOriginDates, occupiedOriginDates, manualOriginDates } = params
+  const { classroomSettings, autoOriginDates, conflictOriginDates, occupiedOriginDates, manualOriginDates, manualOriginReasonLabels } = params
 
   if (classroomSettings.holidayDates.includes(dateKey) && !classroomSettings.forceOpenDates.includes(dateKey)) {
     return '休日振替'
@@ -93,7 +99,7 @@ function resolveOriginReasonLabel(dateKey: string, params: {
     return '空きコマ不足'
   }
   if (manualOriginDates.includes(dateKey)) {
-    return '手動調整'
+    return manualOriginReasonLabels[dateKey] ?? '手動調整'
   }
   if (autoOriginDates.includes(dateKey)) {
     return '休校日'
@@ -133,9 +139,29 @@ function iterateMonthsInRange(startDateKey: string, endDateKey: string) {
   return months
 }
 
+function endOfMonth(year: number, monthIndex: number) {
+  return new Date(year, monthIndex + 1, 0)
+}
+
+function countMonthlyLessonQuota(row: RegularLessonRow, participantIndex: 1 | 2, year: number, monthIndex: number) {
+  const period = resolveRegularLessonParticipantPeriod(row, participantIndex)
+  const monthStartKey = toDateKey(new Date(year, monthIndex, 1))
+  const monthEndKey = toDateKey(endOfMonth(year, monthIndex))
+  const activeStartKey = period.startDate > monthStartKey ? period.startDate : monthStartKey
+  const activeEndKey = period.endDate < monthEndKey ? period.endDate : monthEndKey
+
+  if (activeEndKey < activeStartKey) return 0
+  if (activeStartKey === monthStartKey && activeEndKey === monthEndKey) return 4
+
+  return Math.min(4, getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
+    .filter((dateKey) => dateKey >= activeStartKey && dateKey <= activeEndKey)
+    .length)
+}
+
 function countTotalLessonQuota(row: RegularLessonRow, participantIndex: 1 | 2) {
   const period = resolveRegularLessonParticipantPeriod(row, participantIndex)
-  return iterateMonthsInRange(period.startDate, period.endDate).length * 4
+  return iterateMonthsInRange(period.startDate, period.endDate)
+    .reduce((total, { year, monthIndex }) => total + countMonthlyLessonQuota(row, participantIndex, year, monthIndex), 0)
 }
 
 function countAssignedLessonsByKey(
@@ -499,7 +525,7 @@ export function buildMakeupStockEntries(params: {
   regularLessons: RegularLessonRow[]
   classroomSettings: ClassroomSettings
   weeks: SlotCell[][]
-  manualAdjustments: Record<string, string[]>
+  manualAdjustments: Record<string, ManualMakeupOrigin[]>
   fallbackStudents?: Record<string, { studentName: string; displayName: string; subject: string }>
   resolveStudentKey: (student: StudentEntry) => string
   today?: Date
@@ -526,7 +552,13 @@ export function buildMakeupStockEntries(params: {
     const autoOriginDates = automaticShortages[key] ?? []
     const conflictOriginDates = conflictOrigins[key] ?? []
     const occupiedOriginDates = occupiedSlotOrigins[key] ?? []
-    const manualOriginDates = manualAdjustments[key] ?? []
+    const manualOrigins = manualAdjustments[key] ?? []
+    const manualOriginDates = manualOrigins.map((origin) => origin.dateKey)
+    const manualOriginReasonLabels = manualOrigins.reduce<Record<string, string>>((accumulator, origin) => {
+      if (!origin.reasonLabel || accumulator[origin.dateKey]) return accumulator
+      accumulator[origin.dateKey] = origin.reasonLabel
+      return accumulator
+    }, {})
     const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates])).sort()
     const usedOriginDates = makeupUsage.usedOriginDates[key] ?? []
     const plannedCount = plannedMakeups[key] ?? 0
@@ -541,6 +573,7 @@ export function buildMakeupStockEntries(params: {
       conflictOriginDates,
       occupiedOriginDates,
       manualOriginDates,
+      manualOriginReasonLabels,
     }))
     const manualIndependentPlannedMakeups = isManualEntry ? plannedCount : 0
     const balance = remainingOriginDates.length - overAssignedRegularLessons - manualIndependentPlannedMakeups

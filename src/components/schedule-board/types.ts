@@ -21,6 +21,7 @@ export type SubjectLabel = '英' | '数' | '算' | '国' | '理' | '社' | 'IT'
 export type StudentEntry = {
   id: string
   name: string
+  managedStudentId?: string
   grade: GradeLabel
   birthDate?: string
   makeupSourceDate?: string
@@ -43,6 +44,7 @@ export type DeskCell = {
   id: string
   teacher: string
   manualTeacher?: boolean
+  memoSlots?: [string | null, string | null]
   lesson?: DeskLesson
 }
 

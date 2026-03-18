@@ -1,12 +1,15 @@
 export type SpecialSessionTeacherInput = {
   unavailableSlots: string[]
+  countSubmitted: boolean
   updatedAt: string
 }
 
 export type SpecialSessionStudentInput = {
   unavailableSlots: string[]
+  regularBreakSlots: string[]
   subjectSlots: Record<string, number>
   regularOnly: boolean
+  countSubmitted: boolean
   updatedAt: string
 }
 

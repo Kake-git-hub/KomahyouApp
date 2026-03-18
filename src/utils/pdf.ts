@@ -1,10 +1,36 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
+import { getMemoLineHeight, getMemoTextMetrics } from '../components/schedule-board/memoText'
 
 type ExportBoardPdfParams = {
   element: HTMLElement
   fileName: string
   title: string
+}
+
+function fitMemoTextForPdf(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('.sa-student-name-note').forEach((node) => {
+    const label = node.textContent ?? ''
+    const { fontSize: initialFontSize, lineHeight } = getMemoTextMetrics(label)
+
+    node.style.whiteSpace = 'pre-line'
+    node.style.overflow = 'hidden'
+    node.style.textOverflow = 'clip'
+    node.style.display = '-webkit-box'
+    node.style.boxSizing = 'border-box'
+    node.style.paddingBottom = '1px'
+    node.style.fontSize = `${initialFontSize}px`
+    node.style.lineHeight = String(lineHeight)
+    node.style.setProperty('-webkit-box-orient', 'vertical')
+    node.style.setProperty('-webkit-line-clamp', '2')
+
+    let fontSize = initialFontSize
+    while (node.scrollHeight > node.clientHeight + 1 && fontSize > 4.5) {
+      fontSize -= 0.4
+      node.style.fontSize = `${fontSize}px`
+      node.style.lineHeight = String(getMemoLineHeight(fontSize))
+    }
+  })
 }
 
 export async function exportBoardPdf({ element, fileName, title }: ExportBoardPdfParams) {
@@ -107,6 +133,13 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.gap = '3px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-name').forEach((node) => {
+    if (node.classList.contains('sa-student-name-note')) {
+      const { fontSize, lineHeight } = getMemoTextMetrics(node.textContent ?? '')
+      node.style.fontSize = `${fontSize}px`
+      node.style.lineHeight = String(lineHeight)
+      return
+    }
+
     node.style.fontSize = '11px'
     node.style.lineHeight = '1.25'
   })
@@ -123,6 +156,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
 
   exportRoot.appendChild(clone)
   document.body.appendChild(exportRoot)
+  fitMemoTextForPdf(exportRoot)
 
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',

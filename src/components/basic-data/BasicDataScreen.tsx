@@ -1,5 +1,5 @@
 import { type ChangeEvent, type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
-import type { ClassroomSettings } from '../../App'
+import type { ClassroomSettings } from '../../types/appState'
 import {
   deriveManagedDisplayName,
   type GradeCeiling,

@@ -4,9 +4,21 @@ type BackupRestoreScreenProps = {
   onBackToBoard: () => void
   onOpenBasicData: () => void
   onOpenSpecialData: () => void
+  persistenceMessage: string
+  lastSavedAt: string
+  onExportBackup: () => void
+  onImportBackup: (file: File) => void
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData }: BackupRestoreScreenProps) {
+function formatSavedAt(savedAt: string) {
+  if (!savedAt) return 'まだ保存されていません。'
+
+  const parsed = new Date(savedAt)
+  if (Number.isNaN(parsed.getTime())) return savedAt
+  return parsed.toLocaleString('ja-JP')
+}
+
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup }: BackupRestoreScreenProps) {
   return (
     <div className="page-shell page-shell-basic-data">
       <section className="toolbar-panel" aria-label="バックアップと復元の操作バー">
@@ -30,7 +42,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           </div>
         </div>
         <div className="toolbar-row toolbar-row-secondary">
-          <div className="toolbar-status" data-testid="backup-restore-status">バックアップ/復元の詳細機能は次段で接続できます。現状は画面導線と配置だけ先に揃えています。</div>
+          <div className="toolbar-status" data-testid="backup-restore-status">{persistenceMessage}</div>
         </div>
       </section>
 
@@ -48,13 +60,32 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <section className="basic-data-section-card">
               <div className="basic-data-card-head">
                 <h3>手動バックアップ</h3>
-                <p>コマ表、基本データ、特別講習データをまとめて保存する操作をここに集約します。</p>
+                <p>コマ表、基本データ、特別講習データ、日程表の表示範囲を JSON で書き出します。</p>
+              </div>
+              <div className="basic-data-form-grid">
+                <div className="toolbar-status">最終自動保存: {formatSavedAt(lastSavedAt)}</div>
+                <button className="primary-button" type="button" onClick={onExportBackup} data-testid="backup-restore-export-button">バックアップを書き出す</button>
               </div>
             </section>
             <section className="basic-data-section-card">
               <div className="basic-data-card-head">
                 <h3>復元候補</h3>
-                <p>自動保存や手動保存のスナップショット一覧、復元前の確認差分を表示する想定です。</p>
+                <p>書き出した JSON を読み込み、現在のデータ一式へ復元します。復元後は全画面が新しい状態へ切り替わります。</p>
+              </div>
+              <div className="basic-data-form-grid">
+                <label className="secondary-button slim" htmlFor="backup-restore-import-input">バックアップを読み込む</label>
+                <input
+                  id="backup-restore-import-input"
+                  type="file"
+                  accept="application/json"
+                  style={{ display: 'none' }}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    if (file) onImportBackup(file)
+                    event.currentTarget.value = ''
+                  }}
+                  data-testid="backup-restore-import-input"
+                />
               </div>
             </section>
           </div>

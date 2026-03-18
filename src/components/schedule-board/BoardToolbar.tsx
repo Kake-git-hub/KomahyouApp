@@ -74,6 +74,9 @@ export function BoardToolbar({
               if (screen === 'special-data') onOpenSpecialData()
               if (screen === 'backup-restore') onOpenBackupRestore()
             }}
+            actionButtonLabel={hasSelectedStudent ? 'キャンセル' : undefined}
+            onActionButtonClick={hasSelectedStudent ? onCancelSelection : undefined}
+            actionButtonTestId={hasSelectedStudent ? 'cancel-selection-button' : undefined}
             buttonTestId="menu-button"
             basicDataItemTestId="menu-open-basic-data-button"
             specialDataItemTestId="menu-open-special-data-button"
@@ -112,11 +115,6 @@ export function BoardToolbar({
           <button className="secondary-button slim" type="button" onClick={onPrintPdf} disabled={isPrintingPdf} data-testid="board-print-pdf-button">
             {isPrintingPdf ? 'PDF出力中...' : 'PDF出力'}
           </button>
-          {hasSelectedStudent ? (
-            <button className="secondary-button slim" type="button" onClick={onCancelSelection} data-testid="cancel-selection-button">
-              キャンセル
-            </button>
-          ) : null}
           <div className="toolbar-segmented">
             <button className="segment-button" type="button" onClick={onGoPrevWeek} disabled={!canGoPrevWeek} data-testid="prev-week-button">◀ 前週</button>
             <span className="week-label" data-testid="week-label">{weekLabel}</span>

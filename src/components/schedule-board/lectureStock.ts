@@ -21,6 +21,7 @@ export function buildLectureStockEntries(params: {
 
   return specialSessions
     .flatMap((session) => Object.entries(session.studentInputs).flatMap(([studentId, input]) => {
+      if (!input.countSubmitted) return []
       if (input.regularOnly) return []
 
       const student = studentMap.get(studentId)

@@ -1,4 +1,5 @@
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
+import { getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, TeacherType } from './types'
 
 function getLessonStar(lessonType: LessonType) {
@@ -36,7 +37,7 @@ type BoardGridProps = {
   onDayHeaderClick: (dateKey: string) => void
   onSpecialPeriodClick: (periodId: string) => void
   onTeacherClick: (cellId: string, deskIndex: number, x: number, y: number) => void
-  onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, x: number, y: number) => void
+  onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, x: number, y: number) => void
 }
 
 export function BoardGrid({
@@ -60,6 +61,7 @@ export function BoardGrid({
     studentIndex: number,
     teacherName: string,
     studentName: string,
+    memoLabel: string | undefined,
     studentGrade: string,
     studentBirthDate: string | undefined,
     makeupSourceLabel: string | undefined,
@@ -74,17 +76,20 @@ export function BoardGrid({
     const resolvedLessonType = studentName ? resolveDisplayedLessonType(studentName, studentSubject, lessonType, cell.dateKey, cell.slotNumber) : lessonType
     const lessonStar = resolvedLessonType ? getLessonStar(resolvedLessonType) : null
     const teacherStar = getTeacherStar(teacherType)
-    const displayName = resolveStudentDisplayName(studentName)
-    const displayGrade = resolveStudentGradeLabel(studentName, studentGrade, cell.dateKey, studentBirthDate)
+    const displayName = studentName ? resolveStudentDisplayName(studentName) : (memoLabel ?? '')
+    const displayGrade = studentName ? resolveStudentGradeLabel(studentName, studentGrade, cell.dateKey, studentBirthDate) : ''
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const hasWarning = Boolean(studentWarning || missingTeacherWarning)
+    const hasMemo = !studentName && Boolean(memoLabel)
+    const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const originalLessonLabel = makeupSourceLabel ? `元の通常授業: ${makeupSourceLabel}` : ''
     const hoverText = Array.from(new Set([
+      memoNotice,
       studentWarning,
       missingTeacherWarning,
       visibleNote,
-      originalLessonLabel && visibleNote?.includes('元の通常授業:') ? '' : originalLessonLabel,
+      originalLessonLabel && visibleNote?.includes(originalLessonLabel) ? '' : originalLessonLabel,
     ].filter(Boolean)))
       .join('\n') || undefined
 
@@ -92,46 +97,51 @@ export function BoardGrid({
     <td
       key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
       className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
-      onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), event.clientX, event.clientY)}
+      onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, event.clientX, event.clientY)}
       data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
     >
       <div className="sa-student-inner">
         <span className="sa-student-name-row">
           <span
-            className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}`}
+            className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasMemo ? ' sa-student-name-note' : ''}`}
             data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
             title={hoverText}
+            style={hasMemo ? getMemoTextStyle(displayName) : undefined}
           >
             {displayName}
           </span>
         </span>
-        <span className="sa-student-detail">
-          {lessonStar || teacherStar ? (
-            <span className="sa-student-markers">
-              {lessonStar ? (
-                <span
-                  className={`sa-student-star ${lessonStar.className}`}
-                  title={lessonStar.label}
-                  aria-label={lessonStar.label}
-                >
-                  ★
-                </span>
-              ) : null}
-              {teacherStar ? (
-                <span
-                  className={`sa-student-star ${teacherStar.className}`}
-                  title={teacherStar.label}
-                  aria-label={teacherStar.label}
-                >
-                  ★
-                </span>
-              ) : null}
-            </span>
-          ) : null}
-          <span className="sa-student-detail-grade">{displayGrade}</span>
-          {' '}
-          <span className="sa-student-detail-subject">{studentSubject}</span>
-        </span>
+        {hasMemo ? null : (
+          <span className="sa-student-detail">
+            {lessonStar || teacherStar ? (
+              <span className="sa-student-markers">
+                {lessonStar ? (
+                  <span
+                    className={`sa-student-star ${lessonStar.className}`}
+                    title={lessonStar.label}
+                    aria-label={lessonStar.label}
+                  >
+                    ★
+                  </span>
+                ) : null}
+                {teacherStar ? (
+                  <span
+                    className={`sa-student-star ${teacherStar.className}`}
+                    title={teacherStar.label}
+                    aria-label={teacherStar.label}
+                  >
+                    ★
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
+            <>
+              <span className="sa-student-detail-grade">{displayGrade}</span>
+              {' '}
+              <span className="sa-student-detail-subject">{studentSubject}</span>
+            </>
+          </span>
+        )}
       </div>
     </td>
     )
@@ -315,6 +325,7 @@ export function BoardGrid({
                           0,
                           desk.teacher,
                           firstStudent?.name ?? '',
+                          desk.memoSlots?.[0] ?? undefined,
                           firstStudent?.grade ?? '',
                           firstStudent?.birthDate,
                           firstStudent?.makeupSourceLabel,
@@ -331,6 +342,7 @@ export function BoardGrid({
                           1,
                           desk.teacher,
                           secondStudent?.name ?? '',
+                          desk.memoSlots?.[1] ?? undefined,
                           secondStudent?.grade ?? '',
                           secondStudent?.birthDate,
                           secondStudent?.makeupSourceLabel,

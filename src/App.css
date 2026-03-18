@@ -796,6 +796,21 @@ tr.sa-slot-first td {
   color: #d14343;
 }
 
+.sa-student-name-note {
+  color: #e24a4a;
+  font-weight: 700;
+  display: -webkit-box;
+  line-clamp: 2;
+  max-width: 100%;
+  white-space: pre-line;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  text-align: center;
+  padding-bottom: 1px;
+}
+
 .sa-student-detail {
   display: inline-flex;
   align-items: baseline;
@@ -806,6 +821,10 @@ tr.sa-slot-first td {
   color: #101820;
   line-height: 1.2;
   min-height: 1.2em;
+}
+
+.sa-student-detail-note {
+  color: #6c7f92;
 }
 
 .sa-student-detail-grade,
@@ -856,6 +875,10 @@ tr.sa-slot-first td {
   border: 1px solid #d7e2f1;
   background: #ffffff;
   box-shadow: 0 18px 36px rgba(56, 84, 122, 0.18);
+}
+
+.student-menu-popover-memo {
+  width: 280px;
 }
 
 .student-menu-head {
@@ -981,6 +1004,12 @@ tr.sa-slot-first td {
   font: inherit;
   width: 100%;
   box-sizing: border-box;
+}
+
+.student-menu-textarea {
+  min-height: 56px;
+  max-height: 56px;
+  resize: none;
 }
 
 .student-menu-hint {

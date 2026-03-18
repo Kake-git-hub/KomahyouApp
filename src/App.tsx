@@ -10,6 +10,7 @@ import { importedMasterData } from './data/importedMasterData.generated'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, fetchGoogleHolidayDates, mergeSyncedHolidayDates, readGoogleHolidaySyncCache, shouldRefreshGoogleHolidayCache, writeGoogleHolidaySyncCache } from './utils/googleHolidayCalendar'
+import { createLegacyLessonScheduleQrConfig } from './utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
 import './App.css'
@@ -121,6 +122,7 @@ function App() {
   const googleHolidayCalendarId = (import.meta.env.VITE_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID ?? DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID).trim()
   const holidaySyncInFlightRef = useRef(false)
   const holidaySyncBootstrapRef = useRef(false)
+  const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'backup-restore'>('board')
   const [teachers, setTeachers] = useState(() => useImportedMasterData ? normalizedImportedTeachers : initialTeachers)
   const [students, setStudents] = useState(() => useImportedMasterData ? normalizedImportedStudents : initialStudents)
@@ -221,9 +223,11 @@ function App() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       periodBands: specialSessions,
+      specialSessions,
+      qrConfig: scheduleQrConfig,
       targetWindow: studentPopup,
     })
-  }, [classroomSettings, regularLessons, specialSessions, studentScheduleRange, students, teachers])
+  }, [classroomSettings, regularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -250,9 +254,11 @@ function App() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       periodBands: specialSessions,
+      specialSessions,
+      qrConfig: scheduleQrConfig,
       targetWindow: teacherPopup,
     })
-  }, [classroomSettings, regularLessons, specialSessions, students, teacherScheduleRange, teachers])
+  }, [classroomSettings, regularLessons, scheduleQrConfig, specialSessions, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -265,8 +271,25 @@ function App() {
 
     syncSpecialSessionAvailabilityHtml({
       session,
+      allSessions: specialSessions,
+      classroomSettings,
       teachers,
       students,
+      scheduleCells: buildScheduleCellsForRange({
+        range: {
+          startDate: session.startDate,
+          endDate: session.endDate,
+          periodValue: '',
+        },
+        fallbackStartDate: session.startDate,
+        fallbackEndDate: session.endDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      }),
+      boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
       targetWindow: popupWindow,
     })
   }, [specialSessions, students, teachers])
@@ -313,6 +336,7 @@ function App() {
                 ...session.teacherInputs,
                 [message.personId]: {
                   unavailableSlots,
+                  countSubmitted: Boolean(session.teacherInputs[message.personId]?.countSubmitted),
                   updatedAt,
                 },
               },
@@ -326,11 +350,210 @@ function App() {
               ...session.studentInputs,
               [message.personId]: {
                 unavailableSlots,
+                regularBreakSlots: session.studentInputs[message.personId]?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 regularOnly,
+                countSubmitted: Boolean(session.studentInputs[message.personId]?.countSubmitted),
                 updatedAt,
               },
             },
+            updatedAt,
+          }
+        }))
+        return
+      }
+
+      if (message.type === 'schedule-student-unavailable-save') {
+        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
+        if (!Array.isArray(message.unavailableSlots) || message.unavailableSlots.some((value: unknown) => typeof value !== 'string')) return
+
+        const updatedAt = new Date().toISOString()
+        const unavailableSlots = Array.from(new Set(message.unavailableSlots as string[])).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true }))
+
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+
+          const previousInput = session.studentInputs[message.personId]
+          return {
+            ...session,
+            studentInputs: {
+              ...session.studentInputs,
+              [message.personId]: {
+                unavailableSlots,
+                regularBreakSlots: previousInput?.regularBreakSlots ?? [],
+                subjectSlots: previousInput?.subjectSlots ?? {},
+                regularOnly: Boolean(previousInput?.regularOnly),
+                countSubmitted: Boolean(previousInput?.countSubmitted),
+                updatedAt,
+              },
+            },
+            updatedAt,
+          }
+        }))
+        return
+      }
+
+      if (message.type === 'schedule-student-count-save') {
+        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
+
+        const rawSubjectSlots = message.subjectSlots && typeof message.subjectSlots === 'object'
+          ? message.subjectSlots as Record<string, unknown>
+          : {}
+        const subjectSlots = Object.entries(rawSubjectSlots).reduce<Record<string, number>>((accumulator, [subject, value]) => {
+          const normalizedValue = typeof value === 'number' ? value : Number(value)
+          if (!Number.isFinite(normalizedValue)) return accumulator
+
+          const count = Math.max(0, Math.trunc(normalizedValue))
+          if (count > 0) accumulator[subject] = count
+          return accumulator
+        }, {})
+
+        const updatedAt = new Date().toISOString()
+        const regularOnly = Boolean(message.regularOnly)
+        const countSubmitted = Boolean(message.countSubmitted)
+
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+
+          const previousInput = session.studentInputs[message.personId]
+          return {
+            ...session,
+            studentInputs: {
+              ...session.studentInputs,
+              [message.personId]: {
+                unavailableSlots: previousInput?.unavailableSlots ?? [],
+                regularBreakSlots: previousInput?.regularBreakSlots ?? [],
+                subjectSlots: regularOnly ? {} : subjectSlots,
+                regularOnly,
+                countSubmitted,
+                updatedAt,
+              },
+            },
+            updatedAt,
+          }
+        }))
+        return
+      }
+
+      if (message.type === 'schedule-teacher-unavailable-save') {
+        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
+        if (!Array.isArray(message.unavailableSlots) || message.unavailableSlots.some((value: unknown) => typeof value !== 'string')) return
+
+        const updatedAt = new Date().toISOString()
+        const unavailableSlots = Array.from(new Set(message.unavailableSlots as string[])).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true }))
+
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+
+          const previousInput = session.teacherInputs[message.personId]
+          return {
+            ...session,
+            teacherInputs: {
+              ...session.teacherInputs,
+              [message.personId]: {
+                unavailableSlots,
+                countSubmitted: Boolean(previousInput?.countSubmitted),
+                updatedAt,
+              },
+            },
+            updatedAt,
+          }
+        }))
+        return
+      }
+
+      if (message.type === 'schedule-teacher-count-save') {
+        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
+
+        const updatedAt = new Date().toISOString()
+        const countSubmitted = Boolean(message.countSubmitted)
+
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+
+          const previousInput = session.teacherInputs[message.personId]
+          return {
+            ...session,
+            teacherInputs: {
+              ...session.teacherInputs,
+              [message.personId]: {
+                unavailableSlots: previousInput?.unavailableSlots ?? [],
+                countSubmitted,
+                updatedAt,
+              },
+            },
+            updatedAt,
+          }
+        }))
+        return
+      }
+
+      if (message.type === 'special-session-availability-save-students') {
+        if (typeof message.sessionId !== 'string') return
+        if (!Array.isArray(message.entries)) return
+
+        const normalizedEntries = message.entries.flatMap((entry: unknown) => {
+          if (!entry || typeof entry !== 'object') return []
+
+          const rawEntry = entry as {
+            personId?: unknown
+            unavailableSlots?: unknown
+            regularBreakSlots?: unknown
+            subjectSlots?: unknown
+            regularOnly?: unknown
+            countSubmitted?: unknown
+          }
+
+          const personId = typeof rawEntry.personId === 'string' ? rawEntry.personId : ''
+          if (!personId) return []
+
+          const unavailableSlots = Array.isArray(rawEntry.unavailableSlots)
+            ? rawEntry.unavailableSlots.filter((value: unknown): value is string => typeof value === 'string')
+            : []
+          const regularBreakSlots = Array.isArray(rawEntry.regularBreakSlots)
+            ? rawEntry.regularBreakSlots.filter((value: unknown): value is string => typeof value === 'string')
+            : []
+          const rawSubjectSlots = rawEntry.subjectSlots && typeof rawEntry.subjectSlots === 'object'
+            ? rawEntry.subjectSlots as Record<string, unknown>
+            : {}
+          const subjectSlots = Object.entries(rawSubjectSlots).reduce<Record<string, number>>((accumulator, [subject, value]) => {
+            const normalizedValue = typeof value === 'number' ? value : Number(value)
+            if (!Number.isFinite(normalizedValue)) return accumulator
+
+            const count = Math.max(0, Math.trunc(normalizedValue))
+            if (count > 0) accumulator[subject] = count
+            return accumulator
+          }, {})
+
+          return [{
+            personId,
+            unavailableSlots: Array.from(new Set<string>(unavailableSlots)).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true })),
+            regularBreakSlots: Array.from(new Set<string>(regularBreakSlots)).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true })),
+            regularOnly: Boolean(rawEntry.regularOnly),
+            countSubmitted: Boolean(rawEntry.countSubmitted),
+            subjectSlots,
+          }]
+        })
+
+        const updatedAt = new Date().toISOString()
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+
+          const nextStudentInputs = { ...session.studentInputs }
+          for (const entry of normalizedEntries) {
+            nextStudentInputs[entry.personId] = {
+              unavailableSlots: entry.unavailableSlots,
+              regularBreakSlots: entry.regularBreakSlots,
+              subjectSlots: entry.regularOnly ? {} : entry.subjectSlots,
+              regularOnly: entry.regularOnly,
+              countSubmitted: entry.countSubmitted,
+              updatedAt,
+            }
+          }
+
+          return {
+            ...session,
+            studentInputs: nextStudentInputs,
             updatedAt,
           }
         }))
@@ -434,6 +657,10 @@ function App() {
         onBackToBoard={() => setScreen('board')}
         onOpenBasicData={() => setScreen('basic-data')}
         onOpenSpecialData={() => setScreen('special-data')}
+        persistenceMessage="バックアップ/復元は未接続です。"
+        lastSavedAt=""
+        onExportBackup={() => {}}
+        onImportBackup={() => {}}
       />
     )
   }
@@ -446,7 +673,6 @@ function App() {
       regularLessons={regularLessons}
       specialSessions={specialSessions}
       onUpdateSpecialSessions={setSpecialSessions}
-      onCreateStudent={(student) => setStudents((current) => [...current, student])}
       onUpdateClassroomSettings={setClassroomSettings}
       onOpenBasicData={() => setScreen('basic-data')}
       onOpenSpecialData={() => setScreen('special-data')}

@@ -3,6 +3,9 @@ export type AppMenuScreen = 'board' | 'basic-data' | 'special-data' | 'backup-re
 type AppMenuProps = {
   currentScreen: AppMenuScreen
   onNavigate: (screen: AppMenuScreen) => void
+  actionButtonLabel?: string
+  onActionButtonClick?: () => void
+  actionButtonTestId?: string
   buttonTestId?: string
   boardItemTestId?: string
   basicDataItemTestId?: string
@@ -20,6 +23,9 @@ const menuItems: Array<{ screen: AppMenuScreen; label: string }> = [
 export function AppMenu({
   currentScreen,
   onNavigate,
+  actionButtonLabel,
+  onActionButtonClick,
+  actionButtonTestId,
   buttonTestId,
   boardItemTestId,
   basicDataItemTestId,
@@ -31,6 +37,14 @@ export function AppMenu({
     'basic-data': basicDataItemTestId,
     'special-data': specialDataItemTestId,
     'backup-restore': backupRestoreItemTestId,
+  }
+
+  if (actionButtonLabel && onActionButtonClick) {
+    return (
+      <button className="primary-button menu-button" type="button" onClick={onActionButtonClick} data-testid={actionButtonTestId}>
+        {actionButtonLabel}
+      </button>
+    )
   }
 
   return (
