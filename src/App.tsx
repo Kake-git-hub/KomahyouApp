@@ -9,6 +9,7 @@ import { ScheduleBoardScreen, buildScheduleCellsForRange, normalizeScheduleRange
 import { importedMasterData } from './data/importedMasterData.generated'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
+import type { PersistedBoardState } from './types/appState'
 import { DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, fetchGoogleHolidayDates, mergeSyncedHolidayDates, readGoogleHolidaySyncCache, shouldRefreshGoogleHolidayCache, writeGoogleHolidaySyncCache } from './utils/googleHolidayCalendar'
 import { createLegacyLessonScheduleQrConfig } from './utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
@@ -129,6 +130,7 @@ function App() {
   const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? normalizedImportedRegularLessons : createInitialRegularLessons())
   const [specialSessions, setSpecialSessions] = useState(initialSpecialSessions)
   const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
+  const [boardState, setBoardState] = useState<PersistedBoardState | null>(null)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [googleHolidaySyncState, setGoogleHolidaySyncState] = useState<GoogleHolidaySyncState>(() => {
@@ -591,6 +593,11 @@ function App() {
   }, [syncTeacherSchedulePopup])
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !boardState) return
+    getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = boardState.weeks
+  }, [boardState])
+
+  useEffect(() => {
     if (!isGoogleHolidaySyncEnabled) return
     if (holidaySyncBootstrapRef.current) return
     holidaySyncBootstrapRef.current = true
@@ -672,6 +679,8 @@ function App() {
       students={students}
       regularLessons={regularLessons}
       specialSessions={specialSessions}
+      initialBoardState={boardState}
+      onBoardStateChange={setBoardState}
       onUpdateSpecialSessions={setSpecialSessions}
       onUpdateClassroomSettings={setClassroomSettings}
       onOpenBasicData={() => setScreen('basic-data')}

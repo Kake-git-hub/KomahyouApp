@@ -583,7 +583,6 @@ test.describe('コマ調整表', () => {
     await editablePeriodRow.getByRole('button', { name: '編集終了' }).click()
     await navigateFromBasicDataToBoard(page)
 
-    await page.getByTestId('next-week-button').click()
     await expect.poll(findStudentInTuesdayFifthSlot).toBe(false)
 
     await page.getByTestId('menu-button').click()
@@ -988,6 +987,47 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('teacher-select-confirm-button').click()
 
     await expect(teacherCell).toContainText('田中講師')
+  })
+
+  test('表示週は画面遷移後も維持される', async ({ page }) => {
+    const targetWeekStart = addDays(getWeekStart(new Date()), 14)
+
+    await page.goto('/')
+    await moveBoardToWeek(page, targetWeekStart)
+
+    const expectedLabel = await page.getByTestId('week-label').textContent()
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await navigateFromBasicDataToBoard(page)
+
+    await expect(page.getByTestId('week-label')).toHaveText(expectedLabel ?? '')
+    await expect(page.getByTestId(`day-header-${toDateKey(targetWeekStart)}`)).toBeVisible()
+  })
+
+  test('講師を未選択にしても生徒付きの盤面状態を保持できる', async ({ page }) => {
+    const mondaySlotId = `${toDateKey(getWeekStart(new Date()))}_1`
+    const teacherCell = page.getByTestId(`teacher-cell-${mondaySlotId}-0`)
+    const studentCell = page.getByTestId(`student-name-${mondaySlotId}-0-0`)
+
+    await page.goto('/')
+
+    await expect(teacherCell).toContainText('田中講師')
+    await expect(studentCell).toHaveText('青木太郎')
+
+    await teacherCell.click()
+    await page.getByTestId('teacher-select-input').selectOption('')
+    await page.getByTestId('teacher-select-confirm-button').click()
+
+    await expect(teacherCell).toHaveText('')
+    await expect(studentCell).toHaveText('青木太郎')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await navigateFromBasicDataToBoard(page)
+
+    await expect(teacherCell).toHaveText('')
+    await expect(studentCell).toHaveText('青木太郎')
   })
 
   test('メニューから特別講習データへ移動してセッションを作成できる', async ({ page }) => {
@@ -1446,7 +1486,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-add-regular-lesson-button').click()
     await navigateFromBasicDataToBoard(page)
 
-    await expect(page.getByTestId(`student-name-${nextMondayKey}_4-0-0`)).toHaveCount(0)
+    await expect(page.getByTestId(`student-name-${nextMondayKey}_4-0-0`)).toHaveText('')
     await page.getByTestId('makeup-stock-chip').click()
     await expect(page.getByTestId('makeup-stock-entry-s002__-')).toContainText('+1')
   })

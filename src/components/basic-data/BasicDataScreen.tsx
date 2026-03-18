@@ -156,6 +156,42 @@ function normalizeDateString(value: unknown, xlsx?: XlsxModule) {
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
 }
 
+function toWorkbookDateCellValue(value: unknown) {
+  const normalized = normalizeDateString(value)
+  if (!normalized) return ''
+
+  const [yearText, monthText, dayText] = normalized.split('-')
+  return new Date(Number(yearText), Number(monthText) - 1, Number(dayText))
+}
+
+function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], dateColumns: string[] = []) {
+  const normalizedRows = rows.map((row) => {
+    const nextRow: Record<string, unknown> = { ...row }
+    for (const column of dateColumns) {
+      if (!(column in nextRow)) continue
+      nextRow[column] = toWorkbookDateCellValue(nextRow[column])
+    }
+    return nextRow
+  })
+
+  const sheet = xlsx.utils.json_to_sheet(normalizedRows, { cellDates: true })
+  const headers = rows[0] ? Object.keys(rows[0]) : []
+
+  for (const column of dateColumns) {
+    const columnIndex = headers.indexOf(column)
+    if (columnIndex < 0) continue
+
+    for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+      const cellRef = xlsx.utils.encode_cell({ r: rowIndex + 1, c: columnIndex })
+      const cell = sheet[cellRef]
+      if (!cell || !(cell.v instanceof Date)) continue
+      cell.z = 'yyyy-mm-dd'
+    }
+  }
+
+  return sheet
+}
+
 function resolveSchoolGradeLabel(birthDate: string, today = new Date()) {
   const normalized = normalizeDateString(birthDate)
   if (!normalized) return '-'
@@ -427,56 +463,53 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   const teacherNameById = Object.fromEntries(bundle.teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const studentNameById = Object.fromEntries(bundle.students.map((student) => [student.id, getStudentDisplayName(student)]))
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.managers.map((row) => ({
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.managers.map((row) => ({
     名前: row.name,
     メール: row.email,
   }))), 'マネージャー')
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.teachers.map((row) => ({
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.teachers.map((row) => ({
     名前: row.name,
     表示名: getTeacherDisplayName(row),
     メール: row.email,
     入塾日: row.entryDate,
-    退塾日: formatManagedDateValue(row.withdrawDate),
-    在籍: resolveTeacherStatusLabel(row),
+    退塾日: normalizeDateString(row.withdrawDate),
     表示: row.isHidden ? '非表示' : '表示',
     担当科目: serializeSubjectCapabilities(row.subjectCapabilities),
     メモ: row.memo,
-  }))), '講師')
+  })), ['入塾日', '退塾日']), '講師')
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.students.map((row) => ({
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.students.map((row) => ({
     名前: row.name,
     表示名: row.displayName,
     メール: row.email,
     入塾日: row.entryDate,
-    退塾日: formatManagedDateValue(row.withdrawDate),
+    退塾日: normalizeDateString(row.withdrawDate),
     生年月日: row.birthDate,
-    学年: resolveStudentStatusLabel(row),
-    在籍: resolveStudentStatusLabel(row),
     表示: row.isHidden ? '非表示' : '表示',
-  }))), '生徒')
+  })), ['入塾日', '退塾日', '生年月日']), '生徒')
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.regularLessons.map((row) => {
-    const sharedPeriod = normalizeRegularLessonSharedPeriod(row)
-    return {
-      年度: formatSchoolYearLabel(row.schoolYear),
-      講師: teacherNameById[row.teacherId] ?? '',
-      生徒1: studentNameById[row.student1Id] ?? '',
-      科目1: row.subject1,
-      生徒1期間開始: sharedPeriod.startDate,
-      生徒1期間終了: sharedPeriod.endDate,
-      期間開始: sharedPeriod.startDate,
-      期間終了: sharedPeriod.endDate,
-      生徒2: studentNameById[row.student2Id] ?? '',
-      科目2: row.subject2,
-      生徒2期間開始: sharedPeriod.startDate,
-      生徒2期間終了: sharedPeriod.endDate,
-      曜日: resolveDayLabel(row.dayOfWeek),
-      時限: row.slotNumber,
-    }
-  })), '通常授業')
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(
+    xlsx,
+    bundle.regularLessons.map((row) => {
+      const sharedPeriod = normalizeRegularLessonSharedPeriod(row)
+      return {
+        年度: formatSchoolYearLabel(row.schoolYear),
+        講師: teacherNameById[row.teacherId] ?? '',
+        生徒1: studentNameById[row.student1Id] ?? '',
+        科目1: row.subject1,
+        共通期間開始: sharedPeriod.startDate,
+        共通期間終了: sharedPeriod.endDate,
+        生徒2: studentNameById[row.student2Id] ?? '',
+        科目2: row.subject2,
+        曜日: resolveDayLabel(row.dayOfWeek),
+        時限: row.slotNumber,
+      }
+    }),
+    ['共通期間開始', '共通期間終了'],
+  ), '通常授業')
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.groupLessons.map((row) => ({
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.groupLessons.map((row) => ({
     年度: formatSchoolYearLabel(row.schoolYear),
     講師: teacherNameById[row.teacherId] ?? '',
     科目: row.subject,
@@ -485,7 +518,7 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     時限ラベル: row.slotLabel,
   }))), '集団授業')
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet(bundle.constraints.map((row) => ({
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.constraints.map((row) => ({
     人物A種別: row.personAType === 'teacher' ? '講師' : '生徒',
     人物A: row.personAType === 'teacher' ? teacherNameById[row.personAId] ?? '' : studentNameById[row.personAId] ?? '',
     人物B種別: row.personBType === 'teacher' ? '講師' : '生徒',
@@ -493,13 +526,13 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     種別: '組み合わせ不可',
   }))), 'ペア制約')
 
-  xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '講師.担当科目', 説明: '英:高3, 数:中 のように 科目:上限学年 をカンマ区切りで記入します。' },
-    { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式を推奨します。空欄なら即時在籍として扱います。' },
-    { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または 未定 を入力できます。未定と空欄は日付未設定として扱います。' },
-    { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式を推奨します。学年列は自動計算され、取り込み時は無視されます。' },
+    { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式に加えて Excel の日付セルも取り込めます。空欄なら即時在籍として扱います。' },
+    { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または Excel の日付セルで入力できます。空欄と 未定 はどちらも日付未設定として扱います。' },
+    { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。学年/在籍列はアプリ側で自動計算します。' },
     { 項目: '通常授業/集団授業', 説明: '年度列を付けて年度ごとに分けます。講師名と生徒名は各シートの名前列に一致させてください。' },
-    { 項目: '通常授業.期間開始/期間終了', 説明: '通常授業の共通表示期間です。旧列の 生徒1期間開始/終了 と 生徒2期間開始/終了 も同じ期間として取り込みます。' },
+    { 項目: '通常授業.共通期間開始/共通期間終了', 説明: '通常授業の共有表示期間です。旧列の 期間開始/終了 と 生徒1期間開始/終了 と 生徒2期間開始/終了 も同じ期間として取り込みます。' },
   ]), '説明')
 
   return workbook
@@ -534,7 +567,7 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
           displayName: normalizeText(row['表示名']) || deriveManagedDisplayName(normalizeText(row['名前'])),
           email: normalizeText(row['メール']),
           entryDate: normalizeDateString(row['入塾日'], xlsx),
-          withdrawDate: normalizeText(row['退塾日']) || '未定',
+          withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
           isHidden: normalizeText(row['表示']) === '非表示',
           subjectCapabilities: parseSubjectCapabilities(row['担当科目']),
           memo: normalizeText(row['メモ']),
@@ -550,7 +583,7 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
           displayName: normalizeText(row['表示名']) || deriveManagedDisplayName(normalizeText(row['名前'])),
           email: normalizeText(row['メール']),
           entryDate: normalizeDateString(row['入塾日'], xlsx),
-          withdrawDate: normalizeText(row['退塾日']) || '未定',
+          withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
           birthDate: normalizeDateString(row['生年月日'], xlsx),
           isHidden: normalizeText(row['表示']) === '非表示',
         }))
@@ -577,12 +610,12 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
           teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
           student1Id: studentIdByName.get(normalizeText(row['生徒1'])) ?? '',
           subject1: subjectOptions.includes(normalizeText(row['科目1'])) ? normalizeText(row['科目1']) : '英',
-          startDate: normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx),
-          endDate: normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx),
+          startDate: normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx),
+          endDate: normalizeDateString(row['共通期間終了'], xlsx) || normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx),
           student2Id: studentIdByName.get(normalizeText(row['生徒2'])) ?? '',
           subject2: subjectOptions.includes(normalizeText(row['科目2'])) ? normalizeText(row['科目2']) : '',
-          student2StartDate: normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx),
-          student2EndDate: normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx),
+          student2StartDate: normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx),
+          student2EndDate: normalizeDateString(row['共通期間終了'], xlsx) || normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx),
           nextStudent1Id: '',
           nextSubject1: '',
           nextStudent2Id: '',

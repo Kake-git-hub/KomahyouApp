@@ -9,6 +9,7 @@ import { buildMakeupStockEntries, buildMakeupStockKey, type MakeupStockEntry, ty
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings } from '../../App'
+import type { PersistedBoardState } from '../../types/appState'
 import { exportBoardPdf } from '../../utils/pdf'
 import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
@@ -149,6 +150,8 @@ type ScheduleBoardScreenProps = {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   specialSessions: SpecialSessionRow[]
+  initialBoardState?: PersistedBoardState | null
+  onBoardStateChange?: (state: PersistedBoardState) => void
   onUpdateSpecialSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onOpenBasicData: () => void
@@ -336,6 +339,78 @@ function appendLectureStockCount(countMap: LectureStockCountMap, key: string, in
   return {
     ...countMap,
     [key]: (countMap[key] ?? 0) + increment,
+  }
+}
+
+function createInitialBoardWeeks(
+  classroomSettings: ClassroomSettings,
+  teachers: TeacherRow[],
+  students: StudentRow[],
+  regularLessons: RegularLessonRow[],
+) {
+  const currentWeekStart = getWeekStart(new Date())
+  const previousWeekStart = shiftDate(currentWeekStart, -7)
+  const nextWeekStart = shiftDate(currentWeekStart, 7)
+  return normalizeWeeksDeskCount([
+    createBoardWeek(previousWeekStart, 'prev', { classroomSettings, teachers, students, regularLessons }),
+    createBoardWeek(currentWeekStart, 'current', { classroomSettings, teachers, students, regularLessons }),
+    createBoardWeek(nextWeekStart, 'next', { classroomSettings, teachers, students, regularLessons }),
+  ], classroomSettings.deskCount)
+}
+
+function createInitialBoardSnapshot(params: {
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  initialBoardState?: PersistedBoardState | null
+}) {
+  const fallbackWeeks = createInitialBoardWeeks(
+    params.classroomSettings,
+    params.teachers,
+    params.students,
+    params.regularLessons,
+  )
+  const weeks = params.initialBoardState?.weeks?.length
+    ? normalizeWeeksDeskCount(
+      params.initialBoardState.weeks.map((week) => {
+        const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
+        const weekStart = getWeekStart(parseDateKey(firstDateKey))
+        const managedWeek = createBoardWeek(weekStart, firstDateKey, {
+          classroomSettings: params.classroomSettings,
+          teachers: params.teachers,
+          students: params.students,
+          regularLessons: params.regularLessons,
+        })
+        return mergeManagedWeek(week, managedWeek)
+      }),
+      params.classroomSettings.deskCount,
+    )
+    : fallbackWeeks
+  const maxWeekIndex = Math.max(0, weeks.length - 1)
+  const weekIndex = Math.min(Math.max(params.initialBoardState?.weekIndex ?? defaultWeekIndex, 0), maxWeekIndex)
+  const validCellIds = new Set(weeks.flat().map((cell) => cell.id))
+  const defaultCellId = weeks[weekIndex]?.[0]?.id ?? weeks[0]?.[0]?.id ?? ''
+
+  return {
+    weeks,
+    weekIndex,
+    selectedCellId:
+      params.initialBoardState?.selectedCellId && validCellIds.has(params.initialBoardState.selectedCellId)
+        ? params.initialBoardState.selectedCellId
+        : defaultCellId,
+    selectedDeskIndex: Math.min(
+      Math.max(params.initialBoardState?.selectedDeskIndex ?? 0, 0),
+      Math.max(0, params.classroomSettings.deskCount - 1),
+    ),
+    manualMakeupAdjustments: cloneOriginMap(params.initialBoardState?.manualMakeupAdjustments ?? {}),
+    fallbackMakeupStudents: { ...(params.initialBoardState?.fallbackMakeupStudents ?? {}) },
+    manualLectureStockCounts: { ...(params.initialBoardState?.manualLectureStockCounts ?? {}) },
+    fallbackLectureStockStudents: { ...(params.initialBoardState?.fallbackLectureStockStudents ?? {}) },
+    isLectureStockOpen: params.initialBoardState?.isLectureStockOpen ?? false,
+    isMakeupStockOpen: params.initialBoardState?.isMakeupStockOpen ?? false,
+    studentScheduleRange: params.initialBoardState?.studentScheduleRange ?? null,
+    teacherScheduleRange: params.initialBoardState?.teacherScheduleRange ?? null,
   }
 }
 
@@ -579,11 +654,28 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
     const managedCell = managedCellById.get(cell.id)
     if (!managedCell) return cell
 
+    const managedDesksByLessonId = new Map(
+      managedCell.desks
+        .filter((desk) => desk.lesson && isManagedLesson(desk.lesson))
+        .map((desk) => [desk.lesson!.id, desk]),
+    )
+    const preservedLessonIds = new Set<string>()
+
     const nextDesks = cell.desks.map((desk) => {
-      if (!isManagedLesson(desk.lesson)) {
+      const lesson = desk.lesson
+      if (!lesson || !isManagedLesson(lesson)) {
         return {
           ...desk,
-          lesson: desk.lesson ? cloneDeskLesson(desk.lesson) : undefined,
+          lesson: lesson ? cloneDeskLesson(lesson) : undefined,
+        }
+      }
+
+      const managedDesk = managedDesksByLessonId.get(lesson.id)
+      if (desk.manualTeacher && managedDesk?.lesson) {
+        preservedLessonIds.add(lesson.id)
+        return {
+          ...desk,
+          lesson: cloneDeskLesson(managedDesk.lesson),
         }
       }
 
@@ -596,6 +688,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
 
     for (const managedDesk of managedCell.desks) {
       if (!managedDesk.lesson) continue
+      if (preservedLessonIds.has(managedDesk.lesson.id)) continue
 
       const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
         ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
@@ -613,28 +706,24 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
   })
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenBackupRestore }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenBackupRestore }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
   const specialSessionWindowRef = useRef<Window | null>(null)
-  const [weeks, setWeeks] = useState<SlotCell[][]>(() => {
-    const currentWeekStart = getWeekStart(new Date())
-    const previousWeekStart = shiftDate(currentWeekStart, -7)
-    const nextWeekStart = shiftDate(currentWeekStart, 7)
-    return normalizeWeeksDeskCount([
-      createBoardWeek(previousWeekStart, 'prev', { classroomSettings, teachers, students, regularLessons }),
-      createBoardWeek(currentWeekStart, 'current', { classroomSettings, teachers, students, regularLessons }),
-      createBoardWeek(nextWeekStart, 'next', { classroomSettings, teachers, students, regularLessons }),
-    ], classroomSettings.deskCount)
-  })
+  const initialBoardSnapshotRef = useRef<ReturnType<typeof createInitialBoardSnapshot> | null>(null)
+  if (!initialBoardSnapshotRef.current) {
+    initialBoardSnapshotRef.current = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState })
+  }
+  const initialBoardSnapshot = initialBoardSnapshotRef.current
+  const [weeks, setWeeks] = useState<SlotCell[][]>(() => initialBoardSnapshot.weeks)
   const normalizedWeeks = useMemo(() => applyClassroomAvailability(weeks, classroomSettings), [classroomSettings, weeks])
-  const [weekIndex, setWeekIndex] = useState(defaultWeekIndex)
+  const [weekIndex, setWeekIndex] = useState(initialBoardSnapshot.weekIndex)
   const cells = normalizedWeeks[weekIndex] ?? []
-  const [selectedCellId, setSelectedCellId] = useState(() => weeks[defaultWeekIndex]?.[0]?.id ?? '')
-  const [selectedDeskIndex, setSelectedDeskIndex] = useState(0)
+  const [selectedCellId, setSelectedCellId] = useState(initialBoardSnapshot.selectedCellId)
+  const [selectedDeskIndex, setSelectedDeskIndex] = useState(initialBoardSnapshot.selectedDeskIndex)
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
   const [selectedMakeupStockKey, setSelectedMakeupStockKey] = useState<string | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
@@ -642,20 +731,52 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [memoDraft, setMemoDraft] = useState('')
   const [editStudentDraft, setEditStudentDraft] = useState<EditStudentDraft | null>(null)
   const [statusMessage, setStatusMessage] = useState('左クリックで生徒を選ぶか、空欄の生徒マスを左クリックしてメモを保存できます。')
-  const [manualMakeupAdjustments, setManualMakeupAdjustments] = useState<MakeupOriginMap>({})
-  const [fallbackMakeupStudents, setFallbackMakeupStudents] = useState<Record<string, FallbackMakeupStudent>>({})
-  const [manualLectureStockCounts, setManualLectureStockCounts] = useState<LectureStockCountMap>({})
-  const [fallbackLectureStockStudents, setFallbackLectureStockStudents] = useState<Record<string, { displayName: string }>>({})
-  const [isLectureStockOpen, setIsLectureStockOpen] = useState(false)
-  const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(false)
+  const [manualMakeupAdjustments, setManualMakeupAdjustments] = useState<MakeupOriginMap>(initialBoardSnapshot.manualMakeupAdjustments)
+  const [fallbackMakeupStudents, setFallbackMakeupStudents] = useState<Record<string, FallbackMakeupStudent>>(initialBoardSnapshot.fallbackMakeupStudents)
+  const [manualLectureStockCounts, setManualLectureStockCounts] = useState<LectureStockCountMap>(initialBoardSnapshot.manualLectureStockCounts)
+  const [fallbackLectureStockStudents, setFallbackLectureStockStudents] = useState<Record<string, { displayName: string }>>(initialBoardSnapshot.fallbackLectureStockStudents)
+  const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
+  const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
-  const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
-  const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
+  const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.studentScheduleRange)
+  const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.teacherScheduleRange)
   const [teacherMenu, setTeacherMenu] = useState<TeacherMenuState | null>(null)
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
+
+  useEffect(() => {
+    if (!onBoardStateChange) return
+    onBoardStateChange({
+      weeks: cloneWeeks(weeks),
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
+      fallbackMakeupStudents: { ...fallbackMakeupStudents },
+      manualLectureStockCounts: { ...manualLectureStockCounts },
+      fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
+      isLectureStockOpen,
+      isMakeupStockOpen,
+      studentScheduleRange,
+      teacherScheduleRange,
+    })
+  }, [
+    fallbackLectureStockStudents,
+    fallbackMakeupStudents,
+    isLectureStockOpen,
+    isMakeupStockOpen,
+    manualLectureStockCounts,
+    manualMakeupAdjustments,
+    onBoardStateChange,
+    selectedCellId,
+    selectedDeskIndex,
+    studentScheduleRange,
+    teacherScheduleRange,
+    weekIndex,
+    weeks,
+  ])
 
   useEffect(() => {
     setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => {
