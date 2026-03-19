@@ -100,10 +100,30 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.color = '#111111'
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-col, .sa-year-col, .sa-time-sub-header, .sa-time-cell').forEach((node) => {
-    node.style.width = '78px'
-    node.style.minWidth = '78px'
+    node.style.width = '34px'
+    node.style.minWidth = '34px'
     node.style.background = '#f4f4f4'
     node.style.color = '#111111'
+  })
+  clone.querySelectorAll<HTMLElement>('.sa-time-cell').forEach((node) => {
+    const slotLabel = node.querySelector<HTMLElement>('.sa-time-slot')?.textContent?.trim() ?? ''
+    const rangeLabel = node.querySelector<HTMLElement>('.sa-time-range')?.textContent?.trim() ?? ''
+    const rotatedText = [slotLabel, rangeLabel].filter(Boolean).join(' ')
+
+    node.innerHTML = ''
+    const rotatedLabel = document.createElement('div')
+    rotatedLabel.textContent = rotatedText
+    rotatedLabel.style.display = 'inline-block'
+    rotatedLabel.style.whiteSpace = 'nowrap'
+    rotatedLabel.style.fontSize = '11px'
+    rotatedLabel.style.fontWeight = '700'
+    rotatedLabel.style.lineHeight = '1'
+    rotatedLabel.style.transform = 'rotate(-90deg)'
+    rotatedLabel.style.transformOrigin = 'center center'
+    node.style.padding = '0'
+    node.style.textAlign = 'center'
+    node.style.verticalAlign = 'middle'
+    node.appendChild(rotatedLabel)
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-slot').forEach((node) => {
     node.style.fontSize = '13px'
@@ -169,7 +189,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   document.body.removeChild(exportRoot)
 
   const imageData = canvas.toDataURL('image/png')
-  const orientation = 'landscape'
+  const orientation = 'portrait'
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
