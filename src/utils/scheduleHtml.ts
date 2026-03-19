@@ -1981,6 +1981,36 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return String(label || '').replace(/\s+/g, '');
       }
 
+      function formatMakeupNote(subject, sourceLabel, targetDateKey, targetSlotNumber) {
+        if (!sourceLabel) return '';
+        return [subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
+      }
+
+      function toMakeupRows(makeupNotes, minimumRowCount) {
+        return Array.from({ length: Math.max(minimumRowCount, makeupNotes.length) }, (_, rowIndex) => {
+          const note = makeupNotes[rowIndex] ?? '';
+          return '<tr><td colspan="3">' + escapeHtml(note) + '</td></tr>';
+        }).join('');
+      }
+
+      function collectStudentMakeupNotes(entries) {
+        return entries.reduce((notes, entry) => {
+          const note = formatMakeupNote(entry.lesson.subject, entry.lesson.makeupSourceLabel, entry.dateKey, entry.slotNumber);
+          if (note) notes.push(note);
+          return notes;
+        }, []);
+      }
+
+      function collectTeacherMakeupNotes(entries) {
+        return entries.reduce((notes, entry) => {
+          entry.students.forEach((student) => {
+            const note = formatMakeupNote(student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
+            if (note) notes.push(note);
+          });
+          return notes;
+        }, []);
+      }
+
       function renderPeriodPill(segment, stateHtml) {
         return '<span class="period-pill-edge">◀</span><span class="period-pill-label">' + escapeHtml(segment.label) + '</span>' + (stateHtml || '') + '<span class="period-pill-edge">▶</span>';
       }
@@ -2151,11 +2181,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const subjectCounts = {};
           const lectureCounts = {};
           const desiredLectureCounts = buildDesiredLectureCountMap(student.id, startDate, endDate);
-          const makeupNotes = [];
+          const makeupNotes = collectStudentMakeupNotes(entries);
           entries.forEach((entry) => {
             if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
             else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
-            if (entry.lesson.makeupSourceLabel) makeupNotes.push(entry.lesson.subject + ' ' + compactMakeupSourceLabel(entry.lesson.makeupSourceLabel) + '→' + formatCompactDateSlot(entry.dateKey, entry.slotNumber));
           });
           const lectureCountWarningHtml = hasCountMismatch(lectureCounts, desiredLectureCounts)
             ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と予定数が一致していません！</div>'
@@ -2178,10 +2207,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             }).join('');
             return '<tr>' + renderStudentTimeHeaderCell(student.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
           }).join('');
-          const makeupRows = Array.from({ length: Math.max(7, makeupNotes.length) }, (_, rowIndex) => {
-            const note = makeupNotes[rowIndex] ?? '';
-            return '<tr><td colspan="3">' + escapeHtml(note) + '</td></tr>';
-          }).join('');
+          const makeupRows = toMakeupRows(makeupNotes, 7);
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
           const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
           const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
@@ -2209,6 +2235,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
           const regularCounts = {};
           const lectureCounts = {};
+          const makeupNotes = collectTeacherMakeupNotes(entries);
           entries.forEach((entry) => {
             entry.students.forEach((student) => {
               if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
@@ -2233,13 +2260,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             }).join('');
             return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
           }).join('');
-          const noteRows = Array.from({ length: 5 }, () => {
-            return '<tr><td colspan="3"></td></tr>';
-          }).join('');
+          const makeupRows = toMakeupRows(makeupNotes, 7);
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
           const qrHtml = teacher.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + teacher.qrSvg + '</span>' : '';
           const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, noteRows, toCountRows(regularCounts), toCountRows(lectureCounts), '') + '</section>';
+          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '') + '</section>';
         }).join('');
       }
 

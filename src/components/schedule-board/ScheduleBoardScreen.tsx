@@ -13,7 +13,6 @@ import type { PersistedBoardState } from '../../types/appState'
 import { exportBoardPdf } from '../../utils/pdf'
 import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
-import { openSpecialSessionAvailabilityHtml } from '../../utils/specialSessionAvailabilityHtml'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -595,6 +594,32 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
   }
 }
 
+function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson) {
+  const nextLesson = cloneDeskLesson(managedLesson)
+
+  currentLesson.studentSlots.forEach((student, slotIndex) => {
+    if (!student) return
+
+    const managedStudent = managedLesson.studentSlots[slotIndex]
+    if (managedStudent?.id === student.id) return
+
+    const alreadyPresent = nextLesson.studentSlots.some((entry) => entry?.id === student.id)
+    if (alreadyPresent) return
+
+    if (!nextLesson.studentSlots[slotIndex]) {
+      nextLesson.studentSlots[slotIndex] = { ...student }
+      return
+    }
+
+    const emptySlotIndex = nextLesson.studentSlots.findIndex((entry) => !entry)
+    if (emptySlotIndex >= 0) {
+      nextLesson.studentSlots[emptySlotIndex] = { ...student }
+    }
+  })
+
+  return nextLesson
+}
+
 function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][]) {
   const boardCellsById = new Map(boardWeeks.flat().map((cell) => [cell.id, cell]))
   return scheduleCells.map((managedCell) => {
@@ -671,11 +696,12 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       }
 
       const managedDesk = managedDesksByLessonId.get(lesson.id)
-      if (desk.manualTeacher && managedDesk?.lesson) {
+      if (managedDesk?.lesson) {
         preservedLessonIds.add(lesson.id)
         return {
           ...desk,
-          lesson: cloneDeskLesson(managedDesk.lesson),
+          teacher: desk.manualTeacher ? desk.teacher : managedDesk.teacher,
+          lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson),
         }
       }
 
@@ -712,7 +738,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
-  const specialSessionWindowRef = useRef<Window | null>(null)
   const initialBoardSnapshotRef = useRef<ReturnType<typeof createInitialBoardSnapshot> | null>(null)
   if (!initialBoardSnapshotRef.current) {
     initialBoardSnapshotRef.current = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState })
@@ -1855,45 +1880,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage('講師日程は別タブで表示中です。')
   }
 
-  const handleOpenSpecialSessionAvailability = (sessionId: string) => {
-    const session = specialSessions.find((row) => row.id === sessionId)
-    if (!session) return
-
-    const nextWindow = openSpecialSessionAvailabilityHtml({
-      session,
-      allSessions: specialSessions,
-      classroomSettings,
-      teachers,
-      students,
-      scheduleCells: buildScheduleCellsForRange({
-        range: {
-          startDate: session.startDate,
-          endDate: session.endDate,
-          periodValue: '',
-        },
-        fallbackStartDate: session.startDate,
-        fallbackEndDate: session.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons,
-        boardWeeks: normalizedWeeks,
-      }),
-      boardWeeks: normalizedWeeks,
-      targetWindow: specialSessionWindowRef.current,
-    })
-    if (!nextWindow) return
-
-    specialSessionWindowRef.current = nextWindow
-    const runtimeWindow = getSchedulePopupRuntimeWindow() as typeof window & {
-      __lessonScheduleSpecialSessionWindow?: Window | null
-      __lessonScheduleSpecialSessionId?: string
-    }
-    runtimeWindow.__lessonScheduleSpecialSessionWindow = nextWindow
-    runtimeWindow.__lessonScheduleSpecialSessionId = session.id
-    setStatusMessage(`${session.label} の欠席不可入力を別タブで表示中です。`)
-  }
-
   const handleStoreStudent = () => {
     if (!studentMenu || !menuStudent) return
 
@@ -2254,7 +2240,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             resolveStudentGradeLabel={resolveBoardStudentGradeLabel}
             resolveDisplayedLessonType={resolveDisplayedLessonType}
             onDayHeaderClick={handleToggleHolidayDate}
-            onSpecialPeriodClick={handleOpenSpecialSessionAvailability}
             onTeacherClick={handleSelectDesk}
             onStudentClick={handleStudentClick}
           />

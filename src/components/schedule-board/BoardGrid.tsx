@@ -35,7 +35,6 @@ type BoardGridProps = {
   resolveStudentGradeLabel: (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => string
   resolveDisplayedLessonType: (name: string, subject: string, lessonType: LessonType | null, dateKey: string, slotNumber: number) => LessonType | null
   onDayHeaderClick: (dateKey: string) => void
-  onSpecialPeriodClick: (periodId: string) => void
   onTeacherClick: (cellId: string, deskIndex: number, x: number, y: number) => void
   onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, x: number, y: number) => void
 }
@@ -51,7 +50,6 @@ export function BoardGrid({
   resolveStudentGradeLabel,
   resolveDisplayedLessonType,
   onDayHeaderClick,
-  onSpecialPeriodClick,
   onTeacherClick,
   onStudentClick,
 }: BoardGridProps) {
@@ -239,9 +237,9 @@ export function BoardGrid({
                   ? <th key={segment.key} colSpan={segment.colSpan} className="sa-period-gap"></th>
                   : (
                     <th key={segment.key} colSpan={segment.colSpan} className="sa-period-band" data-testid={`board-special-period-${segment.key}`}>
-                      <button type="button" className="sa-period-band-button" onClick={() => onSpecialPeriodClick(segment.key)}>
+                      <div className="sa-period-band-button">
                         <span className="sa-period-band-inner">{segment.label}</span>
-                      </button>
+                      </div>
                     </th>
                   ))) }
               </tr>
