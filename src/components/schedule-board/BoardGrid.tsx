@@ -2,6 +2,13 @@ import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, TeacherType } from './types'
 
+function formatMakeupSourceDate(dateKey?: string) {
+  if (!dateKey) return ''
+  const [, month = '', day = ''] = dateKey.split('-')
+  if (!month || !day) return ''
+  return `${Number(month)}/${Number(day)}`
+}
+
 function getLessonStar(lessonType: LessonType) {
   switch (lessonType) {
     case 'regular':
@@ -62,6 +69,7 @@ export function BoardGrid({
     memoLabel: string | undefined,
     studentGrade: string,
     studentBirthDate: string | undefined,
+    makeupSourceDate: string | undefined,
     makeupSourceLabel: string | undefined,
     studentSubject: string,
     lessonType: LessonType | null,
@@ -75,6 +83,7 @@ export function BoardGrid({
     const lessonStar = resolvedLessonType ? getLessonStar(resolvedLessonType) : null
     const teacherStar = getTeacherStar(teacherType)
     const displayName = studentName ? resolveStudentDisplayName(studentName) : (memoLabel ?? '')
+    const makeupSourceDateLabel = studentName && resolvedLessonType === 'makeup' ? formatMakeupSourceDate(makeupSourceDate) : ''
     const displayGrade = studentName ? resolveStudentGradeLabel(studentName, studentGrade, cell.dateKey, studentBirthDate) : ''
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
@@ -108,6 +117,7 @@ export function BoardGrid({
           >
             {displayName}
           </span>
+          {makeupSourceDateLabel ? <span className="sa-student-origin-date">{makeupSourceDateLabel}</span> : null}
         </span>
         {hasMemo ? null : (
           <span className="sa-student-detail">
@@ -297,7 +307,6 @@ export function BoardGrid({
                       const lesson = desk.lesson
                       const teacherWarning = hasManualTeacherWarning(desk)
                       const teacherAssignmentHint = getTeacherAssignmentHint(desk)
-                      const showsScheduleRegistrationBadge = desk.teacherAssignmentSource === 'schedule-registration' && Boolean(desk.teacher.trim())
                       const teacherClassName = [
                         'sa-teacher',
                         !cell.isOpenDay ? 'sa-inactive' : '',
@@ -324,11 +333,6 @@ export function BoardGrid({
                           >
                             {cell.isOpenDay ? desk.teacher : ''}
                           </div>
-                          {cell.isOpenDay && showsScheduleRegistrationBadge ? (
-                            <div className="sa-teacher-source" data-testid={`teacher-source-${cell.id}-${deskIndex}`}>
-                              日程表より登録
-                            </div>
-                          ) : null}
                         </td>,
                         renderStudentCell(
                           cell,
@@ -339,6 +343,7 @@ export function BoardGrid({
                           desk.memoSlots?.[0] ?? undefined,
                           firstStudent?.grade ?? '',
                           firstStudent?.birthDate,
+                          firstStudent?.makeupSourceDate,
                           firstStudent?.makeupSourceLabel,
                           firstStudent?.subject ?? '',
                           firstStudent?.lessonType ?? null,
@@ -356,6 +361,7 @@ export function BoardGrid({
                           desk.memoSlots?.[1] ?? undefined,
                           secondStudent?.grade ?? '',
                           secondStudent?.birthDate,
+                          secondStudent?.makeupSourceDate,
                           secondStudent?.makeupSourceLabel,
                           secondStudent?.subject ?? '',
                           secondStudent?.lessonType ?? null,

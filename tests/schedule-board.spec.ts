@@ -102,7 +102,7 @@ async function hasStudentInSlot(
       const locator = page.getByTestId(`student-name-${dateKey}_${slotNumber}-${deskIndex}-${studentIndex}`)
       if (await locator.count() === 0) continue
       const text = (await locator.textContent())?.trim()
-      if (text === studentName) return true
+      if ((text ?? '').startsWith(studentName)) return true
     }
   }
 
@@ -128,14 +128,15 @@ async function countTeacherAssignmentsByDate(
   return count
 }
 
-async function countTeacherSourceBadgesByDate(page: Parameters<typeof test>[0]['page'], dateKey: string) {
+async function countTeacherSourceTooltipsByDate(page: Parameters<typeof test>[0]['page'], dateKey: string) {
   let count = 0
 
   for (let slotNumber = 1; slotNumber <= 5; slotNumber += 1) {
     for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
-      const locator = page.getByTestId(`teacher-source-${dateKey}_${slotNumber}-${deskIndex}`)
+      const locator = page.getByTestId(`teacher-cell-${dateKey}_${slotNumber}-${deskIndex}`).locator('.sa-teacher-name')
       if (await locator.count() === 0) continue
-      if (await locator.isVisible()) count += 1
+      const title = (await locator.getAttribute('title')) ?? ''
+      if (title.includes('日程表より登録')) count += 1
     }
   }
 
@@ -2591,7 +2592,7 @@ test.describe('コマ調整表', () => {
     await moveBoardToWeek(page, new Date(2026, 2, 30))
 
     await expect.poll(async () => countTeacherAssignmentsByDate(page, '2026-04-01', '加藤講師')).toBe(0)
-    await expect.poll(async () => countTeacherSourceBadgesByDate(page, '2026-04-01')).toBe(0)
+    await expect.poll(async () => countTeacherSourceTooltipsByDate(page, '2026-04-01')).toBe(0)
     await expect.poll(async () => {
       const april2 = await countTeacherAssignmentsByDate(page, '2026-04-02', '加藤講師')
       const april3 = await countTeacherAssignmentsByDate(page, '2026-04-03', '加藤講師')
@@ -2599,9 +2600,9 @@ test.describe('コマ調整表', () => {
       return april2 + april3 + april4
     }).toBeGreaterThan(0)
     await expect.poll(async () => {
-      const april2 = await countTeacherSourceBadgesByDate(page, '2026-04-02')
-      const april3 = await countTeacherSourceBadgesByDate(page, '2026-04-03')
-      const april4 = await countTeacherSourceBadgesByDate(page, '2026-04-04')
+      const april2 = await countTeacherSourceTooltipsByDate(page, '2026-04-02')
+      const april3 = await countTeacherSourceTooltipsByDate(page, '2026-04-03')
+      const april4 = await countTeacherSourceTooltipsByDate(page, '2026-04-04')
       return april2 + april3 + april4
     }).toBeGreaterThan(0)
 
@@ -2616,9 +2617,9 @@ test.describe('コマ調整表', () => {
       return april2 + april3 + april4
     }).toBe(0)
     await expect.poll(async () => {
-      const april2 = await countTeacherSourceBadgesByDate(page, '2026-04-02')
-      const april3 = await countTeacherSourceBadgesByDate(page, '2026-04-03')
-      const april4 = await countTeacherSourceBadgesByDate(page, '2026-04-04')
+      const april2 = await countTeacherSourceTooltipsByDate(page, '2026-04-02')
+      const april3 = await countTeacherSourceTooltipsByDate(page, '2026-04-03')
+      const april4 = await countTeacherSourceTooltipsByDate(page, '2026-04-04')
       return april2 + april3 + april4
     }).toBe(0)
   })

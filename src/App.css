@@ -755,19 +755,6 @@ tr.sa-slot-first td {
   color: #d14343;
 }
 
-.sa-teacher-source {
-  margin-top: 3px;
-  display: inline-flex;
-  align-items: center;
-  border-radius: 999px;
-  padding: 2px 6px;
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 1.2;
-  color: #36506d;
-  background: #e6eef9;
-}
-
 .sa-type-chip-wrap {
   margin-top: 3px;
 }
@@ -782,6 +769,7 @@ tr.sa-slot-first td {
 }
 
 .sa-student-picked .sa-student-name,
+.sa-student-picked .sa-student-origin-date,
 .sa-student-picked .sa-student-detail,
 .sa-student-picked .sa-student-star {
   color: #fff;
@@ -822,6 +810,13 @@ tr.sa-slot-first td {
   color: #1f3f61;
   line-height: 1.2;
   min-height: 1.2em;
+}
+
+.sa-student-origin-date {
+  font-size: 8px;
+  font-weight: 700;
+  color: #5e7389;
+  line-height: 1.1;
 }
 
 .sa-student-name-warning {

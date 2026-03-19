@@ -34,22 +34,15 @@ function fitMemoTextForPdf(root: HTMLElement) {
 }
 
 export async function exportBoardPdf({ element, fileName, title }: ExportBoardPdfParams) {
+  void title
   const exportRoot = document.createElement('div')
   exportRoot.style.position = 'fixed'
   exportRoot.style.left = '-100000px'
   exportRoot.style.top = '0'
   exportRoot.style.background = '#ffffff'
-  exportRoot.style.padding = '12px'
+  exportRoot.style.padding = '0'
   exportRoot.style.zIndex = '-1'
   exportRoot.style.width = 'max-content'
-
-  const heading = document.createElement('div')
-  heading.textContent = title
-  heading.style.fontSize = '28px'
-  heading.style.fontWeight = '700'
-  heading.style.color = '#16314f'
-  heading.style.marginBottom = '12px'
-  exportRoot.appendChild(heading)
 
   const clone = element.cloneNode(true) as HTMLElement
   clone.querySelector<HTMLElement>('.lecture-stock-panel')?.remove()
@@ -73,7 +66,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   if (cloneTable && sourceTable) {
     cloneTable.style.width = `${Math.ceil(sourceTable.scrollWidth)}px`
     cloneTable.style.minWidth = `${Math.ceil(sourceTable.scrollWidth)}px`
-    cloneTable.style.fontSize = '11px'
+    cloneTable.style.fontSize = '13px'
   }
 
   clone.querySelectorAll<HTMLElement>('thead th, .sa-time-cell').forEach((cell) => {
@@ -88,49 +81,49 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.background = '#ffffff'
   })
   clone.querySelectorAll<HTMLElement>('.slot-adjust-grid th, .slot-adjust-grid td').forEach((node) => {
-    node.style.padding = '4px 5px'
+    node.style.padding = '6px 7px'
     node.style.borderColor = '#111111'
   })
   clone.querySelectorAll<HTMLElement>('.sa-period-row th').forEach((node) => {
-    node.style.height = '24px'
+    node.style.height = '22px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-header-row1 th').forEach((node) => {
-    node.style.height = '36px'
-    node.style.fontSize = '12px'
+    node.style.height = '38px'
+    node.style.fontSize = '14px'
     node.style.background = '#f4f4f4'
     node.style.color = '#111111'
   })
   clone.querySelectorAll<HTMLElement>('.sa-header-row2 th').forEach((node) => {
-    node.style.height = '30px'
-    node.style.fontSize = '11px'
+    node.style.height = '34px'
+    node.style.fontSize = '12px'
     node.style.background = '#f4f4f4'
     node.style.color = '#111111'
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-col, .sa-year-col, .sa-time-sub-header, .sa-time-cell').forEach((node) => {
-    node.style.width = '72px'
-    node.style.minWidth = '72px'
+    node.style.width = '78px'
+    node.style.minWidth = '78px'
     node.style.background = '#f4f4f4'
     node.style.color = '#111111'
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-slot').forEach((node) => {
-    node.style.fontSize = '11px'
+    node.style.fontSize = '13px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-range').forEach((node) => {
-    node.style.fontSize = '10px'
+    node.style.fontSize = '11px'
     node.style.lineHeight = '1.3'
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher').forEach((node) => {
-    node.style.minHeight = '52px'
+    node.style.minHeight = '62px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
-    node.style.fontSize = '11px'
-    node.style.lineHeight = '1.3'
+    node.style.fontSize = '13px'
+    node.style.lineHeight = '1.25'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student').forEach((node) => {
-    node.style.minHeight = '52px'
+    node.style.minHeight = '62px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((node) => {
-    node.style.gap = '3px'
+    node.style.gap = '4px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-name').forEach((node) => {
     if (node.classList.contains('sa-student-name-note')) {
@@ -140,18 +133,22 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
       return
     }
 
-    node.style.fontSize = '11px'
-    node.style.lineHeight = '1.25'
+    node.style.fontSize = '13px'
+    node.style.lineHeight = '1.2'
+  })
+  clone.querySelectorAll<HTMLElement>('.sa-student-origin-date').forEach((node) => {
+    node.style.fontSize = '10px'
+    node.style.lineHeight = '1.1'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
-    node.style.fontSize = '10px'
-    node.style.lineHeight = '1.25'
-    node.style.gap = '3px'
+    node.style.fontSize = '11px'
+    node.style.lineHeight = '1.2'
+    node.style.gap = '4px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-star').forEach((node) => {
-    node.style.fontSize = '10px'
-    node.style.minWidth = '10px'
-    node.style.height = '13px'
+    node.style.fontSize = '11px'
+    node.style.minWidth = '11px'
+    node.style.height = '14px'
   })
 
   exportRoot.appendChild(clone)
@@ -172,11 +169,11 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   document.body.removeChild(exportRoot)
 
   const imageData = canvas.toDataURL('image/png')
-  const orientation = canvas.width >= canvas.height ? 'landscape' : 'portrait'
+  const orientation = 'landscape'
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
-  const margin = 6
+  const margin = 2
   const contentWidth = pageWidth - margin * 2
   const contentHeight = pageHeight - margin * 2
   const fitScale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height)

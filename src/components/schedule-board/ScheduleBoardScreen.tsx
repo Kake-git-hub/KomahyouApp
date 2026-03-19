@@ -3065,11 +3065,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 <strong>{studentMenu?.mode === 'memo' ? 'メモ' : resolveBoardStudentDisplayName(menuStudent?.student.name ?? '')}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setStudentMenu(null)}>x</button>
               </div>
-              <div className="student-menu-meta">
-                {studentMenu?.mode === 'memo'
-                  ? 'コマ表上だけで使うメモを保存します'
-                  : `${resolveBoardStudentGradeLabel(menuStudent?.student.name ?? '', menuStudent?.student.grade ?? '', menuStudent?.cell.dateKey ?? displayWeekDate)} ${menuStudent?.student.subject}`}
-              </div>
+              {studentMenu?.mode === 'memo' ? null : (
+                <div className="student-menu-meta">
+                  {`${resolveBoardStudentGradeLabel(menuStudent?.student.name ?? '', menuStudent?.student.grade ?? '', menuStudent?.cell.dateKey ?? displayWeekDate)} ${menuStudent?.student.subject}`}
+                </div>
+              )}
               {studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
@@ -3085,7 +3085,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <button type="button" className="primary-button" onClick={handleSaveMemo} data-testid="menu-memo-save-button">保存</button>
                   </div>
                   <div className="student-menu-section">
-                    <label className="student-menu-label" htmlFor="student-memo-input">内容</label>
                     <textarea
                       id="student-memo-input"
                       className="student-menu-input student-menu-textarea"
@@ -3093,7 +3092,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                       onChange={(event) => setMemoDraft(event.target.value)}
                       data-testid="menu-memo-textarea"
                     />
-                    <div className="student-menu-hint">盤面では2行まで表示します。空で保存するとメモを削除します。</div>
+                    <div className="student-menu-hint">2行まで表示します。空で保存するとメモを削除</div>
                   </div>
                 </>
               ) : (
