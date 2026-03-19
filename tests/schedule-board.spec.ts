@@ -1701,6 +1701,7 @@ test.describe('コマ調整表', () => {
   test('講習ストックを割り振れて再移動しても振替にならない', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
+    const lectureSubjects = ['数', '英'] as const
 
     await page.goto('/')
 
@@ -1711,6 +1712,7 @@ test.describe('コマ調整表', () => {
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
     await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
     await expect(page.getByTestId('lecture-stock-chip')).toContainText('1')
@@ -1721,11 +1723,15 @@ test.describe('コマ調整表', () => {
     const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first()
     await expect(lectureEntry).toBeVisible()
     expect((await lectureEntry.getAttribute('title')) ?? '').toContain('数')
+    expect((await lectureEntry.getAttribute('title')) ?? '').toContain('英')
     const initialLectureCount = extractSignedCount(await lectureEntry.textContent())
     await lectureEntry.click()
 
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
     await expect(page.getByTestId('move-preview')).toContainText('講習ストックの配置先を選択中')
+    const firstPreviewText = (await page.getByTestId('move-preview').textContent()) ?? ''
+    const firstSubject = lectureSubjects.find((subject) => firstPreviewText.includes(subject))
+    expect(firstSubject).toBeTruthy()
 
     await page.getByTestId(firstTarget.cellTestId).click()
     const firstTargetName = page.getByTestId(firstTarget.cellTestId.replace('student-cell-', 'student-name-'))
@@ -1736,7 +1742,24 @@ test.describe('コマ調整表', () => {
       return extractSignedCount(await matchingEntries.first().textContent())
     }).toBe(initialLectureCount - 1)
 
-    const secondTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', firstTarget.slotId)
+    const secondPlacementTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', firstTarget.slotId)
+    await lectureEntry.click()
+    await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
+    await expect(page.getByTestId('move-preview')).toContainText('講習ストックの配置先を選択中')
+    const secondPreviewText = (await page.getByTestId('move-preview').textContent()) ?? ''
+    const secondSubject = lectureSubjects.find((subject) => secondPreviewText.includes(subject))
+    expect(secondSubject).toBeTruthy()
+    expect(secondSubject).not.toBe(firstSubject)
+
+    await page.getByTestId(secondPlacementTarget.cellTestId).click()
+    const secondPlacementTargetName = page.getByTestId(secondPlacementTarget.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(secondPlacementTargetName).toHaveText('青木太郎')
+    await expect.poll(async () => {
+      const matchingEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })
+      return matchingEntries.count()
+    }).toBe(0)
+
+    const secondTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', secondPlacementTarget.slotId)
     await page.getByTestId(firstTarget.cellTestId).click()
     await page.getByTestId('menu-move-button').click()
     await page.getByTestId(secondTarget.cellTestId).click()

@@ -1148,8 +1148,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     return Array.from(grouped.entries())
       .map(([studentKey, entry]) => {
-        const nextPlacementEntry = [...entry.subjectCounts]
-          .filter((subjectEntry) => subjectEntry.requestedCount > 0)
+        const subjectTotals = entry.subjectCounts.reduce<Record<string, number>>((totals, subjectEntry) => {
+          totals[subjectEntry.subject] = (totals[subjectEntry.subject] ?? 0) + subjectEntry.requestedCount
+          return totals
+        }, {})
+        const nextPlacementEntry = Object.entries(subjectTotals)
+          .filter(([, requestedCount]) => requestedCount > 0)
+          .map(([subject, requestedCount]) => ({ subject: subject as SubjectLabel, requestedCount }))
           .sort((left, right) => {
             if (left.requestedCount !== right.requestedCount) return right.requestedCount - left.requestedCount
             return left.subject.localeCompare(right.subject, 'ja')
