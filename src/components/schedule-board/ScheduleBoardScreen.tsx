@@ -8,7 +8,7 @@ import { buildLectureStockEntries } from './lectureStock'
 import { buildMakeupStockEntries, buildMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, SubjectLabel, TeacherType } from './types'
-import type { ClassroomSettings } from '../../App'
+import type { ClassroomSettings, TeacherAutoAssignRequest } from '../../App'
 import type { PersistedBoardState } from '../../types/appState'
 import { exportBoardPdf } from '../../utils/pdf'
 import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
@@ -152,6 +152,7 @@ type ScheduleBoardScreenProps = {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   specialSessions: SpecialSessionRow[]
+  teacherAutoAssignRequest?: TeacherAutoAssignRequest | null
   initialBoardState?: PersistedBoardState | null
   onBoardStateChange?: (state: PersistedBoardState) => void
   onUpdateSpecialSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
@@ -876,7 +877,167 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
   })
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenBackupRestore }: ScheduleBoardScreenProps) {
+function repackTeacherOnlyDesks(desks: DeskCell[]) {
+  const teacherOnlyDesks = desks
+    .filter((desk) => !desk.lesson && desk.teacher.trim())
+    .map((desk) => ({
+      teacher: desk.teacher,
+      manualTeacher: Boolean(desk.manualTeacher),
+    }))
+
+  const nextDesks = desks.map((desk) => {
+    if (desk.lesson) return desk
+    return {
+      ...desk,
+      teacher: '',
+      manualTeacher: false,
+    }
+  })
+
+  let teacherOnlyIndex = 0
+  for (let deskIndex = 0; deskIndex < nextDesks.length; deskIndex += 1) {
+    if (nextDesks[deskIndex]?.lesson) continue
+    const teacherOnlyDesk = teacherOnlyDesks[teacherOnlyIndex]
+    if (!teacherOnlyDesk) break
+    nextDesks[deskIndex] = {
+      ...nextDesks[deskIndex],
+      teacher: teacherOnlyDesk.teacher,
+      manualTeacher: teacherOnlyDesk.manualTeacher,
+    }
+    teacherOnlyIndex += 1
+  }
+
+  return nextDesks
+}
+
+function ensureWeeksCoverDateRange(params: {
+  weeks: SlotCell[][]
+  startDate: string
+  endDate: string
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+}) {
+  let nextWeeks = cloneWeeks(params.weeks)
+  let weekIndexOffset = 0
+
+  while ((nextWeeks[0]?.[0]?.dateKey ?? params.startDate) > params.startDate) {
+    const firstWeekStart = getWeekStart(parseDateKey(nextWeeks[0]?.[0]?.dateKey ?? params.startDate))
+    const previousWeekStart = shiftDate(firstWeekStart, -7)
+    nextWeeks = [
+      createBoardWeek(previousWeekStart, previousWeekStart.toISOString().slice(0, 10), {
+        classroomSettings: params.classroomSettings,
+        teachers: params.teachers,
+        students: params.students,
+        regularLessons: params.regularLessons,
+      }),
+      ...nextWeeks,
+    ]
+    weekIndexOffset += 1
+  }
+
+  while ((nextWeeks[nextWeeks.length - 1]?.[6]?.dateKey ?? params.endDate) < params.endDate) {
+    const lastWeekStart = getWeekStart(parseDateKey(nextWeeks[nextWeeks.length - 1]?.[0]?.dateKey ?? params.endDate))
+    const nextWeekStart = shiftDate(lastWeekStart, 7)
+    nextWeeks = [
+      ...nextWeeks,
+      createBoardWeek(nextWeekStart, nextWeekStart.toISOString().slice(0, 10), {
+        classroomSettings: params.classroomSettings,
+        teachers: params.teachers,
+        students: params.students,
+        regularLessons: params.regularLessons,
+      }),
+    ]
+  }
+
+  return {
+    weeks: nextWeeks,
+    weekIndexOffset,
+  }
+}
+
+function autoAssignTeacherToSpecialSession(params: {
+  weeks: SlotCell[][]
+  session: SpecialSessionRow
+  teacher: TeacherRow
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+}) {
+  const teacherName = getTeacherDisplayName(params.teacher)
+  const unavailableSlots = new Set(params.session.teacherInputs[params.teacher.id]?.unavailableSlots ?? [])
+  const coveredWeeks = ensureWeeksCoverDateRange({
+    weeks: params.weeks,
+    startDate: params.session.startDate,
+    endDate: params.session.endDate,
+    classroomSettings: params.classroomSettings,
+    teachers: params.teachers,
+    students: params.students,
+    regularLessons: params.regularLessons,
+  })
+  const nextWeeks = coveredWeeks.weeks
+  let assignedCellCount = 0
+  let skippedFullCellCount = 0
+  let hasChanges = coveredWeeks.weekIndexOffset > 0 || coveredWeeks.weeks.length !== params.weeks.length
+
+  for (const week of nextWeeks) {
+    for (const cell of week) {
+      if (cell.dateKey < params.session.startDate || cell.dateKey > params.session.endDate) continue
+      if (!cell.isOpenDay) continue
+      if (resolveTeacherRosterStatus(params.teacher, cell.dateKey) !== '在籍') continue
+
+      const slotKey = `${cell.dateKey}_${cell.slotNumber}`
+      if (unavailableSlots.has(slotKey)) continue
+
+      const alreadyAssigned = cell.desks.some((desk) => desk.teacher === teacherName)
+      if (alreadyAssigned) {
+        const repackedDesks = repackTeacherOnlyDesks(cell.desks)
+        const repackedChanged = repackedDesks.some((desk, deskIndex) => (
+          desk.teacher !== cell.desks[deskIndex]?.teacher || desk.manualTeacher !== Boolean(cell.desks[deskIndex]?.manualTeacher)
+        ))
+        if (repackedChanged) {
+          cell.desks = repackedDesks
+          hasChanges = true
+        }
+        continue
+      }
+
+      const teacherOnlyDesks = cell.desks.filter((desk) => !desk.lesson && desk.teacher.trim())
+      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson).length
+      if (teacherOnlyDesks.length >= emptyDeskCount) {
+        skippedFullCellCount += 1
+        continue
+      }
+
+      const nextDesks = cell.desks.map((desk) => ({ ...desk }))
+      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim())
+        ?? nextDesks.find((desk) => !desk.lesson)
+      if (!candidateDesk) {
+        skippedFullCellCount += 1
+        continue
+      }
+
+      candidateDesk.teacher = teacherName
+      candidateDesk.manualTeacher = true
+      cell.desks = repackTeacherOnlyDesks(nextDesks)
+      assignedCellCount += 1
+      hasChanges = true
+    }
+  }
+
+  return {
+    nextWeeks,
+    weekIndexOffset: coveredWeeks.weekIndexOffset,
+    teacherName,
+    assignedCellCount,
+    skippedFullCellCount,
+    hasChanges,
+  }
+}
+
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, teacherAutoAssignRequest, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenBackupRestore }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
@@ -917,6 +1078,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
   const [pointerPreviewPosition, setPointerPreviewPosition] = useState({ x: 0, y: 0 })
+  const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -965,6 +1127,42 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (typeof window === 'undefined') return
     getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = normalizedWeeks
   }, [normalizedWeeks])
+
+  useEffect(() => {
+    if (!teacherAutoAssignRequest) return
+    if (processedTeacherAutoAssignRequestIdRef.current === teacherAutoAssignRequest.requestId) return
+    processedTeacherAutoAssignRequestIdRef.current = teacherAutoAssignRequest.requestId
+
+    const session = specialSessions.find((entry) => entry.id === teacherAutoAssignRequest.sessionId)
+    const teacher = teachers.find((entry) => entry.id === teacherAutoAssignRequest.teacherId)
+    if (!session || !teacher) return
+
+    const result = autoAssignTeacherToSpecialSession({
+      weeks,
+      session,
+      teacher,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+    })
+
+    if (!result.hasChanges) {
+      setStatusMessage(`${session.label} で ${result.teacherName} の自動登録対象はありませんでした。`)
+      return
+    }
+
+    commitWeeks(
+      result.nextWeeks,
+      weekIndex + result.weekIndexOffset,
+      selectedCellId,
+      selectedDeskIndex,
+    )
+    setStatusMessage(
+      `${session.label} で ${result.teacherName} を ${result.assignedCellCount} コマ自動登録しました。`
+      + (result.skippedFullCellCount > 0 ? ` ${result.skippedFullCellCount} コマは空き机がないためスキップしました。` : ''),
+    )
+  }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
 
   useEffect(() => {
     if (!isStudentScheduleOpen) return

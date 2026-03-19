@@ -109,6 +109,25 @@ async function hasStudentInSlot(
   return false
 }
 
+async function countTeacherAssignmentsByDate(
+  page: Parameters<typeof test>[0]['page'],
+  dateKey: string,
+  teacherName: string,
+) {
+  let count = 0
+
+  for (let slotNumber = 1; slotNumber <= 5; slotNumber += 1) {
+    for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
+      const locator = page.getByTestId(`teacher-cell-${dateKey}_${slotNumber}-${deskIndex}`)
+      if (await locator.count() === 0) continue
+      const text = ((await locator.textContent()) ?? '').trim()
+      if (text === teacherName) count += 1
+    }
+  }
+
+  return count
+}
+
 async function findSlotWithEmptyCells(
   page: Parameters<typeof test>[0]['page'],
   weekStart: Date,
@@ -2533,6 +2552,37 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('teacher-schedule-register-unregister').click()
     await expect(periodButton).toContainText('参加不可登録はここをクリック')
     await expect.poll(async () => targetSheet.locator('[data-role="toggle-teacher-unavailable-date"]').count()).toBeGreaterThan(0)
+  })
+
+  test('講師日程の講習期間登録で参加可能コマへ講師をコマ表に自動登録する', async ({ page }) => {
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-teacher-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-30', '2026-04-05')
+
+    const teacherId = 't009'
+    const targetSheet = popup.locator(`[data-role="teacher-sheet"][data-teacher-id="${teacherId}"]`)
+    await expect(targetSheet).toBeVisible()
+
+    await popup.getByTestId(`teacher-schedule-day-toggle-${teacherId}-2026-04-01`).click()
+    await expect.poll(async () => targetSheet.locator('.slot-cell.is-unavailable').count()).toBeGreaterThan(0)
+
+    await popup.getByTestId(`teacher-schedule-period-button-${teacherId}-session_2026_spring`).click()
+    await expect(popup.getByTestId('teacher-schedule-register-modal')).toBeVisible()
+    await popup.getByTestId('teacher-schedule-register-submit').click()
+
+    await moveBoardToWeek(page, new Date(2026, 2, 30))
+
+    await expect.poll(async () => countTeacherAssignmentsByDate(page, '2026-04-01', '加藤講師')).toBe(0)
+    await expect.poll(async () => {
+      const april2 = await countTeacherAssignmentsByDate(page, '2026-04-02', '加藤講師')
+      const april3 = await countTeacherAssignmentsByDate(page, '2026-04-03', '加藤講師')
+      const april4 = await countTeacherAssignmentsByDate(page, '2026-04-04', '加藤講師')
+      return april2 + april3 + april4
+    }).toBeGreaterThan(0)
   })
 
 

@@ -32,6 +32,12 @@ type GoogleHolidaySyncState = {
   message: string
 }
 
+export type TeacherAutoAssignRequest = {
+  requestId: number
+  sessionId: string
+  teacherId: string
+}
+
 type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
   __lessonScheduleStudentWindow?: Window | null
   __lessonScheduleTeacherWindow?: Window | null
@@ -123,6 +129,7 @@ function App() {
   const googleHolidayCalendarId = (import.meta.env.VITE_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID ?? DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID).trim()
   const holidaySyncInFlightRef = useRef(false)
   const holidaySyncBootstrapRef = useRef(false)
+  const teacherAutoAssignRequestIdRef = useRef(0)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'backup-restore'>('board')
   const [teachers, setTeachers] = useState(() => useImportedMasterData ? normalizedImportedTeachers : initialTeachers)
@@ -133,6 +140,7 @@ function App() {
   const [boardState, setBoardState] = useState<PersistedBoardState | null>(null)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
+  const [teacherAutoAssignRequest, setTeacherAutoAssignRequest] = useState<TeacherAutoAssignRequest | null>(null)
   const [googleHolidaySyncState, setGoogleHolidaySyncState] = useState<GoogleHolidaySyncState>(() => {
     if (!isGoogleHolidaySyncEnabled) {
       return { status: 'disabled', message: 'Google祝日同期は自動テスト実行中のため停止しています。' }
@@ -487,6 +495,15 @@ function App() {
             updatedAt,
           }
         }))
+
+        if (countSubmitted) {
+          teacherAutoAssignRequestIdRef.current += 1
+          setTeacherAutoAssignRequest({
+            requestId: teacherAutoAssignRequestIdRef.current,
+            sessionId: message.sessionId,
+            teacherId: message.personId,
+          })
+        }
         return
       }
 
@@ -679,6 +696,7 @@ function App() {
       students={students}
       regularLessons={regularLessons}
       specialSessions={specialSessions}
+          teacherAutoAssignRequest={teacherAutoAssignRequest}
       initialBoardState={boardState}
       onBoardStateChange={setBoardState}
       onUpdateSpecialSessions={setSpecialSessions}
