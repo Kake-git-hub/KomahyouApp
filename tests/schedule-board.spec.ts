@@ -1376,6 +1376,30 @@ test.describe('コマ調整表', () => {
     expect(hoverTitle ?? '').toContain('1限')
   })
 
+  test('振替ストック選択中はマウス追従プレビューが表示される', async ({ page }) => {
+    const today = new Date()
+    const mondayDates = getMonthWeekdayDates(today.getFullYear(), today.getMonth(), 1).filter((dateKey) => dateKey <= toDateKey(today))
+    const [firstHoliday] = mondayDates
+
+    test.skip(!firstHoliday, '現在月に判定用の月曜が必要です。')
+
+    await page.goto('/')
+
+    page.once('dialog', async (dialog) => {
+      await dialog.accept()
+    })
+    await moveBoardToWeek(page, parseDateKey(firstHoliday))
+    await page.getByTestId(`day-header-${firstHoliday}`).click()
+
+    await moveBoardToWeek(page, getWeekStart(today))
+    await page.mouse.move(220, 260)
+    await page.getByTestId('makeup-stock-chip').click()
+    await page.getByTestId('makeup-stock-entry-s001__-').click()
+
+    await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
+    await expect(page.getByTestId('move-preview')).toContainText('振替先を選択中')
+  })
+
   test('通常授業を移動してもヒントに初期の通常授業日が残る', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const slotId = `${toDateKey(currentWeekStart)}_1`
@@ -1590,6 +1614,55 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('makeup-stock-chip').click()
     const afterReturnBalance = extractSignedCount(await page.getByTestId('makeup-stock-entry-s001__-').textContent())
     expect(afterReturnBalance).toBe(initialBalance)
+  })
+
+  test('通常授業を移動すると生徒日程表では振替元が消えて振替先だけが残る', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    const target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎', sourceSlotId)
+
+    await page.getByTestId(sourceCellTestId).click()
+    await page.getByTestId('menu-move-button').click()
+    await page.getByTestId(target.cellTestId).click()
+
+    const sourcePopupCell = popup.getByTestId(`student-schedule-cell-s001-${sourceSlotId}`)
+    const targetPopupCell = popup.getByTestId(`student-schedule-cell-s001-${target.slotId}`)
+
+    await expect.poll(async () => ((await sourcePopupCell.textContent()) ?? '').replace(/\s+/g, '').trim()).toBe('')
+    await expect.poll(async () => ((await targetPopupCell.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('振替')
+  })
+
+  test('振替が元のコマへ戻ると通常授業表示に戻る', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+    const sourceName = page.getByTestId(`student-name-${sourceSlotId}-0-0`)
+
+    await page.goto('/')
+
+    const target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎', sourceSlotId)
+    const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
+
+    await page.getByTestId(sourceCellTestId).click()
+    await page.getByTestId('menu-move-button').click()
+    await page.getByTestId(target.cellTestId).click()
+    await expect(targetName).toHaveText('青木太郎')
+
+    await page.getByTestId(target.cellTestId).click()
+    await page.getByTestId('menu-move-button').click()
+    await page.getByTestId(sourceCellTestId).click()
+
+    await expect(targetName).toHaveText('')
+    await expect(sourceName).toHaveText('青木太郎')
+    expect((await sourceName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
   })
 
   test('同コマに同生徒がいる場合は振替不可で振替中状態を維持する', async ({ page }) => {
@@ -2360,6 +2433,7 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => ((await studentSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('→')
     await expect.poll(async () => ((await studentSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(expectedTargetLabel)
     await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('→')
+    await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('青木太郎')
     await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(expectedTargetLabel)
   })
 

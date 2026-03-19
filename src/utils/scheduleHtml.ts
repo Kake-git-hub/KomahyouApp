@@ -1144,6 +1144,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = JSON.stringify(DATA);
       let skipNextEquivalentPayload = false;
+      let suppressNextToggleClick = false;
 
       function escapeHtml(value) {
         return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');
@@ -1238,7 +1239,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (gradeNumber === 11) return '高2';
         return '高3';
       }
-
       function filterCells(startDate, endDate) {
         return DATA.cells.filter((cell) => cell.dateKey >= startDate && cell.dateKey <= endDate);
       }
@@ -1986,6 +1986,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return [subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
       }
 
+      function formatTeacherMakeupNote(studentName, subject, sourceLabel, targetDateKey, targetSlotNumber) {
+        if (!sourceLabel) return '';
+        return [studentName, subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
+      }
+
       function toMakeupRows(makeupNotes, minimumRowCount) {
         return Array.from({ length: Math.max(minimumRowCount, makeupNotes.length) }, (_, rowIndex) => {
           const note = makeupNotes[rowIndex] ?? '';
@@ -2004,7 +2009,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function collectTeacherMakeupNotes(entries) {
         return entries.reduce((notes, entry) => {
           entry.students.forEach((student) => {
-            const note = formatMakeupNote(student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
+            const note = formatTeacherMakeupNote(student.name, student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
             if (note) notes.push(note);
           });
           return notes;
@@ -2491,6 +2496,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         toggleStudentUnavailableSlot(studentId, slotKey);
       }
 
+      function handleUnavailablePointerDown(target) {
+        const role = target.getAttribute('data-role') || '';
+        if (!role.includes('unavailable') && role !== 'student-slot-cell' && role !== 'teacher-slot-cell') return false;
+        if (role.includes('modal')) return false;
+        if (role.includes('teacher')) {
+          handleTeacherUnavailableClick(target);
+          return true;
+        }
+        handleStudentUnavailableClick(target);
+        return true;
+      }
+
       function isDateWithinAvailableRange(dateKey) {
         return !dateKey || (dateKey >= DATA.availableStartDate && dateKey <= DATA.availableEndDate);
       }
@@ -2616,11 +2633,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         setRangeAndRender(startDate, endDate, periodSelect.value);
       });
       refreshButton.addEventListener('click', requestRefresh);
+      pagesElement.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0) return;
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        const toggleTarget = target.closest('[data-role="toggle-student-unavailable"], [data-role="student-slot-cell"], [data-role="toggle-student-unavailable-date"], [data-role="toggle-student-unavailable-slot"], [data-role="toggle-teacher-unavailable"], [data-role="teacher-slot-cell"], [data-role="toggle-teacher-unavailable-date"], [data-role="toggle-teacher-unavailable-slot"]');
+        if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
+        if (!handleUnavailablePointerDown(toggleTarget)) return;
+        suppressNextToggleClick = true;
+        window.setTimeout(() => {
+          suppressNextToggleClick = false;
+        }, 0);
+        event.preventDefault();
+      });
       pagesElement.addEventListener('click', (event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
         const toggleTarget = target.closest('[data-role="toggle-student-unavailable"], [data-role="student-slot-cell"], [data-role="toggle-student-unavailable-date"], [data-role="toggle-student-unavailable-slot"], [data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="student-count-modal-backdrop"], [data-role="toggle-teacher-unavailable"], [data-role="teacher-slot-cell"], [data-role="toggle-teacher-unavailable-date"], [data-role="toggle-teacher-unavailable-slot"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
+        if (suppressNextToggleClick) {
+          suppressNextToggleClick = false;
+          return;
+        }
         if (toggleTarget.getAttribute('data-role') === 'student-count-modal-backdrop' && toggleTarget !== target) return;
         if (toggleTarget.getAttribute('data-role') === 'teacher-register-modal-backdrop' && toggleTarget !== target) return;
         if ((toggleTarget.getAttribute('data-role') || '').includes('teacher')) {

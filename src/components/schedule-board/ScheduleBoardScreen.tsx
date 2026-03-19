@@ -417,6 +417,31 @@ function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: stri
   return student.makeupSourceDate ?? fallbackDateKey
 }
 
+function parseOriginSlotNumber(makeupSourceLabel?: string) {
+  const matched = String(makeupSourceLabel ?? '').match(/(\d+)限/)
+  return matched ? Number(matched[1]) : null
+}
+
+function isReturnedToOriginalSlot(student: StudentEntry, targetDateKey: string, targetSlotNumber: number) {
+  const originSlotNumber = parseOriginSlotNumber(student.makeupSourceLabel)
+  return Boolean(
+    student.makeupSourceDate
+    && originSlotNumber
+    && student.makeupSourceDate === targetDateKey
+    && originSlotNumber === targetSlotNumber,
+  )
+}
+
+function normalizeLessonPlacement(student: StudentEntry, targetDateKey: string, targetSlotNumber: number): StudentEntry {
+  if (student.lessonType !== 'makeup' || !isReturnedToOriginalSlot(student, targetDateKey, targetSlotNumber)) return student
+  return {
+    ...student,
+    lessonType: 'regular',
+    makeupSourceDate: undefined,
+    makeupSourceLabel: undefined,
+  }
+}
+
 function formatStockOriginLabel(dateKey: string, slotNumber: number) {
   const date = parseDateKey(dateKey)
   return `${date.getMonth() + 1}/${date.getDate()}(${calendarDayLabels[date.getDay()]}) ${slotNumber}限`
@@ -472,6 +497,7 @@ function createManagedStudentEntry(student: StudentRow, subject: SubjectLabel, d
   return {
     id: `${student.id}_${dateKey}_${subject}`,
     name: getStudentDisplayName(student),
+    managedStudentId: student.id,
     grade: student.birthDate ? resolveSchoolGradeLabel(student.birthDate, parseDateKey(dateKey)) : '中1',
     birthDate: student.birthDate || undefined,
     subject,
@@ -620,12 +646,70 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
   return nextLesson
 }
 
+function buildManagedOccurrenceKey(student: StudentEntry, dateKey: string, slotNumber: number) {
+  return `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__${slotNumber}`
+}
+
+function buildSuppressedManagedOccurrenceKeys(boardWeeks: SlotCell[][]) {
+  const suppressedKeys = new Set<string>()
+
+  boardWeeks.forEach((week) => {
+    week.forEach((cell) => {
+      cell.desks.forEach((desk) => {
+        desk.lesson?.studentSlots.forEach((student) => {
+          if (!student || student.lessonType !== 'makeup' || !student.makeupSourceDate) return
+          const originSlotNumber = parseOriginSlotNumber(student.makeupSourceLabel)
+          if (!originSlotNumber) return
+          if (student.makeupSourceDate === cell.dateKey && originSlotNumber === cell.slotNumber) return
+          suppressedKeys.add(buildManagedOccurrenceKey(student, student.makeupSourceDate, originSlotNumber))
+        })
+      })
+    })
+  })
+
+  return suppressedKeys
+}
+
+function suppressManagedStudentsInCell(managedCell: SlotCell, suppressedKeys: Set<string>) {
+  if (suppressedKeys.size === 0) return cloneSlotCell(managedCell)
+
+  const nextCell = cloneSlotCell(managedCell)
+  nextCell.desks = nextCell.desks.map((desk) => {
+    if (!desk.lesson || !isManagedLesson(desk.lesson)) return desk
+
+    const nextStudentSlots = desk.lesson.studentSlots.map((student) => {
+      if (!student) return null
+      return suppressedKeys.has(buildManagedOccurrenceKey(student, nextCell.dateKey, nextCell.slotNumber)) ? null : student
+    }) as [StudentEntry | null, StudentEntry | null]
+
+    if (!nextStudentSlots[0] && !nextStudentSlots[1]) {
+      return {
+        ...desk,
+        teacher: '',
+        lesson: undefined,
+      }
+    }
+
+    return {
+      ...desk,
+      lesson: {
+        ...desk.lesson,
+        studentSlots: nextStudentSlots,
+      },
+    }
+  })
+
+  return nextCell
+}
+
 function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][]) {
+  const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(boardWeeks)
   const boardCellsById = new Map(boardWeeks.flat().map((cell) => [cell.id, cell]))
   return scheduleCells.map((managedCell) => {
+    const adjustedManagedCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
     const boardCell = boardCellsById.get(managedCell.id)
-    if (!boardCell) return cloneSlotCell(managedCell)
-    return mergeManagedWeek([boardCell], [managedCell])[0] ?? cloneSlotCell(managedCell)
+    if (!boardCell) return adjustedManagedCell
+    return mergeManagedWeek([boardCell], [adjustedManagedCell])[0] ?? adjustedManagedCell
   })
 }
 
@@ -770,6 +854,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [teacherMenu, setTeacherMenu] = useState<TeacherMenuState | null>(null)
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
+  const [pointerPreviewPosition, setPointerPreviewPosition] = useState({ x: 0, y: 0 })
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -1180,6 +1265,72 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
   }, [cells, studentMenu])
 
+  const movingStudentContext = useMemo(() => {
+    if (!selectedStudentId) return null
+
+    for (const week of normalizedWeeks) {
+      for (const cell of week) {
+        for (const desk of cell.desks) {
+          const studentIndex = desk.lesson?.studentSlots.findIndex((student) => student?.id === selectedStudentId) ?? -1
+          if (studentIndex < 0) continue
+
+          const student = desk.lesson?.studentSlots[studentIndex] ?? null
+          if (!student) continue
+
+          return {
+            cell,
+            desk,
+            student,
+          }
+        }
+      }
+    }
+
+    return null
+  }, [normalizedWeeks, selectedStudentId])
+
+  const pointerPreviewLabel = useMemo(() => {
+    if (selectedMakeupStockEntry?.nextPlacementEntry) {
+      const entry = selectedMakeupStockEntry.nextPlacementEntry
+      const originLabel = entry.nextOriginLabel ?? '元コマ未設定'
+      return `${selectedMakeupStockEntry.displayName} / ${entry.subject} / ${originLabel} の振替先を選択中`
+    }
+
+    if (movingStudentContext) {
+      return `${resolveBoardStudentDisplayName(movingStudentContext.student.name)} / ${movingStudentContext.student.subject} / ${movingStudentContext.cell.dateLabel} ${movingStudentContext.cell.slotLabel} を移動中`
+    }
+
+    return null
+  }, [movingStudentContext, resolveBoardStudentDisplayName, selectedMakeupStockEntry])
+
+  useEffect(() => {
+    if (!pointerPreviewLabel || typeof window === 'undefined') return
+
+    let frameId: number | null = null
+    const handlePointerMove = (event: MouseEvent) => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+      frameId = window.requestAnimationFrame(() => {
+        setPointerPreviewPosition({ x: event.clientX, y: event.clientY })
+        frameId = null
+      })
+    }
+
+    window.addEventListener('mousemove', handlePointerMove)
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId)
+      window.removeEventListener('mousemove', handlePointerMove)
+    }
+  }, [pointerPreviewLabel])
+
+  const pointerPreviewStyle = useMemo(() => {
+    if (typeof window === 'undefined') return { left: 16, top: 16 }
+
+    return {
+      left: Math.max(12, Math.min(pointerPreviewPosition.x + 18, window.innerWidth - 320)),
+      top: Math.max(12, Math.min(pointerPreviewPosition.y + 18, window.innerHeight - 80)),
+    }
+  }, [pointerPreviewPosition])
+
   const menuPosition = useMemo(() => {
     if (!studentMenu || typeof window === 'undefined') {
       return { left: 24, top: 108 }
@@ -1534,9 +1685,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const managedStudent = placementEntry.studentId ? students.find((student) => student.id === placementEntry.studentId) : null
     const studentName = managedStudent ? getStudentDisplayName(managedStudent) : selectedMakeupStockEntry.displayName
     const studentGrade = managedStudent?.birthDate ? resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey)) : '中1'
-    const nextStudent: StudentEntry = {
+    const nextStudent: StudentEntry = normalizeLessonPlacement({
       id: createStudentId(cellId, deskIndex, studentIndex),
       name: studentName,
+      managedStudentId: managedStudent?.id,
       grade: studentGrade,
       birthDate: managedStudent?.birthDate,
       makeupSourceDate: placementEntry.nextOriginDate ?? undefined,
@@ -1544,14 +1696,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       subject: placementEntry.subject as SubjectLabel,
       lessonType: 'makeup',
       teacherType: 'normal',
-    }
+    }, targetCell.dateKey, targetCell.slotNumber)
 
     if (!targetDesk.lesson) {
       targetDesk.lesson = {
-        id: `${cellId}_desk_${deskIndex + 1}_makeup`,
-        note: placementEntry.nextOriginLabel
+        id: `${cellId}_desk_${deskIndex + 1}_${nextStudent.lessonType}`,
+        note: nextStudent.lessonType === 'makeup' && placementEntry.nextOriginLabel
           ? `元の通常授業: ${placementEntry.nextOriginLabel}${placementEntry.nextOriginReasonLabel ? `（${placementEntry.nextOriginReasonLabel}）` : ''}`
-          : '振替ストック消化',
+          : undefined,
         studentSlots: [null, null],
       }
     }
@@ -1639,12 +1791,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     if (movedStudent.lessonType !== 'special') {
       const originalDateKey = resolveOriginalRegularDate(movedStudent, sourceDateKey)
-      movedStudent = {
+      const nextMovedStudent: StudentEntry = {
         ...movedStudent,
         lessonType: 'makeup',
         makeupSourceDate: originalDateKey,
         makeupSourceLabel: movedStudent.makeupSourceLabel ?? formatStockOriginLabel(originalDateKey, sourceSlotNumber),
       }
+      movedStudent = movedStudent.lessonType === 'makeup'
+        ? normalizeLessonPlacement(nextMovedStudent, cellId.split('_')[0] ?? sourceDateKey, Number(cellId.split('_')[1] ?? sourceSlotNumber))
+        : nextMovedStudent
     }
 
     const comparableStudentKey = resolveStockComparableStudentKey(movedStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
@@ -1659,6 +1814,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       targetLesson.studentSlots[studentIndex] = movedStudent
     } else {
       targetDesk.lesson = cloneLesson(sourceLessonSnapshot, movedStudent)
+      if (movedStudent.lessonType === 'regular') {
+        targetDesk.lesson.note = undefined
+      }
       if (studentIndex === 1) {
         targetDesk.lesson.studentSlots = [null, movedStudent]
       }
@@ -2140,6 +2298,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       {centeredStatusMessage ? (
         <div className="status-banner status-banner-floating" data-testid="center-status-banner" role="status" aria-live="polite">
           {centeredStatusMessage}
+        </div>
+      ) : null}
+      {pointerPreviewLabel ? (
+        <div className="cursor-follow-preview" style={pointerPreviewStyle} data-testid="move-preview" role="status" aria-live="polite">
+          {pointerPreviewLabel}
         </div>
       ) : null}
       <main className="page-main page-main-board-only">
