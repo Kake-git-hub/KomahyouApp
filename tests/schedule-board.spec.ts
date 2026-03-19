@@ -1718,8 +1718,9 @@ test.describe('コマ調整表', () => {
 
     const firstTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
     await page.getByTestId('lecture-stock-chip').click()
-    const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎 / 数' }).first()
+    const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first()
     await expect(lectureEntry).toBeVisible()
+    expect((await lectureEntry.getAttribute('title')) ?? '').toContain('数')
     const initialLectureCount = extractSignedCount(await lectureEntry.textContent())
     await lectureEntry.click()
 
@@ -1730,7 +1731,7 @@ test.describe('コマ調整表', () => {
     const firstTargetName = page.getByTestId(firstTarget.cellTestId.replace('student-cell-', 'student-name-'))
     await expect(firstTargetName).toHaveText('青木太郎')
     await expect.poll(async () => {
-      const matchingEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎 / 数' })
+      const matchingEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })
       if (await matchingEntries.count() === 0) return 0
       return extractSignedCount(await matchingEntries.first().textContent())
     }).toBe(initialLectureCount - 1)

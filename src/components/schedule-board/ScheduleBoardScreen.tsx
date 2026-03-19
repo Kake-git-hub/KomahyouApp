@@ -83,8 +83,8 @@ type GroupedLectureStockEntry = {
   key: string
   studentId: string | null
   displayName: string
-  subject: SubjectLabel
   requestedCount: number
+  nextPlacementEntry: { subject: SubjectLabel } | null
   title?: string
 }
 
@@ -1113,17 +1113,18 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }, [rawMakeupStockEntries])
 
   const lectureStockEntries = useMemo<GroupedLectureStockEntry[]>(() => {
-    const grouped = new Map<string, { studentId: string | null; displayName: string; subject: SubjectLabel; requestedCount: number; titleLines: string[] }>()
+    const grouped = new Map<string, { studentId: string | null; displayName: string; requestedCount: number; titleLines: string[]; subjectCounts: Array<{ subject: SubjectLabel; requestedCount: number }> }>()
 
     for (const entry of rawLectureStockEntries) {
       const lectureStockKey = buildLectureStockKey(entry.studentId, entry.subject)
-      const current = grouped.get(lectureStockKey) ?? { studentId: entry.studentId, displayName: entry.displayName, subject: entry.subject, requestedCount: 0, titleLines: [] }
+      const stockStudentKey = parseLectureStockKey(lectureStockKey).studentKey
+      const current = grouped.get(stockStudentKey) ?? { studentId: entry.studentId, displayName: entry.displayName, requestedCount: 0, titleLines: [], subjectCounts: [] }
       current.displayName = entry.displayName
       current.studentId = entry.studentId
-      current.subject = entry.subject
       current.requestedCount += entry.requestedCount
       current.titleLines.push(`${entry.sessionLabel} / ${entry.subject}: ${entry.requestedCount}コマ`)
-      grouped.set(lectureStockKey, current)
+      current.subjectCounts.push({ subject: entry.subject, requestedCount: entry.requestedCount })
+      grouped.set(stockStudentKey, current)
     }
 
     for (const [lectureStockKey, requestedCount] of Object.entries(manualLectureStockCounts)) {
@@ -1131,35 +1132,40 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       const { studentKey, subject } = parseLectureStockKey(lectureStockKey)
       const fallback = fallbackLectureStockStudents[lectureStockKey]
       const fallbackDisplayName = fallback?.displayName ?? studentKey.replace(/^name:/, '')
-      const current = grouped.get(lectureStockKey) ?? {
+      const current = grouped.get(studentKey) ?? {
         studentId: studentKey.startsWith('name:') ? null : studentKey,
         displayName: fallbackDisplayName,
-        subject: (fallback?.subject ?? subject) as SubjectLabel,
         requestedCount: 0,
         titleLines: [],
+        subjectCounts: [],
       }
       current.displayName = current.displayName || fallbackDisplayName
-      current.subject = (current.subject || fallback?.subject || subject) as SubjectLabel
       current.requestedCount += requestedCount
-      current.titleLines.push(`盤面からストック / ${current.subject}: ${requestedCount > 0 ? `+${requestedCount}` : requestedCount}コマ`)
-      grouped.set(lectureStockKey, current)
+      current.titleLines.push(`盤面からストック / ${subject}: ${requestedCount > 0 ? `+${requestedCount}` : requestedCount}コマ`)
+      current.subjectCounts.push({ subject: (fallback?.subject ?? subject) as SubjectLabel, requestedCount })
+      grouped.set(studentKey, current)
     }
 
     return Array.from(grouped.entries())
-      .map(([lectureStockKey, entry]) => ({
-        key: lectureStockKey,
-        studentId: entry.studentId,
-        displayName: entry.displayName,
-        subject: entry.subject,
-        requestedCount: entry.requestedCount,
-        title: entry.titleLines.join('\n'),
-      }))
-      .filter((entry) => entry.requestedCount > 0)
-      .sort((left, right) => {
-        const displayNameCompare = left.displayName.localeCompare(right.displayName, 'ja')
-        if (displayNameCompare !== 0) return displayNameCompare
-        return left.subject.localeCompare(right.subject, 'ja')
+      .map(([studentKey, entry]) => {
+        const nextPlacementEntry = [...entry.subjectCounts]
+          .filter((subjectEntry) => subjectEntry.requestedCount > 0)
+          .sort((left, right) => {
+            if (left.requestedCount !== right.requestedCount) return right.requestedCount - left.requestedCount
+            return left.subject.localeCompare(right.subject, 'ja')
+          })[0] ?? null
+
+        return {
+          key: `${studentKey}__-`,
+          studentId: entry.studentId,
+          displayName: entry.displayName,
+          requestedCount: entry.requestedCount,
+          nextPlacementEntry: nextPlacementEntry ? { subject: nextPlacementEntry.subject } : null,
+          title: entry.titleLines.join('\n'),
+        }
       })
+      .filter((entry) => entry.requestedCount > 0)
+      .sort((left, right) => left.displayName.localeCompare(right.displayName, 'ja'))
   }, [fallbackLectureStockStudents, manualLectureStockCounts, rawLectureStockEntries])
 
   const selectedMakeupStockEntry = useMemo(
@@ -1332,7 +1338,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     if (selectedLectureStockEntry) {
-      return `${selectedLectureStockEntry.displayName} / ${selectedLectureStockEntry.subject} / 講習ストックの配置先を選択中`
+      const subject = selectedLectureStockEntry.nextPlacementEntry?.subject ?? '科目未設定'
+      return `${selectedLectureStockEntry.displayName} / ${subject} / 講習ストックの配置先を選択中`
     }
 
     if (movingStudentContext) {
@@ -1768,6 +1775,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setStatusMessage('この講習ストックは残数がありません。')
       return
     }
+    const placementEntry = selectedLectureStockEntry.nextPlacementEntry
+    if (!placementEntry) {
+      setStatusMessage('この講習ストックは配置できる科目残数がありません。')
+      return
+    }
 
     const nextWeeks = cloneWeeks(weeks)
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === cellId)
@@ -1795,7 +1807,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       managedStudentId: managedStudent?.id,
       grade: studentGrade,
       birthDate: managedStudent?.birthDate,
-      subject: selectedLectureStockEntry.subject,
+      subject: placementEntry.subject,
       lessonType: 'special',
       teacherType: 'normal',
     }
@@ -1808,7 +1820,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     targetDesk.lesson.studentSlots[studentIndex] = nextStudent
-    const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, selectedLectureStockEntry.key, -1)
+    const lectureStockStudentKey = selectedLectureStockEntry.studentId ?? `name:${selectedLectureStockEntry.displayName}`
+    const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, buildLectureStockKey(lectureStockStudentKey, placementEntry.subject), -1)
     commitWeeks(
       nextWeeks,
       weekIndex,
@@ -1823,7 +1836,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     )
     setIsLectureStockOpen(true)
     setSelectedLectureStockKey(selectedLectureStockEntry.requestedCount > 1 ? selectedLectureStockEntry.key : null)
-    setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${selectedLectureStockEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
+    setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
   const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number) => {
@@ -2285,7 +2298,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handleSelectLectureStockEntry = (entry: GroupedLectureStockEntry) => {
     if (entry.requestedCount <= 0) {
-      setStatusMessage(`${entry.displayName} の ${entry.subject} は残数がありません。`)
+      setStatusMessage(`${entry.displayName} の講習ストックは残数がありません。`)
       return
     }
 
@@ -2295,7 +2308,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setIsLectureStockOpen(true)
     setStudentMenu(null)
     setTeacherMenu(null)
-    setStatusMessage(`${entry.displayName} の講習ストック ${entry.subject} を選択しました。空欄セルを左クリックしてください。`)
+    setStatusMessage(`${entry.displayName} の講習ストックを選択しました。空欄セルを左クリックしてください。`)
   }
 
   const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry) => {
@@ -2509,7 +2522,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         title={entry.title}
                         data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
                       >
-                        <span className="makeup-stock-name">{entry.displayName} / {entry.subject}</span>
+                        <span className="makeup-stock-name">{entry.displayName}</span>
                         <span className="status-chip">+{entry.requestedCount}</span>
                       </button>
                     ))}
