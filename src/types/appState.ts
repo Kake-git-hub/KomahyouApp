@@ -42,7 +42,7 @@ export type PersistedBoardState = {
   manualMakeupAdjustments: MakeupOriginMap
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
   manualLectureStockCounts: LectureStockCountMap
-  fallbackLectureStockStudents: Record<string, { displayName: string }>
+  fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
   isLectureStockOpen: boolean
   isMakeupStockOpen: boolean
   studentScheduleRange: ScheduleRangePreference | null

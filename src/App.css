@@ -329,6 +329,8 @@
   border-radius: 12px;
   background: #fff;
   color: #294967;
+  cursor: pointer;
+  font: inherit;
 }
 
 .makeup-stock-name {
@@ -340,7 +342,9 @@
 }
 
 .makeup-stock-row.active,
-.makeup-stock-row:hover:not(:disabled) {
+.makeup-stock-row:hover:not(:disabled),
+.lecture-stock-row.active,
+.lecture-stock-row:hover {
   background: #eef4ff;
   border-color: #bdd3f7;
 }

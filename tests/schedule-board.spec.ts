@@ -1400,6 +1400,39 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('move-preview')).toContainText('振替先を選択中')
   })
 
+  test('振替授業の移動中プレビューはオリジナルのコマ情報を表示する', async ({ page }) => {
+    const today = new Date()
+    const mondayDates = getMonthWeekdayDates(today.getFullYear(), today.getMonth(), 1).filter((dateKey) => dateKey <= toDateKey(today))
+    const [firstHoliday] = mondayDates
+    const currentWeekStart = getWeekStart(today)
+    const targetDateKey = toDateKey(addDays(currentWeekStart, 1))
+    const targetDate = parseDateKey(targetDateKey)
+    const targetCell = page.getByTestId(`student-cell-${targetDateKey}_1-5-0`)
+
+    test.skip(!firstHoliday, '現在月に判定用の月曜が必要です。')
+
+    await page.goto('/')
+
+    page.once('dialog', async (dialog) => {
+      await dialog.accept()
+    })
+    await moveBoardToWeek(page, parseDateKey(firstHoliday))
+    await page.getByTestId(`day-header-${firstHoliday}`).click()
+
+    await moveBoardToWeek(page, currentWeekStart)
+    await page.getByTestId('makeup-stock-chip').click()
+    await page.getByTestId('makeup-stock-entry-s001__-').click()
+    await targetCell.click()
+
+    await targetCell.click()
+    await page.getByTestId('menu-move-button').click()
+
+    await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
+    await expect(page.getByTestId('move-preview')).toContainText('数')
+    await expect(page.getByTestId('move-preview')).toContainText(toOriginDateLabel(parseDateKey(firstHoliday)))
+    await expect(page.getByTestId('move-preview')).not.toContainText(toOriginDateLabel(targetDate))
+  })
+
   test('通常授業を移動してもヒントに初期の通常授業日が残る', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const slotId = `${toDateKey(currentWeekStart)}_1`
@@ -1663,6 +1696,54 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('')
     await expect(sourceName).toHaveText('青木太郎')
     expect((await sourceName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
+  })
+
+  test('講習ストックを割り振れて再移動しても振替にならない', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const specialWeekStart = addDays(currentWeekStart, 7)
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await expect(page.getByTestId('lecture-stock-chip')).toContainText('1')
+    await moveBoardToWeek(page, specialWeekStart)
+
+    const firstTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
+    await page.getByTestId('lecture-stock-chip').click()
+    const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎 / 数' }).first()
+    await expect(lectureEntry).toBeVisible()
+    const initialLectureCount = extractSignedCount(await lectureEntry.textContent())
+    await lectureEntry.click()
+
+    await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
+    await expect(page.getByTestId('move-preview')).toContainText('講習ストックの配置先を選択中')
+
+    await page.getByTestId(firstTarget.cellTestId).click()
+    const firstTargetName = page.getByTestId(firstTarget.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(firstTargetName).toHaveText('青木太郎')
+    await expect.poll(async () => {
+      const matchingEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎 / 数' })
+      if (await matchingEntries.count() === 0) return 0
+      return extractSignedCount(await matchingEntries.first().textContent())
+    }).toBe(initialLectureCount - 1)
+
+    const secondTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', firstTarget.slotId)
+    await page.getByTestId(firstTarget.cellTestId).click()
+    await page.getByTestId('menu-move-button').click()
+    await page.getByTestId(secondTarget.cellTestId).click()
+
+    const secondTargetName = page.getByTestId(secondTarget.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(firstTargetName).toHaveText('')
+    await expect(secondTargetName).toHaveText('青木太郎')
+    expect((await secondTargetName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
   })
 
   test('同コマに同生徒がいる場合は振替不可で振替中状態を維持する', async ({ page }) => {
