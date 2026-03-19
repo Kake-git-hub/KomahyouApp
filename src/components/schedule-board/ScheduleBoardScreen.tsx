@@ -35,6 +35,7 @@ type HistoryEntry = {
   holidayDates: string[]
   forceOpenDates: string[]
   manualMakeupAdjustments: MakeupOriginMap
+  suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, { studentName: string; displayName: string; subject: string }>
   manualLectureStockCounts: LectureStockCountMap
   fallbackLectureStockStudents: Record<string, { displayName: string }>
@@ -336,6 +337,15 @@ function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
   }
 }
 
+function removeStudentFromDeskLesson(desk: DeskCell, studentIndex: number) {
+  if (!desk.lesson) return
+
+  desk.lesson.studentSlots[studentIndex] = null
+  if (!desk.lesson.studentSlots[0] && !desk.lesson.studentSlots[1]) {
+    desk.lesson = undefined
+  }
+}
+
 function appendLectureStockCount(countMap: LectureStockCountMap, key: string, increment = 1) {
   return {
     ...countMap,
@@ -414,6 +424,7 @@ function createInitialBoardSnapshot(params: {
       Math.max(0, params.classroomSettings.deskCount - 1),
     ),
     manualMakeupAdjustments: cloneOriginMap(params.initialBoardState?.manualMakeupAdjustments ?? {}),
+    suppressedMakeupOrigins: cloneOriginMap(params.initialBoardState?.suppressedMakeupOrigins ?? {}),
     fallbackMakeupStudents: { ...(params.initialBoardState?.fallbackMakeupStudents ?? {}) },
     manualLectureStockCounts: { ...(params.initialBoardState?.manualLectureStockCounts ?? {}) },
     fallbackLectureStockStudents: { ...(params.initialBoardState?.fallbackLectureStockStudents ?? {}) },
@@ -426,6 +437,12 @@ function createInitialBoardSnapshot(params: {
 
 function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: string) {
   return student.makeupSourceDate ?? fallbackDateKey
+}
+
+function formatSpecialSessionTimestamp() {
+  const now = new Date()
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`
 }
 
 function parseOriginSlotNumber(makeupSourceLabel?: string) {
@@ -853,6 +870,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [editStudentDraft, setEditStudentDraft] = useState<EditStudentDraft | null>(null)
   const [statusMessage, setStatusMessage] = useState('左クリックで生徒を選ぶか、空欄の生徒マスを左クリックしてメモを保存できます。')
   const [manualMakeupAdjustments, setManualMakeupAdjustments] = useState<MakeupOriginMap>(initialBoardSnapshot.manualMakeupAdjustments)
+  const [suppressedMakeupOrigins, setSuppressedMakeupOrigins] = useState<MakeupOriginMap>(initialBoardSnapshot.suppressedMakeupOrigins)
   const [fallbackMakeupStudents, setFallbackMakeupStudents] = useState<Record<string, FallbackMakeupStudent>>(initialBoardSnapshot.fallbackMakeupStudents)
   const [manualLectureStockCounts, setManualLectureStockCounts] = useState<LectureStockCountMap>(initialBoardSnapshot.manualLectureStockCounts)
   const [fallbackLectureStockStudents, setFallbackLectureStockStudents] = useState<Record<string, { displayName: string; subject?: string }>>(initialBoardSnapshot.fallbackLectureStockStudents)
@@ -876,6 +894,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       selectedCellId,
       selectedDeskIndex,
       manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
+      suppressedMakeupOrigins: cloneOriginMap(suppressedMakeupOrigins),
       fallbackMakeupStudents: { ...fallbackMakeupStudents },
       manualLectureStockCounts: { ...manualLectureStockCounts },
       fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
@@ -895,6 +914,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     selectedCellId,
     selectedDeskIndex,
     studentScheduleRange,
+    suppressedMakeupOrigins,
     teacherScheduleRange,
     weekIndex,
     weeks,
@@ -1058,9 +1078,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     classroomSettings,
     weeks: normalizedWeeks,
     manualAdjustments: manualMakeupAdjustments,
+    suppressedOrigins: suppressedMakeupOrigins,
     fallbackStudents: fallbackMakeupStudents,
     resolveStudentKey: resolveBoardStudentStockId,
-  }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, teachers])
+  }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, teachers])
 
   const rawLectureStockEntries = useMemo(() => buildLectureStockEntries({
     specialSessions,
@@ -1474,6 +1495,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     sourceHolidayDates: string[],
     sourceForceOpenDates: string[],
     sourceManualMakeupAdjustments: MakeupOriginMap,
+    sourceSuppressedMakeupOrigins: MakeupOriginMap,
     sourceFallbackMakeupStudents: Record<string, FallbackMakeupStudent>,
     sourceManualLectureStockCounts: LectureStockCountMap,
     sourceFallbackLectureStockStudents: Record<string, { displayName: string }>,
@@ -1485,6 +1507,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     holidayDates: [...sourceHolidayDates],
     forceOpenDates: [...sourceForceOpenDates],
     manualMakeupAdjustments: cloneOriginMap(sourceManualMakeupAdjustments),
+    suppressedMakeupOrigins: cloneOriginMap(sourceSuppressedMakeupOrigins),
     fallbackMakeupStudents: { ...sourceFallbackMakeupStudents },
     manualLectureStockCounts: { ...sourceManualLectureStockCounts },
     fallbackLectureStockStudents: { ...sourceFallbackLectureStockStudents },
@@ -1498,13 +1521,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     nextHolidayDates: string[] = classroomSettings.holidayDates,
     nextForceOpenDates: string[] = classroomSettings.forceOpenDates,
     nextManualMakeupAdjustments: MakeupOriginMap = manualMakeupAdjustments,
+    nextSuppressedMakeupOrigins: MakeupOriginMap = suppressedMakeupOrigins,
     nextFallbackMakeupStudents: Record<string, FallbackMakeupStudent> = fallbackMakeupStudents,
     nextManualLectureStockCounts: LectureStockCountMap = manualLectureStockCounts,
     nextFallbackLectureStockStudents: Record<string, { displayName: string }> = fallbackLectureStockStudents,
   ) => {
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
     ])
     setRedoStack([])
     if (!areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates)) {
@@ -1519,6 +1543,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedCellId(nextCellId)
     setSelectedDeskIndex(nextDeskIndex)
     setManualMakeupAdjustments(cloneOriginMap(nextManualMakeupAdjustments))
+    setSuppressedMakeupOrigins(cloneOriginMap(nextSuppressedMakeupOrigins))
     setFallbackMakeupStudents(nextFallbackMakeupStudents)
     setManualLectureStockCounts({ ...nextManualLectureStockCounts })
     setFallbackLectureStockStudents({ ...nextFallbackLectureStockStudents })
@@ -1703,6 +1728,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       [...classroomSettings.holidayDates, dateKey].sort(),
       classroomSettings.forceOpenDates.filter((value) => value !== dateKey),
       nextManualMakeupAdjustments,
+      suppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       nextManualLectureStockCounts,
       nextFallbackLectureStockStudents,
@@ -1835,6 +1861,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       manualMakeupAdjustments,
+      suppressedMakeupOrigins,
       fallbackMakeupStudents,
       nextManualLectureStockCounts,
       fallbackLectureStockStudents,
@@ -2184,10 +2211,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetLesson = targetDesk?.lesson
     if (!targetDesk || !targetLesson) return
 
-    targetLesson.studentSlots[studentMenu.studentIndex] = null
-    if (!targetLesson.studentSlots[0] && !targetLesson.studentSlots[1]) {
-      targetDesk.lesson = undefined
-    }
+    removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
 
     if (menuStudent.student.lessonType === 'special') {
       const lectureStudentKey = managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${resolveBoardStudentDisplayName(menuStudent.student.name)}`
@@ -2211,6 +2235,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         classroomSettings.holidayDates,
         classroomSettings.forceOpenDates,
         manualMakeupAdjustments,
+        suppressedMakeupOrigins,
         fallbackMakeupStudents,
         nextManualLectureStockCounts,
         nextFallbackLectureStockStudents,
@@ -2246,11 +2271,98 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       nextManualMakeupAdjustments,
+      suppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       manualLectureStockCounts,
       fallbackLectureStockStudents,
     )
     setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を振替ストックへ回しました。`)
+    if (selectedStudentId === menuStudent.student.id) {
+      setSelectedStudentId(null)
+    }
+  }
+
+  const handleDeleteStudent = () => {
+    if (!studentMenu || !menuStudent) return
+
+    const studentDisplayName = resolveBoardStudentDisplayName(menuStudent.student.name)
+    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します。\n削除した授業は振替の対象にならず、授業回数から減らします。\nよろしいですか。`)
+    if (!confirmed) {
+      setStatusMessage('授業の削除をキャンセルしました。')
+      return
+    }
+
+    const nextWeeks = cloneWeeks(weeks)
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const targetLesson = targetDesk?.lesson
+    if (!targetCell || !targetDesk || !targetLesson) return
+
+    removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
+
+    let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
+    let nextManualLectureStockCounts = manualLectureStockCounts
+    let statusSuffix = '振替対象にはしません。'
+
+    if (menuStudent.student.lessonType === 'makeup' && menuStudent.student.makeupSourceDate) {
+      const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(menuStudent.student), menuStudent.student.subject)
+      nextSuppressedMakeupOrigins = appendMakeupOrigin(nextSuppressedMakeupOrigins, stockKey, menuStudent.student.makeupSourceDate)
+    }
+
+    if (menuStudent.student.lessonType === 'special') {
+      const lectureStudentKey = menuStudent.student.managedStudentId ?? managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${studentDisplayName}`
+      nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, buildLectureStockKey(lectureStudentKey, menuStudent.student.subject), 1)
+
+      if (menuStudent.student.managedStudentId) {
+        const timestamp = formatSpecialSessionTimestamp()
+        onUpdateSpecialSessions((current) => current.map((session) => {
+          if (targetCell.dateKey < session.startDate || targetCell.dateKey > session.endDate) return session
+
+          const currentInput = session.studentInputs[menuStudent.student.managedStudentId!]
+          if (!currentInput || currentInput.regularOnly) return session
+
+          const currentCount = Number(currentInput.subjectSlots[menuStudent.student.subject] ?? 0)
+          if (currentCount <= 0) return session
+
+          const nextSubjectSlots = { ...currentInput.subjectSlots }
+          if (currentCount <= 1) {
+            delete nextSubjectSlots[menuStudent.student.subject]
+          } else {
+            nextSubjectSlots[menuStudent.student.subject] = currentCount - 1
+          }
+
+          return {
+            ...session,
+            studentInputs: {
+              ...session.studentInputs,
+              [menuStudent.student.managedStudentId!]: {
+                ...currentInput,
+                subjectSlots: nextSubjectSlots,
+                updatedAt: timestamp,
+              },
+            },
+            updatedAt: timestamp,
+          }
+        }))
+      }
+
+      statusSuffix = '講習の希望回数を1コマ減らしました。'
+    }
+
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      studentMenu.cellId,
+      studentMenu.deskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      nextSuppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      nextManualLectureStockCounts,
+      fallbackLectureStockStudents,
+    )
+    setStatusMessage(`${studentDisplayName} の授業を削除しました。${statusSuffix}`)
     if (selectedStudentId === menuStudent.student.id) {
       setSelectedStudentId(null)
     }
@@ -2369,7 +2481,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setRedoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
     ])
     setUndoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
@@ -2384,6 +2496,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedCellId(previous.selectedCellId)
     setSelectedDeskIndex(previous.selectedDeskIndex)
     setManualMakeupAdjustments(cloneOriginMap(previous.manualMakeupAdjustments))
+    setSuppressedMakeupOrigins(cloneOriginMap(previous.suppressedMakeupOrigins))
     setFallbackMakeupStudents(previous.fallbackMakeupStudents)
     setManualLectureStockCounts({ ...previous.manualLectureStockCounts })
     setFallbackLectureStockStudents({ ...previous.fallbackLectureStockStudents })
@@ -2401,7 +2514,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
     ])
     setRedoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
@@ -2416,6 +2529,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedCellId(next.selectedCellId)
     setSelectedDeskIndex(next.selectedDeskIndex)
     setManualMakeupAdjustments(cloneOriginMap(next.manualMakeupAdjustments))
+    setSuppressedMakeupOrigins(cloneOriginMap(next.suppressedMakeupOrigins))
     setFallbackMakeupStudents(next.fallbackMakeupStudents)
     setManualLectureStockCounts({ ...next.manualLectureStockCounts })
     setFallbackLectureStockStudents({ ...next.fallbackLectureStockStudents })
@@ -2629,6 +2743,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 <div className="student-menu-section">
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   <button type="button" className="menu-link-button" onClick={handleStoreStudent} data-testid="menu-stock-button">ストックする</button>
+                  <button type="button" className="menu-link-button" onClick={handleDeleteStudent} data-testid="menu-delete-button">削除</button>
                 </div>
               ) : studentMenu?.mode === 'memo' ? (
                 <>

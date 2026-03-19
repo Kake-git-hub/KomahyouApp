@@ -526,11 +526,12 @@ export function buildMakeupStockEntries(params: {
   classroomSettings: ClassroomSettings
   weeks: SlotCell[][]
   manualAdjustments: Record<string, ManualMakeupOrigin[]>
+  suppressedOrigins?: Record<string, ManualMakeupOrigin[]>
   fallbackStudents?: Record<string, { studentName: string; displayName: string; subject: string }>
   resolveStudentKey: (student: StudentEntry) => string
   today?: Date
 }) {
-  const { students, teachers, regularLessons, classroomSettings, weeks, manualAdjustments, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
+  const { students, teachers, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
   const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
   const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
   const occupiedSlotOrigins = computeOccupiedSlotOrigins({ regularLessons, students, teachers, classroomSettings, weeks, resolveStudentKey })
@@ -554,12 +555,15 @@ export function buildMakeupStockEntries(params: {
     const occupiedOriginDates = occupiedSlotOrigins[key] ?? []
     const manualOrigins = manualAdjustments[key] ?? []
     const manualOriginDates = manualOrigins.map((origin) => origin.dateKey)
+    const suppressedOriginDates = (suppressedOrigins[key] ?? []).map((origin) => origin.dateKey)
     const manualOriginReasonLabels = manualOrigins.reduce<Record<string, string>>((accumulator, origin) => {
       if (!origin.reasonLabel || accumulator[origin.dateKey]) return accumulator
       accumulator[origin.dateKey] = origin.reasonLabel
       return accumulator
     }, {})
-    const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates])).sort()
+    const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates]))
+      .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
+      .sort()
     const usedOriginDates = makeupUsage.usedOriginDates[key] ?? []
     const plannedCount = plannedMakeups[key] ?? 0
     const assignedRegularCount = assignedRegularLessons[key] ?? 0

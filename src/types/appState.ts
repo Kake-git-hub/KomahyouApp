@@ -40,6 +40,7 @@ export type PersistedBoardState = {
   selectedCellId: string
   selectedDeskIndex: number
   manualMakeupAdjustments: MakeupOriginMap
+  suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
   manualLectureStockCounts: LectureStockCountMap
   fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
