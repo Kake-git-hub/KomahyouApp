@@ -100,8 +100,8 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.color = '#111111'
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-col, .sa-year-col, .sa-time-sub-header, .sa-time-cell').forEach((node) => {
-    node.style.width = '34px'
-    node.style.minWidth = '34px'
+    node.style.width = '78px'
+    node.style.minWidth = '78px'
     node.style.background = '#f4f4f4'
     node.style.color = '#111111'
   })
@@ -193,13 +193,14 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
-  const margin = 2
-  const contentWidth = pageWidth - margin * 2
-  const contentHeight = pageHeight - margin * 2
-  const fitScale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height)
-  const renderWidth = canvas.width * fitScale
-  const renderHeight = canvas.height * fitScale
-  const offsetX = (pageWidth - renderWidth) / 2
+  const marginX = 1
+  const marginY = 2
+  const contentWidth = pageWidth - marginX * 2
+  const contentHeight = pageHeight - marginY * 2
+  const heightFitScale = contentHeight / canvas.height
+  const renderWidth = contentWidth
+  const renderHeight = canvas.height * heightFitScale
+  const offsetX = marginX
   const offsetY = (pageHeight - renderHeight) / 2
 
   pdf.addImage(imageData, 'PNG', offsetX, offsetY, renderWidth, renderHeight, undefined, 'FAST')
