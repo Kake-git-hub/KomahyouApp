@@ -853,6 +853,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       return {
         ...desk,
         teacher: desk.manualTeacher ? desk.teacher : '',
+        teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
+        teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
+        teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : undefined,
         lesson: undefined,
       }
     })
@@ -867,6 +870,10 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       if (!targetDesk) continue
 
       targetDesk.teacher = managedDesk.teacher
+      targetDesk.manualTeacher = false
+      targetDesk.teacherAssignmentSource = undefined
+      targetDesk.teacherAssignmentSessionId = undefined
+      targetDesk.teacherAssignmentTeacherId = undefined
       targetDesk.lesson = cloneDeskLesson(managedDesk.lesson)
     }
 
@@ -877,12 +884,39 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
   })
 }
 
+function clearTeacherAssignment(desk: DeskCell) {
+  desk.teacher = ''
+  desk.manualTeacher = false
+  desk.teacherAssignmentSource = undefined
+  desk.teacherAssignmentSessionId = undefined
+  desk.teacherAssignmentTeacherId = undefined
+}
+
+function setManualTeacherAssignment(desk: DeskCell, teacherName: string) {
+  desk.teacher = teacherName
+  desk.manualTeacher = true
+  desk.teacherAssignmentSource = 'manual'
+  desk.teacherAssignmentSessionId = undefined
+  desk.teacherAssignmentTeacherId = undefined
+}
+
+function setScheduleRegistrationTeacherAssignment(desk: DeskCell, teacherName: string, sessionId: string, teacherId: string) {
+  desk.teacher = teacherName
+  desk.manualTeacher = true
+  desk.teacherAssignmentSource = 'schedule-registration'
+  desk.teacherAssignmentSessionId = sessionId
+  desk.teacherAssignmentTeacherId = teacherId
+}
+
 function repackTeacherOnlyDesks(desks: DeskCell[]) {
   const teacherOnlyDesks = desks
     .filter((desk) => !desk.lesson && desk.teacher.trim())
     .map((desk) => ({
       teacher: desk.teacher,
       manualTeacher: Boolean(desk.manualTeacher),
+      teacherAssignmentSource: desk.teacherAssignmentSource,
+      teacherAssignmentSessionId: desk.teacherAssignmentSessionId,
+      teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
     }))
 
   const nextDesks = desks.map((desk) => {
@@ -891,6 +925,9 @@ function repackTeacherOnlyDesks(desks: DeskCell[]) {
       ...desk,
       teacher: '',
       manualTeacher: false,
+      teacherAssignmentSource: undefined,
+      teacherAssignmentSessionId: undefined,
+      teacherAssignmentTeacherId: undefined,
     }
   })
 
@@ -903,11 +940,52 @@ function repackTeacherOnlyDesks(desks: DeskCell[]) {
       ...nextDesks[deskIndex],
       teacher: teacherOnlyDesk.teacher,
       manualTeacher: teacherOnlyDesk.manualTeacher,
+      teacherAssignmentSource: teacherOnlyDesk.teacherAssignmentSource,
+      teacherAssignmentSessionId: teacherOnlyDesk.teacherAssignmentSessionId,
+      teacherAssignmentTeacherId: teacherOnlyDesk.teacherAssignmentTeacherId,
     }
     teacherOnlyIndex += 1
   }
 
   return nextDesks
+}
+
+function removeAutoAssignedTeacherFromSpecialSession(params: {
+  weeks: SlotCell[][]
+  session: SpecialSessionRow
+  teacher: TeacherRow
+}) {
+  const nextWeeks = cloneWeeks(params.weeks)
+  let clearedCellCount = 0
+  let hasChanges = false
+
+  for (const week of nextWeeks) {
+    for (const cell of week) {
+      if (cell.dateKey < params.session.startDate || cell.dateKey > params.session.endDate) continue
+
+      let cellChanged = false
+      for (const desk of cell.desks) {
+        if (desk.teacherAssignmentSource !== 'schedule-registration') continue
+        if (desk.teacherAssignmentSessionId !== params.session.id) continue
+        if (desk.teacherAssignmentTeacherId !== params.teacher.id) continue
+        clearTeacherAssignment(desk)
+        clearedCellCount += 1
+        cellChanged = true
+      }
+
+      if (cellChanged) {
+        cell.desks = repackTeacherOnlyDesks(cell.desks)
+        hasChanges = true
+      }
+    }
+  }
+
+  return {
+    nextWeeks,
+    teacherName: getTeacherDisplayName(params.teacher),
+    clearedCellCount,
+    hasChanges,
+  }
 }
 
 function ensureWeeksCoverDateRange(params: {
@@ -1019,8 +1097,7 @@ function autoAssignTeacherToSpecialSession(params: {
         continue
       }
 
-      candidateDesk.teacher = teacherName
-      candidateDesk.manualTeacher = true
+      setScheduleRegistrationTeacherAssignment(candidateDesk, teacherName, params.session.id, params.teacher.id)
       cell.desks = repackTeacherOnlyDesks(nextDesks)
       assignedCellCount += 1
       hasChanges = true
@@ -1136,6 +1213,28 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const session = specialSessions.find((entry) => entry.id === teacherAutoAssignRequest.sessionId)
     const teacher = teachers.find((entry) => entry.id === teacherAutoAssignRequest.teacherId)
     if (!session || !teacher) return
+
+    if (teacherAutoAssignRequest.mode === 'unassign') {
+      const result = removeAutoAssignedTeacherFromSpecialSession({
+        weeks,
+        session,
+        teacher,
+      })
+
+      if (!result.hasChanges) {
+        setStatusMessage(`${session.label} で ${result.teacherName} の日程表登録由来は見つかりませんでした。`)
+        return
+      }
+
+      commitWeeks(
+        result.nextWeeks,
+        weekIndex,
+        selectedCellId,
+        selectedDeskIndex,
+      )
+      setStatusMessage(`${session.label} で ${result.teacherName} の日程表登録由来を ${result.clearedCellCount} コマ解除しました。`)
+      return
+    }
 
     const result = autoAssignTeacherToSpecialSession({
       weeks,
@@ -1829,8 +1928,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       return
     }
 
-    targetDesk.teacher = teacherMenu.selectedTeacherName
-    targetDesk.manualTeacher = true
+    setManualTeacherAssignment(targetDesk, teacherMenu.selectedTeacherName)
     commitWeeks(nextWeeks, weekIndex, teacherMenu.cellId, teacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(teacherMenu.selectedTeacherName

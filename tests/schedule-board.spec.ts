@@ -121,7 +121,21 @@ async function countTeacherAssignmentsByDate(
       const locator = page.getByTestId(`teacher-cell-${dateKey}_${slotNumber}-${deskIndex}`)
       if (await locator.count() === 0) continue
       const text = ((await locator.textContent()) ?? '').trim()
-      if (text === teacherName) count += 1
+      if (text.includes(teacherName)) count += 1
+    }
+  }
+
+  return count
+}
+
+async function countTeacherSourceBadgesByDate(page: Parameters<typeof test>[0]['page'], dateKey: string) {
+  let count = 0
+
+  for (let slotNumber = 1; slotNumber <= 5; slotNumber += 1) {
+    for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
+      const locator = page.getByTestId(`teacher-source-${dateKey}_${slotNumber}-${deskIndex}`)
+      if (await locator.count() === 0) continue
+      if (await locator.isVisible()) count += 1
     }
   }
 
@@ -2577,12 +2591,36 @@ test.describe('コマ調整表', () => {
     await moveBoardToWeek(page, new Date(2026, 2, 30))
 
     await expect.poll(async () => countTeacherAssignmentsByDate(page, '2026-04-01', '加藤講師')).toBe(0)
+    await expect.poll(async () => countTeacherSourceBadgesByDate(page, '2026-04-01')).toBe(0)
     await expect.poll(async () => {
       const april2 = await countTeacherAssignmentsByDate(page, '2026-04-02', '加藤講師')
       const april3 = await countTeacherAssignmentsByDate(page, '2026-04-03', '加藤講師')
       const april4 = await countTeacherAssignmentsByDate(page, '2026-04-04', '加藤講師')
       return april2 + april3 + april4
     }).toBeGreaterThan(0)
+    await expect.poll(async () => {
+      const april2 = await countTeacherSourceBadgesByDate(page, '2026-04-02')
+      const april3 = await countTeacherSourceBadgesByDate(page, '2026-04-03')
+      const april4 = await countTeacherSourceBadgesByDate(page, '2026-04-04')
+      return april2 + april3 + april4
+    }).toBeGreaterThan(0)
+
+    await popup.getByTestId(`teacher-schedule-period-button-${teacherId}-session_2026_spring`).click()
+    await expect(popup.getByTestId('teacher-schedule-register-unregister')).toBeVisible()
+    await popup.getByTestId('teacher-schedule-register-unregister').click()
+
+    await expect.poll(async () => {
+      const april2 = await countTeacherAssignmentsByDate(page, '2026-04-02', '加藤講師')
+      const april3 = await countTeacherAssignmentsByDate(page, '2026-04-03', '加藤講師')
+      const april4 = await countTeacherAssignmentsByDate(page, '2026-04-04', '加藤講師')
+      return april2 + april3 + april4
+    }).toBe(0)
+    await expect.poll(async () => {
+      const april2 = await countTeacherSourceBadgesByDate(page, '2026-04-02')
+      const april3 = await countTeacherSourceBadgesByDate(page, '2026-04-03')
+      const april4 = await countTeacherSourceBadgesByDate(page, '2026-04-04')
+      return april2 + april3 + april4
+    }).toBe(0)
   })
 
 

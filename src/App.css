@@ -755,6 +755,19 @@ tr.sa-slot-first td {
   color: #d14343;
 }
 
+.sa-teacher-source {
+  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 2px 6px;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #36506d;
+  background: #e6eef9;
+}
+
 .sa-type-chip-wrap {
   margin-top: 3px;
 }

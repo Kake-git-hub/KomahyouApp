@@ -44,6 +44,9 @@ export type DeskCell = {
   id: string
   teacher: string
   manualTeacher?: boolean
+  teacherAssignmentSource?: 'manual' | 'schedule-registration'
+  teacherAssignmentSessionId?: string
+  teacherAssignmentTeacherId?: string
   memoSlots?: [string | null, string | null]
   lesson?: DeskLesson
 }

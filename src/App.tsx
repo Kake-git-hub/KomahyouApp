@@ -36,6 +36,7 @@ export type TeacherAutoAssignRequest = {
   requestId: number
   sessionId: string
   teacherId: string
+  mode: 'assign' | 'unassign'
 }
 
 type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
@@ -496,14 +497,13 @@ function App() {
           }
         }))
 
-        if (countSubmitted) {
-          teacherAutoAssignRequestIdRef.current += 1
-          setTeacherAutoAssignRequest({
-            requestId: teacherAutoAssignRequestIdRef.current,
-            sessionId: message.sessionId,
-            teacherId: message.personId,
-          })
-        }
+        teacherAutoAssignRequestIdRef.current += 1
+        setTeacherAutoAssignRequest({
+          requestId: teacherAutoAssignRequestIdRef.current,
+          sessionId: message.sessionId,
+          teacherId: message.personId,
+          mode: countSubmitted ? 'assign' : 'unassign',
+        })
         return
       }
 

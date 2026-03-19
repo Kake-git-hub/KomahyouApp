@@ -146,9 +146,15 @@ export function BoardGrid({
   }
 
   const hasManualTeacherWarning = (desk: SlotCell['desks'][number]) => {
-    if (desk.manualTeacher) return true
+    if (desk.teacherAssignmentSource === 'manual') return true
     const lesson = desk.lesson
     return Boolean(lesson && (lesson.id?.includes('_manual') || lesson.studentSlots.some((student) => student?.manualAdded)))
+  }
+
+  const getTeacherAssignmentHint = (desk: SlotCell['desks'][number]) => {
+    if (desk.teacherAssignmentSource === 'schedule-registration') return '日程表より登録'
+    if (desk.teacherAssignmentSource === 'manual') return '手動設定'
+    return undefined
   }
 
   const days = Array.from(
@@ -290,6 +296,8 @@ export function BoardGrid({
                       const desk = cell.desks[deskIndex]
                       const lesson = desk.lesson
                       const teacherWarning = hasManualTeacherWarning(desk)
+                      const teacherAssignmentHint = getTeacherAssignmentHint(desk)
+                      const showsScheduleRegistrationBadge = desk.teacherAssignmentSource === 'schedule-registration' && Boolean(desk.teacher.trim())
                       const teacherClassName = [
                         'sa-teacher',
                         !cell.isOpenDay ? 'sa-inactive' : '',
@@ -312,10 +320,15 @@ export function BoardGrid({
                         >
                           <div
                             className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}`}
-                            title={teacherWarning ? '手動追加のため注意' : undefined}
+                            title={teacherWarning ? '手動追加のため注意' : teacherAssignmentHint}
                           >
                             {cell.isOpenDay ? desk.teacher : ''}
                           </div>
+                          {cell.isOpenDay && showsScheduleRegistrationBadge ? (
+                            <div className="sa-teacher-source" data-testid={`teacher-source-${cell.id}-${deskIndex}`}>
+                              日程表より登録
+                            </div>
+                          ) : null}
                         </td>,
                         renderStudentCell(
                           cell,
