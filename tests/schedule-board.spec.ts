@@ -1334,7 +1334,9 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('makeup-stock-panel')).toContainText('青木太郎')
     await expect(page.getByTestId('makeup-stock-panel')).toContainText('数')
     await expect(page.getByTestId('makeup-stock-entry-s001__-')).toContainText('+2')
-    await expect(page.getByTestId('makeup-stock-entry-s001__-')).toHaveAttribute('title', /休日/)
+    const initialMakeupTitle = await page.getByTestId('makeup-stock-entry-s001__-').getAttribute('title')
+    expect(initialMakeupTitle ?? '').toContain('残数: +2')
+    expect(countOccurrences(initialMakeupTitle ?? '', '（休日振替）')).toBe(2)
     await page.getByTestId('makeup-stock-entry-s001__-').click()
     await targetCell.click()
 
@@ -1342,6 +1344,9 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('青木太郎')
     await page.getByTestId('makeup-stock-chip').click()
     await expect(page.getByTestId('makeup-stock-entry-s001__-')).toContainText('+1')
+    const afterPlacementMakeupTitle = await page.getByTestId('makeup-stock-entry-s001__-').getAttribute('title')
+    expect(afterPlacementMakeupTitle ?? '').toContain('残数: +1')
+    expect(countOccurrences(afterPlacementMakeupTitle ?? '', '（休日振替）')).toBe(1)
   })
 
   test('振替元の通常授業情報はマウスオーバーで一度だけ表示される', async ({ page }) => {
@@ -1763,8 +1768,10 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('lecture-stock-chip').click()
     const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first()
     await expect(lectureEntry).toBeVisible()
-    expect((await lectureEntry.getAttribute('title')) ?? '').toContain('数')
-    expect((await lectureEntry.getAttribute('title')) ?? '').toContain('英')
+    const initialLectureTitle = (await lectureEntry.getAttribute('title')) ?? ''
+    expect(initialLectureTitle).toContain('残数: +2')
+    expect(initialLectureTitle).toContain('数: +1')
+    expect(initialLectureTitle).toContain('英: +1')
     const initialLectureCount = extractSignedCount(await lectureEntry.textContent())
     await lectureEntry.click()
 

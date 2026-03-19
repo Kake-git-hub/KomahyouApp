@@ -475,15 +475,47 @@ function formatStockOriginLabel(dateKey: string, slotNumber: number) {
   return `${date.getMonth() + 1}/${date.getDate()}(${calendarDayLabels[date.getDay()]}) ${slotNumber}限`
 }
 
-function buildMakeupStockTitle(entry: MakeupStockEntry) {
-  const parts: string[] = []
-  if (entry.remainingOriginLabels.length > 0) {
-    parts.push(`元の通常授業: ${entry.remainingOriginLabels.map((label, index) => `${label}（${entry.remainingOriginReasonLabels[index] ?? '振替発生'}）`).join(', ')}`)
+function formatSignedStockCount(count: number) {
+  return count > 0 ? `+${count}` : String(count)
+}
+
+function buildGroupedMakeupStockTitle(entries: MakeupStockEntry[], balance: number) {
+  const lines = [`残数: ${formatSignedStockCount(balance)}`]
+
+  for (const entry of entries) {
+    if (entry.balance > 0) {
+      lines.push(`${entry.subject}: ${formatSignedStockCount(entry.balance)}`)
+      const visibleOriginLabels = entry.remainingOriginLabels.slice(0, entry.balance)
+      if (visibleOriginLabels.length > 0) {
+        lines.push(`元の通常授業: ${visibleOriginLabels.map((label, index) => `${label}（${entry.remainingOriginReasonLabels[index] ?? '振替発生'}）`).join(', ')}`)
+      }
+    }
+
+    if (entry.balance < 0 && entry.negativeReason) {
+      lines.push(`${entry.subject}: ${entry.negativeReason}`)
+    }
   }
-  if (entry.balance < 0 && entry.negativeReason) {
-    parts.push(entry.negativeReason)
-  }
-  return parts.length > 0 ? parts.join('\n') : undefined
+
+  return lines.join('\n')
+}
+
+function buildGroupedLectureStockTitle(params: {
+  requestedCount: number
+  subjectTotals: Record<string, number>
+}) {
+  const lines = [`残数: ${formatSignedStockCount(params.requestedCount)}`]
+
+  Object.entries(params.subjectTotals)
+    .filter(([, requestedCount]) => requestedCount > 0)
+    .sort((left, right) => {
+      if (left[1] !== right[1]) return right[1] - left[1]
+      return left[0].localeCompare(right[0], 'ja')
+    })
+    .forEach(([subject, requestedCount]) => {
+      lines.push(`${subject}: ${formatSignedStockCount(requestedCount)}`)
+    })
+
+  return lines.join('\n')
 }
 
 function getStockStudentKeyFromEntryKey(entryKey: string) {
@@ -1114,7 +1146,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         })
         const nextPlacementEntry = sortedEntries.find((entry) => entry.balance > 0) ?? null
         const balance = entries.reduce((total, entry) => total + entry.balance, 0)
-        const title = entries.map((entry) => buildMakeupStockTitle(entry)).filter((value): value is string => Boolean(value)).join('\n---\n') || undefined
+        const title = buildGroupedMakeupStockTitle(sortedEntries, balance)
 
         return {
           key: `${stockStudentKey}__-`,
@@ -1187,7 +1219,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           displayName: entry.displayName,
           requestedCount: entry.requestedCount,
           nextPlacementEntry: nextPlacementEntry ? { subject: nextPlacementEntry.subject } : null,
-          title: entry.titleLines.join('\n'),
+          title: buildGroupedLectureStockTitle({
+            requestedCount: entry.requestedCount,
+            subjectTotals,
+          }),
         }
       })
       .filter((entry) => entry.requestedCount > 0)
