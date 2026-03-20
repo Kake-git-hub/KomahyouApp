@@ -295,19 +295,34 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: #f2f2f2;
         color: var(--ink);
         font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif;
-        scrollbar-width: none;
+        scrollbar-width: thin;
+        scrollbar-color: #8f9cac #e6ebf2;
       }
 
       html {
-        scrollbar-width: none;
+        scrollbar-width: thin;
+        scrollbar-color: #8f9cac #e6ebf2;
       }
 
       html::-webkit-scrollbar,
       body::-webkit-scrollbar,
       .pages::-webkit-scrollbar {
-        width: 0;
-        height: 0;
-        display: none;
+        width: 12px;
+        height: 12px;
+      }
+
+      html::-webkit-scrollbar-track,
+      body::-webkit-scrollbar-track,
+      .pages::-webkit-scrollbar-track {
+        background: #e6ebf2;
+      }
+
+      html::-webkit-scrollbar-thumb,
+      body::-webkit-scrollbar-thumb,
+      .pages::-webkit-scrollbar-thumb {
+        background: #8f9cac;
+        border: 2px solid #e6ebf2;
+        border-radius: 999px;
       }
 
       .toolbar {
@@ -330,6 +345,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .toolbar-title {
         font-size: 12px;
         color: var(--muted);
+      }
+
+      .interaction-lock-banner {
+        margin: 0 16px 12px;
+        padding: 10px 14px;
+        border: 1px solid #c5d3e4;
+        background: #eef4fb;
+        color: #244564;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      body.surface-locked .toolbar,
+      body.surface-locked .pages {
+        opacity: 0.82;
       }
 
       .toolbar-title {
@@ -379,7 +409,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 12px;
         justify-content: center;
         overflow: auto;
-        scrollbar-width: none;
+        scrollbar-width: thin;
+        scrollbar-color: #8f9cac #e6ebf2;
       }
 
       .sheet {
@@ -1094,6 +1125,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       @media print {
         body { background: #fff; }
+        html::-webkit-scrollbar,
+        body::-webkit-scrollbar,
+        .pages::-webkit-scrollbar {
+          width: 0;
+          height: 0;
+          display: none;
+        }
         .toolbar { display: none; }
         .pages { padding: 0; gap: 0; }
         .print-only-hidden { display: none; }
@@ -1156,6 +1194,19 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let payloadFingerprint = JSON.stringify(DATA);
       let skipNextEquivalentPayload = false;
       let suppressNextToggleClick = false;
+      const interactionLockStorageKey = 'schedule-shared:interaction-lock';
+      const interactionLockStaleMs = 5000;
+      const interactionLockToken = VIEW_TYPE + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+      let interactionLockOwner = null;
+      const interactionLockBanner = (() => {
+        if (!(summaryLabel instanceof HTMLElement)) return null;
+        const element = document.createElement('div');
+        element.id = 'schedule-interaction-lock-banner';
+        element.className = 'interaction-lock-banner';
+        element.hidden = true;
+        summaryLabel.insertAdjacentElement('afterend', element);
+        return element;
+      })();
 
       function escapeHtml(value) {
         return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');
@@ -1201,6 +1252,78 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         } catch {
           return null;
         }
+      }
+
+      function getInteractionSurfaceLabel(surface) {
+        if (surface === 'board') return 'コマ表';
+        if (surface === 'teacher') return '講師日程表';
+        return '生徒日程表';
+      }
+
+      function parseInteractionLock(rawValue) {
+        if (!rawValue) return null;
+        try {
+          const parsed = JSON.parse(rawValue);
+          if (!parsed || (parsed.owner !== 'board' && parsed.owner !== 'student' && parsed.owner !== 'teacher')) return null;
+          const updatedAt = typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Number(parsed.updatedAt);
+          if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > interactionLockStaleMs) return null;
+          return {
+            owner: parsed.owner,
+            token: typeof parsed.token === 'string' ? parsed.token : '',
+            updatedAt,
+          };
+        } catch {
+          return null;
+        }
+      }
+
+      function readInteractionLock() {
+        const storage = getSharedStorage();
+        if (!storage) return null;
+        try {
+          return parseInteractionLock(storage.getItem(interactionLockStorageKey));
+        } catch {
+          return null;
+        }
+      }
+
+      function writeInteractionLock(payload) {
+        const storage = getSharedStorage();
+        if (!storage) return;
+        try {
+          if (!payload) {
+            storage.removeItem(interactionLockStorageKey);
+            return;
+          }
+          storage.setItem(interactionLockStorageKey, JSON.stringify(payload));
+        } catch {}
+      }
+
+      function refreshInteractionLockState() {
+        const currentLock = readInteractionLock();
+        interactionLockOwner = currentLock ? currentLock.owner : null;
+        const isLocked = Boolean(interactionLockOwner && interactionLockOwner !== VIEW_TYPE);
+        document.body.classList.toggle('surface-locked', isLocked);
+        if (interactionLockBanner) {
+          interactionLockBanner.hidden = !isLocked;
+          if (isLocked) {
+            interactionLockBanner.textContent = getInteractionSurfaceLabel(interactionLockOwner) + ' を操作中です。この画面をクリックすると操作を切り替えます。';
+          }
+        }
+      }
+
+      function acquireInteractionLock() {
+        writeInteractionLock({ owner: VIEW_TYPE, token: interactionLockToken, updatedAt: Date.now() });
+        interactionLockOwner = VIEW_TYPE;
+        refreshInteractionLockState();
+      }
+
+      function releaseInteractionLock() {
+        const currentLock = readInteractionLock();
+        if (currentLock && currentLock.token === interactionLockToken) {
+          writeInteractionLock(null);
+        }
+        refreshInteractionLockState();
       }
 
       function resolveSharedInputValue(sharedKey) {
@@ -2061,14 +2184,19 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!student || !session) return '';
         const input = getStudentSessionInput(student.id, session.id);
         const visibleSubjects = getVisibleSubjectsForStudent(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate);
-        const rowsHtml = visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
+        const rowsHtml = input.countSubmitted
+          ? visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td>' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '</td></tr>').join('')
+          : visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
         const actionHtml = input.countSubmitted
           ? '<button type="button" data-role="unsubmit-student-count-modal" data-testid="student-schedule-count-unregister">登録解除</button>'
           : '<button type="button" data-role="submit-student-count-modal" data-testid="student-schedule-count-register">登録</button>';
         const unregisterNote = input.countSubmitted
-          ? '<div class="count-modal-note">登録解除すると、コマ表からこの生徒だけ外します。講師は残ります。</div>'
+          ? '<div class="count-modal-note">登録中は編集できません。編集する場合は登録解除して、内容を直してから再度登録してください。</div><div class="count-modal-note">登録解除すると、コマ表からこの生徒だけ外します。講師は残ります。</div>'
           : '';
-        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr></tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
+        const regularOnlyRow = input.countSubmitted
+          ? '<tr><td>通常のみ</td><td>' + escapeHtml(input.regularOnly ? 'あり' : 'なし') + '</td></tr>'
+          : '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr>';
+        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + regularOnlyRow + '</tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
       }
 
       function renderTeacherRegisterModal() {
@@ -2663,6 +2791,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       const preferredRange = getPreferredRange();
+      refreshInteractionLockState();
       startInput.addEventListener('input', handleDateInputChange);
       endInput.addEventListener('input', handleDateInputChange);
       startInput.addEventListener('change', handleDateInputChange);
@@ -2679,6 +2808,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const [startDate, endDate] = periodSelect.value.split('|');
         setRangeAndRender(startDate, endDate, periodSelect.value);
       });
+      document.addEventListener('pointerdown', (event) => {
+        if (!(event instanceof PointerEvent) || event.button !== 0) return;
+        acquireInteractionLock();
+      }, true);
       pagesElement.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         const target = event.target;
@@ -2714,8 +2847,33 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       });
       window.addEventListener('beforeunload', () => {
+        releaseInteractionLock();
         notifyRangeChange(startInput.value, endInput.value, periodSelect.value);
       });
+      window.addEventListener('focus', acquireInteractionLock);
+      window.addEventListener('blur', releaseInteractionLock);
+      window.addEventListener('storage', (event) => {
+        if (event.key === interactionLockStorageKey) refreshInteractionLockState();
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          releaseInteractionLock();
+          return;
+        }
+        if (document.hasFocus()) acquireInteractionLock();
+      });
+      window.setInterval(() => {
+        const currentLock = readInteractionLock();
+        if (document.hidden || !document.hasFocus()) {
+          if (currentLock && currentLock.token === interactionLockToken) releaseInteractionLock();
+          return;
+        }
+        if (currentLock && currentLock.token === interactionLockToken) {
+          acquireInteractionLock();
+        } else {
+          refreshInteractionLockState();
+        }
+      }, 1000);
       window.addEventListener('message', (event) => {
         const message = event.data;
         if (!message || message.type !== 'schedule-data-update' || message.viewType !== VIEW_TYPE || !message.payload) return;
@@ -2723,6 +2881,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       });
       window.__scheduleReadStoredLogo = bindLogoControls();
       setRangeAndRender(preferredRange.startDate, preferredRange.endDate, preferredRange.periodValue);
+      if (!document.hidden && document.hasFocus()) acquireInteractionLock();
       window.setTimeout(render, 0);
       window.addEventListener('load', render, { once: true });
     </script>

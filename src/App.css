@@ -198,6 +198,16 @@
   background: transparent;
 }
 
+.interaction-lock-banner {
+  padding: 10px 14px;
+  border: 1px solid #c5d3e4;
+  border-radius: 12px;
+  background: #eef4fb;
+  color: #244564;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .board-panel-unified {
   padding: 18px;
 }
@@ -308,6 +318,13 @@
   gap: 8px;
   overflow-x: auto;
   padding-bottom: 2px;
+}
+
+.makeup-stock-range-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .stock-row-shell,
@@ -964,6 +981,12 @@ tr.sa-slot-first td {
   display: grid;
   gap: 8px;
   margin-top: 10px;
+}
+
+.student-menu-help-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #58708d;
 }
 
 .student-menu-actions {

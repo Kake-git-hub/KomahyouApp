@@ -1,6 +1,7 @@
 import type { StudentRow } from '../basic-data/basicDataModel'
 
 export type AutoAssignRuleKey =
+  | 'preferNextDayOrLater'
   | 'preferTwoStudentsPerTeacher'
   | 'maxOneLesson'
   | 'maxTwoLessons'
@@ -48,6 +49,11 @@ export type AutoAssignRuleRow = {
 }
 
 export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'label' | 'description'>> = [
+  {
+    key: 'preferNextDayOrLater',
+    label: '翌日移行に割り振り',
+    description: '同日に寄せるより、別日に分散できる候補を優先します。',
+  },
   {
     key: 'preferTwoStudentsPerTeacher',
     label: '講師1人に生徒2人配置',

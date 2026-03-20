@@ -27,7 +27,7 @@ type AutoAssignRuleScreenProps = {
 
 type TargetDraftType = 'all' | 'grade' | 'students'
 type SelectionModalMode = 'target' | 'exclude'
-type RuleGroupKey = 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference'
+type RuleGroupKey = 'day-spacing' | 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference'
 
 const forcedRuleKeys = new Set<AutoAssignRuleKey>(['forbidFirstPeriod', 'regularTeachersOnly'])
 const singleTargetRuleKeys = new Set<AutoAssignRuleKey>(['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'])
@@ -55,6 +55,13 @@ const ruleGroupDefinitions: Array<{
   orderKey: AutoAssignRuleKey
   ruleKeys: AutoAssignRuleKey[]
 }> = [
+  {
+    key: 'day-spacing',
+    label: '日付優先',
+    description: '同日内で詰めるより、翌日以降へ分散する優先度を付けます。',
+    orderKey: 'preferNextDayOrLater',
+    ruleKeys: ['preferNextDayOrLater'],
+  },
   {
     key: 'two-students',
     label: '講師1人に生徒2人配置',
