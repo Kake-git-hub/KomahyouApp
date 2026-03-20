@@ -47,8 +47,8 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
   const [draftTypes, setDraftTypes] = useState<Record<string, TargetDraftType>>({})
   const [draftGrades, setDraftGrades] = useState<Record<string, AutoAssignTargetGrade | ''>>({})
   const [draftStudentIds, setDraftStudentIds] = useState<Record<string, string[]>>({})
-  const [draftIncludeStudentIds, setDraftIncludeStudentIds] = useState<Record<string, string>>({})
-  const [draftExcludeStudentIds, setDraftExcludeStudentIds] = useState<Record<string, string>>({})
+  const [openModalRuleKey, setOpenModalRuleKey] = useState<string | null>(null)
+  const [draftExceptionStudentIds, setDraftExceptionStudentIds] = useState<Record<string, string>>({})
   const referenceDate = getReferenceDateKey(new Date())
 
   const visibleStudents = useMemo(() => students
@@ -63,8 +63,7 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
   const resolveDraftType = (ruleKey: string): TargetDraftType => draftTypes[ruleKey] ?? 'all'
   const resolveDraftGrade = (ruleKey: string): AutoAssignTargetGrade | '' => draftGrades[ruleKey] ?? gradeOptions[0] ?? ''
   const resolveDraftStudentIds = (ruleKey: string) => draftStudentIds[ruleKey] ?? []
-  const resolveDraftIncludeStudentId = (ruleKey: string) => draftIncludeStudentIds[ruleKey] ?? ''
-  const resolveDraftExcludeStudentId = (ruleKey: string) => draftExcludeStudentIds[ruleKey] ?? ''
+  const resolveDraftExceptionStudentId = (ruleKey: string) => draftExceptionStudentIds[ruleKey] ?? ''
 
   const resetDraft = (ruleKey: string) => {
     setDraftTypes((current) => ({ ...current, [ruleKey]: 'all' }))
@@ -116,6 +115,12 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
 
     updateRule(rule.key, (currentRule) => ({ ...currentRule, targets: [...currentRule.targets, nextTarget as AutoAssignTarget] }), `${rule.label} に対象を追加しました。`)
     resetDraft(rule.key)
+    setOpenModalRuleKey(null)
+  }
+
+  const openAddTargetModal = (ruleKey: string) => {
+    resetDraft(ruleKey)
+    setOpenModalRuleKey(ruleKey)
   }
 
   const removeTarget = (ruleKey: string, targetId: string) => {
@@ -123,7 +128,7 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
   }
 
   const addRuleException = (rule: AutoAssignRuleRow, mode: 'include' | 'exclude') => {
-    const studentId = mode === 'include' ? resolveDraftIncludeStudentId(rule.key) : resolveDraftExcludeStudentId(rule.key)
+    const studentId = resolveDraftExceptionStudentId(rule.key)
     if (!studentId) {
       setStatusMessage(mode === 'include' ? '追加する個人を選択してください。' : '除外する個人を選択してください。')
       return
@@ -152,8 +157,7 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
       excludeStudentIds: mode === 'exclude' ? [...currentRule.excludeStudentIds, studentId] : currentRule.excludeStudentIds,
     }), mode === 'include' ? '対象外から追加する個人を登録しました。' : '対象内から除外する個人を登録しました。')
 
-    if (mode === 'include') setDraftIncludeStudentIds((current) => ({ ...current, [rule.key]: '' }))
-    else setDraftExcludeStudentIds((current) => ({ ...current, [rule.key]: '' }))
+    setDraftExceptionStudentIds((current) => ({ ...current, [rule.key]: '' }))
   }
 
   const removeRuleException = (ruleKey: string, mode: 'include' | 'exclude', studentId: string) => {
@@ -249,13 +253,9 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
 
           <div className="auto-assign-rule-grid">
             {rules.map((rule, index) => {
-              const draftType = resolveDraftType(rule.key)
-              const draftGrade = resolveDraftGrade(rule.key)
-              const selectedStudentIds = resolveDraftStudentIds(rule.key)
               const includeNames = describeStudentList(rule.includeStudentIds)
               const excludeNames = describeStudentList(rule.excludeStudentIds)
-              const includeDraftStudentId = resolveDraftIncludeStudentId(rule.key)
-              const excludeDraftStudentId = resolveDraftExcludeStudentId(rule.key)
+              const exceptionDraftStudentId = resolveDraftExceptionStudentId(rule.key)
 
               return (
                 <section key={rule.key} className="basic-data-section-card auto-assign-rule-card" data-testid={`auto-assign-rule-card-${rule.key}`}>
@@ -283,86 +283,33 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
                     ))}
                   </div>
 
-                  <div className="auto-assign-target-editor">
-                    <div className="basic-data-form-grid">
-                      <label className="basic-data-inline-field basic-data-inline-field-medium">
-                        <span>対象種別</span>
-                        <select
-                          value={draftType}
-                          onChange={(event) => setDraftTypes((current) => ({ ...current, [rule.key]: event.target.value as TargetDraftType }))}
-                          data-testid={`auto-assign-target-type-${rule.key}`}
-                        >
-                          <option value="all">全員</option>
-                          <option value="grade">学年別</option>
-                          <option value="students">個人複数</option>
-                        </select>
-                      </label>
-
-                      {draftType === 'grade' ? (
-                        <label className="basic-data-inline-field basic-data-inline-field-medium">
-                          <span>学年</span>
-                          <select
-                            value={draftGrade}
-                            onChange={(event) => setDraftGrades((current) => ({ ...current, [rule.key]: event.target.value as AutoAssignTargetGrade }))}
-                            data-testid={`auto-assign-target-grade-${rule.key}`}
-                          >
-                            {gradeOptions.map((grade) => <option key={grade} value={grade}>{grade}</option>)}
-                          </select>
-                        </label>
-                      ) : null}
-
-                      <button className="primary-button" type="button" onClick={() => addTarget(rule)} data-testid={`auto-assign-add-target-${rule.key}`}>対象を追加</button>
-                    </div>
-
-                    {draftType === 'students' ? (
-                      <div className="auto-assign-student-picker" data-testid={`auto-assign-student-picker-${rule.key}`}>
-                        {visibleStudents.map((student) => {
-                          const isSelected = selectedStudentIds.includes(student.id)
-                          return (
-                            <button
-                              key={student.id}
-                              className={`secondary-button slim auto-assign-student-toggle${isSelected ? ' active' : ''}`}
-                              type="button"
-                              onClick={() => toggleStudent(rule.key, student.id)}
-                              data-testid={`auto-assign-student-toggle-${rule.key}-${student.id}`}
-                              aria-pressed={isSelected}
-                            >
-                              {studentNameById[student.id]}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    ) : null}
+                  <div className="auto-assign-add-target-row">
+                    <button className="secondary-button slim" type="button" onClick={() => openAddTargetModal(rule.key)} data-testid={`auto-assign-open-modal-${rule.key}`}>＋ 対象を追加</button>
                   </div>
 
                   <section className="auto-assign-exception-panel">
-                    <div className="basic-data-card-head">
-                      <h4>個人例外</h4>
+                    <h4>個人例外</h4>
+
+                    <div className="auto-assign-exception-add-row">
+                      <select
+                        value={exceptionDraftStudentId}
+                        onChange={(event) => setDraftExceptionStudentIds((current) => ({ ...current, [rule.key]: event.target.value }))}
+                        data-testid={`auto-assign-exception-student-${rule.key}`}
+                      >
+                        <option value="">生徒を選択</option>
+                        {visibleStudents.map((student) => (
+                          <option key={student.id} value={student.id}>{studentNameById[student.id]}</option>
+                        ))}
+                      </select>
+                      <button className="secondary-button slim" type="button" onClick={() => addRuleException(rule, 'include')} data-testid={`auto-assign-exception-include-${rule.key}`}>追加</button>
+                      <button className="secondary-button slim" type="button" onClick={() => addRuleException(rule, 'exclude')} data-testid={`auto-assign-exception-exclude-${rule.key}`}>除外</button>
                     </div>
 
                     <div className="auto-assign-exception-grid">
                       <div className="auto-assign-exception-column">
-                        <div className="auto-assign-exception-head">
-                          <strong>対象外から追加する個人</strong>
-                        </div>
-                        <div className="basic-data-form-grid">
-                          <label className="basic-data-inline-field basic-data-inline-field-medium">
-                            <span>個人追加</span>
-                            <select
-                              value={includeDraftStudentId}
-                              onChange={(event) => setDraftIncludeStudentIds((current) => ({ ...current, [rule.key]: event.target.value }))}
-                              data-testid={`auto-assign-include-student-${rule.key}`}
-                            >
-                              <option value="">生徒を選択</option>
-                              {visibleStudents.map((student) => (
-                                <option key={student.id} value={student.id}>{studentNameById[student.id]}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <button className="secondary-button slim" type="button" onClick={() => addRuleException(rule, 'include')} data-testid={`auto-assign-include-add-${rule.key}`}>追加</button>
-                        </div>
+                        <div className="auto-assign-exception-head"><strong>追加</strong></div>
                         <div className="auto-assign-exception-list" data-testid={`auto-assign-include-list-${rule.key}`}>
-                          {includeNames.length === 0 ? <div className="auto-assign-target-empty">まだ追加個人はありません。</div> : includeNames.map((name, includeIndex) => (
+                          {includeNames.length === 0 ? <div className="auto-assign-target-empty">なし</div> : includeNames.map((name, includeIndex) => (
                             <div key={`${rule.key}_include_${rule.includeStudentIds[includeIndex]}`} className="auto-assign-target-chip-wrap">
                               <span className="selection-pill auto-assign-target-chip">{name}</span>
                               <button className="secondary-button slim" type="button" onClick={() => removeRuleException(rule.key, 'include', rule.includeStudentIds[includeIndex])} data-testid={`auto-assign-include-remove-${rule.key}-${rule.includeStudentIds[includeIndex]}`}>削除</button>
@@ -372,27 +319,9 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
                       </div>
 
                       <div className="auto-assign-exception-column">
-                        <div className="auto-assign-exception-head">
-                          <strong>対象内から除外する個人</strong>
-                        </div>
-                        <div className="basic-data-form-grid">
-                          <label className="basic-data-inline-field basic-data-inline-field-medium">
-                            <span>個人除外</span>
-                            <select
-                              value={excludeDraftStudentId}
-                              onChange={(event) => setDraftExcludeStudentIds((current) => ({ ...current, [rule.key]: event.target.value }))}
-                              data-testid={`auto-assign-exclude-student-${rule.key}`}
-                            >
-                              <option value="">生徒を選択</option>
-                              {visibleStudents.map((student) => (
-                                <option key={student.id} value={student.id}>{studentNameById[student.id]}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <button className="secondary-button slim" type="button" onClick={() => addRuleException(rule, 'exclude')} data-testid={`auto-assign-exclude-add-${rule.key}`}>除外</button>
-                        </div>
+                        <div className="auto-assign-exception-head"><strong>除外</strong></div>
                         <div className="auto-assign-exception-list" data-testid={`auto-assign-exclude-list-${rule.key}`}>
-                          {excludeNames.length === 0 ? <div className="auto-assign-target-empty">まだ除外個人はありません。</div> : excludeNames.map((name, excludeIndex) => (
+                          {excludeNames.length === 0 ? <div className="auto-assign-target-empty">なし</div> : excludeNames.map((name, excludeIndex) => (
                             <div key={`${rule.key}_exclude_${rule.excludeStudentIds[excludeIndex]}`} className="auto-assign-target-chip-wrap">
                               <span className="selection-pill auto-assign-target-chip">{name}</span>
                               <button className="secondary-button slim" type="button" onClick={() => removeRuleException(rule.key, 'exclude', rule.excludeStudentIds[excludeIndex])} data-testid={`auto-assign-exclude-remove-${rule.key}-${rule.excludeStudentIds[excludeIndex]}`}>削除</button>
@@ -408,6 +337,92 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
           </div>
         </section>
       </main>
+
+      {openModalRuleKey !== null && (() => {
+        const rule = rules.find((r) => r.key === openModalRuleKey)
+        if (!rule) return null
+        const draftType = resolveDraftType(rule.key)
+        const draftGrade = resolveDraftGrade(rule.key)
+        const selectedStudentIds = resolveDraftStudentIds(rule.key)
+
+        return (
+          <div
+            className="auto-assign-modal-overlay"
+            data-testid={`auto-assign-modal-overlay-${rule.key}`}
+            onClick={(event) => { if (event.target === event.currentTarget) setOpenModalRuleKey(null) }}
+            onKeyDown={(event) => { if (event.key === 'Escape') setOpenModalRuleKey(null) }}
+            role="presentation"
+          >
+            <div className="auto-assign-modal" data-testid={`auto-assign-modal-${rule.key}`} role="dialog" aria-modal="true">
+              <div className="auto-assign-modal-title">対象を追加 — {rule.label}</div>
+
+              <div className="auto-assign-type-buttons">
+                <button
+                  className={`secondary-button slim${draftType === 'all' ? ' active' : ''}`}
+                  type="button"
+                  aria-pressed={draftType === 'all'}
+                  onClick={() => setDraftTypes((current) => ({ ...current, [rule.key]: 'all' }))}
+                  data-testid={`auto-assign-type-all-${rule.key}`}
+                >全員</button>
+                <button
+                  className={`secondary-button slim${draftType === 'grade' ? ' active' : ''}`}
+                  type="button"
+                  aria-pressed={draftType === 'grade'}
+                  onClick={() => setDraftTypes((current) => ({ ...current, [rule.key]: 'grade' }))}
+                  data-testid={`auto-assign-type-grade-${rule.key}`}
+                >学年</button>
+                <button
+                  className={`secondary-button slim${draftType === 'students' ? ' active' : ''}`}
+                  type="button"
+                  aria-pressed={draftType === 'students'}
+                  onClick={() => setDraftTypes((current) => ({ ...current, [rule.key]: 'students' }))}
+                  data-testid={`auto-assign-type-students-${rule.key}`}
+                >個人</button>
+              </div>
+
+              {draftType === 'grade' ? (
+                <div className="auto-assign-grade-buttons">
+                  {gradeOptions.map((grade) => (
+                    <button
+                      key={grade}
+                      className={`secondary-button slim${draftGrade === grade ? ' active' : ''}`}
+                      type="button"
+                      aria-pressed={draftGrade === grade}
+                      onClick={() => setDraftGrades((current) => ({ ...current, [rule.key]: grade }))}
+                      data-testid={`auto-assign-grade-${grade}-${rule.key}`}
+                    >{grade}</button>
+                  ))}
+                </div>
+              ) : null}
+
+              {draftType === 'students' ? (
+                <div className="auto-assign-student-picker" data-testid={`auto-assign-student-picker-${rule.key}`}>
+                  {visibleStudents.map((student) => {
+                    const isSelected = selectedStudentIds.includes(student.id)
+                    return (
+                      <button
+                        key={student.id}
+                        className={`secondary-button slim auto-assign-student-toggle${isSelected ? ' active' : ''}`}
+                        type="button"
+                        onClick={() => toggleStudent(rule.key, student.id)}
+                        data-testid={`auto-assign-student-toggle-${rule.key}-${student.id}`}
+                        aria-pressed={isSelected}
+                      >
+                        {studentNameById[student.id]}
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : null}
+
+              <div className="auto-assign-modal-actions">
+                <button className="primary-button" type="button" onClick={() => addTarget(rule)} data-testid={`auto-assign-modal-confirm-${rule.key}`}>追加</button>
+                <button className="secondary-button slim" type="button" onClick={() => setOpenModalRuleKey(null)} data-testid={`auto-assign-modal-cancel-${rule.key}`}>キャンセル</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

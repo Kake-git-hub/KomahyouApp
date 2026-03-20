@@ -1491,6 +1491,70 @@ tr.sa-slot-first td {
   gap: 8px;
 }
 
+.auto-assign-add-target-row {
+  display: flex;
+}
+
+.auto-assign-exception-add-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.auto-assign-exception-add-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.auto-assign-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 40, 70, 0.45);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.auto-assign-modal {
+  background: #fff;
+  border-radius: 20px;
+  padding: 24px;
+  max-width: 480px;
+  width: 100%;
+  display: grid;
+  gap: 16px;
+  box-shadow: 0 8px 32px rgba(16, 40, 70, 0.18);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.auto-assign-modal-title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #16314f;
+}
+
+.auto-assign-type-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-assign-grade-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-assign-modal-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .special-session-summary-card span {
   color: #58708d;
   font-size: 12px;
