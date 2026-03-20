@@ -1915,6 +1915,50 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => Number((await reopenedPopup.getByTestId('student-schedule-count-subject-数').inputValue()) || '0')).toBe(0)
   })
 
+  test('小学生の希望科目数モーダルでは算のみ表示し数を表示しない', async ({ page }) => {
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s008-session_2026_spring').click()
+
+    await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-算')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-数')).toHaveCount(0)
+  })
+
+  test('通常と講習の警告スタンプは各回数表の直下に表示される', async ({ page }) => {
+    const targetWeekStart = addDays(getWeekStart(new Date()), 7)
+    const targetWeekStartKey = toDateKey(targetWeekStart)
+    const targetWeekEndKey = toDateKey(addDays(targetWeekStart, 6))
+    const sourceSlotId = `${targetWeekStartKey}_1`
+    const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, targetWeekStartKey, targetWeekEndKey)
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await moveBoardToWeek(page, targetWeekStart)
+    await page.getByTestId(sourceCellTestId).click()
+    await page.getByTestId('menu-stock-button').click()
+
+    const targetSheet = popup.locator('[data-role="student-sheet"][data-student-id="s001"]')
+    const countBlocks = targetSheet.locator('.count-stack-block')
+
+    await expect(countBlocks.nth(0).getByTestId('student-schedule-regular-count-warning')).toBeVisible()
+    await expect(countBlocks.nth(1).getByTestId('student-schedule-lecture-count-warning')).toBeVisible()
+  })
+
   test('同コマに同生徒がいる場合は振替不可で振替中状態を維持する', async ({ page }) => {
     const today = new Date()
     const mondayDates = getMonthWeekdayDates(today.getFullYear(), today.getMonth(), 1).filter((dateKey) => dateKey <= toDateKey(today))
