@@ -84,7 +84,7 @@ type BasicDataBundle = {
 }
 type XlsxModule = typeof import('xlsx')
 
-const subjectOptions = ['算', '数', '英', '国', '理', '社', 'IT']
+const subjectOptions = ['算', '数', '英', '国', '理', '社']
 const gradeCeilingOptions: GradeCeiling[] = ['小', '中', '高1', '高2', '高3']
 const gradeCeilingOptionsWithoutElementary: GradeCeiling[] = ['中', '高1', '高2', '高3']
 const dayOptions = [
@@ -102,7 +102,7 @@ const initialGroupLessons: GroupLessonRow[] = [
   { id: 'g001', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't002', subject: '英', studentIds: ['s002', 's003'], dayOfWeek: 3, slotLabel: '2限' },
   { id: 'g002', schoolYear: resolveOperationalSchoolYear(new Date()) - 1, teacherId: 't001', subject: '算', studentIds: ['s001'], dayOfWeek: 1, slotLabel: '1限' },
   { id: 'g003', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't004', subject: '国', studentIds: ['s013', 's025'], dayOfWeek: 5, slotLabel: '3限' },
-  { id: 'g004', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't006', subject: 'IT', studentIds: ['s014', 's026'], dayOfWeek: 4, slotLabel: '4限' },
+  { id: 'g004', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't006', subject: '理', studentIds: ['s014', 's026'], dayOfWeek: 4, slotLabel: '4限' },
 ]
 const initialConstraints: ConstraintRow[] = [
   { id: 'c001', personAType: 'teacher', personAId: 't001', personBType: 'student', personBId: 's002', type: 'incompatible' },

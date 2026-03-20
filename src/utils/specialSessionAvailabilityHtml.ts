@@ -131,7 +131,7 @@ function createPopupWindow(targetWindow?: Window | null) {
 
 function createSpecialSessionAvailabilityHtml(payload: PopupPayload) {
   const serializedPayload = JSON.stringify(payload).replace(/</g, '\\u003c')
-  const serializedSubjects = JSON.stringify(['英', '数', '算', '国', '理', '社', 'IT']).replace(/</g, '\\u003c')
+  const serializedSubjects = JSON.stringify(['英', '数', '算', '国', '理', '社']).replace(/</g, '\\u003c')
 
   return `<!doctype html>
 <html lang="ja">

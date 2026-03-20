@@ -704,7 +704,7 @@ test.describe('コマ調整表', () => {
       },
       {
         name: '小泉蒼',
-        lesson: { teacher: '渡辺講師', student1: '工藤玲奈', subject1: '理', dayOfWeek: '2', slotNumber: '5', student2: '小泉蒼', subject2: 'IT', student2StartDate: nextTuesdayKey },
+        lesson: { teacher: '渡辺講師', student1: '工藤玲奈', subject1: '理', dayOfWeek: '2', slotNumber: '5', student2: '小泉蒼', subject2: '社', student2StartDate: nextTuesdayKey },
         expected: [false, false, true, true],
       },
       {
@@ -2551,7 +2551,7 @@ test.describe('コマ調整表', () => {
     const periodButton = targetSheet.locator('[data-role="open-teacher-register-modal"]').first()
 
     await expect(dayToggle).toBeVisible()
-    await expect(periodButton).toContainText('参加不可登録はここをクリック')
+    await expect(periodButton).toContainText('講師予定をここをクリックして登録')
 
     await dayToggle.click()
     await expect.poll(async () => targetSheet.locator('.slot-cell.is-unavailable').count()).toBeGreaterThan(0)
@@ -2559,13 +2559,13 @@ test.describe('コマ調整表', () => {
     await periodButton.click()
     await expect(popup.getByTestId('teacher-schedule-register-modal')).toBeVisible()
     await popup.getByTestId('teacher-schedule-register-submit').click()
-    await expect(periodButton).toContainText('参加不可登録済')
+    await expect(periodButton).toContainText('講師予定登録済')
     await expect(targetSheet.locator('[data-role="toggle-teacher-unavailable-date"]')).toHaveCount(0)
 
     await periodButton.click()
     await expect(popup.getByTestId('teacher-schedule-register-unregister')).toBeVisible()
     await popup.getByTestId('teacher-schedule-register-unregister').click()
-    await expect(periodButton).toContainText('参加不可登録はここをクリック')
+    await expect(periodButton).toContainText('講師予定をここをクリックして登録')
     await expect.poll(async () => targetSheet.locator('[data-role="toggle-teacher-unavailable-date"]').count()).toBeGreaterThan(0)
   })
 
@@ -2724,22 +2724,14 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(expectedTargetLabel)
   })
 
-  test('生徒日程は最新状態に更新ボタンで再描画できる', async ({ page }) => {
+  test('生徒日程は最新状態に更新ボタンを表示しない', async ({ page }) => {
     await page.goto('/')
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
-    await expect(popup.locator('#schedule-refresh-button')).toBeVisible()
-    await popup.evaluate(() => {
-      const pages = document.getElementById('schedule-pages')
-      if (pages) pages.innerHTML = '<div id="broken-schedule">broken</div>'
-    })
-    await expect(popup.locator('#broken-schedule')).toBeVisible()
-
-    await popup.locator('#schedule-refresh-button').click()
-    await expect(popup.locator('#broken-schedule')).toHaveCount(0)
+    await expect(popup.locator('#schedule-refresh-button')).toHaveCount(0)
     await expect(popup.locator('section.sheet').first()).toBeVisible()
   })
 

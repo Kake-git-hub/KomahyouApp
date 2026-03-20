@@ -89,7 +89,7 @@ type GroupedLectureStockEntry = {
   title?: string
 }
 
-const editableSubjects: SubjectLabel[] = ['英', '数', '算', '国', '理', '社', 'IT']
+const editableSubjects: SubjectLabel[] = ['英', '数', '算', '国', '理', '社']
 const editableLessonTypes: LessonType[] = ['regular', 'makeup', 'special']
 const editableTeacherTypes: TeacherType[] = ['normal', 'substitute', 'outside']
 
@@ -793,7 +793,7 @@ export function normalizeScheduleRange(range: ScheduleRangePreference, fallbackS
   }
 }
 
-export function buildScheduleCellsForRange(params: {
+export function buildManagedScheduleCellsForRange(params: {
   range: ScheduleRangePreference
   fallbackStartDate: string
   fallbackEndDate: string
@@ -804,7 +804,7 @@ export function buildScheduleCellsForRange(params: {
   boardWeeks: SlotCell[][]
 }) {
   const normalizedRange = normalizeScheduleRange(params.range, params.fallbackStartDate, params.fallbackEndDate)
-  const managedCells = buildManagedRegularLessonsRange({
+  return buildManagedRegularLessonsRange({
     startDate: normalizedRange.startDate,
     endDate: normalizedRange.endDate,
     deskCount: params.classroomSettings.deskCount,
@@ -813,6 +813,19 @@ export function buildScheduleCellsForRange(params: {
     students: params.students,
     regularLessons: params.regularLessons,
   })
+}
+
+export function buildScheduleCellsForRange(params: {
+  range: ScheduleRangePreference
+  fallbackStartDate: string
+  fallbackEndDate: string
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  boardWeeks: SlotCell[][]
+}) {
+  const managedCells = buildManagedScheduleCellsForRange(params)
 
   return overlayBoardWeeksOnScheduleCells(managedCells, params.boardWeeks)
 }
@@ -1583,7 +1596,29 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     boardWeeks: normalizedWeeks,
   }), [classroomSettings, effectiveStudentScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, teachers])
 
+  const studentPlannedScheduleCells = useMemo(() => buildManagedScheduleCellsForRange({
+    range: effectiveStudentScheduleRange,
+    fallbackStartDate: scheduleFallbackStartDate,
+    fallbackEndDate: scheduleFallbackEndDate,
+    classroomSettings,
+    teachers,
+    students,
+    regularLessons,
+    boardWeeks: normalizedWeeks,
+  }), [classroomSettings, effectiveStudentScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, teachers])
+
   const teacherScheduleCells = useMemo(() => buildScheduleCellsForRange({
+    range: effectiveTeacherScheduleRange,
+    fallbackStartDate: scheduleFallbackStartDate,
+    fallbackEndDate: scheduleFallbackEndDate,
+    classroomSettings,
+    teachers,
+    students,
+    regularLessons,
+    boardWeeks: normalizedWeeks,
+  }), [classroomSettings, effectiveTeacherScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, teachers])
+
+  const teacherPlannedScheduleCells = useMemo(() => buildManagedScheduleCellsForRange({
     range: effectiveTeacherScheduleRange,
     fallbackStartDate: scheduleFallbackStartDate,
     fallbackEndDate: scheduleFallbackEndDate,
@@ -1619,6 +1654,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   useEffect(() => {
     syncStudentScheduleHtml({
       cells: studentScheduleCells,
+      plannedCells: studentPlannedScheduleCells,
       students,
       defaultStartDate: effectiveStudentScheduleRange.startDate,
       defaultEndDate: effectiveStudentScheduleRange.endDate,
@@ -1630,11 +1666,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       qrConfig: scheduleQrConfig,
       targetWindow: studentScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, scheduleQrConfig, specialSessions, studentScheduleCells, studentScheduleTitle, students])
+  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
 
   useEffect(() => {
     syncTeacherScheduleHtml({
       cells: teacherScheduleCells,
+      plannedCells: teacherPlannedScheduleCells,
       teachers,
       defaultStartDate: effectiveTeacherScheduleRange.startDate,
       defaultEndDate: effectiveTeacherScheduleRange.endDate,
@@ -1646,7 +1683,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       qrConfig: scheduleQrConfig,
       targetWindow: teacherScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleQrConfig, specialSessions, teacherScheduleCells, teacherScheduleTitle, teachers])
+  }, [classroomSettings, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleQrConfig, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
@@ -2472,6 +2509,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         regularLessons,
         boardWeeks: normalizedWeeks,
       }),
+      plannedCells: buildManagedScheduleCellsForRange({
+        range: storedRange,
+        fallbackStartDate: scheduleFallbackStartDate,
+        fallbackEndDate: scheduleFallbackEndDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: normalizedWeeks,
+      }),
       students,
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,
@@ -2506,6 +2553,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     const nextWindow = openTeacherScheduleHtml({
       cells: buildScheduleCellsForRange({
+        range: storedRange,
+        fallbackStartDate: scheduleFallbackStartDate,
+        fallbackEndDate: scheduleFallbackEndDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: normalizedWeeks,
+      }),
+      plannedCells: buildManagedScheduleCellsForRange({
         range: storedRange,
         fallbackStartDate: scheduleFallbackStartDate,
         fallbackEndDate: scheduleFallbackEndDate,

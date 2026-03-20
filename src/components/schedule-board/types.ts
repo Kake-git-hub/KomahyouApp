@@ -16,7 +16,7 @@ export type GradeLabel =
   | '高2'
   | '高3'
 
-export type SubjectLabel = '英' | '数' | '算' | '国' | '理' | '社' | 'IT'
+export type SubjectLabel = '英' | '数' | '算' | '国' | '理' | '社'
 
 export type StudentEntry = {
   id: string

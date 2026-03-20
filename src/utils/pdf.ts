@@ -115,8 +115,8 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     rotatedLabel.textContent = rotatedText
     rotatedLabel.style.display = 'inline-block'
     rotatedLabel.style.whiteSpace = 'nowrap'
-    rotatedLabel.style.fontSize = '11px'
-    rotatedLabel.style.fontWeight = '700'
+    rotatedLabel.style.fontSize = '15px'
+    rotatedLabel.style.fontWeight = '800'
     rotatedLabel.style.lineHeight = '1'
     rotatedLabel.style.transform = 'rotate(-90deg)'
     rotatedLabel.style.transformOrigin = 'center center'
@@ -126,10 +126,10 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.appendChild(rotatedLabel)
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-slot').forEach((node) => {
-    node.style.fontSize = '13px'
+    node.style.fontSize = '16px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-time-range').forEach((node) => {
-    node.style.fontSize = '11px'
+    node.style.fontSize = '13px'
     node.style.lineHeight = '1.3'
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher').forEach((node) => {

@@ -29,10 +29,10 @@ export const initialTeachers: TeacherRow[] = [
   { id: 't003', name: '鈴木講師', email: 'suzuki@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '理', maxGrade: '高2' }], memo: '理数対応' },
   { id: 't004', name: '高橋講師', email: 'takahashi@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '国', maxGrade: '高3' }], memo: '文系対応' },
   { id: 't005', name: '伊藤講師', email: 'ito-teacher@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '国', maxGrade: '高3' }, { subject: '社', maxGrade: '高3' }], memo: '国社中心' },
-  { id: 't006', name: '渡辺講師', email: 'watanabe@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '理', maxGrade: '高3' }, { subject: 'IT', maxGrade: '高3' }], memo: '理科とIT' },
+  { id: 't006', name: '渡辺講師', email: 'watanabe@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '理', maxGrade: '高3' }], memo: '理科中心' },
   { id: 't007', name: '中村講師', email: 'nakamura@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '社', maxGrade: '高2' }], memo: '英社対応' },
   { id: 't008', name: '小林講師', email: 'kobayashi@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高2' }, { subject: '英', maxGrade: '高1' }], memo: '中学生中心' },
-  { id: 't009', name: '加藤講師', email: 'kato@example.com', entryDate: '2026-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高2' }, { subject: 'IT', maxGrade: '高3' }], memo: '4月着任予定' },
+  { id: 't009', name: '加藤講師', email: 'kato@example.com', entryDate: '2026-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高2' }], memo: '4月着任予定' },
   { id: 't010', name: '吉田講師', email: 'yoshida@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: true, subjectCapabilities: [{ subject: '国', maxGrade: '高3' }, { subject: '社', maxGrade: '高3' }], memo: '休職中のため非表示' },
 ]
 

@@ -5,7 +5,7 @@ import { deriveManagedDisplayName, initialStudents, initialTeachers } from './co
 import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
 import { SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildScheduleCellsForRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { importedMasterData } from './data/importedMasterData.generated'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
@@ -227,6 +227,16 @@ function App() {
         regularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
       }),
+      plannedCells: buildManagedScheduleCellsForRange({
+        range,
+        fallbackStartDate: range.startDate,
+        fallbackEndDate: range.endDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      }),
       students,
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
@@ -249,6 +259,16 @@ function App() {
 
     syncTeacherScheduleHtml({
       cells: buildScheduleCellsForRange({
+        range,
+        fallbackStartDate: range.startDate,
+        fallbackEndDate: range.endDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      }),
+      plannedCells: buildManagedScheduleCellsForRange({
         range,
         fallbackStartDate: range.startDate,
         fallbackEndDate: range.endDate,

@@ -91,12 +91,14 @@ type SchedulePayload = {
   students: SerializedStudent[]
   teachers: SerializedTeacher[]
   cells: SerializedCell[]
+  plannedCells: SerializedCell[]
   specialSessions: SerializedSpecialSession[]
   qrSchoolNamePattern: string
 }
 
 type OpenScheduleHtmlParams = {
   cells: SlotCell[]
+  plannedCells: SlotCell[]
   defaultStartDate: string
   defaultEndDate: string
   defaultPeriodValue?: string
@@ -179,6 +181,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     return [[student.name, student.id], [displayName, student.id]] as Array<[string, string]>
   }))
   const serializedCells = serializeCells(params.cells, (studentName) => linkedStudentIdByName.get(studentName))
+  const serializedPlannedCells = serializeCells(params.plannedCells, (studentName) => linkedStudentIdByName.get(studentName))
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -201,6 +204,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       endDate: period.endDate,
     })),
     cells: serializedCells,
+    plannedCells: serializedPlannedCells,
     specialSessions: (params.specialSessions ?? []).map((session) => ({
       id: session.id,
       label: session.label,
@@ -1016,6 +1020,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         table-layout: fixed;
       }
 
+      .count-table {
+        border-bottom: 1.5px solid var(--line);
+      }
+
       .count-table th,
       .count-table td,
       .makeup-table th,
@@ -1118,7 +1126,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           <option value="">選択してください</option>
         </select>
       </div>
-      <button id="schedule-refresh-button" type="button" class="secondary">最新状態に更新</button>
       <div class="toolbar-summary" id="schedule-summary-label"></div>
     </div>
     <main class="pages" id="schedule-pages"></main>
@@ -1131,15 +1138,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const startInput = document.getElementById('schedule-start-date');
       const endInput = document.getElementById('schedule-end-date');
       const periodSelect = document.getElementById('schedule-period-select');
-      const refreshButton = document.getElementById('schedule-refresh-button');
       const summaryLabel = document.getElementById('schedule-summary-label');
       const pagesElement = document.getElementById('schedule-pages');
       const sharedStoragePrefix = 'schedule-shared:' + VIEW_TYPE + ':';
+      const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
       const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '特別' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-      const subjectDefinitions = ['英', '数', '算', '国', '理', '社', 'IT'];
+      const subjectDefinitions = ['英', '数', '算', '国', '理', '社'];
       let activeCountDialog = null;
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = JSON.stringify(DATA);
@@ -1162,6 +1169,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function normalizeSchoolInfo(value) {
         return String(value || '').replace(/\u3000/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+
+      function getSharedInputStorageKey(sharedKey) {
+        if (sharedKey === 'school-info') return sharedGlobalStoragePrefix + sharedKey;
+        return sharedStoragePrefix + sharedKey;
       }
 
       function setDateInputValue(input, value) {
@@ -1195,7 +1207,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
         const storage = getSharedStorage();
         try {
-          return storage ? storage.getItem(sharedStoragePrefix + sharedKey) || '' : '';
+          return storage ? storage.getItem(getSharedInputStorageKey(sharedKey)) || '' : '';
         } catch {
           return '';
         }
@@ -1448,8 +1460,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return map;
       }
 
-      function toCountRows(countMap, desiredCountMap) {
+      function toCountRows(countMap, desiredCountMap, forcedLabels) {
         const mergedLabels = Array.from(new Set([
+          ...(forcedLabels || []),
           ...Object.keys(countMap || {}),
           ...Object.keys(desiredCountMap || {}),
         ])).sort((left, right) => left.localeCompare(right, 'ja'));
@@ -2026,12 +2039,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const session = getSpecialSessionById(activeCountDialog.sessionId);
         if (!student || !session) return '';
         const input = getStudentSessionInput(student.id, session.id);
-        const unavailableCount = input.unavailableSlots.filter((slotKey) => {
-          const [dateKey] = String(slotKey || '').split('_');
-          return Boolean(dateKey) && dateKey >= session.startDate && dateKey <= session.endDate;
-        }).length;
         const rowsHtml = subjectDefinitions.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
-        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">' + escapeHtml(input.countSubmitted ? '登録解除するとこの期間の参加不可コマを再編集できます。' : '登録するとこの期間の参加不可コマを FIX します。') + ' 現在の参加不可: ' + unavailableCount + ' コマ</div></div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr></tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + (input.countSubmitted ? '<button type="button" class="secondary" data-role="unsubmit-student-count-modal" data-testid="student-schedule-count-unregister">登録解除</button>' : '') + '<button type="button" data-role="submit-student-count-modal" data-testid="student-schedule-count-register">登録</button></div></div></div>';
+        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div></div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr></tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + (input.countSubmitted ? '<button type="button" class="secondary" data-role="unsubmit-student-count-modal" data-testid="student-schedule-count-unregister">登録解除</button>' : '') + '<button type="button" data-role="submit-student-count-modal" data-testid="student-schedule-count-register">登録</button></div></div></div>';
       }
 
       function renderTeacherRegisterModal() {
@@ -2168,10 +2177,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function renderStudentPages(startDate, endDate) {
         const filteredCells = filterCells(startDate, endDate);
+        const filteredPlannedCells = (Array.isArray(DATA.plannedCells) ? DATA.plannedCells : DATA.cells).filter((cell) => cell.dateKey >= startDate && cell.dateKey <= endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
         const cellMap = buildCellMap(filteredCells);
         const assignmentMap = buildStudentAssignments(filteredCells);
+        const plannedAssignmentMap = buildStudentAssignments(filteredPlannedCells);
         const periodSegments = buildPeriodSegments(dateHeaders);
         const cornerYearHtml = makeCornerYearHtml(dateHeaders);
         const monthHeaderHtml = makeMonthHeaderHtml(dateHeaders);
@@ -2181,9 +2192,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const showQr = shouldShowScheduleQr();
         pagesElement.innerHTML = students.map((student, index) => {
           const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
+          const plannedEntries = plannedAssignmentMap.get(student.id) || plannedAssignmentMap.get(student.name) || [];
           const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
           const unavailableSlots = getUnavailableSlotsForStudent(student.id);
           const subjectCounts = {};
+          const plannedRegularCounts = {};
           const lectureCounts = {};
           const desiredLectureCounts = buildDesiredLectureCountMap(student.id, startDate, endDate);
           const makeupNotes = collectStudentMakeupNotes(entries);
@@ -2191,6 +2204,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
             else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
           });
+          plannedEntries.forEach((entry) => {
+            if (entry.lesson.lessonType === 'special') return;
+            plannedRegularCounts[entry.lesson.subject] = (plannedRegularCounts[entry.lesson.subject] || 0) + 1;
+          });
+          const regularCountWarningHtml = hasCountMismatch(subjectCounts, plannedRegularCounts)
+            ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
+            : '';
           const lectureCountWarningHtml = hasCountMismatch(lectureCounts, desiredLectureCounts)
             ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と予定数が一致していません！</div>'
             : '';
@@ -2216,7 +2236,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
           const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
           const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, makeupRows, toCountRows(subjectCounts), toCountRows(lectureCounts, desiredLectureCounts), lectureCountWarningHtml) + '</section>';
+          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, makeupRows, toCountRows(subjectCounts, plannedRegularCounts), toCountRows(lectureCounts, desiredLectureCounts, subjectDefinitions), regularCountWarningHtml + lectureCountWarningHtml) + '</section>';
         }).join('');
       }
 
@@ -2323,7 +2343,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function bindSharedInputs() {
         document.querySelectorAll('.shared-input').forEach((element) => {
           const sharedKey = element.getAttribute('data-shared-input');
-          const storageKey = sharedStoragePrefix + sharedKey;
+          const storageKey = getSharedInputStorageKey(sharedKey);
           const storage = getSharedStorage();
           try {
             const saved = storage ? storage.getItem(storageKey) : null;
@@ -2374,18 +2394,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             periodValue: periodValue || '',
           }, '*');
         } catch {}
-      }
-
-      function requestRefresh() {
-        try {
-          if (window.opener && !window.opener.closed) {
-            window.opener.postMessage({
-              type: 'schedule-refresh-request',
-              viewType: VIEW_TYPE,
-            }, '*');
-          }
-        } catch {}
-        render();
       }
 
       function handleTeacherUnavailableClick(target) {
@@ -2531,7 +2539,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function bindLogoControls() {
         const logoInput = document.getElementById('schedule-logo-input');
-        const storageKey = sharedStoragePrefix + 'logo';
+        const storageKey = sharedGlobalStoragePrefix + 'logo';
         const readStoredLogo = () => {
           const storage = getSharedStorage();
           try {
@@ -2632,7 +2640,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const [startDate, endDate] = periodSelect.value.split('|');
         setRangeAndRender(startDate, endDate, periodSelect.value);
       });
-      refreshButton.addEventListener('click', requestRefresh);
       pagesElement.addEventListener('pointerdown', (event) => {
         if (event.button !== 0) return;
         const target = event.target;
