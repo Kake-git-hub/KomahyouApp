@@ -243,41 +243,9 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
           <div className="basic-data-header">
             <div>
               <h2>自動割振ルール</h2>
-              <p className="basic-data-subcopy">ここではルールごとの対象だけを設定します。実際の自動割振では、守れないルールがあっても配置し、違反した生徒は後で赤字とツールチップ表示にする前提です。</p>
+              <p className="basic-data-subcopy">上にあるルールほど優先されます。「上へ」「下へ」で順序を変更できます。</p>
             </div>
           </div>
-
-          <section className="basic-data-section-card auto-assign-rules-summary-card">
-            <div className="basic-data-card-head">
-              <h3>設定方針</h3>
-              <p>対象は 全員 / 学年別 / 個人複数 を同じルールに対して何件でも追加できます。個人追加と個人除外はルール全体に対して持ち、全員・学年別の対象にだけ適用します。</p>
-            </div>
-          </section>
-
-          <section className="basic-data-section-card auto-assign-priority-card">
-            <div className="basic-data-card-head">
-              <h3>優先順位と競合解決順</h3>
-              <p>自動割振では、まず上から順にルールを評価します。相反する条件がある場合は、禁止系を先に守り、その後で優先系を上から順に当てます。</p>
-            </div>
-            <div className="auto-assign-priority-grid">
-              <div className="auto-assign-priority-step">
-                <strong>1. ルール優先順位</strong>
-                <span>画面の上ほど優先です。上下ボタンで並べ替えます。</span>
-              </div>
-              <div className="auto-assign-priority-step">
-                <strong>2. 禁止系を先に適用</strong>
-                <span>1限禁止、コマ上限、通常講師のみ など、候補を削るルールを先に使います。</span>
-              </div>
-              <div className="auto-assign-priority-step">
-                <strong>3. 優先系で並べ替え</strong>
-                <span>通常授業連結、2コマ連続、一コマ空け、時間帯優先を上から順に当てます。</span>
-              </div>
-              <div className="auto-assign-priority-step">
-                <strong>4. 守れない分は配置</strong>
-                <span>候補が尽きたら配置は止めず、違反情報を後段の表示で持たせる前提です。</span>
-              </div>
-            </div>
-          </section>
 
           <div className="auto-assign-rule-grid">
             {rules.map((rule, index) => {
@@ -294,16 +262,13 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
                   <div className="basic-data-section-header">
                     <div className="basic-data-card-head">
                       <h3>{rule.label}</h3>
-                      <p>{rule.description}</p>
                     </div>
                     <div className="auto-assign-rule-meta">
                       <span className="status-chip" data-testid={`auto-assign-rule-priority-${rule.key}`}>優先 {index + 1}</span>
-                      <span className="status-chip secondary">対象 {rule.targets.length} 件</span>
                       <div className="basic-data-row-actions">
                         <button className="secondary-button slim" type="button" onClick={() => moveRule(rule.key, 'up')} disabled={index === 0} data-testid={`auto-assign-move-up-${rule.key}`}>上へ</button>
                         <button className="secondary-button slim" type="button" onClick={() => moveRule(rule.key, 'down')} disabled={index === rules.length - 1} data-testid={`auto-assign-move-down-${rule.key}`}>下へ</button>
                       </div>
-                      <span className="basic-data-muted-inline">{rule.updatedAt ? `更新: ${rule.updatedAt}` : '未設定'}</span>
                     </div>
                   </div>
 
@@ -373,7 +338,6 @@ export function AutoAssignRuleScreen({ rules, students, onUpdateRules, onBackToB
                   <section className="auto-assign-exception-panel">
                     <div className="basic-data-card-head">
                       <h4>個人例外</h4>
-                      <p>この例外は 全員 / 学年別 の対象にだけ効きます。個人複数ターゲットには効きません。</p>
                     </div>
 
                     <div className="auto-assign-exception-grid">
