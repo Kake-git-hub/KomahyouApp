@@ -39,9 +39,12 @@
 	- Student schedule regular counts compare actual assigned lessons against planned managed lessons.
 	- Regular warning stamps stay directly below the regular count table; lecture warning stamps stay directly below the lecture count table.
 	- Student schedule subject lists must show only one math label: `算` for elementary grades, `数` for middle/high grades.
+	- Keep focused unit coverage for stock math in `src/components/schedule-board/makeupStock.test.ts`, including holiday shortage, manual-added exclusion, and occupied-slot shortage cases.
+	- Keep PDF export rules documented in `docs/board-pdf-design.md`; time-column labels must stay large and centered, and stock side panels must stay out of exported PDFs.
 	- Sending an existing 振替授業 back to stock must not double-count stock; compare against the original regular lesson basis.
 	- When 振替 or 移動 would place the same student into the same slot twice, reject the action, show a warning, and keep the current selection state.
 	- After board or schedule changes, run both `npm run build` and `npx playwright test tests/schedule-board.spec.ts`.
+	- After stock calculation or PDF changes, also run `npm run test:unit`.
 
 - [x] Maintain regression coverage
 	Current expected regression baseline: full `tests/schedule-board.spec.ts` Playwright suite passes after board/schedule behavior changes.

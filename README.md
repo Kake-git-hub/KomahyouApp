@@ -52,6 +52,7 @@
 ## 設計メモ
 
 - 日程表反映の設計メモは [docs/schedule-popup-design.md](docs/schedule-popup-design.md) を参照する
+- PDF 出力の設計メモは [docs/board-pdf-design.md](docs/board-pdf-design.md) を参照する
 
 ## 開発コマンド
 
@@ -59,6 +60,7 @@
 npm install
 npm run dev
 npm run build
+npm run test:unit
 npm run test:e2e -- tests/schedule-board.spec.ts
 npx playwright test tests/schedule-board.spec.ts
 ```
@@ -66,6 +68,7 @@ npx playwright test tests/schedule-board.spec.ts
 ## テスト運用
 
 - コマ表、振替、日程表、講習帯、期間入力まわりを変更したら `npm run build` と `npx playwright test tests/schedule-board.spec.ts` をセットで実行する
+- 振替ストック計算や PDF 整形ロジックを変更したら `npm run test:unit` も追加で実行する
 - 日程表ポップアップの変更時は次を最低確認する
 - 自動反映
 - 講習期間セレクターの並び順
@@ -75,6 +78,7 @@ npx playwright test tests/schedule-board.spec.ts
 - `算` / `数` が学年ごとに適切に出し分けられること
 - `テスト教室2` 入力時だけ QR が表示され、それ以外では非表示のままなこと
 - 同コマ重複時の振替 / 移動の拒否と状態維持
+- `src/components/schedule-board/makeupStock.test.ts` の stock 集計ケースが通ること
 - 詳細運用は [開発ルール.md](開発ルール.md) を参照する
 
 ## 次の実装候補
