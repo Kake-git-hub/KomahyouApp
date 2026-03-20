@@ -1143,7 +1143,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const sharedStoragePrefix = 'schedule-shared:' + VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
-      const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '特別' };
+      const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '講習' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
       const subjectDefinitions = ['英', '数', '算', '国', '理', '社'];

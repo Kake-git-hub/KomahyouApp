@@ -1753,6 +1753,24 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => ((await targetPopupCell.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('振替')
   })
 
+  test('通常授業をストックへ回すと生徒日程表では未割当のまま表示しない', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await page.getByTestId(sourceCellTestId).click()
+    await page.getByTestId('menu-stock-button').click()
+
+    const sourcePopupCell = popup.getByTestId(`student-schedule-cell-s001-${sourceSlotId}`)
+    await expect.poll(async () => ((await sourcePopupCell.textContent()) ?? '').replace(/\s+/g, '').trim()).toBe('')
+  })
+
   test('振替が元のコマへ戻ると通常授業表示に戻る', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const sourceSlotId = `${toDateKey(currentWeekStart)}_1`

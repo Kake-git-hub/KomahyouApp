@@ -295,8 +295,10 @@ export function BoardGrid({
                   <tr key={`${slotNumber}_${deskIndex}`} className={isFirstDesk ? 'sa-slot-first' : ''}>
                     {isFirstDesk ? (
                       <td className="sa-time-cell" rowSpan={deskCount}>
-                        <div className="sa-time-slot">{slotTemplate.slotLabel}</div>
-                        <div className="sa-time-range">{slotTemplate.timeLabel}</div>
+                        <div className="sa-time-cell-inner">
+                          <div className="sa-time-slot">{slotTemplate.slotLabel}</div>
+                          <div className="sa-time-range">{slotTemplate.timeLabel}</div>
+                        </div>
                       </td>
                     ) : null}
                     {days.flatMap((day) => {

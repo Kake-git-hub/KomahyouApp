@@ -711,8 +711,29 @@ function buildManagedOccurrenceKey(student: StudentEntry, dateKey: string, slotN
   return `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__${slotNumber}`
 }
 
-function buildSuppressedManagedOccurrenceKeys(boardWeeks: SlotCell[][]) {
+function buildCurrentManagedOccurrenceKeys(boardWeeks: SlotCell[][]) {
+  const currentKeys = new Set<string>()
+
+  boardWeeks.forEach((week) => {
+    week.forEach((cell) => {
+      cell.desks.forEach((desk) => {
+        desk.lesson?.studentSlots.forEach((student) => {
+          if (!student) return
+          if (student.lessonType === 'regular' || isReturnedToOriginalSlot(student, cell.dateKey, cell.slotNumber)) {
+            currentKeys.add(buildManagedOccurrenceKey(student, cell.dateKey, cell.slotNumber))
+          }
+        })
+      })
+    })
+  })
+
+  return currentKeys
+}
+
+function buildSuppressedManagedOccurrenceKeys(scheduleCells: SlotCell[], boardWeeks: SlotCell[][]) {
   const suppressedKeys = new Set<string>()
+  const boardCellIds = new Set(boardWeeks.flat().map((cell) => cell.id))
+  const currentManagedKeys = buildCurrentManagedOccurrenceKeys(boardWeeks)
 
   boardWeeks.forEach((week) => {
     week.forEach((cell) => {
@@ -724,6 +745,22 @@ function buildSuppressedManagedOccurrenceKeys(boardWeeks: SlotCell[][]) {
           if (student.makeupSourceDate === cell.dateKey && originSlotNumber === cell.slotNumber) return
           suppressedKeys.add(buildManagedOccurrenceKey(student, student.makeupSourceDate, originSlotNumber))
         })
+      })
+    })
+  })
+
+  scheduleCells.forEach((managedCell) => {
+    if (!boardCellIds.has(managedCell.id)) return
+
+    managedCell.desks.forEach((desk) => {
+      if (!desk.lesson || !isManagedLesson(desk.lesson)) return
+
+      desk.lesson.studentSlots.forEach((student) => {
+        if (!student) return
+        const occurrenceKey = buildManagedOccurrenceKey(student, managedCell.dateKey, managedCell.slotNumber)
+        if (!currentManagedKeys.has(occurrenceKey)) {
+          suppressedKeys.add(occurrenceKey)
+        }
       })
     })
   })
@@ -764,7 +801,7 @@ function suppressManagedStudentsInCell(managedCell: SlotCell, suppressedKeys: Se
 }
 
 function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][]) {
-  const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(boardWeeks)
+  const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks)
   const boardCellsById = new Map(boardWeeks.flat().map((cell) => [cell.id, cell]))
   return scheduleCells.map((managedCell) => {
     const adjustedManagedCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
