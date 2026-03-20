@@ -2061,10 +2061,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         if (findDuplicateStudentInCell(cell, params.studentKey)) continue
 
         const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
-        const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
-          .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
-          .find((rule) => isAutoAssignRuleApplicable(rule, params.managedStudent.id, studentGradeOnDate))
-        const lessonLimit = lessonLimitRule?.key === 'maxOneLesson' ? 1 : lessonLimitRule?.key === 'maxTwoLessons' ? 2 : lessonLimitRule?.key === 'maxThreeLessons' ? 3 : null
+        const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
         if (lessonLimit !== null && existingLessons.length >= lessonLimit) continue
 
         const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
@@ -2185,10 +2182,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         if (findDuplicateStudentInCell(cell, params.studentKey)) continue
 
         const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
-        const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
-          .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
-          .find((rule) => isAutoAssignRuleApplicable(rule, params.managedStudent.id, studentGradeOnDate))
-        const lessonLimit = lessonLimitRule?.key === 'maxOneLesson' ? 1 : lessonLimitRule?.key === 'maxTwoLessons' ? 2 : lessonLimitRule?.key === 'maxThreeLessons' ? 3 : null
+        const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
         if (lessonLimit !== null && existingLessons.length >= lessonLimit) continue
 
         const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
@@ -2471,6 +2465,85 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       .filter((session) => emptyMenuContext.cell.dateKey >= session.startDate && emptyMenuContext.cell.dateKey <= session.endDate)
       .sort((left, right) => left.startDate.localeCompare(right.startDate) || left.label.localeCompare(right.label, 'ja'))
   }, [emptyMenuContext, specialSessions])
+
+  const resolveBoardStudentConstraintWarning = useCallback((student: StudentEntry, cell: SlotCell, desk: DeskCell, studentIndex: number) => {
+    const reasons: string[] = []
+    if (student.warning) reasons.push(student.warning)
+
+    const managedStudent = student.managedStudentId
+      ? students.find((entry) => entry.id === student.managedStudentId) ?? managedStudentByAnyName.get(student.name) ?? null
+      : managedStudentByAnyName.get(student.name) ?? null
+    const studentGradeOnDate: GradeLabel = student.birthDate
+      ? resolveSchoolGradeLabel(student.birthDate, parseDateKey(cell.dateKey))
+      : student.grade
+    const teacher = resolveManagedTeacherForDesk(desk, cell.dateKey)
+    const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
+    const slotKey = `${cell.dateKey}_${cell.slotNumber}`
+
+    if (desk.teacher.trim() && !teacher) {
+      reasons.push('在籍講師として参照できません。')
+    }
+
+    if (teacher && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
+      reasons.push(`科目対応外: ${getTeacherDisplayName(teacher)} は ${student.subject} ${studentGradeOnDate} に対応していません。`)
+    }
+
+    if (managedStudent) {
+      if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && cell.slotNumber === 1) {
+        reasons.push('1限禁止に反しています。')
+      }
+
+      const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
+      const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
+      if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
+        reasons.push('通常講師のみ に反しています。')
+      }
+
+      const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate)
+      const comparableStudentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
+      const sameDayLessons = collectStudentLessonsOnDate(normalizedWeeks, comparableStudentKey, cell.dateKey)
+      if (lessonLimit !== null && sameDayLessons.length > lessonLimit) {
+        reasons.push(`同日 ${lessonLimit} コマ上限を超えています。`)
+      }
+
+      const unavailableSlots = studentUnavailableSlotsById.get(managedStudent.id)
+      if (unavailableSlots?.has(slotKey)) {
+        reasons.push('出席不可コマです。')
+      }
+
+      if (teacher && isPairConstraintBlocked(teacher.id, managedStudent.id, pairedStudent)) {
+        reasons.push('ペア制約に反しています。')
+      }
+    }
+
+    if (student.lessonType === 'special') {
+      const session = resolveSpecialSessionById(student.specialSessionId)
+      if (session && (cell.dateKey < session.startDate || cell.dateKey > session.endDate)) {
+        reasons.push(`${session.label} の期間外です。`)
+      }
+    }
+
+    const uniqueReasons = Array.from(new Set(reasons.filter(Boolean)))
+    return uniqueReasons.length > 0 ? ['制約違反', ...uniqueReasons].join('\n') : undefined
+  }, [autoAssignRuleByKey, collectStudentLessonsOnDate, isPairConstraintBlocked, managedStudentByAnyName, normalizedWeeks, resolveBoardStudentDisplayName, resolveBoardStudentGradeLabel, resolveManagedTeacherForDesk, specialSessions, studentUnavailableSlotsById, students])
+
+  const displayCells = useMemo(() => cells.map((cell) => ({
+    ...cell,
+    desks: cell.desks.map((desk) => ({
+      ...desk,
+      lesson: desk.lesson
+        ? {
+            ...desk.lesson,
+            studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => (student
+              ? {
+                  ...student,
+                  warning: resolveBoardStudentConstraintWarning(student, cell, desk, studentIndex),
+                }
+              : null)) as [StudentEntry | null, StudentEntry | null],
+          }
+        : undefined,
+    })),
+  })), [cells, resolveBoardStudentConstraintWarning])
 
   useEffect(() => {
     if (studentMenu?.mode !== 'add') return
@@ -4267,7 +4340,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             </div>
           ) : null}
           <BoardGrid
-            cells={cells}
+            cells={displayCells}
             selectedStudentId={selectedStudentId}
             highlightedCell={highlightedCell}
             highlightedHolidayDate={selectedHolidayDate}
@@ -4521,4 +4594,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       </main>
     </div>
   )
+}
+
+function resolveApplicableLessonLimit(ruleMap: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel) {
+  const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
+    .map((ruleKey) => ruleMap.get(ruleKey))
+    .find((rule) => isAutoAssignRuleApplicable(rule, studentId, studentGrade))
+
+  if (lessonLimitRule?.key === 'maxOneLesson') return 1
+  if (lessonLimitRule?.key === 'maxTwoLessons') return 2
+  if (lessonLimitRule?.key === 'maxThreeLessons') return 3
+  return null
 }

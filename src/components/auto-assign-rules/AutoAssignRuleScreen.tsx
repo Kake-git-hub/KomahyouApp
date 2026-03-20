@@ -42,6 +42,11 @@ const fixedForcedConstraints = [
     label: '出席可能コマのみ',
     description: '生徒の出席可能コマだけを候補にして割り振ります。',
   },
+  {
+    key: 'subject-capable-teachers-only',
+    label: '科目対応講師のみ',
+    description: '講師の科目担当に収まる生徒だけを配置候補にします。',
+  },
 ] as const
 const ruleGroupDefinitions: Array<{
   key: RuleGroupKey

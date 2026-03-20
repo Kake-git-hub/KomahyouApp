@@ -1175,6 +1175,8 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('auto-assign-static-constraint-keep-existing')).toContainText('既存コマは変更しない')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('出席可能コマのみ')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('生徒の出席可能コマだけを候補にして割り振ります。')
+    await expect(page.getByTestId('auto-assign-static-constraint-subject-capable-teachers-only')).toContainText('科目対応講師のみ')
+    await expect(page.getByTestId('auto-assign-static-constraint-subject-capable-teachers-only')).toContainText('講師の科目担当に収まる生徒だけを配置候補にします。')
     await expect(page.getByTestId('auto-assign-rule-priority-regularTeachersOnly')).toContainText('強制制約')
     await expect(page.getByTestId('auto-assign-rule-priority-forbidFirstPeriod')).toContainText('強制制約')
     await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('なし')
@@ -1718,6 +1720,22 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('makeup-stock-chip').click()
     await expect(page.getByTestId('makeup-stock-panel')).toContainText('青木太郎')
     await expect(sourceName).toHaveText('')
+  })
+
+  test('講師の科目対応外になった生徒名は赤表示になりツールチップで理由を出す', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const slotId = `${toDateKey(currentWeekStart)}_1`
+
+    await page.goto('/')
+
+    await page.getByTestId(`teacher-cell-${slotId}-0`).click()
+    await page.getByTestId('teacher-select-input').selectOption({ label: '高橋講師' })
+    await page.getByTestId('teacher-select-confirm-button').click()
+
+    const studentName = page.getByTestId(`student-name-${slotId}-0-0`)
+    await expect(studentName).toHaveClass(/sa-student-name-warning/)
+    await expect(studentName).toHaveAttribute('title', /制約違反/)
+    await expect(studentName).toHaveAttribute('title', /科目対応外/)
   })
 
   test('振替ストックの表示はコマ表操作後も開いたまま残る', async ({ page }) => {
