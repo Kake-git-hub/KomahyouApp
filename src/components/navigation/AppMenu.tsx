@@ -1,4 +1,4 @@
-export type AppMenuScreen = 'board' | 'basic-data' | 'special-data' | 'backup-restore'
+export type AppMenuScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
 
 type AppMenuProps = {
   currentScreen: AppMenuScreen
@@ -10,6 +10,7 @@ type AppMenuProps = {
   boardItemTestId?: string
   basicDataItemTestId?: string
   specialDataItemTestId?: string
+  autoAssignRulesItemTestId?: string
   backupRestoreItemTestId?: string
 }
 
@@ -17,6 +18,7 @@ const menuItems: Array<{ screen: AppMenuScreen; label: string }> = [
   { screen: 'board', label: 'コマ表' },
   { screen: 'basic-data', label: '基本データ' },
   { screen: 'special-data', label: '特別講習データ' },
+  { screen: 'auto-assign-rules', label: '自動割振ルール' },
   { screen: 'backup-restore', label: 'バックアップ/復元' },
 ]
 
@@ -30,12 +32,14 @@ export function AppMenu({
   boardItemTestId,
   basicDataItemTestId,
   specialDataItemTestId,
+  autoAssignRulesItemTestId,
   backupRestoreItemTestId,
 }: AppMenuProps) {
   const testIdByScreen: Partial<Record<AppMenuScreen, string>> = {
     board: boardItemTestId,
     'basic-data': basicDataItemTestId,
     'special-data': specialDataItemTestId,
+    'auto-assign-rules': autoAssignRulesItemTestId,
     'backup-restore': backupRestoreItemTestId,
   }
 

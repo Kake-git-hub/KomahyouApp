@@ -1363,6 +1363,134 @@ tr.sa-slot-first td {
   color: #16314f;
 }
 
+.auto-assign-rules-summary-card {
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8ff 100%);
+}
+
+.auto-assign-priority-card {
+  background: #fffdf8;
+}
+
+.auto-assign-priority-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.auto-assign-priority-step {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid #e7dcc7;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.auto-assign-priority-step strong {
+  color: #16314f;
+}
+
+.auto-assign-priority-step span {
+  color: #58708d;
+  font-size: 12px;
+}
+
+.auto-assign-rule-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.auto-assign-rule-card {
+  align-content: start;
+}
+
+.auto-assign-rule-meta {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
+.auto-assign-target-list {
+  display: grid;
+  gap: 10px;
+}
+
+.auto-assign-target-empty {
+  padding: 12px 14px;
+  border: 1px dashed #cbdaf0;
+  border-radius: 14px;
+  color: #6f86a0;
+  background: #f8fbff;
+}
+
+.auto-assign-target-chip-wrap {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.auto-assign-target-chip {
+  justify-content: flex-start;
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.5;
+}
+
+.auto-assign-target-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d7e2f1;
+  border-radius: 16px;
+  background: #f8fbff;
+}
+
+.auto-assign-student-picker {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-assign-student-toggle {
+  border: 1px solid #d7e2f1;
+}
+
+.auto-assign-exception-panel {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #d7e2f1;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.auto-assign-exception-panel h4 {
+  margin: 0;
+  color: #16314f;
+}
+
+.auto-assign-exception-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.auto-assign-exception-column {
+  display: grid;
+  gap: 10px;
+}
+
+.auto-assign-exception-head {
+  color: #36506d;
+}
+
+.auto-assign-exception-list {
+  display: grid;
+  gap: 8px;
+}
+
 .special-session-summary-card span {
   color: #58708d;
   font-size: 12px;
@@ -2037,7 +2165,13 @@ tr.sa-slot-first td {
   }
 
   .special-session-date-grid,
-  .backup-restore-grid {
+  .backup-restore-grid,
+  .auto-assign-rule-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .auto-assign-priority-grid,
+  .auto-assign-exception-grid {
     grid-template-columns: 1fr;
   }
 

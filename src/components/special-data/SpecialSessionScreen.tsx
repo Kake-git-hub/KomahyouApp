@@ -7,6 +7,7 @@ type SpecialSessionScreenProps = {
   onUpdateSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
   onBackToBoard: () => void
   onOpenBasicData: () => void
+  onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
 }
 
@@ -159,7 +160,7 @@ function DateCalendar({ visibleStartMonth, selectedDates, onDateClick, rangeStar
   )
 }
 
-export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenBackupRestore }: SpecialSessionScreenProps) {
+export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore }: SpecialSessionScreenProps) {
   const [draft, setDraft] = useState<SessionDraft>(() => createDraft())
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -269,11 +270,13 @@ export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard
               onNavigate={(screen) => {
                 if (screen === 'board') onBackToBoard()
                 if (screen === 'basic-data') onOpenBasicData()
+                if (screen === 'auto-assign-rules') onOpenAutoAssignRules()
                 if (screen === 'backup-restore') onOpenBackupRestore()
               }}
               buttonTestId="special-data-menu-button"
               boardItemTestId="special-data-menu-open-board-button"
               basicDataItemTestId="special-data-menu-open-basic-data-button"
+              autoAssignRulesItemTestId="special-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="special-data-menu-open-backup-button"
             />
           </div>

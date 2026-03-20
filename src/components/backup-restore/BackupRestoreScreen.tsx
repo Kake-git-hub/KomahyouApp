@@ -4,6 +4,7 @@ type BackupRestoreScreenProps = {
   onBackToBoard: () => void
   onOpenBasicData: () => void
   onOpenSpecialData: () => void
+  onOpenAutoAssignRules: () => void
   persistenceMessage: string
   lastSavedAt: string
   onExportBackup: () => void
@@ -18,7 +19,7 @@ function formatSavedAt(savedAt: string) {
   return parsed.toLocaleString('ja-JP')
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup }: BackupRestoreScreenProps) {
   return (
     <div className="page-shell page-shell-basic-data">
       <section className="toolbar-panel" aria-label="バックアップと復元の操作バー">
@@ -30,11 +31,13 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 if (screen === 'board') onBackToBoard()
                 if (screen === 'basic-data') onOpenBasicData()
                 if (screen === 'special-data') onOpenSpecialData()
+                if (screen === 'auto-assign-rules') onOpenAutoAssignRules()
               }}
               buttonTestId="backup-restore-menu-button"
               boardItemTestId="backup-restore-open-board-button"
               basicDataItemTestId="backup-restore-open-basic-data-button"
               specialDataItemTestId="backup-restore-open-special-data-button"
+              autoAssignRulesItemTestId="backup-restore-open-auto-assign-rules-button"
             />
           </div>
           <div className="toolbar-group toolbar-group-end">

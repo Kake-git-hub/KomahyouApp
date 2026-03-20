@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
 import { BasicDataScreen } from './components/basic-data/BasicDataScreen'
+import { AutoAssignRuleScreen } from './components/auto-assign-rules/AutoAssignRuleScreen'
+import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { deriveManagedDisplayName, initialStudents, initialTeachers } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
 import { SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
@@ -132,11 +134,12 @@ function App() {
   const holidaySyncBootstrapRef = useRef(false)
   const teacherAutoAssignRequestIdRef = useRef(0)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
-  const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'backup-restore'>('board')
+  const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'>('board')
   const [teachers, setTeachers] = useState(() => useImportedMasterData ? normalizedImportedTeachers : initialTeachers)
   const [students, setStudents] = useState(() => useImportedMasterData ? normalizedImportedStudents : initialStudents)
   const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? normalizedImportedRegularLessons : createInitialRegularLessons())
   const [specialSessions, setSpecialSessions] = useState(initialSpecialSessions)
+  const [autoAssignRules, setAutoAssignRules] = useState(initialAutoAssignRules)
   const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [boardState, setBoardState] = useState<PersistedBoardState | null>(null)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
@@ -678,6 +681,7 @@ function App() {
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onBackToBoard={() => setScreen('board')}
         onOpenSpecialData={() => setScreen('special-data')}
+        onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
         onOpenBackupRestore={() => setScreen('backup-restore')}
       />
     )
@@ -690,6 +694,21 @@ function App() {
         onUpdateSessions={setSpecialSessions}
         onBackToBoard={() => setScreen('board')}
         onOpenBasicData={() => setScreen('basic-data')}
+        onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
+        onOpenBackupRestore={() => setScreen('backup-restore')}
+      />
+    )
+  }
+
+  if (screen === 'auto-assign-rules') {
+    return (
+      <AutoAssignRuleScreen
+        rules={autoAssignRules}
+        students={students}
+        onUpdateRules={setAutoAssignRules}
+        onBackToBoard={() => setScreen('board')}
+        onOpenBasicData={() => setScreen('basic-data')}
+        onOpenSpecialData={() => setScreen('special-data')}
         onOpenBackupRestore={() => setScreen('backup-restore')}
       />
     )
@@ -701,6 +720,7 @@ function App() {
         onBackToBoard={() => setScreen('board')}
         onOpenBasicData={() => setScreen('basic-data')}
         onOpenSpecialData={() => setScreen('special-data')}
+        onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
         persistenceMessage="バックアップ/復元は未接続です。"
         lastSavedAt=""
         onExportBackup={() => {}}
@@ -723,6 +743,7 @@ function App() {
       onUpdateClassroomSettings={setClassroomSettings}
       onOpenBasicData={() => setScreen('basic-data')}
       onOpenSpecialData={() => setScreen('special-data')}
+      onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
       onOpenBackupRestore={() => setScreen('backup-restore')}
     />
   )

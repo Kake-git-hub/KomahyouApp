@@ -2,8 +2,9 @@ import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataM
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
+import type { AutoAssignRuleRow } from '../components/auto-assign-rules/autoAssignRuleModel'
 
-export type AppScreen = 'board' | 'basic-data' | 'special-data' | 'backup-restore'
+export type AppScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
 
 export type ClassroomSettings = {
   closedWeekdays: number[]
@@ -59,6 +60,7 @@ export type AppSnapshotPayload = {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   specialSessions: SpecialSessionRow[]
+  autoAssignRules: AutoAssignRuleRow[]
   boardState: PersistedBoardState | null
 }
 

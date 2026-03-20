@@ -29,6 +29,7 @@ type BoardToolbarProps = {
   onCancelSelection: () => void
   onOpenBasicData: () => void
   onOpenSpecialData: () => void
+  onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
 }
 
@@ -61,6 +62,7 @@ export function BoardToolbar({
   onCancelSelection,
   onOpenBasicData,
   onOpenSpecialData,
+  onOpenAutoAssignRules,
   onOpenBackupRestore,
 }: BoardToolbarProps) {
   return (
@@ -72,6 +74,7 @@ export function BoardToolbar({
             onNavigate={(screen) => {
               if (screen === 'basic-data') onOpenBasicData()
               if (screen === 'special-data') onOpenSpecialData()
+              if (screen === 'auto-assign-rules') onOpenAutoAssignRules()
               if (screen === 'backup-restore') onOpenBackupRestore()
             }}
             actionButtonLabel={hasSelectedStudent ? 'キャンセル' : undefined}
@@ -80,6 +83,7 @@ export function BoardToolbar({
             buttonTestId="menu-button"
             basicDataItemTestId="menu-open-basic-data-button"
             specialDataItemTestId="menu-open-special-data-button"
+            autoAssignRulesItemTestId="menu-open-auto-assign-rules-button"
             backupRestoreItemTestId="menu-open-backup-restore-button"
           />
           <button className="icon-action-button" type="button" onClick={onUndo} disabled={!canUndo} data-testid="undo-button" aria-label="元に戻す" title="元に戻す">

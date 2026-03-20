@@ -44,6 +44,7 @@ type BasicDataScreenProps = {
   onSyncGoogleHolidays: () => void
   onBackToBoard: () => void
   onOpenSpecialData: () => void
+  onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
 }
 
@@ -2119,11 +2120,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
               onNavigate={(screen) => {
                 if (screen === 'board') onBackToBoard()
                 if (screen === 'special-data') onOpenSpecialData()
+                if (screen === 'auto-assign-rules') onOpenAutoAssignRules()
                 if (screen === 'backup-restore') onOpenBackupRestore()
               }}
               buttonTestId="basic-data-menu-button"
               boardItemTestId="basic-data-menu-open-board-button"
               specialDataItemTestId="basic-data-menu-open-special-data-button"
+              autoAssignRulesItemTestId="basic-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="basic-data-menu-open-backup-button"
             />
           </div>

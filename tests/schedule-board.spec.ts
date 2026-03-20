@@ -39,6 +39,11 @@ async function navigateFromSpecialDataToBoard(page: Parameters<typeof test>[0]['
   await page.getByTestId('special-data-menu-open-board-button').click()
 }
 
+async function navigateFromAutoAssignRulesToBoard(page: Parameters<typeof test>[0]['page']) {
+  await page.getByTestId('auto-assign-rules-menu-button').click()
+  await page.getByTestId('auto-assign-rules-menu-open-board-button').click()
+}
+
 async function setScheduleRangeInPopup(popup: Parameters<typeof test>[0]['page'], startDate: string, endDate: string) {
   await popup.evaluate(([nextStartDate, nextEndDate]) => {
     ;(window as Window & { setRangeAndRender?: (startDate: string, endDate: string, periodValue: string) => void }).setRangeAndRender?.(
@@ -1146,6 +1151,48 @@ test.describe('コマ調整表', () => {
     const periodBand = page.getByTestId('board-special-period-session_2026_spring')
     await expect(periodBand).toBeVisible()
     await expect(periodBand.locator('button')).toHaveCount(0)
+  })
+
+  test('メニューから自動割振ルールへ移動して対象を追加できる', async ({ page }) => {
+    await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-auto-assign-rules-button').click()
+
+    await expect(page.getByTestId('auto-assign-rules-screen')).toBeVisible()
+    await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('まだ対象がありません。')
+
+    await page.getByTestId('auto-assign-add-target-preferTwoStudentsPerTeacher').click()
+    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('講師1人に生徒2人最優先 に対象を追加しました。')
+    await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('全員')
+
+    await page.getByTestId('auto-assign-target-type-maxOneLesson').selectOption('grade')
+    await page.getByTestId('auto-assign-target-grade-maxOneLesson').selectOption({ index: 0 })
+    await page.getByTestId('auto-assign-add-target-maxOneLesson').click()
+    await expect(page.getByTestId('auto-assign-rule-targets-maxOneLesson')).not.toContainText('まだ対象がありません。')
+
+    await page.getByTestId('auto-assign-include-student-maxOneLesson').selectOption('s001')
+    await page.getByTestId('auto-assign-include-add-maxOneLesson').click()
+    await expect(page.getByTestId('auto-assign-include-list-maxOneLesson')).toContainText('青木太郎')
+
+    await page.getByTestId('auto-assign-exclude-student-maxOneLesson').selectOption('s002')
+    await page.getByTestId('auto-assign-exclude-add-maxOneLesson').click()
+    await expect(page.getByTestId('auto-assign-exclude-list-maxOneLesson')).toContainText('伊藤花')
+
+    await page.getByTestId('auto-assign-target-type-maxTwoLessons').selectOption('students')
+    await page.getByTestId('auto-assign-student-toggle-maxTwoLessons-s001').click()
+    await page.getByTestId('auto-assign-student-toggle-maxTwoLessons-s002').click()
+    await page.getByTestId('auto-assign-add-target-maxTwoLessons').click()
+    await expect(page.getByTestId('auto-assign-rule-targets-maxTwoLessons')).toContainText('青木太郎')
+    await expect(page.getByTestId('auto-assign-rule-targets-maxTwoLessons')).toContainText('伊藤花')
+
+    await expect(page.getByTestId('auto-assign-rule-priority-preferTwoStudentsPerTeacher')).toContainText('優先 1')
+    await page.getByTestId('auto-assign-move-down-preferTwoStudentsPerTeacher').click()
+    await expect(page.getByTestId('auto-assign-rule-priority-preferTwoStudentsPerTeacher')).toContainText('優先 2')
+    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('優先順位を下げました。')
+
+    await navigateFromAutoAssignRulesToBoard(page)
+    await expect(page.getByTestId('week-label')).toBeVisible()
   })
 
   test('前週次週ボタンで実カレンダーに沿って週表示を切り替えられる', async ({ page }) => {
