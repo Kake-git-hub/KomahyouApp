@@ -28,25 +28,29 @@ export type AutoAssignTargetGrade =
   | '高2'
   | '高3'
 
+export type AutoAssignTargetOrigin = 'manual' | 'group-conflict'
+
 export type AutoAssignTarget =
-  | { id: string; type: 'all' }
-  | { id: string; type: 'grade'; grade: AutoAssignTargetGrade }
-  | { id: string; type: 'students'; studentIds: string[] }
+  | { id: string; type: 'all'; origin?: AutoAssignTargetOrigin; sourceRuleKey?: AutoAssignRuleKey }
+  | { id: string; type: 'grade'; grade: AutoAssignTargetGrade; origin?: AutoAssignTargetOrigin; sourceRuleKey?: AutoAssignRuleKey }
+  | { id: string; type: 'students'; studentIds: string[]; origin?: AutoAssignTargetOrigin; sourceRuleKey?: AutoAssignRuleKey }
 
 export type AutoAssignRuleRow = {
   key: AutoAssignRuleKey
   label: string
   description: string
   targets: AutoAssignTarget[]
-  includeStudentIds: string[]
-  excludeStudentIds: string[]
+  excludeTargets: AutoAssignTarget[]
+  priorityScore: number
+  includeStudentIds?: string[]
+  excludeStudentIds?: string[]
   updatedAt: string
 }
 
 export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'label' | 'description'>> = [
   {
     key: 'preferTwoStudentsPerTeacher',
-    label: '講師1人に生徒2人最優先',
+    label: '講師1人に生徒2人配置',
     description: '可能な限り 1 卓に 2 人着席を優先します。',
   },
   {
@@ -76,7 +80,7 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
   },
   {
     key: 'connectRegularLessons',
-    label: '通常授業連結',
+    label: '通常連結2コマ',
     description: '通常授業と連続する配置を優先候補に含めます。',
   },
   {
@@ -111,6 +115,8 @@ export const autoAssignTargetGradeOrder: AutoAssignTargetGrade[] = ['小1', '小
 export const initialAutoAssignRules: AutoAssignRuleRow[] = autoAssignRuleDefinitions.map((definition) => ({
   ...definition,
   targets: [],
+  excludeTargets: [],
+  priorityScore: 3,
   includeStudentIds: [],
   excludeStudentIds: [],
   updatedAt: '',

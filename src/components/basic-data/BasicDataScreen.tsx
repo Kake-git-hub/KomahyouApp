@@ -26,6 +26,7 @@ import {
   resolveSchoolYearDateRange,
 } from './regularLessonModel'
 import { AppMenu } from '../navigation/AppMenu'
+import { initialPairConstraints, type PairConstraintRow } from '../../types/pairConstraint'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -37,9 +38,11 @@ type BasicDataScreenProps = {
   teachers: TeacherRow[]
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  pairConstraints: PairConstraintRow[]
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
   onUpdateRegularLessons: Dispatch<SetStateAction<RegularLessonRow[]>>
+  onUpdatePairConstraints: Dispatch<SetStateAction<PairConstraintRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onSyncGoogleHolidays: () => void
   onBackToBoard: () => void
@@ -57,14 +60,7 @@ type GroupLessonRow = {
   dayOfWeek: number
   slotLabel: string
 }
-type ConstraintRow = {
-  id: string
-  personAType: 'teacher' | 'student'
-  personAId: string
-  personBType: 'teacher' | 'student'
-  personBId: string
-  type: 'incompatible'
-}
+type ConstraintRow = PairConstraintRow
 
 type TableControl = {
   filterText: string
@@ -105,12 +101,7 @@ const initialGroupLessons: GroupLessonRow[] = [
   { id: 'g003', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't004', subject: '国', studentIds: ['s013', 's025'], dayOfWeek: 5, slotLabel: '3限' },
   { id: 'g004', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't006', subject: '理', studentIds: ['s014', 's026'], dayOfWeek: 4, slotLabel: '4限' },
 ]
-const initialConstraints: ConstraintRow[] = [
-  { id: 'c001', personAType: 'teacher', personAId: 't001', personBType: 'student', personBId: 's002', type: 'incompatible' },
-  { id: 'c002', personAType: 'teacher', personAId: 't004', personBType: 'student', personBId: 's007', type: 'incompatible' },
-  { id: 'c003', personAType: 'student', personAId: 's010', personBType: 'student', personBId: 's011', type: 'incompatible' },
-  { id: 'c004', personAType: 'teacher', personAId: 't008', personBType: 'student', personBId: 's024', type: 'incompatible' },
-]
+const initialConstraints: ConstraintRow[] = initialPairConstraints
 const maxSelectableSchoolYear = 2031
 
 function createId(prefix: string) {
@@ -277,10 +268,6 @@ function getStudentOptionLabel(student: StudentRow) {
 
 function getTeacherOptionLabel(teacher: TeacherRow) {
   return getTeacherDisplayName(teacher)
-}
-
-function getPersonOptionLabel(person: TeacherRow | StudentRow) {
-  return 'birthDate' in person ? getStudentDisplayName(person) : getTeacherDisplayName(person)
 }
 
 function formatSummaryValue(value: string, fallback = '未設定') {
@@ -876,11 +863,10 @@ function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabe
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, pairConstraints, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdatePairConstraints, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [managers, setManagers] = useState(initialManagers)
   const [groupLessons, setGroupLessons] = useState(initialGroupLessons)
-  const [constraints, setConstraints] = useState(initialConstraints)
   const [statusMessage, setStatusMessage] = useState('')
   const [centeredMessage, setCenteredMessage] = useState<string | null>(null)
   const centeredMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -899,7 +885,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
   const [regularLessonDraft, setRegularLessonDraft] = useState(() => createRegularLessonDraft(currentSchoolYear))
   const [groupLessonDraft, setGroupLessonDraft] = useState({ teacherId: '', subject: '英', studentIds: [] as string[], dayOfWeek: 1, slotLabel: '1限' })
-  const [constraintDraft, setConstraintDraft] = useState<ConstraintRow>({ id: '', personAType: 'teacher', personAId: '', personBType: 'student', personBId: '', type: 'incompatible' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
   const [regularLessonEditSnapshots, setRegularLessonEditSnapshots] = useState<Record<string, RegularLessonRow>>({})
   const [teacherRosterView, setTeacherRosterView] = useState<RosterView>('active')
@@ -915,6 +900,8 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     constraints: createDefaultTableControl(),
     classroomData: createDefaultTableControl(),
   })
+  const constraints = pairConstraints
+  const setConstraints = onUpdatePairConstraints
 
   const teacherNameById = useMemo(() => Object.fromEntries(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [teachers])
   const studentNameById = useMemo(() => Object.fromEntries(students.map((student) => [student.id, getStudentDisplayName(student)])), [students])
@@ -1071,10 +1058,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setGroupLessons((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }
 
-  const updateConstraint = (id: string, patch: Partial<ConstraintRow>) => {
-    setConstraints((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-  }
-
   const exportTemplateWorkbook = async () => {
     const xlsx = await import('xlsx')
     xlsx.writeFile(buildWorkbook(xlsx, createTemplateBundle()), 'basic-data-template.xlsx')
@@ -1218,12 +1201,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setStatusMessage('集団授業を追加しました。')
   }
 
-  const addConstraint = () => {
-    if (!constraintDraft.personAId || !constraintDraft.personBId) return
-    setConstraints((current) => [...current, { ...constraintDraft, id: createId('constraint') }])
-    setStatusMessage('ペア制約を追加しました。')
-  }
-
   const removeManager = (id: string) => {
     if (!window.confirm('このマネージャーを削除します。よろしいですか。')) {
       setStatusMessage('マネージャーの削除をキャンセルしました。')
@@ -1267,15 +1244,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     }
     setGroupLessons((current) => current.filter((row) => row.id !== id))
     setStatusMessage('集団授業を削除しました。')
-  }
-
-  const removeConstraint = (id: string) => {
-    if (!window.confirm('このペア制約を削除します。よろしいですか。')) {
-      setStatusMessage('ペア制約の削除をキャンセルしました。')
-      return
-    }
-    setConstraints((current) => current.filter((row) => row.id !== id))
-    setStatusMessage('ペア制約を削除しました。')
   }
 
   const renderManagers = () => (
@@ -1938,109 +1906,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     </>
   )
 
-  const renderConstraints = () => (
-    <>
-      <section className="basic-data-section-card">
-        <div className="basic-data-card-head">
-          <h3>ペア制約</h3>
-        </div>
-        <div className="basic-data-form-row wrap align-center">
-          <select value={constraintDraft.personAType} onChange={(event) => setConstraintDraft((current) => ({ ...current, personAType: event.target.value as 'teacher' | 'student', personAId: '' }))}>
-            <option value="teacher">講師</option>
-            <option value="student">生徒</option>
-          </select>
-          <select value={constraintDraft.personAId} onChange={(event) => setConstraintDraft((current) => ({ ...current, personAId: event.target.value }))}>
-            <option value="">人物Aを選択</option>
-            {(constraintDraft.personAType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
-          </select>
-          <span className="basic-data-xmark">×</span>
-          <select value={constraintDraft.personBType} onChange={(event) => setConstraintDraft((current) => ({ ...current, personBType: event.target.value as 'teacher' | 'student', personBId: '' }))}>
-            <option value="teacher">講師</option>
-            <option value="student">生徒</option>
-          </select>
-          <select value={constraintDraft.personBId} onChange={(event) => setConstraintDraft((current) => ({ ...current, personBId: event.target.value }))}>
-            <option value="">人物Bを選択</option>
-            {(constraintDraft.personBType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
-          </select>
-          <button className="primary-button" type="button" onClick={addConstraint}>保存</button>
-        </div>
-      </section>
-      <section className="basic-data-section-card">
-        <TableControls
-          filterValue={tableControls.constraints.filterText}
-          sortKey={tableControls.constraints.sortKey}
-          direction={tableControls.constraints.direction}
-          filterPlaceholder="人物名で絞り込み"
-          sortOptions={[{ value: 'personA', label: '人物A' }, { value: 'personB', label: '人物B' }, { value: 'type', label: '種別' }]}
-          onFilterChange={(value) => updateTableControl('constraints', { filterText: value })}
-          onSortKeyChange={(value) => updateTableControl('constraints', { sortKey: value })}
-          onDirectionChange={(value) => updateTableControl('constraints', { direction: value })}
-        />
-        <table className="basic-data-table" data-testid="basic-data-constraints-table">
-          <thead><tr><th>人物A</th><th></th><th>人物B</th><th>種別</th><th>操作</th></tr></thead>
-          <tbody>
-            {filterAndSortRows(
-              constraints,
-              tableControls.constraints,
-              (row) => [teacherNameById[row.personAId] ?? studentNameById[row.personAId] ?? '', teacherNameById[row.personBId] ?? studentNameById[row.personBId] ?? '', '組み合わせ不可'],
-              {
-                personA: (row) => teacherNameById[row.personAId] ?? studentNameById[row.personAId] ?? '',
-                personB: (row) => teacherNameById[row.personBId] ?? studentNameById[row.personBId] ?? '',
-                type: () => '組み合わせ不可',
-              },
-            ).map((row) => {
-              const personAName = row.personAType === 'teacher' ? teacherNameById[row.personAId] : studentNameById[row.personAId]
-              const personBName = row.personBType === 'teacher' ? teacherNameById[row.personBId] : studentNameById[row.personBId]
-              return (
-                <tr key={row.id}>
-                  <td>
-                    <div className="basic-data-person-cell">
-                      <select value={row.personAType} onChange={(event) => updateConstraint(row.id, { personAType: event.target.value as 'teacher' | 'student', personAId: '' })} disabled={!isRowEditing('constraint', row.id)}>
-                        <option value="teacher">講師</option>
-                        <option value="student">生徒</option>
-                      </select>
-                      <select value={row.personAId} onChange={(event) => updateConstraint(row.id, { personAId: event.target.value })} disabled={!isRowEditing('constraint', row.id)}>
-                        <option value="">人物Aを選択</option>
-                        {(row.personAType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
-                      </select>
-                    </div>
-                    {personAName ? <span className="basic-data-muted-inline">現在: {personAName}</span> : null}
-                  </td>
-                  <td className="basic-data-xmark-cell">×</td>
-                  <td>
-                    <div className="basic-data-person-cell">
-                      <select value={row.personBType} onChange={(event) => updateConstraint(row.id, { personBType: event.target.value as 'teacher' | 'student', personBId: '' })} disabled={!isRowEditing('constraint', row.id)}>
-                        <option value="teacher">講師</option>
-                        <option value="student">生徒</option>
-                      </select>
-                      <select value={row.personBId} onChange={(event) => updateConstraint(row.id, { personBId: event.target.value })} disabled={!isRowEditing('constraint', row.id)}>
-                        <option value="">人物Bを選択</option>
-                        {(row.personBType === 'teacher' ? teachers : students).map((person) => <option key={person.id} value={person.id}>{getPersonOptionLabel(person)}</option>)}
-                      </select>
-                    </div>
-                    {personBName ? <span className="basic-data-muted-inline">現在: {personBName}</span> : null}
-                  </td>
-                  <td><span className="status-chip secondary">組み合わせ不可</span></td>
-                  <td><div className="basic-data-row-actions"><button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('constraint', row.id)}>{isRowEditing('constraint', row.id) ? '編集終了' : '編集'}</button><button className="secondary-button slim" type="button" onClick={() => removeConstraint(row.id)}>削除</button></div></td>
-                </tr>
-              )
-            })}
-            {filterAndSortRows(
-              constraints,
-              tableControls.constraints,
-              (row) => [teacherNameById[row.personAId] ?? studentNameById[row.personAId] ?? '', teacherNameById[row.personBId] ?? studentNameById[row.personBId] ?? '', '組み合わせ不可'],
-              {
-                personA: (row) => teacherNameById[row.personAId] ?? studentNameById[row.personAId] ?? '',
-                personB: (row) => teacherNameById[row.personBId] ?? studentNameById[row.personBId] ?? '',
-                type: () => '組み合わせ不可',
-              },
-            ).length === 0 ? <tr><td colSpan={5} className="basic-data-empty-row">ペア制約はまだありません。</td></tr> : null}
-          </tbody>
-        </table>
-      </section>
-    </>
-  )
-
   const renderClassroomData = () => (
     <section className="basic-data-section-card" data-testid="basic-data-classroom-screen">
       <div className="basic-data-card-head">
@@ -2099,7 +1964,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     { key: 'teachers', label: '講師' },
     { key: 'regularLessons', label: '通常授業' },
     { key: 'groupLessons', label: '集団授業' },
-    { key: 'constraints', label: 'ペア制約' },
     { key: 'managers', label: 'マネージャー' },
     { key: 'classroomData', label: '教室データ' },
   ]
@@ -2175,7 +2039,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
             {activeTab === 'teachers' ? renderTeachers() : null}
             {activeTab === 'regularLessons' ? renderRegularLessons() : null}
             {activeTab === 'groupLessons' ? renderGroupLessons() : null}
-            {activeTab === 'constraints' ? renderConstraints() : null}
             {activeTab === 'managers' ? renderManagers() : null}
             {activeTab === 'classroomData' ? renderClassroomData() : null}
           </div>

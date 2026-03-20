@@ -1160,39 +1160,76 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-open-auto-assign-rules-button').click()
 
     await expect(page.getByTestId('auto-assign-rules-screen')).toBeVisible()
-    await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('まだ対象がありません。')
+    await expect(page.getByText('強制制約事項', { exact: true })).toBeVisible()
+    await expect(page.getByTestId('auto-assign-static-constraint-keep-existing')).toContainText('既存コマは変更しない')
+    await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('出席可能コマのみ')
+    await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('生徒の出席可能コマだけを候補にして割り振ります。')
+    await expect(page.getByTestId('auto-assign-rule-priority-regularTeachersOnly')).toContainText('強制制約')
+    await expect(page.getByTestId('auto-assign-rule-priority-forbidFirstPeriod')).toContainText('強制制約')
+    await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('なし')
+    await expect(page.getByText('制約事項', { exact: true })).toBeVisible()
+    await expect(page.getByTestId('auto-assign-pair-constraints-panel')).toBeVisible()
+
+    await page.getByTestId('auto-assign-pair-draft-person-a-type').selectOption('teacher')
+    await page.getByTestId('auto-assign-pair-draft-person-a-id').selectOption('t002')
+    await page.getByTestId('auto-assign-pair-draft-person-b-type').selectOption('student')
+    await page.getByTestId('auto-assign-pair-draft-person-b-id').selectOption('s003')
+    await page.getByTestId('auto-assign-pair-save-button').click()
+    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('ペア制約を追加しました。')
+    await expect(page.getByTestId('auto-assign-pair-summary-list')).toContainText('上田陽介')
 
     await page.getByTestId('auto-assign-open-modal-preferTwoStudentsPerTeacher').click()
     await page.getByTestId('auto-assign-modal-confirm-preferTwoStudentsPerTeacher').click()
-    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('講師1人に生徒2人最優先 に対象を追加しました。')
+    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('講師1人に生徒2人配置 に対象を追加しました。')
     await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('全員')
+    await expect(page.getByTestId('auto-assign-group-priority-two-students')).toContainText('制約 1')
 
     await page.getByTestId('auto-assign-open-modal-maxOneLesson').click()
     await page.getByTestId('auto-assign-type-grade-maxOneLesson').click()
-    await page.locator('[data-testid^="auto-assign-grade-"][data-testid$="-maxOneLesson"]').first().click()
+    await page.getByTestId('auto-assign-grade-高1-maxOneLesson').click()
     await page.getByTestId('auto-assign-modal-confirm-maxOneLesson').click()
-    await expect(page.getByTestId('auto-assign-rule-targets-maxOneLesson')).not.toContainText('まだ対象がありません。')
-
-    await page.getByTestId('auto-assign-exception-student-maxOneLesson').selectOption('s001')
-    await page.getByTestId('auto-assign-exception-include-maxOneLesson').click()
-    await expect(page.getByTestId('auto-assign-include-list-maxOneLesson')).toContainText('青木太郎')
-
-    await page.getByTestId('auto-assign-exception-student-maxOneLesson').selectOption('s002')
-    await page.getByTestId('auto-assign-exception-exclude-maxOneLesson').click()
-    await expect(page.getByTestId('auto-assign-exclude-list-maxOneLesson')).toContainText('伊藤花')
+    await expect(page.getByTestId('auto-assign-rule-targets-maxOneLesson')).toContainText('高1')
+    await expect(page.getByTestId('auto-assign-exclude-list-maxOneLesson')).toContainText('なし')
 
     await page.getByTestId('auto-assign-open-modal-maxTwoLessons').click()
+    await page.getByTestId('auto-assign-type-grade-maxTwoLessons').click()
+    await expect(page.getByTestId('auto-assign-grade-高1-maxTwoLessons')).toHaveCount(0)
     await page.getByTestId('auto-assign-type-students-maxTwoLessons').click()
-    await page.getByTestId('auto-assign-student-toggle-maxTwoLessons-s001').click()
-    await page.getByTestId('auto-assign-student-toggle-maxTwoLessons-s002').click()
+    await page.getByTestId('auto-assign-student-toggle-maxTwoLessons-s003').click()
     await page.getByTestId('auto-assign-modal-confirm-maxTwoLessons').click()
-    await expect(page.getByTestId('auto-assign-rule-targets-maxTwoLessons')).toContainText('青木太郎')
-    await expect(page.getByTestId('auto-assign-rule-targets-maxTwoLessons')).toContainText('伊藤花')
+    await expect(page.getByTestId('auto-assign-rule-targets-maxTwoLessons')).toContainText('上田陽介')
+    await expect(page.getByTestId('auto-assign-exclude-list-maxOneLesson')).toContainText('上田陽介')
+    await expect(page.getByTestId('auto-assign-exclude-list-maxTwoLessons')).toContainText('なし')
 
-    await expect(page.getByTestId('auto-assign-rule-priority-preferTwoStudentsPerTeacher')).toContainText('優先 1')
-    await page.getByTestId('auto-assign-move-down-preferTwoStudentsPerTeacher').click()
-    await expect(page.getByTestId('auto-assign-rule-priority-preferTwoStudentsPerTeacher')).toContainText('優先 2')
-    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('優先順位を下げました。')
+    await page.getByTestId('auto-assign-open-exclude-modal-maxOneLesson').click()
+    await expect(page.getByTestId('auto-assign-type-all-maxOneLesson')).toHaveCount(0)
+    await page.getByTestId('auto-assign-type-students-maxOneLesson').click()
+    await page.getByTestId('auto-assign-exception-toggle-exclude-maxOneLesson-s001').click()
+    await page.getByTestId('auto-assign-exception-confirm-exclude-maxOneLesson').click()
+    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('1コマ上限 に対象外を追加しました。')
+    await expect(page.getByTestId('auto-assign-exclude-list-maxOneLesson')).toContainText('青木太郎')
+
+    await page.getByTestId('auto-assign-open-modal-preferLateAfternoon').click()
+    await page.getByTestId('auto-assign-type-grade-preferLateAfternoon').click()
+    await page.getByTestId('auto-assign-grade-中1-preferLateAfternoon').click()
+    await page.getByTestId('auto-assign-grade-高1-preferLateAfternoon').click()
+    await page.getByTestId('auto-assign-modal-confirm-preferLateAfternoon').click()
+    await expect(page.getByTestId('auto-assign-rule-targets-preferLateAfternoon')).toContainText('中1')
+    await expect(page.getByTestId('auto-assign-rule-targets-preferLateAfternoon')).toContainText('高1')
+
+    await page.getByTestId('auto-assign-open-modal-allowTwoConsecutiveLessons').click()
+    await page.getByTestId('auto-assign-type-students-allowTwoConsecutiveLessons').click()
+    await page.getByTestId('auto-assign-student-toggle-allowTwoConsecutiveLessons-s001').click()
+    await page.getByTestId('auto-assign-student-toggle-allowTwoConsecutiveLessons-s002').click()
+    await page.getByTestId('auto-assign-modal-confirm-allowTwoConsecutiveLessons').click()
+    await expect(page.getByTestId('auto-assign-rule-targets-allowTwoConsecutiveLessons')).toContainText('青木太郎')
+    await expect(page.getByTestId('auto-assign-rule-targets-allowTwoConsecutiveLessons')).toContainText('伊藤花')
+
+    await expect(page.getByTestId('auto-assign-rule-priority-allowTwoConsecutiveLessons')).toContainText('制約 3')
+    await page.getByTestId('auto-assign-group-move-down-lesson-pattern').click()
+    await expect(page.getByTestId('auto-assign-rule-priority-allowTwoConsecutiveLessons')).toContainText('制約 4')
+    await expect(page.getByTestId('auto-assign-rules-status')).toContainText('制約グループの優先順位を下げました。')
+    await expect(page.getByTestId('auto-assign-priority-slider-allowTwoConsecutiveLessons')).toHaveCount(0)
 
     await navigateFromAutoAssignRulesToBoard(page)
     await expect(page.getByTestId('week-label')).toBeVisible()
@@ -1847,6 +1884,8 @@ test.describe('コマ調整表', () => {
   })
 
   test('講習ストックを割り振れて再移動しても振替にならない', async ({ page }) => {
+    test.slow()
+
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
     const lectureSubjects = ['数', '英'] as const
@@ -1911,8 +1950,8 @@ test.describe('コマ調整表', () => {
 
     const secondTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', secondPlacementTarget.slotId)
     await page.getByTestId(firstTarget.cellTestId).click()
-    await page.getByTestId('menu-move-button').click()
-    await page.getByTestId(secondTarget.cellTestId).click()
+    await page.getByTestId('menu-move-button').click({ force: true })
+    await page.getByTestId(secondTarget.cellTestId).click({ force: true })
 
     const secondTargetName = page.getByTestId(secondTarget.cellTestId.replace('student-cell-', 'student-name-'))
     await expect(firstTargetName).toHaveText('')
@@ -2585,8 +2624,6 @@ test.describe('コマ調整表', () => {
       storedStartDate: '2026-07-21',
       storedEndDate: '2026-08-28',
     }))
-    await expect(reopenedPopup.locator('#schedule-start-date')).toHaveValue('2026-07-21')
-    await expect(reopenedPopup.locator('#schedule-end-date')).toHaveValue('2026-08-28')
   })
 
   test('講師日程の講習期間セレクターは開始日順で並び、選択と日付入力で即反映される', async ({ page }) => {

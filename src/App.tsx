@@ -3,6 +3,7 @@ import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreSc
 import { BasicDataScreen } from './components/basic-data/BasicDataScreen'
 import { AutoAssignRuleScreen } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
+import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, initialStudents, initialTeachers } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
 import { SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
@@ -140,6 +141,7 @@ function App() {
   const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? normalizedImportedRegularLessons : createInitialRegularLessons())
   const [specialSessions, setSpecialSessions] = useState(initialSpecialSessions)
   const [autoAssignRules, setAutoAssignRules] = useState(initialAutoAssignRules)
+  const [pairConstraints, setPairConstraints] = useState(initialPairConstraints)
   const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [boardState, setBoardState] = useState<PersistedBoardState | null>(null)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
@@ -674,9 +676,11 @@ function App() {
         teachers={teachers}
         students={students}
         regularLessons={regularLessons}
+        pairConstraints={pairConstraints}
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
         onUpdateRegularLessons={setRegularLessons}
+        onUpdatePairConstraints={setPairConstraints}
         onUpdateClassroomSettings={setClassroomSettings}
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onBackToBoard={() => setScreen('board')}
@@ -704,8 +708,11 @@ function App() {
     return (
       <AutoAssignRuleScreen
         rules={autoAssignRules}
+        teachers={teachers}
         students={students}
+        pairConstraints={pairConstraints}
         onUpdateRules={setAutoAssignRules}
+        onUpdatePairConstraints={setPairConstraints}
         onBackToBoard={() => setScreen('board')}
         onOpenBasicData={() => setScreen('basic-data')}
         onOpenSpecialData={() => setScreen('special-data')}

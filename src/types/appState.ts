@@ -3,6 +3,7 @@ import type { RegularLessonRow } from '../components/basic-data/regularLessonMod
 import type { SlotCell } from '../components/schedule-board/types'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { AutoAssignRuleRow } from '../components/auto-assign-rules/autoAssignRuleModel'
+import type { PairConstraintRow } from './pairConstraint'
 
 export type AppScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
 
@@ -61,6 +62,7 @@ export type AppSnapshotPayload = {
   regularLessons: RegularLessonRow[]
   specialSessions: SpecialSessionRow[]
   autoAssignRules: AutoAssignRuleRow[]
+  pairConstraints: PairConstraintRow[]
   boardState: PersistedBoardState | null
 }
 

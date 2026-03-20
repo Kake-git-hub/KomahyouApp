@@ -19,6 +19,7 @@ function isAppSnapshot(value: unknown): value is AppSnapshot {
     && Array.isArray(value.regularLessons)
     && Array.isArray(value.specialSessions)
     && Array.isArray(value.autoAssignRules)
+    && Array.isArray(value.pairConstraints)
     && 'classroomSettings' in value
 }
 
