@@ -743,7 +743,9 @@ function App() {
       students={students}
       regularLessons={regularLessons}
       specialSessions={specialSessions}
-          teacherAutoAssignRequest={teacherAutoAssignRequest}
+      autoAssignRules={autoAssignRules}
+      pairConstraints={pairConstraints}
+      teacherAutoAssignRequest={teacherAutoAssignRequest}
       initialBoardState={boardState}
       onBoardStateChange={setBoardState}
       onUpdateSpecialSessions={setSpecialSessions}

@@ -1,6 +1,6 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
-import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import {
   createAutoAssignTargetId,
   listAutoAssignTargetGrades,
@@ -170,15 +170,15 @@ export function AutoAssignRuleScreen({
   const referenceDate = getReferenceDateKey(new Date())
 
   const visibleStudents = useMemo(() => students
-    .filter((student) => !student.isHidden)
+    .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, referenceDate))
     .slice()
     .sort((left, right) => getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja')),
-  [students])
+  [referenceDate, students])
   const visibleTeachers = useMemo(() => teachers
-    .filter((teacher) => !teacher.isHidden)
+    .filter((teacher) => resolveTeacherRosterStatus(teacher, referenceDate) === '在籍')
     .slice()
     .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja')),
-  [teachers])
+  [referenceDate, teachers])
 
   const studentNameById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, getStudentDisplayName(student)])), [visibleStudents])
   const teacherNameById = useMemo(() => Object.fromEntries(visibleTeachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [visibleTeachers])
@@ -508,7 +508,7 @@ export function AutoAssignRuleScreen({
       {!options?.hideTopline ? (
         <div className="auto-assign-rule-topline">
           <div className="auto-assign-rule-title-group">
-            <span className={`status-chip${tone === 'force' ? ' danger' : ''}`} data-testid={`auto-assign-rule-priority-${rule.key}`}>
+            <span className="status-chip" data-testid={`auto-assign-rule-priority-${rule.key}`}>
               {priorityLabel}
             </span>
             <h3>{rule.label}</h3>
@@ -541,7 +541,7 @@ export function AutoAssignRuleScreen({
     <section className="auto-assign-group-card auto-assign-pair-panel" data-testid="auto-assign-pair-constraints-panel">
       <div className="auto-assign-group-topline">
         <div className="auto-assign-rule-title-group">
-          <span className="status-chip danger">強制制約</span>
+          <span className="status-chip">強制制約</span>
           <h3>ペア制約</h3>
         </div>
       </div>

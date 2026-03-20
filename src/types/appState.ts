@@ -29,6 +29,10 @@ export type MakeupOrigin = {
 
 export type MakeupOriginMap = Record<string, MakeupOrigin[]>
 export type LectureStockCountMap = Record<string, number>
+export type ManualLectureStockOrigin = {
+  displayName: string
+  sessionId?: string
+}
 
 export type FallbackMakeupStudent = {
   studentName: string
@@ -45,6 +49,7 @@ export type PersistedBoardState = {
   suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
   manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
   fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
   isLectureStockOpen: boolean
   isMakeupStockOpen: boolean

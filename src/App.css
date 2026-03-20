@@ -310,6 +310,14 @@
   padding-bottom: 2px;
 }
 
+.stock-row-shell,
+.lecture-stock-row-shell {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  align-items: center;
+}
+
 .makeup-stock-row {
   display: inline-flex;
   flex: 0 0 auto;
@@ -336,6 +344,11 @@
   color: #294967;
   cursor: pointer;
   font: inherit;
+}
+
+.stock-auto-assign-button,
+.lecture-stock-auto-assign-button {
+  white-space: nowrap;
 }
 
 .makeup-stock-name {

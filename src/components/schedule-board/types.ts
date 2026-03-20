@@ -26,6 +26,8 @@ export type StudentEntry = {
   birthDate?: string
   makeupSourceDate?: string
   makeupSourceLabel?: string
+  specialSessionId?: string
+  specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
   warning?: string
   subject: SubjectLabel

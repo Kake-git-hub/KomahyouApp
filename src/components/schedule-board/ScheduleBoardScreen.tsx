@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
@@ -9,7 +10,8 @@ import { buildMakeupStockEntries, buildMakeupStockKey, type MakeupStockEntry, ty
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, TeacherAutoAssignRequest } from '../../App'
-import type { PersistedBoardState } from '../../types/appState'
+import type { ManualLectureStockOrigin, PersistedBoardState } from '../../types/appState'
+import type { PairConstraintRow } from '../../types/pairConstraint'
 import { exportBoardPdf } from '../../utils/pdf'
 import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
@@ -38,6 +40,7 @@ type HistoryEntry = {
   suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, { studentName: string; displayName: string; subject: string }>
   manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
   fallbackLectureStockStudents: Record<string, { displayName: string }>
 }
 
@@ -85,13 +88,105 @@ type GroupedLectureStockEntry = {
   studentId: string | null
   displayName: string
   requestedCount: number
-  nextPlacementEntry: { subject: SubjectLabel } | null
+  nextPlacementEntry: { subject: SubjectLabel; sessionId?: string } | null
   title?: string
 }
+
+type LectureStockPendingItem = {
+  subject: SubjectLabel
+  source: 'session' | 'manual'
+  sessionId?: string
+  sessionLabel?: string
+  startDate?: string
+  endDate?: string
+  unavailableSlots?: string[]
+}
+
+type LectureAutoAssignCandidate = {
+  weekIndex: number
+  cell: SlotCell
+  deskIndex: number
+  studentIndex: number
+  desk: DeskCell
+  teacher: TeacherRow
+  matchedItem: LectureStockPendingItem
+  scoreVector: number[]
+}
+
+type MakeupAutoAssignPendingItem = {
+  subject: SubjectLabel
+  makeupSourceDate?: string
+  makeupSourceLabel?: string
+  makeupSourceReasonLabel?: string
+}
+
+type MakeupAutoAssignCandidate = {
+  weekIndex: number
+  cell: SlotCell
+  deskIndex: number
+  studentIndex: number
+  desk: DeskCell
+  teacher: TeacherRow
+  matchedItem: MakeupAutoAssignPendingItem
+  scoreVector: number[]
+}
+
+type LectureConstraintGroupKey = 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference'
 
 const editableSubjects: SubjectLabel[] = ['英', '数', '算', '国', '理', '社']
 const editableLessonTypes: LessonType[] = ['regular', 'makeup', 'special']
 const editableTeacherTypes: TeacherType[] = ['normal', 'substitute', 'outside']
+const lectureConstraintGroupDefinitions: Array<{ key: LectureConstraintGroupKey; orderKey: AutoAssignRuleKey; ruleKeys: AutoAssignRuleKey[] }> = [
+  { key: 'two-students', orderKey: 'preferTwoStudentsPerTeacher', ruleKeys: ['preferTwoStudentsPerTeacher'] },
+  { key: 'lesson-limit', orderKey: 'maxOneLesson', ruleKeys: ['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'] },
+  { key: 'lesson-pattern', orderKey: 'allowTwoConsecutiveLessons', ruleKeys: ['allowTwoConsecutiveLessons', 'requireBreakBetweenLessons', 'connectRegularLessons'] },
+  { key: 'time-preference', orderKey: 'preferLateAfternoon', ruleKeys: ['preferLateAfternoon', 'preferSecondPeriod', 'preferFifthPeriod'] },
+]
+const gradeCeilingOrder: Record<GradeCeiling, number> = { 小: 1, 中: 2, 高1: 3, 高2: 4, 高3: 5 }
+
+function resolveGradeCeiling(grade: GradeLabel): GradeCeiling {
+  if (grade.startsWith('小')) return '小'
+  if (grade.startsWith('中')) return '中'
+  return grade as GradeCeiling
+}
+
+function canTeacherHandleStudentSubject(teacher: TeacherRow, subject: SubjectLabel, grade: GradeLabel) {
+  const studentGradeCeiling = resolveGradeCeiling(grade)
+  return teacher.subjectCapabilities.some((capability) => (
+    (capability.subject === subject || ((capability.subject === '数' || capability.subject === '算') && (subject === '数' || subject === '算')))
+    && gradeCeilingOrder[capability.maxGrade] >= gradeCeilingOrder[studentGradeCeiling]
+  ))
+}
+
+function matchesAutoAssignTarget(target: AutoAssignTarget, studentId: string, studentGrade: GradeLabel) {
+  if (target.type === 'all') return true
+  if (target.type === 'grade') return target.grade === studentGrade
+  return target.studentIds.includes(studentId)
+}
+
+function isAutoAssignRuleApplicable(rule: AutoAssignRuleRow | undefined, studentId: string, studentGrade: GradeLabel) {
+  if (!rule || rule.targets.length === 0) return false
+  if (rule.excludeTargets.some((target) => matchesAutoAssignTarget(target, studentId, studentGrade))) return false
+  return rule.targets.some((target) => matchesAutoAssignTarget(target, studentId, studentGrade))
+}
+
+function compareScoreVectors(left: number[], right: number[]) {
+  const length = Math.max(left.length, right.length)
+  for (let index = 0; index < length; index += 1) {
+    const difference = (right[index] ?? 0) - (left[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+function resolveLectureConstraintGroupOrder(rules: AutoAssignRuleRow[]) {
+  return lectureConstraintGroupDefinitions
+    .map((group) => ({
+      ...group,
+      orderIndex: rules.findIndex((rule) => rule.key === group.orderKey),
+    }))
+    .sort((left, right) => left.orderIndex - right.orderIndex)
+}
 
 function resolveSchoolGradeLabel(birthDate: string, today = new Date()): GradeLabel {
   const [yearText, monthText, dayText] = birthDate.split('-')
@@ -152,6 +247,8 @@ type ScheduleBoardScreenProps = {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   specialSessions: SpecialSessionRow[]
+  autoAssignRules: AutoAssignRuleRow[]
+  pairConstraints: PairConstraintRow[]
   teacherAutoAssignRequest?: TeacherAutoAssignRequest | null
   initialBoardState?: PersistedBoardState | null
   onBoardStateChange?: (state: PersistedBoardState) => void
@@ -331,6 +428,39 @@ function cloneOriginMap(originMap: MakeupOriginMap): MakeupOriginMap {
   return Object.fromEntries(Object.entries(originMap).map(([key, values]) => [key, values.map((value) => ({ ...value }))]))
 }
 
+function cloneManualLectureStockOrigins(originMap: Record<string, ManualLectureStockOrigin[]>) {
+  return Object.fromEntries(Object.entries(originMap).map(([key, values]) => [key, values.map((value) => ({ ...value }))]))
+}
+
+function appendManualLectureStockOrigin(originMap: Record<string, ManualLectureStockOrigin[]>, key: string, origin: ManualLectureStockOrigin) {
+  const currentOrigins = originMap[key] ?? []
+  return {
+    ...originMap,
+    [key]: [...currentOrigins, origin],
+  }
+}
+
+function consumeManualLectureStockOrigin(originMap: Record<string, ManualLectureStockOrigin[]>, key: string, options?: { sessionId?: string }) {
+  const currentOrigins = originMap[key] ?? []
+  if (currentOrigins.length === 0) return originMap
+
+  const targetIndex = options?.sessionId
+    ? currentOrigins.findIndex((origin) => origin.sessionId === options.sessionId)
+    : 0
+  const resolvedIndex = targetIndex >= 0 ? targetIndex : 0
+  const nextOrigins = currentOrigins.filter((_, index) => index !== resolvedIndex)
+
+  if (nextOrigins.length === 0) {
+    const { [key]: _removed, ...rest } = originMap
+    return rest
+  }
+
+  return {
+    ...originMap,
+    [key]: nextOrigins,
+  }
+}
+
 function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string) {
   const nextDates = originMap[key] ?? []
   return {
@@ -429,6 +559,7 @@ function createInitialBoardSnapshot(params: {
     suppressedMakeupOrigins: cloneOriginMap(params.initialBoardState?.suppressedMakeupOrigins ?? {}),
     fallbackMakeupStudents: { ...(params.initialBoardState?.fallbackMakeupStudents ?? {}) },
     manualLectureStockCounts: { ...(params.initialBoardState?.manualLectureStockCounts ?? {}) },
+    manualLectureStockOrigins: cloneManualLectureStockOrigins(params.initialBoardState?.manualLectureStockOrigins ?? {}),
     fallbackLectureStockStudents: { ...(params.initialBoardState?.fallbackLectureStockStudents ?? {}) },
     isLectureStockOpen: params.initialBoardState?.isLectureStockOpen ?? false,
     isMakeupStockOpen: params.initialBoardState?.isMakeupStockOpen ?? false,
@@ -1165,7 +1296,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, teacherAutoAssignRequest, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
@@ -1194,6 +1325,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [suppressedMakeupOrigins, setSuppressedMakeupOrigins] = useState<MakeupOriginMap>(initialBoardSnapshot.suppressedMakeupOrigins)
   const [fallbackMakeupStudents, setFallbackMakeupStudents] = useState<Record<string, FallbackMakeupStudent>>(initialBoardSnapshot.fallbackMakeupStudents)
   const [manualLectureStockCounts, setManualLectureStockCounts] = useState<LectureStockCountMap>(initialBoardSnapshot.manualLectureStockCounts)
+  const [manualLectureStockOrigins, setManualLectureStockOrigins] = useState<Record<string, ManualLectureStockOrigin[]>>(initialBoardSnapshot.manualLectureStockOrigins)
   const [fallbackLectureStockStudents, setFallbackLectureStockStudents] = useState<Record<string, { displayName: string; subject?: string }>>(initialBoardSnapshot.fallbackLectureStockStudents)
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
@@ -1219,6 +1351,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       suppressedMakeupOrigins: cloneOriginMap(suppressedMakeupOrigins),
       fallbackMakeupStudents: { ...fallbackMakeupStudents },
       manualLectureStockCounts: { ...manualLectureStockCounts },
+      manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
       fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
       isLectureStockOpen,
       isMakeupStockOpen,
@@ -1230,6 +1363,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     fallbackMakeupStudents,
     isLectureStockOpen,
     isMakeupStockOpen,
+    manualLectureStockOrigins,
     manualLectureStockCounts,
     manualMakeupAdjustments,
     onBoardStateChange,
@@ -1586,6 +1720,482 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     () => lectureStockEntries.find((entry) => entry.key === selectedLectureStockKey) ?? null,
     [lectureStockEntries, selectedLectureStockKey],
   )
+  const autoAssignRuleByKey = useMemo(() => new Map(autoAssignRules.map((rule) => [rule.key, rule])), [autoAssignRules])
+  const lectureConstraintGroups = useMemo(() => resolveLectureConstraintGroupOrder(autoAssignRules), [autoAssignRules])
+  const studentUnavailableSlotsById = useMemo(() => {
+    const byId = new Map<string, Set<string>>()
+    for (const session of specialSessions) {
+      for (const [studentId, input] of Object.entries(session.studentInputs)) {
+        const current = byId.get(studentId) ?? new Set<string>()
+        for (const slotKey of input.unavailableSlots ?? []) current.add(slotKey)
+        byId.set(studentId, current)
+      }
+    }
+    return byId
+  }, [specialSessions])
+
+  const resolveManagedTeacherForDesk = (desk: DeskCell, dateKey: string) => {
+    if (desk.teacherAssignmentTeacherId) {
+      const matchedTeacher = teachers.find((teacher) => teacher.id === desk.teacherAssignmentTeacherId)
+      if (matchedTeacher && resolveTeacherRosterStatus(matchedTeacher, dateKey) === '在籍') return matchedTeacher
+    }
+
+    return teachers.find((teacher) => (
+      resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+      && (getTeacherDisplayName(teacher) === desk.teacher || teacher.name === desk.teacher)
+    )) ?? null
+  }
+
+  const collectStudentLessonsOnDate = (sourceWeeks: SlotCell[][], studentKey: string, dateKey: string) => {
+    const lessons: Array<{ slotNumber: number; lessonType: LessonType }> = []
+    for (const week of sourceWeeks) {
+      for (const cell of week) {
+        if (cell.dateKey !== dateKey) continue
+        for (const desk of cell.desks) {
+          for (const student of desk.lesson?.studentSlots ?? []) {
+            if (!student) continue
+            const currentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
+            if (currentKey !== studentKey) continue
+            lessons.push({ slotNumber: cell.slotNumber, lessonType: student.lessonType })
+          }
+        }
+      }
+    }
+    return lessons
+  }
+
+  const resolveRegularTeacherIdsForStudentOnDate = (studentId: string, dateKey: string) => {
+    const lessonDate = parseDateKey(dateKey)
+    const schoolYear = resolveOperationalSchoolYear(lessonDate)
+    const dayOfWeek = lessonDate.getDay()
+    const teacherIds = new Set<string>()
+
+    for (const lesson of regularLessons) {
+      if (lesson.schoolYear !== schoolYear || lesson.dayOfWeek !== dayOfWeek) continue
+      if (lesson.student1Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, 1, dateKey)) teacherIds.add(lesson.teacherId)
+      if (lesson.student2Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, 2, dateKey)) teacherIds.add(lesson.teacherId)
+    }
+
+    return teacherIds
+  }
+
+  const isPairConstraintBlocked = (teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null) => {
+    const otherStudentId = otherStudent?.managedStudentId ?? (otherStudent ? managedStudentByAnyName.get(otherStudent.name)?.id : undefined)
+    return pairConstraints.some((constraint) => {
+      if (constraint.type !== 'incompatible') return false
+      const left = `${constraint.personAType}:${constraint.personAId}`
+      const right = `${constraint.personBType}:${constraint.personBId}`
+
+      if ((left === `teacher:${teacherId}` && right === `student:${primaryStudentId}`) || (right === `teacher:${teacherId}` && left === `student:${primaryStudentId}`)) {
+        return true
+      }
+
+      if (!otherStudentId) return false
+      return (left === `student:${primaryStudentId}` && right === `student:${otherStudentId}`)
+        || (right === `student:${primaryStudentId}` && left === `student:${otherStudentId}`)
+    })
+  }
+
+  const resolveSpecialSessionById = (sessionId?: string) => {
+    if (!sessionId) return null
+    return specialSessions.find((session) => session.id === sessionId) ?? null
+  }
+
+  const buildLecturePendingItems = (entry: GroupedLectureStockEntry) => {
+    const pendingItems: LectureStockPendingItem[] = []
+    const rawPendingItemsByKey = new Map<string, LectureStockPendingItem[]>()
+
+    if (entry.studentId) {
+      for (const stockEntry of rawLectureStockEntries) {
+        if (stockEntry.studentId !== entry.studentId || stockEntry.requestedCount <= 0) continue
+        const session = specialSessions.find((currentSession) => currentSession.id === stockEntry.sessionId)
+        const unavailableSlots = session?.studentInputs[entry.studentId]?.unavailableSlots ?? []
+        const stockKey = buildLectureStockKey(stockEntry.studentId, stockEntry.subject)
+        const currentItems = rawPendingItemsByKey.get(stockKey) ?? []
+        for (let index = 0; index < stockEntry.requestedCount; index += 1) {
+          currentItems.push({
+            subject: stockEntry.subject,
+            source: 'session',
+            sessionId: stockEntry.sessionId,
+            sessionLabel: stockEntry.sessionLabel,
+            startDate: session?.startDate,
+            endDate: session?.endDate,
+            unavailableSlots,
+          })
+        }
+        rawPendingItemsByKey.set(stockKey, currentItems)
+      }
+
+      for (const [stockKey, rawItems] of rawPendingItemsByKey.entries()) {
+        const adjustment = manualLectureStockCounts[stockKey] ?? 0
+        const consumeCount = adjustment < 0 ? Math.min(rawItems.length, Math.abs(adjustment)) : 0
+        pendingItems.push(...rawItems.slice(consumeCount))
+      }
+    }
+
+    const studentKey = entry.studentId ?? `name:${entry.displayName}`
+    const metadataQueueByKey = new Map<string, ManualLectureStockOrigin[]>(
+      Object.entries(manualLectureStockOrigins).map(([key, origins]) => [key, origins.map((origin) => ({ ...origin }))]),
+    )
+
+    for (const [stockKey, requestedCount] of Object.entries(manualLectureStockCounts)) {
+      if (requestedCount <= 0) continue
+      const parsedKey = parseLectureStockKey(stockKey)
+      if (parsedKey.studentKey !== studentKey) continue
+      const metadataQueue = metadataQueueByKey.get(stockKey) ?? []
+
+      for (let index = 0; index < requestedCount; index += 1) {
+        const metadata = metadataQueue.shift()
+        const session = resolveSpecialSessionById(metadata?.sessionId)
+        const unavailableSlots = session && entry.studentId
+          ? session.studentInputs[entry.studentId]?.unavailableSlots ?? []
+          : []
+        pendingItems.push({
+          subject: parsedKey.subject as SubjectLabel,
+          source: 'manual',
+          sessionId: metadata?.sessionId,
+          sessionLabel: session?.label,
+          startDate: session?.startDate,
+          endDate: session?.endDate,
+          unavailableSlots,
+        })
+      }
+    }
+
+    return pendingItems
+  }
+
+  const selectedLecturePlacementItem = selectedLectureStockEntry ? buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null : null
+
+  const buildMakeupPendingItems = (entry: GroupedMakeupStockEntry) => {
+    const pendingItems: MakeupAutoAssignPendingItem[] = []
+
+    for (const stockEntry of rawMakeupStockEntries) {
+      const stockStudentKey = getStockStudentKeyFromEntryKey(stockEntry.key)
+      if (stockStudentKey !== entry.stockStudentKey || stockEntry.balance <= 0) continue
+
+      for (let index = 0; index < stockEntry.remainingOriginDates.length; index += 1) {
+        pendingItems.push({
+          subject: stockEntry.subject as SubjectLabel,
+          makeupSourceDate: stockEntry.remainingOriginDates[index],
+          makeupSourceLabel: stockEntry.remainingOriginLabels[index],
+          makeupSourceReasonLabel: stockEntry.remainingOriginReasonLabels[index],
+        })
+      }
+
+      const fallbackCount = Math.max(0, stockEntry.balance - stockEntry.remainingOriginDates.length)
+      for (let index = 0; index < fallbackCount; index += 1) {
+        pendingItems.push({
+          subject: stockEntry.subject as SubjectLabel,
+        })
+      }
+    }
+
+    return pendingItems
+  }
+
+  const buildCommonAutoAssignScoreVector = (params: {
+    studentId: string
+    studentGradeOnDate: GradeLabel
+    cell: SlotCell
+    teacher: TeacherRow
+    pairedStudent: StudentEntry | null
+    existingLessons: Array<{ slotNumber: number; lessonType: LessonType }>
+  }) => {
+    const scoreVector: number[] = []
+    const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.studentId, params.cell.dateKey)
+    const isAdjacentToAnyLesson = params.existingLessons.some((lesson) => Math.abs(lesson.slotNumber - params.cell.slotNumber) === 1)
+    const hasOneSlotBreak = params.existingLessons.some((lesson) => Math.abs(lesson.slotNumber - params.cell.slotNumber) === 2)
+    const isAdjacentToRegularLesson = params.existingLessons.some((lesson) => lesson.lessonType === 'regular' && Math.abs(lesson.slotNumber - params.cell.slotNumber) === 1)
+
+    scoreVector.push(regularTeacherIds.has(params.teacher.id) ? 1 : 0)
+    scoreVector.push(Math.max(0, 4 - params.existingLessons.length))
+
+    for (const group of lectureConstraintGroups) {
+      const applicableRule = group.ruleKeys
+        .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
+        .find((rule) => isAutoAssignRuleApplicable(rule, params.studentId, params.studentGradeOnDate))
+
+      if (group.key === 'two-students') {
+        if (applicableRule) scoreVector.push(params.pairedStudent ? 2 : 0)
+        else scoreVector.push(params.pairedStudent ? 0 : 1)
+        continue
+      }
+
+      if (group.key === 'lesson-pattern') {
+        if (!applicableRule) {
+          scoreVector.push(0)
+          continue
+        }
+        if (applicableRule.key === 'allowTwoConsecutiveLessons') scoreVector.push(isAdjacentToAnyLesson ? 3 : 0)
+        else if (applicableRule.key === 'requireBreakBetweenLessons') scoreVector.push(hasOneSlotBreak ? 3 : 0)
+        else scoreVector.push(isAdjacentToRegularLesson ? 3 : 0)
+        continue
+      }
+
+      if (group.key === 'time-preference') {
+        if (!applicableRule) {
+          scoreVector.push(({ 5: 5, 4: 4, 3: 3, 2: 2, 1: 1 } as Record<number, number>)[params.cell.slotNumber] ?? 0)
+          continue
+        }
+        if (applicableRule.key === 'preferLateAfternoon') {
+          scoreVector.push(({ 5: 5, 4: 4, 3: 3, 2: 2, 1: 0 } as Record<number, number>)[params.cell.slotNumber] ?? 0)
+        } else if (applicableRule.key === 'preferSecondPeriod') {
+          scoreVector.push(({ 2: 5, 3: 4, 4: 3, 5: 2, 1: 0 } as Record<number, number>)[params.cell.slotNumber] ?? 0)
+        } else {
+          scoreVector.push(({ 5: 5, 4: 4, 3: 3, 2: 2, 1: 0 } as Record<number, number>)[params.cell.slotNumber] ?? 0)
+        }
+        continue
+      }
+
+      scoreVector.push(0)
+    }
+
+    return scoreVector
+  }
+
+  const findBestLectureAutoAssignCandidate = (params: {
+    sourceWeeks: SlotCell[][]
+    pendingItems: LectureStockPendingItem[]
+    managedStudent: StudentRow
+    studentKey: string
+  }) => {
+    const studentUnavailableSlots = studentUnavailableSlotsById.get(params.managedStudent.id) ?? new Set<string>()
+    let bestCandidate: LectureAutoAssignCandidate | null = null
+
+    for (let nextWeekIndex = 0; nextWeekIndex < params.sourceWeeks.length; nextWeekIndex += 1) {
+      const week = params.sourceWeeks[nextWeekIndex]
+      for (const cell of week) {
+        const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
+        const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
+        const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
+        if (!cell.isOpenDay) continue
+        if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.isHidden, cell.dateKey)) continue
+        if (forbidFirstPeriod && cell.slotNumber === 1) continue
+        if (findDuplicateStudentInCell(cell, params.studentKey)) continue
+
+        const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
+        const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
+          .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
+          .find((rule) => isAutoAssignRuleApplicable(rule, params.managedStudent.id, studentGradeOnDate))
+        const lessonLimit = lessonLimitRule?.key === 'maxOneLesson' ? 1 : lessonLimitRule?.key === 'maxTwoLessons' ? 2 : lessonLimitRule?.key === 'maxThreeLessons' ? 3 : null
+        if (lessonLimit !== null && existingLessons.length >= lessonLimit) continue
+
+        const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
+        const slotKey = `${cell.dateKey}_${cell.slotNumber}`
+
+        for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+          const desk = cell.desks[deskIndex]
+          const teacher = resolveManagedTeacherForDesk(desk, cell.dateKey)
+          if (!teacher || !desk.teacher.trim()) continue
+          if (regularTeachersOnly && !regularTeacherIds.has(teacher.id)) continue
+
+          for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
+            if (desk.lesson?.studentSlots[studentIndex]) continue
+            const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
+            if (isPairConstraintBlocked(teacher.id, params.managedStudent.id, pairedStudent)) continue
+
+            const matchedItem = [...params.pendingItems]
+              .filter((item) => {
+                if (!canTeacherHandleStudentSubject(teacher, item.subject, studentGradeOnDate)) return false
+                if (item.startDate && item.endDate && (cell.dateKey < item.startDate || cell.dateKey > item.endDate)) return false
+                  if ((item.unavailableSlots ?? []).includes(slotKey)) return false
+                  return item.startDate || item.endDate ? true : !studentUnavailableSlots.has(slotKey)
+              })
+              .sort((left, right) => {
+                const leftPriority = left.source === 'session' ? 0 : 1
+                const rightPriority = right.source === 'session' ? 0 : 1
+                if (leftPriority !== rightPriority) return leftPriority - rightPriority
+                const leftEnd = left.endDate ?? '9999-12-31'
+                const rightEnd = right.endDate ?? '9999-12-31'
+                const endCompare = leftEnd.localeCompare(rightEnd)
+                if (endCompare !== 0) return endCompare
+                return left.subject.localeCompare(right.subject, 'ja')
+              })[0] ?? null
+
+            if (!matchedItem) continue
+
+            const scoreVector: number[] = [
+              matchedItem.source === 'session' ? 1 : 0,
+              matchedItem.endDate ? 99999999 - Number(matchedItem.endDate.replace(/-/g, '')) : 0,
+              ...buildCommonAutoAssignScoreVector({
+                studentId: params.managedStudent.id,
+                studentGradeOnDate,
+                cell,
+                teacher,
+                pairedStudent,
+                existingLessons,
+              }),
+            ]
+
+            const nextCandidate: LectureAutoAssignCandidate = {
+              weekIndex: nextWeekIndex,
+              cell,
+              deskIndex,
+              studentIndex,
+              desk,
+              teacher,
+              matchedItem,
+              scoreVector,
+            }
+
+            if (!bestCandidate) {
+              bestCandidate = nextCandidate
+              continue
+            }
+
+            const scoreCompare = compareScoreVectors(bestCandidate.scoreVector, nextCandidate.scoreVector)
+            if (scoreCompare > 0) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (scoreCompare < 0) continue
+
+            const dateCompare = nextCandidate.cell.dateKey.localeCompare(bestCandidate.cell.dateKey)
+            if (dateCompare < 0) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (dateCompare > 0) continue
+            if (nextCandidate.cell.slotNumber < bestCandidate.cell.slotNumber) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (nextCandidate.cell.slotNumber > bestCandidate.cell.slotNumber) continue
+            if (nextCandidate.deskIndex < bestCandidate.deskIndex) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (nextCandidate.deskIndex > bestCandidate.deskIndex) continue
+            if (nextCandidate.studentIndex < bestCandidate.studentIndex) {
+              bestCandidate = nextCandidate
+            }
+          }
+        }
+      }
+    }
+
+    return bestCandidate
+  }
+
+  const findBestMakeupAutoAssignCandidate = (params: {
+    sourceWeeks: SlotCell[][]
+    pendingItems: MakeupAutoAssignPendingItem[]
+    managedStudent: StudentRow
+    studentKey: string
+  }) => {
+    const studentUnavailableSlots = studentUnavailableSlotsById.get(params.managedStudent.id) ?? new Set<string>()
+    let bestCandidate: MakeupAutoAssignCandidate | null = null
+
+    for (let nextWeekIndex = 0; nextWeekIndex < params.sourceWeeks.length; nextWeekIndex += 1) {
+      const week = params.sourceWeeks[nextWeekIndex]
+      for (const cell of week) {
+        const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
+        const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
+        const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
+        if (!cell.isOpenDay) continue
+        if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.isHidden, cell.dateKey)) continue
+        if (forbidFirstPeriod && cell.slotNumber === 1) continue
+        if (findDuplicateStudentInCell(cell, params.studentKey)) continue
+
+        const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
+        const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
+          .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
+          .find((rule) => isAutoAssignRuleApplicable(rule, params.managedStudent.id, studentGradeOnDate))
+        const lessonLimit = lessonLimitRule?.key === 'maxOneLesson' ? 1 : lessonLimitRule?.key === 'maxTwoLessons' ? 2 : lessonLimitRule?.key === 'maxThreeLessons' ? 3 : null
+        if (lessonLimit !== null && existingLessons.length >= lessonLimit) continue
+
+        const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
+        const slotKey = `${cell.dateKey}_${cell.slotNumber}`
+
+        for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+          const desk = cell.desks[deskIndex]
+          const teacher = resolveManagedTeacherForDesk(desk, cell.dateKey)
+          if (!teacher || !desk.teacher.trim()) continue
+          if (regularTeachersOnly && !regularTeacherIds.has(teacher.id)) continue
+
+          for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
+            if (desk.lesson?.studentSlots[studentIndex]) continue
+            const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
+            if (isPairConstraintBlocked(teacher.id, params.managedStudent.id, pairedStudent)) continue
+
+            const matchedItem = [...params.pendingItems]
+              .filter((item) => {
+                if (!canTeacherHandleStudentSubject(teacher, item.subject, studentGradeOnDate)) return false
+                if (studentUnavailableSlots.has(slotKey)) return false
+                return true
+              })
+              .sort((left, right) => {
+                const leftOrigin = left.makeupSourceDate ?? '9999-12-31'
+                const rightOrigin = right.makeupSourceDate ?? '9999-12-31'
+                const originCompare = leftOrigin.localeCompare(rightOrigin)
+                if (originCompare !== 0) return originCompare
+                return left.subject.localeCompare(right.subject, 'ja')
+              })[0] ?? null
+            if (!matchedItem) continue
+
+            const scoreVector: number[] = [
+              matchedItem.makeupSourceDate ? 1 : 0,
+              matchedItem.makeupSourceDate ? 99999999 - Number(matchedItem.makeupSourceDate.replace(/-/g, '')) : 0,
+              ...buildCommonAutoAssignScoreVector({
+                studentId: params.managedStudent.id,
+                studentGradeOnDate,
+                cell,
+                teacher,
+                pairedStudent,
+                existingLessons,
+              }),
+            ]
+
+            const nextCandidate: MakeupAutoAssignCandidate = {
+              weekIndex: nextWeekIndex,
+              cell,
+              deskIndex,
+              studentIndex,
+              desk,
+              teacher,
+              matchedItem,
+              scoreVector,
+            }
+
+            if (!bestCandidate) {
+              bestCandidate = nextCandidate
+              continue
+            }
+
+            const scoreCompare = compareScoreVectors(bestCandidate.scoreVector, nextCandidate.scoreVector)
+            if (scoreCompare > 0) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (scoreCompare < 0) continue
+
+            const dateCompare = nextCandidate.cell.dateKey.localeCompare(bestCandidate.cell.dateKey)
+            if (dateCompare < 0) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (dateCompare > 0) continue
+            if (nextCandidate.cell.slotNumber < bestCandidate.cell.slotNumber) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (nextCandidate.cell.slotNumber > bestCandidate.cell.slotNumber) continue
+            if (nextCandidate.deskIndex < bestCandidate.deskIndex) {
+              bestCandidate = nextCandidate
+              continue
+            }
+            if (nextCandidate.deskIndex > bestCandidate.deskIndex) continue
+            if (nextCandidate.studentIndex < bestCandidate.studentIndex) {
+              bestCandidate = nextCandidate
+            }
+          }
+        }
+      }
+    }
+
+    return bestCandidate
+  }
 
   const highlightedCell = useMemo(() => {
     if (!studentMenu || studentMenu.mode !== 'memo') return null
@@ -1771,7 +2381,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     if (selectedLectureStockEntry) {
-      const subject = selectedLectureStockEntry.nextPlacementEntry?.subject ?? '科目未設定'
+      const subject = selectedLecturePlacementItem?.subject ?? selectedLectureStockEntry.nextPlacementEntry?.subject ?? '科目未設定'
       return `${selectedLectureStockEntry.displayName} / ${subject} / 講習ストックの配置先を選択中`
     }
 
@@ -1786,7 +2396,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     return null
-  }, [movingStudentContext, resolveBoardStudentDisplayName, selectedLectureStockEntry, selectedMakeupStockEntry])
+  }, [movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupStockEntry])
 
   useEffect(() => {
     if (!pointerPreviewLabel || typeof window === 'undefined') return
@@ -1905,6 +2515,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     sourceSuppressedMakeupOrigins: MakeupOriginMap,
     sourceFallbackMakeupStudents: Record<string, FallbackMakeupStudent>,
     sourceManualLectureStockCounts: LectureStockCountMap,
+    sourceManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>,
     sourceFallbackLectureStockStudents: Record<string, { displayName: string }>,
   ): HistoryEntry => ({
     weeks: cloneWeeks(sourceWeeks),
@@ -1917,6 +2528,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     suppressedMakeupOrigins: cloneOriginMap(sourceSuppressedMakeupOrigins),
     fallbackMakeupStudents: { ...sourceFallbackMakeupStudents },
     manualLectureStockCounts: { ...sourceManualLectureStockCounts },
+    manualLectureStockOrigins: cloneManualLectureStockOrigins(sourceManualLectureStockOrigins),
     fallbackLectureStockStudents: { ...sourceFallbackLectureStockStudents },
   })
 
@@ -1931,11 +2543,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     nextSuppressedMakeupOrigins: MakeupOriginMap = suppressedMakeupOrigins,
     nextFallbackMakeupStudents: Record<string, FallbackMakeupStudent> = fallbackMakeupStudents,
     nextManualLectureStockCounts: LectureStockCountMap = manualLectureStockCounts,
+    nextManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]> = manualLectureStockOrigins,
     nextFallbackLectureStockStudents: Record<string, { displayName: string }> = fallbackLectureStockStudents,
   ) => {
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setRedoStack([])
     if (!areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates)) {
@@ -1953,6 +2566,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSuppressedMakeupOrigins(cloneOriginMap(nextSuppressedMakeupOrigins))
     setFallbackMakeupStudents(nextFallbackMakeupStudents)
     setManualLectureStockCounts({ ...nextManualLectureStockCounts })
+    setManualLectureStockOrigins(cloneManualLectureStockOrigins(nextManualLectureStockOrigins))
     setFallbackLectureStockStudents({ ...nextFallbackLectureStockStudents })
     setSelectedMakeupStockKey(null)
     setStudentMenu(null)
@@ -2082,6 +2696,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     let nextManualMakeupAdjustments = cloneOriginMap(manualMakeupAdjustments)
     const nextFallbackMakeupStudents = { ...fallbackMakeupStudents }
     let nextManualLectureStockCounts = { ...manualLectureStockCounts }
+    let nextManualLectureStockOrigins = cloneManualLectureStockOrigins(manualLectureStockOrigins)
     const nextFallbackLectureStockStudents = { ...fallbackLectureStockStudents }
     let movedStudentCount = 0
 
@@ -2097,6 +2712,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
               const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject)
               nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+              nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
+                displayName: resolveBoardStudentDisplayName(student.name),
+                sessionId: student.specialSessionId,
+              })
               if (!managedStudentByAnyName.get(student.name)) {
                 nextFallbackLectureStockStudents[lectureStockKey] = {
                   displayName: resolveBoardStudentDisplayName(student.name),
@@ -2137,6 +2756,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       suppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       nextManualLectureStockCounts,
+      nextManualLectureStockOrigins,
       nextFallbackLectureStockStudents,
     )
     setSelectedHolidayDate(dateKey)
@@ -2212,7 +2832,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setStatusMessage('この講習ストックは残数がありません。')
       return
     }
-    const placementEntry = selectedLectureStockEntry.nextPlacementEntry
+    const placementEntry = buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null
     if (!placementEntry) {
       setStatusMessage('この講習ストックは配置できる科目残数がありません。')
       return
@@ -2247,6 +2867,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       subject: placementEntry.subject,
       lessonType: 'special',
       teacherType: 'normal',
+      specialSessionId: placementEntry.sessionId,
+        specialStockSource: placementEntry.source,
     }
 
     if (!targetDesk.lesson) {
@@ -2259,6 +2881,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     targetDesk.lesson.studentSlots[studentIndex] = nextStudent
     const lectureStockStudentKey = selectedLectureStockEntry.studentId ?? `name:${selectedLectureStockEntry.displayName}`
     const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, buildLectureStockKey(lectureStockStudentKey, placementEntry.subject), -1)
+    const nextManualLectureStockOrigins = placementEntry.sessionId
+      ? consumeManualLectureStockOrigin(manualLectureStockOrigins, buildLectureStockKey(lectureStockStudentKey, placementEntry.subject), { sessionId: placementEntry.sessionId })
+      : consumeManualLectureStockOrigin(manualLectureStockOrigins, buildLectureStockKey(lectureStockStudentKey, placementEntry.subject))
     commitWeeks(
       nextWeeks,
       weekIndex,
@@ -2270,11 +2895,221 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       suppressedMakeupOrigins,
       fallbackMakeupStudents,
       nextManualLectureStockCounts,
+      nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
     setIsLectureStockOpen(true)
     setSelectedLectureStockKey(selectedLectureStockEntry.requestedCount > 1 ? selectedLectureStockEntry.key : null)
     setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
+  }
+
+  const handleAutoAssignLectureStockEntry = (entry: GroupedLectureStockEntry) => {
+    if (entry.requestedCount <= 0) {
+      setStatusMessage(`${entry.displayName} の講習ストックは残数がありません。`)
+      return
+    }
+    if (!entry.studentId) {
+      setStatusMessage(`${entry.displayName} は基本データの生徒と未連携のため、自動割振できません。`)
+      return
+    }
+
+    const managedStudent = students.find((student) => student.id === entry.studentId)
+    if (!managedStudent) {
+      setStatusMessage(`${entry.displayName} の生徒情報が見つからないため、自動割振できません。`)
+      return
+    }
+
+    const pendingItems = buildLecturePendingItems(entry)
+    if (pendingItems.length === 0) {
+      setStatusMessage(`${entry.displayName} の講習ストックに割振対象がありません。`)
+      return
+    }
+
+    let nextWeeks = cloneWeeks(normalizedWeeks)
+    let weekIndexOffset = 0
+    const sessionItems = pendingItems.filter((item) => item.startDate && item.endDate)
+    if (sessionItems.length > 0) {
+      const coveredWeeks = ensureWeeksCoverDateRange({
+        weeks: nextWeeks,
+        startDate: sessionItems.reduce((currentMin, item) => (item.startDate && item.startDate < currentMin ? item.startDate : currentMin), sessionItems[0]!.startDate!),
+        endDate: sessionItems.reduce((currentMax, item) => (item.endDate && item.endDate > currentMax ? item.endDate : currentMax), sessionItems[0]!.endDate!),
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+      })
+      nextWeeks = applyClassroomAvailability(coveredWeeks.weeks, classroomSettings)
+      weekIndexOffset = coveredWeeks.weekIndexOffset
+    }
+
+    let nextManualLectureStockCounts = manualLectureStockCounts
+    let nextManualLectureStockOrigins = manualLectureStockOrigins
+    const remainingItems = [...pendingItems]
+    const placedItems: Array<{ dateLabel: string; slotLabel: string; deskLabel: string }> = []
+    const studentKey = entry.studentId
+
+    while (remainingItems.length > 0) {
+      const candidate = findBestLectureAutoAssignCandidate({
+        sourceWeeks: nextWeeks,
+        pendingItems: remainingItems,
+        managedStudent,
+        studentKey,
+      })
+      if (!candidate) break
+
+      const targetCell = nextWeeks[candidate.weekIndex]?.find((cell) => cell.id === candidate.cell.id)
+      const targetDesk = targetCell?.desks[candidate.deskIndex]
+      if (!targetCell || !targetDesk) break
+
+      const studentGrade = resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey))
+      const nextStudent: StudentEntry = {
+        id: createStudentId(targetCell.id, candidate.deskIndex, candidate.studentIndex),
+        name: getStudentDisplayName(managedStudent),
+        managedStudentId: managedStudent.id,
+        grade: studentGrade,
+        birthDate: managedStudent.birthDate,
+        subject: candidate.matchedItem.subject,
+        lessonType: 'special',
+        teacherType: 'normal',
+        specialSessionId: candidate.matchedItem.sessionId,
+        specialStockSource: candidate.matchedItem.source,
+      }
+
+      if (!targetDesk.lesson) {
+        targetDesk.lesson = {
+          id: `${targetCell.id}_desk_${candidate.deskIndex + 1}_special`,
+          studentSlots: [null, null],
+        }
+      }
+
+      targetDesk.lesson.studentSlots[candidate.studentIndex] = nextStudent
+      nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, buildLectureStockKey(studentKey, candidate.matchedItem.subject), -1)
+      nextManualLectureStockOrigins = candidate.matchedItem.sessionId
+        ? consumeManualLectureStockOrigin(nextManualLectureStockOrigins, buildLectureStockKey(studentKey, candidate.matchedItem.subject), { sessionId: candidate.matchedItem.sessionId })
+        : consumeManualLectureStockOrigin(nextManualLectureStockOrigins, buildLectureStockKey(studentKey, candidate.matchedItem.subject))
+      const pendingIndex = remainingItems.indexOf(candidate.matchedItem)
+      if (pendingIndex >= 0) remainingItems.splice(pendingIndex, 1)
+
+      placedItems.push({
+        dateLabel: targetCell.dateLabel,
+        slotLabel: targetCell.slotLabel,
+        deskLabel: resolveDeskLabel(targetDesk, candidate.deskIndex),
+      })
+    }
+
+    if (placedItems.length === 0) {
+      setStatusMessage(`${entry.displayName} は条件に合う空きコマが見つからず、自動割振できませんでした。`)
+      return
+    }
+
+    commitWeeks(
+      nextWeeks,
+      weekIndex + weekIndexOffset,
+      selectedCellId,
+      selectedDeskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      nextManualLectureStockCounts,
+      nextManualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    )
+    setIsLectureStockOpen(true)
+    setSelectedLectureStockKey(remainingItems.length > 0 ? entry.key : null)
+    setStatusMessage(
+      `${entry.displayName} を自動割振しました。${placedItems.length}コマ配置しました。`
+      + (remainingItems.length > 0 ? ` ${remainingItems.length}コマは候補不足でストックに残しています。` : ''),
+    )
+  }
+
+  const handleAutoAssignMakeupStockEntry = (entry: GroupedMakeupStockEntry) => {
+    if (entry.balance <= 0) {
+      setStatusMessage(`${entry.displayName} は先取り済みのため、自動割振できません。`)
+      return
+    }
+    if (!entry.studentId) {
+      setStatusMessage(`${entry.displayName} は基本データの生徒と未連携のため、自動割振できません。`)
+      return
+    }
+
+    const managedStudent = students.find((student) => student.id === entry.studentId)
+    if (!managedStudent) {
+      setStatusMessage(`${entry.displayName} の生徒情報が見つからないため、自動割振できません。`)
+      return
+    }
+
+    const pendingItems = buildMakeupPendingItems(entry)
+    if (pendingItems.length === 0) {
+      setStatusMessage(`${entry.displayName} の振替ストックに割振対象がありません。`)
+      return
+    }
+
+    const nextWeeks = cloneWeeks(normalizedWeeks)
+    const remainingItems = [...pendingItems]
+    const placedItems: Array<{ dateLabel: string; slotLabel: string; deskLabel: string }> = []
+
+    while (remainingItems.length > 0) {
+      const candidate = findBestMakeupAutoAssignCandidate({
+        sourceWeeks: nextWeeks,
+        pendingItems: remainingItems,
+        managedStudent,
+        studentKey: entry.studentId,
+      })
+      if (!candidate) break
+
+      const targetCell = nextWeeks[candidate.weekIndex]?.find((cell) => cell.id === candidate.cell.id)
+      const targetDesk = targetCell?.desks[candidate.deskIndex]
+      if (!targetCell || !targetDesk) break
+
+      const studentGrade = resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey))
+      const nextStudent = normalizeLessonPlacement({
+        id: createStudentId(targetCell.id, candidate.deskIndex, candidate.studentIndex),
+        name: getStudentDisplayName(managedStudent),
+        managedStudentId: managedStudent.id,
+        grade: studentGrade,
+        birthDate: managedStudent.birthDate,
+        makeupSourceDate: candidate.matchedItem.makeupSourceDate,
+        makeupSourceLabel: candidate.matchedItem.makeupSourceLabel,
+        subject: candidate.matchedItem.subject,
+        lessonType: 'makeup',
+        teacherType: 'normal',
+      }, targetCell.dateKey, targetCell.slotNumber)
+
+      if (!targetDesk.lesson) {
+        targetDesk.lesson = {
+          id: `${targetCell.id}_desk_${candidate.deskIndex + 1}_${nextStudent.lessonType}`,
+          note: nextStudent.lessonType === 'makeup' && candidate.matchedItem.makeupSourceLabel
+            ? `元の通常授業: ${candidate.matchedItem.makeupSourceLabel}${candidate.matchedItem.makeupSourceReasonLabel ? `（${candidate.matchedItem.makeupSourceReasonLabel}）` : ''}`
+            : undefined,
+          studentSlots: [null, null],
+        }
+      }
+
+      targetDesk.lesson.studentSlots[candidate.studentIndex] = nextStudent
+      const pendingIndex = remainingItems.indexOf(candidate.matchedItem)
+      if (pendingIndex >= 0) remainingItems.splice(pendingIndex, 1)
+
+      placedItems.push({
+        dateLabel: targetCell.dateLabel,
+        slotLabel: targetCell.slotLabel,
+        deskLabel: resolveDeskLabel(targetDesk, candidate.deskIndex),
+      })
+    }
+
+    if (placedItems.length === 0) {
+      setStatusMessage(`${entry.displayName} は条件に合う空きコマが見つからず、自動割振できませんでした。`)
+      return
+    }
+
+    commitWeeks(nextWeeks, weekIndex, selectedCellId, selectedDeskIndex)
+    setIsMakeupStockOpen(true)
+    setSelectedMakeupStockKey(remainingItems.length > 0 ? entry.key : null)
+    setStatusMessage(
+      `${entry.displayName} の振替を自動割振しました。${placedItems.length}コマ配置しました。`
+      + (remainingItems.length > 0 ? ` ${remainingItems.length}コマは候補不足でストックに残しています。` : ''),
+    )
   }
 
   const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number) => {
@@ -2643,6 +3478,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       const lectureStudentKey = managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${resolveBoardStudentDisplayName(menuStudent.student.name)}`
       const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject)
       const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
+      const nextManualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
+        displayName: resolveBoardStudentDisplayName(menuStudent.student.name),
+        sessionId: menuStudent.student.specialSessionId,
+      })
       const nextFallbackLectureStockStudents = managedStudentByAnyName.get(menuStudent.student.name)
         ? fallbackLectureStockStudents
         : {
@@ -2664,6 +3503,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         suppressedMakeupOrigins,
         fallbackMakeupStudents,
         nextManualLectureStockCounts,
+        nextManualLectureStockOrigins,
         nextFallbackLectureStockStudents,
       )
       setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を講習ストックへ回しました。`)
@@ -2700,6 +3540,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       suppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       manualLectureStockCounts,
+      manualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
     setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を振替ストックへ回しました。`)
@@ -2728,6 +3569,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let nextManualLectureStockCounts = manualLectureStockCounts
+    let nextManualLectureStockOrigins = manualLectureStockOrigins
     let statusSuffix = '振替対象にはしません。'
 
     if (menuStudent.student.lessonType === 'makeup' && menuStudent.student.makeupSourceDate) {
@@ -2737,12 +3579,24 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     if (menuStudent.student.lessonType === 'special') {
       const lectureStudentKey = menuStudent.student.managedStudentId ?? managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${studentDisplayName}`
-      nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, buildLectureStockKey(lectureStudentKey, menuStudent.student.subject), 1)
+      const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject)
 
-      if (menuStudent.student.managedStudentId) {
+      if (menuStudent.student.specialStockSource === 'session') {
+        nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)
+        nextManualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
+          displayName: studentDisplayName,
+          sessionId: menuStudent.student.specialSessionId,
+        })
+      }
+
+      if (menuStudent.student.managedStudentId && menuStudent.student.specialStockSource === 'session') {
         const timestamp = formatSpecialSessionTimestamp()
         onUpdateSpecialSessions((current) => current.map((session) => {
-          if (targetCell.dateKey < session.startDate || targetCell.dateKey > session.endDate) return session
+          if (menuStudent.student.specialSessionId) {
+            if (session.id !== menuStudent.student.specialSessionId) return session
+          } else if (targetCell.dateKey < session.startDate || targetCell.dateKey > session.endDate) {
+            return session
+          }
 
           const currentInput = session.studentInputs[menuStudent.student.managedStudentId!]
           if (!currentInput || currentInput.regularOnly) return session
@@ -2786,6 +3640,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       nextSuppressedMakeupOrigins,
       fallbackMakeupStudents,
       nextManualLectureStockCounts,
+      nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
     setStatusMessage(`${studentDisplayName} の授業を削除しました。${statusSuffix}`)
@@ -2907,7 +3762,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setRedoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setUndoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
@@ -2925,6 +3780,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSuppressedMakeupOrigins(cloneOriginMap(previous.suppressedMakeupOrigins))
     setFallbackMakeupStudents(previous.fallbackMakeupStudents)
     setManualLectureStockCounts({ ...previous.manualLectureStockCounts })
+    setManualLectureStockOrigins(cloneManualLectureStockOrigins(previous.manualLectureStockOrigins))
     setFallbackLectureStockStudents({ ...previous.fallbackLectureStockStudents })
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
@@ -2940,7 +3796,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setRedoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
@@ -2958,6 +3814,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSuppressedMakeupOrigins(cloneOriginMap(next.suppressedMakeupOrigins))
     setFallbackMakeupStudents(next.fallbackMakeupStudents)
     setManualLectureStockCounts({ ...next.manualLectureStockCounts })
+    setManualLectureStockOrigins(cloneManualLectureStockOrigins(next.manualLectureStockOrigins))
     setFallbackLectureStockStudents({ ...next.fallbackLectureStockStudents })
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
@@ -3060,17 +3917,27 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     {lectureStockEntries.length === 0 ? (
                       <div className="makeup-stock-empty">現在の講習ストックはありません。</div>
                     ) : lectureStockEntries.map((entry) => (
-                      <button
-                        key={entry.key}
-                        type="button"
-                        className={`lecture-stock-row${selectedLectureStockKey === entry.key ? ' active' : ''}`}
-                        onClick={() => handleSelectLectureStockEntry(entry)}
-                        title={entry.title}
-                        data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-                      >
-                        <span className="makeup-stock-name">{entry.displayName}</span>
-                        <span className="status-chip">+{entry.requestedCount}</span>
-                      </button>
+                      <div key={entry.key} className="lecture-stock-row-shell">
+                        <button
+                          type="button"
+                          className={`lecture-stock-row${selectedLectureStockKey === entry.key ? ' active' : ''}`}
+                          onClick={() => handleSelectLectureStockEntry(entry)}
+                          title={entry.title}
+                          data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+                        >
+                          <span className="makeup-stock-name">{entry.displayName}</span>
+                          <span className="status-chip">+{entry.requestedCount}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button slim lecture-stock-auto-assign-button"
+                          onClick={() => handleAutoAssignLectureStockEntry(entry)}
+                          disabled={entry.requestedCount <= 0 || !entry.studentId}
+                          data-testid={`lecture-stock-auto-assign-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+                        >
+                          自動割振
+                        </button>
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -3085,18 +3952,28 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     {makeupStockEntries.length === 0 ? (
                       <div className="makeup-stock-empty">現在の振替ストックはありません。</div>
                     ) : makeupStockEntries.map((entry) => (
-                      <button
-                        key={entry.key}
-                        type="button"
-                        className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
-                        onClick={() => handleSelectMakeupStockEntry(entry)}
-                        disabled={entry.balance <= 0}
-                        title={entry.title}
-                        data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-                      >
-                        <span className="makeup-stock-name">{entry.displayName}</span>
-                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
-                      </button>
+                      <div key={entry.key} className="stock-row-shell">
+                        <button
+                          type="button"
+                          className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
+                          onClick={() => handleSelectMakeupStockEntry(entry)}
+                          disabled={entry.balance <= 0}
+                          title={entry.title}
+                          data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+                        >
+                          <span className="makeup-stock-name">{entry.displayName}</span>
+                          <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button slim stock-auto-assign-button"
+                          onClick={() => handleAutoAssignMakeupStockEntry(entry)}
+                          disabled={entry.balance <= 0 || !entry.studentId}
+                          data-testid={`makeup-stock-auto-assign-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+                        >
+                          自動割振
+                        </button>
+                      </div>
                     ))}
                   </div>
                 </section>
