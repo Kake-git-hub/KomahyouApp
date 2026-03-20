@@ -876,7 +876,7 @@ function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabe
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenBackupRestore }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [managers, setManagers] = useState(initialManagers)
   const [groupLessons, setGroupLessons] = useState(initialGroupLessons)
