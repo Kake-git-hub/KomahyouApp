@@ -3154,17 +3154,19 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             if (!student) continue
             movedStudentCount += 1
             if (student.lessonType === 'special') {
-              const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
-              const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject)
-              nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-              nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
-                displayName: resolveBoardStudentDisplayName(student.name),
-                sessionId: student.specialSessionId,
-              })
-              if (!managedStudentByAnyName.get(student.name)) {
-                nextFallbackLectureStockStudents[lectureStockKey] = {
+              if (student.specialStockSource === 'session') {
+                const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
+                const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject)
+                nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
                   displayName: resolveBoardStudentDisplayName(student.name),
-                  subject: student.subject,
+                  sessionId: student.specialSessionId,
+                })
+                if (!managedStudentByAnyName.get(student.name)) {
+                  nextFallbackLectureStockStudents[lectureStockKey] = {
+                    displayName: resolveBoardStudentDisplayName(student.name),
+                    subject: student.subject,
+                  }
                 }
               }
               continue
@@ -3812,7 +3814,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       teacherType: 'normal',
       manualAdded: true,
       specialSessionId: addExistingStudentDraft.lessonType === 'special' ? addExistingStudentDraft.specialSessionId : undefined,
-      specialStockSource: addExistingStudentDraft.lessonType === 'special' ? 'session' : undefined,
+      specialStockSource: addExistingStudentDraft.lessonType === 'special' ? 'manual' : undefined,
     }
 
     if (!targetDesk.lesson) {
@@ -3867,6 +3869,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     const targetStudent = targetDesk?.lesson?.studentSlots[studentMenu.studentIndex]
     if (!targetStudent) return
+
+    if (targetStudent.lessonType === 'special' || editStudentDraft.lessonType === 'special') {
+      setStatusMessage('講習授業はコマ表から編集できません。生徒日程表で登録解除して内容を直し、再登録してください。')
+      return
+    }
 
     targetDesk.lesson!.studentSlots[studentMenu.studentIndex] = {
       ...targetStudent,
@@ -4043,6 +4050,28 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
 
     if (menuStudent.student.lessonType === 'special') {
+      if (menuStudent.student.specialStockSource !== 'session') {
+        commitWeeks(
+          nextWeeks,
+          weekIndex,
+          studentMenu.cellId,
+          studentMenu.deskIndex,
+          classroomSettings.holidayDates,
+          classroomSettings.forceOpenDates,
+          manualMakeupAdjustments,
+          suppressedMakeupOrigins,
+          fallbackMakeupStudents,
+          manualLectureStockCounts,
+          manualLectureStockOrigins,
+          fallbackLectureStockStudents,
+        )
+        setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} の手動追加講習を盤面から外しました。講習ストックには戻しません。`)
+        if (selectedStudentId === menuStudent.student.id) {
+          setSelectedStudentId(null)
+        }
+        return
+      }
+
       const lectureStudentKey = managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${resolveBoardStudentDisplayName(menuStudent.student.name)}`
       const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject)
       const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
@@ -4623,8 +4652,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               {studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
-                  <button type="button" className="menu-link-button" onClick={handleStoreStudent} data-testid="menu-stock-button">ストックする</button>
-                  <div className="student-menu-help-text">ストックは希望数を変えず、未配置分として残します。</div>
+                  {menuStudent?.student.lessonType === 'special' && menuStudent.student.specialStockSource !== 'session' ? (
+                    <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は講習ストックへ戻せません。不要な場合は削除してください。</div>
+                  ) : (
+                    <>
+                      <button type="button" className="menu-link-button" onClick={handleStoreStudent} data-testid="menu-stock-button">ストックする</button>
+                      <div className="student-menu-help-text">ストックは希望数を変えず、未配置分として残します。</div>
+                    </>
+                  )}
+                  {menuStudent?.student.lessonType === 'special' ? <div className="student-menu-help-text">講習の内容変更はコマ表では行わず、生徒日程表で登録解除してから再登録してください。</div> : null}
                   <button type="button" className="menu-link-button" onClick={handleDeleteStudent} data-testid="menu-delete-button">削除</button>
                   <div className="student-menu-help-text">削除は日程表の希望数を変えず、盤面上の予定だけを消します。</div>
                 </div>

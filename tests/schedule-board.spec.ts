@@ -1799,6 +1799,11 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveClass(/sa-student-name-warning/)
     await expect(targetName).toHaveAttribute('title', /手動追加/)
 
+    await page.getByTestId(target.cellTestId).click()
+    await expect(page.getByTestId('menu-stock-button')).toHaveCount(0)
+    await expect(page.getByTestId('menu-stock-disabled-note')).toContainText('手動追加した講習は講習ストックへ戻せません。')
+    await page.getByRole('button', { name: 'x' }).click()
+
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
@@ -1806,6 +1811,34 @@ test.describe('コマ調整表', () => {
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
     await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
     await expect.poll(async () => Number((await popup.getByTestId('student-schedule-count-subject-数').inputValue()) || '0')).toBe(0)
+  })
+
+  test('手動追加した講習は休日化しても講習ストックへ戻らない', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const specialWeekStart = addDays(currentWeekStart, 7)
+
+    await page.goto('/')
+    await moveBoardToWeek(page, specialWeekStart)
+
+    const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
+    const targetDateKey = target.slotId.split('_')[0]
+    const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
+
+    await page.getByTestId(target.cellTestId).click()
+    await page.getByTestId('menu-open-add-existing-student-button').click()
+    await page.getByTestId('menu-add-student-select').selectOption({ label: '青木太郎' })
+    await page.getByTestId('menu-add-lesson-type-special').click()
+    await page.getByTestId('menu-add-subject-select').selectOption('数')
+    await page.getByTestId('menu-add-existing-student-confirm-button').click()
+    await expect(targetName).toHaveText('青木太郎')
+
+    acceptNextDialog(page)
+    await page.getByTestId(`day-header-${targetDateKey}`).click()
+
+    await expect(targetName).toHaveText('')
+    await expect(page.getByTestId('toolbar-status')).toContainText('休日に設定しました。')
+    await page.getByTestId('lecture-stock-chip').click()
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
   })
 
   test('振替授業を削除しても振替ストックへ戻らない', async ({ page }) => {
@@ -2644,6 +2677,29 @@ test.describe('コマ調整表', () => {
     await expect(popup.locator('.sheet').first()).toBeVisible()
   })
 
+  test('生徒日程を開いたまま生徒追加を反映できる', async ({ page }) => {
+    const activeEntryDate = '2024-04-01'
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await expect(popup.locator('.sheet').first()).toBeVisible()
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-students').click()
+    await page.getByTestId('basic-data-student-draft-name').fill('開いたまま追加E2E生徒')
+    await page.getByTestId('basic-data-student-draft-display-name').fill('開いたまま追加E2E生徒')
+    await setHiddenDateInput(page, 'basic-data-student-draft-entry-date-input', activeEntryDate)
+    await setHiddenDateInput(page, 'basic-data-student-draft-birthdate-input', '2012-04-10')
+    await page.getByTestId('basic-data-add-student-button').click()
+
+    await expect(popup.locator('section.sheet').filter({ hasText: '開いたまま追加E2E生徒' }).first()).toBeVisible()
+  })
+
   test('講師日程をポップアップで開いて生徒日程と同じ期間変更UIを表示できる', async ({ page }) => {
     await page.goto('/')
 
@@ -2661,6 +2717,28 @@ test.describe('コマ調整表', () => {
     await expect(popup.locator('#schedule-period-select')).toBeVisible()
     await expect(popup.locator('#schedule-summary-label')).toContainText('表示中:')
     await expect(popup.locator('.sheet').first()).toBeVisible()
+  })
+
+  test('講師日程を開いたまま講師追加を反映できる', async ({ page }) => {
+    const activeEntryDate = '2024-04-01'
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-teacher-schedule-button').click()
+    const popup = await popupPromise
+
+    await expect(popup.locator('.sheet').first()).toBeVisible()
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-teachers').click()
+    await page.getByTestId('basic-data-teacher-draft-name').fill('開いたまま追加E2E講師')
+    await page.getByTestId('basic-data-teacher-draft-email').fill('open-popup-teacher@example.com')
+    await setHiddenDateInput(page, 'basic-data-teacher-draft-entry-date-input', activeEntryDate)
+    await page.getByTestId('basic-data-add-teacher-button').click()
+
+    await expect(popup.locator('section.sheet').filter({ hasText: '開いたまま追加E2E講師' }).first()).toBeVisible()
   })
 
   test('生徒日程は遠い期間も管理データ基準で生成し、開いたまま通常授業追加を反映できる', async ({ page }) => {
@@ -2759,6 +2837,44 @@ test.describe('コマ調整表', () => {
     const studentSheet = popup.locator('section.sheet').filter({ hasText: '青木' }).first()
     await expect(studentSheet).toContainText('数')
     await expect(popup.locator('#schedule-summary-label')).toContainText(`${nextWeekStart.getMonth() + 1}月${nextWeekStart.getDate() + 1}日`)
+  })
+
+  test('開いた日程表は生徒と講師の退塾を即座に反映する', async ({ page }) => {
+    const withdrawnDateKey = toDateKey(addDays(getWeekStart(new Date()), -1))
+
+    await page.goto('/')
+
+    const studentPopupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const studentPopup = await studentPopupPromise
+    await expect(studentPopup.locator('[data-role="student-sheet"][data-student-id="s001"]')).toHaveCount(1)
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-students').click()
+
+    await page.getByTestId('basic-data-edit-student-s001').click()
+    const editableStudentRow = page.getByTestId('basic-data-edit-student-s001').locator('xpath=ancestor::tr')
+    await editableStudentRow.locator('input[type="date"]').nth(1).fill(withdrawnDateKey)
+    await expect(studentPopup.locator('[data-role="student-sheet"][data-student-id="s001"]')).toHaveCount(0)
+
+    await studentPopup.close()
+    await navigateFromBasicDataToBoard(page)
+    await expect(page.getByTestId('board-student-schedule-button')).toBeEnabled()
+
+    const teacherPopupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-teacher-schedule-button').click()
+    const teacherPopup = await teacherPopupPromise
+    await expect(teacherPopup.locator('[data-role="teacher-sheet"][data-teacher-id="t001"]')).toHaveCount(1)
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-teachers').click()
+
+    await page.getByTestId('basic-data-edit-teacher-t001').click()
+    const editableTeacherRow = page.getByTestId('basic-data-edit-teacher-t001').locator('xpath=ancestor::tr')
+    await editableTeacherRow.locator('input[type="date"]').nth(1).fill(withdrawnDateKey)
+    await expect(teacherPopup.locator('[data-role="teacher-sheet"][data-teacher-id="t001"]')).toHaveCount(0)
   })
 
   test('生徒日程の講習期間セレクターは開始日順で並び、選択と日付入力で即反映される', async ({ page }) => {
