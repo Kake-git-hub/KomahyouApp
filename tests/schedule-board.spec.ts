@@ -60,6 +60,9 @@ async function saveMemoToCell(
   memo: string,
 ) {
   await page.getByTestId(cellTestId).click()
+  if (await page.getByTestId('menu-open-memo-button').count()) {
+    await page.getByTestId('menu-open-memo-button').click()
+  }
   await page.getByTestId('menu-memo-textarea').fill(memo)
   await page.getByTestId('menu-memo-save-button').click()
 }
@@ -1390,6 +1393,7 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('')
     await targetCell.click()
     await expect(page.getByTestId('student-action-menu')).toBeVisible()
+    await page.getByTestId('menu-open-memo-button').click()
     await expect(targetCell).toHaveClass(/sa-student-picked/)
     await page.getByTestId('menu-memo-textarea').fill('要連絡\n電話希望')
     await page.getByTestId('menu-memo-save-button').click()
@@ -1401,7 +1405,7 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveAttribute('title', /手入力メモのため注意/)
   })
 
-  test('空欄の生徒マスでは生徒追加 UI を出さずメモ入力だけを表示する', async ({ page }) => {
+  test('空欄の生徒マスでは空欄メニューからメモ入力へ進める', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const slotId = `${toDateKey(currentWeekStart)}_1`
     const targetCell = page.getByTestId(`student-cell-${slotId}-1-1`)
@@ -1409,11 +1413,13 @@ test.describe('コマ調整表', () => {
     await page.goto('/')
 
     await targetCell.click()
+    await expect(page.getByTestId('menu-open-add-existing-student-button')).toBeVisible()
+    await expect(page.getByTestId('menu-open-memo-button')).toBeVisible()
+    await page.getByTestId('menu-open-memo-button').click()
     await expect(page.getByTestId('menu-memo-textarea')).toBeVisible()
     await expect(page.getByTestId('menu-memo-save-button')).toBeVisible()
-    await expect(page.getByTestId('menu-add-name-input')).toHaveCount(0)
-    await expect(page.getByTestId('menu-add-birthdate-input')).toHaveCount(0)
-    await expect(page.getByTestId('menu-add-submit-button')).toHaveCount(0)
+    await expect(page.getByTestId('menu-add-student-select')).toHaveCount(0)
+    await expect(page.getByTestId('menu-add-existing-student-confirm-button')).toHaveCount(0)
   })
 
   test('保存済みメモは同じ生徒マスから再編集と削除ができる', async ({ page }) => {
@@ -1428,6 +1434,9 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('初回メモ')
 
     await targetCell.click()
+    if (await page.getByTestId('menu-open-memo-button').count()) {
+      await page.getByTestId('menu-open-memo-button').click()
+    }
     await expect(page.getByTestId('menu-memo-textarea')).toHaveValue('初回メモ')
     await page.getByTestId('menu-memo-textarea').fill('')
     await page.getByTestId('menu-memo-save-button').click()
@@ -1722,7 +1731,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
   })
 
-  test('生徒メニューは既存生徒で移動とストックを表示し、空欄ではメモ入力を表示する', async ({ page }) => {
+  test('生徒メニューは既存生徒で移動とストックを表示し、空欄では既存生徒追加とメモを表示する', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const slotId = `${toDateKey(currentWeekStart)}_1`
 
@@ -1734,10 +1743,39 @@ test.describe('コマ調整表', () => {
 
     await page.getByRole('button', { name: 'x' }).click()
 
-    const emptyCellTestId = await findFirstEmptyStudentCellTestId(page, slotId)
+    const emptyCellTestId = (await findEmptyStudentCellWithTeacher(page, currentWeekStart)).cellTestId
     await page.getByTestId(emptyCellTestId).click()
-    await expect(page.getByTestId('menu-memo-textarea')).toBeVisible()
-    await expect(page.getByTestId('menu-memo-save-button')).toBeVisible()
+    await expect(page.getByTestId('student-action-menu')).toBeVisible()
+    menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
+    expect(menuButtons).toEqual(['既存生徒追加', 'メモ'])
+  })
+
+  test('空欄セルから既存生徒を講習追加すると希望回数にも反映される', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const specialWeekStart = addDays(currentWeekStart, 7)
+
+    await page.goto('/')
+    await moveBoardToWeek(page, specialWeekStart)
+
+    const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
+    await page.getByTestId(target.cellTestId).click()
+    await page.getByTestId('menu-open-add-existing-student-button').click()
+
+    await page.getByTestId('menu-add-student-select').selectOption({ label: '青木太郎' })
+    await page.getByTestId('menu-add-lesson-type-special').click()
+    await page.getByTestId('menu-add-subject-select').selectOption('数')
+    await page.getByTestId('menu-add-existing-student-confirm-button').click()
+
+    const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(targetName).toHaveText('青木太郎')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await expect.poll(async () => Number((await popup.getByTestId('student-schedule-count-subject-数').inputValue()) || '0')).toBe(1)
   })
 
   test('振替授業を削除しても振替ストックへ戻らない', async ({ page }) => {
@@ -2763,15 +2801,18 @@ test.describe('コマ調整表', () => {
   test('生徒日程で出席不可グレーアウトと希望科目数提出を登録解除まで操作できる', async ({ page }) => {
     await page.goto('/')
 
+    const currentWeekStart = getWeekStart(new Date())
+    const specialWeekStart = addDays(currentWeekStart, 7)
+
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
 
-    const targetSheet = popup.locator('[data-role="student-sheet"]').first()
+    const targetSheet = popup.locator('[data-role="student-sheet"][data-student-id="s001"]')
     const dayToggle = targetSheet.locator('[data-role="toggle-student-unavailable-date"]').first()
-    const periodButton = targetSheet.locator('[data-role="open-student-count-modal"]').first()
+    const periodButton = popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')
 
     await expect(dayToggle).toBeVisible()
     await expect(periodButton).toContainText('希望科目数設定はここをクリック')
@@ -2783,15 +2824,33 @@ test.describe('コマ調整表', () => {
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await expect(popup.getByTestId('student-schedule-count-subject-数')).toBeVisible()
     await expect(popup.getByTestId('student-schedule-count-subject-算')).toHaveCount(0)
+    await expect(popup.getByTestId('student-schedule-count-unregister')).toHaveCount(0)
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
     await expect(periodButton).toContainText('希望科目数登録済')
     await expect(targetSheet.locator('[data-role="toggle-student-unavailable-date"]')).toHaveCount(0)
 
+    await moveBoardToWeek(page, specialWeekStart)
+    const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
+    const targetMatch = target.cellTestId.match(/^student-cell-(.+)-(\d+)-(\d+)$/)
+    expect(targetMatch).toBeTruthy()
+    const teacherCell = page.getByTestId(`teacher-cell-${targetMatch?.[1]}-${targetMatch?.[2]}`)
+    await expect(teacherCell).toContainText(target.teacherName)
+    await page.getByTestId('lecture-stock-chip').click()
+    await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
+    await page.getByTestId(target.cellTestId).click()
+    const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(targetName).toHaveText('青木太郎')
+
     await periodButton.click()
     await expect(popup.getByTestId('student-schedule-count-unregister')).toBeVisible()
+    await expect(popup.getByText('登録解除すると、コマ表からこの生徒だけ外します。講師は残ります。')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-register')).toHaveCount(0)
     await popup.getByTestId('student-schedule-count-unregister').click()
     await expect(periodButton).toContainText('希望科目数設定はここをクリック')
     await expect.poll(async () => targetSheet.locator('[data-role="toggle-student-unavailable-date"]').count()).toBeGreaterThan(0)
+    await expect(targetName).toHaveText('')
+    await expect(teacherCell).toContainText(target.teacherName)
   })
 
   test('講師日程で参加不可グレーアウトと講習期間登録を登録解除まで操作できる', async ({ page }) => {
@@ -2815,12 +2874,15 @@ test.describe('コマ調整表', () => {
 
     await periodButton.click()
     await expect(popup.getByTestId('teacher-schedule-register-modal')).toBeVisible()
+    await expect(popup.getByTestId('teacher-schedule-register-unregister')).toHaveCount(0)
     await popup.getByTestId('teacher-schedule-register-submit').click()
     await expect(periodButton).toContainText('講師予定登録済')
     await expect(targetSheet.locator('[data-role="toggle-teacher-unavailable-date"]')).toHaveCount(0)
 
     await periodButton.click()
     await expect(popup.getByTestId('teacher-schedule-register-unregister')).toBeVisible()
+    await expect(popup.getByText('登録解除すると、コマ表からこの講師だけ外します。生徒は残ります。')).toBeVisible()
+    await expect(popup.getByTestId('teacher-schedule-register-submit')).toHaveCount(0)
     await popup.getByTestId('teacher-schedule-register-unregister').click()
     await expect(periodButton).toContainText('講師予定をここをクリックして登録')
     await expect.poll(async () => targetSheet.locator('[data-role="toggle-teacher-unavailable-date"]').count()).toBeGreaterThan(0)
