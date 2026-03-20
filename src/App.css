@@ -1398,7 +1398,7 @@ tr.sa-slot-first td {
 .auto-assign-rule-grid {
   display: grid;
   gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-template-columns: 1fr;
 }
 
 .auto-assign-rule-card {
@@ -2165,8 +2165,7 @@ tr.sa-slot-first td {
   }
 
   .special-session-date-grid,
-  .backup-restore-grid,
-  .auto-assign-rule-grid {
+  .backup-restore-grid {
     grid-template-columns: 1fr;
   }
 
