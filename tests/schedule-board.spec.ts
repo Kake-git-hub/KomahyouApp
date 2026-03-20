@@ -2544,6 +2544,8 @@ test.describe('コマ調整表', () => {
 
     await periodButton.click()
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-数')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-算')).toHaveCount(0)
     await popup.getByTestId('student-schedule-count-register').click()
     await expect(periodButton).toContainText('希望科目数登録済')
     await expect(targetSheet.locator('[data-role="toggle-student-unavailable-date"]')).toHaveCount(0)

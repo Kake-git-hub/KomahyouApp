@@ -1034,6 +1034,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         height: 22px;
       }
 
+      .count-table tbody tr:last-child td {
+        border-bottom: 1.5px solid var(--line);
+      }
+
       .count-stack {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1484,6 +1488,23 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const desiredCount = Number(desiredCountMap && desiredCountMap[label] ? desiredCountMap[label] : count);
           return count !== desiredCount;
         });
+      }
+
+      function getPreferredMathSubject(student, referenceDate) {
+        const gradeLabel = getGradeLabel(student && student.birthDate, referenceDate);
+        return gradeLabel.startsWith('小') ? '算' : '数';
+      }
+
+      function getVisibleSubjectsForStudent(student, referenceDate) {
+        const preferredMathSubject = getPreferredMathSubject(student, referenceDate);
+        return subjectDefinitions.filter((subject) => {
+          if (subject === '算' || subject === '数') return subject === preferredMathSubject;
+          return true;
+        });
+      }
+
+      function filterCountMapToSubjects(countMap, visibleSubjects) {
+        return Object.fromEntries(Object.entries(countMap || {}).filter(([label]) => visibleSubjects.includes(label)));
       }
 
       function renderStudentCellCard(entry) {
@@ -1976,12 +1997,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }).join('');
       }
 
-      function renderBottomSection(commonKey, individualKey, makeupRows, regularCounts, lectureCounts, lectureWarningHtml) {
+      function renderBottomSection(commonKey, individualKey, makeupRows, regularCounts, lectureCounts, regularWarningHtml, lectureWarningHtml) {
         return '<div class="bottom-grid">' +
           '<div class="box-stack"><div class="box-table-title">共通連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '"></textarea></div></div>' +
           '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '"></textarea></div></div>' +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
-          '<div class="count-stack"><div class="count-stack-block"><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
+          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
         '</div>';
       }
 
@@ -2039,7 +2060,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const session = getSpecialSessionById(activeCountDialog.sessionId);
         if (!student || !session) return '';
         const input = getStudentSessionInput(student.id, session.id);
-        const rowsHtml = subjectDefinitions.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
+        const visibleSubjects = getVisibleSubjectsForStudent(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate);
+        const rowsHtml = visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
         return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div></div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr></tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + (input.countSubmitted ? '<button type="button" class="secondary" data-role="unsubmit-student-count-modal" data-testid="student-schedule-count-unregister">登録解除</button>' : '') + '<button type="button" data-role="submit-student-count-modal" data-testid="student-schedule-count-register">登録</button></div></div></div>';
       }
 
@@ -2191,6 +2213,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const students = DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort((left, right) => left.name.localeCompare(right.name, 'ja'));
         const showQr = shouldShowScheduleQr();
         pagesElement.innerHTML = students.map((student, index) => {
+          const visibleSubjects = getVisibleSubjectsForStudent(student, startDate);
           const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
           const plannedEntries = plannedAssignmentMap.get(student.id) || plannedAssignmentMap.get(student.name) || [];
           const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
@@ -2208,10 +2231,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (entry.lesson.lessonType === 'special') return;
             plannedRegularCounts[entry.lesson.subject] = (plannedRegularCounts[entry.lesson.subject] || 0) + 1;
           });
-          const regularCountWarningHtml = hasCountMismatch(subjectCounts, plannedRegularCounts)
+          const visibleRegularCounts = filterCountMapToSubjects(subjectCounts, visibleSubjects);
+          const visiblePlannedRegularCounts = filterCountMapToSubjects(plannedRegularCounts, visibleSubjects);
+          const visibleLectureCounts = filterCountMapToSubjects(lectureCounts, visibleSubjects);
+          const visibleDesiredLectureCounts = filterCountMapToSubjects(desiredLectureCounts, visibleSubjects);
+          const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
             ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
             : '';
-          const lectureCountWarningHtml = hasCountMismatch(lectureCounts, desiredLectureCounts)
+          const lectureCountWarningHtml = hasCountMismatch(visibleLectureCounts, visibleDesiredLectureCounts)
             ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と予定数が一致していません！</div>'
             : '';
           const rows = slotNumbers.map((slotNumber) => {
@@ -2236,7 +2263,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
           const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
           const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, makeupRows, toCountRows(subjectCounts, plannedRegularCounts), toCountRows(lectureCounts, desiredLectureCounts, subjectDefinitions), regularCountWarningHtml + lectureCountWarningHtml) + '</section>';
+          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, visibleSubjects), regularCountWarningHtml, lectureCountWarningHtml) + '</section>';
         }).join('');
       }
 
@@ -2289,7 +2316,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
           const qrHtml = teacher.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + teacher.qrSvg + '</span>' : '';
           const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '') + '</section>';
+          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '') + '</section>';
         }).join('');
       }
 
