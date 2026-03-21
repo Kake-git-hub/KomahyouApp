@@ -9,6 +9,7 @@ export type AutoAssignRuleKey =
   | 'allowTwoConsecutiveLessons'
   | 'requireBreakBetweenLessons'
   | 'connectRegularLessons'
+  | 'subjectCapableTeachersOnly'
   | 'regularTeachersOnly'
   | 'preferLateAfternoon'
   | 'preferSecondPeriod'
@@ -88,6 +89,11 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
     key: 'connectRegularLessons',
     label: '通常連結2コマ',
     description: '通常授業と連続する配置を優先候補に含めます。',
+  },
+  {
+    key: 'subjectCapableTeachersOnly',
+    label: '科目対応講師のみ',
+    description: '講師の科目担当に収まる生徒だけを配置候補にします。',
   },
   {
     key: 'regularTeachersOnly',

@@ -100,6 +100,29 @@ function normalizeExcelDate(value: unknown, xlsx?: XlsxModule) {
   return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
 }
 
+function formatSlashDate(value: string) {
+  const normalized = normalizeExcelDate(value)
+  if (!normalized) return ''
+  const [year, month, day] = normalized.split('-').map(Number)
+  return `${year}/${month}/${day}`
+}
+
+function normalizeTimestampText(value: unknown) {
+  const text = normalizeText(value)
+  if (!text) return ''
+  const matched = text.match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})(?:\s+(\d{1,2}):(\d{2}))?$/)
+  if (!matched) return text
+  const [, year, month, day, hour = '00', minute = '00'] = matched
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${hour.padStart(2, '0')}:${minute}`
+}
+
+function formatSlashTimestamp(value: string) {
+  const normalized = normalizeTimestampText(value)
+  if (!normalized) return ''
+  const [datePart, timePart = '00:00'] = normalized.split(' ')
+  return `${formatSlashDate(datePart)} ${timePart}`
+}
+
 function toWorkbookDateCellValue(value: unknown) {
   const normalized = normalizeExcelDate(value)
   if (!normalized) return ''
@@ -129,7 +152,7 @@ function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], 
       const cellRef = xlsx.utils.encode_cell({ r: rowIndex + 1, c: columnIndex })
       const cell = sheet[cellRef]
       if (!cell || !(cell.v instanceof Date)) continue
-      cell.z = 'yyyy-mm-dd'
+      cell.z = 'yyyy/m/d'
     }
   }
 
@@ -144,18 +167,17 @@ function buildSpecialSessionWorkbook(xlsx: XlsxModule, sessions: SpecialSessionR
   const workbook = xlsx.utils.book_new()
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, sessions.map((row) => ({
-    講習ID: row.id,
     講習名: row.label,
     開始日: row.startDate,
     終了日: row.endDate,
-    作成日時: row.createdAt,
-    更新日時: row.updatedAt,
+    作成日時: formatSlashTimestamp(row.createdAt),
+    更新日時: formatSlashTimestamp(row.updatedAt),
   })), ['開始日', '終了日']), '特別講習')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '講習名', 説明: '講習名は画面と同じ表示名で取り込みます。' },
-    { 項目: '開始日/終了日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。' },
-    { 項目: '講習ID', 説明: '既存データを更新したい場合は current 出力の 講習ID をそのまま残してください。空欄なら新規 ID を採番します。' },
+    { 項目: '開始日/終了日', 説明: '2026/3/21 のようなスラッシュ表記または Excel の日付セルで入力できます。' },
+    { 項目: '作成日時/更新日時', 説明: '必要な場合のみ 2026/3/21 09:30 のように入力します。空欄ならアプリ側で補います。' },
   ]), '説明')
 
   return workbook
@@ -166,7 +188,6 @@ function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').
   if (!sheet) return fallback
 
   const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
-  const existingById = new Map(fallback.map((row) => [row.id, row]))
   const existingByLabel = new Map(fallback.map((row) => [normalizeSessionLabel(row.label), row]))
   const timestamp = updateTimestamp()
 
@@ -177,18 +198,17 @@ function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').
       const endDate = normalizeExcelDate(row['終了日'], xlsx)
       if (!label || !startDate || !endDate) return null
 
-      const sessionId = normalizeText(row['講習ID'])
-      const existing = existingById.get(sessionId) ?? existingByLabel.get(label)
+      const existing = existingByLabel.get(label)
 
       return {
-        id: sessionId || existing?.id || createSessionId(),
+        id: existing?.id || createSessionId(),
         label,
         startDate,
         endDate,
         teacherInputs: existing?.teacherInputs ?? {},
         studentInputs: existing?.studentInputs ?? {},
-        createdAt: normalizeText(row['作成日時']) || existing?.createdAt || timestamp,
-        updatedAt: normalizeText(row['更新日時']) || timestamp,
+        createdAt: normalizeTimestampText(row['作成日時']) || existing?.createdAt || timestamp,
+        updatedAt: normalizeTimestampText(row['更新日時']) || timestamp,
       }
     })
     .filter((row): row is SpecialSessionRow => Boolean(row))

@@ -188,6 +188,10 @@ function isAutoAssignRuleApplicable(rule: AutoAssignRuleRow | undefined, student
   return rule.targets.some((target) => matchesAutoAssignTarget(target, studentId, studentGrade))
 }
 
+function isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel) {
+  return isAutoAssignRuleApplicable(autoAssignRuleByKey.get('subjectCapableTeachersOnly'), studentId, studentGrade)
+}
+
 function compareScoreVectors(left: number[], right: number[]) {
   const length = Math.max(left.length, right.length)
   for (let index = 0; index < length; index += 1) {
@@ -2252,6 +2256,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       for (const cell of week) {
         const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
         const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
+        const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
         const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
         if (!cell.isOpenDay) continue
         if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.isHidden, cell.dateKey)) continue
@@ -2276,7 +2281,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
             const matchedItem = [...params.pendingItems]
               .filter((item) => {
-                if (!canTeacherHandleStudentSubject(teacher, item.subject, studentGradeOnDate)) return false
+                if (subjectCapableTeachersOnly && !canTeacherHandleStudentSubject(teacher, item.subject, studentGradeOnDate)) return false
                 return true
               })
               .sort((left, right) => {
@@ -2375,6 +2380,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       for (const cell of week) {
         const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
         const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
+        const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
         const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
         if (!cell.isOpenDay) continue
         if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.isHidden, cell.dateKey)) continue
@@ -2399,7 +2405,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
             const matchedItem = [...params.pendingItems]
               .filter((item) => {
-                if (!canTeacherHandleStudentSubject(teacher, item.subject, studentGradeOnDate)) return false
+                if (subjectCapableTeachersOnly && !canTeacherHandleStudentSubject(teacher, item.subject, studentGradeOnDate)) return false
                 return true
               })
               .sort((left, right) => {
@@ -2689,7 +2695,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       hasConstraintReason = true
     }
 
-    if (teacher && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
+    if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
       reasons.push(`科目対応外: ${getTeacherDisplayName(teacher)} は ${student.subject} ${studentGradeOnDate} に対応していません。`)
       hasConstraintReason = true
     }

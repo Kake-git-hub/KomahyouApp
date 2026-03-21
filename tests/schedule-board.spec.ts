@@ -1179,14 +1179,17 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('auto-assign-rules-screen')).toBeVisible()
   await expect(page.getByTestId('auto-assign-rules-excel-menu-button')).toBeVisible()
   await expect(page.getByTestId('auto-assign-rules-back-button')).toHaveCount(0)
+    await expect(page.getByText('絶対制約事項', { exact: true })).toBeVisible()
     await expect(page.getByText('強制制約事項', { exact: true })).toBeVisible()
     await expect(page.getByTestId('auto-assign-static-constraint-keep-existing')).toContainText('既存コマは変更しない')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('出席可能コマのみ')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('生徒の出席可能コマだけを候補にして割り振ります。')
-    await expect(page.getByTestId('auto-assign-static-constraint-subject-capable-teachers-only')).toContainText('科目対応講師のみ')
-    await expect(page.getByTestId('auto-assign-static-constraint-subject-capable-teachers-only')).toContainText('講師の科目担当に収まる生徒だけを配置候補にします。')
+    await expect(page.getByTestId('auto-assign-rule-card-subjectCapableTeachersOnly')).toContainText('科目対応講師のみ')
+    await expect(page.getByTestId('auto-assign-rule-card-subjectCapableTeachersOnly')).toContainText('講師の科目担当に収まる生徒だけを配置候補にします。')
+    await expect(page.getByTestId('auto-assign-rule-priority-subjectCapableTeachersOnly')).toContainText('強制制約')
     await expect(page.getByTestId('auto-assign-rule-priority-regularTeachersOnly')).toContainText('強制制約')
     await expect(page.getByTestId('auto-assign-rule-priority-forbidFirstPeriod')).toContainText('強制制約')
+    await expect(page.getByTestId('auto-assign-rule-targets-subjectCapableTeachersOnly')).toContainText('なし')
     await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('なし')
     await expect(page.getByText('制約事項', { exact: true })).toBeVisible()
     await expect(page.getByTestId('auto-assign-pair-constraints-panel')).toBeVisible()
@@ -1741,6 +1744,12 @@ test.describe('コマ調整表', () => {
     const slotId = `${toDateKey(currentWeekStart)}_1`
 
     await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-auto-assign-rules-button').click()
+    await page.getByTestId('auto-assign-open-modal-subjectCapableTeachersOnly').click()
+    await page.getByTestId('auto-assign-modal-confirm-subjectCapableTeachersOnly').click()
+    await navigateFromAutoAssignRulesToBoard(page)
 
     await page.getByTestId(`teacher-cell-${slotId}-0`).click()
     await page.getByTestId('teacher-select-input').selectOption({ label: '高橋講師' })

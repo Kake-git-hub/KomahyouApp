@@ -89,6 +89,11 @@
   color: #ab2f2f;
 }
 
+.status-chip.warning {
+  background: #fff1c7;
+  color: #8a6400;
+}
+
 .selection-pill {
   background: #edf4ff;
   color: #335b92;
@@ -1468,14 +1473,19 @@ tr.sa-slot-first td {
   background: #fbfdff;
 }
 
-.auto-assign-rule-row.is-absolute,
-.auto-assign-group-card.is-absolute {
+.auto-assign-rule-row.is-force,
+.auto-assign-group-card.is-force {
   border-color: #efb8c7;
   background: #fff1f5;
 }
 
 .auto-assign-rule-row-static {
   border-style: dashed;
+}
+
+.auto-assign-rule-row.is-strict {
+  border-color: #ecd48a;
+  background: #fff9df;
 }
 
 .auto-assign-rule-row.is-constraint {
