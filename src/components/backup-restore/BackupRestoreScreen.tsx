@@ -40,9 +40,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               autoAssignRulesItemTestId="backup-restore-open-auto-assign-rules-button"
             />
           </div>
-          <div className="toolbar-group toolbar-group-end">
-            <button className="secondary-button slim" type="button" onClick={onBackToBoard} data-testid="backup-restore-back-button">コマ表へ戻る</button>
-          </div>
         </div>
         <div className="toolbar-row toolbar-row-secondary">
           <div className="toolbar-status" data-testid="backup-restore-status">{persistenceMessage}</div>

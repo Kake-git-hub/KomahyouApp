@@ -1132,6 +1132,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-open-special-data-button').click()
 
     await expect(page.getByTestId('special-data-screen')).toBeVisible()
+  await expect(page.getByTestId('special-data-excel-menu-button')).toBeVisible()
     await expect(page.getByTestId('special-data-create-form')).toHaveCount(0)
 
   await page.getByTestId('special-data-toggle-create-button').click()
@@ -1176,6 +1177,8 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-open-auto-assign-rules-button').click()
 
     await expect(page.getByTestId('auto-assign-rules-screen')).toBeVisible()
+  await expect(page.getByTestId('auto-assign-rules-excel-menu-button')).toBeVisible()
+  await expect(page.getByTestId('auto-assign-rules-back-button')).toHaveCount(0)
     await expect(page.getByText('強制制約事項', { exact: true })).toBeVisible()
     await expect(page.getByTestId('auto-assign-static-constraint-keep-existing')).toContainText('既存コマは変更しない')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('出席可能コマのみ')
@@ -1187,6 +1190,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('なし')
     await expect(page.getByText('制約事項', { exact: true })).toBeVisible()
     await expect(page.getByTestId('auto-assign-pair-constraints-panel')).toBeVisible()
+    await expect(page.getByTestId('auto-assign-pair-constraints-table')).toContainText('ペア制約はまだありません。')
 
     await page.getByTestId('auto-assign-pair-draft-person-a-type').selectOption('teacher')
     await page.getByTestId('auto-assign-pair-draft-person-a-id').selectOption('t002')

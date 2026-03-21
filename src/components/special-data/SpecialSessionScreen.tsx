@@ -1,6 +1,6 @@
-import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
-import type { SpecialSessionRow } from './specialSessionModel'
+import { initialSpecialSessions, type SpecialSessionRow } from './specialSessionModel'
 
 type SpecialSessionScreenProps = {
   sessions: SpecialSessionRow[]
@@ -26,6 +26,8 @@ type DateCalendarProps = {
   testIdPrefix: string
   showRange?: boolean
 }
+
+type XlsxModule = typeof import('xlsx')
 
 const weekdayLabels = ['月', '火', '水', '木', '金', '土', '日']
 
@@ -72,6 +74,124 @@ function shiftMonthKey(monthKey: string, offset: number) {
 
 function normalizeSessionLabel(value: string) {
   return value.trim().replace(/\s+/g, ' ')
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? '').trim()
+}
+
+function normalizeExcelDate(value: unknown, xlsx?: XlsxModule) {
+  if (typeof value === 'number') {
+    const parsed = xlsx?.SSF.parse_date_code(value)
+    if (!parsed) return ''
+    return `${String(parsed.y).padStart(4, '0')}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`
+  }
+
+  const text = normalizeText(value)
+  if (!text) return ''
+
+  const directMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (directMatch) return text
+
+  const slashMatch = text.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/)
+  if (!slashMatch) return ''
+
+  const [, year, month, day] = slashMatch
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+}
+
+function toWorkbookDateCellValue(value: unknown) {
+  const normalized = normalizeExcelDate(value)
+  if (!normalized) return ''
+
+  const [yearText, monthText, dayText] = normalized.split('-')
+  return new Date(Number(yearText), Number(monthText) - 1, Number(dayText))
+}
+
+function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], dateColumns: string[] = []) {
+  const normalizedRows = rows.map((row) => {
+    const nextRow: Record<string, unknown> = { ...row }
+    for (const column of dateColumns) {
+      if (!(column in nextRow)) continue
+      nextRow[column] = toWorkbookDateCellValue(nextRow[column])
+    }
+    return nextRow
+  })
+
+  const sheet = xlsx.utils.json_to_sheet(normalizedRows, { cellDates: true })
+  const headers = rows[0] ? Object.keys(rows[0]) : []
+
+  for (const column of dateColumns) {
+    const columnIndex = headers.indexOf(column)
+    if (columnIndex < 0) continue
+
+    for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
+      const cellRef = xlsx.utils.encode_cell({ r: rowIndex + 1, c: columnIndex })
+      const cell = sheet[cellRef]
+      if (!cell || !(cell.v instanceof Date)) continue
+      cell.z = 'yyyy-mm-dd'
+    }
+  }
+
+  return sheet
+}
+
+function createSessionId() {
+  return `session_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+}
+
+function buildSpecialSessionWorkbook(xlsx: XlsxModule, sessions: SpecialSessionRow[]) {
+  const workbook = xlsx.utils.book_new()
+
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, sessions.map((row) => ({
+    講習ID: row.id,
+    講習名: row.label,
+    開始日: row.startDate,
+    終了日: row.endDate,
+    作成日時: row.createdAt,
+    更新日時: row.updatedAt,
+  })), ['開始日', '終了日']), '特別講習')
+
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
+    { 項目: '講習名', 説明: '講習名は画面と同じ表示名で取り込みます。' },
+    { 項目: '開始日/終了日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。' },
+    { 項目: '講習ID', 説明: '既存データを更新したい場合は current 出力の 講習ID をそのまま残してください。空欄なら新規 ID を採番します。' },
+  ]), '説明')
+
+  return workbook
+}
+
+function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: SpecialSessionRow[]) {
+  const sheet = workbook.Sheets['特別講習']
+  if (!sheet) return fallback
+
+  const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+  const existingById = new Map(fallback.map((row) => [row.id, row]))
+  const existingByLabel = new Map(fallback.map((row) => [normalizeSessionLabel(row.label), row]))
+  const timestamp = updateTimestamp()
+
+  return rows
+    .map((row) => {
+      const label = normalizeSessionLabel(normalizeText(row['講習名']))
+      const startDate = normalizeExcelDate(row['開始日'], xlsx)
+      const endDate = normalizeExcelDate(row['終了日'], xlsx)
+      if (!label || !startDate || !endDate) return null
+
+      const sessionId = normalizeText(row['講習ID'])
+      const existing = existingById.get(sessionId) ?? existingByLabel.get(label)
+
+      return {
+        id: sessionId || existing?.id || createSessionId(),
+        label,
+        startDate,
+        endDate,
+        teacherInputs: existing?.teacherInputs ?? {},
+        studentInputs: existing?.studentInputs ?? {},
+        createdAt: normalizeText(row['作成日時']) || existing?.createdAt || timestamp,
+        updatedAt: normalizeText(row['更新日時']) || timestamp,
+      }
+    })
+    .filter((row): row is SpecialSessionRow => Boolean(row))
 }
 
 function isDateInRange(date: string, startDate?: string, endDate?: string) {
@@ -167,6 +287,7 @@ export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [draftVisibleStartMonth, setDraftVisibleStartMonth] = useState(() => toMonthKey(createDraft().startDate))
   const [editingVisibleStartMonths, setEditingVisibleStartMonths] = useState<Record<string, string>>({})
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   const sortedSessions = useMemo(() => sessions.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [sessions])
 
@@ -260,8 +381,45 @@ export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard
     setStatusMessage('特別講習データを追加しました。')
   }
 
+  const exportTemplateWorkbook = async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, initialSpecialSessions), 'special-sessions-template.xlsx')
+    setStatusMessage('特別講習の Excel テンプレートを出力しました。')
+  }
+
+  const exportCurrentWorkbook = async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, sessions), 'special-sessions-current.xlsx')
+    setStatusMessage('特別講習データを Excel 出力しました。')
+  }
+
+  const openImportDialog = () => {
+    importInputRef.current?.click()
+  }
+
+  const importWorkbook = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      const buffer = await file.arrayBuffer()
+      const xlsx = await import('xlsx')
+      const workbook = xlsx.read(buffer, { type: 'array' })
+      const importedSessions = parseSpecialSessionWorkbook(xlsx, workbook, sessions)
+      onUpdateSessions(importedSessions)
+      setEditingSessionId(null)
+      setShowCreateForm(false)
+      setStatusMessage('特別講習データを Excel から取り込みました。')
+    } catch {
+      setStatusMessage('特別講習データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
+    } finally {
+      event.target.value = ''
+    }
+  }
+
   return (
     <div className="page-shell page-shell-basic-data">
+      <input ref={importInputRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={importWorkbook} />
       <section className="toolbar-panel" aria-label="特別講習データの操作バー">
         <div className="toolbar-row toolbar-row-primary">
           <div className="toolbar-group toolbar-group-compact">
@@ -279,6 +437,16 @@ export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard
               autoAssignRulesItemTestId="special-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="special-data-menu-open-backup-button"
             />
+          </div>
+          <div className="toolbar-group toolbar-group-end">
+            <details className="menu-dropdown">
+              <summary className="secondary-button slim" data-testid="special-data-excel-menu-button">エクセル管理</summary>
+              <div className="menu-dropdown-list">
+                <button className="menu-link-button" type="button" onClick={exportTemplateWorkbook} data-testid="special-data-export-template-button">テンプレート出力</button>
+                <button className="menu-link-button" type="button" onClick={exportCurrentWorkbook} data-testid="special-data-export-current-button">現データ出力</button>
+                <button className="menu-link-button" type="button" onClick={openImportDialog} data-testid="special-data-import-button">エクセル取り込み</button>
+              </div>
+            </details>
           </div>
         </div>
         {statusMessage ? (

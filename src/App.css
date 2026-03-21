@@ -246,6 +246,11 @@
   z-index: 10;
 }
 
+.toolbar-group-end .menu-dropdown-list {
+  left: auto;
+  right: 0;
+}
+
 .menu-link-button {
   border: none;
   background: transparent;
@@ -1463,13 +1468,19 @@ tr.sa-slot-first td {
   background: #fbfdff;
 }
 
-.auto-assign-rule-row.is-absolute {
-  border-color: #f0c0c0;
-  background: #fff8f8;
+.auto-assign-rule-row.is-absolute,
+.auto-assign-group-card.is-absolute {
+  border-color: #efb8c7;
+  background: #fff1f5;
 }
 
 .auto-assign-rule-row-static {
   border-style: dashed;
+}
+
+.auto-assign-rule-row.is-constraint {
+  border-color: #bfd6f6;
+  background: #f1f7ff;
 }
 
 .auto-assign-rule-topline {

@@ -26,7 +26,7 @@ import {
   resolveSchoolYearDateRange,
 } from './regularLessonModel'
 import { AppMenu } from '../navigation/AppMenu'
-import { initialPairConstraints, type PairConstraintRow } from '../../types/pairConstraint'
+import type { PairConstraintRow } from '../../types/pairConstraint'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -60,7 +60,6 @@ type GroupLessonRow = {
   dayOfWeek: number
   slotLabel: string
 }
-type ConstraintRow = PairConstraintRow
 
 type TableControl = {
   filterText: string
@@ -77,7 +76,7 @@ type BasicDataBundle = {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   groupLessons: GroupLessonRow[]
-  constraints: ConstraintRow[]
+  classroomSettings: ClassroomSettings
 }
 type XlsxModule = typeof import('xlsx')
 
@@ -101,7 +100,6 @@ const initialGroupLessons: GroupLessonRow[] = [
   { id: 'g003', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't004', subject: '国', studentIds: ['s013', 's025'], dayOfWeek: 5, slotLabel: '3限' },
   { id: 'g004', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't006', subject: '理', studentIds: ['s014', 's026'], dayOfWeek: 4, slotLabel: '4限' },
 ]
-const initialConstraints: ConstraintRow[] = initialPairConstraints
 const maxSelectableSchoolYear = 2031
 
 function createId(prefix: string) {
@@ -110,6 +108,25 @@ function createId(prefix: string) {
 
 function resolveDayLabel(dayOfWeek: number) {
   return dayOptions.find((option) => option.value === dayOfWeek)?.label ?? '-'
+}
+
+function serializeClosedWeekdays(closedWeekdays: number[]) {
+  return dayOptions
+    .filter((option) => closedWeekdays.includes(option.value))
+    .map((option) => option.label)
+    .join(', ')
+}
+
+function parseClosedWeekdays(value: unknown) {
+  const labels = normalizeText(value)
+    .split(/[、,]/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+  return dayOptions
+    .filter((option) => labels.includes(option.label) || labels.includes(String(option.value)))
+    .map((option) => option.value)
+    .sort((left, right) => left - right)
 }
 
 function normalizeText(value: unknown) {
@@ -442,7 +459,12 @@ function createTemplateBundle(): BasicDataBundle {
     students: initialStudents,
     regularLessons: createInitialRegularLessons(),
     groupLessons: [{ id: 'template_group', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't002', subject: '英', studentIds: ['s002', 's003'], dayOfWeek: 3, slotLabel: '2限' }],
-    constraints: initialConstraints,
+    classroomSettings: {
+      closedWeekdays: [0],
+      holidayDates: [],
+      forceOpenDates: [],
+      deskCount: 14,
+    },
   }
 }
 
@@ -506,13 +528,10 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     時限ラベル: row.slotLabel,
   }))), '集団授業')
 
-  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.constraints.map((row) => ({
-    人物A種別: row.personAType === 'teacher' ? '講師' : '生徒',
-    人物A: row.personAType === 'teacher' ? teacherNameById[row.personAId] ?? '' : studentNameById[row.personAId] ?? '',
-    人物B種別: row.personBType === 'teacher' ? '講師' : '生徒',
-    人物B: row.personBType === 'teacher' ? teacherNameById[row.personBId] ?? '' : studentNameById[row.personBId] ?? '',
-    種別: '組み合わせ不可',
-  }))), 'ペア制約')
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [{
+    休校曜日: serializeClosedWeekdays(bundle.classroomSettings.closedWeekdays),
+    机数: bundle.classroomSettings.deskCount,
+  }]), '教室データ')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '講師.担当科目', 説明: '英:高3, 数:中 のように 科目:上限学年 をカンマ区切りで記入します。' },
@@ -521,6 +540,7 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。学年/在籍列はアプリ側で自動計算します。' },
     { 項目: '通常授業/集団授業', 説明: '年度列を付けて年度ごとに分けます。講師名と生徒名は各シートの名前列に一致させてください。' },
     { 項目: '通常授業.共通期間開始/共通期間終了', 説明: '通常授業の共有表示期間です。旧列の 期間開始/終了 と 生徒1期間開始/終了 と 生徒2期間開始/終了 も同じ期間として取り込みます。' },
+    { 項目: '教室データ', 説明: '休校曜日 は 日曜, 月曜 のように曜日名をカンマ区切りで入力します。ペア制約は自動割振ルール画面の Excel 管理で扱います。' },
   ]), '説明')
 
   return workbook
@@ -632,23 +652,14 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
         .filter((row) => row.teacherId && row.studentIds.length > 0)
     : fallback.groupLessons
 
-  const constraintRows = readRows('ペア制約')
-  const constraints = constraintRows
-    ? constraintRows
-        .map((row) => {
-          const personAType: ConstraintRow['personAType'] = normalizeText(row['人物A種別']) === '講師' ? 'teacher' : 'student'
-          const personBType: ConstraintRow['personBType'] = normalizeText(row['人物B種別']) === '講師' ? 'teacher' : 'student'
-          return {
-            id: createId('constraint'),
-            personAType,
-            personAId: personAType === 'teacher' ? teacherIdByName.get(normalizeText(row['人物A'])) ?? '' : studentIdByName.get(normalizeText(row['人物A'])) ?? '',
-            personBType,
-            personBId: personBType === 'teacher' ? teacherIdByName.get(normalizeText(row['人物B'])) ?? '' : studentIdByName.get(normalizeText(row['人物B'])) ?? '',
-            type: 'incompatible' as const,
-          }
-        })
-        .filter((row) => row.personAId && row.personBId)
-    : fallback.constraints
+  const classroomRows = readRows('教室データ')
+  const classroomSettings = classroomRows?.[0]
+    ? {
+        ...fallback.classroomSettings,
+        closedWeekdays: parseClosedWeekdays(classroomRows[0]['休校曜日']),
+        deskCount: Math.max(1, Number(classroomRows[0]['机数']) || fallback.classroomSettings.deskCount || 1),
+      }
+    : fallback.classroomSettings
 
   return {
     managers,
@@ -656,7 +667,7 @@ function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook
     students,
     regularLessons,
     groupLessons,
-    constraints,
+    classroomSettings,
   }
 }
 
@@ -863,7 +874,7 @@ function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabe
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, pairConstraints, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdatePairConstraints, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, pairConstraints: _pairConstraints, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdatePairConstraints: _onUpdatePairConstraints, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [managers, setManagers] = useState(initialManagers)
   const [groupLessons, setGroupLessons] = useState(initialGroupLessons)
@@ -900,8 +911,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     constraints: createDefaultTableControl(),
     classroomData: createDefaultTableControl(),
   })
-  const constraints = pairConstraints
-  const setConstraints = onUpdatePairConstraints
 
   const teacherNameById = useMemo(() => Object.fromEntries(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [teachers])
   const studentNameById = useMemo(() => Object.fromEntries(students.map((student) => [student.id, getStudentDisplayName(student)])), [students])
@@ -1066,7 +1075,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
   const exportCurrentWorkbook = async () => {
     const xlsx = await import('xlsx')
-    xlsx.writeFile(buildWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, constraints }), 'basic-data-current.xlsx')
+    xlsx.writeFile(buildWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, classroomSettings }), 'basic-data-current.xlsx')
     setStatusMessage('現在の基本データを Excel 出力しました。')
   }
 
@@ -1082,14 +1091,19 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
-      const imported = parseImportedBundle(xlsx, workbook, { managers, teachers, students, regularLessons, groupLessons, constraints })
-        withdrawDate: teacherDraft.withdrawDate.trim(),
+      const imported = parseImportedBundle(xlsx, workbook, { managers, teachers, students, regularLessons, groupLessons, classroomSettings })
+      setManagers(imported.managers)
       onUpdateTeachers(imported.teachers)
       onUpdateStudents(imported.students)
       onUpdateRegularLessons(imported.regularLessons)
       setGroupLessons(imported.groupLessons)
-      setConstraints(imported.constraints)
-    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] })
+      onUpdateClassroomSettings(imported.classroomSettings)
+      setManagerDraft({ name: '', email: '' })
+      setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [] })
+      setStudentDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
+      setRegularLessonDraft(createRegularLessonDraft(selectedRegularLessonYear))
+      setGroupLessonDraft({ teacherId: '', subject: '英', studentIds: [], dayOfWeek: 1, slotLabel: '1限' })
+      setStatusMessage('Excel を取り込みました。')
     } catch {
       setStatusMessage('Excel 取り込みに失敗しました。シート名と列名を確認してください。')
     } finally {
