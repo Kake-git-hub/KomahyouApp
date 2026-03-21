@@ -1772,6 +1772,15 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
   })
 
+  test('振替ストックの自動割振期間開始は表示中の週初日を初期値にする', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+
+    await page.goto('/')
+
+    await page.getByTestId('makeup-stock-chip').click()
+    await expect(page.getByTestId('makeup-auto-assign-start')).toHaveValue(toDateKey(currentWeekStart))
+  })
+
   test('生徒メニューは既存生徒で移動とストックを表示し、空欄では既存生徒追加とメモを表示する', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const slotId = `${toDateKey(currentWeekStart)}_1`
@@ -2039,6 +2048,30 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('')
     await expect(sourceName).toHaveText('青木太郎')
     expect((await sourceName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
+  })
+
+  test('振替ストックを元のコマへ戻すとストック残数から消える', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+    const sourceName = page.getByTestId(`student-name-${sourceSlotId}-0-0`)
+
+    await page.goto('/')
+
+    await page.getByTestId(sourceCellTestId).click()
+    await page.getByTestId('menu-stock-button').click()
+    await expect(page.getByTestId('makeup-stock-chip')).toContainText('1')
+
+    await page.getByTestId('makeup-stock-chip').click()
+    await openStockActionModal(page, 'makeup-stock-entry-s001__-')
+    await page.getByTestId('stock-action-modal-manual').click()
+    await page.getByTestId(sourceCellTestId).click()
+
+    await expect(sourceName).toHaveText('青木太郎')
+    expect((await sourceName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
+
+    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
+    await expect(page.getByTestId('makeup-stock-panel')).not.toContainText('青木太郎')
   })
 
   test('講習ストックを割り振れて再移動しても振替にならない', async ({ page }) => {

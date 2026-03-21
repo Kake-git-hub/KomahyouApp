@@ -26,7 +26,6 @@ import {
   resolveSchoolYearDateRange,
 } from './regularLessonModel'
 import { AppMenu } from '../navigation/AppMenu'
-import type { PairConstraintRow } from '../../types/pairConstraint'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -38,11 +37,9 @@ type BasicDataScreenProps = {
   teachers: TeacherRow[]
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
-  pairConstraints: PairConstraintRow[]
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
   onUpdateRegularLessons: Dispatch<SetStateAction<RegularLessonRow[]>>
-  onUpdatePairConstraints: Dispatch<SetStateAction<PairConstraintRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onSyncGoogleHolidays: () => void
   onBackToBoard: () => void
@@ -352,9 +349,9 @@ function collectRegularLessonConflicts(
         row.student1Id ? { studentId: row.student1Id, participantIndex: 1 as const } : null,
         row.student2Id ? { studentId: row.student2Id, participantIndex: 2 as const } : null,
       ].filter((entry): entry is { studentId: string; participantIndex: 1 | 2 } => entry !== null)
-      const hasParticipantOverlap = draftParticipants.some((draftParticipant) => (
-        rowParticipants.some((rowParticipant) => doRegularLessonParticipantPeriodsOverlap(draftWithSchoolYear, draftParticipant.participantIndex, row, rowParticipant.participantIndex))
-      ))
+      const hasParticipantOverlap = draftParticipants.length > 0
+        && rowParticipants.length > 0
+        && doRegularLessonParticipantPeriodsOverlap(draftWithSchoolYear, row)
 
       if (draft.teacherId && row.teacherId === draft.teacherId && hasParticipantOverlap) {
         messages.push(`講師重複: ${teacherNameById[row.teacherId] ?? '講師未設定'} が ${resolveDayLabel(row.dayOfWeek)} ${row.slotNumber}限 に既に入っています。`)
@@ -363,7 +360,7 @@ function collectRegularLessonConflicts(
       const duplicatedStudents = draftParticipants
         .filter((draftParticipant) => rowParticipants.some((rowParticipant) => (
           rowParticipant.studentId === draftParticipant.studentId
-          && doRegularLessonParticipantPeriodsOverlap(draftWithSchoolYear, draftParticipant.participantIndex, row, rowParticipant.participantIndex)
+          && doRegularLessonParticipantPeriodsOverlap(draftWithSchoolYear, row)
         )))
         .map((participant) => participant.studentId)
       if (duplicatedStudents.length > 0) {
@@ -374,7 +371,7 @@ function collectRegularLessonConflicts(
     })
 }
 
-function createRegularLessonDraft(_schoolYear: number) {
+function createRegularLessonDraft() {
   return {
     teacherId: '',
     student1Id: '',
@@ -874,7 +871,7 @@ function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabe
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, pairConstraints: _pairConstraints, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdatePairConstraints: _onUpdatePairConstraints, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [managers, setManagers] = useState(initialManagers)
   const [groupLessons, setGroupLessons] = useState(initialGroupLessons)
@@ -894,7 +891,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[] })
   const [teacherDraftExpanded, setTeacherDraftExpanded] = useState(false)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
-  const [regularLessonDraft, setRegularLessonDraft] = useState(() => createRegularLessonDraft(currentSchoolYear))
+  const [regularLessonDraft, setRegularLessonDraft] = useState(() => createRegularLessonDraft())
   const [groupLessonDraft, setGroupLessonDraft] = useState({ teacherId: '', subject: '英', studentIds: [] as string[], dayOfWeek: 1, slotLabel: '1限' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
   const [regularLessonEditSnapshots, setRegularLessonEditSnapshots] = useState<Record<string, RegularLessonRow>>({})
@@ -948,7 +945,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const visibleGroupLessons = useMemo(() => groupLessons.filter((row) => row.schoolYear === selectedGroupLessonYear), [groupLessons, selectedGroupLessonYear])
 
   useEffect(() => {
-    setRegularLessonDraft(createRegularLessonDraft(selectedRegularLessonYear))
+    setRegularLessonDraft(createRegularLessonDraft())
   }, [selectedRegularLessonYear])
 
   const rowKey = (scope: string, id: string) => `${scope}:${id}`
@@ -1101,7 +1098,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       setManagerDraft({ name: '', email: '' })
       setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [] })
       setStudentDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
-      setRegularLessonDraft(createRegularLessonDraft(selectedRegularLessonYear))
+      setRegularLessonDraft(createRegularLessonDraft())
       setGroupLessonDraft({ teacherId: '', subject: '英', studentIds: [], dayOfWeek: 1, slotLabel: '1限' })
       setStatusMessage('Excel を取り込みました。')
     } catch {
@@ -1205,7 +1202,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         nextSubject2: '',
       },
     ])
-    setRegularLessonDraft(createRegularLessonDraft(selectedRegularLessonYear))
+    setRegularLessonDraft(createRegularLessonDraft())
     setStatusMessage('通常授業を追加しました。')
   }
 

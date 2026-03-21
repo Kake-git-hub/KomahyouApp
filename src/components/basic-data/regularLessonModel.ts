@@ -85,7 +85,6 @@ export function resolveSchoolYearDateRange(schoolYear: number) {
 
 export function resolveRegularLessonParticipantPeriod(
   row: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>,
-  _participantIndex: 1 | 2,
 ) {
   const schoolYearRange = resolveSchoolYearDateRange(row.schoolYear)
   const sharedPeriod = resolveStoredSharedPeriod(row)
@@ -115,39 +114,36 @@ export function doManagedDateRangesOverlap(
 
 export function doRegularLessonParticipantPeriodsOverlap(
   left: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>,
-  leftParticipantIndex: 1 | 2,
   right: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>,
-  rightParticipantIndex: 1 | 2,
 ) {
   return doManagedDateRangesOverlap(
-    resolveRegularLessonParticipantPeriod(left, leftParticipantIndex),
-    resolveRegularLessonParticipantPeriod(right, rightParticipantIndex),
+    resolveRegularLessonParticipantPeriod(left),
+    resolveRegularLessonParticipantPeriod(right),
   )
 }
 
 export function resolveRegularLessonStudent1Period(row: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>) {
-  return resolveRegularLessonParticipantPeriod(row, 1)
+  return resolveRegularLessonParticipantPeriod(row)
 }
 
 export function resolveRegularLessonStudent2Period(row: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>) {
-  return resolveRegularLessonParticipantPeriod(row, 2)
+  return resolveRegularLessonParticipantPeriod(row)
 }
 
 export function isRegularLessonParticipantActiveOnDate(
   row: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>,
-  participantIndex: 1 | 2,
   dateKey: string,
 ) {
-  const period = resolveRegularLessonParticipantPeriod(row, participantIndex)
+  const period = resolveRegularLessonParticipantPeriod(row)
   return dateKey >= period.startDate && dateKey <= period.endDate
 }
 
 export function isRegularLessonStudent1ActiveOnDate(row: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>, dateKey: string) {
-  return isRegularLessonParticipantActiveOnDate(row, 1, dateKey)
+  return isRegularLessonParticipantActiveOnDate(row, dateKey)
 }
 
 export function isRegularLessonStudent2ActiveOnDate(row: Pick<RegularLessonRow, 'schoolYear' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>, dateKey: string) {
-  return isRegularLessonParticipantActiveOnDate(row, 2, dateKey)
+  return isRegularLessonParticipantActiveOnDate(row, dateKey)
 }
 
 export function createInitialRegularLessons(today = new Date()): RegularLessonRow[] {

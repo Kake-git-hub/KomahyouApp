@@ -190,4 +190,39 @@ describe('makeupStock', () => {
       remainingOriginReasonLabels: ['空きコマ不足'],
     })
   })
+
+  it('consumes the origin when a makeup is returned to the original slot as a regular lesson', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson()
+    const weeks = [[createCell({
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'returned-regular',
+          studentSlots: [createStudentEntry({
+            lessonType: 'regular',
+            makeupSourceDate: '2025-04-07',
+            makeupSourceLabel: '4/7(月) 1限',
+          }), null],
+        },
+      }],
+    })]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {
+        'student-1__数': [{ dateKey: '2025-04-07' }],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    expect(entries).toEqual([])
+  })
 })

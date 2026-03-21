@@ -61,10 +61,10 @@ function resolveOriginSlotNumber(key: string, dateKey: string, regularLessons: R
   const normalizedStudentKey = studentKey.replace(/^manual:/, '').replace(/^name:/, '')
 
   for (const row of regularLessons) {
-    if (row.student1Id === normalizedStudentKey && row.subject1 === subject && isRegularParticipantScheduledOnDate(row, 1, dateKey)) {
+    if (row.student1Id === normalizedStudentKey && row.subject1 === subject && isRegularParticipantScheduledOnDate(row, dateKey)) {
       return row.slotNumber
     }
-    if (row.student2Id === normalizedStudentKey && row.subject2 === subject && isRegularParticipantScheduledOnDate(row, 2, dateKey)) {
+    if (row.student2Id === normalizedStudentKey && row.subject2 === subject && isRegularParticipantScheduledOnDate(row, dateKey)) {
       return row.slotNumber
     }
   }
@@ -143,8 +143,8 @@ function endOfMonth(year: number, monthIndex: number) {
   return new Date(year, monthIndex + 1, 0)
 }
 
-function countMonthlyLessonQuota(row: RegularLessonRow, participantIndex: 1 | 2, year: number, monthIndex: number) {
-  const period = resolveRegularLessonParticipantPeriod(row, participantIndex)
+function countMonthlyLessonQuota(row: RegularLessonRow, year: number, monthIndex: number) {
+  const period = resolveRegularLessonParticipantPeriod(row)
   const monthStartKey = toDateKey(new Date(year, monthIndex, 1))
   const monthEndKey = toDateKey(endOfMonth(year, monthIndex))
   const activeStartKey = period.startDate > monthStartKey ? period.startDate : monthStartKey
@@ -158,10 +158,10 @@ function countMonthlyLessonQuota(row: RegularLessonRow, participantIndex: 1 | 2,
     .length)
 }
 
-function countTotalLessonQuota(row: RegularLessonRow, participantIndex: 1 | 2) {
-  const period = resolveRegularLessonParticipantPeriod(row, participantIndex)
+function countTotalLessonQuota(row: RegularLessonRow) {
+  const period = resolveRegularLessonParticipantPeriod(row)
   return iterateMonthsInRange(period.startDate, period.endDate)
-    .reduce((total, { year, monthIndex }) => total + countMonthlyLessonQuota(row, participantIndex, year, monthIndex), 0)
+    .reduce((total, { year, monthIndex }) => total + countMonthlyLessonQuota(row, year, monthIndex), 0)
 }
 
 function countAssignedLessonsByKey(
@@ -202,7 +202,7 @@ function countTotalLessonQuotaByKey(regularLessons: RegularLessonRow[]) {
 
     for (const participant of participants) {
       const key = buildMakeupStockKey(participant.studentId, participant.subject)
-      totals[key] = (totals[key] ?? 0) + countTotalLessonQuota(row, participant.participantIndex)
+      totals[key] = (totals[key] ?? 0) + countTotalLessonQuota(row)
     }
   }
 
@@ -245,9 +245,11 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
     for (const cell of week) {
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
-          if (!student || student.manualAdded || student.lessonType !== 'makeup') continue
+          if (!student || student.manualAdded) continue
           const key = buildMakeupStockKey(resolveStudentKey(student), student.subject)
-          counts[key] = (counts[key] ?? 0) + 1
+          if (student.lessonType === 'makeup') {
+            counts[key] = (counts[key] ?? 0) + 1
+          }
           if (student.makeupSourceDate) {
             pushOrigin(usedOriginDates, key, student.makeupSourceDate)
           }
@@ -259,8 +261,8 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
   return { counts, usedOriginDates }
 }
 
-function isRegularParticipantScheduledOnDate(row: RegularLessonRow, participantIndex: 1 | 2, dateKey: string) {
-  const period = resolveRegularLessonParticipantPeriod(row, participantIndex)
+function isRegularParticipantScheduledOnDate(row: RegularLessonRow, dateKey: string) {
+  const period = resolveRegularLessonParticipantPeriod(row)
   return dateKey >= period.startDate && dateKey <= period.endDate
 }
 
@@ -288,7 +290,7 @@ export function computeAutomaticShortageOrigins(
     ].filter((entry) => entry.studentId && entry.subject)
 
     for (const participant of participants) {
-      const period = resolveRegularLessonParticipantPeriod(row, participant.participantIndex)
+      const period = resolveRegularLessonParticipantPeriod(row)
       const rangeEndCandidate = latestHolidayKey && latestHolidayKey > todayKey ? latestHolidayKey : todayKey
       const periodEndKey = period.endDate < rangeEndCandidate ? period.endDate : rangeEndCandidate
       if (periodEndKey < period.startDate) continue
@@ -353,7 +355,7 @@ function computeScheduleConflictOrigins(
           const candidateDateKeys = student
             ? monthDateKeys.filter((dateKey) => (
                 isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
-                && isRegularParticipantScheduledOnDate(row, entry.participantIndex, dateKey)
+                && isRegularParticipantScheduledOnDate(row, dateKey)
               ))
             : []
           const dateKeys = applyMonthlyCap ? capRegularLessonDatesPerMonth(candidateDateKeys) : candidateDateKeys
@@ -474,7 +476,7 @@ function computeOccupiedSlotOrigins(params: {
       const student = studentById.get(participant.studentId)
       const candidateParticipantDateKeys = student
         ? candidateDateKeys.filter((dateKey) => (
-            isRegularParticipantScheduledOnDate(row, participant.participantIndex, dateKey)
+            isRegularParticipantScheduledOnDate(row, dateKey)
             && isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
           ))
         : []

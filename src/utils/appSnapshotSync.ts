@@ -6,11 +6,18 @@ export type SnapshotSyncMessage = {
   originId: string
 }
 
-export function createSnapshotSyncChannel(onMessage: (message: SnapshotSyncMessage) => void) {
+type SnapshotSyncChannel = {
+  originId: string
+  postSnapshotSaved: (savedAt: string) => void
+  dispose: () => void
+  isSupported: boolean
+}
+
+export function createSnapshotSyncChannel(onMessage: (message: SnapshotSyncMessage) => void): SnapshotSyncChannel {
   if (typeof window === 'undefined' || typeof window.BroadcastChannel === 'undefined') {
     return {
       originId: 'unsupported',
-      postSnapshotSaved(_savedAt: string) {},
+      postSnapshotSaved() {},
       dispose() {},
       isSupported: false,
     }

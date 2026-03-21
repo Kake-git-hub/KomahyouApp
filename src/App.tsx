@@ -695,11 +695,9 @@ function App() {
         teachers={teachers}
         students={students}
         regularLessons={regularLessons}
-        pairConstraints={pairConstraints}
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
         onUpdateRegularLessons={setRegularLessons}
-        onUpdatePairConstraints={setPairConstraints}
         onUpdateClassroomSettings={setClassroomSettings}
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onBackToBoard={() => setScreen('board')}

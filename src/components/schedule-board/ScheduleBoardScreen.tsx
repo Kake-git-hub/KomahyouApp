@@ -202,10 +202,9 @@ function compareScoreVectors(left: number[], right: number[]) {
 }
 
 function buildDefaultMakeupAutoAssignRange(referenceDate: string): MakeupAutoAssignRange {
-  const nextDate = shiftDate(parseDateKey(referenceDate), 1)
   return {
-    startDate: nextDate.toISOString().slice(0, 10),
-    endDate: shiftDate(nextDate, 27).toISOString().slice(0, 10),
+    startDate: referenceDate,
+    endDate: shiftDate(parseDateKey(referenceDate), 27).toISOString().slice(0, 10),
   }
 }
 
@@ -593,9 +592,9 @@ function createInitialBoardWeeks(
   const previousWeekStart = shiftDate(currentWeekStart, -7)
   const nextWeekStart = shiftDate(currentWeekStart, 7)
   return normalizeWeeksDeskCount([
-    createBoardWeek(previousWeekStart, 'prev', { classroomSettings, teachers, students, regularLessons }),
-    createBoardWeek(currentWeekStart, 'current', { classroomSettings, teachers, students, regularLessons }),
-    createBoardWeek(nextWeekStart, 'next', { classroomSettings, teachers, students, regularLessons }),
+    createBoardWeek(previousWeekStart, { classroomSettings, teachers, students, regularLessons }),
+    createBoardWeek(currentWeekStart, { classroomSettings, teachers, students, regularLessons }),
+    createBoardWeek(nextWeekStart, { classroomSettings, teachers, students, regularLessons }),
   ], classroomSettings.deskCount)
 }
 
@@ -617,7 +616,7 @@ function createInitialBoardSnapshot(params: {
       params.initialBoardState.weeks.map((week) => {
         const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
         const weekStart = getWeekStart(parseDateKey(firstDateKey))
-        const managedWeek = createBoardWeek(weekStart, firstDateKey, {
+        const managedWeek = createBoardWeek(weekStart, {
           classroomSettings: params.classroomSettings,
           teachers: params.teachers,
           students: params.students,
@@ -681,8 +680,6 @@ function normalizeLessonPlacement(student: StudentEntry, targetDateKey: string, 
   return {
     ...student,
     lessonType: 'regular',
-    makeupSourceDate: undefined,
-    makeupSourceLabel: undefined,
   }
 }
 
@@ -816,13 +813,13 @@ function buildManagedRegularLessonsRange(params: {
     const limitDateKeys = (dateKeys: string[]) => (applyMonthlyCap ? capRegularLessonDatesPerMonth(dateKeys) : dateKeys)
     const student1DateKeys = student1
       ? new Set(limitDateKeys(candidateDateKeys.filter((dateKey) => (
-        isRegularLessonParticipantActiveOnDate(row, 1, dateKey)
+        isRegularLessonParticipantActiveOnDate(row, dateKey)
         && isActiveOnDate(student1.entryDate, student1.withdrawDate, student1.isHidden, dateKey)
       ))))
       : new Set<string>()
     const student2DateKeys = student2 && row.subject2
       ? new Set(limitDateKeys(candidateDateKeys.filter((dateKey) => (
-        isRegularLessonParticipantActiveOnDate(row, 2, dateKey)
+        isRegularLessonParticipantActiveOnDate(row, dateKey)
         && isActiveOnDate(student2.entryDate, student2.withdrawDate, student2.isHidden, dateKey)
       ))))
       : new Set<string>()
@@ -863,7 +860,7 @@ function buildManagedRegularLessonsRange(params: {
   return nextRange
 }
 
-function createBoardWeek(weekStart: Date, _weekId: string, params: { classroomSettings: ClassroomSettings; teachers: TeacherRow[]; students: StudentRow[]; regularLessons: RegularLessonRow[] }) {
+function createBoardWeek(weekStart: Date, params: { classroomSettings: ClassroomSettings; teachers: TeacherRow[]; students: StudentRow[]; regularLessons: RegularLessonRow[] }) {
   return buildManagedRegularLessonsRange({
     startDate: toDateKey(weekStart),
     endDate: toDateKey(shiftDate(weekStart, boardDayLabels.length - 1)),
@@ -1333,7 +1330,7 @@ function ensureWeeksCoverDateRange(params: {
     const firstWeekStart = getWeekStart(parseDateKey(nextWeeks[0]?.[0]?.dateKey ?? params.startDate))
     const previousWeekStart = shiftDate(firstWeekStart, -7)
     nextWeeks = [
-      createBoardWeek(previousWeekStart, previousWeekStart.toISOString().slice(0, 10), {
+      createBoardWeek(previousWeekStart, {
         classroomSettings: params.classroomSettings,
         teachers: params.teachers,
         students: params.students,
@@ -1349,7 +1346,7 @@ function ensureWeeksCoverDateRange(params: {
     const nextWeekStart = shiftDate(lastWeekStart, 7)
     nextWeeks = [
       ...nextWeeks,
-      createBoardWeek(nextWeekStart, nextWeekStart.toISOString().slice(0, 10), {
+      createBoardWeek(nextWeekStart, {
         classroomSettings: params.classroomSettings,
         teachers: params.teachers,
         students: params.students,
@@ -1533,7 +1530,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => {
       const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
       const weekStart = getWeekStart(parseDateKey(firstDateKey))
-      const managedWeek = createBoardWeek(weekStart, firstDateKey, { classroomSettings, teachers, students, regularLessons })
+      const managedWeek = createBoardWeek(weekStart, { classroomSettings, teachers, students, regularLessons })
       return mergeManagedWeek(week, managedWeek)
     }), classroomSettings.deskCount))
   }, [classroomSettings, teachers, students, regularLessons])
@@ -1802,7 +1799,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       && row.subject1 === subject
       && row.dayOfWeek === dayOfWeek
       && row.slotNumber === slotNumber
-      && isRegularLessonParticipantActiveOnDate(row, 1, dateKey)
+      && isRegularLessonParticipantActiveOnDate(row, dateKey)
     ))
 
     if (matchesStudent1) return 'regular'
@@ -1813,7 +1810,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       && row.subject2 === subject
       && row.dayOfWeek === dayOfWeek
       && row.slotNumber === slotNumber
-      && isRegularLessonParticipantActiveOnDate(row, 2, dateKey)
+      && isRegularLessonParticipantActiveOnDate(row, dateKey)
     ))
 
     return matchesStudent2 ? 'regular' : 'regular'
@@ -1833,8 +1830,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       row.schoolYear === schoolYear
       && row.dayOfWeek === dayOfWeek
       && row.slotNumber === slotNumber
-      && (((row.student1Id === managedStudent.id && row.subject1 === student.subject) && isRegularLessonParticipantActiveOnDate(row, 1, dateKey))
-        || ((row.student2Id === managedStudent.id && row.subject2 === student.subject) && isRegularLessonParticipantActiveOnDate(row, 2, dateKey)))
+      && (((row.student1Id === managedStudent.id && row.subject1 === student.subject) && isRegularLessonParticipantActiveOnDate(row, dateKey))
+        || ((row.student2Id === managedStudent.id && row.subject2 === student.subject) && isRegularLessonParticipantActiveOnDate(row, dateKey)))
     ))
 
     return !matchesManagedRegularLesson
@@ -2039,8 +2036,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     for (const lesson of regularLessons) {
       if (lesson.schoolYear !== schoolYear || lesson.dayOfWeek !== dayOfWeek) continue
-      if (lesson.student1Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, 1, dateKey)) teacherIds.add(lesson.teacherId)
-      if (lesson.student2Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, 2, dateKey)) teacherIds.add(lesson.teacherId)
+      if (lesson.student1Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, dateKey)) teacherIds.add(lesson.teacherId)
+      if (lesson.student2Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, dateKey)) teacherIds.add(lesson.teacherId)
     }
 
     return teacherIds
@@ -4236,6 +4233,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setIsMakeupStockOpen((current) => !current)
     if (!isMakeupStockOpen) {
+      setMakeupAutoAssignRange(buildDefaultMakeupAutoAssignRange(cells[0]?.dateKey ?? getReferenceDateKey(new Date())))
       setSelectedStudentId(null)
       setSelectedLectureStockKey(null)
       setStatusMessage('振替ストック一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
@@ -4296,13 +4294,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (nextWeekIndex < 0) {
       const firstWeekStart = getWeekStart(parseDateKey(weeks[0]?.[0]?.dateKey ?? getReferenceDateKey(new Date())))
       const previousWeekStart = shiftDate(firstWeekStart, -7)
-      nextWeeks = [createBoardWeek(previousWeekStart, previousWeekStart.toISOString().slice(0, 10), { classroomSettings, teachers, students, regularLessons }), ...weeks]
+      nextWeeks = [createBoardWeek(previousWeekStart, { classroomSettings, teachers, students, regularLessons }), ...weeks]
       setWeeks(nextWeeks)
       resolvedIndex = 0
     } else if (nextWeekIndex >= weeks.length) {
       const lastWeekStart = getWeekStart(parseDateKey(weeks[weeks.length - 1]?.[0]?.dateKey ?? getReferenceDateKey(new Date())))
       const nextWeekStart = shiftDate(lastWeekStart, 7)
-      nextWeeks = [...weeks, createBoardWeek(nextWeekStart, nextWeekStart.toISOString().slice(0, 10), { classroomSettings, teachers, students, regularLessons })]
+      nextWeeks = [...weeks, createBoardWeek(nextWeekStart, { classroomSettings, teachers, students, regularLessons })]
       setWeeks(nextWeeks)
       resolvedIndex = nextWeeks.length - 1
     }
@@ -4471,68 +4469,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onOpenBackupRestore={onOpenBackupRestore}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
-          {isLectureStockOpen || isMakeupStockOpen ? (
-            <div className="stock-panels">
-              {isLectureStockOpen ? (
-                <section className="lecture-stock-panel" data-testid="lecture-stock-panel">
-                  <div className="makeup-stock-panel-head">
-                    <strong>講習ストック</strong>
-                    <span className="basic-data-muted-inline">生徒ごとの講習ストック数です。</span>
-                  </div>
-                  <div className="makeup-stock-list">
-                    {lectureStockEntries.length === 0 ? (
-                      <div className="makeup-stock-empty">現在の講習ストックはありません。</div>
-                    ) : lectureStockEntries.map((entry) => (
-                      <button
-                        key={entry.key}
-                        type="button"
-                        className={`lecture-stock-row${selectedLectureStockKey === entry.key ? ' active' : ''}`}
-                        onClick={() => setStockActionModal({ type: 'lecture', entryKey: entry.key })}
-                        title={entry.title}
-                        data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-                      >
-                        <span className="makeup-stock-name">{entry.displayName}</span>
-                        <span className="status-chip">+{entry.requestedCount}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              ) : null}
-              {isMakeupStockOpen ? (
-                <section className="makeup-stock-panel" data-testid="makeup-stock-panel">
-                  <div className="makeup-stock-panel-head">
-                    <strong>振替ストック</strong>
-                    <span className="basic-data-muted-inline">残数のある生徒を選ぶとコマ表へ配置できます。</span>
-                  </div>
-                  <div className="makeup-stock-list">
-                    {makeupStockEntries.length === 0 ? (
-                      <div className="makeup-stock-empty">現在の振替ストックはありません。</div>
-                    ) : makeupStockEntries.map((entry) => (
-                      <button
-                        key={entry.key}
-                        type="button"
-                        className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
-                        onClick={() => setStockActionModal({ type: 'makeup', entryKey: entry.key })}
-                        disabled={entry.balance <= 0}
-                        title={entry.title}
-                        data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
-                      >
-                        <span className="makeup-stock-name">{entry.displayName}</span>
-                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="makeup-stock-range-row">
-                    <label className="student-menu-label" htmlFor="makeup-auto-assign-start">自動割振期間</label>
-                    <input id="makeup-auto-assign-start" className="student-menu-select" type="date" value={makeupAutoAssignRange.startDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, startDate: event.target.value }))} data-testid="makeup-auto-assign-start" />
-                    <span className="student-menu-label">〜</span>
-                    <input id="makeup-auto-assign-end" className="student-menu-select" type="date" value={makeupAutoAssignRange.endDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, endDate: event.target.value }))} data-testid="makeup-auto-assign-end" />
-                    <span className="basic-data-muted-inline">翌日以降の範囲だけを自動割振対象にします。</span>
-                  </div>
-                </section>
-              ) : null}
-            </div>
-          ) : null}
           {stockActionModal ? (() => {
             const lectureEntry = stockActionModal.type === 'lecture'
               ? lectureStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
@@ -4597,6 +4533,74 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onStudentClick={handleStudentClick}
           />
           </div>
+          {isLectureStockOpen || isMakeupStockOpen ? (
+            <div className="stock-floating-modals">
+              {isLectureStockOpen ? (
+                <section className="lecture-stock-panel stock-floating-panel" data-testid="lecture-stock-panel">
+                  <div className="makeup-stock-panel-head">
+                    <div className="stock-floating-panel-title">
+                      <strong>講習ストック</strong>
+                      <span className="basic-data-muted-inline">生徒ごとの講習ストック数です。</span>
+                    </div>
+                    <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsLectureStockOpen(false)} data-testid="lecture-stock-close-button">閉じる</button>
+                  </div>
+                  <div className="makeup-stock-list">
+                    {lectureStockEntries.length === 0 ? (
+                      <div className="makeup-stock-empty">現在の講習ストックはありません。</div>
+                    ) : lectureStockEntries.map((entry) => (
+                      <button
+                        key={entry.key}
+                        type="button"
+                        className={`lecture-stock-row${selectedLectureStockKey === entry.key ? ' active' : ''}`}
+                        onClick={() => setStockActionModal({ type: 'lecture', entryKey: entry.key })}
+                        title={entry.title}
+                        data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+                      >
+                        <span className="makeup-stock-name">{entry.displayName}</span>
+                        <span className="status-chip">+{entry.requestedCount}</span>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+              {isMakeupStockOpen ? (
+                <section className="makeup-stock-panel stock-floating-panel" data-testid="makeup-stock-panel">
+                  <div className="makeup-stock-panel-head">
+                    <div className="stock-floating-panel-title">
+                      <strong>振替ストック</strong>
+                      <span className="basic-data-muted-inline">残数のある生徒を選ぶとコマ表へ配置できます。</span>
+                    </div>
+                    <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsMakeupStockOpen(false)} data-testid="makeup-stock-close-button">閉じる</button>
+                  </div>
+                  <div className="makeup-stock-list">
+                    {makeupStockEntries.length === 0 ? (
+                      <div className="makeup-stock-empty">現在の振替ストックはありません。</div>
+                    ) : makeupStockEntries.map((entry) => (
+                      <button
+                        key={entry.key}
+                        type="button"
+                        className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
+                        onClick={() => setStockActionModal({ type: 'makeup', entryKey: entry.key })}
+                        disabled={entry.balance <= 0}
+                        title={entry.title}
+                        data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
+                      >
+                        <span className="makeup-stock-name">{entry.displayName}</span>
+                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="makeup-stock-range-row">
+                    <label className="student-menu-label" htmlFor="makeup-auto-assign-start">自動割振期間</label>
+                    <input id="makeup-auto-assign-start" className="student-menu-select" type="date" value={makeupAutoAssignRange.startDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, startDate: event.target.value }))} data-testid="makeup-auto-assign-start" />
+                    <span className="student-menu-label">〜</span>
+                    <input id="makeup-auto-assign-end" className="student-menu-select" type="date" value={makeupAutoAssignRange.endDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, endDate: event.target.value }))} data-testid="makeup-auto-assign-end" />
+                    <span className="basic-data-muted-inline">表示中の週の開始日を初期値にして自動割振します。</span>
+                  </div>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
           {teacherMenu && teacherMenuContext ? (
             <div
               className="student-menu-popover teacher-menu-popover"

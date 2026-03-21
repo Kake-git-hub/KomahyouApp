@@ -90,7 +90,7 @@ export function BoardGrid({
     const hasWarning = Boolean(studentWarning || missingTeacherWarning)
     const hasMemo = !studentName && Boolean(memoLabel)
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
-    const originalLessonLabel = makeupSourceLabel ? `元の通常授業: ${makeupSourceLabel}` : ''
+    const originalLessonLabel = resolvedLessonType === 'makeup' && makeupSourceLabel ? `元の通常授業: ${makeupSourceLabel}` : ''
     const hoverText = Array.from(new Set([
       memoNotice,
       studentWarning,
