@@ -45,6 +45,11 @@ const fixedAbsoluteConstraints = [
     label: '出席可能コマのみ',
     description: '生徒の出席可能コマだけを候補にして割り振ります。',
   },
+  {
+    key: 'date-priority',
+    label: '日付優先 / 期間内割振',
+    description: '自動割振は対象期間内の日付を先に見て、期間外へは割り振りません。',
+  },
 ] as const
 const ruleGroupDefinitions: Array<{
   key: RuleGroupKey
@@ -53,13 +58,6 @@ const ruleGroupDefinitions: Array<{
   orderKey: AutoAssignRuleKey
   ruleKeys: AutoAssignRuleKey[]
 }> = [
-  {
-    key: 'day-spacing',
-    label: '日付優先',
-    description: '同日内で詰めるより、翌日以降へ分散する優先度を付けます。',
-    orderKey: 'preferNextDayOrLater',
-    ruleKeys: ['preferNextDayOrLater'],
-  },
   {
     key: 'two-students',
     label: '講師1人に生徒2人配置',
@@ -827,7 +825,7 @@ export function AutoAssignRuleScreen({
       : []
     xlsx.writeFile(
       buildAutoAssignWorkbook(xlsx, templateRules, templatePairConstraints, teacherNameById, studentNameById),
-      'auto-assign-rules-template.xlsx',
+      '自動割振ルールテンプレート.xlsx',
     )
     setStatusMessage('自動割振ルールの Excel テンプレートを出力しました。')
   }
@@ -836,7 +834,7 @@ export function AutoAssignRuleScreen({
     const xlsx = await import('xlsx')
     xlsx.writeFile(
       buildAutoAssignWorkbook(xlsx, normalizedRules, pairConstraints, teacherNameById, studentNameById),
-      'auto-assign-rules-current.xlsx',
+      '自動割振ルール_現在.xlsx',
     )
     setStatusMessage('自動割振ルールを Excel 出力しました。')
   }
@@ -919,7 +917,7 @@ export function AutoAssignRuleScreen({
           <div className="basic-data-header">
             <div>
               <h2>自動割振ルール</h2>
-              <p className="basic-data-subcopy">絶対制約事項を常に守り、その上で強制制約事項を適用します。さらにその下の制約グループをひとかたまりとして優先順位付けし、同じ制約グループ内で対象が重なった場合は最後に編集した制約側を優先して他方を対象外へ移します。</p>
+              <p className="basic-data-subcopy">絶対制約事項を常に守り、その上で強制制約事項を適用します。日付優先は絶対制約として扱い、自動割振は対象期間内の日付から順に候補を見ます。さらにその下の制約グループをひとかたまりとして優先順位付けし、同じ制約グループ内で対象が重なった場合は最後に編集した制約側を優先して他方を対象外へ移します。</p>
             </div>
           </div>
 

@@ -1,9 +1,12 @@
 import { useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
+import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { initialSpecialSessions, type SpecialSessionRow } from './specialSessionModel'
 
 type SpecialSessionScreenProps = {
   sessions: SpecialSessionRow[]
+  students: StudentRow[]
+  teachers: TeacherRow[]
   onUpdateSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
   onBackToBoard: () => void
   onOpenBasicData: () => void
@@ -80,6 +83,54 @@ function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
 
+function normalizeBooleanCell(value: unknown) {
+  const normalized = normalizeText(value).toLowerCase()
+  return normalized === 'true'
+    || normalized === '1'
+    || normalized === 'yes'
+    || normalized === 'y'
+    || normalized === 'on'
+    || normalized === '済'
+    || normalized === '登録済'
+    || normalized === 'はい'
+}
+
+function serializeSlotList(slots: string[]) {
+  return slots.join(', ')
+}
+
+function parseSlotList(value: unknown) {
+  return Array.from(new Set(
+    normalizeText(value)
+      .split(/[\n,、]+/)
+      .map((entry) => entry.trim())
+      .filter(Boolean),
+  )).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true }))
+}
+
+function serializeSubjectSlots(subjectSlots: Record<string, number>) {
+  return Object.entries(subjectSlots)
+    .filter(([, count]) => Number.isFinite(count) && count > 0)
+    .sort(([left], [right]) => left.localeCompare(right, 'ja'))
+    .map(([subject, count]) => `${subject}:${Math.trunc(count)}`)
+    .join(', ')
+}
+
+function parseSubjectSlots(value: unknown) {
+  return normalizeText(value)
+    .split(/[\n,、]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .reduce<Record<string, number>>((accumulator, entry) => {
+      const [subjectText, countText = ''] = entry.split(/[:：]/)
+      const subject = subjectText.trim()
+      const count = Math.max(0, Math.trunc(Number(countText.trim())))
+      if (!subject || !Number.isFinite(count) || count <= 0) return accumulator
+      accumulator[subject] = count
+      return accumulator
+    }, {})
+}
+
 function normalizeExcelDate(value: unknown, xlsx?: XlsxModule) {
   if (typeof value === 'number') {
     const parsed = xlsx?.SSF.parse_date_code(value)
@@ -131,9 +182,10 @@ function toWorkbookDateCellValue(value: unknown) {
   return new Date(Number(yearText), Number(monthText) - 1, Number(dayText))
 }
 
-function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], dateColumns: string[] = []) {
+function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], dateColumns: string[] = [], headers: string[] = []) {
   const normalizedRows = rows.map((row) => {
-    const nextRow: Record<string, unknown> = { ...row }
+    const orderedKeys = headers.length > 0 ? headers : Object.keys(row)
+    const nextRow: Record<string, unknown> = Object.fromEntries(orderedKeys.map((key) => [key, row[key] ?? '']))
     for (const column of dateColumns) {
       if (!(column in nextRow)) continue
       nextRow[column] = toWorkbookDateCellValue(nextRow[column])
@@ -141,11 +193,13 @@ function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], 
     return nextRow
   })
 
-  const sheet = xlsx.utils.json_to_sheet(normalizedRows, { cellDates: true })
-  const headers = rows[0] ? Object.keys(rows[0]) : []
+  const resolvedHeaders = headers.length > 0 ? headers : (rows[0] ? Object.keys(rows[0]) : [])
+  const sheet = normalizedRows.length > 0
+    ? xlsx.utils.json_to_sheet(normalizedRows, { cellDates: true })
+    : xlsx.utils.aoa_to_sheet([resolvedHeaders])
 
   for (const column of dateColumns) {
-    const columnIndex = headers.indexOf(column)
+    const columnIndex = resolvedHeaders.indexOf(column)
     if (columnIndex < 0) continue
 
     for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
@@ -159,31 +213,117 @@ function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], 
   return sheet
 }
 
+const specialSessionHeaders = ['講習ID', '講習名', '開始日', '終了日', '作成日時', '更新日時']
+const studentInputHeaders = ['講習ID', '講習名', '生徒ID', '生徒名', '参加不可コマ', '希望科目数', '通常のみ', '希望科目数提出済', '入力更新日時']
+const teacherInputHeaders = ['講習ID', '講習名', '講師ID', '講師名', '参加不可コマ', '講師予定提出済', '入力更新日時']
+
+function buildStudentInputRows(sessions: SpecialSessionRow[], students: StudentRow[]) {
+  const studentMap = new Map(students.map((student) => [student.id, getStudentDisplayName(student)]))
+  return sessions.flatMap((session) => Object.entries(session.studentInputs).map(([studentId, input]) => ({
+    講習ID: session.id,
+    講習名: session.label,
+    生徒ID: studentId,
+    生徒名: studentMap.get(studentId) ?? studentId,
+    参加不可コマ: serializeSlotList(input.unavailableSlots),
+    希望科目数: serializeSubjectSlots(input.subjectSlots),
+    通常のみ: input.regularOnly,
+    希望科目数提出済: input.countSubmitted,
+    入力更新日時: formatSlashTimestamp(input.updatedAt),
+  })))
+}
+
+function buildTemplateSpecialSessions(sessions: SpecialSessionRow[], students: StudentRow[], teachers: TeacherRow[]) {
+  if (sessions.length === 0) return sessions
+
+  const firstSession = sessions[0]
+  if (!firstSession) return sessions
+
+  const firstStudent = students[0]
+  const firstTeacher = teachers[0]
+  const startDate = parseDateString(firstSession.startDate)
+  const secondDate = toDateString(new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + 1))
+  const thirdDate = toDateString(new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate() + 2))
+
+  return sessions.map((session, index) => {
+    if (index !== 0) return session
+    return {
+      ...session,
+      studentInputs: firstStudent ? {
+        [firstStudent.id]: {
+          unavailableSlots: [`${firstSession.startDate}_2`],
+          regularBreakSlots: [],
+          subjectSlots: { 数: 2, 英: 1 },
+          regularOnly: false,
+          countSubmitted: true,
+          updatedAt: `${firstSession.startDate} 10:00`,
+        },
+      } : {},
+      teacherInputs: firstTeacher ? {
+        [firstTeacher.id]: {
+          unavailableSlots: [`${secondDate}_2`, `${thirdDate}_3`],
+          countSubmitted: true,
+          updatedAt: `${firstSession.startDate} 10:30`,
+        },
+      } : {},
+    }
+  })
+}
+
+function buildTeacherInputRows(sessions: SpecialSessionRow[], teachers: TeacherRow[]) {
+  const teacherMap = new Map(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
+  return sessions.flatMap((session) => Object.entries(session.teacherInputs).map(([teacherId, input]) => ({
+    講習ID: session.id,
+    講習名: session.label,
+    講師ID: teacherId,
+    講師名: teacherMap.get(teacherId) ?? teacherId,
+    参加不可コマ: serializeSlotList(input.unavailableSlots),
+    講師予定提出済: input.countSubmitted,
+    入力更新日時: formatSlashTimestamp(input.updatedAt),
+  })))
+}
+
 function createSessionId() {
   return `session_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
 }
 
-function buildSpecialSessionWorkbook(xlsx: XlsxModule, sessions: SpecialSessionRow[]) {
+export function buildSpecialSessionWorkbook(xlsx: XlsxModule, sessions: SpecialSessionRow[], students: StudentRow[], teachers: TeacherRow[]) {
   const workbook = xlsx.utils.book_new()
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, sessions.map((row) => ({
+    講習ID: row.id,
     講習名: row.label,
     開始日: row.startDate,
     終了日: row.endDate,
     作成日時: formatSlashTimestamp(row.createdAt),
     更新日時: formatSlashTimestamp(row.updatedAt),
-  })), ['開始日', '終了日']), '特別講習')
+  })), ['開始日', '終了日'], specialSessionHeaders), '特別講習')
+
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, buildStudentInputRows(sessions, students), [], studentInputHeaders), '生徒日程入力')
+
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, buildTeacherInputRows(sessions, teachers), [], teacherInputHeaders), '講師日程入力')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
-    { 項目: '講習名', 説明: '講習名は画面と同じ表示名で取り込みます。' },
+    { 項目: '講習ID/講習名', 説明: '講習ID を優先して取り込みます。講習名だけでも既存講習へ照合します。' },
     { 項目: '開始日/終了日', 説明: '2026/3/21 のようなスラッシュ表記または Excel の日付セルで入力できます。' },
     { 項目: '作成日時/更新日時', 説明: '必要な場合のみ 2026/3/21 09:30 のように入力します。空欄ならアプリ側で補います。' },
+    { 項目: '生徒日程入力', 説明: '参加不可コマは `2026-03-23_1, 2026-03-24_2` のように、希望科目数は `数:2, 英:1` のように入力します。' },
+    { 項目: '講師日程入力', 説明: '参加不可コマは `2026-03-23_1, 2026-03-24_2` のように入力します。' },
   ]), '説明')
 
   return workbook
 }
 
-function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: SpecialSessionRow[]) {
+function resolveSessionIdentity(row: Record<string, unknown>, sessionsById: Map<string, SpecialSessionRow>, sessionsByLabel: Map<string, SpecialSessionRow>) {
+  const sessionId = normalizeText(row['講習ID'])
+  if (sessionId && sessionsById.has(sessionId)) return sessionsById.get(sessionId) ?? null
+
+  const label = normalizeSessionLabel(normalizeText(row['講習名']))
+  if (label && sessionsByLabel.has(label)) return sessionsByLabel.get(label) ?? null
+
+  return null
+}
+
+export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: SpecialSessionRow[]) {
   const sheet = workbook.Sheets['特別講習']
   if (!sheet) return fallback
 
@@ -191,7 +331,7 @@ function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').
   const existingByLabel = new Map(fallback.map((row) => [normalizeSessionLabel(row.label), row]))
   const timestamp = updateTimestamp()
 
-  return rows
+  const importedSessions = rows
     .map((row) => {
       const label = normalizeSessionLabel(normalizeText(row['講習名']))
       const startDate = normalizeExcelDate(row['開始日'], xlsx)
@@ -201,7 +341,7 @@ function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').
       const existing = existingByLabel.get(label)
 
       return {
-        id: existing?.id || createSessionId(),
+        id: normalizeText(row['講習ID']) || existing?.id || createSessionId(),
         label,
         startDate,
         endDate,
@@ -212,6 +352,64 @@ function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('xlsx').
       }
     })
     .filter((row): row is SpecialSessionRow => Boolean(row))
+
+  const importedById = new Map(importedSessions.map((session) => [session.id, session]))
+  const importedByLabel = new Map(importedSessions.map((session) => [normalizeSessionLabel(session.label), session]))
+
+  const studentInputSheet = workbook.Sheets['生徒日程入力']
+  if (studentInputSheet) {
+    const studentInputRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(studentInputSheet, { defval: '' })
+    const nextStudentInputsBySessionId = new Map(importedSessions.map((session) => [session.id, {} as SpecialSessionRow['studentInputs']]))
+
+    for (const row of studentInputRows) {
+      const session = resolveSessionIdentity(row, importedById, importedByLabel)
+      const studentId = normalizeText(row['生徒ID'])
+      if (!session || !studentId) continue
+
+      nextStudentInputsBySessionId.get(session.id)![studentId] = {
+        unavailableSlots: parseSlotList(row['参加不可コマ']),
+        regularBreakSlots: importedById.get(session.id)?.studentInputs[studentId]?.regularBreakSlots ?? [],
+        subjectSlots: normalizeBooleanCell(row['通常のみ']) ? {} : parseSubjectSlots(row['希望科目数']),
+        regularOnly: normalizeBooleanCell(row['通常のみ']),
+        countSubmitted: normalizeBooleanCell(row['希望科目数提出済']),
+        updatedAt: normalizeTimestampText(row['入力更新日時']) || session.updatedAt || timestamp,
+      }
+    }
+
+    importedSessions.forEach((session, index) => {
+      importedSessions[index] = {
+        ...session,
+        studentInputs: nextStudentInputsBySessionId.get(session.id) ?? {},
+      }
+    })
+  }
+
+  const teacherInputSheet = workbook.Sheets['講師日程入力']
+  if (teacherInputSheet) {
+    const teacherInputRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(teacherInputSheet, { defval: '' })
+    const nextTeacherInputsBySessionId = new Map(importedSessions.map((session) => [session.id, {} as SpecialSessionRow['teacherInputs']]))
+
+    for (const row of teacherInputRows) {
+      const session = resolveSessionIdentity(row, importedById, importedByLabel)
+      const teacherId = normalizeText(row['講師ID'])
+      if (!session || !teacherId) continue
+
+      nextTeacherInputsBySessionId.get(session.id)![teacherId] = {
+        unavailableSlots: parseSlotList(row['参加不可コマ']),
+        countSubmitted: normalizeBooleanCell(row['講師予定提出済']),
+        updatedAt: normalizeTimestampText(row['入力更新日時']) || session.updatedAt || timestamp,
+      }
+    }
+
+    importedSessions.forEach((session, index) => {
+      importedSessions[index] = {
+        ...session,
+        teacherInputs: nextTeacherInputsBySessionId.get(session.id) ?? {},
+      }
+    })
+  }
+
+  return importedSessions
 }
 
 function isDateInRange(date: string, startDate?: string, endDate?: string) {
@@ -300,7 +498,7 @@ function DateCalendar({ visibleStartMonth, selectedDates, onDateClick, rangeStar
   )
 }
 
-export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore }: SpecialSessionScreenProps) {
+export function SpecialSessionScreen({ sessions, students, teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore }: SpecialSessionScreenProps) {
   const [draft, setDraft] = useState<SessionDraft>(() => createDraft())
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -403,13 +601,13 @@ export function SpecialSessionScreen({ sessions, onUpdateSessions, onBackToBoard
 
   const exportTemplateWorkbook = async () => {
     const xlsx = await import('xlsx')
-    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, initialSpecialSessions), 'special-sessions-template.xlsx')
+    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, buildTemplateSpecialSessions(initialSpecialSessions, students, teachers), students, teachers), '特別講習データテンプレート.xlsx')
     setStatusMessage('特別講習の Excel テンプレートを出力しました。')
   }
 
   const exportCurrentWorkbook = async () => {
     const xlsx = await import('xlsx')
-    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, sessions), 'special-sessions-current.xlsx')
+    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, sessions, students, teachers), '特別講習データ_現在.xlsx')
     setStatusMessage('特別講習データを Excel 出力しました。')
   }
 

@@ -1066,13 +1066,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
   const exportTemplateWorkbook = async () => {
     const xlsx = await import('xlsx')
-    xlsx.writeFile(buildWorkbook(xlsx, createTemplateBundle()), 'basic-data-template.xlsx')
+    xlsx.writeFile(buildWorkbook(xlsx, createTemplateBundle()), '基本データテンプレート.xlsx')
     setStatusMessage('Excel テンプレートを出力しました。')
   }
 
   const exportCurrentWorkbook = async () => {
     const xlsx = await import('xlsx')
-    xlsx.writeFile(buildWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, classroomSettings }), 'basic-data-current.xlsx')
+    xlsx.writeFile(buildWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, classroomSettings }), '基本データ_現在.xlsx')
     setStatusMessage('現在の基本データを Excel 出力しました。')
   }
 

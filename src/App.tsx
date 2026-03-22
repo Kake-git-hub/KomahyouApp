@@ -656,7 +656,10 @@ function App() {
   useEffect(() => {
     if (typeof window === 'undefined' || !boardState) return
     getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = boardState.weeks
-  }, [boardState])
+    syncSpecialSessionPopup()
+    syncStudentSchedulePopup()
+    syncTeacherSchedulePopup()
+  }, [boardState, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     if (!isGoogleHolidaySyncEnabled) return
@@ -712,6 +715,8 @@ function App() {
     return (
       <SpecialSessionScreen
         sessions={specialSessions}
+        students={students}
+        teachers={teachers}
         onUpdateSessions={setSpecialSessions}
         onBackToBoard={() => setScreen('board')}
         onOpenBasicData={() => setScreen('basic-data')}

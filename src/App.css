@@ -307,17 +307,18 @@
 
 .stock-floating-modals {
   position: fixed;
-  bottom: 16px;
-  right: 16px;
+  inset: 0;
   z-index: 45;
   display: grid;
   gap: 12px;
-  justify-items: end;
+  align-content: center;
+  justify-items: center;
+  padding: 16px;
   pointer-events: none;
 }
 
 .stock-floating-panel {
-  width: min(440px, calc(100vw - 32px));
+  width: min(520px, calc(100vw - 32px));
   max-height: min(70vh, 720px);
   overflow: auto;
   box-shadow: 0 20px 40px rgba(16, 40, 70, 0.18);
@@ -444,10 +445,8 @@
 
 @media (max-width: 900px) {
   .stock-floating-modals {
-    left: 12px;
-    right: 12px;
-    bottom: 12px;
     justify-items: stretch;
+    padding: 12px;
   }
 
   .stock-floating-panel {
