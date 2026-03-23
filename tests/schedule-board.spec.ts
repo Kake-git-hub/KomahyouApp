@@ -1758,7 +1758,7 @@ test.describe('コマ調整表', () => {
     const studentName = page.getByTestId(`student-name-${slotId}-0-0`)
     await expect(studentName).toHaveClass(/sa-student-name-warning/)
     await expect(studentName).toHaveAttribute('title', /制約違反/)
-    await expect(studentName).toHaveAttribute('title', /科目対応外/)
+    await expect(studentName).toHaveAttribute('title', /強制制約: 科目対応講師のみ/)
   })
 
   test('振替ストックの表示はコマ表操作後も開いたまま残る', async ({ page }) => {
@@ -2219,8 +2219,8 @@ test.describe('コマ調整表', () => {
     await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('1')
   })
 
-  test('講習期間外に置いた講習も登録解除で session に基づいて盤面から消える', async ({ page }) => {
-    const currentWeekStart = getWeekStart(new Date())
+  test('講習は登録した期間外へ手動配置できない', async ({ page }) => {
+    const outOfPeriodWeekStart = getWeekStart(new Date('2026-05-18'))
 
     await page.goto('/')
 
@@ -2233,26 +2233,74 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
-    const target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎')
+    await moveBoardToWeek(page, outOfPeriodWeekStart)
+    const target = await findEmptyStudentCellWithTeacher(page, outOfPeriodWeekStart, '青木太郎')
     await page.getByTestId('lecture-stock-chip').click()
-    await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
+    await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 新年度準備講座' }).click()
     await page.getByTestId('stock-action-modal-manual').click()
     await page.getByTestId(target.cellTestId).click()
 
     const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
-    await expect(targetName).toHaveText('青木太郎')
+    await expect(targetName).toHaveText('')
+    await expect(page.getByTestId('toolbar-status')).toContainText('期間外には配置できません')
+  })
 
-    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+  test('複数講習期間を登録しても講習ストックは期間ごとに分かれ、登録解除も対象期間だけに効く', async ({ page }) => {
+    const springWeekStart = getWeekStart(new Date('2026-03-23'))
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-06-05')
+
     await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click()
+    await popup.getByTestId('student-schedule-count-subject-英').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await page.getByTestId('lecture-stock-chip').click()
+    const stockEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })
+    const springEntry = stockEntries.filter({ hasText: '2026 新年度準備講座' })
+    const examEntry = stockEntries.filter({ hasText: '2026 定期試験対策' })
+    await expect(springEntry).toHaveCount(1)
+    await expect(examEntry).toHaveCount(1)
+
+    await moveBoardToWeek(page, springWeekStart)
+    const springTarget = await findEmptyStudentCellWithTeacher(page, springWeekStart, '青木太郎')
+    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
+      await page.getByTestId('lecture-stock-chip').click()
+    }
+    await springEntry.click()
+    await page.getByTestId('stock-action-modal-manual').click()
+    await page.getByTestId(springTarget.cellTestId).click()
+    const springTargetName = page.getByTestId(springTarget.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(springTargetName).toHaveText('青木太郎')
+
+    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
+      await page.getByTestId('lecture-stock-chip').click()
+    }
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 新年度準備講座' })).toHaveCount(0)
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 定期試験対策' })).toHaveCount(1)
+
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click()
     await popup.getByTestId('student-schedule-count-unregister').click()
 
-    await expect(targetName).toHaveText('')
-    await expect(page.getByTestId('toolbar-status')).toContainText('講習')
+    await expect(springTargetName).toHaveText('青木太郎')
+
+    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
+      await page.getByTestId('lecture-stock-chip').click()
+    }
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 定期試験対策' })).toHaveCount(0)
   })
 
   test('講習ストック行の自動割振で複数コマをまとめて配置できる', async ({ page }) => {
-    const currentWeekStart = getWeekStart(new Date())
-    const specialWeekStart = addDays(currentWeekStart, 7)
+    const specialWeekStart = getWeekStart(new Date('2026-03-23'))
 
     await page.goto('/')
 
@@ -2281,8 +2329,7 @@ test.describe('コマ調整表', () => {
   })
 
   test('講習ストック自動割振の取り消しとやり直しでストック数も戻る', async ({ page }) => {
-    const currentWeekStart = getWeekStart(new Date())
-    const specialWeekStart = addDays(currentWeekStart, 7)
+    const specialWeekStart = getWeekStart(new Date('2026-03-23'))
 
     await page.goto('/')
 
@@ -2312,8 +2359,8 @@ test.describe('コマ調整表', () => {
   })
 
   test('stock に戻した講習も session 情報を保って再割振できる', async ({ page }) => {
-    const currentWeekStart = getWeekStart(new Date())
-    const specialWeekStart = addDays(currentWeekStart, 7)
+    const currentWeekStart = getWeekStart(new Date('2026-03-30'))
+    const specialWeekStart = getWeekStart(new Date('2026-03-23'))
 
     await page.goto('/')
 
@@ -2342,7 +2389,7 @@ test.describe('コマ調整表', () => {
     const beforeReassignCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
     await moveBoardToWeek(page, currentWeekStart)
     await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
-    await openStockActionModal(page, 'lecture-stock-entry-s001__-')
+    await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
     await page.getByTestId('stock-action-modal-auto').click()
     await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。1コマ配置しました。')
 
@@ -3089,8 +3136,7 @@ test.describe('コマ調整表', () => {
   test('生徒日程で出席不可グレーアウトと希望科目数提出を登録解除まで操作できる', async ({ page }) => {
     await page.goto('/')
 
-    const currentWeekStart = getWeekStart(new Date())
-    const specialWeekStart = addDays(currentWeekStart, 7)
+    const specialWeekStart = getWeekStart(new Date('2026-03-23'))
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()

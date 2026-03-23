@@ -48,7 +48,7 @@ const fixedAbsoluteConstraints = [
   {
     key: 'date-priority',
     label: '日付優先 / 期間内割振',
-    description: '自動割振は対象期間内の日付を先に見て、期間外へは割り振りません。',
+    description: '自動割振は期間外へは割り振らず、期間内では制約を優先したうえで日付順に候補を見ます。',
   },
 ] as const
 const ruleGroupDefinitions: Array<{
@@ -917,7 +917,7 @@ export function AutoAssignRuleScreen({
           <div className="basic-data-header">
             <div>
               <h2>自動割振ルール</h2>
-              <p className="basic-data-subcopy">絶対制約事項を常に守り、その上で強制制約事項を適用します。日付優先は絶対制約として扱い、自動割振は対象期間内の日付から順に候補を見ます。さらにその下の制約グループをひとかたまりとして優先順位付けし、同じ制約グループ内で対象が重なった場合は最後に編集した制約側を優先して他方を対象外へ移します。</p>
+              <p className="basic-data-subcopy">絶対制約事項を常に守り、その上で強制制約事項をできる限り守ります。強制制約を満たす候補がないときだけ制約違反で割り振り、その内容はコマ表の赤字ツールチップに出します。期間外への割振は行わず、期間内では制約を優先したうえで日付順に候補を見ます。さらにその下の制約グループをひとかたまりとして優先順位付けし、同じ制約グループ内で対象が重なった場合は最後に編集した制約側を優先して他方を対象外へ移します。</p>
             </div>
           </div>
 

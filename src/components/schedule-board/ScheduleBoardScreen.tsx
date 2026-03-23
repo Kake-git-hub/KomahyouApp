@@ -97,8 +97,11 @@ type GroupedMakeupStockEntry = {
 
 type GroupedLectureStockEntry = {
   key: string
+  studentKey: string
   studentId: string | null
   displayName: string
+  sessionId?: string
+  sessionLabel?: string
   requestedCount: number
   nextPlacementEntry: { subject: SubjectLabel; sessionId?: string } | null
   title?: string
@@ -203,6 +206,19 @@ function compareScoreVectors(left: number[], right: number[]) {
     if (difference !== 0) return difference
   }
   return 0
+}
+
+function buildForcedConstraintScoreVector(params: {
+  firstPeriodPreferred: boolean
+  subjectCapablePreferred: boolean
+  regularTeacherPreferred: boolean
+}) {
+  const forcedScores = [
+    params.firstPeriodPreferred ? 1 : 0,
+    params.subjectCapablePreferred ? 1 : 0,
+    params.regularTeacherPreferred ? 1 : 0,
+  ]
+  return [forcedScores.reduce((total, score) => total + score, 0), ...forcedScores]
 }
 
 function buildDefaultMakeupAutoAssignRange(referenceDate: string): MakeupAutoAssignRange {
@@ -579,6 +595,10 @@ function appendLectureStockCount(countMap: LectureStockCountMap, key: string, in
 
 function buildLectureStockKey(studentKey: string, subject: string) {
   return `${studentKey}__${subject}`
+}
+
+function buildLectureStockScopeKey(studentKey: string, sessionId?: string) {
+  return `${studentKey}__${sessionId ?? '-'}`
 }
 
 function buildDatePriorityScore(dateKey: string) {
@@ -1303,7 +1323,11 @@ function removeStudentAssignmentsFromSpecialSession(params: {
           if (!matchesStudent) return
           if (studentEntry.specialSessionId) {
             if (studentEntry.specialSessionId !== params.session.id) return
-          } else if (cell.dateKey < params.session.startDate || cell.dateKey > params.session.endDate) {
+          } else if (
+            studentEntry.specialStockSource !== 'session'
+            || cell.dateKey < params.session.startDate
+            || cell.dateKey > params.session.endDate
+          ) {
             return
           }
 
@@ -1995,69 +2019,163 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       })
   }, [rawMakeupStockEntries])
 
-  const lectureStockEntries = useMemo<GroupedLectureStockEntry[]>(() => {
-    const grouped = new Map<string, { studentId: string | null; displayName: string; requestedCount: number; titleLines: string[]; subjectCounts: Array<{ subject: SubjectLabel; requestedCount: number }> }>()
+  const lecturePendingItemsByEntryKey = useMemo(() => {
+    const expandedRawItemsByStockKey = new Map<string, Array<{
+      studentKey: string
+      studentId: string
+      displayName: string
+      item: LectureStockPendingItem
+    }>>()
 
-    for (const entry of rawLectureStockEntries) {
-      const lectureStockKey = buildLectureStockKey(entry.studentId, entry.subject)
-      const stockStudentKey = parseLectureStockKey(lectureStockKey).studentKey
-      const current = grouped.get(stockStudentKey) ?? { studentId: entry.studentId, displayName: entry.displayName, requestedCount: 0, titleLines: [], subjectCounts: [] }
-      current.displayName = entry.displayName
-      current.studentId = entry.studentId
-      current.requestedCount += entry.requestedCount
-      current.titleLines.push(`${entry.sessionLabel} / ${entry.subject}: ${entry.requestedCount}コマ`)
-      current.subjectCounts.push({ subject: entry.subject, requestedCount: entry.requestedCount })
-      grouped.set(stockStudentKey, current)
-    }
-
-    for (const [lectureStockKey, requestedCount] of Object.entries(manualLectureStockCounts)) {
-      if (requestedCount === 0) continue
-      const { studentKey, subject } = parseLectureStockKey(lectureStockKey)
-      const fallback = fallbackLectureStockStudents[lectureStockKey]
-      const fallbackDisplayName = fallback?.displayName ?? studentKey.replace(/^name:/, '')
-      const current = grouped.get(studentKey) ?? {
-        studentId: studentKey.startsWith('name:') ? null : studentKey,
-        displayName: fallbackDisplayName,
-        requestedCount: 0,
-        titleLines: [],
-        subjectCounts: [],
+    for (const stockEntry of rawLectureStockEntries) {
+      if (stockEntry.requestedCount <= 0) continue
+      const session = specialSessions.find((currentSession) => currentSession.id === stockEntry.sessionId)
+      const unavailableSlots = session?.studentInputs[stockEntry.studentId]?.unavailableSlots ?? []
+      const stockKey = buildLectureStockKey(stockEntry.studentId, stockEntry.subject)
+      const currentItems = expandedRawItemsByStockKey.get(stockKey) ?? []
+      for (let index = 0; index < stockEntry.requestedCount; index += 1) {
+        currentItems.push({
+          studentKey: stockEntry.studentId,
+          studentId: stockEntry.studentId,
+          displayName: stockEntry.displayName,
+          item: {
+            subject: stockEntry.subject,
+            source: 'session',
+            sessionId: stockEntry.sessionId,
+            sessionLabel: stockEntry.sessionLabel,
+            startDate: session?.startDate,
+            endDate: session?.endDate,
+            unavailableSlots,
+          },
+        })
       }
-      current.displayName = current.displayName || fallbackDisplayName
-      current.requestedCount += requestedCount
-      current.titleLines.push(`盤面からストック / ${subject}: ${requestedCount > 0 ? `+${requestedCount}` : requestedCount}コマ`)
-      current.subjectCounts.push({ subject: (fallback?.subject ?? subject) as SubjectLabel, requestedCount })
-      grouped.set(studentKey, current)
+      expandedRawItemsByStockKey.set(stockKey, currentItems)
     }
 
-    return Array.from(grouped.entries())
-      .map(([studentKey, entry]) => {
-        const subjectTotals = entry.subjectCounts.reduce<Record<string, number>>((totals, subjectEntry) => {
-          totals[subjectEntry.subject] = (totals[subjectEntry.subject] ?? 0) + subjectEntry.requestedCount
-          return totals
-        }, {})
-        const nextPlacementEntry = Object.entries(subjectTotals)
-          .filter(([, requestedCount]) => requestedCount > 0)
-          .map(([subject, requestedCount]) => ({ subject: subject as SubjectLabel, requestedCount }))
-          .sort((left, right) => {
-            if (left.requestedCount !== right.requestedCount) return right.requestedCount - left.requestedCount
-            return left.subject.localeCompare(right.subject, 'ja')
-          })[0] ?? null
+    const scopedItems = new Map<string, Array<{
+      studentKey: string
+      studentId: string | null
+      displayName: string
+      item: LectureStockPendingItem
+    }>>()
 
-        return {
-          key: `${studentKey}__-`,
-          studentId: entry.studentId,
-          displayName: entry.displayName,
-          requestedCount: entry.requestedCount,
-          nextPlacementEntry: nextPlacementEntry ? { subject: nextPlacementEntry.subject } : null,
-          title: buildGroupedLectureStockTitle({
-            requestedCount: entry.requestedCount,
-            subjectTotals,
-          }),
-        }
-      })
-      .filter((entry) => entry.requestedCount > 0)
-      .sort((left, right) => left.displayName.localeCompare(right.displayName, 'ja'))
-  }, [fallbackLectureStockStudents, manualLectureStockCounts, rawLectureStockEntries])
+    for (const [stockKey, rawItems] of expandedRawItemsByStockKey.entries()) {
+      const adjustment = manualLectureStockCounts[stockKey] ?? 0
+      const consumeCount = adjustment < 0 ? Math.min(rawItems.length, Math.abs(adjustment)) : 0
+      for (const rawItem of rawItems.slice(consumeCount)) {
+        const scopeKey = buildLectureStockScopeKey(rawItem.studentKey, rawItem.item.sessionId)
+        const currentItems = scopedItems.get(scopeKey) ?? []
+        currentItems.push({
+          studentKey: rawItem.studentKey,
+          studentId: rawItem.studentId,
+          displayName: rawItem.displayName,
+          item: rawItem.item,
+        })
+        scopedItems.set(scopeKey, currentItems)
+      }
+    }
+
+    const metadataQueueByKey = new Map<string, ManualLectureStockOrigin[]>(
+      Object.entries(manualLectureStockOrigins).map(([key, origins]) => [key, origins.map((origin) => ({ ...origin }))]),
+    )
+
+    for (const [stockKey, requestedCount] of Object.entries(manualLectureStockCounts)) {
+      if (requestedCount <= 0) continue
+      const { studentKey, subject } = parseLectureStockKey(stockKey)
+      const fallback = fallbackLectureStockStudents[stockKey]
+      const fallbackDisplayName = fallback?.displayName ?? studentKey.replace(/^name:/, '')
+      const metadataQueue = metadataQueueByKey.get(stockKey) ?? []
+
+      for (let index = 0; index < requestedCount; index += 1) {
+        const metadata = metadataQueue.shift()
+        const session = metadata?.sessionId
+          ? specialSessions.find((currentSession) => currentSession.id === metadata.sessionId) ?? null
+          : null
+        const scopeKey = buildLectureStockScopeKey(studentKey, metadata?.sessionId)
+        const currentItems = scopedItems.get(scopeKey) ?? []
+        currentItems.push({
+          studentKey,
+          studentId: studentKey.startsWith('name:') ? null : studentKey,
+          displayName: metadata?.displayName ?? fallbackDisplayName,
+          item: {
+            subject: (fallback?.subject ?? subject) as SubjectLabel,
+            source: 'manual',
+            sessionId: metadata?.sessionId,
+            sessionLabel: session?.label,
+            startDate: session?.startDate,
+            endDate: session?.endDate,
+            unavailableSlots: session && !studentKey.startsWith('name:')
+              ? session.studentInputs[studentKey]?.unavailableSlots ?? []
+              : [],
+          },
+        })
+        scopedItems.set(scopeKey, currentItems)
+      }
+    }
+
+    return new Map(Array.from(scopedItems.entries()).map(([entryKey, items]) => {
+      const [firstItem] = items
+      return [
+        entryKey,
+        {
+          studentKey: firstItem?.studentKey ?? entryKey.split('__')[0] ?? entryKey,
+          studentId: firstItem?.studentId ?? null,
+          displayName: firstItem?.displayName ?? entryKey.split('__')[0]?.replace(/^name:/, '') ?? entryKey,
+          sessionId: firstItem?.item.sessionId,
+          sessionLabel: firstItem?.item.sessionLabel,
+          pendingItems: items.map(({ item }) => ({ ...item })),
+        },
+      ]
+    }))
+  }, [fallbackLectureStockStudents, manualLectureStockCounts, manualLectureStockOrigins, rawLectureStockEntries, specialSessions])
+
+  const lectureStockEntries = useMemo<GroupedLectureStockEntry[]>(() => {
+    const entries = Array.from(lecturePendingItemsByEntryKey.entries())
+      .map(([entryKey, scopedEntry]) => {
+      if (scopedEntry.pendingItems.length === 0) return null
+
+      const subjectTotals = scopedEntry.pendingItems.reduce<Record<string, number>>((totals, item) => {
+        totals[item.subject] = (totals[item.subject] ?? 0) + 1
+        return totals
+      }, {})
+      const nextPlacementEntry = Object.entries(subjectTotals)
+        .filter(([, requestedCount]) => requestedCount > 0)
+        .map(([subject, requestedCount]) => ({ subject: subject as SubjectLabel, requestedCount }))
+        .sort((left, right) => {
+          if (left.requestedCount !== right.requestedCount) return right.requestedCount - left.requestedCount
+          return left.subject.localeCompare(right.subject, 'ja')
+        })[0] ?? null
+
+      return {
+        key: entryKey,
+        studentKey: scopedEntry.studentKey,
+        studentId: scopedEntry.studentId,
+        displayName: scopedEntry.displayName,
+        sessionId: scopedEntry.sessionId,
+        sessionLabel: scopedEntry.sessionLabel,
+        requestedCount: scopedEntry.pendingItems.length,
+        nextPlacementEntry: nextPlacementEntry ? { subject: nextPlacementEntry.subject, sessionId: scopedEntry.sessionId } : null,
+        title: buildGroupedLectureStockTitle({
+          requestedCount: scopedEntry.pendingItems.length,
+          subjectTotals,
+        }),
+      }
+    })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+
+    return entries.sort((left, right) => {
+      const nameCompare = left.displayName.localeCompare(right.displayName, 'ja')
+      if (nameCompare !== 0) return nameCompare
+      const leftStart = left.sessionId
+        ? (specialSessions.find((session) => session.id === left.sessionId)?.startDate ?? '9999-12-31')
+        : '9999-12-31'
+      const rightStart = right.sessionId
+        ? (specialSessions.find((session) => session.id === right.sessionId)?.startDate ?? '9999-12-31')
+        : '9999-12-31'
+      if (leftStart !== rightStart) return leftStart.localeCompare(rightStart)
+      return (left.sessionLabel ?? '盤面からストック').localeCompare(right.sessionLabel ?? '盤面からストック', 'ja')
+    })
+  }, [lecturePendingItemsByEntryKey, specialSessions])
 
   const selectedMakeupStockEntry = useMemo(
     () => makeupStockEntries.find((entry) => entry.key === selectedMakeupStockKey) ?? null,
@@ -2150,67 +2268,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }
 
   const buildLecturePendingItems = (entry: GroupedLectureStockEntry) => {
-    const pendingItems: LectureStockPendingItem[] = []
-    const rawPendingItemsByKey = new Map<string, LectureStockPendingItem[]>()
-
-    if (entry.studentId) {
-      for (const stockEntry of rawLectureStockEntries) {
-        if (stockEntry.studentId !== entry.studentId || stockEntry.requestedCount <= 0) continue
-        const session = specialSessions.find((currentSession) => currentSession.id === stockEntry.sessionId)
-        const unavailableSlots = session?.studentInputs[entry.studentId]?.unavailableSlots ?? []
-        const stockKey = buildLectureStockKey(stockEntry.studentId, stockEntry.subject)
-        const currentItems = rawPendingItemsByKey.get(stockKey) ?? []
-        for (let index = 0; index < stockEntry.requestedCount; index += 1) {
-          currentItems.push({
-            subject: stockEntry.subject,
-            source: 'session',
-            sessionId: stockEntry.sessionId,
-            sessionLabel: stockEntry.sessionLabel,
-            startDate: session?.startDate,
-            endDate: session?.endDate,
-            unavailableSlots,
-          })
-        }
-        rawPendingItemsByKey.set(stockKey, currentItems)
-      }
-
-      for (const [stockKey, rawItems] of rawPendingItemsByKey.entries()) {
-        const adjustment = manualLectureStockCounts[stockKey] ?? 0
-        const consumeCount = adjustment < 0 ? Math.min(rawItems.length, Math.abs(adjustment)) : 0
-        pendingItems.push(...rawItems.slice(consumeCount))
-      }
-    }
-
-    const studentKey = entry.studentId ?? `name:${entry.displayName}`
-    const metadataQueueByKey = new Map<string, ManualLectureStockOrigin[]>(
-      Object.entries(manualLectureStockOrigins).map(([key, origins]) => [key, origins.map((origin) => ({ ...origin }))]),
-    )
-
-    for (const [stockKey, requestedCount] of Object.entries(manualLectureStockCounts)) {
-      if (requestedCount <= 0) continue
-      const parsedKey = parseLectureStockKey(stockKey)
-      if (parsedKey.studentKey !== studentKey) continue
-      const metadataQueue = metadataQueueByKey.get(stockKey) ?? []
-
-      for (let index = 0; index < requestedCount; index += 1) {
-        const metadata = metadataQueue.shift()
-        const session = resolveSpecialSessionById(metadata?.sessionId)
-        const unavailableSlots = session && entry.studentId
-          ? session.studentInputs[entry.studentId]?.unavailableSlots ?? []
-          : []
-        pendingItems.push({
-          subject: parsedKey.subject as SubjectLabel,
-          source: 'manual',
-          sessionId: metadata?.sessionId,
-          sessionLabel: session?.label,
-          startDate: session?.startDate,
-          endDate: session?.endDate,
-          unavailableSlots,
-        })
-      }
-    }
-
-    return pendingItems
+    return lecturePendingItemsByEntryKey.get(entry.key)?.pendingItems.map((item) => ({ ...item })) ?? []
   }
 
   const selectedLecturePlacementItem = selectedLectureStockEntry ? buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null : null
@@ -2250,12 +2308,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     pairedStudent: StudentEntry | null
     existingLessons: Array<{ slotNumber: number; lessonType: LessonType }>
     lessonLimitSatisfied: boolean
-    firstPeriodPreferred: boolean
-    subjectCapablePreferred: boolean
-    regularTeacherPreferred: boolean
-    slotAvailablePreferred: boolean
     pairConstraintPreferred: boolean
-    sessionPeriodPreferred?: number
   }) => {
     const scoreVector: number[] = []
     const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.studentId, params.cell.dateKey)
@@ -2308,12 +2361,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       scoreVector.push(0)
     }
 
-    scoreVector.push(params.firstPeriodPreferred ? 1 : 0)
-  scoreVector.push(params.subjectCapablePreferred ? 1 : 0)
-    scoreVector.push(params.regularTeacherPreferred ? 1 : 0)
-    scoreVector.push(params.slotAvailablePreferred ? 1 : 0)
     scoreVector.push(params.pairConstraintPreferred ? 1 : 0)
-    scoreVector.push(params.sessionPeriodPreferred ?? 1)
     scoreVector.push(regularTeacherIds.has(params.teacher.id) ? 1 : 0)
     scoreVector.push(Math.max(0, 4 - params.existingLessons.length))
 
@@ -2360,6 +2408,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             const matchedItem = [...params.pendingItems]
               .filter((item) => {
                 if (!isDateWithinRange(cell.dateKey, item.startDate, item.endDate)) return false
+                if (studentUnavailableSlots.has(slotKey)) return false
+                if ((item.unavailableSlots ?? []).includes(slotKey)) return false
                 return true
               })
               .sort((left, right) => {
@@ -2378,10 +2428,17 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
             if (!matchedItem) continue
 
+            const firstPeriodPreferred = !forbidFirstPeriod || cell.slotNumber !== 1
+            const subjectCapablePreferred = !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate)
+            const regularTeacherPreferred = !regularTeachersOnly || regularTeacherIds.has(teacher.id)
+
             const scoreVector: number[] = [
               matchedItem.source === 'session' ? 1 : 0,
-              buildDatePriorityScore(cell.dateKey),
-              matchedItem.endDate ? 99999999 - Number(matchedItem.endDate.replace(/-/g, '')) : 0,
+              ...buildForcedConstraintScoreVector({
+                firstPeriodPreferred,
+                subjectCapablePreferred,
+                regularTeacherPreferred,
+              }),
               ...buildCommonAutoAssignScoreVector({
                 studentId: params.managedStudent.id,
                 studentGradeOnDate,
@@ -2390,13 +2447,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 pairedStudent,
                 existingLessons,
                 lessonLimitSatisfied,
-                firstPeriodPreferred: !forbidFirstPeriod || cell.slotNumber !== 1,
-                subjectCapablePreferred: !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate),
-                regularTeacherPreferred: !regularTeachersOnly || regularTeacherIds.has(teacher.id),
-                slotAvailablePreferred: !studentUnavailableSlots.has(slotKey) && !(matchedItem.unavailableSlots ?? []).includes(slotKey),
                 pairConstraintPreferred,
-                sessionPeriodPreferred: !matchedItem.startDate || !matchedItem.endDate || (cell.dateKey >= matchedItem.startDate && cell.dateKey <= matchedItem.endDate) ? 1 : 0,
               }),
+              buildDatePriorityScore(cell.dateKey),
+              matchedItem.endDate ? 99999999 - Number(matchedItem.endDate.replace(/-/g, '')) : 0,
             ]
 
             const nextCandidate: LectureAutoAssignCandidate = {
@@ -2475,6 +2529,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
         const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
         const slotKey = `${cell.dateKey}_${cell.slotNumber}`
+        if (studentUnavailableSlots.has(slotKey)) continue
 
         for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
           const desk = cell.desks[deskIndex]
@@ -2499,10 +2554,17 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               })[0] ?? null
             if (!matchedItem) continue
 
+            const firstPeriodPreferred = !forbidFirstPeriod || cell.slotNumber !== 1
+            const subjectCapablePreferred = !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate)
+            const regularTeacherPreferred = !regularTeachersOnly || regularTeacherIds.has(teacher.id)
+
             const scoreVector: number[] = [
               matchedItem.makeupSourceDate ? 1 : 0,
-              buildDatePriorityScore(cell.dateKey),
-              matchedItem.makeupSourceDate ? 99999999 - Number(matchedItem.makeupSourceDate.replace(/-/g, '')) : 0,
+              ...buildForcedConstraintScoreVector({
+                firstPeriodPreferred,
+                subjectCapablePreferred,
+                regularTeacherPreferred,
+              }),
               ...buildCommonAutoAssignScoreVector({
                 studentId: params.managedStudent.id,
                 studentGradeOnDate,
@@ -2511,12 +2573,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 pairedStudent,
                 existingLessons,
                 lessonLimitSatisfied,
-                firstPeriodPreferred: !forbidFirstPeriod || cell.slotNumber !== 1,
-                subjectCapablePreferred: !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate),
-                regularTeacherPreferred: !regularTeachersOnly || regularTeacherIds.has(teacher.id),
-                slotAvailablePreferred: !studentUnavailableSlots.has(slotKey),
                 pairConstraintPreferred,
               }),
+              buildDatePriorityScore(cell.dateKey),
+              matchedItem.makeupSourceDate ? 99999999 - Number(matchedItem.makeupSourceDate.replace(/-/g, '')) : 0,
             ]
 
             const nextCandidate: MakeupAutoAssignCandidate = {
@@ -2775,25 +2835,31 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const slotKey = `${cell.dateKey}_${cell.slotNumber}`
 
     if (desk.teacher.trim() && !teacher) {
-      reasons.push('講師データ不一致')
+      reasons.push('データ不整合: 講師データ不一致')
       hasConstraintReason = true
     }
 
     if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
-      reasons.push('科目対応外')
+      reasons.push('強制制約: 科目対応講師のみ')
       hasConstraintReason = true
     }
 
     if (managedStudent) {
       if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && cell.slotNumber === 1) {
-        reasons.push('1限不可')
+        reasons.push('強制制約: 1限禁止')
         hasConstraintReason = true
       }
 
       const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
       const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
       if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
-        reasons.push('通常講師のみ')
+        reasons.push('強制制約: 通常講師のみ')
+        hasConstraintReason = true
+      }
+
+      const twoStudentsRuleApplied = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('preferTwoStudentsPerTeacher'), managedStudent.id, studentGradeOnDate)
+      if (twoStudentsRuleApplied && !pairedStudent) {
+        reasons.push('制約: 講師1人に生徒2人配置')
         hasConstraintReason = true
       }
 
@@ -2801,18 +2867,41 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       const comparableStudentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
       const sameDayLessons = collectStudentLessonsOnDate(normalizedWeeks, comparableStudentKey, cell.dateKey)
       if (lessonLimit !== null && sameDayLessons.length > lessonLimit) {
-        reasons.push(`同日${lessonLimit}コマ超過`)
+        reasons.push(`制約: 同日${lessonLimit}コマ上限`)
         hasConstraintReason = true
+      }
+
+      const lessonPatternRule = lectureConstraintGroups
+        .find((group) => group.key === 'lesson-pattern')
+        ?.ruleKeys
+        .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
+        .find((rule) => isAutoAssignRuleApplicable(rule, managedStudent.id, studentGradeOnDate))
+      if (lessonPatternRule) {
+        const isAdjacentToAnyLesson = sameDayLessons.some((lesson) => Math.abs(lesson.slotNumber - cell.slotNumber) === 1)
+        const hasOneSlotBreak = sameDayLessons.some((lesson) => Math.abs(lesson.slotNumber - cell.slotNumber) === 2)
+        const isAdjacentToRegularLesson = sameDayLessons.some((lesson) => lesson.lessonType === 'regular' && Math.abs(lesson.slotNumber - cell.slotNumber) === 1)
+        if (lessonPatternRule.key === 'allowTwoConsecutiveLessons' && !isAdjacentToAnyLesson) {
+          reasons.push('制約: 2コマ連続')
+          hasConstraintReason = true
+        }
+        if (lessonPatternRule.key === 'requireBreakBetweenLessons' && !hasOneSlotBreak) {
+          reasons.push('制約: 一コマ空け')
+          hasConstraintReason = true
+        }
+        if (lessonPatternRule.key === 'connectRegularLessons' && !isAdjacentToRegularLesson) {
+          reasons.push('制約: 通常連結2コマ')
+          hasConstraintReason = true
+        }
       }
 
       const unavailableSlots = studentUnavailableSlotsById.get(managedStudent.id)
       if (unavailableSlots?.has(slotKey)) {
-        reasons.push('出席不可')
+        reasons.push('絶対制約: 出席可能コマのみ')
         hasConstraintReason = true
       }
 
       if (teacher && isPairConstraintBlocked(teacher.id, managedStudent.id, pairedStudent)) {
-        reasons.push('ペア不可')
+        reasons.push('制約: 組み合わせ不可')
         hasConstraintReason = true
       }
     }
@@ -2820,7 +2909,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (student.lessonType === 'special') {
       const session = resolveSpecialSessionById(student.specialSessionId)
       if (session && (cell.dateKey < session.startDate || cell.dateKey > session.endDate)) {
-        reasons.push('講習期間外')
+        reasons.push('絶対制約: 講習期間内割振')
         hasConstraintReason = true
       }
     }
@@ -2828,7 +2917,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const uniqueReasons = Array.from(new Set(reasons.filter(Boolean)))
     if (uniqueReasons.length === 0) return undefined
     return hasConstraintReason ? ['制約違反', ...uniqueReasons].join('\n') : uniqueReasons.join('\n')
-  }, [autoAssignRuleByKey, collectStudentLessonsOnDate, isPairConstraintBlocked, managedStudentByRegisteredName, normalizedWeeks, resolveBoardStudentDisplayName, resolveBoardStudentGradeLabel, resolveManagedTeacherForDesk, specialSessions, studentUnavailableSlotsById, students])
+  }, [autoAssignRuleByKey, collectStudentLessonsOnDate, isPairConstraintBlocked, lectureConstraintGroups, managedStudentByRegisteredName, normalizedWeeks, resolveBoardStudentDisplayName, resolveBoardStudentGradeLabel, resolveManagedTeacherForDesk, specialSessions, studentUnavailableSlotsById, students])
 
   const displayCells = useMemo(() => cells.map((cell) => ({
     ...cell,
@@ -3389,6 +3478,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === cellId)
     const targetDesk = targetCell?.desks[deskIndex]
     if (!targetCell || !targetDesk) return
+
+    if (!isDateWithinRange(targetCell.dateKey, placementEntry.startDate, placementEntry.endDate)) {
+      setStatusMessage(`${placementEntry.sessionLabel ?? 'この講習'} の期間外には配置できません。`)
+      return
+    }
 
     if (targetDesk.lesson?.studentSlots[studentIndex]) {
       setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
@@ -4680,7 +4774,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   <div className="makeup-stock-panel-head">
                     <div className="stock-floating-panel-title">
                       <strong>講習ストック</strong>
-                      <span className="basic-data-muted-inline">生徒ごとの講習ストック数です。</span>
+                      <span className="basic-data-muted-inline">生徒・講習期間ごとの講習ストック数です。</span>
                       <span className="basic-data-muted-inline">自動割振は各講習期間内の空きコマだけに配置します。</span>
                     </div>
                     <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsLectureStockOpen(false)} data-testid="lecture-stock-close-button">閉じる</button>
@@ -4698,6 +4792,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         data-testid={`lecture-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
                       >
                         <span className="makeup-stock-name">{entry.displayName}</span>
+                        {entry.sessionLabel ? <span className="lecture-stock-session">{entry.sessionLabel}</span> : null}
                         <span className="status-chip">+{entry.requestedCount}</span>
                       </button>
                     ))}
@@ -4736,7 +4831,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <input id="makeup-auto-assign-start" className="student-menu-select" type="date" value={makeupAutoAssignRange.startDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, startDate: event.target.value }))} data-testid="makeup-auto-assign-start" />
                     <span className="student-menu-label">〜</span>
                     <input id="makeup-auto-assign-end" className="student-menu-select" type="date" value={makeupAutoAssignRange.endDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, endDate: event.target.value }))} data-testid="makeup-auto-assign-end" />
-                    <span className="basic-data-muted-inline">表示中の週の開始日を初期値にし、指定した期間内の日付を優先して期間外へは割り振りません。</span>
+                    <span className="basic-data-muted-inline">表示中の週の開始日を初期値にし、指定した期間外へは割り振りません。期間内では制約を優先したうえで日付順に割り振ります。</span>
                   </div>
                 </section>
               ) : null}
