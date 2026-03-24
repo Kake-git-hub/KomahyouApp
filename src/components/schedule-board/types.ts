@@ -35,6 +35,26 @@ export type StudentEntry = {
   teacherType: TeacherType
 }
 
+export type AbsentStudentEntry = {
+  id: string
+  name: string
+  managedStudentId?: string
+  grade: GradeLabel
+  birthDate?: string
+  makeupSourceDate?: string
+  makeupSourceLabel?: string
+  specialSessionId?: string
+  specialStockSource?: 'session' | 'manual'
+  manualAdded?: boolean
+  subject: SubjectLabel
+  lessonType: LessonType
+  teacherType: TeacherType
+  teacherName: string
+  dateKey: string
+  slotNumber: number
+  recordedAt: string
+}
+
 export type DeskLesson = {
   id: string
   warning?: string
@@ -50,6 +70,7 @@ export type DeskCell = {
   teacherAssignmentSessionId?: string
   teacherAssignmentTeacherId?: string
   memoSlots?: [string | null, string | null]
+  absenceSlots?: [AbsentStudentEntry | null, AbsentStudentEntry | null]
   lesson?: DeskLesson
 }
 

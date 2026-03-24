@@ -1,10 +1,9 @@
-import { useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import {
   autoAssignRuleDefinitions,
   createAutoAssignTargetId,
-  initialAutoAssignRules,
   listAutoAssignTargetGrades,
   resolveStudentGradeLabel,
   type AutoAssignRuleKey,
@@ -47,8 +46,8 @@ const fixedAbsoluteConstraints = [
   },
   {
     key: 'date-priority',
-    label: '日付優先 / 期間内割振',
-    description: '自動割振は期間外へは割り振らず、期間内では制約を優先したうえで日付順に候補を見ます。',
+    label: '期間内割振',
+    description: '振替ストックは指定期間内に割振り、講習ストックはその特別講習期間内に割振ります。',
   },
 ] as const
 const ruleGroupDefinitions: Array<{
@@ -58,6 +57,13 @@ const ruleGroupDefinitions: Array<{
   orderKey: AutoAssignRuleKey
   ruleKeys: AutoAssignRuleKey[]
 }> = [
+  {
+    key: 'day-spacing',
+    label: '登校日集約/分散',
+    description: '登校日集約 / 登校日分散 をひとかたまりとして優先順位を付けます。',
+    orderKey: 'preferDateConcentration',
+    ruleKeys: ['preferDateConcentration', 'preferNextDayOrLater'],
+  },
   {
     key: 'two-students',
     label: '講師1人に生徒2人配置',
@@ -199,7 +205,7 @@ function parseAutoAssignTargets(value: unknown, studentIdByName: Map<string, str
     })
 }
 
-function buildAutoAssignWorkbook(
+export function buildAutoAssignWorkbook(
   xlsx: XlsxModule,
   rules: AutoAssignRuleRow[],
   pairConstraints: PairConstraintRow[],
@@ -212,7 +218,7 @@ function buildAutoAssignWorkbook(
     並び順: index + 1,
     ルールキー: rule.key,
     ルール名: rule.label,
-    分類: forcedRuleKeys.has(rule.key) ? '強制制約' : '制約',
+    分類: forcedRuleKeys.has(rule.key) ? '制約事項' : '優先事項',
     対象: serializeAutoAssignTargets(rule.targets, studentNameById),
     対象外: serializeAutoAssignTargets(rule.excludeTargets, studentNameById),
   }))), 'ルール')
@@ -229,13 +235,13 @@ function buildAutoAssignWorkbook(
     { 項目: '対象/対象外', 説明: 'all または grade:中1 または students:青木太郎,伊藤花 を | 区切りで並べます。' },
     { 項目: 'ルールキー', 説明: 'current 出力のルールキーをそのまま使ってください。未知のキーは取り込みません。' },
     { 項目: 'ペア制約', 説明: '人物A/B は種別に応じて講師名または生徒名で入力します。' },
-    { 項目: '固定の絶対制約', 説明: '既存コマは変更しない / 出席可能コマのみ はアプリ固定のため Excel では編集しません。' },
+    { 項目: '固定の絶対事項', 説明: '既存コマは変更しない / 出席可能コマのみ はアプリ固定のため Excel では編集しません。' },
   ]), '説明')
 
   return workbook
 }
 
-function parseAutoAssignWorkbook(
+export function parseAutoAssignWorkbook(
   xlsx: XlsxModule,
   workbook: import('xlsx').WorkBook,
   fallbackRules: AutoAssignRuleRow[],
@@ -333,7 +339,6 @@ export function AutoAssignRuleScreen({
   const [draftStudentIds, setDraftStudentIds] = useState<Record<string, string[]>>({})
   const [openModalState, setOpenModalState] = useState<{ ruleKey: AutoAssignRuleKey; mode: SelectionModalMode } | null>(null)
   const [pairConstraintDraft, setPairConstraintDraft] = useState<PairConstraintRow>(createEmptyPairConstraintDraft())
-  const importInputRef = useRef<HTMLInputElement | null>(null)
   const referenceDate = getReferenceDateKey(new Date())
 
   const visibleStudents = useMemo(() => students
@@ -653,7 +658,7 @@ export function AutoAssignRuleScreen({
     <section key={constraint.key} className="auto-assign-rule-row auto-assign-rule-row-static is-strict" data-testid={`auto-assign-static-constraint-${constraint.key}`}>
       <div className="auto-assign-rule-topline">
         <div className="auto-assign-rule-title-group">
-          <span className="status-chip warning">絶対制約</span>
+          <span className="status-chip warning">絶対事項</span>
           <h3>{constraint.label}</h3>
         </div>
       </div>
@@ -708,11 +713,11 @@ export function AutoAssignRuleScreen({
     <section className="auto-assign-group-card auto-assign-pair-panel is-force" data-testid="auto-assign-pair-constraints-panel">
       <div className="auto-assign-group-topline">
         <div className="auto-assign-rule-title-group">
-          <span className="status-chip danger">強制制約</span>
+          <span className="status-chip danger">制約事項</span>
           <h3>ペア制約</h3>
         </div>
       </div>
-      <p className="auto-assign-rule-description">ここで指定した組み合わせは、自動割振で常に同席不可として扱います。</p>
+      <p className="auto-assign-rule-description">ここで指定した組み合わせは、同席しないよう制限します。</p>
       <div className="basic-data-form-row wrap align-center auto-assign-pair-form">
         <select value={pairConstraintDraft.personAType} onChange={(event) => setPairConstraintDraft((current) => ({ ...current, personAType: event.target.value as PairConstraintRow['personAType'], personAId: '' }))} data-testid="auto-assign-pair-draft-person-a-type">
           <option value="teacher">講師</option>
@@ -792,90 +797,8 @@ export function AutoAssignRuleScreen({
     </section>
   )
 
-  const exportTemplateWorkbook = async () => {
-    const xlsx = await import('xlsx')
-    const firstStudent = visibleStudents[0]
-    const secondStudent = visibleStudents[1]
-    const firstTeacher = visibleTeachers[0]
-    const firstGrade = firstStudent ? studentGradeById[firstStudent.id] : ''
-    const templateRules = initialAutoAssignRules.map((rule) => {
-      if (rule.key === 'subjectCapableTeachersOnly' && firstStudent) {
-        return {
-          ...rule,
-          targets: [{ id: createAutoAssignTargetId(), type: 'students' as const, studentIds: [firstStudent.id], origin: 'manual' as const }],
-        }
-      }
-      if (rule.key === 'maxOneLesson' && firstGrade) {
-        return {
-          ...rule,
-          targets: [{ id: createAutoAssignTargetId(), type: 'grade' as const, grade: firstGrade, origin: 'manual' as const }],
-          excludeTargets: firstStudent ? [{ id: createAutoAssignTargetId(), type: 'students' as const, studentIds: [firstStudent.id], origin: 'manual' as const }] : [],
-        }
-      }
-      if (rule.key === 'allowTwoConsecutiveLessons' && firstStudent && secondStudent) {
-        return {
-          ...rule,
-          targets: [{ id: createAutoAssignTargetId(), type: 'students' as const, studentIds: [firstStudent.id, secondStudent.id], origin: 'manual' as const }],
-        }
-      }
-      return rule
-    })
-    const templatePairConstraints = firstTeacher && firstStudent
-      ? [{ id: createPairConstraintId(), personAType: 'teacher' as const, personAId: firstTeacher.id, personBType: 'student' as const, personBId: firstStudent.id, type: 'incompatible' as const }]
-      : []
-    xlsx.writeFile(
-      buildAutoAssignWorkbook(xlsx, templateRules, templatePairConstraints, teacherNameById, studentNameById),
-      '自動割振ルールテンプレート.xlsx',
-    )
-    setStatusMessage('自動割振ルールの Excel テンプレートを出力しました。')
-  }
-
-  const exportCurrentWorkbook = async () => {
-    const xlsx = await import('xlsx')
-    xlsx.writeFile(
-      buildAutoAssignWorkbook(xlsx, normalizedRules, pairConstraints, teacherNameById, studentNameById),
-      '自動割振ルール_現在.xlsx',
-    )
-    setStatusMessage('自動割振ルールを Excel 出力しました。')
-  }
-
-  const openImportDialog = () => {
-    importInputRef.current?.click()
-  }
-
-  const importWorkbook = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      const buffer = await file.arrayBuffer()
-      const xlsx = await import('xlsx')
-      const workbook = xlsx.read(buffer, { type: 'array' })
-      const teacherIdByName = new Map<string, string>()
-      for (const teacher of visibleTeachers) {
-        teacherIdByName.set(teacher.name, teacher.id)
-        teacherIdByName.set(getTeacherDisplayName(teacher), teacher.id)
-      }
-      const studentIdByName = new Map<string, string>()
-      for (const student of visibleStudents) {
-        studentIdByName.set(student.name, student.id)
-        studentIdByName.set(getStudentDisplayName(student), student.id)
-      }
-
-      const imported = parseAutoAssignWorkbook(xlsx, workbook, normalizedRules, pairConstraints, teacherIdByName, studentIdByName)
-      onUpdateRules(imported.rules)
-      onUpdatePairConstraints(imported.pairConstraints)
-      setStatusMessage('自動割振ルールを Excel から取り込みました。')
-    } catch {
-      setStatusMessage('自動割振ルールの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
-    } finally {
-      event.target.value = ''
-    }
-  }
-
   return (
     <div className="page-shell page-shell-basic-data">
-      <input ref={importInputRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={importWorkbook} />
       <section className="toolbar-panel" aria-label="自動割振ルールの操作バー">
         <div className="toolbar-row toolbar-row-primary">
           <div className="toolbar-group toolbar-group-compact">
@@ -894,16 +817,6 @@ export function AutoAssignRuleScreen({
               backupRestoreItemTestId="auto-assign-rules-menu-open-backup-button"
             />
           </div>
-          <div className="toolbar-group toolbar-group-end">
-            <details className="menu-dropdown">
-              <summary className="secondary-button slim" data-testid="auto-assign-rules-excel-menu-button">エクセル管理</summary>
-              <div className="menu-dropdown-list">
-                <button className="menu-link-button" type="button" onClick={exportTemplateWorkbook} data-testid="auto-assign-rules-export-template-button">テンプレート出力</button>
-                <button className="menu-link-button" type="button" onClick={exportCurrentWorkbook} data-testid="auto-assign-rules-export-current-button">現データ出力</button>
-                <button className="menu-link-button" type="button" onClick={openImportDialog} data-testid="auto-assign-rules-import-button">エクセル取り込み</button>
-              </div>
-            </details>
-          </div>
         </div>
         {statusMessage ? (
           <div className="toolbar-row toolbar-row-secondary">
@@ -917,28 +830,28 @@ export function AutoAssignRuleScreen({
           <div className="basic-data-header">
             <div>
               <h2>自動割振ルール</h2>
-              <p className="basic-data-subcopy">絶対制約事項を常に守り、その上で強制制約事項をできる限り守ります。強制制約を満たす候補がないときだけ制約違反で割り振り、その内容はコマ表の赤字ツールチップに出します。期間外への割振は行わず、期間内では制約を優先したうえで日付順に候補を見ます。さらにその下の制約グループをひとかたまりとして優先順位付けし、同じ制約グループ内で対象が重なった場合は最後に編集した制約側を優先して他方を対象外へ移します。</p>
+              <p className="basic-data-subcopy">絶対事項を常に守り、その上で制約事項をできる限り守ります。制約事項を満たす候補がないときだけ優先事項違反で割り振り、その内容はコマ表の赤字ツールチップに出します。期間外への割振は行わず、期間内では優先事項を見ながら候補を並べます。さらにその下の優先事項グループをひとかたまりとして優先順位付けし、同じ優先事項グループ内で対象が重なった場合は最後に編集した優先事項側を優先して他方を対象外へ移します。</p>
             </div>
           </div>
 
-          <div className="auto-assign-rule-group-head">絶対制約事項</div>
+          <div className="auto-assign-rule-group-head">絶対事項</div>
           <div className="auto-assign-rule-list">
             {fixedAbsoluteConstraints.map((constraint) => renderStaticForcedConstraint(constraint))}
           </div>
 
-          <div className="auto-assign-rule-group-head">強制制約事項</div>
+          <div className="auto-assign-rule-group-head">制約事項</div>
           <div className="auto-assign-rule-list">
-            {forcedRules.map((rule) => renderRuleCard(rule, '強制制約', 'force'))}
+            {forcedRules.map((rule) => renderRuleCard(rule, '制約事項', 'force'))}
             {renderPairConstraintSection()}
           </div>
 
-          <div className="auto-assign-rule-group-head">制約事項</div>
+          <div className="auto-assign-rule-group-head">優先事項</div>
           <div className="auto-assign-rule-groups">
             {orderedRuleGroups.map((group, index) => (
               <section key={group.key} className="auto-assign-group-card" data-testid={`auto-assign-group-${group.key}`}>
                 <div className="auto-assign-group-topline">
                   <div className="auto-assign-rule-title-group">
-                    <span className="status-chip" data-testid={`auto-assign-group-priority-${group.key}`}>{`制約 ${index + 1}`}</span>
+                    <span className="status-chip" data-testid={`auto-assign-group-priority-${group.key}`}>{`優先 ${index + 1}`}</span>
                     <h3>{group.label}</h3>
                   </div>
                   <div className="auto-assign-rule-order-actions">
@@ -948,7 +861,7 @@ export function AutoAssignRuleScreen({
                 </div>
                 {group.rules.length > 1 ? <p className="auto-assign-rule-description">{group.description}</p> : null}
                 <div className="auto-assign-group-rules">
-                  {group.rules.map((rule) => renderRuleCard(rule, `制約 ${index + 1}`, 'constraint', group.rules.length === 1 ? { hideTopline: true, hideDescription: true } : undefined))}
+                  {group.rules.map((rule) => renderRuleCard(rule, `優先 ${index + 1}`, 'constraint', group.rules.length === 1 ? { hideTopline: true, hideDescription: true } : undefined))}
                 </div>
               </section>
             ))}

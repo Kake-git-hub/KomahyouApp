@@ -1,6 +1,6 @@
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoTextStyle } from './memoText'
-import type { LessonType, SlotCell, TeacherType } from './types'
+import type { AbsentStudentEntry, LessonType, SlotCell, TeacherType } from './types'
 
 function formatMakeupSourceDate(dateKey?: string) {
   if (!dateKey) return ''
@@ -77,22 +77,32 @@ export function BoardGrid({
     studentWarning: string | undefined,
     lessonNote: string | undefined,
     isPicked: boolean,
+    absentEntry: AbsentStudentEntry | null = null,
     extraClassName = '',
   ) => {
     const resolvedLessonType = studentName ? resolveDisplayedLessonType(studentName, studentSubject, lessonType, cell.dateKey, cell.slotNumber) : lessonType
     const lessonStar = resolvedLessonType ? getLessonStar(resolvedLessonType) : null
     const teacherStar = getTeacherStar(teacherType)
-    const displayName = studentName ? resolveStudentDisplayName(studentName) : (memoLabel ?? '')
+    const displayName = studentName
+      ? resolveStudentDisplayName(studentName)
+      : absentEntry
+        ? `${resolveStudentDisplayName(absentEntry.name)}(休)`
+        : (memoLabel ?? '')
     const makeupSourceDateLabel = studentName && resolvedLessonType === 'makeup' ? formatMakeupSourceDate(makeupSourceDate) : ''
     const displayGrade = studentName ? resolveStudentGradeLabel(studentName, studentGrade, cell.dateKey, studentBirthDate) : ''
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const hasWarning = Boolean(studentWarning || missingTeacherWarning)
     const hasMemo = !studentName && Boolean(memoLabel)
+    const hasAbsence = !studentName && Boolean(absentEntry)
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
+    const absenceNotice = absentEntry
+      ? ['休み', lessonTypeLabels[absentEntry.lessonType], absentEntry.subject, absentEntry.teacherName].filter(Boolean).join(' / ')
+      : undefined
     const originalLessonLabel = resolvedLessonType === 'makeup' && makeupSourceLabel ? `元の通常授業: ${makeupSourceLabel}` : ''
     const hoverText = Array.from(new Set([
       memoNotice,
+      absenceNotice,
       studentWarning,
       missingTeacherWarning,
       visibleNote,
@@ -101,64 +111,62 @@ export function BoardGrid({
       .join('\n') || undefined
 
     return (
-    <td
-      key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
-      className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
-      onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, event.clientX, event.clientY)}
-      data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
-    >
-      <div className="sa-student-inner">
-        <span className="sa-student-name-row">
-          <span
-            className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasMemo ? ' sa-student-name-note' : ''}`}
-            data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
-            title={hoverText}
-            style={hasMemo ? getMemoTextStyle(displayName) : undefined}
-          >
-            {displayName}
+      <td
+        key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
+        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
+        onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, event.clientX, event.clientY)}
+        data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
+      >
+        <div className="sa-student-inner">
+          <span className="sa-student-name-row">
+            <span
+              className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasMemo ? ' sa-student-name-note' : ''}${hasAbsence ? ' sa-student-name-absence' : ''}`}
+              data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
+              title={hoverText}
+              style={hasMemo ? getMemoTextStyle(displayName) : undefined}
+            >
+              {displayName}
+            </span>
+            {makeupSourceDateLabel ? <span className="sa-student-origin-date">{makeupSourceDateLabel}</span> : null}
           </span>
-          {makeupSourceDateLabel ? <span className="sa-student-origin-date">{makeupSourceDateLabel}</span> : null}
-        </span>
-        {hasMemo ? null : (
-          <span className="sa-student-detail">
-            {lessonStar || teacherStar ? (
-              <span className="sa-student-markers">
-                {lessonStar ? (
-                  <span
-                    className={`sa-student-star ${lessonStar.className}`}
-                    title={lessonStar.label}
-                    aria-label={lessonStar.label}
-                  >
-                    ★
-                  </span>
-                ) : null}
-                {teacherStar ? (
-                  <span
-                    className={`sa-student-star ${teacherStar.className}`}
-                    title={teacherStar.label}
-                    aria-label={teacherStar.label}
-                  >
-                    ★
-                  </span>
-                ) : null}
-              </span>
-            ) : null}
-            <>
-              <span className="sa-student-detail-grade">{displayGrade}</span>
-              {' '}
-              <span className="sa-student-detail-subject">{studentSubject}</span>
-            </>
-          </span>
-        )}
-      </div>
-    </td>
+          {hasMemo || hasAbsence ? null : (
+            <span className="sa-student-detail">
+              {lessonStar || teacherStar ? (
+                <span className="sa-student-markers">
+                  {lessonStar ? (
+                    <span
+                      className={`sa-student-star ${lessonStar.className}`}
+                      title={lessonStar.label}
+                      aria-label={lessonStar.label}
+                    >
+                      ★
+                    </span>
+                  ) : null}
+                  {teacherStar ? (
+                    <span
+                      className={`sa-student-star ${teacherStar.className}`}
+                      title={teacherStar.label}
+                      aria-label={teacherStar.label}
+                    >
+                      ★
+                    </span>
+                  ) : null}
+                </span>
+              ) : null}
+              <>
+                <span className="sa-student-detail-grade">{displayGrade}</span>
+                {' '}
+                <span className="sa-student-detail-subject">{studentSubject}</span>
+              </>
+            </span>
+          )}
+        </div>
+      </td>
     )
   }
 
   const hasManualTeacherWarning = (desk: SlotCell['desks'][number]) => {
-    if (desk.teacherAssignmentSource === 'manual') return true
-    const lesson = desk.lesson
-    return Boolean(lesson && (lesson.id?.includes('_manual') || lesson.studentSlots.some((student) => student?.manualAdded)))
+    return desk.teacherAssignmentSource === 'manual'
   }
 
   const getTeacherAssignmentHint = (desk: SlotCell['desks'][number]) => {
@@ -316,6 +324,8 @@ export function BoardGrid({
                       ].filter(Boolean).join(' ')
                       const firstStudent = lesson?.studentSlots[0] ?? null
                       const secondStudent = lesson?.studentSlots[1] ?? null
+                      const firstAbsence = desk.absenceSlots?.[0] ?? null
+                      const secondAbsence = desk.absenceSlots?.[1] ?? null
                       const firstSelected =
                         (selectedStudentId !== null && firstStudent?.id === selectedStudentId) ||
                         (highlightedCell?.cellId === cell.id && highlightedCell.deskIndex === deskIndex && highlightedCell.studentIndex === 0)
@@ -353,6 +363,7 @@ export function BoardGrid({
                           firstStudent?.warning,
                           lesson?.note,
                           firstSelected,
+                          firstAbsence,
                         ),
                         renderStudentCell(
                           cell,
@@ -371,6 +382,7 @@ export function BoardGrid({
                           secondStudent?.warning,
                           lesson?.note,
                           secondSelected,
+                          secondAbsence,
                           'sa-day-group-end',
                         ),
                       ]

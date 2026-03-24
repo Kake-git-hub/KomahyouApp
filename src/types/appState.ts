@@ -1,4 +1,5 @@
-import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
+import type { ManagerRow, StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
+import type { GroupLessonRow } from '../components/basic-data/BasicDataScreen'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
@@ -12,8 +13,27 @@ export type ClassroomSettings = {
   holidayDates: string[]
   forceOpenDates: string[]
   deskCount: number
+  operationStartDate?: string
+  initialSetupCompletedAt?: string
+  initialSetupMakeupStocks?: InitialSetupMakeupStockRow[]
+  initialSetupLectureStocks?: InitialSetupLectureStockRow[]
   googleHolidayCalendarSyncedDates?: string[]
   googleHolidayCalendarLastSyncedAt?: string
+}
+
+export type InitialSetupMakeupStockRow = {
+  id: string
+  studentId: string
+  subject: string
+  count: number
+}
+
+export type InitialSetupLectureStockRow = {
+  id: string
+  studentId: string
+  subject: string
+  sessionId: string
+  count: number
 }
 
 export type ScheduleRangePreference = {
@@ -45,6 +65,7 @@ export type PersistedBoardState = {
   weekIndex: number
   selectedCellId: string
   selectedDeskIndex: number
+  suppressedRegularLessonOccurrences: string[]
   manualMakeupAdjustments: MakeupOriginMap
   suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
@@ -62,9 +83,11 @@ export const APP_SNAPSHOT_SCHEMA_VERSION = 1
 export type AppSnapshotPayload = {
   screen: AppScreen
   classroomSettings: ClassroomSettings
+  managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  groupLessons: GroupLessonRow[]
   specialSessions: SpecialSessionRow[]
   autoAssignRules: AutoAssignRuleRow[]
   pairConstraints: PairConstraintRow[]

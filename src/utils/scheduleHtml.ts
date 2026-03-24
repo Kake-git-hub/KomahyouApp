@@ -41,6 +41,17 @@ type SerializedStudentEntry = {
   warning?: string
 }
 
+type SerializedAbsentStudentEntry = {
+  id: string
+  linkedStudentId?: string
+  name: string
+  subject: string
+  lessonType: string
+  teacherType: string
+  teacherName: string
+  recordedAt: string
+}
+
 type SerializedCell = {
   dateKey: string
   dateLabel: string
@@ -51,6 +62,7 @@ type SerializedCell = {
   isOpenDay: boolean
   desks: Array<{
     teacher: string
+    absences?: SerializedAbsentStudentEntry[]
     lesson?: {
       note?: string
       students: SerializedStudentEntry[]
@@ -142,6 +154,18 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
       isOpenDay: cell.isOpenDay,
       desks: cell.desks.map((desk) => ({
         teacher: desk.teacher,
+        absences: desk.absenceSlots
+          ?.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+          .map((entry) => ({
+            id: entry.id,
+            linkedStudentId: entry.managedStudentId,
+            name: entry.name,
+            subject: entry.subject,
+            lessonType: entry.lessonType,
+            teacherType: entry.teacherType,
+            teacherName: entry.teacherName,
+            recordedAt: entry.recordedAt,
+          })),
         lesson: desk.lesson
           ? {
               note: desk.lesson.note,
@@ -822,6 +846,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: rgba(17, 17, 17, 0.08);
       }
 
+      .header-toggle.is-pending,
+      .slot-button.is-pending {
+        cursor: progress;
+      }
+
       .slot-cell {
         height: 62px;
         vertical-align: top;
@@ -830,6 +859,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .slot-cell.is-unavailable {
         background: #d1d6dc;
+      }
+
+      .slot-cell.is-pending {
+        position: relative;
+      }
+
+      .slot-cell.is-pending::after {
+        content: '';
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        border: 2px solid rgba(47, 111, 237, 0.18);
+        border-top-color: #2f6fed;
+        animation: schedule-spin 0.7s linear infinite;
+      }
+
+      .slot-cell.is-pending::after {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        margin-left: -7px;
+        margin-top: -7px;
       }
 
       .slot-cell.is-editable {
@@ -868,6 +919,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .slot-button.is-unavailable {
         background: rgba(17, 17, 17, 0.06);
+      }
+
+      @keyframes schedule-spin {
+        to {
+          transform: rotate(360deg);
+        }
       }
 
       .lesson-card {
@@ -996,10 +1053,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .bottom-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 255px 360px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 220px 255px 320px;
         gap: 8px;
         margin-top: 10px;
         align-items: start;
+      }
+
+      .bottom-grid.bottom-grid-teacher {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 255px 360px;
       }
 
       .box-panel {
@@ -1045,6 +1106,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .count-table,
+      .absence-table,
       .makeup-table {
         width: 100%;
         border-collapse: collapse;
@@ -1057,12 +1119,26 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .count-table th,
       .count-table td,
+      .absence-table th,
+      .absence-table td,
       .makeup-table th,
       .makeup-table td {
         border: 1.5px solid var(--line);
         padding: 3px 4px;
         text-align: center;
         height: 22px;
+      }
+
+      .absence-table td,
+      .makeup-table td {
+        font-size: 9px;
+        line-height: 1.05;
+        padding: 2px 3px;
+        height: 17px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: left;
       }
 
       .count-table tbody tr:last-child td {
@@ -1093,17 +1169,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: rgba(255, 244, 244, 0.94);
         transform: rotate(-4deg);
         letter-spacing: 0.08em;
-      }
-
-      .makeup-table td {
-        font-size: 9px;
-        line-height: 1.05;
-        padding: 2px 3px;
-        height: 17px;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        text-align: left;
       }
 
       .box-table-title {
@@ -1194,10 +1259,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let payloadFingerprint = JSON.stringify(DATA);
       let skipNextEquivalentPayload = false;
       let suppressNextToggleClick = false;
+      const pendingUnavailableKeys = new Set();
+      const pendingUnavailableTimers = new Map();
       const interactionLockStorageKey = 'schedule-shared:interaction-lock';
       const interactionLockStaleMs = 5000;
       const interactionLockToken = VIEW_TYPE + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
       let interactionLockOwner = null;
+      let interactionLockSuspendUntil = 0;
       const interactionLockBanner = (() => {
         if (!(summaryLabel instanceof HTMLElement)) return null;
         const element = document.createElement('div');
@@ -1313,6 +1381,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function acquireInteractionLock() {
+        if (Date.now() < interactionLockSuspendUntil) {
+          refreshInteractionLockState();
+          return;
+        }
         writeInteractionLock({ owner: VIEW_TYPE, token: interactionLockToken, updatedAt: Date.now() });
         interactionLockOwner = VIEW_TYPE;
         refreshInteractionLockState();
@@ -1690,6 +1762,69 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return slotKeys.every((slotKey) => unavailableSlots.has(slotKey));
       }
 
+      function buildUnavailablePendingKey(viewType, personId, scope, value) {
+        return viewType + ':' + personId + ':' + scope + ':' + value;
+      }
+
+      function collectUnavailablePendingKeys(viewType, personId, slotKeys) {
+        const keys = [];
+        const dateKeys = new Set();
+        const slotNumbers = new Set();
+        sortSlotKeys(slotKeys).forEach((slotKey) => {
+          if (!slotKey) return;
+          keys.push(buildUnavailablePendingKey(viewType, personId, 'cell', slotKey));
+          const parts = slotKey.split('_');
+          if (parts[0]) dateKeys.add(parts[0]);
+          if (parts[1]) slotNumbers.add(parts[1]);
+        });
+        dateKeys.forEach((dateKey) => {
+          keys.push(buildUnavailablePendingKey(viewType, personId, 'date', dateKey));
+        });
+        slotNumbers.forEach((slotNumber) => {
+          keys.push(buildUnavailablePendingKey(viewType, personId, 'slot', slotNumber));
+        });
+        return Array.from(new Set(keys));
+      }
+
+      function syncPendingUnavailableUi(root) {
+        if (!(root instanceof HTMLElement)) return;
+        root.querySelectorAll('[data-pending-unavailable-key]').forEach((element) => {
+          if (!(element instanceof HTMLElement)) return;
+          const pendingKey = element.getAttribute('data-pending-unavailable-key') || '';
+          const isPending = Boolean(pendingKey) && pendingUnavailableKeys.has(pendingKey);
+          element.classList.toggle('is-pending', isPending);
+          if (isPending) element.setAttribute('aria-busy', 'true');
+          else element.removeAttribute('aria-busy');
+          if (element instanceof HTMLButtonElement) {
+            element.disabled = isPending;
+          }
+        });
+      }
+
+      function setUnavailablePending(keys, durationMs) {
+        const normalizedKeys = Array.from(new Set((keys || []).filter((value) => typeof value === 'string' && value)));
+        if (!normalizedKeys.length) return;
+        normalizedKeys.forEach((pendingKey) => {
+          pendingUnavailableKeys.add(pendingKey);
+          const currentTimer = pendingUnavailableTimers.get(pendingKey);
+          if (currentTimer) window.clearTimeout(currentTimer);
+          pendingUnavailableTimers.set(pendingKey, window.setTimeout(() => {
+            pendingUnavailableKeys.delete(pendingKey);
+            pendingUnavailableTimers.delete(pendingKey);
+            syncPendingUnavailableUi(pagesElement);
+          }, durationMs));
+        });
+        syncPendingUnavailableUi(pagesElement);
+      }
+
+      function isUnavailableTogglePending(target) {
+        if (!(target instanceof HTMLElement)) return false;
+        const pendingElement = target.closest('[data-pending-unavailable-key]');
+        if (!(pendingElement instanceof HTMLElement)) return false;
+        const pendingKey = pendingElement.getAttribute('data-pending-unavailable-key') || '';
+        return Boolean(pendingKey) && pendingUnavailableKeys.has(pendingKey);
+      }
+
       function getEditableStudentSlotKeys(studentId, dateHeaders, slotNumbers, cellMap, filters) {
         const slotKeys = [];
         dateHeaders.forEach((dateHeader) => {
@@ -1720,6 +1855,39 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           });
         });
         return sortSlotKeys(slotKeys);
+      }
+
+      function getAssignedStudentSlotKeys(studentId) {
+        const assignedSlotKeys = new Set();
+        const student = (DATA.students || []).find((entry) => entry.id === studentId);
+        const candidateNames = new Set([
+          student && typeof student.name === 'string' ? student.name : '',
+          student && typeof student.fullName === 'string' ? student.fullName : '',
+        ].filter(Boolean));
+
+        (DATA.cells || []).forEach((cell) => {
+          (cell.desks || []).forEach((desk) => {
+            const students = desk.lesson && Array.isArray(desk.lesson.students) ? desk.lesson.students : [];
+            if (students.some((entry) => entry && (entry.linkedStudentId === studentId || candidateNames.has(entry.name)))) {
+              assignedSlotKeys.add(cell.dateKey + '_' + cell.slotNumber);
+            }
+          });
+        });
+
+        return assignedSlotKeys;
+      }
+
+      function countAvailableStudentSlotsForSession(studentId, sessionId) {
+        if (!studentId || !sessionId) return 0;
+        const session = getSpecialSessionById(sessionId);
+        if (!session) return 0;
+        const dateHeaders = buildDateHeaders(session.startDate, session.endDate);
+        const slotNumbers = getSlotNumbers();
+        const cellMap = buildCellMap(DATA.cells || []);
+        const editableSlotKeys = getEditableStudentSlotKeys(studentId, dateHeaders, slotNumbers, cellMap);
+        const unavailableSlots = getUnavailableSlotsForStudent(studentId);
+        const assignedSlotKeys = getAssignedStudentSlotKeys(studentId);
+        return editableSlotKeys.filter((slotKey) => !unavailableSlots.has(slotKey) && !assignedSlotKeys.has(slotKey)).length;
       }
 
       function updateUnavailableSlotsLocally(sessionId, personId, unavailableSlots) {
@@ -1848,6 +2016,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!studentId || !Array.isArray(slotKeys) || !slotKeys.length) return;
         const normalizedSlotKeys = sortSlotKeys(Array.from(new Set(slotKeys.filter((slotKey) => typeof slotKey === 'string' && slotKey))));
         if (!normalizedSlotKeys.length) return;
+        setUnavailablePending(collectUnavailablePendingKeys('student', studentId, normalizedSlotKeys), 220);
 
         const targetSessions = new Map();
         normalizedSlotKeys.forEach((slotKey) => {
@@ -1886,6 +2055,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!teacherId || !Array.isArray(slotKeys) || !slotKeys.length) return;
         const normalizedSlotKeys = sortSlotKeys(Array.from(new Set(slotKeys.filter((slotKey) => typeof slotKey === 'string' && slotKey))));
         if (!normalizedSlotKeys.length) return;
+        setUnavailablePending(collectUnavailablePendingKeys('teacher', teacherId, normalizedSlotKeys), 220);
 
         const targetSessions = new Map();
         normalizedSlotKeys.forEach((slotKey) => {
@@ -1924,12 +2094,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const hasEditableSession = !isDisabled && getEditableSpecialSessionsForStudent(studentId, slotKey.split('_')[0] || '').length > 0;
         const unavailableSlots = getUnavailableSlotsForStudent(studentId);
         const isUnavailable = unavailableSlots.has(slotKey);
+        const pendingKey = buildUnavailablePendingKey('student', studentId, 'cell', slotKey);
         if (!hasEditableSession) {
           return '<div class="slot-static">' + content + '</div>';
         }
         const buttonClasses = ['slot-button'];
         if (isUnavailable) buttonClasses.push('is-unavailable');
-        return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable" data-student-id="' + studentId + '" data-slot-key="' + slotKey + '" data-testid="student-schedule-cell-button-' + studentId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
+        return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable" data-student-id="' + studentId + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + pendingKey + '" data-testid="student-schedule-cell-button-' + studentId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
       }
 
       function renderStudentDateHeaderCell(studentId, dateHeader, slotNumbers, cellMap) {
@@ -1939,7 +2110,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!slotKeys.length) return '<th class="' + headerClass + '">' + labelHtml + '</th>';
         const buttonClasses = ['header-toggle'];
         if (areStudentSlotsUnavailable(studentId, slotKeys)) buttonClasses.push('is-unavailable');
-        return '<th class="' + headerClass + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable-date" data-student-id="' + studentId + '" data-date-key="' + dateHeader.dateKey + '" data-testid="student-schedule-day-toggle-' + studentId + '-' + dateHeader.dateKey + '" title="この日の出席不可を一括切替">' + labelHtml + '</button></th>';
+        return '<th class="' + headerClass + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable-date" data-student-id="' + studentId + '" data-date-key="' + dateHeader.dateKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('student', studentId, 'date', dateHeader.dateKey) + '" data-testid="student-schedule-day-toggle-' + studentId + '-' + dateHeader.dateKey + '" title="この日の出席不可を一括切替">' + labelHtml + '</button></th>';
       }
 
       function renderTeacherDateHeaderCell(teacherId, dateHeader, slotNumbers, cellMap) {
@@ -1949,7 +2120,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!slotKeys.length) return '<th class="' + headerClass + '">' + labelHtml + '</th>';
         const buttonClasses = ['header-toggle'];
         if (areTeacherSlotsUnavailable(teacherId, slotKeys)) buttonClasses.push('is-unavailable');
-        return '<th class="' + headerClass + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable-date" data-teacher-id="' + teacherId + '" data-date-key="' + dateHeader.dateKey + '" data-testid="teacher-schedule-day-toggle-' + teacherId + '-' + dateHeader.dateKey + '" title="この日の参加不可を一括切替">' + labelHtml + '</button></th>';
+        return '<th class="' + headerClass + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable-date" data-teacher-id="' + teacherId + '" data-date-key="' + dateHeader.dateKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacherId, 'date', dateHeader.dateKey) + '" data-testid="teacher-schedule-day-toggle-' + teacherId + '-' + dateHeader.dateKey + '" title="この日の参加不可を一括切替">' + labelHtml + '</button></th>';
       }
 
       function renderStudentTimeHeaderCell(studentId, timeLabel, slotNumber, dateHeaders, cellMap) {
@@ -1957,7 +2128,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!slotKeys.length) return renderTimeHeaderCell(timeLabel, slotNumber);
         const buttonClasses = ['header-toggle'];
         if (areStudentSlotsUnavailable(studentId, slotKeys)) buttonClasses.push('is-unavailable');
-        const actionHtml = '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable-slot" data-student-id="' + studentId + '" data-slot-number="' + slotNumber + '" data-testid="student-schedule-slot-toggle-' + studentId + '-' + slotNumber + '" title="この時限の出席不可を一括切替">__CONTENT__</button>';
+        const actionHtml = '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable-slot" data-student-id="' + studentId + '" data-slot-number="' + slotNumber + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('student', studentId, 'slot', String(slotNumber)) + '" data-testid="student-schedule-slot-toggle-' + studentId + '-' + slotNumber + '" title="この時限の出席不可を一括切替">__CONTENT__</button>';
         return renderTimeHeaderCell(timeLabel, slotNumber, actionHtml);
       }
 
@@ -1966,7 +2137,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!slotKeys.length) return renderTimeHeaderCell(timeLabel, slotNumber);
         const buttonClasses = ['header-toggle'];
         if (areTeacherSlotsUnavailable(teacherId, slotKeys)) buttonClasses.push('is-unavailable');
-        const actionHtml = '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable-slot" data-teacher-id="' + teacherId + '" data-slot-number="' + slotNumber + '" data-testid="teacher-schedule-slot-toggle-' + teacherId + '-' + slotNumber + '" title="この時限の参加不可を一括切替">__CONTENT__</button>';
+        const actionHtml = '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable-slot" data-teacher-id="' + teacherId + '" data-slot-number="' + slotNumber + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacherId, 'slot', String(slotNumber)) + '" data-testid="teacher-schedule-slot-toggle-' + teacherId + '-' + slotNumber + '" title="この時限の参加不可を一括切替">__CONTENT__</button>';
         return renderTimeHeaderCell(timeLabel, slotNumber, actionHtml);
       }
 
@@ -2033,6 +2204,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             .filter(Boolean);
           element.classList.toggle('is-unavailable', slotKeys.length > 0 && slotKeys.every((slotKey) => unavailableSlots.has(slotKey)));
         });
+
+        syncPendingUnavailableUi(section);
       }
 
       function refreshTeacherUnavailableUi(teacherId) {
@@ -2076,18 +2249,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             .filter(Boolean);
           element.classList.toggle('is-unavailable', slotKeys.length > 0 && slotKeys.every((slotKey) => unavailableSlots.has(slotKey)));
         });
+
+        syncPendingUnavailableUi(section);
       }
 
       function renderTeacherSlotContent(teacherId, slotKey, content, title, isDisabled) {
         const hasEditableSession = !isDisabled && getEditableSpecialSessionsForTeacher(teacherId, slotKey.split('_')[0] || '').length > 0;
         const unavailableSlots = getUnavailableSlotsForTeacher(teacherId);
         const isUnavailable = unavailableSlots.has(slotKey);
+        const pendingKey = buildUnavailablePendingKey('teacher', teacherId, 'cell', slotKey);
         if (!hasEditableSession) {
           return '<div class="slot-static">' + content + '</div>';
         }
         const buttonClasses = ['slot-button'];
         if (isUnavailable) buttonClasses.push('is-unavailable');
-        return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable" data-teacher-id="' + teacherId + '" data-slot-key="' + slotKey + '" data-testid="teacher-schedule-cell-button-' + teacherId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
+        return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable" data-teacher-id="' + teacherId + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + pendingKey + '" data-testid="teacher-schedule-cell-button-' + teacherId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
       }
 
       function formatTeacherLessonLabel(student) {
@@ -2120,10 +2296,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }).join('');
       }
 
-      function renderBottomSection(commonKey, individualKey, makeupRows, regularCounts, lectureCounts, regularWarningHtml, lectureWarningHtml) {
-        return '<div class="bottom-grid">' +
+      function renderBottomSection(commonKey, individualKey, absenceRows, makeupRows, regularCounts, lectureCounts, regularWarningHtml, lectureWarningHtml, options) {
+        const isTeacher = options && options.isTeacher;
+        const absenceTestId = options && options.absenceTestId ? options.absenceTestId : 'student-schedule-absence-table';
+        const absenceSectionHtml = isTeacher
+          ? ''
+          : '<div class="box-stack"><div class="box-table-title">休み</div><table class="absence-table" data-testid="' + escapeHtml(absenceTestId) + '"><tbody>' + absenceRows + '</tbody></table></div>';
+        return '<div class="bottom-grid' + (isTeacher ? ' bottom-grid-teacher' : '') + '">' +
           '<div class="box-stack"><div class="box-table-title">共通連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '"></textarea></div></div>' +
           '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '"></textarea></div></div>' +
+          absenceSectionHtml +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
           '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
         '</div>';
@@ -2146,6 +2328,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function formatTeacherMakeupNote(studentName, subject, sourceLabel, targetDateKey, targetSlotNumber) {
         if (!sourceLabel) return '';
         return [studentName, subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
+      }
+
+      function formatAbsenceNote(dateKey, slotNumber, teacherName, subject, lessonType) {
+        return [formatCompactDateSlot(dateKey, slotNumber), teacherName, lessonTypeLabels[lessonType] || lessonType, subject].filter(Boolean).join(' / ');
       }
 
       function toMakeupRows(makeupNotes, minimumRowCount) {
@@ -2171,6 +2357,23 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           });
           return notes;
         }, []);
+      }
+
+      function collectStudentAbsenceNotes(cells, student) {
+        const notes = [];
+        (cells || []).forEach((cell) => {
+          (cell.desks || []).forEach((desk) => {
+            const absences = Array.isArray(desk.absences) ? desk.absences : [];
+            absences.forEach((entry) => {
+              if (!entry) return;
+              const linkedStudentId = entry.linkedStudentId || '';
+              const isSameStudent = linkedStudentId === student.id || entry.name === student.name || entry.name === student.fullName;
+              if (!isSameStudent) return;
+              notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, entry.teacherName || desk.teacher, entry.subject, entry.lessonType));
+            });
+          });
+        });
+        return notes;
       }
 
       function renderPeriodPill(segment, stateHtml) {
@@ -2254,6 +2457,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const normalizedValue = Number.isFinite(Number(element.value)) ? Math.max(0, Math.trunc(Number(element.value))) : 0;
           if (normalizedValue > 0) subjectSlots[subject] = normalizedValue;
         });
+        const requestedCount = regularOnly
+          ? 0
+          : Object.values(subjectSlots).reduce((total, value) => total + (Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0), 0);
+        const availableSlotCount = countAvailableStudentSlotsForSession(activeCountDialog.studentId, activeCountDialog.sessionId);
+        if (requestedCount > availableSlotCount) {
+          alert('希望科目数が出席可能コマ数を上回っているため登録できません。出席不可コマを見直してください。');
+          activeCountDialog = null;
+          render();
+          return;
+        }
 
         updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true);
         persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true);
@@ -2362,6 +2575,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const plannedRegularCounts = {};
           const lectureCounts = {};
           const desiredLectureCounts = buildDesiredLectureCountMap(student.id, startDate, endDate);
+          const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
           const makeupNotes = collectStudentMakeupNotes(entries);
           entries.forEach((entry) => {
             if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
@@ -2395,15 +2609,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               let content = '<div class="empty-label"></div>';
               if (assignment) content = renderStudentCellCard(assignment.lesson);
               const title = assignment ? [assignment.lesson.subject, lessonTypeLabels[assignment.lesson.lessonType] || assignment.lesson.lessonType, assignment.teacher].filter(Boolean).join(' / ') : '';
-              return '<td class="' + classes.join(' ') + '" data-role="student-slot-cell" data-student-id="' + student.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="student-schedule-cell-' + student.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderStudentSlotContent(student.id, slotKey, content, title, !isEditable) + '</div></td>';
+              return '<td class="' + classes.join(' ') + '" data-role="student-slot-cell" data-student-id="' + student.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('student', student.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="student-schedule-cell-' + student.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderStudentSlotContent(student.id, slotKey, content, title, !isEditable) + '</div></td>';
             }).join('');
             return '<tr>' + renderStudentTimeHeaderCell(student.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
           }).join('');
+          const absenceRows = toMakeupRows(absenceNotes, 7);
           const makeupRows = toMakeupRows(makeupNotes, 7);
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
           const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
           const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, visibleSubjects), regularCountWarningHtml, lectureCountWarningHtml) + '</section>';
+          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, visibleSubjects), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
         }).join('');
       }
 
@@ -2448,7 +2663,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               let content = '<div class="empty-label"></div>';
               if (entry) content = renderTeacherCellCard(entry.students);
               const title = entry ? entry.students.map((student) => [student.name, student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')).join(' / ') : '';
-              return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
+              return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
             }).join('');
             return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
           }).join('');
@@ -2456,7 +2671,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
           const qrHtml = teacher.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + teacher.qrSvg + '</span>' : '';
           const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '') + '</section>';
+          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true }) + '</section>';
         }).join('');
       }
 
@@ -2470,6 +2685,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           payloadFingerprint = nextFingerprint;
           skipNextEquivalentPayload = false;
           syncPeriodSelectOptions(currentPeriodValue);
+          if (currentStartDate && currentEndDate) {
+            render();
+            return;
+          }
+          const preferredRange = getPreferredRange();
+          setRangeAndRender(
+            preferredRange.startDate,
+            preferredRange.endDate,
+            preferredRange.periodValue,
+          );
           return;
         }
 
@@ -2559,6 +2784,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             startDate: startDate || '',
             endDate: endDate || '',
             periodValue: periodValue || '',
+          }, '*');
+        } catch {}
+      }
+
+      function notifyPopupReady() {
+        try {
+          if (!window.opener || window.opener.closed) return;
+          window.opener.postMessage({
+            type: 'schedule-popup-ready',
+            viewType: VIEW_TYPE,
           }, '*');
         } catch {}
       }
@@ -2672,6 +2907,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function handleUnavailablePointerDown(target) {
+        if (isUnavailableTogglePending(target)) return true;
         const role = target.getAttribute('data-role') || '';
         if (!role.includes('unavailable') && role !== 'student-slot-cell' && role !== 'teacher-slot-cell') return false;
         if (role.includes('modal')) return false;
@@ -2764,6 +3000,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         } catch (error) {
           pagesElement.innerHTML = '<div class="empty-state">表示中にエラーが発生しました: ' + escapeHtml(String(error)) + '</div>';
         }
+        syncPendingUnavailableUi(pagesElement);
         bindNotes();
         bindSharedInputs();
         if (window.__scheduleReadStoredLogo) syncLogo(window.__scheduleReadStoredLogo());
@@ -2876,14 +3113,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }, 1000);
       window.addEventListener('message', (event) => {
         const message = event.data;
+        if (message && message.type === 'schedule-force-release-interaction') {
+          interactionLockSuspendUntil = Date.now() + 1500;
+          releaseInteractionLock();
+          return;
+        }
         if (!message || message.type !== 'schedule-data-update' || message.viewType !== VIEW_TYPE || !message.payload) return;
         applyIncomingPayload(message.payload);
       });
       window.__scheduleReadStoredLogo = bindLogoControls();
       setRangeAndRender(preferredRange.startDate, preferredRange.endDate, preferredRange.periodValue);
       if (!document.hidden && document.hasFocus()) acquireInteractionLock();
-      window.setTimeout(render, 0);
-      window.addEventListener('load', render, { once: true });
+      window.setTimeout(() => {
+        notifyPopupReady();
+      }, 0);
     </script>
   </body>
 </html>`

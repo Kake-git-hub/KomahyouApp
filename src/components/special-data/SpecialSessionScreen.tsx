@@ -1,7 +1,7 @@
-import { useMemo, useRef, useState, type ChangeEvent, type Dispatch, type SetStateAction } from 'react'
+import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
-import { initialSpecialSessions, type SpecialSessionRow } from './specialSessionModel'
+import type { SpecialSessionRow } from './specialSessionModel'
 
 type SpecialSessionScreenProps = {
   sessions: SpecialSessionRow[]
@@ -232,7 +232,7 @@ function buildStudentInputRows(sessions: SpecialSessionRow[], students: StudentR
   })))
 }
 
-function buildTemplateSpecialSessions(sessions: SpecialSessionRow[], students: StudentRow[], teachers: TeacherRow[]) {
+export function buildTemplateSpecialSessions(sessions: SpecialSessionRow[], students: StudentRow[], teachers: TeacherRow[]) {
   if (sessions.length === 0) return sessions
 
   const firstSession = sessions[0]
@@ -498,15 +498,13 @@ function DateCalendar({ visibleStartMonth, selectedDates, onDateClick, rangeStar
   )
 }
 
-export function SpecialSessionScreen({ sessions, students, teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore }: SpecialSessionScreenProps) {
+export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore }: SpecialSessionScreenProps) {
   const [draft, setDraft] = useState<SessionDraft>(() => createDraft())
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const [draftVisibleStartMonth, setDraftVisibleStartMonth] = useState(() => toMonthKey(createDraft().startDate))
   const [editingVisibleStartMonths, setEditingVisibleStartMonths] = useState<Record<string, string>>({})
-  const importInputRef = useRef<HTMLInputElement | null>(null)
-
   const sortedSessions = useMemo(() => sessions.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [sessions])
 
   const updateSession = (id: string, patch: Partial<SpecialSessionRow>) => {
@@ -599,45 +597,8 @@ export function SpecialSessionScreen({ sessions, students, teachers, onUpdateSes
     setStatusMessage('特別講習データを追加しました。')
   }
 
-  const exportTemplateWorkbook = async () => {
-    const xlsx = await import('xlsx')
-    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, buildTemplateSpecialSessions(initialSpecialSessions, students, teachers), students, teachers), '特別講習データテンプレート.xlsx')
-    setStatusMessage('特別講習の Excel テンプレートを出力しました。')
-  }
-
-  const exportCurrentWorkbook = async () => {
-    const xlsx = await import('xlsx')
-    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, sessions, students, teachers), '特別講習データ_現在.xlsx')
-    setStatusMessage('特別講習データを Excel 出力しました。')
-  }
-
-  const openImportDialog = () => {
-    importInputRef.current?.click()
-  }
-
-  const importWorkbook = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      const buffer = await file.arrayBuffer()
-      const xlsx = await import('xlsx')
-      const workbook = xlsx.read(buffer, { type: 'array' })
-      const importedSessions = parseSpecialSessionWorkbook(xlsx, workbook, sessions)
-      onUpdateSessions(importedSessions)
-      setEditingSessionId(null)
-      setShowCreateForm(false)
-      setStatusMessage('特別講習データを Excel から取り込みました。')
-    } catch {
-      setStatusMessage('特別講習データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
-    } finally {
-      event.target.value = ''
-    }
-  }
-
   return (
     <div className="page-shell page-shell-basic-data">
-      <input ref={importInputRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={importWorkbook} />
       <section className="toolbar-panel" aria-label="特別講習データの操作バー">
         <div className="toolbar-row toolbar-row-primary">
           <div className="toolbar-group toolbar-group-compact">
@@ -655,16 +616,6 @@ export function SpecialSessionScreen({ sessions, students, teachers, onUpdateSes
               autoAssignRulesItemTestId="special-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="special-data-menu-open-backup-button"
             />
-          </div>
-          <div className="toolbar-group toolbar-group-end">
-            <details className="menu-dropdown">
-              <summary className="secondary-button slim" data-testid="special-data-excel-menu-button">エクセル管理</summary>
-              <div className="menu-dropdown-list">
-                <button className="menu-link-button" type="button" onClick={exportTemplateWorkbook} data-testid="special-data-export-template-button">テンプレート出力</button>
-                <button className="menu-link-button" type="button" onClick={exportCurrentWorkbook} data-testid="special-data-export-current-button">現データ出力</button>
-                <button className="menu-link-button" type="button" onClick={openImportDialog} data-testid="special-data-import-button">エクセル取り込み</button>
-              </div>
-            </details>
           </div>
         </div>
         {statusMessage ? (

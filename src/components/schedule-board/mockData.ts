@@ -364,9 +364,9 @@ export const openIssues: OpenIssue[] = [
 ]
 
 export const lessonTypeLabels: Record<LessonType, string> = {
-  regular: '通常授業',
-  makeup: '通常振替',
-  special: '特別講習',
+  regular: '通常',
+  makeup: '振替',
+  special: '講習',
 }
 
 export const teacherTypeLabels: Record<TeacherType, string> = {

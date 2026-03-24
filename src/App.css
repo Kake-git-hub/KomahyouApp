@@ -366,6 +366,29 @@
   align-items: center;
 }
 
+.auto-assign-debug-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d7e2f1;
+  border-radius: 16px;
+  background: #f8fbff;
+  justify-self: end;
+  align-self: end;
+  width: min(460px, calc(100vw - 32px));
+}
+
+.auto-assign-debug-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-assign-debug-preview {
+  max-height: min(48vh, 480px);
+  overflow: auto;
+}
+
 .stock-row-shell,
 .lecture-stock-row-shell {
   display: inline-flex;
@@ -937,6 +960,11 @@ tr.sa-slot-first td {
   padding-bottom: 1px;
 }
 
+.sa-student-name-absence {
+  color: #6d7f93;
+  font-weight: 500;
+}
+
 .sa-student-detail {
   display: inline-flex;
   align-items: baseline;
@@ -1055,7 +1083,7 @@ tr.sa-slot-first td {
 }
 
 .student-menu-type-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .student-menu-type-grid-teacher {
@@ -1093,6 +1121,7 @@ tr.sa-slot-first td {
   cursor: pointer;
   font: inherit;
   font-size: 12px;
+  width: 100%;
 }
 
 .student-type-button.compact {

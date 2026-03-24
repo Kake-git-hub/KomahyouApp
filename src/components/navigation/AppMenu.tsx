@@ -19,7 +19,7 @@ const menuItems: Array<{ screen: AppMenuScreen; label: string }> = [
   { screen: 'basic-data', label: '基本データ' },
   { screen: 'special-data', label: '特別講習データ' },
   { screen: 'auto-assign-rules', label: '自動割振ルール' },
-  { screen: 'backup-restore', label: 'バックアップ/復元' },
+  { screen: 'backup-restore', label: 'バックアップ/復元/初期設定' },
 ]
 
 export function AppMenu({

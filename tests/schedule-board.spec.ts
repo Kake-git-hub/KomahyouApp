@@ -54,6 +54,21 @@ async function setScheduleRangeInPopup(popup: Parameters<typeof test>[0]['page']
   }, [startDate, endDate])
 }
 
+async function restoreBoardInteraction(page: Parameters<typeof test>[0]['page']) {
+  await page.getByTestId('toolbar-status').click()
+}
+
+async function ensureLectureStockPanelVisible(page: Parameters<typeof test>[0]['page']) {
+  const panel = page.getByTestId('lecture-stock-panel')
+  const isVisible = (await panel.count()) > 0 && await panel.isVisible()
+  if (isVisible) return
+  await restoreBoardInteraction(page)
+  await page.getByTestId('lecture-stock-chip').evaluate((element) => {
+    ;(element as HTMLButtonElement).click()
+  })
+  await expect(panel).toBeVisible()
+}
+
 async function saveMemoToCell(
   page: Parameters<typeof test>[0]['page'],
   cellTestId: string,
@@ -201,24 +216,31 @@ async function findEmptyStudentCellWithTeacher(
       if (excludedStudentName && await hasStudentInSlot(page, dateKey, slotNumber, excludedStudentName)) continue
       const slotId = `${dateKey}_${slotNumber}`
       if (excludedSlotId === slotId) continue
+      const target = await page.evaluate((currentSlotId) => {
+        for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
+          const teacherCell = document.querySelector<HTMLElement>(`[data-testid="teacher-cell-${currentSlotId}-${deskIndex}"]`)
+          const teacherName = teacherCell?.textContent?.trim() ?? ''
+          if (!teacherName) continue
 
-      for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
-        const teacherCell = page.getByTestId(`teacher-cell-${slotId}-${deskIndex}`)
-        if (await teacherCell.count() === 0) continue
-        const teacherName = ((await teacherCell.textContent()) ?? '').trim()
-        if (!teacherName) continue
+          for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
+            const nameCell = document.querySelector<HTMLElement>(`[data-testid="student-name-${currentSlotId}-${deskIndex}-${studentIndex}"]`)
+            const studentName = nameCell?.textContent?.trim() ?? ''
+            if (studentName) continue
 
-        for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
-          const nameLocator = page.getByTestId(`student-name-${slotId}-${deskIndex}-${studentIndex}`)
-          if (await nameLocator.count() === 0) continue
-          const text = ((await nameLocator.textContent()) ?? '').trim()
-          if (text) continue
-
-          return {
-            cellTestId: `student-cell-${slotId}-${deskIndex}-${studentIndex}`,
-            teacherName,
-            slotId,
+            return {
+              cellTestId: `student-cell-${currentSlotId}-${deskIndex}-${studentIndex}`,
+              teacherName,
+            }
           }
+        }
+
+        return null
+      }, slotId)
+
+      if (target) {
+        return {
+          ...target,
+          slotId,
         }
       }
     }
@@ -357,6 +379,20 @@ function resolveOperationalSchoolYear(today = new Date()) {
   return today >= getSchoolYearStart(today.getFullYear()) ? today.getFullYear() : today.getFullYear() - 1
 }
 
+function getStableWeekStart(today = new Date(), requiredFutureDays = 0) {
+  const currentWeekStart = getWeekStart(today)
+  const currentSchoolYear = resolveOperationalSchoolYear(today)
+  const schoolYearEnd = new Date(getSchoolYearStart(currentSchoolYear + 1))
+  schoolYearEnd.setDate(schoolYearEnd.getDate() - 1)
+  schoolYearEnd.setHours(0, 0, 0, 0)
+
+  if (addDays(currentWeekStart, requiredFutureDays) <= schoolYearEnd) {
+    return currentWeekStart
+  }
+
+  return addDays(getWeekStart(schoolYearEnd), -7 * Math.max(1, Math.ceil(requiredFutureDays / 7)))
+}
+
 function resolveExpectedSpecialDraft(today = new Date()) {
   const month = today.getMonth() + 1
   if (month <= 4) {
@@ -427,7 +463,6 @@ test.describe('コマ調整表', () => {
     await expect(page.getByRole('heading', { name: '管理データ' })).toBeVisible()
     await expect(page.getByTestId('basic-data-tab-students')).toHaveClass(/active/)
     await expect(page.getByTestId('basic-data-student-name-s001')).toHaveText('青木 太郎')
-    await expect(page.getByTestId('basic-data-excel-menu-button')).toBeVisible()
     await expect(page.getByRole('button', { name: '未入力' })).toHaveCount(0)
 
     await page.getByTestId('basic-data-tab-teachers').click()
@@ -623,10 +658,10 @@ test.describe('コマ調整表', () => {
 
   test('通常授業の追加と期間変更と削除がコマ表へ反映される', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
-    const currentWeekStart = getWeekStart(new Date())
+    const currentWeekStart = getStableWeekStart(new Date(), 7)
     const nextWeekStart = addDays(currentWeekStart, 7)
+    const currentTuesdayKey = toDateKey(addDays(currentWeekStart, 1))
     const nextTuesdayKey = toDateKey(addDays(nextWeekStart, 1))
-    const nextWednesdayKey = toDateKey(addDays(nextWeekStart, 2))
     const boardGrid = page.getByTestId('slot-adjust-grid')
     const findStudentInTuesdayFifthSlot = async () => {
       for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
@@ -672,7 +707,7 @@ test.describe('コマ調整表', () => {
 
     await periodRow.getByRole('button', { name: '編集' }).click()
     const editablePeriodRow = page.getByTestId(`basic-data-regular-row-${rowId}`)
-    await setHiddenDateInput(page, `basic-data-regular-period-start-${rowId}-input`, nextWednesdayKey)
+    await setHiddenDateInput(page, `basic-data-regular-period-end-${rowId}-input`, currentTuesdayKey)
     await editablePeriodRow.getByRole('button', { name: '編集終了' }).click()
     await navigateFromBasicDataToBoard(page)
 
@@ -689,8 +724,8 @@ test.describe('コマ調整表', () => {
 
   test('通常授業の期間設定は全パターンでコマ表へ反映される', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
-    const previousWeekStart = addDays(getWeekStart(new Date()), -7)
-    const currentWeekStart = getWeekStart(new Date())
+    const currentWeekStart = getStableWeekStart(new Date(), 15)
+    const previousWeekStart = addDays(currentWeekStart, -7)
     const nextWeekStart = addDays(currentWeekStart, 7)
     const afterNextWeekStart = addDays(currentWeekStart, 14)
     const previousTuesdayKey = toDateKey(addDays(previousWeekStart, 1))
@@ -884,7 +919,7 @@ test.describe('コマ調整表', () => {
 
   test('本番相当データでも通常授業の追加内容が複数週のコマ表へ反映される', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
-    const currentWeekStart = getWeekStart(new Date())
+    const currentWeekStart = getStableWeekStart(new Date(), 17)
     const nextWeekStart = addDays(currentWeekStart, 7)
     const afterNextWeekStart = addDays(currentWeekStart, 14)
     const currentTuesdayKey = toDateKey(addDays(currentWeekStart, 1))
@@ -1132,7 +1167,6 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-open-special-data-button').click()
 
     await expect(page.getByTestId('special-data-screen')).toBeVisible()
-  await expect(page.getByTestId('special-data-excel-menu-button')).toBeVisible()
     await expect(page.getByTestId('special-data-create-form')).toHaveCount(0)
 
   await page.getByTestId('special-data-toggle-create-button').click()
@@ -1177,21 +1211,20 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-open-auto-assign-rules-button').click()
 
     await expect(page.getByTestId('auto-assign-rules-screen')).toBeVisible()
-  await expect(page.getByTestId('auto-assign-rules-excel-menu-button')).toBeVisible()
-  await expect(page.getByTestId('auto-assign-rules-back-button')).toHaveCount(0)
-    await expect(page.getByText('絶対制約事項', { exact: true })).toBeVisible()
-    await expect(page.getByText('強制制約事項', { exact: true })).toBeVisible()
+    await expect(page.getByTestId('auto-assign-rules-back-button')).toHaveCount(0)
+    await expect(page.locator('.auto-assign-rule-group-head', { hasText: '絶対事項' }).first()).toBeVisible()
+    await expect(page.locator('.auto-assign-rule-group-head', { hasText: '制約事項' }).first()).toBeVisible()
     await expect(page.getByTestId('auto-assign-static-constraint-keep-existing')).toContainText('既存コマは変更しない')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('出席可能コマのみ')
     await expect(page.getByTestId('auto-assign-static-constraint-attendance-only')).toContainText('生徒の出席可能コマだけを候補にして割り振ります。')
     await expect(page.getByTestId('auto-assign-rule-card-subjectCapableTeachersOnly')).toContainText('科目対応講師のみ')
     await expect(page.getByTestId('auto-assign-rule-card-subjectCapableTeachersOnly')).toContainText('講師の科目担当に収まる生徒だけを配置候補にします。')
-    await expect(page.getByTestId('auto-assign-rule-priority-subjectCapableTeachersOnly')).toContainText('強制制約')
-    await expect(page.getByTestId('auto-assign-rule-priority-regularTeachersOnly')).toContainText('強制制約')
-    await expect(page.getByTestId('auto-assign-rule-priority-forbidFirstPeriod')).toContainText('強制制約')
+    await expect(page.getByTestId('auto-assign-rule-priority-subjectCapableTeachersOnly')).toContainText('制約事項')
+    await expect(page.getByTestId('auto-assign-rule-priority-regularTeachersOnly')).toContainText('制約事項')
+    await expect(page.getByTestId('auto-assign-rule-priority-forbidFirstPeriod')).toContainText('制約事項')
     await expect(page.getByTestId('auto-assign-rule-targets-subjectCapableTeachersOnly')).toContainText('なし')
     await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('なし')
-    await expect(page.getByText('制約事項', { exact: true })).toBeVisible()
+    await expect(page.locator('.auto-assign-rule-group-head', { hasText: '優先事項' }).first()).toBeVisible()
     await expect(page.getByTestId('auto-assign-pair-constraints-panel')).toBeVisible()
     await expect(page.getByTestId('auto-assign-pair-constraints-table')).toContainText('ペア制約はまだありません。')
 
@@ -1207,7 +1240,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('auto-assign-modal-confirm-preferTwoStudentsPerTeacher').click()
     await expect(page.getByTestId('auto-assign-rules-status')).toContainText('講師1人に生徒2人配置 に対象を追加しました。')
     await expect(page.getByTestId('auto-assign-rule-targets-preferTwoStudentsPerTeacher')).toContainText('全員')
-    await expect(page.getByTestId('auto-assign-group-priority-two-students')).toContainText('制約 1')
+    await expect(page.getByTestId('auto-assign-group-priority-two-students')).toContainText('優先 2')
 
     await page.getByTestId('auto-assign-open-modal-maxOneLesson').click()
     await page.getByTestId('auto-assign-type-grade-maxOneLesson').click()
@@ -1252,9 +1285,9 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('auto-assign-rule-targets-allowTwoConsecutiveLessons')).toContainText('伊藤花')
     await expect(page.locator('[data-testid="auto-assign-pair-draft-person-a-id"] option[value="t009"]')).toHaveCount(0)
 
-    await expect(page.getByTestId('auto-assign-rule-priority-allowTwoConsecutiveLessons')).toContainText('制約 3')
+    await expect(page.getByTestId('auto-assign-rule-priority-allowTwoConsecutiveLessons')).toContainText('優先 4')
     await page.getByTestId('auto-assign-group-move-down-lesson-pattern').click()
-    await expect(page.getByTestId('auto-assign-rule-priority-allowTwoConsecutiveLessons')).toContainText('制約 4')
+    await expect(page.getByTestId('auto-assign-rule-priority-allowTwoConsecutiveLessons')).toContainText('優先 5')
     await expect(page.getByTestId('auto-assign-rules-status')).toContainText('制約グループの優先順位を下げました。')
     await expect(page.getByTestId('auto-assign-priority-slider-allowTwoConsecutiveLessons')).toHaveCount(0)
 
@@ -1730,13 +1763,46 @@ test.describe('コマ調整表', () => {
 
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替ストック')
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('振替ストックに戻す')
     await page.getByTestId('menu-stock-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ回しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('1')
     await page.getByTestId('makeup-stock-chip').click()
     await expect(page.getByTestId('makeup-stock-panel')).toContainText('青木太郎')
     await expect(sourceName).toHaveText('')
+  })
+
+  test('休みにすると盤面へ薄字表示し、生徒日程表の休み欄へ載せる', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const slotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCell = page.getByTestId(`student-cell-${slotId}-0-0`)
+    const sourceName = page.getByTestId(`student-name-${slotId}-0-0`)
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+    await restoreBoardInteraction(page)
+    const teacherName = (((await page.getByTestId(`teacher-cell-${slotId}-0`).textContent()) ?? '').replace(/\s+/g, ' ')).trim()
+
+    await sourceCell.click()
+    await expect(page.getByTestId('menu-absence-button')).toBeVisible()
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('振替ストックに戻す')
+    await page.getByTestId('menu-absence-button').click()
+
+    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
+    await expect(sourceName).toHaveText('青木太郎(休)')
+
+    await sourceCell.click()
+    await expect(page.getByTestId('student-action-menu')).toBeVisible()
+    await expect(page.getByTestId('menu-open-add-existing-student-button')).toBeVisible()
+
+    const absenceTable = popup.getByTestId('student-schedule-absence-table-s001')
+    await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(teacherName)
+    await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('通常')
+    await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('数')
   })
 
   test('講師の科目対応外になった生徒名は赤表示になりツールチップで理由を出す', async ({ page }) => {
@@ -1758,7 +1824,84 @@ test.describe('コマ調整表', () => {
     const studentName = page.getByTestId(`student-name-${slotId}-0-0`)
     await expect(studentName).toHaveClass(/sa-student-name-warning/)
     await expect(studentName).toHaveAttribute('title', /制約違反/)
-    await expect(studentName).toHaveAttribute('title', /強制制約: 科目対応講師のみ/)
+    await expect(studentName).toHaveAttribute('title', /制約事項: 科目対応講師のみ/)
+  })
+
+  test('一コマ空け違反では原因となる両方のコマを赤表示にする', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date('2026-03-23'))
+    const dateKey = toDateKey(currentWeekStart)
+    const sourceName = page.getByTestId(`student-name-${dateKey}_1-0-0`)
+
+    await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-auto-assign-rules-button').click()
+    await page.getByTestId('auto-assign-open-modal-requireBreakBetweenLessons').click()
+    await page.getByTestId('auto-assign-type-students-requireBreakBetweenLessons').click()
+    await page.getByTestId('auto-assign-student-toggle-requireBreakBetweenLessons-s001').click()
+    await page.getByTestId('auto-assign-modal-confirm-requireBreakBetweenLessons').click()
+    await navigateFromAutoAssignRulesToBoard(page)
+
+    const target = await page.evaluate((currentDateKey) => {
+      for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
+        const teacherCell = document.querySelector<HTMLElement>(`[data-testid="teacher-cell-${currentDateKey}_2-${deskIndex}"]`)
+        const teacherName = teacherCell?.textContent?.trim() ?? ''
+        if (!teacherName) continue
+
+        for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
+          const studentNameCell = document.querySelector<HTMLElement>(`[data-testid="student-name-${currentDateKey}_2-${deskIndex}-${studentIndex}"]`)
+          const studentName = studentNameCell?.textContent?.trim() ?? ''
+          if (studentName) continue
+
+          return {
+            cellTestId: `student-cell-${currentDateKey}_2-${deskIndex}-${studentIndex}`,
+            nameTestId: `student-name-${currentDateKey}_2-${deskIndex}-${studentIndex}`,
+          }
+        }
+      }
+
+      return null
+    }, dateKey)
+    expect(target).toBeTruthy()
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await restoreBoardInteraction(page)
+    await page.getByTestId('lecture-stock-chip').click()
+    await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
+    await page.getByTestId('stock-action-modal-manual').click()
+    await page.getByTestId(target!.cellTestId).click()
+
+    const targetName = page.getByTestId(target!.nameTestId)
+    await expect(sourceName).toHaveClass(/sa-student-name-warning/)
+    await expect(sourceName).toHaveAttribute('title', /制約: 一コマ空け/)
+    await expect(targetName).toHaveClass(/sa-student-name-warning/)
+    await expect(targetName).toHaveAttribute('title', /制約: 一コマ空け/)
+  })
+
+  test('通常授業がその日に一コマだけなら一コマ空け違反を出さない', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date('2026-03-23'))
+    const slotId = `${toDateKey(currentWeekStart)}_1`
+    const studentName = page.getByTestId(`student-name-${slotId}-0-0`)
+
+    await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-auto-assign-rules-button').click()
+    await page.getByTestId('auto-assign-open-modal-requireBreakBetweenLessons').click()
+    await page.getByTestId('auto-assign-type-students-requireBreakBetweenLessons').click()
+    await page.getByTestId('auto-assign-student-toggle-requireBreakBetweenLessons-s001').click()
+    await page.getByTestId('auto-assign-modal-confirm-requireBreakBetweenLessons').click()
+    await navigateFromAutoAssignRulesToBoard(page)
+
+    await expect(studentName).not.toHaveClass(/sa-student-name-warning/)
+    await expect(studentName).not.toHaveAttribute('title', /一コマ空け/)
   })
 
   test('振替ストックの表示はコマ表操作後も開いたまま残る', async ({ page }) => {
@@ -1789,7 +1932,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
     let menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtons).toEqual(['移動', 'ストックする', '削除'])
+    expect(menuButtons).toEqual(['移動', '休み', '振替ストックに戻す', '削除'])
 
     await page.getByRole('button', { name: 'x' }).click()
 
@@ -1942,10 +2085,10 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('cancel-selection-button').click()
 
     await targetCell.click()
-    await expect(page.getByTestId('menu-stock-button')).toHaveText('ストックする')
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('振替ストックに戻す')
     await page.getByTestId('menu-stock-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ回しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
     await expect(targetName).toHaveText('')
     await page.getByTestId('makeup-stock-chip').click()
     const afterReturnBalance = extractSignedCount(await page.getByTestId('makeup-stock-entry-s001__-').textContent())
@@ -1995,6 +2138,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
+    await restoreBoardInteraction(page)
     const target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎', sourceSlotId)
 
     await page.getByTestId(sourceCellTestId).click()
@@ -2019,6 +2163,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
+    await restoreBoardInteraction(page)
     await page.getByTestId(sourceCellTestId).click()
     await page.getByTestId('menu-stock-button').click()
 
@@ -2038,6 +2183,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-stock-button').click()
     await expect(sourceName).toHaveText('')
 
+    await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-special-data-button').click()
     await navigateFromSpecialDataToBoard(page)
 
@@ -2219,8 +2365,8 @@ test.describe('コマ調整表', () => {
     await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('1')
   })
 
-  test('講習は登録した期間外へ手動配置できない', async ({ page }) => {
-    const outOfPeriodWeekStart = getWeekStart(new Date('2026-05-18'))
+  test('講習を期間外へ手動配置しても赤字ツールチップで絶対制約違反を表示する', async ({ page }) => {
+    const outOfPeriodWeekStart = getWeekStart(new Date('2026-04-06'))
 
     await page.goto('/')
 
@@ -2238,16 +2384,50 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('lecture-stock-chip').click()
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 新年度準備講座' }).click()
     await page.getByTestId('stock-action-modal-manual').click()
+    await page.getByTestId(target.cellTestId).click({ force: true })
+
+    const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
+    await expect(targetName).toHaveText('青木太郎')
+    await expect(targetName).toHaveClass(/sa-student-name-warning/)
+    await expect(targetName).toHaveAttribute('title', /制約違反/)
+    await expect(targetName).toHaveAttribute('title', /絶対事項: 講習期間内割振/)
+  })
+
+  test('参加不可コマへ手動移動しても赤字ツールチップで絶対制約違反を表示する', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date('2026-03-23'))
+    const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+
+    let target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎', sourceSlotId)
+    const sourceDateKey = sourceSlotId.split('_')[0]
+    if (target.slotId.startsWith(`${sourceDateKey}_`)) {
+      target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎', target.slotId)
+    }
+    const targetDateKey = target.slotId.split('_')[0]
+
+    await popup.getByTestId(`student-schedule-day-toggle-s001-${targetDateKey}`).click()
+    await expect(popup.getByTestId(`student-schedule-day-toggle-s001-${targetDateKey}`)).toHaveClass(/is-unavailable/)
+
+    await restoreBoardInteraction(page)
+    await page.getByTestId(sourceCellTestId).click()
+    await page.getByTestId('menu-move-button').click()
     await page.getByTestId(target.cellTestId).click()
 
     const targetName = page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))
-    await expect(targetName).toHaveText('')
-    await expect(page.getByTestId('toolbar-status')).toContainText('期間外には配置できません')
+    await expect(targetName).toHaveText('青木太郎')
+    await expect(targetName).toHaveClass(/sa-student-name-warning/)
+    await expect(targetName).toHaveAttribute('title', /制約違反/)
+    await expect(targetName).toHaveAttribute('title', /絶対事項: 出席可能コマのみ/)
   })
 
   test('複数講習期間を登録しても講習ストックは期間ごとに分かれ、登録解除も対象期間だけに効く', async ({ page }) => {
-    const springWeekStart = getWeekStart(new Date('2026-03-23'))
-
     await page.goto('/')
 
     const popupPromise = page.waitForEvent('popup')
@@ -2264,39 +2444,21 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
-    await page.getByTestId('lecture-stock-chip').click()
+    await ensureLectureStockPanelVisible(page)
     const stockEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })
     const springEntry = stockEntries.filter({ hasText: '2026 新年度準備講座' })
     const examEntry = stockEntries.filter({ hasText: '2026 定期試験対策' })
-    await expect(springEntry).toHaveCount(1)
-    await expect(examEntry).toHaveCount(1)
-
-    await moveBoardToWeek(page, springWeekStart)
-    const springTarget = await findEmptyStudentCellWithTeacher(page, springWeekStart, '青木太郎')
-    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
-      await page.getByTestId('lecture-stock-chip').click()
-    }
-    await springEntry.click()
-    await page.getByTestId('stock-action-modal-manual').click()
-    await page.getByTestId(springTarget.cellTestId).click()
-    const springTargetName = page.getByTestId(springTarget.cellTestId.replace('student-cell-', 'student-name-'))
-    await expect(springTargetName).toHaveText('青木太郎')
-
-    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
-      await page.getByTestId('lecture-stock-chip').click()
-    }
-    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 新年度準備講座' })).toHaveCount(0)
-    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 定期試験対策' })).toHaveCount(1)
+    await expect.poll(async () => await stockEntries.count()).toBe(2)
+    await expect.poll(async () => await springEntry.count()).toBe(1)
+    await expect.poll(async () => await examEntry.count()).toBe(1)
 
     await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click()
     await popup.getByTestId('student-schedule-count-unregister').click()
 
-    await expect(springTargetName).toHaveText('青木太郎')
-
-    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
-      await page.getByTestId('lecture-stock-chip').click()
-    }
-    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).filter({ hasText: '2026 定期試験対策' })).toHaveCount(0)
+    await ensureLectureStockPanelVisible(page)
+    await expect.poll(async () => await stockEntries.count()).toBe(1)
+    await expect.poll(async () => await springEntry.count()).toBe(1)
+    await expect.poll(async () => await examEntry.count()).toBe(0)
   })
 
   test('講習ストック行の自動割振で複数コマをまとめて配置できる', async ({ page }) => {
@@ -2314,6 +2476,7 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
+    await restoreBoardInteraction(page)
     await moveBoardToWeek(page, specialWeekStart)
     const beforeCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
 
@@ -2326,6 +2489,41 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。')
     await expect.poll(async () => await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')).toBe(beforeCount + 2)
     await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
+  })
+
+  test('登校日集約の講習自動割振は期間前半の週も使いながら日を広く取る', async ({ page }) => {
+    const firstWeekStart = getWeekStart(new Date('2026-03-23'))
+    const secondWeekStart = getWeekStart(new Date('2026-03-30'))
+
+    await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-auto-assign-rules-button').click()
+    await page.getByTestId('auto-assign-open-modal-preferDateConcentration').click()
+    await page.getByTestId('auto-assign-modal-confirm-preferDateConcentration').click()
+    await navigateFromAutoAssignRulesToBoard(page)
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-04-05')
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('5')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await restoreBoardInteraction(page)
+    await moveBoardToWeek(page, firstWeekStart)
+    await page.getByTestId('lecture-stock-chip').click()
+    const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first()
+    await lectureEntry.click()
+    await page.getByTestId('stock-action-modal-auto').click()
+
+    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。')
+    await expect.poll(async () => await countStudentOccurrencesInWeek(page, firstWeekStart, '青木太郎')).toBeGreaterThan(0)
+
+    await moveBoardToWeek(page, secondWeekStart)
+    await expect.poll(async () => await countStudentOccurrencesInWeek(page, secondWeekStart, '青木太郎')).toBeGreaterThan(0)
   })
 
   test('講習ストック自動割振の取り消しとやり直しでストック数も戻る', async ({ page }) => {
@@ -2342,6 +2540,7 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
+    await restoreBoardInteraction(page)
     await moveBoardToWeek(page, specialWeekStart)
     await page.getByTestId('lecture-stock-chip').click()
     const lectureEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })
@@ -2373,6 +2572,7 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
+    await restoreBoardInteraction(page)
     await moveBoardToWeek(page, specialWeekStart)
     const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
 
@@ -2383,8 +2583,9 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))).toHaveText('青木太郎')
 
     await page.getByTestId(target.cellTestId).click()
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('講習ストックに戻す')
     await page.getByTestId('menu-stock-button').click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('講習ストックへ回しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('講習ストックへ戻しました。')
 
     const beforeReassignCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
     await moveBoardToWeek(page, currentWeekStart)
@@ -2412,6 +2613,39 @@ test.describe('コマ調整表', () => {
     await expect(popup.getByTestId('student-schedule-count-subject-数')).toHaveCount(0)
   })
 
+  test('希望科目数が出席可能コマ数を上回ると登録不可にして見直しを促す', async ({ page }) => {
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+
+    const studentId = 's001'
+    const targetSheet = popup.locator(`[data-role="student-sheet"][data-student-id="${studentId}"]`)
+    await popup.getByTestId(`student-schedule-day-toggle-${studentId}-2026-03-23`).click()
+    await popup.getByTestId(`student-schedule-day-toggle-${studentId}-2026-03-24`).click()
+    await popup.getByTestId(`student-schedule-day-toggle-${studentId}-2026-03-25`).click()
+    await popup.getByTestId(`student-schedule-day-toggle-${studentId}-2026-03-26`).click()
+    await expect.poll(async () => targetSheet.locator('.slot-cell.is-unavailable').count()).toBeGreaterThan(0)
+
+    const periodButton = popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')
+    await periodButton.click()
+    await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('99')
+
+    popup.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('希望科目数が出席可能コマ数を上回っているため登録できません。出席不可コマを見直してください。')
+      await dialog.accept()
+    })
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await expect(popup.getByTestId('student-schedule-count-modal')).toHaveCount(0)
+    await expect(periodButton).toContainText('希望科目数設定はここをクリック')
+    await expect.poll(async () => targetSheet.locator('[data-role="toggle-student-unavailable-date"]').count()).toBeGreaterThan(0)
+  })
+
   test('通常と講習の警告スタンプは各回数表の直下に表示される', async ({ page }) => {
     const targetWeekStart = addDays(getWeekStart(new Date()), 7)
     const targetWeekStartKey = toDateKey(targetWeekStart)
@@ -2430,6 +2664,7 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
+    await restoreBoardInteraction(page)
     await moveBoardToWeek(page, targetWeekStart)
     await page.getByTestId(sourceCellTestId).click()
     await page.getByTestId('menu-stock-button').click()
@@ -2859,6 +3094,7 @@ test.describe('コマ調整表', () => {
     const popup = await popupPromise
 
     await expect(popup.locator('.sheet').first()).toBeVisible()
+    await restoreBoardInteraction(page)
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
@@ -2901,6 +3137,7 @@ test.describe('コマ調整表', () => {
     const popup = await popupPromise
 
     await expect(popup.locator('.sheet').first()).toBeVisible()
+    await restoreBoardInteraction(page)
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
@@ -2950,6 +3187,7 @@ test.describe('コマ調整表', () => {
     await expect(popup.locator('#schedule-summary-label')).toContainText(`${targetWeekStart.getMonth() + 1}月${targetWeekStart.getDate()}日`)
 
     await expect(popup.locator('section.sheet').first()).toBeVisible()
+    await restoreBoardInteraction(page)
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
@@ -2970,18 +3208,25 @@ test.describe('コマ調整表', () => {
 
   test('通常授業データの編集もコマ表と開いた生徒日程へ反映される', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
-    const currentWeekStart = getWeekStart(new Date())
+    const currentWeekStart = getStableWeekStart(new Date(), 8)
     const nextWeekStart = addDays(currentWeekStart, 7)
     const currentMondayKey = toDateKey(currentWeekStart)
     const nextTuesdayKey = toDateKey(addDays(nextWeekStart, 1))
 
     await page.goto('/')
 
-    const popupPromise = page.waitForEvent('popup')
+    for (const popupPage of page.context().pages()) {
+      if (popupPage === page) continue
+      await popupPage.close()
+    }
+
     await page.getByTestId('board-student-schedule-button').click()
-    const popup = await popupPromise
+    await expect.poll(() => page.context().pages().filter((candidate) => candidate !== page).length).toBe(1)
+    const popup = page.context().pages().find((candidate) => candidate !== page)
+    if (!popup) throw new Error('student schedule popup not found')
     await setScheduleRangeInPopup(popup, nextTuesdayKey, nextTuesdayKey)
     await expect(popup.locator('#schedule-summary-label')).toContainText(`${nextWeekStart.getMonth() + 1}月${nextWeekStart.getDate() + 1}日`)
+    await restoreBoardInteraction(page)
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
@@ -3020,6 +3265,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-student-schedule-button').click()
     const studentPopup = await studentPopupPromise
     await expect(studentPopup.locator('[data-role="student-sheet"][data-student-id="s001"]')).toHaveCount(1)
+    await restoreBoardInteraction(page)
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
@@ -3038,6 +3284,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-teacher-schedule-button').click()
     const teacherPopup = await teacherPopupPromise
     await expect(teacherPopup.locator('[data-role="teacher-sheet"][data-teacher-id="t001"]')).toHaveCount(1)
+    await restoreBoardInteraction(page)
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
@@ -3164,6 +3411,7 @@ test.describe('コマ調整表', () => {
     await expect(periodButton).toContainText('希望科目数登録済')
     await expect(targetSheet.locator('[data-role="toggle-student-unavailable-date"]')).toHaveCount(0)
 
+    await restoreBoardInteraction(page)
     await moveBoardToWeek(page, specialWeekStart)
     const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
     const targetMatch = target.cellTestId.match(/^student-cell-(.+)-(\d+)-(\d+)$/)
@@ -3341,6 +3589,7 @@ test.describe('コマ調整表', () => {
     page.once('dialog', async (dialog) => {
       await dialog.accept()
     })
+    await restoreBoardInteraction(page)
     await page.getByTestId(`day-header-${currentMondayKey}`).click()
 
     await expect.poll(async () => popup.locator('.slot-cell.is-holiday').count()).toBeGreaterThan(holidayCountBefore)
@@ -3367,10 +3616,12 @@ test.describe('コマ調整表', () => {
     const studentPopupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const studentPopup = await studentPopupPromise
+    await restoreBoardInteraction(page)
 
     const teacherPopupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-teacher-schedule-button').click()
     const teacherPopup = await teacherPopupPromise
+    await restoreBoardInteraction(page)
 
     const target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎')
     const slotMatch = target.slotId.match(/^(\d{4}-\d{2}-\d{2})_(\d+)$/)

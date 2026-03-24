@@ -1,6 +1,7 @@
 import type { StudentRow } from '../basic-data/basicDataModel'
 
 export type AutoAssignRuleKey =
+  | 'preferDateConcentration'
   | 'preferNextDayOrLater'
   | 'preferTwoStudentsPerTeacher'
   | 'maxOneLesson'
@@ -51,9 +52,14 @@ export type AutoAssignRuleRow = {
 
 export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'label' | 'description'>> = [
   {
+    key: 'preferDateConcentration',
+    label: '登校日集約',
+    description: '同じ日に複数コマをまとめつつ、登校日どうしは期間内でほどよく間隔が空く候補を優先します。',
+  },
+  {
     key: 'preferNextDayOrLater',
-    label: '翌日移行に割り振り',
-    description: '同日に寄せるより、別日に分散できる候補を優先します。',
+    label: '登校日分散',
+    description: '同じ日にまとめるより、別日の登校へ分散できる候補を優先します。',
   },
   {
     key: 'preferTwoStudentsPerTeacher',
@@ -98,7 +104,7 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
   {
     key: 'regularTeachersOnly',
     label: '通常講師のみ',
-    description: '通常授業で担当している講師への配置を優先します。',
+    description: '割振りを通常授業で担当している講師だけに制限します。',
   },
   {
     key: 'preferLateAfternoon',
@@ -118,7 +124,7 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
   {
     key: 'forbidFirstPeriod',
     label: '1限禁止',
-    description: '1 限には配置しない前提で候補を並べます。',
+    description: '対象者を1 限に配置しないよう制限します。',
   },
 ]
 

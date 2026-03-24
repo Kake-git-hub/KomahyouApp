@@ -1,32 +1,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
-import { BasicDataScreen } from './components/basic-data/BasicDataScreen'
-import { AutoAssignRuleScreen } from './components/auto-assign-rules/AutoAssignRuleScreen'
+import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
+import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
-import { deriveManagedDisplayName, initialStudents, initialTeachers } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, type ManagerRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
-import { SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
+import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { importedMasterData } from './data/importedMasterData.generated'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import type { PersistedBoardState } from './types/appState'
+import { loadAppSnapshot, parseAppSnapshot, saveAppSnapshot, serializeAppSnapshot } from './data/appSnapshotRepository'
+import type { AppSnapshot, ClassroomSettings as SharedClassroomSettings, PersistedBoardState } from './types/appState'
 import { DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, fetchGoogleHolidayDates, mergeSyncedHolidayDates, readGoogleHolidaySyncCache, shouldRefreshGoogleHolidayCache, writeGoogleHolidaySyncCache } from './utils/googleHolidayCalendar'
 import { createLegacyLessonScheduleQrConfig } from './utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
 import './App.css'
 
-export type ClassroomSettings = {
-  closedWeekdays: number[]
-  holidayDates: string[]
-  forceOpenDates: string[]
-  deskCount: number
-  googleHolidayCalendarSyncedDates?: string[]
-  googleHolidayCalendarLastSyncedAt?: string
-}
+export type ClassroomSettings = SharedClassroomSettings
 
 type GoogleHolidaySyncStatus = 'idle' | 'syncing' | 'success' | 'error' | 'disabled'
 
@@ -55,6 +49,16 @@ type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
   __lessonScheduleSpecialSessionWindow?: Window | null
   __lessonScheduleSpecialSessionId?: string
   __lessonScheduleBoardWeeks?: SlotCell[][]
+}
+
+function downloadTextFile(fileName: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
 }
 
 function getSchedulePopupRuntimeWindow() {
@@ -95,6 +99,11 @@ function shouldUseImportedMasterData() {
   return importedMasterData.teachers.length > 0 && importedMasterData.students.length > 0
 }
 
+function isSnapshotPersistenceRuntimeEnabled() {
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return false
+  return true
+}
+
 const normalizedImportedTeachers = importedMasterData.teachers.map((teacher) => ({
   ...teacher,
   displayName: deriveManagedDisplayName(teacher.name),
@@ -117,6 +126,10 @@ function createInitialClassroomSettings(): ClassroomSettings {
       holidayDates: [],
       forceOpenDates: [],
       deskCount: 14,
+      operationStartDate: '',
+      initialSetupCompletedAt: '',
+      initialSetupMakeupStocks: [],
+      initialSetupLectureStocks: [],
       googleHolidayCalendarSyncedDates: [],
       googleHolidayCalendarLastSyncedAt: '',
     }
@@ -128,6 +141,10 @@ function createInitialClassroomSettings(): ClassroomSettings {
     holidayDates: cache?.syncedHolidayDates ?? [],
     forceOpenDates: [],
     deskCount: 14,
+    operationStartDate: '',
+    initialSetupCompletedAt: '',
+    initialSetupMakeupStocks: [],
+    initialSetupLectureStocks: [],
     googleHolidayCalendarSyncedDates: cache?.syncedHolidayDates ?? [],
     googleHolidayCalendarLastSyncedAt: cache?.lastSyncedAt ?? '',
   }
@@ -140,13 +157,16 @@ function App() {
   const googleHolidayCalendarId = (import.meta.env.VITE_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID ?? DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID).trim()
   const holidaySyncInFlightRef = useRef(false)
   const holidaySyncBootstrapRef = useRef(false)
+  const initialSetupAutoOpenRef = useRef(false)
   const teacherAutoAssignRequestIdRef = useRef(0)
   const studentScheduleRequestIdRef = useRef(0)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const [screen, setScreen] = useState<'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'>('board')
+  const [managers, setManagers] = useState<ManagerRow[]>(initialManagers)
   const [teachers, setTeachers] = useState(() => useImportedMasterData ? normalizedImportedTeachers : initialTeachers)
   const [students, setStudents] = useState(() => useImportedMasterData ? normalizedImportedStudents : initialStudents)
   const [regularLessons, setRegularLessons] = useState(() => useImportedMasterData ? normalizedImportedRegularLessons : createInitialRegularLessons())
+  const [groupLessons, setGroupLessons] = useState<GroupLessonRow[]>(initialGroupLessons)
   const [specialSessions, setSpecialSessions] = useState(initialSpecialSessions)
   const [autoAssignRules, setAutoAssignRules] = useState(initialAutoAssignRules)
   const [pairConstraints, setPairConstraints] = useState(initialPairConstraints)
@@ -156,6 +176,9 @@ function App() {
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherAutoAssignRequest, setTeacherAutoAssignRequest] = useState<TeacherAutoAssignRequest | null>(null)
   const [studentScheduleRequest, setStudentScheduleRequest] = useState<StudentScheduleRequest | null>(null)
+  const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
+  const [lastSavedAt, setLastSavedAt] = useState('')
+  const [hasHydratedSnapshot, setHasHydratedSnapshot] = useState(false)
   const [googleHolidaySyncState, setGoogleHolidaySyncState] = useState<GoogleHolidaySyncState>(() => {
     if (!isGoogleHolidaySyncEnabled) {
       return { status: 'disabled', message: 'Google祝日同期は自動テスト実行中のため停止しています。' }
@@ -240,6 +263,7 @@ function App() {
         students,
         regularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       plannedCells: buildManagedScheduleCellsForRange({
         range,
@@ -262,7 +286,7 @@ function App() {
       qrConfig: scheduleQrConfig,
       targetWindow: studentPopup,
     })
-  }, [classroomSettings, regularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, regularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -281,6 +305,7 @@ function App() {
         students,
         regularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       plannedCells: buildManagedScheduleCellsForRange({
         range,
@@ -303,7 +328,7 @@ function App() {
       qrConfig: scheduleQrConfig,
       targetWindow: teacherPopup,
     })
-  }, [classroomSettings, regularLessons, scheduleQrConfig, specialSessions, students, teacherScheduleRange, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, regularLessons, scheduleQrConfig, specialSessions, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -333,11 +358,12 @@ function App() {
         students,
         regularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
       targetWindow: popupWindow,
     })
-  }, [specialSessions, students, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, specialSessions, students, teachers])
 
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
@@ -345,6 +371,12 @@ function App() {
       if (!message) return
 
       if (message.type === 'schedule-refresh-request') {
+        if (message.viewType === 'student') syncStudentSchedulePopup()
+        if (message.viewType === 'teacher') syncTeacherSchedulePopup()
+        return
+      }
+
+      if (message.type === 'schedule-popup-ready') {
         if (message.viewType === 'student') syncStudentSchedulePopup()
         if (message.viewType === 'teacher') syncTeacherSchedulePopup()
         return
@@ -689,18 +721,257 @@ function App() {
     return () => window.clearInterval(intervalId)
   }, [classroomSettings.googleHolidayCalendarLastSyncedAt, googleHolidayApiKey, isGoogleHolidaySyncEnabled, runGoogleHolidaySync])
 
+  useEffect(() => {
+    if (!isSnapshotPersistenceRuntimeEnabled()) {
+      setPersistenceMessage('')
+      setHasHydratedSnapshot(true)
+      return
+    }
+
+    let disposed = false
+
+    void loadAppSnapshot()
+      .then((snapshot) => {
+        if (disposed) return
+        if (snapshot) {
+          setScreen(snapshot.screen)
+          setManagers(snapshot.managers)
+          setTeachers(snapshot.teachers)
+          setStudents(snapshot.students)
+          setRegularLessons(snapshot.regularLessons)
+          setGroupLessons(snapshot.groupLessons)
+          setSpecialSessions(snapshot.specialSessions)
+          setAutoAssignRules(snapshot.autoAssignRules)
+          setPairConstraints(snapshot.pairConstraints)
+          setClassroomSettings(snapshot.classroomSettings)
+          setBoardState(snapshot.boardState)
+          setLastSavedAt(snapshot.savedAt)
+          setPersistenceMessage('保存済みデータを読み込みました。')
+        } else {
+          setPersistenceMessage('保存データはまだありません。必要なら初期設定から開始してください。')
+        }
+        setHasHydratedSnapshot(true)
+      })
+      .catch(() => {
+        if (disposed) return
+        setPersistenceMessage('保存データの読み込みに失敗しました。現在の初期データで続行します。')
+        setHasHydratedSnapshot(true)
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!hasHydratedSnapshot) return
+    if (!isSnapshotPersistenceRuntimeEnabled()) return
+
+    const snapshot: AppSnapshot = {
+      schemaVersion: 1,
+      savedAt: new Date().toISOString(),
+      screen,
+      classroomSettings,
+      managers,
+      teachers,
+      students,
+      regularLessons,
+      groupLessons,
+      specialSessions,
+      autoAssignRules,
+      pairConstraints,
+      boardState,
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void saveAppSnapshot(snapshot)
+        .then(() => {
+          setLastSavedAt(snapshot.savedAt)
+          setPersistenceMessage('自動保存しました。')
+        })
+        .catch(() => {
+          setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
+        })
+    }, 250)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [autoAssignRules, boardState, classroomSettings, groupLessons, hasHydratedSnapshot, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+
+  useEffect(() => {
+    if (!hasHydratedSnapshot) return
+    if (typeof navigator !== 'undefined' && navigator.webdriver) return
+    if (classroomSettings.initialSetupCompletedAt) return
+    if (initialSetupAutoOpenRef.current) return
+    initialSetupAutoOpenRef.current = true
+    setScreen('backup-restore')
+  }, [classroomSettings.initialSetupCompletedAt, hasHydratedSnapshot])
+
+  const exportBackup = useCallback(() => {
+    const snapshot: AppSnapshot = {
+      schemaVersion: 1,
+      savedAt: new Date().toISOString(),
+      screen,
+      classroomSettings,
+      managers,
+      teachers,
+      students,
+      regularLessons,
+      groupLessons,
+      specialSessions,
+      autoAssignRules,
+      pairConstraints,
+      boardState,
+    }
+    downloadTextFile(`komahyouapp-backup-${snapshot.savedAt.slice(0, 10)}.json`, serializeAppSnapshot(snapshot), 'application/json')
+    setLastSavedAt(snapshot.savedAt)
+    setPersistenceMessage('バックアップを書き出しました。')
+  }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+
+  const importBackup = useCallback(async (file: File) => {
+    try {
+      const text = await file.text()
+      const snapshot = parseAppSnapshot(text)
+      setScreen(snapshot.screen)
+      setManagers(snapshot.managers)
+      setTeachers(snapshot.teachers)
+      setStudents(snapshot.students)
+      setRegularLessons(snapshot.regularLessons)
+      setGroupLessons(snapshot.groupLessons)
+      setSpecialSessions(snapshot.specialSessions)
+      setAutoAssignRules(snapshot.autoAssignRules)
+      setPairConstraints(snapshot.pairConstraints)
+      setClassroomSettings(snapshot.classroomSettings)
+      setBoardState(snapshot.boardState)
+      setLastSavedAt(snapshot.savedAt)
+      setPersistenceMessage('バックアップを読み込みました。')
+    } catch {
+      setPersistenceMessage('バックアップの読み込みに失敗しました。ファイル形式を確認してください。')
+    }
+  }, [])
+
+  const exportBasicDataTemplate = useCallback(async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildBasicDataWorkbook(xlsx, createBasicDataTemplateBundle()), '基本データテンプレート.xlsx')
+    setPersistenceMessage('基本データの Excel テンプレートを出力しました。')
+  }, [])
+
+  const exportBasicDataCurrent = useCallback(async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildBasicDataWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, classroomSettings }), '基本データ_現在.xlsx')
+    setPersistenceMessage('基本データを Excel 出力しました。')
+  }, [classroomSettings, groupLessons, managers, regularLessons, students, teachers])
+
+  const importBasicDataWorkbook = useCallback(async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer()
+      const xlsx = await import('xlsx')
+      const workbook = xlsx.read(buffer, { type: 'array' })
+      const imported = parseImportedBundle(xlsx, workbook, { managers, teachers, students, regularLessons, groupLessons, classroomSettings })
+      setManagers(imported.managers)
+      setTeachers(imported.teachers)
+      setStudents(imported.students)
+      setRegularLessons(imported.regularLessons)
+      setGroupLessons(imported.groupLessons)
+      setClassroomSettings((current) => ({
+        ...imported.classroomSettings,
+        operationStartDate: current.operationStartDate,
+        initialSetupCompletedAt: current.initialSetupCompletedAt,
+        initialSetupMakeupStocks: current.initialSetupMakeupStocks ?? [],
+        initialSetupLectureStocks: current.initialSetupLectureStocks ?? [],
+        googleHolidayCalendarSyncedDates: current.googleHolidayCalendarSyncedDates,
+        googleHolidayCalendarLastSyncedAt: current.googleHolidayCalendarLastSyncedAt,
+      }))
+      setPersistenceMessage('基本データを Excel から取り込みました。')
+    } catch {
+      setPersistenceMessage('基本データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
+    }
+  }, [classroomSettings, groupLessons, managers, regularLessons, students, teachers])
+
+  const exportSpecialDataTemplate = useCallback(async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, buildTemplateSpecialSessions(initialSpecialSessions, students, teachers), students, teachers), '特別講習データテンプレート.xlsx')
+    setPersistenceMessage('特別講習データの Excel テンプレートを出力しました。')
+  }, [students, teachers])
+
+  const exportSpecialDataCurrent = useCallback(async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildSpecialSessionWorkbook(xlsx, specialSessions, students, teachers), '特別講習データ_現在.xlsx')
+    setPersistenceMessage('特別講習データを Excel 出力しました。')
+  }, [specialSessions, students, teachers])
+
+  const importSpecialDataWorkbook = useCallback(async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer()
+      const xlsx = await import('xlsx')
+      const workbook = xlsx.read(buffer, { type: 'array' })
+      setSpecialSessions(parseSpecialSessionWorkbook(xlsx, workbook, specialSessions))
+      setPersistenceMessage('特別講習データを Excel から取り込みました。')
+    } catch {
+      setPersistenceMessage('特別講習データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
+    }
+  }, [specialSessions])
+
+  const exportAutoAssignTemplate = useCallback(async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildAutoAssignWorkbook(xlsx, initialAutoAssignRules, [], Object.fromEntries(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), Object.fromEntries(students.map((student) => [student.id, getStudentDisplayName(student)]))), '自動割振ルールテンプレート.xlsx')
+    setPersistenceMessage('自動割振ルールの Excel テンプレートを出力しました。')
+  }, [students, teachers])
+
+  const exportAutoAssignCurrent = useCallback(async () => {
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(buildAutoAssignWorkbook(xlsx, autoAssignRules, pairConstraints, Object.fromEntries(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), Object.fromEntries(students.map((student) => [student.id, getStudentDisplayName(student)]))), '自動割振ルール_現在.xlsx')
+    setPersistenceMessage('自動割振ルールを Excel 出力しました。')
+  }, [autoAssignRules, pairConstraints, students, teachers])
+
+  const importAutoAssignWorkbookFile = useCallback(async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer()
+      const xlsx = await import('xlsx')
+      const workbook = xlsx.read(buffer, { type: 'array' })
+      const teacherIdByName = new Map<string, string>()
+      teachers.forEach((teacher) => {
+        teacherIdByName.set(teacher.name, teacher.id)
+        teacherIdByName.set(getTeacherDisplayName(teacher), teacher.id)
+      })
+      const studentIdByName = new Map<string, string>()
+      students.forEach((student) => {
+        studentIdByName.set(student.name, student.id)
+        studentIdByName.set(getStudentDisplayName(student), student.id)
+      })
+      const imported = parseAutoAssignWorkbook(xlsx, workbook, autoAssignRules, pairConstraints, teacherIdByName, studentIdByName)
+      setAutoAssignRules(imported.rules)
+      setPairConstraints(imported.pairConstraints)
+      setPersistenceMessage('自動割振ルールを Excel から取り込みました。')
+    } catch {
+      setPersistenceMessage('自動割振ルールの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
+    }
+  }, [autoAssignRules, pairConstraints, students, teachers])
+
+  const completeInitialSetup = useCallback(() => {
+    setClassroomSettings((current) => ({
+      ...current,
+      initialSetupCompletedAt: new Date().toISOString(),
+    }))
+    setPersistenceMessage('初期設定を完了しました。')
+    setScreen('board')
+  }, [])
+
   if (screen === 'basic-data') {
     return (
       <BasicDataScreen
         classroomSettings={classroomSettings}
         googleHolidaySyncState={googleHolidaySyncState}
         isGoogleHolidayApiConfigured={Boolean(googleHolidayApiKey) && isGoogleHolidaySyncEnabled}
+        managers={managers}
         teachers={teachers}
         students={students}
         regularLessons={regularLessons}
+        groupLessons={groupLessons}
+        onUpdateManagers={setManagers}
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
         onUpdateRegularLessons={setRegularLessons}
+        onUpdateGroupLessons={setGroupLessons}
         onUpdateClassroomSettings={setClassroomSettings}
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onBackToBoard={() => setScreen('board')}
@@ -750,10 +1021,27 @@ function App() {
         onOpenBasicData={() => setScreen('basic-data')}
         onOpenSpecialData={() => setScreen('special-data')}
         onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
-        persistenceMessage="バックアップ/復元は未接続です。"
-        lastSavedAt=""
-        onExportBackup={() => {}}
-        onImportBackup={() => {}}
+        persistenceMessage={persistenceMessage}
+        lastSavedAt={lastSavedAt}
+        onExportBackup={exportBackup}
+        onImportBackup={importBackup}
+        classroomSettings={classroomSettings}
+        students={students}
+        specialSessions={specialSessions}
+        googleHolidaySyncState={googleHolidaySyncState}
+        isGoogleHolidayApiConfigured={Boolean(googleHolidayApiKey) && isGoogleHolidaySyncEnabled}
+        onUpdateClassroomSettings={setClassroomSettings}
+        onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
+        onCompleteInitialSetup={completeInitialSetup}
+        onExportBasicDataTemplate={exportBasicDataTemplate}
+        onExportBasicDataCurrent={exportBasicDataCurrent}
+        onImportBasicDataWorkbook={importBasicDataWorkbook}
+        onExportSpecialDataTemplate={exportSpecialDataTemplate}
+        onExportSpecialDataCurrent={exportSpecialDataCurrent}
+        onImportSpecialDataWorkbook={importSpecialDataWorkbook}
+        onExportAutoAssignTemplate={exportAutoAssignTemplate}
+        onExportAutoAssignCurrent={exportAutoAssignCurrent}
+        onImportAutoAssignWorkbook={importAutoAssignWorkbookFile}
       />
     )
   }

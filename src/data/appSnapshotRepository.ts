@@ -14,9 +14,11 @@ function isAppSnapshot(value: unknown): value is AppSnapshot {
     && typeof value.schemaVersion === 'number'
     && typeof value.savedAt === 'string'
     && typeof value.screen === 'string'
+    && Array.isArray(value.managers)
     && Array.isArray(value.teachers)
     && Array.isArray(value.students)
     && Array.isArray(value.regularLessons)
+    && Array.isArray(value.groupLessons)
     && Array.isArray(value.specialSessions)
     && Array.isArray(value.autoAssignRules)
     && Array.isArray(value.pairConstraints)

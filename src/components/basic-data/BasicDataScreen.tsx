@@ -1,4 +1,4 @@
-import { type ChangeEvent, type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
   deriveManagedDisplayName,
@@ -34,12 +34,16 @@ type BasicDataScreenProps = {
     message: string
   }
   isGoogleHolidayApiConfigured: boolean
+  managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  groupLessons: GroupLessonRow[]
+  onUpdateManagers: Dispatch<SetStateAction<ManagerRow[]>>
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
   onUpdateRegularLessons: Dispatch<SetStateAction<RegularLessonRow[]>>
+  onUpdateGroupLessons: Dispatch<SetStateAction<GroupLessonRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onSyncGoogleHolidays: () => void
   onBackToBoard: () => void
@@ -48,7 +52,7 @@ type BasicDataScreenProps = {
   onOpenBackupRestore: () => void
 }
 
-type GroupLessonRow = {
+export type GroupLessonRow = {
   id: string
   schoolYear: number
   teacherId: string
@@ -67,7 +71,7 @@ type TableControl = {
 type RosterView = 'active' | 'withdrawn'
 
 type BasicDataTab = 'managers' | 'teachers' | 'students' | 'regularLessons' | 'groupLessons' | 'constraints' | 'classroomData'
-type BasicDataBundle = {
+export type BasicDataBundle = {
   managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
@@ -90,8 +94,8 @@ const dayOptions = [
   { value: 6, label: '土曜' },
 ]
 
-const initialManagers: ManagerRow[] = []
-const initialGroupLessons: GroupLessonRow[] = [
+export const initialManagers: ManagerRow[] = []
+export const initialGroupLessons: GroupLessonRow[] = [
   { id: 'g001', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't002', subject: '英', studentIds: ['s002', 's003'], dayOfWeek: 3, slotLabel: '2限' },
   { id: 'g002', schoolYear: resolveOperationalSchoolYear(new Date()) - 1, teacherId: 't001', subject: '算', studentIds: ['s001'], dayOfWeek: 1, slotLabel: '1限' },
   { id: 'g003', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't004', subject: '国', studentIds: ['s013', 's025'], dayOfWeek: 5, slotLabel: '3限' },
@@ -449,7 +453,7 @@ function parseSchoolYear(value: unknown, fallback = resolveOperationalSchoolYear
   return matched ? Number(matched[0]) : fallback
 }
 
-function createTemplateBundle(): BasicDataBundle {
+export function createTemplateBundle(): BasicDataBundle {
   return {
     managers: [{ id: 'template_manager', name: '管理 太郎', email: 'manager@example.com' }],
     teachers: initialTeachers,
@@ -465,7 +469,7 @@ function createTemplateBundle(): BasicDataBundle {
   }
 }
 
-function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
+export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   const workbook = xlsx.utils.book_new()
   const teacherNameById = Object.fromEntries(bundle.teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const studentNameById = Object.fromEntries(bundle.students.map((student) => [student.id, getStudentDisplayName(student)]))
@@ -543,7 +547,7 @@ function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   return workbook
 }
 
-function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: BasicDataBundle): BasicDataBundle {
+export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, fallback: BasicDataBundle): BasicDataBundle {
   const readRows = (sheetName: string) => {
     const sheet = workbook.Sheets[sheetName]
     if (!sheet) return null
@@ -871,10 +875,8 @@ function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabe
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, teachers, students, regularLessons, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, managers, teachers, students, regularLessons, groupLessons, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateGroupLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
-  const [managers, setManagers] = useState(initialManagers)
-  const [groupLessons, setGroupLessons] = useState(initialGroupLessons)
   const [statusMessage, setStatusMessage] = useState('')
   const [centeredMessage, setCenteredMessage] = useState<string | null>(null)
   const centeredMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -883,7 +885,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setCenteredMessage(message)
     centeredMessageTimerRef.current = setTimeout(() => setCenteredMessage(null), 4000)
   }
-  const importInputRef = useRef<HTMLInputElement | null>(null)
   const currentSchoolYear = useMemo(() => resolveOperationalSchoolYear(new Date()), [])
   const selectableSchoolYears = useMemo(() => buildSelectableSchoolYears(currentSchoolYear), [currentSchoolYear])
 
@@ -1037,7 +1038,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setStatusMessage('通常授業を更新しました。')
   }
   const updateManager = (id: string, patch: Partial<ManagerRow>) => {
-    setManagers((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+    onUpdateManagers((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }
 
   const updateTeacher = (id: string, patch: Partial<TeacherRow>) => {
@@ -1061,56 +1062,12 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   }
 
   const updateGroupLesson = (id: string, patch: Partial<GroupLessonRow>) => {
-    setGroupLessons((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-  }
-
-  const exportTemplateWorkbook = async () => {
-    const xlsx = await import('xlsx')
-    xlsx.writeFile(buildWorkbook(xlsx, createTemplateBundle()), '基本データテンプレート.xlsx')
-    setStatusMessage('Excel テンプレートを出力しました。')
-  }
-
-  const exportCurrentWorkbook = async () => {
-    const xlsx = await import('xlsx')
-    xlsx.writeFile(buildWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, classroomSettings }), '基本データ_現在.xlsx')
-    setStatusMessage('現在の基本データを Excel 出力しました。')
-  }
-
-  const openImportDialog = () => {
-    importInputRef.current?.click()
-  }
-
-  const importWorkbook = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    try {
-      const buffer = await file.arrayBuffer()
-      const xlsx = await import('xlsx')
-      const workbook = xlsx.read(buffer, { type: 'array' })
-      const imported = parseImportedBundle(xlsx, workbook, { managers, teachers, students, regularLessons, groupLessons, classroomSettings })
-      setManagers(imported.managers)
-      onUpdateTeachers(imported.teachers)
-      onUpdateStudents(imported.students)
-      onUpdateRegularLessons(imported.regularLessons)
-      setGroupLessons(imported.groupLessons)
-      onUpdateClassroomSettings(imported.classroomSettings)
-      setManagerDraft({ name: '', email: '' })
-      setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [] })
-      setStudentDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
-      setRegularLessonDraft(createRegularLessonDraft())
-      setGroupLessonDraft({ teacherId: '', subject: '英', studentIds: [], dayOfWeek: 1, slotLabel: '1限' })
-      setStatusMessage('Excel を取り込みました。')
-    } catch {
-      setStatusMessage('Excel 取り込みに失敗しました。シート名と列名を確認してください。')
-    } finally {
-      event.target.value = ''
-    }
+    onUpdateGroupLessons((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }
 
   const addManager = () => {
     if (!managerDraft.name.trim()) return
-    setManagers((current) => [...current, { id: createId('manager'), name: managerDraft.name.trim(), email: managerDraft.email.trim() }])
+    onUpdateManagers((current) => [...current, { id: createId('manager'), name: managerDraft.name.trim(), email: managerDraft.email.trim() }])
     setManagerDraft({ name: '', email: '' })
     setStatusMessage('マネージャーを追加しました。')
   }
@@ -1208,7 +1165,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
   const addGroupLesson = () => {
     if (!groupLessonDraft.teacherId || groupLessonDraft.studentIds.length === 0) return
-    setGroupLessons((current) => [...current, { id: createId('group'), schoolYear: selectedGroupLessonYear, ...groupLessonDraft }])
+    onUpdateGroupLessons((current) => [...current, { id: createId('group'), schoolYear: selectedGroupLessonYear, ...groupLessonDraft }])
     setStatusMessage('集団授業を追加しました。')
   }
 
@@ -1217,7 +1174,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       setStatusMessage('マネージャーの削除をキャンセルしました。')
       return
     }
-    setManagers((current) => current.filter((row) => row.id !== id))
+    onUpdateManagers((current) => current.filter((row) => row.id !== id))
     setStatusMessage('マネージャーを削除しました。')
   }
 
@@ -1253,7 +1210,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       setStatusMessage('集団授業の削除をキャンセルしました。')
       return
     }
-    setGroupLessons((current) => current.filter((row) => row.id !== id))
+    onUpdateGroupLessons((current) => current.filter((row) => row.id !== id))
     setStatusMessage('集団授業を削除しました。')
   }
 
@@ -1986,7 +1943,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           {centeredMessage}
         </div>
       ) : null}
-      <input ref={importInputRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={importWorkbook} />
       <section className="toolbar-panel" aria-label="基本データの操作バー">
         <div className="toolbar-row toolbar-row-primary">
           <div className="toolbar-group toolbar-group-compact">
@@ -2004,16 +1960,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
               autoAssignRulesItemTestId="basic-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="basic-data-menu-open-backup-button"
             />
-          </div>
-          <div className="toolbar-group toolbar-group-end">
-            <details className="menu-dropdown">
-              <summary className="secondary-button slim" data-testid="basic-data-excel-menu-button">エクセル管理</summary>
-              <div className="menu-dropdown-list">
-                <button className="menu-link-button" type="button" onClick={exportTemplateWorkbook} data-testid="basic-data-export-template-button">テンプレート出力</button>
-                <button className="menu-link-button" type="button" onClick={exportCurrentWorkbook} data-testid="basic-data-export-current-button">現データ出力</button>
-                <button className="menu-link-button" type="button" onClick={openImportDialog} data-testid="basic-data-import-button">エクセル取り込み</button>
-              </div>
-            </details>
           </div>
         </div>
         {statusMessage ? (
