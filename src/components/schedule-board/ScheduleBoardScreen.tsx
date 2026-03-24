@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
+import { flushSync } from 'react-dom'
 import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
@@ -1034,6 +1035,48 @@ function buildAbsentStudentEntry(student: StudentEntry, cell: SlotCell, desk: De
   }
 }
 
+function updateSpecialSessionRequestedCount(params: {
+  sessions: SpecialSessionRow[]
+  sessionId: string
+  studentId: string
+  subject: SubjectLabel
+  delta: number
+}) {
+  const updatedAt = new Date().toISOString()
+  return params.sessions.map((session) => {
+    if (session.id !== params.sessionId) return session
+
+    const currentInput = session.studentInputs[params.studentId] ?? {
+      unavailableSlots: [],
+      regularBreakSlots: [],
+      subjectSlots: {},
+      regularOnly: false,
+      countSubmitted: false,
+      updatedAt,
+    }
+    const currentCount = currentInput.subjectSlots[params.subject] ?? 0
+    const nextCount = Math.max(0, currentCount + params.delta)
+    const nextSubjectSlots = { ...currentInput.subjectSlots }
+    if (nextCount > 0) nextSubjectSlots[params.subject] = nextCount
+    else delete nextSubjectSlots[params.subject]
+
+    return {
+      ...session,
+      studentInputs: {
+        ...session.studentInputs,
+        [params.studentId]: {
+          ...currentInput,
+          subjectSlots: nextSubjectSlots,
+          regularOnly: false,
+          countSubmitted: true,
+          updatedAt,
+        },
+      },
+      updatedAt,
+    }
+  })
+}
+
 function getStudentStockMenuLabel(student: StudentEntry) {
   return student.lessonType === 'special' ? '講習ストックに戻す' : '振替ストックに戻す'
 }
@@ -1286,6 +1329,66 @@ function suppressManagedStudentsInCell(managedCell: SlotCell, suppressedKeys: Se
   return nextCell
 }
 
+function hasPlannedStudentInCell(cell: SlotCell, studentKey: string) {
+  return cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => (
+    Boolean(student) && (student!.managedStudentId ?? student!.name) === studentKey
+  )))
+}
+
+function overlayManualRegularAdditionsOnPlannedCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][]) {
+  if (boardWeeks.length === 0) return scheduleCells.map((cell) => cloneSlotCell(cell))
+
+  const boardCellsById = new Map(boardWeeks.flat().map((cell) => [cell.id, cell]))
+  return scheduleCells.map((cell) => {
+    const boardCell = boardCellsById.get(cell.id)
+    const nextCell = cloneSlotCell(cell)
+    if (!boardCell) return nextCell
+
+    boardCell.desks.forEach((boardDesk, deskIndex) => {
+      boardDesk.lesson?.studentSlots.forEach((boardStudent, studentIndex) => {
+        if (!boardStudent || boardStudent.lessonType !== 'regular' || !boardStudent.manualAdded) return
+
+        const studentKey = boardStudent.managedStudentId ?? boardStudent.name
+        if (hasPlannedStudentInCell(nextCell, studentKey)) return
+
+        const targetDesk = nextCell.desks[deskIndex]
+        if (!targetDesk) return
+
+        if (!targetDesk.lesson) {
+          targetDesk.teacher = boardDesk.teacher
+          targetDesk.lesson = {
+            id: `planned_manual_${cell.id}_${deskIndex + 1}`,
+            note: '盤面追加反映',
+            studentSlots: [null, null],
+          }
+        }
+
+        if (!targetDesk.lesson.studentSlots[studentIndex]) {
+          targetDesk.lesson.studentSlots[studentIndex] = { ...boardStudent }
+          return
+        }
+
+        const fallbackDesk = nextCell.desks.find((desk) => !desk.lesson || desk.lesson.studentSlots.some((student) => !student))
+        if (!fallbackDesk) return
+        if (!fallbackDesk.lesson) {
+          fallbackDesk.teacher = boardDesk.teacher
+          fallbackDesk.lesson = {
+            id: `planned_manual_${cell.id}_fallback`,
+            note: '盤面追加反映',
+            studentSlots: [null, null],
+          }
+        }
+        const emptySlotIndex = fallbackDesk.lesson.studentSlots.findIndex((student) => !student)
+        if (emptySlotIndex >= 0) {
+          fallbackDesk.lesson.studentSlots[emptySlotIndex] = { ...boardStudent }
+        }
+      })
+    })
+
+    return nextCell
+  })
+}
+
 function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
   const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys)
   const boardCellsById = new Map(boardWeeks.flat().map((cell) => [cell.id, cell]))
@@ -1316,7 +1419,7 @@ export function normalizeScheduleRange(range: ScheduleRangePreference, fallbackS
   }
 }
 
-export function buildManagedScheduleCellsForRange(params: {
+function buildBaseManagedScheduleCellsForRange(params: {
   range: ScheduleRangePreference
   fallbackStartDate: string
   fallbackEndDate: string
@@ -1338,6 +1441,26 @@ export function buildManagedScheduleCellsForRange(params: {
   })
 }
 
+export function buildManagedScheduleCellsForRange(params: {
+  range: ScheduleRangePreference
+  fallbackStartDate: string
+  fallbackEndDate: string
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  boardWeeks: SlotCell[][]
+  suppressedRegularLessonOccurrences?: string[]
+}) {
+  const baseCells = buildBaseManagedScheduleCellsForRange(params)
+  const suppressedKeys = new Set(params.suppressedRegularLessonOccurrences ?? [])
+  const adjustedCells = suppressedKeys.size > 0
+    ? baseCells.map((cell) => suppressManagedStudentsInCell(cell, suppressedKeys))
+    : baseCells
+
+  return overlayManualRegularAdditionsOnPlannedCells(adjustedCells, params.boardWeeks)
+}
+
 export function buildScheduleCellsForRange(params: {
   range: ScheduleRangePreference
   fallbackStartDate: string
@@ -1349,7 +1472,7 @@ export function buildScheduleCellsForRange(params: {
   boardWeeks: SlotCell[][]
   suppressedRegularLessonOccurrences?: string[]
 }) {
-  const managedCells = buildManagedScheduleCellsForRange(params)
+  const managedCells = buildBaseManagedScheduleCellsForRange(params)
 
   return overlayBoardWeeksOnScheduleCells(managedCells, params.boardWeeks, params.suppressedRegularLessonOccurrences ?? [])
 }
@@ -3179,7 +3302,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     students,
     regularLessons,
     boardWeeks: normalizedWeeks,
-  }), [classroomSettings, effectiveStudentScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, teachers])
+    suppressedRegularLessonOccurrences,
+  }), [classroomSettings, effectiveStudentScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const teacherScheduleCells = useMemo(() => buildScheduleCellsForRange({
     range: effectiveTeacherScheduleRange,
@@ -3202,7 +3326,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     students,
     regularLessons,
     boardWeeks: normalizedWeeks,
-  }), [classroomSettings, effectiveTeacherScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, teachers])
+    suppressedRegularLessonOccurrences,
+  }), [classroomSettings, effectiveTeacherScheduleRange, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const studentScheduleTitle = useMemo(
     () => formatWeeklyScheduleTitle(effectiveStudentScheduleRange.startDate, effectiveStudentScheduleRange.endDate),
@@ -4612,8 +4737,23 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
+    if (addExistingStudentDraft.lessonType === 'special' && addExistingStudentDraft.specialSessionId) {
+      flushSync(() => {
+        onUpdateSpecialSessions((current) => updateSpecialSessionRequestedCount({
+          sessions: current,
+          sessionId: addExistingStudentDraft.specialSessionId,
+          studentId: managedStudent.id,
+          subject: addExistingStudentDraft.subject,
+          delta: 1,
+        }))
+      })
+    }
     setAddExistingStudentDraft(null)
-    setStatusMessage(`${studentName} を ${lessonTypeLabels[addExistingStudentDraft.lessonType]} として追加しました。`)
+    setStatusMessage(
+      addExistingStudentDraft.lessonType === 'special'
+        ? `${studentName} を講習として追加し、講習の希望数も 1 件増やしました。`
+        : `${studentName} を ${lessonTypeLabels[addExistingStudentDraft.lessonType]} として追加しました。希望回数へ反映します。`,
+    )
   }
 
   const handleCloseEdit = () => {
@@ -4729,6 +4869,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         students,
         regularLessons,
         boardWeeks: normalizedWeeks,
+        suppressedRegularLessonOccurrences,
       }),
       students,
       defaultStartDate: storedRange.startDate,
@@ -4783,6 +4924,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         students,
         regularLessons,
         boardWeeks: normalizedWeeks,
+        suppressedRegularLessonOccurrences,
       }),
       teachers,
       defaultStartDate: storedRange.startDate,
@@ -5060,17 +5202,22 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     if (menuStudent.student.lessonType === 'special') {
-      const lectureStudentKey = menuStudent.student.managedStudentId ?? managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${studentDisplayName}`
-      const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
-
-      if (menuStudent.student.specialStockSource === 'session') {
-        nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)
-        nextManualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
-          displayName: studentDisplayName,
-          sessionId: menuStudent.student.specialSessionId,
+      const managedStudentId = menuStudent.student.managedStudentId ?? managedStudentByAnyName.get(menuStudent.student.name)?.id ?? ''
+      const sessionId = menuStudent.student.specialSessionId
+      if (managedStudentId && sessionId) {
+        flushSync(() => {
+          onUpdateSpecialSessions((current) => updateSpecialSessionRequestedCount({
+            sessions: current,
+            sessionId,
+            studentId: managedStudentId,
+            subject: menuStudent.student.subject,
+            delta: -1,
+          }))
         })
+        statusSuffix = '講習の希望数を減らしました。'
+      } else {
+        statusSuffix = '講習の予定を削除しました。'
       }
-      statusSuffix = '講習の希望数は変えず、盤面上の予定だけを削除しました。'
     }
 
     commitWeeks(

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
+import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
@@ -183,23 +184,16 @@ function App() {
     if (!isGoogleHolidaySyncEnabled) {
       return { status: 'disabled', message: 'Google祝日同期は自動テスト実行中のため停止しています。' }
     }
-    if (!googleHolidayApiKey) {
-      return { status: 'disabled', message: 'Google祝日同期は API キー未設定のため停止中です。' }
-    }
 
     const cache = readGoogleHolidaySyncCache()
     return cache?.lastSyncedAt
-      ? { status: 'idle', message: 'Google公開祝日の差分を起動時に反映します。' }
-      : { status: 'idle', message: 'Google公開祝日の初回同期を待機しています。' }
+      ? { status: 'idle', message: googleHolidayApiKey ? 'Google公開祝日の差分を起動時に反映します。' : '公開祝日データの差分を起動時に反映します。' }
+      : { status: 'idle', message: googleHolidayApiKey ? 'Google公開祝日の初回同期を待機しています。' : '公開祝日データの初回同期を待機しています。' }
   })
 
   const runGoogleHolidaySync = useCallback(async (options?: { force?: boolean; background?: boolean }) => {
     if (!isGoogleHolidaySyncEnabled) {
       setGoogleHolidaySyncState({ status: 'disabled', message: 'Google祝日同期は自動テスト実行中のため停止しています。' })
-      return
-    }
-    if (!googleHolidayApiKey) {
-      setGoogleHolidaySyncState({ status: 'disabled', message: 'Google祝日同期は API キー未設定のため停止中です。' })
       return
     }
     if (holidaySyncInFlightRef.current) return
@@ -220,7 +214,9 @@ function App() {
     holidaySyncInFlightRef.current = true
     setGoogleHolidaySyncState({
       status: 'syncing',
-      message: options?.background ? 'Google公開祝日をバックグラウンド同期中です。' : 'Google公開祝日を同期中です。',
+      message: options?.background
+        ? (googleHolidayApiKey ? 'Google公開祝日をバックグラウンド同期中です。' : '公開祝日データをバックグラウンド同期中です。')
+        : (googleHolidayApiKey ? 'Google公開祝日を同期中です。' : '公開祝日データを同期中です。'),
     })
 
     try {
@@ -237,14 +233,29 @@ function App() {
         googleHolidayCalendarLastSyncedAt: syncedAt,
       }))
       writeGoogleHolidaySyncCache({ syncedHolidayDates, lastSyncedAt: syncedAt })
-      setGoogleHolidaySyncState({ status: 'success', message: `Google公開祝日を ${syncedHolidayDates.length} 件同期しました。` })
+      setGoogleHolidaySyncState({ status: 'success', message: `${googleHolidayApiKey ? 'Google公開祝日' : '公開祝日データ'}を ${syncedHolidayDates.length} 件同期しました。` })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Google祝日同期に失敗しました。'
+      const message = error instanceof Error ? error.message : '祝日同期に失敗しました。'
       setGoogleHolidaySyncState({ status: 'error', message })
     } finally {
       holidaySyncInFlightRef.current = false
     }
   }, [classroomSettings.googleHolidayCalendarLastSyncedAt, googleHolidayApiKey, googleHolidayCalendarId, isGoogleHolidaySyncEnabled])
+
+  const hasAnyExistingSetupData = useCallback(() => (
+    managers.length > 0
+    || teachers.length > 0
+    || students.length > 0
+    || regularLessons.length > 0
+    || groupLessons.length > 0
+    || specialSessions.some((session) => Object.keys(session.studentInputs).length > 0 || Object.keys(session.teacherInputs).length > 0)
+    || autoAssignRules.some((rule) => rule.targets.length > 0 || rule.excludeTargets.length > 0)
+    || pairConstraints.length > 0
+    || boardState !== null
+    || Boolean(classroomSettings.operationStartDate)
+    || (classroomSettings.initialSetupMakeupStocks?.length ?? 0) > 0
+    || (classroomSettings.initialSetupLectureStocks?.length ?? 0) > 0
+  ), [autoAssignRules, boardState, classroomSettings.initialSetupLectureStocks, classroomSettings.initialSetupMakeupStocks, classroomSettings.operationStartDate, groupLessons.length, managers.length, pairConstraints.length, regularLessons.length, specialSessions, students.length, teachers.length])
 
   const syncStudentSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -274,6 +285,7 @@ function App() {
         students,
         regularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       students,
       defaultStartDate: range.startDate,
@@ -316,6 +328,7 @@ function App() {
         students,
         regularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       teachers,
       defaultStartDate: range.startDate,
@@ -867,25 +880,58 @@ function App() {
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
       const imported = parseImportedBundle(xlsx, workbook, { managers, teachers, students, regularLessons, groupLessons, classroomSettings })
+      const validationErrors = validateImportedBasicDataBundle(imported)
+      if (validationErrors.length > 0) {
+        window.alert([
+          '基本データの取り込みを中断しました。',
+          '以下の矛盾をすべて修正してから再取り込みしてください。',
+          '',
+          ...validationErrors.map((message, index) => `${index + 1}. ${message}`),
+        ].join('\n'))
+        setPersistenceMessage('基本データに矛盾が見つかったため、取り込みを中断しました。')
+        return
+      }
+
+      if (hasAnyExistingSetupData()) {
+        const confirmed = window.confirm([
+          '現在の既存データはすべて削除されます。',
+          '基本データ、特別講習データ、自動割振ルール、盤面調整、ストック、初期設定入力は消えます。',
+          '元に戻せません。取り込みを続ける場合だけ OK を押してください。',
+        ].join('\n'))
+        if (!confirmed) {
+          setPersistenceMessage('既存データ全削除の確認でキャンセルされたため、基本データ取り込みを中止しました。')
+          return
+        }
+      }
+
       setManagers(imported.managers)
       setTeachers(imported.teachers)
       setStudents(imported.students)
       setRegularLessons(imported.regularLessons)
       setGroupLessons(imported.groupLessons)
-      setClassroomSettings((current) => ({
+      setSpecialSessions(initialSpecialSessions)
+      setAutoAssignRules(initialAutoAssignRules)
+      setPairConstraints(initialPairConstraints)
+      setBoardState(null)
+      setStudentScheduleRange(null)
+      setTeacherScheduleRange(null)
+      setTeacherAutoAssignRequest(null)
+      setStudentScheduleRequest(null)
+      setClassroomSettings({
         ...imported.classroomSettings,
-        operationStartDate: current.operationStartDate,
-        initialSetupCompletedAt: current.initialSetupCompletedAt,
-        initialSetupMakeupStocks: current.initialSetupMakeupStocks ?? [],
-        initialSetupLectureStocks: current.initialSetupLectureStocks ?? [],
-        googleHolidayCalendarSyncedDates: current.googleHolidayCalendarSyncedDates,
-        googleHolidayCalendarLastSyncedAt: current.googleHolidayCalendarLastSyncedAt,
-      }))
-      setPersistenceMessage('基本データを Excel から取り込みました。')
+        operationStartDate: '',
+        initialSetupCompletedAt: '',
+        initialSetupMakeupStocks: [],
+        initialSetupLectureStocks: [],
+        googleHolidayCalendarSyncedDates: [],
+        googleHolidayCalendarLastSyncedAt: '',
+      })
+      setPersistenceMessage('基本データを Excel から取り込みました。既存データはすべて削除し、盤面も初期配置へ戻しました。')
+      void runGoogleHolidaySync({ force: true, background: true })
     } catch {
       setPersistenceMessage('基本データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [classroomSettings, groupLessons, managers, regularLessons, students, teachers])
+  }, [classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
 
   const exportSpecialDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -1029,7 +1075,7 @@ function App() {
         students={students}
         specialSessions={specialSessions}
         googleHolidaySyncState={googleHolidaySyncState}
-        isGoogleHolidayApiConfigured={Boolean(googleHolidayApiKey) && isGoogleHolidaySyncEnabled}
+        isGoogleHolidayApiConfigured={isGoogleHolidaySyncEnabled}
         onUpdateClassroomSettings={setClassroomSettings}
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onCompleteInitialSetup={completeInitialSetup}

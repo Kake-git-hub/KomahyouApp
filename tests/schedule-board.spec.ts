@@ -1943,7 +1943,7 @@ test.describe('コマ調整表', () => {
     expect(menuButtons).toEqual(['既存生徒追加', 'メモ'])
   })
 
-  test('空欄セルから既存生徒を講習追加しても希望回数は変わらず手動追加警告を出す', async ({ page }) => {
+  test('空欄セルから既存生徒を講習追加すると希望回数も増え、手動追加警告を出す', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
 
@@ -1974,11 +1974,13 @@ test.describe('コマ調整表', () => {
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')).toContainText('希望科目数登録済')
     await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
-    await expect.poll(async () => Number((await popup.getByTestId('student-schedule-count-subject-数').inputValue()) || '0')).toBe(0)
+    await expect(popup.getByTestId('student-schedule-count-modal')).toContainText('数')
+    await expect(popup.getByTestId('student-schedule-count-modal')).toContainText('1')
   })
 
-  test('手動追加した講習は休日化しても講習ストックへ戻らない', async ({ page }) => {
+  test('手動追加した講習を休日化すると未配置の講習残として stock に残る', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
 
@@ -2003,7 +2005,7 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('')
     await expect(page.getByTestId('toolbar-status')).toContainText('休日に設定しました。')
     await page.getByTestId('lecture-stock-chip').click()
-    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(1)
   })
 
   test('振替授業を削除しても振替ストックへ戻らない', async ({ page }) => {
@@ -2315,7 +2317,7 @@ test.describe('コマ調整表', () => {
     expect((await secondTargetName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
   })
 
-  test('講習授業を削除すると希望回数は維持したまま講習ストックへ戻る', async ({ page }) => {
+  test('講習授業を削除すると希望回数も減り講習ストックへは戻らない', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
 
@@ -2345,12 +2347,12 @@ test.describe('コマ調整表', () => {
     acceptNextDialog(page, '振替の対象にならず、授業回数から減らします。')
     await page.getByTestId('menu-delete-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('講習の希望数は変えず、盤面上の予定だけを削除しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('講習の希望数を減らしました。')
     await expect(targetName).toHaveText('')
     if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
       await page.getByTestId('lecture-stock-chip').click()
     }
-    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(1)
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
 
     await popup.close()
     await expect.poll(async () => await page.getByTestId('board-student-schedule-button').isDisabled()).toBe(false)
@@ -2362,7 +2364,7 @@ test.describe('コマ調整表', () => {
     await reopenedPopup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
     await expect(reopenedPopup.getByTestId('student-schedule-count-unregister')).toBeVisible()
     await expect(reopenedPopup.getByTestId('student-schedule-count-subject-数')).toHaveCount(0)
-    await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('1')
+    await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('0')
   })
 
   test('講習を期間外へ手動配置しても赤字ツールチップで絶対制約違反を表示する', async ({ page }) => {
@@ -2646,7 +2648,7 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => targetSheet.locator('[data-role="toggle-student-unavailable-date"]').count()).toBeGreaterThan(0)
   })
 
-  test('通常と講習の警告スタンプは各回数表の直下に表示される', async ({ page }) => {
+  test('希望数が残っている表だけ警告スタンプを表示する', async ({ page }) => {
     const targetWeekStart = addDays(getWeekStart(new Date()), 7)
     const targetWeekStartKey = toDateKey(targetWeekStart)
     const targetWeekEndKey = toDateKey(addDays(targetWeekStart, 6))
@@ -2672,7 +2674,7 @@ test.describe('コマ調整表', () => {
     const targetSheet = popup.locator('[data-role="student-sheet"][data-student-id="s001"]')
     const countBlocks = targetSheet.locator('.count-stack-block')
 
-    await expect(countBlocks.nth(0).getByTestId('student-schedule-regular-count-warning')).toBeVisible()
+    await expect(countBlocks.nth(0).getByTestId('student-schedule-regular-count-warning')).toHaveCount(0)
     await expect(countBlocks.nth(1).getByTestId('student-schedule-lecture-count-warning')).toBeVisible()
   })
 

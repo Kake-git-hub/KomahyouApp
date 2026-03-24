@@ -183,13 +183,14 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
               <h3>初期設定ナビ</h3>
-              <p>基本データ Excel は必須です。特別講習データと自動割振ルールの Excel は、この画面に集約しましたが必要なときだけ実行できます。</p>
+              <p>基本データ Excel は必須です。取り込み時に既存データがある場合は、盤面や各設定を含めてすべて削除してから入れ直します。特別講習データと自動割振ルールの Excel は、この画面に集約しましたが必要なときだけ実行できます。</p>
             </div>
 
             <div className="auto-assign-priority-grid">
               <div className="auto-assign-priority-step">
                 <strong>1. 基本データ Excel</strong>
                 <span>{formatSetupStatus(false)}</span>
+                <span className="basic-data-subcopy">取り込みを確定すると、現在の既存データはすべて消えます。</span>
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataTemplate} data-testid="setup-basic-export-template">テンプレート出力</button>
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataCurrent} data-testid="setup-basic-export-current">現データ出力</button>
@@ -227,7 +228,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                   })}
                 </div>
                 <div className="basic-data-form-grid">
-                  <span className="basic-data-subcopy">Google公開祝日同期: {googleHolidaySyncState.message}</span>
+                  <span className="basic-data-subcopy">公開祝日同期: {googleHolidaySyncState.message}</span>
                   <button className="secondary-button slim" type="button" onClick={onSyncGoogleHolidays} disabled={!isGoogleHolidayApiConfigured || googleHolidaySyncState.status === 'syncing'} data-testid="setup-google-holiday-sync">今すぐ同期</button>
                 </div>
               </div>

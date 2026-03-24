@@ -1,5 +1,6 @@
 const GOOGLE_HOLIDAY_SYNC_CACHE_KEY = 'lesson-schedule:google-holiday-sync-cache'
 const GOOGLE_HOLIDAY_SYNC_STALE_MS = 24 * 60 * 60 * 1000
+const PUBLIC_HOLIDAY_FALLBACK_URL = 'https://holidays-jp.github.io/api/v1/date.json'
 
 export const DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID = 'ja.japanese#holiday@group.v.calendar.google.com'
 
@@ -21,7 +22,7 @@ type GoogleHolidayEventsResponse = {
 }
 
 type FetchGoogleHolidayDatesParams = {
-  apiKey: string
+  apiKey?: string
   calendarId?: string
   now?: Date
   fetchImpl?: typeof fetch
@@ -97,6 +98,16 @@ export function writeGoogleHolidaySyncCache(cache: GoogleHolidaySyncCache) {
 
 export async function fetchGoogleHolidayDates(params: FetchGoogleHolidayDatesParams) {
   const { apiKey, calendarId = DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, now = new Date(), fetchImpl = fetch } = params
+  if (!apiKey) {
+    const response = await fetchImpl(PUBLIC_HOLIDAY_FALLBACK_URL)
+    if (!response.ok) {
+      throw new Error(`公開祝日取得に失敗しました (${response.status})`)
+    }
+
+    const payload = await response.json() as Record<string, string>
+    return uniqueSortedDateKeys(Object.keys(payload))
+  }
+
   const { timeMin, timeMax } = createGoogleHolidayTimeRange(now)
   const dateKeys: string[] = []
   let nextPageToken = ''
