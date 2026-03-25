@@ -9,7 +9,7 @@ import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName,
 import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { importedMasterData } from './data/importedMasterData.generated'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
@@ -912,7 +912,20 @@ function App() {
       setSpecialSessions(initialSpecialSessions)
       setAutoAssignRules(initialAutoAssignRules)
       setPairConstraints(initialPairConstraints)
-      setBoardState(null)
+      setBoardState(createPackedInitialBoardState({
+        classroomSettings: {
+          ...imported.classroomSettings,
+          operationStartDate: '',
+          initialSetupCompletedAt: '',
+          initialSetupMakeupStocks: [],
+          initialSetupLectureStocks: [],
+          googleHolidayCalendarSyncedDates: [],
+          googleHolidayCalendarLastSyncedAt: '',
+        },
+        teachers: imported.teachers,
+        students: imported.students,
+        regularLessons: imported.regularLessons,
+      }))
       setStudentScheduleRange(null)
       setTeacherScheduleRange(null)
       setTeacherAutoAssignRequest(null)

@@ -16,6 +16,7 @@ import type { PairConstraintRow } from '../../types/pairConstraint'
 import { exportBoardPdf } from '../../utils/pdf'
 import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
+import { resolveDisplayedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -920,6 +921,26 @@ function createInitialBoardSnapshot(params: {
   }
 }
 
+export function createPackedInitialBoardState(params: {
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+}): PersistedBoardState {
+  const snapshot = createInitialBoardSnapshot({
+    ...params,
+    initialBoardState: null,
+  })
+
+  return {
+    ...snapshot,
+    weeks: snapshot.weeks.map((week) => week.map((cell) => ({
+      ...cell,
+      desks: packSortCellDesks(cell),
+    }))),
+  }
+}
+
 function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: string) {
   return student.makeupSourceDate ?? fallbackDateKey
 }
@@ -1084,6 +1105,40 @@ function getStudentStockMenuLabel(student: StudentEntry) {
 function parseDeskOrder(deskId: string) {
   const matched = deskId.match(/_desk_(\d+)$/)
   return matched ? Number(matched[1]) : Number.MAX_SAFE_INTEGER
+}
+
+function hasMemoInStudentSlot(desk: DeskCell, studentIndex: number) {
+  return Boolean(desk.memoSlots?.[studentIndex]?.trim())
+}
+
+function isStudentSlotBlocked(desk: DeskCell, studentIndex: number) {
+  return Boolean(desk.lesson?.studentSlots[studentIndex]) || hasMemoInStudentSlot(desk, studentIndex)
+}
+
+function packSortCellDesks(cell: SlotCell) {
+  for (const desk of cell.desks) {
+    if (desk.lesson?.studentSlots[0] === null && desk.lesson?.studentSlots[1]) {
+      desk.lesson.studentSlots = [desk.lesson.studentSlots[1], null]
+    }
+  }
+
+  return [...cell.desks]
+    .sort((leftDesk, rightDesk) => {
+      const leftCount = leftDesk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
+      const rightCount = rightDesk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
+      if (leftCount !== rightCount) return rightCount - leftCount
+
+      const leftTeacherLabel = leftDesk.lesson ? (leftDesk.teacher ?? '') : ''
+      const rightTeacherLabel = rightDesk.lesson ? (rightDesk.teacher ?? '') : ''
+      const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
+      if (teacherCompare !== 0) return teacherCompare
+
+      return parseDeskOrder(leftDesk.id) - parseDeskOrder(rightDesk.id)
+    })
+    .map((desk, index) => ({
+      ...desk,
+      id: `${cell.id}_desk_${index + 1}`,
+    }))
 }
 
 function hasRegularPlacementConflict(cell: SlotCell, teacherId: string, studentIds: string[], teacherById: Map<string, TeacherRow>) {
@@ -2269,6 +2324,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (!managedStudent?.birthDate) return fallbackGrade
     return resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(dateKey))
   }
+  const resolveDisplayedBoardSubject = useCallback((student: Pick<StudentEntry, 'subject' | 'grade' | 'birthDate'>, dateKey: string) => {
+    const gradeLabel = student.birthDate
+      ? resolveGradeLabelFromBirthDate(student.birthDate, dateKey)
+      : student.grade
+    return resolveDisplayedSubjectForGrade(student.subject, gradeLabel)
+  }, [])
   const resolveDisplayedLessonType = (name: string, subject: string, lessonType: LessonType | null, dateKey: string, slotNumber: number) => {
     if (lessonType !== 'regular') return lessonType
 
@@ -3027,7 +3088,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           if (!teacher || !desk.teacher.trim()) continue
 
           for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
-            if (desk.lesson?.studentSlots[studentIndex]) continue
+            if (isStudentSlotBlocked(desk, studentIndex)) continue
             const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
             const pairConstraintPreferred = !isPairConstraintBlocked(teacher.id, params.managedStudent.id, pairedStudent)
 
@@ -3159,7 +3220,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           if (!teacher || !desk.teacher.trim()) continue
 
           for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
-            if (desk.lesson?.studentSlots[studentIndex]) continue
+            if (isStudentSlotBlocked(desk, studentIndex)) continue
             const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
             const pairConstraintPreferred = !isPairConstraintBlocked(teacher.id, params.managedStudent.id, pairedStudent)
 
@@ -4062,6 +4123,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
       return
     }
+    if (hasMemoInStudentSlot(targetDesk, studentIndex)) {
+      setStatusMessage('クリックした移動先にはメモがあります。メモを削除してから配置してください。')
+      return
+    }
 
     const comparableStudentKey = selectedMakeupStockEntry.studentId ?? `name:${selectedMakeupStockEntry.displayName}`
     const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey)
@@ -4128,6 +4193,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     if (targetDesk.lesson?.studentSlots[studentIndex]) {
       setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
+      return
+    }
+    if (hasMemoInStudentSlot(targetDesk, studentIndex)) {
+      setStatusMessage('クリックした移動先にはメモがあります。メモを削除してから配置してください。')
       return
     }
 
@@ -4681,6 +4750,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setStatusMessage('この生徒マスにはすでに生徒が入っています。')
       return
     }
+    if (hasMemoInStudentSlot(targetDesk, studentMenu.studentIndex)) {
+      setStatusMessage('この生徒マスにはメモがあります。メモを削除してから追加してください。')
+      return
+    }
 
     const duplicateStudent = findDuplicateStudentInCell(targetCell, managedStudent.id)
     if (duplicateStudent) {
@@ -4737,21 +4810,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
-    if (addExistingStudentDraft.lessonType === 'special' && addExistingStudentDraft.specialSessionId) {
-      flushSync(() => {
-        onUpdateSpecialSessions((current) => updateSpecialSessionRequestedCount({
-          sessions: current,
-          sessionId: addExistingStudentDraft.specialSessionId,
-          studentId: managedStudent.id,
-          subject: addExistingStudentDraft.subject,
-          delta: 1,
-        }))
-      })
-    }
     setAddExistingStudentDraft(null)
     setStatusMessage(
       addExistingStudentDraft.lessonType === 'special'
-        ? `${studentName} を講習として追加し、講習の希望数も 1 件増やしました。`
+        ? `${studentName} を講習として追加しました。講習ストック数は増やしません。`
         : `${studentName} を ${lessonTypeLabels[addExistingStudentDraft.lessonType]} として追加しました。希望回数へ反映します。`,
     )
   }
@@ -5204,7 +5266,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (menuStudent.student.lessonType === 'special') {
       const managedStudentId = menuStudent.student.managedStudentId ?? managedStudentByAnyName.get(menuStudent.student.name)?.id ?? ''
       const sessionId = menuStudent.student.specialSessionId
-      if (managedStudentId && sessionId) {
+      if (managedStudentId && sessionId && !menuStudent.student.manualAdded) {
         flushSync(() => {
           onUpdateSpecialSessions((current) => updateSpecialSessionRequestedCount({
             sessions: current,
@@ -5446,29 +5508,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const nextCells = nextWeeks[weekIndex]
 
     for (const cell of nextCells) {
-      for (const desk of cell.desks) {
-        if (desk.lesson?.studentSlots[0] === null && desk.lesson?.studentSlots[1]) {
-          desk.lesson.studentSlots = [desk.lesson.studentSlots[1], null]
-        }
-      }
-
-      const orderedDesks = [...cell.desks].sort((leftDesk, rightDesk) => {
-        const leftCount = leftDesk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
-        const rightCount = rightDesk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
-        if (leftCount !== rightCount) return rightCount - leftCount
-
-        const leftTeacherLabel = leftDesk.lesson ? (leftDesk.teacher ?? '') : ''
-        const rightTeacherLabel = rightDesk.lesson ? (rightDesk.teacher ?? '') : ''
-        const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
-        if (teacherCompare !== 0) return teacherCompare
-
-        return parseDeskOrder(leftDesk.id) - parseDeskOrder(rightDesk.id)
-      })
-
-      cell.desks = orderedDesks.map((desk, index) => ({
-        ...desk,
-        id: `${cell.id}_desk_${index + 1}`,
-      }))
+      cell.desks = packSortCellDesks(cell)
     }
 
     commitWeeks(nextWeeks, weekIndex, selectedCellId, 0)
@@ -5740,7 +5780,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 </div>
               ) : (
                 <div className="student-menu-meta">
-                  {`${resolveBoardStudentGradeLabel(menuStudent?.student.name ?? '', menuStudent?.student.grade ?? '', menuStudent?.cell.dateKey ?? displayWeekDate)} ${menuStudent?.student.subject}`}
+                  {`${resolveBoardStudentGradeLabel(menuStudent?.student.name ?? '', menuStudent?.student.grade ?? '', menuStudent?.cell.dateKey ?? displayWeekDate)} ${menuStudent ? resolveDisplayedBoardSubject(menuStudent.student, menuStudent.cell.dateKey) : ''}`}
                 </div>
               )}
               {studentMenu?.mode === 'root' ? (

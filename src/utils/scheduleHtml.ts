@@ -4,6 +4,7 @@ import type { SlotCell } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { generateQrSvg } from './qrcode'
 import type { ScheduleQrConfig } from './scheduleQrConfig'
+import { resolveDisplayedSubjectForGrade } from './studentGradeSubject'
 
 type SerializedStudent = {
   id: string
@@ -160,7 +161,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
             id: entry.id,
             linkedStudentId: entry.managedStudentId,
             name: entry.name,
-            subject: entry.subject,
+            subject: resolveDisplayedSubjectForGrade(entry.subject, entry.grade),
             lessonType: entry.lessonType,
             teacherType: entry.teacherType,
             teacherName: entry.teacherName,
@@ -176,7 +177,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
                   linkedStudentId: resolveLinkedStudentId?.(student.name),
                   name: student.name,
                   grade: student.grade,
-                  subject: student.subject,
+                  subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
                   lessonType: student.lessonType,
                   teacherType: student.teacherType,
                   manualAdded: Boolean(student.manualAdded),
@@ -451,7 +452,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .sheet-top {
         display: grid;
-        grid-template-columns: 150px 200px 1fr 240px;
+        grid-template-columns: 150px 172px minmax(0, 1fr) auto;
         gap: 6px;
         align-items: stretch;
         margin-bottom: 8px;
@@ -515,6 +516,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         align-items: center;
         justify-content: center;
         padding: 0 10px;
+        min-width: 0;
       }
 
       .title-input {
@@ -537,6 +539,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         gap: 2px;
         font-size: 13px;
         font-weight: 700;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .meta-row {
@@ -550,7 +554,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: flex;
         align-items: center;
         justify-content: flex-end;
-        gap: 8px;
+        gap: 6px;
+        max-width: 100%;
       }
 
       .meta-label {
@@ -1053,14 +1058,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .bottom-grid {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 220px 255px 320px;
+        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) 168px 206px 246px;
         gap: 8px;
         margin-top: 10px;
         align-items: start;
       }
 
       .bottom-grid.bottom-grid-teacher {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 255px 360px;
+        grid-template-columns: minmax(0, 1.45fr) minmax(0, 1.45fr) 206px 246px;
       }
 
       .box-panel {
@@ -1698,6 +1703,22 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
+      function normalizeSubjectForStudent(subject, student, referenceDate) {
+        if (subject !== '算' && subject !== '数') return subject;
+        return getPreferredMathSubject(student, referenceDate);
+      }
+
+      function normalizeCountMapSubjects(countMap, student, referenceDate) {
+        const next = {};
+        Object.entries(countMap || {}).forEach(([subject, value]) => {
+          const normalizedSubject = normalizeSubjectForStudent(subject, student, referenceDate);
+          const normalizedValue = Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0;
+          if (normalizedValue <= 0) return;
+          next[normalizedSubject] = (next[normalizedSubject] || 0) + normalizedValue;
+        });
+        return next;
+      }
+
       function filterCountMapToSubjects(countMap, visibleSubjects) {
         return Object.fromEntries(Object.entries(countMap || {}).filter(([label]) => visibleSubjects.includes(label)));
       }
@@ -1734,17 +1755,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return unavailableSlots;
       }
 
-      function buildDesiredLectureCountMap(studentId, startDate, endDate) {
+      function buildDesiredLectureCountMap(student, startDate, endDate) {
         const countMap = {};
         (DATA.specialSessions || []).forEach((session) => {
           if (!session || session.endDate < startDate || session.startDate > endDate) return;
-          const input = getStudentSessionInput(studentId, session.id);
+          const input = getStudentSessionInput(student.id, session.id);
           if (!input.countSubmitted) return;
           if (input.regularOnly) return;
           Object.entries(input.subjectSlots || {}).forEach(([subject, value]) => {
+            const normalizedSubject = normalizeSubjectForStudent(subject, student, startDate);
             const normalizedValue = Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0;
             if (normalizedValue <= 0) return;
-            countMap[subject] = (countMap[subject] || 0) + normalizedValue;
+            countMap[normalizedSubject] = (countMap[normalizedSubject] || 0) + normalizedValue;
           });
         });
         return countMap;
@@ -2385,11 +2407,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const student = DATA.students.find((entry) => entry.id === activeCountDialog.studentId);
         const session = getSpecialSessionById(activeCountDialog.sessionId);
         if (!student || !session) return '';
+        const referenceDate = startInput.value || DATA.defaultStartDate || DATA.availableStartDate;
         const input = getStudentSessionInput(student.id, session.id);
-        const visibleSubjects = getVisibleSubjectsForStudent(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate);
+        const normalizedSubjectSlots = normalizeCountMapSubjects(input.subjectSlots, student, referenceDate);
+        const visibleSubjects = getVisibleSubjectsForStudent(student, referenceDate);
         const rowsHtml = input.countSubmitted
-          ? visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td>' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '</td></tr>').join('')
-          : visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(input.subjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
+          ? visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td>' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '</td></tr>').join('')
+          : visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
         const actionHtml = input.countSubmitted
           ? '<button type="button" data-role="unsubmit-student-count-modal" data-testid="student-schedule-count-unregister">登録解除</button>'
           : '<button type="button" data-role="submit-student-count-modal" data-testid="student-schedule-count-register">登録</button>';
@@ -2574,7 +2598,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const subjectCounts = {};
           const plannedRegularCounts = {};
           const lectureCounts = {};
-          const desiredLectureCounts = buildDesiredLectureCountMap(student.id, startDate, endDate);
+          const desiredLectureCounts = buildDesiredLectureCountMap(student, startDate, endDate);
           const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
           const makeupNotes = collectStudentMakeupNotes(entries);
           entries.forEach((entry) => {
@@ -2585,9 +2609,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (entry.lesson.lessonType === 'special') return;
             plannedRegularCounts[entry.lesson.subject] = (plannedRegularCounts[entry.lesson.subject] || 0) + 1;
           });
-          const visibleRegularCounts = filterCountMapToSubjects(subjectCounts, visibleSubjects);
-          const visiblePlannedRegularCounts = filterCountMapToSubjects(plannedRegularCounts, visibleSubjects);
-          const visibleLectureCounts = filterCountMapToSubjects(lectureCounts, visibleSubjects);
+          const visibleRegularCounts = filterCountMapToSubjects(normalizeCountMapSubjects(subjectCounts, student, startDate), visibleSubjects);
+          const visiblePlannedRegularCounts = filterCountMapToSubjects(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), visibleSubjects);
+          const visibleLectureCounts = filterCountMapToSubjects(normalizeCountMapSubjects(lectureCounts, student, startDate), visibleSubjects);
           const visibleDesiredLectureCounts = filterCountMapToSubjects(desiredLectureCounts, visibleSubjects);
           const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
             ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'

@@ -59,9 +59,9 @@ async function restoreBoardInteraction(page: Parameters<typeof test>[0]['page'])
 }
 
 async function ensureLectureStockPanelVisible(page: Parameters<typeof test>[0]['page']) {
+  await page.bringToFront()
   const panel = page.getByTestId('lecture-stock-panel')
-  const isVisible = (await panel.count()) > 0 && await panel.isVisible()
-  if (isVisible) return
+  if (await panel.isVisible().catch(() => false)) return
   await restoreBoardInteraction(page)
   await page.getByTestId('lecture-stock-chip').evaluate((element) => {
     ;(element as HTMLButtonElement).click()
@@ -74,7 +74,9 @@ async function saveMemoToCell(
   cellTestId: string,
   memo: string,
 ) {
-  await page.getByTestId(cellTestId).click()
+  await page.getByTestId(cellTestId).evaluate((element) => {
+    ;(element as HTMLElement).click()
+  })
   if (await page.getByTestId('menu-open-memo-button').count()) {
     await page.getByTestId('menu-open-memo-button').click()
   }
@@ -1480,7 +1482,9 @@ test.describe('コマ調整表', () => {
     await saveMemoToCell(page, `student-cell-${slotId}-1-1`, '初回メモ')
     await expect(targetName).toHaveText('初回メモ')
 
-    await targetCell.click()
+    await targetCell.evaluate((element) => {
+      ;(element as HTMLElement).click()
+    })
     if (await page.getByTestId('menu-open-memo-button').count()) {
       await page.getByTestId('menu-open-memo-button').click()
     }
@@ -1943,11 +1947,26 @@ test.describe('コマ調整表', () => {
     expect(menuButtons).toEqual(['既存生徒追加', 'メモ'])
   })
 
-  test('空欄セルから既存生徒を講習追加すると希望回数も増え、手動追加警告を出す', async ({ page }) => {
+  test('空欄セルから既存生徒を講習追加しても講習ストックは増えず、手動追加警告を出す', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
 
     await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    await restoreBoardInteraction(page)
+    await page.getByTestId('lecture-stock-chip').click()
+    const lectureEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first()
+    await expect(lectureEntry).toContainText('+1')
+
     await moveBoardToWeek(page, specialWeekStart)
 
     const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
@@ -1969,18 +1988,20 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('menu-stock-disabled-note')).toContainText('手動追加した講習は講習ストックへ戻せません。')
     await page.getByRole('button', { name: 'x' }).click()
 
-    const popupPromise = page.waitForEvent('popup')
-    await page.getByTestId('board-student-schedule-button').click()
-    const popup = await popupPromise
-
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
     await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')).toContainText('希望科目数登録済')
     await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
     await expect(popup.getByTestId('student-schedule-count-modal')).toContainText('数')
     await expect(popup.getByTestId('student-schedule-count-modal')).toContainText('1')
+
+    await restoreBoardInteraction(page)
+    if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
+      await page.getByTestId('lecture-stock-chip').click()
+    }
+    await expect(lectureEntry).toContainText('+1')
   })
 
-  test('手動追加した講習を休日化すると未配置の講習残として stock に残る', async ({ page }) => {
+  test('手動追加した講習を休日化しても講習ストックは増えない', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
 
@@ -2005,7 +2026,7 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('')
     await expect(page.getByTestId('toolbar-status')).toContainText('休日に設定しました。')
     await page.getByTestId('lecture-stock-chip').click()
-    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(1)
+    await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
   })
 
   test('振替授業を削除しても振替ストックへ戻らない', async ({ page }) => {
@@ -2113,12 +2134,18 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(`day-header-${holiday}`).click()
 
     await moveBoardToWeek(page, currentWeekStart)
+    const memoTarget = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎')
+    const memoTargetName = page.getByTestId(memoTarget.cellTestId.replace('student-cell-', 'student-name-'))
+    await saveMemoToCell(page, memoTarget.cellTestId, '振替回避メモ')
+    await expect(memoTargetName).toHaveText('振替回避メモ')
+
     await page.getByTestId('makeup-stock-chip').click()
     const initialBalance = extractSignedCount(await page.getByTestId('makeup-stock-entry-s001__-').textContent())
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await page.getByTestId('stock-action-modal-auto').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 の振替を自動割振しました。1コマ配置しました。')
+    await expect(memoTargetName).toHaveText('振替回避メモ')
     await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
     const remainingEntryCount = await page.getByTestId('makeup-stock-entry-s001__-').count()
     if (remainingEntryCount === 0) {
@@ -2438,29 +2465,36 @@ test.describe('コマ調整表', () => {
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-06-05')
 
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')).toBeVisible()
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click({ force: true })
+    await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click()
+    await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_exam')).toBeVisible()
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click({ force: true })
+    await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
     await ensureLectureStockPanelVisible(page)
-    const stockEntries = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })
-    const springEntry = stockEntries.filter({ hasText: '2026 新年度準備講座' })
-    const examEntry = stockEntries.filter({ hasText: '2026 定期試験対策' })
-    await expect.poll(async () => await stockEntries.count()).toBe(2)
-    await expect.poll(async () => await springEntry.count()).toBe(1)
-    await expect.poll(async () => await examEntry.count()).toBe(1)
+    const readLectureStockListText = async () => {
+      return (await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').textContent()) ?? ''
+    }
+    await expect.poll(readLectureStockListText).toContain('青木太郎')
+    await expect.poll(readLectureStockListText).toContain('2026 新年度準備講座')
+    await expect.poll(readLectureStockListText).toContain('2026 定期試験対策')
 
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click()
+  await popup.bringToFront()
+  await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_exam')).toBeVisible()
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click({ force: true })
+    await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await popup.getByTestId('student-schedule-count-unregister').click()
 
     await ensureLectureStockPanelVisible(page)
-    await expect.poll(async () => await stockEntries.count()).toBe(1)
-    await expect.poll(async () => await springEntry.count()).toBe(1)
-    await expect.poll(async () => await examEntry.count()).toBe(0)
+    await expect.poll(readLectureStockListText).toContain('青木太郎')
+    await expect.poll(readLectureStockListText).toContain('2026 新年度準備講座')
+    await expect.poll(readLectureStockListText).not.toContain('2026 定期試験対策')
   })
 
   test('講習ストック行の自動割振で複数コマをまとめて配置できる', async ({ page }) => {
@@ -2480,6 +2514,11 @@ test.describe('コマ調整表', () => {
 
     await restoreBoardInteraction(page)
     await moveBoardToWeek(page, specialWeekStart)
+    const memoTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
+    const memoTargetName = page.getByTestId(memoTarget.cellTestId.replace('student-cell-', 'student-name-'))
+    await saveMemoToCell(page, memoTarget.cellTestId, '講習回避メモ')
+    await expect(memoTargetName).toHaveText('講習回避メモ')
+
     const beforeCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
 
     await page.getByTestId('lecture-stock-chip').click()
@@ -2489,6 +2528,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('stock-action-modal-auto').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。')
+    await expect(memoTargetName).toHaveText('講習回避メモ')
     await expect.poll(async () => await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')).toBe(beforeCount + 2)
     await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
   })

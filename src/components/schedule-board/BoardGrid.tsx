@@ -1,6 +1,7 @@
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoTextStyle } from './memoText'
 import type { AbsentStudentEntry, LessonType, SlotCell, TeacherType } from './types'
+import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
 function formatMakeupSourceDate(dateKey?: string) {
   if (!dateKey) return ''
@@ -90,6 +91,7 @@ export function BoardGrid({
         : (memoLabel ?? '')
     const makeupSourceDateLabel = studentName && resolvedLessonType === 'makeup' ? formatMakeupSourceDate(makeupSourceDate) : ''
     const displayGrade = studentName ? resolveStudentGradeLabel(studentName, studentGrade, cell.dateKey, studentBirthDate) : ''
+    const displaySubject = resolveDisplayedSubjectForGrade(studentSubject, displayGrade || studentGrade)
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const hasWarning = Boolean(studentWarning || missingTeacherWarning)
@@ -97,7 +99,7 @@ export function BoardGrid({
     const hasAbsence = !studentName && Boolean(absentEntry)
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const absenceNotice = absentEntry
-      ? ['休み', lessonTypeLabels[absentEntry.lessonType], absentEntry.subject, absentEntry.teacherName].filter(Boolean).join(' / ')
+      ? ['休み', lessonTypeLabels[absentEntry.lessonType], resolveDisplayedSubjectForGrade(absentEntry.subject, absentEntry.grade), absentEntry.teacherName].filter(Boolean).join(' / ')
       : undefined
     const originalLessonLabel = resolvedLessonType === 'makeup' && makeupSourceLabel ? `元の通常授業: ${makeupSourceLabel}` : ''
     const hoverText = Array.from(new Set([
@@ -156,7 +158,7 @@ export function BoardGrid({
               <>
                 <span className="sa-student-detail-grade">{displayGrade}</span>
                 {' '}
-                <span className="sa-student-detail-subject">{studentSubject}</span>
+                <span className="sa-student-detail-subject">{displaySubject}</span>
               </>
             </span>
           )}

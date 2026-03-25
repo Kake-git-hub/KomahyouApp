@@ -1,5 +1,6 @@
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import type { DeskLesson, SlotCell, StudentEntry } from './types'
+import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
 const hasStudent = (student: StudentEntry | null): student is StudentEntry => student !== null
 
@@ -56,7 +57,7 @@ export function DetailPanel({
             </div>
             <div className="detail-row">
               <span className="detail-label">科目</span>
-              <span>{selectedLesson.studentSlots.filter(hasStudent).map((student) => student.subject).join(' / ')}</span>
+              <span>{selectedLesson.studentSlots.filter(hasStudent).map((student) => resolveDisplayedSubjectForGrade(student.subject, student.grade)).join(' / ')}</span>
             </div>
             <div className="detail-row">
               <span className="detail-label">注意理由</span>
@@ -91,6 +92,10 @@ export function DetailPanel({
               <div className="detail-row">
                 <span className="detail-label">生徒</span>
                 <span>{lesson.studentSlots.filter(hasStudent).map((student) => student.name).join(' / ')}</span>
+              </div>
+              <div className="detail-row">
+                <span className="detail-label">科目</span>
+                <span>{lesson.studentSlots.filter(hasStudent).map((student) => resolveDisplayedSubjectForGrade(student.subject, student.grade)).join(' / ')}</span>
               </div>
             </div>
             )

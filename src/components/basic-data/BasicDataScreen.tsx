@@ -26,6 +26,7 @@ import {
   resolveSchoolYearDateRange,
 } from './regularLessonModel'
 import { AppMenu } from '../navigation/AppMenu'
+import { resolveDisplayedSubjectForBirthDate } from '../../utils/studentGradeSubject'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -609,29 +610,41 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
     studentIdByName.set(student.name, student.id)
     if (student.displayName) studentIdByName.set(student.displayName, student.id)
   }
+  const studentById = new Map(students.map((student) => [student.id, student]))
 
   const regularRows = readRows('通常授業')
   const regularLessons = regularRows
     ? regularRows
-        .map((row) => normalizeRegularLessonSharedPeriod({
-          id: createId('regular'),
-          schoolYear: parseSchoolYear(row['年度']),
-          teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
-          student1Id: studentIdByName.get(normalizeText(row['生徒1'])) ?? '',
-          subject1: subjectOptions.includes(normalizeText(row['科目1'])) ? normalizeText(row['科目1']) : '英',
-          startDate: normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx),
-          endDate: normalizeDateString(row['共通期間終了'], xlsx) || normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx),
-          student2Id: studentIdByName.get(normalizeText(row['生徒2'])) ?? '',
-          subject2: subjectOptions.includes(normalizeText(row['科目2'])) ? normalizeText(row['科目2']) : '',
-          student2StartDate: normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx),
-          student2EndDate: normalizeDateString(row['共通期間終了'], xlsx) || normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx),
-          nextStudent1Id: '',
-          nextSubject1: '',
-          nextStudent2Id: '',
-          nextSubject2: '',
-          dayOfWeek: parseDayOfWeek(row['曜日']),
-          slotNumber: parseSlotNumber(row['時限']),
-        }))
+        .map((row) => {
+          const schoolYear = parseSchoolYear(row['年度'])
+          const sharedStartDate = normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx)
+          const sharedEndDate = normalizeDateString(row['共通期間終了'], xlsx) || normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx)
+          const referenceDate = sharedStartDate || resolveSchoolYearDateRange(schoolYear).startDate
+          const student1Id = studentIdByName.get(normalizeText(row['生徒1'])) ?? ''
+          const student2Id = studentIdByName.get(normalizeText(row['生徒2'])) ?? ''
+          const subject1 = subjectOptions.includes(normalizeText(row['科目1'])) ? normalizeText(row['科目1']) : '英'
+          const subject2 = subjectOptions.includes(normalizeText(row['科目2'])) ? normalizeText(row['科目2']) : ''
+
+          return normalizeRegularLessonSharedPeriod({
+            id: createId('regular'),
+            schoolYear,
+            teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
+            student1Id,
+            subject1: resolveDisplayedSubjectForBirthDate(subject1, studentById.get(student1Id)?.birthDate, referenceDate),
+            startDate: sharedStartDate,
+            endDate: sharedEndDate,
+            student2Id,
+            subject2: resolveDisplayedSubjectForBirthDate(subject2, studentById.get(student2Id)?.birthDate, referenceDate),
+            student2StartDate: sharedStartDate,
+            student2EndDate: sharedEndDate,
+            nextStudent1Id: '',
+            nextSubject1: '',
+            nextStudent2Id: '',
+            nextSubject2: '',
+            dayOfWeek: parseDayOfWeek(row['曜日']),
+            slotNumber: parseSlotNumber(row['時限']),
+          })
+        })
         .filter((row) => row.teacherId && row.student1Id)
     : fallback.regularLessons
 
