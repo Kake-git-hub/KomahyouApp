@@ -81,6 +81,117 @@ export type BasicDataBundle = {
   groupLessons: GroupLessonRow[]
   classroomSettings: ClassroomSettings
 }
+
+function normalizeImportIdentityValue(value: string) {
+  return value.replace(/[\s\u3000]+/gu, '').trim().toLowerCase()
+}
+
+function findManagerMatch(manager: ManagerRow, currentManagers: ManagerRow[]) {
+  if (manager.id) {
+    const matchedById = currentManagers.find((row) => row.id === manager.id)
+    if (matchedById) return matchedById
+  }
+
+  const normalizedEmail = normalizeImportIdentityValue(manager.email)
+  if (normalizedEmail) {
+    const matchedByEmail = currentManagers.find((row) => normalizeImportIdentityValue(row.email) === normalizedEmail)
+    if (matchedByEmail) return matchedByEmail
+  }
+
+  const normalizedName = normalizeImportIdentityValue(manager.name)
+  if (!normalizedName) return null
+  return currentManagers.find((row) => normalizeImportIdentityValue(row.name) === normalizedName) ?? null
+}
+
+function findTeacherMatch(teacher: TeacherRow, currentTeachers: TeacherRow[]) {
+  if (teacher.id) {
+    const matchedById = currentTeachers.find((row) => row.id === teacher.id)
+    if (matchedById) return matchedById
+  }
+
+  const normalizedEmail = normalizeImportIdentityValue(teacher.email)
+  if (normalizedEmail) {
+    const matchedByEmail = currentTeachers.find((row) => normalizeImportIdentityValue(row.email) === normalizedEmail)
+    if (matchedByEmail) return matchedByEmail
+  }
+
+  const normalizedDisplayName = normalizeImportIdentityValue(getTeacherDisplayName(teacher))
+  if (normalizedDisplayName) {
+    const matchedByDisplayName = currentTeachers.find((row) => normalizeImportIdentityValue(getTeacherDisplayName(row)) === normalizedDisplayName)
+    if (matchedByDisplayName) return matchedByDisplayName
+  }
+
+  const normalizedName = normalizeImportIdentityValue(teacher.name)
+  if (!normalizedName) return null
+  return currentTeachers.find((row) => normalizeImportIdentityValue(row.name) === normalizedName) ?? null
+}
+
+function findStudentMatch(student: StudentRow, currentStudents: StudentRow[]) {
+  if (student.id) {
+    const matchedById = currentStudents.find((row) => row.id === student.id)
+    if (matchedById) return matchedById
+  }
+
+  const normalizedEmail = normalizeImportIdentityValue(student.email)
+  if (normalizedEmail) {
+    const matchedByEmail = currentStudents.find((row) => normalizeImportIdentityValue(row.email) === normalizedEmail)
+    if (matchedByEmail) return matchedByEmail
+  }
+
+  const normalizedDisplayName = normalizeImportIdentityValue(getStudentDisplayName(student))
+  if (normalizedDisplayName) {
+    const matchedByDisplayName = currentStudents.find((row) => normalizeImportIdentityValue(getStudentDisplayName(row)) === normalizedDisplayName)
+    if (matchedByDisplayName) return matchedByDisplayName
+  }
+
+  const normalizedName = normalizeImportIdentityValue(student.name)
+  if (!normalizedName) return null
+  return currentStudents.find((row) => normalizeImportIdentityValue(row.name) === normalizedName) ?? null
+}
+
+function buildRegularLessonMergeKey(row: Pick<RegularLessonRow, 'schoolYear' | 'teacherId' | 'student1Id' | 'startDate' | 'endDate' | 'student2Id' | 'student2StartDate' | 'student2EndDate' | 'dayOfWeek' | 'slotNumber'>) {
+  const normalized = normalizeRegularLessonSharedPeriod(row)
+  return [
+    normalized.schoolYear,
+    normalized.teacherId,
+    normalized.student1Id,
+    normalized.student2Id,
+    normalized.dayOfWeek,
+    normalized.slotNumber,
+    normalized.startDate,
+    normalized.endDate,
+  ].join('__')
+}
+
+function findRegularLessonMatch(row: RegularLessonRow, currentRegularLessons: RegularLessonRow[]) {
+  if (row.id) {
+    const matchedById = currentRegularLessons.find((currentRow) => currentRow.id === row.id)
+    if (matchedById) return matchedById
+  }
+
+  const rowKey = buildRegularLessonMergeKey(row)
+  return currentRegularLessons.find((currentRow) => buildRegularLessonMergeKey(currentRow) === rowKey) ?? null
+}
+
+function buildGroupLessonMergeKey(row: Pick<GroupLessonRow, 'schoolYear' | 'teacherId' | 'studentIds' | 'dayOfWeek' | 'slotLabel'>) {
+  return [
+    row.schoolYear,
+    row.teacherId,
+    row.dayOfWeek,
+    row.slotLabel,
+    row.studentIds.slice().sort((left, right) => left.localeCompare(right)).join(','),
+  ].join('__')
+}
+
+function findGroupLessonMatch(row: GroupLessonRow, currentGroupLessons: GroupLessonRow[]) {
+  if (row.id) {
+    const matchedById = currentGroupLessons.find((currentRow) => currentRow.id === row.id)
+    if (matchedById) return matchedById
+  }
+
+  const rowKey = buildGroupLessonMergeKey(row)
+  return currentGroupLessons.find((currentRow) => buildGroupLessonMergeKey(currentRow) === rowKey) ?? null
+}
 type XlsxModule = typeof import('xlsx')
 
 const subjectOptions = ['算', '数', '英', '国', '理', '社']
@@ -477,11 +588,13 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   const studentNameById = Object.fromEntries(bundle.students.map((student) => [student.id, getStudentDisplayName(student)]))
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.managers.map((row) => ({
+    管理ID: row.id,
     名前: row.name,
     メール: row.email,
   }))), 'マネージャー')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.teachers.map((row) => ({
+    講師ID: row.id,
     名前: row.name,
     表示名: getTeacherDisplayName(row),
     メール: row.email,
@@ -493,6 +606,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   })), ['入塾日', '退塾日']), '講師')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.students.map((row) => ({
+    生徒ID: row.id,
     名前: row.name,
     表示名: row.displayName,
     メール: row.email,
@@ -507,6 +621,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     bundle.regularLessons.map((row) => {
       const sharedPeriod = normalizeRegularLessonSharedPeriod(row)
       return {
+        通常授業ID: row.id,
         年度: formatSchoolYearLabel(row.schoolYear),
         講師: teacherNameById[row.teacherId] ?? '',
         生徒1: studentNameById[row.student1Id] ?? '',
@@ -523,6 +638,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   ), '通常授業')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.groupLessons.map((row) => ({
+    集団授業ID: row.id,
     年度: formatSchoolYearLabel(row.schoolYear),
     講師: teacherNameById[row.teacherId] ?? '',
     科目: row.subject,
@@ -537,6 +653,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   }]), '教室データ')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
+    { 項目: '各ID列', 説明: '現データ出力に含まれる ID 列は差分取り込みの照合に使います。差分更新時は削除せずそのまま残してください。新規行は空欄でも取り込めます。' },
     { 項目: '講師.担当科目', 説明: '英:高3, 数:中 のように 科目:上限学年 をカンマ区切りで記入します。' },
     { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式に加えて Excel の日付セルも取り込めます。空欄なら即時在籍として扱います。' },
     { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または Excel の日付セルで入力できます。空欄と 未定 はどちらも日付未設定として扱います。' },
@@ -591,7 +708,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   const managers = managerRows
     ? managerRows
         .map((row) => ({
-          id: createId('manager'),
+          id: normalizeText(row['管理ID']) || createId('manager'),
           name: normalizeText(row['名前']),
           email: normalizeText(row['メール']),
         }))
@@ -601,7 +718,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   const teachers = teacherRows
     ? teacherRows
         .map((row) => ({
-          id: createId('teacher'),
+          id: normalizeText(row['講師ID']) || createId('teacher'),
           name: normalizeText(row['名前']),
           displayName: normalizeText(row['表示名']) || deriveManagedDisplayName(normalizeText(row['名前'])),
           email: normalizeText(row['メール']),
@@ -617,7 +734,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   const students = studentRows
     ? studentRows
         .map((row) => ({
-          id: createId('student'),
+          id: normalizeText(row['生徒ID']) || createId('student'),
           name: normalizeText(row['名前']),
           displayName: normalizeText(row['表示名']) || deriveManagedDisplayName(normalizeText(row['名前'])),
           email: normalizeText(row['メール']),
@@ -656,7 +773,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           const subject2 = subjectOptions.includes(normalizeText(row['科目2'])) ? normalizeText(row['科目2']) : ''
 
           return normalizeRegularLessonSharedPeriod({
-            id: createId('regular'),
+            id: normalizeText(row['通常授業ID']) || createId('regular'),
             schoolYear,
             teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
             student1Id,
@@ -683,7 +800,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   const groupLessons = groupRows
     ? groupRows
         .map((row) => ({
-          id: createId('group'),
+          id: normalizeText(row['集団授業ID']) || createId('group'),
           schoolYear: parseSchoolYear(row['年度']),
           teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
           subject: subjectOptions.includes(normalizeText(row['科目'])) ? normalizeText(row['科目']) : '英',
@@ -713,6 +830,94 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
     regularLessons,
     groupLessons,
     classroomSettings,
+  }
+}
+
+export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDataBundle): BasicDataBundle {
+  const managers = fallback.managers.slice()
+  for (const importedManager of imported.managers) {
+    const matchedManager = findManagerMatch(importedManager, fallback.managers)
+    const nextManager = { ...importedManager, id: matchedManager?.id ?? importedManager.id }
+    const targetIndex = managers.findIndex((row) => row.id === nextManager.id)
+    if (targetIndex >= 0) {
+      managers[targetIndex] = nextManager
+      continue
+    }
+    managers.push(nextManager)
+  }
+
+  const teachers = fallback.teachers.slice()
+  const mergedTeacherIdByImportedId = new Map<string, string>()
+  for (const importedTeacher of imported.teachers) {
+    const matchedTeacher = findTeacherMatch(importedTeacher, fallback.teachers)
+    const nextTeacher = { ...importedTeacher, id: matchedTeacher?.id ?? importedTeacher.id }
+    mergedTeacherIdByImportedId.set(importedTeacher.id, nextTeacher.id)
+    const targetIndex = teachers.findIndex((row) => row.id === nextTeacher.id)
+    if (targetIndex >= 0) {
+      teachers[targetIndex] = nextTeacher
+      continue
+    }
+    teachers.push(nextTeacher)
+  }
+
+  const students = fallback.students.slice()
+  const mergedStudentIdByImportedId = new Map<string, string>()
+  for (const importedStudent of imported.students) {
+    const matchedStudent = findStudentMatch(importedStudent, fallback.students)
+    const nextStudent = { ...importedStudent, id: matchedStudent?.id ?? importedStudent.id }
+    mergedStudentIdByImportedId.set(importedStudent.id, nextStudent.id)
+    const targetIndex = students.findIndex((row) => row.id === nextStudent.id)
+    if (targetIndex >= 0) {
+      students[targetIndex] = nextStudent
+      continue
+    }
+    students.push(nextStudent)
+  }
+
+  const regularLessons = fallback.regularLessons.slice()
+  for (const importedRegularLesson of imported.regularLessons) {
+    const remappedRegularLesson = normalizeRegularLessonSharedPeriod({
+      ...importedRegularLesson,
+      teacherId: mergedTeacherIdByImportedId.get(importedRegularLesson.teacherId) ?? importedRegularLesson.teacherId,
+      student1Id: mergedStudentIdByImportedId.get(importedRegularLesson.student1Id) ?? importedRegularLesson.student1Id,
+      student2Id: mergedStudentIdByImportedId.get(importedRegularLesson.student2Id) ?? importedRegularLesson.student2Id,
+      nextStudent1Id: mergedStudentIdByImportedId.get(importedRegularLesson.nextStudent1Id) ?? importedRegularLesson.nextStudent1Id,
+      nextStudent2Id: mergedStudentIdByImportedId.get(importedRegularLesson.nextStudent2Id) ?? importedRegularLesson.nextStudent2Id,
+    })
+    const matchedRegularLesson = findRegularLessonMatch(remappedRegularLesson, fallback.regularLessons)
+    const nextRegularLesson = { ...remappedRegularLesson, id: matchedRegularLesson?.id ?? remappedRegularLesson.id }
+    const targetIndex = regularLessons.findIndex((row) => row.id === nextRegularLesson.id)
+    if (targetIndex >= 0) {
+      regularLessons[targetIndex] = nextRegularLesson
+      continue
+    }
+    regularLessons.push(nextRegularLesson)
+  }
+
+  const groupLessons = fallback.groupLessons.slice()
+  for (const importedGroupLesson of imported.groupLessons) {
+    const remappedGroupLesson = {
+      ...importedGroupLesson,
+      teacherId: mergedTeacherIdByImportedId.get(importedGroupLesson.teacherId) ?? importedGroupLesson.teacherId,
+      studentIds: importedGroupLesson.studentIds.map((studentId) => mergedStudentIdByImportedId.get(studentId) ?? studentId),
+    }
+    const matchedGroupLesson = findGroupLessonMatch(remappedGroupLesson, fallback.groupLessons)
+    const nextGroupLesson = { ...remappedGroupLesson, id: matchedGroupLesson?.id ?? remappedGroupLesson.id }
+    const targetIndex = groupLessons.findIndex((row) => row.id === nextGroupLesson.id)
+    if (targetIndex >= 0) {
+      groupLessons[targetIndex] = nextGroupLesson
+      continue
+    }
+    groupLessons.push(nextGroupLesson)
+  }
+
+  return {
+    managers,
+    teachers,
+    students,
+    regularLessons: packSortRegularLessonRows(regularLessons, (row) => teachers.find((teacher) => teacher.id === row.teacherId)?.displayName ?? ''),
+    groupLessons,
+    classroomSettings: imported.classroomSettings,
   }
 }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
-import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
+import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
@@ -146,6 +146,18 @@ function createInitialClassroomSettings(): ClassroomSettings {
     initialSetupLectureStocks: [],
     googleHolidayCalendarSyncedDates: cache?.syncedHolidayDates ?? [],
     googleHolidayCalendarLastSyncedAt: cache?.lastSyncedAt ?? '',
+  }
+}
+
+function sanitizeClassroomSettingsWithHolidayCache(settings: ClassroomSettings) {
+  const cache = readGoogleHolidaySyncCache()
+  if (!cache) return settings
+
+  return {
+    ...settings,
+    holidayDates: mergeSyncedHolidayDates(settings.holidayDates, settings.googleHolidayCalendarSyncedDates ?? [], cache.syncedHolidayDates),
+    googleHolidayCalendarSyncedDates: cache.syncedHolidayDates,
+    googleHolidayCalendarLastSyncedAt: cache.lastSyncedAt,
   }
 }
 
@@ -754,7 +766,7 @@ function App() {
           setSpecialSessions(snapshot.specialSessions)
           setAutoAssignRules(snapshot.autoAssignRules)
           setPairConstraints(snapshot.pairConstraints)
-          setClassroomSettings(snapshot.classroomSettings)
+          setClassroomSettings(sanitizeClassroomSettingsWithHolidayCache(snapshot.classroomSettings))
           setBoardState(snapshot.boardState)
           setLastSavedAt(snapshot.savedAt)
           setPersistenceMessage('保存済みデータを読み込みました。')
@@ -851,7 +863,7 @@ function App() {
       setSpecialSessions(snapshot.specialSessions)
       setAutoAssignRules(snapshot.autoAssignRules)
       setPairConstraints(snapshot.pairConstraints)
-      setClassroomSettings(snapshot.classroomSettings)
+      setClassroomSettings(sanitizeClassroomSettingsWithHolidayCache(snapshot.classroomSettings))
       setBoardState(snapshot.boardState)
       setLastSavedAt(snapshot.savedAt)
       setPersistenceMessage('バックアップを読み込みました。')
@@ -877,8 +889,10 @@ function App() {
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
-      const imported = parseImportedBundle(xlsx, workbook, { managers, teachers, students, regularLessons, groupLessons, classroomSettings })
-      const validationErrors = validateImportedBasicDataBundle(imported)
+      const fallbackBundle = { managers, teachers, students, regularLessons, groupLessons, classroomSettings }
+      const imported = parseImportedBundle(xlsx, workbook, fallbackBundle)
+      const merged = mergeImportedBundle(imported, fallbackBundle)
+      const validationErrors = validateImportedBasicDataBundle(merged)
       if (validationErrors.length > 0) {
         window.alert([
           '基本データの取り込みを中断しました。',
@@ -890,57 +904,30 @@ function App() {
         return
       }
 
-      if (hasAnyExistingSetupData()) {
-        const confirmed = window.confirm([
-          '現在の既存データはすべて削除されます。',
-          '基本データ、特別講習データ、自動割振ルール、盤面調整、ストック、初期設定入力は消えます。',
-          '元に戻せません。取り込みを続ける場合だけ OK を押してください。',
-        ].join('\n'))
-        if (!confirmed) {
-          setPersistenceMessage('既存データ全削除の確認でキャンセルされたため、基本データ取り込みを中止しました。')
-          return
-        }
+      setManagers(merged.managers)
+      setTeachers(merged.teachers)
+      setStudents(merged.students)
+      setRegularLessons(merged.regularLessons)
+      setGroupLessons(merged.groupLessons)
+      setClassroomSettings(merged.classroomSettings)
+      if (!boardState) {
+        setBoardState(createPackedInitialBoardState({
+          classroomSettings: merged.classroomSettings,
+          teachers: merged.teachers,
+          students: merged.students,
+          regularLessons: merged.regularLessons,
+        }))
       }
-
-      setManagers(imported.managers)
-      setTeachers(imported.teachers)
-      setStudents(imported.students)
-      setRegularLessons(imported.regularLessons)
-      setGroupLessons(imported.groupLessons)
-      setSpecialSessions(initialSpecialSessions)
-      setAutoAssignRules(initialAutoAssignRules)
-      setPairConstraints(initialPairConstraints)
-      setBoardState(createPackedInitialBoardState({
-        classroomSettings: {
-          ...imported.classroomSettings,
-          initialSetupCompletedAt: '',
-          initialSetupMakeupStocks: [],
-          initialSetupLectureStocks: [],
-          googleHolidayCalendarSyncedDates: [],
-          googleHolidayCalendarLastSyncedAt: '',
-        },
-        teachers: imported.teachers,
-        students: imported.students,
-        regularLessons: imported.regularLessons,
-      }))
-      setStudentScheduleRange(null)
-      setTeacherScheduleRange(null)
-      setTeacherAutoAssignRequest(null)
-      setStudentScheduleRequest(null)
-      setClassroomSettings({
-        ...imported.classroomSettings,
-        initialSetupCompletedAt: '',
-        initialSetupMakeupStocks: [],
-        initialSetupLectureStocks: [],
-        googleHolidayCalendarSyncedDates: [],
-        googleHolidayCalendarLastSyncedAt: '',
-      })
-      setPersistenceMessage('基本データを Excel から取り込みました。既存データはすべて削除し、盤面も初期配置へ戻しました。')
+      if (!hasAnyExistingSetupData()) {
+        setPersistenceMessage('基本データを Excel から取り込みました。初期盤面を生成しました。')
+      } else {
+        setPersistenceMessage('基本データの差分を Excel から取り込みました。特別講習、ルール、盤面、ストックは保持しています。')
+      }
       void runGoogleHolidaySync({ force: true, background: true })
     } catch {
       setPersistenceMessage('基本データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
+  }, [boardState, classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
 
   const exportSpecialDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')

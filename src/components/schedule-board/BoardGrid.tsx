@@ -4,7 +4,7 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
 function getStudentStatusLabel(status: StudentStatusKind) {
-  return status === 'attended' ? '出席' : '休'
+  return status === 'attended' ? '出' : '休'
 }
 
 function formatMakeupSourceDate(dateKey?: string) {
@@ -100,7 +100,7 @@ export function BoardGrid({
     const displayName = studentName
       ? resolveStudentDisplayName(studentName)
       : statusEntry
-        ? resolveStudentDisplayName(statusEntry.name)
+        ? `${resolveStudentDisplayName(statusEntry.name)}(${statusLabel}`
         : (memoLabel ?? '')
     const makeupSourceDateLabel = effectiveName && resolvedLessonType === 'makeup' ? formatMakeupSourceDate(effectiveMakeupSourceDate) : ''
     const displayGrade = effectiveName ? resolveStudentGradeLabel(effectiveName, effectiveGrade, cell.dateKey, effectiveBirthDate) : ''
@@ -145,7 +145,7 @@ export function BoardGrid({
             {makeupSourceDateLabel ? <span className="sa-student-origin-date">{makeupSourceDateLabel}</span> : null}
           </span>
           {hasMemo ? null : (
-            <span className="sa-student-detail">
+            <span className={`sa-student-detail${hasStatus ? ' sa-student-detail-muted' : ''}`}>
               {lessonStar || teacherStar ? (
                 <span className="sa-student-markers">
                   {lessonStar ? (
@@ -168,7 +168,6 @@ export function BoardGrid({
                   ) : null}
                 </span>
               ) : null}
-              {statusLabel ? <span>{statusLabel}</span> : null}
               <>
                 <span className="sa-student-detail-grade">{displayGrade}</span>
                 {' '}

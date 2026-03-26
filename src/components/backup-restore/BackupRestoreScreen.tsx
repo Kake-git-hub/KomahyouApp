@@ -153,7 +153,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <div>
               <p className="panel-kicker">バックアップ/復元/初期設定</p>
               <h2>データ保全と運用開始準備</h2>
-              <p className="page-summary">バックアップと復元に加えて、運用開始時に必要な Excel 取り込み、開始時点ストック、教室設定確認をここへ集約します。</p>
+              <p className="page-summary">バックアップと復元に加えて、運用開始前後に使う Excel 管理、開始時点ストック、教室設定確認をここへ集約します。</p>
             </div>
           </div>
 
@@ -181,19 +181,19 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
 
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
-              <h3>初期設定ナビ</h3>
-              <p>基本データ Excel は必須です。取り込み時に既存データがある場合は、盤面や各設定を含めてすべて削除してから入れ直します。特別講習データと自動割振ルールの Excel は、この画面に集約しましたが必要なときだけ実行できます。</p>
+              <h3>初期設定と運用中の Excel 管理</h3>
+              <p>基本データ Excel は初期設定後も差分だけ反映できます。特別講習データと自動割振ルールの Excel 取り込みと同じように、運用途中の更新にも使えます。</p>
             </div>
 
             <div className="auto-assign-priority-grid">
               <div className="auto-assign-priority-step">
                 <strong>1. 基本データ Excel</strong>
-                <span>{formatSetupStatus(false)}</span>
-                <span className="basic-data-subcopy">取り込みを確定すると、現在の既存データはすべて消えます。</span>
+                <span>{formatSetupStatus(true)}</span>
+                <span className="basic-data-subcopy">現データ出力の ID 列を残したまま再取込すると、既存データを消さずに差分更新できます。特別講習・ルール・盤面・ストックは保持します。</span>
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataTemplate} data-testid="setup-basic-export-template">テンプレート出力</button>
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataCurrent} data-testid="setup-basic-export-current">現データ出力</button>
-                  <button className="primary-button" type="button" onClick={() => basicImportRef.current?.click()} data-testid="setup-basic-import">Excel 取り込み</button>
+                  <button className="primary-button" type="button" onClick={() => basicImportRef.current?.click()} data-testid="setup-basic-import">差分取り込み</button>
                 </div>
               </div>
 

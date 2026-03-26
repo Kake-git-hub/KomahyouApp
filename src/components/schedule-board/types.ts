@@ -39,6 +39,8 @@ export type StudentEntry = {
 
 export type StudentStatusEntry = {
   id: string
+  studentId: string
+  sourceManagedLesson: boolean
   name: string
   managedStudentId?: string
   grade: GradeLabel
@@ -56,6 +58,9 @@ export type StudentStatusEntry = {
   slotNumber: number
   recordedAt: string
   status: StudentStatusKind
+  sourceLessonId: string
+  sourceLessonNote?: string
+  sourceLessonWarning?: string
 }
 
 export type DeskLesson = {

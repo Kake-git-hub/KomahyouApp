@@ -114,6 +114,11 @@ type SchedulePayload = {
   cells: SerializedCell[]
   plannedCells: SerializedCell[]
   expectedRegularOccurrences: SerializedExpectedRegularOccurrence[]
+  highlightedStudentSlot?: {
+    studentId: string
+    dateKey: string
+    slotNumber: number
+  }
   specialSessions: SerializedSpecialSession[]
   qrSchoolNamePattern: string
 }
@@ -142,6 +147,11 @@ function buildScheduleQrSvg(qrConfig: ScheduleQrConfig | undefined, personType: 
 type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  highlightedStudentSlot?: {
+    studentId: string
+    dateKey: string
+    slotNumber: number
+  } | null
 }
 
 type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
@@ -326,6 +336,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     cells: serializedCells,
     plannedCells: serializedPlannedCells,
     expectedRegularOccurrences: [],
+    highlightedStudentSlot: undefined,
     specialSessions: (params.specialSessions ?? []).map((session) => ({
       id: session.id,
       label: session.label,
@@ -358,6 +369,7 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
   return {
     ...basePayload,
     expectedRegularOccurrences,
+    highlightedStudentSlot: params.highlightedStudentSlot ?? undefined,
     students: params.students.map((student) => ({
       id: student.id,
       name: getStudentDisplayName(student),
@@ -967,6 +979,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .slot-cell.is-unavailable {
         background: #d1d6dc;
+      }
+
+      .slot-cell.is-moving-highlight {
+        background: #fff4ad;
+        box-shadow: inset 0 0 0 2px #d0a000;
       }
 
       .slot-cell.is-pending {
@@ -1836,7 +1853,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function renderStudentCellCard(entry) {
         if (entry.status === 'absent' || entry.status === 'attended') {
-          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.status === 'attended' ? '出' : '休') + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
+          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.status === 'attended' ? '出席' : '休') + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
         return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.subject) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
       }
@@ -2402,10 +2419,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable" data-teacher-id="' + teacherId + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + pendingKey + '" data-testid="teacher-schedule-cell-button-' + teacherId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
       }
 
+      function getCompactLessonTypeLabel(lessonType) {
+        if (lessonType === 'regular') return '通';
+        if (lessonType === 'makeup') return '振';
+        if (lessonType === 'special') return '講';
+        return lessonTypeLabels[lessonType] || lessonType || '';
+      }
+
       function formatTeacherLessonLabel(student) {
-        if (student.status === 'absent') return '休';
-        if (student.status === 'attended') return '出席';
-        const lessonLabel = lessonTypeLabels[student.lessonType] || student.lessonType;
+        const lessonLabel = getCompactLessonTypeLabel(student.lessonType);
+        if (student.status === 'absent') return [lessonLabel, '休'].filter(Boolean).join(' ');
+        if (student.status === 'attended') return [lessonLabel, '出席'].filter(Boolean).join(' ');
         const teacherLabel = teacherTypeLabels[student.teacherType] || '';
         return teacherLabel ? lessonLabel + '(' + teacherLabel + ')' : lessonLabel;
       }
@@ -2753,6 +2777,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
               if (isEditable) classes.push('is-editable');
               if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
+              const highlightedStudentSlot = DATA.highlightedStudentSlot;
+              if (highlightedStudentSlot && highlightedStudentSlot.studentId === student.id && highlightedStudentSlot.dateKey === dateHeader.dateKey && highlightedStudentSlot.slotNumber === slotNumber) {
+                classes.push('is-moving-highlight');
+              }
               let content = '<div class="empty-label"></div>';
               if (assignment) content = renderStudentCellCard(assignment.lesson);
               const title = assignment ? [assignment.lesson.subject, lessonTypeLabels[assignment.lesson.lessonType] || assignment.lesson.lessonType, assignment.teacher].filter(Boolean).join(' / ') : '';

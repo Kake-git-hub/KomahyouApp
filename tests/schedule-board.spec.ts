@@ -1891,8 +1891,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-absence-button').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
-    await expect(sourceName).toHaveText('青木太郎')
-    await expect(sourceCell).toContainText('休')
+    await expect(sourceName).toHaveText('青木太郎(休')
     await expect(sourceCell).toContainText('数')
 
     await sourceCell.click()
@@ -1904,6 +1903,13 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(teacherName)
     await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('通常')
     await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('数')
+
+    await page.getByTestId('menu-clear-absence-button').click()
+    await expect(page.getByTestId('toolbar-status')).toContainText('休みを解除しました。')
+    await expect(sourceName).toHaveText('青木太郎')
+    await expect(sourceName).not.toContainText('(休')
+    await expect(sourceCell).not.toContainText('(休')
+    await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).not.toContain(teacherName)
   })
 
   test('講師の科目対応外になった生徒名は赤表示になりツールチップで理由を出す', async ({ page }) => {
@@ -2057,13 +2063,21 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-attendance-button').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('出席にしました。')
-    await expect(sourceName).toHaveText('青木太郎')
-    await expect(sourceCell).toContainText('出席')
+    await expect(sourceName).toHaveText('青木太郎(出')
     await expect(sourceCell).toContainText('数')
 
     await sourceCell.click()
     const menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
     expect(menuButtons).toEqual(['出席解除'])
+
+    await page.getByTestId('menu-clear-attendance-button').click()
+    await expect(page.getByTestId('toolbar-status')).toContainText('出席を解除しました。')
+    await expect(sourceName).toHaveText('青木太郎')
+    await expect(sourceName).not.toContainText('(出')
+
+    await sourceCell.click()
+    const menuButtonsAfterClear = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
+    expect(menuButtonsAfterClear).toEqual(['移動', '出席', '休み', '振替ストックに戻す', '削除'])
   })
 
   test('空欄セルから既存生徒を講習追加しても講習ストックは増えず、手動追加警告を出す', async ({ page }) => {
@@ -2598,6 +2612,7 @@ test.describe('コマ調整表', () => {
 
     await ensureLectureStockPanelVisible(page)
     await expect(page.getByTestId('lecture-stock-chip')).toContainText('2')
+    await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').waitFor()
     const readLectureStockListText = async () => {
       return (await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').textContent()) ?? ''
     }
@@ -2612,6 +2627,7 @@ test.describe('コマ調整表', () => {
 
     await ensureLectureStockPanelVisible(page)
     await expect(page.getByTestId('lecture-stock-chip')).toContainText('1')
+    await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').waitFor()
     await expect.poll(readLectureStockListText).not.toContain('2026 定期試験対策')
   })
 

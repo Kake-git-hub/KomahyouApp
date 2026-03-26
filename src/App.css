@@ -965,6 +965,14 @@ tr.sa-slot-first td {
   font-weight: 500;
 }
 
+.sa-student-name-absence,
+.sa-student-detail-muted,
+.sa-student-detail-muted .sa-student-star,
+.sa-student-detail-muted .sa-student-detail-grade,
+.sa-student-detail-muted .sa-student-detail-subject {
+  color: #6d7f93;
+}
+
 .sa-student-detail {
   display: inline-flex;
   align-items: baseline;
@@ -1072,6 +1080,16 @@ tr.sa-slot-first td {
   margin-top: 10px;
 }
 
+.student-menu-button-row {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.student-menu-button-row-two-up {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .student-menu-inline-head {
   grid-template-columns: 1fr auto;
   align-items: center;
@@ -1084,6 +1102,7 @@ tr.sa-slot-first td {
 
 .student-menu-type-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
 }
 
 .student-menu-type-grid-teacher {
@@ -1122,6 +1141,7 @@ tr.sa-slot-first td {
   font: inherit;
   font-size: 12px;
   width: 100%;
+  min-width: 0;
 }
 
 .student-type-button.compact {
