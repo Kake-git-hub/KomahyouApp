@@ -18,6 +18,8 @@ export type GradeLabel =
 
 export type SubjectLabel = '英' | '数' | '算' | '国' | '理' | '社'
 
+export type StudentStatusKind = 'absent' | 'attended'
+
 export type StudentEntry = {
   id: string
   name: string
@@ -35,7 +37,7 @@ export type StudentEntry = {
   teacherType: TeacherType
 }
 
-export type AbsentStudentEntry = {
+export type StudentStatusEntry = {
   id: string
   name: string
   managedStudentId?: string
@@ -53,6 +55,7 @@ export type AbsentStudentEntry = {
   dateKey: string
   slotNumber: number
   recordedAt: string
+  status: StudentStatusKind
 }
 
 export type DeskLesson = {
@@ -70,7 +73,7 @@ export type DeskCell = {
   teacherAssignmentSessionId?: string
   teacherAssignmentTeacherId?: string
   memoSlots?: [string | null, string | null]
-  absenceSlots?: [AbsentStudentEntry | null, AbsentStudentEntry | null]
+  statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]
   lesson?: DeskLesson
 }
 

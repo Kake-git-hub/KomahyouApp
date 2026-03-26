@@ -21,6 +21,7 @@ import {
   createInitialRegularLessons,
   doRegularLessonParticipantPeriodsOverlap,
   normalizeRegularLessonSharedPeriod,
+  packSortRegularLessonRows,
   type RegularLessonRow,
   resolveOperationalSchoolYear,
   resolveSchoolYearDateRange,
@@ -552,7 +553,35 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   const readRows = (sheetName: string) => {
     const sheet = workbook.Sheets[sheetName]
     if (!sheet) return null
-    return xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+
+    const matrix = xlsx.utils.sheet_to_json<Array<unknown>>(sheet, {
+      header: 1,
+      defval: '',
+      blankrows: false,
+    })
+    const [headerRow, ...dataRows] = matrix
+    if (!headerRow) return []
+
+    const rows: Record<string, unknown>[] = []
+
+    for (const [rowIndex, rowValues] of dataRows.entries()) {
+      if (sheet['!rows']?.[rowIndex + 1]?.hidden) continue
+
+      const rowObject: Record<string, unknown> = {}
+      let hasAnyValue = false
+      headerRow.forEach((headerValue, columnIndex) => {
+        const header = normalizeText(headerValue)
+        if (!header) return
+        const cellValue = rowValues?.[columnIndex] ?? ''
+        rowObject[header] = cellValue
+        if (normalizeText(cellValue)) hasAnyValue = true
+      })
+
+      if (!hasAnyValue) break
+      rows.push(rowObject)
+    }
+
+    return rows
   }
 
   const managerRows = readRows('マネージャー')
@@ -605,6 +634,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
     teacherIdByName.set(teacher.name, teacher.id)
     teacherIdByName.set(getTeacherDisplayName(teacher), teacher.id)
   }
+  const teacherLabelById = new Map(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const studentIdByName = new Map<string, string>()
   for (const student of students) {
     studentIdByName.set(student.name, student.id)
@@ -614,7 +644,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
 
   const regularRows = readRows('通常授業')
   const regularLessons = regularRows
-    ? regularRows
+    ? packSortRegularLessonRows(regularRows
         .map((row) => {
           const schoolYear = parseSchoolYear(row['年度'])
           const sharedStartDate = normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx)
@@ -645,7 +675,8 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
             slotNumber: parseSlotNumber(row['時限']),
           })
         })
-        .filter((row) => row.teacherId && row.student1Id)
+        .filter((row) => row.teacherId && (row.student1Id || row.student2Id)),
+      (row) => teacherLabelById.get(row.teacherId) ?? '')
     : fallback.regularLessons
 
   const groupRows = readRows('集団授業')

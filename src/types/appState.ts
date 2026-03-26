@@ -13,7 +13,6 @@ export type ClassroomSettings = {
   holidayDates: string[]
   forceOpenDates: string[]
   deskCount: number
-  operationStartDate?: string
   initialSetupCompletedAt?: string
   initialSetupMakeupStocks?: InitialSetupMakeupStockRow[]
   initialSetupLectureStocks?: InitialSetupLectureStockRow[]

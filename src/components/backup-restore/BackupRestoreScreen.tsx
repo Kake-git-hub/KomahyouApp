@@ -79,7 +79,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
     count: 1,
   })
 
-  const operationStartDate = classroomSettings.operationStartDate ?? ''
   const initialSetupMakeupStocks = classroomSettings.initialSetupMakeupStocks ?? []
   const initialSetupLectureStocks = classroomSettings.initialSetupLectureStocks ?? []
   const studentNameById = new Map(students.map((student) => [student.id, student.displayName || student.name]))
@@ -154,7 +153,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <div>
               <p className="panel-kicker">バックアップ/復元/初期設定</p>
               <h2>データ保全と運用開始準備</h2>
-              <p className="page-summary">バックアップと復元に加えて、運用開始時に必要な Excel 取り込み、運用開始日、開始時点ストック、教室設定確認をここへ集約します。</p>
+              <p className="page-summary">バックアップと復元に加えて、運用開始時に必要な Excel 取り込み、開始時点ストック、教室設定確認をここへ集約します。</p>
             </div>
           </div>
 
@@ -199,13 +198,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               </div>
 
               <div className="auto-assign-priority-step">
-                <strong>2. 運用開始日</strong>
-                <span>{formatSetupStatus(Boolean(operationStartDate))}</span>
-                <input type="date" value={operationStartDate} onChange={(event) => updateSetupField('operationStartDate', event.target.value)} data-testid="setup-operation-start-date" />
-              </div>
-
-              <div className="auto-assign-priority-step">
-                <strong>3. 教室運用確認</strong>
+                <strong>2. 教室運用確認</strong>
                 <span>{formatSetupStatus(classroomSettings.deskCount > 0)}</span>
                 <label className="basic-data-inline-field basic-data-inline-field-short">
                   <span>机数</span>
@@ -238,7 +231,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               <section className="basic-data-editor-block basic-data-inline-stack" data-testid="setup-initial-makeup-stock">
                 <div className="basic-data-card-head">
                   <h3>開始時点の振替ストック</h3>
-                  <p>運用開始日以前に持ち越す通常残を登録します。</p>
+                  <p>開始時点で持ち越している通常残を登録します。</p>
                 </div>
                 <div className="basic-data-form-row wrap align-center">
                   <select value={makeupDraft.studentId} onChange={(event) => setMakeupDraft((current) => ({ ...current, studentId: event.target.value }))}>
@@ -265,7 +258,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               <section className="basic-data-editor-block basic-data-inline-stack" data-testid="setup-initial-lecture-stock">
                 <div className="basic-data-card-head">
                   <h3>開始時点の講習ストック</h3>
-                  <p>運用開始日以前に持ち越す講習残を登録します。</p>
+                  <p>開始時点で持ち越している講習残を登録します。</p>
                 </div>
                 <div className="basic-data-form-row wrap align-center">
                   <select value={lectureDraft.studentId} onChange={(event) => setLectureDraft((current) => ({ ...current, studentId: event.target.value }))}>
@@ -320,7 +313,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             </section>
 
             <div className="basic-data-actions-row">
-              <button className="primary-button" type="button" onClick={onCompleteInitialSetup} disabled={!operationStartDate} data-testid="setup-complete-button">初期設定を完了してコマ表へ進む</button>
+              <button className="primary-button" type="button" onClick={onCompleteInitialSetup} data-testid="setup-complete-button">初期設定を完了してコマ表へ進む</button>
             </div>
           </section>
         </section>

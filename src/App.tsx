@@ -6,7 +6,7 @@ import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook 
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, type ManagerRow } from './components/basic-data/basicDataModel'
-import { createInitialRegularLessons } from './components/basic-data/regularLessonModel'
+import { createInitialRegularLessons, packSortRegularLessonRows } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
@@ -115,10 +115,10 @@ const normalizedImportedStudents = importedMasterData.students.map((student) => 
   displayName: deriveManagedDisplayName(student.name),
 }))
 
-const normalizedImportedRegularLessons = importedMasterData.regularLessons.map((row) => ({
+const normalizedImportedRegularLessons = packSortRegularLessonRows(importedMasterData.regularLessons.map((row) => ({
   ...row,
   schoolYear: 2026,
-}))
+})), (row) => normalizedImportedTeachers.find((teacher) => teacher.id === row.teacherId)?.displayName ?? '')
 
 function createInitialClassroomSettings(): ClassroomSettings {
   if (!isGoogleHolidaySyncRuntimeEnabled()) {
@@ -127,7 +127,6 @@ function createInitialClassroomSettings(): ClassroomSettings {
       holidayDates: [],
       forceOpenDates: [],
       deskCount: 14,
-      operationStartDate: '',
       initialSetupCompletedAt: '',
       initialSetupMakeupStocks: [],
       initialSetupLectureStocks: [],
@@ -142,7 +141,6 @@ function createInitialClassroomSettings(): ClassroomSettings {
     holidayDates: cache?.syncedHolidayDates ?? [],
     forceOpenDates: [],
     deskCount: 14,
-    operationStartDate: '',
     initialSetupCompletedAt: '',
     initialSetupMakeupStocks: [],
     initialSetupLectureStocks: [],
@@ -252,10 +250,9 @@ function App() {
     || autoAssignRules.some((rule) => rule.targets.length > 0 || rule.excludeTargets.length > 0)
     || pairConstraints.length > 0
     || boardState !== null
-    || Boolean(classroomSettings.operationStartDate)
     || (classroomSettings.initialSetupMakeupStocks?.length ?? 0) > 0
     || (classroomSettings.initialSetupLectureStocks?.length ?? 0) > 0
-  ), [autoAssignRules, boardState, classroomSettings.initialSetupLectureStocks, classroomSettings.initialSetupMakeupStocks, classroomSettings.operationStartDate, groupLessons.length, managers.length, pairConstraints.length, regularLessons.length, specialSessions, students.length, teachers.length])
+  ), [autoAssignRules, boardState, classroomSettings.initialSetupLectureStocks, classroomSettings.initialSetupMakeupStocks, groupLessons.length, managers.length, pairConstraints.length, regularLessons.length, specialSessions, students.length, teachers.length])
 
   const syncStudentSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -288,6 +285,7 @@ function App() {
         suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       students,
+      regularLessons,
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,
@@ -915,7 +913,6 @@ function App() {
       setBoardState(createPackedInitialBoardState({
         classroomSettings: {
           ...imported.classroomSettings,
-          operationStartDate: '',
           initialSetupCompletedAt: '',
           initialSetupMakeupStocks: [],
           initialSetupLectureStocks: [],
@@ -932,7 +929,6 @@ function App() {
       setStudentScheduleRequest(null)
       setClassroomSettings({
         ...imported.classroomSettings,
-        operationStartDate: '',
         initialSetupCompletedAt: '',
         initialSetupMakeupStocks: [],
         initialSetupLectureStocks: [],

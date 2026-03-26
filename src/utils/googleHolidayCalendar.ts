@@ -28,6 +28,16 @@ type FetchGoogleHolidayDatesParams = {
   fetchImpl?: typeof fetch
 }
 
+async function fetchOfficialJapaneseHolidayDates(fetchImpl: typeof fetch) {
+  const response = await fetchImpl(PUBLIC_HOLIDAY_FALLBACK_URL)
+  if (!response.ok) {
+    throw new Error(`公開祝日取得に失敗しました (${response.status})`)
+  }
+
+  const payload = await response.json() as Record<string, string>
+  return uniqueSortedDateKeys(Object.keys(payload))
+}
+
 function formatUtcDateTime(year: number, monthIndex: number, day: number) {
   return new Date(Date.UTC(year, monthIndex, day, 0, 0, 0)).toISOString()
 }
@@ -98,14 +108,9 @@ export function writeGoogleHolidaySyncCache(cache: GoogleHolidaySyncCache) {
 
 export async function fetchGoogleHolidayDates(params: FetchGoogleHolidayDatesParams) {
   const { apiKey, calendarId = DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, now = new Date(), fetchImpl = fetch } = params
+  const officialHolidayDates = await fetchOfficialJapaneseHolidayDates(fetchImpl)
   if (!apiKey) {
-    const response = await fetchImpl(PUBLIC_HOLIDAY_FALLBACK_URL)
-    if (!response.ok) {
-      throw new Error(`公開祝日取得に失敗しました (${response.status})`)
-    }
-
-    const payload = await response.json() as Record<string, string>
-    return uniqueSortedDateKeys(Object.keys(payload))
+    return officialHolidayDates
   }
 
   const { timeMin, timeMax } = createGoogleHolidayTimeRange(now)
@@ -136,5 +141,6 @@ export async function fetchGoogleHolidayDates(params: FetchGoogleHolidayDatesPar
     nextPageToken = payload.nextPageToken ?? ''
   } while (nextPageToken)
 
-  return uniqueSortedDateKeys(dateKeys)
+  const googleHolidayDateSet = new Set(uniqueSortedDateKeys(dateKeys))
+  return officialHolidayDates.filter((dateKey) => googleHolidayDateSet.has(dateKey))
 }

@@ -50,6 +50,76 @@ export function capRegularLessonDatesPerMonth(dateKeys: string[], monthlyLimit =
     })
 }
 
+export function packRegularLessonSlotNumbers<T extends Pick<RegularLessonRow, 'schoolYear' | 'dayOfWeek' | 'slotNumber'>>(rows: T[]) {
+  const slotMapByGroup = new Map<string, Map<number, number>>()
+
+  for (const row of rows) {
+    const groupKey = `${row.schoolYear}_${row.dayOfWeek}`
+    const slotMap = slotMapByGroup.get(groupKey) ?? new Map<number, number>()
+    slotMap.set(row.slotNumber, row.slotNumber)
+    slotMapByGroup.set(groupKey, slotMap)
+  }
+
+  for (const slotMap of slotMapByGroup.values()) {
+    Array.from(slotMap.keys())
+      .sort((left, right) => left - right)
+      .forEach((slotNumber, index) => {
+        slotMap.set(slotNumber, index + 1)
+      })
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    slotNumber: slotMapByGroup.get(`${row.schoolYear}_${row.dayOfWeek}`)?.get(row.slotNumber) ?? row.slotNumber,
+  }))
+}
+
+function normalizeRegularLessonStudentColumns<T extends Pick<RegularLessonRow, 'student1Id' | 'subject1' | 'student2Id' | 'subject2'>>(row: T): T {
+  if (row.student1Id || !row.student2Id) return row
+  return {
+    ...row,
+    student1Id: row.student2Id,
+    subject1: row.subject2,
+    student2Id: '',
+    subject2: '',
+  }
+}
+
+function resolveRegularLessonPackPriority(row: Pick<RegularLessonRow, 'student1Id' | 'student2Id'>) {
+  const participantCount = [row.student1Id, row.student2Id].filter(Boolean).length
+  if (participantCount >= 2) return 0
+  if (participantCount === 1) return 1
+  return 2
+}
+
+export function packSortRegularLessonRows<T extends Pick<RegularLessonRow, 'schoolYear' | 'dayOfWeek' | 'slotNumber' | 'student1Id' | 'subject1' | 'student2Id' | 'subject2'>>(
+  rows: T[],
+  resolveTeacherLabel?: (row: T) => string,
+) {
+  return rows
+    .map((row, index) => ({
+      row: normalizeRegularLessonStudentColumns(row),
+      index,
+    }))
+    .sort((left, right) => {
+      if (left.row.schoolYear !== right.row.schoolYear) return left.row.schoolYear - right.row.schoolYear
+      if (left.row.dayOfWeek !== right.row.dayOfWeek) return left.row.dayOfWeek - right.row.dayOfWeek
+      if (left.row.slotNumber !== right.row.slotNumber) return left.row.slotNumber - right.row.slotNumber
+
+      const leftPriority = resolveRegularLessonPackPriority(left.row)
+      const rightPriority = resolveRegularLessonPackPriority(right.row)
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority
+
+      const leftTeacherLabel = resolveTeacherLabel?.(left.row) ?? ''
+      const rightTeacherLabel = resolveTeacherLabel?.(right.row) ?? ''
+      const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
+      if (teacherCompare !== 0) return teacherCompare
+
+      return left.index - right.index
+    })
+    .map((entry) => entry.row)
+}
+
 function normalizeManagedDate(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : ''
 }

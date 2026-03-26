@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { flushSync } from 'react-dom'
 import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
-import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
+import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { buildLectureStockEntries } from './lectureStock'
 import { buildMakeupStockEntries, buildMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
-import type { AbsentStudentEntry, DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, SubjectLabel, TeacherType } from './types'
+import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
@@ -411,7 +411,7 @@ function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
       desks: cell.desks.map((desk) => ({
         ...desk,
         memoSlots: desk.memoSlots ? [...desk.memoSlots] as [string | null, string | null] : undefined,
-        absenceSlots: desk.absenceSlots ? desk.absenceSlots.map((entry) => (entry ? { ...entry } : null)) as [AbsentStudentEntry | null, AbsentStudentEntry | null] : undefined,
+        statusSlots: desk.statusSlots ? desk.statusSlots.map((entry) => (entry ? { ...entry } : null)) as [StudentStatusEntry | null, StudentStatusEntry | null] : undefined,
         lesson: desk.lesson
           ? {
               ...desk.lesson,
@@ -670,12 +670,12 @@ function removeStudentFromDeskLesson(desk: DeskCell, studentIndex: number) {
   }
 }
 
-function setDeskAbsentStudent(desk: DeskCell, studentIndex: number, entry: AbsentStudentEntry | null) {
-  const nextAbsenceSlots: [AbsentStudentEntry | null, AbsentStudentEntry | null] = desk.absenceSlots
-    ? cloneAbsenceSlots(desk.absenceSlots) ?? [null, null]
+function setDeskStudentStatus(desk: DeskCell, studentIndex: number, entry: StudentStatusEntry | null) {
+  const nextStatusSlots: [StudentStatusEntry | null, StudentStatusEntry | null] = desk.statusSlots
+    ? cloneStatusSlots(desk.statusSlots) ?? [null, null]
     : [null, null]
-  nextAbsenceSlots[studentIndex] = entry ? { ...entry } : null
-  desk.absenceSlots = nextAbsenceSlots.some((current) => current) ? nextAbsenceSlots : undefined
+  nextStatusSlots[studentIndex] = entry ? { ...entry } : null
+  desk.statusSlots = nextStatusSlots.some((current) => current) ? nextStatusSlots : undefined
 }
 
 function appendLectureStockCount(countMap: LectureStockCountMap, key: string, increment = 1) {
@@ -795,15 +795,16 @@ function buildInitialSetupLectureStockKey(studentKey: string, subject: string, s
   return sessionId ? `${studentKey}__${subject}__${sessionId}` : `${studentKey}__${subject}`
 }
 
-function buildInitialSetupMakeupAdjustmentsFromSettings(classroomSettings: ClassroomSettings) {
-  const operationStartDate = classroomSettings.operationStartDate?.trim() || ''
-  if (!operationStartDate) return {}
+function buildInitialSetupMakeupOriginKey(stockId: string, index: number) {
+  return `__initial_setup__${stockId}_${index + 1}`
+}
 
+function buildInitialSetupMakeupAdjustmentsFromSettings(classroomSettings: ClassroomSettings) {
   return (classroomSettings.initialSetupMakeupStocks ?? []).reduce<MakeupOriginMap>((accumulator, row) => {
     const count = Math.max(0, Math.trunc(Number(row.count) || 0))
     if (!row.studentId || !row.subject || count <= 0) return accumulator
     const key = buildMakeupStockKey(row.studentId, row.subject)
-    accumulator[key] = Array.from({ length: count }, () => ({ dateKey: operationStartDate, reasonLabel: '初期設定' }))
+    accumulator[key] = Array.from({ length: count }, (_, index) => ({ dateKey: buildInitialSetupMakeupOriginKey(row.id, index), reasonLabel: '初期設定' }))
     return accumulator
   }, {})
 }
@@ -1034,9 +1035,9 @@ function resolveDeskLabel(desk: DeskCell, deskIndex: number) {
   return desk.teacher.trim() || `${deskIndex + 1}机目`
 }
 
-function buildAbsentStudentEntry(student: StudentEntry, cell: SlotCell, desk: DeskCell): AbsentStudentEntry {
+function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: DeskCell, status: StudentStatusKind): StudentStatusEntry {
   return {
-    id: `${student.id}_absent_${Date.now().toString(36)}`,
+    id: `${student.id}_${status}_${Date.now().toString(36)}`,
     name: student.name,
     managedStudentId: student.managedStudentId,
     grade: student.grade,
@@ -1053,6 +1054,7 @@ function buildAbsentStudentEntry(student: StudentEntry, cell: SlotCell, desk: De
     dateKey: cell.dateKey,
     slotNumber: cell.slotNumber,
     recordedAt: new Date().toISOString(),
+    status,
   }
 }
 
@@ -1115,7 +1117,15 @@ function isStudentSlotBlocked(desk: DeskCell, studentIndex: number) {
   return Boolean(desk.lesson?.studentSlots[studentIndex]) || hasMemoInStudentSlot(desk, studentIndex)
 }
 
-function packSortCellDesks(cell: SlotCell) {
+function resolveDeskPackPriority(desk: DeskCell) {
+  const filledStudentCount = desk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
+  if (filledStudentCount >= 2) return 0
+  if (filledStudentCount === 1) return 1
+  if (desk.teacher.trim()) return 2
+  return 3
+}
+
+export function packSortCellDesks(cell: SlotCell) {
   for (const desk of cell.desks) {
     if (desk.lesson?.studentSlots[0] === null && desk.lesson?.studentSlots[1]) {
       desk.lesson.studentSlots = [desk.lesson.studentSlots[1], null]
@@ -1124,12 +1134,12 @@ function packSortCellDesks(cell: SlotCell) {
 
   return [...cell.desks]
     .sort((leftDesk, rightDesk) => {
-      const leftCount = leftDesk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
-      const rightCount = rightDesk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
-      if (leftCount !== rightCount) return rightCount - leftCount
+      const leftPriority = resolveDeskPackPriority(leftDesk)
+      const rightPriority = resolveDeskPackPriority(rightDesk)
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority
 
-      const leftTeacherLabel = leftDesk.lesson ? (leftDesk.teacher ?? '') : ''
-      const rightTeacherLabel = rightDesk.lesson ? (rightDesk.teacher ?? '') : ''
+      const leftTeacherLabel = leftDesk.teacher ?? ''
+      const rightTeacherLabel = rightDesk.teacher ?? ''
       const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
       if (teacherCompare !== 0) return teacherCompare
 
@@ -1171,6 +1181,13 @@ function createManagedStudentEntry(student: StudentRow, subject: SubjectLabel, d
   }
 }
 
+function resetManagedTeacherAssignment(desk: DeskCell) {
+  desk.manualTeacher = false
+  desk.teacherAssignmentSource = undefined
+  desk.teacherAssignmentSessionId = undefined
+  desk.teacherAssignmentTeacherId = undefined
+}
+
 function buildManagedRegularLessonsRange(params: {
   startDate: string
   endDate: string
@@ -1189,38 +1206,51 @@ function buildManagedRegularLessonsRange(params: {
 
   for (const row of regularLessons) {
     const teacher = teacherById.get(row.teacherId)
-    const applyMonthlyCap = hasManagedRegularLessonPeriod(row)
-    const candidateDateKeys = monthDatesInScope.flatMap(({ year, monthIndex }) => getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)).filter((dateKey) => {
+    const scheduledDateKeys = monthDatesInScope.flatMap(({ year, monthIndex }) => getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)).filter((dateKey) => {
       const date = parseDateKey(dateKey)
       if (row.schoolYear !== resolveOperationalSchoolYear(date)) return false
+      return !teacher || resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+    })
+    if (scheduledDateKeys.length === 0) continue
+
+    const openDateKeys = scheduledDateKeys.filter((dateKey) => {
+      const date = parseDateKey(dateKey)
       if (classroomSettings.forceOpenDates.includes(dateKey)) return true
       if (classroomSettings.holidayDates.includes(dateKey)) return false
       if (classroomSettings.closedWeekdays.includes(date.getDay())) return false
-      return !teacher || resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+      return true
     })
-    if (candidateDateKeys.length === 0) continue
 
     const student1 = studentById.get(row.student1Id)
     const student2 = studentById.get(row.student2Id)
     if (!student1 && !student2) continue
 
-    const limitDateKeys = (dateKeys: string[]) => (applyMonthlyCap ? capRegularLessonDatesPerMonth(dateKeys) : dateKeys)
-    const student1DateKeys = student1
-      ? new Set(limitDateKeys(candidateDateKeys.filter((dateKey) => (
+    const limitDateKeys = (dateKeys: string[]) => capRegularLessonDatesPerMonth(dateKeys)
+    const student1ActiveDateKeys = student1
+      ? scheduledDateKeys.filter((dateKey) => (
         isRegularLessonParticipantActiveOnDate(row, dateKey)
         && isActiveOnDate(student1.entryDate, student1.withdrawDate, student1.isHidden, dateKey)
-      ))))
-      : new Set<string>()
-    const student2DateKeys = student2 && row.subject2
-      ? new Set(limitDateKeys(candidateDateKeys.filter((dateKey) => (
+      ))
+      : []
+    const student2ActiveDateKeys = student2 && row.subject2
+      ? scheduledDateKeys.filter((dateKey) => (
         isRegularLessonParticipantActiveOnDate(row, dateKey)
         && isActiveOnDate(student2.entryDate, student2.withdrawDate, student2.isHidden, dateKey)
-      ))))
+      ))
+      : []
+
+    const student1DateKeys = student1
+      ? new Set(limitDateKeys(student1ActiveDateKeys))
+      : new Set<string>()
+    const student2DateKeys = student2 && row.subject2
+      ? new Set(limitDateKeys(student2ActiveDateKeys))
       : new Set<string>()
 
-    const scheduledDateKeys = Array.from(new Set([...student1DateKeys, ...student2DateKeys])).sort((left, right) => left.localeCompare(right))
+    const activeDateKeys = Array.from(new Set([...student1ActiveDateKeys, ...student2ActiveDateKeys]))
+      .filter((dateKey) => openDateKeys.includes(dateKey))
+      .sort((left, right) => left.localeCompare(right))
 
-    for (const dateKey of scheduledDateKeys) {
+    for (const dateKey of activeDateKeys) {
       const cell = cellByDateSlot.get(`${dateKey}_${row.slotNumber}`)
       if (!cell) continue
 
@@ -1231,18 +1261,24 @@ function buildManagedRegularLessonsRange(params: {
         ? createManagedStudentEntry(student2, row.subject2 as SubjectLabel, dateKey)
         : null
 
-      if (!firstStudent && !secondStudent) continue
-
       const participantIds = [
         firstStudent ? row.student1Id : '',
         secondStudent ? row.student2Id : '',
       ].filter(Boolean)
       if (hasRegularPlacementConflict(cell, row.teacherId, participantIds, teacherById)) continue
 
-      const targetDesk = cell.desks.find((desk) => !desk.lesson)
+      const targetDesk = cell.desks.find((desk) => !desk.lesson && !desk.teacher.trim())
+        ?? cell.desks.find((desk) => !desk.lesson && !desk.teacher)
       if (!targetDesk) continue
 
       targetDesk.teacher = teacher ? getTeacherDisplayName(teacher) : '講師未割当'
+      resetManagedTeacherAssignment(targetDesk)
+
+      if (!firstStudent && !secondStudent) {
+        targetDesk.lesson = undefined
+        continue
+      }
+
       targetDesk.lesson = {
         id: `managed_${row.id}_${dateKey}`,
         note: '管理データ反映',
@@ -1277,9 +1313,9 @@ function cloneDeskLesson(lesson: DeskLesson): DeskLesson {
   }
 }
 
-function cloneAbsenceSlots(absenceSlots?: [AbsentStudentEntry | null, AbsentStudentEntry | null]) {
-  return absenceSlots
-    ? absenceSlots.map((entry) => (entry ? { ...entry } : null)) as [AbsentStudentEntry | null, AbsentStudentEntry | null]
+function cloneStatusSlots(statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]) {
+  return statusSlots
+    ? statusSlots.map((entry) => (entry ? { ...entry } : null)) as [StudentStatusEntry | null, StudentStatusEntry | null]
     : undefined
 }
 
@@ -1288,7 +1324,7 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
     ...cell,
     desks: cell.desks.map((desk) => ({
       ...desk,
-      absenceSlots: cloneAbsenceSlots(desk.absenceSlots),
+      statusSlots: cloneStatusSlots(desk.statusSlots),
       lesson: desk.lesson ? cloneDeskLesson(desk.lesson) : undefined,
     })),
   }
@@ -1367,7 +1403,11 @@ function suppressManagedStudentsInCell(managedCell: SlotCell, suppressedKeys: Se
     if (!nextStudentSlots[0] && !nextStudentSlots[1]) {
       return {
         ...desk,
-        teacher: '',
+        teacher: desk.teacher,
+        manualTeacher: false,
+        teacherAssignmentSource: undefined,
+        teacherAssignmentSessionId: undefined,
+        teacherAssignmentTeacherId: undefined,
         lesson: undefined,
       }
     }
@@ -1551,7 +1591,12 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       if (!lesson || !isManagedLesson(lesson)) {
         return {
           ...desk,
-          absenceSlots: cloneAbsenceSlots(desk.absenceSlots),
+          statusSlots: cloneStatusSlots(desk.statusSlots),
+          teacher: !lesson && !desk.manualTeacher ? '' : desk.teacher,
+          manualTeacher: !lesson && !desk.manualTeacher ? false : desk.manualTeacher,
+          teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
+          teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
+          teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : undefined,
           lesson: lesson ? cloneDeskLesson(lesson) : undefined,
         }
       }
@@ -1561,7 +1606,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
         preservedLessonIds.add(lesson.id)
         return {
           ...desk,
-          absenceSlots: cloneAbsenceSlots(desk.absenceSlots),
+          statusSlots: cloneStatusSlots(desk.statusSlots),
           teacher: desk.manualTeacher ? desk.teacher : managedDesk.teacher,
           lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson),
         }
@@ -1569,7 +1614,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
 
       return {
         ...desk,
-        absenceSlots: cloneAbsenceSlots(desk.absenceSlots),
+        statusSlots: cloneStatusSlots(desk.statusSlots),
         teacher: desk.manualTeacher ? desk.teacher : '',
         teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
         teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
@@ -1579,7 +1624,23 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
     })
 
     for (const managedDesk of managedCell.desks) {
-      if (!managedDesk.lesson) continue
+      if (!managedDesk.lesson) {
+        if (!managedDesk.teacher.trim()) continue
+
+        const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
+          ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
+
+        if (!targetDesk) continue
+
+        targetDesk.teacher = managedDesk.teacher
+        targetDesk.manualTeacher = false
+        targetDesk.teacherAssignmentSource = undefined
+        targetDesk.teacherAssignmentSessionId = undefined
+        targetDesk.teacherAssignmentTeacherId = undefined
+        targetDesk.lesson = undefined
+        continue
+      }
+
       if (preservedLessonIds.has(managedDesk.lesson.id)) continue
 
       const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
@@ -3417,6 +3478,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       cells: studentScheduleCells,
       plannedCells: studentPlannedScheduleCells,
       students,
+      regularLessons,
       defaultStartDate: effectiveStudentScheduleRange.startDate,
       defaultEndDate: effectiveStudentScheduleRange.endDate,
       defaultPeriodValue: effectiveStudentScheduleRange.periodValue,
@@ -3427,7 +3489,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       qrConfig: scheduleQrConfig,
       targetWindow: studentScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
+  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, regularLessons, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
 
   useEffect(() => {
     syncTeacherScheduleHtml({
@@ -3467,7 +3529,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetCell = cells.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     if (!targetCell || !targetDesk) return null
-    return { cell: targetCell, desk: targetDesk }
+    return {
+      cell: targetCell,
+      desk: targetDesk,
+      statusEntry: targetDesk.statusSlots?.[studentMenu.studentIndex] ?? null,
+    }
   }, [cells, studentMenu])
 
   const addableStudents = useMemo(() => {
@@ -4595,6 +4661,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       return
     }
 
+    const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(movedStudent, sourceDateKey, sourceSlotNumber)
+
     if (movedStudent.lessonType !== 'special') {
       const originalDateKey = resolveOriginalRegularDate(movedStudent, sourceDateKey)
       const nextMovedStudent: StudentEntry = {
@@ -4628,9 +4696,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }
     }
 
-    const suppressedOccurrenceKey = movedStudent.lessonType === 'makeup'
-      ? resolveSuppressedRegularLessonOccurrenceKey(movedStudent, sourceDateKey, sourceSlotNumber)
-      : null
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
@@ -4640,13 +4705,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell?.dateLabel} ${targetCell?.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`)
   }
 
-  const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, x: number, y: number) => {
+  const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
     setTeacherMenu(null)
     const targetCell = cells.find((cell) => cell.id === cellId)
     const currentMemo = targetCell?.desks[deskIndex]?.memoSlots?.[studentIndex] ?? ''
-    const currentAbsence = targetCell?.desks[deskIndex]?.absenceSlots?.[studentIndex] ?? null
+    const currentStatus = targetCell?.desks[deskIndex]?.statusSlots?.[studentIndex] ?? null
 
     if (hasStudent) {
       setSelectedStudentId(null)
@@ -4689,7 +4754,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setAddExistingStudentDraft(null)
       setMemoDraft(currentMemo)
       setStudentMenu({ cellId, deskIndex, studentIndex, x, y, mode: 'empty' })
-      setStatusMessage(currentAbsence ? '休みセルの空欄メニューを開きました。' : '空欄メニューを開きました。')
+      setStatusMessage(currentStatus ? `${currentStatus.status === 'attended' ? '出席' : '休み'}セルのメニューを開きました。` : '空欄メニューを開きました。')
       return
     }
 
@@ -4710,6 +4775,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handleOpenAddExistingStudent = () => {
     if (!studentMenu || !emptyMenuContext) return
+    if (emptyMenuContext.statusEntry?.status === 'attended') {
+      setStatusMessage('出席セルには既存生徒を追加できません。出席解除してから操作してください。')
+      return
+    }
     if (addableStudents.length === 0) {
       setStatusMessage('追加できる在籍生徒が見つかりませんでした。')
       return
@@ -4934,6 +5003,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         suppressedRegularLessonOccurrences,
       }),
       students,
+      regularLessons,
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,
       defaultPeriodValue: storedRange.periodValue,
@@ -5130,7 +5200,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (!targetCell || !targetDesk || !targetStudent) return
 
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
-    setDeskAbsentStudent(targetDesk, studentMenu.studentIndex, buildAbsentStudentEntry(targetStudent, targetCell, targetDesk))
+    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent'))
 
     if (targetStudent.lessonType === 'special') {
       if (targetStudent.specialStockSource !== 'session') {
@@ -5223,6 +5293,54 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       nextSuppressedRegularLessonOccurrences,
     )
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、振替ストックへ戻しました。`)
+  }
+
+  const handleMarkStudentAttended = () => {
+    if (!studentMenu || !menuStudent) return
+
+    const nextWeeks = cloneWeeks(weeks)
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const targetLesson = targetDesk?.lesson
+    const targetStudent = targetLesson?.studentSlots[studentMenu.studentIndex]
+    if (!targetCell || !targetDesk || !targetStudent) return
+
+    removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
+    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'attended'))
+    const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
+    const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
+      ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
+      : suppressedRegularLessonOccurrences
+
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      studentMenu.cellId,
+      studentMenu.deskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+      nextSuppressedRegularLessonOccurrences,
+    )
+    setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を出席にしました。`)
+  }
+
+  const handleClearStudentStatus = () => {
+    if (!studentMenu || !emptyMenuContext?.statusEntry) return
+
+    const nextWeeks = cloneWeeks(weeks)
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    if (!targetCell || !targetDesk) return
+
+    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, null)
+    commitWeeks(nextWeeks, weekIndex, studentMenu.cellId, studentMenu.deskIndex)
+    setStatusMessage(`${resolveBoardStudentDisplayName(emptyMenuContext.statusEntry.name)} の${emptyMenuContext.statusEntry.status === 'attended' ? '出席' : '休み'}を解除しました。`)
   }
 
   const handleDeleteStudent = () => {
@@ -5786,6 +5904,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               {studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
+                  <button type="button" className="menu-link-button" onClick={handleMarkStudentAttended} data-testid="menu-attendance-button">出席</button>
                   <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsent} data-testid="menu-absence-button">休み</button>
                   {menuStudent?.student.lessonType === 'special' && menuStudent.student.specialStockSource !== 'session' ? (
                     <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は講習ストックへ戻せません。不要な場合は削除してください。</div>
@@ -5798,8 +5917,19 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 </div>
               ) : studentMenu?.mode === 'empty' ? (
                 <div className="student-menu-section">
-                  <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">既存生徒追加</button>
-                  <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
+                  {emptyMenuContext?.statusEntry?.status === 'attended' ? (
+                    <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-attendance-button">出席解除</button>
+                  ) : emptyMenuContext?.statusEntry?.status === 'absent' ? (
+                    <>
+                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">既存生徒追加</button>
+                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">既存生徒追加</button>
+                      <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
+                    </>
+                  )}
                 </div>
               ) : studentMenu?.mode === 'add' ? (
                 <>

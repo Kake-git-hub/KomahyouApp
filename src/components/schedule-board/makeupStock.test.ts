@@ -130,6 +130,26 @@ describe('makeupStock', () => {
     expect(reopenedShortages).toEqual({})
   })
 
+  it('treats a holiday in a five-week month as shortage stock instead of using the fifth week as the fourth lesson', () => {
+    const student = createStudent()
+    const regularLesson = createRegularLesson({
+      dayOfWeek: 2,
+      slotNumber: 4,
+    })
+    const settings = createSettings({ holidayDates: ['2026-03-10'] })
+
+    const shortages = computeAutomaticShortageOrigins(
+      [regularLesson],
+      [student],
+      settings,
+      new Date('2026-03-31T00:00:00'),
+    )
+
+    expect(shortages).toEqual({
+      'student-1__数': ['2026-03-10'],
+    })
+  })
+
   it('ignores manual-added makeup students in planned makeup counts', () => {
     const weeks = [[createCell({
       desks: [{

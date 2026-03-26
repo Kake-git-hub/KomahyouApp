@@ -1,4 +1,5 @@
-import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
+import { getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
+import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
@@ -42,7 +43,7 @@ type SerializedStudentEntry = {
   warning?: string
 }
 
-type SerializedAbsentStudentEntry = {
+type SerializedStudentStatusEntry = {
   id: string
   linkedStudentId?: string
   name: string
@@ -51,6 +52,7 @@ type SerializedAbsentStudentEntry = {
   teacherType: string
   teacherName: string
   recordedAt: string
+  status: 'absent' | 'attended'
 }
 
 type SerializedCell = {
@@ -63,7 +65,7 @@ type SerializedCell = {
   isOpenDay: boolean
   desks: Array<{
     teacher: string
-    absences?: SerializedAbsentStudentEntry[]
+    statuses?: SerializedStudentStatusEntry[]
     lesson?: {
       note?: string
       students: SerializedStudentEntry[]
@@ -92,6 +94,12 @@ type SerializedSpecialSession = {
   studentInputs: Record<string, SerializedStudentSpecialSessionInput>
 }
 
+type SerializedExpectedRegularOccurrence = {
+  linkedStudentId: string
+  subject: string
+  dateKey: string
+}
+
 type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
@@ -105,6 +113,7 @@ type SchedulePayload = {
   teachers: SerializedTeacher[]
   cells: SerializedCell[]
   plannedCells: SerializedCell[]
+  expectedRegularOccurrences: SerializedExpectedRegularOccurrence[]
   specialSessions: SerializedSpecialSession[]
   qrSchoolNamePattern: string
 }
@@ -132,6 +141,7 @@ function buildScheduleQrSvg(qrConfig: ScheduleQrConfig | undefined, personType: 
 
 type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
+  regularLessons: RegularLessonRow[]
 }
 
 type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
@@ -155,7 +165,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
       isOpenDay: cell.isOpenDay,
       desks: cell.desks.map((desk) => ({
         teacher: desk.teacher,
-        absences: desk.absenceSlots
+        statuses: desk.statusSlots
           ?.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
           .map((entry) => ({
             id: entry.id,
@@ -166,6 +176,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
             teacherType: entry.teacherType,
             teacherName: entry.teacherName,
             recordedAt: entry.recordedAt,
+            status: entry.status,
           })),
         lesson: desk.lesson
           ? {
@@ -200,6 +211,90 @@ function createPopupWindow(targetName: string, targetWindow?: Window | null) {
   return null
 }
 
+function startOfMonth(dateKey: string) {
+  const [year, month] = dateKey.split('-').map(Number)
+  return new Date(year, (month || 1) - 1, 1)
+}
+
+function toDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = `${date.getMonth() + 1}`.padStart(2, '0')
+  const day = `${date.getDate()}`.padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function iterateMonthsInRange(startDateKey: string, endDateKey: string) {
+  const months: Array<{ year: number; monthIndex: number }> = []
+  const cursor = startOfMonth(startDateKey)
+  const limit = startOfMonth(endDateKey)
+
+  while (cursor <= limit) {
+    months.push({ year: cursor.getFullYear(), monthIndex: cursor.getMonth() })
+    cursor.setMonth(cursor.getMonth() + 1)
+  }
+
+  return months
+}
+
+function getScheduledDatesInMonth(year: number, monthIndex: number, dayOfWeek: number) {
+  const dates: string[] = []
+  const cursor = new Date(year, monthIndex, 1)
+
+  while (cursor.getMonth() === monthIndex) {
+    if (cursor.getDay() === dayOfWeek) dates.push(toDateKey(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+
+  return dates
+}
+
+export function buildExpectedRegularOccurrences(params: {
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  startDate: string
+  endDate: string
+}) {
+  const { students, regularLessons, startDate, endDate } = params
+  const studentById = new Map(students.map((student) => [student.id, student]))
+  const occurrences: SerializedExpectedRegularOccurrence[] = []
+
+  for (const row of regularLessons) {
+    const participants = [
+      { studentId: row.student1Id, subject: row.subject1 },
+      { studentId: row.student2Id, subject: row.subject2 },
+    ].filter((entry) => entry.studentId && entry.subject)
+
+    for (const participant of participants) {
+      const student = studentById.get(participant.studentId)
+      if (!student) continue
+
+      const participantPeriod = resolveRegularLessonParticipantPeriod(row)
+      const visibleStartDate = participantPeriod.startDate > startDate ? participantPeriod.startDate : startDate
+      const visibleEndDate = participantPeriod.endDate < endDate ? participantPeriod.endDate : endDate
+      if (visibleEndDate < visibleStartDate) continue
+
+      for (const { year, monthIndex } of iterateMonthsInRange(visibleStartDate, visibleEndDate)) {
+        const monthScheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
+          .filter((dateKey) => dateKey >= participantPeriod.startDate && dateKey <= participantPeriod.endDate)
+          .filter((dateKey) => isRegularLessonParticipantActiveOnDate(row, dateKey))
+          .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
+
+        const cappedDates = capRegularLessonDatesPerMonth(monthScheduledDates)
+        for (const dateKey of cappedDates) {
+          if (dateKey < visibleStartDate || dateKey > visibleEndDate) continue
+          occurrences.push({ linkedStudentId: student.id, subject: participant.subject, dateKey })
+        }
+      }
+    }
+  }
+
+  return occurrences.sort((left, right) => (
+    left.linkedStudentId.localeCompare(right.linkedStudentId)
+    || left.dateKey.localeCompare(right.dateKey)
+    || left.subject.localeCompare(right.subject, 'ja')
+  ))
+}
+
 function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: StudentRow[] = []): Omit<SchedulePayload, 'students' | 'teachers'> {
   const linkedStudentIdByName = new Map(linkedStudents.flatMap((student) => {
     const displayName = getStudentDisplayName(student)
@@ -230,6 +325,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     })),
     cells: serializedCells,
     plannedCells: serializedPlannedCells,
+    expectedRegularOccurrences: [],
     specialSessions: (params.specialSessions ?? []).map((session) => ({
       id: session.id,
       label: session.label,
@@ -252,9 +348,16 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
 
 function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params, params.students)
+  const expectedRegularOccurrences = buildExpectedRegularOccurrences({
+    students: params.students,
+    regularLessons: params.regularLessons,
+    startDate: basePayload.availableStartDate,
+    endDate: basePayload.availableEndDate,
+  })
 
   return {
     ...basePayload,
+    expectedRegularOccurrences,
     students: params.students.map((student) => ({
       id: student.id,
       name: getStudentDisplayName(student),
@@ -1641,11 +1744,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const map = new Map();
         cells.forEach((cell) => {
           cell.desks.forEach((desk) => {
-            if (!desk.lesson) return;
-            desk.lesson.students.forEach((student) => {
-              const studentKey = student.linkedStudentId || student.name;
+            if (desk.lesson) {
+              desk.lesson.students.forEach((student) => {
+                const studentKey = student.linkedStudentId || student.name;
+                if (!map.has(studentKey)) map.set(studentKey, []);
+                map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: desk.teacher, timeLabel: cell.timeLabel, lesson: student });
+              });
+            }
+            (Array.isArray(desk.statuses) ? desk.statuses : []).forEach((statusEntry) => {
+              if (!statusEntry) return;
+              const studentKey = statusEntry.linkedStudentId || statusEntry.name;
               if (!map.has(studentKey)) map.set(studentKey, []);
-              map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: desk.teacher, timeLabel: cell.timeLabel, lesson: student });
+              map.get(studentKey).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, teacher: statusEntry.teacherName || desk.teacher, timeLabel: cell.timeLabel, lesson: statusEntry });
             });
           });
         });
@@ -1656,9 +1766,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const map = new Map();
         cells.forEach((cell) => {
           cell.desks.forEach((desk) => {
-            if (!desk.teacher || !desk.lesson) return;
+            const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
+            if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
             if (!map.has(desk.teacher)) map.set(desk.teacher, []);
-            map.get(desk.teacher).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson.students, note: desk.lesson.note || '' });
+            map.get(desk.teacher).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' });
           });
         });
         return map;
@@ -1724,6 +1835,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function renderStudentCellCard(entry) {
+        if (entry.status === 'absent' || entry.status === 'attended') {
+          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.status === 'attended' ? '出' : '休') + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
+        }
         return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.subject) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
       }
 
@@ -2289,14 +2403,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function formatTeacherLessonLabel(student) {
+        if (student.status === 'absent') return '休';
+        if (student.status === 'attended') return '出席';
         const lessonLabel = lessonTypeLabels[student.lessonType] || student.lessonType;
         const teacherLabel = teacherTypeLabels[student.teacherType] || '';
         return teacherLabel ? lessonLabel + '(' + teacherLabel + ')' : lessonLabel;
       }
 
-      function renderTeacherCellCard(students) {
-        const cardClass = 'lesson-card lesson-card-teacher ' + (students.length > 1 ? 'is-pair' : 'is-single');
-        return '<div class="' + cardClass + '">' + students.map((student) => '<div class="teacher-lesson-person"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
+      function renderTeacherCellCard(students, statuses) {
+        const people = [...(students || []), ...(statuses || [])];
+        const cardClass = 'lesson-card lesson-card-teacher ' + (people.length > 1 ? 'is-pair' : 'is-single');
+        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
       }
 
       function makeCornerYearHtml(dateHeaders) {
@@ -2365,6 +2482,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function collectStudentMakeupNotes(entries) {
         return entries.reduce((notes, entry) => {
+          if (entry.lesson.status === 'absent') return notes;
           const note = formatMakeupNote(entry.lesson.subject, entry.lesson.makeupSourceLabel, entry.dateKey, entry.slotNumber);
           if (note) notes.push(note);
           return notes;
@@ -2377,6 +2495,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const note = formatTeacherMakeupNote(student.name, student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
             if (note) notes.push(note);
           });
+          (entry.statuses || []).forEach((student) => {
+            if (student.status === 'absent') return;
+            const note = formatTeacherMakeupNote(student.name, student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
+            if (note) notes.push(note);
+          });
           return notes;
         }, []);
       }
@@ -2385,9 +2508,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const notes = [];
         (cells || []).forEach((cell) => {
           (cell.desks || []).forEach((desk) => {
-            const absences = Array.isArray(desk.absences) ? desk.absences : [];
-            absences.forEach((entry) => {
+            const statuses = Array.isArray(desk.statuses) ? desk.statuses : [];
+            statuses.forEach((entry) => {
               if (!entry) return;
+              if (entry.status !== 'absent') return;
               const linkedStudentId = entry.linkedStudentId || '';
               const isSameStudent = linkedStudentId === student.id || entry.name === student.name || entry.name === student.fullName;
               if (!isSameStudent) return;
@@ -2576,12 +2700,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function renderStudentPages(startDate, endDate) {
         const filteredCells = filterCells(startDate, endDate);
-        const filteredPlannedCells = (Array.isArray(DATA.plannedCells) ? DATA.plannedCells : DATA.cells).filter((cell) => cell.dateKey >= startDate && cell.dateKey <= endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
         const cellMap = buildCellMap(filteredCells);
         const assignmentMap = buildStudentAssignments(filteredCells);
-        const plannedAssignmentMap = buildStudentAssignments(filteredPlannedCells);
         const periodSegments = buildPeriodSegments(dateHeaders);
         const cornerYearHtml = makeCornerYearHtml(dateHeaders);
         const monthHeaderHtml = makeMonthHeaderHtml(dateHeaders);
@@ -2592,7 +2714,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         pagesElement.innerHTML = students.map((student, index) => {
           const visibleSubjects = getVisibleSubjectsForStudent(student, startDate);
           const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
-          const plannedEntries = plannedAssignmentMap.get(student.id) || plannedAssignmentMap.get(student.name) || [];
           const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
           const unavailableSlots = getUnavailableSlotsForStudent(student.id);
           const subjectCounts = {};
@@ -2602,12 +2723,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
           const makeupNotes = collectStudentMakeupNotes(entries);
           entries.forEach((entry) => {
+            if (entry.lesson.status === 'absent') return;
             if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
             else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
           });
-          plannedEntries.forEach((entry) => {
-            if (entry.lesson.lessonType === 'special') return;
-            plannedRegularCounts[entry.lesson.subject] = (plannedRegularCounts[entry.lesson.subject] || 0) + 1;
+          (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).forEach((entry) => {
+            if (entry.linkedStudentId !== student.id) return;
+            if (entry.dateKey < startDate || entry.dateKey > endDate) return;
+            plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1;
           });
           const visibleRegularCounts = filterCountMapToSubjects(normalizeCountMapSubjects(subjectCounts, student, startDate), visibleSubjects);
           const visiblePlannedRegularCounts = filterCountMapToSubjects(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), visibleSubjects);
@@ -2672,6 +2795,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
               else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
             });
+            (entry.statuses || []).forEach((student) => {
+              if (student.status === 'absent') return;
+              if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
+              else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
+            });
           });
           const rows = slotNumbers.map((slotNumber) => {
             const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
@@ -2685,8 +2813,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               if (isEditable) classes.push('is-editable');
               if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
               let content = '<div class="empty-label"></div>';
-              if (entry) content = renderTeacherCellCard(entry.students);
-              const title = entry ? entry.students.map((student) => [student.name, student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')).join(' / ') : '';
+              if (entry && ((entry.students || []).length > 0 || (entry.statuses || []).length > 0)) content = renderTeacherCellCard(entry.students, entry.statuses);
+              const title = entry ? [...entry.students, ...(entry.statuses || [])].map((student) => [student.name, student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')).join(' / ') : '';
               return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
             }).join('');
             return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';

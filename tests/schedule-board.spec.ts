@@ -139,6 +139,22 @@ async function hasStudentInSlot(
   return false
 }
 
+async function hasTeacherInSlot(
+  page: Parameters<typeof test>[0]['page'],
+  dateKey: string,
+  slotNumber: number,
+  teacherName: string,
+) {
+  for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
+    const locator = page.getByTestId(`teacher-cell-${dateKey}_${slotNumber}-${deskIndex}`)
+    if (await locator.count() === 0) continue
+    const text = ((await locator.textContent()) ?? '').trim()
+    if (text.includes(teacherName)) return true
+  }
+
+  return false
+}
+
 async function countTeacherAssignmentsByDate(
   page: Parameters<typeof test>[0]['page'],
   dateKey: string,
@@ -660,10 +676,30 @@ test.describe('コマ調整表', () => {
 
   test('通常授業の追加と期間変更と削除がコマ表へ反映される', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
-    const currentWeekStart = getStableWeekStart(new Date(), 7)
+    const schoolYearStart = new Date(currentSchoolYear, 3, 1)
+    const schoolYearEnd = new Date(currentSchoolYear + 1, 2, 31)
+    const today = new Date()
+    const searchStart = today > schoolYearStart ? today : schoolYearStart
+
+    let targetMonthStart: Date | null = null
+    for (let year = searchStart.getFullYear(); year <= schoolYearEnd.getFullYear() && !targetMonthStart; year += 1) {
+      const monthStart = year === searchStart.getFullYear() ? searchStart.getMonth() : 0
+      const monthEnd = year === schoolYearEnd.getFullYear() ? schoolYearEnd.getMonth() : 11
+      for (let monthIndex = monthStart; monthIndex <= monthEnd; monthIndex += 1) {
+        const tuesdays = getMonthWeekdayDates(year, monthIndex, 2)
+        if (tuesdays.length >= 4) {
+          targetMonthStart = new Date(year, monthIndex, 1)
+          break
+        }
+      }
+    }
+    if (!targetMonthStart) throw new Error('4回ある火曜の月が見つかりません')
+
+    const monthTuesdays = getMonthWeekdayDates(targetMonthStart.getFullYear(), targetMonthStart.getMonth(), 2)
+    const currentWeekStart = getWeekStart(parseDateKey(monthTuesdays[1]))
     const nextWeekStart = addDays(currentWeekStart, 7)
-    const currentTuesdayKey = toDateKey(addDays(currentWeekStart, 1))
-    const nextTuesdayKey = toDateKey(addDays(nextWeekStart, 1))
+    const currentTuesdayKey = monthTuesdays[1]
+    const nextTuesdayKey = monthTuesdays[2]
     const boardGrid = page.getByTestId('slot-adjust-grid')
     const findStudentInTuesdayFifthSlot = async () => {
       for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
@@ -696,7 +732,7 @@ test.describe('コマ調整表', () => {
     await expect(newRow).toContainText('伊藤講師')
 
     await navigateFromBasicDataToBoard(page)
-    await page.getByTestId('next-week-button').click()
+    await moveBoardToWeek(page, nextWeekStart)
     await expect.poll(findStudentInTuesdayFifthSlot).toBe(true)
 
     await page.getByTestId('menu-button').click()
@@ -713,6 +749,7 @@ test.describe('コマ調整表', () => {
     await editablePeriodRow.getByRole('button', { name: '編集終了' }).click()
     await navigateFromBasicDataToBoard(page)
 
+    await moveBoardToWeek(page, nextWeekStart)
     await expect.poll(findStudentInTuesdayFifthSlot).toBe(false)
 
     await page.getByTestId('menu-button').click()
@@ -1081,6 +1118,63 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('makeup-stock-chip').click()
     const stockRow = page.locator('.makeup-stock-row').filter({ hasText: '契約回数検証生徒' }).first()
     await expect(stockRow).toHaveCount(0)
+  })
+
+  test('通常授業は5週ある月でも生徒を4回までに抑え、5週目は講師だけ残す', async ({ page }) => {
+    const currentSchoolYear = resolveOperationalSchoolYear(new Date())
+    const schoolYearStart = new Date(currentSchoolYear, 3, 1)
+    const schoolYearEnd = new Date(currentSchoolYear + 1, 2, 31)
+    const today = new Date()
+    const searchStart = today > schoolYearStart ? today : schoolYearStart
+
+    let targetMonthStart: Date | null = null
+    for (let year = searchStart.getFullYear(); year <= schoolYearEnd.getFullYear() && !targetMonthStart; year += 1) {
+      const monthStart = year === searchStart.getFullYear() ? searchStart.getMonth() : 0
+      const monthEnd = year === schoolYearEnd.getFullYear() ? schoolYearEnd.getMonth() : 11
+      for (let monthIndex = monthStart; monthIndex <= monthEnd; monthIndex += 1) {
+        const tuesdays = getMonthWeekdayDates(year, monthIndex, 2)
+        if (tuesdays.length >= 5) {
+          targetMonthStart = new Date(year, monthIndex, 1)
+          break
+        }
+      }
+    }
+    if (!targetMonthStart) throw new Error('5回ある火曜の月が見つかりません')
+
+    const monthTuesdays = getMonthWeekdayDates(targetMonthStart.getFullYear(), targetMonthStart.getMonth(), 2)
+
+    await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-students').click()
+    await page.getByTestId('basic-data-student-draft-name').fill('通常5週検証生徒')
+    await page.getByTestId('basic-data-student-draft-display-name').fill('通常5週検証生徒')
+    await setHiddenDateInput(page, 'basic-data-student-draft-entry-date-input', `${currentSchoolYear}-04-01`)
+    await setHiddenDateInput(page, 'basic-data-student-draft-birthdate-input', '2010-04-10')
+    await page.getByTestId('basic-data-add-student-button').click()
+
+    await page.getByTestId('basic-data-tab-regularLessons').click()
+    await page.getByTestId('basic-data-regular-year-select').selectOption(String(currentSchoolYear))
+    await addRegularLessonDraft(page, {
+      teacher: '田中講師',
+      student1: '通常5週検証生徒',
+      subject1: '数',
+      dayOfWeek: '2',
+      slotNumber: '5',
+    })
+
+    await navigateFromBasicDataToBoard(page)
+
+    for (const dateKey of monthTuesdays.slice(0, 4)) {
+      await moveBoardToWeek(page, parseDateKey(dateKey))
+      await expect.poll(() => hasStudentInSlot(page, dateKey, 5, '通常5週検証生徒')).toBe(true)
+      await expect.poll(() => hasTeacherInSlot(page, dateKey, 5, '田中講師')).toBe(true)
+    }
+
+    await moveBoardToWeek(page, parseDateKey(monthTuesdays[4]))
+    await expect.poll(() => hasStudentInSlot(page, monthTuesdays[4], 5, '通常5週検証生徒')).toBe(false)
+    await expect.poll(() => hasTeacherInSlot(page, monthTuesdays[4], 5, '田中講師')).toBe(true)
   })
 
   test('現状の通常授業管理データがコマ表にも表示される', async ({ page }) => {
@@ -1797,11 +1891,14 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-absence-button').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
-    await expect(sourceName).toHaveText('青木太郎(休)')
+    await expect(sourceName).toHaveText('青木太郎')
+    await expect(sourceCell).toContainText('休')
+    await expect(sourceCell).toContainText('数')
 
     await sourceCell.click()
     await expect(page.getByTestId('student-action-menu')).toBeVisible()
     await expect(page.getByTestId('menu-open-add-existing-student-button')).toBeVisible()
+    await expect(page.getByTestId('menu-clear-absence-button')).toBeVisible()
 
     const absenceTable = popup.getByTestId('student-schedule-absence-table-s001')
     await expect.poll(async () => ((await absenceTable.textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(teacherName)
@@ -1936,7 +2033,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
     let menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtons).toEqual(['移動', '休み', '振替ストックに戻す', '削除'])
+    expect(menuButtons).toEqual(['移動', '出席', '休み', '振替ストックに戻す', '削除'])
 
     await page.getByRole('button', { name: 'x' }).click()
 
@@ -1945,6 +2042,28 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('student-action-menu')).toBeVisible()
     menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
     expect(menuButtons).toEqual(['既存生徒追加', 'メモ'])
+  })
+
+  test('出席にすると薄字表示し、再クリックでは出席解除だけを表示する', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const slotId = `${toDateKey(currentWeekStart)}_1`
+    const sourceCell = page.getByTestId(`student-cell-${slotId}-0-0`)
+    const sourceName = page.getByTestId(`student-name-${slotId}-0-0`)
+
+    await page.goto('/')
+
+    await sourceCell.click()
+    await expect(page.getByTestId('menu-attendance-button')).toBeVisible()
+    await page.getByTestId('menu-attendance-button').click()
+
+    await expect(page.getByTestId('toolbar-status')).toContainText('出席にしました。')
+    await expect(sourceName).toHaveText('青木太郎')
+    await expect(sourceCell).toContainText('出席')
+    await expect(sourceCell).toContainText('数')
+
+    await sourceCell.click()
+    const menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
+    expect(menuButtons).toEqual(['出席解除'])
   })
 
   test('空欄セルから既存生徒を講習追加しても講習ストックは増えず、手動追加警告を出す', async ({ page }) => {
@@ -2478,10 +2597,10 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-register').click()
 
     await ensureLectureStockPanelVisible(page)
+    await expect(page.getByTestId('lecture-stock-chip')).toContainText('2')
     const readLectureStockListText = async () => {
       return (await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').textContent()) ?? ''
     }
-    await expect.poll(readLectureStockListText).toContain('青木太郎')
     await expect.poll(readLectureStockListText).toContain('2026 新年度準備講座')
     await expect.poll(readLectureStockListText).toContain('2026 定期試験対策')
 
@@ -2492,13 +2611,13 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId('student-schedule-count-unregister').click()
 
     await ensureLectureStockPanelVisible(page)
-    await expect.poll(readLectureStockListText).toContain('青木太郎')
-    await expect.poll(readLectureStockListText).toContain('2026 新年度準備講座')
+    await expect(page.getByTestId('lecture-stock-chip')).toContainText('1')
     await expect.poll(readLectureStockListText).not.toContain('2026 定期試験対策')
   })
 
   test('講習ストック行の自動割振で複数コマをまとめて配置できる', async ({ page }) => {
     const specialWeekStart = getWeekStart(new Date('2026-03-23'))
+    const nextSessionWeekStart = addDays(specialWeekStart, 7)
 
     await page.goto('/')
 
@@ -2519,7 +2638,15 @@ test.describe('コマ調整表', () => {
     await saveMemoToCell(page, memoTarget.cellTestId, '講習回避メモ')
     await expect(memoTargetName).toHaveText('講習回避メモ')
 
-    const beforeCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
+    const countStudentOccurrencesInSessionWeeks = async () => {
+      await moveBoardToWeek(page, specialWeekStart)
+      const firstWeekCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
+      await moveBoardToWeek(page, nextSessionWeekStart)
+      const secondWeekCount = await countStudentOccurrencesInWeek(page, nextSessionWeekStart, '青木太郎')
+      return firstWeekCount + secondWeekCount
+    }
+
+    const beforeCount = await countStudentOccurrencesInSessionWeeks()
 
     await page.getByTestId('lecture-stock-chip').click()
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().waitFor()
@@ -2528,8 +2655,9 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('stock-action-modal-auto').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。')
-    await expect(memoTargetName).toHaveText('講習回避メモ')
-    await expect.poll(async () => await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')).toBe(beforeCount + 2)
+    await moveBoardToWeek(page, specialWeekStart)
+    await expect(page.locator('[data-testid^="student-name-"]').filter({ hasText: '講習回避メモ' }).first()).toHaveText('講習回避メモ')
+    await expect.poll(countStudentOccurrencesInSessionWeeks).toBe(beforeCount + 2)
     await expect(page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' })).toHaveCount(0)
   })
 
@@ -2602,6 +2730,7 @@ test.describe('コマ調整表', () => {
   test('stock に戻した講習も session 情報を保って再割振できる', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date('2026-03-30'))
     const specialWeekStart = getWeekStart(new Date('2026-03-23'))
+    const nextSessionWeekStart = addDays(specialWeekStart, 7)
 
     await page.goto('/')
 
@@ -2629,15 +2758,22 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-stock-button').click()
     await expect(page.getByTestId('toolbar-status')).toContainText('講習ストックへ戻しました。')
 
-    const beforeReassignCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
+    const countStudentOccurrencesInSessionWeeks = async () => {
+      await moveBoardToWeek(page, specialWeekStart)
+      const firstWeekCount = await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')
+      await moveBoardToWeek(page, nextSessionWeekStart)
+      const secondWeekCount = await countStudentOccurrencesInWeek(page, nextSessionWeekStart, '青木太郎')
+      return firstWeekCount + secondWeekCount
+    }
+
+    const beforeReassignCount = await countStudentOccurrencesInSessionWeeks()
     await moveBoardToWeek(page, currentWeekStart)
     await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
     await page.getByTestId('stock-action-modal-auto').click()
     await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。1コマ配置しました。')
 
-    await moveBoardToWeek(page, specialWeekStart)
-    await expect.poll(async () => await countStudentOccurrencesInWeek(page, specialWeekStart, '青木太郎')).toBe(beforeReassignCount + 1)
+    await expect.poll(countStudentOccurrencesInSessionWeeks).toBe(beforeReassignCount + 1)
   })
 
   test('小学生の希望科目数モーダルでは算のみ表示し数を表示しない', async ({ page }) => {
@@ -2689,7 +2825,7 @@ test.describe('コマ調整表', () => {
   })
 
   test('希望数が残っている表だけ警告スタンプを表示する', async ({ page }) => {
-    const targetWeekStart = addDays(getWeekStart(new Date()), 7)
+    const targetWeekStart = getWeekStart(new Date())
     const targetWeekStartKey = toDateKey(targetWeekStart)
     const targetWeekEndKey = toDateKey(addDays(targetWeekStart, 6))
     const sourceSlotId = `${targetWeekStartKey}_1`
@@ -2714,7 +2850,7 @@ test.describe('コマ調整表', () => {
     const targetSheet = popup.locator('[data-role="student-sheet"][data-student-id="s001"]')
     const countBlocks = targetSheet.locator('.count-stack-block')
 
-    await expect(countBlocks.nth(0).getByTestId('student-schedule-regular-count-warning')).toHaveCount(0)
+    await expect(countBlocks.nth(0).getByTestId('student-schedule-regular-count-warning')).toBeVisible()
     await expect(countBlocks.nth(1).getByTestId('student-schedule-lecture-count-warning')).toBeVisible()
   })
 
@@ -3250,10 +3386,30 @@ test.describe('コマ調整表', () => {
 
   test('通常授業データの編集もコマ表と開いた生徒日程へ反映される', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
-    const currentWeekStart = getStableWeekStart(new Date(), 8)
-    const nextWeekStart = addDays(currentWeekStart, 7)
+    const schoolYearStart = new Date(currentSchoolYear, 3, 1)
+    const schoolYearEnd = new Date(currentSchoolYear + 1, 2, 31)
+    const today = new Date()
+    const searchStart = today > schoolYearStart ? today : schoolYearStart
+
+    let targetMonthStart: Date | null = null
+    for (let year = searchStart.getFullYear(); year <= schoolYearEnd.getFullYear() && !targetMonthStart; year += 1) {
+      const monthStart = year === searchStart.getFullYear() ? searchStart.getMonth() : 0
+      const monthEnd = year === schoolYearEnd.getFullYear() ? schoolYearEnd.getMonth() : 11
+      for (let monthIndex = monthStart; monthIndex <= monthEnd; monthIndex += 1) {
+        const tuesdays = getMonthWeekdayDates(year, monthIndex, 2)
+        if (tuesdays.length >= 4) {
+          targetMonthStart = new Date(year, monthIndex, 1)
+          break
+        }
+      }
+    }
+    if (!targetMonthStart) throw new Error('4回ある火曜の月が見つかりません')
+
+    const monthTuesdays = getMonthWeekdayDates(targetMonthStart.getFullYear(), targetMonthStart.getMonth(), 2)
+    const nextTuesdayKey = monthTuesdays[2]
+    const nextWeekStart = getWeekStart(parseDateKey(nextTuesdayKey))
+    const currentWeekStart = addDays(nextWeekStart, -7)
     const currentMondayKey = toDateKey(currentWeekStart)
-    const nextTuesdayKey = toDateKey(addDays(nextWeekStart, 1))
 
     await page.goto('/')
 

@@ -34,6 +34,7 @@ export type MakeupStockEntry = {
 }
 
 const DAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const
+const INITIAL_SETUP_ORIGIN_PREFIX = '__initial_setup__'
 
 function pad(value: number) {
   return String(value).padStart(2, '0')
@@ -48,7 +49,14 @@ function parseDateKey(value: string) {
   return new Date(year, (month || 1) - 1, day || 1)
 }
 
+function isDateKey(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
 function formatOriginLabel(dateKey: string, slotNumber: number | null) {
+  if (!isDateKey(dateKey) || dateKey.startsWith(INITIAL_SETUP_ORIGIN_PREFIX)) {
+    return '元コマ未設定'
+  }
   const date = parseDateKey(dateKey)
   const month = date.getMonth() + 1
   const day = date.getDate()
@@ -57,6 +65,7 @@ function formatOriginLabel(dateKey: string, slotNumber: number | null) {
 }
 
 function resolveOriginSlotNumber(key: string, dateKey: string, regularLessons: RegularLessonRow[]) {
+  if (!isDateKey(dateKey)) return null
   const [studentKey, subject = ''] = key.split('__')
   const normalizedStudentKey = studentKey.replace(/^manual:/, '').replace(/^name:/, '')
 
@@ -85,6 +94,11 @@ function resolveOriginReasonLabel(dateKey: string, params: {
   manualOriginReasonLabels: Record<string, string>
 }) {
   const { classroomSettings, autoOriginDates, conflictOriginDates, occupiedOriginDates, manualOriginDates, manualOriginReasonLabels } = params
+
+  if (!isDateKey(dateKey)) {
+    if (manualOriginDates.includes(dateKey)) return manualOriginReasonLabels[dateKey] ?? '手動調整'
+    return '振替発生'
+  }
 
   if (classroomSettings.holidayDates.includes(dateKey) && !classroomSettings.forceOpenDates.includes(dateKey)) {
     return '休日振替'
