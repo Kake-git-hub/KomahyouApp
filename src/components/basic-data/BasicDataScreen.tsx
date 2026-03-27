@@ -1,9 +1,12 @@
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
+  compareStudentsByCurrentGradeThenName,
   deriveManagedDisplayName,
+  formatStudentSelectionLabel,
   type GradeCeiling,
   type ManagerRow,
+  resolveCurrentStudentGradeLabel,
   type StudentRow,
   type TeacherRow,
   type TeacherSubjectCapability,
@@ -394,7 +397,7 @@ function parseSubjectCapabilities(value: unknown): TeacherSubjectCapability[] {
 }
 
 function getStudentOptionLabel(student: StudentRow) {
-  return getStudentDisplayName(student)
+  return formatStudentSelectionLabel(student)
 }
 
 function getTeacherOptionLabel(teacher: TeacherRow) {
@@ -917,7 +920,14 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
     students,
     regularLessons: packSortRegularLessonRows(regularLessons, (row) => teachers.find((teacher) => teacher.id === row.teacherId)?.displayName ?? ''),
     groupLessons,
-    classroomSettings: imported.classroomSettings,
+    classroomSettings: {
+      ...fallback.classroomSettings,
+      ...imported.classroomSettings,
+      closedWeekdays: imported.classroomSettings.closedWeekdays,
+      holidayDates: imported.classroomSettings.holidayDates,
+      forceOpenDates: imported.classroomSettings.forceOpenDates,
+      deskCount: imported.classroomSettings.deskCount,
+    },
   }
 }
 
@@ -1166,14 +1176,14 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     () => students.filter((student) => {
       const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, todayReferenceDate)
       return status !== '退塾' && status !== '非表示'
-    }),
+    }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const withdrawnStudentRows = useMemo(
     () => students.filter((student) => {
       const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, todayReferenceDate)
       return status === '退塾' || status === '非表示'
-    }),
+    }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const activeTeacherRows = useMemo(
@@ -1188,7 +1198,11 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     [teachers, todayReferenceDate],
   )
   const activeTeachers = useMemo(() => teachers.filter((teacher) => isTeacherActive(teacher)), [teachers])
-  const activeStudents = useMemo(() => students.filter((student) => isStudentActive(student)), [students])
+  const activeStudents = useMemo(() => students
+    .filter((student) => isStudentActive(student))
+    .slice()
+    .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)), [students, todayReferenceDate])
+  const sortedStudents = useMemo(() => students.slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)), [students, todayReferenceDate])
   const regularLessonYears = useMemo(() => selectableSchoolYears.filter((year) => year >= Math.min(...regularLessons.map((row) => row.schoolYear), currentSchoolYear - 1)), [currentSchoolYear, regularLessons, selectableSchoolYears])
   const groupLessonYears = useMemo(() => selectableSchoolYears.filter((year) => year >= Math.min(...groupLessons.map((row) => row.schoolYear), currentSchoolYear - 1)), [currentSchoolYear, groupLessons, selectableSchoolYears])
   const visibleRegularLessons = useMemo(() => regularLessons.filter((row) => row.schoolYear === selectedRegularLessonYear), [regularLessons, selectedRegularLessonYear])
@@ -1667,7 +1681,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       tableControls.students,
       (row) => [row.name, row.displayName, row.email, row.entryDate, row.withdrawDate, row.birthDate, resolveStudentStatusLabel(row)],
       {
-        name: (row) => getStudentDisplayName(row),
+        name: (row) => `${resolveCurrentStudentGradeLabel(row, todayReferenceDate)}_${getStudentDisplayName(row)}`,
         entryDate: (row) => row.entryDate,
         withdrawDate: (row) => formatManagedDateValue(row.withdrawDate),
         birthDate: (row) => row.birthDate,
@@ -1920,7 +1934,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                     ? (
                         <select value={row.student1Id} onChange={(event) => updateRegularLesson(row.id, { student1Id: event.target.value })}>
                           <option value="">生徒1を選択</option>
-                          {students.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
+                          {sortedStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
                         </select>
                       )
                     : <span className="basic-data-static-field">{formatRegularLessonParticipantSummary(studentNameById[row.student1Id] ?? '', row.subject1, '生徒1未設定')}</span>}
@@ -1939,7 +1953,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                     ? (
                         <select value={row.student2Id} onChange={(event) => updateRegularLesson(row.id, { student2Id: event.target.value })}>
                           <option value="">生徒2(任意)</option>
-                          {students.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
+                          {sortedStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
                         </select>
                       )
                     : <span className="basic-data-static-field">{formatRegularLessonParticipantSummary(studentNameById[row.student2Id] ?? '', row.subject2, '生徒2なし')}</span>}

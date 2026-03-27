@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import type { StudentRow } from '../basic-data/basicDataModel'
+import { useMemo, useRef, useState } from 'react'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getStudentDisplayName, type StudentRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
 import type { ClassroomSettings, InitialSetupLectureStockRow, InitialSetupMakeupStockRow } from '../../types/appState'
@@ -81,7 +81,8 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
 
   const initialSetupMakeupStocks = classroomSettings.initialSetupMakeupStocks ?? []
   const initialSetupLectureStocks = classroomSettings.initialSetupLectureStocks ?? []
-  const studentNameById = new Map(students.map((student) => [student.id, student.displayName || student.name]))
+  const sortedStudents = useMemo(() => students.slice().sort(compareStudentsByCurrentGradeThenName), [students])
+  const studentNameById = new Map(students.map((student) => [student.id, getStudentDisplayName(student)]))
   const sessionLabelById = new Map(specialSessions.map((session) => [session.id, session.label]))
 
   const updateSetupField = <K extends keyof ClassroomSettings>(key: K, value: ClassroomSettings[K]) => {
@@ -236,7 +237,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 <div className="basic-data-form-row wrap align-center">
                   <select value={makeupDraft.studentId} onChange={(event) => setMakeupDraft((current) => ({ ...current, studentId: event.target.value }))}>
                     <option value="">生徒を選択</option>
-                    {students.map((student) => <option key={student.id} value={student.id}>{student.displayName || student.name}</option>)}
+                    {sortedStudents.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student)}</option>)}
                   </select>
                   <select value={makeupDraft.subject} onChange={(event) => setMakeupDraft((current) => ({ ...current, subject: event.target.value }))}>
                     {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
@@ -263,7 +264,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 <div className="basic-data-form-row wrap align-center">
                   <select value={lectureDraft.studentId} onChange={(event) => setLectureDraft((current) => ({ ...current, studentId: event.target.value }))}>
                     <option value="">生徒を選択</option>
-                    {students.map((student) => <option key={student.id} value={student.id}>{student.displayName || student.name}</option>)}
+                    {sortedStudents.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student)}</option>)}
                   </select>
                   <select value={lectureDraft.subject} onChange={(event) => setLectureDraft((current) => ({ ...current, subject: event.target.value }))}>
                     {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}

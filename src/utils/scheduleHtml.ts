@@ -1,4 +1,4 @@
-import { getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { SlotCell } from '../components/schedule-board/types'
@@ -11,6 +11,8 @@ type SerializedStudent = {
   id: string
   name: string
   fullName: string
+  currentGradeLabel: string
+  currentGradeOrder: number
   birthDate: string
   entryDate: string
   withdrawDate: string
@@ -366,14 +368,34 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
     endDate: basePayload.availableEndDate,
   })
 
+  const currentReferenceDate = getReferenceDateKey(new Date())
+
   return {
     ...basePayload,
     expectedRegularOccurrences,
     highlightedStudentSlot: params.highlightedStudentSlot ?? undefined,
-    students: params.students.map((student) => ({
+    students: params.students
+      .slice()
+      .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, currentReferenceDate))
+      .map((student) => ({
       id: student.id,
       name: getStudentDisplayName(student),
       fullName: student.name,
+      currentGradeLabel: resolveCurrentStudentGradeLabel(student, currentReferenceDate),
+      currentGradeOrder: (() => {
+        const gradeLabel = resolveCurrentStudentGradeLabel(student, currentReferenceDate)
+        if (gradeLabel === '未就学') return 0
+        const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
+        if (elementaryMatch) return Number(elementaryMatch[1])
+        const middleMatch = gradeLabel.match(/^中(\d+)$/)
+        if (middleMatch) return 100 + Number(middleMatch[1])
+        const highMatch = gradeLabel.match(/^高(\d+)$/)
+        if (highMatch) return 200 + Number(highMatch[1])
+        if (gradeLabel === '入塾前') return 900
+        if (gradeLabel === '退塾') return 901
+        if (gradeLabel === '非表示') return 902
+        return 999
+      })(),
       birthDate: student.birthDate,
       entryDate: student.entryDate,
       withdrawDate: student.withdrawDate,
@@ -2713,9 +2735,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function formatStudentHeaderName(student, referenceDate) {
-        const gradeLabel = getGradeLabel(student.birthDate, referenceDate);
+        const gradeLabel = student.currentGradeLabel || getGradeLabel(student.birthDate, referenceDate);
         const sourceName = student.fullName || student.name;
         return gradeLabel ? sourceName + '(' + gradeLabel + ')' : sourceName;
+      }
+
+      function compareStudentOrder(left, right) {
+        const orderDifference = (left.currentGradeOrder || 999) - (right.currentGradeOrder || 999);
+        if (orderDifference !== 0) return orderDifference;
+        const nameDifference = (left.name || '').localeCompare(right.name || '', 'ja');
+        if (nameDifference !== 0) return nameDifference;
+        return (left.fullName || '').localeCompare(right.fullName || '', 'ja');
       }
 
       function formatTeacherHeaderName(teacher) {
@@ -2733,7 +2763,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const monthHeaderHtml = makeMonthHeaderHtml(dateHeaders);
         const weekdayHeaderHtml = makeWeekdayHeaderHtml(dateHeaders);
         const tableDensityClass = getTableDensityClass(dateHeaders);
-        const students = DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort((left, right) => left.name.localeCompare(right.name, 'ja'));
+        const students = DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);
         const showQr = shouldShowScheduleQr();
         pagesElement.innerHTML = students.map((student, index) => {
           const visibleSubjects = getVisibleSubjectsForStudent(student, startDate);

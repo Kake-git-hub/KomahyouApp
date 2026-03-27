@@ -94,6 +94,71 @@ export function getStudentDisplayName(student: StudentRow) {
   return student.displayName.trim() || deriveManagedDisplayName(student.name) || student.name.trim()
 }
 
+function resolveSchoolGradeLabelFromBirthDate(birthDate: string, today = new Date()) {
+  const normalized = normalizeDateText(birthDate)
+  if (!normalized) return '-'
+
+  const [yearText, monthText, dayText] = normalized.split('-')
+  const birthYear = Number(yearText)
+  const birthMonth = Number(monthText)
+  const birthDay = Number(dayText)
+  if ([birthYear, birthMonth, birthDay].some((value) => Number.isNaN(value))) return '-'
+
+  let age = today.getFullYear() - birthYear
+  if (today.getMonth() + 1 < birthMonth || (today.getMonth() + 1 === birthMonth && today.getDate() < birthDay)) {
+    age -= 1
+  }
+
+  if (age < 6) return '未就学'
+  if (age <= 11) return `小${age - 5}`
+  if (age <= 14) return `中${age - 11}`
+  if (age <= 17) return `高${age - 14}`
+  return '退塾'
+}
+
+function resolveStudentGradeSortOrder(gradeLabel: string) {
+  if (gradeLabel === '未就学') return 0
+
+  const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
+  if (elementaryMatch) return Number(elementaryMatch[1])
+
+  const middleMatch = gradeLabel.match(/^中(\d+)$/)
+  if (middleMatch) return 100 + Number(middleMatch[1])
+
+  const highMatch = gradeLabel.match(/^高(\d+)$/)
+  if (highMatch) return 200 + Number(highMatch[1])
+
+  if (gradeLabel === '入塾前') return 900
+  if (gradeLabel === '退塾') return 901
+  if (gradeLabel === '非表示') return 902
+  return 999
+}
+
+export function resolveCurrentStudentGradeLabel(student: StudentRow, referenceDate = getReferenceDateKey(new Date())) {
+  const scheduledStatus = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)
+  if (scheduledStatus !== '在籍') return scheduledStatus
+
+  const [yearText, monthText, dayText] = referenceDate.split('-')
+  const referenceDateValue = new Date(Number(yearText), Number(monthText) - 1, Number(dayText))
+  return resolveSchoolGradeLabelFromBirthDate(student.birthDate, referenceDateValue)
+}
+
+export function formatStudentSelectionLabel(student: StudentRow, referenceDate = getReferenceDateKey(new Date())) {
+  const gradeLabel = resolveCurrentStudentGradeLabel(student, referenceDate)
+  const displayName = getStudentDisplayName(student)
+  return gradeLabel && gradeLabel !== '-' ? `${displayName} (${gradeLabel})` : displayName
+}
+
+export function compareStudentsByCurrentGradeThenName(left: StudentRow, right: StudentRow, referenceDate = getReferenceDateKey(new Date())) {
+  const gradeOrderDiff = resolveStudentGradeSortOrder(resolveCurrentStudentGradeLabel(left, referenceDate)) - resolveStudentGradeSortOrder(resolveCurrentStudentGradeLabel(right, referenceDate))
+  if (gradeOrderDiff !== 0) return gradeOrderDiff
+
+  const displayNameCompare = getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja')
+  if (displayNameCompare !== 0) return displayNameCompare
+
+  return left.name.localeCompare(right.name, 'ja')
+}
+
 export function getTeacherDisplayName(teacher: TeacherRow) {
   return teacher.displayName?.trim() || deriveManagedDisplayName(teacher.name) || teacher.name.trim()
 }

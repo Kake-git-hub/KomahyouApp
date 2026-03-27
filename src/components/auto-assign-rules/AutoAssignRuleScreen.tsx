@@ -1,6 +1,6 @@
 import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
-import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import {
   autoAssignRuleDefinitions,
   createAutoAssignTargetId,
@@ -344,7 +344,7 @@ export function AutoAssignRuleScreen({
   const visibleStudents = useMemo(() => students
     .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, referenceDate))
     .slice()
-    .sort((left, right) => getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja')),
+    .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, referenceDate)),
   [referenceDate, students])
   const visibleTeachers = useMemo(() => teachers
     .filter((teacher) => resolveTeacherRosterStatus(teacher, referenceDate) === '在籍')
@@ -352,7 +352,7 @@ export function AutoAssignRuleScreen({
     .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja')),
   [referenceDate, teachers])
 
-  const studentNameById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, getStudentDisplayName(student)])), [visibleStudents])
+  const studentNameById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, formatStudentSelectionLabel(student, referenceDate)])), [referenceDate, visibleStudents])
   const teacherNameById = useMemo(() => Object.fromEntries(visibleTeachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [visibleTeachers])
   const studentGradeById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, resolveStudentGradeLabel(student.birthDate, referenceDate)])), [referenceDate, visibleStudents])
   const gradeOptions = useMemo(() => listAutoAssignTargetGrades(visibleStudents, referenceDate), [referenceDate, visibleStudents])
@@ -427,7 +427,12 @@ export function AutoAssignRuleScreen({
       for (const studentId of target.studentIds) studentIds.add(studentId)
     }
 
-    return Array.from(studentIds).sort((left, right) => (studentNameById[left] ?? '').localeCompare(studentNameById[right] ?? '', 'ja'))
+    return Array.from(studentIds).sort((left, right) => {
+      const leftStudent = visibleStudents.find((student) => student.id === left)
+      const rightStudent = visibleStudents.find((student) => student.id === right)
+      if (leftStudent && rightStudent) return compareStudentsByCurrentGradeThenName(leftStudent, rightStudent, referenceDate)
+      return (studentNameById[left] ?? '').localeCompare(studentNameById[right] ?? '', 'ja')
+    })
   }
 
   const buildDraftTargets = (ruleKey: AutoAssignRuleKey, mode: SelectionModalMode) => {
@@ -435,7 +440,12 @@ export function AutoAssignRuleScreen({
     const selectedGrades = resolveDraftGrades(ruleKey, mode)
     const selectedStudentIds = resolveDraftStudentIds(ruleKey, mode)
       .slice()
-      .sort((left, right) => (studentNameById[left] ?? '').localeCompare(studentNameById[right] ?? '', 'ja'))
+      .sort((left, right) => {
+        const leftStudent = visibleStudents.find((student) => student.id === left)
+        const rightStudent = visibleStudents.find((student) => student.id === right)
+        if (leftStudent && rightStudent) return compareStudentsByCurrentGradeThenName(leftStudent, rightStudent, referenceDate)
+        return (studentNameById[left] ?? '').localeCompare(studentNameById[right] ?? '', 'ja')
+      })
 
     if (draftType === 'all') {
       return [{ id: createAutoAssignTargetId(), type: 'all' as const }]
