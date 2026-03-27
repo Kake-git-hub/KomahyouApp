@@ -1,5 +1,5 @@
 import type { ClassroomSettings } from '../../types/appState'
-import { getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { formatStudentSelectionLabel, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
@@ -58,10 +58,11 @@ function formatOriginLabel(dateKey: string, slotNumber: number | null) {
     return '元コマ未設定'
   }
   const date = parseDateKey(dateKey)
+  const year = date.getFullYear()
   const month = date.getMonth() + 1
   const day = date.getDate()
   const dayLabel = DAY_LABELS[date.getDay()]
-  return slotNumber ? `${month}/${day}(${dayLabel}) ${slotNumber}限` : `${month}/${day}(${dayLabel})`
+  return slotNumber ? `${year}/${month}/${day}(${dayLabel}) ${slotNumber}限` : `${year}/${month}/${day}(${dayLabel})`
 }
 
 function resolveOriginSlotNumber(key: string, dateKey: string, regularLessons: RegularLessonRow[]) {
@@ -613,7 +614,7 @@ export function buildMakeupStockEntries(params: {
       key,
       studentId: student?.id ?? null,
       studentName: student?.name ?? fallback?.studentName ?? normalizedStudentKey.replace(/^name:/, ''),
-      displayName: student ? getStudentDisplayName(student) : (fallback?.displayName ?? normalizedStudentKey.replace(/^name:/, '')),
+      displayName: student ? formatStudentSelectionLabel(student) : (fallback?.displayName ?? normalizedStudentKey.replace(/^name:/, '')),
       subject: student ? subject : (fallback?.subject ?? subject),
       balance,
       autoShortage: autoOriginDates.length + conflictOriginDates.length + occupiedOriginDates.length,

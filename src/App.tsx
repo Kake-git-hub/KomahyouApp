@@ -884,7 +884,69 @@ function App() {
     setPersistenceMessage('基本データを Excel 出力しました。')
   }, [classroomSettings, groupLessons, managers, regularLessons, students, teachers])
 
-  const importBasicDataWorkbook = useCallback(async (file: File) => {
+  const importInitialBasicDataWorkbook = useCallback(async (file: File) => {
+    try {
+      if (hasAnyExistingSetupData() && !window.confirm([
+        '基本データを初期取り込みします。',
+        '現在の基本データ、特別講習データ、自動割振ルール、盤面、開始時点ストックは初期化されます。',
+        '続行しますか?',
+      ].join('\n'))) {
+        setPersistenceMessage('基本データの初期取り込みをキャンセルしました。')
+        return
+      }
+
+      const buffer = await file.arrayBuffer()
+      const xlsx = await import('xlsx')
+      const workbook = xlsx.read(buffer, { type: 'array' })
+      const fallbackBundle = { managers, teachers, students, regularLessons, groupLessons, classroomSettings }
+      const imported = parseImportedBundle(xlsx, workbook, fallbackBundle)
+      const resetClassroomSettings = sanitizeClassroomSettingsWithHolidayCache({
+        ...createInitialClassroomSettings(),
+        ...imported.classroomSettings,
+        closedWeekdays: imported.classroomSettings.closedWeekdays,
+        holidayDates: imported.classroomSettings.holidayDates,
+        forceOpenDates: imported.classroomSettings.forceOpenDates,
+        deskCount: imported.classroomSettings.deskCount,
+      })
+      const initialImportedBundle = {
+        ...imported,
+        classroomSettings: resetClassroomSettings,
+      }
+      const validationErrors = validateImportedBasicDataBundle(initialImportedBundle)
+      if (validationErrors.length > 0) {
+        window.alert([
+          '基本データの取り込みを中断しました。',
+          '以下の矛盾をすべて修正してから再取り込みしてください。',
+          '',
+          ...validationErrors.map((message, index) => `${index + 1}. ${message}`),
+        ].join('\n'))
+        setPersistenceMessage('基本データに矛盾が見つかったため、取り込みを中断しました。')
+        return
+      }
+
+      setManagers(initialImportedBundle.managers)
+      setTeachers(initialImportedBundle.teachers)
+      setStudents(initialImportedBundle.students)
+      setRegularLessons(initialImportedBundle.regularLessons)
+      setGroupLessons(initialImportedBundle.groupLessons)
+      setClassroomSettings(initialImportedBundle.classroomSettings)
+      setSpecialSessions(initialSpecialSessions)
+      setAutoAssignRules(initialAutoAssignRules)
+      setPairConstraints(initialPairConstraints)
+      setBoardState(createPackedInitialBoardState({
+        classroomSettings: initialImportedBundle.classroomSettings,
+        teachers: initialImportedBundle.teachers,
+        students: initialImportedBundle.students,
+        regularLessons: initialImportedBundle.regularLessons,
+      }))
+      setPersistenceMessage('基本データを初期取り込みしました。特別講習、ルール、盤面、開始時点ストックは初期化しました。')
+      void runGoogleHolidaySync({ force: true, background: true })
+    } catch {
+      setPersistenceMessage('基本データの Excel 初期取り込みに失敗しました。シート名と列名を確認してください。')
+    }
+  }, [classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
+
+  const importDiffBasicDataWorkbook = useCallback(async (file: File) => {
     try {
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
@@ -925,7 +987,7 @@ function App() {
       }
       void runGoogleHolidaySync({ force: true, background: true })
     } catch {
-      setPersistenceMessage('基本データの Excel 取り込みに失敗しました。シート名と列名を確認してください。')
+      setPersistenceMessage('基本データの Excel 差分取り込みに失敗しました。シート名と列名を確認してください。')
     }
   }, [boardState, classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
 
@@ -1077,7 +1139,8 @@ function App() {
         onCompleteInitialSetup={completeInitialSetup}
         onExportBasicDataTemplate={exportBasicDataTemplate}
         onExportBasicDataCurrent={exportBasicDataCurrent}
-        onImportBasicDataWorkbook={importBasicDataWorkbook}
+        onImportInitialBasicDataWorkbook={importInitialBasicDataWorkbook}
+        onImportDiffBasicDataWorkbook={importDiffBasicDataWorkbook}
         onExportSpecialDataTemplate={exportSpecialDataTemplate}
         onExportSpecialDataCurrent={exportSpecialDataCurrent}
         onImportSpecialDataWorkbook={importSpecialDataWorkbook}

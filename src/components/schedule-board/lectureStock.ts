@@ -1,4 +1,4 @@
-import { getStudentDisplayName, type StudentRow } from '../basic-data/basicDataModel'
+import { formatStudentSelectionLabel, type StudentRow } from '../basic-data/basicDataModel'
 import type { SubjectLabel } from './types'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 
@@ -25,7 +25,7 @@ export function buildLectureStockEntries(params: {
       if (input.regularOnly) return []
 
       const student = studentMap.get(studentId)
-      const displayName = student ? getStudentDisplayName(student) : studentId
+      const displayName = student ? formatStudentSelectionLabel(student) : studentId
 
       return Object.entries(input.subjectSlots)
         .map(([subject, requestedCount]) => ({

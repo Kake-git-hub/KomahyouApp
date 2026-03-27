@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { flushSync } from 'react-dom'
-import { getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
@@ -1014,7 +1014,7 @@ function normalizeLessonPlacement(student: StudentEntry, targetDateKey: string, 
 
 function formatStockOriginLabel(dateKey: string, slotNumber: number) {
   const date = parseDateKey(dateKey)
-  return `${date.getMonth() + 1}/${date.getDate()}(${calendarDayLabels[date.getDay()]}) ${slotNumber}限`
+  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}(${calendarDayLabels[date.getDay()]}) ${slotNumber}限`
 }
 
 function formatSignedStockCount(count: number) {
@@ -2095,6 +2095,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
+  const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.studentScheduleRange)
@@ -2434,6 +2435,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }, [])
 
   const displayWeekDate = cells[0]?.dateKey ?? getReferenceDateKey(new Date())
+  const currentGradeReferenceDate = getReferenceDateKey(new Date())
 
   const managedStudentNameMap = useMemo(() => {
     const entries = students.flatMap((student) => {
@@ -2592,10 +2594,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       })
       .filter((entry) => entry.balance !== 0)
       .sort((left, right) => {
-        if (left.balance !== right.balance) return right.balance - left.balance
+        const leftStudent = left.studentId ? students.find((student) => student.id === left.studentId) ?? null : null
+        const rightStudent = right.studentId ? students.find((student) => student.id === right.studentId) ?? null : null
+        if (leftStudent && rightStudent) return compareStudentsByCurrentGradeThenName(leftStudent, rightStudent, currentGradeReferenceDate)
+        if (leftStudent) return -1
+        if (rightStudent) return 1
         return left.displayName.localeCompare(right.displayName, 'ja')
       })
-  }, [rawMakeupStockEntries])
+  }, [currentGradeReferenceDate, rawMakeupStockEntries, students])
 
   const lecturePendingItemsByEntryKey = useMemo(() => {
     const expandedRawItemsByStockKey = new Map<string, Array<{
@@ -2743,8 +2749,17 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
     return entries.sort((left, right) => {
-      const nameCompare = left.displayName.localeCompare(right.displayName, 'ja')
-      if (nameCompare !== 0) return nameCompare
+      const leftStudent = left.studentId ? students.find((student) => student.id === left.studentId) ?? null : null
+      const rightStudent = right.studentId ? students.find((student) => student.id === right.studentId) ?? null : null
+      if (leftStudent && rightStudent) {
+        const studentCompare = compareStudentsByCurrentGradeThenName(leftStudent, rightStudent, currentGradeReferenceDate)
+        if (studentCompare !== 0) return studentCompare
+      } else if (leftStudent || rightStudent) {
+        return leftStudent ? -1 : 1
+      } else {
+        const nameCompare = left.displayName.localeCompare(right.displayName, 'ja')
+        if (nameCompare !== 0) return nameCompare
+      }
       const leftStart = left.sessionId
         ? (specialSessions.find((session) => session.id === left.sessionId)?.startDate ?? '9999-12-31')
         : '9999-12-31'
@@ -2754,7 +2769,17 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       if (leftStart !== rightStart) return leftStart.localeCompare(rightStart)
       return (left.sessionLabel ?? '盤面からストック').localeCompare(right.sessionLabel ?? '盤面からストック', 'ja')
     })
-  }, [lecturePendingItemsByEntryKey, specialSessions])
+  }, [currentGradeReferenceDate, lecturePendingItemsByEntryKey, specialSessions, students])
+
+  const runStockAutoAssign = async (entryKey: string, runner: () => void) => {
+    setActiveStockAutoAssignKey(entryKey)
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    try {
+      runner()
+    } finally {
+      setActiveStockAutoAssignKey(null)
+    }
+  }
 
   const selectedMakeupStockEntry = useMemo(
     () => makeupStockEntries.find((entry) => entry.key === selectedMakeupStockKey) ?? null,
@@ -2943,7 +2968,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }
     }
 
-    return pendingItems
+    return pendingItems.sort((left, right) => {
+      const leftOrigin = left.makeupSourceDate ?? '9999-12-31'
+      const rightOrigin = right.makeupSourceDate ?? '9999-12-31'
+      const originCompare = leftOrigin.localeCompare(rightOrigin)
+      if (originCompare !== 0) return originCompare
+      return left.subject.localeCompare(right.subject, 'ja')
+    })
   }
 
   const buildCommonAutoAssignScoreParts = (params: {
@@ -3385,6 +3416,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 value: matchedItem.makeupSourceDate ? 1 : 0,
                 detail: matchedItem.makeupSourceDate ? '元授業日ありの振替を優先' : '元授業日未設定',
               },
+              {
+                label: '元授業日優先',
+                value: matchedItem.makeupSourceDate ? 99999999 - Number(matchedItem.makeupSourceDate.replace(/-/g, '')) : 0,
+                detail: matchedItem.makeupSourceDate ? `${matchedItem.makeupSourceDate} の振替を優先` : '元授業日なし',
+              },
+              {
+                label: '日付優先',
+                value: buildDatePriorityScore(cell.dateKey),
+                detail: '早い日付ほど高得点',
+              },
               ...buildForcedConstraintScoreParts({
                 firstPeriodRuleApplied: forbidFirstPeriod,
                 firstPeriodPreferred,
@@ -3404,16 +3445,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 lessonLimitSatisfied,
                 pairConstraintPreferred,
               }),
-              {
-                label: '日付優先',
-                value: buildDatePriorityScore(cell.dateKey),
-                detail: '早い日付ほど高得点',
-              },
-              {
-                label: '元授業日優先',
-                value: matchedItem.makeupSourceDate ? 99999999 - Number(matchedItem.makeupSourceDate.replace(/-/g, '')) : 0,
-                detail: matchedItem.makeupSourceDate ? `${matchedItem.makeupSourceDate} の振替を優先` : '元授業日なし',
-              },
             ]
             const scoreVector = scoreParts.map((part) => part.value)
 
@@ -3651,10 +3682,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, emptyMenuContext.cell.dateKey))
       .map((student) => ({
         id: student.id,
-        displayName: getStudentDisplayName(student),
+        displayName: formatStudentSelectionLabel(student, emptyMenuContext.cell.dateKey),
         student,
       }))
-      .sort((left, right) => left.displayName.localeCompare(right.displayName, 'ja'))
+      .sort((left, right) => compareStudentsByCurrentGradeThenName(left.student, right.student, emptyMenuContext.cell.dateKey))
   }, [emptyMenuContext, students])
 
   const selectedAddStudent = useMemo(() => {
@@ -4594,12 +4625,22 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     let evaluatedCandidateCount = 0
 
     while (remainingItems.length > 0) {
+      remainingItems.sort((left, right) => {
+        const leftOrigin = left.makeupSourceDate ?? '9999-12-31'
+        const rightOrigin = right.makeupSourceDate ?? '9999-12-31'
+        const originCompare = leftOrigin.localeCompare(rightOrigin)
+        if (originCompare !== 0) return originCompare
+        return left.subject.localeCompare(right.subject, 'ja')
+      })
+      const [currentItem] = remainingItems
+      if (!currentItem) break
+
       const candidateSearch = findBestMakeupAutoAssignCandidate({
         sourceWeeks: nextWeeks.map((week) => week.filter((cell) => (
           (!makeupAutoAssignRange.startDate || cell.dateKey >= makeupAutoAssignRange.startDate)
           && (!makeupAutoAssignRange.endDate || cell.dateKey <= makeupAutoAssignRange.endDate)
         ))),
-        pendingItems: remainingItems,
+        pendingItems: [currentItem],
         managedStudent,
         studentKey: entry.studentId,
       })
@@ -4878,7 +4919,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       specialSessionId: addableSpecialSessions[0]?.id ?? '',
     })
     setStudentMenu({ ...studentMenu, mode: 'add' })
-    setStatusMessage('既存生徒追加メニューを開きました。')
+    setStatusMessage('生徒追加メニューを開きました。')
   }
 
   const handleSaveAddedStudent = () => {
@@ -5838,6 +5879,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <button
                       className="secondary-button slim"
                       type="button"
+                      disabled={activeStockAutoAssignKey !== null}
                       onClick={() => {
                         if (lectureEntry) handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
                         if (makeupEntry) handleSelectMakeupStockEntry(makeupEntry, { hidePanelsDuringPlacement: true })
@@ -5850,24 +5892,30 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <button
                       className="primary-button"
                       type="button"
-                      disabled={!canAutoAssign}
-                      onClick={() => {
+                      disabled={!canAutoAssign || activeStockAutoAssignKey !== null}
+                      onClick={async () => {
+                        const modalEntryKey = lectureEntry?.key ?? makeupEntry?.key ?? ''
+                        if (!modalEntryKey) return
                         const restoreState = { lecture: isLectureStockOpen, makeup: isMakeupStockOpen }
-                        setStockPanelsRestoreState(restoreState)
-                        setIsLectureStockOpen(false)
-                        setIsMakeupStockOpen(false)
-                        if (lectureEntry) handleAutoAssignLectureStockEntry(lectureEntry)
-                        if (makeupEntry) handleAutoAssignMakeupStockEntry(makeupEntry)
-                        setIsLectureStockOpen(restoreState.lecture)
-                        setIsMakeupStockOpen(restoreState.makeup)
-                        setStockPanelsRestoreState(null)
+                        await runStockAutoAssign(modalEntryKey, () => {
+                          setStockPanelsRestoreState(restoreState)
+                          setIsLectureStockOpen(false)
+                          setIsMakeupStockOpen(false)
+                          if (lectureEntry) handleAutoAssignLectureStockEntry(lectureEntry)
+                          if (makeupEntry) handleAutoAssignMakeupStockEntry(makeupEntry)
+                          setIsLectureStockOpen(restoreState.lecture)
+                          setIsMakeupStockOpen(restoreState.makeup)
+                          setStockPanelsRestoreState(null)
+                        })
                         setStockActionModal(null)
                       }}
                       data-testid="stock-action-modal-auto"
                     >
-                      自動割振
+                      {activeStockAutoAssignKey === (lectureEntry?.key ?? makeupEntry?.key ?? '')
+                        ? <span className="button-loading-content"><span className="button-spinner" aria-hidden="true" />自動割振中</span>
+                        : '自動割振'}
                     </button>
-                    <button className="secondary-button slim" type="button" onClick={() => setStockActionModal(null)} data-testid="stock-action-modal-cancel">キャンセル</button>
+                    <button className="secondary-button slim" type="button" disabled={activeStockAutoAssignKey !== null} onClick={() => setStockActionModal(null)} data-testid="stock-action-modal-cancel">キャンセル</button>
                   </div>
                 </div>
               </div>
@@ -6019,7 +6067,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   : studentMenu?.mode === 'empty'
                     ? '空欄メニュー'
                     : studentMenu?.mode === 'add'
-                      ? '既存生徒追加'
+                      ? '生徒追加'
                       : resolveBoardStudentDisplayName(menuStudent?.student.name ?? '')}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setStudentMenu(null)}>x</button>
               </div>
@@ -6054,12 +6102,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-attendance-button">出席解除</button>
                   ) : emptyMenuContext?.statusEntry?.status === 'absent' ? (
                     <div className="student-menu-button-row student-menu-button-row-two-up">
-                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">既存生徒追加</button>
+                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
                       <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
                     </div>
                   ) : (
                     <div className="student-menu-button-row student-menu-button-row-two-up">
-                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">既存生徒追加</button>
+                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
                       <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
                     </div>
                   )}
@@ -6099,7 +6147,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   </div>
                   <div className="student-menu-section">
                     <span className="student-menu-label">授業区分</span>
-                    <div className="student-menu-type-grid">
+                    <div className="student-menu-type-grid student-menu-type-grid-lesson">
                       {editableLessonTypes.map((type) => (
                         <button
                           key={type}
@@ -6183,7 +6231,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   </div>
                   <div className="student-menu-section">
                     <span className="student-menu-label">授業区分</span>
-                    <div className="student-menu-type-grid">
+                    <div className="student-menu-type-grid student-menu-type-grid-lesson">
                       {editableLessonTypes.map((type) => (
                         <button
                           key={type}

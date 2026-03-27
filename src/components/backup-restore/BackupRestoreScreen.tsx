@@ -26,7 +26,8 @@ type BackupRestoreScreenProps = {
   onCompleteInitialSetup: () => void
   onExportBasicDataTemplate: () => void
   onExportBasicDataCurrent: () => void
-  onImportBasicDataWorkbook: (file: File) => void
+  onImportInitialBasicDataWorkbook: (file: File) => void
+  onImportDiffBasicDataWorkbook: (file: File) => void
   onExportSpecialDataTemplate: () => void
   onExportSpecialDataCurrent: () => void
   onImportSpecialDataWorkbook: (file: File) => void
@@ -62,9 +63,10 @@ function createDraftId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
-  const basicImportRef = useRef<HTMLInputElement | null>(null)
+  const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
+  const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
   const specialImportRef = useRef<HTMLInputElement | null>(null)
   const autoAssignImportRef = useRef<HTMLInputElement | null>(null)
   const [makeupDraft, setMakeupDraft] = useState<Omit<InitialSetupMakeupStockRow, 'id'>>({
@@ -108,9 +110,14 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
         if (file) onImportBackup(file)
         event.currentTarget.value = ''
       }} />
-      <input ref={basicImportRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={(event) => {
+      <input ref={basicInitialImportRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={(event) => {
         const file = event.target.files?.[0]
-        if (file) onImportBasicDataWorkbook(file)
+        if (file) onImportInitialBasicDataWorkbook(file)
+        event.currentTarget.value = ''
+      }} />
+      <input ref={basicDiffImportRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={(event) => {
+        const file = event.target.files?.[0]
+        if (file) onImportDiffBasicDataWorkbook(file)
         event.currentTarget.value = ''
       }} />
       <input ref={specialImportRef} className="basic-data-hidden-input" type="file" accept=".xlsx,.xls" onChange={(event) => {
@@ -183,18 +190,19 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
               <h3>初期設定と運用中の Excel 管理</h3>
-              <p>基本データ Excel は初期設定後も差分だけ反映できます。特別講習データと自動割振ルールの Excel 取り込みと同じように、運用途中の更新にも使えます。</p>
+              <p>基本データ Excel は、最初に全体を入れ直す初期取り込みと、運用中に変更分だけ反映する差分取り込みを使い分けられます。</p>
             </div>
 
             <div className="auto-assign-priority-grid">
               <div className="auto-assign-priority-step">
                 <strong>1. 基本データ Excel</strong>
                 <span>{formatSetupStatus(true)}</span>
-                <span className="basic-data-subcopy">現データ出力の ID 列を残したまま再取込すると、既存データを消さずに差分更新できます。特別講習・ルール・盤面・ストックは保持します。</span>
+                <span className="basic-data-subcopy">初期取り込みは基本データを入れ直して関連データを初期化します。差分取り込みは現データ出力の ID 列を残したまま再取込すると、特別講習・ルール・盤面・ストックを保持したまま差分更新できます。</span>
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataTemplate} data-testid="setup-basic-export-template">テンプレート出力</button>
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataCurrent} data-testid="setup-basic-export-current">現データ出力</button>
-                  <button className="primary-button" type="button" onClick={() => basicImportRef.current?.click()} data-testid="setup-basic-import">差分取り込み</button>
+                  <button className="secondary-button slim" type="button" onClick={() => basicInitialImportRef.current?.click()} data-testid="setup-basic-import-initial">初期取り込み</button>
+                  <button className="primary-button" type="button" onClick={() => basicDiffImportRef.current?.click()} data-testid="setup-basic-import">差分取り込み</button>
                 </div>
               </div>
 

@@ -1101,12 +1101,19 @@ tr.sa-slot-first td {
 }
 
 .student-menu-type-grid {
+  display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   width: 100%;
+  gap: 8px;
 }
 
 .student-menu-type-grid-teacher {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.student-menu-type-grid-lesson {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
 }
 
 .student-menu-tab-row {
@@ -1827,6 +1834,27 @@ tr.sa-slot-first td {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.button-loading-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.button-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #ffffff;
+  animation: button-spin 0.7s linear infinite;
+}
+
+@keyframes button-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .auto-assign-pair-form {
