@@ -229,7 +229,6 @@
   max-width: 720px;
 }
 
-.developer-provision-guide-card,
 .developer-guide-section,
 .developer-guide-list {
   display: grid;
@@ -248,6 +247,10 @@
 
 .developer-guide-link-button {
   text-decoration: none;
+}
+
+.developer-provision-form {
+  margin-top: 4px;
 }
 
 .developer-guide-command {

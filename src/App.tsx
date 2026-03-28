@@ -12,7 +12,7 @@ import { initialSpecialSessions } from './components/special-data/specialSession
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroom, updateFirebaseWorkspaceClassroom } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, updateFirebaseWorkspaceClassroom } from './integrations/firebase/adminFunctions'
 import { getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -96,6 +96,15 @@ type DeveloperRestoreModalState = {
   currentSnapshot: WorkspaceSnapshot
   restoringSnapshot: WorkspaceSnapshot
   options: DeveloperRestoreModalOption[]
+}
+
+type AddClassroomOptions = {
+  classroomName: string
+  managerName: string
+  managerEmail: string
+  managerUserId?: string
+  contractStartDate?: string
+  contractEndDate?: string
 }
 
 function downloadTextFile(fileName: string, content: string, mimeType: string) {
@@ -919,28 +928,50 @@ function App() {
     setRemoteAuthMessage('')
   }, [actingClassroomId, applyWorkspaceSnapshot, remoteSessionUserId])
 
-  const addClassroom = useCallback(() => {
+  const addClassroom = useCallback((input?: AddClassroomOptions) => {
     if (isRemoteBackendEnabled) {
-      if (!isRemoteAdminAutomationEnabled) {
-        setPersistenceMessage('Spark 構成では教室追加をアプリから実行できません。Firebase Console で Auth ユーザーと Firestore ドキュメントを追加してください。')
-        return
-      }
-
-      const classroomName = window.prompt('追加する教室名を入力してください。', `新規教室 ${workspaceClassrooms.length + 1}`)?.trim() ?? ''
+      const classroomName = input?.classroomName?.trim() ?? window.prompt('追加する教室名を入力してください。', `新規教室 ${workspaceClassrooms.length + 1}`)?.trim() ?? ''
       if (!classroomName) {
         setPersistenceMessage('教室追加をキャンセルしました。')
         return
       }
 
-      const managerName = window.prompt('管理者名を入力してください。', `教室管理者 ${workspaceClassrooms.length + 1}`)?.trim() ?? ''
+      const managerName = input?.managerName?.trim() ?? window.prompt('管理者名を入力してください。', `教室管理者 ${workspaceClassrooms.length + 1}`)?.trim() ?? ''
       if (!managerName) {
         setPersistenceMessage('教室追加をキャンセルしました。')
         return
       }
 
-      const managerEmail = window.prompt('管理者メールアドレスを入力してください。', '')?.trim() ?? ''
+      const managerEmail = input?.managerEmail?.trim() ?? window.prompt('管理者メールアドレスを入力してください。', '')?.trim() ?? ''
       if (!managerEmail) {
         setPersistenceMessage('教室追加をキャンセルしました。')
+        return
+      }
+
+      const contractStartDate = input?.contractStartDate?.trim() || getTodayDateValue()
+      const contractEndDate = input?.contractEndDate?.trim() || ''
+
+      if (!isRemoteAdminAutomationEnabled) {
+        const managerUserId = input?.managerUserId?.trim() ?? ''
+        if (!managerUserId) {
+          setPersistenceMessage('Spark 構成で教室追加するには、Authentication で作成した管理者 UID を入力してください。')
+          return
+        }
+
+        void provisionFirebaseWorkspaceClassroomWithExistingUid({
+          classroomName,
+          managerName,
+          managerEmail,
+          managerUserId,
+          contractStartDate,
+          contractEndDate,
+          initialPayload: buildEmptyClassroomPayload(),
+        }).then(async (result) => {
+          await reloadRemoteWorkspace('教室を追加しました。Authentication で作成済みの UID を教室管理者へ紐付けました。', result.classroomId)
+        }).catch((error) => {
+          const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
+          setPersistenceMessage(message)
+        })
         return
       }
 
@@ -948,8 +979,8 @@ function App() {
         classroomName,
         managerName,
         managerEmail,
-        contractStartDate: getTodayDateValue(),
-        contractEndDate: '',
+        contractStartDate,
+        contractEndDate,
         initialPayload: buildEmptyClassroomPayload(),
       }).then(async (result) => {
         await reloadRemoteWorkspace('教室を追加しました。管理者アカウントを Firebase Auth に発行しました。', result.classroomId)

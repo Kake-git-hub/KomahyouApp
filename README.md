@@ -58,8 +58,8 @@
 - 教室ごとのデータを含むワークスペース状態もローカル保存し、第三者認証やDBは未確定のまま画面運用を先に検証する
 - 同一ブラウザ内の別タブで保存が発生した場合は BroadcastChannel で最新スナップショットを取り込む
 - `.env` に Firebase 接続情報を入れると、Email/Password 認証と教室単位の外部 DB 同期へ切り替わる
-- Spark 無料プラン前提では Firebase Hosting + Auth + Firestore のみを使い、管理者アカウント追加 / 削除 / 管理者メール変更は Firebase Console で手動運用する
-- Spark 無料プランでも開発者画面の `教室を追加` ボタンから、Firebase Console 直リンク、作成先コレクション、helper コマンド、本番 Hosting URL をまとめたガイドを開ける
+- Spark 無料プラン前提では Firebase Hosting + Auth + Firestore のみを使い、管理者アカウント削除 / 管理者メール変更は Firebase Console で手動運用する
+- Spark 無料プランでも開発者画面の `教室を追加` ボタンから、Authentication で作成済みの UID を貼り付けて `members` / `classrooms` / `classroomSnapshots` を追加できる
 
 ## 設計メモ
 
@@ -73,9 +73,9 @@
 - 現在の採用方針は Firebase です
 - 現段階の外部保存は Firestore の `workspaces/{workspaceKey}/classroomSnapshots/{classroomId}` に教室単位で同期します
 - Firebase Hosting で `dist` を配信し、Firestore に教室メタ情報と snapshot を保存します
-- Spark 前提ではアプリ内の教室追加 / 削除 / 管理者メール変更はロックされます。必要な場合は Firebase Console で `Authentication` と `workspaces/{workspaceKey}/members`, `classrooms`, `classroomSnapshots` を手動更新してください
+- Spark 前提では管理者アカウント削除 / 管理者メール変更はアプリ内で行わず、Firebase Console で手動更新してください
 - 最初の教室を作るときは `npm run firebase:first-classroom` を実行すると、Firebase Console に貼る JSON 一式を対話形式で生成できます
-- Spark 構成では開発者画面の `教室を追加` を押すと、上記の Firebase Console リンクと手順ガイドを画面内で開けます
+- Spark 構成では開発者画面の `教室を追加` を押すと、Authentication で作成済みの管理者 UID を貼り付けて教室を追加できます
 - アプリ自体は `https://komahyouapp-prod.web.app/` を直接開いて運用します
 - `firebase/firestore.rules` を適用し、`.env` に `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID` / `VITE_FIREBASE_APP_ID` / `VITE_FIREBASE_WORKSPACE_KEY` を設定すると有効化されます
 - `VITE_FIREBASE_ENABLE_FUNCTIONS=true` は Blaze へ移行する場合のみ使ってください

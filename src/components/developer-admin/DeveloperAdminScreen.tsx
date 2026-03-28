@@ -21,7 +21,14 @@ type DeveloperAdminScreenProps = {
   classrooms: WorkspaceClassroom[]
   users: WorkspaceUser[]
   actingClassroomId: string | null
-  onAddClassroom: () => void
+  onAddClassroom: (input?: {
+    classroomName: string
+    managerName: string
+    managerEmail: string
+    managerUserId?: string
+    contractStartDate?: string
+    contractEndDate?: string
+  }) => void
   autoBackupSummaries: AutoBackupSummary[]
   bulkTemporarySuspensionReason: string
   onBulkTemporarySuspensionReasonChange: (value: string) => void
@@ -113,18 +120,21 @@ function buildHostingRootUrl(projectId: string) {
 export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
+  const [provisionDraft, setProvisionDraft] = useState(() => ({
+    classroomName: `新規教室 ${classrooms.length + 1}`,
+    managerName: `教室管理者 ${classrooms.length + 1}`,
+    managerEmail: '',
+    managerUserId: '',
+    contractStartDate: new Date().toISOString().slice(0, 10),
+    contractEndDate: '',
+  }))
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
   const latestAutoBackup = autoBackupSummaries[0] ?? null
   const canProvisionClassroomInApp = authMode !== 'firebase' || !accountProvisioningLocked
   const firebaseSummary = accountProvisioningLocked || managerEmailLocked
-    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。教室追加 / 削除 / 管理者メール変更はアプリ側からは行わず、Firebase Console で手動運用します。ここでは既存教室の契約状態と教室データを同期します。'
+    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室を追加します。削除と管理者メール変更は Firebase Console で手動運用します。'
     : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
-  const firebaseOverviewUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/overview')
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
-  const firebaseFirestoreUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}`)
-  const firebaseMembersUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}~2Fmembers`)
-  const firebaseClassroomsUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}~2Fclassrooms`)
-  const firebaseSnapshotsUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}~2FclassroomSnapshots`)
   const hostingRootUrl = buildHostingRootUrl(firebaseProjectId)
   const totals = useMemo(() => classrooms.reduce((accumulator, classroom) => {
     const counts = countSnapshotRows(classroom.data)
@@ -151,6 +161,27 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     }
 
     setShowProvisioningGuide(true)
+  }
+
+  const submitProvisionDraft = () => {
+    const normalizedClassroomName = provisionDraft.classroomName.trim()
+    const normalizedManagerName = provisionDraft.managerName.trim()
+    const normalizedManagerEmail = provisionDraft.managerEmail.trim()
+    const normalizedManagerUserId = provisionDraft.managerUserId.trim()
+
+    if (!normalizedClassroomName || !normalizedManagerName || !normalizedManagerEmail || !normalizedManagerUserId) {
+      return
+    }
+
+    onAddClassroom({
+      classroomName: normalizedClassroomName,
+      managerName: normalizedManagerName,
+      managerEmail: normalizedManagerEmail,
+      managerUserId: normalizedManagerUserId,
+      contractStartDate: provisionDraft.contractStartDate,
+      contractEndDate: provisionDraft.contractEndDate,
+    })
+    setShowProvisioningGuide(false)
   }
 
   return (
@@ -204,17 +235,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
             </div>
           </div>
           {authMode === 'firebase' && accountProvisioningLocked ? <div className="toolbar-status">Spark 無料プランでは Functions を使わないため、教室追加 / 削除 / 管理者メール変更は Firebase Console で実施してください。</div> : null}
-
-          {authMode === 'firebase' && accountProvisioningLocked ? <section className="basic-data-section-card developer-provision-guide-card">
-            <div className="basic-data-card-head">
-              <h3>教室追加の見方</h3>
-              <p>この環境ではアプリから直接作成せず、`教室を追加` ボタンから Firebase Console と作成手順を開きます。</p>
-            </div>
-            <div className="developer-guide-actions">
-              <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(true)}>教室追加ガイドを開く</button>
-              {firebaseOverviewUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseOverviewUrl} target="_blank" rel="noreferrer">Firebase Console を開く</a> : null}
-            </div>
-          </section> : null}
 
           <div className="developer-summary-grid">
             <article className="basic-data-section-card developer-summary-card">
@@ -399,39 +419,57 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
 
       {showProvisioningGuide ? (
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
-          <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加ガイド">
-            <div className="auto-assign-modal-title">Spark 構成の教室追加ガイド</div>
-            <div className="detail-note">このボタンから作成先を順番に開けます。作成先は `workspaces/{firebaseWorkspaceKey || 'main'}` 配下です。</div>
+          <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加">
+            <div className="auto-assign-modal-title">Spark 構成の教室追加</div>
+            <div className="detail-note">Authentication で作成した管理者 UID を貼り付けると、`workspaces/{firebaseWorkspaceKey || 'main'}` 配下の `members` / `classrooms` / `classroomSnapshots` をこの画面から追加します。</div>
 
             <section className="developer-guide-section">
-              <h3>1. Firebase Console を開く</h3>
+              <h3>1. Authentication で UID を作成</h3>
               <div className="developer-guide-actions">
-                {firebaseOverviewUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseOverviewUrl} target="_blank" rel="noreferrer">プロジェクト概要</a> : null}
                 {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
-                {firebaseFirestoreUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseFirestoreUrl} target="_blank" rel="noreferrer">Firestore</a> : null}
               </div>
               <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
             </section>
 
             <section className="developer-guide-section">
-              <h3>2. 作成先ドキュメントを開く</h3>
-              <div className="developer-guide-actions">
-                {firebaseMembersUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseMembersUrl} target="_blank" rel="noreferrer">members</a> : null}
-                {firebaseClassroomsUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseClassroomsUrl} target="_blank" rel="noreferrer">classrooms</a> : null}
-                {firebaseSnapshotsUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseSnapshotsUrl} target="_blank" rel="noreferrer">classroomSnapshots</a> : null}
+              <h3>2. 教室情報を入力</h3>
+              <div className="developer-classroom-grid developer-provision-form">
+                <label className="basic-data-inline-field">
+                  <span>教室名</span>
+                  <input value={provisionDraft.classroomName} onChange={(event) => setProvisionDraft((current) => ({ ...current, classroomName: event.target.value }))} />
+                </label>
+                <label className="basic-data-inline-field">
+                  <span>管理者名</span>
+                  <input value={provisionDraft.managerName} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerName: event.target.value }))} />
+                </label>
+                <label className="basic-data-inline-field">
+                  <span>管理者メール</span>
+                  <input type="email" value={provisionDraft.managerEmail} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerEmail: event.target.value }))} />
+                </label>
+                <label className="basic-data-inline-field">
+                  <span>管理者 UID</span>
+                  <input value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="lGTog10vTnPQdUNMus1JWKJOLGy2" />
+                </label>
+                <label className="basic-data-inline-field">
+                  <span>利用開始日</span>
+                  <input type="date" value={provisionDraft.contractStartDate} onChange={(event) => setProvisionDraft((current) => ({ ...current, contractStartDate: event.target.value }))} />
+                </label>
+                <label className="basic-data-inline-field">
+                  <span>利用終了日</span>
+                  <input type="date" value={provisionDraft.contractEndDate} onChange={(event) => setProvisionDraft((current) => ({ ...current, contractEndDate: event.target.value }))} />
+                </label>
               </div>
               <div className="developer-guide-list">
-                <div><strong>members</strong><span> `displayName`, `email`, `role: manager`, `assignedClassroomId` を追加</span></div>
-                <div><strong>classrooms</strong><span> `name`, `contractStatus`, `contractStartDate`, `managerUserId` を追加</span></div>
-                <div><strong>classroomSnapshots</strong><span> 初期 snapshot を追加</span></div>
+                <div><strong>自動追加されるもの</strong><span>`members` / `classrooms` / `classroomSnapshots`</span></div>
+                <div><strong>手動のまま残るもの</strong><span>管理者ユーザーの作成、削除、メール変更</span></div>
               </div>
             </section>
 
             <section className="developer-guide-section">
-              <h3>3. JSON ひな型を出す</h3>
+              <h3>3. 補助コマンド</h3>
               <div className="developer-guide-command">npm run firebase:first-classroom</div>
               <div className="developer-guide-command">npm run firebase:first-classroom -- --output docs/first-classroom-XXXX.md</div>
-              <p className="detail-note">ターミナルで実行すると、Firebase Console に貼る JSON をまとめて出力します。開発者画面でリンクを開きながら、その JSON を貼れば新規教室を 1 から作れます。</p>
+              <p className="detail-note">既存の helper も残しています。必要なら JSON ひな型を出して手動確認に使えます。</p>
             </section>
 
             <section className="developer-guide-section">
@@ -444,6 +482,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
             </section>
 
             <div className="auto-assign-modal-actions">
+              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerEmail.trim() || !provisionDraft.managerUserId.trim()}>この UID で教室追加</button>
               <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(false)}>閉じる</button>
             </div>
           </div>

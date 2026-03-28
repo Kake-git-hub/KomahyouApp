@@ -1,6 +1,7 @@
+import { collection, doc, getDoc, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/appState'
-import { getFirebaseFunctionsInstance } from './client'
+import { getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 
 type ProvisionWorkspaceClassroomRequest = {
@@ -11,6 +12,10 @@ type ProvisionWorkspaceClassroomRequest = {
   contractStartDate: string
   contractEndDate: string
   initialPayload: AppSnapshotPayload
+}
+
+type ProvisionWorkspaceClassroomWithExistingUidRequest = ProvisionWorkspaceClassroomRequest & {
+  managerUserId: string
 }
 
 type ProvisionWorkspaceClassroomResponse = {
@@ -44,6 +49,15 @@ function requireFunctions() {
   return functions
 }
 
+function requireFirestore() {
+  const firestore = getFirebaseFirestoreInstance()
+  if (!firestore) {
+    throw new Error('Firebase Firestore を利用できません。接続設定を確認してください。')
+  }
+
+  return firestore
+}
+
 export async function provisionFirebaseWorkspaceClassroom(input: Omit<ProvisionWorkspaceClassroomRequest, 'workspaceKey'>) {
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
@@ -53,6 +67,61 @@ export async function provisionFirebaseWorkspaceClassroom(input: Omit<ProvisionW
     ...input,
   })
   return result.data
+}
+
+export async function provisionFirebaseWorkspaceClassroomWithExistingUid(input: Omit<ProvisionWorkspaceClassroomWithExistingUidRequest, 'workspaceKey'>) {
+  const firestore = requireFirestore()
+  const config = getFirebaseBackendConfig()
+  const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
+  const membersCollectionRef = collection(workspaceRef, 'members')
+  const classroomsCollectionRef = collection(workspaceRef, 'classrooms')
+  const snapshotsCollectionRef = collection(workspaceRef, 'classroomSnapshots')
+  const memberRef = doc(membersCollectionRef, input.managerUserId)
+  const memberSnapshot = await getDoc(memberRef)
+  if (memberSnapshot.exists()) {
+    throw new Error('この UID はすでに members に登録されています。既存ユーザーかどうかを確認してください。')
+  }
+
+  const classroomRef = doc(classroomsCollectionRef)
+  const snapshotRef = doc(snapshotsCollectionRef, classroomRef.id)
+  const now = new Date().toISOString()
+  const batch = writeBatch(firestore)
+
+  batch.set(workspaceRef, {
+    name: config.workspaceKey,
+    schemaVersion: 1,
+    updatedAt: now,
+  }, { merge: true })
+  batch.set(memberRef, {
+    displayName: input.managerName,
+    email: input.managerEmail,
+    role: 'manager',
+    assignedClassroomId: classroomRef.id,
+    updatedAt: now,
+  })
+  batch.set(classroomRef, {
+    name: input.classroomName,
+    contractStatus: 'active',
+    contractStartDate: input.contractStartDate,
+    contractEndDate: input.contractEndDate,
+    managerUserId: input.managerUserId,
+    isTemporarilySuspended: false,
+    temporarySuspensionReason: '',
+    updatedAt: now,
+  })
+  batch.set(snapshotRef, {
+    schemaVersion: 1,
+    savedAt: now,
+    data: input.initialPayload,
+    updatedBy: '',
+    updatedAt: now,
+  })
+  await batch.commit()
+
+  return {
+    classroomId: classroomRef.id,
+    managerUserId: input.managerUserId,
+  }
 }
 
 export async function updateFirebaseWorkspaceClassroom(input: Omit<UpdateWorkspaceClassroomRequest, 'workspaceKey'>) {
