@@ -1,6 +1,22 @@
 export type GradeCeiling = '小' | '中' | '高1' | '高2' | '高3'
 export type ManagerRow = { id: string; name: string; email: string }
 export type TeacherSubjectCapability = { subject: string; maxGrade: GradeCeiling }
+export type TeacherAvailableSlot = { dayOfWeek: number; slotNumber: number }
+
+export const teacherAvailabilityDayOptions = [
+  { value: 1, label: '月' },
+  { value: 2, label: '火' },
+  { value: 3, label: '水' },
+  { value: 4, label: '木' },
+  { value: 5, label: '金' },
+  { value: 6, label: '土' },
+  { value: 0, label: '日' },
+] as const
+
+export const teacherAvailabilitySlotNumbers = [1, 2, 3, 4, 5] as const
+
+const teacherAvailabilityDayValueByLabel = new Map<string, number>(teacherAvailabilityDayOptions.map((entry) => [entry.label, entry.value]))
+
 export type TeacherRow = {
   id: string
   name: string
@@ -10,6 +26,7 @@ export type TeacherRow = {
   withdrawDate: string
   isHidden: boolean
   subjectCapabilities: TeacherSubjectCapability[]
+  availableSlots?: TeacherAvailableSlot[]
   memo: string
 }
 export type StudentRow = {
@@ -24,17 +41,70 @@ export type StudentRow = {
 }
 
 export const initialTeachers: TeacherRow[] = [
-  { id: 't001', name: '田中講師', email: 'tanaka@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高2' }], memo: '数学メイン' },
-  { id: 't002', name: '佐藤講師', email: 'sato@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '数', maxGrade: '中' }], memo: '英語メイン' },
-  { id: 't003', name: '鈴木講師', email: 'suzuki@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '理', maxGrade: '高2' }], memo: '理数対応' },
-  { id: 't004', name: '高橋講師', email: 'takahashi@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '国', maxGrade: '高3' }], memo: '文系対応' },
-  { id: 't005', name: '伊藤講師', email: 'ito-teacher@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '国', maxGrade: '高3' }, { subject: '社', maxGrade: '高3' }], memo: '国社中心' },
-  { id: 't006', name: '渡辺講師', email: 'watanabe@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '理', maxGrade: '高3' }], memo: '理科中心' },
-  { id: 't007', name: '中村講師', email: 'nakamura@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '社', maxGrade: '高2' }], memo: '英社対応' },
-  { id: 't008', name: '小林講師', email: 'kobayashi@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高2' }, { subject: '英', maxGrade: '高1' }], memo: '中学生中心' },
-  { id: 't009', name: '加藤講師', email: 'kato@example.com', entryDate: '2026-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高2' }], memo: '4月着任予定' },
-  { id: 't010', name: '吉田講師', email: 'yoshida@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: true, subjectCapabilities: [{ subject: '国', maxGrade: '高3' }, { subject: '社', maxGrade: '高3' }], memo: '休職中のため非表示' },
+  { id: 't001', name: '田中講師', email: 'tanaka@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高2' }], availableSlots: [], memo: '数学メイン' },
+  { id: 't002', name: '佐藤講師', email: 'sato@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '数', maxGrade: '中' }], availableSlots: [], memo: '英語メイン' },
+  { id: 't003', name: '鈴木講師', email: 'suzuki@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '理', maxGrade: '高2' }], availableSlots: [], memo: '理数対応' },
+  { id: 't004', name: '高橋講師', email: 'takahashi@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '国', maxGrade: '高3' }], availableSlots: [], memo: '文系対応' },
+  { id: 't005', name: '伊藤講師', email: 'ito-teacher@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '国', maxGrade: '高3' }, { subject: '社', maxGrade: '高3' }], availableSlots: [], memo: '国社中心' },
+  { id: 't006', name: '渡辺講師', email: 'watanabe@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '理', maxGrade: '高3' }], availableSlots: [], memo: '理科中心' },
+  { id: 't007', name: '中村講師', email: 'nakamura@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '社', maxGrade: '高2' }], availableSlots: [], memo: '英社対応' },
+  { id: 't008', name: '小林講師', email: 'kobayashi@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高2' }, { subject: '英', maxGrade: '高1' }], availableSlots: [], memo: '中学生中心' },
+  { id: 't009', name: '加藤講師', email: 'kato@example.com', entryDate: '2026-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '英', maxGrade: '高2' }], availableSlots: [], memo: '4月着任予定' },
+  { id: 't010', name: '吉田講師', email: 'yoshida@example.com', entryDate: '2024-04-01', withdrawDate: '未定', isHidden: true, subjectCapabilities: [{ subject: '国', maxGrade: '高3' }, { subject: '社', maxGrade: '高3' }], availableSlots: [], memo: '休職中のため非表示' },
 ]
+
+function resolveTeacherAvailabilityDaySortValue(dayOfWeek: number) {
+  return dayOfWeek === 0 ? 7 : dayOfWeek
+}
+
+export function normalizeTeacherAvailableSlots(slots: TeacherAvailableSlot[] | undefined) {
+  const uniqueSlots = new Map<string, TeacherAvailableSlot>()
+
+  for (const slot of slots ?? []) {
+    const dayOfWeek = Number(slot.dayOfWeek)
+    const slotNumber = Number(slot.slotNumber)
+    if (!Number.isInteger(dayOfWeek) || !Number.isInteger(slotNumber)) continue
+    if (!teacherAvailabilityDayOptions.some((entry) => entry.value === dayOfWeek)) continue
+    if (!teacherAvailabilitySlotNumbers.includes(slotNumber as (typeof teacherAvailabilitySlotNumbers)[number])) continue
+    uniqueSlots.set(`${dayOfWeek}_${slotNumber}`, { dayOfWeek, slotNumber })
+  }
+
+  return Array.from(uniqueSlots.values())
+    .sort((left, right) => {
+      const dayDiff = resolveTeacherAvailabilityDaySortValue(left.dayOfWeek) - resolveTeacherAvailabilityDaySortValue(right.dayOfWeek)
+      if (dayDiff !== 0) return dayDiff
+      return left.slotNumber - right.slotNumber
+    })
+}
+
+export function buildTeacherAvailableSlotLabel(slot: TeacherAvailableSlot) {
+  const dayLabel = teacherAvailabilityDayOptions.find((entry) => entry.value === slot.dayOfWeek)?.label ?? '?'
+  return `${dayLabel}${slot.slotNumber}限`
+}
+
+export function serializeTeacherAvailableSlots(slots: TeacherAvailableSlot[] | undefined) {
+  return normalizeTeacherAvailableSlots(slots)
+    .map((slot) => buildTeacherAvailableSlotLabel(slot))
+    .join(', ')
+}
+
+export function parseTeacherAvailableSlots(value: unknown) {
+  const entries = String(value ?? '')
+    .split(/[、,\n\/]+/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+
+  const slots: TeacherAvailableSlot[] = []
+  for (const entry of entries) {
+    const matched = entry.match(/([日月火水木金土])(?:曜)?\s*([1-5])(?:限)?/u)
+    if (!matched) continue
+    const dayOfWeek = teacherAvailabilityDayValueByLabel.get(matched[1] ?? '')
+    if (dayOfWeek === undefined) continue
+    slots.push({ dayOfWeek, slotNumber: Number(matched[2]) })
+  }
+
+  return normalizeTeacherAvailableSlots(slots)
+}
 
 export const initialStudents: StudentRow[] = [
   { id: 's001', name: '青木 太郎', displayName: '青木太郎', email: 'aoki@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2010-05-14', isHidden: false },

@@ -49,6 +49,16 @@ function parseDateKey(value: string) {
   return new Date(year, (month || 1) - 1, day || 1)
 }
 
+function parseCreatedDateKeyFromGeneratedId(id: string) {
+  const matched = id.match(/^[a-z]+_([0-9a-z]+)_[0-9a-z]+$/i)
+  if (!matched) return null
+
+  const timestamp = parseInt(matched[1], 36)
+  if (!Number.isFinite(timestamp)) return null
+
+  return toDateKey(new Date(timestamp))
+}
+
 function isDateKey(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
@@ -171,6 +181,19 @@ function countMonthlyLessonQuota(row: RegularLessonRow, year: number, monthIndex
   return Math.min(4, getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
     .filter((dateKey) => dateKey >= activeStartKey && dateKey <= activeEndKey)
     .length)
+}
+
+function resolveAutomaticStockPeriod(row: RegularLessonRow) {
+  const period = resolveRegularLessonParticipantPeriod(row)
+  if (hasManagedRegularLessonPeriod(row)) return period
+
+  const createdDateKey = parseCreatedDateKeyFromGeneratedId(row.id)
+  if (!createdDateKey || createdDateKey <= period.startDate) return period
+
+  return {
+    startDate: createdDateKey,
+    endDate: period.endDate,
+  }
 }
 
 function countTotalLessonQuota(row: RegularLessonRow) {
@@ -298,18 +321,17 @@ export function computeAutomaticShortageOrigins(
 
   for (const row of regularLessons) {
     if (row.schoolYear !== currentSchoolYear) continue
-    const applyMonthlyCap = hasManagedRegularLessonPeriod(row)
     const participants = [
       { studentId: row.student1Id, subject: row.subject1, participantIndex: 1 as const },
       { studentId: row.student2Id, subject: row.subject2, participantIndex: 2 as const },
     ].filter((entry) => entry.studentId && entry.subject)
+    const stockPeriod = resolveAutomaticStockPeriod(row)
 
     for (const participant of participants) {
-      const period = resolveRegularLessonParticipantPeriod(row)
       const rangeEndCandidate = latestHolidayKey && latestHolidayKey > todayKey ? latestHolidayKey : todayKey
-      const periodEndKey = period.endDate < rangeEndCandidate ? period.endDate : rangeEndCandidate
-      if (periodEndKey < period.startDate) continue
-      const monthRange = iterateMonthsInRange(period.startDate, periodEndKey)
+      const periodEndKey = stockPeriod.endDate < rangeEndCandidate ? stockPeriod.endDate : rangeEndCandidate
+      if (periodEndKey < stockPeriod.startDate) continue
+      const monthRange = iterateMonthsInRange(stockPeriod.startDate, periodEndKey)
       const student = studentById.get(participant.studentId)
       if (!student) continue
 
@@ -317,7 +339,7 @@ export function computeAutomaticShortageOrigins(
 
       for (const { year, monthIndex } of monthRange) {
         const scheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
-          .filter((dateKey) => dateKey >= period.startDate && dateKey <= periodEndKey)
+          .filter((dateKey) => dateKey >= stockPeriod.startDate && dateKey <= periodEndKey)
           .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
         if (scheduledDates.length === 0) continue
 
@@ -325,8 +347,8 @@ export function computeAutomaticShortageOrigins(
         if (pastScheduledDates.length === 0) continue
 
         const openCandidateDates = pastScheduledDates.filter((dateKey) => !isClosedDate(dateKey, classroomSettings))
-        const openScheduledDates = applyMonthlyCap ? capRegularLessonDatesPerMonth(openCandidateDates) : openCandidateDates
-        const expectedLessonCount = applyMonthlyCap ? Math.min(4, pastScheduledDates.length) : pastScheduledDates.length
+        const openScheduledDates = capRegularLessonDatesPerMonth(openCandidateDates)
+        const expectedLessonCount = capRegularLessonDatesPerMonth(pastScheduledDates).length
         const shortageCount = Math.max(0, expectedLessonCount - openScheduledDates.length)
         const missedDates = pastScheduledDates.filter((dateKey) => isClosedDate(dateKey, classroomSettings))
         const shortageDates = missedDates.slice(0, shortageCount)
@@ -353,12 +375,14 @@ function computeScheduleConflictOrigins(
 
   for (const [rowIndex, row] of regularLessons.entries()) {
     if (row.schoolYear !== currentSchoolYear) continue
-    const applyMonthlyCap = hasManagedRegularLessonPeriod(row)
-    const months = iterateMonthsInRange(`${row.schoolYear}-04-01`, todayKey)
+    const stockPeriod = resolveAutomaticStockPeriod(row)
+    if (todayKey < stockPeriod.startDate) continue
+    const months = iterateMonthsInRange(stockPeriod.startDate, todayKey < stockPeriod.endDate ? todayKey : stockPeriod.endDate)
 
     for (const { year, monthIndex } of months) {
       const monthDateKeys = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
         .filter((dateKey) => dateKey <= todayKey)
+        .filter((dateKey) => dateKey >= stockPeriod.startDate && dateKey <= stockPeriod.endDate)
         .filter((dateKey) => !isClosedDate(dateKey, classroomSettings))
 
       const participantDateSets = [
@@ -373,7 +397,7 @@ function computeScheduleConflictOrigins(
                 && isRegularParticipantScheduledOnDate(row, dateKey)
               ))
             : []
-          const dateKeys = applyMonthlyCap ? capRegularLessonDatesPerMonth(candidateDateKeys) : candidateDateKeys
+          const dateKeys = capRegularLessonDatesPerMonth(candidateDateKeys)
 
           return {
             studentId: entry.studentId,
@@ -471,37 +495,41 @@ function computeOccupiedSlotOrigins(params: {
 
   for (const row of regularLessons) {
     const teacher = teacherById.get(row.teacherId)
-    const applyMonthlyCap = hasManagedRegularLessonPeriod(row)
-    const candidateDateKeys = months
-      .flatMap(({ year, monthIndex }) => getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek))
-      .filter((dateKey) => dateKey >= startDateKey && dateKey <= endDateKey)
-      .filter((dateKey) => {
-        const date = parseDateKey(dateKey)
-        if (row.schoolYear !== resolveOperationalSchoolYear(date)) return false
-        if (isClosedDate(dateKey, classroomSettings)) return false
-        return !teacher || resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
-      })
-
+    const stockPeriod = resolveAutomaticStockPeriod(row)
     const participants = [
       { studentId: row.student1Id, subject: row.subject1, participantIndex: 1 as const },
       { studentId: row.student2Id, subject: row.subject2, participantIndex: 2 as const },
     ].filter((entry) => entry.studentId && entry.subject)
 
-    const participantDateSets = participants.map((participant) => {
-      const student = studentById.get(participant.studentId)
-      const candidateParticipantDateKeys = student
-        ? candidateDateKeys.filter((dateKey) => (
-            isRegularParticipantScheduledOnDate(row, dateKey)
-            && isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
-          ))
-        : []
-      const dateKeys = applyMonthlyCap ? capRegularLessonDatesPerMonth(candidateParticipantDateKeys) : candidateParticipantDateKeys
+    const participantDateSets = participants.map((participant) => ({
+      ...participant,
+      dateKeys: new Set<string>(),
+    }))
 
-      return {
-        ...participant,
-        dateKeys: new Set(dateKeys),
-      }
-    })
+    for (const { year, monthIndex } of months) {
+      const monthlyCandidateDateKeys = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
+        .filter((dateKey) => dateKey >= stockPeriod.startDate && dateKey <= stockPeriod.endDate)
+        .filter((dateKey) => {
+          const date = parseDateKey(dateKey)
+          if (row.schoolYear !== resolveOperationalSchoolYear(date)) return false
+          if (isClosedDate(dateKey, classroomSettings)) return false
+          return !teacher || resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+        })
+
+      participantDateSets.forEach((participantDateSet) => {
+        const student = studentById.get(participantDateSet.studentId)
+        const candidateParticipantDateKeys = student
+          ? monthlyCandidateDateKeys.filter((dateKey) => (
+              isRegularParticipantScheduledOnDate(row, dateKey)
+              && isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
+            ))
+          : []
+        const contractedDateKeys = capRegularLessonDatesPerMonth(candidateParticipantDateKeys)
+          .filter((dateKey) => dateKey >= startDateKey && dateKey <= endDateKey)
+
+        contractedDateKeys.forEach((dateKey) => participantDateSet.dateKeys.add(dateKey))
+      })
+    }
 
     const scheduledDateKeys = Array.from(new Set(participantDateSets.flatMap((participant) => Array.from(participant.dateKeys)))).sort((left, right) => left.localeCompare(right))
 

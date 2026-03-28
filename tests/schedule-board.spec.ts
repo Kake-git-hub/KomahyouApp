@@ -571,6 +571,36 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('basic-data-withdrawn-students-table')).toContainText('卒業済みテスト生徒')
   })
 
+  test('講師の出勤可能コマは通常授業がなくてもコマ表へ講師だけ表示する', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const mondayKey = toDateKey(currentWeekStart)
+
+    await page.goto('/')
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-teachers').click()
+
+    await page.getByTestId('basic-data-teacher-draft-name').fill('出勤講師')
+    await page.getByTestId('basic-data-teacher-draft-email').fill('availability-teacher@example.com')
+    await setHiddenDateInput(page, 'basic-data-teacher-draft-entry-date-input', '2024-04-01')
+    await page.getByTestId('basic-data-teacher-draft-availability-summary').click()
+    await page.getByTestId('basic-data-teacher-draft-available-slot-1-4').click()
+    await expect(page.getByTestId('basic-data-teacher-draft-available-slots')).toContainText('月4限')
+    await page.getByTestId('basic-data-add-teacher-button').click()
+
+    await navigateFromBasicDataToBoard(page)
+    await expect.poll(async () => hasTeacherInSlot(page, mondayKey, 4, '出勤講師')).toBe(true)
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-teachers').click()
+    const addedTeacherRow = page.getByTestId('basic-data-teachers-table').locator('tbody tr').filter({ hasText: '出勤講師' }).first()
+    acceptNextDialog(page, 'この講師を削除します。')
+    await addedTeacherRow.getByRole('button', { name: '削除' }).click()
+    await expect(page.getByTestId('basic-data-teachers-table')).not.toContainText('出勤講師')
+  })
+
   test('通常授業と集団授業は年度別タブで見られ、追加時に年度を選べる', async ({ page }) => {
     const currentSchoolYear = resolveOperationalSchoolYear(new Date())
     const nextSchoolYear = currentSchoolYear + 1
@@ -2058,7 +2088,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
     let menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtons).toEqual(['移動', '出席', '休み', '振替ストックに戻す', '削除'])
+    expect(menuButtons).toEqual(['出席', '休み', '移動', '振替ストックに戻す', '削除'])
 
     await page.getByRole('button', { name: 'x' }).click()
 
@@ -2096,7 +2126,7 @@ test.describe('コマ調整表', () => {
 
     await sourceCell.click()
     const menuButtonsAfterClear = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtonsAfterClear).toEqual(['移動', '出席', '休み', '振替ストックに戻す', '削除'])
+    expect(menuButtonsAfterClear).toEqual(['出席', '休み', '移動', '振替ストックに戻す', '削除'])
   })
 
   test('空欄セルから既存生徒を講習追加しても講習ストックは増えず、手動追加警告を出す', async ({ page }) => {
@@ -2214,7 +2244,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('cancel-selection-button').click()
 
     await targetCell.click()
-    acceptNextDialog(page, '振替の対象にならず、授業回数から減らします。')
+    acceptNextDialog(page, '振替の対象になりません。')
     await page.getByTestId('menu-delete-button').click()
 
     await expect(page.getByTestId('toolbar-status')).toContainText('振替対象にはしません。')
@@ -2496,7 +2526,7 @@ test.describe('コマ調整表', () => {
     expect((await secondTargetName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
   })
 
-  test('講習授業を削除すると希望回数も減り講習ストックへは戻らない', async ({ page }) => {
+  test('講習授業を削除しても希望数は減らず講習ストックへは戻らない', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const specialWeekStart = addDays(currentWeekStart, 7)
 
@@ -2523,10 +2553,10 @@ test.describe('コマ調整表', () => {
     await expect(targetName).toHaveText('青木太郎')
 
     await page.getByTestId(target.cellTestId).click()
-    acceptNextDialog(page, '振替の対象にならず、授業回数から減らします。')
+    acceptNextDialog(page, '振替の対象になりません。')
     await page.getByTestId('menu-delete-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('講習の希望数を減らしました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('講習の予定を削除しました。')
     await expect(targetName).toHaveText('')
     if (!await page.getByTestId('lecture-stock-panel').isVisible()) {
       await page.getByTestId('lecture-stock-chip').click()
@@ -2542,8 +2572,7 @@ test.describe('コマ調整表', () => {
     await setScheduleRangeInPopup(reopenedPopup, '2026-03-23', '2026-03-29')
     await reopenedPopup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
     await expect(reopenedPopup.getByTestId('student-schedule-count-unregister')).toBeVisible()
-    await expect(reopenedPopup.getByTestId('student-schedule-count-subject-数')).toHaveCount(0)
-    await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('0')
+    await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('1')
   })
 
   test('講習を期間外へ手動配置しても赤字ツールチップで絶対制約違反を表示する', async ({ page }) => {
@@ -2609,6 +2638,7 @@ test.describe('コマ調整表', () => {
   })
 
   test('複数講習期間を登録しても講習ストックは期間ごとに分かれ、登録解除も対象期間だけに効く', async ({ page }) => {
+    test.slow()
     await page.goto('/')
 
     const popupPromise = page.waitForEvent('popup')
@@ -2631,12 +2661,10 @@ test.describe('コマ調整表', () => {
 
     await ensureLectureStockPanelVisible(page)
     await expect(page.getByTestId('lecture-stock-chip')).toContainText('2')
-    await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').waitFor()
-    const readLectureStockListText = async () => {
-      return (await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').textContent()) ?? ''
-    }
-    await expect.poll(readLectureStockListText).toContain('2026 新年度準備講座')
-    await expect.poll(readLectureStockListText).toContain('2026 定期試験対策')
+    const springEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '2026 新年度準備講座' })
+    const examEntry = page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '2026 定期試験対策' })
+    await expect(springEntry).toHaveCount(1)
+    await expect(examEntry).toHaveCount(1)
 
   await popup.bringToFront()
   await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_exam')).toBeVisible()
@@ -2646,8 +2674,8 @@ test.describe('コマ調整表', () => {
 
     await ensureLectureStockPanelVisible(page)
     await expect(page.getByTestId('lecture-stock-chip')).toContainText('1')
-    await page.locator('[data-testid="lecture-stock-panel"] .makeup-stock-list').waitFor()
-    await expect.poll(readLectureStockListText).not.toContain('2026 定期試験対策')
+    await expect(springEntry).toHaveCount(1)
+    await expect(examEntry).toHaveCount(0)
   })
 
   test('講習ストック行の自動割振で複数コマをまとめて配置できる', async ({ page }) => {
@@ -2826,6 +2854,23 @@ test.describe('コマ調整表', () => {
     await expect(popup.getByTestId('student-schedule-count-subject-数')).toHaveCount(0)
   })
 
+  test('高校生の希望科目数モーダルでは理を出さず生物化を表示する', async ({ page }) => {
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s019-session_2026_spring').click()
+
+    await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-理')).toHaveCount(0)
+    await expect(popup.getByTestId('student-schedule-count-subject-生')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-物')).toBeVisible()
+    await expect(popup.getByTestId('student-schedule-count-subject-化')).toBeVisible()
+  })
+
   test('希望科目数が出席可能コマ数を上回ると登録不可にして見直しを促す', async ({ page }) => {
     await page.goto('/')
 
@@ -2887,6 +2932,28 @@ test.describe('コマ調整表', () => {
 
     await expect(countBlocks.nth(0).getByTestId('student-schedule-regular-count-warning')).toBeVisible()
     await expect(countBlocks.nth(1).getByTestId('student-schedule-lecture-count-warning')).toBeVisible()
+  })
+
+  test('生徒日程表の講習回数表は表示期間で件数がある科目だけを表示する', async ({ page }) => {
+    await page.goto('/')
+
+    const popupPromise = page.waitForEvent('popup')
+    await page.getByTestId('board-student-schedule-button').click()
+    const popup = await popupPromise
+
+    await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
+    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
+    await popup.getByTestId('student-schedule-count-register').click()
+
+    const targetSheet = popup.locator('[data-role="student-sheet"][data-student-id="s001"]')
+    const lectureCountBlock = targetSheet.locator('.count-stack-block').nth(1)
+
+    await expect(lectureCountBlock).toContainText('数')
+    await expect(lectureCountBlock).not.toContainText('英')
+    await expect(lectureCountBlock).not.toContainText('国')
+    await expect(lectureCountBlock).not.toContainText('理')
+    await expect(lectureCountBlock.locator('tbody tr')).toHaveCount(1)
   })
 
   test('同コマに同生徒がいる場合は振替不可で振替中状態を維持する', async ({ page }) => {

@@ -130,7 +130,26 @@ describe('makeupStock', () => {
     expect(reopenedShortages).toEqual({})
   })
 
-  it('treats a holiday in a five-week month as shortage stock instead of using the fifth week as the fourth lesson', () => {
+  it('counts holiday shortages only from the app-added lesson date onward', () => {
+    const student = createStudent()
+    const regularLesson = createRegularLesson({
+      id: `regular_${new Date('2025-04-15T12:00:00').getTime().toString(36)}_test`,
+    })
+    const settings = createSettings({ holidayDates: ['2025-04-07', '2025-04-21'] })
+
+    const shortages = computeAutomaticShortageOrigins(
+      [regularLesson],
+      [student],
+      settings,
+      new Date('2025-04-30T00:00:00'),
+    )
+
+    expect(shortages).toEqual({
+      'student-1__数': ['2025-04-21'],
+    })
+  })
+
+  it('does not treat a holiday in a five-week month as shortage stock when four contractual lessons still fit', () => {
     const student = createStudent()
     const regularLesson = createRegularLesson({
       dayOfWeek: 2,
@@ -145,9 +164,7 @@ describe('makeupStock', () => {
       new Date('2026-03-31T00:00:00'),
     )
 
-    expect(shortages).toEqual({
-      'student-1__数': ['2026-03-10'],
-    })
+    expect(shortages).toEqual({})
   })
 
   it('ignores manual-added makeup students in planned makeup counts', () => {
@@ -209,6 +226,44 @@ describe('makeupStock', () => {
       remainingOriginDates: ['2025-04-07'],
       remainingOriginReasonLabels: ['空きコマ不足'],
     })
+  })
+
+  it('does not create stock for an occupied fifth weekly occurrence that is outside the four-lesson contract', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({
+      dayOfWeek: 2,
+      slotNumber: 1,
+    })
+    const weeks = [[createCell({
+      id: 'cell-5th-week',
+      dateKey: '2026-03-31',
+      dayLabel: '火',
+      dateLabel: '3/31',
+      slotNumber: 1,
+      slotLabel: '1限',
+      desks: [{
+        id: 'desk-1',
+        teacher: '別講師',
+        lesson: {
+          id: 'occupied-5th-week',
+          studentSlots: [createStudentEntry({ id: 'other-entry', managedStudentId: 'other-student' }), null],
+        },
+      }],
+    })]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-03-31T00:00:00'),
+    })
+
+    expect(entries).toEqual([])
   })
 
   it('consumes the origin when a makeup is returned to the original slot as a regular lesson', () => {

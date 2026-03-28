@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getStudentDisplayName, type StudentRow } from '../basic-data/basicDataModel'
+import { useRef } from 'react'
+import type { StudentRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
-import type { ClassroomSettings, InitialSetupLectureStockRow, InitialSetupMakeupStockRow } from '../../types/appState'
+import type { ClassroomSettings } from '../../types/appState'
 import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
 
 type BackupRestoreScreenProps = {
@@ -40,7 +40,6 @@ type BackupRestoreScreenProps = {
   onImportAutoAssignWorkbook: (file: File) => void
 }
 
-const subjectOptions = ['英', '数', '算', '国', '理', '社']
 const dayOptions = [
   { value: 0, label: '日曜' },
   { value: 1, label: '月曜' },
@@ -63,49 +62,16 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-function createDraftId(prefix: string) {
-  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
   const specialImportRef = useRef<HTMLInputElement | null>(null)
   const autoAssignImportRef = useRef<HTMLInputElement | null>(null)
-  const [makeupDraft, setMakeupDraft] = useState<Omit<InitialSetupMakeupStockRow, 'id'>>({
-    studentId: students[0]?.id ?? '',
-    subject: '英',
-    count: 1,
-  })
-  const [lectureDraft, setLectureDraft] = useState<Omit<InitialSetupLectureStockRow, 'id'>>({
-    studentId: students[0]?.id ?? '',
-    subject: '英',
-    sessionId: specialSessions[0]?.id ?? '',
-    count: 1,
-  })
-
-  const initialSetupMakeupStocks = classroomSettings.initialSetupMakeupStocks ?? []
-  const initialSetupLectureStocks = classroomSettings.initialSetupLectureStocks ?? []
-  const sortedStudents = useMemo(() => students.slice().sort(compareStudentsByCurrentGradeThenName), [students])
   const latestAutoBackup = autoBackupSummaries[0] ?? null
-  const studentNameById = new Map(students.map((student) => [student.id, getStudentDisplayName(student)]))
-  const sessionLabelById = new Map(specialSessions.map((session) => [session.id, session.label]))
 
   const updateSetupField = <K extends keyof ClassroomSettings>(key: K, value: ClassroomSettings[K]) => {
     onUpdateClassroomSettings({ ...classroomSettings, [key]: value })
-  }
-
-  const addInitialMakeupStock = () => {
-    const count = Math.max(0, Math.trunc(Number(makeupDraft.count) || 0))
-    if (!makeupDraft.studentId || !makeupDraft.subject || count <= 0) return
-    updateSetupField('initialSetupMakeupStocks', [...initialSetupMakeupStocks, { id: createDraftId('setup_makeup'), ...makeupDraft, count }])
-  }
-
-  const addInitialLectureStock = () => {
-    const count = Math.max(0, Math.trunc(Number(lectureDraft.count) || 0))
-    if (!lectureDraft.studentId || !lectureDraft.subject || !lectureDraft.sessionId || count <= 0) return
-    updateSetupField('initialSetupLectureStocks', [...initialSetupLectureStocks, { id: createDraftId('setup_lecture'), ...lectureDraft, count }])
   }
 
   return (
@@ -221,7 +187,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
               <h3>初期設定フロー</h3>
-              <p>運用開始前に、管理データの初期取り込み、教室設定、開始時点ストック登録をここで完了します。</p>
+                <p>運用開始前に、管理データの初期取り込みと教室設定をここで完了します。</p>
             </div>
 
             <div className="auto-assign-priority-grid">
@@ -266,73 +232,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 </div>
               </div>
 
-              <div className="auto-assign-priority-step">
-                <strong>3. 開始時点ストック登録</strong>
-                <span>{formatSetupStatus((initialSetupMakeupStocks.length + initialSetupLectureStocks.length) > 0)}</span>
-                <span className="basic-data-subcopy">運用開始時点で持ち越している振替残と講習残を登録します。</span>
-              </div>
             </div>
-
-            <div className="backup-restore-grid">
-              <section className="basic-data-editor-block basic-data-inline-stack" data-testid="setup-initial-makeup-stock">
-                <div className="basic-data-card-head">
-                  <h3>開始時点の振替ストック</h3>
-                  <p>開始時点で持ち越している通常残を登録します。</p>
-                </div>
-                <div className="basic-data-form-row wrap align-center">
-                  <select value={makeupDraft.studentId} onChange={(event) => setMakeupDraft((current) => ({ ...current, studentId: event.target.value }))}>
-                    <option value="">生徒を選択</option>
-                    {sortedStudents.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student)}</option>)}
-                  </select>
-                  <select value={makeupDraft.subject} onChange={(event) => setMakeupDraft((current) => ({ ...current, subject: event.target.value }))}>
-                    {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                  </select>
-                  <input type="number" min="1" value={makeupDraft.count} onChange={(event) => setMakeupDraft((current) => ({ ...current, count: Math.max(1, Number(event.target.value) || 1) }))} />
-                  <button className="primary-button" type="button" onClick={addInitialMakeupStock} data-testid="setup-add-makeup-stock">追加</button>
-                </div>
-                <div className="auto-assign-pair-list">
-                  {initialSetupMakeupStocks.length === 0 ? <span className="basic-data-muted-inline">未登録</span> : null}
-                  {initialSetupMakeupStocks.map((row) => (
-                    <span key={row.id} className="selection-pill auto-assign-target-chip">
-                      {(studentNameById.get(row.studentId) ?? row.studentId)} / {row.subject} / {row.count}件
-                      <button className="basic-data-capability-remove" type="button" onClick={() => updateSetupField('initialSetupMakeupStocks', initialSetupMakeupStocks.filter((entry) => entry.id !== row.id))}>×</button>
-                    </span>
-                  ))}
-                </div>
-              </section>
-
-              <section className="basic-data-editor-block basic-data-inline-stack" data-testid="setup-initial-lecture-stock">
-                <div className="basic-data-card-head">
-                  <h3>開始時点の講習ストック</h3>
-                  <p>開始時点で持ち越している講習残を登録します。</p>
-                </div>
-                <div className="basic-data-form-row wrap align-center">
-                  <select value={lectureDraft.studentId} onChange={(event) => setLectureDraft((current) => ({ ...current, studentId: event.target.value }))}>
-                    <option value="">生徒を選択</option>
-                    {sortedStudents.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student)}</option>)}
-                  </select>
-                  <select value={lectureDraft.subject} onChange={(event) => setLectureDraft((current) => ({ ...current, subject: event.target.value }))}>
-                    {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                  </select>
-                  <select value={lectureDraft.sessionId} onChange={(event) => setLectureDraft((current) => ({ ...current, sessionId: event.target.value }))}>
-                    <option value="">講習を選択</option>
-                    {specialSessions.map((session) => <option key={session.id} value={session.id}>{session.label}</option>)}
-                  </select>
-                  <input type="number" min="1" value={lectureDraft.count} onChange={(event) => setLectureDraft((current) => ({ ...current, count: Math.max(1, Number(event.target.value) || 1) }))} />
-                  <button className="primary-button" type="button" onClick={addInitialLectureStock} data-testid="setup-add-lecture-stock">追加</button>
-                </div>
-                <div className="auto-assign-pair-list">
-                  {initialSetupLectureStocks.length === 0 ? <span className="basic-data-muted-inline">未登録</span> : null}
-                  {initialSetupLectureStocks.map((row) => (
-                    <span key={row.id} className="selection-pill auto-assign-target-chip">
-                      {(studentNameById.get(row.studentId) ?? row.studentId)} / {row.subject} / {(sessionLabelById.get(row.sessionId) ?? row.sessionId)} / {row.count}件
-                      <button className="basic-data-capability-remove" type="button" onClick={() => updateSetupField('initialSetupLectureStocks', initialSetupLectureStocks.filter((entry) => entry.id !== row.id))}>×</button>
-                    </span>
-                  ))}
-                </div>
-              </section>
-            </div>
-
             <div className="basic-data-actions-row">
               <button className="primary-button" type="button" onClick={onCompleteInitialSetup} data-testid="setup-complete-button">初期設定を完了してコマ表をリセットする</button>
             </div>

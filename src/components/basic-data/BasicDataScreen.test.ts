@@ -36,6 +36,66 @@ describe('BasicDataScreen parseImportedBundle', () => {
     })
   })
 
+  it('accepts 算国 as an imported elementary regular lesson subject', () => {
+    const workbook = xlsx.utils.book_new()
+
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: '田中講師', 表示名: '田中講師', メール: '', 入塾日: '2024-04-01', 退塾日: '', 表示: '表示', 担当科目: '数:高3', メモ: '' },
+    ]), '講師')
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: '生徒A', 表示名: '生徒A', メール: '', 入塾日: '2024-04-01', 退塾日: '', 生年月日: '2015-04-02', 表示: '表示' },
+    ]), '生徒')
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 年度: '2026年度', 講師: '田中講師', 生徒1: '生徒A', 科目1: '算国', 共通期間開始: '', 共通期間終了: '', 生徒2: '', 科目2: '', 曜日: '火曜', 時限: 2 },
+    ]), '通常授業')
+
+    const parsed = parseImportedBundle(xlsx, workbook, createTemplateBundle())
+
+    expect(parsed.regularLessons).toHaveLength(1)
+    expect(parsed.regularLessons[0]?.subject1).toBe('算国')
+  })
+
+  it('parses imported teacher available slots', () => {
+    const workbook = xlsx.utils.book_new()
+
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: '田中講師', 表示名: '田中講師', メール: '', 入塾日: '2024-04-01', 退塾日: '', 表示: '表示', 担当科目: '数:高3', 出勤可能コマ: '月4限, 木2限, 日5限', メモ: '' },
+    ]), '講師')
+
+    const parsed = parseImportedBundle(xlsx, workbook, createTemplateBundle())
+
+    expect(parsed.teachers[0]).toMatchObject({
+      availableSlots: [
+        { dayOfWeek: 1, slotNumber: 4 },
+        { dayOfWeek: 4, slotNumber: 2 },
+        { dayOfWeek: 0, slotNumber: 5 },
+      ],
+    })
+  })
+
+  it('trims imported regular lesson notes to three characters', () => {
+    const workbook = xlsx.utils.book_new()
+
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: '田中講師', 表示名: '田中講師', メール: '', 入塾日: '2024-04-01', 退塾日: '', 表示: '表示', 担当科目: '数:高3', メモ: '' },
+    ]), '講師')
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: '生徒A', 表示名: '生徒A', メール: '', 入塾日: '2024-04-01', 退塾日: '', 生年月日: '2015-04-02', 表示: '表示' },
+      { 名前: '生徒B', 表示名: '生徒B', メール: '', 入塾日: '2024-04-01', 退塾日: '', 生年月日: '2015-04-03', 表示: '表示' },
+    ]), '生徒')
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 年度: '2026年度', 講師: '田中講師', 生徒1: '生徒A', 科目1: '算国', 生徒1注記: '前宿題', 共通期間開始: '', 共通期間終了: '', 生徒2: '生徒B', 科目2: '国', 生徒2注記: '再テスト', 曜日: '火曜', 時限: 2 },
+    ]), '通常授業')
+
+    const parsed = parseImportedBundle(xlsx, workbook, createTemplateBundle())
+
+    expect(parsed.regularLessons).toHaveLength(1)
+    expect(parsed.regularLessons[0]).toMatchObject({
+      student1Note: '前宿題',
+      student2Note: '再テス',
+    })
+  })
+
   it('keeps imported paired regular lessons visible on the board after a 4/1 math label transition', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-06T09:00:00'))

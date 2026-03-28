@@ -199,6 +199,80 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(firstMondayDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s001')
   })
 
+  it('adds teacher-only desks from teacher available slots even without regular lessons', () => {
+    const teachers = initialTeachers.map((teacher) => (
+      teacher.id === 't001'
+        ? { ...teacher, availableSlots: [{ dayOfWeek: 1, slotNumber: 4 }] }
+        : { ...teacher, availableSlots: [] }
+    ))
+
+    const cells = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-01',
+        endDate: '2026-03-31',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-01',
+      fallbackEndDate: '2026-03-31',
+      classroomSettings,
+      teachers,
+      students: initialStudents,
+      regularLessons: [],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = cells.find((cell) => cell.dateKey === '2026-03-02' && cell.slotNumber === 4)
+    const teacherDesk = targetCell?.desks.find((desk) => desk.teacher === '田中講師')
+
+    expect(targetCell).toBeDefined()
+    expect(teacherDesk).toBeDefined()
+    expect(teacherDesk?.lesson).toBeUndefined()
+  })
+
+  it('propagates regular lesson notes into managed board student entries', () => {
+    const cells = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-04-01',
+        endDate: '2026-04-30',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-04-01',
+      fallbackEndDate: '2026-04-30',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [{
+        id: 'noted-regular',
+        schoolYear: 2026,
+        teacherId: 't001',
+        student1Id: 's001',
+        subject1: '数',
+        student1Note: '宿題',
+        startDate: '2026-04-01',
+        endDate: '2027-03-31',
+        student2Id: '',
+        subject2: '',
+        student2Note: '',
+        student2StartDate: '2026-04-01',
+        student2EndDate: '2027-03-31',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 1,
+        slotNumber: 1,
+      }],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = cells.find((cell) => cell.dateKey === '2026-04-06' && cell.slotNumber === 1)
+    const student = targetCell?.desks.find((desk) => desk.teacher === '田中講師')?.lesson?.studentSlots[0]
+
+    expect(student?.noteSuffix).toBe('宿題')
+  })
+
   it('stores a holiday-shortened regular lesson as stock instead of moving the student to the fifth week', () => {
     const holidayAwareSettings: ClassroomSettings = {
       ...classroomSettings,
@@ -288,5 +362,29 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     expect(teacherDesk).toBeDefined()
     expect(teacherDesk?.lesson).toBeUndefined()
+  })
+
+  it('keeps planned regular lessons visible even when actual occurrences are suppressed on the board', () => {
+    const cells = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-01',
+        endDate: '2026-03-31',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-01',
+      fallbackEndDate: '2026-03-31',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: createInitialRegularLessons(new Date('2025-04-01T00:00:00')),
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: ['s001__数__2026-03-02__1'],
+    })
+
+    const firstMondayDesk = cells
+      .find((cell) => cell.dateKey === '2026-03-02' && cell.slotNumber === 1)
+      ?.desks.find((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001'))
+
+    expect(firstMondayDesk?.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001')).toBe(true)
   })
 })

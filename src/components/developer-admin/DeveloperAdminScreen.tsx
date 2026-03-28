@@ -42,7 +42,7 @@ type DeveloperAdminScreenProps = {
     managerName?: string
     managerEmail?: string
   }) => void
-  onReplaceClassroomManagerUid: (classroomId: string, managerUserId: string) => void
+  onReplaceClassroomManagerUid: (classroomId: string, managerUserId: string, managerEmail: string) => void
   onExportWorkspaceBackup: () => void
   onExportAnalysisData: () => void
   onImportWorkspaceBackup: (file: File, password: string) => void
@@ -112,6 +112,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
+  const [managerEmailDrafts, setManagerEmailDrafts] = useState<Record<string, string>>({})
   const [provisionDraft, setProvisionDraft] = useState(() => ({
     classroomName: `新規教室 ${classrooms.length + 1}`,
     managerName: `教室管理者 ${classrooms.length + 1}`,
@@ -376,13 +377,22 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                           placeholder="Authentication で取得した UID"
                         />
                       </label>
+                      <label className="basic-data-inline-field">
+                        <span>差し替え先メール</span>
+                        <input
+                          type="email"
+                          value={managerEmailDrafts[classroom.id] ?? ''}
+                          onChange={(event) => setManagerEmailDrafts((current) => ({ ...current, [classroom.id]: event.target.value }))}
+                          placeholder={manager?.email ?? 'Authentication のメールアドレス'}
+                        />
+                      </label>
                       <div className="basic-data-row-actions">
                         {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
                         <button
                           className="secondary-button slim"
                           type="button"
-                          onClick={() => onReplaceClassroomManagerUid(classroom.id, managerUidDrafts[classroom.id] ?? '')}
-                          disabled={!(managerUidDrafts[classroom.id] ?? '').trim() || (managerUidDrafts[classroom.id] ?? '').trim() === classroom.managerUserId}
+                          onClick={() => onReplaceClassroomManagerUid(classroom.id, managerUidDrafts[classroom.id] ?? '', managerEmailDrafts[classroom.id] ?? '')}
+                          disabled={!(managerUidDrafts[classroom.id] ?? '').trim() || !(managerEmailDrafts[classroom.id] ?? '').trim() || (managerUidDrafts[classroom.id] ?? '').trim() === classroom.managerUserId}
                         >
                           この UID に差し替え
                         </button>

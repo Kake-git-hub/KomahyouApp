@@ -1078,15 +1078,20 @@ function App() {
     setPersistenceMessage('教室設定を更新しました。')
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, queueRemoteWorkspaceClassroomUpdate, workspaceClassrooms, workspaceUsers])
 
-  const replaceClassroomManagerUid = useCallback((classroomId: string, managerUserId: string) => {
+  const replaceClassroomManagerUid = useCallback((classroomId: string, managerUserId: string, managerEmail: string) => {
     if (!isRemoteBackendEnabled || isRemoteAdminAutomationEnabled) {
       setPersistenceMessage('管理者 UID の差し替えは Spark 構成の Firebase 画面でのみ利用できます。')
       return
     }
 
     const normalizedManagerUserId = managerUserId.trim()
+    const normalizedManagerEmail = managerEmail.trim()
     if (!normalizedManagerUserId) {
       setPersistenceMessage('差し替え先の管理者 UID を入力してください。')
+      return
+    }
+    if (!normalizedManagerEmail) {
+      setPersistenceMessage('差し替え先の管理者メールアドレスを入力してください。')
       return
     }
 
@@ -1113,7 +1118,7 @@ function App() {
     void reassignFirebaseWorkspaceClassroomManagerWithExistingUid({
       classroomId,
       managerName: currentManager.name,
-      managerEmail: currentManager.email,
+      managerEmail: normalizedManagerEmail,
       managerUserId: normalizedManagerUserId,
     }).then(async () => {
       await reloadRemoteWorkspace('管理者 UID を差し替えました。新しい Authentication ユーザーでこの教室へログインできます。', classroomId)

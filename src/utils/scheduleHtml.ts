@@ -120,6 +120,8 @@ type SchedulePayload = {
   expectedRegularOccurrences: SerializedExpectedRegularOccurrence[]
   highlightedStudentSlot?: {
     studentId: string
+    studentName?: string
+    studentDisplayName?: string
     dateKey: string
     slotNumber: number
   }
@@ -160,6 +162,8 @@ type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   regularLessons: RegularLessonRow[]
   highlightedStudentSlot?: {
     studentId: string
+    studentName?: string
+    studentDisplayName?: string
     dateKey: string
     slotNumber: number
   } | null
@@ -1345,7 +1349,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       @media print {
-        body { background: #fff; }
+        html, body {
+          background: #fff;
+          overflow: hidden;
+          scrollbar-width: none;
+        }
         html::-webkit-scrollbar,
         body::-webkit-scrollbar,
         .pages::-webkit-scrollbar {
@@ -1354,7 +1362,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           display: none;
         }
         .toolbar { display: none; }
-        .pages { padding: 0; gap: 0; }
+        .pages {
+          padding: 0;
+          gap: 0;
+          overflow: visible;
+          scrollbar-width: none;
+        }
         .print-only-hidden { display: none; }
         .sheet {
           box-shadow: none;
@@ -1409,7 +1422,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '講習' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-      const subjectDefinitions = ['英', '数', '算', '国', '理', '社'];
+      const subjectDefinitions = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社'];
       let activeCountDialog = null;
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = JSON.stringify(DATA);
@@ -1854,10 +1867,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return gradeLabel.startsWith('小') ? '算' : '数';
       }
 
-      function getVisibleSubjectsForStudent(student, referenceDate) {
+      function getVisibleSubjectsForStudent(student, referenceDate, additionalSubjects) {
         const preferredMathSubject = getPreferredMathSubject(student, referenceDate);
+        const gradeLabel = getGradeLabel(student && student.birthDate, referenceDate);
+        const prefersHighSchoolScience = gradeLabel.startsWith('高');
+        const legacySubjects = Array.isArray(additionalSubjects) ? additionalSubjects : [];
         return subjectDefinitions.filter((subject) => {
           if (subject === '算' || subject === '数') return subject === preferredMathSubject;
+          if (subject === '算国') return preferredMathSubject === '算';
+          if (subject === '理') return !prefersHighSchoolScience || legacySubjects.includes('理');
+          if (subject === '生' || subject === '物' || subject === '化') return prefersHighSchoolScience || legacySubjects.includes(subject);
           return true;
         });
       }
@@ -2589,7 +2608,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const referenceDate = startInput.value || DATA.defaultStartDate || DATA.availableStartDate;
         const input = getStudentSessionInput(student.id, session.id);
         const normalizedSubjectSlots = normalizeCountMapSubjects(input.subjectSlots, student, referenceDate);
-        const visibleSubjects = getVisibleSubjectsForStudent(student, referenceDate);
+        const visibleSubjects = getVisibleSubjectsForStudent(student, referenceDate, Object.keys(normalizedSubjectSlots));
         const rowsHtml = input.countSubmitted
           ? visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td>' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '</td></tr>').join('')
           : visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
@@ -2775,7 +2794,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const students = DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);
         const showQr = shouldShowScheduleQr();
         pagesElement.innerHTML = students.map((student, index) => {
-          const visibleSubjects = getVisibleSubjectsForStudent(student, startDate);
           const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
           const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
           const unavailableSlots = getUnavailableSlotsForStudent(student.id);
@@ -2795,10 +2813,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (entry.dateKey < startDate || entry.dateKey > endDate) return;
             plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1;
           });
-          const visibleRegularCounts = filterCountMapToSubjects(normalizeCountMapSubjects(subjectCounts, student, startDate), visibleSubjects);
-          const visiblePlannedRegularCounts = filterCountMapToSubjects(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), visibleSubjects);
-          const visibleLectureCounts = filterCountMapToSubjects(normalizeCountMapSubjects(lectureCounts, student, startDate), visibleSubjects);
-          const visibleDesiredLectureCounts = filterCountMapToSubjects(desiredLectureCounts, visibleSubjects);
+          const visibleRegularCounts = normalizeCountMapSubjects(subjectCounts, student, startDate);
+          const visiblePlannedRegularCounts = normalizeCountMapSubjects(plannedRegularCounts, student, startDate);
+          const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate);
+          const visibleDesiredLectureCounts = normalizeCountMapSubjects(desiredLectureCounts, student, startDate);
           const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
             ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
             : '';
@@ -2817,7 +2835,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               if (isEditable) classes.push('is-editable');
               if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
               const highlightedStudentSlot = DATA.highlightedStudentSlot;
-              if (highlightedStudentSlot && highlightedStudentSlot.studentId === student.id && highlightedStudentSlot.dateKey === dateHeader.dateKey && highlightedStudentSlot.slotNumber === slotNumber) {
+              const isHighlightedStudent = highlightedStudentSlot && (
+                highlightedStudentSlot.studentId === student.id
+                || highlightedStudentSlot.studentName === student.fullName
+                || highlightedStudentSlot.studentName === student.name
+                || highlightedStudentSlot.studentDisplayName === student.name
+              );
+              if (isHighlightedStudent && highlightedStudentSlot.dateKey === dateHeader.dateKey && highlightedStudentSlot.slotNumber === slotNumber) {
                 classes.push('is-moving-highlight');
               }
               let content = '<div class="empty-label"></div>';
@@ -2832,7 +2856,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
           const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
           const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, visibleSubjects), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
         }).join('');
       }
 

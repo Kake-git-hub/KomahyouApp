@@ -1,13 +1,20 @@
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
+  buildTeacherAvailableSlotLabel,
   compareStudentsByCurrentGradeThenName,
   deriveManagedDisplayName,
   formatStudentSelectionLabel,
   type GradeCeiling,
   type ManagerRow,
+  normalizeTeacherAvailableSlots,
+  parseTeacherAvailableSlots,
   resolveCurrentStudentGradeLabel,
+  serializeTeacherAvailableSlots,
   type StudentRow,
+  teacherAvailabilityDayOptions,
+  teacherAvailabilitySlotNumbers,
+  type TeacherAvailableSlot,
   type TeacherRow,
   type TeacherSubjectCapability,
   formatManagedDateValue,
@@ -23,6 +30,7 @@ import {
 import {
   createInitialRegularLessons,
   doRegularLessonParticipantPeriodsOverlap,
+  normalizeRegularLessonNote,
   normalizeRegularLessonSharedPeriod,
   packSortRegularLessonRows,
   type RegularLessonRow,
@@ -30,7 +38,10 @@ import {
   resolveSchoolYearDateRange,
 } from './regularLessonModel'
 import { AppMenu } from '../navigation/AppMenu'
-import { resolveDisplayedSubjectForBirthDate } from '../../utils/studentGradeSubject'
+import {
+  allStudentSubjectOptions,
+  resolveDisplayedSubjectForBirthDate,
+} from '../../utils/studentGradeSubject'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -198,7 +209,8 @@ function findGroupLessonMatch(row: GroupLessonRow, currentGroupLessons: GroupLes
 }
 type XlsxModule = typeof import('xlsx')
 
-const subjectOptions = ['算', '数', '英', '国', '理', '社']
+const teacherSubjectOptions = ['算', '数', '英', '国', '理', '生', '物', '化', '社']
+const lessonSubjectOptions = allStudentSubjectOptions
 const gradeCeilingOptions: GradeCeiling[] = ['小', '中', '高1', '高2', '高3']
 const gradeCeilingOptionsWithoutElementary: GradeCeiling[] = ['中', '高1', '高2', '高3']
 const dayOptions = [
@@ -364,7 +376,7 @@ function isStudentActive(student: StudentRow, today = new Date()) {
 function serializeSubjectCapabilities(capabilities: TeacherSubjectCapability[]) {
   return capabilities
     .slice()
-    .sort((left, right) => subjectOptions.indexOf(left.subject) - subjectOptions.indexOf(right.subject))
+    .sort((left, right) => teacherSubjectOptions.indexOf(left.subject) - teacherSubjectOptions.indexOf(right.subject))
     .map((entry) => `${entry.subject}:${entry.maxGrade}`)
     .join(', ')
 }
@@ -372,7 +384,7 @@ function serializeSubjectCapabilities(capabilities: TeacherSubjectCapability[]) 
 function upsertSubjectCapability(capabilities: TeacherSubjectCapability[], subject: string, maxGrade: GradeCeiling) {
   const next = capabilities.filter((entry) => entry.subject !== subject)
   next.push({ subject, maxGrade })
-  return next.sort((left, right) => subjectOptions.indexOf(left.subject) - subjectOptions.indexOf(right.subject))
+  return next.sort((left, right) => teacherSubjectOptions.indexOf(left.subject) - teacherSubjectOptions.indexOf(right.subject))
 }
 
 function removeSubjectCapability(capabilities: TeacherSubjectCapability[], subject: string) {
@@ -389,7 +401,7 @@ function parseSubjectCapabilities(value: unknown): TeacherSubjectCapability[] {
 
   for (const entry of entries) {
     const [subjectText, maxGradeText] = entry.split(':').map((part) => part.trim())
-    if (!subjectOptions.includes(subjectText)) continue
+    if (!teacherSubjectOptions.includes(subjectText)) continue
     const maxGrade = gradeCeilingOptions.includes(maxGradeText as GradeCeiling) ? (maxGradeText as GradeCeiling) : '高3'
     capabilities.push({ subject: subjectText, maxGrade })
   }
@@ -409,6 +421,10 @@ function formatSummaryValue(value: string, fallback = '未設定') {
   return normalizeText(value) || fallback
 }
 
+function formatTeacherAvailabilitySummary(slots: TeacherAvailableSlot[] | undefined) {
+  return serializeTeacherAvailableSlots(slots) || '未設定'
+}
+
 function formatManagedDateButtonLabel(value: string, emptyLabel: string, hint?: string) {
   const normalizedValue = normalizeText(value)
   if (normalizedValue && normalizedValue !== '未定') return normalizedValue
@@ -419,6 +435,14 @@ function formatRegularLessonParticipantSummary(studentName: string, subject: str
   const normalizedStudentName = normalizeText(studentName)
   if (!normalizedStudentName) return emptyLabel
   return `${normalizedStudentName} / ${formatSummaryValue(subject)}`
+}
+
+function normalizeRegularLessonRowNotes<T extends { student1Note?: string; student2Note?: string }>(row: T): T {
+  return {
+    ...row,
+    student1Note: normalizeRegularLessonNote(row.student1Note),
+    student2Note: normalizeRegularLessonNote(row.student2Note),
+  }
 }
 
 function formatRegularLessonPeriodSummary(startDate: string, endDate: string, schoolYear: number) {
@@ -450,7 +474,7 @@ function buildSharedRegularLessonPeriodPatch(startDate: string, endDate: string)
 
 function collectRegularLessonConflicts(
   regularLessons: RegularLessonRow[],
-  draft: ReturnType<typeof createRegularLessonDraft>,
+  draft: Pick<RegularLessonRow, 'teacherId' | 'student1Id' | 'student2Id' | 'dayOfWeek' | 'slotNumber' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>,
   schoolYear: number,
   teacherNameById: Record<string, string>,
   studentNameById: Record<string, string>,
@@ -497,10 +521,12 @@ function createRegularLessonDraft() {
     teacherId: '',
     student1Id: '',
     subject1: '英',
+    student1Note: '',
     startDate: '',
     endDate: '',
     student2Id: '',
     subject2: '英',
+    student2Note: '',
     student2StartDate: '',
     student2EndDate: '',
     nextStudent1Id: '',
@@ -606,6 +632,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     退塾日: normalizeDateString(row.withdrawDate),
     表示: row.isHidden ? '非表示' : '表示',
     担当科目: serializeSubjectCapabilities(row.subjectCapabilities),
+    出勤可能コマ: serializeTeacherAvailableSlots(row.availableSlots),
     メモ: row.memo,
   })), ['入塾日', '退塾日']), '講師')
 
@@ -630,10 +657,12 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
         講師: teacherNameById[row.teacherId] ?? '',
         生徒1: studentNameById[row.student1Id] ?? '',
         科目1: row.subject1,
+        生徒1注記: normalizeRegularLessonNote(row.student1Note),
         共通期間開始: sharedPeriod.startDate,
         共通期間終了: sharedPeriod.endDate,
         生徒2: studentNameById[row.student2Id] ?? '',
         科目2: row.subject2,
+        生徒2注記: normalizeRegularLessonNote(row.student2Note),
         曜日: resolveDayLabel(row.dayOfWeek),
         時限: row.slotNumber,
       }
@@ -659,11 +688,13 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '各ID列', 説明: '現データ出力に含まれる ID 列は差分取り込みの照合に使います。差分更新時は削除せずそのまま残してください。新規行は空欄でも取り込めます。' },
     { 項目: '講師.担当科目', 説明: '英:高3, 数:中 のように 科目:上限学年 をカンマ区切りで記入します。' },
+    { 項目: '講師.出勤可能コマ', 説明: '月1限, 木3限 のように曜日と時限をカンマ区切りで記入します。通常授業がなくてもコマ表へ講師だけ表示します。' },
     { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式に加えて Excel の日付セルも取り込めます。空欄なら即時在籍として扱います。' },
     { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または Excel の日付セルで入力できます。空欄と 未定 はどちらも日付未設定として扱います。' },
     { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。学年/在籍列はアプリ側で自動計算します。' },
     { 項目: '通常授業/集団授業', 説明: '年度列を付けて年度ごとに分けます。講師名と生徒名は各シートの名前列に一致させてください。' },
     { 項目: '通常授業.共通期間開始/共通期間終了', 説明: '通常授業の共有表示期間です。旧列の 期間開始/終了 と 生徒1期間開始/終了 と 生徒2期間開始/終了 も同じ期間として取り込みます。' },
+    { 項目: '通常授業.生徒1注記/生徒2注記', 説明: '各注記は 3 文字までです。コマ表上では科目の後ろに連結して表示されます。' },
     { 項目: '教室データ', 説明: '休校曜日 は 日曜, 月曜 のように曜日名をカンマ区切りで入力します。ペア制約は自動割振ルール画面の Excel 管理で扱います。' },
   ]), '説明')
 
@@ -730,6 +761,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
           isHidden: normalizeText(row['表示']) === '非表示',
           subjectCapabilities: parseSubjectCapabilities(row['担当科目']),
+          availableSlots: parseTeacherAvailableSlots(row['出勤可能コマ']),
           memo: normalizeText(row['メモ']),
         }))
         .filter((row) => row.name)
@@ -773,19 +805,21 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           const referenceDate = sharedStartDate || resolveSchoolYearDateRange(schoolYear).startDate
           const student1Id = studentIdByName.get(normalizeText(row['生徒1'])) ?? ''
           const student2Id = studentIdByName.get(normalizeText(row['生徒2'])) ?? ''
-          const subject1 = subjectOptions.includes(normalizeText(row['科目1'])) ? normalizeText(row['科目1']) : '英'
-          const subject2 = subjectOptions.includes(normalizeText(row['科目2'])) ? normalizeText(row['科目2']) : ''
+          const subject1 = lessonSubjectOptions.includes(normalizeText(row['科目1']) as (typeof lessonSubjectOptions)[number]) ? normalizeText(row['科目1']) : '英'
+          const subject2 = lessonSubjectOptions.includes(normalizeText(row['科目2']) as (typeof lessonSubjectOptions)[number]) ? normalizeText(row['科目2']) : ''
 
-          return normalizeRegularLessonSharedPeriod({
+          return normalizeRegularLessonRowNotes(normalizeRegularLessonSharedPeriod({
             id: normalizeText(row['通常授業ID']) || createId('regular'),
             schoolYear,
             teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
             student1Id,
             subject1: resolveDisplayedSubjectForBirthDate(subject1, studentById.get(student1Id)?.birthDate, referenceDate),
+            student1Note: normalizeText(row['生徒1注記']),
             startDate: sharedStartDate,
             endDate: sharedEndDate,
             student2Id,
             subject2: resolveDisplayedSubjectForBirthDate(subject2, studentById.get(student2Id)?.birthDate, referenceDate),
+            student2Note: normalizeText(row['生徒2注記']),
             student2StartDate: sharedStartDate,
             student2EndDate: sharedEndDate,
             nextStudent1Id: '',
@@ -794,7 +828,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
             nextSubject2: '',
             dayOfWeek: parseDayOfWeek(row['曜日']),
             slotNumber: parseSlotNumber(row['時限']),
-          })
+          }))
         })
         .filter((row) => row.teacherId && (row.student1Id || row.student2Id)),
       (row) => teacherLabelById.get(row.teacherId) ?? '')
@@ -807,7 +841,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           id: normalizeText(row['集団授業ID']) || createId('group'),
           schoolYear: parseSchoolYear(row['年度']),
           teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
-          subject: subjectOptions.includes(normalizeText(row['科目'])) ? normalizeText(row['科目']) : '英',
+          subject: lessonSubjectOptions.includes(normalizeText(row['科目']) as (typeof lessonSubjectOptions)[number]) ? normalizeText(row['科目']) : '英',
           studentIds: normalizeText(row['生徒一覧'])
             .split(',')
             .map((entry) => studentIdByName.get(entry.trim()) ?? '')
@@ -940,10 +974,12 @@ type SubjectCapabilityEditorProps = {
 }
 
 function SubjectCapabilityEditor({ capabilities, onChange, testIdPrefix, disabled = false }: SubjectCapabilityEditorProps) {
-  const [selectedSubject, setSelectedSubject] = useState(subjectOptions[0])
+  const [selectedSubject, setSelectedSubject] = useState(teacherSubjectOptions[0])
   const selectedCapability = capabilities.find((entry) => entry.subject === selectedSubject)
   const allowedGrades: GradeCeiling[] = selectedSubject === '算'
     ? ['小']
+    : (selectedSubject === '生' || selectedSubject === '物' || selectedSubject === '化')
+      ? ['高1', '高2', '高3']
     : selectedSubject === '数'
       ? gradeCeilingOptionsWithoutElementary
       : gradeCeilingOptions
@@ -966,7 +1002,7 @@ function SubjectCapabilityEditor({ capabilities, onChange, testIdPrefix, disable
         ))}
       </div>
       <div className="basic-data-chip-row">
-        {subjectOptions.map((subject) => (
+        {teacherSubjectOptions.map((subject) => (
           <button
             key={subject}
             type="button"
@@ -999,6 +1035,72 @@ function SubjectCapabilityEditor({ capabilities, onChange, testIdPrefix, disable
         ))}
       </div>
       <p className="basic-data-subcopy">選んだ学年以下を担当可能として扱います。</p>
+    </div>
+  )
+}
+
+type TeacherAvailabilityEditorProps = {
+  slots: TeacherAvailableSlot[]
+  onChange: (next: TeacherAvailableSlot[]) => void
+  testIdPrefix?: string
+  disabled?: boolean
+}
+
+function TeacherAvailabilityEditor({ slots, onChange, testIdPrefix, disabled = false }: TeacherAvailabilityEditorProps) {
+  const normalizedSlots = normalizeTeacherAvailableSlots(slots)
+
+  const toggleSlot = (dayOfWeek: number, slotNumber: number) => {
+    const exists = normalizedSlots.some((slot) => slot.dayOfWeek === dayOfWeek && slot.slotNumber === slotNumber)
+    if (exists) {
+      onChange(normalizedSlots.filter((slot) => !(slot.dayOfWeek === dayOfWeek && slot.slotNumber === slotNumber)))
+      return
+    }
+
+    onChange(normalizeTeacherAvailableSlots([...normalizedSlots, { dayOfWeek, slotNumber }]))
+  }
+
+  return (
+    <div className="basic-data-inline-stack">
+      <div className="basic-data-capability-list" data-testid={testIdPrefix ? `${testIdPrefix}-available-slots` : undefined}>
+        {normalizedSlots.length === 0 ? <span className="basic-data-muted-inline">未設定</span> : normalizedSlots.map((slot) => (
+          <span key={`${slot.dayOfWeek}_${slot.slotNumber}`} className="status-chip secondary basic-data-capability-item">
+            {buildTeacherAvailableSlotLabel(slot)}
+            <button
+              className="basic-data-capability-remove"
+              type="button"
+              onClick={() => toggleSlot(slot.dayOfWeek, slot.slotNumber)}
+              disabled={disabled}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      <div className="basic-data-availability-grid">
+        {teacherAvailabilityDayOptions.map((day) => (
+          <div key={day.value} className="basic-data-availability-row">
+            <span className="basic-data-availability-day">{day.label}</span>
+            <div className="basic-data-chip-row">
+              {teacherAvailabilitySlotNumbers.map((slotNumber) => {
+                const isActive = normalizedSlots.some((slot) => slot.dayOfWeek === day.value && slot.slotNumber === slotNumber)
+                return (
+                  <button
+                    key={`${day.value}_${slotNumber}`}
+                    type="button"
+                    className={`basic-data-chip${isActive ? ' active' : ''}`}
+                    onClick={() => toggleSlot(day.value, slotNumber)}
+                    disabled={disabled}
+                    data-testid={testIdPrefix ? `${testIdPrefix}-available-slot-${day.value}-${slotNumber}` : undefined}
+                  >
+                    {slotNumber}限
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="basic-data-subcopy">選んだ曜日と時限は、通常授業がなくても講師だけコマ表へ表示します。</p>
     </div>
   )
 }
@@ -1149,8 +1251,9 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const selectableSchoolYears = useMemo(() => buildSelectableSchoolYears(currentSchoolYear), [currentSchoolYear])
 
   const [managerDraft, setManagerDraft] = useState({ name: '', email: '' })
-  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[] })
+  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[], availableSlots: [] as TeacherAvailableSlot[] })
   const [teacherDraftExpanded, setTeacherDraftExpanded] = useState(false)
+  const [teacherDraftAvailabilityExpanded, setTeacherDraftAvailabilityExpanded] = useState(false)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
   const [regularLessonDraft, setRegularLessonDraft] = useState(() => createRegularLessonDraft())
   const [groupLessonDraft, setGroupLessonDraft] = useState({ teacherId: '', subject: '英', studentIds: [] as string[], dayOfWeek: 1, slotLabel: '1限' })
@@ -1317,7 +1420,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     onUpdateRegularLessons((current) => current.map((row) => {
       if (row.id !== id) return row
 
-      const nextRow = { ...row, ...patch }
+      const nextRow = normalizeRegularLessonRowNotes({ ...row, ...patch })
       if ('startDate' in patch || 'endDate' in patch || 'student2StartDate' in patch || 'student2EndDate' in patch) {
         return normalizeRegularLessonSharedPeriod(nextRow)
       }
@@ -1349,11 +1452,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         withdrawDate: teacherDraft.withdrawDate.trim() || '未定',
         isHidden: teacherDraft.isHidden,
         subjectCapabilities: teacherDraft.subjectCapabilities,
+        availableSlots: normalizeTeacherAvailableSlots(teacherDraft.availableSlots),
         memo: teacherDraft.memo.trim(),
       },
     ])
-    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [] })
+    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [], availableSlots: [] })
     setTeacherDraftExpanded(false)
+    setTeacherDraftAvailabilityExpanded(false)
     setStatusMessage('講師を追加しました。')
   }
 
@@ -1376,7 +1481,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const addRegularLesson = () => {
     if (!regularLessonDraft.teacherId || !regularLessonDraft.student1Id) return
 
-    const normalizedDraft = normalizeRegularLessonSharedPeriod(regularLessonDraft)
+    const normalizedDraft = normalizeRegularLessonRowNotes(normalizeRegularLessonSharedPeriod(regularLessonDraft))
 
     const periodValidationTargets = [
       { label: '期間開始', value: normalizedDraft.startDate },
@@ -1537,13 +1642,14 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     const filteredTeachers = filterAndSortRows(
       visibleTeachers,
       tableControls.teachers,
-      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities), row.memo],
+      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities), formatTeacherAvailabilitySummary(row.availableSlots), row.memo],
       {
         name: (row) => getTeacherDisplayName(row),
         entryDate: (row) => row.entryDate,
         withdrawDate: (row) => formatManagedDateValue(row.withdrawDate),
         status: (row) => resolveTeacherStatusLabel(row),
         subjects: (row) => formatSubjectCapabilitySummary(row.subjectCapabilities),
+        availability: (row) => formatTeacherAvailabilitySummary(row.availableSlots),
       },
     )
 
@@ -1582,6 +1688,26 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                 </div>
               ) : null}
             </div>
+            <div className="basic-data-inline-editor-slot basic-data-inline-editor-slot-teacher">
+              <button
+                className="basic-data-inline-summary basic-data-inline-summary-button"
+                type="button"
+                onClick={() => setTeacherDraftAvailabilityExpanded((current) => !current)}
+                data-testid="basic-data-teacher-draft-availability-summary"
+              >
+                <span className="basic-data-inline-summary-label">出勤可</span>
+                <strong>{formatTeacherAvailabilitySummary(teacherDraft.availableSlots)}</strong>
+              </button>
+              {teacherDraftAvailabilityExpanded ? (
+                <div className="basic-data-inline-editor basic-data-inline-editor-teacher">
+                  <TeacherAvailabilityEditor
+                    slots={teacherDraft.availableSlots}
+                    onChange={(next) => setTeacherDraft((current) => ({ ...current, availableSlots: normalizeTeacherAvailableSlots(next) }))}
+                    testIdPrefix="basic-data-teacher-draft"
+                  />
+                </div>
+              ) : null}
+            </div>
             <label className="basic-data-inline-field basic-data-inline-field-medium">
               <span>メール</span>
               <input value={teacherDraft.email} onChange={(event) => setTeacherDraft((current) => ({ ...current, email: event.target.value }))} placeholder="メールアドレス" type="email" data-testid="basic-data-teacher-draft-email" />
@@ -1607,8 +1733,8 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
               filterValue={tableControls.teachers.filterText}
               sortKey={tableControls.teachers.sortKey}
               direction={tableControls.teachers.direction}
-              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目で絞り込み' : '退塾講師を名前・表示名・メールで絞り込み'}
-              sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }]}
+              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目・出勤可能コマで絞り込み' : '退塾講師を名前・表示名・メールで絞り込み'}
+              sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }, { value: 'availability', label: '出勤可' }]}
               onFilterChange={(value) => updateTableControl('teachers', { filterText: value })}
               onSortKeyChange={(value) => updateTableControl('teachers', { sortKey: value })}
               onDirectionChange={(value) => updateTableControl('teachers', { direction: value })}
@@ -1619,7 +1745,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
             </div>
           </div>
           <table className="basic-data-table" data-testid="basic-data-teachers-table">
-            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>メモ</th><th>操作</th></tr></thead>
+            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>出勤可能コマ</th><th>メモ</th><th>操作</th></tr></thead>
             <tbody>
               {filteredTeachers.map((row) => (
                 <tr key={row.id}>
@@ -1656,6 +1782,11 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   </td>
                   <td>
                     {isRowEditing('teacher', row.id)
+                      ? <TeacherAvailabilityEditor slots={row.availableSlots ?? []} onChange={(next) => updateTeacher(row.id, { availableSlots: normalizeTeacherAvailableSlots(next) })} />
+                      : <span className="basic-data-cell-summary" data-testid={`basic-data-teacher-availability-${row.id}`}>{formatTeacherAvailabilitySummary(row.availableSlots)}</span>}
+                  </td>
+                  <td>
+                    {isRowEditing('teacher', row.id)
                       ? <input value={row.memo} onChange={(event) => updateTeacher(row.id, { memo: event.target.value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.memo)}</span>}
                   </td>
@@ -1667,7 +1798,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   </td>
                 </tr>
               ))}
-              {filteredTeachers.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
+              {filteredTeachers.length === 0 ? <tr><td colSpan={10} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
@@ -1823,8 +1954,19 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           <label className="basic-data-stack-field basic-data-stack-field-subject">
             <span>科目1</span>
             <select value={regularLessonDraft.subject1} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, subject1: event.target.value }))} data-testid="basic-data-regular-draft-subject1">
-              {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+              {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
             </select>
+          </label>
+          <label className="basic-data-stack-field basic-data-stack-field-subject">
+            <span>生徒1注記</span>
+            <input
+              type="text"
+              maxLength={3}
+              value={regularLessonDraft.student1Note}
+              onChange={(event) => setRegularLessonDraft((current) => ({ ...current, student1Note: normalizeRegularLessonNote(event.target.value) }))}
+              placeholder="3文字まで"
+              data-testid="basic-data-regular-draft-note1"
+            />
           </label>
           <label className="basic-data-stack-field">
             <span>生徒2</span>
@@ -1836,8 +1978,19 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           <label className="basic-data-stack-field basic-data-stack-field-subject">
             <span>科目2</span>
             <select value={regularLessonDraft.subject2} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, subject2: event.target.value }))} data-testid="basic-data-regular-draft-subject2">
-              {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+              {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
             </select>
+          </label>
+          <label className="basic-data-stack-field basic-data-stack-field-subject">
+            <span>生徒2注記</span>
+            <input
+              type="text"
+              maxLength={3}
+              value={regularLessonDraft.student2Note}
+              onChange={(event) => setRegularLessonDraft((current) => ({ ...current, student2Note: normalizeRegularLessonNote(event.target.value) }))}
+              placeholder="3文字まで"
+              data-testid="basic-data-regular-draft-note2"
+            />
           </label>
           <label className="basic-data-stack-field basic-data-stack-field-day">
             <span>曜日</span>
@@ -1903,7 +2056,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           onDirectionChange={(value) => updateTableControl('regularLessons', { direction: value })}
         />
         <table className="basic-data-table regular-table" data-testid="basic-data-regular-lessons-table">
-          <thead><tr><th>講師</th><th>生徒1</th><th>生徒1科目</th><th>生徒2</th><th>生徒2科目</th><th>曜日</th><th>時限</th><th>期間</th><th>操作</th></tr></thead>
+          <thead><tr><th>講師</th><th>生徒1</th><th>生徒1科目</th><th>生徒1注記</th><th>生徒2</th><th>生徒2科目</th><th>生徒2注記</th><th>曜日</th><th>時限</th><th>期間</th><th>操作</th></tr></thead>
           <tbody>
             {filterAndSortRows(
               visibleRegularLessons,
@@ -1944,10 +2097,15 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   {isRowEditing('regular', row.id)
                     ? (
                         <select value={row.subject1} onChange={(event) => updateRegularLesson(row.id, { subject1: event.target.value })}>
-                          {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                          {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
                         </select>
                       )
                     : <span className="basic-data-static-field">{formatSummaryValue(row.subject1)}</span>}
+                </td>
+                <td>
+                  {isRowEditing('regular', row.id)
+                    ? <input type="text" maxLength={3} value={row.student1Note ?? ''} onChange={(event) => updateRegularLesson(row.id, { student1Note: normalizeRegularLessonNote(event.target.value) })} />
+                    : <span className="basic-data-static-field">{formatSummaryValue(normalizeRegularLessonNote(row.student1Note), '')}</span>}
                 </td>
                 <td>
                   {isRowEditing('regular', row.id)
@@ -1964,10 +2122,15 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                     ? (
                         <select value={row.subject2} onChange={(event) => updateRegularLesson(row.id, { subject2: event.target.value })}>
                           <option value="">未設定</option>
-                          {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                          {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
                         </select>
                       )
                     : <span className="basic-data-static-field">{formatSummaryValue(row.subject2)}</span>}
+                </td>
+                <td>
+                  {isRowEditing('regular', row.id)
+                    ? <input type="text" maxLength={3} value={row.student2Note ?? ''} onChange={(event) => updateRegularLesson(row.id, { student2Note: normalizeRegularLessonNote(event.target.value) })} />
+                    : <span className="basic-data-static-field">{formatSummaryValue(normalizeRegularLessonNote(row.student2Note), '')}</span>}
                 </td>
                 <td>
                   {isRowEditing('regular', row.id)
@@ -2042,7 +2205,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
             {groupLessonYears.map((schoolYear) => <option key={schoolYear} value={schoolYear}>{formatSchoolYearLabel(schoolYear)}</option>)}
           </select>
           <select value={groupLessonDraft.subject} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, subject: event.target.value }))} data-testid="basic-data-group-draft-subject">
-            {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+            {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
           </select>
           <select value={String(groupLessonDraft.dayOfWeek)} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, dayOfWeek: Number(event.target.value) }))} data-testid="basic-data-group-draft-day">
             {dayOptions.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
@@ -2119,7 +2282,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                 </td>
                 <td>
                   <select value={row.subject} onChange={(event) => updateGroupLesson(row.id, { subject: event.target.value })} disabled={!isRowEditing('group', row.id)}>
-                    {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                    {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
                   </select>
                 </td>
                 <td><StudentPicker students={students} selectedIds={row.studentIds} onChange={(next) => updateGroupLesson(row.id, { studentIds: next })} disabled={!isRowEditing('group', row.id)} /></td>

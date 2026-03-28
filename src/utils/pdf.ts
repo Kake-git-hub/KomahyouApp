@@ -199,10 +199,10 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   const marginY = 2
   const contentWidth = pageWidth - marginX * 2
   const contentHeight = pageHeight - marginY * 2
-  const heightFitScale = contentHeight / canvas.height
-  const renderWidth = contentWidth
-  const renderHeight = canvas.height * heightFitScale
-  const offsetX = marginX
+  const renderScale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height)
+  const renderWidth = canvas.width * renderScale
+  const renderHeight = canvas.height * renderScale
+  const offsetX = (pageWidth - renderWidth) / 2
   const offsetY = (pageHeight - renderHeight) / 2
 
   pdf.addImage(imageData, 'PNG', offsetX, offsetY, renderWidth, renderHeight, undefined, 'FAST')

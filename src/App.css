@@ -1211,6 +1211,10 @@ tr.sa-slot-first td {
   color: #fff;
 }
 
+.sa-student-picked .sa-student-detail-prefix {
+  color: #fff;
+}
+
 .sa-warning {
   background: #fff7e7;
 }
@@ -1237,7 +1241,7 @@ tr.sa-slot-first td {
 .sa-student-markers {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
 }
 
 .sa-student-name {
@@ -1282,6 +1286,7 @@ tr.sa-slot-first td {
 .sa-student-name-absence,
 .sa-student-detail-muted,
 .sa-student-detail-muted .sa-student-star,
+.sa-student-detail-muted .sa-student-detail-prefix,
 .sa-student-detail-muted .sa-student-detail-grade,
 .sa-student-detail-muted .sa-student-detail-subject {
   color: #6d7f93;
@@ -1291,12 +1296,16 @@ tr.sa-slot-first td {
   display: inline-flex;
   align-items: baseline;
   justify-content: center;
-  gap: 2px;
+  gap: 0;
   font-size: 8px;
   font-weight: 700;
   color: #101820;
   line-height: 1.2;
   min-height: 1.2em;
+}
+
+.sa-student-detail-prefix {
+  color: inherit;
 }
 
 .sa-student-detail-note {
@@ -1312,12 +1321,24 @@ tr.sa-slot-first td {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 9px;
+  min-width: 7px;
   height: 12px;
   padding: 0;
   font-size: 9px;
   line-height: 1;
   background: transparent;
+}
+
+.sa-student-detail-prefix.prefix-lesson-regular {
+  color: #2f8a2f;
+}
+
+.sa-student-detail-prefix.prefix-lesson-makeup {
+  color: #d0a000;
+}
+
+.sa-student-detail-prefix.prefix-lesson-special {
+  color: #ba4d1b;
 }
 
 .sa-student-star.star-lesson-regular {
@@ -2397,7 +2418,7 @@ tr.sa-slot-first td {
 }
 
 .basic-data-compact-form-teacher {
-  grid-template-columns: minmax(180px, 1fr) minmax(320px, 1.8fr) minmax(220px, 1.2fr) minmax(190px, 1fr) minmax(190px, 1fr) minmax(160px, 0.9fr) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(300px, 1.6fr) minmax(300px, 1.6fr) minmax(220px, 1.2fr) minmax(190px, 1fr) minmax(190px, 1fr) minmax(160px, 0.9fr) auto;
 }
 
 .basic-data-compact-form .basic-data-inline-field {
@@ -2705,6 +2726,25 @@ tr.sa-slot-first td {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.basic-data-availability-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.basic-data-availability-row {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.basic-data-availability-day {
+  color: #58708d;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
 }
 
 .basic-data-capability-list {

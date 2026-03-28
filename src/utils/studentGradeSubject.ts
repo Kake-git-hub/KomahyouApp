@@ -1,4 +1,9 @@
-import type { GradeLabel } from '../components/schedule-board/types'
+import type { GradeLabel, SubjectLabel } from '../components/schedule-board/types'
+
+export const allStudentSubjectOptions: SubjectLabel[] = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社']
+export const elementaryStudentSubjectOptions: SubjectLabel[] = ['算', '算国', '英', '国', '理', '社']
+export const middleSchoolStudentSubjectOptions: SubjectLabel[] = ['数', '英', '国', '理', '社']
+export const highSchoolStudentSubjectOptions: SubjectLabel[] = ['数', '英', '国', '生', '物', '化', '社']
 
 function toDate(value: string | Date) {
   if (value instanceof Date) return new Date(value)
@@ -35,9 +40,28 @@ export function resolveGradeLabelFromBirthDate(birthDate?: string, referenceDate
   return '高3'
 }
 
+export function isElementaryGradeLabel(gradeLabel?: string) {
+  return Boolean(gradeLabel?.startsWith('小'))
+}
+
+export function isMiddleSchoolGradeLabel(gradeLabel?: string) {
+  return Boolean(gradeLabel?.startsWith('中'))
+}
+
+export function isHighSchoolGradeLabel(gradeLabel?: string) {
+  return Boolean(gradeLabel?.startsWith('高'))
+}
+
+export function getSelectableStudentSubjectsForGrade(gradeLabel?: string): SubjectLabel[] {
+  if (isElementaryGradeLabel(gradeLabel)) return elementaryStudentSubjectOptions
+  if (isMiddleSchoolGradeLabel(gradeLabel)) return middleSchoolStudentSubjectOptions
+  if (isHighSchoolGradeLabel(gradeLabel)) return highSchoolStudentSubjectOptions
+  return middleSchoolStudentSubjectOptions
+}
+
 export function resolveDisplayedSubjectForGrade(subject: string, gradeLabel?: string) {
   if (subject !== '算' && subject !== '数') return subject
-  return gradeLabel?.startsWith('小') ? '算' : '数'
+  return isElementaryGradeLabel(gradeLabel) ? '算' : '数'
 }
 
 export function resolveDisplayedSubjectForBirthDate(subject: string, birthDate: string | undefined, referenceDate: string | Date, fallbackGrade = '') {

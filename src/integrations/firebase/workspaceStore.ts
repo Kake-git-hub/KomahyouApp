@@ -1,5 +1,6 @@
 import { doc, getDoc, getDocs, setDoc, writeBatch, collection, type Firestore } from 'firebase/firestore'
-import { APP_SNAPSHOT_SCHEMA_VERSION, WORKSPACE_SNAPSHOT_SCHEMA_VERSION, type AppSnapshotPayload, type WorkspaceClassroom, type WorkspaceSnapshot, type WorkspaceUser, type WorkspaceUserRole } from '../../types/appState'
+import { APP_SNAPSHOT_SCHEMA_VERSION, WORKSPACE_SNAPSHOT_SCHEMA_VERSION, type AppSnapshotPayload, type PersistedBoardState, type WorkspaceClassroom, type WorkspaceSnapshot, type WorkspaceUser, type WorkspaceUserRole } from '../../types/appState'
+import type { SlotCell } from '../../components/schedule-board/types'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 
@@ -31,9 +32,21 @@ type FirebaseClassroomDoc = {
 type FirebaseClassroomSnapshotDoc = {
   schemaVersion: number
   savedAt: string
-  data: AppSnapshotPayload
+  data: FirebaseAppSnapshotPayload
   updatedBy: string
   updatedAt: string
+}
+
+type FirebasePersistedBoardWeek = {
+  cells: SlotCell[]
+}
+
+type FirebasePersistedBoardState = Omit<PersistedBoardState, 'weeks'> & {
+  weeks: FirebasePersistedBoardWeek[]
+}
+
+type FirebaseAppSnapshotPayload = Omit<AppSnapshotPayload, 'boardState'> & {
+  boardState: FirebasePersistedBoardState | null
 }
 
 function requireFirestore() {
@@ -66,6 +79,46 @@ function toWorkspaceUser(userId: string, data: FirebaseWorkspaceMemberDoc): Work
     email: data.email?.trim() || '',
     role: data.role,
     assignedClassroomId: data.assignedClassroomId ?? null,
+  }
+}
+
+function deserializeBoardState(boardState: FirebasePersistedBoardState | PersistedBoardState | null | undefined): PersistedBoardState | null {
+  if (!boardState) return null
+
+  const rawWeeks = Array.isArray(boardState.weeks) ? boardState.weeks : []
+  const weeks = rawWeeks.map((week) => {
+    if (Array.isArray(week)) return week
+    return Array.isArray(week?.cells) ? week.cells : []
+  })
+
+  return {
+    ...boardState,
+    weeks,
+  }
+}
+
+function serializeBoardState(boardState: PersistedBoardState | null | undefined): FirebasePersistedBoardState | null {
+  if (!boardState) return null
+
+  return {
+    ...boardState,
+    weeks: boardState.weeks.map((week) => ({ cells: week })),
+  }
+}
+
+function deserializeSnapshotPayload(payload: FirebaseAppSnapshotPayload | AppSnapshotPayload | null | undefined): AppSnapshotPayload | null {
+  if (!payload) return null
+
+  return {
+    ...payload,
+    boardState: deserializeBoardState(payload.boardState),
+  }
+}
+
+function serializeSnapshotPayload(payload: AppSnapshotPayload): FirebaseAppSnapshotPayload {
+  return {
+    ...payload,
+    boardState: serializeBoardState(payload.boardState),
   }
 }
 
@@ -147,7 +200,7 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
   const classrooms = classroomDocSnapshots.docs.map((entry) => {
     const data = entry.data() as FirebaseClassroomDoc
     const snapshot = snapshotByClassroomId.get(entry.id)
-    return toWorkspaceClassroom(entry.id, data, snapshot?.data ?? null, params.createEmptyClassroomPayload)
+    return toWorkspaceClassroom(entry.id, data, deserializeSnapshotPayload(snapshot?.data) ?? null, params.createEmptyClassroomPayload)
   })
 
   const actingClassroomId = currentUser.role === 'manager'
@@ -227,7 +280,7 @@ export async function saveFirebaseWorkspaceSnapshot(snapshot: WorkspaceSnapshot,
       batch.set(doc(getSnapshotsCollection(firestore), classroom.id), {
         schemaVersion: APP_SNAPSHOT_SCHEMA_VERSION,
         savedAt,
-        data: classroom.data,
+        data: serializeSnapshotPayload(classroom.data),
         updatedBy: authenticatedUserId,
         updatedAt: savedAt,
       } satisfies FirebaseClassroomSnapshotDoc)
@@ -250,7 +303,7 @@ export async function saveFirebaseWorkspaceSnapshot(snapshot: WorkspaceSnapshot,
   await setDoc(doc(getSnapshotsCollection(firestore), targetClassroom.id), {
     schemaVersion: APP_SNAPSHOT_SCHEMA_VERSION,
     savedAt,
-    data: targetClassroom.data,
+    data: serializeSnapshotPayload(targetClassroom.data),
     updatedBy: authenticatedUserId,
     updatedAt: savedAt,
   } satisfies FirebaseClassroomSnapshotDoc)

@@ -16,7 +16,7 @@ export type GradeLabel =
   | '高2'
   | '高3'
 
-export type SubjectLabel = '英' | '数' | '算' | '国' | '理' | '社'
+export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '生' | '物' | '化' | '社'
 
 export type StudentStatusKind = 'absent' | 'attended'
 
@@ -26,6 +26,7 @@ export type StudentEntry = {
   managedStudentId?: string
   grade: GradeLabel
   birthDate?: string
+  noteSuffix?: string
   makeupSourceDate?: string
   makeupSourceLabel?: string
   specialSessionId?: string
@@ -45,6 +46,7 @@ export type StudentStatusEntry = {
   managedStudentId?: string
   grade: GradeLabel
   birthDate?: string
+  noteSuffix?: string
   makeupSourceDate?: string
   makeupSourceLabel?: string
   specialSessionId?: string

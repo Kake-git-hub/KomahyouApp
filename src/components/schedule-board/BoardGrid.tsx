@@ -1,6 +1,7 @@
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, TeacherType } from './types'
+import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
 function getStudentStatusLabel(status: StudentStatusKind) {
@@ -14,14 +15,14 @@ function formatMakeupSourceDate(dateKey?: string) {
   return `${Number(month)}/${Number(day)}`
 }
 
-function getLessonStar(lessonType: LessonType) {
+function getLessonPrefix(lessonType: LessonType) {
   switch (lessonType) {
     case 'regular':
-      return { label: lessonTypeLabels[lessonType], className: 'star-lesson-regular' }
+      return { label: lessonTypeLabels[lessonType], text: '通)', className: 'prefix-lesson-regular' }
     case 'makeup':
-      return { label: lessonTypeLabels[lessonType], className: 'star-lesson-makeup' }
-    default:
-      return null
+      return { label: lessonTypeLabels[lessonType], text: '振)', className: 'prefix-lesson-makeup' }
+    case 'special':
+      return { label: lessonTypeLabels[lessonType], text: '講)', className: 'prefix-lesson-special' }
   }
 }
 
@@ -77,6 +78,7 @@ export function BoardGrid({
     makeupSourceDate: string | undefined,
     makeupSourceLabel: string | undefined,
     studentSubject: string,
+    noteSuffix: string | undefined,
     lessonType: LessonType | null,
     teacherType: TeacherType,
     studentWarning: string | undefined,
@@ -89,13 +91,14 @@ export function BoardGrid({
     const effectiveGrade = studentName ? studentGrade : (statusEntry?.grade ?? studentGrade)
     const effectiveBirthDate = studentName ? studentBirthDate : (statusEntry?.birthDate ?? studentBirthDate)
     const effectiveSubject = studentName ? studentSubject : (statusEntry?.subject ?? studentSubject)
+    const effectiveNoteSuffix = studentName ? normalizeRegularLessonNote(noteSuffix) : normalizeRegularLessonNote(statusEntry?.noteSuffix)
     const effectiveLessonType = studentName ? lessonType : (statusEntry?.lessonType ?? lessonType)
     const effectiveTeacherType = studentName ? teacherType : (statusEntry?.teacherType ?? teacherType)
     const effectiveMakeupSourceDate = studentName ? makeupSourceDate : (statusEntry?.makeupSourceDate ?? makeupSourceDate)
     const effectiveMakeupSourceLabel = studentName ? makeupSourceLabel : (statusEntry?.makeupSourceLabel ?? makeupSourceLabel)
     const statusLabel = statusEntry ? getStudentStatusLabel(statusEntry.status) : ''
     const resolvedLessonType = effectiveName ? resolveDisplayedLessonType(effectiveName, effectiveSubject, effectiveLessonType, cell.dateKey, cell.slotNumber) : effectiveLessonType
-    const lessonStar = resolvedLessonType ? getLessonStar(resolvedLessonType) : null
+    const lessonPrefix = resolvedLessonType ? getLessonPrefix(resolvedLessonType) : null
     const teacherStar = getTeacherStar(effectiveTeacherType)
     const displayName = studentName
       ? resolveStudentDisplayName(studentName)
@@ -105,6 +108,7 @@ export function BoardGrid({
     const makeupSourceDateLabel = effectiveName && resolvedLessonType === 'makeup' ? formatMakeupSourceDate(effectiveMakeupSourceDate) : ''
     const displayGrade = effectiveName ? resolveStudentGradeLabel(effectiveName, effectiveGrade, cell.dateKey, effectiveBirthDate) : ''
     const displaySubject = resolveDisplayedSubjectForGrade(effectiveSubject, displayGrade || effectiveGrade)
+    const displaySubjectWithNote = `${displaySubject}${effectiveNoteSuffix}`
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const hasWarning = Boolean(studentWarning || missingTeacherWarning)
@@ -146,15 +150,15 @@ export function BoardGrid({
           </span>
           {hasMemo ? null : (
             <span className={`sa-student-detail${hasStatus ? ' sa-student-detail-muted' : ''}`}>
-              {lessonStar || teacherStar ? (
+              {lessonPrefix || teacherStar ? (
                 <span className="sa-student-markers">
-                  {lessonStar ? (
+                  {lessonPrefix ? (
                     <span
-                      className={`sa-student-star ${lessonStar.className}`}
-                      title={lessonStar.label}
-                      aria-label={lessonStar.label}
+                      className={`sa-student-detail-prefix ${lessonPrefix.className}`}
+                      title={lessonPrefix.label}
+                      aria-label={lessonPrefix.label}
                     >
-                      ★
+                      {lessonPrefix.text}
                     </span>
                   ) : null}
                   {teacherStar ? (
@@ -170,8 +174,7 @@ export function BoardGrid({
               ) : null}
               <>
                 <span className="sa-student-detail-grade">{displayGrade}</span>
-                {' '}
-                <span className="sa-student-detail-subject">{displaySubject}</span>
+                <span className="sa-student-detail-subject">{displaySubjectWithNote}</span>
               </>
             </span>
           )}
@@ -373,6 +376,7 @@ export function BoardGrid({
                           firstStudent?.makeupSourceDate,
                           firstStudent?.makeupSourceLabel,
                           firstStudent?.subject ?? '',
+                          firstStudent?.noteSuffix,
                           firstStudent?.lessonType ?? null,
                           firstStudent?.teacherType ?? 'normal',
                           firstStudent?.warning,
@@ -392,6 +396,7 @@ export function BoardGrid({
                           secondStudent?.makeupSourceDate,
                           secondStudent?.makeupSourceLabel,
                           secondStudent?.subject ?? '',
+                          secondStudent?.noteSuffix,
                           secondStudent?.lessonType ?? null,
                           secondStudent?.teacherType ?? 'normal',
                           secondStudent?.warning,
