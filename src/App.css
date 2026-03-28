@@ -253,17 +253,6 @@
   margin-top: 4px;
 }
 
-.developer-guide-command {
-  padding: 12px 14px;
-  border: 1px solid #d7e2f1;
-  border-radius: 12px;
-  background: #f7fbff;
-  color: #16314f;
-  font-family: 'Consolas', 'SFMono-Regular', 'Courier New', monospace;
-  font-size: 14px;
-  word-break: break-all;
-}
-
 .developer-guide-list {
   padding: 14px 16px;
   border: 1px solid #d7e2f1;

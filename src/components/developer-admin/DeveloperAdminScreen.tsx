@@ -101,20 +101,10 @@ function requestDeveloperPassword(actionLabel: string) {
   return window.prompt(`${actionLabel}ため、開発者パスワードを入力してください。`, '')
 }
 
-function trimTrailingSlash(value: string) {
-  return value.replace(/\/+$/, '')
-}
-
 function buildFirebaseConsoleUrl(projectId: string, path: string) {
   const normalizedProjectId = projectId.trim()
   if (!normalizedProjectId) return ''
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
-}
-
-function buildHostingRootUrl(projectId: string) {
-  const normalizedProjectId = trimTrailingSlash(projectId.trim())
-  if (!normalizedProjectId) return ''
-  return `https://${normalizedProjectId}.web.app/`
 }
 
 export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
@@ -135,7 +125,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室を追加します。削除と管理者メール変更は Firebase Console で手動運用します。'
     : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
-  const hostingRootUrl = buildHostingRootUrl(firebaseProjectId)
   const totals = useMemo(() => classrooms.reduce((accumulator, classroom) => {
     const counts = countSnapshotRows(classroom.data)
     accumulator.classrooms += 1
@@ -420,19 +409,14 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
       {showProvisioningGuide ? (
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
           <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加">
-            <div className="auto-assign-modal-title">Spark 構成の教室追加</div>
-            <div className="detail-note">Authentication で作成した管理者 UID を貼り付けると、`workspaces/{firebaseWorkspaceKey || 'main'}` 配下の `members` / `classrooms` / `classroomSnapshots` をこの画面から追加します。</div>
+            <div className="auto-assign-modal-title">教室追加</div>
+            <div className="detail-note">Authentication で取得した管理者 UID を貼り付けると、workspaces/{firebaseWorkspaceKey || 'main'} 配下の members / classrooms / classroomSnapshots をこの画面から追加します。</div>
 
             <section className="developer-guide-section">
-              <h3>1. Authentication で UID を作成</h3>
               <div className="developer-guide-actions">
                 {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
               </div>
-              <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
-            </section>
-
-            <section className="developer-guide-section">
-              <h3>2. 教室情報を入力</h3>
+              <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。UID を取得済みなら、下の入力欄にそのまま貼り付けてください。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
               <div className="developer-classroom-grid developer-provision-form">
                 <label className="basic-data-inline-field">
                   <span>教室名</span>
@@ -448,7 +432,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 </label>
                 <label className="basic-data-inline-field">
                   <span>管理者 UID</span>
-                  <input value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="lGTog10vTnPQdUNMus1JWKJOLGy2" />
+                  <input value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="Authentication で取得した UID" />
                 </label>
                 <label className="basic-data-inline-field">
                   <span>利用開始日</span>
@@ -460,24 +444,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 </label>
               </div>
               <div className="developer-guide-list">
-                <div><strong>自動追加されるもの</strong><span>`members` / `classrooms` / `classroomSnapshots`</span></div>
+                <div><strong>自動追加されるもの</strong><span>members / classrooms / classroomSnapshots</span></div>
                 <div><strong>手動のまま残るもの</strong><span>管理者ユーザーの作成、削除、メール変更</span></div>
-              </div>
-            </section>
-
-            <section className="developer-guide-section">
-              <h3>3. 補助コマンド</h3>
-              <div className="developer-guide-command">npm run firebase:first-classroom</div>
-              <div className="developer-guide-command">npm run firebase:first-classroom -- --output docs/first-classroom-XXXX.md</div>
-              <p className="detail-note">既存の helper も残しています。必要なら JSON ひな型を出して手動確認に使えます。</p>
-            </section>
-
-            <section className="developer-guide-section">
-              <h3>アプリを開く URL</h3>
-              <p className="detail-note">現運用では短縮 URL を使わず、このアプリの Hosting ルート URL をそのままブラウザで開きます。開発者画面や各教室の操作確認もここを起点にします。</p>
-              <div className="developer-guide-list">
-                <div><strong>本番 URL</strong><span>{hostingRootUrl || 'Firebase projectId が未設定のため算出できません。'}</span></div>
-                <div><strong>補足</strong><span>既存の `/KomahyouApp/...` 転送経路は残していますが、通常運用では使いません。</span></div>
               </div>
             </section>
 
