@@ -18,6 +18,14 @@ type ProvisionWorkspaceClassroomWithExistingUidRequest = ProvisionWorkspaceClass
   managerUserId: string
 }
 
+type ReassignWorkspaceClassroomManagerWithExistingUidRequest = {
+  workspaceKey: string
+  classroomId: string
+  managerName: string
+  managerEmail: string
+  managerUserId: string
+}
+
 type ProvisionWorkspaceClassroomResponse = {
   classroomId: string
   managerUserId: string
@@ -120,6 +128,72 @@ export async function provisionFirebaseWorkspaceClassroomWithExistingUid(input: 
 
   return {
     classroomId: classroomRef.id,
+    managerUserId: input.managerUserId,
+  }
+}
+
+export async function reassignFirebaseWorkspaceClassroomManagerWithExistingUid(input: Omit<ReassignWorkspaceClassroomManagerWithExistingUidRequest, 'workspaceKey'>) {
+  const firestore = requireFirestore()
+  const config = getFirebaseBackendConfig()
+  const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
+  const membersCollectionRef = collection(workspaceRef, 'members')
+  const classroomsCollectionRef = collection(workspaceRef, 'classrooms')
+  const classroomRef = doc(classroomsCollectionRef, input.classroomId)
+  const classroomSnapshot = await getDoc(classroomRef)
+  if (!classroomSnapshot.exists()) {
+    throw new Error('対象の教室が見つかりません。')
+  }
+
+  const currentManagerUserId = String(classroomSnapshot.get('managerUserId') ?? '').trim()
+  if (!currentManagerUserId) {
+    throw new Error('現在の管理者 UID が未設定のため、差し替えできません。')
+  }
+
+  if (currentManagerUserId === input.managerUserId) {
+    return {
+      classroomId: input.classroomId,
+      managerUserId: input.managerUserId,
+    }
+  }
+
+  const currentMemberRef = doc(membersCollectionRef, currentManagerUserId)
+  const nextMemberRef = doc(membersCollectionRef, input.managerUserId)
+  const nextMemberSnapshot = await getDoc(nextMemberRef)
+  if (nextMemberSnapshot.exists()) {
+    const assignedClassroomId = String(nextMemberSnapshot.get('assignedClassroomId') ?? '').trim()
+    if (assignedClassroomId && assignedClassroomId !== input.classroomId) {
+      throw new Error('この UID はすでに別の教室へ割り当てられています。別ユーザーかどうかを確認してください。')
+    }
+  }
+
+  const now = new Date().toISOString()
+  const batch = writeBatch(firestore)
+
+  batch.set(workspaceRef, {
+    name: config.workspaceKey,
+    schemaVersion: 1,
+    updatedAt: now,
+  }, { merge: true })
+  batch.set(nextMemberRef, {
+    displayName: input.managerName,
+    email: input.managerEmail,
+    role: 'manager',
+    assignedClassroomId: input.classroomId,
+    updatedAt: now,
+  }, { merge: true })
+  batch.set(classroomRef, {
+    managerUserId: input.managerUserId,
+    updatedAt: now,
+  }, { merge: true })
+
+  if (currentManagerUserId !== input.managerUserId) {
+    batch.delete(currentMemberRef)
+  }
+
+  await batch.commit()
+
+  return {
+    classroomId: input.classroomId,
     managerUserId: input.managerUserId,
   }
 }

@@ -42,6 +42,7 @@ type DeveloperAdminScreenProps = {
     managerName?: string
     managerEmail?: string
   }) => void
+  onReplaceClassroomManagerUid: (classroomId: string, managerUserId: string) => void
   onExportWorkspaceBackup: () => void
   onExportAnalysisData: () => void
   onImportWorkspaceBackup: (file: File, password: string) => void
@@ -107,9 +108,10 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
+  const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
   const [provisionDraft, setProvisionDraft] = useState(() => ({
     classroomName: `新規教室 ${classrooms.length + 1}`,
     managerName: `教室管理者 ${classrooms.length + 1}`,
@@ -121,8 +123,9 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
   const latestAutoBackup = autoBackupSummaries[0] ?? null
   const canProvisionClassroomInApp = authMode !== 'firebase' || !accountProvisioningLocked
+  const sparkManualAdminMode = authMode === 'firebase' && accountProvisioningLocked
   const firebaseSummary = accountProvisioningLocked || managerEmailLocked
-    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室を追加します。削除と管理者メール変更は Firebase Console で手動運用します。'
+    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室追加と既存教室の UID 差し替えを行います。削除と管理者メール変更は Firebase Console で手動運用します。'
     : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
   const totals = useMemo(() => classrooms.reduce((accumulator, classroom) => {
@@ -223,7 +226,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <button className="primary-button" type="button" onClick={handleAddClassroom}>教室を追加</button>
             </div>
           </div>
-          {authMode === 'firebase' && accountProvisioningLocked ? <div className="toolbar-status">Spark 無料プランでは Functions を使わないため、教室追加 / 削除 / 管理者メール変更は Firebase Console で実施してください。</div> : null}
+          {sparkManualAdminMode ? <div className="toolbar-status">Spark 無料プランでは Functions を使わないため、教室追加と既存教室の UID 差し替えはこの画面で行い、削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
 
           <div className="developer-summary-grid">
             <article className="basic-data-section-card developer-summary-card">
@@ -358,6 +361,34 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                       <input type="email" value={manager?.email ?? ''} onChange={(event) => onUpdateClassroom(classroom.id, { managerEmail: event.target.value })} disabled={managerEmailLocked} />
                     </label>
                   </div>
+
+                  {sparkManualAdminMode ? (
+                    <div className="developer-classroom-grid">
+                      <label className="basic-data-inline-field">
+                        <span>現在の管理者 UID</span>
+                        <input value={classroom.managerUserId} readOnly />
+                      </label>
+                      <label className="basic-data-inline-field">
+                        <span>差し替え先 UID</span>
+                        <input
+                          value={managerUidDrafts[classroom.id] ?? ''}
+                          onChange={(event) => setManagerUidDrafts((current) => ({ ...current, [classroom.id]: event.target.value }))}
+                          placeholder="Authentication で取得した UID"
+                        />
+                      </label>
+                      <div className="basic-data-row-actions">
+                        {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
+                        <button
+                          className="secondary-button slim"
+                          type="button"
+                          onClick={() => onReplaceClassroomManagerUid(classroom.id, managerUidDrafts[classroom.id] ?? '')}
+                          disabled={!(managerUidDrafts[classroom.id] ?? '').trim() || (managerUidDrafts[classroom.id] ?? '').trim() === classroom.managerUserId}
+                        >
+                          この UID に差し替え
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
 
                   <div className="developer-data-counts">
                     <span className="selection-pill">管理者 {counts.managers} 人</span>

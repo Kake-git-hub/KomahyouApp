@@ -12,7 +12,7 @@ import { initialSpecialSessions } from './components/special-data/specialSession
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, updateFirebaseWorkspaceClassroom } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom } from './integrations/firebase/adminFunctions'
 import { getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -1077,6 +1077,51 @@ function App() {
 
     setPersistenceMessage('教室設定を更新しました。')
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, queueRemoteWorkspaceClassroomUpdate, workspaceClassrooms, workspaceUsers])
+
+  const replaceClassroomManagerUid = useCallback((classroomId: string, managerUserId: string) => {
+    if (!isRemoteBackendEnabled || isRemoteAdminAutomationEnabled) {
+      setPersistenceMessage('管理者 UID の差し替えは Spark 構成の Firebase 画面でのみ利用できます。')
+      return
+    }
+
+    const normalizedManagerUserId = managerUserId.trim()
+    if (!normalizedManagerUserId) {
+      setPersistenceMessage('差し替え先の管理者 UID を入力してください。')
+      return
+    }
+
+    const targetClassroom = workspaceClassrooms.find((classroom) => classroom.id === classroomId)
+    if (!targetClassroom) return
+
+    if (normalizedManagerUserId === targetClassroom.managerUserId) {
+      setPersistenceMessage('現在と同じ UID のため、差し替えは不要です。')
+      return
+    }
+
+    const currentManager = workspaceUsers.find((user) => user.id === targetClassroom.managerUserId)
+    if (!currentManager) {
+      setPersistenceMessage('現在の管理者情報が見つからないため、UID を差し替えできません。')
+      return
+    }
+
+    const confirmed = window.confirm(`「${targetClassroom.name || 'この教室'}」の管理者 UID を ${normalizedManagerUserId} に差し替えます。続行しますか?`)
+    if (!confirmed) {
+      setPersistenceMessage('管理者 UID の差し替えをキャンセルしました。')
+      return
+    }
+
+    void reassignFirebaseWorkspaceClassroomManagerWithExistingUid({
+      classroomId,
+      managerName: currentManager.name,
+      managerEmail: currentManager.email,
+      managerUserId: normalizedManagerUserId,
+    }).then(async () => {
+      await reloadRemoteWorkspace('管理者 UID を差し替えました。新しい Authentication ユーザーでこの教室へログインできます。', classroomId)
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : '管理者 UID の差し替えに失敗しました。'
+      setPersistenceMessage(message)
+    })
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
 
   const deleteClassroom = useCallback((classroomId: string, password: string) => {
     if (isRemoteBackendEnabled) {
@@ -2547,6 +2592,7 @@ function App() {
         areAllContractedClassroomsTemporarilySuspended={areAllContractedClassroomsTemporarilySuspended}
         onToggleContractedClassroomsTemporarySuspension={toggleContractedClassroomsTemporarySuspension}
         onUpdateClassroom={updateClassroom}
+        onReplaceClassroomManagerUid={replaceClassroomManagerUid}
         onExportWorkspaceBackup={exportWorkspaceBackup}
         onExportAnalysisData={exportAnalysisData}
         onImportWorkspaceBackup={importWorkspaceBackup}
