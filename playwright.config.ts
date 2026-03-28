@@ -12,9 +12,13 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   webServer: {
-    command: 'npm run dev -- --host 127.0.0.1 --port 4173',
+    command: 'npm run dev -- --host 127.0.0.1 --port 4173 --force',
     url: 'http://127.0.0.1:4173',
-    reuseExistingServer: true,
+    env: {
+      ...process.env,
+      VITE_EXTERNAL_BACKEND_MODE: 'local',
+    },
+    reuseExistingServer: false,
     timeout: 120000,
   },
   projects: [

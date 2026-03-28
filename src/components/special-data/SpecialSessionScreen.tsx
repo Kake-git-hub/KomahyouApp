@@ -12,6 +12,7 @@ type SpecialSessionScreenProps = {
   onOpenBasicData: () => void
   onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
+  onLogout: () => void
 }
 
 type SessionDraft = {
@@ -498,7 +499,7 @@ function DateCalendar({ visibleStartMonth, selectedDates, onDateClick, rangeStar
   )
 }
 
-export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore }: SpecialSessionScreenProps) {
+export function SpecialSessionScreen({ sessions, students: _students, teachers: _teachers, onUpdateSessions, onBackToBoard, onOpenBasicData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: SpecialSessionScreenProps) {
   const [draft, setDraft] = useState<SessionDraft>(() => createDraft())
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
@@ -615,6 +616,9 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
               basicDataItemTestId="special-data-menu-open-basic-data-button"
               autoAssignRulesItemTestId="special-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="special-data-menu-open-backup-button"
+              footerActionLabel="ログアウト"
+              onFooterActionClick={onLogout}
+              footerActionTestId="special-data-menu-logout-button"
             />
           </div>
         </div>

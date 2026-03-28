@@ -4,8 +4,10 @@ import type { SpecialSessionRow } from '../components/special-data/specialSessio
 import type { SlotCell } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { generateQrSvg } from './qrcode'
-import type { ScheduleQrConfig } from './scheduleQrConfig'
+import { buildLegacyLessonScheduleAvailabilityUrl, type ScheduleQrConfig } from './scheduleQrConfig'
 import { resolveDisplayedSubjectForGrade } from './studentGradeSubject'
+
+const scheduleQrSvgCache = new Map<string, string>()
 
 type SerializedStudent = {
   id: string
@@ -142,8 +144,15 @@ type OpenScheduleHtmlParams = {
 function buildScheduleQrSvg(qrConfig: ScheduleQrConfig | undefined, personType: 'student' | 'teacher', personId: string) {
   if (!qrConfig?.baseUrl || !qrConfig.classroomId || !qrConfig.sessionId || !personId) return undefined
 
-  const inputUrl = `${qrConfig.baseUrl}/#/c/${encodeURIComponent(qrConfig.classroomId)}/availability/${encodeURIComponent(qrConfig.sessionId)}/${personType}/${encodeURIComponent(personId)}`
-  return generateQrSvg(inputUrl, 52)
+  const inputUrl = buildLegacyLessonScheduleAvailabilityUrl(qrConfig, personType, personId)
+  if (!inputUrl) return undefined
+  const cacheKey = `${qrConfig.baseUrl}\n${qrConfig.classroomId}\n${qrConfig.sessionId}\n${personType}\n${personId}`
+  const cachedSvg = scheduleQrSvgCache.get(cacheKey)
+  if (cachedSvg) return cachedSvg
+
+  const generatedSvg = generateQrSvg(inputUrl, 52)
+  scheduleQrSvgCache.set(cacheKey, generatedSvg)
+  return generatedSvg
 }
 
 type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
@@ -3384,10 +3393,12 @@ export function openTeacherScheduleHtml(params: OpenTeacherScheduleHtmlParams) {
 }
 
 export function syncStudentScheduleHtml(params: OpenStudentScheduleHtmlParams) {
+  if (!params.targetWindow || params.targetWindow.closed) return
   postSchedulePayload(params.targetWindow, 'student', buildStudentPayload(params))
 }
 
 export function syncTeacherScheduleHtml(params: OpenTeacherScheduleHtmlParams) {
+  if (!params.targetWindow || params.targetWindow.closed) return
   postSchedulePayload(params.targetWindow, 'teacher', buildTeacherPayload(params))
 }
 

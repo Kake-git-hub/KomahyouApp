@@ -31,6 +31,7 @@ type BoardToolbarProps = {
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
+  onLogout: () => void
 }
 
 export function BoardToolbar({
@@ -64,6 +65,7 @@ export function BoardToolbar({
   onOpenSpecialData,
   onOpenAutoAssignRules,
   onOpenBackupRestore,
+  onLogout,
 }: BoardToolbarProps) {
   return (
     <section className="toolbar-panel" aria-label="コマ調整の操作バー">
@@ -85,6 +87,9 @@ export function BoardToolbar({
             specialDataItemTestId="menu-open-special-data-button"
             autoAssignRulesItemTestId="menu-open-auto-assign-rules-button"
             backupRestoreItemTestId="menu-open-backup-restore-button"
+            footerActionLabel="ログアウト"
+            onFooterActionClick={onLogout}
+            footerActionTestId="menu-logout-button"
           />
           <button className="icon-action-button" type="button" onClick={onUndo} disabled={!canUndo} data-testid="undo-button" aria-label="元に戻す" title="元に戻す">
             <svg viewBox="0 0 20 20" aria-hidden="true">

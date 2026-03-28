@@ -6,7 +6,9 @@ import type { SpecialSessionRow } from '../components/special-data/specialSessio
 import type { AutoAssignRuleRow } from '../components/auto-assign-rules/autoAssignRuleModel'
 import type { PairConstraintRow } from './pairConstraint'
 
-export type AppScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
+export type ClassroomScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
+
+export type AppScreen = ClassroomScreen | 'developer'
 
 export type ClassroomSettings = {
   closedWeekdays: number[]
@@ -80,7 +82,7 @@ export type PersistedBoardState = {
 export const APP_SNAPSHOT_SCHEMA_VERSION = 1
 
 export type AppSnapshotPayload = {
-  screen: AppScreen
+  screen: ClassroomScreen
   classroomSettings: ClassroomSettings
   managers: ManagerRow[]
   teachers: TeacherRow[]
@@ -96,4 +98,43 @@ export type AppSnapshotPayload = {
 export type AppSnapshot = AppSnapshotPayload & {
   schemaVersion: number
   savedAt: string
+}
+
+export type WorkspaceUserRole = 'developer' | 'manager'
+
+export type WorkspaceUser = {
+  id: string
+  name: string
+  email: string
+  role: WorkspaceUserRole
+  assignedClassroomId: string | null
+}
+
+export type ClassroomContractStatus = 'active' | 'suspended'
+
+export type WorkspaceClassroom = {
+  id: string
+  name: string
+  contractStatus: ClassroomContractStatus
+  contractStartDate: string
+  contractEndDate: string
+  managerUserId: string
+  isTemporarilySuspended?: boolean
+  temporarySuspensionReason?: string
+  data: AppSnapshotPayload
+}
+
+export const WORKSPACE_SNAPSHOT_SCHEMA_VERSION = 1
+
+export type WorkspaceSnapshot = {
+  schemaVersion: number
+  savedAt: string
+  developerPassword: string
+  developerCloudBackupEnabled: boolean
+  developerCloudBackupFolderName: string
+  developerCloudSyncedAutoBackupKeys: string[]
+  currentUserId: string
+  actingClassroomId: string | null
+  classrooms: WorkspaceClassroom[]
+  users: WorkspaceUser[]
 }

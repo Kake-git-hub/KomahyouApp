@@ -24,6 +24,7 @@ type AutoAssignRuleScreenProps = {
   onOpenBasicData: () => void
   onOpenSpecialData: () => void
   onOpenBackupRestore: () => void
+  onLogout: () => void
 }
 
 type TargetDraftType = 'all' | 'grade' | 'students'
@@ -332,6 +333,7 @@ export function AutoAssignRuleScreen({
   onOpenBasicData,
   onOpenSpecialData,
   onOpenBackupRestore,
+  onLogout,
 }: AutoAssignRuleScreenProps) {
   const [statusMessage, setStatusMessage] = useState('')
   const [draftTypes, setDraftTypes] = useState<Record<string, TargetDraftType>>({})
@@ -825,6 +827,9 @@ export function AutoAssignRuleScreen({
               basicDataItemTestId="auto-assign-rules-menu-open-basic-data-button"
               specialDataItemTestId="auto-assign-rules-menu-open-special-data-button"
               backupRestoreItemTestId="auto-assign-rules-menu-open-backup-button"
+              footerActionLabel="ログアウト"
+              onFooterActionClick={onLogout}
+              footerActionTestId="auto-assign-rules-menu-logout-button"
             />
           </div>
         </div>

@@ -441,6 +441,7 @@ type ScheduleBoardScreenProps = {
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
+  onLogout: () => void
 }
 
 export type ScheduleRangePreference = {
@@ -2059,7 +2060,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
@@ -5851,6 +5852,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onOpenSpecialData={onOpenSpecialData}
             onOpenAutoAssignRules={onOpenAutoAssignRules}
             onOpenBackupRestore={onOpenBackupRestore}
+            onLogout={onLogout}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
           {stockActionModal ? (() => {

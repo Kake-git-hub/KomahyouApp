@@ -1,5 +1,22 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator } from '@playwright/test'
 import { buildMakeupStockEntries } from '../src/components/schedule-board/makeupStock'
+
+async function selectOptionContainingText(select: Locator, text: string) {
+  const optionValue = await select.locator('option').evaluateAll((options, expectedText) => {
+    const normalizedExpectedText = String(expectedText).trim()
+    const matchedOption = options.find((option) => {
+      const label = option.textContent?.trim() ?? ''
+      return label === normalizedExpectedText || label.startsWith(normalizedExpectedText) || label.includes(normalizedExpectedText)
+    })
+    return matchedOption?.getAttribute('value') ?? null
+  }, text)
+
+  if (!optionValue) {
+    throw new Error(`option containing text not found: ${text}`)
+  }
+
+  await select.selectOption(optionValue)
+}
 
 async function setHiddenDateInput(page: Parameters<typeof test>[0]['page'], testId: string, value: string) {
   await page.getByTestId(testId).evaluate((element, nextValue) => {
@@ -287,7 +304,7 @@ async function addRegularLessonDraft(
   const sharedEndDate = lesson.student2EndDate ?? lesson.endDate
 
   await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: lesson.teacher })
-  await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: lesson.student1 })
+  await selectOptionContainingText(page.getByTestId('basic-data-regular-draft-student1'), lesson.student1)
   await page.getByTestId('basic-data-regular-draft-subject1').selectOption(lesson.subject1)
   await page.getByTestId('basic-data-regular-draft-day').selectOption(lesson.dayOfWeek)
   await page.getByTestId('basic-data-regular-draft-slot-number').fill(lesson.slotNumber)
@@ -299,7 +316,7 @@ async function addRegularLessonDraft(
     await setHiddenDateInput(page, 'basic-data-regular-draft-end-input', sharedEndDate)
   }
   if (lesson.student2) {
-    await page.getByTestId('basic-data-regular-draft-student2').selectOption({ label: lesson.student2 })
+    await selectOptionContainingText(page.getByTestId('basic-data-regular-draft-student2'), lesson.student2)
   }
   if (lesson.subject2) {
     await page.getByTestId('basic-data-regular-draft-subject2').selectOption(lesson.subject2)
@@ -496,10 +513,9 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-basic-data-button').click()
 
-    const firstStudentRow = page.getByTestId('basic-data-students-table').locator('tbody tr').first()
     const firstStudentName = page.getByTestId('basic-data-student-name-input-s001')
 
-    await expect(firstStudentRow).toContainText('青木 太郎')
+    await expect(page.getByTestId('basic-data-student-name-s001')).toHaveText('青木 太郎')
     await expect(firstStudentName).toHaveCount(0)
     await page.getByTestId('basic-data-edit-student-s001').click()
     await expect(firstStudentName).toBeVisible()
@@ -526,7 +542,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('basic-data-teacher-draft-capabilities')).toContainText('理 中まで')
     await page.getByTestId('basic-data-add-teacher-button').click()
 
-    const latestTeacherRow = page.getByTestId('basic-data-teachers-table').locator('tbody tr').last()
+    const latestTeacherRow = page.getByTestId('basic-data-teachers-table').locator('tbody tr').filter({ hasText: '新規講師' })
     await expect(latestTeacherRow).toContainText('新規講師')
     await expect(latestTeacherRow).toContainText('2025-04-01')
     await expect(latestTeacherRow).toContainText('理 中まで')
@@ -538,7 +554,7 @@ test.describe('コマ調整表', () => {
     await setHiddenDateInput(page, 'basic-data-student-draft-birthdate-input', currentGradeBirthDate)
     await page.getByTestId('basic-data-add-student-button').click()
 
-    const latestStudentRow = page.getByTestId('basic-data-students-table').locator('tbody tr').last()
+    const latestStudentRow = page.getByTestId('basic-data-students-table').locator('tbody tr').filter({ hasText: '学年テスト生徒' })
     await expect(latestStudentRow).toContainText('学年テスト生徒')
     await expect(latestStudentRow).toContainText('テスト生徒')
     await expect(latestStudentRow).toContainText('2025-04-01')
@@ -572,7 +588,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('basic-data-regular-draft-start-input')).toHaveValue('')
     await expect(page.getByTestId('basic-data-regular-draft-end-input')).toHaveValue('')
     await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: '田中講師' })
-    await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: '青木太郎' })
+    await page.getByTestId('basic-data-regular-draft-student1').selectOption('s001')
     await page.getByTestId('basic-data-regular-draft-subject1').selectOption('数')
     await page.getByTestId('basic-data-regular-draft-day').selectOption('1')
     await page.getByTestId('basic-data-regular-draft-slot-number').fill('4')
@@ -586,7 +602,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('basic-data-regular-lessons-table')).toContainText('青木太郎')
 
     await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: '田中講師' })
-    await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: '青木太郎' })
+    await page.getByTestId('basic-data-regular-draft-student1').selectOption('s001')
     await setHiddenDateInput(page, 'basic-data-regular-draft-start-input', `${currentSchoolYear}-03-31`)
     page.once('dialog', async (dialog) => {
       expect(dialog.message()).toContain(`${nextSchoolYear}年度の範囲外です。`)
@@ -607,8 +623,8 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-group-draft-subject').selectOption('英')
     await page.getByTestId('basic-data-group-draft-day').selectOption('3')
     await page.getByTestId('basic-data-group-draft-slot-label').fill('3限')
-    await page.getByRole('button', { name: '伊藤花' }).click()
-    await page.getByRole('button', { name: '上田陽介' }).click()
+    await page.getByRole('button', { name: /伊藤花/ }).click()
+    await page.getByRole('button', { name: /上田陽介/ }).click()
     await page.getByTestId('basic-data-add-group-lesson-button').click()
     await page.getByTestId(`basic-data-group-year-${nextSchoolYear}`).click()
     const groupRows = page.getByTestId('basic-data-group-lessons-table').locator('tbody tr')
@@ -661,16 +677,17 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-add-student-button').click()
 
     const studentsTable = page.getByTestId('basic-data-students-table')
-    const studentRow = studentsTable.locator('tbody tr').last()
+    const studentRow = studentsTable.locator('tbody tr').filter({ hasText: '表示E2E' })
     await expect(studentRow).toContainText('表示E2E')
     await studentRow.getByRole('button', { name: '編集' }).click()
-    await studentRow.locator('input').first().fill('E2E生徒改')
-    await studentRow.locator('input').nth(1).fill('表示E2E改')
-    await studentRow.getByRole('button', { name: '編集終了' }).click()
-    await expect(studentRow).toContainText('E2E生徒改')
-    await expect(studentRow).toContainText('表示E2E改')
+    await page.locator('input[value="E2E生徒"]').fill('E2E生徒改')
+    await page.locator('input[value="表示E2E"]').fill('表示E2E改')
+    await studentsTable.getByRole('button', { name: '編集終了' }).click()
+    const updatedStudentRow = studentsTable.locator('tbody tr').filter({ hasText: 'E2E生徒改' })
+    await expect(updatedStudentRow).toContainText('E2E生徒改')
+    await expect(updatedStudentRow).toContainText('表示E2E改')
     acceptNextDialog(page, 'この生徒を削除します。')
-    await studentRow.getByRole('button', { name: '削除' }).click()
+    await updatedStudentRow.getByRole('button', { name: '削除' }).click()
     await expect(studentsTable.locator('tbody tr').filter({ hasText: 'E2E生徒改' })).toHaveCount(0)
   })
 
@@ -718,7 +735,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-tab-regularLessons').click()
     await page.getByTestId('basic-data-regular-year-select').selectOption(String(currentSchoolYear))
     await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: '伊藤講師' })
-    await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: '福田翔太' })
+    await page.getByTestId('basic-data-regular-draft-student1').selectOption('s024')
     await page.getByTestId('basic-data-regular-draft-subject1').selectOption('社')
     await page.getByTestId('basic-data-regular-draft-day').selectOption('2')
     await page.getByTestId('basic-data-regular-draft-slot-number').fill('5')
@@ -1398,10 +1415,12 @@ test.describe('コマ調整表', () => {
     const nextWeekEnd = addDays(currentWeekStart, 13)
 
     await page.goto('/')
+    const boardGrid = page.getByTestId('slot-adjust-grid')
+    await expect(boardGrid).toBeVisible()
 
     const overflowModes = await page.evaluate(() => ({
       bodyOverflowY: window.getComputedStyle(document.body).overflowY,
-      gridOverflowY: window.getComputedStyle(document.querySelector('[data-testid="slot-adjust-grid"]') as HTMLElement).overflowY,
+      gridOverflowY: window.getComputedStyle(document.querySelector('[data-testid="slot-adjust-grid"]') as Element).overflowY,
     }))
 
     expect(overflowModes.bodyOverflowY).toBe('auto')
@@ -1458,7 +1477,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(sourceCell).click()
     await expect(page.getByTestId('student-action-menu')).toBeVisible()
     await page.getByTestId('menu-move-button').click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を選択しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を選択しました。/)
     await expect(page.getByTestId('cancel-selection-button')).toBeVisible()
 
     await page.getByTestId('cancel-selection-button').click()
@@ -1468,7 +1487,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-move-button').click()
     await page.getByTestId(targetCell).click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText(`青木太郎 を ${toDateLabel(currentWeekStart)} 1限 / 9机目 へ移動しました。`)
+    await expect(page.getByTestId('toolbar-status')).toContainText(new RegExp(`青木太郎(?: \\([^)]*\\))? を ${toDateLabel(currentWeekStart).replace('/', '\\/')} 1限 / 9机目 へ移動しました。`))
     await expect(sourceName).toHaveText('')
     await expect(targetName).toHaveText('青木太郎')
   })
@@ -1482,7 +1501,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(`student-cell-${currentSlotId}-0-0`).click()
     await page.getByTestId('menu-move-button').click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を選択しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を選択しました。/)
 
     await page.getByTestId('next-week-button').click()
     await expect(page.getByTestId('toolbar-status')).toContainText('選択中の内容をこの週へ配置できます。')
@@ -1494,7 +1513,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(nextWeekTargetCellTestId).click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を/)
     await expect(nextWeekTarget).toHaveText('青木太郎')
 
     await page.getByTestId('prev-week-button').click()
@@ -1626,7 +1645,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('stock-action-modal-manual').click()
     await targetCell.click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 の振替を')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? の振替を/)
     await expect(targetName).toHaveText('青木太郎')
     await page.getByTestId('makeup-stock-chip').click()
     await expect(page.getByTestId('makeup-stock-entry-s001__-')).toContainText('+1')
@@ -1837,7 +1856,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-tab-regularLessons').click()
     await page.getByTestId('basic-data-regular-year-select').selectOption(String(currentSchoolYear))
     await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: '田中講師' })
-    await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: '伊藤花' })
+    await page.getByTestId('basic-data-regular-draft-student1').selectOption('s002')
     await page.getByTestId('basic-data-regular-draft-subject1').selectOption('数')
     await page.getByTestId('basic-data-regular-draft-day').selectOption('1')
     await page.getByTestId('basic-data-regular-draft-slot-number').fill('4')
@@ -2031,7 +2050,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('makeup-auto-assign-start')).toHaveValue(toDateKey(currentWeekStart))
   })
 
-  test('生徒メニューは既存生徒で移動とストックを表示し、空欄では既存生徒追加とメモを表示する', async ({ page }) => {
+  test('生徒メニューは既存生徒で移動とストックを表示し、空欄では生徒追加とメモを表示する', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const slotId = `${toDateKey(currentWeekStart)}_1`
 
@@ -2047,7 +2066,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(emptyCellTestId).click()
     await expect(page.getByTestId('student-action-menu')).toBeVisible()
     menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtons).toEqual(['既存生徒追加', 'メモ'])
+    expect(menuButtons).toEqual(['生徒追加', 'メモ'])
   })
 
   test('出席にすると薄字表示し、再クリックでは出席解除だけを表示する', async ({ page }) => {
@@ -2106,7 +2125,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(target.cellTestId).click()
     await page.getByTestId('menu-open-add-existing-student-button').click()
 
-    await page.getByTestId('menu-add-student-select').selectOption({ label: '青木太郎' })
+    await page.getByTestId('menu-add-student-select').selectOption('s001')
     await page.getByTestId('menu-add-lesson-type-special').click()
     await page.getByTestId('menu-add-subject-select').selectOption('数')
     await page.getByTestId('menu-add-existing-student-confirm-button').click()
@@ -2147,7 +2166,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(target.cellTestId).click()
     await page.getByTestId('menu-open-add-existing-student-button').click()
-    await page.getByTestId('menu-add-student-select').selectOption({ label: '青木太郎' })
+    await page.getByTestId('menu-add-student-select').selectOption('s001')
     await page.getByTestId('menu-add-lesson-type-special').click()
     await page.getByTestId('menu-add-subject-select').selectOption('数')
     await page.getByTestId('menu-add-existing-student-confirm-button').click()
@@ -2277,7 +2296,7 @@ test.describe('コマ調整表', () => {
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await page.getByTestId('stock-action-modal-auto').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 の振替を自動割振しました。1コマ配置しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? の振替を自動割振しました。1コマ配置しました。/)
     await expect(memoTargetName).toHaveText('振替回避メモ')
     await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
     const remainingEntryCount = await page.getByTestId('makeup-stock-entry-s001__-').count()
@@ -2670,7 +2689,7 @@ test.describe('コマ調整表', () => {
     await lectureEntry.click()
     await page.getByTestId('stock-action-modal-auto').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を自動割振しました。/)
     await moveBoardToWeek(page, specialWeekStart)
     await expect(page.locator('[data-testid^="student-name-"]').filter({ hasText: '講習回避メモ' }).first()).toHaveText('講習回避メモ')
     await expect.poll(countStudentOccurrencesInSessionWeeks).toBe(beforeCount + 2)
@@ -2705,7 +2724,7 @@ test.describe('コマ調整表', () => {
     await lectureEntry.click()
     await page.getByTestId('stock-action-modal-auto').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を自動割振しました。/)
     await expect.poll(async () => await countStudentOccurrencesInWeek(page, firstWeekStart, '青木太郎')).toBeGreaterThan(0)
 
     await moveBoardToWeek(page, secondWeekStart)
@@ -2787,7 +2806,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
     await page.getByTestId('stock-action-modal-auto').click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を自動割振しました。1コマ配置しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を自動割振しました。1コマ配置しました。/)
 
     await expect.poll(countStudentOccurrencesInSessionWeeks).toBe(beforeReassignCount + 1)
   })
@@ -2912,7 +2931,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('makeup-stock-panel')).toBeHidden()
 
     await validTarget.click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 の振替を')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? の振替を/)
     await expect(validName).toHaveText('青木太郎')
   })
 
@@ -2960,7 +2979,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('cancel-selection-button')).toBeVisible()
 
     await validTarget.click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('青木太郎 を')
+    await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を/)
     await expect(validName).toHaveText('青木太郎')
   })
 
@@ -2974,7 +2993,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-tab-regularLessons').click()
     await page.getByTestId('basic-data-regular-year-select').selectOption(String(currentSchoolYear))
     await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: '田中講師' })
-    await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: '青木太郎' })
+    await page.getByTestId('basic-data-regular-draft-student1').selectOption('s001')
     await page.getByTestId('basic-data-regular-draft-subject1').selectOption('数')
     await page.getByTestId('basic-data-regular-draft-day').selectOption('1')
     await page.getByTestId('basic-data-regular-draft-slot-number').fill('1')
@@ -3022,7 +3041,7 @@ test.describe('コマ調整表', () => {
     await editableExistingRow.getByRole('button', { name: '編集終了' }).click()
 
     await page.getByTestId('basic-data-regular-draft-teacher').selectOption({ label: '田中講師' })
-    await page.getByTestId('basic-data-regular-draft-student1').selectOption({ label: '青木太郎' })
+    await page.getByTestId('basic-data-regular-draft-student1').selectOption('s001')
     await page.getByTestId('basic-data-regular-draft-subject1').selectOption('数')
     await page.getByTestId('basic-data-regular-draft-day').selectOption('1')
     await page.getByTestId('basic-data-regular-draft-slot-number').fill('1')

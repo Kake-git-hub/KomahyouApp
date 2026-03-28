@@ -12,6 +12,9 @@ type AppMenuProps = {
   specialDataItemTestId?: string
   autoAssignRulesItemTestId?: string
   backupRestoreItemTestId?: string
+  footerActionLabel?: string
+  onFooterActionClick?: () => void
+  footerActionTestId?: string
 }
 
 const menuItems: Array<{ screen: AppMenuScreen; label: string }> = [
@@ -34,6 +37,9 @@ export function AppMenu({
   specialDataItemTestId,
   autoAssignRulesItemTestId,
   backupRestoreItemTestId,
+  footerActionLabel,
+  onFooterActionClick,
+  footerActionTestId,
 }: AppMenuProps) {
   const testIdByScreen: Partial<Record<AppMenuScreen, string>> = {
     board: boardItemTestId,
@@ -67,6 +73,19 @@ export function AppMenu({
             {item.label}
           </button>
         ))}
+        {footerActionLabel && onFooterActionClick ? (
+          <>
+            <div className="menu-dropdown-divider" aria-hidden="true" />
+            <button
+              className="menu-link-button menu-link-button-footer"
+              type="button"
+              onClick={onFooterActionClick}
+              data-testid={footerActionTestId}
+            >
+              {footerActionLabel}
+            </button>
+          </>
+        ) : null}
       </div>
     </details>
   )

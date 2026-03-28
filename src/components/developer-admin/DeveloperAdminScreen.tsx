@@ -1,0 +1,454 @@
+import { useMemo, useRef, useState } from 'react'
+import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
+import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
+
+type DeveloperAdminScreenProps = {
+  currentUser: WorkspaceUser
+  authMode: 'local' | 'firebase'
+  accountProvisioningLocked: boolean
+  managerEmailLocked: boolean
+  firebaseProjectId: string
+  firebaseWorkspaceKey: string
+  firebaseAuthDomain: string
+  persistenceMessage: string
+  developerPassword: string
+  onDeveloperPasswordChange: (value: string) => void
+  developerCloudBackupEnabled: boolean
+  developerCloudBackupFolderName: string
+  developerCloudBackupStatus: string
+  onConnectDeveloperCloudBackupFolder: () => void
+  onDisconnectDeveloperCloudBackupFolder: () => void
+  classrooms: WorkspaceClassroom[]
+  users: WorkspaceUser[]
+  actingClassroomId: string | null
+  onAddClassroom: () => void
+  autoBackupSummaries: AutoBackupSummary[]
+  bulkTemporarySuspensionReason: string
+  onBulkTemporarySuspensionReasonChange: (value: string) => void
+  areAllContractedClassroomsTemporarilySuspended: boolean
+  onToggleContractedClassroomsTemporarySuspension: () => void
+  onUpdateClassroom: (classroomId: string, updates: {
+    name?: string
+    contractStatus?: WorkspaceClassroom['contractStatus']
+    contractStartDate?: string
+    contractEndDate?: string
+    managerName?: string
+    managerEmail?: string
+  }) => void
+  onExportWorkspaceBackup: () => void
+  onExportAnalysisData: () => void
+  onImportWorkspaceBackup: (file: File, password: string) => void
+  onRestoreAutoBackup: (backupDateKey: string, password: string) => void
+  restoreModalState: null | {
+    sourceLabel: string
+    savedAt: string
+    options: Array<{
+      classroomId: string
+      classroomName: string
+      managerName: string
+      existsInCurrent: boolean
+      selected: boolean
+    }>
+  }
+  onToggleRestoreClassroom: (classroomId: string) => void
+  onSelectAllRestoreClassrooms: () => void
+  onClearAllRestoreClassrooms: () => void
+  onConfirmRestoreSelection: () => void
+  onCancelRestoreSelection: () => void
+  onDeleteClassroom: (classroomId: string, password: string) => void
+  onOpenClassroom: (classroomId: string) => void
+  onLogout: () => void
+}
+
+function countSnapshotRows(snapshot: AppSnapshotPayload) {
+  return {
+    managers: snapshot.managers.length,
+    teachers: snapshot.teachers.length,
+    students: snapshot.students.length,
+    regularLessons: snapshot.regularLessons.length,
+    groupLessons: snapshot.groupLessons.length,
+    specialSessions: snapshot.specialSessions.length,
+  }
+}
+
+function formatContractStatusLabel(status: WorkspaceClassroom['contractStatus']) {
+  return status === 'active' ? '契約中' : '解約済'
+}
+
+function formatContractPeriod(startDate: string, endDate: string) {
+  if (!startDate && !endDate) return '未設定'
+  if (!startDate) return `終了 ${endDate}`
+  if (!endDate) return `${startDate} から継続`
+  return `${startDate} - ${endDate}`
+}
+
+function formatSavedAt(savedAt: string) {
+  if (!savedAt) return 'まだありません。'
+
+  const parsed = new Date(savedAt)
+  if (Number.isNaN(parsed.getTime())) return savedAt
+  return parsed.toLocaleString('ja-JP')
+}
+
+function requestDeveloperPassword(actionLabel: string) {
+  return window.prompt(`${actionLabel}ため、開発者パスワードを入力してください。`, '')
+}
+
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, '')
+}
+
+function buildFirebaseConsoleUrl(projectId: string, path: string) {
+  const normalizedProjectId = projectId.trim()
+  if (!normalizedProjectId) return ''
+  return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
+}
+
+function buildHostingRootUrl(projectId: string) {
+  const normalizedProjectId = trimTrailingSlash(projectId.trim())
+  if (!normalizedProjectId) return ''
+  return `https://${normalizedProjectId}.web.app/`
+}
+
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+  const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
+  const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
+  const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
+  const latestAutoBackup = autoBackupSummaries[0] ?? null
+  const canProvisionClassroomInApp = authMode !== 'firebase' || !accountProvisioningLocked
+  const firebaseSummary = accountProvisioningLocked || managerEmailLocked
+    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。教室追加 / 削除 / 管理者メール変更はアプリ側からは行わず、Firebase Console で手動運用します。ここでは既存教室の契約状態と教室データを同期します。'
+    : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
+  const firebaseOverviewUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/overview')
+  const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
+  const firebaseFirestoreUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}`)
+  const firebaseMembersUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}~2Fmembers`)
+  const firebaseClassroomsUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}~2Fclassrooms`)
+  const firebaseSnapshotsUrl = buildFirebaseConsoleUrl(firebaseProjectId, `/firestore/databases/-default-/data/~2Fworkspaces~2F${encodeURIComponent(firebaseWorkspaceKey)}~2FclassroomSnapshots`)
+  const hostingRootUrl = buildHostingRootUrl(firebaseProjectId)
+  const totals = useMemo(() => classrooms.reduce((accumulator, classroom) => {
+    const counts = countSnapshotRows(classroom.data)
+    accumulator.classrooms += 1
+    accumulator.active += classroom.contractStatus === 'active' ? 1 : 0
+    accumulator.cancelled += classroom.contractStatus === 'suspended' ? 1 : 0
+    accumulator.temporarilySuspended += classroom.contractStatus === 'active' && classroom.isTemporarilySuspended ? 1 : 0
+    accumulator.teachers += counts.teachers
+    accumulator.students += counts.students
+    return accumulator
+  }, {
+    classrooms: 0,
+    active: 0,
+    cancelled: 0,
+    temporarilySuspended: 0,
+    teachers: 0,
+    students: 0,
+  }), [classrooms])
+
+  const handleAddClassroom = () => {
+    if (canProvisionClassroomInApp) {
+      onAddClassroom()
+      return
+    }
+
+    setShowProvisioningGuide(true)
+  }
+
+  return (
+    <div className="page-shell developer-shell">
+      <input ref={workspaceBackupImportRef} className="basic-data-hidden-input" type="file" accept="application/json" onChange={(event) => {
+        const file = event.target.files?.[0]
+        if (file) {
+          const password = authMode === 'local' ? requestDeveloperPassword('開発者バックアップを復元する') : ''
+          if (password !== null) onImportWorkspaceBackup(file, password)
+        }
+        event.currentTarget.value = ''
+      }} />
+
+      <section className="toolbar-panel" aria-label="開発者画面の操作バー">
+        <div className="toolbar-row toolbar-row-primary">
+          <div>
+            <p className="panel-kicker">Developer Control</p>
+            <h2 className="developer-heading">教室運営管理</h2>
+          </div>
+          <div className="toolbar-group toolbar-group-end">
+            <div className="toolbar-status">ログイン中: {currentUser.name}</div>
+            <button className="secondary-button slim" type="button" onClick={onLogout}>ログアウト</button>
+          </div>
+        </div>
+        <div className="toolbar-row toolbar-row-secondary">
+          <div className="toolbar-status">{persistenceMessage}</div>
+        </div>
+      </section>
+
+      <main className="developer-main">
+        <section className="board-panel board-panel-unified">
+          <div className="basic-data-header developer-header">
+            <div>
+              <p className="panel-kicker">全教室一覧</p>
+              <h2>利用状況と契約状態</h2>
+              <p className="page-summary">{authMode === 'firebase' ? firebaseSummary : '第三者認証やDB接続前の運営UIです。教室追加、停止切替、管理者更新、代理入室の動線を先に確定します。'}</p>
+            </div>
+          </div>
+          <div className="developer-header-actions">
+            <div className="basic-data-row-actions developer-actions-left">
+              <label className="basic-data-inline-field developer-bulk-reason-field">
+                <span>一時停止理由</span>
+                <input value={bulkTemporarySuspensionReason} onChange={(event) => onBulkTemporarySuspensionReasonChange(event.target.value)} placeholder="UPDATE中のため一時停止 など" />
+              </label>
+              <button className="secondary-button slim" type="button" onClick={onToggleContractedClassroomsTemporarySuspension}>
+                {areAllContractedClassroomsTemporarilySuspended ? '契約中教室の一時利用停止を解除' : '契約中教室の一時利用停止'}
+              </button>
+            </div>
+            <div className="basic-data-row-actions developer-actions-right">
+              <button className="primary-button" type="button" onClick={handleAddClassroom}>教室を追加</button>
+            </div>
+          </div>
+          {authMode === 'firebase' && accountProvisioningLocked ? <div className="toolbar-status">Spark 無料プランでは Functions を使わないため、教室追加 / 削除 / 管理者メール変更は Firebase Console で実施してください。</div> : null}
+
+          {authMode === 'firebase' && accountProvisioningLocked ? <section className="basic-data-section-card developer-provision-guide-card">
+            <div className="basic-data-card-head">
+              <h3>教室追加の見方</h3>
+              <p>この環境ではアプリから直接作成せず、`教室を追加` ボタンから Firebase Console と作成手順を開きます。</p>
+            </div>
+            <div className="developer-guide-actions">
+              <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(true)}>教室追加ガイドを開く</button>
+              {firebaseOverviewUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseOverviewUrl} target="_blank" rel="noreferrer">Firebase Console を開く</a> : null}
+            </div>
+          </section> : null}
+
+          <div className="developer-summary-grid">
+            <article className="basic-data-section-card developer-summary-card">
+              <strong>{totals.classrooms}</strong>
+              <span>総教室数</span>
+            </article>
+            <article className="basic-data-section-card developer-summary-card">
+              <strong>{totals.active}</strong>
+              <span>利用中教室</span>
+            </article>
+            <article className="basic-data-section-card developer-summary-card">
+              <strong>{totals.cancelled}</strong>
+              <span>解約済教室</span>
+            </article>
+            <article className="basic-data-section-card developer-summary-card">
+              <strong>{totals.temporarilySuspended}</strong>
+              <span>一時停止中教室</span>
+            </article>
+            <article className="basic-data-section-card developer-summary-card">
+              <strong>{totals.teachers}</strong>
+              <span>講師総数</span>
+            </article>
+            <article className="basic-data-section-card developer-summary-card">
+              <strong>{totals.students}</strong>
+              <span>生徒総数</span>
+            </article>
+          </div>
+
+          <section className="basic-data-section-card developer-backup-panel">
+            <div className="basic-data-card-head">
+              <h3>開発者バックアップ</h3>
+              <p>開発者画面ではワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。</p>
+            </div>
+            <div className="developer-backup-grid">
+              {authMode === 'local' ? (
+                <label className="basic-data-inline-field developer-password-field">
+                  <span>開発者パスワード</span>
+                  <input type="password" value={developerPassword} onChange={(event) => onDeveloperPasswordChange(event.target.value)} />
+                </label>
+              ) : (
+                <div className="toolbar-status">現在の本人確認: Firebase ログイン済み</div>
+              )}
+              <div className="basic-data-row-actions">
+                <button className="secondary-button slim" type="button" onClick={onExportWorkspaceBackup} data-testid="developer-export-workspace-backup-button">バックアップを書き出す</button>
+                <button className="secondary-button slim" type="button" onClick={onExportAnalysisData}>AI分析用データを書き出す</button>
+                <button className="secondary-button slim" type="button" onClick={() => workspaceBackupImportRef.current?.click()} data-testid="developer-import-workspace-backup-button">バックアップを読み込む</button>
+              </div>
+              <div className="toolbar-status">最新自動バックアップ: {formatSavedAt(latestAutoBackup?.savedAt ?? '')}</div>
+            </div>
+            <div className="developer-cloud-backup-row">
+              <div className="toolbar-status">{developerCloudBackupEnabled ? `保存先フォルダ: ${developerCloudBackupFolderName || '未接続'}` : '保存先フォルダ: 未設定'}</div>
+              <div className="toolbar-status">{developerCloudBackupStatus}</div>
+              <div className="basic-data-row-actions">
+                <button className="secondary-button slim" type="button" onClick={onConnectDeveloperCloudBackupFolder}>同期フォルダを設定</button>
+                {developerCloudBackupEnabled ? <button className="secondary-button slim" type="button" onClick={onDisconnectDeveloperCloudBackupFolder}>自動保存を停止</button> : null}
+              </div>
+            </div>
+            <div className="backup-restore-auto-backup-list">
+              {autoBackupSummaries.length === 0 ? <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span> : null}
+              {autoBackupSummaries.map((summary) => (
+                <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                  <div className="backup-restore-auto-backup-meta">
+                    <strong>{summary.backupDateKey}</strong>
+                    <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                  </div>
+                  <button className="secondary-button slim" type="button" onClick={() => {
+                    const password = authMode === 'local' ? requestDeveloperPassword('自動バックアップを復元する') : ''
+                    if (password === null) return
+                    onRestoreAutoBackup(summary.backupDateKey, password)
+                  }}>この時点へ復元</button>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="developer-classroom-list">
+            {classrooms.map((classroom) => {
+              const manager = managerById.get(classroom.managerUserId)
+              const counts = countSnapshotRows(classroom.data)
+              const isActing = actingClassroomId === classroom.id
+              return (
+                <article key={classroom.id} className="basic-data-section-card developer-classroom-card" data-testid={`developer-classroom-${classroom.id}`}>
+                  <div className="developer-classroom-head">
+                    <div>
+                      <div className="developer-classroom-title-row">
+                        <h3>{classroom.name || '名称未設定の教室'}</h3>
+                        <span className={`status-chip ${classroom.contractStatus === 'suspended' ? 'danger' : ''}`}>{formatContractStatusLabel(classroom.contractStatus)}</span>
+                        {classroom.contractStatus === 'active' && classroom.isTemporarilySuspended ? <span className="status-chip warning">一時停止中</span> : null}
+                        {isActing ? <span className="status-chip secondary">現在開いている教室</span> : null}
+                      </div>
+                      <p className="detail-note">契約期間: {formatContractPeriod(classroom.contractStartDate, classroom.contractEndDate)}</p>
+                      {classroom.contractStatus === 'active' && classroom.isTemporarilySuspended && classroom.temporarySuspensionReason ? <p className="detail-note">停止理由: {classroom.temporarySuspensionReason}</p> : null}
+                    </div>
+                    <div className="basic-data-row-actions">
+                      <button className="secondary-button slim" type="button" onClick={() => onOpenClassroom(classroom.id)}>この教室を開く</button>
+                      <button className="secondary-button slim" type="button" onClick={() => {
+                        const password = authMode === 'local'
+                          ? window.prompt(`「${classroom.name || 'この教室'}」を削除します。開発者パスワードを入力してください。`, '')
+                          : ''
+                        if (password === null) return
+                        onDeleteClassroom(classroom.id, password)
+                      }} disabled={accountProvisioningLocked}>削除</button>
+                    </div>
+                  </div>
+
+                  <div className="developer-classroom-grid">
+                    <label className="basic-data-inline-field">
+                      <span>教室名</span>
+                      <input value={classroom.name} onChange={(event) => onUpdateClassroom(classroom.id, { name: event.target.value })} />
+                    </label>
+                    <label className="basic-data-inline-field">
+                      <span>契約状態</span>
+                      <select value={classroom.contractStatus} onChange={(event) => onUpdateClassroom(classroom.id, { contractStatus: event.target.value as WorkspaceClassroom['contractStatus'] })}>
+                        <option value="active">契約中</option>
+                        <option value="suspended">解約済</option>
+                      </select>
+                    </label>
+                    <label className="basic-data-inline-field">
+                      <span>利用開始日</span>
+                      <input type="date" value={classroom.contractStartDate} onChange={(event) => onUpdateClassroom(classroom.id, { contractStartDate: event.target.value })} />
+                    </label>
+                    <label className="basic-data-inline-field">
+                      <span>利用終了日</span>
+                      <input type="date" value={classroom.contractEndDate} onChange={(event) => onUpdateClassroom(classroom.id, { contractEndDate: event.target.value })} />
+                    </label>
+                    <label className="basic-data-inline-field">
+                      <span>管理者名</span>
+                      <input value={manager?.name ?? ''} onChange={(event) => onUpdateClassroom(classroom.id, { managerName: event.target.value })} />
+                    </label>
+                    <label className="basic-data-inline-field">
+                      <span>管理者メール</span>
+                      <input type="email" value={manager?.email ?? ''} onChange={(event) => onUpdateClassroom(classroom.id, { managerEmail: event.target.value })} disabled={managerEmailLocked} />
+                    </label>
+                  </div>
+
+                  <div className="developer-data-counts">
+                    <span className="selection-pill">管理者 {counts.managers} 人</span>
+                    <span className="selection-pill">講師 {counts.teachers} 人</span>
+                    <span className="selection-pill">生徒 {counts.students} 人</span>
+                    <span className="selection-pill">通常授業 {counts.regularLessons} 件</span>
+                    <span className="selection-pill">集団授業 {counts.groupLessons} 件</span>
+                    <span className="selection-pill">講習期間 {counts.specialSessions} 件</span>
+                  </div>
+                </article>
+              )
+            })}
+          </div>
+        </section>
+      </main>
+
+      {restoreModalState ? (
+        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) onCancelRestoreSelection() }}>
+          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="教室復元選択モーダル">
+            <div className="auto-assign-modal-title">{restoreModalState.sourceLabel}から復元する教室を選択</div>
+            <div className="detail-note">保存日時: {formatSavedAt(restoreModalState.savedAt)}</div>
+            <div className="developer-restore-modal-actions-top">
+              <button className="secondary-button slim" type="button" onClick={onSelectAllRestoreClassrooms}>すべて復元</button>
+              <button className="secondary-button slim" type="button" onClick={onClearAllRestoreClassrooms}>すべて現状維持</button>
+            </div>
+            <div className="developer-restore-modal-list">
+              {restoreModalState.options.map((option) => (
+                <label key={option.classroomId} className="developer-restore-toggle-row">
+                  <span className="developer-restore-toggle-copy">
+                    <strong>{option.classroomName}</strong>
+                    <span className="detail-note">管理者: {option.managerName}</span>
+                    <span className="detail-note">{option.existsInCurrent ? '現在も存在する教室です。' : '現在は削除済みです。復元すると教室を追加します。'}</span>
+                  </span>
+                  <span className="developer-restore-toggle-control">
+                    <input type="checkbox" checked={option.selected} onChange={() => onToggleRestoreClassroom(option.classroomId)} />
+                    <span>{option.selected ? '復元する' : '現状維持'}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+            <div className="auto-assign-modal-actions">
+              <button className="primary-button" type="button" onClick={onConfirmRestoreSelection}>選択内容で復元</button>
+              <button className="secondary-button slim" type="button" onClick={onCancelRestoreSelection}>キャンセル</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showProvisioningGuide ? (
+        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
+          <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加ガイド">
+            <div className="auto-assign-modal-title">Spark 構成の教室追加ガイド</div>
+            <div className="detail-note">このボタンから作成先を順番に開けます。作成先は `workspaces/{firebaseWorkspaceKey || 'main'}` 配下です。</div>
+
+            <section className="developer-guide-section">
+              <h3>1. Firebase Console を開く</h3>
+              <div className="developer-guide-actions">
+                {firebaseOverviewUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseOverviewUrl} target="_blank" rel="noreferrer">プロジェクト概要</a> : null}
+                {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
+                {firebaseFirestoreUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseFirestoreUrl} target="_blank" rel="noreferrer">Firestore</a> : null}
+              </div>
+              <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
+            </section>
+
+            <section className="developer-guide-section">
+              <h3>2. 作成先ドキュメントを開く</h3>
+              <div className="developer-guide-actions">
+                {firebaseMembersUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseMembersUrl} target="_blank" rel="noreferrer">members</a> : null}
+                {firebaseClassroomsUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseClassroomsUrl} target="_blank" rel="noreferrer">classrooms</a> : null}
+                {firebaseSnapshotsUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseSnapshotsUrl} target="_blank" rel="noreferrer">classroomSnapshots</a> : null}
+              </div>
+              <div className="developer-guide-list">
+                <div><strong>members</strong><span> `displayName`, `email`, `role: manager`, `assignedClassroomId` を追加</span></div>
+                <div><strong>classrooms</strong><span> `name`, `contractStatus`, `contractStartDate`, `managerUserId` を追加</span></div>
+                <div><strong>classroomSnapshots</strong><span> 初期 snapshot を追加</span></div>
+              </div>
+            </section>
+
+            <section className="developer-guide-section">
+              <h3>3. JSON ひな型を出す</h3>
+              <div className="developer-guide-command">npm run firebase:first-classroom</div>
+              <div className="developer-guide-command">npm run firebase:first-classroom -- --output docs/first-classroom-XXXX.md</div>
+              <p className="detail-note">ターミナルで実行すると、Firebase Console に貼る JSON をまとめて出力します。開発者画面でリンクを開きながら、その JSON を貼れば新規教室を 1 から作れます。</p>
+            </section>
+
+            <section className="developer-guide-section">
+              <h3>アプリを開く URL</h3>
+              <p className="detail-note">現運用では短縮 URL を使わず、このアプリの Hosting ルート URL をそのままブラウザで開きます。開発者画面や各教室の操作確認もここを起点にします。</p>
+              <div className="developer-guide-list">
+                <div><strong>本番 URL</strong><span>{hostingRootUrl || 'Firebase projectId が未設定のため算出できません。'}</span></div>
+                <div><strong>補足</strong><span>既存の `/KomahyouApp/...` 転送経路は残していますが、通常運用では使いません。</span></div>
+              </div>
+            </section>
+
+            <div className="auto-assign-modal-actions">
+              <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(false)}>閉じる</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}

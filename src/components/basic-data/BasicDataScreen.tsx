@@ -55,6 +55,7 @@ type BasicDataScreenProps = {
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
+  onLogout: () => void
 }
 
 export type GroupLessonRow = {
@@ -1134,7 +1135,7 @@ function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabe
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, managers, teachers, students, regularLessons, groupLessons, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateGroupLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, managers, teachers, students, regularLessons, groupLessons, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateGroupLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   const [centeredMessage, setCenteredMessage] = useState<string | null>(null)
@@ -2222,6 +2223,9 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
               specialDataItemTestId="basic-data-menu-open-special-data-button"
               autoAssignRulesItemTestId="basic-data-menu-open-auto-assign-rules-button"
               backupRestoreItemTestId="basic-data-menu-open-backup-button"
+              footerActionLabel="ログアウト"
+              onFooterActionClick={onLogout}
+              footerActionTestId="basic-data-menu-logout-button"
             />
           </div>
         </div>

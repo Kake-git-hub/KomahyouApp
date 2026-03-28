@@ -8,9 +8,13 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+functions/node_modules
 dist
+functions/lib
 dist-ssr
 *.local
+.firebase
+firebase-debug.log*
 playwright-report
 test-results
 

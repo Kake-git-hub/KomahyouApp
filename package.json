@@ -6,13 +6,18 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:firebase": "npm run build",
+    "firebase:first-classroom": "node tools/firebase-first-classroom-helper.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
+    "deploy:firebase": "npm run build:firebase && npx firebase-tools deploy --only hosting,firestore",
+    "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
     "test:e2e": "playwright test"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",
+    "firebase": "^12.11.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^3.0.3",
     "qrcode": "^1.5.4",

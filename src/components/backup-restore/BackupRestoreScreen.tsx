@@ -3,16 +3,20 @@ import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, get
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
 import type { ClassroomSettings, InitialSetupLectureStockRow, InitialSetupMakeupStockRow } from '../../types/appState'
+import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
 
 type BackupRestoreScreenProps = {
   onBackToBoard: () => void
   onOpenBasicData: () => void
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
+  onLogout: () => void
   persistenceMessage: string
   lastSavedAt: string
+  autoBackupSummaries: AutoBackupSummary[]
   onExportBackup: () => void
   onImportBackup: (file: File) => void
+  onRestoreAutoBackup: (backupDateKey: string) => void
   classroomSettings: ClassroomSettings
   students: StudentRow[]
   specialSessions: SpecialSessionRow[]
@@ -63,7 +67,7 @@ function createDraftId(prefix: string) {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -84,6 +88,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const initialSetupMakeupStocks = classroomSettings.initialSetupMakeupStocks ?? []
   const initialSetupLectureStocks = classroomSettings.initialSetupLectureStocks ?? []
   const sortedStudents = useMemo(() => students.slice().sort(compareStudentsByCurrentGradeThenName), [students])
+  const latestAutoBackup = autoBackupSummaries[0] ?? null
   const studentNameById = new Map(students.map((student) => [student.id, getStudentDisplayName(student)]))
   const sessionLabelById = new Map(specialSessions.map((session) => [session.id, session.label]))
 
@@ -147,6 +152,9 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               basicDataItemTestId="backup-restore-open-basic-data-button"
               specialDataItemTestId="backup-restore-open-special-data-button"
               autoAssignRulesItemTestId="backup-restore-open-auto-assign-rules-button"
+              footerActionLabel="ログアウト"
+              onFooterActionClick={onLogout}
+              footerActionTestId="backup-restore-menu-logout-button"
             />
           </div>
         </div>
@@ -161,7 +169,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             <div>
               <p className="panel-kicker">バックアップ/復元/初期設定</p>
               <h2>データ保全と運用開始準備</h2>
-              <p className="page-summary">バックアップと復元に加えて、運用開始前後に使う Excel 管理、開始時点ストック、教室設定確認をここへ集約します。</p>
+              <p className="page-summary">バックアップと復元に加えて、初期設定フローと運用中の Excel 管理ツールを分けて配置しています。開始準備と日々の更新を混同しないための画面です。</p>
             </div>
           </div>
 
@@ -187,28 +195,51 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             </section>
           </div>
 
+          <section className="basic-data-section-card" data-testid="auto-backup-panel">
+            <div className="basic-data-card-head">
+              <h3>自動バックアップ</h3>
+              <p>1日につき1件を自動保持し、直近 14 日分を残します。必要な時はこの一覧から復元できます。</p>
+            </div>
+            <div className="basic-data-form-grid">
+              <div className="toolbar-status">最新自動バックアップ: {latestAutoBackup ? formatSavedAt(latestAutoBackup.savedAt) : 'まだありません。'}</div>
+              <div className="basic-data-subcopy">保持数: {autoBackupSummaries.length} / 14</div>
+            </div>
+            <div className="backup-restore-auto-backup-list">
+              {autoBackupSummaries.length === 0 ? <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span> : null}
+              {autoBackupSummaries.map((summary) => (
+                <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                  <div className="backup-restore-auto-backup-meta">
+                    <strong>{summary.backupDateKey}</strong>
+                    <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                  </div>
+                  <button className="secondary-button slim" type="button" onClick={() => onRestoreAutoBackup(summary.backupDateKey)} data-testid={`auto-backup-restore-${summary.backupDateKey}`}>この時点へ復元</button>
+                </div>
+              ))}
+            </div>
+          </section>
+
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
-              <h3>初期設定と運用中の Excel 管理</h3>
-              <p>基本データ Excel は、最初に全体を入れ直す初期取り込みと、運用中に変更分だけ反映する差分取り込みを使い分けられます。</p>
+              <h3>初期設定フロー</h3>
+              <p>運用開始前に、管理データの初期取り込み、教室設定、開始時点ストック登録をここで完了します。</p>
             </div>
 
             <div className="auto-assign-priority-grid">
               <div className="auto-assign-priority-step">
-                <strong>1. 基本データ Excel</strong>
+                <strong>1. 管理データ Excel 初期取り込み</strong>
                 <span>{formatSetupStatus(true)}</span>
-                <span className="basic-data-subcopy">初期取り込みは基本データを入れ直して関連データを初期化します。差分取り込みは現データ出力の ID 列を残したまま再取込すると、特別講習・ルール・盤面・ストックを保持したまま差分更新できます。</span>
+                <span className="basic-data-subcopy">運用開始前に使う全体取り込みです。管理データを読み直し、コマ表作成の元データを確定します。</span>
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataTemplate} data-testid="setup-basic-export-template">テンプレート出力</button>
                   <button className="secondary-button slim" type="button" onClick={onExportBasicDataCurrent} data-testid="setup-basic-export-current">現データ出力</button>
-                  <button className="secondary-button slim" type="button" onClick={() => basicInitialImportRef.current?.click()} data-testid="setup-basic-import-initial">初期取り込み</button>
-                  <button className="primary-button" type="button" onClick={() => basicDiffImportRef.current?.click()} data-testid="setup-basic-import">差分取り込み</button>
+                  <button className="primary-button" type="button" onClick={() => basicInitialImportRef.current?.click()} data-testid="setup-basic-import-initial">初期取り込み</button>
                 </div>
               </div>
 
               <div className="auto-assign-priority-step">
                 <strong>2. 教室運用確認</strong>
                 <span>{formatSetupStatus(classroomSettings.deskCount > 0)}</span>
+                <span className="basic-data-subcopy">机数、休校曜日、公開祝日同期を確認して、盤面作成の基準を整えます。</span>
                 <label className="basic-data-inline-field basic-data-inline-field-short">
                   <span>机数</span>
                   <input type="number" min="1" max="30" value={classroomSettings.deskCount} onChange={(event) => updateSetupField('deskCount', Math.max(1, Number(event.target.value) || 1))} data-testid="setup-desk-count" />
@@ -233,6 +264,12 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                   <span className="basic-data-subcopy">公開祝日同期: {googleHolidaySyncState.message}</span>
                   <button className="secondary-button slim" type="button" onClick={onSyncGoogleHolidays} disabled={!isGoogleHolidayApiConfigured || googleHolidaySyncState.status === 'syncing'} data-testid="setup-google-holiday-sync">今すぐ同期</button>
                 </div>
+              </div>
+
+              <div className="auto-assign-priority-step">
+                <strong>3. 開始時点ストック登録</strong>
+                <span>{formatSetupStatus((initialSetupMakeupStocks.length + initialSetupLectureStocks.length) > 0)}</span>
+                <span className="basic-data-subcopy">運用開始時点で持ち越している振替残と講習残を登録します。</span>
               </div>
             </div>
 
@@ -296,6 +333,29 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               </section>
             </div>
 
+            <div className="basic-data-actions-row">
+              <button className="primary-button" type="button" onClick={onCompleteInitialSetup} data-testid="setup-complete-button">初期設定を完了してコマ表をリセットする</button>
+            </div>
+          </section>
+
+          <section className="basic-data-section-card" data-testid="ongoing-excel-tools-panel">
+            <div className="basic-data-card-head">
+              <h3>運用中の Excel 管理と追加ツール</h3>
+              <p>初期設定後の更新で使う管理データ差分取り込みと、関連 Excel ツールをここにまとめています。</p>
+            </div>
+
+            <div className="auto-assign-priority-grid">
+              <div className="auto-assign-priority-step">
+                <strong>1. 管理データ Excel 差分取り込み</strong>
+                <span>{formatSetupStatus(true)}</span>
+                <span className="basic-data-subcopy">現データ出力の ID 列を残したまま再取込すると、特別講習・ルール・盤面・ストックを保持したまま差分更新できます。</span>
+                <div className="basic-data-row-actions">
+                  <button className="secondary-button slim" type="button" onClick={onExportBasicDataCurrent} data-testid="setup-basic-export-current">現データ出力</button>
+                  <button className="primary-button" type="button" onClick={() => basicDiffImportRef.current?.click()} data-testid="setup-basic-import">差分取り込み</button>
+                </div>
+              </div>
+            </div>
+
             <section className="basic-data-editor-block basic-data-inline-stack">
               <div className="basic-data-card-head">
                 <h3>追加ツール</h3>
@@ -320,10 +380,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 </section>
               </div>
             </section>
-
-            <div className="basic-data-actions-row">
-              <button className="primary-button" type="button" onClick={onCompleteInitialSetup} data-testid="setup-complete-button">初期設定を完了してコマ表へ進む</button>
-            </div>
           </section>
         </section>
       </main>

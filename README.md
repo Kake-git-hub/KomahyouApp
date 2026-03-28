@@ -5,6 +5,7 @@
 ## 現在の方針
 
 - 初期利用者はアプリ開発者と管理者(室長)のみ
+- 認証方式確定前はローカルの仮ログインで、開発者と各教室管理者の導線を先に固める
 - PC 前提のクローズドな管理アプリとして開始
 - 通常授業、休日、振替、再調整を優先して実装
 - 講師、生徒、保護者向けの共有や通知は後続フェーズ
@@ -24,7 +25,12 @@
 - PDF 出力
 - 生徒日程表 / 講師日程表の別タブ出力
 - ローカル自動保存とバックアップ JSON の書き出し / 復元
+- 開発者画面での教室編集、利用中 / 停止中の切り替え、管理者アカウント編集
+- ローカル運用または Functions 有効時は開発者画面で教室追加 / 削除も可能
+- 管理者は割り当てられた教室だけ開けて、停止中は停止画面のみ表示
+- 本番環境のアプリ起点 URL は `https://komahyouapp-prod.web.app/` を使う
 - 日程表QRは `テスト教室2` の校舎名入力時のみ表示し、既定では `https://kake-git-hub.github.io/LessonScheduleTable` の `0002 / 2026-spring` に向ける
+- 既存の `/KomahyouApp/...` 転送経路は互換性のため残しているが、通常運用では使わない
 - 通常授業 / 通常振替 / 通常代行 / 講習 / 注意付きの色分け
 - 日程表 popup では校舎名とロゴを生徒日程 / 講師日程で共有する
 - 日程表 popup の講習関連文言は `講習` に統一し、更新ボタンは持たない
@@ -49,12 +55,33 @@
 	- 小学生: `算`
 	- 中学生以上: `数`
 - IndexedDB を優先し、利用不可時は localStorage にフォールバックしてアプリ全体のスナップショットを自動保存する
+- 教室ごとのデータを含むワークスペース状態もローカル保存し、第三者認証やDBは未確定のまま画面運用を先に検証する
 - 同一ブラウザ内の別タブで保存が発生した場合は BroadcastChannel で最新スナップショットを取り込む
+- `.env` に Firebase 接続情報を入れると、Email/Password 認証と教室単位の外部 DB 同期へ切り替わる
+- Spark 無料プラン前提では Firebase Hosting + Auth + Firestore のみを使い、管理者アカウント追加 / 削除 / 管理者メール変更は Firebase Console で手動運用する
+- Spark 無料プランでも開発者画面の `教室を追加` ボタンから、Firebase Console 直リンク、作成先コレクション、helper コマンド、本番 Hosting URL をまとめたガイドを開ける
 
 ## 設計メモ
 
 - 日程表反映の設計メモは [docs/schedule-popup-design.md](docs/schedule-popup-design.md) を参照する
 - PDF 出力の設計メモは [docs/board-pdf-design.md](docs/board-pdf-design.md) を参照する
+- 外部 DB / 認証候補は [docs/external-db-auth-options.md](docs/external-db-auth-options.md) を参照する
+- DB 構成見直しは [docs/database-architecture.md](docs/database-architecture.md) を参照する
+
+## 外部DBと認証
+
+- 現在の採用方針は Firebase です
+- 現段階の外部保存は Firestore の `workspaces/{workspaceKey}/classroomSnapshots/{classroomId}` に教室単位で同期します
+- Firebase Hosting で `dist` を配信し、Firestore に教室メタ情報と snapshot を保存します
+- Spark 前提ではアプリ内の教室追加 / 削除 / 管理者メール変更はロックされます。必要な場合は Firebase Console で `Authentication` と `workspaces/{workspaceKey}/members`, `classrooms`, `classroomSnapshots` を手動更新してください
+- 最初の教室を作るときは `npm run firebase:first-classroom` を実行すると、Firebase Console に貼る JSON 一式を対話形式で生成できます
+- Spark 構成では開発者画面の `教室を追加` を押すと、上記の Firebase Console リンクと手順ガイドを画面内で開けます
+- アプリ自体は `https://komahyouapp-prod.web.app/` を直接開いて運用します
+- `firebase/firestore.rules` を適用し、`.env` に `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID` / `VITE_FIREBASE_APP_ID` / `VITE_FIREBASE_WORKSPACE_KEY` を設定すると有効化されます
+- `VITE_FIREBASE_ENABLE_FUNCTIONS=true` は Blaze へ移行する場合のみ使ってください
+- `/KomahyouApp/...` 転送経路は互換性のため残していますが、現運用では本番 Hosting のルート URL を使います
+- 詳細な構成は [docs/firebase-backend.md](docs/firebase-backend.md) を参照してください
+- Firebase CLI 側は [firebase.json](firebase.json) を使い、プロジェクト紐付けは各環境で `firebase use --add` を実行してください
 
 ## 開発コマンド
 
@@ -62,6 +89,9 @@
 npm install
 npm run dev
 npm run build
+npm run build:firebase
+npm run firebase:first-classroom
+npx firebase-tools deploy --only hosting,firestore
 npm run test:unit
 npm run test:e2e -- tests/schedule-board.spec.ts
 npx playwright test tests/schedule-board.spec.ts

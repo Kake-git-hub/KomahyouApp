@@ -1,0 +1,58 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function memberDoc(workspaceKey) {
+      return /databases/$(database)/documents/workspaces/$(workspaceKey)/members/$(request.auth.uid);
+    }
+
+    function hasWorkspaceMembership(workspaceKey) {
+      return isSignedIn() && exists(memberDoc(workspaceKey));
+    }
+
+    function workspaceRole(workspaceKey) {
+      return get(memberDoc(workspaceKey)).data.role;
+    }
+
+    function assignedClassroomId(workspaceKey) {
+      return get(memberDoc(workspaceKey)).data.assignedClassroomId;
+    }
+
+    function isDeveloper(workspaceKey) {
+      return hasWorkspaceMembership(workspaceKey) && workspaceRole(workspaceKey) == 'developer';
+    }
+
+    function canAccessClassroom(workspaceKey, classroomId) {
+      return hasWorkspaceMembership(workspaceKey)
+        && (
+          workspaceRole(workspaceKey) == 'developer'
+          || assignedClassroomId(workspaceKey) == classroomId
+        );
+    }
+
+    match /workspaces/{workspaceKey} {
+      allow read: if hasWorkspaceMembership(workspaceKey);
+      allow write: if isDeveloper(workspaceKey);
+
+      match /members/{userId} {
+        allow read: if isDeveloper(workspaceKey) || (hasWorkspaceMembership(workspaceKey) && request.auth.uid == userId);
+        allow write: if isDeveloper(workspaceKey);
+      }
+
+      match /classrooms/{classroomId} {
+        allow read: if canAccessClassroom(workspaceKey, classroomId);
+        allow write: if isDeveloper(workspaceKey);
+      }
+
+      match /classroomSnapshots/{classroomId} {
+        allow read: if canAccessClassroom(workspaceKey, classroomId);
+        allow create, update: if canAccessClassroom(workspaceKey, classroomId);
+        allow delete: if isDeveloper(workspaceKey);
+      }
+    }
+  }
+}

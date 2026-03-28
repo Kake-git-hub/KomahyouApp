@@ -4,6 +4,314 @@
   min-height: 0;
 }
 
+.workspace-status-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  border: 1px solid #d7e2f1;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 28px rgba(76, 105, 148, 0.08);
+}
+
+.workspace-status-bar__meta,
+.workspace-status-bar__actions,
+.workspace-stop-meta,
+.workspace-account-list,
+.developer-summary-grid,
+.developer-data-counts,
+.developer-classroom-list {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workspace-status-bar__label {
+  display: inline-flex;
+  align-items: center;
+  color: #36506d;
+  font-weight: 700;
+}
+
+.workspace-auth-shell {
+  min-height: calc(100vh - 40px);
+  display: grid;
+  place-items: center;
+}
+
+.workspace-auth-card {
+  width: min(920px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid #d7e2f1;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 20px 44px rgba(76, 105, 148, 0.12);
+}
+
+.workspace-auth-card--warning {
+  width: min(720px, 100%);
+}
+
+.workspace-auth-form {
+  display: grid;
+  gap: 14px;
+}
+
+.workspace-auth-field {
+  display: grid;
+  gap: 6px;
+  color: #244564;
+  font-weight: 700;
+}
+
+.workspace-auth-field input {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #c9d9eb;
+  border-radius: 12px;
+  background: #fff;
+  color: #16314f;
+}
+
+.workspace-auth-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.workspace-auth-note {
+  padding: 12px 14px;
+  border: 1px solid #d7e2f1;
+  border-radius: 14px;
+  background: #f7fbff;
+  color: #36506d;
+}
+
+.workspace-auth-note-error {
+  border-color: #e7b4b4;
+  background: #fff5f5;
+  color: #8f2d2d;
+}
+
+.workspace-account-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.workspace-account-card {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  border: 1px solid #d7e2f1;
+  border-radius: 18px;
+  background: #fff;
+  color: #244564;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-account-card:hover {
+  background: #eef4fb;
+}
+
+.developer-shell,
+.developer-main {
+  display: grid;
+  gap: 16px;
+}
+
+.developer-heading {
+  margin: 0;
+  color: #16314f;
+}
+
+.developer-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.developer-header-actions,
+.developer-cloud-backup-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.developer-actions-left {
+  margin-right: auto;
+  justify-content: flex-start;
+  align-items: flex-end;
+}
+
+.developer-actions-right {
+  margin-left: auto;
+  justify-content: flex-end;
+  align-items: flex-end;
+}
+
+.developer-bulk-reason-field {
+  min-width: min(360px, 100%);
+}
+
+.developer-backup-panel,
+.developer-backup-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.developer-backup-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+  margin-bottom: 10px;
+}
+
+.developer-password-field {
+  max-width: 320px;
+}
+
+.developer-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  margin-bottom: 16px;
+}
+
+.developer-summary-card {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+}
+
+.developer-summary-card strong {
+  font-size: 28px;
+  color: #16314f;
+}
+
+.developer-classroom-list {
+  display: grid;
+  gap: 14px;
+}
+
+.developer-classroom-card,
+.developer-classroom-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.developer-classroom-head,
+.developer-classroom-title-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.developer-classroom-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.developer-data-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.developer-restore-modal {
+  max-width: 720px;
+}
+
+.developer-provision-guide-card,
+.developer-guide-section,
+.developer-guide-list {
+  display: grid;
+  gap: 12px;
+}
+
+.developer-provision-guide-modal {
+  max-width: 760px;
+}
+
+.developer-guide-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.developer-guide-link-button {
+  text-decoration: none;
+}
+
+.developer-guide-command {
+  padding: 12px 14px;
+  border: 1px solid #d7e2f1;
+  border-radius: 12px;
+  background: #f7fbff;
+  color: #16314f;
+  font-family: 'Consolas', 'SFMono-Regular', 'Courier New', monospace;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.developer-guide-list {
+  padding: 14px 16px;
+  border: 1px solid #d7e2f1;
+  border-radius: 16px;
+  background: #f9fbff;
+}
+
+.developer-guide-list div {
+  display: grid;
+  gap: 4px;
+}
+
+.developer-guide-list strong {
+  color: #16314f;
+}
+
+.developer-restore-modal-actions-top {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.developer-restore-modal-list {
+  display: grid;
+  gap: 10px;
+}
+
+.developer-restore-toggle-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid #d7e2f1;
+  border-radius: 16px;
+  background: #f9fbff;
+}
+
+.developer-restore-toggle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.developer-restore-toggle-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: #16314f;
+}
+
 .page-shell-board-only {
   gap: 12px;
   min-height: 100%;
@@ -276,6 +584,20 @@
   background: #dceaff;
   color: #1f4d89;
   cursor: default;
+}
+
+.menu-dropdown-divider {
+  height: 1px;
+  margin: 6px 2px;
+  background: #d7e2f1;
+}
+
+.menu-link-button-footer {
+  color: #8f2d2d;
+}
+
+.menu-link-button-footer:hover {
+  background: #fff0f0;
 }
 
 .toolbar-row {
@@ -1960,6 +2282,27 @@ tr.sa-slot-first td {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.backup-restore-auto-backup-list {
+  display: grid;
+  gap: 10px;
+}
+
+.backup-restore-auto-backup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid #d7e2f1;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.backup-restore-auto-backup-meta {
+  display: grid;
+  gap: 4px;
+}
+
 .basic-data-panel {
   display: grid;
   gap: 18px;
@@ -2543,6 +2886,11 @@ tr.sa-slot-first td {
   .special-session-date-grid,
   .backup-restore-grid {
     grid-template-columns: 1fr;
+  }
+
+  .backup-restore-auto-backup-row {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .auto-assign-priority-grid,

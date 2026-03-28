@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "komahyouapp-prod"
+  },
+  "targets": {},
+  "etags": {}
+}
