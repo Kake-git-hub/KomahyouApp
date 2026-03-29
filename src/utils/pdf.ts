@@ -35,6 +35,31 @@ function fitMemoTextForPdf(root: HTMLElement) {
 
 function fitStudentDetailTextForPdf(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
+    const segments = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-detail-prefix, .sa-student-star, .sa-student-detail-grade, .sa-student-detail-subject'))
+      .map((entry) => {
+        const text = (entry.textContent ?? '').replace(/\s+/gu, '')
+        if (!text) return null
+
+        const compactSegment = document.createElement('span')
+        compactSegment.className = entry.className
+        compactSegment.textContent = text
+        compactSegment.style.display = 'inline'
+        compactSegment.style.margin = '0'
+        compactSegment.style.padding = '0'
+        compactSegment.style.minWidth = '0'
+        compactSegment.style.whiteSpace = 'nowrap'
+        compactSegment.style.flex = '0 0 auto'
+
+        return {
+          element: compactSegment,
+          isStar: entry.classList.contains('sa-student-star'),
+        }
+      })
+      .filter((entry): entry is { element: HTMLSpanElement; isStar: boolean } => entry !== null)
+
+    if (segments.length === 0) return
+
+    node.innerHTML = ''
     node.style.display = 'flex'
     node.style.width = '100%'
     node.style.maxWidth = '100%'
@@ -44,31 +69,28 @@ function fitStudentDetailTextForPdf(root: HTMLElement) {
     node.style.gap = '0'
     node.style.overflow = 'hidden'
     node.style.textOverflow = 'clip'
+    node.style.letterSpacing = '-0.02em'
 
-    const starNodes = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-star'))
-    const textNodes = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-detail-prefix, .sa-student-detail-grade, .sa-student-detail-subject'))
+    segments.forEach(({ element }) => node.appendChild(element))
 
     let fontSize = 10.4
-    let starFontSize = 9.4
     const applyFontSizes = () => {
       node.style.fontSize = `${fontSize}px`
       node.style.lineHeight = '1'
-      textNodes.forEach((textNode) => {
-        textNode.style.fontSize = `${fontSize}px`
-        textNode.style.lineHeight = '1'
-      })
-      starNodes.forEach((starNode) => {
-        starNode.style.fontSize = `${starFontSize}px`
-        starNode.style.minWidth = `${Math.max(starFontSize - 1.2, 5)}px`
-        starNode.style.height = `${Math.max(starFontSize + 1, 7)}px`
-        starNode.style.lineHeight = '1'
+      segments.forEach(({ element, isStar }) => {
+        const segmentFontSize = isStar ? Math.max(fontSize - 1.2, 5.2) : fontSize
+        element.style.fontSize = `${segmentFontSize}px`
+        element.style.lineHeight = '1'
+        if (isStar) {
+          element.style.minWidth = '0'
+          element.style.height = `${Math.max(segmentFontSize + 1, 7)}px`
+        }
       })
     }
 
     applyFontSizes()
     while (node.scrollWidth > node.clientWidth + 1 && fontSize > 5.8) {
       fontSize -= 0.25
-      starFontSize = Math.max(fontSize - 1, 5.2)
       applyFontSizes()
     }
   })

@@ -142,6 +142,8 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(typeof html).toBe('string')
     expect(html).toContain('-webkit-print-color-adjust: exact;')
     expect(html).toContain('print-color-adjust: exact;')
+    expect(html).toContain('box-shadow: inset 0 0 0 999px var(--holiday-bg);')
+    expect(html).toContain('box-shadow: inset 0 0 0 999px #d1d6dc;')
     vi.unstubAllGlobals()
   })
 })

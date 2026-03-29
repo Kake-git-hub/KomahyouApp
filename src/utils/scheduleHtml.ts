@@ -1349,6 +1349,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       @media print {
+        *,
+        *::before,
+        *::after {
+          -webkit-print-color-adjust: exact !important;
+          print-color-adjust: exact !important;
+        }
         html, body {
           background: #fff;
           overflow: hidden;
@@ -1379,6 +1385,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         .header-toggle.is-unavailable {
           -webkit-print-color-adjust: exact;
           print-color-adjust: exact;
+        }
+        .holiday-col,
+        .slot-cell.is-holiday {
+          background: var(--holiday-bg) !important;
+          box-shadow: inset 0 0 0 999px var(--holiday-bg);
+        }
+        .slot-cell.is-unavailable,
+        .slot-button.is-unavailable,
+        .header-toggle.is-unavailable {
+          background: #d1d6dc !important;
+          box-shadow: inset 0 0 0 999px #d1d6dc;
         }
         .sheet {
           box-shadow: none;
