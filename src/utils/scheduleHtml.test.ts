@@ -109,4 +109,39 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain("sort(compareStudentOrder)")
     vi.unstubAllGlobals()
   })
+
+  it('keeps holiday and unavailable background colors enabled for print output', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain('-webkit-print-color-adjust: exact;')
+    expect(html).toContain('print-color-adjust: exact;')
+    vi.unstubAllGlobals()
+  })
 })

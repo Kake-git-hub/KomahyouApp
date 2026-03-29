@@ -1353,6 +1353,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           background: #fff;
           overflow: hidden;
           scrollbar-width: none;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
         }
         html::-webkit-scrollbar,
         body::-webkit-scrollbar,
@@ -1369,6 +1371,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           scrollbar-width: none;
         }
         .print-only-hidden { display: none; }
+        .sheet,
+        .holiday-col,
+        .slot-cell.is-holiday,
+        .slot-cell.is-unavailable,
+        .slot-button.is-unavailable,
+        .header-toggle.is-unavailable {
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
         .sheet {
           box-shadow: none;
           border: 0;

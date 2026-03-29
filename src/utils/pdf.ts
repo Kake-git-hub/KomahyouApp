@@ -33,6 +33,47 @@ function fitMemoTextForPdf(root: HTMLElement) {
   })
 }
 
+function fitStudentDetailTextForPdf(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
+    node.style.display = 'flex'
+    node.style.width = '100%'
+    node.style.maxWidth = '100%'
+    node.style.justifyContent = 'center'
+    node.style.alignItems = 'center'
+    node.style.whiteSpace = 'nowrap'
+    node.style.gap = '0'
+    node.style.overflow = 'hidden'
+    node.style.textOverflow = 'clip'
+
+    const starNodes = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-star'))
+    const textNodes = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-detail-prefix, .sa-student-detail-grade, .sa-student-detail-subject'))
+
+    let fontSize = 10.4
+    let starFontSize = 9.4
+    const applyFontSizes = () => {
+      node.style.fontSize = `${fontSize}px`
+      node.style.lineHeight = '1'
+      textNodes.forEach((textNode) => {
+        textNode.style.fontSize = `${fontSize}px`
+        textNode.style.lineHeight = '1'
+      })
+      starNodes.forEach((starNode) => {
+        starNode.style.fontSize = `${starFontSize}px`
+        starNode.style.minWidth = `${Math.max(starFontSize - 1.2, 5)}px`
+        starNode.style.height = `${Math.max(starFontSize + 1, 7)}px`
+        starNode.style.lineHeight = '1'
+      })
+    }
+
+    applyFontSizes()
+    while (node.scrollWidth > node.clientWidth + 1 && fontSize > 5.8) {
+      fontSize -= 0.25
+      starFontSize = Math.max(fontSize - 1, 5.2)
+      applyFontSizes()
+    }
+  })
+}
+
 export async function exportBoardPdf({ element, fileName, title }: ExportBoardPdfParams) {
   void title
   const exportRoot = document.createElement('div')
@@ -145,7 +186,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.minHeight = '62px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((node) => {
-    node.style.gap = '4px'
+    node.style.gap = '1px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-name').forEach((node) => {
     if (node.classList.contains('sa-student-name-note')) {
@@ -163,19 +204,21 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.lineHeight = '1.1'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
-    node.style.fontSize = '11px'
-    node.style.lineHeight = '1.2'
-    node.style.gap = '4px'
+    node.style.fontSize = '10.4px'
+    node.style.lineHeight = '1'
+    node.style.gap = '0'
+    node.style.whiteSpace = 'nowrap'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-star').forEach((node) => {
-    node.style.fontSize = '11px'
-    node.style.minWidth = '11px'
-    node.style.height = '14px'
+    node.style.fontSize = '9.4px'
+    node.style.minWidth = '8px'
+    node.style.height = '10px'
   })
 
   exportRoot.appendChild(clone)
   document.body.appendChild(exportRoot)
   fitMemoTextForPdf(exportRoot)
+  fitStudentDetailTextForPdf(exportRoot)
 
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',
@@ -190,56 +233,22 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
 
   document.body.removeChild(exportRoot)
 
-  const orientation = 'landscape'
+  const orientation = 'portrait'
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
-  const marginX = 1
-  const marginY = 2
+  const marginX = 3
+  const marginY = 4
   const contentWidth = pageWidth - marginX * 2
   const contentHeight = pageHeight - marginY * 2
-  const renderScale = contentWidth / canvas.width
-  const sourcePageHeight = Math.max(1, Math.floor(contentHeight / renderScale))
+  const imageData = canvas.toDataURL('image/png')
+  const renderScale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height)
+  const renderWidth = canvas.width * renderScale
+  const renderHeight = canvas.height * renderScale
+  const offsetX = (pageWidth - renderWidth) / 2
+  const offsetY = (pageHeight - renderHeight) / 2
 
-  let sourceOffsetY = 0
-  let isFirstPage = true
-  while (sourceOffsetY < canvas.height) {
-    const sourceSliceHeight = Math.min(sourcePageHeight, canvas.height - sourceOffsetY)
-    const pageCanvas = document.createElement('canvas')
-    pageCanvas.width = canvas.width
-    pageCanvas.height = sourceSliceHeight
-
-    const pageContext = pageCanvas.getContext('2d')
-    if (!pageContext) {
-      throw new Error('PDF 出力用キャンバスの描画コンテキストを取得できませんでした。')
-    }
-
-    pageContext.fillStyle = '#ffffff'
-    pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
-    pageContext.drawImage(
-      canvas,
-      0,
-      sourceOffsetY,
-      canvas.width,
-      sourceSliceHeight,
-      0,
-      0,
-      canvas.width,
-      sourceSliceHeight,
-    )
-
-    const imageData = pageCanvas.toDataURL('image/png')
-    const renderHeight = sourceSliceHeight * renderScale
-
-    if (!isFirstPage) {
-      pdf.addPage('a3', orientation)
-    }
-
-    pdf.addImage(imageData, 'PNG', marginX, marginY, contentWidth, renderHeight, undefined, 'FAST')
-
-    sourceOffsetY += sourceSliceHeight
-    isFirstPage = false
-  }
+  pdf.addImage(imageData, 'PNG', offsetX, offsetY, renderWidth, renderHeight, undefined, 'FAST')
 
   pdf.save(fileName)
 }
