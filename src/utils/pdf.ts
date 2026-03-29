@@ -190,8 +190,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
 
   document.body.removeChild(exportRoot)
 
-  const imageData = canvas.toDataURL('image/png')
-  const orientation = 'portrait'
+  const orientation = 'landscape'
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
   const pageHeight = pdf.internal.pageSize.getHeight()
@@ -199,13 +198,48 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   const marginY = 2
   const contentWidth = pageWidth - marginX * 2
   const contentHeight = pageHeight - marginY * 2
-  const renderScale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height)
-  const renderWidth = canvas.width * renderScale
-  const renderHeight = canvas.height * renderScale
-  const offsetX = (pageWidth - renderWidth) / 2
-  const offsetY = (pageHeight - renderHeight) / 2
+  const renderScale = contentWidth / canvas.width
+  const sourcePageHeight = Math.max(1, Math.floor(contentHeight / renderScale))
 
-  pdf.addImage(imageData, 'PNG', offsetX, offsetY, renderWidth, renderHeight, undefined, 'FAST')
+  let sourceOffsetY = 0
+  let isFirstPage = true
+  while (sourceOffsetY < canvas.height) {
+    const sourceSliceHeight = Math.min(sourcePageHeight, canvas.height - sourceOffsetY)
+    const pageCanvas = document.createElement('canvas')
+    pageCanvas.width = canvas.width
+    pageCanvas.height = sourceSliceHeight
+
+    const pageContext = pageCanvas.getContext('2d')
+    if (!pageContext) {
+      throw new Error('PDF 出力用キャンバスの描画コンテキストを取得できませんでした。')
+    }
+
+    pageContext.fillStyle = '#ffffff'
+    pageContext.fillRect(0, 0, pageCanvas.width, pageCanvas.height)
+    pageContext.drawImage(
+      canvas,
+      0,
+      sourceOffsetY,
+      canvas.width,
+      sourceSliceHeight,
+      0,
+      0,
+      canvas.width,
+      sourceSliceHeight,
+    )
+
+    const imageData = pageCanvas.toDataURL('image/png')
+    const renderHeight = sourceSliceHeight * renderScale
+
+    if (!isFirstPage) {
+      pdf.addPage('a3', orientation)
+    }
+
+    pdf.addImage(imageData, 'PNG', marginX, marginY, contentWidth, renderHeight, undefined, 'FAST')
+
+    sourceOffsetY += sourceSliceHeight
+    isFirstPage = false
+  }
 
   pdf.save(fileName)
 }

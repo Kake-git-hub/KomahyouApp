@@ -3,6 +3,7 @@ import { httpsCallable } from 'firebase/functions'
 import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/appState'
 import { getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
+import { sanitizeForFirestore } from './firestoreSanitize'
 
 type ProvisionWorkspaceClassroomRequest = {
   workspaceKey: string
@@ -120,7 +121,7 @@ export async function provisionFirebaseWorkspaceClassroomWithExistingUid(input: 
   batch.set(snapshotRef, {
     schemaVersion: 1,
     savedAt: now,
-    data: input.initialPayload,
+    data: sanitizeForFirestore(input.initialPayload),
     updatedBy: '',
     updatedAt: now,
   })

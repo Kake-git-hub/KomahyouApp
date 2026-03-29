@@ -845,6 +845,11 @@ function App() {
     }))
   }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
 
+  const navigateClassroomScreen = useCallback((nextScreen: ClassroomScreen) => {
+    syncCurrentClassroomData(actingClassroomId)
+    setScreen(nextScreen)
+  }, [actingClassroomId, syncCurrentClassroomData])
+
   const openClassroom = useCallback((classroomId: string, nextScreen?: AppScreen) => {
     syncCurrentClassroomData(actingClassroomId)
     const nextClassroom = workspaceClassrooms.find((classroom) => classroom.id === classroomId)
@@ -2654,10 +2659,10 @@ function App() {
         onUpdateGroupLessons={setGroupLessons}
         onUpdateClassroomSettings={setClassroomSettings}
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
-        onBackToBoard={() => setScreen('board')}
-        onOpenSpecialData={() => setScreen('special-data')}
-        onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
-        onOpenBackupRestore={() => setScreen('backup-restore')}
+        onBackToBoard={() => navigateClassroomScreen('board')}
+        onOpenSpecialData={() => navigateClassroomScreen('special-data')}
+        onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
+        onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
         onLogout={logout}
       />
     )
@@ -2670,10 +2675,10 @@ function App() {
         students={students}
         teachers={teachers}
         onUpdateSessions={setSpecialSessions}
-        onBackToBoard={() => setScreen('board')}
-        onOpenBasicData={() => setScreen('basic-data')}
-        onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
-        onOpenBackupRestore={() => setScreen('backup-restore')}
+        onBackToBoard={() => navigateClassroomScreen('board')}
+        onOpenBasicData={() => navigateClassroomScreen('basic-data')}
+        onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
+        onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
         onLogout={logout}
       />
     )
@@ -2688,10 +2693,10 @@ function App() {
         pairConstraints={pairConstraints}
         onUpdateRules={setAutoAssignRules}
         onUpdatePairConstraints={setPairConstraints}
-        onBackToBoard={() => setScreen('board')}
-        onOpenBasicData={() => setScreen('basic-data')}
-        onOpenSpecialData={() => setScreen('special-data')}
-        onOpenBackupRestore={() => setScreen('backup-restore')}
+        onBackToBoard={() => navigateClassroomScreen('board')}
+        onOpenBasicData={() => navigateClassroomScreen('basic-data')}
+        onOpenSpecialData={() => navigateClassroomScreen('special-data')}
+        onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
         onLogout={logout}
       />
     )
@@ -2700,10 +2705,10 @@ function App() {
   if (screen === 'backup-restore') {
     return (
       <BackupRestoreScreen
-        onBackToBoard={() => setScreen('board')}
-        onOpenBasicData={() => setScreen('basic-data')}
-        onOpenSpecialData={() => setScreen('special-data')}
-        onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
+        onBackToBoard={() => navigateClassroomScreen('board')}
+        onOpenBasicData={() => navigateClassroomScreen('basic-data')}
+        onOpenSpecialData={() => navigateClassroomScreen('special-data')}
+        onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
         onLogout={logout}
         persistenceMessage={persistenceMessage}
         lastSavedAt={lastSavedAt}
@@ -2748,10 +2753,10 @@ function App() {
       onBoardStateChange={setBoardState}
       onUpdateSpecialSessions={setSpecialSessions}
       onUpdateClassroomSettings={setClassroomSettings}
-      onOpenBasicData={() => setScreen('basic-data')}
-      onOpenSpecialData={() => setScreen('special-data')}
-      onOpenAutoAssignRules={() => setScreen('auto-assign-rules')}
-      onOpenBackupRestore={() => setScreen('backup-restore')}
+      onOpenBasicData={() => navigateClassroomScreen('basic-data')}
+      onOpenSpecialData={() => navigateClassroomScreen('special-data')}
+      onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
+      onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
       onLogout={logout}
     />
   )

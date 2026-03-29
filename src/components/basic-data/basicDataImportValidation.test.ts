@@ -3,6 +3,26 @@ import { validateImportedBasicDataBundle } from './basicDataImportValidation'
 import { createTemplateBundle, mergeImportedBundle } from './BasicDataScreen'
 
 describe('basicDataImportValidation', () => {
+  it('reports duplicate ids before importing Excel data', () => {
+    const bundle = createTemplateBundle()
+    const errors = validateImportedBasicDataBundle({
+      ...bundle,
+      teachers: [
+        bundle.teachers[0]!,
+        { ...bundle.teachers[1]!, id: bundle.teachers[0]!.id },
+      ],
+      regularLessons: [
+        bundle.regularLessons[0]!,
+        { ...bundle.regularLessons[1]!, id: bundle.regularLessons[0]!.id },
+      ],
+    })
+
+    expect(errors).toEqual(expect.arrayContaining([
+      expect.stringContaining('講師IDが重複しています'),
+      expect.stringContaining('通常授業IDが重複しています'),
+    ]))
+  })
+
   it('does not treat regular lessons in different school years as duplicates', () => {
     const bundle = createTemplateBundle()
     const baseLesson = bundle.regularLessons[0]

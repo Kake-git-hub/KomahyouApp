@@ -50,7 +50,7 @@ function parseDateKey(value: string) {
 }
 
 function parseCreatedDateKeyFromGeneratedId(id: string) {
-  const matched = id.match(/^[a-z]+_([0-9a-z]+)_[0-9a-z]+$/i)
+  const matched = id.match(/^[a-z0-9]+_([0-9a-z]+)(?:_[0-9a-z]+)?$/i)
   if (!matched) return null
 
   const timestamp = parseInt(matched[1], 36)

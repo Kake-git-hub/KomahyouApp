@@ -64,6 +64,44 @@ function readPayloadObject(value: unknown, fieldName: string) {
   return value as Record<string, unknown>
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
+
+function sanitizeFirestoreValue(value: unknown): unknown {
+  if (typeof value === 'undefined') return undefined
+  if (value === null) return null
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => {
+      const sanitizedEntry = sanitizeFirestoreValue(entry)
+      return typeof sanitizedEntry === 'undefined' ? null : sanitizedEntry
+    })
+  }
+
+  if (isPlainObject(value)) {
+    const sanitizedObject: Record<string, unknown> = {}
+
+    Object.entries(value).forEach(([key, entry]) => {
+      const sanitizedEntry = sanitizeFirestoreValue(entry)
+      if (typeof sanitizedEntry !== 'undefined') {
+        sanitizedObject[key] = sanitizedEntry
+      }
+    })
+
+    return sanitizedObject
+  }
+
+  return value
+}
+
+function sanitizeForFirestore<T>(value: T): T {
+  return sanitizeFirestoreValue(value) as T
+}
+
 function validateEmailAddress(value: string, fieldName: string) {
   const normalized = value.toLowerCase()
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -118,6 +156,7 @@ export const provisionWorkspaceClassroom = onCall(async (request) => {
   const contractStartDate = readString(rawData.contractStartDate, 'contractStartDate')
   const contractEndDate = readOptionalString(rawData.contractEndDate, 'contractEndDate')
   const initialPayload = readPayloadObject(rawData.initialPayload, 'initialPayload')
+  const sanitizedInitialPayload = sanitizeForFirestore(initialPayload)
 
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
 
@@ -163,7 +202,7 @@ export const provisionWorkspaceClassroom = onCall(async (request) => {
     batch.set(snapshotRef, {
       schemaVersion: 1,
       savedAt: now,
-      data: initialPayload,
+      data: sanitizedInitialPayload,
       updatedBy: request.auth?.uid ?? '',
       updatedAt: now,
     })

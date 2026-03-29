@@ -73,7 +73,7 @@ describe('BasicDataScreen parseImportedBundle', () => {
     })
   })
 
-  it('trims imported regular lesson notes to three characters', () => {
+  it('trims imported regular lesson notes to four characters', () => {
     const workbook = xlsx.utils.book_new()
 
     xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
@@ -84,16 +84,29 @@ describe('BasicDataScreen parseImportedBundle', () => {
       { 名前: '生徒B', 表示名: '生徒B', メール: '', 入塾日: '2024-04-01', 退塾日: '', 生年月日: '2015-04-03', 表示: '表示' },
     ]), '生徒')
     xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
-      { 年度: '2026年度', 講師: '田中講師', 生徒1: '生徒A', 科目1: '算国', 生徒1注記: '前宿題', 共通期間開始: '', 共通期間終了: '', 生徒2: '生徒B', 科目2: '国', 生徒2注記: '再テスト', 曜日: '火曜', 時限: 2 },
+      { 年度: '2026年度', 講師: '田中講師', 生徒1: '生徒A', 科目1: '算国', 生徒1注記: '漢字変換済', 共通期間開始: '', 共通期間終了: '', 生徒2: '生徒B', 科目2: '国', 生徒2注記: '再テスト前', 曜日: '火曜', 時限: 2 },
     ]), '通常授業')
 
     const parsed = parseImportedBundle(xlsx, workbook, createTemplateBundle())
 
     expect(parsed.regularLessons).toHaveLength(1)
     expect(parsed.regularLessons[0]).toMatchObject({
-      student1Note: '前宿題',
-      student2Note: '再テス',
+      student1Note: '漢字変換',
+      student2Note: '再テスト',
     })
+  })
+
+  it('assigns sequential ids to imported rows without id columns', () => {
+    const workbook = xlsx.utils.book_new()
+
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: '新規講師A', 表示名: '講師A', メール: '', 入塾日: '2024-04-01', 退塾日: '', 表示: '表示', 担当科目: '数:高3', メモ: '' },
+      { 名前: '新規講師B', 表示名: '講師B', メール: '', 入塾日: '2024-04-01', 退塾日: '', 表示: '表示', 担当科目: '英:高3', メモ: '' },
+    ]), '講師')
+
+    const parsed = parseImportedBundle(xlsx, workbook, createTemplateBundle())
+
+    expect(parsed.teachers.map((row) => row.id)).toEqual(['t011', 't012'])
   })
 
   it('keeps imported paired regular lessons visible on the board after a 4/1 math label transition', () => {

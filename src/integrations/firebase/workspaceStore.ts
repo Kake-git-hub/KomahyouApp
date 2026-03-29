@@ -3,6 +3,7 @@ import { APP_SNAPSHOT_SCHEMA_VERSION, WORKSPACE_SNAPSHOT_SCHEMA_VERSION, type Ap
 import type { SlotCell } from '../../components/schedule-board/types'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
+import { sanitizeForFirestore } from './firestoreSanitize'
 
 const DEFAULT_DEVELOPER_PASSWORD = 'developer'
 
@@ -116,10 +117,10 @@ function deserializeSnapshotPayload(payload: FirebaseAppSnapshotPayload | AppSna
 }
 
 function serializeSnapshotPayload(payload: AppSnapshotPayload): FirebaseAppSnapshotPayload {
-  return {
+  return sanitizeForFirestore({
     ...payload,
     boardState: serializeBoardState(payload.boardState),
-  }
+  }) as FirebaseAppSnapshotPayload
 }
 
 function toWorkspaceClassroom(classroomId: string, data: FirebaseClassroomDoc, snapshotData: AppSnapshotPayload | null, createEmptyClassroomPayload: () => AppSnapshotPayload): WorkspaceClassroom {

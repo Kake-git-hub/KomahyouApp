@@ -2632,6 +2632,22 @@ tr.sa-slot-first td {
   width: 100%;
 }
 
+.basic-data-teacher-modal {
+  max-width: 760px;
+  pointer-events: auto;
+}
+
+.basic-data-teacher-modal-overlay {
+  pointer-events: none;
+}
+
+.basic-data-teacher-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .basic-data-static-field {
   display: inline-flex;
   align-items: center;

@@ -44,6 +44,32 @@ export function validateImportedBasicDataBundle(bundle: BasicDataBundleForValida
   const studentNameById = new Map(bundle.students.map((student) => [student.id, getStudentDisplayName(student)]))
 
   errors.push(...collectDuplicateValueErrors(
+    bundle.managers.map((manager, index) => ({ label: manager.id, key: manager.id.trim(), rowNumber: index + 2 })),
+    '管理',
+    'ID',
+  ))
+  errors.push(...collectDuplicateValueErrors(
+    bundle.teachers.map((teacher, index) => ({ label: teacher.id, key: teacher.id.trim(), rowNumber: index + 2 })),
+    '講師',
+    'ID',
+  ))
+  errors.push(...collectDuplicateValueErrors(
+    bundle.students.map((student, index) => ({ label: student.id, key: student.id.trim(), rowNumber: index + 2 })),
+    '生徒',
+    'ID',
+  ))
+  errors.push(...collectDuplicateValueErrors(
+    bundle.regularLessons.map((lesson, index) => ({ label: lesson.id, key: lesson.id.trim(), rowNumber: index + 2 })),
+    '通常授業',
+    'ID',
+  ))
+  errors.push(...collectDuplicateValueErrors(
+    bundle.groupLessons.map((lesson, index) => ({ label: lesson.id, key: lesson.id.trim(), rowNumber: index + 2 })),
+    '集団授業',
+    'ID',
+  ))
+
+  errors.push(...collectDuplicateValueErrors(
     bundle.teachers.map((teacher, index) => ({ label: teacher.name, key: normalizeDuplicateKey(teacher.name), rowNumber: index + 2 })),
     '講師',
     '名',
