@@ -8,6 +8,14 @@ type ExportBoardPdfParams = {
   title: string
 }
 
+function resolveTargetExportWidth(currentWidth: number, currentHeight: number, targetAspectRatio: number) {
+  if (currentWidth <= 0 || currentHeight <= 0 || targetAspectRatio <= 0) {
+    return currentWidth
+  }
+
+  return Math.max(currentWidth, Math.ceil(currentHeight * targetAspectRatio))
+}
+
 function fitMemoTextForPdf(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-student-name-note').forEach((node) => {
     const label = node.textContent ?? ''
@@ -242,6 +250,34 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   fitMemoTextForPdf(exportRoot)
   fitStudentDetailTextForPdf(exportRoot)
 
+  const orientation = 'portrait'
+  const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
+  const pageWidth = pdf.internal.pageSize.getWidth()
+  const pageHeight = pdf.internal.pageSize.getHeight()
+  const marginX = 3
+  const marginY = 4
+  const contentWidth = pageWidth - marginX * 2
+  const contentHeight = pageHeight - marginY * 2
+  const targetExportWidth = resolveTargetExportWidth(
+    Math.ceil(exportRoot.scrollWidth),
+    Math.ceil(exportRoot.scrollHeight),
+    contentWidth / contentHeight,
+  )
+
+  if (targetExportWidth > exportRoot.scrollWidth + 1) {
+    clone.style.width = `${targetExportWidth}px`
+    clone.style.maxWidth = 'none'
+
+    if (grid) {
+      grid.style.width = `${targetExportWidth}px`
+    }
+
+    if (cloneTable) {
+      cloneTable.style.width = `${targetExportWidth}px`
+      cloneTable.style.minWidth = `${targetExportWidth}px`
+    }
+  }
+
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',
     scale: 2,
@@ -255,14 +291,6 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
 
   document.body.removeChild(exportRoot)
 
-  const orientation = 'portrait'
-  const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
-  const pageWidth = pdf.internal.pageSize.getWidth()
-  const pageHeight = pdf.internal.pageSize.getHeight()
-  const marginX = 3
-  const marginY = 4
-  const contentWidth = pageWidth - marginX * 2
-  const contentHeight = pageHeight - marginY * 2
   const imageData = canvas.toDataURL('image/png')
   const renderScale = Math.min(contentWidth / canvas.width, contentHeight / canvas.height)
   const renderWidth = canvas.width * renderScale

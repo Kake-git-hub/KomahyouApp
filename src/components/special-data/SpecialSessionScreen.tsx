@@ -80,6 +80,12 @@ function normalizeSessionLabel(value: string) {
   return value.trim().replace(/\s+/g, ' ')
 }
 
+function hasSessionEditorChanges(previous: Pick<SpecialSessionRow, 'label' | 'startDate' | 'endDate'>, next: Pick<SpecialSessionRow, 'label' | 'startDate' | 'endDate'>) {
+  return previous.label !== next.label
+    || previous.startDate !== next.startDate
+    || previous.endDate !== next.endDate
+}
+
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
 }
@@ -504,24 +510,58 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
   const [statusMessage, setStatusMessage] = useState('')
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [editingSessionSnapshots, setEditingSessionSnapshots] = useState<Record<string, Pick<SpecialSessionRow, 'label' | 'startDate' | 'endDate'>>>({})
   const [draftVisibleStartMonth, setDraftVisibleStartMonth] = useState(() => toMonthKey(createDraft().startDate))
   const [editingVisibleStartMonths, setEditingVisibleStartMonths] = useState<Record<string, string>>({})
   const sortedSessions = useMemo(() => sessions.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), [sessions])
 
   const updateSession = (id: string, patch: Partial<SpecialSessionRow>) => {
-    onUpdateSessions((current) => current.map((row) => (row.id === id ? { ...row, ...patch, updatedAt: updateTimestamp() } : row)))
+    onUpdateSessions((current) => current.map((row) => (row.id === id ? { ...row, ...patch, updatedAt: editingSessionId === id ? row.updatedAt : updateTimestamp() } : row)))
   }
 
   const updateSessionRange = (id: string, date: string) => {
     onUpdateSessions((current) => current.map((row) => {
       if (row.id !== id) return row
       if (!row.startDate || row.endDate) {
-        return { ...row, startDate: date, endDate: '', updatedAt: updateTimestamp() }
+        return { ...row, startDate: date, endDate: '', updatedAt: editingSessionId === id ? row.updatedAt : updateTimestamp() }
       }
 
       const [startDate, endDate] = compareDateString(date, row.startDate) < 0 ? [date, row.startDate] : [row.startDate, date]
-      return { ...row, startDate, endDate, updatedAt: updateTimestamp() }
+      return { ...row, startDate, endDate, updatedAt: editingSessionId === id ? row.updatedAt : updateTimestamp() }
     }))
+  }
+
+  const openSessionEditor = (id: string) => {
+    const session = sessions.find((row) => row.id === id)
+    if (!session) return
+
+    setEditingSessionSnapshots((current) => ({
+      ...current,
+      [id]: {
+        label: session.label,
+        startDate: session.startDate,
+        endDate: session.endDate,
+      },
+    }))
+    setEditingSessionId(id)
+  }
+
+  const closeSessionEditor = (id: string) => {
+    const previous = editingSessionSnapshots[id]
+    const session = sessions.find((row) => row.id === id)
+
+    if (previous && session && hasSessionEditorChanges(previous, session)) {
+      onUpdateSessions((current) => current.map((row) => (row.id === id ? { ...row, updatedAt: updateTimestamp() } : row)))
+      setStatusMessage('特別講習データを更新しました。')
+    }
+
+    setEditingSessionSnapshots((current) => {
+      if (!current[id]) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    setEditingSessionId((current) => (current === id ? null : current))
   }
 
   const removeSession = (id: string) => {
@@ -530,6 +570,12 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
       return
     }
     onUpdateSessions((current) => current.filter((row) => row.id !== id))
+    setEditingSessionSnapshots((current) => {
+      if (!current[id]) return current
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
     setEditingSessionId((current) => (current === id ? null : current))
     setStatusMessage('特別講習データを削除しました。')
   }
@@ -705,7 +751,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                       <td><span className="basic-data-muted-inline">{row.updatedAt}</span></td>
                       <td>
                         <div className="basic-data-row-actions">
-                          <button className="secondary-button slim" type="button" onClick={() => setEditingSessionId((current) => (current === row.id ? null : row.id))} data-testid={`special-data-edit-session-${row.id}`}>{isEditing ? '編集を閉じる' : '編集'}</button>
+                          <button className="secondary-button slim" type="button" onClick={() => (isEditing ? closeSessionEditor(row.id) : openSessionEditor(row.id))} data-testid={`special-data-edit-session-${row.id}`}>{isEditing ? '編集完了' : '編集'}</button>
                           <button className="secondary-button slim" type="button" onClick={() => removeSession(row.id)}>削除</button>
                         </div>
                       </td>

@@ -1,6 +1,68 @@
 import { expect, test, type Locator } from '@playwright/test'
 import { buildMakeupStockEntries } from '../src/components/schedule-board/makeupStock'
 
+const REFERENCE_TODAY_ISO = '2026-03-23T09:00:00+09:00'
+const RealDate = Date
+
+class FixedDate extends RealDate {
+  constructor(...args: ConstructorParameters<DateConstructor>) {
+    if (args.length === 0) {
+      super(REFERENCE_TODAY_ISO)
+      return
+    }
+
+    super(...args)
+  }
+
+  static now() {
+    return new RealDate(REFERENCE_TODAY_ISO).getTime()
+  }
+
+  static parse(dateString: string) {
+    return RealDate.parse(dateString)
+  }
+
+  static UTC(...args: Parameters<typeof Date.UTC>) {
+    return RealDate.UTC(...args)
+  }
+}
+
+Object.setPrototypeOf(FixedDate, RealDate)
+globalThis.Date = FixedDate as DateConstructor
+
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript((referenceIso) => {
+    const fixedTime = new Date(referenceIso).getTime()
+    const BrowserRealDate = Date
+
+    class BrowserFixedDate extends BrowserRealDate {
+      constructor(...args) {
+        if (args.length === 0) {
+          super(fixedTime)
+          return
+        }
+
+        super(...args)
+      }
+
+      static now() {
+        return fixedTime
+      }
+
+      static parse(dateString) {
+        return BrowserRealDate.parse(dateString)
+      }
+
+      static UTC(...args) {
+        return BrowserRealDate.UTC(...args)
+      }
+    }
+
+    Object.setPrototypeOf(BrowserFixedDate, BrowserRealDate)
+    window.Date = BrowserFixedDate
+  }, REFERENCE_TODAY_ISO)
+})
+
 async function selectOptionContainingText(select: Locator, text: string) {
   const optionValue = await select.locator('option').evaluateAll((options, expectedText) => {
     const normalizedExpectedText = String(expectedText).trim()

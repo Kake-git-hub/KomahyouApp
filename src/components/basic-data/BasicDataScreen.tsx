@@ -88,6 +88,7 @@ type TableControl = {
 type RosterView = 'active' | 'withdrawn'
 
 type BasicDataTab = 'managers' | 'teachers' | 'students' | 'regularLessons' | 'groupLessons' | 'constraints' | 'classroomData'
+type RowEditScope = 'manager' | 'teacher' | 'student' | 'regular' | 'group'
 export type BasicDataBundle = {
   managers: ManagerRow[]
   teachers: TeacherRow[]
@@ -643,6 +644,28 @@ function filterAndSortRows<T>(
   if (!control.sortKey || !sortValues[control.sortKey]) return filteredRows
 
   return filteredRows.slice().sort((left, right) => compareControlValue(sortValues[control.sortKey](left), sortValues[control.sortKey](right), control.direction))
+}
+
+function applyFrozenRowOrder<T extends { id: string }>(rows: T[], frozenRowIds?: string[]) {
+  if (!frozenRowIds || frozenRowIds.length === 0) return rows
+
+  const rowById = new Map(rows.map((row) => [row.id, row]))
+  const orderedRows: T[] = []
+
+  frozenRowIds.forEach((id) => {
+    const row = rowById.get(id)
+    if (!row) return
+    orderedRows.push(row)
+    rowById.delete(id)
+  })
+
+  rows.forEach((row) => {
+    if (!rowById.has(row.id)) return
+    orderedRows.push(row)
+    rowById.delete(row.id)
+  })
+
+  return orderedRows
 }
 
 function parseDayOfWeek(value: unknown) {
@@ -1391,6 +1414,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const [groupLessonDraft, setGroupLessonDraft] = useState({ teacherId: '', subject: '英', studentIds: [] as string[], dayOfWeek: 1, slotLabel: '1限' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
   const [regularLessonEditSnapshots, setRegularLessonEditSnapshots] = useState<Record<string, RegularLessonRow>>({})
+  const [frozenRowOrders, setFrozenRowOrders] = useState<Partial<Record<RowEditScope, string[]>>>({})
   const [teacherRosterView, setTeacherRosterView] = useState<RosterView>('active')
   const [studentRosterView, setStudentRosterView] = useState<RosterView>('active')
   const [selectedRegularLessonYear, setSelectedRegularLessonYear] = useState(currentSchoolYear)
@@ -1448,27 +1472,49 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setRegularLessonDraft(createRegularLessonDraft())
   }, [selectedRegularLessonYear])
 
-  const rowKey = (scope: string, id: string) => `${scope}:${id}`
+  const rowKey = (scope: RowEditScope, id: string) => `${scope}:${id}`
   const updateTableControl = (tab: BasicDataTab, patch: Partial<TableControl>) => {
     setTableControls((current) => ({ ...current, [tab]: { ...current[tab], ...patch } }))
   }
-  const isRowEditing = (scope: string, id: string) => Boolean(editingRows[rowKey(scope, id)])
-  const toggleRowEditing = (scope: string, id: string) => {
-    const key = rowKey(scope, id)
-    setEditingRows((current) => {
-      const nextIsEditing = !current[key]
-      if (!nextIsEditing && scope === 'teacher') {
-        setTeacherEditorModalState((previous) => previous?.target === 'row' && previous.rowId === id ? null : previous)
-      }
-      return { ...current, [key]: nextIsEditing }
+  const isRowEditing = (scope: RowEditScope, id: string) => Boolean(editingRows[rowKey(scope, id)])
+  const captureFrozenRowOrder = (scope: RowEditScope, visibleRowIds: string[]) => {
+    if (visibleRowIds.length === 0) return
+
+    setFrozenRowOrders((current) => (current[scope] ? current : { ...current, [scope]: visibleRowIds }))
+  }
+  const releaseFrozenRowOrder = (scope: RowEditScope, currentKey: string) => {
+    const hasOtherEditingRows = Object.entries(editingRows).some(([key, isEditing]) => isEditing && key !== currentKey && key.startsWith(`${scope}:`))
+    if (hasOtherEditingRows) return
+
+    setFrozenRowOrders((current) => {
+      if (!current[scope]) return current
+      const next = { ...current }
+      delete next[scope]
+      return next
     })
   }
-  const handleToggleRegularLessonEditing = (id: string) => {
+  const toggleRowEditing = (scope: RowEditScope, id: string, visibleRowIds: string[] = []) => {
+    const key = rowKey(scope, id)
+    const nextIsEditing = !editingRows[key]
+
+    if (nextIsEditing) {
+      captureFrozenRowOrder(scope, visibleRowIds)
+    } else {
+      releaseFrozenRowOrder(scope, key)
+      if (scope === 'teacher') {
+        setTeacherEditorModalState((previous) => previous?.target === 'row' && previous.rowId === id ? null : previous)
+      }
+    }
+
+    setEditingRows((current) => ({ ...current, [key]: nextIsEditing }))
+  }
+  const handleToggleRegularLessonEditing = (id: string, visibleRowIds: string[] = []) => {
     const key = rowKey('regular', id)
     const row = regularLessons.find((entry) => entry.id === id)
     if (!row) return
 
     if (!editingRows[key]) {
+      captureFrozenRowOrder('regular', visibleRowIds)
       setRegularLessonEditSnapshots((current) => ({ ...current, [id]: { ...row } }))
       setEditingRows((current) => ({ ...current, [key]: true }))
       return
@@ -1539,6 +1585,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       delete next[id]
       return next
     })
+    releaseFrozenRowOrder('regular', key)
     setEditingRows((current) => ({ ...current, [key]: false }))
     setStatusMessage('通常授業を更新しました。')
   }
@@ -1777,7 +1824,15 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setStatusMessage('集団授業を削除しました。')
   }
 
-  const renderManagers = () => (
+  const renderManagers = () => {
+    const filteredManagers = applyFrozenRowOrder(filterAndSortRows(
+      managers,
+      tableControls.managers,
+      (row) => [row.name, row.email],
+      { name: (row) => row.name, email: (row) => row.email },
+    ), frozenRowOrders.manager)
+
+    return (
     <>
       <section className="basic-data-section-card">
         <div className="basic-data-card-head">
@@ -1803,23 +1858,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         <table className="basic-data-table" data-testid="basic-data-managers-table">
           <thead><tr><th>名前</th><th>メール</th><th>操作</th></tr></thead>
           <tbody>
-            {filterAndSortRows(
-              managers,
-              tableControls.managers,
-              (row) => [row.name, row.email],
-              { name: (row) => row.name, email: (row) => row.email },
-            ).length === 0 ? <tr><td colSpan={3} className="basic-data-empty-row">登録済みマネージャーはありません。</td></tr> : filterAndSortRows(
-              managers,
-              tableControls.managers,
-              (row) => [row.name, row.email],
-              { name: (row) => row.name, email: (row) => row.email },
-            ).map((row) => (
+            {filteredManagers.length === 0 ? <tr><td colSpan={3} className="basic-data-empty-row">登録済みマネージャーはありません。</td></tr> : filteredManagers.map((row) => (
               <tr key={row.id}>
                 <td><input value={row.name} onChange={(event) => updateManager(row.id, { name: event.target.value })} disabled={!isRowEditing('manager', row.id)} /></td>
                 <td><input value={row.email} onChange={(event) => updateManager(row.id, { email: event.target.value })} type="email" disabled={!isRowEditing('manager', row.id)} /></td>
                 <td>
                   <div className="basic-data-row-actions">
-                    <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('manager', row.id)}>{isRowEditing('manager', row.id) ? '編集終了' : '編集'}</button>
+                    <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('manager', row.id, filteredManagers.map((entry) => entry.id))}>{isRowEditing('manager', row.id) ? '編集終了' : '編集'}</button>
                     <button className="secondary-button slim" type="button" onClick={() => removeManager(row.id)}>削除</button>
                   </div>
                 </td>
@@ -1830,6 +1875,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       </section>
     </>
   )
+  }
 
   const renderTeachers = () => {
     const visibleTeachers = teacherRosterView === 'active' ? activeTeacherRows : withdrawnTeacherRows
@@ -1846,6 +1892,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         availability: (row) => formatTeacherAvailabilitySummary(row.availableSlots),
       },
     )
+    const orderedTeachers = applyFrozenRowOrder(filteredTeachers, frozenRowOrders.teacher)
 
     return (
       <>
@@ -1923,7 +1970,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           <table className="basic-data-table" data-testid="basic-data-teachers-table">
             <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>出勤可能コマ</th><th>メモ</th><th>操作</th></tr></thead>
             <tbody>
-              {filteredTeachers.map((row) => (
+              {orderedTeachers.map((row) => (
                 <tr key={row.id}>
                   <td>
                     {isRowEditing('teacher', row.id)
@@ -1986,13 +2033,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   </td>
                   <td>
                     <div className="basic-data-row-actions">
-                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('teacher', row.id)} data-testid={`basic-data-edit-teacher-${row.id}`}>{isRowEditing('teacher', row.id) ? '編集終了' : '編集'}</button>
+                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('teacher', row.id, orderedTeachers.map((entry) => entry.id))} data-testid={`basic-data-edit-teacher-${row.id}`}>{isRowEditing('teacher', row.id) ? '編集終了' : '編集'}</button>
                       <button className="secondary-button slim" type="button" onClick={() => removeTeacher(row.id)}>削除</button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {filteredTeachers.length === 0 ? <tr><td colSpan={10} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
+              {orderedTeachers.length === 0 ? <tr><td colSpan={10} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
@@ -2014,6 +2061,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         status: (row) => resolveStudentStatusLabel(row),
       },
     )
+    const orderedStudents = applyFrozenRowOrder(filteredStudents, frozenRowOrders.student)
 
     return (
       <>
@@ -2069,7 +2117,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           <table className="basic-data-table" data-testid={studentRosterView === 'active' ? 'basic-data-students-table' : 'basic-data-withdrawn-students-table'}>
             <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>生年月日</th><th>学年/状態</th><th>操作</th></tr></thead>
             <tbody>
-              {filteredStudents.map((row) => (
+              {orderedStudents.map((row) => (
                 <tr key={row.id}>
                   <td>
                     {isRowEditing('student', row.id)
@@ -2104,13 +2152,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{studentRosterView === 'active' ? resolveStudentStatusLabel(row) : resolveScheduledStatus(row.entryDate, row.withdrawDate, row.isHidden, todayReferenceDate)}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
-                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id)} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
+                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
                       <button className="secondary-button slim" type="button" onClick={() => removeStudent(row.id)}>削除</button>
                     </div>
                   </td>
                 </tr>
               ))}
-              {filteredStudents.length === 0 ? <tr><td colSpan={8} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '退塾生徒はまだありません。'}</td></tr> : null}
+              {orderedStudents.length === 0 ? <tr><td colSpan={8} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '退塾生徒はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
@@ -2118,7 +2166,23 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     )
   }
 
-  const renderRegularLessons = () => (
+  const renderRegularLessons = () => {
+    const filteredRegularLessons = applyFrozenRowOrder(filterAndSortRows(
+      visibleRegularLessons,
+      tableControls.regularLessons,
+      (row) => [teacherNameById[row.teacherId] ?? '', studentNameById[row.student1Id] ?? '', row.subject1, studentNameById[row.student2Id] ?? '', row.subject2, resolveDayLabel(row.dayOfWeek), row.slotNumber],
+      {
+        teacher: (row) => teacherNameById[row.teacherId] ?? '',
+        student1: (row) => studentNameById[row.student1Id] ?? '',
+        subject1: (row) => row.subject1,
+        student2: (row) => studentNameById[row.student2Id] ?? '',
+        subject2: (row) => row.subject2,
+        day: (row) => resolveDayLabel(row.dayOfWeek),
+        slot: (row) => row.slotNumber,
+      },
+    ), frozenRowOrders.regular)
+
+    return (
     <>
       <section className="basic-data-section-card">
         <div className="basic-data-card-head">
@@ -2248,20 +2312,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         <table className="basic-data-table regular-table" data-testid="basic-data-regular-lessons-table">
           <thead><tr><th>講師</th><th>生徒1</th><th>生徒1科目</th><th>生徒1注記</th><th>生徒2</th><th>生徒2科目</th><th>生徒2注記</th><th>曜日</th><th>時限</th><th>期間</th><th>操作</th></tr></thead>
           <tbody>
-            {filterAndSortRows(
-              visibleRegularLessons,
-              tableControls.regularLessons,
-              (row) => [teacherNameById[row.teacherId] ?? '', studentNameById[row.student1Id] ?? '', row.subject1, studentNameById[row.student2Id] ?? '', row.subject2, resolveDayLabel(row.dayOfWeek), row.slotNumber],
-              {
-                teacher: (row) => teacherNameById[row.teacherId] ?? '',
-                student1: (row) => studentNameById[row.student1Id] ?? '',
-                subject1: (row) => row.subject1,
-                student2: (row) => studentNameById[row.student2Id] ?? '',
-                subject2: (row) => row.subject2,
-                day: (row) => resolveDayLabel(row.dayOfWeek),
-                slot: (row) => row.slotNumber,
-              },
-            ).map((row) => (
+            {filteredRegularLessons.map((row) => (
               <tr key={row.id} data-testid={`basic-data-regular-row-${row.id}`}>
                 <td>
                   {isRowEditing('regular', row.id)
@@ -2354,33 +2405,34 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                 </td>
                 <td>
                   <div className="basic-data-row-actions basic-data-row-actions-wrap">
-                    <button className="secondary-button slim" type="button" onClick={() => handleToggleRegularLessonEditing(row.id)}>{isRowEditing('regular', row.id) ? '編集終了' : '編集'}</button>
+                    <button className="secondary-button slim" type="button" onClick={() => handleToggleRegularLessonEditing(row.id, filteredRegularLessons.map((entry) => entry.id))}>{isRowEditing('regular', row.id) ? '編集終了' : '編集'}</button>
                     <button className="secondary-button slim" type="button" onClick={() => removeRegularLesson(row.id)}>削除</button>
                   </div>
                 </td>
               </tr>
             ))}
-            {filterAndSortRows(
-              visibleRegularLessons,
-              tableControls.regularLessons,
-              (row) => [teacherNameById[row.teacherId] ?? '', studentNameById[row.student1Id] ?? '', row.subject1, studentNameById[row.student2Id] ?? '', row.subject2, resolveDayLabel(row.dayOfWeek), row.slotNumber],
-              {
-                teacher: (row) => teacherNameById[row.teacherId] ?? '',
-                student1: (row) => studentNameById[row.student1Id] ?? '',
-                subject1: (row) => row.subject1,
-                student2: (row) => studentNameById[row.student2Id] ?? '',
-                subject2: (row) => row.subject2,
-                day: (row) => resolveDayLabel(row.dayOfWeek),
-                slot: (row) => row.slotNumber,
-              },
-            ).length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{formatSchoolYearLabel(selectedRegularLessonYear)} の通常授業はまだありません。</td></tr> : null}
+            {filteredRegularLessons.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{formatSchoolYearLabel(selectedRegularLessonYear)} の通常授業はまだありません。</td></tr> : null}
           </tbody>
         </table>
       </section>
     </>
   )
+  }
 
-  const renderGroupLessons = () => (
+  const renderGroupLessons = () => {
+    const filteredGroupLessons = applyFrozenRowOrder(filterAndSortRows(
+      visibleGroupLessons,
+      tableControls.groupLessons,
+      (row) => [teacherNameById[row.teacherId] ?? '', row.subject, row.studentIds.map((studentId) => studentNameById[studentId] ?? '').join(','), resolveDayLabel(row.dayOfWeek), row.slotLabel],
+      {
+        teacher: (row) => teacherNameById[row.teacherId] ?? '',
+        subject: (row) => row.subject,
+        day: (row) => resolveDayLabel(row.dayOfWeek),
+        slot: (row) => row.slotLabel,
+      },
+    ), frozenRowOrders.group)
+
+    return (
     <>
       <section className="basic-data-section-card">
         <div className="basic-data-card-head">
@@ -2442,27 +2494,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
         <table className="basic-data-table" data-testid="basic-data-group-lessons-table">
           <thead><tr><th>講師</th><th>科目</th><th>生徒</th><th>曜日</th><th>時限</th><th>操作</th></tr></thead>
           <tbody>
-            {filterAndSortRows(
-              visibleGroupLessons,
-              tableControls.groupLessons,
-              (row) => [teacherNameById[row.teacherId] ?? '', row.subject, row.studentIds.map((studentId) => studentNameById[studentId] ?? '').join(','), resolveDayLabel(row.dayOfWeek), row.slotLabel],
-              {
-                teacher: (row) => teacherNameById[row.teacherId] ?? '',
-                subject: (row) => row.subject,
-                day: (row) => resolveDayLabel(row.dayOfWeek),
-                slot: (row) => row.slotLabel,
-              },
-            ).length === 0 ? <tr><td colSpan={6} className="basic-data-empty-row">{formatSchoolYearLabel(selectedGroupLessonYear)} の集団授業はまだありません。</td></tr> : filterAndSortRows(
-              visibleGroupLessons,
-              tableControls.groupLessons,
-              (row) => [teacherNameById[row.teacherId] ?? '', row.subject, row.studentIds.map((studentId) => studentNameById[studentId] ?? '').join(','), resolveDayLabel(row.dayOfWeek), row.slotLabel],
-              {
-                teacher: (row) => teacherNameById[row.teacherId] ?? '',
-                subject: (row) => row.subject,
-                day: (row) => resolveDayLabel(row.dayOfWeek),
-                slot: (row) => row.slotLabel,
-              },
-            ).map((row) => (
+            {filteredGroupLessons.length === 0 ? <tr><td colSpan={6} className="basic-data-empty-row">{formatSchoolYearLabel(selectedGroupLessonYear)} の集団授業はまだありません。</td></tr> : filteredGroupLessons.map((row) => (
               <tr key={row.id}>
                 <td>
                   <select value={row.teacherId} onChange={(event) => updateGroupLesson(row.id, { teacherId: event.target.value })} disabled={!isRowEditing('group', row.id)}>
@@ -2482,7 +2514,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   </select>
                 </td>
                 <td><input value={row.slotLabel} onChange={(event) => updateGroupLesson(row.id, { slotLabel: event.target.value })} disabled={!isRowEditing('group', row.id)} /></td>
-                <td><div className="basic-data-row-actions"><button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('group', row.id)}>{isRowEditing('group', row.id) ? '編集終了' : '編集'}</button><button className="secondary-button slim" type="button" onClick={() => removeGroupLesson(row.id)}>削除</button></div></td>
+                <td><div className="basic-data-row-actions"><button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('group', row.id, filteredGroupLessons.map((entry) => entry.id))}>{isRowEditing('group', row.id) ? '編集終了' : '編集'}</button><button className="secondary-button slim" type="button" onClick={() => removeGroupLesson(row.id)}>削除</button></div></td>
               </tr>
             ))}
           </tbody>
@@ -2490,6 +2522,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       </section>
     </>
   )
+  }
 
   const renderClassroomData = () => (
     <section className="basic-data-section-card" data-testid="basic-data-classroom-screen">
