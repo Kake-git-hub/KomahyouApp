@@ -1598,6 +1598,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
     const normalizedRow = normalizeRegularLessonParticipants(normalizeRegularLessonSharedPeriod(row))
 
+    if (!normalizedRow.student1Id) {
+      restoreSnapshot()
+      showCenteredMessage('通常授業の編集では生徒1を必ず設定してください。')
+      setStatusMessage('生徒1が未設定のため通常授業を保存できませんでした。')
+      return
+    }
+
     const periodValidationTargets = [
       { label: '期間開始', value: normalizedRow.startDate },
       { label: '期間終了', value: normalizedRow.endDate },
@@ -1631,7 +1638,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
     if (addedStudents.length > 0) {
       const addedStudentNames = addedStudents.map((studentId) => studentNameById[studentId] ?? '生徒未設定').join(' / ')
-      const confirmed = window.confirm(`${addedStudentNames} を追加します。追加分は振替ストックにカウントせず、そのままコマ表へ反映します。よろしいですか。`)
+      const confirmed = window.confirm(`${addedStudentNames} をコマ表に追加します。よろしいですか？`)
       if (!confirmed) {
         setStatusMessage('通常授業の編集終了をキャンセルしました。')
         return
@@ -2409,7 +2416,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
                   {isRowEditing('regular', row.id)
                     ? (
                         <select value={row.student1Id} onChange={(event) => updateRegularLesson(row.id, { student1Id: event.target.value })}>
-                          <option value="">生徒1を選択</option>
                           {sortedStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
                         </select>
                       )
