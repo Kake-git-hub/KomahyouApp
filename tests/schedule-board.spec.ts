@@ -3669,7 +3669,7 @@ test.describe('コマ調整表', () => {
     await editableSingleRow.getByRole('button', { name: '編集' }).click()
     await editableSingleRow.locator('select').nth(1).selectOption('s003')
     await editableSingleRow.locator('select').nth(2).selectOption('数')
-    acceptNextDialog(page, 'をコマ表に追加します。よろしいですか？')
+    acceptNextDialog(page, 'この通常授業をコマ表に反映します。該当箇所がすでに埋まっている場合は振替ストックに蓄積します')
     await editableSingleRow.getByRole('button', { name: '編集終了' }).click()
     await expect(page.getByTestId('basic-data-status')).toContainText('通常授業を更新しました。')
 

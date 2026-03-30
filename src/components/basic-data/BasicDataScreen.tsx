@@ -713,24 +713,19 @@ function hasRegularLessonStructureChanges(before: RegularLessonRow, after: Regul
     || before.student2EndDate !== after.student2EndDate
 }
 
-function collectAddedRegularLessonStudents(before: RegularLessonRow | undefined, after: RegularLessonRow) {
-  const addedStudents: string[] = []
+function hasRegularLessonAddedParticipants(before: RegularLessonRow | undefined, after: RegularLessonRow) {
+  if (!before) return false
+
   const beforeParticipants = new Set([
-    before?.student1Id && before.subject1 ? `${before.student1Id}__${before.subject1}` : '',
-    before?.student2Id && before.subject2 ? `${before.student2Id}__${before.subject2}` : '',
+    before.student1Id && before.subject1 ? `${before.student1Id}__${before.subject1}` : '',
+    before.student2Id && before.subject2 ? `${before.student2Id}__${before.subject2}` : '',
   ].filter(Boolean))
   const afterParticipants = [
-    after.student1Id && after.subject1 ? { id: after.student1Id, key: `${after.student1Id}__${after.subject1}` } : null,
-    after.student2Id && after.subject2 ? { id: after.student2Id, key: `${after.student2Id}__${after.subject2}` } : null,
-  ].filter((entry): entry is { id: string; key: string } => Boolean(entry))
+    after.student1Id && after.subject1 ? `${after.student1Id}__${after.subject1}` : '',
+    after.student2Id && after.subject2 ? `${after.student2Id}__${after.subject2}` : '',
+  ].filter(Boolean)
 
-  afterParticipants.forEach((participant) => {
-    if (!beforeParticipants.has(participant.key)) {
-      addedStudents.push(participant.id)
-    }
-  })
-
-  return addedStudents
+  return afterParticipants.some((participant) => !beforeParticipants.has(participant))
 }
 
 function buildRegularLessonRevisionId(id: string) {
@@ -1634,11 +1629,10 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       return
     }
 
-    const addedStudents = collectAddedRegularLessonStudents(snapshot, normalizedRow)
-
-    if (addedStudents.length > 0) {
-      const addedStudentNames = addedStudents.map((studentId) => studentNameById[studentId] ?? '生徒未設定').join(' / ')
-      const confirmed = window.confirm(`${addedStudentNames} をコマ表に追加します。よろしいですか？`)
+    if (hasRegularLessonAddedParticipants(snapshot, normalizedRow)) {
+      const confirmed = window.confirm([
+        'この通常授業をコマ表に反映します。該当箇所がすでに埋まっている場合は振替ストックに蓄積します',
+      ].filter(Boolean).join('\n\n'))
       if (!confirmed) {
         setStatusMessage('通常授業の編集終了をキャンセルしました。')
         return
