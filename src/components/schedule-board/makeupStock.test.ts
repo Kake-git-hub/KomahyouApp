@@ -300,4 +300,93 @@ describe('makeupStock', () => {
 
     expect(entries).toEqual([])
   })
+
+  it('goes negative when regular and makeup assignments exceed the shortened lesson quota', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({
+      dayOfWeek: 2,
+      slotNumber: 1,
+      startDate: '2026-03-01',
+      endDate: '2026-03-17',
+      student2StartDate: '2026-03-01',
+      student2EndDate: '2026-03-17',
+    })
+    const weeks = [[
+      createCell({
+        id: 'regular-1',
+        dateKey: '2026-03-03',
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'managed_regular-1_2026-03-03',
+            studentSlots: [createStudentEntry({ lessonType: 'regular' }), null],
+          },
+        }],
+      }),
+      createCell({
+        id: 'regular-2',
+        dateKey: '2026-03-10',
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'managed_regular-1_2026-03-10',
+            studentSlots: [createStudentEntry({ lessonType: 'regular', id: 'regular-entry-2' }), null],
+          },
+        }],
+      }),
+      createCell({
+        id: 'makeup-1',
+        dateKey: '2026-03-12',
+        slotNumber: 2,
+        slotLabel: '2限',
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'makeup-lesson-1',
+            studentSlots: [createStudentEntry({ lessonType: 'makeup', id: 'makeup-entry-1' }), null],
+          },
+        }],
+      }),
+      createCell({
+        id: 'makeup-2',
+        dateKey: '2026-03-13',
+        slotNumber: 3,
+        slotLabel: '3限',
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'makeup-lesson-2',
+            studentSlots: [createStudentEntry({ lessonType: 'makeup', id: 'makeup-entry-2' }), null],
+          },
+        }],
+      }),
+    ]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-03-31T00:00:00'),
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      key: 'student-1__数',
+      balance: -1,
+      assignedRegularLessons: 2,
+      assignedMakeupLessons: 2,
+      totalLessonCount: 3,
+      overAssignedRegularLessons: 1,
+      negativeReason: '残数がマイナスです。希望回数を 1 件上回って配置しています。',
+    })
+  })
 })

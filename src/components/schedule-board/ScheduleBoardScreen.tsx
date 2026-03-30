@@ -1408,6 +1408,9 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
   currentLesson.studentSlots.forEach((student, slotIndex) => {
     if (!student) return
 
+    // Preserve only non-managed carryovers such as manual additions or makeup/special placements.
+    if (student.lessonType === 'regular' && !student.manualAdded) return
+
     const managedStudent = managedLesson.studentSlots[slotIndex]
     if (managedStudent?.id === student.id) return
 

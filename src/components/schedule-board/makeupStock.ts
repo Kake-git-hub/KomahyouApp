@@ -613,7 +613,9 @@ export function buildMakeupStockEntries(params: {
     const plannedCount = plannedMakeups[key] ?? 0
     const assignedRegularCount = assignedRegularLessons[key] ?? 0
     const totalLessonCount = totalLessonCounts[key] ?? 0
-    const overAssignedRegularLessons = Math.max(0, assignedRegularCount - totalLessonCount)
+    const overAssignedRegularLessons = totalLessonCount > 0
+      ? Math.max(0, assignedRegularCount + plannedCount - totalLessonCount)
+      : 0
     const remainingOriginDates = consumeOriginDates(allOriginDates, usedOriginDates, plannedCount)
     const remainingOriginLabels = buildOriginLabels(remainingOriginDates, key, regularLessons)
     const remainingOriginReasonLabels = remainingOriginDates.map((dateKey) => resolveOriginReasonLabel(dateKey, {
@@ -624,12 +626,12 @@ export function buildMakeupStockEntries(params: {
       manualOriginDates,
       manualOriginReasonLabels,
     }))
-    const manualIndependentPlannedMakeups = isManualEntry ? plannedCount : 0
+    const manualIndependentPlannedMakeups = isManualEntry ? Math.max(0, plannedCount - allOriginDates.length) : 0
     const balance = remainingOriginDates.length - overAssignedRegularLessons - manualIndependentPlannedMakeups
     const negativeReasonParts: string[] = []
 
     if (overAssignedRegularLessons > 0) {
-      negativeReasonParts.push(`通常授業を ${overAssignedRegularLessons} 件先取りしています。`) 
+      negativeReasonParts.push(`希望回数を ${overAssignedRegularLessons} 件上回って配置しています。`)
     }
     if (manualIndependentPlannedMakeups > 0) {
       negativeReasonParts.push(`手動追加した振替を ${manualIndependentPlannedMakeups} 件先に使っています。`)

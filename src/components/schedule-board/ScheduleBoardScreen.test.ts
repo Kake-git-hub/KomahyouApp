@@ -387,4 +387,212 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     expect(firstMondayDesk?.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001')).toBe(true)
   })
+
+  it('drops a removed second student when a regular lesson edit creates a new managed lesson revision', () => {
+    const beforeEdit = {
+      id: 'revision-base',
+      schoolYear: 2025,
+      teacherId: 't002',
+      student1Id: 's002',
+      subject1: '英',
+      startDate: '',
+      endDate: '',
+      student2Id: 's003',
+      subject2: '英',
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '',
+      nextStudent2Id: '',
+      nextSubject2: '',
+      dayOfWeek: 3,
+      slotNumber: 2,
+    }
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-23',
+        endDate: '2026-03-29',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [beforeEdit],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const afterEdit = {
+      ...beforeEdit,
+      id: 'revision-base_migrated',
+      student2Id: '',
+      subject2: '',
+      student2StartDate: '',
+      student2EndDate: '',
+    }
+    const cells = buildScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-23',
+        endDate: '2026-03-29',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [afterEdit],
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = cells.find((cell) => cell.dateKey === '2026-03-25' && cell.slotNumber === 2)
+    const managedDesk = targetCell?.desks.find((desk) => desk.teacher === '佐藤講師')
+
+    expect(managedDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s002')
+    expect(managedDesk?.lesson?.studentSlots[1]).toBeNull()
+  })
+
+  it('drops a removed regular student during board merge even if the managed lesson id stays the same', () => {
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-23',
+        endDate: '2026-03-29',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [{
+        id: 'same-id-lesson',
+        schoolYear: 2025,
+        teacherId: 't002',
+        student1Id: 's002',
+        subject1: '英',
+        startDate: '',
+        endDate: '',
+        student2Id: 's003',
+        subject2: '英',
+        student2StartDate: '',
+        student2EndDate: '',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 3,
+        slotNumber: 2,
+      }],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const cells = buildScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-23',
+        endDate: '2026-03-29',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [{
+        id: 'same-id-lesson',
+        schoolYear: 2025,
+        teacherId: 't002',
+        student1Id: 's002',
+        subject1: '英',
+        startDate: '',
+        endDate: '',
+        student2Id: '',
+        subject2: '',
+        student2StartDate: '',
+        student2EndDate: '',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 3,
+        slotNumber: 2,
+      }],
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = cells.find((cell) => cell.dateKey === '2026-03-25' && cell.slotNumber === 2)
+    const managedDesk = targetCell?.desks.find((desk) => desk.teacher === '佐藤講師')
+
+    expect(managedDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s002')
+    expect(managedDesk?.lesson?.studentSlots[1]).toBeNull()
+  })
+
+  it('drops the previous student when a regular lesson is reassigned to a different student revision', () => {
+    const beforeEdit = {
+      id: 'revision-change',
+      schoolYear: 2025,
+      teacherId: 't001',
+      student1Id: 's001',
+      subject1: '数',
+      startDate: '',
+      endDate: '',
+      student2Id: '',
+      subject2: '',
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '',
+      nextStudent2Id: '',
+      nextSubject2: '',
+      dayOfWeek: 1,
+      slotNumber: 1,
+    }
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-23',
+        endDate: '2026-03-29',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [beforeEdit],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const afterEdit = {
+      ...beforeEdit,
+      id: 'revision-change_updated',
+      student1Id: 's002',
+      subject1: '英',
+    }
+    const cells = buildScheduleCellsForRange({
+      range: {
+        startDate: '2026-03-23',
+        endDate: '2026-03-29',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [afterEdit],
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = cells.find((cell) => cell.dateKey === '2026-03-23' && cell.slotNumber === 1)
+    const managedDesk = targetCell?.desks.find((desk) => desk.teacher === '田中講師')
+
+    expect(managedDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s002')
+    expect(managedDesk?.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001')).toBe(false)
+  })
 })

@@ -3618,6 +3618,67 @@ test.describe('コマ調整表', () => {
     await expect(popup.locator('#schedule-summary-label')).toContainText(`${nextWeekStart.getMonth() + 1}月${nextWeekStart.getDate() + 1}日`)
   })
 
+  test('通常授業編集中に2人授業の片方削除と生徒差し替えをすると旧生徒が盤面に残らない', async ({ page }) => {
+    const currentSchoolYear = resolveOperationalSchoolYear(new Date())
+    const currentWeekStart = getStableWeekStart(new Date(), 6)
+    const currentWednesdayKey = toDateKey(addDays(currentWeekStart, 2))
+
+    await page.goto('/')
+    await moveBoardToWeek(page, currentWeekStart)
+    await expect.poll(() => hasStudentInSlot(page, currentWednesdayKey, 2, '伊藤花')).toBe(true)
+    await expect.poll(() => hasStudentInSlot(page, currentWednesdayKey, 2, '上田陽介')).toBe(true)
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-regularLessons').click()
+    await page.getByTestId('basic-data-regular-year-select').selectOption(String(currentSchoolYear))
+
+    const pairedRow = page.getByTestId('basic-data-regular-lessons-table').locator('tbody tr')
+      .filter({ hasText: '伊藤花' })
+      .filter({ hasText: '上田陽介' })
+      .filter({ hasText: '水曜' })
+      .filter({ hasText: '2限' })
+      .first()
+    const pairedRowTestId = await pairedRow.getAttribute('data-testid')
+    if (!pairedRowTestId) throw new Error('paired regular lesson row id not found')
+    const editablePairedRow = page.getByTestId(pairedRowTestId)
+
+    await editablePairedRow.getByRole('button', { name: '編集' }).click()
+    await editablePairedRow.locator('select').nth(3).selectOption('')
+    await editablePairedRow.getByRole('button', { name: '編集終了' }).click()
+    await expect(page.getByTestId('basic-data-status')).toContainText('通常授業を更新しました。')
+
+    await navigateFromBasicDataToBoard(page)
+    await moveBoardToWeek(page, currentWeekStart)
+    await expect.poll(() => hasStudentInSlot(page, currentWednesdayKey, 2, '伊藤花')).toBe(true)
+    await expect.poll(() => hasStudentInSlot(page, currentWednesdayKey, 2, '上田陽介')).toBe(false)
+
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-basic-data-button').click()
+    await page.getByTestId('basic-data-tab-regularLessons').click()
+
+    const singleRow = page.getByTestId('basic-data-regular-lessons-table').locator('tbody tr')
+      .filter({ hasText: '伊藤花' })
+      .filter({ hasText: '水曜' })
+      .filter({ hasText: '2限' })
+      .first()
+    const singleRowTestId = await singleRow.getAttribute('data-testid')
+    if (!singleRowTestId) throw new Error('single regular lesson row id not found')
+    const editableSingleRow = page.getByTestId(singleRowTestId)
+
+    await editableSingleRow.getByRole('button', { name: '編集' }).click()
+    await editableSingleRow.locator('select').nth(1).selectOption('s003')
+    await editableSingleRow.locator('select').nth(2).selectOption('数')
+    acceptNextDialog(page, 'を追加します。追加分は振替ストックにカウントせず、そのままコマ表へ反映します。')
+    await editableSingleRow.getByRole('button', { name: '編集終了' }).click()
+    await expect(page.getByTestId('basic-data-status')).toContainText('通常授業を更新しました。')
+
+    await navigateFromBasicDataToBoard(page)
+    await moveBoardToWeek(page, currentWeekStart)
+    await expect.poll(() => hasStudentInSlot(page, currentWednesdayKey, 2, '伊藤花')).toBe(false)
+    await expect.poll(() => hasStudentInSlot(page, currentWednesdayKey, 2, '上田陽介')).toBe(true)
+  })
+
   test('開いた日程表は生徒と講師の退塾を即座に反映する', async ({ page }) => {
     const withdrawnDateKey = toDateKey(addDays(getWeekStart(new Date()), -1))
 

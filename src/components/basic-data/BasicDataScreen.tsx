@@ -668,6 +668,76 @@ function applyFrozenRowOrder<T extends { id: string }>(rows: T[], frozenRowIds?:
   return orderedRows
 }
 
+function normalizeRegularLessonParticipants<T extends Pick<RegularLessonRow, 'student1Id' | 'subject1' | 'student1Note' | 'student2Id' | 'subject2' | 'student2Note'>>(row: T): T {
+  const nextRow = {
+    ...row,
+    student1Note: normalizeRegularLessonNote(row.student1Note),
+    student2Note: normalizeRegularLessonNote(row.student2Note),
+  }
+
+  if (!nextRow.student2Id) {
+    nextRow.subject2 = ''
+    nextRow.student2Note = ''
+  }
+
+  if (nextRow.student1Id || !nextRow.student2Id) {
+    if (!nextRow.student1Id) {
+      nextRow.subject1 = ''
+      nextRow.student1Note = ''
+    }
+    return nextRow
+  }
+
+  return {
+    ...nextRow,
+    student1Id: nextRow.student2Id,
+    subject1: nextRow.subject2,
+    student1Note: nextRow.student2Note,
+    student2Id: '',
+    subject2: '',
+    student2Note: '',
+  }
+}
+
+function hasRegularLessonStructureChanges(before: RegularLessonRow, after: RegularLessonRow) {
+  return before.teacherId !== after.teacherId
+    || before.student1Id !== after.student1Id
+    || before.subject1 !== after.subject1
+    || before.student2Id !== after.student2Id
+    || before.subject2 !== after.subject2
+    || before.dayOfWeek !== after.dayOfWeek
+    || before.slotNumber !== after.slotNumber
+    || before.startDate !== after.startDate
+    || before.endDate !== after.endDate
+    || before.student2StartDate !== after.student2StartDate
+    || before.student2EndDate !== after.student2EndDate
+}
+
+function collectAddedRegularLessonStudents(before: RegularLessonRow | undefined, after: RegularLessonRow) {
+  const addedStudents: string[] = []
+  const beforeParticipants = new Set([
+    before?.student1Id && before.subject1 ? `${before.student1Id}__${before.subject1}` : '',
+    before?.student2Id && before.subject2 ? `${before.student2Id}__${before.subject2}` : '',
+  ].filter(Boolean))
+  const afterParticipants = [
+    after.student1Id && after.subject1 ? { id: after.student1Id, key: `${after.student1Id}__${after.subject1}` } : null,
+    after.student2Id && after.subject2 ? { id: after.student2Id, key: `${after.student2Id}__${after.subject2}` } : null,
+  ].filter((entry): entry is { id: string; key: string } => Boolean(entry))
+
+  afterParticipants.forEach((participant) => {
+    if (!beforeParticipants.has(participant.key)) {
+      addedStudents.push(participant.id)
+    }
+  })
+
+  return addedStudents
+}
+
+function buildRegularLessonRevisionId(id: string) {
+  const [baseId = id] = id.split('_')
+  return `${baseId}_${Date.now().toString(36)}`
+}
+
 function parseDayOfWeek(value: unknown) {
   const text = normalizeText(value)
   const numeric = Number(text)
@@ -1526,7 +1596,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       onUpdateRegularLessons((current) => current.map((entry) => (entry.id === id ? { ...snapshot } : entry)))
     }
 
-    const normalizedRow = normalizeRegularLessonSharedPeriod(row)
+    const normalizedRow = normalizeRegularLessonParticipants(normalizeRegularLessonSharedPeriod(row))
 
     const periodValidationTargets = [
       { label: '期間開始', value: normalizedRow.startDate },
@@ -1557,10 +1627,7 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       return
     }
 
-    const addedStudents = [
-      !snapshot?.student1Id && row.student1Id ? row.student1Id : '',
-      !snapshot?.student2Id && row.student2Id ? row.student2Id : '',
-    ].filter(Boolean)
+    const addedStudents = collectAddedRegularLessonStudents(snapshot, normalizedRow)
 
     if (addedStudents.length > 0) {
       const addedStudentNames = addedStudents.map((studentId) => studentNameById[studentId] ?? '生徒未設定').join(' / ')
@@ -1571,13 +1638,27 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       }
     }
 
+    const revisedRow = snapshot && hasRegularLessonStructureChanges(snapshot, normalizedRow)
+      ? { ...normalizedRow, id: buildRegularLessonRevisionId(normalizedRow.id) }
+      : normalizedRow
+
     if (
-      row.startDate !== normalizedRow.startDate
-      || row.endDate !== normalizedRow.endDate
-      || row.student2StartDate !== normalizedRow.student2StartDate
-      || row.student2EndDate !== normalizedRow.student2EndDate
+      row.id !== revisedRow.id
+      || row.teacherId !== revisedRow.teacherId
+      || row.student1Id !== revisedRow.student1Id
+      || row.subject1 !== revisedRow.subject1
+      || normalizeRegularLessonNote(row.student1Note) !== normalizeRegularLessonNote(revisedRow.student1Note)
+      || row.student2Id !== revisedRow.student2Id
+      || row.subject2 !== revisedRow.subject2
+      || normalizeRegularLessonNote(row.student2Note) !== normalizeRegularLessonNote(revisedRow.student2Note)
+      || row.dayOfWeek !== revisedRow.dayOfWeek
+      || row.slotNumber !== revisedRow.slotNumber
+      || row.startDate !== revisedRow.startDate
+      || row.endDate !== revisedRow.endDate
+      || row.student2StartDate !== revisedRow.student2StartDate
+      || row.student2EndDate !== revisedRow.student2EndDate
     ) {
-      onUpdateRegularLessons((current) => current.map((entry) => (entry.id === id ? normalizedRow : entry)))
+      onUpdateRegularLessons((current) => current.map((entry) => (entry.id === id ? revisedRow : entry)))
     }
 
     setRegularLessonEditSnapshots((current) => {
