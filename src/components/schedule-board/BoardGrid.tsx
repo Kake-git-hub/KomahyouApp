@@ -118,7 +118,12 @@ export function BoardGrid({
     const statusNotice = statusEntry
       ? [getStudentStatusLabel(statusEntry.status), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
       : undefined
-    const originalLessonLabel = resolvedLessonType === 'makeup' && effectiveMakeupSourceLabel ? `元の通常授業: ${effectiveMakeupSourceLabel}` : ''
+    const originalLessonLabel = effectiveMakeupSourceLabel && (
+      resolvedLessonType === 'makeup'
+      || (resolvedLessonType === 'regular' && effectiveMakeupSourceDate === cell.dateKey)
+    )
+      ? `元の通常授業: ${effectiveMakeupSourceLabel}`
+      : ''
     const hoverText = Array.from(new Set([
       memoNotice,
       statusNotice,

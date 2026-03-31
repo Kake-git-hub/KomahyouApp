@@ -3,7 +3,7 @@ import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry } from './types'
-import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, packSortCellDesks } from './ScheduleBoardScreen'
+import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, normalizeLessonPlacement, packSortCellDesks } from './ScheduleBoardScreen'
 
 const classroomSettings: ClassroomSettings = {
   closedWeekdays: [0],
@@ -76,6 +76,24 @@ function createPackTestCell(): SlotCell {
 }
 
 describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
+  it('treats a same-day return as regular even when the destination slot changes', () => {
+    const normalized = normalizeLessonPlacement({
+      id: 'same-day-return',
+      name: '青木太郎',
+      managedStudentId: 's001',
+      grade: '中3',
+      subject: '数',
+      lessonType: 'makeup',
+      teacherType: 'normal',
+      makeupSourceDate: '2026-04-07',
+      makeupSourceLabel: '2026/4/7(火) 1限',
+    }, '2026-04-07')
+
+    expect(normalized.lessonType).toBe('regular')
+    expect(normalized.makeupSourceDate).toBe('2026-04-07')
+    expect(normalized.makeupSourceLabel).toBe('2026/4/7(火) 1限')
+  })
+
   it('packs desk rows within the same slot as two students, one student, teacher only, then empty', () => {
     const packedDesks = packSortCellDesks(createPackTestCell())
 

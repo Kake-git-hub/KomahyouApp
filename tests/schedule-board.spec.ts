@@ -346,6 +346,55 @@ async function findEmptyStudentCellWithTeacher(
   throw new Error(`empty student cell with teacher not found for week ${toDateKey(weekStart)}`)
 }
 
+async function findEmptyStudentCellWithTeacherOnDifferentDate(
+  page: Parameters<typeof test>[0]['page'],
+  weekStart: Date,
+  excludedDateKey: string,
+  excludedStudentName?: string,
+  excludedSlotId?: string,
+) {
+  for (let dayOffset = 0; dayOffset < 7; dayOffset += 1) {
+    const dateKey = toDateKey(addDays(weekStart, dayOffset))
+    if (dateKey === excludedDateKey) continue
+
+    for (let slotNumber = 1; slotNumber <= 4; slotNumber += 1) {
+      if (excludedStudentName && await hasStudentInSlot(page, dateKey, slotNumber, excludedStudentName)) continue
+      const slotId = `${dateKey}_${slotNumber}`
+      if (excludedSlotId === slotId) continue
+
+      const target = await page.evaluate((currentSlotId) => {
+        for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
+          const teacherCell = document.querySelector<HTMLElement>(`[data-testid="teacher-cell-${currentSlotId}-${deskIndex}"]`)
+          const teacherName = teacherCell?.textContent?.trim() ?? ''
+          if (!teacherName) continue
+
+          for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
+            const nameCell = document.querySelector<HTMLElement>(`[data-testid="student-name-${currentSlotId}-${deskIndex}-${studentIndex}"]`)
+            const studentName = nameCell?.textContent?.trim() ?? ''
+            if (studentName) continue
+
+            return {
+              cellTestId: `student-cell-${currentSlotId}-${deskIndex}-${studentIndex}`,
+              teacherName,
+            }
+          }
+        }
+
+        return null
+      }, slotId)
+
+      if (target) {
+        return {
+          ...target,
+          slotId,
+        }
+      }
+    }
+  }
+
+  throw new Error(`empty student cell with teacher not found outside ${excludedDateKey} for week ${toDateKey(weekStart)}`)
+}
+
 async function addRegularLessonDraft(
   page: Parameters<typeof test>[0]['page'],
   lesson: {
@@ -1844,6 +1893,7 @@ test.describe('コマ調整表', () => {
     const sourceCell = `student-cell-${slotId}-0-0`
     const targetCell = `student-cell-${slotId}-8-1`
     const targetName = page.getByTestId(`student-name-${slotId}-8-1`)
+    const targetPrefix = page.getByTestId(targetCell).locator('.sa-student-detail-prefix')
 
     await page.goto('/')
 
@@ -1851,7 +1901,36 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('menu-move-button').click()
     await page.getByTestId(targetCell).click()
 
+    await expect(targetPrefix).toHaveAttribute('aria-label', '通常')
     const hoverTitle = await targetName.getAttribute('title')
+    expect(hoverTitle).not.toBeNull()
+    expect(hoverTitle ?? '').toContain('元の通常授業:')
+    expect(hoverTitle ?? '').toContain(toOriginDateLabel(currentWeekStart))
+    expect(hoverTitle ?? '').toContain('1限')
+  })
+
+  test('振替授業を元の授業日へ戻すと通常扱いになる', async ({ page }) => {
+    const currentWeekStart = getWeekStart(new Date())
+    const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
+    const temporaryDateKey = toDateKey(addDays(currentWeekStart, 1))
+    const sourceCell = `student-cell-${sourceSlotId}-0-0`
+    const temporaryCell = `student-cell-${temporaryDateKey}_1-5-0`
+    const returnCell = `student-cell-${sourceSlotId}-8-1`
+    const returnName = page.getByTestId(`student-name-${sourceSlotId}-8-1`)
+    const returnPrefix = page.getByTestId(returnCell).locator('.sa-student-detail-prefix')
+
+    await page.goto('/')
+
+    await page.getByTestId(sourceCell).click()
+    await page.getByTestId('menu-move-button').click()
+    await page.getByTestId(temporaryCell).click()
+
+    await page.getByTestId(temporaryCell).click()
+    await page.getByTestId('menu-move-button').click()
+    await page.getByTestId(returnCell).click()
+
+    await expect(returnPrefix).toHaveAttribute('aria-label', '通常')
+    const hoverTitle = await returnName.getAttribute('title')
     expect(hoverTitle).not.toBeNull()
     expect(hoverTitle ?? '').toContain('元の通常授業:')
     expect(hoverTitle ?? '').toContain(toOriginDateLabel(currentWeekStart))
@@ -2404,6 +2483,7 @@ test.describe('コマ調整表', () => {
     const currentWeekStart = getWeekStart(new Date())
     const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
     const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
+    const sourceDateKey = sourceSlotId.split('_')[0]
 
     await page.goto('/')
 
@@ -2412,7 +2492,7 @@ test.describe('コマ調整表', () => {
     const popup = await popupPromise
 
     await restoreBoardInteraction(page)
-    const target = await findEmptyStudentCellWithTeacher(page, currentWeekStart, '青木太郎', sourceSlotId)
+    const target = await findEmptyStudentCellWithTeacherOnDifferentDate(page, currentWeekStart, sourceDateKey, '青木太郎', sourceSlotId)
 
     await page.getByTestId(sourceCellTestId).click()
     await page.getByTestId('menu-move-button').click()
@@ -2470,6 +2550,7 @@ test.describe('コマ調整表', () => {
     const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
     const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
     const sourceName = page.getByTestId(`student-name-${sourceSlotId}-0-0`)
+    const sourcePrefix = page.getByTestId(sourceCellTestId).locator('.sa-student-detail-prefix')
 
     await page.goto('/')
 
@@ -2487,7 +2568,7 @@ test.describe('コマ調整表', () => {
 
     await expect(targetName).toHaveText('')
     await expect(sourceName).toHaveText('青木太郎')
-    expect((await sourceName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
+    await expect(sourcePrefix).toHaveAttribute('aria-label', '通常')
   })
 
   test('振替ストックを元のコマへ戻すとストック残数から消える', async ({ page }) => {
@@ -2495,6 +2576,7 @@ test.describe('コマ調整表', () => {
     const sourceSlotId = `${toDateKey(currentWeekStart)}_1`
     const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
     const sourceName = page.getByTestId(`student-name-${sourceSlotId}-0-0`)
+    const sourcePrefix = page.getByTestId(sourceCellTestId).locator('.sa-student-detail-prefix')
 
     await page.goto('/')
 
@@ -2508,7 +2590,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(sourceCellTestId).click()
 
     await expect(sourceName).toHaveText('青木太郎')
-    expect((await sourceName.getAttribute('title')) ?? '').not.toContain('元の通常授業:')
+    await expect(sourcePrefix).toHaveAttribute('aria-label', '通常')
 
     await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
     await expect(page.getByTestId('makeup-stock-panel')).not.toContainText('青木太郎')

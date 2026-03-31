@@ -999,18 +999,12 @@ function parseOriginSlotNumber(makeupSourceLabel?: string) {
   return matched ? Number(matched[1]) : null
 }
 
-function isReturnedToOriginalSlot(student: StudentEntry, targetDateKey: string, targetSlotNumber: number) {
-  const originSlotNumber = parseOriginSlotNumber(student.makeupSourceLabel)
-  return Boolean(
-    student.makeupSourceDate
-    && originSlotNumber
-    && student.makeupSourceDate === targetDateKey
-    && originSlotNumber === targetSlotNumber,
-  )
+function isReturnedToOriginalDate(student: StudentEntry, targetDateKey: string) {
+  return Boolean(student.makeupSourceDate && student.makeupSourceDate === targetDateKey)
 }
 
-function normalizeLessonPlacement(student: StudentEntry, targetDateKey: string, targetSlotNumber: number): StudentEntry {
-  if (student.lessonType !== 'makeup' || !isReturnedToOriginalSlot(student, targetDateKey, targetSlotNumber)) return student
+export function normalizeLessonPlacement(student: StudentEntry, targetDateKey: string): StudentEntry {
+  if (student.lessonType !== 'makeup' || !isReturnedToOriginalDate(student, targetDateKey)) return student
   return {
     ...student,
     lessonType: 'regular',
@@ -1402,14 +1396,14 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
   }
 }
 
-function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson) {
+function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson, dateKey: string) {
   const nextLesson = cloneDeskLesson(managedLesson)
 
   currentLesson.studentSlots.forEach((student, slotIndex) => {
     if (!student) return
 
     // Preserve only non-managed carryovers such as manual additions or makeup/special placements.
-    if (student.lessonType === 'regular' && !student.manualAdded) return
+    if (student.lessonType === 'regular' && !student.manualAdded && !isReturnedToOriginalDate(student, dateKey)) return
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
     if (managedStudent?.id === student.id) return
@@ -1679,7 +1673,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
           ...desk,
           statusSlots: cloneStatusSlots(desk.statusSlots),
           teacher: desk.manualTeacher ? desk.teacher : managedDesk.teacher,
-          lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson),
+          lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson, cell.dateKey),
         }
       }
 
@@ -4332,7 +4326,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       subject: placementEntry.subject as SubjectLabel,
       lessonType: 'makeup',
       teacherType: 'normal',
-    }, targetCell.dateKey, targetCell.slotNumber)
+    }, targetCell.dateKey)
 
     if (!targetDesk.lesson) {
       targetDesk.lesson = {
@@ -4665,7 +4659,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         subject: candidate.matchedItem.subject,
         lessonType: 'makeup',
         teacherType: 'normal',
-      }, targetCell.dateKey, targetCell.slotNumber)
+      }, targetCell.dateKey)
 
       if (!targetDesk.lesson) {
         targetDesk.lesson = {
@@ -4798,9 +4792,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         makeupSourceDate: originalDateKey,
         makeupSourceLabel: movedStudent.makeupSourceLabel ?? formatStockOriginLabel(originalDateKey, sourceSlotNumber),
       }
-      movedStudent = movedStudent.lessonType === 'makeup'
-        ? normalizeLessonPlacement(nextMovedStudent, cellId.split('_')[0] ?? sourceDateKey, Number(cellId.split('_')[1] ?? sourceSlotNumber))
-        : nextMovedStudent
+      movedStudent = normalizeLessonPlacement(nextMovedStudent, cellId.split('_')[0] ?? sourceDateKey)
     }
 
     const comparableStudentKey = resolveStockComparableStudentKey(movedStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
