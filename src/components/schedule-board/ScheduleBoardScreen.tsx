@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, normalizeTeacherAvailableSlots, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
+import { RegularLessonTemplateEditor } from '../regular-template/RegularLessonTemplateEditor'
+import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
@@ -291,7 +293,7 @@ function buildForcedConstraintScoreParts(params: {
 function buildDefaultMakeupAutoAssignRange(referenceDate: string): MakeupAutoAssignRange {
   return {
     startDate: referenceDate,
-    endDate: shiftDate(parseDateKey(referenceDate), 27).toISOString().slice(0, 10),
+    endDate: shiftDate(parseDateKey(referenceDate), 29).toISOString().slice(0, 10),
   }
 }
 
@@ -439,6 +441,7 @@ type ScheduleBoardScreenProps = {
   studentScheduleRequest?: StudentScheduleRequest | null
   initialBoardState?: PersistedBoardState | null
   onBoardStateChange?: (state: PersistedBoardState) => void
+  onReplaceRegularLessons?: Dispatch<SetStateAction<RegularLessonRow[]>>
   onUpdateSpecialSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onOpenBasicData: () => void
@@ -1138,7 +1141,7 @@ function restoreStudentToDesk(desk: DeskCell, studentIndex: number, statusEntry:
 }
 
 function getStudentStockMenuLabel(student: StudentEntry) {
-  return student.lessonType === 'special' ? '講習ストックに戻す' : '振替ストックに戻す'
+  return student.lessonType === 'special' ? '未消化講習に戻す' : '未消化振替に戻す'
 }
 
 function parseDeskOrder(deskId: string) {
@@ -1205,11 +1208,6 @@ function hasRegularPlacementConflict(cell: SlotCell, teacherId: string, studentI
   })
 }
 
-function hasTeacherAlreadyPlaced(cell: SlotCell, teacher: TeacherRow) {
-  const teacherDisplayName = getTeacherDisplayName(teacher)
-  return cell.desks.some((desk) => desk.teacher === teacherDisplayName || desk.teacher === teacher.name)
-}
-
 function createManagedStudentEntry(student: StudentRow, subject: SubjectLabel, dateKey: string, noteSuffix?: string): StudentEntry {
   return {
     id: `${student.id}_${dateKey}_${subject}`,
@@ -1266,7 +1264,9 @@ function buildManagedRegularLessonsRange(params: {
 
     const student1 = studentById.get(row.student1Id)
     const student2 = studentById.get(row.student2Id)
-    if (!student1 && !student2) continue
+    const hasAssignedStudents = Boolean(student1 || student2)
+    const hasTeacherOnlyDesk = Boolean(row.teacherId) && !hasAssignedStudents
+    if (!hasAssignedStudents && !hasTeacherOnlyDesk) continue
 
     const limitDateKeys = (dateKeys: string[]) => capRegularLessonDatesPerMonth(dateKeys)
     const student1ActiveDateKeys = student1
@@ -1289,9 +1289,11 @@ function buildManagedRegularLessonsRange(params: {
       ? new Set(limitDateKeys(student2ActiveDateKeys))
       : new Set<string>()
 
-    const activeDateKeys = Array.from(new Set([...student1ActiveDateKeys, ...student2ActiveDateKeys]))
-      .filter((dateKey) => openDateKeys.includes(dateKey))
-      .sort((left, right) => left.localeCompare(right))
+    const activeDateKeys = hasTeacherOnlyDesk
+      ? openDateKeys.slice().sort((left, right) => left.localeCompare(right))
+      : Array.from(new Set([...student1ActiveDateKeys, ...student2ActiveDateKeys]))
+          .filter((dateKey) => openDateKeys.includes(dateKey))
+          .sort((left, right) => left.localeCompare(right))
 
     for (const dateKey of activeDateKeys) {
       const cell = cellByDateSlot.get(`${dateKey}_${row.slotNumber}`)
@@ -1327,29 +1329,6 @@ function buildManagedRegularLessonsRange(params: {
         note: '管理データ反映',
         studentSlots: firstStudent ? [firstStudent, secondStudent] : [secondStudent, null],
       }
-    }
-  }
-
-  for (const teacher of teachers) {
-    const availableSlots = normalizeTeacherAvailableSlots(teacher.availableSlots)
-    if (availableSlots.length === 0) continue
-
-    for (const cell of nextRange) {
-      if (!cell.isOpenDay) continue
-      if (resolveTeacherRosterStatus(teacher, cell.dateKey) !== '在籍') continue
-
-      const cellDayOfWeek = parseDateKey(cell.dateKey).getDay()
-      const matchesAvailability = availableSlots.some((slot) => slot.dayOfWeek === cellDayOfWeek && slot.slotNumber === cell.slotNumber)
-      if (!matchesAvailability) continue
-      if (hasTeacherAlreadyPlaced(cell, teacher)) continue
-
-      const targetDesk = cell.desks.find((desk) => !desk.lesson && !desk.teacher.trim())
-        ?? cell.desks.find((desk) => !desk.lesson && !desk.teacher)
-      if (!targetDesk) continue
-
-      targetDesk.teacher = getTeacherDisplayName(teacher)
-      resetManagedTeacherAssignment(targetDesk)
-      targetDesk.lesson = undefined
     }
   }
 
@@ -2046,7 +2025,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
@@ -2082,6 +2061,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
+  const [isRegularTemplateEditorOpen, setIsRegularTemplateEditorOpen] = useState(false)
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
@@ -2099,6 +2079,22 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [pointerPreviewPosition, setPointerPreviewPosition] = useState({ x: 0, y: 0 })
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
+
+  const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate) => {
+    const normalizedTemplateRegularLessons = buildRegularLessonsFromTemplate({
+      template,
+      teachers,
+      students,
+    })
+
+    onUpdateClassroomSettings({
+      ...classroomSettings,
+      regularLessonTemplate: template,
+    })
+    onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
+    setIsRegularTemplateEditorOpen(false)
+    setStatusMessage('通常授業テンプレートを保存しました。開始日以降の通常授業へ反映します。')
+  }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers])
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -3274,7 +3270,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             const regularTeacherPreferred = !regularTeachersOnly || regularTeacherIds.has(teacher.id)
             const scoreParts: AutoAssignScorePart[] = [
               {
-                label: '講習ストック由来',
+                label: '未消化講習由来',
                 value: matchedItem.source === 'session' ? 1 : 0,
                 detail: matchedItem.source === 'session' ? '講習期間の登録希望を優先' : '手動追加ストック',
               },
@@ -3881,7 +3877,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     if (selectedLectureStockEntry) {
       const subject = selectedLecturePlacementItem?.subject ?? selectedLectureStockEntry.nextPlacementEntry?.subject ?? '科目未設定'
-      return `${selectedLectureStockEntry.displayName} / ${subject} / 講習ストックの配置先を選択中`
+      return `${selectedLectureStockEntry.displayName} / ${subject} / 未消化講習の配置先を選択中`
     }
 
     if (movingStudentContext) {
@@ -4354,12 +4350,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const handlePlaceLectureFromStock = (cellId: string, deskIndex: number, studentIndex: number) => {
     if (!selectedLectureStockEntry) return
     if (selectedLectureStockEntry.requestedCount <= 0) {
-      setStatusMessage('この講習ストックは残数がありません。')
+      setStatusMessage('この未消化講習は残数がありません。')
       return
     }
     const placementEntry = buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null
     if (!placementEntry) {
-      setStatusMessage('この講習ストックは配置できる科目残数がありません。')
+      setStatusMessage('この未消化講習は配置できる科目残数がありません。')
       return
     }
 
@@ -4441,7 +4437,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handleAutoAssignLectureStockEntry = (entry: GroupedLectureStockEntry) => {
     if (entry.requestedCount <= 0) {
-      setStatusMessage(`${entry.displayName} の講習ストックは残数がありません。`)
+      setStatusMessage(`${entry.displayName} の未消化講習は残数がありません。`)
       return
     }
     if (!entry.studentId) {
@@ -4457,7 +4453,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     const pendingItems = buildLecturePendingItems(entry)
     if (pendingItems.length === 0) {
-      setStatusMessage(`${entry.displayName} の講習ストックに割振対象がありません。`)
+      setStatusMessage(`${entry.displayName} の未消化講習に割振対象がありません。`)
       return
     }
 
@@ -4595,7 +4591,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     const pendingItems = buildMakeupPendingItems(entry)
     if (pendingItems.length === 0) {
-      setStatusMessage(`${entry.displayName} の振替ストックに割振対象がありません。`)
+      setStatusMessage(`${entry.displayName} の未消化振替に割振対象がありません。`)
       return
     }
 
@@ -5001,7 +4997,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setAddExistingStudentDraft(null)
     setStatusMessage(
       addExistingStudentDraft.lessonType === 'special'
-        ? `${studentName} を講習として追加しました。講習ストック数は増やしません。`
+        ? `${studentName} を講習として追加しました。未消化講習数は増やしません。`
         : `${studentName} を ${lessonTypeLabels[addExistingStudentDraft.lessonType]} として追加しました。`,
     )
   }
@@ -5222,7 +5218,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           manualLectureStockOrigins,
           fallbackLectureStockStudents,
         )
-        setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} の手動追加講習を盤面から外しました。講習ストックには戻しません。`)
+        setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} の手動追加講習を盤面から外しました。未消化講習には戻しません。`)
         if (selectedStudentId === menuStudent.student.id) {
           setSelectedStudentId(null)
         }
@@ -5260,7 +5256,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         nextManualLectureStockOrigins,
         nextFallbackLectureStockStudents,
       )
-      setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を講習ストックへ戻しました。`)
+      setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を未消化講習へ戻しました。`)
       if (selectedStudentId === menuStudent.student.id) {
         setSelectedStudentId(null)
       }
@@ -5302,7 +5298,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
-    setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を振替ストックへ戻しました。`)
+    setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を未消化振替へ戻しました。`)
     if (selectedStudentId === menuStudent.student.id) {
       setSelectedStudentId(null)
     }
@@ -5337,7 +5333,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           manualLectureStockOrigins,
           fallbackLectureStockStudents,
         )
-        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。手動追加講習のため講習ストックには戻していません。`)
+        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。手動追加講習のため未消化講習には戻していません。`)
         return
       }
 
@@ -5372,7 +5368,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         nextManualLectureStockOrigins,
         nextFallbackLectureStockStudents,
       )
-      setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、講習ストックへ戻しました。`)
+      setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化講習へ戻しました。`)
       return
     }
 
@@ -5411,7 +5407,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
-    setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、振替ストックへ戻しました。`)
+    setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化振替へ戻しました。`)
   }
 
   const handleMarkStudentAttended = () => {
@@ -5601,7 +5597,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setMakeupAutoAssignRange(buildDefaultMakeupAutoAssignRange(cells[0]?.dateKey ?? getReferenceDateKey(new Date())))
       setSelectedStudentId(null)
       setSelectedLectureStockKey(null)
-      setStatusMessage('振替ストック一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
+      setStatusMessage('未消化振替一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
     }
   }
 
@@ -5619,13 +5615,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (!isLectureStockOpen) {
       setSelectedStudentId(null)
       setSelectedMakeupStockKey(null)
-      setStatusMessage('講習ストック一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
+      setStatusMessage('未消化講習一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
     }
   }
 
   const handleSelectLectureStockEntry = (entry: GroupedLectureStockEntry, options?: { hidePanelsDuringPlacement?: boolean }) => {
     if (entry.requestedCount <= 0) {
-      setStatusMessage(`${entry.displayName} の講習ストックは残数がありません。`)
+      setStatusMessage(`${entry.displayName} の未消化講習は残数がありません。`)
       return
     }
 
@@ -5642,7 +5638,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
     setStudentMenu(null)
     setTeacherMenu(null)
-    setStatusMessage(`${entry.displayName} の講習ストックを選択しました。空欄セルを左クリックしてください。`)
+    setStatusMessage(`${entry.displayName} の未消化講習を選択しました。空欄セルを左クリックしてください。`)
   }
 
   const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: { hidePanelsDuringPlacement?: boolean }) => {
@@ -5664,7 +5660,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
     setStudentMenu(null)
     setTeacherMenu(null)
-    setStatusMessage(`${entry.displayName} の振替ストックを選択しました。空欄セルを左クリックしてください。`)
+    setStatusMessage(`${entry.displayName} の未消化振替を選択しました。空欄セルを左クリックしてください。`)
   }
 
   const switchWeek = (nextWeekIndex: number) => {
@@ -5821,6 +5817,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onToggleMakeupStock={handleToggleMakeupStock}
             onOpenStudentSchedule={handleOpenStudentSchedule}
             onOpenTeacherSchedule={handleOpenTeacherSchedule}
+            onOpenRegularTemplate={() => setIsRegularTemplateEditorOpen(true)}
             onPrintPdf={handlePrintPdf}
             onCancelSelection={handleCancelSelection}
             onOpenBasicData={onOpenBasicData}
@@ -5828,6 +5825,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onOpenAutoAssignRules={onOpenAutoAssignRules}
             onOpenBackupRestore={onOpenBackupRestore}
             onLogout={onLogout}
+          />
+          <RegularLessonTemplateEditor
+            open={isRegularTemplateEditorOpen}
+            classroomSettings={classroomSettings}
+            teachers={teachers}
+            students={students}
+            onClose={() => setIsRegularTemplateEditorOpen(false)}
+            onSave={handleSaveRegularLessonTemplate}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
           {stockActionModal ? (() => {
@@ -5919,15 +5924,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 <section className="lecture-stock-panel stock-floating-panel" data-testid="lecture-stock-panel">
                   <div className="makeup-stock-panel-head">
                     <div className="stock-floating-panel-title">
-                      <strong>講習ストック</strong>
-                      <span className="basic-data-muted-inline">生徒・講習期間ごとの講習ストック数です。</span>
+                      <strong>未消化講習</strong>
+                      <span className="basic-data-muted-inline">生徒・講習期間ごとの未消化講習数です。</span>
                       <span className="basic-data-muted-inline">自動割振は各講習期間内の空きコマだけに配置します。</span>
                     </div>
                     <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsLectureStockOpen(false)} data-testid="lecture-stock-close-button">閉じる</button>
                   </div>
                   <div className="makeup-stock-list">
                     {lectureStockEntries.length === 0 ? (
-                      <div className="makeup-stock-empty">現在の講習ストックはありません。</div>
+                      <div className="makeup-stock-empty">現在の未消化講習はありません。</div>
                     ) : lectureStockEntries.map((entry) => (
                       <button
                         key={entry.key}
@@ -5949,14 +5954,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 <section className="makeup-stock-panel stock-floating-panel" data-testid="makeup-stock-panel">
                   <div className="makeup-stock-panel-head">
                     <div className="stock-floating-panel-title">
-                      <strong>振替ストック</strong>
+                      <strong>未消化振替</strong>
                       <span className="basic-data-muted-inline">残数のある生徒を選ぶとコマ表へ配置できます。</span>
                     </div>
                     <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsMakeupStockOpen(false)} data-testid="makeup-stock-close-button">閉じる</button>
                   </div>
                   <div className="makeup-stock-list">
                     {makeupStockEntries.length === 0 ? (
-                      <div className="makeup-stock-empty">現在の振替ストックはありません。</div>
+                      <div className="makeup-stock-empty">現在の未消化振替はありません。</div>
                     ) : makeupStockEntries.map((entry) => (
                       <button
                         key={entry.key}
@@ -6065,7 +6070,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   </div>
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   {menuStudent?.student.lessonType === 'special' && menuStudent.student.specialStockSource !== 'session' ? (
-                    <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は講習ストックへ戻せません。不要な場合は削除してください。</div>
+                    <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は未消化講習へ戻せません。不要な場合は削除してください。</div>
                   ) : (
                     <>
                       <button type="button" className="menu-link-button" onClick={handleStoreStudent} data-testid="menu-stock-button">{menuStudent ? getStudentStockMenuLabel(menuStudent.student) : 'ストックへ戻す'}</button>

@@ -11,6 +11,7 @@ import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecial
 import { initialSpecialSessions } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
+import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
 import { deleteFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom } from './integrations/firebase/adminFunctions'
 import { getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
@@ -429,6 +430,7 @@ function createInitialClassroomSettings(): ClassroomSettings {
       holidayDates: [],
       forceOpenDates: [],
       deskCount: 14,
+      regularLessonTemplate: null,
       initialSetupCompletedAt: '',
       initialSetupMakeupStocks: [],
       initialSetupLectureStocks: [],
@@ -443,6 +445,7 @@ function createInitialClassroomSettings(): ClassroomSettings {
     holidayDates: cache?.syncedHolidayDates ?? [],
     forceOpenDates: [],
     deskCount: 14,
+    regularLessonTemplate: null,
     initialSetupCompletedAt: '',
     initialSetupMakeupStocks: [],
     initialSetupLectureStocks: [],
@@ -676,6 +679,14 @@ function App() {
   })
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
+  const displayRegularLessons = useMemo(() => {
+    const templateRows = buildRegularLessonsFromTemplate({
+      template: classroomSettings.regularLessonTemplate,
+      teachers,
+      students,
+    })
+    return templateRows.length > 0 ? templateRows : regularLessons
+  }, [classroomSettings.regularLessonTemplate, regularLessons, students, teachers])
   const isCurrentClassroomTemporarilySuspended = Boolean(actingClassroom?.isTemporarilySuspended)
   const isCurrentClassroomCancelled = actingClassroom?.contractStatus === 'suspended'
   const isCurrentClassroomSuspended = isCurrentClassroomCancelled || isCurrentClassroomTemporarilySuspended
@@ -1425,6 +1436,7 @@ function App() {
     || teachers.length > 0
     || students.length > 0
     || regularLessons.length > 0
+    || hasRegularLessonTemplateAssignments(classroomSettings.regularLessonTemplate)
     || groupLessons.length > 0
     || specialSessions.some((session) => Object.keys(session.studentInputs).length > 0 || Object.keys(session.teacherInputs).length > 0)
     || autoAssignRules.some((rule) => rule.targets.length > 0 || rule.excludeTargets.length > 0)
@@ -1432,7 +1444,7 @@ function App() {
     || boardState !== null
     || (classroomSettings.initialSetupMakeupStocks?.length ?? 0) > 0
     || (classroomSettings.initialSetupLectureStocks?.length ?? 0) > 0
-  ), [autoAssignRules, boardState, classroomSettings.initialSetupLectureStocks, classroomSettings.initialSetupMakeupStocks, groupLessons.length, managers.length, pairConstraints.length, regularLessons.length, specialSessions, students.length, teachers.length])
+  ), [autoAssignRules, boardState, classroomSettings.initialSetupLectureStocks, classroomSettings.initialSetupMakeupStocks, classroomSettings.regularLessonTemplate, groupLessons.length, managers.length, pairConstraints.length, regularLessons.length, specialSessions, students.length, teachers.length])
 
   const syncStudentSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1449,7 +1461,7 @@ function App() {
         classroomSettings,
         teachers,
         students,
-        regularLessons,
+        regularLessons: displayRegularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
         suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
@@ -1460,12 +1472,12 @@ function App() {
         classroomSettings,
         teachers,
         students,
-        regularLessons,
+        regularLessons: displayRegularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
         suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       students,
-      regularLessons,
+      regularLessons: displayRegularLessons,
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,
@@ -1476,7 +1488,7 @@ function App() {
       qrConfig: scheduleQrConfig,
       targetWindow: studentPopup,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, regularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1493,7 +1505,7 @@ function App() {
         classroomSettings,
         teachers,
         students,
-        regularLessons,
+        regularLessons: displayRegularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
         suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
@@ -1504,7 +1516,7 @@ function App() {
         classroomSettings,
         teachers,
         students,
-        regularLessons,
+        regularLessons: displayRegularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
         suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
@@ -1519,7 +1531,7 @@ function App() {
       qrConfig: scheduleQrConfig,
       targetWindow: teacherPopup,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, regularLessons, scheduleQrConfig, specialSessions, students, teacherScheduleRange, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, scheduleQrConfig, specialSessions, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1547,14 +1559,14 @@ function App() {
         classroomSettings,
         teachers,
         students,
-        regularLessons,
+        regularLessons: displayRegularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
         suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
       targetWindow: popupWindow,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, specialSessions, students, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
 
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
@@ -2361,11 +2373,16 @@ function App() {
       setSpecialSessions(createInitialSpecialSessionRows())
       setAutoAssignRules(createInitialAutoAssignRuleRows())
       setPairConstraints(createInitialPairConstraintRows())
+      const initialBoardRegularLessons = buildRegularLessonsFromTemplate({
+        template: initialImportedBundle.classroomSettings.regularLessonTemplate,
+        teachers: initialImportedBundle.teachers,
+        students: initialImportedBundle.students,
+      })
       setBoardState(createPackedInitialBoardState({
         classroomSettings: initialImportedBundle.classroomSettings,
         teachers: initialImportedBundle.teachers,
         students: initialImportedBundle.students,
-        regularLessons: initialImportedBundle.regularLessons,
+        regularLessons: initialBoardRegularLessons.length > 0 ? initialBoardRegularLessons : initialImportedBundle.regularLessons,
       }))
       setPersistenceMessage('基本データを初期取り込みしました。特別講習、ルール、盤面、開始時点ストックは初期化しました。')
       void runGoogleHolidaySync({ force: true, background: true })
@@ -2401,11 +2418,16 @@ function App() {
       setGroupLessons(merged.groupLessons)
       setClassroomSettings(merged.classroomSettings)
       if (!boardState) {
+        const mergedBoardRegularLessons = buildRegularLessonsFromTemplate({
+          template: merged.classroomSettings.regularLessonTemplate,
+          teachers: merged.teachers,
+          students: merged.students,
+        })
         setBoardState(createPackedInitialBoardState({
           classroomSettings: merged.classroomSettings,
           teachers: merged.teachers,
           students: merged.students,
-          regularLessons: merged.regularLessons,
+          regularLessons: mergedBoardRegularLessons.length > 0 ? mergedBoardRegularLessons : merged.regularLessons,
         }))
       }
       if (!hasAnyExistingSetupData()) {
@@ -2490,11 +2512,11 @@ function App() {
       classroomSettings: nextClassroomSettings,
       teachers,
       students,
-      regularLessons,
+      regularLessons: displayRegularLessons,
     }))
     setPersistenceMessage('初期設定を完了し、管理データと開始時点ストックを反映したコマ表にリセットしました。')
     setScreen('board')
-  }, [classroomSettings, regularLessons, students, teachers])
+  }, [classroomSettings, displayRegularLessons, students, teachers])
 
   if (!hasHydratedSnapshot) {
     return <div className="workspace-auth-shell"><div className="workspace-auth-card"><h2>読み込み中</h2><p>教室ワークスペースを準備しています。</p></div></div>
@@ -2743,7 +2765,7 @@ function App() {
       classroomSettings={classroomSettings}
       teachers={teachers}
       students={students}
-      regularLessons={regularLessons}
+      regularLessons={displayRegularLessons}
       specialSessions={specialSessions}
       autoAssignRules={autoAssignRules}
       pairConstraints={pairConstraints}
@@ -2751,6 +2773,7 @@ function App() {
       studentScheduleRequest={studentScheduleRequest}
       initialBoardState={boardState}
       onBoardStateChange={setBoardState}
+      onReplaceRegularLessons={setRegularLessons}
       onUpdateSpecialSessions={setSpecialSessions}
       onUpdateClassroomSettings={setClassroomSettings}
       onOpenBasicData={() => navigateClassroomScreen('basic-data')}

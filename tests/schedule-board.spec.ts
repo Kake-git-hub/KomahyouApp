@@ -682,7 +682,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('basic-data-withdrawn-students-table')).toContainText('卒業済みテスト生徒')
   })
 
-  test('講師の出勤可能コマは通常授業がなくてもコマ表へ講師だけ表示する', async ({ page }) => {
+  test('通常授業テンプレの講師のみコマは通常授業がなくてもコマ表へ講師だけ表示する', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const mondayKey = toDateKey(currentWeekStart)
 
@@ -695,21 +695,16 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('basic-data-teacher-draft-name').fill('出勤講師')
     await page.getByTestId('basic-data-teacher-draft-email').fill('availability-teacher@example.com')
     await setHiddenDateInput(page, 'basic-data-teacher-draft-entry-date-input', '2024-04-01')
-    await page.getByTestId('basic-data-teacher-draft-availability-summary').click()
-    await page.getByTestId('basic-data-teacher-draft-available-slot-1-4').click()
-    await expect(page.getByTestId('basic-data-teacher-draft-available-slots')).toContainText('月4限')
     await page.getByTestId('basic-data-add-teacher-button').click()
 
     await navigateFromBasicDataToBoard(page)
+    await page.getByTestId('board-regular-template-button').click()
+    await expect(page.getByTestId('regular-template-editor')).toBeVisible()
+    await setHiddenDateInput(page, 'regular-template-effective-start-date', mondayKey)
+    await page.getByTestId('regular-template-add-1-4').click()
+    await page.getByTestId('regular-template-teacher-select').selectOption({ label: '出勤講師' })
+    await page.getByTestId('regular-template-save-button').click()
     await expect.poll(async () => hasTeacherInSlot(page, mondayKey, 4, '出勤講師')).toBe(true)
-
-    await page.getByTestId('menu-button').click()
-    await page.getByTestId('menu-open-basic-data-button').click()
-    await page.getByTestId('basic-data-tab-teachers').click()
-    const addedTeacherRow = page.getByTestId('basic-data-teachers-table').locator('tbody tr').filter({ hasText: '出勤講師' }).first()
-    acceptNextDialog(page, 'この講師を削除します。')
-    await addedTeacherRow.getByRole('button', { name: '削除' }).click()
-    await expect(page.getByTestId('basic-data-teachers-table')).not.toContainText('出勤講師')
   })
 
   test('通常授業と集団授業は年度別タブで見られ、追加時に年度を選べる', async ({ page }) => {
@@ -2049,12 +2044,12 @@ test.describe('コマ調整表', () => {
 
     await page.goto('/')
 
-    await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替ストック')
+    await expect(page.getByTestId('makeup-stock-chip')).toContainText('未消化振替')
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
-    await expect(page.getByTestId('menu-stock-button')).toHaveText('振替ストックに戻す')
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('未消化振替に戻す')
     await page.getByTestId('menu-stock-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('未消化振替へ戻しました。')
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('1')
     await page.getByTestId('makeup-stock-chip').click()
     await expect(page.getByTestId('makeup-stock-panel')).toContainText('青木太郎')
@@ -2077,10 +2072,10 @@ test.describe('コマ調整表', () => {
 
     await sourceCell.click()
     await expect(page.getByTestId('menu-absence-button')).toBeVisible()
-    await expect(page.getByTestId('menu-stock-button')).toHaveText('振替ストックに戻す')
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('未消化振替に戻す')
     await page.getByTestId('menu-absence-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('未消化振替へ戻しました。')
     await expect(sourceName).toHaveText('青木太郎(休')
     await expect(sourceCell).toContainText('数')
 
@@ -2229,7 +2224,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
     let menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtons).toEqual(['出席', '休み', '移動', '振替ストックに戻す', '削除'])
+    expect(menuButtons).toEqual(['出席', '休み', '移動', '未消化振替に戻す', '削除'])
 
     await page.getByRole('button', { name: 'x' }).click()
 

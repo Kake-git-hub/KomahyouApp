@@ -4,6 +4,7 @@ import type { RegularLessonRow } from '../components/basic-data/regularLessonMod
 import type { SlotCell } from '../components/schedule-board/types'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { AutoAssignRuleRow } from '../components/auto-assign-rules/autoAssignRuleModel'
+import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { PairConstraintRow } from './pairConstraint'
 
 export type ClassroomScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
@@ -15,6 +16,7 @@ export type ClassroomSettings = {
   holidayDates: string[]
   forceOpenDates: string[]
   deskCount: number
+  regularLessonTemplate?: RegularLessonTemplate | null
   initialSetupCompletedAt?: string
   initialSetupMakeupStocks?: InitialSetupMakeupStockRow[]
   initialSetupLectureStocks?: InitialSetupLectureStockRow[]

@@ -217,13 +217,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(firstMondayDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s001')
   })
 
-  it('adds teacher-only desks from teacher available slots even without regular lessons', () => {
-    const teachers = initialTeachers.map((teacher) => (
-      teacher.id === 't001'
-        ? { ...teacher, availableSlots: [{ dayOfWeek: 1, slotNumber: 4 }] }
-        : { ...teacher, availableSlots: [] }
-    ))
-
+  it('adds teacher-only desks from regular template derived rows even without student assignments', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {
         startDate: '2026-03-01',
@@ -233,9 +227,29 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
       fallbackStartDate: '2026-03-01',
       fallbackEndDate: '2026-03-31',
       classroomSettings,
-      teachers,
+      teachers: initialTeachers,
       students: initialStudents,
-      regularLessons: [],
+      regularLessons: [{
+        id: 'template_teacher_only',
+        schoolYear: 2025,
+        teacherId: 't001',
+        student1Id: '',
+        subject1: '',
+        student1Note: '',
+        startDate: '2026-03-01',
+        endDate: '2026-03-31',
+        student2Id: '',
+        subject2: '',
+        student2Note: '',
+        student2StartDate: '2026-03-01',
+        student2EndDate: '2026-03-31',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 1,
+        slotNumber: 4,
+      }],
       boardWeeks: [],
       suppressedRegularLessonOccurrences: [],
     })

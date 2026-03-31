@@ -25,6 +25,7 @@ type BoardToolbarProps = {
   onToggleMakeupStock: () => void
   onOpenStudentSchedule: () => void
   onOpenTeacherSchedule: () => void
+  onOpenRegularTemplate: () => void
   onPrintPdf: () => void
   onCancelSelection: () => void
   onOpenBasicData: () => void
@@ -59,6 +60,7 @@ export function BoardToolbar({
   onToggleMakeupStock,
   onOpenStudentSchedule,
   onOpenTeacherSchedule,
+  onOpenRegularTemplate,
   onPrintPdf,
   onCancelSelection,
   onOpenBasicData,
@@ -108,11 +110,11 @@ export function BoardToolbar({
         <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}`} data-testid="toolbar-status">{statusMessage}</div>
         <div className="toolbar-group toolbar-group-end">
           <button className={`secondary-button slim${isLectureStockOpen ? ' active' : ''}`} type="button" onClick={onToggleLectureStock} data-testid="lecture-stock-chip">
-            講習ストック
+            未消化講習
             {lectureStockEntryCount > 0 ? <span className="toolbar-inline-count">{lectureStockEntryCount}</span> : null}
           </button>
           <button className={`secondary-button slim${isMakeupStockOpen || isMakeupMoveActive ? ' active' : ''}${isMakeupMoveActive ? ' is-emphasis' : ''}`} type="button" onClick={onToggleMakeupStock} data-testid="makeup-stock-chip">
-            {isMakeupMoveActive ? '振替移動中' : '振替ストック'}
+            {isMakeupMoveActive ? '振替移動中' : '未消化振替'}
             {makeupStockEntryCount > 0 ? <span className="toolbar-inline-count">{makeupStockEntryCount}</span> : null}
           </button>
           <button className="secondary-button slim" type="button" onClick={onOpenStudentSchedule} disabled={isStudentScheduleOpen} data-testid="board-student-schedule-button">
@@ -120,6 +122,9 @@ export function BoardToolbar({
           </button>
           <button className="secondary-button slim" type="button" onClick={onOpenTeacherSchedule} disabled={isTeacherScheduleOpen} data-testid="board-teacher-schedule-button">
             {isTeacherScheduleOpen ? '講師日程は別タブで表示中' : '講師日程'}
+          </button>
+          <button className="secondary-button slim" type="button" onClick={onOpenRegularTemplate} data-testid="board-regular-template-button">
+            通常授業テンプレ作成
           </button>
           <button className="secondary-button slim" type="button" onClick={onPrintPdf} disabled={isPrintingPdf} data-testid="board-print-pdf-button">
             {isPrintingPdf ? 'PDF出力中...' : 'PDF出力'}
