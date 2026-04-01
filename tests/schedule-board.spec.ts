@@ -699,11 +699,12 @@ test.describe('コマ調整表', () => {
 
     await navigateFromBasicDataToBoard(page)
     await page.getByTestId('board-regular-template-button').click()
-    await expect(page.getByTestId('regular-template-editor')).toBeVisible()
-    await setHiddenDateInput(page, 'regular-template-effective-start-date', mondayKey)
+    await expect(page.locator('.template-mode-active')).toBeVisible()
+    await setHiddenDateInput(page, 'template-effective-start-date', mondayKey)
     await page.getByTestId('teacher-cell-template_1_4-0').click()
-    await page.getByTestId('regular-template-teacher-select').selectOption({ label: '出勤講師' })
-    await page.getByTestId('regular-template-save-button').click()
+    await page.getByTestId('teacher-select-input').selectOption({ label: '出勤講師' })
+    await page.getByTestId('teacher-select-confirm-button').click()
+    await page.getByTestId('template-save-button').click()
     await expect.poll(async () => hasTeacherInSlot(page, mondayKey, 4, '出勤講師')).toBe(true)
   })
 

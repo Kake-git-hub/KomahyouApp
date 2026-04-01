@@ -1,6 +1,6 @@
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { normalizeRegularLessonNote, packSortRegularLessonRows, resolveOperationalSchoolYear, resolveSchoolYearDateRange, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import type { GradeLabel, SlotCell, SubjectLabel } from '../schedule-board/types'
+import type { DeskCell, GradeLabel, SlotCell, StudentEntry, SubjectLabel } from '../schedule-board/types'
 import { resolveDisplayedSubjectForBirthDate, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
 type XlsxModule = typeof import('xlsx')
@@ -402,4 +402,101 @@ export function buildTemplateBoardCells(params: {
       }),
     }
   })
+}
+
+export function copyBoardCellsForTemplate(cells: SlotCell[]): SlotCell[] {
+  const calendarDayLabelsLocal = ['日', '月', '火', '水', '木', '金', '土'] as const
+
+  return cells.map((cell) => {
+    const date = parseDateKey(cell.dateKey)
+    const jsDay = date.getDay()
+    const templateCellId = `template_${jsDay}_${cell.slotNumber}`
+
+    return {
+      id: templateCellId,
+      dateKey: `template_${jsDay}`,
+      dayLabel: calendarDayLabelsLocal[jsDay],
+      dateLabel: calendarDayLabelsLocal[jsDay],
+      slotLabel: cell.slotLabel,
+      slotNumber: cell.slotNumber,
+      timeLabel: cell.timeLabel,
+      isOpenDay: true,
+      desks: cell.desks.map((desk, deskIdx) => {
+        const s0 = desk.lesson?.studentSlots[0]
+        const s1 = desk.lesson?.studentSlots[1]
+        const regular0: StudentEntry | null = s0 && s0.lessonType === 'regular'
+          ? { ...s0, id: `${templateCellId}_s0_${deskIdx}` }
+          : null
+        const regular1: StudentEntry | null = s1 && s1.lessonType === 'regular'
+          ? { ...s1, id: `${templateCellId}_s1_${deskIdx}` }
+          : null
+        const hasContent = Boolean(desk.teacher) || Boolean(regular0) || Boolean(regular1)
+        const result: DeskCell = {
+          id: `${templateCellId}_desk_${deskIdx + 1}`,
+          teacher: desk.teacher,
+          lesson: hasContent && (regular0 || regular1)
+            ? {
+                id: `${templateCellId}_lesson_${deskIdx}`,
+                studentSlots: [regular0, regular1],
+              }
+            : undefined,
+        }
+        return result
+      }),
+    }
+  })
+}
+
+export function convertTemplateCellsToTemplate(params: {
+  cells: SlotCell[]
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  effectiveStartDate: string
+  deskCount: number
+}): RegularLessonTemplate {
+  const { cells: templateCells, teachers, students, effectiveStartDate, deskCount } = params
+  const teacherIdByName = new Map(teachers.map((t) => [getTeacherDisplayName(t), t.id]))
+  const studentIdByName = new Map(students.map((s) => [getStudentDisplayName(s), s.id]))
+
+  const cellByKey = new Map<string, RegularLessonTemplateCell>()
+
+  for (const cell of templateCells) {
+    const parts = cell.id.replace('template_', '').split('_')
+    const dayOfWeek = Number(parts[0])
+    const slotNumber = Number(parts[1])
+    const key = buildTemplateCellKey(dayOfWeek, slotNumber)
+    if (cellByKey.has(key)) continue
+
+    cellByKey.set(key, {
+      dayOfWeek,
+      slotNumber,
+      desks: cell.desks.map((desk, idx) => {
+        const teacherId = teacherIdByName.get(desk.teacher) ?? ''
+        const s0 = desk.lesson?.studentSlots[0]
+        const s1 = desk.lesson?.studentSlots[1]
+        return {
+          deskIndex: idx + 1,
+          teacherId,
+          students: [
+            s0 ? { studentId: s0.managedStudentId ?? studentIdByName.get(s0.name) ?? '', subject: s0.subject, note: normalizeRegularLessonNote(s0.noteSuffix) } : null,
+            s1 ? { studentId: s1.managedStudentId ?? studentIdByName.get(s1.name) ?? '', subject: s1.subject, note: normalizeRegularLessonNote(s1.noteSuffix) } : null,
+          ],
+        }
+      }),
+    })
+  }
+
+  const resultCells: RegularLessonTemplateCell[] = regularTemplateDayOptions.flatMap((dayOfWeek) =>
+    regularTemplateSlotNumbers.map((slotNumber) => {
+      const key = buildTemplateCellKey(dayOfWeek, slotNumber)
+      return cellByKey.get(key) ?? createEmptyCell(dayOfWeek, slotNumber, deskCount)
+    }),
+  )
+
+  return {
+    version: 1,
+    effectiveStartDate: normalizeDateString(effectiveStartDate) || toDateKey(new Date()),
+    savedAt: new Date().toISOString(),
+    cells: resultCells,
+  }
 }

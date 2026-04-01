@@ -2239,6 +2239,41 @@ tr.sa-slot-first td {
   color: #16314f;
 }
 
+/* Template mode (inline board mode) */
+.template-mode-active {
+  background: #fff0f0;
+}
+
+.template-mode-active .toolbar-panel {
+  background: #fde8e8;
+  border-bottom-color: #e8b8b8;
+}
+
+.template-mode-active .slot-adjust-grid {
+  background: #fff5f5;
+  border-color: #c88;
+}
+
+.template-mode-active .slot-adjust-grid th {
+  background: #fde8e8;
+}
+
+.template-mode-header-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 16px;
+  background: #f4d4d4;
+  border-bottom: 1px solid #daa;
+  flex-wrap: wrap;
+}
+
+.template-mode-title {
+  font-weight: 700;
+  font-size: 1rem;
+  color: #8b2020;
+}
+
 .button-loading-content {
   display: inline-flex;
   align-items: center;

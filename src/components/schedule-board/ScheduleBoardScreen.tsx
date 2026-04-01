@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import { RegularLessonTemplateEditor } from '../regular-template/RegularLessonTemplateEditor'
-import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
@@ -119,6 +118,22 @@ type LectureStockPendingItem = {
   startDate?: string
   endDate?: string
   unavailableSlots?: string[]
+}
+
+type TemplateEditDraft = {
+  studentId: string
+  subject: SubjectLabel
+  note: string
+}
+
+type TemplateAddDraft = {
+  studentId: string
+  subject: SubjectLabel
+  note: string
+}
+
+type TemplateHistoryEntry = {
+  cells: SlotCell[]
 }
 
 type AutoAssignScorePart = {
@@ -2061,7 +2076,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
-  const [isRegularTemplateEditorOpen, setIsRegularTemplateEditorOpen] = useState(false)
+  const [isTemplateMode, setIsTemplateMode] = useState(false)
+  const [templateCells, setTemplateCells] = useState<SlotCell[]>([])
+  const [templateEffectiveStartDate, setTemplateEffectiveStartDate] = useState('')
+  const [templateEditDraft, setTemplateEditDraft] = useState<TemplateEditDraft | null>(null)
+  const [templateAddDraft, setTemplateAddDraft] = useState<TemplateAddDraft | null>(null)
+  const [templateUndoStack, setTemplateUndoStack] = useState<TemplateHistoryEntry[]>([])
+  const [templateRedoStack, setTemplateRedoStack] = useState<TemplateHistoryEntry[]>([])
+  const templateFileInputRef = useRef<HTMLInputElement | null>(null)
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
@@ -2080,6 +2102,62 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
 
+  const handleEnterTemplateMode = useCallback(() => {
+    const copiedCells = copyBoardCellsForTemplate(cells)
+    const existingTemplate = classroomSettings.regularLessonTemplate
+    setTemplateCells(copiedCells)
+    setTemplateEffectiveStartDate(existingTemplate?.effectiveStartDate || toDateKey(new Date()))
+    setIsTemplateMode(true)
+    setStudentMenu(null)
+    setTeacherMenu(null)
+    setSelectedStudentId(null)
+    setSelectedMakeupStockKey(null)
+    setSelectedLectureStockKey(null)
+    setIsLectureStockOpen(false)
+    setIsMakeupStockOpen(false)
+    setTemplateEditDraft(null)
+    setTemplateAddDraft(null)
+    setTemplateUndoStack([])
+    setTemplateRedoStack([])
+    setStatusMessage('通常授業テンプレート編集モードです。コマ表から通常授業のみコピーしました。')
+  }, [cells, classroomSettings.regularLessonTemplate])
+
+  const handleExitTemplateMode = useCallback(() => {
+    setIsTemplateMode(false)
+    setTemplateCells([])
+    setStudentMenu(null)
+    setTeacherMenu(null)
+    setSelectedStudentId(null)
+    setTemplateEditDraft(null)
+    setTemplateAddDraft(null)
+    setStatusMessage('コマ表に戻りました。')
+  }, [])
+
+  const pushTemplateUndo = useCallback((currentCells: SlotCell[]) => {
+    setTemplateUndoStack((prev) => [...prev, { cells: currentCells.map((c) => ({ ...c, desks: c.desks.map((d) => ({ ...d, lesson: d.lesson ? { ...d.lesson, studentSlots: [...d.lesson.studentSlots] as [StudentEntry | null, StudentEntry | null] } : undefined })) })) }])
+    setTemplateRedoStack([])
+  }, [])
+
+  const handleTemplateUndo = useCallback(() => {
+    setTemplateUndoStack((prev) => {
+      if (prev.length === 0) return prev
+      const last = prev[prev.length - 1]
+      setTemplateRedoStack((redo) => [...redo, { cells: templateCells.map((c) => ({ ...c, desks: c.desks.map((d) => ({ ...d, lesson: d.lesson ? { ...d.lesson, studentSlots: [...d.lesson.studentSlots] as [StudentEntry | null, StudentEntry | null] } : undefined })) })) }])
+      setTemplateCells(last.cells)
+      return prev.slice(0, -1)
+    })
+  }, [templateCells])
+
+  const handleTemplateRedo = useCallback(() => {
+    setTemplateRedoStack((prev) => {
+      if (prev.length === 0) return prev
+      const last = prev[prev.length - 1]
+      setTemplateUndoStack((undo) => [...undo, { cells: templateCells.map((c) => ({ ...c, desks: c.desks.map((d) => ({ ...d, lesson: d.lesson ? { ...d.lesson, studentSlots: [...d.lesson.studentSlots] as [StudentEntry | null, StudentEntry | null] } : undefined })) })) }])
+      setTemplateCells(last.cells)
+      return prev.slice(0, -1)
+    })
+  }, [templateCells])
+
   const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate) => {
     const normalizedTemplateRegularLessons = buildRegularLessonsFromTemplate({
       template,
@@ -2092,7 +2170,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       regularLessonTemplate: template,
     })
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
-    setIsRegularTemplateEditorOpen(false)
+    setIsTemplateMode(false)
+    setTemplateCells([])
     setStatusMessage('通常授業テンプレートを保存しました。開始日以降の通常授業へ反映します。')
   }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers])
 
@@ -3820,23 +3899,26 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }))
   }, [autoAssignRuleByKey, cells, isPairConstraintBlocked, lectureConstraintGroups, managedStudentByAnyName, managedStudentByRegisteredName, normalizedWeeks, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, studentUnavailableSlotsById, students])
 
-  const displayCells = useMemo(() => cells.map((cell) => ({
-    ...cell,
-    desks: cell.desks.map((desk, deskIndex) => ({
-      ...desk,
-      lesson: desk.lesson
-        ? {
-            ...desk.lesson,
-            studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => (student
-              ? {
-                  ...student,
-                  warning: boardStudentWarningsByLocation.get(buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex)),
-                }
-              : null)) as [StudentEntry | null, StudentEntry | null],
-          }
-        : undefined,
-    })),
-  })), [boardStudentWarningsByLocation, cells])
+  const displayCells = useMemo(() => {
+    const sourceCells = isTemplateMode ? templateCells : cells
+    return sourceCells.map((cell) => ({
+      ...cell,
+      desks: cell.desks.map((desk, deskIndex) => ({
+        ...desk,
+        lesson: desk.lesson
+          ? {
+              ...desk.lesson,
+              studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => (student
+                ? {
+                    ...student,
+                    warning: isTemplateMode ? undefined : boardStudentWarningsByLocation.get(buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex)),
+                  }
+                : null)) as [StudentEntry | null, StudentEntry | null],
+            }
+          : undefined,
+      })),
+    }))
+  }, [boardStudentWarningsByLocation, cells, isTemplateMode, templateCells])
 
   useEffect(() => {
     if (studentMenu?.mode !== 'add') return
@@ -3947,11 +4029,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const teacherMenuContext = useMemo(() => {
     if (!teacherMenu) return null
-    const targetCell = cells.find((cell) => cell.id === teacherMenu.cellId)
+    const sourceCells = isTemplateMode ? templateCells : cells
+    const targetCell = sourceCells.find((cell) => cell.id === teacherMenu.cellId)
     const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
     if (!targetCell || !targetDesk) return null
     return { cell: targetCell, desk: targetDesk }
-  }, [cells, teacherMenu])
+  }, [cells, isTemplateMode, teacherMenu, templateCells])
 
   const teacherMenuPosition = useMemo(() => {
     if (!teacherMenu || typeof window === 'undefined') {
@@ -3967,7 +4050,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const teacherOptions = useMemo(() => {
     if (!teacherMenuContext) return []
     const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === teacherMenuContext.desk.teacher || teacher.name === teacherMenuContext.desk.teacher)
-    const visibleTeachers = teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, teacherMenuContext.cell.dateKey) === '在籍')
+    const visibleTeachers = isTemplateMode
+      ? teachers
+      : teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, teacherMenuContext.cell.dateKey) === '在籍')
     const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
       ? [...visibleTeachers, currentTeacher]
       : visibleTeachers
@@ -3976,9 +4061,404 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       .slice()
       .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
       .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher) }))
-  }, [teacherMenuContext, teachers])
+  }, [isTemplateMode, teacherMenuContext, teachers])
 
   const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('不可です。') ? statusMessage : null
+
+  // ── Template mode helpers ──
+  const cloneTemplateCells = (src: SlotCell[]): SlotCell[] =>
+    src.map((c) => ({
+      ...c,
+      desks: c.desks.map((d) => ({
+        ...d,
+        lesson: d.lesson ? { ...d.lesson, studentSlots: [d.lesson.studentSlots[0] ? { ...d.lesson.studentSlots[0] } : null, d.lesson.studentSlots[1] ? { ...d.lesson.studentSlots[1] } : null] as [StudentEntry | null, StudentEntry | null] } : undefined,
+      })),
+    }))
+
+  const templateMenuStudent = useMemo(() => {
+    if (!isTemplateMode || !studentMenu) return null
+    const targetCell = templateCells.find((c) => c.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const student = targetDesk?.lesson?.studentSlots[studentMenu.studentIndex]
+    if (!student || !targetCell || !targetDesk) return null
+    return { student, cell: targetCell, desk: targetDesk }
+  }, [isTemplateMode, studentMenu, templateCells])
+
+  const templateAddableStudents = useMemo(() => {
+    if (!isTemplateMode) return []
+    return students
+      .slice()
+      .sort((a, b) => getStudentDisplayName(a).localeCompare(getStudentDisplayName(b), 'ja'))
+      .map((s) => ({ id: s.id, displayName: getStudentDisplayName(s), student: s }))
+  }, [isTemplateMode, students])
+
+  const templateEditableSubjects = allStudentSubjectOptions
+
+  const handleTemplateStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, _hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
+    setTeacherMenu(null)
+
+    if (hasStudent) {
+      if (selectedStudentId) {
+        // Move with swap
+        handleTemplateMoveStudent(cellId, deskIndex, studentIndex)
+        return
+      }
+      setStudentMenu({ cellId, deskIndex, studentIndex, x, y, mode: 'root' })
+      setStatusMessage('生徒メニューを開きました。')
+      return
+    }
+
+    if (selectedStudentId) {
+      handleTemplateMoveStudent(cellId, deskIndex, studentIndex)
+      return
+    }
+
+    // Empty cell → show add menu
+    setTemplateAddDraft(null)
+    setStudentMenu({ cellId, deskIndex, studentIndex, x, y, mode: 'empty' })
+    setStatusMessage('空欄メニューを開きました。')
+  }
+
+  const handleTemplateStartMove = () => {
+    if (!templateMenuStudent) return
+    setSelectedStudentId(templateMenuStudent.student.id)
+    setStudentMenu(null)
+    setStatusMessage(`${templateMenuStudent.student.name} を選択しました。移動先セルを左クリックしてください。（移動先に生徒がいる場合は入れ替えます）`)
+  }
+
+  const handleTemplateMoveStudent = (targetCellId: string, targetDeskIndex: number, targetStudentIndex: number) => {
+    if (!selectedStudentId) return
+
+    const next = cloneTemplateCells(templateCells)
+
+    // Find source student
+    let sourceStudent: StudentEntry | null = null
+    let sourceCellIdx = -1
+    let sourceDeskIdx = -1
+    let sourceSlotIdx = -1
+    for (let ci = 0; ci < next.length; ci++) {
+      for (let di = 0; di < next[ci].desks.length; di++) {
+        const lesson = next[ci].desks[di].lesson
+        if (!lesson) continue
+        for (let si = 0; si < 2; si++) {
+          if (lesson.studentSlots[si]?.id === selectedStudentId) {
+            sourceStudent = lesson.studentSlots[si]
+            sourceCellIdx = ci
+            sourceDeskIdx = di
+            sourceSlotIdx = si
+          }
+        }
+      }
+    }
+    if (!sourceStudent) {
+      setSelectedStudentId(null)
+      setStatusMessage('移動元の生徒が見つかりませんでした。')
+      return
+    }
+
+    const targetCell = next.find((c) => c.id === targetCellId)
+    const targetDesk = targetCell?.desks[targetDeskIndex]
+    if (!targetDesk) {
+      setSelectedStudentId(null)
+      setStatusMessage('移動先が見つかりませんでした。')
+      return
+    }
+
+    // Same position → cancel
+    if (sourceCellIdx >= 0 && next[sourceCellIdx].id === targetCellId && sourceDeskIdx === targetDeskIndex && sourceSlotIdx === targetStudentIndex) {
+      setSelectedStudentId(null)
+      setStatusMessage('同じ位置をクリックしたため、移動は行いませんでした。')
+      return
+    }
+
+    const targetLesson = targetDesk.lesson
+    const targetStudent = targetLesson?.studentSlots[targetStudentIndex] ?? null
+
+    // Save undo
+    pushTemplateUndo(templateCells)
+
+    // Remove source from original position
+    const srcDesk = next[sourceCellIdx].desks[sourceDeskIdx]
+    if (srcDesk.lesson) {
+      srcDesk.lesson.studentSlots[sourceSlotIdx] = null
+    }
+
+    // Place source at target
+    if (targetLesson) {
+      targetLesson.studentSlots[targetStudentIndex] = sourceStudent
+    } else {
+      targetDesk.lesson = {
+        id: `tpl_lesson_${Date.now().toString(36)}`,
+        studentSlots: targetStudentIndex === 0 ? [sourceStudent, null] : [null, sourceStudent],
+      }
+    }
+
+    // If swap: place target student at source position
+    if (targetStudent) {
+      if (srcDesk.lesson) {
+        srcDesk.lesson.studentSlots[sourceSlotIdx] = targetStudent
+      } else {
+        srcDesk.lesson = {
+          id: `tpl_lesson_${Date.now().toString(36)}_swap`,
+          studentSlots: sourceSlotIdx === 0 ? [targetStudent, null] : [null, targetStudent],
+        }
+      }
+      setStatusMessage(`${sourceStudent.name} と ${targetStudent.name} を入れ替えました。`)
+    } else {
+      // Clean up source desk if empty
+      if (srcDesk.lesson && !srcDesk.lesson.studentSlots[0] && !srcDesk.lesson.studentSlots[1]) {
+        srcDesk.lesson = undefined
+      }
+      setStatusMessage(`${sourceStudent.name} を移動しました。`)
+    }
+
+    setTemplateCells(next)
+    setSelectedStudentId(null)
+    setStudentMenu(null)
+  }
+
+  const handleTemplateDeleteStudent = () => {
+    if (!studentMenu || !templateMenuStudent) return
+    pushTemplateUndo(templateCells)
+    const next = cloneTemplateCells(templateCells)
+    const targetCell = next.find((c) => c.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    if (!targetDesk?.lesson) return
+    targetDesk.lesson.studentSlots[studentMenu.studentIndex] = null
+    if (!targetDesk.lesson.studentSlots[0] && !targetDesk.lesson.studentSlots[1]) {
+      targetDesk.lesson = undefined
+    }
+    setTemplateCells(next)
+    setStudentMenu(null)
+    setStatusMessage(`${templateMenuStudent.student.name} を削除しました。`)
+  }
+
+  const handleTemplateOpenEdit = () => {
+    if (!studentMenu || !templateMenuStudent) return
+    setTemplateEditDraft({
+      studentId: templateMenuStudent.student.managedStudentId ?? '',
+      subject: templateMenuStudent.student.subject,
+      note: templateMenuStudent.student.noteSuffix ?? '',
+    })
+    setStudentMenu({ ...studentMenu, mode: 'edit' })
+  }
+
+  const handleTemplateConfirmEdit = () => {
+    if (!studentMenu || !templateEditDraft || !templateMenuStudent) return
+    pushTemplateUndo(templateCells)
+    const next = cloneTemplateCells(templateCells)
+    const targetCell = next.find((c) => c.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const targetStudent = targetDesk?.lesson?.studentSlots[studentMenu.studentIndex]
+    if (!targetStudent) return
+
+    const newStudentRow = students.find((s) => s.id === templateEditDraft.studentId)
+    const today = new Date()
+    targetDesk!.lesson!.studentSlots[studentMenu.studentIndex] = {
+      ...targetStudent,
+      name: newStudentRow ? getStudentDisplayName(newStudentRow) : targetStudent.name,
+      managedStudentId: templateEditDraft.studentId || targetStudent.managedStudentId,
+      grade: newStudentRow ? (resolveGradeLabelFromBirthDate(newStudentRow.birthDate, today) || targetStudent.grade) as GradeLabel : targetStudent.grade,
+      birthDate: newStudentRow?.birthDate ?? targetStudent.birthDate,
+      subject: templateEditDraft.subject,
+      noteSuffix: templateEditDraft.note || undefined,
+    }
+    setTemplateCells(next)
+    setStudentMenu(null)
+    setTemplateEditDraft(null)
+    setStatusMessage(`${newStudentRow ? getStudentDisplayName(newStudentRow) : targetStudent.name} の情報を更新しました。`)
+  }
+
+  const handleTemplateOpenAdd = () => {
+    if (!studentMenu || templateAddableStudents.length === 0) {
+      setStatusMessage('追加できる在籍生徒が見つかりませんでした。')
+      return
+    }
+    const defaultStudent = templateAddableStudents[0]
+    setTemplateAddDraft({
+      studentId: defaultStudent.id,
+      subject: templateEditableSubjects[0],
+      note: '',
+    })
+    setStudentMenu({ ...studentMenu, mode: 'add' })
+    setStatusMessage('生徒追加メニューを開きました。')
+  }
+
+  const handleTemplateConfirmAdd = () => {
+    if (!studentMenu || !templateAddDraft) return
+    const managedStudent = students.find((s) => s.id === templateAddDraft.studentId)
+    if (!managedStudent) {
+      setStatusMessage('追加対象の生徒が見つかりませんでした。')
+      return
+    }
+
+    pushTemplateUndo(templateCells)
+    const next = cloneTemplateCells(templateCells)
+    const targetCell = next.find((c) => c.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    if (!targetDesk) return
+
+    const today = new Date()
+    const newStudent: StudentEntry = {
+      id: `tpl_add_${Date.now().toString(36)}_${studentMenu.studentIndex}`,
+      name: getStudentDisplayName(managedStudent),
+      managedStudentId: managedStudent.id,
+      grade: (resolveGradeLabelFromBirthDate(managedStudent.birthDate, today) || '中1') as GradeLabel,
+      birthDate: managedStudent.birthDate,
+      noteSuffix: templateAddDraft.note || undefined,
+      subject: templateAddDraft.subject,
+      lessonType: 'regular',
+      teacherType: 'normal',
+    }
+
+    if (targetDesk.lesson) {
+      targetDesk.lesson.studentSlots[studentMenu.studentIndex] = newStudent
+    } else {
+      targetDesk.lesson = {
+        id: `tpl_lesson_${Date.now().toString(36)}`,
+        studentSlots: studentMenu.studentIndex === 0 ? [newStudent, null] : [null, newStudent],
+      }
+    }
+
+    setTemplateCells(next)
+    setStudentMenu(null)
+    setTemplateAddDraft(null)
+    setStatusMessage(`${getStudentDisplayName(managedStudent)} を追加しました。`)
+  }
+
+  const handleTemplateSelectDesk = (cellId: string, deskIndex: number, x: number, y: number) => {
+    setStudentMenu(null)
+    const targetCell = templateCells.find((c) => c.id === cellId)
+    const targetDesk = targetCell?.desks[deskIndex]
+    if (!targetCell || !targetDesk) return
+
+    const matchedTeacher = teachers.find((t) => getTeacherDisplayName(t) === targetDesk.teacher || t.name === targetDesk.teacher)
+    setTeacherMenu({
+      cellId,
+      deskIndex,
+      x,
+      y,
+      selectedTeacherName: matchedTeacher ? getTeacherDisplayName(matchedTeacher) : targetDesk.teacher,
+    })
+    setStatusMessage(`講師選択を開きました: ${targetCell.dateLabel} ${targetCell.slotLabel} / ${deskIndex + 1}机目`)
+  }
+
+  const handleTemplateConfirmTeacher = () => {
+    if (!teacherMenu) return
+    pushTemplateUndo(templateCells)
+    const next = cloneTemplateCells(templateCells)
+    const targetCell = next.find((c) => c.id === teacherMenu.cellId)
+    const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
+    if (!targetDesk) return
+    targetDesk.teacher = teacherMenu.selectedTeacherName
+    setTemplateCells(next)
+    setTeacherMenu(null)
+    setStatusMessage(`講師を ${teacherMenu.selectedTeacherName || '未設定'} に変更しました。`)
+  }
+
+  const handleTemplateSave = () => {
+    const template = convertTemplateCellsToTemplate({
+      cells: templateCells,
+      teachers,
+      students,
+      effectiveStartDate: templateEffectiveStartDate,
+      deskCount: classroomSettings.deskCount,
+    })
+    handleSaveRegularLessonTemplate(template)
+  }
+
+  const handleTemplateExport = async () => {
+    const template = convertTemplateCellsToTemplate({
+      cells: templateCells,
+      teachers,
+      students,
+      effectiveStartDate: templateEffectiveStartDate,
+      deskCount: classroomSettings.deskCount,
+    })
+    const xlsx = await import('xlsx')
+    xlsx.writeFile(
+      buildRegularLessonTemplateWorkbook(xlsx, { template, teachers, students, deskCount: classroomSettings.deskCount }),
+      '通常授業テンプレート.xlsx',
+    )
+    setStatusMessage('通常授業テンプレートを Excel 出力しました。')
+  }
+
+  const handleTemplateImportClick = () => {
+    templateFileInputRef.current?.click()
+  }
+
+  const handleTemplateImportFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const [file] = Array.from(event.target.files ?? [])
+    event.target.value = ''
+    if (!file) return
+    try {
+      const buffer = await file.arrayBuffer()
+      const xlsx = await import('xlsx')
+      const workbook = xlsx.read(buffer, { type: 'array' })
+      const currentTemplate = convertTemplateCellsToTemplate({
+        cells: templateCells,
+        teachers,
+        students,
+        effectiveStartDate: templateEffectiveStartDate,
+        deskCount: classroomSettings.deskCount,
+      })
+      const normalizedCurrent = normalizeRegularLessonTemplate(currentTemplate, classroomSettings.deskCount)
+      const importedTemplate = parseRegularLessonTemplateWorkbook(xlsx, workbook, {
+        fallbackTemplate: normalizedCurrent,
+        teachers,
+        students,
+        deskCount: classroomSettings.deskCount,
+      })
+      const importedCells = buildTemplateBoardCells({ template: importedTemplate, teachers, students, deskCount: classroomSettings.deskCount })
+      pushTemplateUndo(templateCells)
+      setTemplateCells(importedCells)
+      setTemplateEffectiveStartDate(importedTemplate.effectiveStartDate)
+      setStatusMessage('通常授業テンプレートを Excel から取り込みました。')
+    } catch {
+      setStatusMessage('通常授業テンプレートの Excel 取り込みに失敗しました。')
+    }
+  }
+
+  const handleTemplatePackSort = () => {
+    pushTemplateUndo(templateCells)
+    const next = cloneTemplateCells(templateCells)
+    // Group cells by dateKey (dayOfWeek)
+    const byDay = new Map<string, SlotCell[]>()
+    for (const cell of next) {
+      const group = byDay.get(cell.dateKey) ?? []
+      group.push(cell)
+      byDay.set(cell.dateKey, group)
+    }
+    for (const group of byDay.values()) {
+      // Collect all occupied desks
+      const occupiedDesks: { teacher: string; lesson: DeskLesson }[] = []
+      for (const cell of group) {
+        for (const desk of cell.desks) {
+          if (desk.lesson?.studentSlots[0] || desk.lesson?.studentSlots[1]) {
+            occupiedDesks.push({ teacher: desk.teacher, lesson: desk.lesson! })
+          }
+        }
+      }
+      // Clear all desks, then re-fill from top
+      let fillIdx = 0
+      for (const cell of group) {
+        for (const desk of cell.desks) {
+          if (fillIdx < occupiedDesks.length) {
+            desk.teacher = occupiedDesks[fillIdx].teacher
+            desk.lesson = occupiedDesks[fillIdx].lesson
+            fillIdx++
+          } else {
+            desk.lesson = undefined
+          }
+        }
+      }
+    }
+    setTemplateCells(next)
+    setStudentMenu(null)
+    setTeacherMenu(null)
+    setStatusMessage('テンプレートを詰めて並び替えました。')
+  }
+  // ── End template mode helpers ──
 
   const findDuplicateStudentInCell = (targetCell: SlotCell, studentKey: string, excludedStudentId?: string) => {
     for (const desk of targetCell.desks) {
@@ -5789,9 +6269,20 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           {pointerPreviewLabel}
         </div>
       ) : null}
-      <main className="page-main page-main-board-only" onPointerDownCapture={acquireBoardInteraction}>
+      <main className={`page-main page-main-board-only${isTemplateMode ? ' template-mode-active' : ''}`} onPointerDownCapture={acquireBoardInteraction}>
         <section className="board-panel board-panel-unified">
-          {isBoardInteractionLocked ? <div className="interaction-lock-banner" data-testid="board-interaction-lock-banner">{boardInteractionLockMessage}</div> : null}
+          {isBoardInteractionLocked && !isTemplateMode ? <div className="interaction-lock-banner" data-testid="board-interaction-lock-banner">{boardInteractionLockMessage}</div> : null}
+          {isTemplateMode ? (
+            <div className="template-mode-header-bar">
+              <span className="template-mode-title">通常授業テンプレート編集</span>
+              <label className="basic-data-inline-field basic-data-inline-field-short">
+                <span>反映開始日</span>
+                <input type="date" value={templateEffectiveStartDate} onChange={(e) => setTemplateEffectiveStartDate(e.target.value)} data-testid="template-effective-start-date" />
+              </label>
+              <span className="selection-pill">机数 {classroomSettings.deskCount}</span>
+            </div>
+          ) : null}
+          <input ref={templateFileInputRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={(e) => { void handleTemplateImportFile(e) }} />
           <BoardToolbar
             weekLabel={weekLabel}
             statusMessage={statusMessage}
@@ -5804,20 +6295,21 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             isStudentScheduleOpen={isStudentScheduleOpen}
             isTeacherScheduleOpen={isTeacherScheduleOpen}
             hasSelectedStudent={selectedStudentId !== null || selectedMakeupStockKey !== null || selectedLectureStockKey !== null}
-            canUndo={undoStack.length > 0}
-            canRedo={redoStack.length > 0}
-            canGoPrevWeek
-            canGoNextWeek
-            onUndo={handleUndo}
-            onRedo={handleRedo}
-            onPackSort={handlePackSort}
+            canUndo={isTemplateMode ? templateUndoStack.length > 0 : undoStack.length > 0}
+            canRedo={isTemplateMode ? templateRedoStack.length > 0 : redoStack.length > 0}
+            canGoPrevWeek={!isTemplateMode}
+            canGoNextWeek={!isTemplateMode}
+            isTemplateMode={isTemplateMode}
+            onUndo={isTemplateMode ? handleTemplateUndo : handleUndo}
+            onRedo={isTemplateMode ? handleTemplateRedo : handleRedo}
+            onPackSort={isTemplateMode ? handleTemplatePackSort : handlePackSort}
             onGoPrevWeek={() => switchWeek(weekIndex - 1)}
             onGoNextWeek={() => switchWeek(weekIndex + 1)}
             onToggleLectureStock={handleToggleLectureStock}
             onToggleMakeupStock={handleToggleMakeupStock}
             onOpenStudentSchedule={handleOpenStudentSchedule}
             onOpenTeacherSchedule={handleOpenTeacherSchedule}
-            onOpenRegularTemplate={() => setIsRegularTemplateEditorOpen(true)}
+            onOpenRegularTemplate={handleEnterTemplateMode}
             onPrintPdf={handlePrintPdf}
             onCancelSelection={handleCancelSelection}
             onOpenBasicData={onOpenBasicData}
@@ -5825,17 +6317,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onOpenAutoAssignRules={onOpenAutoAssignRules}
             onOpenBackupRestore={onOpenBackupRestore}
             onLogout={onLogout}
-          />
-          <RegularLessonTemplateEditor
-            open={isRegularTemplateEditorOpen}
-            classroomSettings={classroomSettings}
-            teachers={teachers}
-            students={students}
-            onClose={() => setIsRegularTemplateEditorOpen(false)}
-            onSave={handleSaveRegularLessonTemplate}
+            onTemplateExport={() => void handleTemplateExport()}
+            onTemplateImport={handleTemplateImportClick}
+            onTemplateSave={handleTemplateSave}
+            onTemplateClose={handleExitTemplateMode}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
-          {stockActionModal ? (() => {
+          {!isTemplateMode && stockActionModal ? (() => {
             const lectureEntry = stockActionModal.type === 'lecture'
               ? lectureStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
               : null
@@ -5907,18 +6395,18 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             cells={displayCells}
             selectedStudentId={selectedStudentId}
             highlightedCell={highlightedCell}
-            highlightedHolidayDate={selectedHolidayDate}
-            yearLabel={yearLabel}
-            specialPeriods={visibleSpecialSessions}
-            resolveStudentDisplayName={resolveBoardStudentDisplayName}
-            resolveStudentGradeLabel={resolveBoardStudentGradeLabel}
-            resolveDisplayedLessonType={resolveDisplayedLessonType}
-            onDayHeaderClick={handleToggleHolidayDate}
-            onTeacherClick={handleSelectDesk}
-            onStudentClick={handleStudentClick}
+            highlightedHolidayDate={isTemplateMode ? null : selectedHolidayDate}
+            yearLabel={isTemplateMode ? '' : yearLabel}
+            specialPeriods={isTemplateMode ? [] : visibleSpecialSessions}
+            resolveStudentDisplayName={isTemplateMode ? ((name) => name) : resolveBoardStudentDisplayName}
+            resolveStudentGradeLabel={isTemplateMode ? ((_name, fallbackGrade) => fallbackGrade) : resolveBoardStudentGradeLabel}
+            resolveDisplayedLessonType={isTemplateMode ? ((_name, _subject, lessonType) => lessonType) : resolveDisplayedLessonType}
+            onDayHeaderClick={isTemplateMode ? (() => {}) : handleToggleHolidayDate}
+            onTeacherClick={isTemplateMode ? handleTemplateSelectDesk : handleSelectDesk}
+            onStudentClick={isTemplateMode ? handleTemplateStudentClick : handleStudentClick}
           />
           </div>
-          {!studentMenu && !teacherMenu && !selectedStudentId && (isLectureStockOpen || isMakeupStockOpen || autoAssignDebugReport) ? (
+          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && (isLectureStockOpen || isMakeupStockOpen || autoAssignDebugReport) ? (
             <div className="stock-floating-modals">
               {isLectureStockOpen ? (
                 <section className="lecture-stock-panel stock-floating-panel" data-testid="lecture-stock-panel">
@@ -6033,11 +6521,127 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 </select>
               </div>
               <div className="student-menu-section student-menu-actions">
-                <button type="button" className="primary-button" onClick={handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
+                <button type="button" className="primary-button" onClick={isTemplateMode ? handleTemplateConfirmTeacher : handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
               </div>
             </div>
           ) : null}
-          {studentMenu && (studentMenu.mode === 'memo' || studentMenu.mode === 'empty' || studentMenu.mode === 'add' || menuStudent) ? (
+          {isTemplateMode && studentMenu && (studentMenu.mode === 'root' || studentMenu.mode === 'empty' || studentMenu.mode === 'edit' || studentMenu.mode === 'add') ? (
+            <div
+              className="student-menu-popover"
+              style={menuPosition}
+              data-testid="student-action-menu"
+            >
+              <div className="student-menu-head">
+                <strong>{studentMenu.mode === 'empty' || studentMenu.mode === 'add'
+                  ? '空欄メニュー'
+                  : templateMenuStudent?.student.name ?? ''}</strong>
+                <button type="button" className="student-menu-close" onClick={() => { setStudentMenu(null); setTemplateEditDraft(null); setTemplateAddDraft(null) }}>x</button>
+              </div>
+              {studentMenu.mode === 'root' && templateMenuStudent ? (
+                <div className="student-menu-section">
+                  <button type="button" className="menu-link-button" onClick={handleTemplateStartMove} data-testid="menu-move-button">移動</button>
+                  <button type="button" className="menu-link-button" onClick={handleTemplateOpenEdit} data-testid="menu-edit-button">編集</button>
+                  <button type="button" className="menu-link-button" onClick={handleTemplateDeleteStudent} data-testid="menu-delete-button">削除</button>
+                </div>
+              ) : studentMenu.mode === 'empty' ? (
+                <div className="student-menu-section">
+                  <button type="button" className="menu-link-button" onClick={handleTemplateOpenAdd} data-testid="menu-open-add-existing-student-button">既存生徒追加</button>
+                </div>
+              ) : studentMenu.mode === 'edit' && templateEditDraft ? (
+                <>
+                  <div className="student-menu-section student-menu-inline-head">
+                    <strong className="student-menu-section-title">編集</strong>
+                    <button type="button" className="menu-link-button subtle" onClick={() => { setTemplateEditDraft(null); setStudentMenu({ ...studentMenu, mode: 'root' }) }} data-testid="menu-edit-back-button">戻る</button>
+                  </div>
+                  <div className="student-menu-section student-menu-actions">
+                    <button type="button" className="primary-button" onClick={handleTemplateConfirmEdit} data-testid="menu-edit-confirm-button">保存</button>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="template-edit-student-select">生徒</label>
+                    <select
+                      id="template-edit-student-select"
+                      className="student-menu-select"
+                      value={templateEditDraft.studentId}
+                      onChange={(e) => setTemplateEditDraft((d) => d ? { ...d, studentId: e.target.value } : d)}
+                      data-testid="template-edit-student-select"
+                    >
+                      <option value="">生徒なし</option>
+                      {templateAddableStudents.map((s) => <option key={s.id} value={s.id}>{s.displayName}</option>)}
+                    </select>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="template-edit-subject-select">科目</label>
+                    <select
+                      id="template-edit-subject-select"
+                      className="student-menu-select"
+                      value={templateEditDraft.subject}
+                      onChange={(e) => setTemplateEditDraft((d) => d ? { ...d, subject: e.target.value as SubjectLabel } : d)}
+                      data-testid="template-edit-subject-select"
+                    >
+                      {templateEditableSubjects.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="template-edit-note-input">注記</label>
+                    <input
+                      id="template-edit-note-input"
+                      className="student-menu-input"
+                      value={templateEditDraft.note}
+                      maxLength={4}
+                      onChange={(e) => setTemplateEditDraft((d) => d ? { ...d, note: e.target.value.slice(0, 4) } : d)}
+                      data-testid="template-edit-note-input"
+                    />
+                  </div>
+                </>
+              ) : studentMenu.mode === 'add' && templateAddDraft ? (
+                <>
+                  <div className="student-menu-section student-menu-inline-head">
+                    <strong className="student-menu-section-title">追加</strong>
+                    <button type="button" className="menu-link-button subtle" onClick={() => { setTemplateAddDraft(null); setStudentMenu({ ...studentMenu, mode: 'empty' }) }} data-testid="menu-add-back-button">戻る</button>
+                  </div>
+                  <div className="student-menu-section student-menu-actions">
+                    <button type="button" className="primary-button" onClick={handleTemplateConfirmAdd} data-testid="menu-add-existing-student-confirm-button">追加</button>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="template-add-student-select">生徒</label>
+                    <select
+                      id="template-add-student-select"
+                      className="student-menu-select"
+                      value={templateAddDraft.studentId}
+                      onChange={(e) => setTemplateAddDraft((d) => d ? { ...d, studentId: e.target.value } : d)}
+                      data-testid="template-add-student-select"
+                    >
+                      {templateAddableStudents.map((s) => <option key={s.id} value={s.id}>{s.displayName}</option>)}
+                    </select>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="template-add-subject-select">科目</label>
+                    <select
+                      id="template-add-subject-select"
+                      className="student-menu-select"
+                      value={templateAddDraft.subject}
+                      onChange={(e) => setTemplateAddDraft((d) => d ? { ...d, subject: e.target.value as SubjectLabel } : d)}
+                      data-testid="template-add-subject-select"
+                    >
+                      {templateEditableSubjects.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="template-add-note-input">注記</label>
+                    <input
+                      id="template-add-note-input"
+                      className="student-menu-input"
+                      value={templateAddDraft.note}
+                      maxLength={4}
+                      onChange={(e) => setTemplateAddDraft((d) => d ? { ...d, note: e.target.value.slice(0, 4) } : d)}
+                      data-testid="template-add-note-input"
+                    />
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {!isTemplateMode && studentMenu && (studentMenu.mode === 'memo' || studentMenu.mode === 'empty' || studentMenu.mode === 'add' || menuStudent) ? (
             <div
               className={`student-menu-popover${studentMenu.mode === 'memo' ? ' student-menu-popover-memo' : ''}`}
               style={menuPosition}
