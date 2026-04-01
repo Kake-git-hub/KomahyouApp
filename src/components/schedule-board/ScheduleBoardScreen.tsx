@@ -69,6 +69,11 @@ type TeacherMenuState = {
   selectedTeacherName: string
 }
 
+type TemplateSaveConfirmState = {
+  mode: 'normal' | 'overwrite'
+  template: RegularLessonTemplate
+}
+
 type EditStudentDraft = {
   subject: SubjectLabel
   lessonType: LessonType
@@ -2084,6 +2089,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [templateUndoStack, setTemplateUndoStack] = useState<TemplateHistoryEntry[]>([])
   const [templateRedoStack, setTemplateRedoStack] = useState<TemplateHistoryEntry[]>([])
   const templateFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [templateSaveConfirm, setTemplateSaveConfirm] = useState<TemplateSaveConfirmState | null>(null)
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
@@ -2158,7 +2164,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     })
   }, [templateCells])
 
-  const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate) => {
+  const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate, overwrite: boolean) => {
     const normalizedTemplateRegularLessons = buildRegularLessonsFromTemplate({
       template,
       teachers,
@@ -2170,10 +2176,38 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       regularLessonTemplate: template,
     })
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
+
+    if (overwrite) {
+      const effectiveStart = template.effectiveStartDate
+      const clearedWeeks = weeks.map((week) =>
+        week.map((cell) => {
+          if (cell.dateKey < effectiveStart) return cell
+          return {
+            ...cell,
+            desks: cell.desks.map((desk) => ({
+              ...desk,
+              teacher: '',
+              manualTeacher: false,
+              teacherAssignmentSource: undefined,
+              teacherAssignmentSessionId: undefined,
+              teacherAssignmentTeacherId: undefined,
+              memoSlots: undefined,
+              statusSlots: cloneStatusSlots(desk.statusSlots),
+              lesson: undefined,
+            })),
+          }
+        }),
+      )
+      setWeeks(clearedWeeks)
+    }
+
     setIsTemplateMode(false)
     setTemplateCells([])
-    setStatusMessage('通常授業テンプレートを保存しました。開始日以降の通常授業へ反映します。')
-  }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers])
+    setTemplateSaveConfirm(null)
+    setStatusMessage(overwrite
+      ? `通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`
+      : '通常授業テンプレートを通常保存しました。メモ・手入力は維持されます。')
+  }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks])
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -4369,7 +4403,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage('講師を削除しました。')
   }
 
-  const handleTemplateSave = () => {
+  const handleTemplateSaveRequest = (mode: 'normal' | 'overwrite') => {
     const template = convertTemplateCellsToTemplate({
       cells: templateCells,
       teachers,
@@ -4377,7 +4411,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       effectiveStartDate: templateEffectiveStartDate,
       deskCount: classroomSettings.deskCount,
     })
-    handleSaveRegularLessonTemplate(template)
+    setTemplateSaveConfirm({ mode, template })
+  }
+
+  const handleTemplateSaveConfirm = () => {
+    if (!templateSaveConfirm) return
+    handleSaveRegularLessonTemplate(templateSaveConfirm.template, templateSaveConfirm.mode === 'overwrite')
   }
 
   const handleTemplateExport = async () => {
@@ -4594,9 +4633,26 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id)
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
-    setStatusMessage(currentTeacherMenu.selectedTeacherName
-      ? `${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を ${currentTeacherMenu.selectedTeacherName} に設定しました。`
-      : `${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を未設定にしました。`)
+    setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を ${currentTeacherMenu.selectedTeacherName} に設定しました。`)
+  }
+
+  const handleDeleteTeacher = () => {
+    const currentTeacherMenu = teacherMenu
+    if (!currentTeacherMenu || !teacherMenuContext) return
+
+    const nextWeeks = cloneWeeks(weeks)
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === currentTeacherMenu.cellId)
+    const targetDesk = targetCell?.desks[currentTeacherMenu.deskIndex]
+    if (!targetCell || !targetDesk) return
+
+    targetDesk.teacher = ''
+    targetDesk.manualTeacher = true
+    targetDesk.teacherAssignmentSource = 'deleted'
+    targetDesk.teacherAssignmentSessionId = undefined
+    targetDesk.teacherAssignmentTeacherId = undefined
+    commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
+    setTeacherMenu(null)
+    setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を削除しました。`)
   }
 
   const handleToggleHolidayDate = (dateKey: string) => {
@@ -5182,8 +5238,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetCellBeforeMove = cells.find((cell) => cell.id === cellId)
     const targetDeskBeforeMove = targetCellBeforeMove?.desks[deskIndex]
     const targetLessonBeforeMove = targetDeskBeforeMove?.lesson
-    if (targetLessonBeforeMove?.studentSlots[studentIndex]) {
-      setStatusMessage('クリックした移動先は埋まっています。空欄の生徒マスを選んでください。')
+    const targetStudentBeforeMove = targetLessonBeforeMove?.studentSlots[studentIndex] ?? null
+
+    if (targetDeskBeforeMove && hasMemoInStudentSlot(targetDeskBeforeMove, studentIndex) && !targetStudentBeforeMove) {
+      setStatusMessage('クリックした移動先にはメモがあります。メモを削除してから配置してください。')
       return
     }
 
@@ -5256,12 +5314,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       movedStudent = normalizeLessonPlacement(nextMovedStudent, cellId.split('_')[0] ?? sourceDateKey)
     }
 
+    // Check for duplicates (exclude both source and target students from check)
     const comparableStudentKey = resolveStockComparableStudentKey(movedStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
     const duplicateStudent = targetCell ? findDuplicateStudentInCell(targetCell, comparableStudentKey, movedStudent.id) : null
-    if (duplicateStudent) {
+    if (duplicateStudent && duplicateStudent.id !== targetStudentBeforeMove?.id) {
       setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動不可です。`)
       return
     }
+
+    // Get the target student (for swap)
+    const swapStudent = targetDesk.lesson?.studentSlots[studentIndex] ?? null
 
     const targetLesson = targetDesk.lesson
     if (targetLesson) {
@@ -5276,13 +5338,34 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }
     }
 
+    // If swap: place target student at source position
+    if (swapStudent) {
+      // Find source desk in nextWeeks (it may have been cleared)
+      const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
+      const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
+      if (sourceDesk) {
+        if (sourceDesk.lesson) {
+          sourceDesk.lesson.studentSlots[sourceSlotIndex] = swapStudent
+        } else {
+          sourceDesk.lesson = cloneLesson(sourceLessonSnapshot, swapStudent)
+          sourceDesk.lesson.studentSlots = sourceSlotIndex === 0
+            ? [swapStudent, null]
+            : [null, swapStudent]
+        }
+      }
+    }
+
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
 
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, nextSuppressedRegularLessonOccurrences)
     setSelectedStudentId(null)
-    setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell?.dateLabel} ${targetCell?.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`)
+    if (swapStudent) {
+      setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} と ${resolveBoardStudentDisplayName(swapStudent.name)} を入れ替えました。`)
+    } else {
+      setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell?.dateLabel} ${targetCell?.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`)
+    }
   }
 
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
@@ -5294,6 +5377,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const currentStatus = targetCell?.desks[deskIndex]?.statusSlots?.[studentIndex] ?? null
 
     if (hasStudent) {
+      if (selectedStudentId) {
+        executeMoveStudent(cellId, deskIndex, studentIndex)
+        return
+      }
       setSelectedStudentId(null)
       setSelectedMakeupStockKey(null)
       setSelectedLectureStockKey(null)
@@ -5350,7 +5437,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setIsLectureStockOpen(false)
     setStockPanelsRestoreState(null)
     setStudentMenu(null)
-    setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を選択しました。移動先の空欄セルを左クリックしてください。`)
+    setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を選択しました。移動先セルを左クリックしてください。（移動先に生徒がいる場合は入れ替えます）`)
   }
 
   const handleOpenAddExistingStudent = () => {
@@ -6304,7 +6391,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onLogout={onLogout}
             onTemplateExport={() => void handleTemplateExport()}
             onTemplateImport={handleTemplateImportClick}
-            onTemplateSave={handleTemplateSave}
+            onTemplateSaveNormal={() => handleTemplateSaveRequest('normal')}
+            onTemplateSaveOverwrite={() => handleTemplateSaveRequest('overwrite')}
             onTemplateClose={handleExitTemplateMode}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
@@ -6499,7 +6587,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   onChange={(event) => setTeacherMenu((current) => (current ? { ...current, selectedTeacherName: event.target.value } : current))}
                   data-testid="teacher-select-input"
                 >
-                  <option value="">未選択</option>
                   {teacherOptions.map((teacher) => (
                     <option key={teacher.id} value={teacher.name}>{teacher.name}</option>
                   ))}
@@ -6507,9 +6594,29 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               </div>
               <div className="student-menu-section student-menu-actions">
                 <button type="button" className="primary-button" onClick={isTemplateMode ? handleTemplateConfirmTeacher : handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
-                {isTemplateMode && teacherMenuContext?.desk.teacher ? (
-                  <button type="button" className="menu-link-button danger" onClick={handleTemplateDeleteTeacher} data-testid="teacher-delete-button">講師削除</button>
+                {teacherMenuContext?.desk.teacher ? (
+                  <button type="button" className="menu-link-button danger" onClick={isTemplateMode ? handleTemplateDeleteTeacher : handleDeleteTeacher} data-testid="teacher-delete-button">講師削除</button>
                 ) : null}
+              </div>
+            </div>
+          ) : null}
+          {templateSaveConfirm ? (
+            <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplateSaveConfirm(null) }}>
+              <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="template-save-confirm-modal">
+                <div className="auto-assign-modal-title">
+                  {templateSaveConfirm.mode === 'normal' ? 'テンプレート通常保存' : 'テンプレート上書き保存'}
+                </div>
+                <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {templateSaveConfirm.mode === 'normal'
+                    ? `${templateSaveConfirm.template.effectiveStartDate} 以降の通常授業をテンプレート内容で書き換えます。\n\n書き換わらない対象:\n・手入力で追加/変更した生徒や講師\n・メモ\n・振替授業、講習授業\n・出欠記録\n\n実行しますか？`
+                    : `${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
+                </div>
+                <div className="student-menu-section student-menu-actions">
+                  <button type="button" className="primary-button" onClick={handleTemplateSaveConfirm} data-testid="template-save-confirm-execute-button">
+                    {templateSaveConfirm.mode === 'normal' ? '通常保存を実行' : '上書き保存を実行'}
+                  </button>
+                  <button type="button" className="secondary-button" onClick={() => setTemplateSaveConfirm(null)} data-testid="template-save-confirm-cancel-button">キャンセル</button>
+                </div>
               </div>
             </div>
           ) : null}

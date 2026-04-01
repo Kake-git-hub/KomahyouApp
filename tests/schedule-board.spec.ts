@@ -644,7 +644,8 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('teacher-cell-template_1_4-0').click()
     await page.getByTestId('teacher-select-input').selectOption({ label: '出勤講師' })
     await page.getByTestId('teacher-select-confirm-button').click()
-    await page.getByTestId('template-save-button').click()
+    await page.getByTestId('template-save-normal-button').click()
+    await page.getByTestId('template-save-confirm-execute-button').click()
     await expect.poll(async () => hasTeacherInSlot(page, mondayKey, 4, '出勤講師')).toBe(true)
   })
 
@@ -745,7 +746,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId(`day-header-${toDateKey(targetWeekStart)}`)).toBeVisible()
   })
 
-  test('講師を未選択にしても生徒付きの盤面状態を保持できる', async ({ page }) => {
+  test('講師を削除しても生徒付きの盤面状態を保持できる', async ({ page }) => {
     const mondaySlotId = `${toDateKey(getWeekStart(new Date()))}_1`
     const teacherCell = page.getByTestId(`teacher-cell-${mondaySlotId}-0`)
     const studentCell = page.getByTestId(`student-name-${mondaySlotId}-0-0`)
@@ -756,10 +757,10 @@ test.describe('コマ調整表', () => {
     await expect(studentCell).toHaveText('青木太郎')
 
     await teacherCell.click()
-    await page.getByTestId('teacher-select-input').selectOption('')
-    await page.getByTestId('teacher-select-confirm-button').click()
+    await page.getByTestId('teacher-delete-button').click()
 
     await expect(teacherCell).toHaveText('')
+    await expect(teacherCell).not.toHaveClass(/sa-warning/)
     await expect(studentCell).toHaveText('青木太郎')
 
     await page.getByTestId('menu-button').click()

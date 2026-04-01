@@ -432,6 +432,11 @@
   box-shadow: 0 6px 18px rgba(26, 115, 232, 0.24);
 }
 
+.primary-button.danger {
+  background: #d93025;
+  box-shadow: 0 6px 18px rgba(217, 48, 37, 0.24);
+}
+
 .primary-button:hover,
 .secondary-button:hover,
 .segment-button:hover,

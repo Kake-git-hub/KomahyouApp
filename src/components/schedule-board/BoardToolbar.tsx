@@ -36,7 +36,8 @@ type BoardToolbarProps = {
   onLogout: () => void
   onTemplateExport?: () => void
   onTemplateImport?: () => void
-  onTemplateSave?: () => void
+  onTemplateSaveNormal?: () => void
+  onTemplateSaveOverwrite?: () => void
   onTemplateClose?: () => void
 }
 
@@ -76,7 +77,8 @@ export function BoardToolbar({
   onLogout,
   onTemplateExport,
   onTemplateImport,
-  onTemplateSave,
+  onTemplateSaveNormal,
+  onTemplateSaveOverwrite,
   onTemplateClose,
 }: BoardToolbarProps) {
   return (
@@ -127,7 +129,8 @@ export function BoardToolbar({
             <>
               <button className="secondary-button slim" type="button" onClick={onTemplateExport} data-testid="template-export-button">エクセル現状出力</button>
               <button className="secondary-button slim" type="button" onClick={onTemplateImport} data-testid="template-import-button">エクセル取込</button>
-              <button className="primary-button" type="button" onClick={onTemplateSave} data-testid="template-save-button">保存</button>
+              <button className="primary-button" type="button" onClick={onTemplateSaveNormal} data-testid="template-save-normal-button">通常保存</button>
+              <button className="primary-button danger" type="button" onClick={onTemplateSaveOverwrite} data-testid="template-save-overwrite-button">上書き保存</button>
             </>
           ) : (
             <>
