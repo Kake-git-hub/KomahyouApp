@@ -2215,80 +2215,14 @@ tr.sa-slot-first td {
 
 .regular-template-board {
   overflow: auto;
-  padding: 14px;
+  padding: 0;
 }
 
-.regular-template-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-}
-
-.regular-template-table th,
-.regular-template-table td {
-  padding: 10px;
-  vertical-align: top;
-  border-bottom: 1px solid #d7e2f1;
-}
-
-.regular-template-table thead th {
-  position: sticky;
-  top: 0;
-  background: #eef4fb;
-  color: #16314f;
-  z-index: 1;
-}
-
-.regular-template-table tbody tr:last-child th,
-.regular-template-table tbody tr:last-child td {
-  border-bottom: none;
-}
-
-.regular-template-cell,
 .regular-template-editor-panel,
 .regular-template-editor-fields,
 .regular-template-student-block {
   display: grid;
   gap: 10px;
-}
-
-.regular-template-empty {
-  padding: 12px;
-  border: 1px dashed #c7d8ea;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.7);
-  color: #58708d;
-  text-align: center;
-}
-
-.regular-template-desk-chip {
-  display: grid;
-  gap: 4px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #d7e2f1;
-  border-radius: 12px;
-  background: #fff;
-  color: #244564;
-  text-align: left;
-  cursor: pointer;
-  font: inherit;
-}
-
-.regular-template-desk-chip.active,
-.regular-template-desk-chip:hover {
-  border-color: #9fc0f0;
-  background: #eef4ff;
-}
-
-.regular-template-desk-chip span {
-  color: #58708d;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.regular-template-add-button {
-  justify-self: start;
 }
 
 .regular-template-editor-panel {

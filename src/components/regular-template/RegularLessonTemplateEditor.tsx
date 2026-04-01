@@ -4,6 +4,7 @@ import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type Tea
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import {
   buildRegularLessonTemplateWorkbook,
+  buildTemplateBoardCells,
   createRegularLessonTemplate,
   normalizeRegularLessonTemplate,
   parseRegularLessonTemplateWorkbook,
@@ -12,6 +13,7 @@ import {
   type RegularLessonTemplate,
   type RegularLessonTemplateDesk,
 } from './regularLessonTemplate'
+import { BoardGrid } from '../schedule-board/BoardGrid'
 
 type RegularLessonTemplateEditorProps = {
   open: boolean
@@ -57,6 +59,11 @@ const dayLabelByValue: Record<number, string> = {
   6: '土',
 }
 
+function parseTemplateCellId(cellId: string) {
+  const parts = cellId.replace('template_', '').split('_')
+  return { dayOfWeek: Number(parts[0]), slotNumber: Number(parts[1]) }
+}
+
 export function RegularLessonTemplateEditor({ open, classroomSettings, teachers, students, onClose, onSave }: RegularLessonTemplateEditorProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [draftTemplate, setDraftTemplate] = useState<RegularLessonTemplate>(() => normalizeRegularLessonTemplate(classroomSettings.regularLessonTemplate, classroomSettings.deskCount))
@@ -98,7 +105,23 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     [normalizedTemplate.cells],
   )
 
+  const boardCells = useMemo(
+    () => buildTemplateBoardCells({ template: normalizedTemplate, teachers, students, deskCount: classroomSettings.deskCount }),
+    [normalizedTemplate, teachers, students, classroomSettings.deskCount],
+  )
+
+  const highlightedCell = useMemo(() => ({
+    cellId: `template_${selectedDesk.dayOfWeek}_${selectedDesk.slotNumber}`,
+    deskIndex: selectedDesk.deskIndex - 1,
+    studentIndex: 0,
+  }), [selectedDesk.dayOfWeek, selectedDesk.slotNumber, selectedDesk.deskIndex])
+
   if (!open) return null
+
+  const handleBoardDeskClick = (cellId: string, deskIndex: number) => {
+    const { dayOfWeek, slotNumber } = parseTemplateCellId(cellId)
+    setSelectedDesk({ dayOfWeek, slotNumber, deskIndex: deskIndex + 1 })
+  }
 
   const updateDesk = (mutator: (desk: RegularLessonTemplateDesk) => RegularLessonTemplateDesk) => {
     setDraftTemplate((current) => {
@@ -115,13 +138,6 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
         savedAt: new Date().toISOString(),
       }
     })
-  }
-
-  const handleSelectFirstEmptyDesk = (dayOfWeek: number, slotNumber: number) => {
-    const cell = cellByKey.get(buildCellKey(dayOfWeek, slotNumber))
-    const targetDesk = cell?.desks.find((desk) => !desk.teacherId && desk.students.every((student) => !student?.studentId)) ?? cell?.desks[0]
-    if (!targetDesk) return
-    setSelectedDesk({ dayOfWeek, slotNumber, deskIndex: targetDesk.deskIndex })
   }
 
   const handleExport = async () => {
@@ -180,19 +196,6 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     onClose()
   }
 
-  const renderDeskSummary = (desk: RegularLessonTemplateDesk) => {
-    const teacherLabel = desk.teacherId ? getTeacherDisplayName(teachers.find((teacher) => teacher.id === desk.teacherId) ?? { ...teachers[0], id: '', name: '講師未設定', displayName: '講師未設定', email: '', entryDate: '', withdrawDate: '', isHidden: false, subjectCapabilities: [], memo: '' }) : '講師未設定'
-    const studentLabels = desk.students
-      .map((student) => {
-        if (!student?.studentId) return null
-        const managedStudent = students.find((entry) => entry.id === student.studentId)
-        return `${getStudentDisplayName(managedStudent ?? { id: '', name: student.studentId, displayName: student.studentId, email: '', entryDate: '', withdrawDate: '', birthDate: '', isHidden: false })} ${student.subject}`
-      })
-      .filter(Boolean)
-
-    return [teacherLabel, ...studentLabels].join(' / ')
-  }
-
   return (
     <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <div className="auto-assign-modal regular-template-modal" role="dialog" aria-modal="true" aria-label="通常授業テンプレート編集" data-testid="regular-template-editor">
@@ -232,48 +235,20 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
 
         <div className="regular-template-layout">
           <div className="regular-template-board">
-            <table className="regular-template-table">
-              <thead>
-                <tr>
-                  <th>時限</th>
-                  {regularTemplateDayOptions.map((dayOfWeek) => <th key={dayOfWeek}>{dayLabelByValue[dayOfWeek]}</th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {regularTemplateSlotNumbers.map((slotNumber) => (
-                  <tr key={slotNumber}>
-                    <th>{slotNumber}限</th>
-                    {regularTemplateDayOptions.map((dayOfWeek) => {
-                      const cell = cellByKey.get(buildCellKey(dayOfWeek, slotNumber))
-                      const occupiedDesks = cell?.desks.filter((desk) => desk.teacherId || desk.students.some((student) => student?.studentId)) ?? []
-                      return (
-                        <td key={`${dayOfWeek}_${slotNumber}`}>
-                          <div className="regular-template-cell">
-                            {occupiedDesks.length === 0 ? <div className="regular-template-empty">未設定</div> : null}
-                            {occupiedDesks.map((desk) => {
-                              const isSelected = selectedDesk.dayOfWeek === dayOfWeek && selectedDesk.slotNumber === slotNumber && selectedDesk.deskIndex === desk.deskIndex
-                              return (
-                                <button
-                                  key={desk.deskIndex}
-                                  className={`regular-template-desk-chip${isSelected ? ' active' : ''}`}
-                                  type="button"
-                                  data-testid={`regular-template-desk-${dayOfWeek}-${slotNumber}-${desk.deskIndex}`}
-                                  onClick={() => setSelectedDesk({ dayOfWeek, slotNumber, deskIndex: desk.deskIndex })}
-                                >
-                                  <strong>{desk.deskIndex}机</strong>
-                                  <span>{renderDeskSummary(desk)}</span>
-                                </button>
-                              )
-                            })}
-                            <button className="secondary-button slim regular-template-add-button" type="button" data-testid={`regular-template-add-${dayOfWeek}-${slotNumber}`} onClick={() => handleSelectFirstEmptyDesk(dayOfWeek, slotNumber)}>机を設定</button>
-                          </div>
-                        </td>
-                      )
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <BoardGrid
+              cells={boardCells}
+              selectedStudentId={null}
+              highlightedCell={highlightedCell}
+              highlightedHolidayDate={null}
+              yearLabel=""
+              specialPeriods={[]}
+              resolveStudentDisplayName={(name) => name}
+              resolveStudentGradeLabel={(_name, fallbackGrade) => fallbackGrade}
+              resolveDisplayedLessonType={(_name, _subject, lessonType) => lessonType}
+              onDayHeaderClick={() => {}}
+              onTeacherClick={(cellId, deskIndex) => handleBoardDeskClick(cellId, deskIndex)}
+              onStudentClick={(cellId, deskIndex) => handleBoardDeskClick(cellId, deskIndex)}
+            />
           </div>
 
           <aside className="regular-template-editor-panel">

@@ -701,7 +701,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-regular-template-button').click()
     await expect(page.getByTestId('regular-template-editor')).toBeVisible()
     await setHiddenDateInput(page, 'regular-template-effective-start-date', mondayKey)
-    await page.getByTestId('regular-template-add-1-4').click()
+    await page.getByTestId('teacher-cell-template_1_4-0').click()
     await page.getByTestId('regular-template-teacher-select').selectOption({ label: '出勤講師' })
     await page.getByTestId('regular-template-save-button').click()
     await expect.poll(async () => hasTeacherInSlot(page, mondayKey, 4, '出勤講師')).toBe(true)
@@ -2262,7 +2262,7 @@ test.describe('コマ調整表', () => {
 
     await sourceCell.click()
     const menuButtonsAfterClear = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtonsAfterClear).toEqual(['出席', '休み', '移動', '振替ストックに戻す', '削除'])
+    expect(menuButtonsAfterClear).toEqual(['出席', '休み', '移動', '未消化振替に戻す', '削除'])
   })
 
   test('空欄セルから既存生徒を講習追加しても講習ストックは増えず、手動追加警告を出す', async ({ page }) => {
@@ -2303,7 +2303,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(target.cellTestId).click()
     await expect(page.getByTestId('menu-stock-button')).toHaveCount(0)
-    await expect(page.getByTestId('menu-stock-disabled-note')).toContainText('手動追加した講習は講習ストックへ戻せません。')
+    await expect(page.getByTestId('menu-stock-disabled-note')).toContainText('手動追加した講習は未消化講習へ戻せません。')
     await page.getByRole('button', { name: 'x' }).click()
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
@@ -2426,10 +2426,10 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('cancel-selection-button').click()
 
     await targetCell.click()
-    await expect(page.getByTestId('menu-stock-button')).toHaveText('振替ストックに戻す')
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('未消化振替に戻す')
     await page.getByTestId('menu-stock-button').click()
 
-    await expect(page.getByTestId('toolbar-status')).toContainText('振替ストックへ戻しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('未消化振替へ戻しました。')
     await expect(targetName).toHaveText('')
     await page.getByTestId('makeup-stock-chip').click()
     const afterReturnBalance = extractSignedCount(await page.getByTestId('makeup-stock-entry-s001__-').textContent())
@@ -2626,7 +2626,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('stock-action-modal-manual').click()
 
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
-    await expect(page.getByTestId('move-preview')).toContainText('講習ストックの配置先を選択中')
+    await expect(page.getByTestId('move-preview')).toContainText('未消化講習の配置先を選択中')
     const firstPreviewText = (await page.getByTestId('move-preview').textContent()) ?? ''
     const firstSubject = lectureSubjects.find((subject) => firstPreviewText.includes(subject))
     expect(firstSubject).toBeTruthy()
@@ -2636,11 +2636,11 @@ test.describe('コマ調整表', () => {
     await expect(firstTargetName).toHaveText('青木太郎')
     await expect(page.getByTestId('lecture-stock-panel')).toBeHidden()
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
-    await expect(page.getByTestId('move-preview')).toContainText('講習ストックの配置先を選択中')
+    await expect(page.getByTestId('move-preview')).toContainText('未消化講習の配置先を選択中')
 
     const secondPlacementTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', firstTarget.slotId)
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
-    await expect(page.getByTestId('move-preview')).toContainText('講習ストックの配置先を選択中')
+    await expect(page.getByTestId('move-preview')).toContainText('未消化講習の配置先を選択中')
     const secondPreviewText = (await page.getByTestId('move-preview').textContent()) ?? ''
     const secondSubject = lectureSubjects.find((subject) => secondPreviewText.includes(subject))
     expect(secondSubject).toBeTruthy()
@@ -2956,9 +2956,9 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId(target.cellTestId.replace('student-cell-', 'student-name-'))).toHaveText('青木太郎')
 
     await page.getByTestId(target.cellTestId).click()
-    await expect(page.getByTestId('menu-stock-button')).toHaveText('講習ストックに戻す')
+    await expect(page.getByTestId('menu-stock-button')).toHaveText('未消化講習に戻す')
     await page.getByTestId('menu-stock-button').click()
-    await expect(page.getByTestId('toolbar-status')).toContainText('講習ストックへ戻しました。')
+    await expect(page.getByTestId('toolbar-status')).toContainText('未消化講習へ戻しました。')
 
     const countStudentOccurrencesInSessionWeeks = async () => {
       await moveBoardToWeek(page, specialWeekStart)

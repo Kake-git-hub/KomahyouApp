@@ -1,7 +1,7 @@
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { normalizeRegularLessonNote, packSortRegularLessonRows, resolveOperationalSchoolYear, resolveSchoolYearDateRange, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import type { SubjectLabel } from '../schedule-board/types'
-import { resolveDisplayedSubjectForBirthDate } from '../../utils/studentGradeSubject'
+import type { GradeLabel, SlotCell, SubjectLabel } from '../schedule-board/types'
+import { resolveDisplayedSubjectForBirthDate, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
 type XlsxModule = typeof import('xlsx')
 
@@ -335,4 +335,71 @@ export function parseRegularLessonTemplateWorkbook(xlsx: XlsxModule, workbook: i
   }
 
   return normalizeRegularLessonTemplate(nextTemplate, params.deskCount)
+}
+
+export function buildTemplateBoardCells(params: {
+  template: RegularLessonTemplate
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  deskCount: number
+}): SlotCell[] {
+  const { template, teachers, students, deskCount } = params
+  const normalized = normalizeRegularLessonTemplate(template, deskCount)
+  const teacherNameById = new Map(teachers.map((t) => [t.id, getTeacherDisplayName(t)]))
+  const studentById = new Map(students.map((s) => [s.id, s]))
+  const today = new Date()
+
+  return normalized.cells.map((cell) => {
+    const cellId = `template_${cell.dayOfWeek}_${cell.slotNumber}`
+    return {
+      id: cellId,
+      dateKey: `template_${cell.dayOfWeek}`,
+      dayLabel: dayLabelByValue[cell.dayOfWeek] ?? '',
+      dateLabel: dayLabelByValue[cell.dayOfWeek] ?? '',
+      slotLabel: `${cell.slotNumber}限`,
+      slotNumber: cell.slotNumber,
+      timeLabel: '',
+      isOpenDay: true,
+      desks: cell.desks.map((desk) => {
+        const teacherName = teacherNameById.get(desk.teacherId) ?? ''
+        const student1 = desk.students[0]
+        const student2 = desk.students[1]
+        const student1Row = student1 ? studentById.get(student1.studentId) : null
+        const student2Row = student2 ? studentById.get(student2.studentId) : null
+        const hasContent = Boolean(desk.teacherId || student1?.studentId || student2?.studentId)
+
+        return {
+          id: `${cellId}_${desk.deskIndex}`,
+          teacher: teacherName,
+          lesson: hasContent ? {
+            id: `${cellId}_lesson_${desk.deskIndex}`,
+            studentSlots: [
+              student1?.studentId && student1Row ? {
+                id: `${cellId}_s1_${desk.deskIndex}`,
+                name: getStudentDisplayName(student1Row),
+                managedStudentId: student1.studentId,
+                grade: (resolveGradeLabelFromBirthDate(student1Row.birthDate, today) || '中1') as GradeLabel,
+                birthDate: student1Row.birthDate,
+                noteSuffix: normalizeRegularLessonNote(student1.note),
+                subject: student1.subject,
+                lessonType: 'regular' as const,
+                teacherType: 'normal' as const,
+              } : null,
+              student2?.studentId && student2Row ? {
+                id: `${cellId}_s2_${desk.deskIndex}`,
+                name: getStudentDisplayName(student2Row),
+                managedStudentId: student2.studentId,
+                grade: (resolveGradeLabelFromBirthDate(student2Row.birthDate, today) || '中1') as GradeLabel,
+                birthDate: student2Row.birthDate,
+                noteSuffix: normalizeRegularLessonNote(student2.note),
+                subject: student2.subject,
+                lessonType: 'regular' as const,
+                teacherType: 'normal' as const,
+              } : null,
+            ] as [import('../schedule-board/types').StudentEntry | null, import('../schedule-board/types').StudentEntry | null],
+          } : undefined,
+        }
+      }),
+    }
+  })
 }

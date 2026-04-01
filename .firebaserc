@@ -2,6 +2,14 @@
   "projects": {
     "default": "komahyouapp-prod"
   },
-  "targets": {},
+  "targets": {
+    "komahyouapp-prod": {
+      "hosting": {
+        "default": [
+          "komahyouapp-prod"
+        ]
+      }
+    }
+  },
   "etags": {}
 }
