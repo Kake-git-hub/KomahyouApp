@@ -43,6 +43,10 @@
 	- Keep PDF export rules documented in `docs/board-pdf-design.md`; time-column labels must stay large and centered, and stock side panels must stay out of exported PDFs.
 	- Sending an existing 振替授業 back to stock must not double-count stock; compare against the original regular lesson basis.
 	- When 振替 or 移動 would place the same student into the same slot twice, reject the action, show a warning, and keep the current selection state.
+	- Teacher delete on the normal board uses `teacherAssignmentSource: 'deleted'` with `manualTeacher: true` so the merge preserves the deletion without triggering the manual-teacher warning color.
+	- The 講師未選択 dropdown option has been removed; use the 講師削除 button instead.
+	- Student move on the normal board supports swap: when the target slot is occupied, the two students are swapped.
+	- Template save offers two modes: 通常保存 (preserves manual edits, memos, makeup/special lessons) and 上書き保存 (clears all board data for dates >= effectiveStartDate and rebuilds from template only). Both show a confirmation dialog.
 	- After board or schedule changes, run both `npm run build` and `npx playwright test tests/schedule-board.spec.ts`.
 	- After stock calculation or PDF changes, also run `npm run test:unit`.
 
