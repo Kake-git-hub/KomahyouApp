@@ -2122,11 +2122,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handleEnterTemplateMode = useCallback(() => {
     const copiedCells = copyBoardCellsForTemplate(cells)
-    const existingTemplate = classroomSettings.regularLessonTemplate
     const currentBoardDateKey = cells[0]?.dateKey ?? toDateKey(new Date())
     const defaultMonday = toDateKey(getWeekStart(parseDateKey(currentBoardDateKey)))
     setTemplateCells(copiedCells)
-    setTemplateEffectiveStartDate(existingTemplate?.effectiveStartDate || defaultMonday)
+    setTemplateEffectiveStartDate(defaultMonday)
     setIsTemplateMode(true)
     setStudentMenu(null)
     setTeacherMenu(null)
@@ -2140,7 +2139,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setTemplateUndoStack([])
     setTemplateRedoStack([])
     setStatusMessage('通常授業テンプレート編集モードです。コマ表から通常授業のみコピーしました。')
-  }, [cells, classroomSettings.regularLessonTemplate])
+  }, [cells])
 
   const handleExitTemplateMode = useCallback(() => {
     setIsTemplateMode(false)

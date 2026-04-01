@@ -314,6 +314,9 @@ export function computeAutomaticShortageOrigins(
   const currentSchoolYear = resolveOperationalSchoolYear(today)
   const studentById = new Map(students.map((student) => [student.id, student]))
   const shortages: OriginMap = {}
+  const setupFloorKey = classroomSettings.initialSetupCompletedAt
+    ? toDateKey(new Date(classroomSettings.initialSetupCompletedAt))
+    : null
   const latestHolidayKey = classroomSettings.holidayDates.reduce<string | null>((latest, dateKey) => {
     if (!latest || dateKey > latest) return dateKey
     return latest
@@ -353,6 +356,7 @@ export function computeAutomaticShortageOrigins(
         const missedDates = pastScheduledDates.filter((dateKey) => isClosedDate(dateKey, classroomSettings))
         const shortageDates = missedDates.slice(0, shortageCount)
         for (const shortageDate of shortageDates) {
+          if (setupFloorKey && shortageDate < setupFloorKey) continue
           pushOrigin(shortages, stockKey, shortageDate)
         }
       }
@@ -371,6 +375,9 @@ function computeScheduleConflictOrigins(
   const todayKey = toDateKey(today)
   const currentSchoolYear = resolveOperationalSchoolYear(today)
   const studentById = new Map(students.map((student) => [student.id, student]))
+  const setupFloorKey = classroomSettings.initialSetupCompletedAt
+    ? toDateKey(new Date(classroomSettings.initialSetupCompletedAt))
+    : null
   const occurrences = new Map<string, Array<{ rowIndex: number; teacherId: string; participants: Array<{ studentId: string; subject: string }> }>>()
 
   for (const [rowIndex, row] of regularLessons.entries()) {
@@ -436,6 +443,7 @@ function computeScheduleConflictOrigins(
 
       if (hasTeacherConflict || hasStudentConflict) {
         for (const participant of row.participants) {
+          if (setupFloorKey && dateKey < setupFloorKey) continue
           pushOrigin(conflicts, buildMakeupStockKey(participant.studentId, participant.subject), dateKey)
         }
         continue
