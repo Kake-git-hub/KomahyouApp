@@ -301,7 +301,7 @@ export function BoardGrid({
                   data-testid={`day-header-${day.dateKey}`}
                   onClick={() => onDayHeaderClick(day.dateKey)}
                 >
-                  {day.dateLabel}({day.dayLabel})
+                  {day.dayLabel ? `${day.dateLabel}(${day.dayLabel})` : day.dateLabel}
                 </th>
               ))}
             </tr>

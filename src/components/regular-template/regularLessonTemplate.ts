@@ -354,7 +354,7 @@ export function buildTemplateBoardCells(params: {
     return {
       id: cellId,
       dateKey: `template_${cell.dayOfWeek}`,
-      dayLabel: dayLabelByValue[cell.dayOfWeek] ?? '',
+      dayLabel: '',
       dateLabel: dayLabelByValue[cell.dayOfWeek] ?? '',
       slotLabel: `${cell.slotNumber}限`,
       slotNumber: cell.slotNumber,
@@ -415,7 +415,7 @@ export function copyBoardCellsForTemplate(cells: SlotCell[]): SlotCell[] {
     return {
       id: templateCellId,
       dateKey: `template_${jsDay}`,
-      dayLabel: calendarDayLabelsLocal[jsDay],
+      dayLabel: '',
       dateLabel: calendarDayLabelsLocal[jsDay],
       slotLabel: cell.slotLabel,
       slotNumber: cell.slotNumber,

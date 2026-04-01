@@ -4356,6 +4356,19 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage(`講師を ${teacherMenu.selectedTeacherName || '未設定'} に変更しました。`)
   }
 
+  const handleTemplateDeleteTeacher = () => {
+    if (!teacherMenu) return
+    pushTemplateUndo(templateCells)
+    const next = cloneTemplateCells(templateCells)
+    const targetCell = next.find((c) => c.id === teacherMenu.cellId)
+    const targetDesk = targetCell?.desks[teacherMenu.deskIndex]
+    if (!targetDesk) return
+    targetDesk.teacher = ''
+    setTemplateCells(next)
+    setTeacherMenu(null)
+    setStatusMessage('講師を削除しました。')
+  }
+
   const handleTemplateSave = () => {
     const template = convertTemplateCellsToTemplate({
       cells: templateCells,
@@ -4422,36 +4435,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const handleTemplatePackSort = () => {
     pushTemplateUndo(templateCells)
     const next = cloneTemplateCells(templateCells)
-    // Group cells by dateKey (dayOfWeek)
-    const byDay = new Map<string, SlotCell[]>()
     for (const cell of next) {
-      const group = byDay.get(cell.dateKey) ?? []
-      group.push(cell)
-      byDay.set(cell.dateKey, group)
-    }
-    for (const group of byDay.values()) {
-      // Collect all occupied desks
-      const occupiedDesks: { teacher: string; lesson: DeskLesson }[] = []
-      for (const cell of group) {
-        for (const desk of cell.desks) {
-          if (desk.lesson?.studentSlots[0] || desk.lesson?.studentSlots[1]) {
-            occupiedDesks.push({ teacher: desk.teacher, lesson: desk.lesson! })
-          }
-        }
-      }
-      // Clear all desks, then re-fill from top
-      let fillIdx = 0
-      for (const cell of group) {
-        for (const desk of cell.desks) {
-          if (fillIdx < occupiedDesks.length) {
-            desk.teacher = occupiedDesks[fillIdx].teacher
-            desk.lesson = occupiedDesks[fillIdx].lesson
-            fillIdx++
-          } else {
-            desk.lesson = undefined
-          }
-        }
-      }
+      cell.desks = packSortCellDesks(cell)
     }
     setTemplateCells(next)
     setStudentMenu(null)
@@ -6398,8 +6383,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             highlightedHolidayDate={isTemplateMode ? null : selectedHolidayDate}
             yearLabel={isTemplateMode ? '' : yearLabel}
             specialPeriods={isTemplateMode ? [] : visibleSpecialSessions}
-            resolveStudentDisplayName={isTemplateMode ? ((name) => name) : resolveBoardStudentDisplayName}
-            resolveStudentGradeLabel={isTemplateMode ? ((_name, fallbackGrade) => fallbackGrade) : resolveBoardStudentGradeLabel}
+            resolveStudentDisplayName={resolveBoardStudentDisplayName}
+            resolveStudentGradeLabel={isTemplateMode ? ((_name, fallbackGrade, _dateKey, birthDate) => birthDate ? resolveSchoolGradeLabel(birthDate, new Date()) : fallbackGrade) : resolveBoardStudentGradeLabel}
             resolveDisplayedLessonType={isTemplateMode ? ((_name, _subject, lessonType) => lessonType) : resolveDisplayedLessonType}
             onDayHeaderClick={isTemplateMode ? (() => {}) : handleToggleHolidayDate}
             onTeacherClick={isTemplateMode ? handleTemplateSelectDesk : handleSelectDesk}
@@ -6522,6 +6507,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               </div>
               <div className="student-menu-section student-menu-actions">
                 <button type="button" className="primary-button" onClick={isTemplateMode ? handleTemplateConfirmTeacher : handleConfirmTeacher} data-testid="teacher-select-confirm-button">保存</button>
+                {isTemplateMode && teacherMenuContext?.desk.teacher ? (
+                  <button type="button" className="menu-link-button danger" onClick={handleTemplateDeleteTeacher} data-testid="teacher-delete-button">講師削除</button>
+                ) : null}
               </div>
             </div>
           ) : null}
