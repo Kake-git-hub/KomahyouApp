@@ -317,10 +317,6 @@ export function computeAutomaticShortageOrigins(
   const setupFloorKey = classroomSettings.initialSetupCompletedAt
     ? toDateKey(new Date(classroomSettings.initialSetupCompletedAt))
     : null
-  const latestHolidayKey = classroomSettings.holidayDates.reduce<string | null>((latest, dateKey) => {
-    if (!latest || dateKey > latest) return dateKey
-    return latest
-  }, null)
 
   for (const row of regularLessons) {
     if (row.schoolYear !== currentSchoolYear) continue
@@ -331,8 +327,7 @@ export function computeAutomaticShortageOrigins(
     const stockPeriod = resolveAutomaticStockPeriod(row)
 
     for (const participant of participants) {
-      const rangeEndCandidate = latestHolidayKey && latestHolidayKey > todayKey ? latestHolidayKey : todayKey
-      const periodEndKey = stockPeriod.endDate < rangeEndCandidate ? stockPeriod.endDate : rangeEndCandidate
+      const periodEndKey = stockPeriod.endDate < todayKey ? stockPeriod.endDate : todayKey
       if (periodEndKey < stockPeriod.startDate) continue
       const monthRange = iterateMonthsInRange(stockPeriod.startDate, periodEndKey)
       const student = studentById.get(participant.studentId)
@@ -346,7 +341,7 @@ export function computeAutomaticShortageOrigins(
           .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
         if (scheduledDates.length === 0) continue
 
-        const pastScheduledDates = scheduledDates.filter((dateKey) => dateKey <= todayKey || classroomSettings.holidayDates.includes(dateKey))
+        const pastScheduledDates = scheduledDates.filter((dateKey) => dateKey <= todayKey)
         if (pastScheduledDates.length === 0) continue
 
         const openCandidateDates = pastScheduledDates.filter((dateKey) => !isClosedDate(dateKey, classroomSettings))
