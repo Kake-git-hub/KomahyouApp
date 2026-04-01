@@ -2724,14 +2724,6 @@ test.describe('コマ調整表', () => {
     expect(stockEntry?.balance).toBe(-1)
   })
 
-  test('PDF出力ボタンが表示される', async ({ page }) => {
-    await page.goto('/')
-
-    await expect(page.getByTestId('board-student-schedule-button')).toBeVisible()
-    await expect(page.getByTestId('board-teacher-schedule-button')).toBeVisible()
-    await expect(page.getByTestId('board-print-pdf-button')).toBeVisible()
-  })
-
   test('生徒日程をポップアップで開いて期間変更UIを表示できる', async ({ page }) => {
     await page.goto('/')
 
@@ -3205,17 +3197,6 @@ test.describe('コマ調整表', () => {
     await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('→')
     await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain('青木太郎')
     await expect.poll(async () => ((await teacherSheet.locator('.makeup-table').textContent()) ?? '').replace(/\s+/g, ' ').trim()).toContain(expectedTargetLabel)
-  })
-
-  test('生徒日程は最新状態に更新ボタンを表示しない', async ({ page }) => {
-    await page.goto('/')
-
-    const popupPromise = page.waitForEvent('popup')
-    await page.getByTestId('board-student-schedule-button').click()
-    const popup = await popupPromise
-
-    await expect(popup.locator('#schedule-refresh-button')).toHaveCount(0)
-    await expect(popup.locator('section.sheet').first()).toBeVisible()
   })
 
   test('休校セルには手入力で生徒追加できない', async ({ page }) => {

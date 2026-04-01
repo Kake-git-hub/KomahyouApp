@@ -5905,8 +5905,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetStudent = targetLesson?.studentSlots[studentMenu.studentIndex]
     if (!targetCell || !targetDesk || !targetStudent) return
 
+    const absentStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent')
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
-    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent'))
+    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentStatusEntry)
 
     if (targetStudent.lessonType === 'special') {
       if (targetStudent.specialStockSource !== 'session') {
@@ -6011,8 +6012,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetStudent = targetLesson?.studentSlots[studentMenu.studentIndex]
     if (!targetCell || !targetDesk || !targetStudent) return
 
+    const attendedStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'attended')
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
-    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'attended'))
+    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, attendedStatusEntry)
     const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
