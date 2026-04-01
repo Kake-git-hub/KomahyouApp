@@ -1,9 +1,16 @@
-import { collection, doc, getDoc, writeBatch } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, orderBy, query, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/appState'
 import { getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
+
+export type ServerAutoBackupSummary = {
+  backupDateKey: string
+  savedAt: string
+  sourceSavedAt: string
+  storagePath: string
+}
 
 type ProvisionWorkspaceClassroomRequest = {
   workspaceKey: string
@@ -217,6 +224,54 @@ export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspa
   const result = await callable({
     workspaceKey: config.workspaceKey,
     ...input,
+  })
+  return result.data
+}
+
+export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAutoBackupSummary[]> {
+  const firestore = requireFirestore()
+  const config = getFirebaseBackendConfig()
+  const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
+  const summariesRef = collection(workspaceRef, 'workspaceAutoBackupSummaries')
+  const q = query(summariesRef, orderBy('backupDateKey', 'desc'))
+  const snapshot = await getDocs(q)
+  return snapshot.docs.map((entry) => {
+    const data = entry.data()
+    return {
+      backupDateKey: String(data.backupDateKey ?? entry.id),
+      savedAt: String(data.savedAt ?? ''),
+      sourceSavedAt: String(data.sourceSavedAt ?? ''),
+      storagePath: String(data.storagePath ?? ''),
+    }
+  })
+}
+
+export async function downloadFirebaseServerAutoBackup(backupDateKey: string): Promise<string> {
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson: string }>(functions, 'downloadServerAutoBackup')
+  const result = await callable({
+    workspaceKey: config.workspaceKey,
+    backupDateKey,
+  })
+  return result.data.snapshotJson
+}
+
+export type ClassroomFromServerAutoBackup = {
+  classroomId: string
+  classroomName: string
+  savedAt: string
+  data: AppSnapshotPayload
+}
+
+export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKey: string, classroomId: string): Promise<ClassroomFromServerAutoBackup> {
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; classroomId: string }, ClassroomFromServerAutoBackup>(functions, 'downloadClassroomFromServerAutoBackup')
+  const result = await callable({
+    workspaceKey: config.workspaceKey,
+    backupDateKey,
+    classroomId,
   })
   return result.data
 }

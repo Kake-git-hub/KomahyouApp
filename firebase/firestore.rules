@@ -53,6 +53,11 @@ service cloud.firestore {
         allow create, update: if canAccessClassroom(workspaceKey, classroomId);
         allow delete: if isDeveloper(workspaceKey);
       }
+
+      match /workspaceAutoBackupSummaries/{backupDateKey} {
+        allow read: if hasWorkspaceMembership(workspaceKey);
+        allow write: if false;
+      }
     }
   }
 }

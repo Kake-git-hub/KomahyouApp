@@ -7,6 +7,7 @@ import type { ClassroomSettings, InitialSetupMakeupStockRow, InitialSetupLecture
 import type { SubjectLabel } from '../schedule-board/types'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
+import type { ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 
 type BackupRestoreScreenProps = {
   onBackToBoard: () => void
@@ -20,6 +21,11 @@ type BackupRestoreScreenProps = {
   onExportBackup: () => void
   onImportBackup: (file: File) => void
   onRestoreAutoBackup: (backupDateKey: string) => void
+  showServerBackups: boolean
+  serverAutoBackupSummaries: ServerAutoBackupSummary[]
+  serverAutoBackupLoading: boolean
+  onLoadServerAutoBackupSummaries: () => void
+  onRestoreClassroomFromServerAutoBackup: (backupDateKey: string) => void
   classroomSettings: ClassroomSettings
   students: StudentRow[]
   specialSessions: SpecialSessionRow[]
@@ -59,7 +65,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -206,7 +212,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <section className="basic-data-section-card" data-testid="auto-backup-panel">
             <div className="basic-data-card-head">
               <h3>自動バックアップ</h3>
-              <p>1日につき1件を自動保持し、直近 14 日分を残します。必要な時はこの一覧から復元できます。</p>
+              <p>現在は教室ごとではなく、ワークスペース全体を 1 日 1 件で自動保持します。直近 14 日分を残し、必要な時はこの一覧から復元できます。</p>
             </div>
             <div className="basic-data-form-grid">
               <div className="toolbar-status">最新自動バックアップ: {latestAutoBackup ? formatSavedAt(latestAutoBackup.savedAt) : 'まだありません。'}</div>
@@ -225,6 +231,30 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               ))}
             </div>
           </section>
+
+          {showServerBackups ? (
+            <section className="basic-data-section-card" data-testid="server-backup-panel">
+              <div className="basic-data-card-head">
+                <h3>サーバーバックアップから復元</h3>
+                <p>Firebase サーバーに保存された自動バックアップから、この教室のデータだけを復元します。他の教室には影響しません。</p>
+              </div>
+              <div className="basic-data-row-actions">
+                <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : 'サーバーバックアップ一覧を取得'}</button>
+              </div>
+              <div className="backup-restore-auto-backup-list">
+                {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
+                {serverAutoBackupSummaries.map((summary) => (
+                  <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                    <div className="backup-restore-auto-backup-meta">
+                      <strong>{summary.backupDateKey}</strong>
+                      <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                    </div>
+                    <button className="secondary-button slim" type="button" onClick={() => onRestoreClassroomFromServerAutoBackup(summary.backupDateKey)}>この教室を復元</button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">

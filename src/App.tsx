@@ -8,12 +8,12 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { initialSpecialSessions } from './components/special-data/specialSessionModel'
+import { initialSpecialSessions, removedDefaultSpecialSessionIds } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -225,11 +225,64 @@ async function writeTextFileToDeveloperCloudDirectory(handle: DeveloperCloudBack
   await writable.close()
 }
 
+const removedDefaultSpecialSessionIdSet = new Set(removedDefaultSpecialSessionIds)
+
+function sanitizeClassroomSettings(settings: ClassroomSettings): ClassroomSettings {
+  const initialSettings = createInitialClassroomSettings()
+  const normalizedClosedWeekdays = Array.from(new Set(
+    (Array.isArray(settings.closedWeekdays) ? settings.closedWeekdays : initialSettings.closedWeekdays)
+      .filter((value): value is number => Number.isInteger(value) && value >= 0 && value <= 6),
+  )).sort((left, right) => left - right)
+  const normalizedForceOpenDates = Array.from(new Set(
+    (Array.isArray(settings.forceOpenDates) ? settings.forceOpenDates : initialSettings.forceOpenDates)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+  )).sort((left, right) => left.localeCompare(right))
+
+  return {
+    ...initialSettings,
+    ...settings,
+    closedWeekdays: normalizedClosedWeekdays.length > 0 ? normalizedClosedWeekdays : initialSettings.closedWeekdays,
+    holidayDates: [],
+    forceOpenDates: normalizedForceOpenDates,
+    deskCount: Math.max(1, Number(settings.deskCount) || initialSettings.deskCount),
+    initialSetupCompletedAt: typeof settings.initialSetupCompletedAt === 'string' ? settings.initialSetupCompletedAt : initialSettings.initialSetupCompletedAt,
+    initialSetupMakeupStocks: Array.isArray(settings.initialSetupMakeupStocks) ? settings.initialSetupMakeupStocks : initialSettings.initialSetupMakeupStocks,
+    initialSetupLectureStocks: Array.isArray(settings.initialSetupLectureStocks) ? settings.initialSetupLectureStocks : initialSettings.initialSetupLectureStocks,
+  }
+}
+
+function sanitizeSpecialSessions(sessions: AppSnapshotPayload['specialSessions']) {
+  return sessions.filter((session) => !removedDefaultSpecialSessionIdSet.has(session.id))
+}
+
+function sanitizeClassroomPayload(payload: AppSnapshotPayload): AppSnapshotPayload {
+  return {
+    ...payload,
+    classroomSettings: sanitizeClassroomSettings(payload.classroomSettings),
+    specialSessions: sanitizeSpecialSessions(payload.specialSessions),
+  }
+}
+
+function sanitizeAppSnapshot(snapshot: AppSnapshot): AppSnapshot {
+  return {
+    ...snapshot,
+    ...sanitizeClassroomPayload(snapshot),
+  }
+}
+
 function normalizeWorkspaceClassroom(classroom: WorkspaceClassroom): WorkspaceClassroom {
   return {
     ...classroom,
     isTemporarilySuspended: Boolean(classroom.isTemporarilySuspended),
     temporarySuspensionReason: classroom.temporarySuspensionReason ?? '',
+    data: sanitizeClassroomPayload(classroom.data),
+  }
+}
+
+function sanitizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+  return {
+    ...snapshot,
+    classrooms: snapshot.classrooms.map((classroom) => normalizeWorkspaceClassroom(classroom)),
   }
 }
 
@@ -520,17 +573,18 @@ function applyClassroomPayloadToState(payload: AppSnapshotPayload, handlers: {
   setClassroomSettings: (value: ClassroomSettings) => void
   setBoardState: (value: PersistedBoardState | null) => void
 }) {
-  handlers.setScreen(payload.screen)
-  handlers.setManagers(payload.managers)
-  handlers.setTeachers(payload.teachers)
-  handlers.setStudents(payload.students)
-  handlers.setRegularLessons(payload.regularLessons)
-  handlers.setGroupLessons(payload.groupLessons)
-  handlers.setSpecialSessions(payload.specialSessions)
-  handlers.setAutoAssignRules(payload.autoAssignRules)
-  handlers.setPairConstraints(payload.pairConstraints)
-  handlers.setClassroomSettings(payload.classroomSettings)
-  handlers.setBoardState(payload.boardState)
+  const sanitizedPayload = sanitizeClassroomPayload(payload)
+  handlers.setScreen(sanitizedPayload.screen)
+  handlers.setManagers(sanitizedPayload.managers)
+  handlers.setTeachers(sanitizedPayload.teachers)
+  handlers.setStudents(sanitizedPayload.students)
+  handlers.setRegularLessons(sanitizedPayload.regularLessons)
+  handlers.setGroupLessons(sanitizedPayload.groupLessons)
+  handlers.setSpecialSessions(sanitizedPayload.specialSessions)
+  handlers.setAutoAssignRules(sanitizedPayload.autoAssignRules)
+  handlers.setPairConstraints(sanitizedPayload.pairConstraints)
+  handlers.setClassroomSettings(sanitizedPayload.classroomSettings)
+  handlers.setBoardState(sanitizedPayload.boardState)
 }
 
 function buildClassroomSnapshotPayload(params: {
@@ -546,7 +600,7 @@ function buildClassroomSnapshotPayload(params: {
   pairConstraints: typeof initialPairConstraints
   boardState: PersistedBoardState | null
 }): AppSnapshotPayload {
-  return {
+  return sanitizeClassroomPayload({
     screen: params.screen,
     classroomSettings: params.classroomSettings,
     managers: params.managers,
@@ -558,7 +612,7 @@ function buildClassroomSnapshotPayload(params: {
     autoAssignRules: params.autoAssignRules,
     pairConstraints: params.pairConstraints,
     boardState: params.boardState,
-  }
+  })
 }
 
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
@@ -600,6 +654,8 @@ function App() {
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
   const [autoBackupSummaries, setAutoBackupSummaries] = useState<AutoBackupSummary[]>([])
+  const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
+  const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([])
   const [workspaceClassrooms, setWorkspaceClassrooms] = useState<WorkspaceClassroom[]>([])
   const [developerPassword, setDeveloperPassword] = useState(DEFAULT_DEVELOPER_PASSWORD)
@@ -707,18 +763,19 @@ function App() {
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
 
   const applySnapshot = useCallback((snapshot: AppSnapshot, successMessage: string) => {
-    setScreen(snapshot.screen)
-    setManagers(snapshot.managers)
-    setTeachers(snapshot.teachers)
-    setStudents(snapshot.students)
-    setRegularLessons(snapshot.regularLessons)
-    setGroupLessons(snapshot.groupLessons)
-    setSpecialSessions(snapshot.specialSessions)
-    setAutoAssignRules(snapshot.autoAssignRules)
-    setPairConstraints(snapshot.pairConstraints)
-    setClassroomSettings(snapshot.classroomSettings)
-    setBoardState(snapshot.boardState)
-    setLastSavedAt(snapshot.savedAt)
+    const sanitizedSnapshot = sanitizeAppSnapshot(snapshot)
+    setScreen(sanitizedSnapshot.screen)
+    setManagers(sanitizedSnapshot.managers)
+    setTeachers(sanitizedSnapshot.teachers)
+    setStudents(sanitizedSnapshot.students)
+    setRegularLessons(sanitizedSnapshot.regularLessons)
+    setGroupLessons(sanitizedSnapshot.groupLessons)
+    setSpecialSessions(sanitizedSnapshot.specialSessions)
+    setAutoAssignRules(sanitizedSnapshot.autoAssignRules)
+    setPairConstraints(sanitizedSnapshot.pairConstraints)
+    setClassroomSettings(sanitizedSnapshot.classroomSettings)
+    setBoardState(sanitizedSnapshot.boardState)
+    setLastSavedAt(sanitizedSnapshot.savedAt)
     setPersistenceMessage(successMessage)
   }, [])
 
@@ -774,26 +831,23 @@ function App() {
   }, [actingClassroomId, syncCurrentClassroomData, workspaceClassrooms])
 
   const applyWorkspaceSnapshot = useCallback((workspaceSnapshot: WorkspaceSnapshot, successMessage: string) => {
-    setWorkspaceUsers(workspaceSnapshot.users)
-    setWorkspaceClassrooms(workspaceSnapshot.classrooms.map((classroom) => ({
-      ...classroom,
-      isTemporarilySuspended: Boolean(classroom.isTemporarilySuspended),
-      temporarySuspensionReason: classroom.temporarySuspensionReason ?? '',
-    })))
-    setDeveloperPassword(workspaceSnapshot.developerPassword ?? DEFAULT_DEVELOPER_PASSWORD)
-    setDeveloperCloudBackupEnabled(workspaceSnapshot.developerCloudBackupEnabled ?? false)
-    setDeveloperCloudBackupFolderName(workspaceSnapshot.developerCloudBackupFolderName ?? '')
-    setDeveloperCloudSyncedAutoBackupKeys(workspaceSnapshot.developerCloudSyncedAutoBackupKeys ?? [])
-    setCurrentUserId(workspaceSnapshot.currentUserId)
-    setActingClassroomId(workspaceSnapshot.actingClassroomId)
-    setLastSavedAt(workspaceSnapshot.savedAt)
+    const sanitizedWorkspaceSnapshot = sanitizeWorkspaceSnapshot(workspaceSnapshot)
+    setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
+    setWorkspaceClassrooms(sanitizedWorkspaceSnapshot.classrooms)
+    setDeveloperPassword(sanitizedWorkspaceSnapshot.developerPassword ?? DEFAULT_DEVELOPER_PASSWORD)
+    setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
+    setDeveloperCloudBackupFolderName(sanitizedWorkspaceSnapshot.developerCloudBackupFolderName ?? '')
+    setDeveloperCloudSyncedAutoBackupKeys(sanitizedWorkspaceSnapshot.developerCloudSyncedAutoBackupKeys ?? [])
+    setCurrentUserId(sanitizedWorkspaceSnapshot.currentUserId)
+    setActingClassroomId(sanitizedWorkspaceSnapshot.actingClassroomId)
+    setLastSavedAt(sanitizedWorkspaceSnapshot.savedAt)
     setPersistenceMessage(successMessage)
 
-    const currentWorkspaceUser = workspaceSnapshot.users.find((user) => user.id === workspaceSnapshot.currentUserId) ?? null
+    const currentWorkspaceUser = sanitizedWorkspaceSnapshot.users.find((user) => user.id === sanitizedWorkspaceSnapshot.currentUserId) ?? null
     const targetClassroomId = currentWorkspaceUser?.role === 'manager'
       ? currentWorkspaceUser.assignedClassroomId
-      : workspaceSnapshot.actingClassroomId
-    const targetClassroom = workspaceSnapshot.classrooms.find((classroom) => classroom.id === targetClassroomId) ?? workspaceSnapshot.classrooms[0] ?? null
+      : sanitizedWorkspaceSnapshot.actingClassroomId
+    const targetClassroom = sanitizedWorkspaceSnapshot.classrooms.find((classroom) => classroom.id === targetClassroomId) ?? sanitizedWorkspaceSnapshot.classrooms[0] ?? null
 
     if (targetClassroom) {
       applyClassroomPayloadToState(targetClassroom.data, {
@@ -2175,6 +2229,80 @@ function App() {
     }
   }, [developerPassword, isRemoteBackendEnabled, openDeveloperRestoreModal])
 
+  const loadServerAutoBackupSummaries = useCallback(async () => {
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    setServerAutoBackupLoading(true)
+    try {
+      const summaries = await listFirebaseServerAutoBackupSummaries()
+      setServerAutoBackupSummaries(summaries)
+      setPersistenceMessage(`サーバーバックアップ一覧を取得しました。${summaries.length} 件`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'サーバーバックアップ一覧の取得に失敗しました。'
+      setPersistenceMessage(message)
+    } finally {
+      setServerAutoBackupLoading(false)
+    }
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
+
+  const restoreServerAutoBackup = useCallback(async (backupDateKey: string) => {
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    setPersistenceMessage('サーバーバックアップをダウンロードしています…')
+    try {
+      const snapshotJson = await downloadFirebaseServerAutoBackup(backupDateKey)
+      const snapshot = parseWorkspaceSnapshot(snapshotJson)
+      openDeveloperRestoreModal(snapshot, `サーバーバックアップ (${backupDateKey})`)
+      setPersistenceMessage('復元する教室をモーダルで選択してください。')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'サーバーバックアップのダウンロードに失敗しました。'
+      setPersistenceMessage(message)
+    }
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openDeveloperRestoreModal])
+
+  const restoreClassroomFromServerAutoBackup = useCallback(async (backupDateKey: string) => {
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled || !actingClassroomId) return
+    setPersistenceMessage('サーバーバックアップから教室データをダウンロードしています…')
+    try {
+      const result = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, actingClassroomId)
+      const confirmed = window.confirm([
+        `サーバーバックアップ (${backupDateKey}) からこの教室を復元します。`,
+        `教室名: ${result.classroomName}`,
+        `保存日時: ${new Date(result.savedAt).toLocaleString('ja-JP')}`,
+        '',
+        'この教室の現在のデータはバックアップ時点の内容で上書きされます。',
+        '他の教室には影響しません。',
+        '復元してよろしいですか?',
+      ].join('\n'))
+      if (!confirmed) {
+        setPersistenceMessage('サーバーバックアップからの教室復元をキャンセルしました。')
+        return
+      }
+
+      const updatedClassrooms = workspaceClassrooms.map((classroom) =>
+        classroom.id === actingClassroomId
+          ? { ...classroom, data: result.data }
+          : classroom,
+      )
+      setWorkspaceClassrooms(updatedClassrooms)
+      applyClassroomPayloadToState(result.data, {
+        setScreen: (value) => setScreen(value),
+        setManagers,
+        setTeachers,
+        setStudents,
+        setRegularLessons,
+        setGroupLessons,
+        setSpecialSessions,
+        setAutoAssignRules,
+        setPairConstraints,
+        setClassroomSettings,
+        setBoardState,
+      })
+      setPersistenceMessage(`サーバーバックアップ (${backupDateKey}) からこの教室を復元しました。`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'サーバーバックアップからの教室復元に失敗しました。'
+      setPersistenceMessage(message)
+    }
+  }, [actingClassroomId, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, workspaceClassrooms])
+
   const exportBasicDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
     xlsx.writeFile(buildBasicDataWorkbook(xlsx, createBasicDataTemplateBundle()), '基本データテンプレート.xlsx')
@@ -2207,7 +2335,7 @@ function App() {
         ...createInitialClassroomSettings(),
         ...imported.classroomSettings,
         closedWeekdays: imported.classroomSettings.closedWeekdays,
-        holidayDates: imported.classroomSettings.holidayDates,
+        holidayDates: [],
         forceOpenDates: imported.classroomSettings.forceOpenDates,
         deskCount: imported.classroomSettings.deskCount,
       }
@@ -2478,6 +2606,10 @@ function App() {
         actingClassroomId={actingClassroomId}
         onAddClassroom={addClassroom}
         autoBackupSummaries={autoBackupSummaries}
+        serverAutoBackupSummaries={serverAutoBackupSummaries}
+        serverAutoBackupLoading={serverAutoBackupLoading}
+        onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
+        onRestoreServerAutoBackup={(backupDateKey) => void restoreServerAutoBackup(backupDateKey)}
         bulkTemporarySuspensionReason={bulkTemporarySuspensionReason}
         onBulkTemporarySuspensionReasonChange={setBulkTemporarySuspensionReason}
         areAllContractedClassroomsTemporarilySuspended={areAllContractedClassroomsTemporarilySuspended}
@@ -2590,6 +2722,11 @@ function App() {
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
         onRestoreAutoBackup={restoreAutoBackup}
+        showServerBackups={isRemoteBackendEnabled && isRemoteAdminAutomationEnabled}
+        serverAutoBackupSummaries={serverAutoBackupSummaries}
+        serverAutoBackupLoading={serverAutoBackupLoading}
+        onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
+        onRestoreClassroomFromServerAutoBackup={(backupDateKey) => void restoreClassroomFromServerAutoBackup(backupDateKey)}
         classroomSettings={classroomSettings}
         students={students}
         specialSessions={specialSessions}

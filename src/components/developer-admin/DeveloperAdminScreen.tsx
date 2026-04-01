@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
+import type { ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 
 type DeveloperAdminScreenProps = {
@@ -30,6 +31,10 @@ type DeveloperAdminScreenProps = {
     contractEndDate?: string
   }) => void
   autoBackupSummaries: AutoBackupSummary[]
+  serverAutoBackupSummaries: ServerAutoBackupSummary[]
+  serverAutoBackupLoading: boolean
+  onLoadServerAutoBackupSummaries: () => void
+  onRestoreServerAutoBackup: (backupDateKey: string) => void
   bulkTemporarySuspensionReason: string
   onBulkTemporarySuspensionReasonChange: (value: string) => void
   areAllContractedClassroomsTemporarilySuspended: boolean
@@ -106,7 +111,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
@@ -300,6 +305,31 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               ))}
             </div>
           </section>
+
+          {authMode === 'firebase' ? (
+            <section className="basic-data-section-card developer-backup-panel">
+              <div className="basic-data-card-head">
+                <h3>サーバー自動バックアップ</h3>
+                <p>Firebase サーバー側で毎日 02:10 JST に作成されるバックアップです。復元時は教室を選択できます。</p>
+              </div>
+              <div className="basic-data-row-actions">
+                <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : 'サーバーバックアップ一覧を取得'}</button>
+              </div>
+              <div className="backup-restore-auto-backup-list">
+                {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
+                {serverAutoBackupSummaries.map((summary) => (
+                  <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                    <div className="backup-restore-auto-backup-meta">
+                      <strong>{summary.backupDateKey}</strong>
+                      <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                      <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
+                    </div>
+                    <button className="secondary-button slim" type="button" onClick={() => onRestoreServerAutoBackup(summary.backupDateKey)}>この時点へ復元</button>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <div className="developer-classroom-list">
             {classrooms.map((classroom) => {
