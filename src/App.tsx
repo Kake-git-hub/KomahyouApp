@@ -2320,9 +2320,9 @@ function App() {
 
   const exportBasicDataCurrent = useCallback(async () => {
     const xlsx = await import('xlsx')
-    xlsx.writeFile(buildBasicDataWorkbook(xlsx, { managers, teachers, students, regularLessons, groupLessons, classroomSettings }), '基本データ_現在.xlsx')
+    xlsx.writeFile(buildBasicDataWorkbook(xlsx, { managers, teachers, students, classroomSettings }), '基本データ_現在.xlsx')
     setPersistenceMessage('基本データを Excel 出力しました。')
-  }, [classroomSettings, groupLessons, managers, regularLessons, students, teachers])
+  }, [classroomSettings, managers, students, teachers])
 
   const importInitialBasicDataWorkbook = useCallback(async (file: File) => {
     try {
@@ -2338,7 +2338,7 @@ function App() {
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
-      const fallbackBundle = { managers, teachers, students, regularLessons, groupLessons, classroomSettings }
+      const fallbackBundle = { managers, teachers, students, classroomSettings }
       const imported = parseImportedBundle(xlsx, workbook, fallbackBundle)
       const resetClassroomSettings = sanitizeClassroomSettingsWithHolidayCache({
         ...createInitialClassroomSettings(),
@@ -2367,8 +2367,8 @@ function App() {
       setManagers(initialImportedBundle.managers)
       setTeachers(initialImportedBundle.teachers)
       setStudents(initialImportedBundle.students)
-      setRegularLessons(initialImportedBundle.regularLessons)
-      setGroupLessons(initialImportedBundle.groupLessons)
+      setRegularLessons([])
+      setGroupLessons([])
       setClassroomSettings(initialImportedBundle.classroomSettings)
       setSpecialSessions(createInitialSpecialSessionRows())
       setAutoAssignRules(createInitialAutoAssignRuleRows())
@@ -2382,21 +2382,21 @@ function App() {
         classroomSettings: initialImportedBundle.classroomSettings,
         teachers: initialImportedBundle.teachers,
         students: initialImportedBundle.students,
-        regularLessons: initialBoardRegularLessons.length > 0 ? initialBoardRegularLessons : initialImportedBundle.regularLessons,
+        regularLessons: initialBoardRegularLessons,
       }))
       setPersistenceMessage('基本データを初期取り込みしました。特別講習、ルール、盤面、開始時点ストックは初期化しました。')
       void runGoogleHolidaySync({ force: true, background: true })
     } catch {
       setPersistenceMessage('基本データの Excel 初期取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
+  }, [classroomSettings, hasAnyExistingSetupData, managers, runGoogleHolidaySync, students, teachers])
 
   const importDiffBasicDataWorkbook = useCallback(async (file: File) => {
     try {
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
-      const fallbackBundle = { managers, teachers, students, regularLessons, groupLessons, classroomSettings }
+      const fallbackBundle = { managers, teachers, students, classroomSettings }
       const imported = parseImportedBundle(xlsx, workbook, fallbackBundle)
       const merged = mergeImportedBundle(imported, fallbackBundle)
       const validationErrors = validateImportedBasicDataBundle(merged)
@@ -2414,8 +2414,6 @@ function App() {
       setManagers(merged.managers)
       setTeachers(merged.teachers)
       setStudents(merged.students)
-      setRegularLessons(merged.regularLessons)
-      setGroupLessons(merged.groupLessons)
       setClassroomSettings(merged.classroomSettings)
       if (!boardState) {
         const mergedBoardRegularLessons = buildRegularLessonsFromTemplate({
@@ -2427,7 +2425,7 @@ function App() {
           classroomSettings: merged.classroomSettings,
           teachers: merged.teachers,
           students: merged.students,
-          regularLessons: mergedBoardRegularLessons.length > 0 ? mergedBoardRegularLessons : merged.regularLessons,
+          regularLessons: mergedBoardRegularLessons,
         }))
       }
       if (!hasAnyExistingSetupData()) {
@@ -2439,7 +2437,7 @@ function App() {
     } catch {
       setPersistenceMessage('基本データの Excel 差分取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [boardState, classroomSettings, groupLessons, hasAnyExistingSetupData, managers, regularLessons, runGoogleHolidaySync, students, teachers])
+  }, [boardState, classroomSettings, hasAnyExistingSetupData, managers, runGoogleHolidaySync, students, teachers])
 
   const exportSpecialDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -2672,13 +2670,9 @@ function App() {
         managers={managers}
         teachers={teachers}
         students={students}
-        regularLessons={regularLessons}
-        groupLessons={groupLessons}
         onUpdateManagers={setManagers}
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
-        onUpdateRegularLessons={setRegularLessons}
-        onUpdateGroupLessons={setGroupLessons}
         onUpdateClassroomSettings={setClassroomSettings}
         onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onBackToBoard={() => navigateClassroomScreen('board')}

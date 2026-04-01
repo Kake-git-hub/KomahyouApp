@@ -11,35 +11,11 @@ describe('basicDataImportValidation', () => {
         bundle.teachers[0]!,
         { ...bundle.teachers[1]!, id: bundle.teachers[0]!.id },
       ],
-      regularLessons: [
-        bundle.regularLessons[0]!,
-        { ...bundle.regularLessons[1]!, id: bundle.regularLessons[0]!.id },
-      ],
     })
 
     expect(errors).toEqual(expect.arrayContaining([
       expect.stringContaining('講師IDが重複しています'),
-      expect.stringContaining('通常授業IDが重複しています'),
     ]))
-  })
-
-  it('does not treat regular lessons in different school years as duplicates', () => {
-    const bundle = createTemplateBundle()
-    const baseLesson = bundle.regularLessons[0]
-    expect(baseLesson).toBeDefined()
-
-    const merged = mergeImportedBundle({
-      ...bundle,
-      regularLessons: [
-        {
-          ...baseLesson!,
-          id: 'imported-regular',
-          schoolYear: baseLesson!.schoolYear + 1,
-        },
-      ],
-    }, bundle)
-
-    expect(validateImportedBasicDataBundle(merged)).toEqual([])
   })
 
   it('preserves initial setup fields when basic data is merged from Excel', () => {

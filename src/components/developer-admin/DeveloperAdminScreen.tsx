@@ -73,8 +73,6 @@ function countSnapshotRows(snapshot: AppSnapshotPayload) {
     managers: snapshot.managers.length,
     teachers: snapshot.teachers.length,
     students: snapshot.students.length,
-    regularLessons: snapshot.regularLessons.length,
-    groupLessons: snapshot.groupLessons.length,
     specialSessions: snapshot.specialSessions.length,
   }
 }
@@ -404,8 +402,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                     <span className="selection-pill">管理者 {counts.managers} 人</span>
                     <span className="selection-pill">講師 {counts.teachers} 人</span>
                     <span className="selection-pill">生徒 {counts.students} 人</span>
-                    <span className="selection-pill">通常授業 {counts.regularLessons} 件</span>
-                    <span className="selection-pill">集団授業 {counts.groupLessons} 件</span>
                     <span className="selection-pill">講習期間 {counts.specialSessions} 件</span>
                   </div>
                 </article>

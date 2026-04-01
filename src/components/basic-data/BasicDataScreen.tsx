@@ -1,10 +1,9 @@
-import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
+import { type Dispatch, type SetStateAction, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
   buildTeacherAvailableSlotLabel,
   compareStudentsByCurrentGradeThenName,
   deriveManagedDisplayName,
-  formatStudentSelectionLabel,
   type GradeCeiling,
   type ManagerRow,
   normalizeTeacherAvailableSlots,
@@ -23,25 +22,15 @@ import {
   getTeacherDisplayName,
   initialStudents,
   initialTeachers,
-  isActiveOnDate,
   resolveScheduledStatus,
   resolveTeacherRosterStatus,
 } from './basicDataModel'
 import {
-  createInitialRegularLessons,
-  doRegularLessonParticipantPeriodsOverlap,
   normalizeRegularLessonNote,
-  normalizeRegularLessonSharedPeriod,
-  packSortRegularLessonRows,
-  type RegularLessonRow,
   resolveOperationalSchoolYear,
-  resolveSchoolYearDateRange,
 } from './regularLessonModel'
+import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { AppMenu } from '../navigation/AppMenu'
-import {
-  allStudentSubjectOptions,
-  resolveDisplayedSubjectForBirthDate,
-} from '../../utils/studentGradeSubject'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -53,13 +42,9 @@ type BasicDataScreenProps = {
   managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
-  regularLessons: RegularLessonRow[]
-  groupLessons: GroupLessonRow[]
   onUpdateManagers: Dispatch<SetStateAction<ManagerRow[]>>
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
-  onUpdateRegularLessons: Dispatch<SetStateAction<RegularLessonRow[]>>
-  onUpdateGroupLessons: Dispatch<SetStateAction<GroupLessonRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onSyncGoogleHolidays: () => void
   onBackToBoard: () => void
@@ -87,14 +72,12 @@ type TableControl = {
 
 type RosterView = 'active' | 'withdrawn'
 
-type BasicDataTab = 'managers' | 'teachers' | 'students' | 'regularLessons' | 'groupLessons' | 'constraints' | 'classroomData'
-type RowEditScope = 'manager' | 'teacher' | 'student' | 'regular' | 'group'
+type BasicDataTab = 'managers' | 'teachers' | 'students' | 'constraints' | 'classroomData'
+type RowEditScope = 'manager' | 'teacher' | 'student'
 export type BasicDataBundle = {
   managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
-  regularLessons: RegularLessonRow[]
-  groupLessons: GroupLessonRow[]
   classroomSettings: ClassroomSettings
 }
 
@@ -164,54 +147,9 @@ function findStudentMatch(student: StudentRow, currentStudents: StudentRow[]) {
   if (!normalizedName) return null
   return currentStudents.find((row) => normalizeImportIdentityValue(row.name) === normalizedName) ?? null
 }
-
-function buildRegularLessonMergeKey(row: Pick<RegularLessonRow, 'schoolYear' | 'teacherId' | 'student1Id' | 'startDate' | 'endDate' | 'student2Id' | 'student2StartDate' | 'student2EndDate' | 'dayOfWeek' | 'slotNumber'>) {
-  const normalized = normalizeRegularLessonSharedPeriod(row)
-  return [
-    normalized.schoolYear,
-    normalized.teacherId,
-    normalized.student1Id,
-    normalized.student2Id,
-    normalized.dayOfWeek,
-    normalized.slotNumber,
-    normalized.startDate,
-    normalized.endDate,
-  ].join('__')
-}
-
-function findRegularLessonMatch(row: RegularLessonRow, currentRegularLessons: RegularLessonRow[]) {
-  if (row.id) {
-    const matchedById = currentRegularLessons.find((currentRow) => currentRow.id === row.id)
-    if (matchedById) return matchedById
-  }
-
-  const rowKey = buildRegularLessonMergeKey(row)
-  return currentRegularLessons.find((currentRow) => buildRegularLessonMergeKey(currentRow) === rowKey) ?? null
-}
-
-function buildGroupLessonMergeKey(row: Pick<GroupLessonRow, 'schoolYear' | 'teacherId' | 'studentIds' | 'dayOfWeek' | 'slotLabel'>) {
-  return [
-    row.schoolYear,
-    row.teacherId,
-    row.dayOfWeek,
-    row.slotLabel,
-    row.studentIds.slice().sort((left, right) => left.localeCompare(right)).join(','),
-  ].join('__')
-}
-
-function findGroupLessonMatch(row: GroupLessonRow, currentGroupLessons: GroupLessonRow[]) {
-  if (row.id) {
-    const matchedById = currentGroupLessons.find((currentRow) => currentRow.id === row.id)
-    if (matchedById) return matchedById
-  }
-
-  const rowKey = buildGroupLessonMergeKey(row)
-  return currentGroupLessons.find((currentRow) => buildGroupLessonMergeKey(currentRow) === rowKey) ?? null
-}
 type XlsxModule = typeof import('xlsx')
 
 const teacherSubjectOptions = ['算', '数', '英', '国', '理', '生', '物', '化', '社']
-const lessonSubjectOptions = allStudentSubjectOptions
 const gradeCeilingOptions: GradeCeiling[] = ['小', '中', '高1', '高2', '高3']
 const gradeCeilingOptionsWithoutElementary: GradeCeiling[] = ['中', '高1', '高2', '高3']
 const dayOptions = [
@@ -231,7 +169,6 @@ export const initialGroupLessons: GroupLessonRow[] = [
   { id: 'g003', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't004', subject: '国', studentIds: ['s013', 's025'], dayOfWeek: 5, slotLabel: '3限' },
   { id: 'g004', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't006', subject: '理', studentIds: ['s014', 's026'], dayOfWeek: 4, slotLabel: '4限' },
 ]
-const maxSelectableSchoolYear = 2031
 
 type ManagedIdKind = 'manager' | 'teacher' | 'student' | 'regular' | 'group'
 
@@ -305,10 +242,6 @@ function resolveImportedOrGeneratedId(value: unknown, allocator: ReturnType<type
   return importedId ? allocator.reserve(importedId) : allocator.next()
 }
 
-function resolveDayLabel(dayOfWeek: number) {
-  return dayOptions.find((option) => option.value === dayOfWeek)?.label ?? '-'
-}
-
 function serializeClosedWeekdays(closedWeekdays: number[]) {
   return dayOptions
     .filter((option) => closedWeekdays.includes(option.value))
@@ -330,18 +263,6 @@ function parseClosedWeekdays(value: unknown) {
 
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
-}
-
-function formatSchoolYearLabel(schoolYear: number) {
-  return `${schoolYear}年度`
-}
-
-function buildSelectableSchoolYears(currentSchoolYear: number) {
-  const years: number[] = []
-  for (let year = currentSchoolYear - 1; year <= maxSelectableSchoolYear; year += 1) {
-    years.push(year)
-  }
-  return years.reverse()
 }
 
 function normalizeDateString(value: unknown, xlsx?: XlsxModule) {
@@ -433,15 +354,6 @@ function resolveTeacherStatusLabel(teacher: TeacherRow, today = new Date()) {
   return resolveTeacherRosterStatus(teacher, getReferenceDateKey(today))
 }
 
-function isTeacherActive(teacher: TeacherRow, today = new Date()) {
-  return resolveTeacherStatusLabel(teacher, today) === '在籍'
-}
-
-function isStudentActive(student: StudentRow, today = new Date()) {
-  const referenceDate = getReferenceDateKey(today)
-  return isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, referenceDate) && resolveSchoolGradeLabel(student.birthDate, today) !== '退塾'
-}
-
 function serializeSubjectCapabilities(capabilities: TeacherSubjectCapability[]) {
   return capabilities
     .slice()
@@ -478,14 +390,6 @@ function parseSubjectCapabilities(value: unknown): TeacherSubjectCapability[] {
   return capabilities
 }
 
-function getStudentOptionLabel(student: StudentRow) {
-  return formatStudentSelectionLabel(student)
-}
-
-function getTeacherOptionLabel(teacher: TeacherRow) {
-  return getTeacherDisplayName(teacher)
-}
-
 function formatSummaryValue(value: string, fallback = '未設定') {
   return normalizeText(value) || fallback
 }
@@ -500,25 +404,6 @@ function formatManagedDateButtonLabel(value: string, emptyLabel: string, hint?: 
   return hint ? `${emptyLabel} ${hint}` : emptyLabel
 }
 
-function formatRegularLessonParticipantSummary(studentName: string, subject: string, emptyLabel: string) {
-  const normalizedStudentName = normalizeText(studentName)
-  if (!normalizedStudentName) return emptyLabel
-  return `${normalizedStudentName} / ${formatSummaryValue(subject)}`
-}
-
-function normalizeRegularLessonRowNotes<T extends { student1Note?: string; student2Note?: string }>(row: T): T {
-  return {
-    ...row,
-    student1Note: normalizeRegularLessonNote(row.student1Note),
-    student2Note: normalizeRegularLessonNote(row.student2Note),
-  }
-}
-
-function formatRegularLessonPeriodSummary(startDate: string, endDate: string, schoolYear: number) {
-  const schoolYearRange = resolveSchoolYearDateRange(schoolYear)
-  return `${normalizeText(startDate) || schoolYearRange.startDate} - ${normalizeText(endDate) || schoolYearRange.endDate}`
-}
-
 function formatSyncTimestamp(value: string) {
   if (!value) return '未同期'
   const parsed = new Date(value)
@@ -530,87 +415,6 @@ function formatSyncTimestamp(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   })
-}
-
-function buildSharedRegularLessonPeriodPatch(startDate: string, endDate: string) {
-  return {
-    startDate,
-    endDate,
-    student2StartDate: startDate,
-    student2EndDate: endDate,
-  }
-}
-
-function collectRegularLessonConflicts(
-  regularLessons: RegularLessonRow[],
-  draft: Pick<RegularLessonRow, 'teacherId' | 'student1Id' | 'student2Id' | 'dayOfWeek' | 'slotNumber' | 'startDate' | 'endDate' | 'student2StartDate' | 'student2EndDate'>,
-  schoolYear: number,
-  teacherNameById: Record<string, string>,
-  studentNameById: Record<string, string>,
-  excludeRowId?: string,
-) {
-  const draftWithSchoolYear = { ...draft, schoolYear }
-  const draftParticipants = [
-    draft.student1Id ? { studentId: draft.student1Id, participantIndex: 1 as const } : null,
-    draft.student2Id ? { studentId: draft.student2Id, participantIndex: 2 as const } : null,
-  ].filter((entry): entry is { studentId: string; participantIndex: 1 | 2 } => entry !== null)
-
-  return regularLessons
-    .filter((row) => row.id !== excludeRowId && row.schoolYear === schoolYear && row.dayOfWeek === draft.dayOfWeek && row.slotNumber === draft.slotNumber)
-    .flatMap((row) => {
-      const messages: string[] = []
-      const rowParticipants = [
-        row.student1Id ? { studentId: row.student1Id, participantIndex: 1 as const } : null,
-        row.student2Id ? { studentId: row.student2Id, participantIndex: 2 as const } : null,
-      ].filter((entry): entry is { studentId: string; participantIndex: 1 | 2 } => entry !== null)
-      const hasParticipantOverlap = draftParticipants.length > 0
-        && rowParticipants.length > 0
-        && doRegularLessonParticipantPeriodsOverlap(draftWithSchoolYear, row)
-
-      if (draft.teacherId && row.teacherId === draft.teacherId && hasParticipantOverlap) {
-        messages.push(`講師重複: ${teacherNameById[row.teacherId] ?? '講師未設定'} が ${resolveDayLabel(row.dayOfWeek)} ${row.slotNumber}限 に既に入っています。`)
-      }
-
-      const duplicatedStudents = draftParticipants
-        .filter((draftParticipant) => rowParticipants.some((rowParticipant) => (
-          rowParticipant.studentId === draftParticipant.studentId
-          && doRegularLessonParticipantPeriodsOverlap(draftWithSchoolYear, row)
-        )))
-        .map((participant) => participant.studentId)
-      if (duplicatedStudents.length > 0) {
-        messages.push(`生徒重複: ${Array.from(new Set(duplicatedStudents)).map((studentId) => studentNameById[studentId] ?? '生徒未設定').join(' / ')} が ${resolveDayLabel(row.dayOfWeek)} ${row.slotNumber}限 に既に入っています。`)
-      }
-
-      return messages
-    })
-}
-
-function createRegularLessonDraft() {
-  return {
-    teacherId: '',
-    student1Id: '',
-    subject1: '英',
-    student1Note: '',
-    startDate: '',
-    endDate: '',
-    student2Id: '',
-    subject2: '英',
-    student2Note: '',
-    student2StartDate: '',
-    student2EndDate: '',
-    nextStudent1Id: '',
-    nextSubject1: '',
-    nextStudent2Id: '',
-    nextSubject2: '',
-    dayOfWeek: 1,
-    slotNumber: 1,
-  }
-}
-
-function isDateOutsideSchoolYear(dateKey: string, schoolYear: number) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return false
-  const schoolYearRange = resolveSchoolYearDateRange(schoolYear)
-  return dateKey < schoolYearRange.startDate || dateKey > schoolYearRange.endDate
 }
 
 function formatSubjectCapabilitySummary(capabilities: TeacherSubjectCapability[]) {
@@ -668,97 +472,11 @@ function applyFrozenRowOrder<T extends { id: string }>(rows: T[], frozenRowIds?:
   return orderedRows
 }
 
-function normalizeRegularLessonParticipants<T extends Pick<RegularLessonRow, 'student1Id' | 'subject1' | 'student1Note' | 'student2Id' | 'subject2' | 'student2Note'>>(row: T): T {
-  const nextRow = {
-    ...row,
-    student1Note: normalizeRegularLessonNote(row.student1Note),
-    student2Note: normalizeRegularLessonNote(row.student2Note),
-  }
-
-  if (!nextRow.student2Id) {
-    nextRow.subject2 = ''
-    nextRow.student2Note = ''
-  }
-
-  if (nextRow.student1Id || !nextRow.student2Id) {
-    if (!nextRow.student1Id) {
-      nextRow.subject1 = ''
-      nextRow.student1Note = ''
-    }
-    return nextRow
-  }
-
-  return {
-    ...nextRow,
-    student1Id: nextRow.student2Id,
-    subject1: nextRow.subject2,
-    student1Note: nextRow.student2Note,
-    student2Id: '',
-    subject2: '',
-    student2Note: '',
-  }
-}
-
-function hasRegularLessonStructureChanges(before: RegularLessonRow, after: RegularLessonRow) {
-  return before.teacherId !== after.teacherId
-    || before.student1Id !== after.student1Id
-    || before.subject1 !== after.subject1
-    || before.student2Id !== after.student2Id
-    || before.subject2 !== after.subject2
-    || before.dayOfWeek !== after.dayOfWeek
-    || before.slotNumber !== after.slotNumber
-    || before.startDate !== after.startDate
-    || before.endDate !== after.endDate
-    || before.student2StartDate !== after.student2StartDate
-    || before.student2EndDate !== after.student2EndDate
-}
-
-function hasRegularLessonAddedParticipants(before: RegularLessonRow | undefined, after: RegularLessonRow) {
-  if (!before) return false
-
-  const beforeParticipants = new Set([
-    before.student1Id && before.subject1 ? `${before.student1Id}__${before.subject1}` : '',
-    before.student2Id && before.subject2 ? `${before.student2Id}__${before.subject2}` : '',
-  ].filter(Boolean))
-  const afterParticipants = [
-    after.student1Id && after.subject1 ? `${after.student1Id}__${after.subject1}` : '',
-    after.student2Id && after.subject2 ? `${after.student2Id}__${after.subject2}` : '',
-  ].filter(Boolean)
-
-  return afterParticipants.some((participant) => !beforeParticipants.has(participant))
-}
-
-function buildRegularLessonRevisionId(id: string) {
-  const [baseId = id] = id.split('_')
-  return `${baseId}_${Date.now().toString(36)}`
-}
-
-function parseDayOfWeek(value: unknown) {
-  const text = normalizeText(value)
-  const numeric = Number(text)
-  if (!Number.isNaN(numeric) && numeric >= 0 && numeric <= 6) return numeric
-  return dayOptions.find((option) => option.label === text)?.value ?? 1
-}
-
-function parseSlotNumber(value: unknown) {
-  const text = normalizeText(value)
-  const matched = text.match(/\d+/)
-  return matched ? Number(matched[0]) : 1
-}
-
-function parseSchoolYear(value: unknown, fallback = resolveOperationalSchoolYear(new Date())) {
-  const text = normalizeText(value)
-  const matched = text.match(/\d{4}/)
-  return matched ? Number(matched[0]) : fallback
-}
-
 export function createTemplateBundle(): BasicDataBundle {
   return {
     managers: [{ id: 'template_manager', name: '管理 太郎', email: 'manager@example.com' }],
     teachers: initialTeachers,
     students: initialStudents,
-    regularLessons: createInitialRegularLessons(),
-    groupLessons: [{ id: 'template_group', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't002', subject: '英', studentIds: ['s002', 's003'], dayOfWeek: 3, slotLabel: '2限' }],
     classroomSettings: {
       closedWeekdays: [0],
       holidayDates: [],
@@ -803,38 +521,26 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     表示: row.isHidden ? '非表示' : '表示',
   })), ['入塾日', '退塾日', '生年月日']), '生徒')
 
-  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(
-    xlsx,
-    bundle.regularLessons.map((row) => {
-      const sharedPeriod = normalizeRegularLessonSharedPeriod(row)
-      return {
-        通常授業ID: row.id,
-        年度: formatSchoolYearLabel(row.schoolYear),
-        講師: teacherNameById[row.teacherId] ?? '',
-        生徒1: studentNameById[row.student1Id] ?? '',
-        科目1: row.subject1,
-        生徒1注記: normalizeRegularLessonNote(row.student1Note),
-        共通期間開始: sharedPeriod.startDate,
-        共通期間終了: sharedPeriod.endDate,
-        生徒2: studentNameById[row.student2Id] ?? '',
-        科目2: row.subject2,
-        生徒2注記: normalizeRegularLessonNote(row.student2Note),
-        曜日: resolveDayLabel(row.dayOfWeek),
-        時限: row.slotNumber,
-      }
-    }),
-    ['共通期間開始', '共通期間終了'],
-  ), '通常授業')
-
-  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.groupLessons.map((row) => ({
-    集団授業ID: row.id,
-    年度: formatSchoolYearLabel(row.schoolYear),
-    講師: teacherNameById[row.teacherId] ?? '',
-    科目: row.subject,
-    生徒一覧: row.studentIds.map((studentId) => studentNameById[studentId] ?? '').filter(Boolean).join(', '),
-    曜日: resolveDayLabel(row.dayOfWeek),
-    時限ラベル: row.slotLabel,
-  }))), '集団授業')
+  const template = bundle.classroomSettings.regularLessonTemplate
+  const deskCount = bundle.classroomSettings.deskCount || 14
+  const normalizedTemplate = template ? normalizeRegularLessonTemplate(template, deskCount) : null
+  if (normalizedTemplate) {
+    const dayLabelByValue: Record<number, string> = { 0: '日', 1: '月', 2: '火', 3: '水', 4: '木', 5: '金', 6: '土' }
+    const templateRows = normalizedTemplate.cells.flatMap((cell) => cell.desks.map((desk) => ({
+      開始日: normalizedTemplate.effectiveStartDate,
+      曜日: dayLabelByValue[cell.dayOfWeek] ?? '月',
+      時限: `${cell.slotNumber}限`,
+      机: desk.deskIndex,
+      講師: teacherNameById[desk.teacherId] ?? '',
+      生徒1: studentNameById[desk.students[0]?.studentId ?? ''] ?? '',
+      科目1: desk.students[0]?.subject ?? '',
+      注記1: normalizeRegularLessonNote(desk.students[0]?.note),
+      生徒2: studentNameById[desk.students[1]?.studentId ?? ''] ?? '',
+      科目2: desk.students[1]?.subject ?? '',
+      注記2: normalizeRegularLessonNote(desk.students[1]?.note),
+    })))
+    xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, templateRows, ['開始日']), '通常授業テンプレ')
+  }
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [{
     休校曜日: serializeClosedWeekdays(bundle.classroomSettings.closedWeekdays),
@@ -848,9 +554,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式に加えて Excel の日付セルも取り込めます。空欄なら即時在籍として扱います。' },
     { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または Excel の日付セルで入力できます。空欄と 未定 はどちらも日付未設定として扱います。' },
     { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。学年/在籍列はアプリ側で自動計算します。' },
-    { 項目: '通常授業/集団授業', 説明: '年度列を付けて年度ごとに分けます。講師名と生徒名は各シートの名前列に一致させてください。' },
-    { 項目: '通常授業.共通期間開始/共通期間終了', 説明: '通常授業の共有表示期間です。旧列の 期間開始/終了 と 生徒1期間開始/終了 と 生徒2期間開始/終了 も同じ期間として取り込みます。' },
-    { 項目: '通常授業.生徒1注記/生徒2注記', 説明: '各注記は 4 文字までです。コマ表上では科目の後ろに連結して表示されます。' },
+    { 項目: '通常授業テンプレ', 説明: 'コマ表のテンプレモードで作成した通常授業テンプレです。講師名と生徒名は各シートの名前列に一致させてください。' },
     { 項目: '教室データ', 説明: '休校曜日 は 日曜, 月曜 のように曜日名をカンマ区切りで入力します。ペア制約は自動割振ルール画面の Excel 管理で扱います。' },
   ]), '説明')
 
@@ -861,8 +565,6 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   const managerIdAllocator = createManagedIdAllocator('manager', fallback.managers.map((row) => row.id))
   const teacherIdAllocator = createManagedIdAllocator('teacher', fallback.teachers.map((row) => row.id))
   const studentIdAllocator = createManagedIdAllocator('student', fallback.students.map((row) => row.id))
-  const regularIdAllocator = createManagedIdAllocator('regular', fallback.regularLessons.map((row) => row.id))
-  const groupIdAllocator = createManagedIdAllocator('group', fallback.groupLessons.map((row) => row.id))
 
   const readRows = (sheetName: string) => {
     const sheet = workbook.Sheets[sheetName]
@@ -949,73 +651,14 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
     teacherIdByName.set(teacher.name, teacher.id)
     teacherIdByName.set(getTeacherDisplayName(teacher), teacher.id)
   }
-  const teacherLabelById = new Map(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const studentIdByName = new Map<string, string>()
   for (const student of students) {
     studentIdByName.set(student.name, student.id)
     if (student.displayName) studentIdByName.set(student.displayName, student.id)
   }
-  const studentById = new Map(students.map((student) => [student.id, student]))
-
-  const regularRows = readRows('通常授業')
-  const regularLessons = regularRows
-    ? packSortRegularLessonRows(regularRows
-        .map((row) => {
-          const schoolYear = parseSchoolYear(row['年度'])
-          const sharedStartDate = normalizeDateString(row['共通期間開始'], xlsx) || normalizeDateString(row['期間開始'], xlsx) || normalizeDateString(row['生徒2期間開始'], xlsx) || normalizeDateString(row['生徒1期間開始'], xlsx)
-          const sharedEndDate = normalizeDateString(row['共通期間終了'], xlsx) || normalizeDateString(row['期間終了'], xlsx) || normalizeDateString(row['生徒2期間終了'], xlsx) || normalizeDateString(row['生徒1期間終了'], xlsx)
-          const referenceDate = sharedStartDate || resolveSchoolYearDateRange(schoolYear).startDate
-          const student1Id = studentIdByName.get(normalizeText(row['生徒1'])) ?? ''
-          const student2Id = studentIdByName.get(normalizeText(row['生徒2'])) ?? ''
-          const subject1 = lessonSubjectOptions.includes(normalizeText(row['科目1']) as (typeof lessonSubjectOptions)[number]) ? normalizeText(row['科目1']) : '英'
-          const subject2 = lessonSubjectOptions.includes(normalizeText(row['科目2']) as (typeof lessonSubjectOptions)[number]) ? normalizeText(row['科目2']) : ''
-
-          return normalizeRegularLessonRowNotes(normalizeRegularLessonSharedPeriod({
-            id: resolveImportedOrGeneratedId(row['通常授業ID'], regularIdAllocator),
-            schoolYear,
-            teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
-            student1Id,
-            subject1: resolveDisplayedSubjectForBirthDate(subject1, studentById.get(student1Id)?.birthDate, referenceDate),
-            student1Note: normalizeText(row['生徒1注記']),
-            startDate: sharedStartDate,
-            endDate: sharedEndDate,
-            student2Id,
-            subject2: resolveDisplayedSubjectForBirthDate(subject2, studentById.get(student2Id)?.birthDate, referenceDate),
-            student2Note: normalizeText(row['生徒2注記']),
-            student2StartDate: sharedStartDate,
-            student2EndDate: sharedEndDate,
-            nextStudent1Id: '',
-            nextSubject1: '',
-            nextStudent2Id: '',
-            nextSubject2: '',
-            dayOfWeek: parseDayOfWeek(row['曜日']),
-            slotNumber: parseSlotNumber(row['時限']),
-          }))
-        })
-        .filter((row) => row.teacherId && (row.student1Id || row.student2Id)),
-      (row) => teacherLabelById.get(row.teacherId) ?? '')
-    : fallback.regularLessons
-
-  const groupRows = readRows('集団授業')
-  const groupLessons = groupRows
-    ? groupRows
-        .map((row) => ({
-          id: resolveImportedOrGeneratedId(row['集団授業ID'], groupIdAllocator),
-          schoolYear: parseSchoolYear(row['年度']),
-          teacherId: teacherIdByName.get(normalizeText(row['講師'])) ?? '',
-          subject: lessonSubjectOptions.includes(normalizeText(row['科目']) as (typeof lessonSubjectOptions)[number]) ? normalizeText(row['科目']) : '英',
-          studentIds: normalizeText(row['生徒一覧'])
-            .split(',')
-            .map((entry) => studentIdByName.get(entry.trim()) ?? '')
-            .filter(Boolean),
-          dayOfWeek: parseDayOfWeek(row['曜日']),
-          slotLabel: normalizeText(row['時限ラベル']) || '1限',
-        }))
-        .filter((row) => row.teacherId && row.studentIds.length > 0)
-    : fallback.groupLessons
 
   const classroomRows = readRows('教室データ')
-  const classroomSettings = classroomRows?.[0]
+  const baseClassroomSettings = classroomRows?.[0]
     ? {
         ...fallback.classroomSettings,
         closedWeekdays: parseClosedWeekdays(classroomRows[0]['休校曜日']),
@@ -1023,12 +666,26 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
       }
     : fallback.classroomSettings
 
+  const deskCount = baseClassroomSettings.deskCount || 14
+  const hasTemplateSheet = Boolean(workbook.Sheets['通常授業テンプレ'])
+  const importedTemplate = hasTemplateSheet
+    ? parseRegularLessonTemplateWorkbook(xlsx, workbook, {
+        fallbackTemplate: fallback.classroomSettings.regularLessonTemplate,
+        teachers,
+        students,
+        deskCount,
+      })
+    : fallback.classroomSettings.regularLessonTemplate ?? null
+
+  const classroomSettings = {
+    ...baseClassroomSettings,
+    regularLessonTemplate: importedTemplate,
+  }
+
   return {
     managers,
     teachers,
     students,
-    regularLessons,
-    groupLessons,
     classroomSettings,
   }
 }
@@ -1074,49 +731,10 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
     students.push(nextStudent)
   }
 
-  const regularLessons = fallback.regularLessons.slice()
-  for (const importedRegularLesson of imported.regularLessons) {
-    const remappedRegularLesson = normalizeRegularLessonSharedPeriod({
-      ...importedRegularLesson,
-      teacherId: mergedTeacherIdByImportedId.get(importedRegularLesson.teacherId) ?? importedRegularLesson.teacherId,
-      student1Id: mergedStudentIdByImportedId.get(importedRegularLesson.student1Id) ?? importedRegularLesson.student1Id,
-      student2Id: mergedStudentIdByImportedId.get(importedRegularLesson.student2Id) ?? importedRegularLesson.student2Id,
-      nextStudent1Id: mergedStudentIdByImportedId.get(importedRegularLesson.nextStudent1Id) ?? importedRegularLesson.nextStudent1Id,
-      nextStudent2Id: mergedStudentIdByImportedId.get(importedRegularLesson.nextStudent2Id) ?? importedRegularLesson.nextStudent2Id,
-    })
-    const matchedRegularLesson = findRegularLessonMatch(remappedRegularLesson, fallback.regularLessons)
-    const nextRegularLesson = { ...remappedRegularLesson, id: matchedRegularLesson?.id ?? remappedRegularLesson.id }
-    const targetIndex = regularLessons.findIndex((row) => row.id === nextRegularLesson.id)
-    if (targetIndex >= 0) {
-      regularLessons[targetIndex] = nextRegularLesson
-      continue
-    }
-    regularLessons.push(nextRegularLesson)
-  }
-
-  const groupLessons = fallback.groupLessons.slice()
-  for (const importedGroupLesson of imported.groupLessons) {
-    const remappedGroupLesson = {
-      ...importedGroupLesson,
-      teacherId: mergedTeacherIdByImportedId.get(importedGroupLesson.teacherId) ?? importedGroupLesson.teacherId,
-      studentIds: importedGroupLesson.studentIds.map((studentId) => mergedStudentIdByImportedId.get(studentId) ?? studentId),
-    }
-    const matchedGroupLesson = findGroupLessonMatch(remappedGroupLesson, fallback.groupLessons)
-    const nextGroupLesson = { ...remappedGroupLesson, id: matchedGroupLesson?.id ?? remappedGroupLesson.id }
-    const targetIndex = groupLessons.findIndex((row) => row.id === nextGroupLesson.id)
-    if (targetIndex >= 0) {
-      groupLessons[targetIndex] = nextGroupLesson
-      continue
-    }
-    groupLessons.push(nextGroupLesson)
-  }
-
   return {
     managers,
     teachers,
     students,
-    regularLessons: packSortRegularLessonRows(regularLessons, (row) => teachers.find((teacher) => teacher.id === row.teacherId)?.displayName ?? ''),
-    groupLessons,
     classroomSettings: {
       ...fallback.classroomSettings,
       ...imported.classroomSettings,
@@ -1267,91 +885,10 @@ function TeacherAvailabilityEditor({ slots, onChange, testIdPrefix, disabled = f
   )
 }
 
-type RegularLessonNoteInputProps = {
-  value: string | undefined
-  onChange: (next: string) => void
-  placeholder?: string
-  disabled?: boolean
-  testId?: string
-}
-
-function RegularLessonNoteInput({ value, onChange, placeholder, disabled = false, testId }: RegularLessonNoteInputProps) {
-  const [draftValue, setDraftValue] = useState(value ?? '')
-  const [isComposing, setIsComposing] = useState(false)
-
-  useEffect(() => {
-    if (!isComposing) {
-      setDraftValue(value ?? '')
-    }
-  }, [isComposing, value])
-
-  const commitValue = (nextValue: string) => {
-    const normalizedValue = normalizeRegularLessonNote(nextValue)
-    setDraftValue(normalizedValue)
-    onChange(normalizedValue)
-  }
-
-  return (
-    <input
-      type="text"
-      value={draftValue}
-      onChange={(event) => {
-        const nextValue = event.target.value
-        if (isComposing) {
-          setDraftValue(nextValue)
-          return
-        }
-
-        commitValue(nextValue)
-      }}
-      onCompositionStart={() => setIsComposing(true)}
-      onCompositionEnd={(event) => {
-        setIsComposing(false)
-        commitValue(event.currentTarget.value)
-      }}
-      onBlur={() => {
-        if (isComposing) return
-        commitValue(draftValue)
-      }}
-      placeholder={placeholder}
-      disabled={disabled}
-      data-testid={testId}
-    />
-  )
-}
-
 type TeacherEditorModalState = {
   editor: 'capabilities' | 'availability'
   target: 'draft' | 'row'
   rowId?: string
-}
-
-type StudentPickerProps = {
-  students: StudentRow[]
-  selectedIds: string[]
-  onChange: (next: string[]) => void
-  disabled?: boolean
-}
-
-function StudentPicker({ students, selectedIds, onChange, disabled = false }: StudentPickerProps) {
-  return (
-    <div className="basic-data-inline-picker">
-      {students.map((student) => {
-        const isActive = selectedIds.includes(student.id)
-        return (
-          <button
-            key={student.id}
-            type="button"
-            className={`basic-data-chip${isActive ? ' active' : ''}`}
-            onClick={() => onChange(isActive ? selectedIds.filter((entry) => entry !== student.id) : [...selectedIds, student.id])}
-            disabled={disabled}
-          >
-            {getStudentOptionLabel(student)}
-          </button>
-        )
-      })}
-    </div>
-  )
 }
 
 type TableControlsProps = {
@@ -1437,65 +974,27 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-type PeriodRangeInlineProps = {
-  startValue: string
-  endValue: string
-  startEmptyLabel: string
-  endEmptyLabel: string
-  onStartChange: (value: string) => void
-  onEndChange: (value: string) => void
-  startTestIdPrefix?: string
-  endTestIdPrefix?: string
-}
-
-function PeriodRangeInline({ startValue, endValue, startEmptyLabel, endEmptyLabel, onStartChange, onEndChange, startTestIdPrefix, endTestIdPrefix }: PeriodRangeInlineProps) {
-  return (
-    <div className="basic-data-period-inline">
-      <DateAssistInput value={startValue} emptyLabel={startEmptyLabel} onChange={onStartChange} testIdPrefix={startTestIdPrefix} />
-      <span className="basic-data-period-inline-separator">-</span>
-      <DateAssistInput value={endValue} emptyLabel={endEmptyLabel} onChange={onEndChange} testIdPrefix={endTestIdPrefix} />
-    </div>
-  )
-}
-
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, managers, teachers, students, regularLessons, groupLessons, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateRegularLessons, onUpdateGroupLessons, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, managers, teachers, students, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
-  const [centeredMessage, setCenteredMessage] = useState<string | null>(null)
-  const centeredMessageTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const showCenteredMessage = (message: string) => {
-    if (centeredMessageTimerRef.current) clearTimeout(centeredMessageTimerRef.current)
-    setCenteredMessage(message)
-    centeredMessageTimerRef.current = setTimeout(() => setCenteredMessage(null), 4000)
-  }
-  const currentSchoolYear = useMemo(() => resolveOperationalSchoolYear(new Date()), [])
-  const selectableSchoolYears = useMemo(() => buildSelectableSchoolYears(currentSchoolYear), [currentSchoolYear])
+
 
   const [managerDraft, setManagerDraft] = useState({ name: '', email: '' })
   const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[], availableSlots: [] as TeacherAvailableSlot[] })
   const [teacherEditorModalState, setTeacherEditorModalState] = useState<TeacherEditorModalState | null>(null)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
-  const [regularLessonDraft, setRegularLessonDraft] = useState(() => createRegularLessonDraft())
-  const [groupLessonDraft, setGroupLessonDraft] = useState({ teacherId: '', subject: '英', studentIds: [] as string[], dayOfWeek: 1, slotLabel: '1限' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
-  const [regularLessonEditSnapshots, setRegularLessonEditSnapshots] = useState<Record<string, RegularLessonRow>>({})
   const [frozenRowOrders, setFrozenRowOrders] = useState<Partial<Record<RowEditScope, string[]>>>({})
   const [teacherRosterView, setTeacherRosterView] = useState<RosterView>('active')
   const [studentRosterView, setStudentRosterView] = useState<RosterView>('active')
-  const [selectedRegularLessonYear, setSelectedRegularLessonYear] = useState(currentSchoolYear)
-  const [selectedGroupLessonYear, setSelectedGroupLessonYear] = useState(currentSchoolYear)
   const [tableControls, setTableControls] = useState<Record<BasicDataTab, TableControl>>({
     managers: createDefaultTableControl(),
     teachers: createDefaultTableControl(),
     students: createDefaultTableControl(),
-    regularLessons: createDefaultTableControl(),
-    groupLessons: createDefaultTableControl(),
     constraints: createDefaultTableControl(),
     classroomData: createDefaultTableControl(),
   })
 
-  const teacherNameById = useMemo(() => Object.fromEntries(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)])), [teachers])
-  const studentNameById = useMemo(() => Object.fromEntries(students.map((student) => [student.id, getStudentDisplayName(student)])), [students])
   const todayReferenceDate = useMemo(() => getReferenceDateKey(new Date()), [])
   const activeStudentRows = useMemo(
     () => students.filter((student) => {
@@ -1522,20 +1021,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     }),
     [teachers, todayReferenceDate],
   )
-  const activeTeachers = useMemo(() => teachers.filter((teacher) => isTeacherActive(teacher)), [teachers])
-  const activeStudents = useMemo(() => students
-    .filter((student) => isStudentActive(student))
-    .slice()
-    .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)), [students, todayReferenceDate])
-  const sortedStudents = useMemo(() => students.slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)), [students, todayReferenceDate])
-  const regularLessonYears = useMemo(() => selectableSchoolYears.filter((year) => year >= Math.min(...regularLessons.map((row) => row.schoolYear), currentSchoolYear - 1)), [currentSchoolYear, regularLessons, selectableSchoolYears])
-  const groupLessonYears = useMemo(() => selectableSchoolYears.filter((year) => year >= Math.min(...groupLessons.map((row) => row.schoolYear), currentSchoolYear - 1)), [currentSchoolYear, groupLessons, selectableSchoolYears])
-  const visibleRegularLessons = useMemo(() => regularLessons.filter((row) => row.schoolYear === selectedRegularLessonYear), [regularLessons, selectedRegularLessonYear])
-  const visibleGroupLessons = useMemo(() => groupLessons.filter((row) => row.schoolYear === selectedGroupLessonYear), [groupLessons, selectedGroupLessonYear])
-
-  useEffect(() => {
-    setRegularLessonDraft(createRegularLessonDraft())
-  }, [selectedRegularLessonYear])
 
   const rowKey = (scope: RowEditScope, id: string) => `${scope}:${id}`
   const updateTableControl = (tab: BasicDataTab, patch: Partial<TableControl>) => {
@@ -1573,104 +1058,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
     setEditingRows((current) => ({ ...current, [key]: nextIsEditing }))
   }
-  const handleToggleRegularLessonEditing = (id: string, visibleRowIds: string[] = []) => {
-    const key = rowKey('regular', id)
-    const row = regularLessons.find((entry) => entry.id === id)
-    if (!row) return
-
-    if (!editingRows[key]) {
-      captureFrozenRowOrder('regular', visibleRowIds)
-      setRegularLessonEditSnapshots((current) => ({ ...current, [id]: { ...row } }))
-      setEditingRows((current) => ({ ...current, [key]: true }))
-      return
-    }
-
-    const snapshot = regularLessonEditSnapshots[id]
-    const restoreSnapshot = () => {
-      if (!snapshot) return
-      onUpdateRegularLessons((current) => current.map((entry) => (entry.id === id ? { ...snapshot } : entry)))
-    }
-
-    const normalizedRow = normalizeRegularLessonParticipants(normalizeRegularLessonSharedPeriod(row))
-
-    if (!normalizedRow.student1Id) {
-      restoreSnapshot()
-      showCenteredMessage('通常授業の編集では生徒1を必ず設定してください。')
-      setStatusMessage('生徒1が未設定のため通常授業を保存できませんでした。')
-      return
-    }
-
-    const periodValidationTargets = [
-      { label: '期間開始', value: normalizedRow.startDate },
-      { label: '期間終了', value: normalizedRow.endDate },
-    ].filter((entry) => entry.value)
-
-    const outOfRangeField = periodValidationTargets.find((entry) => isDateOutsideSchoolYear(entry.value, row.schoolYear))
-    if (outOfRangeField) {
-      const schoolYearRange = resolveSchoolYearDateRange(row.schoolYear)
-      restoreSnapshot()
-      showCenteredMessage(`${outOfRangeField.label} は ${row.schoolYear}年度の範囲外です。\n${schoolYearRange.startDate} ～ ${schoolYearRange.endDate} の範囲で入力してください。`)
-      setStatusMessage('年度範囲外の期間があるため通常授業を保存できませんでした。')
-      return
-    }
-
-    const conflicts = collectRegularLessonConflicts(
-      regularLessons,
-      normalizedRow,
-      normalizedRow.schoolYear,
-      teacherNameById,
-      studentNameById,
-      normalizedRow.id,
-    )
-    if (conflicts.length > 0) {
-      restoreSnapshot()
-      window.alert(['重複があるため通常授業を保存できません。', ...conflicts].join('\n'))
-      setStatusMessage('重複があるため通常授業を保存できませんでした。')
-      return
-    }
-
-    if (hasRegularLessonAddedParticipants(snapshot, normalizedRow)) {
-      const confirmed = window.confirm([
-        'この通常授業をコマ表に反映します。該当箇所がすでに埋まっている場合は振替ストックに蓄積します',
-      ].filter(Boolean).join('\n\n'))
-      if (!confirmed) {
-        setStatusMessage('通常授業の編集終了をキャンセルしました。')
-        return
-      }
-    }
-
-    const revisedRow = snapshot && hasRegularLessonStructureChanges(snapshot, normalizedRow)
-      ? { ...normalizedRow, id: buildRegularLessonRevisionId(normalizedRow.id) }
-      : normalizedRow
-
-    if (
-      row.id !== revisedRow.id
-      || row.teacherId !== revisedRow.teacherId
-      || row.student1Id !== revisedRow.student1Id
-      || row.subject1 !== revisedRow.subject1
-      || normalizeRegularLessonNote(row.student1Note) !== normalizeRegularLessonNote(revisedRow.student1Note)
-      || row.student2Id !== revisedRow.student2Id
-      || row.subject2 !== revisedRow.subject2
-      || normalizeRegularLessonNote(row.student2Note) !== normalizeRegularLessonNote(revisedRow.student2Note)
-      || row.dayOfWeek !== revisedRow.dayOfWeek
-      || row.slotNumber !== revisedRow.slotNumber
-      || row.startDate !== revisedRow.startDate
-      || row.endDate !== revisedRow.endDate
-      || row.student2StartDate !== revisedRow.student2StartDate
-      || row.student2EndDate !== revisedRow.student2EndDate
-    ) {
-      onUpdateRegularLessons((current) => current.map((entry) => (entry.id === id ? revisedRow : entry)))
-    }
-
-    setRegularLessonEditSnapshots((current) => {
-      const next = { ...current }
-      delete next[id]
-      return next
-    })
-    releaseFrozenRowOrder('regular', key)
-    setEditingRows((current) => ({ ...current, [key]: false }))
-    setStatusMessage('通常授業を更新しました。')
-  }
   const updateManager = (id: string, patch: Partial<ManagerRow>) => {
     onUpdateManagers((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }
@@ -1681,22 +1068,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
 
   const updateStudent = (id: string, patch: Partial<StudentRow>) => {
     onUpdateStudents((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-  }
-
-  const updateRegularLesson = (id: string, patch: Partial<RegularLessonRow>) => {
-    onUpdateRegularLessons((current) => current.map((row) => {
-      if (row.id !== id) return row
-
-      const nextRow = normalizeRegularLessonRowNotes({ ...row, ...patch })
-      if ('startDate' in patch || 'endDate' in patch || 'student2StartDate' in patch || 'student2EndDate' in patch) {
-        return normalizeRegularLessonSharedPeriod(nextRow)
-      }
-      return nextRow
-    }))
-  }
-
-  const updateGroupLesson = (id: string, patch: Partial<GroupLessonRow>) => {
-    onUpdateGroupLessons((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }
 
   const teacherEditorModalConfig = (() => {
@@ -1801,66 +1172,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     setStatusMessage('生徒を追加しました。')
   }
 
-  const addRegularLesson = () => {
-    if (!regularLessonDraft.teacherId || !regularLessonDraft.student1Id) return
-
-    const normalizedDraft = normalizeRegularLessonRowNotes(normalizeRegularLessonSharedPeriod(regularLessonDraft))
-
-    const periodValidationTargets = [
-      { label: '期間開始', value: normalizedDraft.startDate },
-      { label: '期間終了', value: normalizedDraft.endDate },
-    ].filter((entry) => entry.value)
-
-    const outOfRangeField = periodValidationTargets.find((entry) => isDateOutsideSchoolYear(entry.value, selectedRegularLessonYear))
-    if (outOfRangeField) {
-      const schoolYearRange = resolveSchoolYearDateRange(selectedRegularLessonYear)
-      showCenteredMessage(`${outOfRangeField.label} は ${selectedRegularLessonYear}年度の範囲外です。\n${schoolYearRange.startDate} ～ ${schoolYearRange.endDate} の範囲で入力してください。`)
-      setStatusMessage('年度範囲外の期間があるため通常授業を追加できませんでした。')
-      return
-    }
-
-    const conflicts = collectRegularLessonConflicts(
-      regularLessons,
-      normalizedDraft,
-      selectedRegularLessonYear,
-      teacherNameById,
-      studentNameById,
-    )
-    if (conflicts.length > 0) {
-      window.alert(['重複があるため通常授業を追加できません。', ...conflicts].join('\n'))
-      setStatusMessage('重複があるため通常授業を追加できませんでした。')
-      return
-    }
-    const confirmed = window.confirm([
-      'この通常授業をコマ表に反映します。該当箇所がすでに埋まっている場合は振替ストックに蓄積します',
-    ].filter(Boolean).join('\n\n'))
-    if (!confirmed) {
-      setStatusMessage('通常授業の追加をキャンセルしました。')
-      return
-    }
-
-    onUpdateRegularLessons((current) => [
-      ...current,
-      {
-        id: createNextManagedId('regular', current.map((row) => row.id)),
-        schoolYear: selectedRegularLessonYear,
-        ...normalizedDraft,
-        nextStudent1Id: '',
-        nextSubject1: '',
-        nextStudent2Id: '',
-        nextSubject2: '',
-      },
-    ])
-    setRegularLessonDraft(createRegularLessonDraft())
-    setStatusMessage('通常授業を追加しました。')
-  }
-
-  const addGroupLesson = () => {
-    if (!groupLessonDraft.teacherId || groupLessonDraft.studentIds.length === 0) return
-    onUpdateGroupLessons((current) => [...current, { id: createNextManagedId('group', current.map((row) => row.id)), schoolYear: selectedGroupLessonYear, ...groupLessonDraft }])
-    setStatusMessage('集団授業を追加しました。')
-  }
-
   const removeManager = (id: string) => {
     if (!window.confirm('このマネージャーを削除します。よろしいですか。')) {
       setStatusMessage('マネージャーの削除をキャンセルしました。')
@@ -1886,24 +1197,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     }
     onUpdateStudents((current) => current.filter((row) => row.id !== id))
     setStatusMessage('生徒を削除しました。')
-  }
-
-  const removeRegularLesson = (id: string) => {
-    if (!window.confirm('この通常授業を削除します。よろしいですか。')) {
-      setStatusMessage('通常授業の削除をキャンセルしました。')
-      return
-    }
-    onUpdateRegularLessons((current) => current.filter((row) => row.id !== id))
-    setStatusMessage('通常授業を削除しました。')
-  }
-
-  const removeGroupLesson = (id: string) => {
-    if (!window.confirm('この集団授業を削除します。よろしいですか。')) {
-      setStatusMessage('集団授業の削除をキャンセルしました。')
-      return
-    }
-    onUpdateGroupLessons((current) => current.filter((row) => row.id !== id))
-    setStatusMessage('集団授業を削除しました。')
   }
 
   const renderManagers = () => {
@@ -2248,363 +1541,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
     )
   }
 
-  const renderRegularLessons = () => {
-    const filteredRegularLessons = applyFrozenRowOrder(filterAndSortRows(
-      visibleRegularLessons,
-      tableControls.regularLessons,
-      (row) => [teacherNameById[row.teacherId] ?? '', studentNameById[row.student1Id] ?? '', row.subject1, studentNameById[row.student2Id] ?? '', row.subject2, resolveDayLabel(row.dayOfWeek), row.slotNumber],
-      {
-        teacher: (row) => teacherNameById[row.teacherId] ?? '',
-        student1: (row) => studentNameById[row.student1Id] ?? '',
-        subject1: (row) => row.subject1,
-        student2: (row) => studentNameById[row.student2Id] ?? '',
-        subject2: (row) => row.subject2,
-        day: (row) => resolveDayLabel(row.dayOfWeek),
-        slot: (row) => row.slotNumber,
-      },
-    ), frozenRowOrders.regular)
-
-    return (
-    <>
-      <section className="basic-data-section-card">
-        <div className="basic-data-card-head">
-          <h3>通常授業管理</h3>
-        </div>
-        <div className="basic-data-regular-draft-grid">
-          <label className="basic-data-stack-field basic-data-stack-field-year">
-            <span>年度</span>
-            <select value={String(selectedRegularLessonYear)} onChange={(event) => setSelectedRegularLessonYear(Number(event.target.value))} data-testid="basic-data-regular-year-select">
-              {regularLessonYears.map((schoolYear) => <option key={schoolYear} value={schoolYear}>{formatSchoolYearLabel(schoolYear)}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-compact">
-            <span>講師</span>
-            <select value={regularLessonDraft.teacherId} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, teacherId: event.target.value }))} data-testid="basic-data-regular-draft-teacher">
-              <option value="">講師未割当</option>
-              {activeTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field">
-            <span>生徒1</span>
-            <select value={regularLessonDraft.student1Id} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, student1Id: event.target.value }))} data-testid="basic-data-regular-draft-student1">
-              <option value="">生徒1を選択</option>
-              {activeStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-subject">
-            <span>科目1</span>
-            <select value={regularLessonDraft.subject1} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, subject1: event.target.value }))} data-testid="basic-data-regular-draft-subject1">
-              {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-subject">
-            <span>生徒1注記</span>
-            <RegularLessonNoteInput
-              value={regularLessonDraft.student1Note}
-              onChange={(next) => setRegularLessonDraft((current) => ({ ...current, student1Note: next }))}
-              placeholder="4文字まで"
-              testId="basic-data-regular-draft-note1"
-            />
-          </label>
-          <label className="basic-data-stack-field">
-            <span>生徒2</span>
-            <select value={regularLessonDraft.student2Id} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, student2Id: event.target.value }))} data-testid="basic-data-regular-draft-student2">
-              <option value="">生徒2(任意)</option>
-              {activeStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-subject">
-            <span>科目2</span>
-            <select value={regularLessonDraft.subject2} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, subject2: event.target.value }))} data-testid="basic-data-regular-draft-subject2">
-              {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-subject">
-            <span>生徒2注記</span>
-            <RegularLessonNoteInput
-              value={regularLessonDraft.student2Note}
-              onChange={(next) => setRegularLessonDraft((current) => ({ ...current, student2Note: next }))}
-              placeholder="4文字まで"
-              testId="basic-data-regular-draft-note2"
-            />
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-day">
-            <span>曜日</span>
-            <select value={String(regularLessonDraft.dayOfWeek)} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, dayOfWeek: Number(event.target.value) }))} data-testid="basic-data-regular-draft-day">
-              {dayOptions.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
-            </select>
-          </label>
-          <label className="basic-data-stack-field basic-data-stack-field-slot">
-            <span>時限</span>
-            <input type="number" min="1" value={regularLessonDraft.slotNumber} onChange={(event) => setRegularLessonDraft((current) => ({ ...current, slotNumber: Number(event.target.value) }))} placeholder="時限番号" data-testid="basic-data-regular-draft-slot-number" />
-          </label>
-          <div className="basic-data-stack-field basic-data-stack-field-period">
-            <span>期間</span>
-            <PeriodRangeInline
-              startValue={regularLessonDraft.startDate}
-              endValue={regularLessonDraft.endDate}
-              startEmptyLabel={resolveSchoolYearDateRange(selectedRegularLessonYear).startDate}
-              endEmptyLabel={resolveSchoolYearDateRange(selectedRegularLessonYear).endDate}
-              onStartChange={(value) => setRegularLessonDraft((current) => ({ ...current, ...buildSharedRegularLessonPeriodPatch(value, current.endDate) }))}
-              onEndChange={(value) => setRegularLessonDraft((current) => ({ ...current, ...buildSharedRegularLessonPeriodPatch(current.startDate, value) }))}
-              startTestIdPrefix="basic-data-regular-draft-start"
-              endTestIdPrefix="basic-data-regular-draft-end"
-            />
-          </div>
-          <div className="basic-data-stack-field basic-data-stack-field-action">
-            <span>&nbsp;</span>
-            <button className="primary-button" type="button" onClick={addRegularLesson} data-testid="basic-data-add-regular-lesson-button">追加</button>
-          </div>
-        </div>
-      </section>
-      <section className="basic-data-section-card">
-        <div className="basic-data-section-header">
-          <div className="basic-data-year-toolbar basic-data-year-toolbar-start" data-testid="basic-data-regular-year-toolbar">
-            {regularLessonYears.map((schoolYear) => (
-              <button
-                key={schoolYear}
-                type="button"
-                className={`basic-data-chip${selectedRegularLessonYear === schoolYear ? ' active' : ''}`}
-                onClick={() => setSelectedRegularLessonYear(schoolYear)}
-                data-testid={`basic-data-regular-year-${schoolYear}`}
-              >
-                {formatSchoolYearLabel(schoolYear)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <TableControls
-          filterValue={tableControls.regularLessons.filterText}
-          sortKey={tableControls.regularLessons.sortKey}
-          direction={tableControls.regularLessons.direction}
-          filterPlaceholder="講師・生徒1・生徒2・科目で絞り込み"
-          sortOptions={[
-            { value: 'teacher', label: '講師' },
-            { value: 'student1', label: '生徒1' },
-            { value: 'subject1', label: '生徒1科目' },
-            { value: 'student2', label: '生徒2' },
-            { value: 'subject2', label: '生徒2科目' },
-            { value: 'day', label: '曜日' },
-            { value: 'slot', label: '時限' },
-          ]}
-          onFilterChange={(value) => updateTableControl('regularLessons', { filterText: value })}
-          onSortKeyChange={(value) => updateTableControl('regularLessons', { sortKey: value })}
-          onDirectionChange={(value) => updateTableControl('regularLessons', { direction: value })}
-        />
-        <table className="basic-data-table regular-table" data-testid="basic-data-regular-lessons-table">
-          <thead><tr><th>講師</th><th>生徒1</th><th>生徒1科目</th><th>生徒1注記</th><th>生徒2</th><th>生徒2科目</th><th>生徒2注記</th><th>曜日</th><th>時限</th><th>期間</th><th>操作</th></tr></thead>
-          <tbody>
-            {filteredRegularLessons.map((row) => (
-              <tr key={row.id} data-testid={`basic-data-regular-row-${row.id}`}>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <select value={row.teacherId} onChange={(event) => updateRegularLesson(row.id, { teacherId: event.target.value })}>
-                          <option value="">講師未割当</option>
-                          {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
-                        </select>
-                      )
-                    : <span className="basic-data-static-field">{formatSummaryValue(teacherNameById[row.teacherId] ?? '', '講師未割当')}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <select value={row.student1Id} onChange={(event) => updateRegularLesson(row.id, { student1Id: event.target.value })}>
-                          {sortedStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
-                        </select>
-                      )
-                    : <span className="basic-data-static-field">{formatRegularLessonParticipantSummary(studentNameById[row.student1Id] ?? '', row.subject1, '生徒1未設定')}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <select value={row.subject1} onChange={(event) => updateRegularLesson(row.id, { subject1: event.target.value })}>
-                          {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                        </select>
-                      )
-                    : <span className="basic-data-static-field">{formatSummaryValue(row.subject1)}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? <RegularLessonNoteInput value={row.student1Note ?? ''} onChange={(next) => updateRegularLesson(row.id, { student1Note: next })} />
-                    : <span className="basic-data-static-field">{formatSummaryValue(normalizeRegularLessonNote(row.student1Note), '')}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <select value={row.student2Id} onChange={(event) => updateRegularLesson(row.id, { student2Id: event.target.value })}>
-                          <option value="">生徒2(任意)</option>
-                          {sortedStudents.map((student) => <option key={student.id} value={student.id}>{getStudentOptionLabel(student)}</option>)}
-                        </select>
-                      )
-                    : <span className="basic-data-static-field">{formatRegularLessonParticipantSummary(studentNameById[row.student2Id] ?? '', row.subject2, '生徒2なし')}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <select value={row.subject2} onChange={(event) => updateRegularLesson(row.id, { subject2: event.target.value })}>
-                          <option value="">未設定</option>
-                          {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                        </select>
-                      )
-                    : <span className="basic-data-static-field">{formatSummaryValue(row.subject2)}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? <RegularLessonNoteInput value={row.student2Note ?? ''} onChange={(next) => updateRegularLesson(row.id, { student2Note: next })} />
-                    : <span className="basic-data-static-field">{formatSummaryValue(normalizeRegularLessonNote(row.student2Note), '')}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <select value={String(row.dayOfWeek)} onChange={(event) => updateRegularLesson(row.id, { dayOfWeek: Number(event.target.value) })}>
-                          {dayOptions.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
-                        </select>
-                      )
-                    : <span className="basic-data-static-field">{resolveDayLabel(row.dayOfWeek)}</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? <input type="number" min="1" value={row.slotNumber} onChange={(event) => updateRegularLesson(row.id, { slotNumber: Number(event.target.value) || 1 })} />
-                    : <span className="basic-data-static-field">{row.slotNumber}限</span>}
-                </td>
-                <td>
-                  {isRowEditing('regular', row.id)
-                    ? (
-                        <PeriodRangeInline
-                          startValue={row.startDate}
-                          endValue={row.endDate}
-                          startEmptyLabel={resolveSchoolYearDateRange(row.schoolYear).startDate}
-                          endEmptyLabel={resolveSchoolYearDateRange(row.schoolYear).endDate}
-                          onStartChange={(value) => updateRegularLesson(row.id, buildSharedRegularLessonPeriodPatch(value, row.endDate))}
-                          onEndChange={(value) => updateRegularLesson(row.id, buildSharedRegularLessonPeriodPatch(row.startDate, value))}
-                          startTestIdPrefix={`basic-data-regular-period-start-${row.id}`}
-                          endTestIdPrefix={`basic-data-regular-period-end-${row.id}`}
-                        />
-                      )
-                    : <span className="basic-data-static-field basic-data-period-summary-field">{formatRegularLessonPeriodSummary(row.startDate, row.endDate, row.schoolYear)}</span>}
-                </td>
-                <td>
-                  <div className="basic-data-row-actions basic-data-row-actions-wrap">
-                    <button className="secondary-button slim" type="button" onClick={() => handleToggleRegularLessonEditing(row.id, filteredRegularLessons.map((entry) => entry.id))}>{isRowEditing('regular', row.id) ? '編集終了' : '編集'}</button>
-                    <button className="secondary-button slim" type="button" onClick={() => removeRegularLesson(row.id)}>削除</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {filteredRegularLessons.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{formatSchoolYearLabel(selectedRegularLessonYear)} の通常授業はまだありません。</td></tr> : null}
-          </tbody>
-        </table>
-      </section>
-    </>
-  )
-  }
-
-  const renderGroupLessons = () => {
-    const filteredGroupLessons = applyFrozenRowOrder(filterAndSortRows(
-      visibleGroupLessons,
-      tableControls.groupLessons,
-      (row) => [teacherNameById[row.teacherId] ?? '', row.subject, row.studentIds.map((studentId) => studentNameById[studentId] ?? '').join(','), resolveDayLabel(row.dayOfWeek), row.slotLabel],
-      {
-        teacher: (row) => teacherNameById[row.teacherId] ?? '',
-        subject: (row) => row.subject,
-        day: (row) => resolveDayLabel(row.dayOfWeek),
-        slot: (row) => row.slotLabel,
-      },
-    ), frozenRowOrders.group)
-
-    return (
-    <>
-      <section className="basic-data-section-card">
-        <div className="basic-data-card-head">
-          <h3>集団授業設定</h3>
-        </div>
-        <div className="basic-data-form-row wrap">
-          <select value={groupLessonDraft.teacherId} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, teacherId: event.target.value }))} data-testid="basic-data-group-draft-teacher">
-            <option value="">講師未割当</option>
-            {activeTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
-          </select>
-          <select value={String(selectedGroupLessonYear)} onChange={(event) => setSelectedGroupLessonYear(Number(event.target.value))} data-testid="basic-data-group-year-select">
-            {groupLessonYears.map((schoolYear) => <option key={schoolYear} value={schoolYear}>{formatSchoolYearLabel(schoolYear)}</option>)}
-          </select>
-          <select value={groupLessonDraft.subject} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, subject: event.target.value }))} data-testid="basic-data-group-draft-subject">
-            {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-          </select>
-          <select value={String(groupLessonDraft.dayOfWeek)} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, dayOfWeek: Number(event.target.value) }))} data-testid="basic-data-group-draft-day">
-            {dayOptions.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
-          </select>
-          <input value={groupLessonDraft.slotLabel} onChange={(event) => setGroupLessonDraft((current) => ({ ...current, slotLabel: event.target.value }))} placeholder="1限" data-testid="basic-data-group-draft-slot-label" />
-          <button className="primary-button" type="button" onClick={addGroupLesson} data-testid="basic-data-add-group-lesson-button">追加</button>
-        </div>
-        <div className="basic-data-checkbox-panel">
-          <StudentPicker students={activeStudents} selectedIds={groupLessonDraft.studentIds} onChange={(next) => setGroupLessonDraft((current) => ({ ...current, studentIds: next }))} />
-        </div>
-      </section>
-      <section className="basic-data-section-card">
-        <div className="basic-data-section-header">
-          <div className="basic-data-year-toolbar basic-data-year-toolbar-start" data-testid="basic-data-group-year-toolbar">
-            {groupLessonYears.map((schoolYear) => (
-              <button
-                key={schoolYear}
-                type="button"
-                className={`basic-data-chip${selectedGroupLessonYear === schoolYear ? ' active' : ''}`}
-                onClick={() => setSelectedGroupLessonYear(schoolYear)}
-                data-testid={`basic-data-group-year-${schoolYear}`}
-              >
-                {formatSchoolYearLabel(schoolYear)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <TableControls
-          filterValue={tableControls.groupLessons.filterText}
-          sortKey={tableControls.groupLessons.sortKey}
-          direction={tableControls.groupLessons.direction}
-          filterPlaceholder="講師・科目・生徒で絞り込み"
-          sortOptions={[{ value: 'teacher', label: '講師' }, { value: 'subject', label: '科目' }, { value: 'day', label: '曜日' }, { value: 'slot', label: '時限' }]}
-          onFilterChange={(value) => updateTableControl('groupLessons', { filterText: value })}
-          onSortKeyChange={(value) => updateTableControl('groupLessons', { sortKey: value })}
-          onDirectionChange={(value) => updateTableControl('groupLessons', { direction: value })}
-        />
-        <div className="basic-data-section-header">
-          <div className="basic-data-card-head">
-            <h3>授業データ一覧</h3>
-            <p>集団授業も年度タブで切り替えて確認します。</p>
-          </div>
-        </div>
-        <table className="basic-data-table" data-testid="basic-data-group-lessons-table">
-          <thead><tr><th>講師</th><th>科目</th><th>生徒</th><th>曜日</th><th>時限</th><th>操作</th></tr></thead>
-          <tbody>
-            {filteredGroupLessons.length === 0 ? <tr><td colSpan={6} className="basic-data-empty-row">{formatSchoolYearLabel(selectedGroupLessonYear)} の集団授業はまだありません。</td></tr> : filteredGroupLessons.map((row) => (
-              <tr key={row.id}>
-                <td>
-                  <select value={row.teacherId} onChange={(event) => updateGroupLesson(row.id, { teacherId: event.target.value })} disabled={!isRowEditing('group', row.id)}>
-                    <option value="">講師未割当</option>
-                    {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherOptionLabel(teacher)}</option>)}
-                  </select>
-                </td>
-                <td>
-                  <select value={row.subject} onChange={(event) => updateGroupLesson(row.id, { subject: event.target.value })} disabled={!isRowEditing('group', row.id)}>
-                    {lessonSubjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
-                  </select>
-                </td>
-                <td><StudentPicker students={students} selectedIds={row.studentIds} onChange={(next) => updateGroupLesson(row.id, { studentIds: next })} disabled={!isRowEditing('group', row.id)} /></td>
-                <td>
-                  <select value={String(row.dayOfWeek)} onChange={(event) => updateGroupLesson(row.id, { dayOfWeek: Number(event.target.value) })} disabled={!isRowEditing('group', row.id)}>
-                    {dayOptions.map((day) => <option key={day.value} value={day.value}>{day.label}</option>)}
-                  </select>
-                </td>
-                <td><input value={row.slotLabel} onChange={(event) => updateGroupLesson(row.id, { slotLabel: event.target.value })} disabled={!isRowEditing('group', row.id)} /></td>
-                <td><div className="basic-data-row-actions"><button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('group', row.id, filteredGroupLessons.map((entry) => entry.id))}>{isRowEditing('group', row.id) ? '編集終了' : '編集'}</button><button className="secondary-button slim" type="button" onClick={() => removeGroupLesson(row.id)}>削除</button></div></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    </>
-  )
-  }
-
   const renderClassroomData = () => (
     <section className="basic-data-section-card" data-testid="basic-data-classroom-screen">
       <div className="basic-data-card-head">
@@ -2661,19 +1597,13 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
   const tabItems: Array<{ key: BasicDataTab; label: string }> = [
     { key: 'students', label: '生徒' },
     { key: 'teachers', label: '講師' },
-    { key: 'regularLessons', label: '通常授業' },
-    { key: 'groupLessons', label: '集団授業' },
     { key: 'managers', label: 'マネージャー' },
     { key: 'classroomData', label: '教室データ' },
   ]
 
   return (
     <div className="page-shell page-shell-basic-data">
-      {centeredMessage ? (
-        <div className="status-banner status-banner-floating" data-testid="center-status-banner" role="status" aria-live="polite" style={{ whiteSpace: 'pre-line' }}>
-          {centeredMessage}
-        </div>
-      ) : null}
+
       {teacherEditorModalConfig ? (
         <div className="auto-assign-modal-overlay basic-data-teacher-modal-overlay" role="presentation">
           <div
@@ -2747,8 +1677,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
           <div className="basic-data-content">
             {activeTab === 'students' ? renderStudents() : null}
             {activeTab === 'teachers' ? renderTeachers() : null}
-            {activeTab === 'regularLessons' ? renderRegularLessons() : null}
-            {activeTab === 'groupLessons' ? renderGroupLessons() : null}
             {activeTab === 'managers' ? renderManagers() : null}
             {activeTab === 'classroomData' ? renderClassroomData() : null}
           </div>
