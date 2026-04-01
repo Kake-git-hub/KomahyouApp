@@ -1687,9 +1687,21 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       }
     })
 
-    for (const managedDesk of managedCell.desks) {
+    // Track managed teacher-only desks consumed by board desks with explicit teacher assignments (e.g. deleted)
+    const consumedManagedTeacherIndexes = new Set<number>()
+    managedCell.desks.forEach((managedDesk, idx) => {
+      if (managedDesk.lesson || !managedDesk.teacher.trim()) return
+      const boardDesk = nextDesks[idx]
+      if (boardDesk && !boardDesk.lesson && boardDesk.manualTeacher) {
+        consumedManagedTeacherIndexes.add(idx)
+      }
+    })
+
+    for (let mi = 0; mi < managedCell.desks.length; mi++) {
+      const managedDesk = managedCell.desks[mi]
       if (!managedDesk.lesson) {
         if (!managedDesk.teacher.trim()) continue
+        if (consumedManagedTeacherIndexes.has(mi)) continue
 
         const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
           ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
@@ -2111,8 +2123,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const handleEnterTemplateMode = useCallback(() => {
     const copiedCells = copyBoardCellsForTemplate(cells)
     const existingTemplate = classroomSettings.regularLessonTemplate
+    const currentBoardDateKey = cells[0]?.dateKey ?? toDateKey(new Date())
+    const defaultMonday = toDateKey(getWeekStart(parseDateKey(currentBoardDateKey)))
     setTemplateCells(copiedCells)
-    setTemplateEffectiveStartDate(existingTemplate?.effectiveStartDate || toDateKey(new Date()))
+    setTemplateEffectiveStartDate(existingTemplate?.effectiveStartDate || defaultMonday)
     setIsTemplateMode(true)
     setStudentMenu(null)
     setTeacherMenu(null)
@@ -2199,6 +2213,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         }),
       )
       setWeeks(clearedWeeks)
+      // Clear suppressed managed occurrences for dates >= effectiveStartDate so fresh managed data is applied
+      setSuppressedRegularLessonOccurrences((prev) => prev.filter((key) => {
+        const parts = key.split('__')
+        const dateKey = parts[2] ?? ''
+        return dateKey < effectiveStart
+      }))
     }
 
     setIsTemplateMode(false)
@@ -2207,7 +2227,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage(overwrite
       ? `通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`
       : '通常授業テンプレートを通常保存しました。メモ・手入力は維持されます。')
-  }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks])
+  }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -5338,26 +5358,46 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }
     }
 
-    // If swap: place target student at source position
+    // If swap: convert the swap student to makeup and place at source position
     if (swapStudent) {
+      let convertedSwapStudent = swapStudent
+      if (swapStudent.lessonType !== 'special') {
+        const originalSwapDateKey = resolveOriginalRegularDate(swapStudent, targetCell?.dateKey ?? sourceDateKey)
+        const nextSwapStudent: StudentEntry = {
+          ...swapStudent,
+          lessonType: 'makeup',
+          makeupSourceDate: originalSwapDateKey,
+          makeupSourceLabel: swapStudent.makeupSourceLabel ?? formatStockOriginLabel(originalSwapDateKey, targetCell?.slotNumber ?? 0),
+        }
+        convertedSwapStudent = normalizeLessonPlacement(nextSwapStudent, sourceDateKey)
+      }
+
       // Find source desk in nextWeeks (it may have been cleared)
       const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
       const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
       if (sourceDesk) {
         if (sourceDesk.lesson) {
-          sourceDesk.lesson.studentSlots[sourceSlotIndex] = swapStudent
+          sourceDesk.lesson.studentSlots[sourceSlotIndex] = convertedSwapStudent
         } else {
-          sourceDesk.lesson = cloneLesson(sourceLessonSnapshot, swapStudent)
+          sourceDesk.lesson = cloneLesson(sourceLessonSnapshot, convertedSwapStudent)
           sourceDesk.lesson.studentSlots = sourceSlotIndex === 0
-            ? [swapStudent, null]
-            : [null, swapStudent]
+            ? [convertedSwapStudent, null]
+            : [null, convertedSwapStudent]
         }
       }
     }
 
-    const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
+    // Suppress managed occurrences for both moved and swapped students
+    let nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
-      : suppressedRegularLessonOccurrences
+      : [...suppressedRegularLessonOccurrences]
+
+    if (swapStudent) {
+      const swapSuppressedKey = resolveSuppressedRegularLessonOccurrenceKey(swapStudent, targetCell?.dateKey ?? '', targetCell?.slotNumber ?? 0)
+      if (swapSuppressedKey) {
+        nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, swapSuppressedKey)
+      }
+    }
 
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, nextSuppressedRegularLessonOccurrences)
     setSelectedStudentId(null)

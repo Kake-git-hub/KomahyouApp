@@ -1,8 +1,11 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import { getStudentDisplayName } from '../basic-data/basicDataModel'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
-import type { ClassroomSettings } from '../../types/appState'
+import type { ClassroomSettings, InitialSetupMakeupStockRow, InitialSetupLectureStockRow } from '../../types/appState'
+import type { SubjectLabel } from '../schedule-board/types'
+import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
 
 type BackupRestoreScreenProps = {
@@ -62,13 +65,58 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
   const specialImportRef = useRef<HTMLInputElement | null>(null)
   const autoAssignImportRef = useRef<HTMLInputElement | null>(null)
   const latestAutoBackup = autoBackupSummaries[0] ?? null
+
+  const [makeupDraftStudentId, setMakeupDraftStudentId] = useState('')
+  const [makeupDraftSubject, setMakeupDraftSubject] = useState(allStudentSubjectOptions[0])
+  const [makeupDraftCount, setMakeupDraftCount] = useState(1)
+  const [lectureDraftStudentId, setLectureDraftStudentId] = useState('')
+  const [lectureDraftSubject, setLectureDraftSubject] = useState(allStudentSubjectOptions[0])
+  const [lectureDraftSessionId, setLectureDraftSessionId] = useState('')
+  const [lectureDraftCount, setLectureDraftCount] = useState(1)
+
+  const makeupStockRows = classroomSettings.initialSetupMakeupStocks ?? []
+  const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
+
+  const activeStudents = students.filter((s) => !s.isHidden).sort((a, b) => getStudentDisplayName(a).localeCompare(getStudentDisplayName(b), 'ja'))
+
+  const addMakeupStockRow = () => {
+    if (!makeupDraftStudentId || makeupDraftCount < 1) return
+    const newRow: InitialSetupMakeupStockRow = { id: `ms_${Date.now().toString(36)}`, studentId: makeupDraftStudentId, subject: makeupDraftSubject, count: makeupDraftCount }
+    onUpdateClassroomSettings({ ...classroomSettings, initialSetupMakeupStocks: [...makeupStockRows, newRow] })
+    setMakeupDraftCount(1)
+  }
+
+  const removeMakeupStockRow = (id: string) => {
+    onUpdateClassroomSettings({ ...classroomSettings, initialSetupMakeupStocks: makeupStockRows.filter((r) => r.id !== id) })
+  }
+
+  const addLectureStockRow = () => {
+    if (!lectureDraftStudentId || !lectureDraftSessionId || lectureDraftCount < 1) return
+    const newRow: InitialSetupLectureStockRow = { id: `ls_${Date.now().toString(36)}`, studentId: lectureDraftStudentId, subject: lectureDraftSubject, sessionId: lectureDraftSessionId, count: lectureDraftCount }
+    onUpdateClassroomSettings({ ...classroomSettings, initialSetupLectureStocks: [...lectureStockRows, newRow] })
+    setLectureDraftCount(1)
+  }
+
+  const removeLectureStockRow = (id: string) => {
+    onUpdateClassroomSettings({ ...classroomSettings, initialSetupLectureStocks: lectureStockRows.filter((r) => r.id !== id) })
+  }
+
+  const resolveStudentName = (studentId: string) => {
+    const student = students.find((s) => s.id === studentId)
+    return student ? getStudentDisplayName(student) : studentId
+  }
+
+  const resolveSessionName = (sessionId: string) => {
+    const session = specialSessions.find((s) => s.id === sessionId)
+    return session ? session.label : sessionId
+  }
 
   const updateSetupField = <K extends keyof ClassroomSettings>(key: K, value: ClassroomSettings[K]) => {
     onUpdateClassroomSettings({ ...classroomSettings, [key]: value })
@@ -229,6 +277,77 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 <div className="basic-data-form-grid">
                   <span className="basic-data-subcopy">公開祝日同期: {googleHolidaySyncState.message}</span>
                   <button className="secondary-button slim" type="button" onClick={onSyncGoogleHolidays} disabled={!isGoogleHolidayApiConfigured || googleHolidaySyncState.status === 'syncing'} data-testid="setup-google-holiday-sync">今すぐ同期</button>
+                </div>
+              </div>
+
+              <div className="auto-assign-priority-step">
+                <strong>3. 開始時点の未消化ストック</strong>
+                <span>{formatSetupStatus(makeupStockRows.length > 0 || lectureStockRows.length > 0)}</span>
+                <span className="basic-data-subcopy">運用開始時点で残っている未消化振替・未消化講習の件数を生徒ごとに登録します。</span>
+
+                <div style={{ marginTop: 8 }}>
+                  <strong style={{ fontSize: '0.85em' }}>未消化振替</strong>
+                  {makeupStockRows.length > 0 && (
+                    <table className="basic-data-compact-table" style={{ marginTop: 4 }}>
+                      <thead><tr><th>生徒</th><th>科目</th><th>件数</th><th></th></tr></thead>
+                      <tbody>
+                        {makeupStockRows.map((row) => (
+                          <tr key={row.id}>
+                            <td>{resolveStudentName(row.studentId)}</td>
+                            <td>{row.subject}</td>
+                            <td>{row.count}</td>
+                            <td><button type="button" className="menu-link-button danger" onClick={() => removeMakeupStockRow(row.id)} data-testid={`setup-makeup-remove-${row.id}`}>削除</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  <div className="basic-data-row-actions" style={{ marginTop: 4, gap: 4, flexWrap: 'wrap' }}>
+                    <select value={makeupDraftStudentId} onChange={(e) => setMakeupDraftStudentId(e.target.value)} data-testid="setup-makeup-student">
+                      <option value="">生徒を選択</option>
+                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{getStudentDisplayName(s)}</option>)}
+                    </select>
+                    <select value={makeupDraftSubject} onChange={(e) => setMakeupDraftSubject(e.target.value as SubjectLabel)} data-testid="setup-makeup-subject">
+                      {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+                    </select>
+                    <input type="number" min="1" max="99" value={makeupDraftCount} onChange={(e) => setMakeupDraftCount(Math.max(1, Number(e.target.value) || 1))} style={{ width: 48 }} data-testid="setup-makeup-count" />
+                    <button type="button" className="secondary-button slim" onClick={addMakeupStockRow} data-testid="setup-makeup-add">追加</button>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 12 }}>
+                  <strong style={{ fontSize: '0.85em' }}>未消化講習</strong>
+                  {lectureStockRows.length > 0 && (
+                    <table className="basic-data-compact-table" style={{ marginTop: 4 }}>
+                      <thead><tr><th>生徒</th><th>科目</th><th>講習</th><th>件数</th><th></th></tr></thead>
+                      <tbody>
+                        {lectureStockRows.map((row) => (
+                          <tr key={row.id}>
+                            <td>{resolveStudentName(row.studentId)}</td>
+                            <td>{row.subject}</td>
+                            <td>{resolveSessionName(row.sessionId)}</td>
+                            <td>{row.count}</td>
+                            <td><button type="button" className="menu-link-button danger" onClick={() => removeLectureStockRow(row.id)} data-testid={`setup-lecture-remove-${row.id}`}>削除</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                  <div className="basic-data-row-actions" style={{ marginTop: 4, gap: 4, flexWrap: 'wrap' }}>
+                    <select value={lectureDraftStudentId} onChange={(e) => setLectureDraftStudentId(e.target.value)} data-testid="setup-lecture-student">
+                      <option value="">生徒を選択</option>
+                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{getStudentDisplayName(s)}</option>)}
+                    </select>
+                    <select value={lectureDraftSubject} onChange={(e) => setLectureDraftSubject(e.target.value as SubjectLabel)} data-testid="setup-lecture-subject">
+                      {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
+                    </select>
+                    <select value={lectureDraftSessionId} onChange={(e) => setLectureDraftSessionId(e.target.value)} data-testid="setup-lecture-session">
+                      <option value="">講習を選択</option>
+                      {specialSessions.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                    </select>
+                    <input type="number" min="1" max="99" value={lectureDraftCount} onChange={(e) => setLectureDraftCount(Math.max(1, Number(e.target.value) || 1))} style={{ width: 48 }} data-testid="setup-lecture-count" />
+                    <button type="button" className="secondary-button slim" onClick={addLectureStockRow} data-testid="setup-lecture-add">追加</button>
+                  </div>
                 </div>
               </div>
 
