@@ -1553,7 +1553,7 @@ test.describe('コマ調整表', () => {
 
     await page.getByTestId(`student-cell-${slotId}-0-0`).click()
     let menuButtons = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtons).toEqual(['出席', '休み', '移動', '未消化振替に戻す', '削除'])
+    expect(menuButtons).toEqual(['出席', '休み', '振替なし休み', '移動', '未消化振替に戻す', '削除'])
 
     await page.getByRole('button', { name: 'x' }).click()
 
@@ -1591,7 +1591,7 @@ test.describe('コマ調整表', () => {
 
     await sourceCell.click()
     const menuButtonsAfterClear = await page.locator('[data-testid="student-action-menu"] .menu-link-button').allTextContents()
-    expect(menuButtonsAfterClear).toEqual(['出席', '休み', '移動', '未消化振替に戻す', '削除'])
+    expect(menuButtonsAfterClear).toEqual(['出席', '休み', '振替なし休み', '移動', '未消化振替に戻す', '削除'])
   })
 
   test('空欄セルから既存生徒を講習追加しても講習ストックは増えず、手動追加警告を出す', async ({ page }) => {

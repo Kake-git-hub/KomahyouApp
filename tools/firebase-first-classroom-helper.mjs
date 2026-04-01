@@ -137,8 +137,6 @@ function createInitialSnapshot(nowIso, developerUid) {
         initialSetupCompletedAt: '',
         initialSetupMakeupStocks: [],
         initialSetupLectureStocks: [],
-        googleHolidayCalendarSyncedDates: [],
-        googleHolidayCalendarLastSyncedAt: '',
       },
       managers: [],
       teachers: [],

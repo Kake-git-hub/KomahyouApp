@@ -198,9 +198,7 @@ helper を使わず進める場合は、以下の順に進めます。
       "deskCount": 14,
       "initialSetupCompletedAt": "",
       "initialSetupMakeupStocks": [],
-      "initialSetupLectureStocks": [],
-      "googleHolidayCalendarSyncedDates": [],
-      "googleHolidayCalendarLastSyncedAt": ""
+      "initialSetupLectureStocks": []
     },
     "managers": [],
     "teachers": [],

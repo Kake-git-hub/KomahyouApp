@@ -18,7 +18,7 @@ export type GradeLabel =
 
 export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '生' | '物' | '化' | '社'
 
-export type StudentStatusKind = 'absent' | 'attended'
+export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended'
 
 export type StudentEntry = {
   id: string

@@ -21,20 +21,12 @@ import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupEntries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceAutoBackupSummaries, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, type AutoBackupSummary } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
-import { DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID, fetchGoogleHolidayDates, mergeSyncedHolidayDates, readGoogleHolidaySyncCache, shouldRefreshGoogleHolidayCache, writeGoogleHolidaySyncCache } from './utils/googleHolidayCalendar'
 import { createLegacyLessonScheduleQrConfig } from './utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
-
-type GoogleHolidaySyncStatus = 'idle' | 'syncing' | 'success' | 'error' | 'disabled'
-
-type GoogleHolidaySyncState = {
-  status: GoogleHolidaySyncStatus
-  message: string
-}
 
 export type TeacherAutoAssignRequest = {
   requestId: number
@@ -175,11 +167,6 @@ function buildNormalizedScheduleRange(viewType: 'student' | 'teacher', range: Sc
     fallbackRange.startDate,
     fallbackRange.endDate,
   )
-}
-
-function isGoogleHolidaySyncRuntimeEnabled() {
-  if (typeof navigator !== 'undefined' && navigator.webdriver) return false
-  return true
 }
 
 function shouldUseImportedMasterData() {
@@ -424,45 +411,15 @@ function createInitialPairConstraintRows() {
 }
 
 function createInitialClassroomSettings(): ClassroomSettings {
-  if (!isGoogleHolidaySyncRuntimeEnabled()) {
-    return {
-      closedWeekdays: [0],
-      holidayDates: [],
-      forceOpenDates: [],
-      deskCount: 14,
-      regularLessonTemplate: null,
-      initialSetupCompletedAt: '',
-      initialSetupMakeupStocks: [],
-      initialSetupLectureStocks: [],
-      googleHolidayCalendarSyncedDates: [],
-      googleHolidayCalendarLastSyncedAt: '',
-    }
-  }
-
-  const cache = readGoogleHolidaySyncCache()
   return {
     closedWeekdays: [0],
-    holidayDates: cache?.syncedHolidayDates ?? [],
+    holidayDates: [],
     forceOpenDates: [],
     deskCount: 14,
     regularLessonTemplate: null,
     initialSetupCompletedAt: '',
     initialSetupMakeupStocks: [],
     initialSetupLectureStocks: [],
-    googleHolidayCalendarSyncedDates: cache?.syncedHolidayDates ?? [],
-    googleHolidayCalendarLastSyncedAt: cache?.lastSyncedAt ?? '',
-  }
-}
-
-function sanitizeClassroomSettingsWithHolidayCache(settings: ClassroomSettings) {
-  const cache = readGoogleHolidaySyncCache()
-  if (!cache) return settings
-
-  return {
-    ...settings,
-    holidayDates: mergeSyncedHolidayDates(settings.holidayDates, settings.googleHolidayCalendarSyncedDates ?? [], cache.syncedHolidayDates),
-    googleHolidayCalendarSyncedDates: cache.syncedHolidayDates,
-    googleHolidayCalendarLastSyncedAt: cache.lastSyncedAt,
   }
 }
 
@@ -572,7 +529,7 @@ function applyClassroomPayloadToState(payload: AppSnapshotPayload, handlers: {
   handlers.setSpecialSessions(payload.specialSessions)
   handlers.setAutoAssignRules(payload.autoAssignRules)
   handlers.setPairConstraints(payload.pairConstraints)
-  handlers.setClassroomSettings(sanitizeClassroomSettingsWithHolidayCache(payload.classroomSettings))
+  handlers.setClassroomSettings(payload.classroomSettings)
   handlers.setBoardState(payload.boardState)
 }
 
@@ -616,15 +573,10 @@ function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, l
 }
 
 function App() {
-  const isGoogleHolidaySyncEnabled = isGoogleHolidaySyncRuntimeEnabled()
   const isRemoteBackendEnabled = isFirebaseBackendEnabled()
   const isRemoteAdminAutomationEnabled = isFirebaseAdminFunctionsEnabled()
   const firebaseBackendConfig = getFirebaseBackendConfig()
   const useImportedMasterData = shouldUseImportedMasterData()
-  const googleHolidayApiKey = (import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY ?? '').trim()
-  const googleHolidayCalendarId = (import.meta.env.VITE_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID ?? DEFAULT_GOOGLE_PUBLIC_HOLIDAY_CALENDAR_ID).trim()
-  const holidaySyncInFlightRef = useRef(false)
-  const holidaySyncBootstrapRef = useRef(false)
   const initialSetupAutoOpenRef = useRef(false)
   const remoteClassroomUpdateTimeoutsRef = useRef<Record<string, number>>({})
   const teacherAutoAssignRequestIdRef = useRef(0)
@@ -667,16 +619,6 @@ function App() {
   const [remoteAuthMessage, setRemoteAuthMessage] = useState('')
   const [isRemoteLoginSubmitting, setIsRemoteLoginSubmitting] = useState(false)
   const [hasHydratedSnapshot, setHasHydratedSnapshot] = useState(false)
-  const [googleHolidaySyncState, setGoogleHolidaySyncState] = useState<GoogleHolidaySyncState>(() => {
-    if (!isGoogleHolidaySyncEnabled) {
-      return { status: 'disabled', message: 'Google祝日同期は自動テスト実行中のため停止しています。' }
-    }
-
-    const cache = readGoogleHolidaySyncCache()
-    return cache?.lastSyncedAt
-      ? { status: 'idle', message: googleHolidayApiKey ? 'Google公開祝日の差分を起動時に反映します。' : '公開祝日データの差分を起動時に反映します。' }
-      : { status: 'idle', message: googleHolidayApiKey ? 'Google公開祝日の初回同期を待機しています。' : '公開祝日データの初回同期を待機しています。' }
-  })
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const displayRegularLessons = useMemo(() => {
@@ -764,57 +706,6 @@ function App() {
     }, 700)
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
 
-  const runGoogleHolidaySync = useCallback(async (options?: { force?: boolean; background?: boolean }) => {
-    if (!isGoogleHolidaySyncEnabled) {
-      setGoogleHolidaySyncState({ status: 'disabled', message: 'Google祝日同期は自動テスト実行中のため停止しています。' })
-      return
-    }
-    if (holidaySyncInFlightRef.current) return
-
-    const cache = readGoogleHolidaySyncCache()
-    if (!options?.force && cache?.lastSyncedAt && !shouldRefreshGoogleHolidayCache(cache.lastSyncedAt)) {
-      if (!classroomSettings.googleHolidayCalendarLastSyncedAt) {
-        setClassroomSettings((current) => ({
-          ...current,
-          holidayDates: mergeSyncedHolidayDates(current.holidayDates, current.googleHolidayCalendarSyncedDates ?? [], cache.syncedHolidayDates),
-          googleHolidayCalendarSyncedDates: cache.syncedHolidayDates,
-          googleHolidayCalendarLastSyncedAt: cache.lastSyncedAt,
-        }))
-      }
-      return
-    }
-
-    holidaySyncInFlightRef.current = true
-    setGoogleHolidaySyncState({
-      status: 'syncing',
-      message: options?.background
-        ? (googleHolidayApiKey ? 'Google公開祝日をバックグラウンド同期中です。' : '公開祝日データをバックグラウンド同期中です。')
-        : (googleHolidayApiKey ? 'Google公開祝日を同期中です。' : '公開祝日データを同期中です。'),
-    })
-
-    try {
-      const syncedHolidayDates = await fetchGoogleHolidayDates({
-        apiKey: googleHolidayApiKey,
-        calendarId: googleHolidayCalendarId,
-      })
-      const syncedAt = new Date().toISOString()
-
-      setClassroomSettings((current) => ({
-        ...current,
-        holidayDates: mergeSyncedHolidayDates(current.holidayDates, current.googleHolidayCalendarSyncedDates ?? [], syncedHolidayDates),
-        googleHolidayCalendarSyncedDates: syncedHolidayDates,
-        googleHolidayCalendarLastSyncedAt: syncedAt,
-      }))
-      writeGoogleHolidaySyncCache({ syncedHolidayDates, lastSyncedAt: syncedAt })
-      setGoogleHolidaySyncState({ status: 'success', message: `${googleHolidayApiKey ? 'Google公開祝日' : '公開祝日データ'}を ${syncedHolidayDates.length} 件同期しました。` })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '祝日同期に失敗しました。'
-      setGoogleHolidaySyncState({ status: 'error', message })
-    } finally {
-      holidaySyncInFlightRef.current = false
-    }
-  }, [classroomSettings.googleHolidayCalendarLastSyncedAt, googleHolidayApiKey, googleHolidayCalendarId, isGoogleHolidaySyncEnabled])
-
   const applySnapshot = useCallback((snapshot: AppSnapshot, successMessage: string) => {
     setScreen(snapshot.screen)
     setManagers(snapshot.managers)
@@ -825,7 +716,7 @@ function App() {
     setSpecialSessions(snapshot.specialSessions)
     setAutoAssignRules(snapshot.autoAssignRules)
     setPairConstraints(snapshot.pairConstraints)
-    setClassroomSettings(sanitizeClassroomSettingsWithHolidayCache(snapshot.classroomSettings))
+    setClassroomSettings(snapshot.classroomSettings)
     setBoardState(snapshot.boardState)
     setLastSavedAt(snapshot.savedAt)
     setPersistenceMessage(successMessage)
@@ -1935,34 +1826,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!isGoogleHolidaySyncEnabled) return
-    if (holidaySyncBootstrapRef.current) return
-    holidaySyncBootstrapRef.current = true
-
-    const cache = readGoogleHolidaySyncCache()
-    if (cache && classroomSettings.googleHolidayCalendarLastSyncedAt !== cache.lastSyncedAt) {
-      setClassroomSettings((current) => ({
-        ...current,
-        holidayDates: mergeSyncedHolidayDates(current.holidayDates, current.googleHolidayCalendarSyncedDates ?? [], cache.syncedHolidayDates),
-        googleHolidayCalendarSyncedDates: cache.syncedHolidayDates,
-        googleHolidayCalendarLastSyncedAt: cache.lastSyncedAt,
-      }))
-    }
-
-    void runGoogleHolidaySync({ background: true })
-
-    if (!googleHolidayApiKey) return
-
-    const intervalId = window.setInterval(() => {
-      const latestCache = readGoogleHolidaySyncCache()
-      if (latestCache?.lastSyncedAt && !shouldRefreshGoogleHolidayCache(latestCache.lastSyncedAt)) return
-      void runGoogleHolidaySync({ background: true })
-    }, 60 * 60 * 1000)
-
-    return () => window.clearInterval(intervalId)
-  }, [classroomSettings.googleHolidayCalendarLastSyncedAt, googleHolidayApiKey, isGoogleHolidaySyncEnabled, runGoogleHolidaySync])
-
-  useEffect(() => {
     if (isRemoteBackendEnabled && !hasCheckedRemoteSession) return
 
     if (!isSnapshotPersistenceRuntimeEnabled()) {
@@ -2340,14 +2203,14 @@ function App() {
       const workbook = xlsx.read(buffer, { type: 'array' })
       const fallbackBundle = { managers, teachers, students, classroomSettings }
       const imported = parseImportedBundle(xlsx, workbook, fallbackBundle)
-      const resetClassroomSettings = sanitizeClassroomSettingsWithHolidayCache({
+      const resetClassroomSettings = {
         ...createInitialClassroomSettings(),
         ...imported.classroomSettings,
         closedWeekdays: imported.classroomSettings.closedWeekdays,
         holidayDates: imported.classroomSettings.holidayDates,
         forceOpenDates: imported.classroomSettings.forceOpenDates,
         deskCount: imported.classroomSettings.deskCount,
-      })
+      }
       const initialImportedBundle = {
         ...imported,
         classroomSettings: resetClassroomSettings,
@@ -2385,11 +2248,10 @@ function App() {
         regularLessons: initialBoardRegularLessons,
       }))
       setPersistenceMessage('基本データを初期取り込みしました。特別講習、ルール、盤面、開始時点ストックは初期化しました。')
-      void runGoogleHolidaySync({ force: true, background: true })
     } catch {
       setPersistenceMessage('基本データの Excel 初期取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [classroomSettings, hasAnyExistingSetupData, managers, runGoogleHolidaySync, students, teachers])
+  }, [classroomSettings, hasAnyExistingSetupData, managers, students, teachers])
 
   const importDiffBasicDataWorkbook = useCallback(async (file: File) => {
     try {
@@ -2433,11 +2295,10 @@ function App() {
       } else {
         setPersistenceMessage('基本データの差分を Excel から取り込みました。特別講習、ルール、盤面、ストックは保持しています。')
       }
-      void runGoogleHolidaySync({ force: true, background: true })
     } catch {
       setPersistenceMessage('基本データの Excel 差分取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [boardState, classroomSettings, hasAnyExistingSetupData, managers, runGoogleHolidaySync, students, teachers])
+  }, [boardState, classroomSettings, hasAnyExistingSetupData, managers, students, teachers])
 
   const exportSpecialDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -2665,8 +2526,6 @@ function App() {
     return (
       <BasicDataScreen
         classroomSettings={classroomSettings}
-        googleHolidaySyncState={googleHolidaySyncState}
-        isGoogleHolidayApiConfigured={Boolean(googleHolidayApiKey) && isGoogleHolidaySyncEnabled}
         managers={managers}
         teachers={teachers}
         students={students}
@@ -2674,7 +2533,6 @@ function App() {
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
         onUpdateClassroomSettings={setClassroomSettings}
-        onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onBackToBoard={() => navigateClassroomScreen('board')}
         onOpenSpecialData={() => navigateClassroomScreen('special-data')}
         onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
@@ -2735,10 +2593,7 @@ function App() {
         classroomSettings={classroomSettings}
         students={students}
         specialSessions={specialSessions}
-        googleHolidaySyncState={googleHolidaySyncState}
-        isGoogleHolidayApiConfigured={isGoogleHolidaySyncEnabled}
         onUpdateClassroomSettings={setClassroomSettings}
-        onSyncGoogleHolidays={() => void runGoogleHolidaySync({ force: true })}
         onCompleteInitialSetup={completeInitialSetup}
         onExportBasicDataTemplate={exportBasicDataTemplate}
         onExportBasicDataCurrent={exportBasicDataCurrent}

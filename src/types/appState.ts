@@ -20,8 +20,6 @@ export type ClassroomSettings = {
   initialSetupCompletedAt?: string
   initialSetupMakeupStocks?: InitialSetupMakeupStockRow[]
   initialSetupLectureStocks?: InitialSetupLectureStockRow[]
-  googleHolidayCalendarSyncedDates?: string[]
-  googleHolidayCalendarLastSyncedAt?: string
 }
 
 export type InitialSetupMakeupStockRow = {

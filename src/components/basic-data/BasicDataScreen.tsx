@@ -34,11 +34,6 @@ import { AppMenu } from '../navigation/AppMenu'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
-  googleHolidaySyncState: {
-    status: 'idle' | 'syncing' | 'success' | 'error' | 'disabled'
-    message: string
-  }
-  isGoogleHolidayApiConfigured: boolean
   managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
@@ -46,7 +41,6 @@ type BasicDataScreenProps = {
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
-  onSyncGoogleHolidays: () => void
   onBackToBoard: () => void
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
@@ -402,19 +396,6 @@ function formatManagedDateButtonLabel(value: string, emptyLabel: string, hint?: 
   const normalizedValue = normalizeText(value)
   if (normalizedValue && normalizedValue !== '未定') return normalizedValue
   return hint ? `${emptyLabel} ${hint}` : emptyLabel
-}
-
-function formatSyncTimestamp(value: string) {
-  if (!value) return '未同期'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '未同期'
-  return parsed.toLocaleString('ja-JP', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 function formatSubjectCapabilitySummary(capabilities: TeacherSubjectCapability[]) {
@@ -974,7 +955,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isGoogleHolidayApiConfigured, managers, teachers, students, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, onSyncGoogleHolidays, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, managers, teachers, students, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
 
@@ -1548,22 +1529,6 @@ export function BasicDataScreen({ classroomSettings, googleHolidaySyncState, isG
       </div>
       <div className="basic-data-inline-stack">
         <div className="basic-data-editor-block basic-data-inline-stack">
-          <div className="basic-data-classroom-sync-row">
-            <div className="basic-data-inline-stack">
-              <strong>Google公開祝日同期</strong>
-              <p className="basic-data-subcopy" data-testid="basic-data-classroom-google-holiday-status">{googleHolidaySyncState.message}</p>
-              <p className="basic-data-subcopy">最終同期: {formatSyncTimestamp(classroomSettings.googleHolidayCalendarLastSyncedAt ?? '')}</p>
-            </div>
-            <button
-              type="button"
-              className="secondary-button slim"
-              onClick={onSyncGoogleHolidays}
-              disabled={!isGoogleHolidayApiConfigured || googleHolidaySyncState.status === 'syncing'}
-              data-testid="basic-data-classroom-google-holiday-sync-button"
-            >
-              今すぐ同期
-            </button>
-          </div>
         </div>
         <div className="basic-data-chip-row">
           {dayOptions.map((day) => {

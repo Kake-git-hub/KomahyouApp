@@ -56,7 +56,7 @@ type SerializedStudentStatusEntry = {
   teacherType: string
   teacherName: string
   recordedAt: string
-  status: 'absent' | 'attended'
+  status: 'absent' | 'absent-no-makeup' | 'attended'
 }
 
 type SerializedCell = {
@@ -1930,7 +1930,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function renderStudentCellCard(entry) {
-        if (entry.status === 'absent' || entry.status === 'attended') {
+        if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended') {
           return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.status === 'attended' ? '出席' : '休') + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
         return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.subject) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
@@ -2506,7 +2506,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function formatTeacherLessonLabel(student) {
         const lessonLabel = getCompactLessonTypeLabel(student.lessonType);
-        if (student.status === 'absent') return [lessonLabel, '休'].filter(Boolean).join(' ');
+        if (student.status === 'absent' || student.status === 'absent-no-makeup') return [lessonLabel, '休'].filter(Boolean).join(' ');
         if (student.status === 'attended') return [lessonLabel, '出席'].filter(Boolean).join(' ');
         const teacherLabel = teacherTypeLabels[student.teacherType] || '';
         return teacherLabel ? lessonLabel + '(' + teacherLabel + ')' : lessonLabel;
@@ -2584,7 +2584,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function collectStudentMakeupNotes(entries) {
         return entries.reduce((notes, entry) => {
-          if (entry.lesson.status === 'absent') return notes;
+          if (entry.lesson.status === 'absent' || entry.lesson.status === 'absent-no-makeup') return notes;
           const note = formatMakeupNote(entry.lesson.subject, entry.lesson.makeupSourceLabel, entry.dateKey, entry.slotNumber);
           if (note) notes.push(note);
           return notes;
@@ -2598,7 +2598,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (note) notes.push(note);
           });
           (entry.statuses || []).forEach((student) => {
-            if (student.status === 'absent') return;
+            if (student.status === 'absent' || student.status === 'absent-no-makeup') return;
             const note = formatTeacherMakeupNote(student.name, student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
             if (note) notes.push(note);
           });
@@ -2613,7 +2613,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const statuses = Array.isArray(desk.statuses) ? desk.statuses : [];
             statuses.forEach((entry) => {
               if (!entry) return;
-              if (entry.status !== 'absent') return;
+              if (entry.status !== 'absent' && entry.status !== 'absent-no-makeup') return;
               const linkedStudentId = entry.linkedStudentId || '';
               const isSameStudent = linkedStudentId === student.id || entry.name === student.name || entry.name === student.fullName;
               if (!isSameStudent) return;
@@ -2832,7 +2832,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
           const makeupNotes = collectStudentMakeupNotes(entries);
           entries.forEach((entry) => {
-            if (entry.lesson.status === 'absent') return;
+            if (entry.lesson.status === 'absent' || entry.lesson.status === 'absent-no-makeup') return;
             if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
             else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
           });
@@ -2915,7 +2915,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
             });
             (entry.statuses || []).forEach((student) => {
-              if (student.status === 'absent') return;
+              if (student.status === 'absent' || student.status === 'absent-no-makeup') return;
               if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
               else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
             });

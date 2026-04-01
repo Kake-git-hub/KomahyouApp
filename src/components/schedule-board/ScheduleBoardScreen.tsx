@@ -4678,7 +4678,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const isHoliday = classroomSettings.holidayDates.includes(dateKey)
     const isForceOpen = classroomSettings.forceOpenDates.includes(dateKey)
     const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
-    const isSyncedHoliday = (classroomSettings.googleHolidayCalendarSyncedDates ?? []).includes(dateKey)
 
     if (isForceOpen) {
       commitWeeks(
@@ -4698,7 +4697,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     if (isHoliday) {
-      const nextForceOpenDates = isClosedWeekday || isSyncedHoliday
+      const nextForceOpenDates = isClosedWeekday
         ? [...classroomSettings.forceOpenDates.filter((value) => value !== dateKey), dateKey].sort()
         : classroomSettings.forceOpenDates.filter((value) => value !== dateKey)
 
@@ -4714,7 +4713,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setStudentMenu(null)
       setSelectedStudentId(null)
       setSelectedMakeupStockKey(null)
-      setStatusMessage(isClosedWeekday || isSyncedHoliday ? `${dateKey} の休校設定を解除しました。営業日に戻しました。` : `${dateKey} の休日設定を解除しました。通常営業に戻しました。`)
+      setStatusMessage(isClosedWeekday ? `${dateKey} の休校設定を解除しました。営業日に戻しました。` : `${dateKey} の休日設定を解除しました。通常営業に戻しました。`)
       return
     }
 
@@ -5460,7 +5459,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setAddExistingStudentDraft(null)
       setMemoDraft(currentMemo)
       setStudentMenu({ cellId, deskIndex, studentIndex, x, y, mode: 'empty' })
-      setStatusMessage(currentStatus ? `${currentStatus.status === 'attended' ? '出席' : '休み'}セルのメニューを開きました。` : '空欄メニューを開きました。')
+      setStatusMessage(currentStatus ? `${currentStatus.status === 'attended' ? '出席' : currentStatus.status === 'absent-no-makeup' ? '振替なし休み' : '休み'}セルのメニューを開きました。` : '空欄メニューを開きました。')
       return
     }
 
@@ -6002,6 +6001,43 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化振替へ戻しました。`)
   }
 
+  const handleMarkStudentAbsentNoMakeup = () => {
+    if (!studentMenu || !menuStudent) return
+
+    const nextWeeks = cloneWeeks(weeks)
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const targetLesson = targetDesk?.lesson
+    const targetStudent = targetLesson?.studentSlots[studentMenu.studentIndex]
+    if (!targetCell || !targetDesk || !targetStudent) return
+
+    const absentNoMakeupStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent-no-makeup')
+    removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
+    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentNoMakeupStatusEntry)
+
+    const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
+    const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
+      ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
+      : suppressedRegularLessonOccurrences
+
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      studentMenu.cellId,
+      studentMenu.deskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+      nextSuppressedRegularLessonOccurrences,
+    )
+    setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を振替なし休みにしました。`)
+  }
+
   const handleMarkStudentAttended = () => {
     if (!studentMenu || !menuStudent) return
 
@@ -6094,7 +6130,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
-    setStatusMessage(`${resolveBoardStudentDisplayName(statusEntry.name)} の${statusEntry.status === 'attended' ? '出席' : '休み'}を解除しました。`)
+    setStatusMessage(`${resolveBoardStudentDisplayName(statusEntry.name)} の${statusEntry.status === 'attended' ? '出席' : statusEntry.status === 'absent-no-makeup' ? '振替なし休み' : '休み'}を解除しました。`)
   }
 
   const handleDeleteStudent = () => {
@@ -6808,6 +6844,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAttended} data-testid="menu-attendance-button">出席</button>
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsent} data-testid="menu-absence-button">休み</button>
                   </div>
+                  <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsentNoMakeup} data-testid="menu-absence-no-makeup-button">振替なし休み</button>
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   {menuStudent?.student.lessonType === 'special' && menuStudent.student.specialStockSource !== 'session' ? (
                     <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は未消化講習へ戻せません。不要な場合は削除してください。</div>
@@ -6826,6 +6863,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <div className="student-menu-button-row student-menu-button-row-two-up">
                       <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
                       <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
+                    </div>
+                  ) : emptyMenuContext?.statusEntry?.status === 'absent-no-makeup' ? (
+                    <div className="student-menu-button-row student-menu-button-row-two-up">
+                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
+                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-no-makeup-button">振替なし休み解除</button>
                     </div>
                   ) : (
                     <div className="student-menu-button-row">

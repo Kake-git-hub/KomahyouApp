@@ -23,13 +23,7 @@ type BackupRestoreScreenProps = {
   classroomSettings: ClassroomSettings
   students: StudentRow[]
   specialSessions: SpecialSessionRow[]
-  googleHolidaySyncState: {
-    status: 'idle' | 'syncing' | 'success' | 'error' | 'disabled'
-    message: string
-  }
-  isGoogleHolidayApiConfigured: boolean
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
-  onSyncGoogleHolidays: () => void
   onCompleteInitialSetup: () => void
   onExportBasicDataTemplate: () => void
   onExportBasicDataCurrent: () => void
@@ -65,7 +59,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, students, specialSessions, googleHolidaySyncState, isGoogleHolidayApiConfigured, onUpdateClassroomSettings, onSyncGoogleHolidays, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -253,7 +247,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               <div className="auto-assign-priority-step">
                 <strong>2. 教室運用確認</strong>
                 <span>{formatSetupStatus(classroomSettings.deskCount > 0)}</span>
-                <span className="basic-data-subcopy">机数、休校曜日、公開祝日同期を確認して、盤面作成の基準を整えます。</span>
+                <span className="basic-data-subcopy">机数、休校曜日を確認して、盤面作成の基準を整えます。</span>
                 <label className="basic-data-inline-field basic-data-inline-field-short">
                   <span>机数</span>
                   <input type="number" min="1" max="30" value={classroomSettings.deskCount} onChange={(event) => updateSetupField('deskCount', Math.max(1, Number(event.target.value) || 1))} data-testid="setup-desk-count" />
@@ -273,10 +267,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                       </button>
                     )
                   })}
-                </div>
-                <div className="basic-data-form-grid">
-                  <span className="basic-data-subcopy">公開祝日同期: {googleHolidaySyncState.message}</span>
-                  <button className="secondary-button slim" type="button" onClick={onSyncGoogleHolidays} disabled={!isGoogleHolidayApiConfigured || googleHolidaySyncState.status === 'syncing'} data-testid="setup-google-holiday-sync">今すぐ同期</button>
                 </div>
               </div>
 
