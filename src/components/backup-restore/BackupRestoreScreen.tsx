@@ -212,7 +212,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <section className="basic-data-section-card" data-testid="auto-backup-panel">
             <div className="basic-data-card-head">
               <h3>自動バックアップ</h3>
-              <p>現在は教室ごとではなく、ワークスペース全体を 1 日 1 件で自動保持します。直近 14 日分を残し、必要な時はこの一覧から復元できます。</p>
+              <p>ワークスペース全体を 1 日 1 件で自動保持します。直近 14 日分を残し、この一覧からこの教室のデータだけを復元できます。</p>
             </div>
             <div className="basic-data-form-grid">
               <div className="toolbar-status">最新自動バックアップ: {latestAutoBackup ? formatSavedAt(latestAutoBackup.savedAt) : 'まだありません。'}</div>
@@ -226,7 +226,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                     <strong>{summary.backupDateKey}</strong>
                     <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
                   </div>
-                  <button className="secondary-button slim" type="button" onClick={() => onRestoreAutoBackup(summary.backupDateKey)} data-testid={`auto-backup-restore-${summary.backupDateKey}`}>この時点へ復元</button>
+                  <button className="secondary-button slim" type="button" onClick={() => onRestoreAutoBackup(summary.backupDateKey)} data-testid={`auto-backup-restore-${summary.backupDateKey}`}>この教室を復元</button>
                 </div>
               ))}
             </div>

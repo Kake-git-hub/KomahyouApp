@@ -2280,27 +2280,39 @@ function App() {
   }, [applySnapshot])
 
   const restoreAutoBackup = useCallback(async (backupDateKey: string) => {
+    if (!actingClassroomId) {
+      setPersistenceMessage('操作中の教室がないため復元できません。')
+      return
+    }
     try {
       const snapshot = await loadWorkspaceAutoBackupSnapshot(backupDateKey)
       if (!snapshot) {
         setPersistenceMessage('指定した自動バックアップが見つかりませんでした。')
         return
       }
+      const backupClassroom = snapshot.classrooms.find((c) => c.id === actingClassroomId)
+      if (!backupClassroom) {
+        setPersistenceMessage('バックアップにこの教室のデータが見つかりませんでした。')
+        return
+      }
       const confirmed = window.confirm([
-        '自動バックアップ時点へ復元します。',
+        'この教室だけを自動バックアップ時点へ復元します。',
         `保存日時: ${new Date(snapshot.savedAt).toLocaleString('ja-JP')}`,
-        '現在のデータはこの内容で上書きされます。',
+        '他の教室には影響しません。',
         '復元してよろしいですか?',
       ].join('\n'))
       if (!confirmed) {
         setPersistenceMessage('自動バックアップからの復元をキャンセルしました。')
         return
       }
-      applyWorkspaceSnapshot(snapshot, '自動バックアップを読み込みました。')
+      const currentSnapshot = buildWorkspaceSnapshot(new Date().toISOString())
+      const restoreSelection = new Map(currentSnapshot.classrooms.map((c) => [c.id, c.id === actingClassroomId]))
+      const mergeResult = buildWorkspaceSnapshotMergeFromSelection(currentSnapshot, snapshot, restoreSelection)
+      applyWorkspaceSnapshot(mergeResult.snapshot, 'この教室の自動バックアップを復元しました。')
     } catch {
       setPersistenceMessage('自動バックアップの読み込みに失敗しました。')
     }
-  }, [applyWorkspaceSnapshot])
+  }, [actingClassroomId, applyWorkspaceSnapshot, buildWorkspaceSnapshot])
 
   const restoreDeveloperAutoBackup = useCallback(async (backupDateKey: string, password: string) => {
     if (!isRemoteBackendEnabled && password !== developerPassword) {

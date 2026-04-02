@@ -71,7 +71,7 @@ type TeacherMenuState = {
 }
 
 type TemplateSaveConfirmState = {
-  mode: 'normal' | 'overwrite'
+  mode: 'overwrite'
   template: RegularLessonTemplate
 }
 
@@ -1745,12 +1745,20 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       }
     })
 
-    // Track managed teacher-only desks consumed by board desks with explicit teacher assignments (e.g. deleted)
+    // Track managed teacher-only desks consumed by board desks with explicit teacher assignments (e.g. deleted, manual-replaced)
+    // or desks where a lesson now exists (e.g. student was moved there)
     const consumedManagedTeacherIndexes = new Set<number>()
     managedCell.desks.forEach((managedDesk, idx) => {
       if (managedDesk.lesson || !managedDesk.teacher.trim()) return
       const boardDesk = nextDesks[idx]
-      if (boardDesk && !boardDesk.lesson && boardDesk.manualTeacher && boardDesk.teacherAssignmentSource === 'manual-replaced') {
+      if (!boardDesk) return
+      // If the board desk now has a lesson, the teacher slot is consumed
+      if (boardDesk.lesson) {
+        consumedManagedTeacherIndexes.add(idx)
+        return
+      }
+      // If the teacher was explicitly managed (deleted or replaced), mark consumed
+      if (boardDesk.manualTeacher && (boardDesk.teacherAssignmentSource === 'manual-replaced' || boardDesk.teacherAssignmentSource === 'deleted')) {
         consumedManagedTeacherIndexes.add(idx)
       }
     })
@@ -1760,6 +1768,10 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       if (!managedDesk.lesson) {
         if (!managedDesk.teacher.trim()) continue
         if (consumedManagedTeacherIndexes.has(mi)) continue
+
+        // Skip if this teacher is already present on any desk in the cell
+        const alreadyPresent = nextDesks.some((desk) => desk.teacher === managedDesk.teacher)
+        if (alreadyPresent) continue
 
         const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
           ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
@@ -2181,11 +2193,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
 
   const handleEnterTemplateMode = useCallback(() => {
-    const copiedCells = copyBoardCellsForTemplate(cells)
-    const currentBoardDateKey = cells[0]?.dateKey ?? toDateKey(new Date())
-    const defaultMonday = toDateKey(getWeekStart(parseDateKey(currentBoardDateKey)))
-    setTemplateCells(copiedCells)
-    setTemplateEffectiveStartDate(defaultMonday)
+    const savedTemplate = classroomSettings.regularLessonTemplate
+    const templateBoardCells = savedTemplate
+      ? buildTemplateBoardCells({ template: savedTemplate, teachers, students, deskCount: classroomSettings.deskCount })
+      : copyBoardCellsForTemplate(cells)
+    setTemplateCells(templateBoardCells)
+    setTemplateEffectiveStartDate(toDateKey(new Date()))
     setIsTemplateMode(true)
     setStudentMenu(null)
     setTeacherMenu(null)
@@ -2198,8 +2211,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setTemplateAddDraft(null)
     setTemplateUndoStack([])
     setTemplateRedoStack([])
-    setStatusMessage('通常授業テンプレート編集モードです。コマ表から通常授業のみコピーしました。')
-  }, [cells])
+    setStatusMessage(savedTemplate ? '通常授業テンプレート編集モードです。前回のテンプレートを読み込みました。' : '通常授業テンプレート編集モードです。コマ表から通常授業のみコピーしました。')
+  }, [cells, classroomSettings.deskCount, classroomSettings.regularLessonTemplate, students, teachers])
 
   const handleExitTemplateMode = useCallback(() => {
     setIsTemplateMode(false)
@@ -2283,9 +2296,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setIsTemplateMode(false)
     setTemplateCells([])
     setTemplateSaveConfirm(null)
-    setStatusMessage(overwrite
-      ? `通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`
-      : '通常授業テンプレートを通常保存しました。メモ・手入力は維持されます。')
+    setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`)
   }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
 
   useEffect(() => {
@@ -4495,7 +4506,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage('講師を削除しました。')
   }
 
-  const handleTemplateSaveRequest = (mode: 'normal' | 'overwrite') => {
+  const handleTemplateSaveRequest = () => {
     const template = convertTemplateCellsToTemplate({
       cells: templateCells,
       teachers,
@@ -4503,12 +4514,26 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       effectiveStartDate: templateEffectiveStartDate,
       deskCount: classroomSettings.deskCount,
     })
-    setTemplateSaveConfirm({ mode, template })
+    setTemplateSaveConfirm({ mode: 'overwrite', template })
   }
 
   const handleTemplateSaveConfirm = () => {
     if (!templateSaveConfirm) return
-    handleSaveRegularLessonTemplate(templateSaveConfirm.template, templateSaveConfirm.mode === 'overwrite')
+    handleSaveRegularLessonTemplate(templateSaveConfirm.template, true)
+  }
+
+  const handleTemplateClear = () => {
+    if (!window.confirm('テンプレートの内容をすべて空にします。よろしいですか？')) return
+    pushTemplateUndo(templateCells)
+    setTemplateCells(templateCells.map((cell) => ({
+      ...cell,
+      desks: cell.desks.map((desk) => ({
+        ...desk,
+        teacher: '',
+        lesson: undefined,
+      })),
+    })))
+    setStatusMessage('テンプレートを空にしました。')
   }
 
   const handleTemplateExport = async () => {
@@ -6561,8 +6586,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onLogout={onLogout}
             onTemplateExport={() => void handleTemplateExport()}
             onTemplateImport={handleTemplateImportClick}
-            onTemplateSaveNormal={() => handleTemplateSaveRequest('normal')}
-            onTemplateSaveOverwrite={() => handleTemplateSaveRequest('overwrite')}
+            onTemplateSaveOverwrite={handleTemplateSaveRequest}
+            onTemplateClear={handleTemplateClear}
             onTemplateClose={handleExitTemplateMode}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
@@ -6774,16 +6799,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplateSaveConfirm(null) }}>
               <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="template-save-confirm-modal">
                 <div className="auto-assign-modal-title">
-                  {templateSaveConfirm.mode === 'normal' ? 'テンプレート通常保存' : 'テンプレート上書き保存'}
+                  テンプレート上書き保存
                 </div>
                 <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
-                  {templateSaveConfirm.mode === 'normal'
-                    ? `${templateSaveConfirm.template.effectiveStartDate} 以降の通常授業をテンプレート内容で書き換えます。\n\n書き換わらない対象:\n・手入力で追加/変更した生徒や講師\n・メモ\n・振替授業、講習授業\n・出欠記録\n\n実行しますか？`
-                    : `${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
+                  {`${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="primary-button" onClick={handleTemplateSaveConfirm} data-testid="template-save-confirm-execute-button">
-                    {templateSaveConfirm.mode === 'normal' ? '通常保存を実行' : '上書き保存を実行'}
+                    上書き保存を実行
                   </button>
                   <button type="button" className="secondary-button" onClick={() => setTemplateSaveConfirm(null)} data-testid="template-save-confirm-cancel-button">キャンセル</button>
                 </div>
