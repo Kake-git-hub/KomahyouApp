@@ -627,4 +627,77 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(managedDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s002')
     expect(managedDesk?.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001')).toBe(false)
   })
+
+  it('replaces a managed teacher-only desk without leaving the previous teacher in a lower row', () => {
+    const range = {
+      startDate: '2026-03-01',
+      endDate: '2026-03-07',
+      periodValue: '',
+    }
+    const regularLessons = [{
+      id: 'teacher-only-replace',
+      schoolYear: 2025,
+      teacherId: 't001',
+      student1Id: '',
+      subject1: '',
+      student1Note: '',
+      startDate: '2026-03-01',
+      endDate: '2026-03-31',
+      student2Id: '',
+      subject2: '',
+      student2Note: '',
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '',
+      nextStudent2Id: '',
+      nextSubject2: '',
+      dayOfWeek: 1,
+      slotNumber: 4,
+    }]
+
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = boardWeek.find((cell) => cell.dateKey === '2026-03-02' && cell.slotNumber === 4)
+    const targetDeskIndex = targetCell?.desks.findIndex((desk) => desk.teacher === '田中講師') ?? -1
+
+    expect(targetDeskIndex).toBeGreaterThanOrEqual(0)
+
+    const targetDesk = targetCell?.desks[targetDeskIndex]
+    expect(targetDesk).toBeDefined()
+
+    if (!targetDesk) throw new Error('targetDesk is required for test')
+
+    targetDesk.teacher = '佐藤講師'
+    targetDesk.manualTeacher = true
+    targetDesk.teacherAssignmentSource = 'manual-replaced'
+    targetDesk.teacherAssignmentTeacherId = 't002'
+
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const mergedCell = cells.find((cell) => cell.dateKey === '2026-03-02' && cell.slotNumber === 4)
+    const teacherNames = mergedCell?.desks.filter((desk) => desk.teacher.trim()).map((desk) => desk.teacher) ?? []
+
+    expect(teacherNames).toEqual(['佐藤講師'])
+  })
 })

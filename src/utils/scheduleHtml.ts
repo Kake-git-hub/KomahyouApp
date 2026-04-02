@@ -1,6 +1,7 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
+import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { generateQrSvg } from './qrcode'
@@ -104,6 +105,14 @@ type SerializedExpectedRegularOccurrence = {
   dateKey: string
 }
 
+type SerializedScheduleCountAdjustment = {
+  studentKey: string
+  subject: string
+  countKind: 'regular' | 'special'
+  dateKey: string
+  delta: number
+}
+
 type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
@@ -125,6 +134,7 @@ type SchedulePayload = {
     dateKey: string
     slotNumber: number
   }
+  countAdjustments: SerializedScheduleCountAdjustment[]
   specialSessions: SerializedSpecialSession[]
   qrSchoolNamePattern: string
 }
@@ -160,6 +170,7 @@ function buildScheduleQrSvg(qrConfig: ScheduleQrConfig | undefined, personType: 
 type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
   highlightedStudentSlot?: {
     studentId: string
     studentName?: string
@@ -352,6 +363,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     plannedCells: serializedPlannedCells,
     expectedRegularOccurrences: [],
     highlightedStudentSlot: undefined,
+    countAdjustments: [],
     specialSessions: (params.specialSessions ?? []).map((session) => ({
       id: session.id,
       label: session.label,
@@ -372,6 +384,69 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
   }
 }
 
+export function buildSerializedScheduleCountAdjustments(params: {
+  cells: SlotCell[]
+  scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
+}) {
+  const entries = new Map<string, SerializedScheduleCountAdjustment>()
+
+  const appendEntry = (entry: SerializedScheduleCountAdjustment) => {
+    const studentKey = String(entry.studentKey || '').trim()
+    const subject = String(entry.subject || '').trim()
+    const dateKey = String(entry.dateKey || '').trim()
+    const delta = Number.isFinite(Number(entry.delta)) ? Math.trunc(Number(entry.delta)) : 0
+    if (!studentKey || !subject || !dateKey || delta === 0) return
+
+    const key = `${studentKey}__${subject}__${entry.countKind}__${dateKey}`
+    const current = entries.get(key)
+    const nextDelta = (current?.delta ?? 0) + delta
+    if (nextDelta === 0) {
+      entries.delete(key)
+      return
+    }
+
+    entries.set(key, {
+      studentKey,
+      subject,
+      countKind: entry.countKind,
+      dateKey,
+      delta: nextDelta,
+    })
+  }
+
+  params.cells.forEach((cell) => {
+    cell.desks.forEach((desk) => {
+      desk.lesson?.studentSlots.forEach((student) => {
+        if (!student?.manualAdded) return
+        appendEntry({
+          studentKey: student.managedStudentId ?? student.name,
+          subject: student.subject,
+          countKind: student.lessonType === 'special' ? 'special' : 'regular',
+          dateKey: cell.dateKey,
+          delta: 1,
+        })
+      })
+    })
+  })
+
+  for (const adjustment of params.scheduleCountAdjustments ?? []) {
+    appendEntry({
+      studentKey: adjustment.studentKey,
+      subject: adjustment.subject,
+      countKind: adjustment.countKind,
+      dateKey: adjustment.dateKey,
+      delta: adjustment.delta,
+    })
+  }
+
+  return Array.from(entries.values()).sort((left, right) => (
+    left.studentKey.localeCompare(right.studentKey, 'ja')
+    || left.dateKey.localeCompare(right.dateKey)
+    || left.countKind.localeCompare(right.countKind)
+    || left.subject.localeCompare(right.subject, 'ja')
+  ))
+}
+
 function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params, params.students)
   const expectedRegularOccurrences = buildExpectedRegularOccurrences({
@@ -387,6 +462,10 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
     ...basePayload,
     expectedRegularOccurrences,
     highlightedStudentSlot: params.highlightedStudentSlot ?? undefined,
+    countAdjustments: buildSerializedScheduleCountAdjustments({
+      cells: params.cells,
+      scheduleCountAdjustments: params.scheduleCountAdjustments,
+    }),
     students: params.students
       .slice()
       .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, currentReferenceDate))
@@ -424,6 +503,7 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
 
   return {
     ...basePayload,
+    countAdjustments: [],
     students: [],
     teachers: params.teachers.map((teacher) => ({
       id: teacher.id,
@@ -515,6 +595,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .toolbar-field { display: grid; gap: 4px; }
 
+      .toolbar-spacer {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      .toolbar-actions {
+        display: flex;
+        align-items: end;
+        gap: 8px;
+      }
+
       .toolbar-field label,
       .toolbar-summary,
       .toolbar-title {
@@ -551,6 +642,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font: inherit;
       }
 
+      .toolbar-field--search input {
+        min-width: 220px;
+      }
+
       .toolbar select {
         min-width: 220px;
         padding: 8px 10px;
@@ -576,6 +671,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .toolbar button.secondary {
         background: #f3f3f3;
         color: var(--ink);
+      }
+
+      @media (max-width: 1180px) {
+        .toolbar-title {
+          min-width: 100%;
+        }
+
+        .toolbar-spacer {
+          display: none;
+        }
       }
 
       .pages {
@@ -1431,6 +1536,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-summary" id="schedule-summary-label"></div>
+      <div class="toolbar-spacer"></div>
+      <div class="toolbar-field toolbar-field--search">
+        <label for="schedule-person-search">${viewType === 'student' ? '生徒名検索' : '講師名検索'}</label>
+        <input id="schedule-person-search" type="search" placeholder="${viewType === 'student' ? '生徒名を検索' : '講師名を検索'}" />
+      </div>
+      <div class="toolbar-field">
+        <label for="schedule-person-select">${viewType === 'student' ? '生徒選択' : '講師選択'}</label>
+        <select id="schedule-person-select">
+          <option value="">選択してください</option>
+        </select>
+      </div>
+      <div class="toolbar-actions">
+        <button type="button" id="schedule-apply-button">反映</button>
+      </div>
     </div>
     <main class="pages" id="schedule-pages"></main>
     <input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />
@@ -1444,6 +1563,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const periodSelect = document.getElementById('schedule-period-select');
       const summaryLabel = document.getElementById('schedule-summary-label');
       const pagesElement = document.getElementById('schedule-pages');
+      const personSearchInput = document.getElementById('schedule-person-search');
+      const personSelect = document.getElementById('schedule-person-select');
+      const applyButton = document.getElementById('schedule-apply-button');
       const sharedStoragePrefix = 'schedule-shared:' + VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
@@ -1456,6 +1578,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let payloadFingerprint = JSON.stringify(DATA);
       let skipNextEquivalentPayload = false;
       let suppressNextToggleClick = false;
+      let appliedStartDate = '';
+      let appliedEndDate = '';
+      let appliedPeriodValue = '';
+      let appliedPersonId = '';
       const pendingUnavailableKeys = new Set();
       const pendingUnavailableTimers = new Map();
       const interactionLockStorageKey = 'schedule-shared:interaction-lock';
@@ -2808,7 +2934,93 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return teacher.fullName || teacher.name;
       }
 
-      function renderStudentPages(startDate, endDate) {
+      function normalizeSearchText(value) {
+        return String(value || '').replace(/\s+/g, '').toLowerCase();
+      }
+
+      function getVisibleStudents(startDate, endDate) {
+        return DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);
+      }
+
+      function getVisibleTeachers(startDate, endDate) {
+        return DATA.teachers.filter((teacher) => isVisibleInRange(teacher, startDate, endDate)).sort((left, right) => left.name.localeCompare(right.name, 'ja'));
+      }
+
+      function getFilteredPeople(startDate, endDate) {
+        const people = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
+        const query = normalizeSearchText(personSearchInput && 'value' in personSearchInput ? personSearchInput.value : '');
+        if (!query) return people;
+        return people.filter((person) => [person.name, person.fullName].some((label) => normalizeSearchText(label).includes(query)));
+      }
+
+      function getDefaultAppliedPersonId(startDate, endDate) {
+        const people = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
+        if (!people.length) return '';
+        if (appliedPersonId && people.some((person) => person.id === appliedPersonId)) return appliedPersonId;
+        if (VIEW_TYPE === 'student') {
+          const highlightedStudentId = DATA.highlightedStudentSlot && typeof DATA.highlightedStudentSlot.studentId === 'string'
+            ? DATA.highlightedStudentSlot.studentId
+            : '';
+          if (highlightedStudentId && people.some((person) => person.id === highlightedStudentId)) return highlightedStudentId;
+        }
+        return people[0].id;
+      }
+
+      function syncPersonSelectOptions(preferredPersonId) {
+        const draftStartDate = startInput.value || DATA.defaultStartDate || DATA.availableStartDate;
+        const draftEndDate = endInput.value || DATA.defaultEndDate || DATA.availableEndDate;
+        const normalizedStartDate = draftStartDate <= draftEndDate ? draftStartDate : draftEndDate;
+        const normalizedEndDate = draftStartDate <= draftEndDate ? draftEndDate : draftStartDate;
+        const people = getFilteredPeople(normalizedStartDate, normalizedEndDate);
+        const currentValue = preferredPersonId ?? personSelect.value;
+
+        if (!people.length) {
+          personSelect.innerHTML = '<option value="">該当なし</option>';
+          personSelect.value = '';
+          applyButton.disabled = true;
+          return '';
+        }
+
+        personSelect.innerHTML = people.map((person) => {
+          const label = VIEW_TYPE === 'student'
+            ? formatStudentHeaderName(person, normalizedStartDate)
+            : formatTeacherHeaderName(person);
+          return '<option value="' + escapeHtml(person.id) + '">' + escapeHtml(label) + '</option>';
+        }).join('');
+        const nextValue = people.some((person) => person.id === currentValue) ? currentValue : people[0].id;
+        personSelect.value = nextValue;
+        applyButton.disabled = false;
+        return nextValue;
+      }
+
+      function buildStudentCountAdjustmentMap(student, startDate, endDate, countKind) {
+        const countMap = {};
+        (DATA.countAdjustments || []).forEach((entry) => {
+          if (!entry || entry.countKind !== countKind) return;
+          const matchesStudent = entry.studentKey === student.id || entry.studentKey === student.name || entry.studentKey === student.fullName;
+          if (!matchesStudent) return;
+          if (entry.dateKey < startDate || entry.dateKey > endDate) return;
+          const normalizedSubject = normalizeSubjectForStudent(entry.subject, student, startDate);
+          const delta = Number.isFinite(Number(entry.delta)) ? Math.trunc(Number(entry.delta)) : 0;
+          if (!normalizedSubject || delta === 0) return;
+          countMap[normalizedSubject] = (countMap[normalizedSubject] || 0) + delta;
+        });
+        return countMap;
+      }
+
+      function applyCountAdjustments(countMap, adjustmentMap) {
+        const next = { ...(countMap || {}) };
+        Object.entries(adjustmentMap || {}).forEach(([subject, rawDelta]) => {
+          const delta = Number.isFinite(Number(rawDelta)) ? Math.trunc(Number(rawDelta)) : 0;
+          if (delta === 0) return;
+          const nextValue = (next[subject] || 0) + delta;
+          if (nextValue > 0) next[subject] = nextValue;
+          else delete next[subject];
+        });
+        return next;
+      }
+
+      function renderStudentPages(startDate, endDate, studentId) {
         const filteredCells = filterCells(startDate, endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
@@ -2819,76 +3031,83 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const monthHeaderHtml = makeMonthHeaderHtml(dateHeaders);
         const weekdayHeaderHtml = makeWeekdayHeaderHtml(dateHeaders);
         const tableDensityClass = getTableDensityClass(dateHeaders);
-        const students = DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);
+        const students = getVisibleStudents(startDate, endDate);
+        const student = students.find((entry) => entry.id === studentId) || students[0] || null;
+        if (!student) {
+          pagesElement.innerHTML = '<div class="empty-state">表示できる生徒が見つかりません。</div>';
+          return null;
+        }
         const showQr = shouldShowScheduleQr();
-        pagesElement.innerHTML = students.map((student, index) => {
-          const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
-          const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
-          const unavailableSlots = getUnavailableSlotsForStudent(student.id);
-          const subjectCounts = {};
-          const plannedRegularCounts = {};
-          const lectureCounts = {};
-          const desiredLectureCounts = buildDesiredLectureCountMap(student, startDate, endDate);
-          const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
-          const makeupNotes = collectStudentMakeupNotes(entries);
-          entries.forEach((entry) => {
-            if (entry.lesson.status === 'absent' || entry.lesson.status === 'absent-no-makeup') return;
-            if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
-            else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
-          });
-          (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).forEach((entry) => {
-            if (entry.linkedStudentId !== student.id) return;
-            if (entry.dateKey < startDate || entry.dateKey > endDate) return;
-            plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1;
-          });
-          const visibleRegularCounts = normalizeCountMapSubjects(subjectCounts, student, startDate);
-          const visiblePlannedRegularCounts = normalizeCountMapSubjects(plannedRegularCounts, student, startDate);
-          const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate);
-          const visibleDesiredLectureCounts = normalizeCountMapSubjects(desiredLectureCounts, student, startDate);
-          const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
-            ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
-            : '';
-          const lectureCountWarningHtml = hasCountMismatch(visibleLectureCounts, visibleDesiredLectureCounts)
-            ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と予定数が一致していません！</div>'
-            : '';
-          const rows = slotNumbers.map((slotNumber) => {
-            const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
-            const cellsHtml = dateHeaders.map((dateHeader) => {
-              const cell = cellMap.get(dateHeader.dateKey + '_' + slotNumber);
-              const assignment = keyMap.get(dateHeader.dateKey + '_' + slotNumber);
-              const slotKey = dateHeader.dateKey + '_' + slotNumber;
-              const isEditable = getEditableSpecialSessionsForStudent(student.id, dateHeader.dateKey).length > 0 && dateHeader.isOpenDay && (!cell || cell.isOpenDay);
-              const classes = ['slot-cell'];
-              if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
-              if (isEditable) classes.push('is-editable');
-              if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
-              const highlightedStudentSlot = DATA.highlightedStudentSlot;
-              const isHighlightedStudent = highlightedStudentSlot && (
-                highlightedStudentSlot.studentId === student.id
-                || highlightedStudentSlot.studentName === student.fullName
-                || highlightedStudentSlot.studentName === student.name
-                || highlightedStudentSlot.studentDisplayName === student.name
-              );
-              if (isHighlightedStudent && highlightedStudentSlot.dateKey === dateHeader.dateKey && highlightedStudentSlot.slotNumber === slotNumber) {
-                classes.push('is-moving-highlight');
-              }
-              let content = '<div class="empty-label"></div>';
-              if (assignment) content = renderStudentCellCard(assignment.lesson);
-              const title = assignment ? [assignment.lesson.subject, lessonTypeLabels[assignment.lesson.lessonType] || assignment.lesson.lessonType, assignment.teacher].filter(Boolean).join(' / ') : '';
-              return '<td class="' + classes.join(' ') + '" data-role="student-slot-cell" data-student-id="' + student.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('student', student.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="student-schedule-cell-' + student.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderStudentSlotContent(student.id, slotKey, content, title, !isEditable) + '</div></td>';
-            }).join('');
-            return '<tr>' + renderStudentTimeHeaderCell(student.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
+        const studentIndex = Math.max(0, students.findIndex((entry) => entry.id === student.id));
+        const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
+        const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
+        const unavailableSlots = getUnavailableSlotsForStudent(student.id);
+        const subjectCounts = {};
+        const plannedRegularCounts = {};
+        const lectureCounts = {};
+        const desiredLectureCounts = buildDesiredLectureCountMap(student, startDate, endDate);
+        const regularCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'regular');
+        const lectureCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'special');
+        const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
+        const makeupNotes = collectStudentMakeupNotes(entries);
+        entries.forEach((entry) => {
+          if (entry.lesson.status === 'absent' || entry.lesson.status === 'absent-no-makeup') return;
+          if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
+          else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
+        });
+        (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).forEach((entry) => {
+          if (entry.linkedStudentId !== student.id) return;
+          if (entry.dateKey < startDate || entry.dateKey > endDate) return;
+          plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1;
+        });
+        const visibleRegularCounts = normalizeCountMapSubjects(subjectCounts, student, startDate);
+        const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments);
+        const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate);
+        const visibleDesiredLectureCounts = applyCountAdjustments(normalizeCountMapSubjects(desiredLectureCounts, student, startDate), lectureCountAdjustments);
+        const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
+          ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
+          : '';
+        const lectureCountWarningHtml = hasCountMismatch(visibleLectureCounts, visibleDesiredLectureCounts)
+          ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と予定数が一致していません！</div>'
+          : '';
+        const rows = slotNumbers.map((slotNumber) => {
+          const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
+          const cellsHtml = dateHeaders.map((dateHeader) => {
+            const cell = cellMap.get(dateHeader.dateKey + '_' + slotNumber);
+            const assignment = keyMap.get(dateHeader.dateKey + '_' + slotNumber);
+            const slotKey = dateHeader.dateKey + '_' + slotNumber;
+            const isEditable = getEditableSpecialSessionsForStudent(student.id, dateHeader.dateKey).length > 0 && dateHeader.isOpenDay && (!cell || cell.isOpenDay);
+            const classes = ['slot-cell'];
+            if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
+            if (isEditable) classes.push('is-editable');
+            if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
+            const highlightedStudentSlot = DATA.highlightedStudentSlot;
+            const isHighlightedStudent = highlightedStudentSlot && (
+              highlightedStudentSlot.studentId === student.id
+              || highlightedStudentSlot.studentName === student.fullName
+              || highlightedStudentSlot.studentName === student.name
+              || highlightedStudentSlot.studentDisplayName === student.name
+            );
+            if (isHighlightedStudent && highlightedStudentSlot.dateKey === dateHeader.dateKey && highlightedStudentSlot.slotNumber === slotNumber) {
+              classes.push('is-moving-highlight');
+            }
+            let content = '<div class="empty-label"></div>';
+            if (assignment) content = renderStudentCellCard(assignment.lesson);
+            const title = assignment ? [assignment.lesson.subject, lessonTypeLabels[assignment.lesson.lessonType] || assignment.lesson.lessonType, assignment.teacher].filter(Boolean).join(' / ') : '';
+            return '<td class="' + classes.join(' ') + '" data-role="student-slot-cell" data-student-id="' + student.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('student', student.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="student-schedule-cell-' + student.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderStudentSlotContent(student.id, slotKey, content, title, !isEditable) + '</div></td>';
           }).join('');
-          const absenceRows = toMakeupRows(absenceNotes, 7);
-          const makeupRows = toMakeupRows(makeupNotes, 7);
-          const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
-          const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
-          const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+          return '<tr>' + renderStudentTimeHeaderCell(student.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
         }).join('');
+        const absenceRows = toMakeupRows(absenceNotes, 7);
+        const makeupRows = toMakeupRows(makeupNotes, 7);
+        const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
+        const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
+        const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
+        pagesElement.innerHTML = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+        return student;
       }
 
-      function renderTeacherPages(startDate, endDate) {
+      function renderTeacherPages(startDate, endDate, teacherId) {
         const filteredCells = filterCells(startDate, endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
@@ -2897,66 +3116,74 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const periodSegments = buildPeriodSegments(dateHeaders);
         const cornerYearHtml = makeCornerYearHtml(dateHeaders);
         const monthHeaderHtml = makeMonthHeaderHtml(dateHeaders);
-        const dateHeaderHtml = makeDateHeaderHtml(dateHeaders);
         const weekdayHeaderHtml = makeWeekdayHeaderHtml(dateHeaders);
         const tableDensityClass = getTableDensityClass(dateHeaders);
-        const teachers = DATA.teachers.filter((teacher) => isVisibleInRange(teacher, startDate, endDate)).sort((left, right) => left.name.localeCompare(right.name, 'ja'));
+        const teachers = getVisibleTeachers(startDate, endDate);
+        const teacher = teachers.find((entry) => entry.id === teacherId) || teachers[0] || null;
+        if (!teacher) {
+          pagesElement.innerHTML = '<div class="empty-state">表示できる講師が見つかりません。</div>';
+          return null;
+        }
         const showQr = shouldShowScheduleQr();
-        pagesElement.innerHTML = teachers.map((teacher, index) => {
-          const entries = assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
-          const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
-          const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
-          const regularCounts = {};
-          const lectureCounts = {};
-          const makeupNotes = collectTeacherMakeupNotes(entries);
-          entries.forEach((entry) => {
-            entry.students.forEach((student) => {
-              if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
-              else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
-            });
-            (entry.statuses || []).forEach((student) => {
-              if (student.status === 'absent' || student.status === 'absent-no-makeup') return;
-              if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
-              else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
-            });
+        const teacherIndex = Math.max(0, teachers.findIndex((entry) => entry.id === teacher.id));
+        const entries = assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
+        const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
+        const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
+        const regularCounts = {};
+        const lectureCounts = {};
+        const makeupNotes = collectTeacherMakeupNotes(entries);
+        entries.forEach((entry) => {
+          entry.students.forEach((student) => {
+            if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
+            else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
           });
-          const rows = slotNumbers.map((slotNumber) => {
-            const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
-            const cellsHtml = dateHeaders.map((dateHeader) => {
-              const cell = cellMap.get(dateHeader.dateKey + '_' + slotNumber);
-              const entry = keyMap.get(dateHeader.dateKey + '_' + slotNumber);
-              const slotKey = dateHeader.dateKey + '_' + slotNumber;
-              const isEditable = getEditableSpecialSessionsForTeacher(teacher.id, dateHeader.dateKey).length > 0 && dateHeader.isOpenDay && (!cell || cell.isOpenDay);
-              const classes = ['slot-cell'];
-              if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
-              if (isEditable) classes.push('is-editable');
-              if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
-              let content = '<div class="empty-label"></div>';
-              if (entry && ((entry.students || []).length > 0 || (entry.statuses || []).length > 0)) content = renderTeacherCellCard(entry.students, entry.statuses);
-              const title = entry ? [...entry.students, ...(entry.statuses || [])].map((student) => [student.name, student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')).join(' / ') : '';
-              return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
-            }).join('');
-            return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
+          (entry.statuses || []).forEach((student) => {
+            if (student.status === 'absent' || student.status === 'absent-no-makeup') return;
+            if (student.lessonType === 'special') lectureCounts[student.subject] = (lectureCounts[student.subject] || 0) + 1;
+            else regularCounts[student.subject] = (regularCounts[student.subject] || 0) + 1;
+          });
+        });
+        const rows = slotNumbers.map((slotNumber) => {
+          const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
+          const cellsHtml = dateHeaders.map((dateHeader) => {
+            const cell = cellMap.get(dateHeader.dateKey + '_' + slotNumber);
+            const entry = keyMap.get(dateHeader.dateKey + '_' + slotNumber);
+            const slotKey = dateHeader.dateKey + '_' + slotNumber;
+            const isEditable = getEditableSpecialSessionsForTeacher(teacher.id, dateHeader.dateKey).length > 0 && dateHeader.isOpenDay && (!cell || cell.isOpenDay);
+            const classes = ['slot-cell'];
+            if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
+            if (isEditable) classes.push('is-editable');
+            if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
+            let content = '<div class="empty-label"></div>';
+            if (entry && ((entry.students || []).length > 0 || (entry.statuses || []).length > 0)) content = renderTeacherCellCard(entry.students, entry.statuses);
+            const title = entry ? [...entry.students, ...(entry.statuses || [])].map((student) => [student.name, student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')).join(' / ') : '';
+            return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
           }).join('');
-          const makeupRows = toMakeupRows(makeupNotes, 7);
-          const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
-          const qrHtml = teacher.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + teacher.qrSvg + '</span>' : '';
-          const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-          return '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), index, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true }) + '</section>';
+          return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
         }).join('');
+        const makeupRows = toMakeupRows(makeupNotes, 7);
+        const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
+        const qrHtml = teacher.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + teacher.qrSvg + '</span>' : '';
+        const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
+        pagesElement.innerHTML = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true }) + '</section>';
+        return teacher;
       }
 
       function applyIncomingPayload(nextPayload) {
         const nextFingerprint = JSON.stringify(nextPayload);
-        const currentStartDate = startInput.value;
-        const currentEndDate = endInput.value;
-        const currentPeriodValue = periodSelect.value;
+        const draftStartDate = startInput.value;
+        const draftEndDate = endInput.value;
+        const draftPeriodValue = periodSelect.value;
+        const draftPersonId = personSelect.value;
         if (skipNextEquivalentPayload && nextFingerprint === payloadFingerprint) {
           DATA = nextPayload;
           payloadFingerprint = nextFingerprint;
           skipNextEquivalentPayload = false;
-          syncPeriodSelectOptions(currentPeriodValue);
-          if (currentStartDate && currentEndDate) {
+          syncPeriodSelectOptions(draftPeriodValue || appliedPeriodValue);
+          if (draftStartDate) setDateInputValue(startInput, draftStartDate);
+          if (draftEndDate) setDateInputValue(endInput, draftEndDate);
+          syncPersonSelectOptions(draftPersonId || appliedPersonId);
+          if (appliedStartDate && appliedEndDate && isDateWithinAvailableRange(appliedStartDate) && isDateWithinAvailableRange(appliedEndDate)) {
             render();
             return;
           }
@@ -2965,6 +3192,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             preferredRange.startDate,
             preferredRange.endDate,
             preferredRange.periodValue,
+            getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
           );
           return;
         }
@@ -2972,8 +3200,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         skipNextEquivalentPayload = false;
         DATA = nextPayload;
         payloadFingerprint = nextFingerprint;
-        syncPeriodSelectOptions(currentPeriodValue);
-        if (currentStartDate && currentEndDate) {
+        syncPeriodSelectOptions(draftPeriodValue || appliedPeriodValue);
+        if (draftStartDate) setDateInputValue(startInput, draftStartDate);
+        if (draftEndDate) setDateInputValue(endInput, draftEndDate);
+        syncPersonSelectOptions(draftPersonId || appliedPersonId);
+        if (appliedStartDate && appliedEndDate && isDateWithinAvailableRange(appliedStartDate) && isDateWithinAvailableRange(appliedEndDate)) {
           render();
           return;
         }
@@ -2982,6 +3213,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           preferredRange.startDate,
           preferredRange.endDate,
           preferredRange.periodValue,
+          getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
         );
       }
 
@@ -3251,26 +3483,52 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return readStoredLogo;
       }
 
-      function render() {
+      function getDraftRange() {
         let startDate = startInput.value || DATA.defaultStartDate || DATA.availableStartDate;
         let endDate = endInput.value || DATA.defaultEndDate || DATA.availableEndDate;
         if (startDate > endDate) {
           const previous = startDate;
           startDate = endDate;
           endDate = previous;
-          setDateInputValue(startInput, startDate);
-          setDateInputValue(endInput, endDate);
         }
-        summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate);
-        document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate);
+        return {
+          startDate,
+          endDate,
+          periodValue: periodSelect.value || '',
+        };
+      }
+
+      function render() {
+        let startDate = appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
+        let endDate = appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
+        if (startDate > endDate) {
+          const previous = startDate;
+          startDate = endDate;
+          endDate = previous;
+          appliedStartDate = startDate;
+          appliedEndDate = endDate;
+        }
+
+        const visiblePeople = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
+        if (!visiblePeople.some((person) => person.id === appliedPersonId)) {
+          appliedPersonId = getDefaultAppliedPersonId(startDate, endDate);
+        }
+
+        let displayedPerson = null;
         try {
-          if (VIEW_TYPE === 'student') renderStudentPages(startDate, endDate);
-          else renderTeacherPages(startDate, endDate);
+          if (VIEW_TYPE === 'student') displayedPerson = renderStudentPages(startDate, endDate, appliedPersonId);
+          else displayedPerson = renderTeacherPages(startDate, endDate, appliedPersonId);
           if (VIEW_TYPE === 'student') pagesElement.insertAdjacentHTML('beforeend', renderStudentCountModal());
           if (VIEW_TYPE === 'teacher') pagesElement.insertAdjacentHTML('beforeend', renderTeacherRegisterModal());
         } catch (error) {
           pagesElement.innerHTML = '<div class="empty-state">表示中にエラーが発生しました: ' + escapeHtml(String(error)) + '</div>';
         }
+
+        const personLabel = displayedPerson
+          ? (VIEW_TYPE === 'student' ? formatStudentHeaderName(displayedPerson, startDate) : formatTeacherHeaderName(displayedPerson))
+          : '対象なし';
+        summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
+        document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate) + ' | ' + personLabel;
         syncPendingUnavailableUi(pagesElement);
         bindNotes();
         bindSharedInputs();
@@ -3278,7 +3536,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         syncScheduleQrVisibility();
       }
 
-      function setRangeAndRender(nextStartDate, nextEndDate, nextPeriodValue) {
+      function setRangeAndRender(nextStartDate, nextEndDate, nextPeriodValue, nextPersonId) {
         let startDate = nextStartDate || DATA.defaultStartDate || DATA.availableStartDate;
         let endDate = nextEndDate || DATA.defaultEndDate || DATA.availableEndDate;
         if (startDate > endDate) {
@@ -3286,16 +3544,38 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           startDate = endDate;
           endDate = previous;
         }
+        appliedStartDate = startDate;
+        appliedEndDate = endDate;
+        appliedPeriodValue = nextPeriodValue || '';
         setDateInputValue(startInput, startDate);
         setDateInputValue(endInput, endDate);
         syncPeriodSelectOptions(nextPeriodValue);
+        appliedPersonId = nextPersonId || getDefaultAppliedPersonId(startDate, endDate);
+        syncPersonSelectOptions(appliedPersonId);
         writeStoredRange(startDate, endDate, periodSelect.value || nextPeriodValue || '');
         notifyRangeChange(startDate, endDate, periodSelect.value || nextPeriodValue || '');
         render();
       }
 
       function handleDateInputChange() {
-        setRangeAndRender(startInput.value, endInput.value, '');
+        syncPeriodSelectOptions('');
+        syncPersonSelectOptions(personSelect.value || appliedPersonId);
+      }
+
+      function handlePeriodDraftChange() {
+        if (periodSelect.value) {
+          const [startDate, endDate] = periodSelect.value.split('|');
+          setDateInputValue(startInput, startDate || DATA.defaultStartDate || DATA.availableStartDate);
+          setDateInputValue(endInput, endDate || DATA.defaultEndDate || DATA.availableEndDate);
+        }
+        syncPersonSelectOptions(personSelect.value || appliedPersonId);
+      }
+
+      function applyFilters() {
+        const draftRange = getDraftRange();
+        const selectedPersonId = syncPersonSelectOptions(personSelect.value || appliedPersonId)
+          || getDefaultAppliedPersonId(draftRange.startDate, draftRange.endDate);
+        setRangeAndRender(draftRange.startDate, draftRange.endDate, draftRange.periodValue, selectedPersonId);
       }
 
       const preferredRange = getPreferredRange();
@@ -3306,16 +3586,22 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       endInput.addEventListener('change', handleDateInputChange);
       startInput.addEventListener('blur', handleDateInputChange);
       endInput.addEventListener('blur', handleDateInputChange);
-      periodSelect.addEventListener('input', () => {
-        if (!periodSelect.value) return;
-        const [startDate, endDate] = periodSelect.value.split('|');
-        setRangeAndRender(startDate, endDate, periodSelect.value);
+      periodSelect.addEventListener('input', handlePeriodDraftChange);
+      periodSelect.addEventListener('change', handlePeriodDraftChange);
+      personSearchInput.addEventListener('input', () => {
+        syncPersonSelectOptions();
       });
-      periodSelect.addEventListener('change', () => {
-        if (!periodSelect.value) return;
-        const [startDate, endDate] = periodSelect.value.split('|');
-        setRangeAndRender(startDate, endDate, periodSelect.value);
+      personSearchInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        applyFilters();
       });
+      personSelect.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        applyFilters();
+      });
+      applyButton.addEventListener('click', applyFilters);
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
         acquireInteractionLock();
@@ -3356,7 +3642,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       });
       window.addEventListener('beforeunload', () => {
         releaseInteractionLock();
-        notifyRangeChange(startInput.value, endInput.value, periodSelect.value);
+        notifyRangeChange(appliedStartDate, appliedEndDate, appliedPeriodValue);
       });
       window.addEventListener('focus', acquireInteractionLock);
       window.addEventListener('blur', releaseInteractionLock);
@@ -3393,7 +3679,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         applyIncomingPayload(message.payload);
       });
       window.__scheduleReadStoredLogo = bindLogoControls();
-      setRangeAndRender(preferredRange.startDate, preferredRange.endDate, preferredRange.periodValue);
+      setRangeAndRender(
+        preferredRange.startDate,
+        preferredRange.endDate,
+        preferredRange.periodValue,
+        getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
+      );
       if (!document.hidden && document.hasFocus()) acquireInteractionLock();
       window.setTimeout(() => {
         notifyPopupReady();

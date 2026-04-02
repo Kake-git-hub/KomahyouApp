@@ -643,9 +643,13 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
     ? {
         ...fallback.classroomSettings,
         closedWeekdays: parseClosedWeekdays(classroomRows[0]['休校曜日']),
+        holidayDates: [],
         deskCount: Math.max(1, Number(classroomRows[0]['机数']) || fallback.classroomSettings.deskCount || 1),
       }
-    : fallback.classroomSettings
+    : {
+        ...fallback.classroomSettings,
+        holidayDates: [],
+      }
 
   const deskCount = baseClassroomSettings.deskCount || 14
   const hasTemplateSheet = Boolean(workbook.Sheets['通常授業テンプレ'])
@@ -720,7 +724,7 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
       ...fallback.classroomSettings,
       ...imported.classroomSettings,
       closedWeekdays: imported.classroomSettings.closedWeekdays,
-      holidayDates: imported.classroomSettings.holidayDates,
+      holidayDates: [],
       forceOpenDates: imported.classroomSettings.forceOpenDates,
       deskCount: imported.classroomSettings.deskCount,
     },

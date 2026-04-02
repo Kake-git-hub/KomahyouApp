@@ -1423,6 +1423,7 @@ function App() {
       }),
       students,
       regularLessons: displayRegularLessons,
+      scheduleCountAdjustments: boardState?.scheduleCountAdjustments ?? [],
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,
@@ -1433,7 +1434,7 @@ function App() {
       qrConfig: scheduleQrConfig,
       targetWindow: studentPopup,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
+  }, [boardState?.scheduleCountAdjustments, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()

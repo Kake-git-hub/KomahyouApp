@@ -2,6 +2,10 @@ import { expect, test } from '@playwright/test'
 import { buildMakeupStockEntries } from '../src/components/schedule-board/makeupStock'
 
 const REFERENCE_TODAY_ISO = '2026-03-23T09:00:00+09:00'
+const SPRING_SPECIAL_SESSION = { label: '2026 新年度準備講座', startDate: '2026-03-23', endDate: '2026-04-05' }
+const EXAM_SPECIAL_SESSION = { label: '2026 定期試験対策', startDate: '2026-05-18', endDate: '2026-06-05' }
+const SUMMER_SPECIAL_SESSION = { label: '2026 夏期講習', startDate: '2026-07-21', endDate: '2026-08-28' }
+const WINTER_SPECIAL_SESSION = { label: '2026 冬期講習', startDate: '2026-12-24', endDate: '2027-01-07' }
 const RealDate = Date
 
 class FixedDate extends RealDate {
@@ -62,6 +66,85 @@ test.beforeEach(async ({ page }) => {
     window.Date = BrowserFixedDate
   }, REFERENCE_TODAY_ISO)
 })
+
+function parseSpecialCalendarMonthKey(label: string) {
+  const match = label.match(/(\d+)年(\d+)月/)
+  if (!match) throw new Error(`unexpected special calendar label: ${label}`)
+  return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}`
+}
+
+async function getSpecialSessionDateButton(page: Parameters<typeof test>[0]['page'], dateKey: string) {
+  const targetMonthKey = dateKey.slice(0, 7)
+  const previousMonthButton = page.getByTestId('special-data-create-form').getByRole('button', { name: '前月' })
+  const nextMonthButton = page.getByTestId('special-data-create-form').getByRole('button', { name: '次月' })
+
+  for (let step = 0; step < 18; step += 1) {
+    const locator = page.getByTestId(`special-data-period-date-${dateKey}`)
+    if (await locator.count()) return locator
+
+    const visibleMonthKeys = (await page.locator('.special-session-calendar-head').allTextContents()).map(parseSpecialCalendarMonthKey)
+    const firstVisibleMonthKey = visibleMonthKeys[0]
+    const lastVisibleMonthKey = visibleMonthKeys[visibleMonthKeys.length - 1]
+    if (!firstVisibleMonthKey || !lastVisibleMonthKey) break
+
+    if (targetMonthKey < firstVisibleMonthKey) {
+      await previousMonthButton.click()
+      continue
+    }
+
+    if (targetMonthKey > lastVisibleMonthKey) {
+      await nextMonthButton.click()
+      continue
+    }
+
+    break
+  }
+
+  throw new Error(`special session date button not found for ${dateKey}`)
+}
+
+async function ensureSpecialSessions(page: Parameters<typeof test>[0]['page'], sessions: Array<{ label: string; startDate: string; endDate: string }>) {
+  if (sessions.length === 0) return
+
+  await page.getByTestId('menu-button').click()
+  await page.getByTestId('menu-open-special-data-button').click()
+  await expect(page.getByTestId('special-data-screen')).toBeVisible()
+
+  const sessionsTable = page.getByTestId('special-data-sessions-table')
+  for (const session of sessions) {
+    const existingRow = sessionsTable.locator('tbody tr').filter({ hasText: session.label })
+    if (await existingRow.count()) continue
+
+    if (!await page.getByTestId('special-data-create-form').isVisible().catch(() => false)) {
+      await page.getByTestId('special-data-toggle-create-button').click()
+    }
+
+    await page.getByTestId('special-data-draft-label').fill(session.label)
+    await page.getByTestId('special-data-clear-period-button').click()
+    await (await getSpecialSessionDateButton(page, session.startDate)).click()
+    await (await getSpecialSessionDateButton(page, session.endDate)).click()
+    await page.getByTestId('special-data-create-button').click()
+    await expect(sessionsTable.locator('tbody tr').filter({ hasText: session.label })).toHaveCount(1)
+  }
+
+  await navigateFromSpecialDataToBoard(page)
+}
+
+function getStudentSchedulePeriodButton(
+  popup: Parameters<typeof test>[0]['page'],
+  studentId: string,
+  sessionLabel: string,
+) {
+  return popup.locator(`[data-role="open-student-count-modal"][data-student-id="${studentId}"]`).filter({ hasText: sessionLabel }).first()
+}
+
+function getTeacherSchedulePeriodButton(
+  popup: Parameters<typeof test>[0]['page'],
+  teacherId: string,
+  sessionLabel: string,
+) {
+  return popup.locator(`[data-role="open-teacher-register-modal"][data-teacher-id="${teacherId}"]`).filter({ hasText: sessionLabel }).first()
+}
 
 async function setHiddenDateInput(page: Parameters<typeof test>[0]['page'], testId: string, value: string) {
   await page.getByTestId(testId).evaluate((element, nextValue) => {
@@ -809,12 +892,13 @@ test.describe('コマ調整表', () => {
 
   test('講習期間帯はコマ表上で静的表示され、クリック導線を持たない', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     await moveBoardToWeek(page, new Date(2026, 2, 23))
 
-    const periodBand = page.getByTestId('board-special-period-session_2026_spring')
-    await expect(periodBand).toBeVisible()
-    await expect(periodBand.locator('button')).toHaveCount(0)
+    const periodBands = page.getByTestId('board-special-periods')
+    await expect(periodBands).toContainText(SPRING_SPECIAL_SESSION.label)
+    await expect(periodBands.locator('button')).toHaveCount(0)
   })
 
   test('メニューから自動割振ルールへ移動して対象を追加できる', async ({ page }) => {
@@ -1454,6 +1538,7 @@ test.describe('コマ調整表', () => {
     const sourceName = page.getByTestId(`student-name-${dateKey}_1-0-0`)
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-auto-assign-rules-button').click()
@@ -1489,7 +1574,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -1599,13 +1684,14 @@ test.describe('コマ調整表', () => {
     const specialWeekStart = addDays(currentWeekStart, 7)
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -1636,8 +1722,9 @@ test.describe('コマ調整表', () => {
     await page.getByRole('button', { name: 'x' }).click()
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')).toContainText('希望科目数登録済')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    const springPeriodButton = getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label)
+    await expect(springPeriodButton).toContainText('希望科目数登録済')
+    await springPeriodButton.click()
     await expect(popup.getByTestId('student-schedule-count-modal')).toContainText('数')
     await expect(popup.getByTestId('student-schedule-count-modal')).toContainText('1')
 
@@ -1653,6 +1740,7 @@ test.describe('コマ調整表', () => {
     const specialWeekStart = addDays(currentWeekStart, 7)
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
     await moveBoardToWeek(page, specialWeekStart)
 
     const target = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎')
@@ -1928,13 +2016,14 @@ test.describe('コマ調整表', () => {
     const lectureSubjects = ['数', '英'] as const
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
@@ -1999,13 +2088,14 @@ test.describe('コマ調整表', () => {
     const specialWeekStart = addDays(currentWeekStart, 7)
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2038,7 +2128,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId('board-student-schedule-button').click()
     const reopenedPopup = await reopenedPopupPromise
     await setScheduleRangeInPopup(reopenedPopup, '2026-03-23', '2026-03-29')
-    await reopenedPopup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(reopenedPopup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await expect(reopenedPopup.getByTestId('student-schedule-count-unregister')).toBeVisible()
     await expect(reopenedPopup.locator('.count-modal-table tr').filter({ hasText: '数' })).toContainText('1')
   })
@@ -2047,13 +2137,14 @@ test.describe('コマ調整表', () => {
     const outOfPeriodWeekStart = getWeekStart(new Date('2026-04-06'))
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2077,6 +2168,7 @@ test.describe('コマ調整表', () => {
     const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
@@ -2108,6 +2200,7 @@ test.describe('コマ調整表', () => {
   test('複数講習期間を登録しても講習ストックは期間ごとに分かれ、登録解除も対象期間だけに効く', async ({ page }) => {
     test.slow()
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION, EXAM_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
@@ -2115,16 +2208,18 @@ test.describe('コマ調整表', () => {
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-06-05')
 
-    await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')).toBeVisible()
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click({ force: true })
+    const springPeriodButton = getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label)
+    const examPeriodButton = getStudentSchedulePeriodButton(popup, 's001', EXAM_SPECIAL_SESSION.label)
+    await expect(springPeriodButton).toBeVisible()
+    await springPeriodButton.click({ force: true })
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
-    await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_exam')).toBeVisible()
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click({ force: true })
+    await expect(examPeriodButton).toBeVisible()
+    await examPeriodButton.click({ force: true })
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
-    await popup.getByTestId('student-schedule-count-subject-英').fill('1')
+    await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
     await ensureLectureStockPanelVisible(page)
@@ -2135,8 +2230,8 @@ test.describe('コマ調整表', () => {
     await expect(examEntry).toHaveCount(1)
 
   await popup.bringToFront()
-  await expect(popup.getByTestId('student-schedule-period-button-s001-session_2026_exam')).toBeVisible()
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_exam').click({ force: true })
+  await expect(examPeriodButton).toBeVisible()
+    await examPeriodButton.click({ force: true })
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await popup.getByTestId('student-schedule-count-unregister').click()
 
@@ -2151,13 +2246,14 @@ test.describe('コマ調整表', () => {
     const nextSessionWeekStart = addDays(specialWeekStart, 7)
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
@@ -2197,6 +2293,7 @@ test.describe('コマ調整表', () => {
     const secondWeekStart = getWeekStart(new Date('2026-03-30'))
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-auto-assign-rules-button').click()
@@ -2209,7 +2306,7 @@ test.describe('コマ調整表', () => {
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-04-05')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('5')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2231,13 +2328,14 @@ test.describe('コマ調整表', () => {
     const specialWeekStart = getWeekStart(new Date('2026-03-23'))
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-英').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2264,13 +2362,14 @@ test.describe('コマ調整表', () => {
     const nextSessionWeekStart = addDays(specialWeekStart, 7)
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2309,13 +2408,14 @@ test.describe('コマ調整表', () => {
 
   test('小学生の希望科目数モーダルでは算のみ表示し数を表示しない', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s008-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's008', SPRING_SPECIAL_SESSION.label).click()
 
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await expect(popup.getByTestId('student-schedule-count-subject-算')).toBeVisible()
@@ -2324,13 +2424,14 @@ test.describe('コマ調整表', () => {
 
   test('高校生の希望科目数モーダルでは理を出さず生物化を表示する', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s019-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's019', SPRING_SPECIAL_SESSION.label).click()
 
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await expect(popup.getByTestId('student-schedule-count-subject-理')).toHaveCount(0)
@@ -2341,6 +2442,7 @@ test.describe('コマ調整表', () => {
 
   test('希望科目数が出席可能コマ数を上回ると登録不可にして見直しを促す', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
@@ -2356,7 +2458,7 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId(`student-schedule-day-toggle-${studentId}-2026-03-26`).click()
     await expect.poll(async () => targetSheet.locator('.slot-cell.is-unavailable').count()).toBeGreaterThan(0)
 
-    const periodButton = popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')
+    const periodButton = getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label)
     await periodButton.click()
     await expect(popup.getByTestId('student-schedule-count-modal')).toBeVisible()
     await popup.getByTestId('student-schedule-count-subject-数').fill('99')
@@ -2380,13 +2482,14 @@ test.describe('コマ調整表', () => {
     const sourceCellTestId = `student-cell-${sourceSlotId}-0-0`
 
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, targetWeekStartKey, targetWeekEndKey)
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2404,13 +2507,14 @@ test.describe('コマ調整表', () => {
 
   test('生徒日程表の講習回数表は表示期間で件数がある科目だけを表示する', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
     const popup = await popupPromise
 
     await setScheduleRangeInPopup(popup, '2026-03-23', '2026-03-29')
-    await popup.getByTestId('student-schedule-period-button-s001-session_2026_spring').click()
+    await getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label).click()
     await popup.getByTestId('student-schedule-count-subject-数').fill('1')
     await popup.getByTestId('student-schedule-count-register').click()
 
@@ -2851,6 +2955,7 @@ test.describe('コマ調整表', () => {
 
   test('生徒日程の講習期間セレクターは開始日順で並び、選択と日付入力で即反映される', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION, EXAM_SPECIAL_SESSION, SUMMER_SPECIAL_SESSION, WINTER_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-student-schedule-button').click()
@@ -2907,6 +3012,7 @@ test.describe('コマ調整表', () => {
 
   test('講師日程の講習期間セレクターは開始日順で並び、選択と日付入力で即反映される', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION, EXAM_SPECIAL_SESSION, SUMMER_SPECIAL_SESSION, WINTER_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-teacher-schedule-button').click()
@@ -2935,6 +3041,7 @@ test.describe('コマ調整表', () => {
 
   test('生徒日程で出席不可グレーアウトと希望科目数提出を登録解除まで操作できる', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const specialWeekStart = getWeekStart(new Date('2026-03-23'))
 
@@ -2946,7 +3053,7 @@ test.describe('コマ調整表', () => {
 
     const targetSheet = popup.locator('[data-role="student-sheet"][data-student-id="s001"]')
     const dayToggle = targetSheet.locator('[data-role="toggle-student-unavailable-date"]').first()
-    const periodButton = popup.getByTestId('student-schedule-period-button-s001-session_2026_spring')
+    const periodButton = getStudentSchedulePeriodButton(popup, 's001', SPRING_SPECIAL_SESSION.label)
 
     await expect(dayToggle).toBeVisible()
     await expect(periodButton).toContainText('希望科目数設定はここをクリック')
@@ -3006,6 +3113,7 @@ test.describe('コマ調整表', () => {
 
   test('講師日程で参加不可グレーアウトと講習期間登録を登録解除まで操作できる', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-teacher-schedule-button').click()
@@ -3041,6 +3149,7 @@ test.describe('コマ調整表', () => {
 
   test('講師日程の講習期間登録で参加可能コマへ講師をコマ表に自動登録する', async ({ page }) => {
     await page.goto('/')
+    await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-teacher-schedule-button').click()
@@ -3055,7 +3164,7 @@ test.describe('コマ調整表', () => {
     await popup.getByTestId(`teacher-schedule-day-toggle-${teacherId}-2026-04-01`).click()
     await expect.poll(async () => targetSheet.locator('.slot-cell.is-unavailable').count()).toBeGreaterThan(0)
 
-    await popup.getByTestId(`teacher-schedule-period-button-${teacherId}-session_2026_spring`).click()
+    await getTeacherSchedulePeriodButton(popup, teacherId, SPRING_SPECIAL_SESSION.label).click()
     await expect(popup.getByTestId('teacher-schedule-register-modal')).toBeVisible()
     await popup.getByTestId('teacher-schedule-register-submit').click()
 
@@ -3076,7 +3185,7 @@ test.describe('コマ調整表', () => {
       return april2 + april3 + april4
     }).toBeGreaterThan(0)
 
-    await popup.getByTestId(`teacher-schedule-period-button-${teacherId}-session_2026_spring`).click()
+    await getTeacherSchedulePeriodButton(popup, teacherId, SPRING_SPECIAL_SESSION.label).click()
     await expect(popup.getByTestId('teacher-schedule-register-unregister')).toBeVisible()
     await popup.getByTestId('teacher-schedule-register-unregister').click()
 

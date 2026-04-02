@@ -25,12 +25,14 @@ describe('basicDataImportValidation', () => {
       classroomSettings: {
         ...bundle.classroomSettings,
         closedWeekdays: [0, 1],
+        holidayDates: ['2026-04-29'],
         deskCount: 18,
       },
     }, {
       ...bundle,
       classroomSettings: {
         ...bundle.classroomSettings,
+        holidayDates: ['2026-03-20'],
         initialSetupCompletedAt: '2026-03-27T00:00:00.000Z',
         initialSetupMakeupStocks: [{ id: 'm1', studentId: 's001', subject: '英', count: 2 }],
         initialSetupLectureStocks: [{ id: 'l1', studentId: 's001', subject: '英', sessionId: 'session-1', count: 1 }],
@@ -39,6 +41,7 @@ describe('basicDataImportValidation', () => {
 
     expect(merged.classroomSettings).toEqual(expect.objectContaining({
       closedWeekdays: [0, 1],
+      holidayDates: [],
       deskCount: 18,
       initialSetupCompletedAt: '2026-03-27T00:00:00.000Z',
       initialSetupMakeupStocks: [{ id: 'm1', studentId: 's001', subject: '英', count: 2 }],

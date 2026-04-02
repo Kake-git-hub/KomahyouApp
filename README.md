@@ -56,10 +56,15 @@
 	- 中学生以上: `数`
 - IndexedDB を優先し、利用不可時は localStorage にフォールバックしてアプリ全体のスナップショットを自動保存する
 - 教室ごとのデータを含むワークスペース状態もローカル保存し、第三者認証やDBは未確定のまま画面運用を先に検証する
+- 教室画面の自動バックアップ一覧は現在、教室別ではなくワークスペース全体を 1 日 1 件で保持 / 復元する
+- Blaze プランで Functions と Cloud Storage を有効にすると、Firebase サーバー側でも開発者向けワークスペースバックアップ JSON を 1 日 1 回自動保存できる
+- 現在の開発者画面に表示している自動バックアップ一覧はブラウザ内バックアップで、Firebase サーバー側バックアップ一覧とはまだ統合していない
 - 同一ブラウザ内の別タブで保存が発生した場合は BroadcastChannel で最新スナップショットを取り込む
 - `.env` に Firebase 接続情報を入れると、Email/Password 認証と教室単位の外部 DB 同期へ切り替わる
 - Spark 無料プラン前提では Firebase Hosting + Auth + Firestore のみを使い、管理者アカウント削除 / 管理者メール変更は Firebase Console で手動運用する
 - Spark 無料プランでも開発者画面の `教室を追加` ボタンから、Authentication で作成済みの UID を貼り付けて `members` / `classrooms` / `classroomSnapshots` を追加できる
+- 新規教室と初期状態の特別講習データは空で開始し、過去のサンプル講習データはロード時に除去する
+- 祝日データは保持せず、全教室で平日扱いに統一する
 
 ## 設計メモ
 
@@ -73,12 +78,14 @@
 - 現在の採用方針は Firebase です
 - 現段階の外部保存は Firestore の `workspaces/{workspaceKey}/classroomSnapshots/{classroomId}` に教室単位で同期します
 - Firebase Hosting で `dist` を配信し、Firestore に教室メタ情報と snapshot を保存します
+- Blaze へ移行して Functions と Cloud Storage を有効化すると、`workspace-auto-backups/{workspaceKey}/{backupDateKey}.json` に日次サーバーバックアップを保存できます
 - Spark 前提では管理者アカウント削除 / 管理者メール変更はアプリ内で行わず、Firebase Console で手動更新してください
 - 最初の教室を作るときは `npm run firebase:first-classroom` を実行すると、Firebase Console に貼る JSON 一式を対話形式で生成できます
 - Spark 構成では開発者画面の `教室を追加` を押すと、Authentication で作成済みの管理者 UID を貼り付けて教室を追加できます
 - アプリ自体は `https://komahyouapp-prod.web.app/` を直接開いて運用します
 - `firebase/firestore.rules` を適用し、`.env` に `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID` / `VITE_FIREBASE_APP_ID` / `VITE_FIREBASE_WORKSPACE_KEY` を設定すると有効化されます
 - `VITE_FIREBASE_ENABLE_FUNCTIONS=true` は Blaze へ移行する場合のみ使ってください
+- サーバー側の自動バックアップを使う場合は Cloud Storage も有効化し、`npm run deploy:firebase:with-functions` で Functions を含めてデプロイしてください
 - `/KomahyouApp/...` 転送経路は互換性のため残していますが、現運用では本番 Hosting のルート URL を使います
 - 詳細な構成は [docs/firebase-backend.md](docs/firebase-backend.md) を参照してください
 - Firebase CLI 側は [firebase.json](firebase.json) を使い、プロジェクト紐付けは各環境で `firebase use --add` を実行してください
@@ -90,8 +97,10 @@ npm install
 npm run dev
 npm run build
 npm run build:firebase
+npm run build:functions
 npm run firebase:first-classroom
 npx firebase-tools deploy --only hosting,firestore
+npm run deploy:firebase:with-functions
 npm run test:unit
 npm run test:e2e -- tests/schedule-board.spec.ts
 npx playwright test tests/schedule-board.spec.ts
@@ -99,7 +108,8 @@ npx playwright test tests/schedule-board.spec.ts
 
 ## テスト運用
 
-- コマ表、振替、日程表、講習帯、期間入力まわりを変更したら `npm run build` と `npx playwright test tests/schedule-board.spec.ts` をセットで実行する
+- コマ表、振替、日程表、講習帯、期間入力まわりを変更したら、まず `npm run build` を実行する
+- Playwright は E2E が必要なときだけ `npm run test:e2e -- tests/schedule-board.spec.ts` または `npx playwright test tests/schedule-board.spec.ts` を実行する
 - 振替ストック計算や PDF 整形ロジックを変更したら `npm run test:unit` も追加で実行する
 - 日程表ポップアップの変更時は次を最低確認する
 - 自動反映

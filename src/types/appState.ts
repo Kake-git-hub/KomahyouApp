@@ -55,6 +55,16 @@ export type ManualLectureStockOrigin = {
   sessionId?: string
 }
 
+export type ScheduleCountAdjustmentKind = 'regular' | 'special'
+
+export type ScheduleCountAdjustmentEntry = {
+  studentKey: string
+  subject: string
+  countKind: ScheduleCountAdjustmentKind
+  dateKey: string
+  delta: number
+}
+
 export type FallbackMakeupStudent = {
   studentName: string
   displayName: string
@@ -67,6 +77,7 @@ export type PersistedBoardState = {
   selectedCellId: string
   selectedDeskIndex: number
   suppressedRegularLessonOccurrences: string[]
+  scheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
   manualMakeupAdjustments: MakeupOriginMap
   suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildExpectedRegularOccurrences, openStudentScheduleHtml } from './scheduleHtml'
+import { buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml } from './scheduleHtml'
 import type { StudentRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
+import type { SlotCell } from '../components/schedule-board/types'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -40,6 +41,36 @@ function createRegularLesson(overrides: Partial<RegularLessonRow> = {}): Regular
   }
 }
 
+function createManualScheduleCell(): SlotCell {
+  return {
+    id: '2026-03-24_3',
+    dateKey: '2026-03-24',
+    dayLabel: '火',
+    dateLabel: '3/24',
+    slotLabel: '3限',
+    slotNumber: 3,
+    timeLabel: '16:20-17:50',
+    isOpenDay: true,
+    desks: [{
+      id: '2026-03-24_3_desk_1',
+      teacher: '田中講師',
+      lesson: {
+        id: 'manual-regular',
+        studentSlots: [{
+          id: 'student-entry-1',
+          name: '山田',
+          managedStudentId: 'student-1',
+          grade: '中3',
+          subject: '数',
+          lessonType: 'regular',
+          teacherType: 'normal',
+          manualAdded: true,
+        }, null],
+      },
+    }],
+  }
+}
+
 describe('scheduleHtml buildExpectedRegularOccurrences', () => {
   it('counts the first four scheduled weekly occurrences even when one date is later closed as a holiday', () => {
     const occurrences = buildExpectedRegularOccurrences({
@@ -68,6 +99,36 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(occurrences.map((entry) => entry.dateKey)).toEqual([
       '2026-03-17',
       '2026-03-24',
+    ])
+  })
+
+  it('serializes manual board additions and explicit count deletions for student schedule counts', () => {
+    const adjustments = buildSerializedScheduleCountAdjustments({
+      cells: [createManualScheduleCell()],
+      scheduleCountAdjustments: [{
+        studentKey: 'student-1',
+        subject: '英',
+        countKind: 'special',
+        dateKey: '2026-03-25',
+        delta: -1,
+      }],
+    })
+
+    expect(adjustments).toEqual([
+      {
+        studentKey: 'student-1',
+        subject: '数',
+        countKind: 'regular',
+        dateKey: '2026-03-24',
+        delta: 1,
+      },
+      {
+        studentKey: 'student-1',
+        subject: '英',
+        countKind: 'special',
+        dateKey: '2026-03-25',
+        delta: -1,
+      },
     ])
   })
 
@@ -144,6 +205,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('print-color-adjust: exact;')
     expect(html).toContain('box-shadow: inset 0 0 0 999px var(--holiday-bg);')
     expect(html).toContain('box-shadow: inset 0 0 0 999px #d1d6dc;')
+    vi.unstubAllGlobals()
+  })
+
+  it('renders person search, selector, and apply controls for single-person popup display', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain('id="schedule-person-search"')
+    expect(html).toContain('id="schedule-person-select"')
+    expect(html).toContain('id="schedule-apply-button"')
+    expect(html).toContain('function renderStudentPages(startDate, endDate, studentId)')
     vi.unstubAllGlobals()
   })
 })

@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:firebase": "npm run build",
+    "build:functions": "npm --prefix functions run build",
     "firebase:first-classroom": "node tools/firebase-first-classroom-helper.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "deploy:firebase": "npm run build:firebase && npx firebase-tools deploy --only hosting,firestore",
+    "deploy:firebase:with-functions": "npm run build:firebase && npm run build:functions && npx firebase-tools deploy --only hosting,firestore,functions",
     "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
     "test:e2e": "playwright test"

@@ -188,13 +188,11 @@ export function BoardGrid({
     )
   }
 
-  const hasManualTeacherWarning = (desk: SlotCell['desks'][number]) => {
-    return desk.teacherAssignmentSource === 'manual'
-  }
+  const hasManualTeacherWarning = (_desk: SlotCell['desks'][number]) => false
 
   const getTeacherAssignmentHint = (desk: SlotCell['desks'][number]) => {
     if (desk.teacherAssignmentSource === 'schedule-registration') return '日程表より登録'
-    if (desk.teacherAssignmentSource === 'manual') return '手動設定'
+    if (desk.teacherAssignmentSource === 'manual' || desk.teacherAssignmentSource === 'manual-replaced') return '手動設定'
     return undefined
   }
 

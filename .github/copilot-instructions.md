@@ -47,11 +47,15 @@
 	- The 講師未選択 dropdown option has been removed; use the 講師削除 button instead.
 	- Student move on the normal board supports swap: when the target slot is occupied, the two students are swapped.
 	- Template save offers two modes: 通常保存 (preserves manual edits, memos, makeup/special lessons) and 上書き保存 (clears all board data for dates >= effectiveStartDate and rebuilds from template only). Both show a confirmation dialog.
-	- After board or schedule changes, run both `npm run build` and `npx playwright test tests/schedule-board.spec.ts`.
+	- New classrooms and reset states must start with empty `specialSessions`; the legacy sample session IDs `session_2026_summer`, `session_2026_spring`, `session_2026_exam`, and `session_2026_winter` should be removed from loaded classroom data.
+	- `classroomSettings.holidayDates` must be cleared on load/import so all classrooms treat holidays as normal weekdays.
+	- Classroom-screen auto-backup UI currently reflects workspace-wide daily backups, not per-classroom backups.
+	- Firebase server auto-backup can run daily without an open browser only on Blaze with Functions and Cloud Storage; the current developer-screen backup list still reflects browser-local auto backups.
+	- After board or schedule changes, run `npm run build`. Run Playwright only when the user explicitly requests E2E verification.
 	- After stock calculation or PDF changes, also run `npm run test:unit`.
 
 - [x] Maintain regression coverage
-	Current expected regression baseline: full `tests/schedule-board.spec.ts` Playwright suite passes after board/schedule behavior changes.
+	Current expected regression baseline: `tests/schedule-board.spec.ts` remains the E2E reference suite, but only run it when the user explicitly asks for Playwright verification.
 
 
 - Work through each checklist item systematically.

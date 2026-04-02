@@ -11,7 +11,7 @@ import { buildMakeupStockEntries, buildMakeupStockKey, type MakeupStockEntry, ty
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignRequest } from '../../App'
-import type { ManualLectureStockOrigin, PersistedBoardState } from '../../types/appState'
+import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry, ScheduleCountAdjustmentKind } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { exportBoardPdf } from '../../utils/pdf'
 import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
@@ -39,6 +39,7 @@ type HistoryEntry = {
   holidayDates: string[]
   forceOpenDates: string[]
   suppressedRegularLessonOccurrences: string[]
+  scheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
   manualMakeupAdjustments: MakeupOriginMap
   suppressedMakeupOrigins: MakeupOriginMap
   fallbackMakeupStudents: Record<string, { studentName: string; displayName: string; subject: string }>
@@ -790,6 +791,62 @@ function removeSuppressedRegularLessonOccurrence(occurrences: string[], occurren
   return occurrences.filter((current) => current !== occurrenceKey)
 }
 
+function cloneScheduleCountAdjustments(adjustments: ScheduleCountAdjustmentEntry[] = []) {
+  return adjustments.map((entry) => ({ ...entry }))
+}
+
+function appendScheduleCountAdjustment(adjustments: ScheduleCountAdjustmentEntry[], nextEntry: ScheduleCountAdjustmentEntry) {
+  const studentKey = nextEntry.studentKey.trim()
+  const subject = nextEntry.subject.trim()
+  const dateKey = nextEntry.dateKey.trim()
+  const delta = Number.isFinite(Number(nextEntry.delta)) ? Math.trunc(Number(nextEntry.delta)) : 0
+
+  if (!studentKey || !subject || !dateKey || delta === 0) return cloneScheduleCountAdjustments(adjustments)
+
+  const nextAdjustments = cloneScheduleCountAdjustments(adjustments)
+  const existingIndex = nextAdjustments.findIndex((entry) => (
+    entry.studentKey === studentKey
+    && entry.subject === subject
+    && entry.countKind === nextEntry.countKind
+    && entry.dateKey === dateKey
+  ))
+
+  if (existingIndex < 0) {
+    nextAdjustments.push({
+      studentKey,
+      subject,
+      countKind: nextEntry.countKind,
+      dateKey,
+      delta,
+    })
+  } else {
+    const updatedDelta = nextAdjustments[existingIndex]!.delta + delta
+    if (updatedDelta === 0) {
+      nextAdjustments.splice(existingIndex, 1)
+    } else {
+      nextAdjustments[existingIndex] = {
+        ...nextAdjustments[existingIndex]!,
+        delta: updatedDelta,
+      }
+    }
+  }
+
+  return nextAdjustments.sort((left, right) => (
+    left.studentKey.localeCompare(right.studentKey, 'ja')
+    || left.dateKey.localeCompare(right.dateKey)
+    || left.countKind.localeCompare(right.countKind)
+    || left.subject.localeCompare(right.subject, 'ja')
+  ))
+}
+
+function resolveScheduleCountAdjustmentStudentKey(student: StudentEntry) {
+  return (student.managedStudentId ?? student.name).trim()
+}
+
+function resolveScheduleCountAdjustmentKind(student: StudentEntry): ScheduleCountAdjustmentKind {
+  return student.lessonType === 'special' ? 'special' : 'regular'
+}
+
 function buildDateCoverageScore(dateKeys: string[]) {
   const uniqueDateKeys = Array.from(new Set(dateKeys)).sort()
   if (uniqueDateKeys.length <= 1) return 0
@@ -975,6 +1032,7 @@ function createInitialBoardSnapshot(params: {
       Math.max(0, params.classroomSettings.deskCount - 1),
     ),
     suppressedRegularLessonOccurrences: [...(params.initialBoardState?.suppressedRegularLessonOccurrences ?? [])],
+    scheduleCountAdjustments: cloneScheduleCountAdjustments(params.initialBoardState?.scheduleCountAdjustments ?? []),
     manualMakeupAdjustments: cloneOriginMap(params.initialBoardState?.manualMakeupAdjustments ?? buildInitialSetupMakeupAdjustmentsFromSettings(params.classroomSettings)),
     suppressedMakeupOrigins: cloneOriginMap(params.initialBoardState?.suppressedMakeupOrigins ?? {}),
     fallbackMakeupStudents: { ...(params.initialBoardState?.fallbackMakeupStudents ?? {}) },
@@ -1692,7 +1750,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
     managedCell.desks.forEach((managedDesk, idx) => {
       if (managedDesk.lesson || !managedDesk.teacher.trim()) return
       const boardDesk = nextDesks[idx]
-      if (boardDesk && !boardDesk.lesson && boardDesk.manualTeacher) {
+      if (boardDesk && !boardDesk.lesson && boardDesk.manualTeacher && boardDesk.teacherAssignmentSource === 'manual-replaced') {
         consumedManagedTeacherIndexes.add(idx)
       }
     })
@@ -1748,10 +1806,10 @@ function clearTeacherAssignment(desk: DeskCell) {
   desk.teacherAssignmentTeacherId = undefined
 }
 
-function setManualTeacherAssignment(desk: DeskCell, teacherName: string, teacherId?: string) {
+function setManualTeacherAssignment(desk: DeskCell, teacherName: string, teacherId?: string, assignmentSource: 'manual' | 'manual-replaced' = 'manual') {
   desk.teacher = teacherName
   desk.manualTeacher = true
-  desk.teacherAssignmentSource = 'manual'
+  desk.teacherAssignmentSource = assignmentSource
   desk.teacherAssignmentSessionId = undefined
   desk.teacherAssignmentTeacherId = teacherId
 }
@@ -2084,6 +2142,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [addExistingStudentDraft, setAddExistingStudentDraft] = useState<AddExistingStudentDraft | null>(null)
   const [statusMessage, setStatusMessage] = useState('左クリックで生徒を選ぶか、空欄の生徒マスを左クリックしてメモを保存できます。')
   const [suppressedRegularLessonOccurrences, setSuppressedRegularLessonOccurrences] = useState<string[]>(initialBoardSnapshot.suppressedRegularLessonOccurrences)
+  const [scheduleCountAdjustments, setScheduleCountAdjustments] = useState<ScheduleCountAdjustmentEntry[]>(initialBoardSnapshot.scheduleCountAdjustments)
   const [manualMakeupAdjustments, setManualMakeupAdjustments] = useState<MakeupOriginMap>(initialBoardSnapshot.manualMakeupAdjustments)
   const [suppressedMakeupOrigins, setSuppressedMakeupOrigins] = useState<MakeupOriginMap>(initialBoardSnapshot.suppressedMakeupOrigins)
   const [fallbackMakeupStudents, setFallbackMakeupStudents] = useState<Record<string, FallbackMakeupStudent>>(initialBoardSnapshot.fallbackMakeupStudents)
@@ -2236,6 +2295,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       selectedCellId,
       selectedDeskIndex,
       suppressedRegularLessonOccurrences: [...suppressedRegularLessonOccurrences],
+      scheduleCountAdjustments: cloneScheduleCountAdjustments(scheduleCountAdjustments),
       manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
       suppressedMakeupOrigins: cloneOriginMap(suppressedMakeupOrigins),
       fallbackMakeupStudents: { ...fallbackMakeupStudents },
@@ -2256,6 +2316,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     manualLectureStockCounts,
     manualMakeupAdjustments,
     onBoardStateChange,
+    scheduleCountAdjustments,
     selectedCellId,
     selectedDeskIndex,
     suppressedRegularLessonOccurrences,
@@ -3724,6 +3785,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       plannedCells: studentPlannedScheduleCells,
       students,
       regularLessons,
+      scheduleCountAdjustments,
       highlightedStudentSlot: movingStudentContext
         ? {
             studentId: movingStudentContext.student.managedStudentId ?? movingStudentContext.student.id,
@@ -3743,7 +3805,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       qrConfig: scheduleQrConfig,
       targetWindow: studentScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
+  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
 
   useEffect(() => {
     syncTeacherScheduleHtml({
@@ -4536,6 +4598,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     sourceHolidayDates: string[],
     sourceForceOpenDates: string[],
     sourceSuppressedRegularLessonOccurrences: string[],
+    sourceScheduleCountAdjustments: ScheduleCountAdjustmentEntry[],
     sourceManualMakeupAdjustments: MakeupOriginMap,
     sourceSuppressedMakeupOrigins: MakeupOriginMap,
     sourceFallbackMakeupStudents: Record<string, FallbackMakeupStudent>,
@@ -4550,6 +4613,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     holidayDates: [...sourceHolidayDates],
     forceOpenDates: [...sourceForceOpenDates],
     suppressedRegularLessonOccurrences: [...sourceSuppressedRegularLessonOccurrences],
+    scheduleCountAdjustments: cloneScheduleCountAdjustments(sourceScheduleCountAdjustments),
     manualMakeupAdjustments: cloneOriginMap(sourceManualMakeupAdjustments),
     suppressedMakeupOrigins: cloneOriginMap(sourceSuppressedMakeupOrigins),
     fallbackMakeupStudents: { ...sourceFallbackMakeupStudents },
@@ -4572,10 +4636,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     nextManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]> = manualLectureStockOrigins,
     nextFallbackLectureStockStudents: Record<string, { displayName: string }> = fallbackLectureStockStudents,
     nextSuppressedRegularLessonOccurrences: string[] = suppressedRegularLessonOccurrences,
+    nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[] = scheduleCountAdjustments,
   ) => {
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setRedoStack([])
     if (!areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates)) {
@@ -4590,6 +4655,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedCellId(nextCellId)
     setSelectedDeskIndex(nextDeskIndex)
     setSuppressedRegularLessonOccurrences([...nextSuppressedRegularLessonOccurrences])
+    setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
     setManualMakeupAdjustments(cloneOriginMap(nextManualMakeupAdjustments))
     setSuppressedMakeupOrigins(cloneOriginMap(nextSuppressedMakeupOrigins))
     setFallbackMakeupStudents(nextFallbackMakeupStudents)
@@ -4649,7 +4715,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     const selectedTeacher = teacherOptions.find((option) => option.name === currentTeacherMenu.selectedTeacherName)
-    setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id)
+    const teacherAssignmentSource = !targetDesk.lesson && targetDesk.teacher.trim() && !targetDesk.manualTeacher
+      ? 'manual-replaced'
+      : 'manual'
+    setManualTeacherAssignment(targetDesk, currentTeacherMenu.selectedTeacherName, selectedTeacher?.id, teacherAssignmentSource)
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を ${currentTeacherMenu.selectedTeacherName} に設定しました。`)
@@ -5709,6 +5778,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }),
       students,
       regularLessons,
+      scheduleCountAdjustments,
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,
       defaultPeriodValue: storedRange.periodValue,
@@ -6155,6 +6225,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
+    const nextScheduleCountAdjustments = !menuStudent.student.manualAdded
+      ? appendScheduleCountAdjustment(scheduleCountAdjustments, {
+          studentKey: resolveScheduleCountAdjustmentStudentKey(menuStudent.student),
+          subject: menuStudent.student.subject,
+          countKind: resolveScheduleCountAdjustmentKind(menuStudent.student),
+          dateKey: targetCell.dateKey,
+          delta: -1,
+        })
+      : scheduleCountAdjustments
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let statusSuffix = '振替対象にはしません。'
 
@@ -6187,6 +6266,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
+      nextScheduleCountAdjustments,
     )
     setStatusMessage(`${studentDisplayName} の授業を削除しました。${statusSuffix}`)
     if (selectedStudentId === menuStudent.student.id) {
@@ -6330,7 +6410,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setRedoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setUndoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
@@ -6345,6 +6425,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedCellId(previous.selectedCellId)
     setSelectedDeskIndex(previous.selectedDeskIndex)
     setSuppressedRegularLessonOccurrences([...previous.suppressedRegularLessonOccurrences])
+    setScheduleCountAdjustments(cloneScheduleCountAdjustments(previous.scheduleCountAdjustments))
     setManualMakeupAdjustments(cloneOriginMap(previous.manualMakeupAdjustments))
     setSuppressedMakeupOrigins(cloneOriginMap(previous.suppressedMakeupOrigins))
     setFallbackMakeupStudents(previous.fallbackMakeupStudents)
@@ -6365,7 +6446,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setRedoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
@@ -6380,6 +6461,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedCellId(next.selectedCellId)
     setSelectedDeskIndex(next.selectedDeskIndex)
     setSuppressedRegularLessonOccurrences([...next.suppressedRegularLessonOccurrences])
+    setScheduleCountAdjustments(cloneScheduleCountAdjustments(next.scheduleCountAdjustments))
     setManualMakeupAdjustments(cloneOriginMap(next.manualMakeupAdjustments))
     setSuppressedMakeupOrigins(cloneOriginMap(next.suppressedMakeupOrigins))
     setFallbackMakeupStudents(next.fallbackMakeupStudents)

@@ -628,7 +628,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
 
     const timestamp = updateTimestamp()
     onUpdateSessions((current) => [{
-      id: `session_${Date.now().toString(36)}`,
+      id: createSessionId(),
       label: normalizedLabel,
       startDate: draft.startDate,
       endDate: draft.endDate,

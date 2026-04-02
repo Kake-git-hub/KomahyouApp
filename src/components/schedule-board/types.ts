@@ -76,7 +76,7 @@ export type DeskCell = {
   id: string
   teacher: string
   manualTeacher?: boolean
-  teacherAssignmentSource?: 'manual' | 'schedule-registration' | 'deleted'
+  teacherAssignmentSource?: 'manual' | 'manual-replaced' | 'schedule-registration' | 'deleted'
   teacherAssignmentSessionId?: string
   teacherAssignmentTeacherId?: string
   memoSlots?: [string | null, string | null]
