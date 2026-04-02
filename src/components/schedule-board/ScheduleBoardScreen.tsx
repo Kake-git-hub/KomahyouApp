@@ -4205,11 +4205,25 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       ? [...visibleTeachers, currentTeacher]
       : visibleTeachers
 
+    // Exclude teachers already assigned to other desks in the same cell
+    const otherDeskTeacherNames = new Set(
+      teacherMenuContext.cell.desks
+        .filter((_, idx) => idx !== teacherMenu?.deskIndex)
+        .map((desk) => desk.teacher)
+        .filter((name) => name.trim()),
+    )
+
     return mergedTeachers
+      .filter((teacher) => {
+        const displayName = getTeacherDisplayName(teacher)
+        // Always keep the current desk's teacher in the list
+        if (currentTeacher && teacher.id === currentTeacher.id) return true
+        return !otherDeskTeacherNames.has(displayName) && !otherDeskTeacherNames.has(teacher.name)
+      })
       .slice()
       .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
       .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher) }))
-  }, [isTemplateMode, teacherMenuContext, teachers])
+  }, [isTemplateMode, teacherMenu?.deskIndex, teacherMenuContext, teachers])
 
   const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('不可です。') ? statusMessage : null
 

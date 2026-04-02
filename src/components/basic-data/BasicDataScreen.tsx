@@ -1534,6 +1534,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
       <div className="basic-data-inline-stack">
         <div className="basic-data-editor-block basic-data-inline-stack">
         </div>
+        <span style={{ color: '#58708d', fontSize: '12px' }}>定休日設定</span>
         <div className="basic-data-chip-row">
           {dayOptions.map((day) => {
             const isActive = classroomSettings.closedWeekdays.includes(day.value)
