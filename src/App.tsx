@@ -5,7 +5,7 @@ import { validateImportedBasicDataBundle } from './components/basic-data/basicDa
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
-import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions, removedDefaultSpecialSessionIds } from './components/special-data/specialSessionModel'
@@ -14,7 +14,7 @@ import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdmi
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
 import { deleteFirebaseWorkspaceClassroom, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
-import { getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
+import { createFirebaseAuthUser, getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import type { SlotCell } from './components/schedule-board/types'
@@ -683,6 +683,7 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState('')
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
+  const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([])
   const [workspaceClassrooms, setWorkspaceClassrooms] = useState<WorkspaceClassroom[]>([])
   const [developerPassword, setDeveloperPassword] = useState(DEFAULT_DEVELOPER_PASSWORD)
@@ -1004,25 +1005,52 @@ function App() {
 
       if (!isRemoteAdminAutomationEnabled) {
         const managerUserId = input?.managerUserId?.trim() ?? ''
-        if (!managerUserId) {
-          setPersistenceMessage('Spark 構成で教室追加するには、Authentication で作成した管理者 UID を入力してください。')
+
+        if (managerUserId) {
+          void provisionFirebaseWorkspaceClassroomWithExistingUid({
+            classroomName,
+            managerName,
+            managerEmail,
+            managerUserId,
+            contractStartDate,
+            contractEndDate,
+            initialPayload: buildEmptyClassroomPayload(),
+          }).then(async (result) => {
+            await reloadRemoteWorkspace('教室を追加しました。', result.classroomId)
+          }).catch((error) => {
+            const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
+            setPersistenceMessage(message)
+          })
           return
         }
 
-        void provisionFirebaseWorkspaceClassroomWithExistingUid({
-          classroomName,
-          managerName,
-          managerEmail,
-          managerUserId,
-          contractStartDate,
-          contractEndDate,
-          initialPayload: buildEmptyClassroomPayload(),
-        }).then(async (result) => {
-          await reloadRemoteWorkspace('教室を追加しました。Authentication で作成済みの UID を教室管理者へ紐付けました。', result.classroomId)
-        }).catch((error) => {
-          const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
-          setPersistenceMessage(message)
-        })
+        const temporaryPassword = 'Koma' + Math.random().toString(36).slice(2, 8) + '!'
+        setPersistenceMessage('管理者アカウントを作成しています…')
+
+        void (async () => {
+          try {
+            const createdUid = await createFirebaseAuthUser(managerEmail, temporaryPassword)
+            const result = await provisionFirebaseWorkspaceClassroomWithExistingUid({
+              classroomName,
+              managerName,
+              managerEmail,
+              managerUserId: createdUid,
+              contractStartDate,
+              contractEndDate,
+              initialPayload: buildEmptyClassroomPayload(),
+            })
+            await reloadRemoteWorkspace('教室を追加しました。管理者アカウントを発行しました。', result.classroomId)
+            window.alert([
+              `${classroomName} を追加しました。`,
+              `管理者メール: ${managerEmail}`,
+              `初期パスワード: ${temporaryPassword}`,
+              '初回ログイン後に管理者自身で変更してください。',
+            ].join('\n'))
+          } catch (error) {
+            const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
+            setPersistenceMessage(message)
+          }
+        })()
         return
       }
 
@@ -2090,10 +2118,12 @@ function App() {
     if (!developerCloudBackupEnabled) return
     if (!developerCloudBackupHandle) return
 
-    void syncDeveloperCloudAutoBackups().catch(() => {
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {
       setDeveloperCloudBackupStatus('保存フォルダへの未同期バックアップ同期に失敗しました。')
     })
-  }, [developerCloudBackupEnabled, developerCloudBackupHandle, hasHydratedSnapshot, syncDeveloperCloudAutoBackups])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [developerCloudBackupEnabled, developerCloudBackupHandle, hasHydratedSnapshot])
 
   useEffect(() => {
     if (!hasHydratedSnapshot) return
@@ -2118,20 +2148,6 @@ function App() {
               setPersistenceMessage(`自動保存しましたが、${message}`)
             }
           }
-
-          try {
-            const cloudSyncResult = await syncDeveloperCloudAutoBackups(undefined, snapshot)
-            if (cloudSyncResult.synced) {
-              setPersistenceMessage('自動保存し、保存フォルダへバックアップとAI分析用データを同期しました。')
-            } else if (developerCloudBackupEnabled && cloudSyncResult.message) {
-              setPersistenceMessage(`自動保存しましたが、${cloudSyncResult.message}`)
-            }
-          } catch {
-            if (developerCloudBackupEnabled) {
-              setDeveloperCloudBackupStatus('保存フォルダへの自動保存に失敗しました。')
-              setPersistenceMessage('自動保存しましたが、保存フォルダへの自動保存に失敗しました。')
-            }
-          }
         })
         .catch(() => {
           setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
@@ -2139,7 +2155,7 @@ function App() {
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncDeveloperCloudAutoBackups, workspaceClassrooms.length, workspaceUsers.length])
+  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
 
   useEffect(() => {
     if (!currentUser) return
@@ -2271,6 +2287,31 @@ function App() {
       setServerAutoBackupLoading(false)
     }
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
+
+  const loadStudentHistory = useCallback((classroomId: string) => {
+    const allClassrooms = workspaceClassrooms.map((c) =>
+      c.id === actingClassroomId
+        ? { ...c, data: buildClassroomSnapshotPayload({ screen: screen === 'developer' ? 'board' : screen, classroomSettings, managers, teachers, students, regularLessons, groupLessons, specialSessions, autoAssignRules, pairConstraints, boardState }) }
+        : c,
+    )
+    const classroom = allClassrooms.find((c) => c.id === classroomId)
+    if (!classroom) return
+    const studentList = classroom.data.students
+    if (studentList.length === 0) {
+      setStudentHistoryState({ classroomName: classroom.name, entries: [], loading: false })
+      return
+    }
+    const today = new Date()
+    const entries: Array<{ dateKey: string; count: number }> = []
+    const startDate = new Date(today.getFullYear(), today.getMonth() - 11, 1)
+    for (let d = new Date(startDate); d <= today; d.setMonth(d.getMonth() + 1)) {
+      const dateKey = d.toISOString().slice(0, 7)
+      const refDate = `${dateKey}-01`
+      const count = studentList.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, refDate)).length
+      entries.push({ dateKey, count })
+    }
+    setStudentHistoryState({ classroomName: classroom.name, entries, loading: false })
+  }, [workspaceClassrooms, actingClassroomId, screen, classroomSettings, managers, teachers, students, regularLessons, groupLessons, specialSessions, autoAssignRules, pairConstraints, boardState])
 
   const restoreServerAutoBackup = useCallback(async (backupDateKey: string) => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
@@ -2602,8 +2643,6 @@ function App() {
         accountProvisioningLocked={isRemoteBackendEnabled && !isRemoteAdminAutomationEnabled}
         managerEmailLocked={isRemoteBackendEnabled && !isRemoteAdminAutomationEnabled}
         firebaseProjectId={firebaseBackendConfig.projectId}
-        firebaseWorkspaceKey={firebaseBackendConfig.workspaceKey}
-        firebaseAuthDomain={firebaseBackendConfig.authDomain}
         persistenceMessage={persistenceMessage}
         developerPassword={developerPassword}
         onDeveloperPasswordChange={setDeveloperPassword}
@@ -2633,7 +2672,6 @@ function App() {
         users={workspaceUsers}
         actingClassroomId={actingClassroomId}
         onAddClassroom={addClassroom}
-        autoBackupSummaries={[]}
         blazeFreeTierEstimate={blazeFreeTierEstimate}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
@@ -2649,6 +2687,9 @@ function App() {
         onExportAnalysisData={exportAnalysisData}
         onImportWorkspaceBackup={importWorkspaceBackup}
         onRestoreAutoBackup={() => {}}
+        onLoadStudentHistory={loadStudentHistory}
+        studentHistoryState={studentHistoryState}
+        onCloseStudentHistory={() => setStudentHistoryState(null)}
         restoreModalState={developerRestoreModalState ? {
           sourceLabel: developerRestoreModalState.sourceLabel,
           savedAt: developerRestoreModalState.savedAt,

@@ -1,5 +1,5 @@
-import { initializeApp, getApp, getApps } from 'firebase/app'
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
+import { initializeApp, deleteApp, getApp, getApps } from 'firebase/app'
+import { getAuth, createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled } from './config'
@@ -63,4 +63,24 @@ export async function signOutFromFirebase() {
   const auth = getFirebaseAuthInstance()
   if (!auth) return
   await signOut(auth)
+}
+
+export async function createFirebaseAuthUser(email: string, password: string): Promise<string> {
+  const config = getFirebaseBackendConfig()
+  if (!config.enabled) throw new Error('Firebase 設定が無効のため、ユーザーを作成できません。')
+
+  const secondaryApp = initializeApp({
+    apiKey: config.apiKey,
+    authDomain: config.authDomain,
+    projectId: config.projectId,
+  }, '__provision_' + Date.now())
+
+  try {
+    const secondaryAuth = getAuth(secondaryApp)
+    const credential = await createUserWithEmailAndPassword(secondaryAuth, email, password)
+    await signOut(secondaryAuth)
+    return credential.user.uid
+  } finally {
+    await deleteApp(secondaryApp)
+  }
 }

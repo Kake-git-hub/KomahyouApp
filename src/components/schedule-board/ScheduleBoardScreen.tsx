@@ -1940,9 +1940,8 @@ function removeStudentAssignmentsFromSpecialSession(params: {
     for (const cell of week) {
       for (const desk of cell.desks) {
         const lesson = desk.lesson
-        if (!lesson) continue
-
-        lesson.studentSlots.forEach((studentEntry, studentIndex) => {
+        if (lesson) {
+          lesson.studentSlots.forEach((studentEntry, studentIndex) => {
           if (!studentEntry) return
           if (studentEntry.lessonType !== 'special') return
           const entryStudentNameKey = normalizeStudentNameKey(studentEntry.name)
@@ -1980,6 +1979,31 @@ function removeStudentAssignmentsFromSpecialSession(params: {
           clearedCellCount += 1
           hasChanges = true
         })
+        }
+
+        if (desk.statusSlots) {
+          desk.statusSlots.forEach((statusEntry, statusIndex) => {
+            if (!statusEntry) return
+            if (statusEntry.lessonType !== 'special') return
+            const statusNameKey = normalizeStudentNameKey(statusEntry.name)
+            const matchesStudent = statusEntry.managedStudentId === params.student.id
+              || statusNameKey === registeredStudentNameKey
+              || statusNameKey === displayStudentNameKey
+            if (!matchesStudent) return
+            if (statusEntry.specialSessionId) {
+              if (statusEntry.specialSessionId !== params.session.id) return
+            } else if (
+              statusEntry.specialStockSource !== 'session'
+              || cell.dateKey < params.session.startDate
+              || cell.dateKey > params.session.endDate
+            ) {
+              return
+            }
+            setDeskStudentStatus(desk, statusIndex, null)
+            clearedCellCount += 1
+            hasChanges = true
+          })
+        }
       }
     }
   }

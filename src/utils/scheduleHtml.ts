@@ -1325,11 +1325,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .bottom-grid.bottom-grid-teacher {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) 206px 246px;
-      }
-
-      .bottom-grid-teacher .box-textarea {
-        min-height: 42px;
+        grid-template-columns: minmax(0, 1.5fr) 206px 246px;
       }
 
       .box-panel {
@@ -2751,10 +2747,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ? ''
           : '<div class="box-stack"><div class="box-table-title">休み</div><table class="absence-table" data-testid="' + escapeHtml(absenceTestId) + '"><tbody>' + absenceRows + '</tbody></table></div>';
         const salarySectionHtml = isTeacher && salaryData ? renderSalarySection(salaryData) : '';
-        return '<div class="bottom-grid' + (isTeacher ? ' bottom-grid-teacher' : '') + '">' +
+        if (isTeacher) {
+          return '<div class="bottom-grid bottom-grid-teacher">' +
+            salarySectionHtml +
+            '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
+            '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
+          '</div>';
+        }
+        return '<div class="bottom-grid">' +
           '<div class="box-stack"><div class="box-table-title">共通連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '"></textarea></div></div>' +
           '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '"></textarea></div></div>' +
-          (isTeacher ? salarySectionHtml : absenceSectionHtml) +
+          absenceSectionHtml +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
           '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
         '</div>';

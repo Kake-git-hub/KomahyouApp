@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
+import { isActiveOnDate } from '../basic-data/basicDataModel'
 import type { ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 
@@ -9,8 +9,6 @@ type DeveloperAdminScreenProps = {
   accountProvisioningLocked: boolean
   managerEmailLocked: boolean
   firebaseProjectId: string
-  firebaseWorkspaceKey: string
-  firebaseAuthDomain: string
   persistenceMessage: string
   developerPassword: string
   onDeveloperPasswordChange: (value: string) => void
@@ -30,7 +28,6 @@ type DeveloperAdminScreenProps = {
     contractStartDate?: string
     contractEndDate?: string
   }) => void
-  autoBackupSummaries: AutoBackupSummary[]
   blazeFreeTierEstimate: null | {
     currentClassroomCount: number
     currentWorkspaceDailyBytes: number
@@ -67,6 +64,13 @@ type DeveloperAdminScreenProps = {
   onExportAnalysisData: () => void
   onImportWorkspaceBackup: (file: File, password: string) => void
   onRestoreAutoBackup: (backupDateKey: string, password: string) => void
+  onLoadStudentHistory: (classroomId: string) => void
+  studentHistoryState: null | {
+    classroomName: string
+    entries: Array<{ dateKey: string; count: number }>
+    loading: boolean
+  }
+  onCloseStudentHistory: () => void
   restoreModalState: null | {
     sourceLabel: string
     savedAt: string
@@ -95,6 +99,10 @@ function countSnapshotRows(snapshot: AppSnapshotPayload) {
     students: snapshot.students.length,
     specialSessions: snapshot.specialSessions.length,
   }
+}
+
+function countActiveStudents(snapshot: AppSnapshotPayload, referenceDate: string) {
+  return snapshot.students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)).length
 }
 
 function formatContractStatusLabel(status: WorkspaceClassroom['contractStatus']) {
@@ -133,7 +141,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
@@ -152,23 +160,15 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室追加と既存教室の UID 差し替えを行います。削除と管理者メール変更は Firebase Console で手動運用します。'
     : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
-  const totals = useMemo(() => classrooms.reduce((accumulator, classroom) => {
-    const counts = countSnapshotRows(classroom.data)
-    accumulator.classrooms += 1
-    accumulator.active += classroom.contractStatus === 'active' ? 1 : 0
-    accumulator.cancelled += classroom.contractStatus === 'suspended' ? 1 : 0
-    accumulator.temporarilySuspended += classroom.contractStatus === 'active' && classroom.isTemporarilySuspended ? 1 : 0
-    accumulator.teachers += counts.teachers
-    accumulator.students += counts.students
-    return accumulator
-  }, {
-    classrooms: 0,
-    active: 0,
-    cancelled: 0,
-    temporarilySuspended: 0,
-    teachers: 0,
-    students: 0,
-  }), [classrooms])
+  const todayDateKey = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const classroomActiveStudents = useMemo(() =>
+    classrooms.map((classroom) => ({
+      id: classroom.id,
+      name: classroom.name,
+      count: countActiveStudents(classroom.data, todayDateKey),
+    })),
+    [classrooms, todayDateKey],
+  )
 
   const handleAddClassroom = () => {
     setShowProvisioningGuide(true)
@@ -178,16 +178,13 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     const normalizedClassroomName = provisionDraft.classroomName.trim()
     const normalizedManagerName = provisionDraft.managerName.trim()
     const normalizedManagerEmail = provisionDraft.managerEmail.trim()
-    const normalizedManagerUserId = provisionDraft.managerUserId.trim()
 
     if (!normalizedClassroomName || !normalizedManagerName || !normalizedManagerEmail) return
-    if (sparkManualAdminMode && !normalizedManagerUserId) return
 
     onAddClassroom({
       classroomName: normalizedClassroomName,
       managerName: normalizedManagerName,
       managerEmail: normalizedManagerEmail,
-      managerUserId: sparkManualAdminMode ? normalizedManagerUserId : undefined,
       contractStartDate: provisionDraft.contractStartDate,
       contractEndDate: provisionDraft.contractEndDate,
     })
@@ -244,33 +241,15 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <button className="primary-button" type="button" onClick={handleAddClassroom}>教室を追加</button>
             </div>
           </div>
-          {sparkManualAdminMode ? <div className="toolbar-status">Spark 無料プランでは Functions を使わないため、教室追加と既存教室の UID 差し替えはこの画面で行い、削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
+          {sparkManualAdminMode ? <div className="toolbar-status">Spark 無料プランでは教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
 
           <div className="developer-summary-grid">
-            <article className="basic-data-section-card developer-summary-card">
-              <strong>{totals.classrooms}</strong>
-              <span>総教室数</span>
-            </article>
-            <article className="basic-data-section-card developer-summary-card">
-              <strong>{totals.active}</strong>
-              <span>利用中教室</span>
-            </article>
-            <article className="basic-data-section-card developer-summary-card">
-              <strong>{totals.cancelled}</strong>
-              <span>解約済教室</span>
-            </article>
-            <article className="basic-data-section-card developer-summary-card">
-              <strong>{totals.temporarilySuspended}</strong>
-              <span>一時停止中教室</span>
-            </article>
-            <article className="basic-data-section-card developer-summary-card">
-              <strong>{totals.teachers}</strong>
-              <span>講師総数</span>
-            </article>
-            <article className="basic-data-section-card developer-summary-card">
-              <strong>{totals.students}</strong>
-              <span>生徒総数</span>
-            </article>
+            {classroomActiveStudents.map((entry) => (
+              <article key={entry.id} className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => onLoadStudentHistory(entry.id)}>
+                <strong>{entry.count}</strong>
+                <span>{entry.name} 在籍生徒数</span>
+              </article>
+            ))}
           </div>
 
           {authMode === 'firebase' && blazeFreeTierEstimate ? (
@@ -474,25 +453,38 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
         </div>
       ) : null}
 
+      {studentHistoryState ? (
+        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) onCloseStudentHistory() }}>
+          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="生徒数推移">
+            <div className="auto-assign-modal-title">{studentHistoryState.classroomName} — 在籍生徒数の推移</div>
+            {studentHistoryState.loading ? (
+              <div className="toolbar-status">読み込み中…</div>
+            ) : studentHistoryState.entries.length === 0 ? (
+              <div className="toolbar-status">バックアップ履歴がありません。</div>
+            ) : (
+              <div className="developer-restore-modal-list">
+                {studentHistoryState.entries.map((entry) => (
+                  <div key={entry.dateKey} className="backup-restore-auto-backup-row">
+                    <strong>{entry.dateKey}</strong>
+                    <span>{entry.count} 人</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="auto-assign-modal-actions">
+              <button className="secondary-button slim" type="button" onClick={onCloseStudentHistory}>閉じる</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {showProvisioningGuide ? (
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
           <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加">
             <div className="auto-assign-modal-title">教室追加</div>
-            {sparkManualAdminMode ? (
-              <div className="detail-note">Authentication で取得した管理者 UID を貼り付けると、workspaces/{firebaseWorkspaceKey || 'main'} 配下の members / classrooms / classroomSnapshots をこの画面から追加します。</div>
-            ) : (
-              <div className="detail-note">教室名・管理者情報を入力して追加します。管理者アカウントは Firebase Auth に自動発行されます。</div>
-            )}
+            <div className="detail-note">教室名・管理者情報を入力して追加します。管理者アカウントは自動発行されます。</div>
 
             <section className="developer-guide-section">
-              {sparkManualAdminMode ? (
-                <div className="developer-guide-actions">
-                  {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
-                </div>
-              ) : null}
-              {sparkManualAdminMode ? (
-                <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。UID を取得済みなら、下の入力欄にそのまま貼り付けてください。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
-              ) : null}
               <div className="developer-classroom-grid developer-provision-form">
                 <label className="basic-data-inline-field">
                   <span>教室名</span>
@@ -506,12 +498,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                   <span>管理者メール</span>
                   <input type="email" value={provisionDraft.managerEmail} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerEmail: event.target.value }))} />
                 </label>
-                {sparkManualAdminMode ? (
-                  <label className="basic-data-inline-field">
-                    <span>管理者 UID</span>
-                    <input value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="Authentication で取得した UID" />
-                  </label>
-                ) : null}
                 <label className="basic-data-inline-field">
                   <span>利用開始日</span>
                   <input type="date" value={provisionDraft.contractStartDate} onChange={(event) => setProvisionDraft((current) => ({ ...current, contractStartDate: event.target.value }))} />
@@ -524,8 +510,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
             </section>
 
             <div className="auto-assign-modal-actions">
-              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerEmail.trim() || (sparkManualAdminMode && !provisionDraft.managerUserId.trim())}>
-                {sparkManualAdminMode ? 'この UID で教室追加' : '教室を追加'}
+              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerEmail.trim()}>
+                教室を追加
               </button>
               <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(false)}>閉じる</button>
             </div>
