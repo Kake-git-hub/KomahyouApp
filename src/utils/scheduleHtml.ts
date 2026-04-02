@@ -2057,7 +2057,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function renderStudentCellCard(entry) {
         if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended') {
-          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.status === 'attended' ? '出席' : '休') + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
+          var statusLabel = entry.status === 'attended' ? '出席' : entry.status === 'absent-no-makeup' ? '振替なし休み' : '休';
+          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(statusLabel) + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
         return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.subject) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
       }
@@ -2632,7 +2633,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function formatTeacherLessonLabel(student) {
         const lessonLabel = getCompactLessonTypeLabel(student.lessonType);
-        if (student.status === 'absent' || student.status === 'absent-no-makeup') return [lessonLabel, '休'].filter(Boolean).join(' ');
+        if (student.status === 'absent-no-makeup') return [lessonLabel, '振替なし休み'].filter(Boolean).join(' ');
+        if (student.status === 'absent') return [lessonLabel, '休'].filter(Boolean).join(' ');
         if (student.status === 'attended') return [lessonLabel, '出席'].filter(Boolean).join(' ');
         const teacherLabel = teacherTypeLabels[student.teacherType] || '';
         return teacherLabel ? lessonLabel + '(' + teacherLabel + ')' : lessonLabel;
@@ -2697,8 +2699,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return [studentName, subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
       }
 
-      function formatAbsenceNote(dateKey, slotNumber, teacherName, subject, lessonType) {
-        return [formatCompactDateSlot(dateKey, slotNumber), teacherName, lessonTypeLabels[lessonType] || lessonType, subject].filter(Boolean).join(' / ');
+      function formatAbsenceNote(dateKey, slotNumber, teacherName, subject, lessonType, status) {
+        var base = [formatCompactDateSlot(dateKey, slotNumber), teacherName, lessonTypeLabels[lessonType] || lessonType, subject].filter(Boolean).join(' / ');
+        if (status === 'absent-no-makeup') base += ' (振替なし休み)';
+        return base;
       }
 
       function toMakeupRows(makeupNotes, minimumRowCount) {
@@ -2743,7 +2747,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               const linkedStudentId = entry.linkedStudentId || '';
               const isSameStudent = linkedStudentId === student.id || entry.name === student.name || entry.name === student.fullName;
               if (!isSameStudent) return;
-              notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, entry.teacherName || desk.teacher, entry.subject, entry.lessonType));
+              notes.push(formatAbsenceNote(cell.dateKey, cell.slotNumber, entry.teacherName || desk.teacher, entry.subject, entry.lessonType, entry.status));
             });
           });
         });

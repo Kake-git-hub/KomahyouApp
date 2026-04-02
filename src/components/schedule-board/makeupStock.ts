@@ -211,6 +211,7 @@ function countAssignedLessonsByKey(
 
   for (const week of weeks) {
     for (const cell of week) {
+      if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
           if (!student || student.manualAdded || student.lessonType !== lessonType) continue
@@ -262,6 +263,7 @@ export function countPlannedMakeupsByKey(weeks: SlotCell[][], resolveStudentKey:
 
   for (const week of weeks) {
     for (const cell of week) {
+      if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
           if (!student || student.manualAdded || student.lessonType !== 'makeup') continue
@@ -281,6 +283,7 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
 
   for (const week of weeks) {
     for (const cell of week) {
+      if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
           if (!student || student.manualAdded) continue

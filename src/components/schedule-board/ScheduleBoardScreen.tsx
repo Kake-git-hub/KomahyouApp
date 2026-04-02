@@ -2170,6 +2170,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [makeupAutoAssignRange, setMakeupAutoAssignRange] = useState<MakeupAutoAssignRange>(() => buildDefaultMakeupAutoAssignRange(initialBoardSnapshot.weeks[initialBoardSnapshot.weekIndex]?.[0]?.dateKey ?? getReferenceDateKey(new Date())))
   const [stockPanelsRestoreState, setStockPanelsRestoreState] = useState<StockPanelsRestoreState | null>(null)
   const [autoAssignDebugReport, setAutoAssignDebugReport] = useState<AutoAssignDebugReport | null>(null)
+  const [scheduleSyncTrigger, setScheduleSyncTrigger] = useState(0)
   const boardInteractionTokenRef = useRef(createInteractionLockToken('board'))
   const [interactionLockOwner, setInteractionLockOwner] = useState<InteractionSurface | null>(() => parseInteractionLockOwner(typeof window === 'undefined' ? null : window.localStorage.getItem(interactionLockStorageKey)))
   const [teacherMenu, setTeacherMenu] = useState<TeacherMenuState | null>(null)
@@ -2608,6 +2609,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
+  }, [])
+
+  useEffect(() => {
+    const handlePopupReady = (event: MessageEvent) => {
+      const message = event.data
+      if (!message || message.type !== 'schedule-popup-ready') return
+      setScheduleSyncTrigger((prev) => prev + 1)
+    }
+    window.addEventListener('message', handlePopupReady)
+    return () => window.removeEventListener('message', handlePopupReady)
   }, [])
 
   const displayWeekDate = cells[0]?.dateKey ?? getReferenceDateKey(new Date())
@@ -3805,7 +3816,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       qrConfig: scheduleQrConfig,
       targetWindow: studentScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
+  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleSyncTrigger, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
 
   useEffect(() => {
     syncTeacherScheduleHtml({
@@ -3822,7 +3833,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       qrConfig: scheduleQrConfig,
       targetWindow: teacherScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleQrConfig, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
+  }, [classroomSettings, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleSyncTrigger, scheduleQrConfig, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
@@ -6922,11 +6933,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               )}
               {studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">
-                  <div className="student-menu-button-row student-menu-button-row-two-up">
+                  <div className="student-menu-button-row student-menu-button-row-three-up">
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAttended} data-testid="menu-attendance-button">出席</button>
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsent} data-testid="menu-absence-button">休み</button>
+                    <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsentNoMakeup} data-testid="menu-absence-no-makeup-button">振替なし休み</button>
                   </div>
-                  <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsentNoMakeup} data-testid="menu-absence-no-makeup-button">振替なし休み</button>
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   {menuStudent?.student.lessonType === 'special' && menuStudent.student.specialStockSource !== 'session' ? (
                     <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は未消化講習へ戻せません。不要な場合は削除してください。</div>

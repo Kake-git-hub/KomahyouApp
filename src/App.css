@@ -1430,6 +1430,10 @@ tr.sa-slot-first td {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.student-menu-button-row-three-up {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .student-menu-inline-head {
   grid-template-columns: 1fr auto;
   align-items: center;

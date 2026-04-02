@@ -5,7 +5,9 @@ import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
 function getStudentStatusLabel(status: StudentStatusKind) {
-  return status === 'attended' ? '出' : '休'
+  if (status === 'attended') return '出'
+  if (status === 'absent-no-makeup') return '振無休'
+  return '休'
 }
 
 function formatMakeupSourceDate(dateKey?: string) {
