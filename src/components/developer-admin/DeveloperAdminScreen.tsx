@@ -287,8 +287,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
 
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
-              <h3>開発者バックアップ</h3>
-              <p>開発者画面ではワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。</p>
+              <h3>サーバーバックアップ</h3>
+              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎日 02:10 JST に自動バックアップが作成されます。' : ''}</p>
             </div>
             <div className="developer-backup-grid">
               {authMode === 'local' ? (
@@ -321,32 +321,27 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span>
               )}
             </div>
-          </section>
-
-          {authMode === 'firebase' ? (
-            <section className="basic-data-section-card developer-backup-panel">
-              <div className="basic-data-card-head">
-                <h3>サーバー自動バックアップ</h3>
-                <p>Firebase サーバー側で毎日 02:10 JST に作成されるバックアップです。復元時は教室を選択できます。</p>
-              </div>
-              <div className="basic-data-row-actions">
-                <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : 'サーバーバックアップ一覧を取得'}</button>
-              </div>
-              <div className="backup-restore-auto-backup-list">
-                {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
-                {serverAutoBackupSummaries.map((summary) => (
-                  <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                    <div className="backup-restore-auto-backup-meta">
-                      <strong>{summary.backupDateKey}</strong>
-                      <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
-                      <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
+            {authMode === 'firebase' ? (
+              <>
+                <div className="basic-data-row-actions">
+                  <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : 'サーバーバックアップ一覧を取得'}</button>
+                </div>
+                <div className="backup-restore-auto-backup-list">
+                  {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
+                  {serverAutoBackupSummaries.map((summary) => (
+                    <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                      <div className="backup-restore-auto-backup-meta">
+                        <strong>{summary.backupDateKey}</strong>
+                        <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                        <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
+                      </div>
+                      <button className="secondary-button slim" type="button" onClick={() => onRestoreServerAutoBackup(summary.backupDateKey)}>この時点へ復元</button>
                     </div>
-                    <button className="secondary-button slim" type="button" onClick={() => onRestoreServerAutoBackup(summary.backupDateKey)}>この時点へ復元</button>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
+                  ))}
+                </div>
+              </>
+            ) : null}
+          </section>
 
           <div className="developer-classroom-list">
             {classrooms.map((classroom) => {

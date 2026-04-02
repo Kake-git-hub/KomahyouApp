@@ -1286,6 +1286,11 @@ tr.sa-slot-first td {
 .sa-student-name-absence {
   color: #6d7f93;
   font-weight: 500;
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sa-student-name-absence,

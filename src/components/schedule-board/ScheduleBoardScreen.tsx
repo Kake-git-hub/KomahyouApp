@@ -1763,6 +1763,14 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       }
     })
 
+    // Collect teacher names that were explicitly deleted from any desk (regardless of index)
+    const deletedTeacherNameSet = new Set<string>()
+    nextDesks.forEach((desk) => {
+      if (desk.manualTeacher && desk.teacherAssignmentSource === 'deleted' && desk.teacherAssignmentTeacherId) {
+        deletedTeacherNameSet.add(desk.teacherAssignmentTeacherId)
+      }
+    })
+
     for (let mi = 0; mi < managedCell.desks.length; mi++) {
       const managedDesk = managedCell.desks[mi]
       if (!managedDesk.lesson) {
@@ -1772,6 +1780,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
         // Skip if this teacher is already present on any desk in the cell
         const alreadyPresent = nextDesks.some((desk) => desk.teacher === managedDesk.teacher)
         if (alreadyPresent) continue
+
+        // Skip if this teacher was explicitly deleted from any desk in the cell
+        if (deletedTeacherNameSet.has(managedDesk.teacher)) continue
 
         const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
           ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
@@ -2656,7 +2667,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     return new Map(entries)
   }, [students])
 
-  const resolveBoardStudentDisplayName = (name: string) => managedStudentNameMap.get(name) ?? name
+  const resolveBoardStudentDisplayName = useCallback((name: string) => managedStudentNameMap.get(name) ?? name, [managedStudentNameMap])
   const resolveBoardStudentGradeLabel = (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => {
     if (birthDate) return resolveSchoolGradeLabel(birthDate, parseDateKey(dateKey))
     const managedStudent = managedStudentByAnyName.get(name)
@@ -4769,11 +4780,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetDesk = targetCell?.desks[currentTeacherMenu.deskIndex]
     if (!targetCell || !targetDesk) return
 
+    const deletedTeacherName = targetDesk.teacher
     targetDesk.teacher = ''
     targetDesk.manualTeacher = true
     targetDesk.teacherAssignmentSource = 'deleted'
     targetDesk.teacherAssignmentSessionId = undefined
-    targetDesk.teacherAssignmentTeacherId = undefined
+    targetDesk.teacherAssignmentTeacherId = deletedTeacherName || undefined
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を削除しました。`)

@@ -2701,7 +2701,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function formatAbsenceNote(dateKey, slotNumber, teacherName, subject, lessonType, status) {
         var base = [formatCompactDateSlot(dateKey, slotNumber), teacherName, lessonTypeLabels[lessonType] || lessonType, subject].filter(Boolean).join(' / ');
-        if (status === 'absent-no-makeup') base += ' (振替なし休み)';
+        if (status === 'absent-no-makeup') base += ' (振無休)';
         return base;
       }
 
@@ -3179,6 +3179,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const draftEndDate = endInput.value;
         const draftPeriodValue = periodSelect.value;
         const draftPersonId = personSelect.value;
+
+        // Auto-switch to highlighted student when highlight data arrives
+        var highlightPersonId = nextPayload.highlightedStudentSlot && nextPayload.highlightedStudentSlot.studentId;
+        if (VIEW_TYPE === 'student' && highlightPersonId && highlightPersonId !== appliedPersonId) {
+          appliedPersonId = highlightPersonId;
+        }
+
         if (skipNextEquivalentPayload && nextFingerprint === payloadFingerprint) {
           DATA = nextPayload;
           payloadFingerprint = nextFingerprint;
@@ -3186,7 +3193,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           syncPeriodSelectOptions(draftPeriodValue || appliedPeriodValue);
           if (draftStartDate) setDateInputValue(startInput, draftStartDate);
           if (draftEndDate) setDateInputValue(endInput, draftEndDate);
-          syncPersonSelectOptions(draftPersonId || appliedPersonId);
+          syncPersonSelectOptions(appliedPersonId);
           if (appliedStartDate && appliedEndDate && isDateWithinAvailableRange(appliedStartDate) && isDateWithinAvailableRange(appliedEndDate)) {
             render();
             return;
@@ -3196,7 +3203,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             preferredRange.startDate,
             preferredRange.endDate,
             preferredRange.periodValue,
-            getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
+            appliedPersonId || getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
           );
           return;
         }
@@ -3207,7 +3214,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         syncPeriodSelectOptions(draftPeriodValue || appliedPeriodValue);
         if (draftStartDate) setDateInputValue(startInput, draftStartDate);
         if (draftEndDate) setDateInputValue(endInput, draftEndDate);
-        syncPersonSelectOptions(draftPersonId || appliedPersonId);
+        syncPersonSelectOptions(appliedPersonId);
         if (appliedStartDate && appliedEndDate && isDateWithinAvailableRange(appliedStartDate) && isDateWithinAvailableRange(appliedEndDate)) {
           render();
           return;
@@ -3217,7 +3224,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           preferredRange.startDate,
           preferredRange.endDate,
           preferredRange.periodValue,
-          getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
+          appliedPersonId || getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
         );
       }
 
