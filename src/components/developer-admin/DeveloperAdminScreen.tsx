@@ -116,14 +116,6 @@ function formatSavedAt(savedAt: string) {
   return parsed.toLocaleString('ja-JP')
 }
 
-function formatBytes(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return '0 B'
-  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} GB`
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} MB`
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} KB`
-  return `${Math.round(value)} B`
-}
-
 function formatPercent(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '0%'
   if (value >= 100) return `${value.toFixed(0)}%`
@@ -156,7 +148,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   }))
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
   const latestAutoBackup = autoBackupSummaries[0] ?? null
-  const canProvisionClassroomInApp = authMode !== 'firebase' || !accountProvisioningLocked
   const sparkManualAdminMode = authMode === 'firebase' && accountProvisioningLocked
   const firebaseSummary = accountProvisioningLocked || managerEmailLocked
     ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室追加と既存教室の UID 差し替えを行います。削除と管理者メール変更は Firebase Console で手動運用します。'
@@ -180,12 +171,9 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     students: 0,
   }), [classrooms])
 
-  const handleAddClassroom = () => {
-    if (canProvisionClassroomInApp) {
-      onAddClassroom()
-      return
-    }
+  const [showAutoBackupModal, setShowAutoBackupModal] = useState(false)
 
+  const handleAddClassroom = () => {
     setShowProvisioningGuide(true)
   }
 
@@ -195,15 +183,14 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     const normalizedManagerEmail = provisionDraft.managerEmail.trim()
     const normalizedManagerUserId = provisionDraft.managerUserId.trim()
 
-    if (!normalizedClassroomName || !normalizedManagerName || !normalizedManagerEmail || !normalizedManagerUserId) {
-      return
-    }
+    if (!normalizedClassroomName || !normalizedManagerName || !normalizedManagerEmail) return
+    if (sparkManualAdminMode && !normalizedManagerUserId) return
 
     onAddClassroom({
       classroomName: normalizedClassroomName,
       managerName: normalizedManagerName,
       managerEmail: normalizedManagerEmail,
-      managerUserId: normalizedManagerUserId,
+      managerUserId: sparkManualAdminMode ? normalizedManagerUserId : undefined,
       contractStartDate: provisionDraft.contractStartDate,
       contractEndDate: provisionDraft.contractEndDate,
     })
@@ -293,38 +280,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
             <section className="basic-data-section-card developer-backup-panel">
               <div className="basic-data-card-head">
                 <h3>Blaze 無料枠の目安</h3>
-                <p>現在の実データを JSON 化した概算です。サーバーバックアップで先に効きやすい Cloud Storage 5GB に対する使用率を表示します。</p>
               </div>
-              <div className="developer-summary-grid">
-                <article className="basic-data-section-card developer-summary-card">
-                  <strong>{formatBytes(blazeFreeTierEstimate.currentWorkspaceDailyBytes)}</strong>
-                  <span>現在の 1 日分</span>
-                </article>
-                <article className="basic-data-section-card developer-summary-card">
-                  <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong>
-                  <span>現在の {blazeFreeTierEstimate.retentionDays} 日保持使用率</span>
-                </article>
-                <article className="basic-data-section-card developer-summary-card">
-                  <strong>{formatBytes(blazeFreeTierEstimate.estimatedReferenceDailyBytes)}</strong>
-                  <span>{blazeFreeTierEstimate.referenceClassroomCount} 教室換算の 1 日分</span>
-                </article>
-                <article className="basic-data-section-card developer-summary-card">
-                  <strong>{formatPercent(blazeFreeTierEstimate.estimatedReferenceUsageRate)}</strong>
-                  <span>{blazeFreeTierEstimate.referenceClassroomCount} 教室の {blazeFreeTierEstimate.retentionDays} 日保持使用率</span>
-                </article>
-                <article className="basic-data-section-card developer-summary-card">
-                  <strong>{blazeFreeTierEstimate.estimatedReferenceMaxRetentionDays} 日</strong>
-                  <span>{blazeFreeTierEstimate.referenceClassroomCount} 教室の保持可能日数</span>
-                </article>
-                <article className="basic-data-section-card developer-summary-card">
-                  <strong>{formatBytes(blazeFreeTierEstimate.estimatedAverageClassroomBytes)}</strong>
-                  <span>教室あたり概算容量</span>
-                </article>
-              </div>
-              <div className="developer-guide-list">
-                <div><strong>計算前提</strong><span>Cloud Storage 無料枠 {formatBytes(blazeFreeTierEstimate.freeTierStorageBytes)} / 1 日 1 件保存 / 現在 {blazeFreeTierEstimate.currentClassroomCount} 教室の実データから概算</span></div>
-                <div><strong>補足</strong><span>Functions 実行回数より先に Storage 容量がボトルネックになりやすい想定です。転送量や読み出し回数は別途課金対象です。</span></div>
-              </div>
+              <div className="toolbar-status">Cloud Storage 5 GB 中 <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong> 使用中（{blazeFreeTierEstimate.retentionDays} 日保持 × {blazeFreeTierEstimate.currentClassroomCount} 教室で概算）</div>
             </section>
           ) : null}
 
@@ -347,7 +304,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 <button className="secondary-button slim" type="button" onClick={onExportAnalysisData}>AI分析用データを書き出す</button>
                 <button className="secondary-button slim" type="button" onClick={() => workspaceBackupImportRef.current?.click()} data-testid="developer-import-workspace-backup-button">バックアップを読み込む</button>
               </div>
-              <div className="toolbar-status">最新自動バックアップ: {formatSavedAt(latestAutoBackup?.savedAt ?? '')}</div>
             </div>
             <div className="developer-cloud-backup-row">
               <div className="toolbar-status">{developerCloudBackupEnabled ? `保存先フォルダ: ${developerCloudBackupFolderName || '未接続'}` : '保存先フォルダ: 未設定'}</div>
@@ -358,20 +314,12 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               </div>
             </div>
             <div className="backup-restore-auto-backup-list">
-              {autoBackupSummaries.length === 0 ? <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span> : null}
-              {autoBackupSummaries.map((summary) => (
-                <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                  <div className="backup-restore-auto-backup-meta">
-                    <strong>{summary.backupDateKey}</strong>
-                    <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
-                  </div>
-                  <button className="secondary-button slim" type="button" onClick={() => {
-                    const password = authMode === 'local' ? requestDeveloperPassword('自動バックアップを復元する') : ''
-                    if (password === null) return
-                    onRestoreAutoBackup(summary.backupDateKey, password)
-                  }}>この時点へ復元</button>
-                </div>
-              ))}
+              <div className="toolbar-status">最新自動バックアップ: {formatSavedAt(latestAutoBackup?.savedAt ?? '')}（保持 {autoBackupSummaries.length} 件）</div>
+              {autoBackupSummaries.length > 0 ? (
+                <button className="secondary-button slim" type="button" onClick={() => setShowAutoBackupModal(true)}>自動バックアップ一覧を表示</button>
+              ) : (
+                <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span>
+              )}
             </div>
           </section>
 
@@ -546,13 +494,21 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
           <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加">
             <div className="auto-assign-modal-title">教室追加</div>
-            <div className="detail-note">Authentication で取得した管理者 UID を貼り付けると、workspaces/{firebaseWorkspaceKey || 'main'} 配下の members / classrooms / classroomSnapshots をこの画面から追加します。</div>
+            {sparkManualAdminMode ? (
+              <div className="detail-note">Authentication で取得した管理者 UID を貼り付けると、workspaces/{firebaseWorkspaceKey || 'main'} 配下の members / classrooms / classroomSnapshots をこの画面から追加します。</div>
+            ) : (
+              <div className="detail-note">教室名・管理者情報を入力して追加します。管理者アカウントは Firebase Auth に自動発行されます。</div>
+            )}
 
             <section className="developer-guide-section">
-              <div className="developer-guide-actions">
-                {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
-              </div>
-              <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。UID を取得済みなら、下の入力欄にそのまま貼り付けてください。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
+              {sparkManualAdminMode ? (
+                <div className="developer-guide-actions">
+                  {firebaseAuthUrl ? <a className="secondary-button slim developer-guide-link-button" href={firebaseAuthUrl} target="_blank" rel="noreferrer">Authentication</a> : null}
+                </div>
+              ) : null}
+              {sparkManualAdminMode ? (
+                <p className="detail-note">Authentication では Email/Password ユーザーを作成し、UID を控えます。UID を取得済みなら、下の入力欄にそのまま貼り付けてください。Auth Domain は {firebaseAuthDomain || '未設定'} です。</p>
+              ) : null}
               <div className="developer-classroom-grid developer-provision-form">
                 <label className="basic-data-inline-field">
                   <span>教室名</span>
@@ -566,10 +522,12 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                   <span>管理者メール</span>
                   <input type="email" value={provisionDraft.managerEmail} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerEmail: event.target.value }))} />
                 </label>
-                <label className="basic-data-inline-field">
-                  <span>管理者 UID</span>
-                  <input value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="Authentication で取得した UID" />
-                </label>
+                {sparkManualAdminMode ? (
+                  <label className="basic-data-inline-field">
+                    <span>管理者 UID</span>
+                    <input value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="Authentication で取得した UID" />
+                  </label>
+                ) : null}
                 <label className="basic-data-inline-field">
                   <span>利用開始日</span>
                   <input type="date" value={provisionDraft.contractStartDate} onChange={(event) => setProvisionDraft((current) => ({ ...current, contractStartDate: event.target.value }))} />
@@ -579,15 +537,41 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                   <input type="date" value={provisionDraft.contractEndDate} onChange={(event) => setProvisionDraft((current) => ({ ...current, contractEndDate: event.target.value }))} />
                 </label>
               </div>
-              <div className="developer-guide-list">
-                <div><strong>自動追加されるもの</strong><span>members / classrooms / classroomSnapshots</span></div>
-                <div><strong>手動のまま残るもの</strong><span>管理者ユーザーの作成、削除、メール変更</span></div>
-              </div>
             </section>
 
             <div className="auto-assign-modal-actions">
-              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerEmail.trim() || !provisionDraft.managerUserId.trim()}>この UID で教室追加</button>
+              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerEmail.trim() || (sparkManualAdminMode && !provisionDraft.managerUserId.trim())}>
+                {sparkManualAdminMode ? 'この UID で教室追加' : '教室を追加'}
+              </button>
               <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(false)}>閉じる</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showAutoBackupModal ? (
+        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowAutoBackupModal(false) }}>
+          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="自動バックアップ一覧">
+            <div className="auto-assign-modal-title">自動バックアップ一覧</div>
+            <div className="detail-note">保持 {autoBackupSummaries.length} 件</div>
+            <div className="developer-restore-modal-list">
+              {autoBackupSummaries.map((summary) => (
+                <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                  <div className="backup-restore-auto-backup-meta">
+                    <strong>{summary.backupDateKey}</strong>
+                    <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                  </div>
+                  <button className="secondary-button slim" type="button" onClick={() => {
+                    const password = authMode === 'local' ? requestDeveloperPassword('自動バックアップを復元する') : ''
+                    if (password === null) return
+                    onRestoreAutoBackup(summary.backupDateKey, password)
+                    setShowAutoBackupModal(false)
+                  }}>この時点へ復元</button>
+                </div>
+              ))}
+            </div>
+            <div className="auto-assign-modal-actions">
+              <button className="secondary-button slim" type="button" onClick={() => setShowAutoBackupModal(false)}>閉じる</button>
             </div>
           </div>
         </div>

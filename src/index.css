@@ -51,3 +51,14 @@ select:focus-visible {
   padding: 20px;
   overflow: visible;
 }
+
+.app-version-badge {
+  position: fixed;
+  bottom: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  z-index: 9999;
+  line-height: 1;
+}

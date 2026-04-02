@@ -12,6 +12,7 @@ if (redirectTarget) {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <App />
+      <div className="app-version-badge">v{__APP_VERSION__}</div>
     </StrictMode>,
   )
 }
