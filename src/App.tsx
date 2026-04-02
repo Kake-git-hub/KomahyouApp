@@ -75,6 +75,34 @@ type DeveloperCloudBackupRuntimeWindow = Window & typeof globalThis & {
   showDirectoryPicker?: (options?: DeveloperCloudBackupPermissionOptions) => Promise<DeveloperCloudBackupDirectoryHandle>
 }
 
+type BlazeFreeTierEstimate = {
+  currentClassroomCount: number
+  currentWorkspaceDailyBytes: number
+  currentWorkspaceRetentionBytes: number
+  currentWorkspaceUsageRate: number
+  currentWorkspaceMaxRetentionDays: number
+  estimatedAverageClassroomBytes: number
+  estimatedReferenceDailyBytes: number
+  estimatedReferenceRetentionBytes: number
+  estimatedReferenceUsageRate: number
+  estimatedReferenceMaxRetentionDays: number
+  referenceClassroomCount: number
+  retentionDays: number
+  freeTierStorageBytes: number
+}
+
+const SERVER_AUTO_BACKUP_RETENTION_DAYS = 14
+const BLAZE_STORAGE_FREE_TIER_BYTES = 5_000_000_000
+const BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT = 50
+
+function measureUtf8Bytes(text: string) {
+  return new TextEncoder().encode(text).length
+}
+
+function measureJsonBytes(value: unknown) {
+  return measureUtf8Bytes(JSON.stringify(value))
+}
+
 type DeveloperRestoreModalOption = {
   classroomId: string
   classroomName: string
@@ -724,6 +752,69 @@ function App() {
       }
     }),
   }), [actingClassroomId, autoAssignRules, boardState, classroomSettings, currentUserId, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudSyncedAutoBackupKeys, developerPassword, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers, workspaceClassrooms, workspaceUsers])
+
+  const blazeFreeTierEstimate = useMemo<BlazeFreeTierEstimate | null>(() => {
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    const currentClassroomCount = snapshot.classrooms.length
+    const currentWorkspaceDailyBytes = measureUtf8Bytes(serializeWorkspaceSnapshot(snapshot))
+    if (currentClassroomCount === 0) {
+      return {
+        currentClassroomCount: 0,
+        currentWorkspaceDailyBytes,
+        currentWorkspaceRetentionBytes: 0,
+        currentWorkspaceUsageRate: 0,
+        currentWorkspaceMaxRetentionDays: 0,
+        estimatedAverageClassroomBytes: 0,
+        estimatedReferenceDailyBytes: 0,
+        estimatedReferenceRetentionBytes: 0,
+        estimatedReferenceUsageRate: 0,
+        estimatedReferenceMaxRetentionDays: 0,
+        referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
+        retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
+        freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
+      }
+    }
+
+    const developerUsers = snapshot.users.filter((user) => user.role === 'developer')
+    const fixedSnapshot: WorkspaceSnapshot = {
+      ...snapshot,
+      currentUserId: developerUsers.some((user) => user.id === snapshot.currentUserId)
+        ? snapshot.currentUserId
+        : (developerUsers[0]?.id ?? ''),
+      actingClassroomId: null,
+      classrooms: [],
+      users: developerUsers,
+    }
+    const fixedSnapshotBytes = measureUtf8Bytes(serializeWorkspaceSnapshot(fixedSnapshot))
+    const classroomManagerUsers = snapshot.classrooms.flatMap((classroom) => {
+      const manager = snapshot.users.find((user) => user.role === 'manager' && user.id === classroom.managerUserId)
+      return manager ? [manager] : []
+    })
+    const totalClassroomBytes = snapshot.classrooms.reduce((sum, classroom) => sum + measureJsonBytes(classroom), 0)
+    const totalManagerBytes = classroomManagerUsers.reduce((sum, user) => sum + measureJsonBytes(user), 0)
+    const estimatedAverageClassroomBytes = Math.max(1, Math.round((totalClassroomBytes + totalManagerBytes) / currentClassroomCount))
+    const estimateDailyBytes = (classroomCount: number) => fixedSnapshotBytes + estimatedAverageClassroomBytes * Math.max(0, classroomCount)
+
+    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * SERVER_AUTO_BACKUP_RETENTION_DAYS
+    const estimatedReferenceDailyBytes = estimateDailyBytes(BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT)
+    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * SERVER_AUTO_BACKUP_RETENTION_DAYS
+
+    return {
+      currentClassroomCount,
+      currentWorkspaceDailyBytes,
+      currentWorkspaceRetentionBytes,
+      currentWorkspaceUsageRate: currentWorkspaceRetentionBytes / BLAZE_STORAGE_FREE_TIER_BYTES * 100,
+      currentWorkspaceMaxRetentionDays: Math.floor(BLAZE_STORAGE_FREE_TIER_BYTES / currentWorkspaceDailyBytes),
+      estimatedAverageClassroomBytes,
+      estimatedReferenceDailyBytes,
+      estimatedReferenceRetentionBytes,
+      estimatedReferenceUsageRate: estimatedReferenceRetentionBytes / BLAZE_STORAGE_FREE_TIER_BYTES * 100,
+      estimatedReferenceMaxRetentionDays: Math.floor(BLAZE_STORAGE_FREE_TIER_BYTES / estimatedReferenceDailyBytes),
+      referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
+      retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
+      freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
+    }
+  }, [buildWorkspaceSnapshot])
 
   const queueRemoteWorkspaceClassroomUpdate = useCallback((params: {
     classroomId: string
@@ -2607,6 +2698,7 @@ function App() {
         actingClassroomId={actingClassroomId}
         onAddClassroom={addClassroom}
         autoBackupSummaries={autoBackupSummaries}
+        blazeFreeTierEstimate={blazeFreeTierEstimate}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
         onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}

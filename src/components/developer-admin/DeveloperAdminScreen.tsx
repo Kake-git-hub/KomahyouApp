@@ -31,6 +31,21 @@ type DeveloperAdminScreenProps = {
     contractEndDate?: string
   }) => void
   autoBackupSummaries: AutoBackupSummary[]
+  blazeFreeTierEstimate: null | {
+    currentClassroomCount: number
+    currentWorkspaceDailyBytes: number
+    currentWorkspaceRetentionBytes: number
+    currentWorkspaceUsageRate: number
+    currentWorkspaceMaxRetentionDays: number
+    estimatedAverageClassroomBytes: number
+    estimatedReferenceDailyBytes: number
+    estimatedReferenceRetentionBytes: number
+    estimatedReferenceUsageRate: number
+    estimatedReferenceMaxRetentionDays: number
+    referenceClassroomCount: number
+    retentionDays: number
+    freeTierStorageBytes: number
+  }
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
   serverAutoBackupLoading: boolean
   onLoadServerAutoBackupSummaries: () => void
@@ -101,6 +116,21 @@ function formatSavedAt(savedAt: string) {
   return parsed.toLocaleString('ja-JP')
 }
 
+function formatBytes(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0 B'
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(2)} GB`
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)} MB`
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)} KB`
+  return `${Math.round(value)} B`
+}
+
+function formatPercent(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0%'
+  if (value >= 100) return `${value.toFixed(0)}%`
+  if (value >= 10) return `${value.toFixed(1)}%`
+  return `${value.toFixed(2)}%`
+}
+
 function requestDeveloperPassword(actionLabel: string) {
   return window.prompt(`${actionLabel}ため、開発者パスワードを入力してください。`, '')
 }
@@ -111,7 +141,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
@@ -258,6 +288,45 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <span>生徒総数</span>
             </article>
           </div>
+
+          {authMode === 'firebase' && blazeFreeTierEstimate ? (
+            <section className="basic-data-section-card developer-backup-panel">
+              <div className="basic-data-card-head">
+                <h3>Blaze 無料枠の目安</h3>
+                <p>現在の実データを JSON 化した概算です。サーバーバックアップで先に効きやすい Cloud Storage 5GB に対する使用率を表示します。</p>
+              </div>
+              <div className="developer-summary-grid">
+                <article className="basic-data-section-card developer-summary-card">
+                  <strong>{formatBytes(blazeFreeTierEstimate.currentWorkspaceDailyBytes)}</strong>
+                  <span>現在の 1 日分</span>
+                </article>
+                <article className="basic-data-section-card developer-summary-card">
+                  <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong>
+                  <span>現在の {blazeFreeTierEstimate.retentionDays} 日保持使用率</span>
+                </article>
+                <article className="basic-data-section-card developer-summary-card">
+                  <strong>{formatBytes(blazeFreeTierEstimate.estimatedReferenceDailyBytes)}</strong>
+                  <span>{blazeFreeTierEstimate.referenceClassroomCount} 教室換算の 1 日分</span>
+                </article>
+                <article className="basic-data-section-card developer-summary-card">
+                  <strong>{formatPercent(blazeFreeTierEstimate.estimatedReferenceUsageRate)}</strong>
+                  <span>{blazeFreeTierEstimate.referenceClassroomCount} 教室の {blazeFreeTierEstimate.retentionDays} 日保持使用率</span>
+                </article>
+                <article className="basic-data-section-card developer-summary-card">
+                  <strong>{blazeFreeTierEstimate.estimatedReferenceMaxRetentionDays} 日</strong>
+                  <span>{blazeFreeTierEstimate.referenceClassroomCount} 教室の保持可能日数</span>
+                </article>
+                <article className="basic-data-section-card developer-summary-card">
+                  <strong>{formatBytes(blazeFreeTierEstimate.estimatedAverageClassroomBytes)}</strong>
+                  <span>教室あたり概算容量</span>
+                </article>
+              </div>
+              <div className="developer-guide-list">
+                <div><strong>計算前提</strong><span>Cloud Storage 無料枠 {formatBytes(blazeFreeTierEstimate.freeTierStorageBytes)} / 1 日 1 件保存 / 現在 {blazeFreeTierEstimate.currentClassroomCount} 教室の実データから概算</span></div>
+                <div><strong>補足</strong><span>Functions 実行回数より先に Storage 容量がボトルネックになりやすい想定です。転送量や読み出し回数は別途課金対象です。</span></div>
+              </div>
+            </section>
+          ) : null}
 
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
