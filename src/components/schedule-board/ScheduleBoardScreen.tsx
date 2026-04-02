@@ -187,12 +187,6 @@ type LectureAutoAssignCandidateSearchResult = {
   evaluatedCandidateCount: number
 }
 
-type MakeupAutoAssignCandidateSearchResult = {
-  bestCandidate: MakeupAutoAssignCandidate | null
-  topCandidates: MakeupAutoAssignCandidate[]
-  evaluatedCandidateCount: number
-}
-
 type AutoAssignDebugReport = {
   title: string
   summary: string
@@ -204,10 +198,6 @@ type StockActionModalState =
   | { type: 'lecture'; entryKey: string }
   | { type: 'makeup'; entryKey: string }
 type InteractionSurface = 'board' | 'student' | 'teacher'
-type MakeupAutoAssignRange = {
-  startDate: string
-  endDate: string
-}
 
 const editableSubjects: SubjectLabel[] = allStudentSubjectOptions
 const editableLessonTypes: LessonType[] = ['regular', 'makeup', 'special']
@@ -309,13 +299,6 @@ function buildForcedConstraintScoreParts(params: {
       satisfied: params.regularTeacherRuleApplied ? params.regularTeacherPreferred : false,
     },
   ]
-}
-
-function buildDefaultMakeupAutoAssignRange(referenceDate: string): MakeupAutoAssignRange {
-  return {
-    startDate: referenceDate,
-    endDate: shiftDate(parseDateKey(referenceDate), 29).toISOString().slice(0, 10),
-  }
 }
 
 function compareAutoAssignCandidateOrder<T extends { scoreVector: number[]; cell: SlotCell; deskIndex: number; studentIndex: number }>(left: T, right: T) {
@@ -2190,7 +2173,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.studentScheduleRange)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.teacherScheduleRange)
   const [stockActionModal, setStockActionModal] = useState<StockActionModalState | null>(null)
-  const [makeupAutoAssignRange, setMakeupAutoAssignRange] = useState<MakeupAutoAssignRange>(() => buildDefaultMakeupAutoAssignRange(initialBoardSnapshot.weeks[initialBoardSnapshot.weekIndex]?.[0]?.dateKey ?? getReferenceDateKey(new Date())))
   const [stockPanelsRestoreState, setStockPanelsRestoreState] = useState<StockPanelsRestoreState | null>(null)
   const [autoAssignDebugReport, setAutoAssignDebugReport] = useState<AutoAssignDebugReport | null>(null)
   const [scheduleSyncTrigger, setScheduleSyncTrigger] = useState(0)
@@ -3150,39 +3132,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const selectedLecturePlacementItem = selectedLectureStockEntry ? buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null : null
 
-  const buildMakeupPendingItems = (entry: GroupedMakeupStockEntry) => {
-    const pendingItems: MakeupAutoAssignPendingItem[] = []
-
-    for (const stockEntry of rawMakeupStockEntries) {
-      const stockStudentKey = getStockStudentKeyFromEntryKey(stockEntry.key)
-      if (stockStudentKey !== entry.stockStudentKey || stockEntry.balance <= 0) continue
-
-      for (let index = 0; index < stockEntry.remainingOriginDates.length; index += 1) {
-        pendingItems.push({
-          subject: stockEntry.subject as SubjectLabel,
-          makeupSourceDate: stockEntry.remainingOriginDates[index],
-          makeupSourceLabel: stockEntry.remainingOriginLabels[index],
-          makeupSourceReasonLabel: stockEntry.remainingOriginReasonLabels[index],
-        })
-      }
-
-      const fallbackCount = Math.max(0, stockEntry.balance - stockEntry.remainingOriginDates.length)
-      for (let index = 0; index < fallbackCount; index += 1) {
-        pendingItems.push({
-          subject: stockEntry.subject as SubjectLabel,
-        })
-      }
-    }
-
-    return pendingItems.sort((left, right) => {
-      const leftOrigin = left.makeupSourceDate ?? '9999-12-31'
-      const rightOrigin = right.makeupSourceDate ?? '9999-12-31'
-      const originCompare = leftOrigin.localeCompare(rightOrigin)
-      if (originCompare !== 0) return originCompare
-      return left.subject.localeCompare(right.subject, 'ja')
-    })
-  }
-
   const buildCommonAutoAssignScoreParts = (params: {
     studentId: string
     studentGradeOnDate: GradeLabel
@@ -3533,128 +3482,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             const scoreVector = scoreParts.map((part) => part.value)
 
             const nextCandidate: LectureAutoAssignCandidate = {
-              weekIndex: nextWeekIndex,
-              cell,
-              deskIndex,
-              studentIndex,
-              desk,
-              teacher,
-              matchedItem,
-              scoreVector,
-              scoreParts,
-            }
-            evaluatedCandidates.push(nextCandidate)
-
-            if (!bestCandidate || compareAutoAssignCandidateOrder(nextCandidate, bestCandidate) < 0) {
-              bestCandidate = nextCandidate
-            }
-          }
-        }
-      }
-    }
-
-    return {
-      bestCandidate,
-      topCandidates: [...evaluatedCandidates].sort(compareAutoAssignCandidateOrder).slice(0, 5),
-      evaluatedCandidateCount: evaluatedCandidates.length,
-    }
-  }
-
-  const findBestMakeupAutoAssignCandidate = (params: {
-    sourceWeeks: SlotCell[][]
-    pendingItems: MakeupAutoAssignPendingItem[]
-    managedStudent: StudentRow
-    studentKey: string
-  }): MakeupAutoAssignCandidateSearchResult => {
-    const studentUnavailableSlots = studentUnavailableSlotsById.get(params.managedStudent.id) ?? new Set<string>()
-    let bestCandidate: MakeupAutoAssignCandidate | null = null
-    const evaluatedCandidates: MakeupAutoAssignCandidate[] = []
-
-    for (let nextWeekIndex = 0; nextWeekIndex < params.sourceWeeks.length; nextWeekIndex += 1) {
-      const week = params.sourceWeeks[nextWeekIndex]
-      for (const cell of week) {
-        const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
-        const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
-        const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
-        const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
-        if (!cell.isOpenDay) continue
-        if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.isHidden, cell.dateKey)) continue
-        if (findDuplicateStudentInCell(cell, params.studentKey)) continue
-
-        const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
-        const assignedDateKeys = collectStudentAssignedDateKeys(params.sourceWeeks, params.studentKey)
-        const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
-        const lessonLimitSatisfied = lessonLimit === null || existingLessons.length < lessonLimit
-
-        const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
-        const slotKey = `${cell.dateKey}_${cell.slotNumber}`
-        if (studentUnavailableSlots.has(slotKey)) continue
-
-        for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
-          const desk = cell.desks[deskIndex]
-          const teacher = resolveManagedTeacherForDesk(desk, cell.dateKey)
-          if (!teacher || !desk.teacher.trim()) continue
-
-          for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
-            if (isStudentSlotBlocked(desk, studentIndex)) continue
-            const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
-            const pairConstraintPreferred = !isPairConstraintBlocked(teacher.id, params.managedStudent.id, pairedStudent)
-
-            const matchedItem = [...params.pendingItems]
-              .sort((left, right) => {
-                const leftCapable = canTeacherHandleStudentSubject(teacher, left.subject, studentGradeOnDate)
-                const rightCapable = canTeacherHandleStudentSubject(teacher, right.subject, studentGradeOnDate)
-                if (leftCapable !== rightCapable) return leftCapable ? -1 : 1
-                const leftOrigin = left.makeupSourceDate ?? '9999-12-31'
-                const rightOrigin = right.makeupSourceDate ?? '9999-12-31'
-                const originCompare = leftOrigin.localeCompare(rightOrigin)
-                if (originCompare !== 0) return originCompare
-                return left.subject.localeCompare(right.subject, 'ja')
-              })[0] ?? null
-            if (!matchedItem) continue
-
-            const firstPeriodPreferred = !forbidFirstPeriod || cell.slotNumber !== 1
-            const subjectCapablePreferred = !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate)
-            const regularTeacherPreferred = !regularTeachersOnly || regularTeacherIds.has(teacher.id)
-            const scoreParts: AutoAssignScorePart[] = [
-              {
-                label: '振替元情報',
-                value: matchedItem.makeupSourceDate ? 1 : 0,
-                detail: matchedItem.makeupSourceDate ? '元授業日ありの振替を優先' : '元授業日未設定',
-              },
-              {
-                label: '元授業日優先',
-                value: matchedItem.makeupSourceDate ? 99999999 - Number(matchedItem.makeupSourceDate.replace(/-/g, '')) : 0,
-                detail: matchedItem.makeupSourceDate ? `${matchedItem.makeupSourceDate} の振替を優先` : '元授業日なし',
-              },
-              {
-                label: '日付優先',
-                value: buildDatePriorityScore(cell.dateKey),
-                detail: '早い日付ほど高得点',
-              },
-              ...buildForcedConstraintScoreParts({
-                firstPeriodRuleApplied: forbidFirstPeriod,
-                firstPeriodPreferred,
-                subjectCapableRuleApplied: subjectCapableTeachersOnly,
-                subjectCapablePreferred,
-                regularTeacherRuleApplied: regularTeachersOnly,
-                regularTeacherPreferred,
-              }),
-              ...buildCommonAutoAssignScoreParts({
-                studentId: params.managedStudent.id,
-                studentGradeOnDate,
-                cell,
-                teacher,
-                pairedStudent,
-                existingLessons,
-                assignedDateKeys,
-                lessonLimitSatisfied,
-                pairConstraintPreferred,
-              }),
-            ]
-            const scoreVector = scoreParts.map((part) => part.value)
-
-            const nextCandidate: MakeupAutoAssignCandidate = {
               weekIndex: nextWeekIndex,
               cell,
               deskIndex,
@@ -5243,137 +5070,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     )
   }
 
-  const handleAutoAssignMakeupStockEntry = (entry: GroupedMakeupStockEntry) => {
-    if (entry.balance <= 0) {
-      setStatusMessage(`${entry.displayName} は先取り済みのため、自動割振できません。`)
-      return
-    }
-    if (!entry.studentId) {
-      setStatusMessage(`${entry.displayName} は基本データの生徒と未連携のため、自動割振できません。`)
-      return
-    }
-
-    const managedStudent = students.find((student) => student.id === entry.studentId)
-    if (!managedStudent) {
-      setStatusMessage(`${entry.displayName} の生徒情報が見つからないため、自動割振できません。`)
-      return
-    }
-
-    const pendingItems = buildMakeupPendingItems(entry)
-    if (pendingItems.length === 0) {
-      setStatusMessage(`${entry.displayName} の未消化振替に割振対象がありません。`)
-      return
-    }
-
-    let nextWeeks = cloneWeeks(normalizedWeeks)
-    let weekIndexOffset = 0
-    if (makeupAutoAssignRange.startDate && makeupAutoAssignRange.endDate && makeupAutoAssignRange.startDate <= makeupAutoAssignRange.endDate) {
-      const coveredWeeks = ensureWeeksCoverDateRange({
-        weeks: nextWeeks,
-        startDate: makeupAutoAssignRange.startDate,
-        endDate: makeupAutoAssignRange.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons,
-      })
-      nextWeeks = applyClassroomAvailability(coveredWeeks.weeks, classroomSettings)
-      weekIndexOffset = coveredWeeks.weekIndexOffset
-    }
-    const remainingItems = [...pendingItems]
-    const placedItems: Array<{ dateLabel: string; slotLabel: string; deskLabel: string }> = []
-    const placementCandidates: MakeupAutoAssignCandidate[] = []
-    let evaluatedCandidateCount = 0
-
-    while (remainingItems.length > 0) {
-      remainingItems.sort((left, right) => {
-        const leftOrigin = left.makeupSourceDate ?? '9999-12-31'
-        const rightOrigin = right.makeupSourceDate ?? '9999-12-31'
-        const originCompare = leftOrigin.localeCompare(rightOrigin)
-        if (originCompare !== 0) return originCompare
-        return left.subject.localeCompare(right.subject, 'ja')
-      })
-      const [currentItem] = remainingItems
-      if (!currentItem) break
-
-      const candidateSearch = findBestMakeupAutoAssignCandidate({
-        sourceWeeks: nextWeeks.map((week) => week.filter((cell) => (
-          (!makeupAutoAssignRange.startDate || cell.dateKey >= makeupAutoAssignRange.startDate)
-          && (!makeupAutoAssignRange.endDate || cell.dateKey <= makeupAutoAssignRange.endDate)
-        ))),
-        pendingItems: [currentItem],
-        managedStudent,
-        studentKey: entry.studentId,
-      })
-      const candidate = candidateSearch.bestCandidate
-      evaluatedCandidateCount += candidateSearch.evaluatedCandidateCount
-      if (!candidate) break
-
-      const targetCell = nextWeeks[candidate.weekIndex]?.find((cell) => cell.id === candidate.cell.id)
-      const targetDesk = targetCell?.desks[candidate.deskIndex]
-      if (!targetCell || !targetDesk) break
-
-      const studentGrade = resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey))
-      const nextStudent = normalizeLessonPlacement({
-        id: createStudentId(targetCell.id, candidate.deskIndex, candidate.studentIndex),
-        name: getStudentDisplayName(managedStudent),
-        managedStudentId: managedStudent.id,
-        grade: studentGrade,
-        birthDate: managedStudent.birthDate,
-        makeupSourceDate: candidate.matchedItem.makeupSourceDate,
-        makeupSourceLabel: candidate.matchedItem.makeupSourceLabel,
-        subject: candidate.matchedItem.subject,
-        lessonType: 'makeup',
-        teacherType: 'normal',
-      }, targetCell.dateKey)
-
-      if (!targetDesk.lesson) {
-        targetDesk.lesson = {
-          id: `${targetCell.id}_desk_${candidate.deskIndex + 1}_${nextStudent.lessonType}`,
-          note: nextStudent.lessonType === 'makeup' && candidate.matchedItem.makeupSourceLabel
-            ? `元の通常授業: ${candidate.matchedItem.makeupSourceLabel}${candidate.matchedItem.makeupSourceReasonLabel ? `（${candidate.matchedItem.makeupSourceReasonLabel}）` : ''}`
-            : undefined,
-          studentSlots: [null, null],
-        }
-      }
-
-      targetDesk.lesson.studentSlots[candidate.studentIndex] = nextStudent
-      const pendingIndex = remainingItems.indexOf(candidate.matchedItem)
-      if (pendingIndex >= 0) remainingItems.splice(pendingIndex, 1)
-      placementCandidates.push(candidate)
-      placedItems.push({
-        dateLabel: targetCell.dateLabel,
-        slotLabel: targetCell.slotLabel,
-        deskLabel: resolveDeskLabel(targetDesk, candidate.deskIndex),
-      })
-    }
-
-    if (placedItems.length === 0) {
-      setAutoAssignDebugReport({
-        title: '振替自動割振デバッグ',
-        summary: `${entry.displayName} は条件に合う空きコマが見つからず、自動割振できませんでした。`,
-        details: `候補比較件数: ${evaluatedCandidateCount}`,
-      })
-      setStatusMessage(`${entry.displayName} は条件に合う空きコマが見つからず、自動割振できませんでした。`)
-      return
-    }
-
-    commitWeeks(nextWeeks, weekIndex + weekIndexOffset, selectedCellId, selectedDeskIndex)
-    setAutoAssignDebugReport(buildAutoAssignDebugReport({
-      entryLabel: entry.displayName,
-      mode: 'makeup',
-      placementCandidates,
-      evaluatedCandidateCount,
-      remainingCount: remainingItems.length,
-    }))
-    setIsMakeupStockOpen(true)
-    setSelectedMakeupStockKey(remainingItems.length > 0 ? entry.key : null)
-    setStatusMessage(
-      `${entry.displayName} の振替を自動割振しました。${placedItems.length}コマ配置しました。`
-      + (remainingItems.length > 0 ? ` ${remainingItems.length}コマは候補不足でストックに残しています。` : ''),
-    )
-  }
-
   const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number) => {
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
@@ -6365,7 +6061,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     setIsMakeupStockOpen((current) => !current)
     if (!isMakeupStockOpen) {
-      setMakeupAutoAssignRange(buildDefaultMakeupAutoAssignRange(cells[0]?.dateKey ?? getReferenceDateKey(new Date())))
       setSelectedStudentId(null)
       setSelectedLectureStockKey(null)
       setStatusMessage('未消化振替一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
@@ -6621,32 +6316,23 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             const lectureEntry = stockActionModal.type === 'lecture'
               ? lectureStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
               : null
-            const makeupEntry = stockActionModal.type === 'makeup'
-              ? makeupStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
-              : null
-            const entryLabel = lectureEntry?.displayName ?? makeupEntry?.displayName ?? ''
-            const canAutoAssign = stockActionModal.type === 'lecture'
-              ? Boolean(lectureEntry?.studentId && (lectureEntry?.requestedCount ?? 0) > 0)
-              : Boolean(makeupEntry?.studentId && (makeupEntry?.balance ?? 0) > 0)
+            if (!lectureEntry) return null
+            const entryLabel = lectureEntry.displayName
+            const canAutoAssign = Boolean(lectureEntry.studentId && (lectureEntry.requestedCount ?? 0) > 0)
 
             return (
               <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setStockActionModal(null) }}>
                 <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="stock-action-modal">
                   <div className="auto-assign-modal-title">{entryLabel}</div>
                   <div className="student-menu-help-text">個別割振で配置先を選ぶか、自動割振で候補へ一括配置します。</div>
-                                    <div className="student-menu-help-text">
-                                      {stockActionModal.type === 'lecture'
-                                        ? '講習の自動割振は各講習期間内の空きコマだけを対象にします。'
-                                        : '振替の自動割振は下で指定した期間内の空きコマだけを対象にします。'}
-                                    </div>
+                                    <div className="student-menu-help-text">講習の自動割振は各講習期間内の空きコマだけを対象にします。</div>
                   <div className="auto-assign-modal-actions">
                     <button
                       className="secondary-button slim"
                       type="button"
                       disabled={activeStockAutoAssignKey !== null}
                       onClick={() => {
-                        if (lectureEntry) handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
-                        if (makeupEntry) handleSelectMakeupStockEntry(makeupEntry, { hidePanelsDuringPlacement: true })
+                        handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
                         setStockActionModal(null)
                       }}
                       data-testid="stock-action-modal-manual"
@@ -6658,15 +6344,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                       type="button"
                       disabled={!canAutoAssign || activeStockAutoAssignKey !== null}
                       onClick={async () => {
-                        const modalEntryKey = lectureEntry?.key ?? makeupEntry?.key ?? ''
+                        const modalEntryKey = lectureEntry.key
                         if (!modalEntryKey) return
                         const restoreState = { lecture: isLectureStockOpen, makeup: isMakeupStockOpen }
                         await runStockAutoAssign(modalEntryKey, () => {
                           setStockPanelsRestoreState(restoreState)
                           setIsLectureStockOpen(false)
                           setIsMakeupStockOpen(false)
-                          if (lectureEntry) handleAutoAssignLectureStockEntry(lectureEntry)
-                          if (makeupEntry) handleAutoAssignMakeupStockEntry(makeupEntry)
+                          handleAutoAssignLectureStockEntry(lectureEntry)
                           setIsLectureStockOpen(restoreState.lecture)
                           setIsMakeupStockOpen(restoreState.makeup)
                           setStockPanelsRestoreState(null)
@@ -6675,7 +6360,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                       }}
                       data-testid="stock-action-modal-auto"
                     >
-                      {activeStockAutoAssignKey === (lectureEntry?.key ?? makeupEntry?.key ?? '')
+                      {activeStockAutoAssignKey === lectureEntry.key
                         ? <span className="button-loading-content"><span className="button-spinner" aria-hidden="true" />自動割振中</span>
                         : '自動割振'}
                     </button>
@@ -6749,7 +6434,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         key={entry.key}
                         type="button"
                         className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
-                        onClick={() => setStockActionModal({ type: 'makeup', entryKey: entry.key })}
+                        onClick={() => {
+                          handleSelectMakeupStockEntry(entry, { hidePanelsDuringPlacement: true })
+                        }}
                         disabled={entry.balance <= 0}
                         title={entry.title}
                         data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
@@ -6758,13 +6445,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
                       </button>
                     ))}
-                  </div>
-                  <div className="makeup-stock-range-row">
-                    <label className="student-menu-label" htmlFor="makeup-auto-assign-start">自動割振期間</label>
-                    <input id="makeup-auto-assign-start" className="student-menu-select" type="date" value={makeupAutoAssignRange.startDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, startDate: event.target.value }))} data-testid="makeup-auto-assign-start" />
-                    <span className="student-menu-label">〜</span>
-                    <input id="makeup-auto-assign-end" className="student-menu-select" type="date" value={makeupAutoAssignRange.endDate} onChange={(event) => setMakeupAutoAssignRange((current) => ({ ...current, endDate: event.target.value }))} data-testid="makeup-auto-assign-end" />
-                    <span className="basic-data-muted-inline">表示中の週の開始日を初期値にし、指定した期間外へは割り振りません。期間内では制約を優先したうえで日付順に割り振ります。</span>
                   </div>
                 </section>
               ) : null}

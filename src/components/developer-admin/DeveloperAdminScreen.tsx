@@ -133,7 +133,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, autoBackupSummaries, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onRestoreAutoBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, firebaseWorkspaceKey, firebaseAuthDomain, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
@@ -147,7 +147,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     contractEndDate: '',
   }))
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
-  const latestAutoBackup = autoBackupSummaries[0] ?? null
   const sparkManualAdminMode = authMode === 'firebase' && accountProvisioningLocked
   const firebaseSummary = accountProvisioningLocked || managerEmailLocked
     ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室追加と既存教室の UID 差し替えを行います。削除と管理者メール変更は Firebase Console で手動運用します。'
@@ -170,8 +169,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     teachers: 0,
     students: 0,
   }), [classrooms])
-
-  const [showAutoBackupModal, setShowAutoBackupModal] = useState(false)
 
   const handleAddClassroom = () => {
     setShowProvisioningGuide(true)
@@ -312,14 +309,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 <button className="secondary-button slim" type="button" onClick={onConnectDeveloperCloudBackupFolder}>同期フォルダを設定</button>
                 {developerCloudBackupEnabled ? <button className="secondary-button slim" type="button" onClick={onDisconnectDeveloperCloudBackupFolder}>自動保存を停止</button> : null}
               </div>
-            </div>
-            <div className="backup-restore-auto-backup-list">
-              <div className="toolbar-status">最新自動バックアップ: {formatSavedAt(latestAutoBackup?.savedAt ?? '')}（保持 {autoBackupSummaries.length} 件）</div>
-              {autoBackupSummaries.length > 0 ? (
-                <button className="secondary-button slim" type="button" onClick={() => setShowAutoBackupModal(true)}>自動バックアップ一覧を表示</button>
-              ) : (
-                <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span>
-              )}
             </div>
             {authMode === 'firebase' ? (
               <>
@@ -539,34 +528,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 {sparkManualAdminMode ? 'この UID で教室追加' : '教室を追加'}
               </button>
               <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(false)}>閉じる</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {showAutoBackupModal ? (
-        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowAutoBackupModal(false) }}>
-          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="自動バックアップ一覧">
-            <div className="auto-assign-modal-title">自動バックアップ一覧</div>
-            <div className="detail-note">保持 {autoBackupSummaries.length} 件</div>
-            <div className="developer-restore-modal-list">
-              {autoBackupSummaries.map((summary) => (
-                <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                  <div className="backup-restore-auto-backup-meta">
-                    <strong>{summary.backupDateKey}</strong>
-                    <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
-                  </div>
-                  <button className="secondary-button slim" type="button" onClick={() => {
-                    const password = authMode === 'local' ? requestDeveloperPassword('自動バックアップを復元する') : ''
-                    if (password === null) return
-                    onRestoreAutoBackup(summary.backupDateKey, password)
-                    setShowAutoBackupModal(false)
-                  }}>この時点へ復元</button>
-                </div>
-              ))}
-            </div>
-            <div className="auto-assign-modal-actions">
-              <button className="secondary-button slim" type="button" onClick={() => setShowAutoBackupModal(false)}>閉じる</button>
             </div>
           </div>
         </div>

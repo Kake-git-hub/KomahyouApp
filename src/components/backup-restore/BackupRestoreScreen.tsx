@@ -65,13 +65,12 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
   const specialImportRef = useRef<HTMLInputElement | null>(null)
   const autoAssignImportRef = useRef<HTMLInputElement | null>(null)
-  const latestAutoBackup = autoBackupSummaries[0] ?? null
 
   const [makeupDraftStudentId, setMakeupDraftStudentId] = useState('')
   const [makeupDraftSubject, setMakeupDraftSubject] = useState(allStudentSubjectOptions[0])
@@ -208,29 +207,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               </div>
             </section>
           </div>
-
-          <section className="basic-data-section-card" data-testid="auto-backup-panel">
-            <div className="basic-data-card-head">
-              <h3>自動バックアップ</h3>
-              <p>ワークスペース全体を 1 日 1 件で自動保持します。直近 14 日分を残し、この一覧からこの教室のデータだけを復元できます。</p>
-            </div>
-            <div className="basic-data-form-grid">
-              <div className="toolbar-status">最新自動バックアップ: {latestAutoBackup ? formatSavedAt(latestAutoBackup.savedAt) : 'まだありません。'}</div>
-              <div className="basic-data-subcopy">保持数: {autoBackupSummaries.length} / 14</div>
-            </div>
-            <div className="backup-restore-auto-backup-list">
-              {autoBackupSummaries.length === 0 ? <span className="basic-data-muted-inline">まだ自動バックアップはありません。</span> : null}
-              {autoBackupSummaries.map((summary) => (
-                <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                  <div className="backup-restore-auto-backup-meta">
-                    <strong>{summary.backupDateKey}</strong>
-                    <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
-                  </div>
-                  <button className="secondary-button slim" type="button" onClick={() => onRestoreAutoBackup(summary.backupDateKey)} data-testid={`auto-backup-restore-${summary.backupDateKey}`}>この教室を復元</button>
-                </div>
-              ))}
-            </div>
-          </section>
 
           {showServerBackups ? (
             <section className="basic-data-section-card" data-testid="server-backup-panel">

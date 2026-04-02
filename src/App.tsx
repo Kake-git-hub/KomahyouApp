@@ -19,7 +19,7 @@ import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBa
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupEntries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceAutoBackupSummaries, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, type AutoBackupSummary } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { createLegacyLessonScheduleQrConfig } from './utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
@@ -681,7 +681,6 @@ function App() {
   const [studentScheduleRequest, setStudentScheduleRequest] = useState<StudentScheduleRequest | null>(null)
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
-  const [autoBackupSummaries, setAutoBackupSummaries] = useState<AutoBackupSummary[]>([])
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([])
@@ -1258,7 +1257,7 @@ function App() {
     setPersistenceMessage('契約中教室を一時利用停止に変更しました。')
   }, [bulkTemporarySuspensionReason, workspaceClassrooms])
 
-  const syncDeveloperCloudAutoBackups = useCallback(async (handleOverride?: DeveloperCloudBackupDirectoryHandle | null) => {
+  const syncDeveloperCloudAutoBackups = useCallback(async (handleOverride?: DeveloperCloudBackupDirectoryHandle | null, snapshotOverride?: WorkspaceSnapshot) => {
     if (!developerCloudBackupEnabled) return { synced: false, message: '' }
 
     if (!isDeveloperCloudBackupSupported()) {
@@ -1281,26 +1280,21 @@ function App() {
       return { synced: false, message }
     }
 
-    const entries = await loadWorkspaceAutoBackupEntries()
-    const unsyncedEntries = entries.filter((entry) => !developerCloudSyncedAutoBackupKeys.includes(entry.backupDateKey))
-    if (unsyncedEntries.length === 0) {
+    const snapshot = snapshotOverride
+    if (!snapshot) {
       const folderName = developerCloudBackupFolderName || targetHandle.name
-      const message = `${folderName} と自動バックアップは同期済みです。`
+      const message = `${folderName}: 同期するスナップショットがありません。`
       setDeveloperCloudBackupStatus(message)
       return { synced: false, message: '' }
     }
 
-    for (const entry of unsyncedEntries) {
-      await syncWorkspaceArtifactsToDeveloperCloudDirectory(entry.snapshot, targetHandle)
-    }
+    await syncWorkspaceArtifactsToDeveloperCloudDirectory(snapshot, targetHandle)
 
-    const syncedKeys = unsyncedEntries.map((entry) => entry.backupDateKey)
-    setDeveloperCloudSyncedAutoBackupKeys((current) => Array.from(new Set([...current, ...syncedKeys])).sort())
     const folderName = developerCloudBackupFolderName || targetHandle.name
-    const message = `${folderName} に ${syncedKeys.length} 件の未同期自動バックアップとAI分析用データを保存しました。`
+    const message = `${folderName} にバックアップとAI分析用データを保存しました。`
     setDeveloperCloudBackupStatus(message)
     return { synced: true, message }
-  }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle, developerCloudSyncedAutoBackupKeys])
+  }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle])
 
   const connectDeveloperCloudBackupFolder = useCallback(async () => {
     if (!isDeveloperCloudBackupSupported()) {
@@ -1337,9 +1331,6 @@ function App() {
       setPersistenceMessage(persisted
         ? '保存フォルダを設定しました。以後は自動保存ごとに最新バックアップとAI分析用データを更新します。'
         : '保存フォルダを設定しました。今のセッション中は自動保存されますが、再起動後は再選択が必要です。')
-      void syncDeveloperCloudAutoBackups(handle).catch(() => {
-        setDeveloperCloudBackupStatus('保存フォルダの初回同期に失敗しました。')
-      })
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         setDeveloperCloudBackupStatus('保存フォルダの選択をキャンセルしました。')
@@ -1349,7 +1340,7 @@ function App() {
       setDeveloperCloudBackupStatus(`保存フォルダの設定に失敗しました。${message}`)
       setPersistenceMessage(`保存フォルダの設定に失敗しました。${message}`)
     }
-  }, [syncDeveloperCloudAutoBackups])
+  }, [buildWorkspaceSnapshot])
 
   const disconnectDeveloperCloudBackupFolder = useCallback(async () => {
     setDeveloperCloudBackupEnabled(false)
@@ -1987,11 +1978,9 @@ function App() {
     if (isRemoteBackendEnabled) {
       if (!remoteSessionUserId) {
         void Promise.all([
-          loadWorkspaceAutoBackupSummaries().catch(() => []),
           loadDeveloperCloudBackupHandle().catch(() => null),
-        ]).then(([autoBackups, storedDeveloperCloudBackupHandle]) => {
+        ]).then(([storedDeveloperCloudBackupHandle]) => {
           if (disposed) return
-          setAutoBackupSummaries(autoBackups)
           if (isDeveloperCloudBackupDirectoryHandle(storedDeveloperCloudBackupHandle)) {
             setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
           }
@@ -2011,12 +2000,10 @@ function App() {
           createEmptyClassroomPayload: buildEmptyClassroomPayload,
         }),
         loadWorkspaceSnapshot().catch(() => null),
-        loadWorkspaceAutoBackupSummaries().catch(() => []),
         loadDeveloperCloudBackupHandle().catch(() => null),
       ])
-        .then(([remoteSnapshot, localWorkspaceSnapshot, autoBackups, storedDeveloperCloudBackupHandle]) => {
+        .then(([remoteSnapshot, localWorkspaceSnapshot, storedDeveloperCloudBackupHandle]) => {
           if (disposed) return
-          setAutoBackupSummaries(autoBackups)
           if (isDeveloperCloudBackupDirectoryHandle(storedDeveloperCloudBackupHandle)) {
             setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
           }
@@ -2042,13 +2029,11 @@ function App() {
 
     void Promise.all([
       loadWorkspaceSnapshot().catch(() => null),
-      loadWorkspaceAutoBackupSummaries().catch(() => []),
       loadAppSnapshot().catch(() => null),
       loadDeveloperCloudBackupHandle().catch(() => null),
     ])
-      .then(([workspaceSnapshot, autoBackups, legacySnapshot, storedDeveloperCloudBackupHandle]) => {
+      .then(([workspaceSnapshot, legacySnapshot, storedDeveloperCloudBackupHandle]) => {
         if (disposed) return
-        setAutoBackupSummaries(autoBackups)
         if (isDeveloperCloudBackupDirectoryHandle(storedDeveloperCloudBackupHandle)) {
           setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
         }
@@ -2124,13 +2109,6 @@ function App() {
           setLastSavedAt(snapshot.savedAt)
           setPersistenceMessage('自動保存しました。')
 
-          try {
-            const autoBackupResult = await saveDailyWorkspaceAutoBackup(snapshot)
-            setAutoBackupSummaries(autoBackupResult.summaries)
-          } catch {
-            setPersistenceMessage('自動保存しましたが、自動バックアップの更新に失敗しました。')
-          }
-
           if (isRemoteBackendEnabled && remoteSessionUserId) {
             try {
               await saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId)
@@ -2142,9 +2120,9 @@ function App() {
           }
 
           try {
-            const cloudSyncResult = await syncDeveloperCloudAutoBackups()
+            const cloudSyncResult = await syncDeveloperCloudAutoBackups(undefined, snapshot)
             if (cloudSyncResult.synced) {
-              setPersistenceMessage('自動保存し、保存フォルダへ未同期バックアップとAI分析用データを同期しました。')
+              setPersistenceMessage('自動保存し、保存フォルダへバックアップとAI分析用データを同期しました。')
             } else if (developerCloudBackupEnabled && cloudSyncResult.message) {
               setPersistenceMessage(`自動保存しましたが、${cloudSyncResult.message}`)
             }
@@ -2278,60 +2256,6 @@ function App() {
       setPersistenceMessage('バックアップの読み込みに失敗しました。ファイル形式を確認してください。')
     }
   }, [applySnapshot])
-
-  const restoreAutoBackup = useCallback(async (backupDateKey: string) => {
-    if (!actingClassroomId) {
-      setPersistenceMessage('操作中の教室がないため復元できません。')
-      return
-    }
-    try {
-      const snapshot = await loadWorkspaceAutoBackupSnapshot(backupDateKey)
-      if (!snapshot) {
-        setPersistenceMessage('指定した自動バックアップが見つかりませんでした。')
-        return
-      }
-      const backupClassroom = snapshot.classrooms.find((c) => c.id === actingClassroomId)
-      if (!backupClassroom) {
-        setPersistenceMessage('バックアップにこの教室のデータが見つかりませんでした。')
-        return
-      }
-      const confirmed = window.confirm([
-        'この教室だけを自動バックアップ時点へ復元します。',
-        `保存日時: ${new Date(snapshot.savedAt).toLocaleString('ja-JP')}`,
-        '他の教室には影響しません。',
-        '復元してよろしいですか?',
-      ].join('\n'))
-      if (!confirmed) {
-        setPersistenceMessage('自動バックアップからの復元をキャンセルしました。')
-        return
-      }
-      const currentSnapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      const restoreSelection = new Map(currentSnapshot.classrooms.map((c) => [c.id, c.id === actingClassroomId]))
-      const mergeResult = buildWorkspaceSnapshotMergeFromSelection(currentSnapshot, snapshot, restoreSelection)
-      applyWorkspaceSnapshot(mergeResult.snapshot, 'この教室の自動バックアップを復元しました。')
-    } catch {
-      setPersistenceMessage('自動バックアップの読み込みに失敗しました。')
-    }
-  }, [actingClassroomId, applyWorkspaceSnapshot, buildWorkspaceSnapshot])
-
-  const restoreDeveloperAutoBackup = useCallback(async (backupDateKey: string, password: string) => {
-    if (!isRemoteBackendEnabled && password !== developerPassword) {
-      setPersistenceMessage('開発者パスワードが一致しないため、自動バックアップを復元できませんでした。')
-      return
-    }
-
-    try {
-      const snapshot = await loadWorkspaceAutoBackupSnapshot(backupDateKey)
-      if (!snapshot) {
-        setPersistenceMessage('指定した自動バックアップが見つかりませんでした。')
-        return
-      }
-      openDeveloperRestoreModal(snapshot, '自動バックアップ')
-      setPersistenceMessage('復元する教室をモーダルで選択してください。')
-    } catch {
-      setPersistenceMessage('自動バックアップの読み込みに失敗しました。')
-    }
-  }, [developerPassword, isRemoteBackendEnabled, openDeveloperRestoreModal])
 
   const loadServerAutoBackupSummaries = useCallback(async () => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
@@ -2709,7 +2633,7 @@ function App() {
         users={workspaceUsers}
         actingClassroomId={actingClassroomId}
         onAddClassroom={addClassroom}
-        autoBackupSummaries={autoBackupSummaries}
+        autoBackupSummaries={[]}
         blazeFreeTierEstimate={blazeFreeTierEstimate}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
@@ -2724,7 +2648,7 @@ function App() {
         onExportWorkspaceBackup={exportWorkspaceBackup}
         onExportAnalysisData={exportAnalysisData}
         onImportWorkspaceBackup={importWorkspaceBackup}
-        onRestoreAutoBackup={restoreDeveloperAutoBackup}
+        onRestoreAutoBackup={() => {}}
         restoreModalState={developerRestoreModalState ? {
           sourceLabel: developerRestoreModalState.sourceLabel,
           savedAt: developerRestoreModalState.savedAt,
@@ -2823,10 +2747,10 @@ function App() {
         onLogout={logout}
         persistenceMessage={persistenceMessage}
         lastSavedAt={lastSavedAt}
-        autoBackupSummaries={autoBackupSummaries}
+        autoBackupSummaries={[]}
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
-        onRestoreAutoBackup={restoreAutoBackup}
+        onRestoreAutoBackup={() => {}}
         showServerBackups={isRemoteBackendEnabled && isRemoteAdminAutomationEnabled}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
