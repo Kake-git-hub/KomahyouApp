@@ -4735,8 +4735,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         if (cell.dateKey !== dateKey) continue
 
         for (const desk of cell.desks) {
-          for (const student of desk.lesson?.studentSlots ?? []) {
+          const processedSlotIndices = new Set<number>()
+          for (let slotIdx = 0; slotIdx < (desk.lesson?.studentSlots ?? []).length; slotIdx++) {
+            const student = desk.lesson!.studentSlots[slotIdx]
             if (!student) continue
+            processedSlotIndices.add(slotIdx)
             movedStudentCount += 1
             if (student.lessonType === 'special') {
               if (student.specialStockSource === 'session') {
@@ -4772,6 +4775,51 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               }
             }
           }
+
+          if (desk.statusSlots) {
+            for (let slotIdx = 0; slotIdx < desk.statusSlots.length; slotIdx++) {
+              if (processedSlotIndices.has(slotIdx)) continue
+              const statusEntry = desk.statusSlots[slotIdx]
+              if (!statusEntry) continue
+              movedStudentCount += 1
+              if (statusEntry.lessonType === 'special') {
+                if (statusEntry.specialStockSource === 'session') {
+                  const lectureStudentKey = statusEntry.managedStudentId ?? managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
+                  const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
+                  nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                  nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
+                    displayName: resolveBoardStudentDisplayName(statusEntry.name),
+                    sessionId: statusEntry.specialSessionId ?? '',
+                  })
+                  if (!managedStudentByAnyName.get(statusEntry.name)) {
+                    nextFallbackLectureStockStudents[lectureStockKey] = {
+                      displayName: resolveBoardStudentDisplayName(statusEntry.name),
+                      subject: statusEntry.subject,
+                    }
+                  }
+                }
+                continue
+              }
+              if (!statusEntry.manualAdded) {
+                const statusStudentAsEntry = { name: statusEntry.name, manualAdded: statusEntry.manualAdded, subject: statusEntry.subject, lessonType: statusEntry.lessonType } as StudentEntry
+                const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(statusStudentAsEntry), statusEntry.subject)
+                if (shouldCountHolidayAsManualAdjustment(statusStudentAsEntry, cell.dateKey, cell.slotNumber)) {
+                  nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, cell.dateKey)
+                }
+
+                const managedStudent = managedStudentByAnyName.get(statusEntry.name)
+                if (!managedStudent) {
+                  nextFallbackMakeupStudents[stockKey] = {
+                    studentName: statusEntry.name,
+                    displayName: resolveBoardStudentDisplayName(statusEntry.name),
+                    subject: statusEntry.subject,
+                  }
+                }
+              }
+            }
+            desk.statusSlots = undefined
+          }
+
           desk.lesson = undefined
         }
       }
