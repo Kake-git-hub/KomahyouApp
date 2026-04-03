@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { getStudentDisplayName } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel } from '../basic-data/basicDataModel'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
@@ -104,7 +104,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const makeupStockRows = classroomSettings.initialSetupMakeupStocks ?? []
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
 
-  const activeStudents = students.filter((s) => !s.isHidden).sort((a, b) => getStudentDisplayName(a).localeCompare(getStudentDisplayName(b), 'ja'))
+  const activeStudents = students.filter((s) => !s.isHidden).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
 
   const addMakeupStockRow = () => {
     if (!makeupDraftStudentId || makeupDraftCount < 1) return
@@ -130,7 +130,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
 
   const resolveStudentName = (studentId: string) => {
     const student = students.find((s) => s.id === studentId)
-    return student ? getStudentDisplayName(student) : studentId
+    return student ? formatStudentSelectionLabel(student) : studentId
   }
 
   const resolveSessionName = (sessionId: string) => {
@@ -310,7 +310,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                   <div className="basic-data-row-actions" style={{ marginTop: 4, gap: 4, flexWrap: 'wrap' }}>
                     <select value={makeupDraftStudentId} onChange={(e) => setMakeupDraftStudentId(e.target.value)} data-testid="setup-makeup-student">
                       <option value="">生徒を選択</option>
-                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{getStudentDisplayName(s)}</option>)}
+                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{formatStudentSelectionLabel(s)}</option>)}
                     </select>
                     <select value={makeupDraftSubject} onChange={(e) => setMakeupDraftSubject(e.target.value as SubjectLabel)} data-testid="setup-makeup-subject">
                       {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
@@ -341,7 +341,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                   <div className="basic-data-row-actions" style={{ marginTop: 4, gap: 4, flexWrap: 'wrap' }}>
                     <select value={lectureDraftStudentId} onChange={(e) => setLectureDraftStudentId(e.target.value)} data-testid="setup-lecture-student">
                       <option value="">生徒を選択</option>
-                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{getStudentDisplayName(s)}</option>)}
+                      {activeStudents.map((s) => <option key={s.id} value={s.id}>{formatStudentSelectionLabel(s)}</option>)}
                     </select>
                     <select value={lectureDraftSubject} onChange={(e) => setLectureDraftSubject(e.target.value as SubjectLabel)} data-testid="setup-lecture-subject">
                       {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}

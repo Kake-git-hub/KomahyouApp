@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
-import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import {
   buildRegularLessonTemplateWorkbook,
@@ -96,7 +96,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
   )
 
   const studentOptions = useMemo(
-    () => students.slice().sort((left, right) => getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja')),
+    () => students.slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right)),
     [students],
   )
 
@@ -302,7 +302,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                           })}
                         >
                           <option value="">生徒なし</option>
-                          {studentOptions.map((student) => <option key={student.id} value={student.id}>{getStudentDisplayName(student)}</option>)}
+                          {studentOptions.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student)}</option>)}
                         </select>
                       </label>
                       <label className="basic-data-inline-field basic-data-inline-field-short">
