@@ -2332,19 +2332,6 @@ function App() {
     setPersistenceMessage('サーバーバックアップから教室データをダウンロードしています…')
     try {
       const result = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, actingClassroomId)
-      const confirmed = window.confirm([
-        `サーバーバックアップ (${backupDateKey}) からこの教室を復元します。`,
-        `教室名: ${result.classroomName}`,
-        `保存日時: ${new Date(result.savedAt).toLocaleString('ja-JP')}`,
-        '',
-        'この教室の現在のデータはバックアップ時点の内容で上書きされます。',
-        '他の教室には影響しません。',
-        '復元してよろしいですか?',
-      ].join('\n'))
-      if (!confirmed) {
-        setPersistenceMessage('サーバーバックアップからの教室復元をキャンセルしました。')
-        return
-      }
 
       const updatedClassrooms = workspaceClassrooms.map((classroom) =>
         classroom.id === actingClassroomId
@@ -2788,6 +2775,7 @@ function App() {
         onLogout={logout}
         persistenceMessage={persistenceMessage}
         lastSavedAt={lastSavedAt}
+        classroomName={actingClassroom?.name ?? '教室'}
         autoBackupSummaries={[]}
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
