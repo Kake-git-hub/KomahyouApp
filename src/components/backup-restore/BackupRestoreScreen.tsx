@@ -291,7 +291,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 <span className="basic-data-subcopy">運用開始時点で残っている未消化振替・未消化講習の件数を生徒ごとに登録します。</span>
 
                 <div style={{ marginTop: 8 }}>
-                  <strong style={{ fontSize: '0.85em' }}>未消化振替</strong>
+                  <strong style={{ fontSize: '0.85em' }}>未消化振替（{makeupStockRows.reduce((sum, r) => sum + r.count, 0)} コマ）</strong>
                   {makeupStockRows.length > 0 && (
                     <table className="basic-data-compact-table" style={{ marginTop: 4 }}>
                       <thead><tr><th>生徒</th><th>科目</th><th>件数</th><th></th></tr></thead>
@@ -321,7 +321,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 </div>
 
                 <div style={{ marginTop: 12 }}>
-                  <strong style={{ fontSize: '0.85em' }}>未消化講習</strong>
+                  <strong style={{ fontSize: '0.85em' }}>未消化講習（{lectureStockRows.reduce((sum, r) => sum + r.count, 0)} コマ）</strong>
                   {lectureStockRows.length > 0 && (
                     <table className="basic-data-compact-table" style={{ marginTop: 4 }}>
                       <thead><tr><th>生徒</th><th>科目</th><th>講習</th><th>件数</th><th></th></tr></thead>
