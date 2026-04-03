@@ -14,7 +14,7 @@ import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdmi
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
 import { deleteFirebaseWorkspaceClassroom, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
-import { createFirebaseAuthUser, getFirebaseCurrentUser, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
+import { createFirebaseAuthUser, getFirebaseCurrentUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import type { SlotCell } from './components/schedule-board/types'
@@ -122,7 +122,7 @@ type DeveloperRestoreModalState = {
 type AddClassroomOptions = {
   classroomName: string
   managerName: string
-  managerEmail: string
+  managerEmail?: string
   managerPassword?: string
   managerUserId?: string
   contractStartDate?: string
@@ -999,10 +999,6 @@ function App() {
       }
 
       const managerEmail = input?.managerEmail?.trim() ?? window.prompt('管理者メールアドレスを入力してください。', '')?.trim() ?? ''
-      if (!managerEmail) {
-        setPersistenceMessage('教室追加をキャンセルしました。')
-        return
-      }
 
       const contractStartDate = input?.contractStartDate?.trim() || getTodayDateValue()
       const contractEndDate = input?.contractEndDate?.trim() || ''
@@ -1474,6 +1470,21 @@ function App() {
       setIsRemoteLoginSubmitting(false)
     }
   }, [remoteLoginEmail, remoteLoginPassword])
+
+  const submitPasswordReset = useCallback(async () => {
+    const normalizedEmail = remoteLoginEmail.trim()
+    if (!normalizedEmail) {
+      setRemoteAuthMessage('パスワードリセット用のメールアドレスを入力してください。')
+      return
+    }
+    try {
+      await sendFirebasePasswordResetEmail(normalizedEmail)
+      setRemoteAuthMessage(`${normalizedEmail} にパスワードリセットメールを送信しました。メール内のリンクから再設定してください。`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'パスワードリセットメールの送信に失敗しました。'
+      setRemoteAuthMessage(message)
+    }
+  }, [remoteLoginEmail])
 
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
@@ -2595,6 +2606,9 @@ function App() {
                 <button className="primary-button" type="submit" disabled={isRemoteLoginSubmitting}>{isRemoteLoginSubmitting ? 'ログイン中...' : 'Firebase にログイン'}</button>
               </div>
             </form>
+            <div className="workspace-auth-actions">
+              <button className="menu-link-button" type="button" onClick={() => void submitPasswordReset()}>パスワードを忘れた方はこちら</button>
+            </div>
             {remoteAuthMessage ? <div className="workspace-auth-note workspace-auth-note-error">{remoteAuthMessage}</div> : null}
             <div className="workspace-auth-note">接続先の設定は `.env.example` と `firebase/firestore.rules` を参照してください。</div>
           </div>

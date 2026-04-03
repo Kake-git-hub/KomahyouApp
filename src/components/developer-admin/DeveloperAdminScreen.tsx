@@ -23,7 +23,7 @@ type DeveloperAdminScreenProps = {
   onAddClassroom: (input?: {
     classroomName: string
     managerName: string
-    managerEmail: string
+    managerEmail?: string
     managerPassword?: string
     managerUserId?: string
     contractStartDate?: string
@@ -151,8 +151,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   const [provisionDraft, setProvisionDraft] = useState(() => ({
     classroomName: `新規教室 ${classrooms.length + 1}`,
     managerName: `教室管理者 ${classrooms.length + 1}`,
-    managerEmail: '',
-    managerPassword: '',
     managerUserId: '',
     contractStartDate: new Date().toISOString().slice(0, 10),
     contractEndDate: '',
@@ -189,16 +187,14 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   const submitProvisionDraft = () => {
     const normalizedClassroomName = provisionDraft.classroomName.trim()
     const normalizedManagerName = provisionDraft.managerName.trim()
-    const normalizedManagerEmail = provisionDraft.managerEmail.trim()
+    const normalizedManagerUserId = provisionDraft.managerUserId.trim()
 
-    if (!normalizedClassroomName || !normalizedManagerName || !normalizedManagerEmail) return
+    if (!normalizedClassroomName || !normalizedManagerName || !normalizedManagerUserId) return
 
     onAddClassroom({
       classroomName: normalizedClassroomName,
       managerName: normalizedManagerName,
-      managerEmail: normalizedManagerEmail,
-      managerPassword: provisionDraft.managerPassword.trim() || undefined,
-      managerUserId: provisionDraft.managerUserId.trim() || undefined,
+      managerUserId: normalizedManagerUserId,
       contractStartDate: provisionDraft.contractStartDate,
       contractEndDate: provisionDraft.contractEndDate,
     })
@@ -399,7 +395,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                     </label>
                   </div>
 
-                  {sparkManualAdminMode ? (
+                  {authMode === 'firebase' ? (
                     <div className="developer-classroom-grid">
                       <label className="basic-data-inline-field">
                         <span>現在の管理者 UID</span>
@@ -577,7 +573,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
           <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加">
             <div className="auto-assign-modal-title">教室追加</div>
-            <div className="detail-note">教室名・管理者情報を入力して追加します。Firebase Auth の UID を貼り付けると既存アカウントで登録できます。UID が空の場合はアカウントを自動発行します。</div>
+            <div className="detail-note">教室名・管理者情報を入力して追加します。Firebase Auth コンソールでアカウントを作成し、UID を貼り付けてください。</div>
 
             <section className="developer-guide-section">
               {firebaseAuthUrl ? <div className="detail-note"><a href={firebaseAuthUrl} target="_blank" rel="noopener noreferrer">Firebase Auth コンソールを開く</a>（UID をコピーできます）</div> : null}
@@ -591,16 +587,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                   <input value={provisionDraft.managerName} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerName: event.target.value }))} />
                 </label>
                 <label className="basic-data-inline-field">
-                  <span>管理者メール</span>
-                  <input type="email" value={provisionDraft.managerEmail} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerEmail: event.target.value }))} />
-                </label>
-                <label className="basic-data-inline-field">
                   <span>管理者 UID</span>
-                  <input type="text" value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="Firebase Auth の UID を貼り付け（空なら自動発行）" />
-                </label>
-                <label className="basic-data-inline-field">
-                  <span>初期パスワード</span>
-                  <input type="text" value={provisionDraft.managerPassword} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerPassword: event.target.value }))} placeholder={provisionDraft.managerUserId.trim() ? 'UID指定時は不要' : '未入力の場合は自動生成'} disabled={!!provisionDraft.managerUserId.trim()} />
+                  <input type="text" value={provisionDraft.managerUserId} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerUserId: event.target.value }))} placeholder="Firebase Auth の UID を貼り付け" />
                 </label>
                 <label className="basic-data-inline-field">
                   <span>利用開始日</span>
@@ -614,7 +602,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
             </section>
 
             <div className="auto-assign-modal-actions">
-              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerEmail.trim()}>
+              <button className="primary-button" type="button" onClick={submitProvisionDraft} disabled={!provisionDraft.classroomName.trim() || !provisionDraft.managerName.trim() || !provisionDraft.managerUserId.trim()}>
                 教室を追加
               </button>
               <button className="secondary-button slim" type="button" onClick={() => setShowProvisioningGuide(false)}>閉じる</button>

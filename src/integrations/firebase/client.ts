@@ -1,5 +1,5 @@
 import { initializeApp, deleteApp, getApp, getApps } from 'firebase/app'
-import { getAuth, createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
+import { getAuth, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail as firebaseSendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
 import { getFirestore } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled } from './config'
@@ -74,6 +74,12 @@ export async function signOutFromFirebase() {
   const auth = getFirebaseAuthInstance()
   if (!auth) return
   await signOut(auth)
+}
+
+export async function sendFirebasePasswordResetEmail(email: string) {
+  const auth = getFirebaseAuthInstance()
+  if (!auth) throw new Error('Firebase 設定が不足しているため、パスワードリセットメールを送信できません。')
+  await firebaseSendPasswordResetEmail(auth, email)
 }
 
 export async function createFirebaseAuthUser(email: string, password: string): Promise<string> {
