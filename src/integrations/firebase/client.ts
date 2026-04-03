@@ -79,6 +79,7 @@ export async function signOutFromFirebase() {
 export async function sendFirebasePasswordResetEmail(email: string) {
   const auth = getFirebaseAuthInstance()
   if (!auth) throw new Error('Firebase 設定が不足しているため、パスワードリセットメールを送信できません。')
+  auth.languageCode = 'ja'
   await firebaseSendPasswordResetEmail(auth, email)
 }
 

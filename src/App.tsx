@@ -1242,6 +1242,7 @@ function App() {
         .catch((error) => {
           const message = error instanceof Error ? error.message : '教室削除に失敗しました。'
           setPersistenceMessage(message)
+          window.alert('教室削除に失敗しました: ' + message)
         })
       return
     }

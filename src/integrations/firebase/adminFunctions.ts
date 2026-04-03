@@ -241,6 +241,7 @@ export async function deleteFirebaseWorkspaceClassroomDirect(input: { classroomI
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
   const classroomsCollectionRef = collection(workspaceRef, 'classrooms')
   const membersCollectionRef = collection(workspaceRef, 'members')
+  const snapshotsCollectionRef = collection(workspaceRef, 'classroomSnapshots')
   const classroomRef = doc(classroomsCollectionRef, input.classroomId)
   const classroomSnapshot = await getDoc(classroomRef)
   if (!classroomSnapshot.exists()) {
@@ -250,6 +251,7 @@ export async function deleteFirebaseWorkspaceClassroomDirect(input: { classroomI
 
   const batch = writeBatch(firestore)
   batch.delete(classroomRef)
+  batch.delete(doc(snapshotsCollectionRef, input.classroomId))
   if (managerUserId) {
     batch.delete(doc(membersCollectionRef, managerUserId))
   }
