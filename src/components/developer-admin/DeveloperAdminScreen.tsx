@@ -179,6 +179,10 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   )
 
   const handleAddClassroom = () => {
+    if (authMode === 'local') {
+      onAddClassroom()
+      return
+    }
     setShowProvisioningGuide(true)
   }
 
@@ -272,7 +276,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
             ) : null}
           </div>
           <div className="basic-data-row-actions" style={{ marginBottom: 12 }}>
-            <button className="secondary-button slim" type="button" onClick={() => setSubPage('classrooms')}>全校舎の詳細・請求一覧を表示</button>
+            <button className="secondary-button slim" type="button" onClick={() => setSubPage('classrooms')}>生徒数・請求一覧を表示</button>
           </div>
 
           {authMode === 'firebase' && blazeFreeTierEstimate ? (
@@ -332,60 +336,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 </div>
               </>
             ) : null}
-          </section>
-        </section>
-      </main>
-    ) : (
-      <main className="developer-main">
-        <section className="board-panel board-panel-unified">
-          <div className="basic-data-header developer-header">
-            <div>
-              <p className="panel-kicker">校舎一覧・請求管理</p>
-              <h2>全校舎の詳細と請求金額（{todayLabel}）</h2>
-            </div>
-          </div>
-          <div className="developer-header-actions">
-            <div className="basic-data-row-actions developer-actions-left">
-              <button className="secondary-button slim" type="button" onClick={() => setSubPage('main')}>← 管理画面に戻る</button>
-            </div>
-            <div className="basic-data-row-actions developer-actions-right">
-              <button className="primary-button" type="button" onClick={handleAddClassroom}>教室を追加</button>
-            </div>
-          </div>
-          {sparkManualAdminMode ? <div className="toolbar-status">教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
-
-          <section className="basic-data-section-card developer-backup-panel">
-            <div className="basic-data-card-head">
-              <h3>請求金額サマリー（生徒単価 {STUDENT_UNIT_PRICE.toLocaleString()}円）</h3>
-            </div>
-            <table className="developer-billing-table">
-              <thead>
-                <tr>
-                  <th>校舎名</th>
-                  <th style={{ textAlign: 'right' }}>在籍生徒数</th>
-                  <th style={{ textAlign: 'right' }}>単価</th>
-                  <th style={{ textAlign: 'right' }}>請求金額</th>
-                </tr>
-              </thead>
-              <tbody>
-                {classroomActiveStudents.map((entry) => (
-                  <tr key={entry.id}>
-                    <td>{entry.name || '名称未設定'}</td>
-                    <td style={{ textAlign: 'right' }}>{entry.count} 人</td>
-                    <td style={{ textAlign: 'right' }}>{STUDENT_UNIT_PRICE.toLocaleString()}円</td>
-                    <td style={{ textAlign: 'right' }}>{(entry.count * STUDENT_UNIT_PRICE).toLocaleString()}円</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr>
-                  <td><strong>合計（{classroomActiveStudents.length} 校舎）</strong></td>
-                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count, 0)} 人</strong></td>
-                  <td></td>
-                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count * STUDENT_UNIT_PRICE, 0).toLocaleString()}円</strong></td>
-                </tr>
-              </tfoot>
-            </table>
           </section>
 
           <div className="developer-classroom-list">
@@ -494,6 +444,72 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 </article>
               )
             })}
+          </div>
+        </section>
+      </main>
+    ) : (
+      <main className="developer-main">
+        <section className="board-panel board-panel-unified">
+          <div className="basic-data-header developer-header">
+            <div>
+              <p className="panel-kicker">生徒数・請求管理</p>
+              <h2>全校舎の生徒数と請求金額（{todayLabel}）</h2>
+            </div>
+          </div>
+          <div className="developer-header-actions">
+            <div className="basic-data-row-actions developer-actions-left">
+              <button className="secondary-button slim" type="button" onClick={() => setSubPage('main')}>← 管理画面に戻る</button>
+            </div>
+          </div>
+
+          <section className="basic-data-section-card developer-backup-panel">
+            <div className="basic-data-card-head">
+              <h3>請求金額サマリー（生徒単価 {STUDENT_UNIT_PRICE.toLocaleString()}円）</h3>
+            </div>
+            <table className="developer-billing-table">
+              <thead>
+                <tr>
+                  <th>校舎名</th>
+                  <th style={{ textAlign: 'right' }}>在籍生徒数</th>
+                  <th style={{ textAlign: 'right' }}>単価</th>
+                  <th style={{ textAlign: 'right' }}>請求金額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {classroomActiveStudents.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>{entry.name || '名称未設定'}</td>
+                    <td style={{ textAlign: 'right' }}>{entry.count} 人</td>
+                    <td style={{ textAlign: 'right' }}>{STUDENT_UNIT_PRICE.toLocaleString()}円</td>
+                    <td style={{ textAlign: 'right' }}>{(entry.count * STUDENT_UNIT_PRICE).toLocaleString()}円</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td><strong>合計（{classroomActiveStudents.length} 校舎）</strong></td>
+                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count, 0)} 人</strong></td>
+                  <td></td>
+                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count * STUDENT_UNIT_PRICE, 0).toLocaleString()}円</strong></td>
+                </tr>
+              </tfoot>
+            </table>
+          </section>
+
+          <div className="developer-classroom-list">
+            {classroomActiveStudents.map((entry) => (
+              <article key={entry.id} className="basic-data-section-card developer-classroom-card">
+                <div className="developer-classroom-head">
+                  <div>
+                    <h3>{entry.name || '名称未設定'}</h3>
+                    <p className="detail-note">在籍生徒数: {entry.count} 人</p>
+                  </div>
+                  <div className="basic-data-row-actions">
+                    <button className="secondary-button slim" type="button" onClick={() => onLoadStudentHistory(entry.id)}>推移を表示</button>
+                  </div>
+                </div>
+              </article>
+            ))}
           </div>
         </section>
       </main>
