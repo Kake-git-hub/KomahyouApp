@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, orderBy, query, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/appState'
 import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
@@ -235,7 +235,7 @@ export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspa
 }
 
 export async function deleteFirebaseWorkspaceClassroomDirect(input: { classroomId: string }) {
-  await ensureFirebaseAuthenticatedUser()
+  const authenticatedUser = await ensureFirebaseAuthenticatedUser()
   const firestore = requireFirestore()
   const config = getFirebaseBackendConfig()
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
@@ -249,13 +249,24 @@ export async function deleteFirebaseWorkspaceClassroomDirect(input: { classroomI
   }
   const managerUserId = String(classroomSnapshot.get('managerUserId') ?? '').trim()
 
-  const batch = writeBatch(firestore)
-  batch.delete(classroomRef)
-  batch.delete(doc(snapshotsCollectionRef, input.classroomId))
-  if (managerUserId) {
-    batch.delete(doc(membersCollectionRef, managerUserId))
+  // Delete classroom doc first
+  await deleteDoc(classroomRef)
+
+  // Delete snapshot doc (ignore if not exists)
+  try {
+    await deleteDoc(doc(snapshotsCollectionRef, input.classroomId))
+  } catch {
+    // snapshot may not exist
   }
-  await batch.commit()
+
+  // Delete member doc only if it belongs to a different user (not the developer)
+  if (managerUserId && managerUserId !== authenticatedUser.uid) {
+    try {
+      await deleteDoc(doc(membersCollectionRef, managerUserId))
+    } catch {
+      // member doc may not exist
+    }
+  }
 
   return { classroomId: input.classroomId }
 }

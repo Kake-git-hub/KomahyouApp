@@ -14,7 +14,7 @@ import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdmi
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
 import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
-import { createFirebaseAuthUser, getFirebaseCurrentUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
+import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import type { SlotCell } from './components/schedule-board/types'
@@ -424,8 +424,6 @@ async function syncWorkspaceArtifactsToDeveloperCloudDirectory(snapshot: Workspa
   await writeTextFileToDeveloperCloudDirectory(handle, getDeveloperCloudBackupFileName(snapshot.savedAt), serializeWorkspaceSnapshot(snapshot))
 }
 
-const DEFAULT_DEVELOPER_PASSWORD = 'developer'
-
 function cloneInitialValue<T>(value: T): T {
   if (typeof structuredClone === 'function') {
     return structuredClone(value)
@@ -546,7 +544,6 @@ function createInitialWorkspace(useImportedMasterData: boolean): WorkspaceSnapsh
   return {
     schemaVersion: 1,
     savedAt: new Date().toISOString(),
-    developerPassword: DEFAULT_DEVELOPER_PASSWORD,
     developerCloudBackupEnabled: false,
     developerCloudBackupFolderName: '',
     developerCloudSyncedAutoBackupKeys: [],
@@ -682,7 +679,6 @@ function App() {
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([])
   const [workspaceClassrooms, setWorkspaceClassrooms] = useState<WorkspaceClassroom[]>([])
-  const [developerPassword, setDeveloperPassword] = useState(DEFAULT_DEVELOPER_PASSWORD)
   const [developerCloudBackupEnabled, setDeveloperCloudBackupEnabled] = useState(false)
   const [developerCloudBackupFolderName, setDeveloperCloudBackupFolderName] = useState('')
   const [developerCloudBackupStatus, setDeveloperCloudBackupStatus] = useState('個人クラウドへの自動保存は未設定です。')
@@ -721,7 +717,6 @@ function App() {
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => ({
     schemaVersion: 1,
     savedAt,
-    developerPassword,
     developerCloudBackupEnabled,
     developerCloudBackupFolderName,
     developerCloudSyncedAutoBackupKeys,
@@ -747,7 +742,7 @@ function App() {
         }),
       }
     }),
-  }), [actingClassroomId, autoAssignRules, boardState, classroomSettings, currentUserId, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudSyncedAutoBackupKeys, developerPassword, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers, workspaceClassrooms, workspaceUsers])
+  }), [actingClassroomId, autoAssignRules, boardState, classroomSettings, currentUserId, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudSyncedAutoBackupKeys, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers, workspaceClassrooms, workspaceUsers])
 
   const blazeFreeTierEstimate = useMemo<BlazeFreeTierEstimate | null>(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -921,7 +916,6 @@ function App() {
     const sanitizedWorkspaceSnapshot = sanitizeWorkspaceSnapshot(workspaceSnapshot)
     setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
     setWorkspaceClassrooms(sanitizedWorkspaceSnapshot.classrooms)
-    setDeveloperPassword(sanitizedWorkspaceSnapshot.developerPassword ?? DEFAULT_DEVELOPER_PASSWORD)
     setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
     setDeveloperCloudBackupFolderName(sanitizedWorkspaceSnapshot.developerCloudBackupFolderName ?? '')
     setDeveloperCloudSyncedAutoBackupKeys(sanitizedWorkspaceSnapshot.developerCloudSyncedAutoBackupKeys ?? [])
@@ -1213,10 +1207,12 @@ function App() {
     })
   }, [isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
 
-  const deleteClassroom = useCallback((classroomId: string, password: string) => {
+  const deleteClassroom = useCallback(async (classroomId: string, password: string) => {
     if (isRemoteBackendEnabled) {
-      if (password !== developerPassword) {
-        setPersistenceMessage('開発者パスワードが一致しないため、教室を削除できませんでした。')
+      try {
+        await reauthenticateFirebaseUser(password)
+      } catch {
+        setPersistenceMessage('ログインパスワードが一致しないため、教室を削除できませんでした。')
         return
       }
 
@@ -1233,27 +1229,22 @@ function App() {
         ? (workspaceClassrooms.find((classroom) => classroom.id !== classroomId)?.id ?? null)
         : actingClassroomId
 
-      const deleteOperation = isRemoteAdminAutomationEnabled
-        ? deleteFirebaseWorkspaceClassroom({ classroomId })
-        : deleteFirebaseWorkspaceClassroomDirect({ classroomId })
-
-      void deleteOperation
-        .then(() => reloadRemoteWorkspace('教室を削除しました。', fallbackClassroomId))
-        .catch((error) => {
-          const message = error instanceof Error ? error.message : '教室削除に失敗しました。'
-          setPersistenceMessage(message)
-          window.alert('教室削除に失敗しました: ' + message)
-        })
+      try {
+        const deleteOperation = isRemoteAdminAutomationEnabled
+          ? deleteFirebaseWorkspaceClassroom({ classroomId })
+          : deleteFirebaseWorkspaceClassroomDirect({ classroomId })
+        await deleteOperation
+        await reloadRemoteWorkspace('教室を削除しました。', fallbackClassroomId)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '教室削除に失敗しました。'
+        setPersistenceMessage(message)
+        window.alert('教室削除に失敗しました: ' + message)
+      }
       return
     }
 
     if (workspaceClassrooms.length <= 1) {
       setPersistenceMessage('最後の1教室は削除できません。')
-      return
-    }
-
-    if (password !== developerPassword) {
-      setPersistenceMessage('開発者パスワードが一致しないため、教室を削除できませんでした。')
       return
     }
 
@@ -1267,7 +1258,7 @@ function App() {
       if (fallback) openClassroom(fallback.id, currentUser?.role === 'developer' ? 'developer' : fallback.data.screen)
     }
     setPersistenceMessage('教室を削除しました。開発者バックアップまたは自動バックアップから復元できます。')
-  }, [actingClassroomId, currentUser?.role, developerPassword, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openClassroom, reloadRemoteWorkspace, workspaceClassrooms])
+  }, [actingClassroomId, currentUser?.role, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openClassroom, reloadRemoteWorkspace, workspaceClassrooms])
   const toggleContractedClassroomsTemporarySuspension = useCallback(() => {
     const contractedClassrooms = workspaceClassrooms.filter((classroom) => classroom.contractStatus === 'active')
     if (contractedClassrooms.length === 0) {
@@ -2250,12 +2241,7 @@ function App() {
     setPersistenceMessage('AI分析用データを書き出しました。')
   }, [buildWorkspaceSnapshot])
 
-  const importWorkspaceBackup = useCallback(async (file: File, password: string) => {
-    if (!isRemoteBackendEnabled && password !== developerPassword) {
-      setPersistenceMessage('開発者パスワードが一致しないため、開発者バックアップを復元できませんでした。')
-      return
-    }
-
+  const importWorkspaceBackup = useCallback(async (file: File, _password: string) => {
     try {
       const text = await file.text()
       const snapshot = parseWorkspaceSnapshot(text)
@@ -2264,7 +2250,7 @@ function App() {
     } catch {
       setPersistenceMessage('開発者バックアップの読み込みに失敗しました。ファイル形式を確認してください。')
     }
-  }, [developerPassword, isRemoteBackendEnabled, openDeveloperRestoreModal])
+  }, [openDeveloperRestoreModal])
 
   const importBackup = useCallback(async (file: File) => {
     try {
@@ -2655,8 +2641,6 @@ function App() {
         managerEmailLocked={isRemoteBackendEnabled && !isRemoteAdminAutomationEnabled}
         firebaseProjectId={firebaseBackendConfig.projectId}
         persistenceMessage={persistenceMessage}
-        developerPassword={developerPassword}
-        onDeveloperPasswordChange={setDeveloperPassword}
         developerCloudBackupEnabled={developerCloudBackupEnabled}
         developerCloudBackupFolderName={developerCloudBackupFolderName}
         developerCloudBackupStatus={developerCloudBackupStatus}

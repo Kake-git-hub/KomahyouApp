@@ -140,7 +140,7 @@ export const WORKSPACE_SNAPSHOT_SCHEMA_VERSION = 1
 export type WorkspaceSnapshot = {
   schemaVersion: number
   savedAt: string
-  developerPassword: string
+  developerPassword?: string
   developerCloudBackupEnabled: boolean
   developerCloudBackupFolderName: string
   developerCloudSyncedAutoBackupKeys: string[]
