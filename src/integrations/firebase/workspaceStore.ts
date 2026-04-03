@@ -10,6 +10,7 @@ const DEFAULT_DEVELOPER_PASSWORD = 'developer'
 type FirebaseWorkspaceDoc = {
   name: string
   schemaVersion?: number
+  developerPassword?: string
 }
 
 type FirebaseWorkspaceMemberDoc = {
@@ -167,7 +168,8 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
     throw new Error('対象 workspace が Firestore に見つかりません。docs/firebase-backend.md の初期セットアップを確認してください。')
   }
 
-  void (workspaceSnapshot.data() as FirebaseWorkspaceDoc)
+  const workspaceData = workspaceSnapshot.data() as FirebaseWorkspaceDoc
+  const developerPassword = workspaceData.developerPassword?.trim() || DEFAULT_DEVELOPER_PASSWORD
   const membership = await loadWorkspaceMembership(firestore, params.authenticatedUserId)
   const currentUser = toWorkspaceUser(params.authenticatedUserId, membership)
 
@@ -214,7 +216,7 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
       classroomDocSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomDoc),
       snapshotDocSnapshots.docs.map((entry) => entry.data() as FirebaseClassroomSnapshotDoc),
     ),
-    developerPassword: DEFAULT_DEVELOPER_PASSWORD,
+    developerPassword,
     developerCloudBackupEnabled: false,
     developerCloudBackupFolderName: '',
     developerCloudSyncedAutoBackupKeys: [],
@@ -258,6 +260,13 @@ export async function saveFirebaseWorkspaceSnapshot(snapshot: WorkspaceSnapshot,
 
   if (membership.role === 'developer') {
     const batch = writeBatch(firestore)
+
+    batch.set(getWorkspaceRef(firestore), {
+      name: getFirebaseBackendConfig().workspaceKey,
+      schemaVersion: WORKSPACE_SNAPSHOT_SCHEMA_VERSION,
+      developerPassword: snapshot.developerPassword || DEFAULT_DEVELOPER_PASSWORD,
+    } satisfies FirebaseWorkspaceDoc, { merge: true })
+
     snapshot.users.forEach((user) => {
       batch.set(doc(getMembersCollection(firestore), user.id), {
         displayName: user.name,

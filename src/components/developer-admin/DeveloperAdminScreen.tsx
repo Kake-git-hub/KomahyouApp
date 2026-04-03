@@ -291,14 +291,13 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎日 02:10 JST に自動バックアップが作成されます。' : ''}</p>
             </div>
             <div className="developer-backup-grid">
-              {authMode === 'local' ? (
-                <label className="basic-data-inline-field developer-password-field">
-                  <span>開発者パスワード</span>
-                  <input type="password" value={developerPassword} onChange={(event) => onDeveloperPasswordChange(event.target.value)} />
-                </label>
-              ) : (
-                <div className="toolbar-status">現在の本人確認: Firebase ログイン済み</div>
-              )}
+              <label className="basic-data-inline-field developer-password-field">
+                <span>開発者パスワード</span>
+                <input type="password" value={developerPassword} onChange={(event) => onDeveloperPasswordChange(event.target.value)} />
+              </label>
+              {authMode === 'firebase' ? (
+                <div className="toolbar-status">現在の本人確認: Firebase ログイン済み（教室削除に開発者パスワードが必要です）</div>
+              ) : null}
               <div className="basic-data-row-actions">
                 <button className="secondary-button slim" type="button" onClick={onExportWorkspaceBackup} data-testid="developer-export-workspace-backup-button">バックアップを書き出す</button>
                 <button className="secondary-button slim" type="button" onClick={onExportAnalysisData}>AI分析用データを書き出す</button>
