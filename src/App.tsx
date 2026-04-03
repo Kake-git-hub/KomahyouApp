@@ -2319,7 +2319,7 @@ function App() {
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openDeveloperRestoreModal])
 
   const restoreClassroomFromServerAutoBackup = useCallback(async (backupDateKey: string) => {
-    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled || !actingClassroomId) return
+    if (!isRemoteBackendEnabled || !actingClassroomId) return
     setPersistenceMessage('サーバーバックアップから教室データをダウンロードしています…')
     try {
       const result = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, actingClassroomId)
@@ -2348,7 +2348,7 @@ function App() {
       const message = error instanceof Error ? error.message : 'サーバーバックアップからの教室復元に失敗しました。'
       setPersistenceMessage(message)
     }
-  }, [actingClassroomId, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, workspaceClassrooms])
+  }, [actingClassroomId, isRemoteBackendEnabled, workspaceClassrooms])
 
   const exportBasicDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -2771,7 +2771,7 @@ function App() {
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
         onRestoreAutoBackup={() => {}}
-        showServerBackups={isRemoteBackendEnabled && isRemoteAdminAutomationEnabled}
+        showServerBackups={isRemoteBackendEnabled}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
         onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
