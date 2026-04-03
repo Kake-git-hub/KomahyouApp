@@ -145,6 +145,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
 export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerPassword, onDeveloperPasswordChange, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
+  const [subPage, setSubPage] = useState<'main' | 'classrooms'>('main')
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
   const [managerEmailDrafts, setManagerEmailDrafts] = useState<Record<string, string>>({})
   const [provisionDraft, setProvisionDraft] = useState(() => ({
@@ -163,6 +164,11 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
   const todayDateKey = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const todayLabel = useMemo(() => {
+    const now = new Date()
+    return `${now.getFullYear()}年${now.getMonth() + 1}月現在`
+  }, [])
+  const STUDENT_UNIT_PRICE = 300
   const classroomActiveStudents = useMemo(() =>
     classrooms.map((classroom) => ({
       id: classroom.id,
@@ -221,6 +227,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
         </div>
       </section>
 
+      {subPage === 'main' ? (
       <main className="developer-main">
         <section className="board-panel board-panel-unified">
           <div className="basic-data-header developer-header">
@@ -247,12 +254,25 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
           {sparkManualAdminMode ? <div className="toolbar-status">教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
 
           <div className="developer-summary-grid">
-            {classroomActiveStudents.map((entry) => (
+            <article className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => setSubPage('classrooms')}>
+              <strong>{classrooms.length}</strong>
+              <span>校舎数（{todayLabel}）</span>
+            </article>
+            {classroomActiveStudents.slice(0, 3).map((entry) => (
               <article key={entry.id} className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => onLoadStudentHistory(entry.id)}>
                 <strong>{entry.count}</strong>
                 <span>{entry.name} 在籍生徒数</span>
               </article>
             ))}
+            {classroomActiveStudents.length > 3 ? (
+              <article className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => setSubPage('classrooms')}>
+                <strong>…</strong>
+                <span>他 {classroomActiveStudents.length - 3} 校舎</span>
+              </article>
+            ) : null}
+          </div>
+          <div className="basic-data-row-actions" style={{ marginBottom: 12 }}>
+            <button className="secondary-button slim" type="button" onClick={() => setSubPage('classrooms')}>全校舎の詳細・請求一覧を表示</button>
           </div>
 
           {authMode === 'firebase' && blazeFreeTierEstimate ? (
@@ -312,6 +332,60 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 </div>
               </>
             ) : null}
+          </section>
+        </section>
+      </main>
+    ) : (
+      <main className="developer-main">
+        <section className="board-panel board-panel-unified">
+          <div className="basic-data-header developer-header">
+            <div>
+              <p className="panel-kicker">校舎一覧・請求管理</p>
+              <h2>全校舎の詳細と請求金額（{todayLabel}）</h2>
+            </div>
+          </div>
+          <div className="developer-header-actions">
+            <div className="basic-data-row-actions developer-actions-left">
+              <button className="secondary-button slim" type="button" onClick={() => setSubPage('main')}>← 管理画面に戻る</button>
+            </div>
+            <div className="basic-data-row-actions developer-actions-right">
+              <button className="primary-button" type="button" onClick={handleAddClassroom}>教室を追加</button>
+            </div>
+          </div>
+          {sparkManualAdminMode ? <div className="toolbar-status">教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
+
+          <section className="basic-data-section-card developer-backup-panel">
+            <div className="basic-data-card-head">
+              <h3>請求金額サマリー（生徒単価 {STUDENT_UNIT_PRICE.toLocaleString()}円）</h3>
+            </div>
+            <table className="developer-billing-table">
+              <thead>
+                <tr>
+                  <th>校舎名</th>
+                  <th style={{ textAlign: 'right' }}>在籍生徒数</th>
+                  <th style={{ textAlign: 'right' }}>単価</th>
+                  <th style={{ textAlign: 'right' }}>請求金額</th>
+                </tr>
+              </thead>
+              <tbody>
+                {classroomActiveStudents.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>{entry.name || '名称未設定'}</td>
+                    <td style={{ textAlign: 'right' }}>{entry.count} 人</td>
+                    <td style={{ textAlign: 'right' }}>{STUDENT_UNIT_PRICE.toLocaleString()}円</td>
+                    <td style={{ textAlign: 'right' }}>{(entry.count * STUDENT_UNIT_PRICE).toLocaleString()}円</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td><strong>合計（{classroomActiveStudents.length} 校舎）</strong></td>
+                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count, 0)} 人</strong></td>
+                  <td></td>
+                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count * STUDENT_UNIT_PRICE, 0).toLocaleString()}円</strong></td>
+                </tr>
+              </tfoot>
+            </table>
           </section>
 
           <div className="developer-classroom-list">
@@ -423,6 +497,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
           </div>
         </section>
       </main>
+      )}
 
       {restoreModalState ? (
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) onCancelRestoreSelection() }}>

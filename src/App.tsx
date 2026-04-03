@@ -1052,6 +1052,8 @@ function App() {
         return
       }
 
+      setPersistenceMessage('教室を追加しています…')
+
       void provisionFirebaseWorkspaceClassroom({
         classroomName,
         managerName,
@@ -1071,6 +1073,7 @@ function App() {
       }).catch((error) => {
         const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
         setPersistenceMessage(message)
+        window.alert('教室追加に失敗しました: ' + message)
       })
       return
     }

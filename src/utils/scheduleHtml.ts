@@ -543,7 +543,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         --sat: #003cff;
         --holiday-bg: #d9dde3;
         --header-bg: #f8f8f8;
-        --sheet-screen-height: 760px;
       }
 
       * { box-sizing: border-box; }
@@ -704,9 +703,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 10px;
         box-shadow: none;
         break-inside: avoid;
-        width: min(calc(var(--sheet-screen-height) * 297 / 210), calc(100vw - 24px));
-        max-width: calc(100vw - 24px);
-        aspect-ratio: 297 / 210;
+        width: max(277mm, calc(100vw - 24px));
+        min-height: 190mm;
         overflow: hidden;
       }
 
@@ -1751,11 +1749,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function updateSheetScreenSize() {
-        if (!(pagesElement instanceof HTMLElement)) return;
-        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-        var pagesTop = pagesElement.getBoundingClientRect().top;
-        var availableHeight = Math.max(420, viewportHeight - pagesTop - 12);
-        document.documentElement.style.setProperty('--sheet-screen-height', availableHeight + 'px');
       }
 
       function normalizeSchoolInfo(value) {
