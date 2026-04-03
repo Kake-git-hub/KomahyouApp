@@ -52,6 +52,7 @@ type SerializedStudentStatusEntry = {
   id: string
   linkedStudentId?: string
   name: string
+  grade: string
   subject: string
   lessonType: string
   teacherType: string
@@ -207,6 +208,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
             id: entry.id,
             linkedStudentId: entry.managedStudentId,
             name: entry.name,
+            grade: entry.grade,
             subject: resolveDisplayedSubjectForGrade(entry.subject, entry.grade),
             lessonType: entry.lessonType,
             teacherType: entry.teacherType,
@@ -541,6 +543,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         --sat: #003cff;
         --holiday-bg: #d9dde3;
         --header-bg: #f8f8f8;
+        --sheet-screen-height: 760px;
       }
 
       * { box-sizing: border-box; }
@@ -688,6 +691,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         gap: 12px;
         padding: 12px;
         justify-content: center;
+        align-content: start;
         overflow: auto;
         scrollbar-width: thin;
         scrollbar-color: #8f9cac #e6ebf2;
@@ -700,8 +704,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 10px;
         box-shadow: none;
         break-inside: avoid;
-        width: max(277mm, calc(100vw - 24px));
-        min-height: 190mm;
+        width: min(calc(var(--sheet-screen-height) * 297 / 210), calc(100vw - 24px));
+        max-width: calc(100vw - 24px);
+        aspect-ratio: 297 / 210;
         overflow: hidden;
       }
 
@@ -1209,6 +1214,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         justify-items: stretch;
         gap: 0;
         padding: 1px 1px;
+        overflow: hidden;
       }
 
       .lesson-card-teacher.is-single {
@@ -1225,15 +1231,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 5px;
-        padding: 3px 1px;
+        gap: 3px;
+        padding: 2px 0;
         writing-mode: vertical-rl;
         text-orientation: upright;
+        overflow: hidden;
+      }
+
+      .lesson-card-teacher.is-pair .teacher-lesson-person {
+        gap: 1px;
+        padding: 1px 0;
       }
 
       .teacher-lesson-line {
         display: block;
-        line-height: 1.12;
+        line-height: 1.04;
         text-align: center;
         white-space: nowrap;
       }
@@ -1245,6 +1257,24 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .teacher-lesson-meta {
         font-size: 9px;
+      }
+
+      .teacher-lesson-person.is-condensed .teacher-lesson-name,
+      .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 10px;
+      }
+
+      .teacher-lesson-person.is-condensed .teacher-lesson-meta,
+      .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 7px;
+      }
+
+      .teacher-lesson-person.is-ultra-condensed .teacher-lesson-name {
+        font-size: 9px;
+      }
+
+      .teacher-lesson-person.is-ultra-condensed .teacher-lesson-meta {
+        font-size: 6px;
       }
 
       .lesson-main {
@@ -1295,12 +1325,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 9px;
       }
 
+      .schedule-table.is-compact .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 9px;
+      }
+
+      .schedule-table.is-compact .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 7px;
+      }
+
       .schedule-table.is-dense .teacher-lesson-name {
         font-size: 10px;
       }
 
       .schedule-table.is-dense .teacher-lesson-meta {
         font-size: 8px;
+      }
+
+      .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 6px;
       }
 
       .schedule-table.is-dense .date-row th,
@@ -1327,6 +1373,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .schedule-table.is-ultra-dense .teacher-lesson-meta {
         font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 5px;
       }
 
       .schedule-table.is-ultra-dense .date-row th,
@@ -1577,6 +1631,22 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           min-height: 190mm;
           page-break-after: always;
         }
+        .teacher-lesson-person {
+          gap: 2px;
+          padding: 1px 0;
+        }
+        .teacher-lesson-name {
+          font-size: 10px;
+        }
+        .teacher-lesson-meta {
+          font-size: 7px;
+        }
+        .lesson-card-teacher.is-pair .teacher-lesson-name {
+          font-size: 8px;
+        }
+        .lesson-card-teacher.is-pair .teacher-lesson-meta {
+          font-size: 6px;
+        }
       }
 
       @page {
@@ -1678,6 +1748,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function formatRangeLabel(startDate, endDate) {
         if (!startDate || !endDate) return '';
         return formatMonthDay(startDate) + ' ～ ' + formatMonthDay(endDate);
+      }
+
+      function updateSheetScreenSize() {
+        if (!(pagesElement instanceof HTMLElement)) return;
+        var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        var pagesTop = pagesElement.getBoundingClientRect().top;
+        var availableHeight = Math.max(420, viewportHeight - pagesTop - 12);
+        document.documentElement.style.setProperty('--sheet-screen-height', availableHeight + 'px');
       }
 
       function normalizeSchoolInfo(value) {
@@ -2699,19 +2777,48 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return lessonTypeLabels[lessonType] || lessonType || '';
       }
 
-      function formatTeacherLessonLabel(student) {
+      function getCompactStatusLabel(status) {
+        if (status === 'absent-no-makeup') return '振無休';
+        if (status === 'absent') return '休';
+        if (status === 'attended') return '出席';
+        return '';
+      }
+
+      function getVerboseStatusLabel(status) {
+        if (status === 'absent-no-makeup') return '振替なし休み';
+        if (status === 'absent') return '休み';
+        if (status === 'attended') return '出席';
+        return '';
+      }
+
+      function formatTeacherLessonLabel(student, options) {
         const lessonLabel = getCompactLessonTypeLabel(student.lessonType);
-        if (student.status === 'absent-no-makeup') return [lessonLabel, '振替なし休み'].filter(Boolean).join(' ');
-        if (student.status === 'absent') return [lessonLabel, '休'].filter(Boolean).join(' ');
-        if (student.status === 'attended') return [lessonLabel, '出席'].filter(Boolean).join(' ');
+        const statusLabel = options && options.verbose ? getVerboseStatusLabel(student.status) : getCompactStatusLabel(student.status);
+        if (statusLabel) return [lessonLabel, statusLabel].filter(Boolean).join(' ');
         const teacherLabel = teacherTypeLabels[student.teacherType] || '';
         return teacherLabel ? lessonLabel + '(' + teacherLabel + ')' : lessonLabel;
+      }
+
+      function getTeacherLessonPersonDensityClass(student) {
+        const meta = [student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ');
+        const totalLength = String(student.name || '').length + meta.length;
+        if (totalLength >= 13) return ' is-ultra-condensed';
+        if (totalLength >= 9) return ' is-condensed';
+        return '';
+      }
+
+      function formatTeacherTooltipEntry(student) {
+        const lessonLabel = [lessonTypeLabels[student.lessonType] || student.lessonType, student.subject].filter(Boolean).join(' ');
+        if (student.status === 'absent' || student.status === 'absent-no-makeup' || student.status === 'attended') {
+          return [getVerboseStatusLabel(student.status), student.name, lessonLabel].filter(Boolean).join(' / ');
+        }
+        return [student.name, lessonLabel].filter(Boolean).join(' / ');
       }
 
       function renderTeacherCellCard(students, statuses) {
         const people = [...(students || []), ...(statuses || [])];
         const cardClass = 'lesson-card lesson-card-teacher ' + (people.length > 1 ? 'is-pair' : 'is-single');
-        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
+        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person' + getTeacherLessonPersonDensityClass(student) + '"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
       }
 
       function makeCornerYearHtml(dateHeaders) {
@@ -2741,21 +2848,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var countA = 0, countB = 0, countC = 0, countD = 0;
         var attendanceDates = {};
         (entries || []).forEach(function(entry) {
-          var statuses = entry.statuses || [];
-          // コマ数(実績): 実際に出席または休みの記録があるスロットのみカウント
-          if (statuses.length === 0) return;
-          // カテゴリ分類は予定生徒情報(grade あり)を使用
-          var allStudents = entry.students || [];
-          var count = allStudents.length > 0 ? allStudents.length : statuses.length;
-          var hasHigh = allStudents.some(function(s) { return isHighSchoolOrAbove(s.grade); });
-          if (count === 1) {
+          var statuses = (entry.statuses || []).filter(Boolean);
+          var attendedStatuses = statuses.filter(function(s) {
+            return s.status === 'attended';
+          });
+          if (attendedStatuses.length === 0) return;
+          var hasHigh = attendedStatuses.some(function(s) { return isHighSchoolOrAbove(s.grade); });
+          if (attendedStatuses.length === 1) {
             if (hasHigh) countC++; else countA++;
           } else {
             if (hasHigh) countD++; else countB++;
           }
-          // 交通費: 1人でも出席(attended)があった日のみカウント
-          var hasAttended = statuses.some(function(s) { return s.status === 'attended'; });
-          if (hasAttended) attendanceDates[entry.dateKey] = true;
+          attendanceDates[entry.dateKey] = true;
         });
         return { countA: countA, countB: countB, countC: countC, countD: countD, attendanceDays: Object.keys(attendanceDates).length, teacherId: teacherId };
       }
@@ -3281,7 +3385,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
             let content = '<div class="empty-label"></div>';
             if (entry && ((entry.students || []).length > 0 || (entry.statuses || []).length > 0)) content = renderTeacherCellCard(entry.students, entry.statuses);
-            const title = entry ? [...entry.students, ...(entry.statuses || [])].map((student) => [student.name, student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')).join(' / ') : '';
+            const title = entry ? [...entry.students, ...(entry.statuses || [])].map((student) => formatTeacherTooltipEntry(student)).join(' | ') : '';
             return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
           }).join('');
           return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
@@ -3699,6 +3803,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           : '対象なし';
         summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
         document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate) + ' | ' + personLabel;
+        updateSheetScreenSize();
         syncPendingUnavailableUi(pagesElement);
         bindNotes();
         bindSalaryInputs();
@@ -3827,6 +3932,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
         if (document.hasFocus()) acquireInteractionLock();
       });
+      window.addEventListener('resize', updateSheetScreenSize);
+      if (window.visualViewport) window.visualViewport.addEventListener('resize', updateSheetScreenSize);
       window.setInterval(() => {
         const currentLock = readInteractionLock();
         if (document.hidden || !document.hasFocus()) {

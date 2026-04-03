@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml } from './scheduleHtml'
-import type { StudentRow } from '../components/basic-data/basicDataModel'
+import { buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SlotCell } from '../components/schedule-board/types'
 
@@ -14,6 +14,22 @@ function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
     withdrawDate: '未定',
     birthDate: '2012-05-01',
     isHidden: false,
+    ...overrides,
+  }
+}
+
+function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
+  return {
+    id: 'teacher-1',
+    name: '田中講師',
+    displayName: '田中',
+    email: 'teacher@example.com',
+    entryDate: '2025-04-01',
+    withdrawDate: '未定',
+    isHidden: false,
+    memo: '',
+    subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
+    availableSlots: [],
     ...overrides,
   }
 }
@@ -242,6 +258,80 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('id="schedule-person-select"')
     expect(html).toContain('id="schedule-apply-button"')
     expect(html).toContain('function renderStudentPages(startDate, endDate, studentId)')
+    vi.unstubAllGlobals()
+  })
+
+  it('sizes the sheet from browser height while preserving the A4 landscape ratio on screen', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain('--sheet-screen-height: 760px;')
+    expect(html).toContain('width: min(calc(var(--sheet-screen-height) * 297 / 210), calc(100vw - 24px));')
+    expect(html).toContain('aspect-ratio: 297 / 210;')
+    expect(html).toContain('function updateSheetScreenSize()')
+    vi.unstubAllGlobals()
+  })
+
+  it('builds teacher salary from attended statuses only and emits absent-first tooltip formatting', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      teachers: [createTeacher()],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain("var attendedStatuses = statuses.filter(function(s) {")
+    expect(html).toContain('if (attendedStatuses.length === 0) return;')
+    expect(html).toContain('isHighSchoolOrAbove(s.grade)')
+    expect(html).toContain('function formatTeacherTooltipEntry(student)')
+    expect(html).toContain("return [getVerboseStatusLabel(student.status), student.name, lessonLabel].filter(Boolean).join(' / ');")
     vi.unstubAllGlobals()
   })
 })
