@@ -2293,38 +2293,59 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
       for (const week of weeks) {
         for (const cell of week) {
-          if (cell.dateKey < effectiveStart) continue
+          const isInEffectiveRange = cell.dateKey >= effectiveStart
           for (const desk of cell.desks) {
+            // (A) effectiveStart以降の通常授業セル: 振替・講習を未消化へ返す
+            // (B) effectiveStart以前のセルでも起点日がeffectiveStart以降の振替: 盤面から除去（未消化へは返さない）
             for (const student of desk.lesson?.studentSlots ?? []) {
               if (!student) continue
-              if (student.lessonType === 'special' && student.specialStockSource === 'session') {
-                const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
-                const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
-                nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-                nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
-                  displayName: resolveBoardStudentDisplayName(student.name),
-                  sessionId: student.specialSessionId,
-                })
-                if (!managedStudentByAnyName.get(student.name)) {
-                  nextFallbackLectureStockStudents[lectureStockKey] = {
+              if (isInEffectiveRange) {
+                if (student.lessonType === 'special' && student.specialStockSource === 'session') {
+                  const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
+                  const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
+                  nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                  nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
                     displayName: resolveBoardStudentDisplayName(student.name),
-                    subject: student.subject,
+                    sessionId: student.specialSessionId,
+                  })
+                  if (!managedStudentByAnyName.get(student.name)) {
+                    nextFallbackLectureStockStudents[lectureStockKey] = {
+                      displayName: resolveBoardStudentDisplayName(student.name),
+                      subject: student.subject,
+                    }
+                  }
+                  restoredCount += 1
+                }
+                if (student.lessonType === 'makeup' && !student.manualAdded) {
+                  const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
+                  nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
+                  const managedStudent = managedStudentByAnyName.get(student.name)
+                  if (!managedStudent) {
+                    nextFallbackMakeupStudents[stockKey] = {
+                      studentName: student.name,
+                      displayName: resolveBoardStudentDisplayName(student.name),
+                      subject: student.subject,
+                    }
+                  }
+                  restoredCount += 1
+                }
+                // (C) effectiveStart以降のabsent statusSlots が作った未消化振替・講習を相殺
+                for (const statusEntry of desk.statusSlots ?? []) {
+                  if (!statusEntry || statusEntry.status !== 'absent') continue
+                  if (statusEntry.lessonType === 'special' && statusEntry.specialStockSource === 'session') {
+                    const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
+                    const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
+                    nextManualLectureStockCounts = removeLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                    nextManualLectureStockOrigins = removeManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, { sessionId: statusEntry.specialSessionId })
+                  } else if (statusEntry.lessonType === 'regular' || !statusEntry.makeupSourceDate) {
+                    const restoredStudent = buildStudentEntryFromStatus(statusEntry)
+                    const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(restoredStudent), statusEntry.subject)
+                    nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey))
                   }
                 }
-                restoredCount += 1
-              }
-              if (student.lessonType === 'makeup' && !student.manualAdded) {
-                const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
-                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
-                const managedStudent = managedStudentByAnyName.get(student.name)
-                if (!managedStudent) {
-                  nextFallbackMakeupStudents[stockKey] = {
-                    studentName: student.name,
-                    displayName: resolveBoardStudentDisplayName(student.name),
-                    subject: student.subject,
-                  }
-                }
-                restoredCount += 1
+              } else {
+                // effectiveStart以前のセルでも、起点日がeffectiveStart以降の振替は除去する（未消化へ返さない）
+                // → 盤面クリア時に除去するためここではマーキングのみ不要（clearedWeeksで処理）
               }
             }
           }
@@ -2337,26 +2358,65 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setManualMakeupAdjustments(cloneOriginMap(nextManualMakeupAdjustments))
       setFallbackMakeupStudents(nextFallbackMakeupStudents)
 
+      // (D) effectiveStart以降に削除された通常授業・振替の suppressed 抑制をクリア
+      // （テンプレで通常授業が再生成されるため、抑制が残ると未消化が正しく計算されない）
+      const nextSuppressedMakeupOrigins = Object.fromEntries(
+        Object.entries(suppressedMakeupOrigins)
+          .map(([key, origins]) => [key, origins.filter((origin) => origin.dateKey < effectiveStart)])
+          .filter(([, origins]) => (origins as ManualMakeupOrigin[]).length > 0),
+      ) as MakeupOriginMap
+
+      // (E) effectiveStart以降の授業削除による希望回数補正をクリア
+      // （テンプレで通常授業が再生成されるため、削除補正が残ると希望回数が二重に減る）
+      const nextScheduleCountAdjustments = scheduleCountAdjustments.filter((adj) => adj.dateKey < effectiveStart)
+
       const clearedWeeks = weeks.map((week) =>
         week.map((cell) => {
-          if (cell.dateKey < effectiveStart) return cell
+          if (cell.dateKey >= effectiveStart) {
+            // effectiveStart以降は全てクリア
+            return {
+              ...cell,
+              desks: cell.desks.map((desk) => ({
+                ...desk,
+                teacher: '',
+                manualTeacher: false,
+                teacherAssignmentSource: undefined,
+                teacherAssignmentSessionId: undefined,
+                teacherAssignmentTeacherId: undefined,
+                memoSlots: undefined,
+                statusSlots: undefined,
+                lesson: undefined,
+              })),
+            }
+          }
+          // effectiveStart以前のセル: 起点日がeffectiveStart以降の振替だけ除去
+          const hasEarlyMakeupToRemove = cell.desks.some((desk) =>
+            desk.lesson?.studentSlots.some((s) =>
+              s && s.lessonType === 'makeup' && !s.manualAdded && s.makeupSourceDate && s.makeupSourceDate >= effectiveStart,
+            ),
+          )
+          if (!hasEarlyMakeupToRemove) return cell
           return {
             ...cell,
-            desks: cell.desks.map((desk) => ({
-              ...desk,
-              teacher: '',
-              manualTeacher: false,
-              teacherAssignmentSource: undefined,
-              teacherAssignmentSessionId: undefined,
-              teacherAssignmentTeacherId: undefined,
-              memoSlots: undefined,
-              statusSlots: undefined,
-              lesson: undefined,
-            })),
+            desks: cell.desks.map((desk) => {
+              if (!desk.lesson) return desk
+              const nextSlots = desk.lesson.studentSlots.map((s) => {
+                if (!s || s.lessonType !== 'makeup' || s.manualAdded) return s
+                if (s.makeupSourceDate && s.makeupSourceDate >= effectiveStart) return null
+                return s
+              }) as [StudentEntry | null, StudentEntry | null]
+              const hasAnyStudent = nextSlots.some(Boolean)
+              return {
+                ...desk,
+                lesson: hasAnyStudent ? { ...desk.lesson, studentSlots: nextSlots } : undefined,
+              }
+            }),
           }
         }),
       )
       setWeeks(clearedWeeks)
+      setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
+      setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
       // Clear suppressed managed occurrences for dates >= effectiveStartDate so fresh managed data is applied
       setSuppressedRegularLessonOccurrences((prev) => prev.filter((key) => {
         const parts = key.split('__')
