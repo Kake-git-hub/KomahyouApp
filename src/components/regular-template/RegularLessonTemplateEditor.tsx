@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getTeacherDisplayName, isActiveOnDate, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import {
   buildRegularLessonTemplateWorkbook,
@@ -95,10 +95,12 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     [teachers],
   )
 
-  const studentOptions = useMemo(
-    () => students.slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right)),
-    [students],
-  )
+  const studentOptions = useMemo(() => {
+    const referenceDate = new Date().toISOString().slice(0, 10)
+    return students
+      .filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, referenceDate))
+      .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right))
+  }, [students])
 
   const occupiedDeskCount = useMemo(
     () => normalizedTemplate.cells.reduce((total, cell) => total + cell.desks.filter((desk) => desk.teacherId || desk.students.some((student) => student?.studentId)).length, 0),

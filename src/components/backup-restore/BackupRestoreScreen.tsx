@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isActiveOnDate } from '../basic-data/basicDataModel'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { AppMenu } from '../navigation/AppMenu'
@@ -76,6 +76,8 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const [makeupDraftStudentId, setMakeupDraftStudentId] = useState('')
   const [makeupDraftSubject, setMakeupDraftSubject] = useState(allStudentSubjectOptions[0])
   const [makeupDraftCount, setMakeupDraftCount] = useState(1)
+  const [makeupDraftOriginDate, setMakeupDraftOriginDate] = useState('')
+  const [makeupDraftOriginSlot, setMakeupDraftOriginSlot] = useState(0)
   const [lectureDraftStudentId, setLectureDraftStudentId] = useState('')
   const [lectureDraftSubject, setLectureDraftSubject] = useState(allStudentSubjectOptions[0])
   const [lectureDraftSessionId, setLectureDraftSessionId] = useState('')
@@ -104,13 +106,23 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const makeupStockRows = classroomSettings.initialSetupMakeupStocks ?? []
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
 
-  const activeStudents = students.filter((s) => !s.isHidden).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
+  const referenceDate = new Date().toISOString().slice(0, 10)
+  const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, referenceDate)).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
 
   const addMakeupStockRow = () => {
     if (!makeupDraftStudentId || makeupDraftCount < 1) return
-    const newRow: InitialSetupMakeupStockRow = { id: `ms_${Date.now().toString(36)}`, studentId: makeupDraftStudentId, subject: makeupDraftSubject, count: makeupDraftCount }
+    const newRow: InitialSetupMakeupStockRow = {
+      id: `ms_${Date.now().toString(36)}`,
+      studentId: makeupDraftStudentId,
+      subject: makeupDraftSubject,
+      count: makeupDraftCount,
+      originDateKey: makeupDraftOriginDate || undefined,
+      originSlotNumber: makeupDraftOriginSlot > 0 ? makeupDraftOriginSlot : undefined,
+    }
     onUpdateClassroomSettings({ ...classroomSettings, initialSetupMakeupStocks: [...makeupStockRows, newRow] })
     setMakeupDraftCount(1)
+    setMakeupDraftOriginDate('')
+    setMakeupDraftOriginSlot(0)
   }
 
   const removeMakeupStockRow = (id: string) => {
@@ -294,13 +306,15 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                   <strong style={{ fontSize: '0.85em' }}>未消化振替（{makeupStockRows.reduce((sum, r) => sum + r.count, 0)} コマ）</strong>
                   {makeupStockRows.length > 0 && (
                     <table className="basic-data-compact-table" style={{ marginTop: 4 }}>
-                      <thead><tr><th>生徒</th><th>科目</th><th>件数</th><th></th></tr></thead>
+                      <thead><tr><th>生徒</th><th>科目</th><th>件数</th><th>振替元日付</th><th>時限</th><th></th></tr></thead>
                       <tbody>
                         {makeupStockRows.map((row) => (
                           <tr key={row.id}>
                             <td>{resolveStudentName(row.studentId)}</td>
                             <td>{row.subject}</td>
                             <td>{row.count}</td>
+                            <td>{row.originDateKey || '-'}</td>
+                            <td>{row.originSlotNumber ? `${row.originSlotNumber}限` : '-'}</td>
                             <td><button type="button" className="menu-link-button danger" onClick={() => removeMakeupStockRow(row.id)} data-testid={`setup-makeup-remove-${row.id}`}>削除</button></td>
                           </tr>
                         ))}
@@ -316,6 +330,11 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                       {allStudentSubjectOptions.map((sub) => <option key={sub} value={sub}>{sub}</option>)}
                     </select>
                     <input type="number" min="1" max="99" value={makeupDraftCount} onChange={(e) => setMakeupDraftCount(Math.max(1, Number(e.target.value) || 1))} style={{ width: 48 }} data-testid="setup-makeup-count" />
+                    <input type="date" value={makeupDraftOriginDate} onChange={(e) => setMakeupDraftOriginDate(e.target.value)} style={{ width: 140 }} data-testid="setup-makeup-origin-date" title="振替元日付（任意）" />
+                    <select value={makeupDraftOriginSlot} onChange={(e) => setMakeupDraftOriginSlot(Number(e.target.value))} style={{ width: 64 }} data-testid="setup-makeup-origin-slot" title="振替元時限（任意）">
+                      <option value="0">時限</option>
+                      {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}限</option>)}
+                    </select>
                     <button type="button" className="secondary-button slim" onClick={addMakeupStockRow} data-testid="setup-makeup-add">追加</button>
                   </div>
                 </div>

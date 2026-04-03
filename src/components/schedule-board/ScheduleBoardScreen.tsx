@@ -910,7 +910,12 @@ function buildInitialSetupMakeupAdjustmentsFromSettings(classroomSettings: Class
     const count = Math.max(0, Math.trunc(Number(row.count) || 0))
     if (!row.studentId || !row.subject || count <= 0) return accumulator
     const key = buildMakeupStockKey(row.studentId, row.subject)
-    accumulator[key] = Array.from({ length: count }, (_, index) => ({ dateKey: buildInitialSetupMakeupOriginKey(row.id, index), reasonLabel: '初期設定' }))
+    const dateKey = row.originDateKey?.trim() || buildInitialSetupMakeupOriginKey(row.id, 0)
+    accumulator[key] = Array.from({ length: count }, (_, index) => ({
+      dateKey: row.originDateKey?.trim() ? dateKey : buildInitialSetupMakeupOriginKey(row.id, index),
+      slotNumber: row.originSlotNumber ?? undefined,
+      reasonLabel: '初期設定',
+    }))
     return accumulator
   }, {})
 }

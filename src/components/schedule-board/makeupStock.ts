@@ -7,6 +7,7 @@ type OriginMap = Record<string, string[]>
 
 export type ManualMakeupOrigin = {
   dateKey: string
+  slotNumber?: number
   reasonLabel?: string
 }
 
@@ -92,8 +93,11 @@ function resolveOriginSlotNumber(key: string, dateKey: string, regularLessons: R
   return null
 }
 
-function buildOriginLabels(originDates: string[], key: string, regularLessons: RegularLessonRow[]) {
-  return originDates.map((dateKey) => formatOriginLabel(dateKey, resolveOriginSlotNumber(key, dateKey, regularLessons)))
+function buildOriginLabels(originDates: string[], key: string, regularLessons: RegularLessonRow[], manualSlotNumbers?: Record<string, number>) {
+  return originDates.map((dateKey) => {
+    const slotNumber = resolveOriginSlotNumber(key, dateKey, regularLessons) ?? manualSlotNumbers?.[dateKey] ?? null
+    return formatOriginLabel(dateKey, slotNumber)
+  })
 }
 
 function resolveOriginReasonLabel(dateKey: string, params: {
@@ -612,6 +616,11 @@ export function buildMakeupStockEntries(params: {
       accumulator[origin.dateKey] = origin.reasonLabel
       return accumulator
     }, {})
+    const manualSlotNumbers = manualOrigins.reduce<Record<string, number>>((accumulator, origin) => {
+      if (!origin.slotNumber || accumulator[origin.dateKey]) return accumulator
+      accumulator[origin.dateKey] = origin.slotNumber
+      return accumulator
+    }, {})
     const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates]))
       .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
       .sort()
@@ -623,7 +632,7 @@ export function buildMakeupStockEntries(params: {
       ? Math.max(0, assignedRegularCount + plannedCount - totalLessonCount)
       : 0
     const remainingOriginDates = consumeOriginDates(allOriginDates, usedOriginDates, plannedCount)
-    const remainingOriginLabels = buildOriginLabels(remainingOriginDates, key, regularLessons)
+    const remainingOriginLabels = buildOriginLabels(remainingOriginDates, key, regularLessons, manualSlotNumbers)
     const remainingOriginReasonLabels = remainingOriginDates.map((dateKey) => resolveOriginReasonLabel(dateKey, {
       classroomSettings,
       autoOriginDates,

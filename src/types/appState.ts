@@ -27,6 +27,8 @@ export type InitialSetupMakeupStockRow = {
   studentId: string
   subject: string
   count: number
+  originDateKey?: string
+  originSlotNumber?: number
 }
 
 export type InitialSetupLectureStockRow = {
