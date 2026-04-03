@@ -32,6 +32,7 @@ type ClassroomProvisionPayload = {
   classroomName: string
   managerName: string
   managerEmail: string
+  managerPassword?: string
   contractStartDate: string
   contractEndDate?: string
   initialPayload: Record<string, unknown>
@@ -432,6 +433,7 @@ export const provisionWorkspaceClassroom = onCall(async (request) => {
   const managerEmail = validateEmailAddress(readString(rawData.managerEmail, 'managerEmail'), 'managerEmail')
   const contractStartDate = readString(rawData.contractStartDate, 'contractStartDate')
   const contractEndDate = readOptionalString(rawData.contractEndDate, 'contractEndDate')
+  const managerPassword = readOptionalString(rawData.managerPassword, 'managerPassword')
   const initialPayload = readPayloadObject(rawData.initialPayload, 'initialPayload')
   const sanitizedInitialPayload = sanitizeForFirestore(initialPayload)
 
@@ -440,7 +442,7 @@ export const provisionWorkspaceClassroom = onCall(async (request) => {
   const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
   const classroomRef = workspaceRef.collection('classrooms').doc()
   const snapshotRef = workspaceRef.collection('classroomSnapshots').doc(classroomRef.id)
-  const temporaryPassword = buildTemporaryPassword()
+  const temporaryPassword = managerPassword || buildTemporaryPassword()
   const now = new Date().toISOString()
 
   let managerUserId = ''

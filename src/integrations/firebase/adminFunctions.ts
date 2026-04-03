@@ -17,6 +17,7 @@ type ProvisionWorkspaceClassroomRequest = {
   classroomName: string
   managerName: string
   managerEmail: string
+  managerPassword?: string
   contractStartDate: string
   contractEndDate: string
   initialPayload: AppSnapshotPayload

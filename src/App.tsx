@@ -123,6 +123,7 @@ type AddClassroomOptions = {
   classroomName: string
   managerName: string
   managerEmail: string
+  managerPassword?: string
   managerUserId?: string
   contractStartDate?: string
   contractEndDate?: string
@@ -998,6 +999,8 @@ function App() {
       const contractStartDate = input?.contractStartDate?.trim() || getTodayDateValue()
       const contractEndDate = input?.contractEndDate?.trim() || ''
 
+      const managerPassword = input?.managerPassword?.trim() ?? ''
+
       if (!isRemoteAdminAutomationEnabled) {
         const managerUserId = input?.managerUserId?.trim() ?? ''
 
@@ -1019,7 +1022,7 @@ function App() {
           return
         }
 
-        const temporaryPassword = 'Koma' + Math.random().toString(36).slice(2, 8) + '!'
+        const temporaryPassword = managerPassword || ('Koma' + Math.random().toString(36).slice(2, 8) + '!')
         setPersistenceMessage('管理者アカウントを作成しています…')
 
         void (async () => {
@@ -1053,6 +1056,7 @@ function App() {
         classroomName,
         managerName,
         managerEmail,
+        managerPassword: managerPassword || undefined,
         contractStartDate,
         contractEndDate,
         initialPayload: buildEmptyClassroomPayload(),

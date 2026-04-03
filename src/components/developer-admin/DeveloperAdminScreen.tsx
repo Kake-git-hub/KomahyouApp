@@ -24,6 +24,7 @@ type DeveloperAdminScreenProps = {
     classroomName: string
     managerName: string
     managerEmail: string
+    managerPassword?: string
     managerUserId?: string
     contractStartDate?: string
     contractEndDate?: string
@@ -150,6 +151,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     classroomName: `新規教室 ${classrooms.length + 1}`,
     managerName: `教室管理者 ${classrooms.length + 1}`,
     managerEmail: '',
+    managerPassword: '',
     managerUserId: '',
     contractStartDate: new Date().toISOString().slice(0, 10),
     contractEndDate: '',
@@ -185,6 +187,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
       classroomName: normalizedClassroomName,
       managerName: normalizedManagerName,
       managerEmail: normalizedManagerEmail,
+      managerPassword: provisionDraft.managerPassword.trim() || undefined,
       contractStartDate: provisionDraft.contractStartDate,
       contractEndDate: provisionDraft.contractEndDate,
     })
@@ -497,6 +500,10 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 <label className="basic-data-inline-field">
                   <span>管理者メール</span>
                   <input type="email" value={provisionDraft.managerEmail} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerEmail: event.target.value }))} />
+                </label>
+                <label className="basic-data-inline-field">
+                  <span>初期パスワード</span>
+                  <input type="text" value={provisionDraft.managerPassword} onChange={(event) => setProvisionDraft((current) => ({ ...current, managerPassword: event.target.value }))} placeholder="未入力の場合は自動生成" />
                 </label>
                 <label className="basic-data-inline-field">
                   <span>利用開始日</span>
