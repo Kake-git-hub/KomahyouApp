@@ -356,12 +356,10 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                     <div className="basic-data-row-actions">
                       <button className="secondary-button slim" type="button" onClick={() => onOpenClassroom(classroom.id)}>この教室を開く</button>
                       <button className="secondary-button slim" type="button" onClick={() => {
-                        const password = authMode === 'local'
-                          ? window.prompt(`「${classroom.name || 'この教室'}」を削除します。開発者パスワードを入力してください。`, '')
-                          : ''
+                        const password = window.prompt(`「${classroom.name || 'この教室'}」を削除します。開発者パスワードを入力してください。`, '')
                         if (password === null) return
                         onDeleteClassroom(classroom.id, password)
-                      }} disabled={accountProvisioningLocked}>削除</button>
+                      }}>削除</button>
                     </div>
                   </div>
 

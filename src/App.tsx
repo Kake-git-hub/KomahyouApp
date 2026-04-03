@@ -13,7 +13,7 @@ import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCe
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -1164,8 +1164,8 @@ function App() {
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, queueRemoteWorkspaceClassroomUpdate, workspaceClassrooms, workspaceUsers])
 
   const replaceClassroomManagerUid = useCallback((classroomId: string, managerUserId: string, managerEmail: string) => {
-    if (!isRemoteBackendEnabled || isRemoteAdminAutomationEnabled) {
-      setPersistenceMessage('管理者 UID の差し替えは Spark 構成の Firebase 画面でのみ利用できます。')
+    if (!isRemoteBackendEnabled) {
+      setPersistenceMessage('管理者 UID の差し替えは Firebase 運用時のみ利用できます。')
       return
     }
 
@@ -1211,19 +1211,19 @@ function App() {
       const message = error instanceof Error ? error.message : '管理者 UID の差し替えに失敗しました。'
       setPersistenceMessage(message)
     })
-  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
+  }, [isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
 
   const deleteClassroom = useCallback((classroomId: string, password: string) => {
     if (isRemoteBackendEnabled) {
-      if (!isRemoteAdminAutomationEnabled) {
-        setPersistenceMessage('Spark 構成では教室削除をアプリから実行できません。Firebase Console で Auth ユーザーと Firestore ドキュメントを削除してください。')
+      if (password !== developerPassword) {
+        setPersistenceMessage('開発者パスワードが一致しないため、教室を削除できませんでした。')
         return
       }
 
       const targetClassroom = workspaceClassrooms.find((classroom) => classroom.id === classroomId)
       if (!targetClassroom) return
 
-      const confirmed = window.confirm(`「${targetClassroom.name || 'この教室'}」を削除します。関連する管理者アカウントも Firebase Auth から削除されます。続行しますか?`)
+      const confirmed = window.confirm(`「${targetClassroom.name || 'この教室'}」を削除します。続行しますか?`)
       if (!confirmed) {
         setPersistenceMessage('教室削除をキャンセルしました。')
         return
@@ -1233,8 +1233,12 @@ function App() {
         ? (workspaceClassrooms.find((classroom) => classroom.id !== classroomId)?.id ?? null)
         : actingClassroomId
 
-      void deleteFirebaseWorkspaceClassroom({ classroomId })
-        .then(() => reloadRemoteWorkspace('教室を削除しました。Firebase Auth の管理者アカウントも整理しました。', fallbackClassroomId))
+      const deleteOperation = isRemoteAdminAutomationEnabled
+        ? deleteFirebaseWorkspaceClassroom({ classroomId })
+        : deleteFirebaseWorkspaceClassroomDirect({ classroomId })
+
+      void deleteOperation
+        .then(() => reloadRemoteWorkspace('教室を削除しました。', fallbackClassroomId))
         .catch((error) => {
           const message = error instanceof Error ? error.message : '教室削除に失敗しました。'
           setPersistenceMessage(message)
@@ -1263,7 +1267,6 @@ function App() {
     }
     setPersistenceMessage('教室を削除しました。開発者バックアップまたは自動バックアップから復元できます。')
   }, [actingClassroomId, currentUser?.role, developerPassword, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openClassroom, reloadRemoteWorkspace, workspaceClassrooms])
-
   const toggleContractedClassroomsTemporarySuspension = useCallback(() => {
     const contractedClassrooms = workspaceClassrooms.filter((classroom) => classroom.contractStatus === 'active')
     if (contractedClassrooms.length === 0) {

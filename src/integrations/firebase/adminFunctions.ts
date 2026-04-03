@@ -234,6 +234,30 @@ export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspa
   return result.data
 }
 
+export async function deleteFirebaseWorkspaceClassroomDirect(input: { classroomId: string }) {
+  await ensureFirebaseAuthenticatedUser()
+  const firestore = requireFirestore()
+  const config = getFirebaseBackendConfig()
+  const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
+  const classroomsCollectionRef = collection(workspaceRef, 'classrooms')
+  const membersCollectionRef = collection(workspaceRef, 'members')
+  const classroomRef = doc(classroomsCollectionRef, input.classroomId)
+  const classroomSnapshot = await getDoc(classroomRef)
+  if (!classroomSnapshot.exists()) {
+    throw new Error('対象の教室が見つかりません。')
+  }
+  const managerUserId = String(classroomSnapshot.get('managerUserId') ?? '').trim()
+
+  const batch = writeBatch(firestore)
+  batch.delete(classroomRef)
+  if (managerUserId) {
+    batch.delete(doc(membersCollectionRef, managerUserId))
+  }
+  await batch.commit()
+
+  return { classroomId: input.classroomId }
+}
+
 export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAutoBackupSummary[]> {
   await ensureFirebaseAuthenticatedUser()
   const firestore = requireFirestore()
