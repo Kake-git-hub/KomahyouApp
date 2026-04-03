@@ -1081,7 +1081,7 @@ function formatStockOriginLabel(dateKey: string, slotNumber: number) {
 }
 
 function formatSignedStockCount(count: number) {
-  return count > 0 ? `+${count}コマ` : `${count}コマ`
+  return count > 0 ? `+${count}` : String(count)
 }
 
 function buildGroupedMakeupStockTitle(entries: MakeupStockEntry[], balance: number) {
@@ -2855,6 +2855,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         return left.displayName.localeCompare(right.displayName, 'ja')
       })
   }, [currentGradeReferenceDate, rawMakeupStockEntries, students])
+
+  const makeupStockTotalCount = useMemo(
+    () => makeupStockEntries.reduce((total, entry) => total + Math.max(0, entry.balance), 0),
+    [makeupStockEntries],
+  )
 
   const lecturePendingItemsByEntryKey = useMemo(() => {
     const expandedRawItemsByStockKey = new Map<string, Array<{
@@ -6385,7 +6390,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             statusMessage={statusMessage}
             lectureStockEntryCount={lectureStockEntries.length}
             isLectureStockOpen={isLectureStockOpen}
-            makeupStockEntryCount={makeupStockEntries.length}
+            makeupStockTotalCount={makeupStockTotalCount}
             isMakeupStockOpen={isMakeupStockOpen}
             isMakeupMoveActive={selectedMakeupStockKey !== null || selectedLectureStockKey !== null}
             isPrintingPdf={isPrintingPdf}
@@ -6520,7 +6525,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                       >
                         <span className="makeup-stock-name">{entry.displayName}</span>
                         {entry.sessionLabel ? <span className="lecture-stock-session">{entry.sessionLabel}</span> : null}
-                        <span className="status-chip">+{entry.requestedCount}コマ</span>
+                        <span className="status-chip">+{entry.requestedCount}</span>
                       </button>
                     ))}
                   </div>
@@ -6551,7 +6556,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
                       >
                         <span className="makeup-stock-name">{entry.displayName}</span>
-                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}コマ` : `${entry.balance}コマ`}</span>
+                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
                       </button>
                     ))}
                   </div>

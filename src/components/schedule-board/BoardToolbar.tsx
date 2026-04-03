@@ -5,7 +5,7 @@ type BoardToolbarProps = {
   statusMessage: string
   lectureStockEntryCount: number
   isLectureStockOpen: boolean
-  makeupStockEntryCount: number
+  makeupStockTotalCount: number
   isMakeupStockOpen: boolean
   isMakeupMoveActive: boolean
   isPrintingPdf: boolean
@@ -46,7 +46,7 @@ export function BoardToolbar({
   statusMessage,
   lectureStockEntryCount,
   isLectureStockOpen,
-  makeupStockEntryCount,
+  makeupStockTotalCount,
   isMakeupStockOpen,
   isMakeupMoveActive,
   isPrintingPdf,
@@ -140,7 +140,7 @@ export function BoardToolbar({
               </button>
               <button className={`secondary-button slim${isMakeupStockOpen || isMakeupMoveActive ? ' active' : ''}${isMakeupMoveActive ? ' is-emphasis' : ''}`} type="button" onClick={onToggleMakeupStock} data-testid="makeup-stock-chip">
                 {isMakeupMoveActive ? '振替移動中' : '未消化振替'}
-                {makeupStockEntryCount > 0 ? <span className="toolbar-inline-count">{makeupStockEntryCount}</span> : null}
+                {makeupStockTotalCount > 0 ? <span className="toolbar-inline-count">{makeupStockTotalCount}</span> : null}
               </button>
               <button className="secondary-button slim" type="button" onClick={onOpenStudentSchedule} disabled={isStudentScheduleOpen} data-testid="board-student-schedule-button">
                 {isStudentScheduleOpen ? '生徒日程は別タブで表示中' : '生徒日程'}
