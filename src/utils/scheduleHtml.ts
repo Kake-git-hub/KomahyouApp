@@ -700,7 +700,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 10px;
         box-shadow: none;
         break-inside: avoid;
-        width: 277mm;
+        width: max(277mm, calc(100vw - 24px));
         min-height: 190mm;
         overflow: hidden;
       }
@@ -1300,6 +1300,37 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .schedule-table.is-dense .teacher-lesson-meta {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-dense .date-row th,
+      .schedule-table.is-dense .weekday-row th {
+        font-size: 10px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-main {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-sub {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-card {
+        gap: 0;
+        padding: 0 1px;
+      }
+
+      .schedule-table.is-ultra-dense .teacher-lesson-name {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-ultra-dense .teacher-lesson-meta {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .date-row th,
+      .schedule-table.is-ultra-dense .weekday-row th {
         font-size: 8px;
       }
 
@@ -1978,6 +2009,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function getTableDensityClass(dateHeaders) {
+        if (dateHeaders.length >= 38) return 'is-dense is-ultra-dense';
         if (dateHeaders.length >= 28) return 'is-dense';
         if (dateHeaders.length >= 18) return 'is-compact';
         return '';
@@ -2709,17 +2741,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var countA = 0, countB = 0, countC = 0, countD = 0;
         var attendanceDates = {};
         (entries || []).forEach(function(entry) {
-          var presentStudents = (entry.students || []).filter(function(s) {
-            return s.status !== 'absent' && s.status !== 'absent-no-makeup';
-          });
-          if (presentStudents.length === 0) return;
-          attendanceDates[entry.dateKey] = true;
-          var hasHigh = presentStudents.some(function(s) { return isHighSchoolOrAbove(s.grade); });
-          if (presentStudents.length === 1) {
+          var statuses = entry.statuses || [];
+          // コマ数(実績): 実際に出席または休みの記録があるスロットのみカウント
+          if (statuses.length === 0) return;
+          // カテゴリ分類は予定生徒情報(grade あり)を使用
+          var allStudents = entry.students || [];
+          var count = allStudents.length > 0 ? allStudents.length : statuses.length;
+          var hasHigh = allStudents.some(function(s) { return isHighSchoolOrAbove(s.grade); });
+          if (count === 1) {
             if (hasHigh) countC++; else countA++;
           } else {
             if (hasHigh) countD++; else countB++;
           }
+          // 交通費: 1人でも出席(attended)があった日のみカウント
+          var hasAttended = statuses.some(function(s) { return s.status === 'attended'; });
+          if (hasAttended) attendanceDates[entry.dateKey] = true;
         });
         return { countA: countA, countB: countB, countC: countC, countD: countD, attendanceDays: Object.keys(attendanceDates).length, teacherId: teacherId };
       }
@@ -2728,7 +2764,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var tid = escapeHtml(salaryData.teacherId);
         return '<div class="box-stack salary-section"><div class="box-table-title">給与計算</div>' +
           '<table class="salary-table" data-salary-teacher-id="' + tid + '">' +
-          '<thead><tr><th></th><th>コマ数</th><th>単価</th><th>小計</th></tr></thead>' +
+          '<thead><tr><th></th><th>コマ数(実績)</th><th>単価</th><th>小計</th></tr></thead>' +
           '<tbody>' +
           '<tr><td class="salary-label">A (1名/中学以下)</td><td class="salary-count" data-salary-cat="A">' + salaryData.countA + '</td><td><input class="salary-input" type="number" min="0" data-salary-unit="A" data-salary-key="salary-unit-A-' + tid + '" /></td><td class="salary-subtotal" data-salary-sub="A">0</td></tr>' +
           '<tr><td class="salary-label">B (2名/中学以下)</td><td class="salary-count" data-salary-cat="B">' + salaryData.countB + '</td><td><input class="salary-input" type="number" min="0" data-salary-unit="B" data-salary-key="salary-unit-B-' + tid + '" /></td><td class="salary-subtotal" data-salary-sub="B">0</td></tr>' +
@@ -2783,7 +2819,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function formatAbsenceNote(dateKey, slotNumber, teacherName, subject, lessonType, status) {
-        var base = [formatCompactDateSlot(dateKey, slotNumber), teacherName, lessonTypeLabels[lessonType] || lessonType, subject].filter(Boolean).join(' / ');
+        var base = [formatCompactDateSlot(dateKey, slotNumber), lessonTypeLabels[lessonType] || lessonType, subject].filter(Boolean).join(' / ');
         if (status === 'absent-no-makeup') base += ' (振無休)';
         return base;
       }
@@ -2791,7 +2827,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function toMakeupRows(makeupNotes, minimumRowCount) {
         return Array.from({ length: Math.max(minimumRowCount, makeupNotes.length) }, (_, rowIndex) => {
           const note = makeupNotes[rowIndex] ?? '';
-          return '<tr><td colspan="3">' + escapeHtml(note) + '</td></tr>';
+          const len = note.length;
+          const fs = len > 40 ? 'font-size:7px;' : len > 28 ? 'font-size:8px;' : '';
+          return '<tr><td colspan="3"' + (fs ? ' style="' + fs + '"' : '') + '>' + escapeHtml(note) + '</td></tr>';
         }).join('');
       }
 
