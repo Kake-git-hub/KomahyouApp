@@ -2282,6 +2282,61 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     if (overwrite) {
       const effectiveStart = template.effectiveStartDate
+
+      // Return makeup/lecture students to stock before clearing
+      let nextManualLectureStockCounts = { ...manualLectureStockCounts }
+      let nextManualLectureStockOrigins = cloneManualLectureStockOrigins(manualLectureStockOrigins)
+      const nextFallbackLectureStockStudents = { ...fallbackLectureStockStudents }
+      let nextManualMakeupAdjustments = cloneOriginMap(manualMakeupAdjustments)
+      const nextFallbackMakeupStudents = { ...fallbackMakeupStudents }
+      let restoredCount = 0
+
+      for (const week of weeks) {
+        for (const cell of week) {
+          if (cell.dateKey < effectiveStart) continue
+          for (const desk of cell.desks) {
+            for (const student of desk.lesson?.studentSlots ?? []) {
+              if (!student) continue
+              if (student.lessonType === 'special' && student.specialStockSource === 'session') {
+                const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
+                const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
+                nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
+                  displayName: resolveBoardStudentDisplayName(student.name),
+                  sessionId: student.specialSessionId,
+                })
+                if (!managedStudentByAnyName.get(student.name)) {
+                  nextFallbackLectureStockStudents[lectureStockKey] = {
+                    displayName: resolveBoardStudentDisplayName(student.name),
+                    subject: student.subject,
+                  }
+                }
+                restoredCount += 1
+              }
+              if (student.lessonType === 'makeup' && !student.manualAdded) {
+                const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
+                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
+                const managedStudent = managedStudentByAnyName.get(student.name)
+                if (!managedStudent) {
+                  nextFallbackMakeupStudents[stockKey] = {
+                    studentName: student.name,
+                    displayName: resolveBoardStudentDisplayName(student.name),
+                    subject: student.subject,
+                  }
+                }
+                restoredCount += 1
+              }
+            }
+          }
+        }
+      }
+
+      setManualLectureStockCounts({ ...nextManualLectureStockCounts })
+      setManualLectureStockOrigins(cloneManualLectureStockOrigins(nextManualLectureStockOrigins))
+      setFallbackLectureStockStudents({ ...nextFallbackLectureStockStudents })
+      setManualMakeupAdjustments(cloneOriginMap(nextManualMakeupAdjustments))
+      setFallbackMakeupStudents(nextFallbackMakeupStudents)
+
       const clearedWeeks = weeks.map((week) =>
         week.map((cell) => {
           if (cell.dateKey < effectiveStart) return cell
@@ -2295,7 +2350,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               teacherAssignmentSessionId: undefined,
               teacherAssignmentTeacherId: undefined,
               memoSlots: undefined,
-              statusSlots: cloneStatusSlots(desk.statusSlots),
+              statusSlots: undefined,
               lesson: undefined,
             })),
           }
@@ -2308,13 +2363,20 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         const dateKey = parts[2] ?? ''
         return dateKey < effectiveStart
       }))
+
+      if (restoredCount > 0) {
+        setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。${restoredCount}件の振替・講習を未消化ストックへ戻しました。`)
+      } else {
+        setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`)
+      }
+    } else {
+      setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`)
     }
 
     setIsTemplateMode(false)
     setTemplateCells([])
     setTemplateSaveConfirm(null)
-    setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。`)
-  }, [classroomSettings, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
+  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -2717,27 +2779,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     ))
 
     return matchesStudent2 ? 'regular' : 'regular'
-  }
-  const shouldCountHolidayAsManualAdjustment = (student: StudentEntry, dateKey: string, slotNumber: number) => {
-    if (student.manualAdded) return false
-    if (student.lessonType !== 'regular') return true
-
-    const managedStudent = managedStudentByAnyName.get(student.name)
-    if (!managedStudent) return true
-
-    const lessonDate = parseDateKey(dateKey)
-    const schoolYear = resolveOperationalSchoolYear(lessonDate)
-    const dayOfWeek = lessonDate.getDay()
-
-    const matchesManagedRegularLesson = regularLessons.some((row) => (
-      row.schoolYear === schoolYear
-      && row.dayOfWeek === dayOfWeek
-      && row.slotNumber === slotNumber
-      && (((row.student1Id === managedStudent.id && row.subject1 === student.subject) && isRegularLessonParticipantActiveOnDate(row, dateKey))
-        || ((row.student2Id === managedStudent.id && row.subject2 === student.subject) && isRegularLessonParticipantActiveOnDate(row, dateKey)))
-    ))
-
-    return !matchesManagedRegularLesson
   }
   const resolveBoardStudentStockId = (student: StudentEntry) => {
     const managedId = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
@@ -4761,9 +4802,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             }
             if (!student.manualAdded) {
               const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
-              if (shouldCountHolidayAsManualAdjustment(student, cell.dateKey, cell.slotNumber)) {
-                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
-              }
+              nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
 
               const managedStudent = managedStudentByAnyName.get(student.name)
               if (!managedStudent) {
@@ -4803,9 +4842,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               if (!statusEntry.manualAdded) {
                 const statusStudentAsEntry = { name: statusEntry.name, manualAdded: statusEntry.manualAdded, subject: statusEntry.subject, lessonType: statusEntry.lessonType } as StudentEntry
                 const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(statusStudentAsEntry), statusEntry.subject)
-                if (shouldCountHolidayAsManualAdjustment(statusStudentAsEntry, cell.dateKey, cell.slotNumber)) {
-                  nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, cell.dateKey)
-                }
+                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, cell.dateKey)
 
                 const managedStudent = managedStudentByAnyName.get(statusEntry.name)
                 if (!managedStudent) {
