@@ -2382,7 +2382,7 @@ function App() {
     try {
       if (hasAnyExistingSetupData() && !window.confirm([
         '基本データを初期取り込みします。',
-        '現在の基本データ、特別講習データ、自動割振ルール、盤面、開始時点ストックは初期化されます。',
+        '現在の基本データ、自動割振ルール、盤面、開始時点ストックは初期化されます。',
         '続行しますか?',
       ].join('\n'))) {
         setPersistenceMessage('基本データの初期取り込みをキャンセルしました。')
@@ -2424,7 +2424,6 @@ function App() {
       setRegularLessons([])
       setGroupLessons([])
       setClassroomSettings(initialImportedBundle.classroomSettings)
-      setSpecialSessions(createInitialSpecialSessionRows())
       setAutoAssignRules(createInitialAutoAssignRuleRows())
       setPairConstraints(createInitialPairConstraintRows())
       const initialBoardRegularLessons = buildRegularLessonsFromTemplate({

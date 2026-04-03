@@ -333,7 +333,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                     <input type="date" value={makeupDraftOriginDate} onChange={(e) => setMakeupDraftOriginDate(e.target.value)} style={{ width: 140 }} data-testid="setup-makeup-origin-date" title="振替元日付（任意）" />
                     <select value={makeupDraftOriginSlot} onChange={(e) => setMakeupDraftOriginSlot(Number(e.target.value))} style={{ width: 64 }} data-testid="setup-makeup-origin-slot" title="振替元時限（任意）">
                       <option value="0">時限</option>
-                      {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}限</option>)}
+                      {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}限</option>)}
                     </select>
                     <button type="button" className="secondary-button slim" onClick={addMakeupStockRow} data-testid="setup-makeup-add">追加</button>
                   </div>
