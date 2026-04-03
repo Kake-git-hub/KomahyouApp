@@ -5307,6 +5307,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       return
     }
 
+    const targetStatusBeforeMove = targetDeskBeforeMove?.statusSlots?.[studentIndex] ?? null
+    if (targetStudentBeforeMove && targetStatusBeforeMove?.status === 'attended') {
+      setStatusMessage('出席済みの生徒とは入れ替えできません。出席を解除してから操作してください。')
+      return
+    }
+
     let movedStudent: StudentEntry | null = null
     let sourceLessonSnapshot: DeskLesson | null = null
     let sourceCellId = ''
@@ -5318,8 +5324,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const nextWeeks = cloneWeeks(weeks)
     const nextCells = nextWeeks[weekIndex]
 
+    let sourceFound = false
     for (const week of nextWeeks) {
+      if (sourceFound) break
       for (const cell of week) {
+        if (sourceFound) break
         for (const desk of cell.desks) {
           if (!desk.lesson) continue
           const currentIndex = desk.lesson.studentSlots.findIndex((student) => student?.id === selectedStudentId)
@@ -5339,6 +5348,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           if (!desk.lesson.studentSlots[0] && !desk.lesson.studentSlots[1]) {
             desk.lesson = undefined
           }
+          sourceFound = true
+          break
         }
       }
     }
@@ -6887,6 +6898,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   {menuStudent?.student.lessonType === 'special' && menuStudent.student.specialStockSource !== 'session' ? (
                     <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した講習は未消化講習へ戻せません。不要な場合は削除してください。</div>
+                  ) : menuStudent?.student.manualAdded && (menuStudent.student.lessonType === 'regular' || menuStudent.student.lessonType === 'makeup') ? (
+                    <div className="student-menu-help-text" data-testid="menu-stock-disabled-note">手動追加した通常/振替は未消化振替へ戻せません。不要な場合は削除してください。</div>
                   ) : (
                     <>
                       <button type="button" className="menu-link-button" onClick={handleStoreStudent} data-testid="menu-stock-button">{menuStudent ? getStudentStockMenuLabel(menuStudent.student) : 'ストックへ戻す'}</button>
