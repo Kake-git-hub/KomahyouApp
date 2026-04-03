@@ -242,10 +242,6 @@ function getDeveloperCloudBackupFileName(savedAt: string) {
   return formatPreciseBackupFileName(savedAt, '開発者バックアップ_自動保存')
 }
 
-function getDeveloperCloudAnalysisFileName(savedAt: string) {
-  return formatPreciseBackupFileName(savedAt, 'AI分析用データ_自動保存')
-}
-
 async function writeTextFileToDeveloperCloudDirectory(handle: DeveloperCloudBackupDirectoryHandle, fileName: string, content: string) {
   const fileHandle = await handle.getFileHandle(fileName, { create: true })
   const writable = await fileHandle.createWritable()
@@ -425,7 +421,6 @@ function buildWorkspaceAnalysisExport(snapshot: WorkspaceSnapshot) {
 
 async function syncWorkspaceArtifactsToDeveloperCloudDirectory(snapshot: WorkspaceSnapshot, handle: DeveloperCloudBackupDirectoryHandle) {
   await writeTextFileToDeveloperCloudDirectory(handle, getDeveloperCloudBackupFileName(snapshot.savedAt), serializeWorkspaceSnapshot(snapshot))
-  await writeTextFileToDeveloperCloudDirectory(handle, getDeveloperCloudAnalysisFileName(snapshot.savedAt), serializeAnalysisExport(buildWorkspaceAnalysisExport(snapshot)))
 }
 
 const DEFAULT_DEVELOPER_PASSWORD = 'developer'
@@ -1319,7 +1314,7 @@ function App() {
     await syncWorkspaceArtifactsToDeveloperCloudDirectory(snapshot, targetHandle)
 
     const folderName = developerCloudBackupFolderName || targetHandle.name
-    const message = `${folderName} にバックアップとAI分析用データを保存しました。`
+    const message = `${folderName} にバックアップを保存しました。`
     setDeveloperCloudBackupStatus(message)
     return { synced: true, message }
   }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle])
@@ -1357,8 +1352,8 @@ function App() {
         ? `${handle.name} を保存フォルダに設定しました。`
         : `${handle.name} を保存フォルダに設定しました。再起動後は再選択が必要です。`)
       setPersistenceMessage(persisted
-        ? '保存フォルダを設定しました。以後は自動保存ごとに最新バックアップとAI分析用データを更新します。'
-        : '保存フォルダを設定しました。今のセッション中は自動保存されますが、再起動後は再選択が必要です。')
+        ? '保存フォルダを設定しました。以後はサーバーバックアップ一覧取得時に最新バックアップを同期します。'
+        : '保存フォルダを設定しました。今のセッション中は有効ですが、再起動後は再選択が必要です。')
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         setDeveloperCloudBackupStatus('保存フォルダの選択をキャンセルしました。')
@@ -2115,18 +2110,6 @@ function App() {
 
   useEffect(() => {
     if (!hasHydratedSnapshot) return
-    if (!developerCloudBackupEnabled) return
-    if (!developerCloudBackupHandle) return
-
-    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {
-      setDeveloperCloudBackupStatus('保存フォルダへの未同期バックアップ同期に失敗しました。')
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [developerCloudBackupEnabled, developerCloudBackupHandle, hasHydratedSnapshot])
-
-  useEffect(() => {
-    if (!hasHydratedSnapshot) return
     if (!isSnapshotPersistenceRuntimeEnabled()) return
     if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
 
@@ -2280,13 +2263,21 @@ function App() {
       const summaries = await listFirebaseServerAutoBackupSummaries()
       setServerAutoBackupSummaries(summaries)
       setPersistenceMessage(`サーバーバックアップ一覧を取得しました。${summaries.length} 件`)
+
+      // サーバーバックアップ一覧取得のタイミングで自動同期フォルダへ同期する
+      if (summaries.length > 0 && developerCloudBackupEnabled && developerCloudBackupHandle) {
+        const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+        void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {
+          setDeveloperCloudBackupStatus('自動同期フォルダへの同期に失敗しました。')
+        })
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'サーバーバックアップ一覧の取得に失敗しました。'
       setPersistenceMessage(message)
     } finally {
       setServerAutoBackupLoading(false)
     }
-  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
+  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
 
   const loadStudentHistory = useCallback((classroomId: string) => {
     const allClassrooms = workspaceClassrooms.map((c) =>
