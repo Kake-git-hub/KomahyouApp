@@ -261,6 +261,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders a fixed top toolbar that compensates for browser zoom', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain('--schedule-toolbar-offset: 0px;')
+    expect(html).toContain('position: fixed;')
+    expect(html).toContain("toolbarElement.style.transform = 'scale(' + inverseScale + ')';")
+    expect(html).toContain("window.visualViewport.addEventListener('scroll', updateSheetScreenSize);")
+    vi.unstubAllGlobals()
+  })
+
   it('sizes the sheet from browser height while preserving the A4 landscape ratio on screen', () => {
     const write = vi.fn()
     const popup = {

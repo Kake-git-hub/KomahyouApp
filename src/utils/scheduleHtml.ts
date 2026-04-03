@@ -543,6 +543,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         --sat: #003cff;
         --holiday-bg: #d9dde3;
         --header-bg: #f8f8f8;
+        --schedule-toolbar-offset: 0px;
       }
 
       * { box-sizing: border-box; }
@@ -583,8 +584,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .toolbar {
-        position: sticky;
+        position: fixed;
         top: 0;
+        left: 0;
+        width: 100%;
         z-index: 20;
         display: flex;
         flex-wrap: wrap;
@@ -593,6 +596,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 10px 16px;
         border-bottom: 1px solid #c9c9c9;
         background: rgba(255, 255, 255, 0.97);
+        transform-origin: top left;
+        will-change: transform, width, left, top;
       }
 
       .toolbar-field { display: grid; gap: 4px; }
@@ -688,7 +693,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .pages {
         display: grid;
         gap: 12px;
-        padding: 12px;
+        padding: calc(var(--schedule-toolbar-offset) + 12px) 12px 12px;
         justify-content: center;
         align-content: start;
         overflow: auto;
@@ -1697,6 +1702,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const endInput = document.getElementById('schedule-end-date');
       const periodSelect = document.getElementById('schedule-period-select');
       const summaryLabel = document.getElementById('schedule-summary-label');
+      const toolbarElement = document.querySelector('.toolbar');
       const pagesElement = document.getElementById('schedule-pages');
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
@@ -1749,6 +1755,22 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function updateSheetScreenSize() {
+        if (!(toolbarElement instanceof HTMLElement)) return;
+
+        const viewport = window.visualViewport;
+        const viewportScale = viewport && Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
+        const viewportWidth = viewport && Number.isFinite(viewport.width) && viewport.width > 0 ? viewport.width : window.innerWidth;
+        const offsetLeft = viewport && Number.isFinite(viewport.offsetLeft) ? viewport.offsetLeft : 0;
+        const offsetTop = viewport && Number.isFinite(viewport.offsetTop) ? viewport.offsetTop : 0;
+        const inverseScale = 1 / viewportScale;
+
+        toolbarElement.style.left = offsetLeft + 'px';
+        toolbarElement.style.top = offsetTop + 'px';
+        toolbarElement.style.width = viewportWidth * viewportScale + 'px';
+        toolbarElement.style.transform = 'scale(' + inverseScale + ')';
+
+        const toolbarRect = toolbarElement.getBoundingClientRect();
+        document.documentElement.style.setProperty('--schedule-toolbar-offset', Math.max(toolbarRect.height + offsetTop, 0) + 'px');
       }
 
       function normalizeSchoolInfo(value) {
@@ -3926,7 +3948,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (document.hasFocus()) acquireInteractionLock();
       });
       window.addEventListener('resize', updateSheetScreenSize);
-      if (window.visualViewport) window.visualViewport.addEventListener('resize', updateSheetScreenSize);
+      if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', updateSheetScreenSize);
+        window.visualViewport.addEventListener('scroll', updateSheetScreenSize);
+      }
       window.setInterval(() => {
         const currentLock = readInteractionLock();
         if (document.hidden || !document.hasFocus()) {
