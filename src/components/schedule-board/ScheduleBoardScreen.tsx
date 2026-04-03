@@ -1081,7 +1081,7 @@ function formatStockOriginLabel(dateKey: string, slotNumber: number) {
 }
 
 function formatSignedStockCount(count: number) {
-  return count > 0 ? `+${count}` : String(count)
+  return count > 0 ? `+${count}コマ` : `${count}コマ`
 }
 
 function buildGroupedMakeupStockTitle(entries: MakeupStockEntry[], balance: number) {
@@ -6520,7 +6520,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                       >
                         <span className="makeup-stock-name">{entry.displayName}</span>
                         {entry.sessionLabel ? <span className="lecture-stock-session">{entry.sessionLabel}</span> : null}
-                        <span className="status-chip">+{entry.requestedCount}</span>
+                        <span className="status-chip">+{entry.requestedCount}コマ</span>
                       </button>
                     ))}
                   </div>
@@ -6551,7 +6551,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
                       >
                         <span className="makeup-stock-name">{entry.displayName}</span>
-                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
+                        <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}コマ` : `${entry.balance}コマ`}</span>
                       </button>
                     ))}
                   </div>

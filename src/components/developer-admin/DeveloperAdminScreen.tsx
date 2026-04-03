@@ -157,7 +157,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
   const sparkManualAdminMode = authMode === 'firebase' && accountProvisioningLocked
   const firebaseSummary = accountProvisioningLocked || managerEmailLocked
-    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。Authentication で管理者ユーザーを作成して UID を控えた後、この画面から教室追加と既存教室の UID 差し替えを行います。削除と管理者メール変更は Firebase Console で手動運用します。'
+    ? 'Firebase Hosting / Auth / Firestore の Spark 構成です。教室追加はこの画面から実行でき、管理者アカウントは自動発行されます。既存教室の管理者 UID 差し替えもここで行えます。教室削除と管理者メール変更は Firebase Console で手動運用します。'
     : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者メール変更も Firebase 側へ反映します。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
   const todayDateKey = useMemo(() => new Date().toISOString().slice(0, 10), [])
