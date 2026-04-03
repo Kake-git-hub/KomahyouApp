@@ -4729,6 +4729,37 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         ? [...classroomSettings.forceOpenDates.filter((value) => value !== dateKey), dateKey].sort()
         : classroomSettings.forceOpenDates.filter((value) => value !== dateKey)
 
+      // Suppress managed regular lessons so they don't get re-placed by the overlay.
+      // The manual makeup adjustments added when the holiday was set still apply,
+      // and restoring the lessons would double-count.
+      let nextSuppressedRegularLessonOccurrences = [...suppressedRegularLessonOccurrences]
+      const holidayDate = parseDateKey(dateKey)
+      const holidayDayOfWeek = holidayDate.getDay()
+      const schoolYear = resolveOperationalSchoolYear(holidayDate)
+      const studentByIdLocal = new Map(students.map((s) => [s.id, s]))
+      const teacherByIdLocal = new Map(teachers.map((t) => [t.id, t]))
+
+      for (const row of regularLessons) {
+        if (row.dayOfWeek !== holidayDayOfWeek) continue
+        if (row.schoolYear !== schoolYear) continue
+        const teacher = teacherByIdLocal.get(row.teacherId)
+        if (teacher && resolveTeacherRosterStatus(teacher, dateKey) !== '在籍') continue
+        if (!isRegularLessonParticipantActiveOnDate(row, dateKey)) continue
+
+        const participants = [
+          { studentId: row.student1Id, subject: row.subject1 },
+          { studentId: row.student2Id, subject: row.subject2 },
+        ].filter((p) => p.studentId && p.subject)
+
+        for (const participant of participants) {
+          const student = studentByIdLocal.get(participant.studentId)
+          if (!student) continue
+          if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)) continue
+          const occurrenceKey = `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`
+          nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, occurrenceKey)
+        }
+      }
+
       commitWeeks(
         cloneWeeks(weeks),
         weekIndex,
@@ -4736,6 +4767,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         selectedDeskIndex,
         classroomSettings.holidayDates.filter((value) => value !== dateKey),
         nextForceOpenDates,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        nextSuppressedRegularLessonOccurrences,
       )
       setSelectedHolidayDate(dateKey)
       setStudentMenu(null)
