@@ -45,6 +45,17 @@ export function getFirebaseCurrentUser() {
   return auth?.currentUser ?? null
 }
 
+export async function ensureFirebaseAuthenticatedUser() {
+  const auth = getFirebaseAuthInstance()
+  const currentUser = auth?.currentUser ?? null
+  if (!currentUser) {
+    throw new Error('Firebase のログイン状態が確認できません。再ログイン後にもう一度実行してください。')
+  }
+
+  await currentUser.getIdToken(true)
+  return currentUser
+}
+
 export function subscribeToFirebaseAuthChanges(callback: (user: User | null) => void) {
   const auth = getFirebaseAuthInstance()
   if (!auth) return () => {}

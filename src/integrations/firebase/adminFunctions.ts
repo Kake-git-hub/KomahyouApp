@@ -1,7 +1,7 @@
 import { collection, doc, getDoc, getDocs, orderBy, query, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/appState'
-import { getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
+import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 
@@ -76,6 +76,7 @@ function requireFirestore() {
 }
 
 export async function provisionFirebaseWorkspaceClassroom(input: Omit<ProvisionWorkspaceClassroomRequest, 'workspaceKey'>) {
+  await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<ProvisionWorkspaceClassroomRequest, ProvisionWorkspaceClassroomResponse>(functions, 'provisionWorkspaceClassroom')
@@ -87,6 +88,7 @@ export async function provisionFirebaseWorkspaceClassroom(input: Omit<ProvisionW
 }
 
 export async function provisionFirebaseWorkspaceClassroomWithExistingUid(input: Omit<ProvisionWorkspaceClassroomWithExistingUidRequest, 'workspaceKey'>) {
+  await ensureFirebaseAuthenticatedUser()
   const firestore = requireFirestore()
   const config = getFirebaseBackendConfig()
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
@@ -142,6 +144,7 @@ export async function provisionFirebaseWorkspaceClassroomWithExistingUid(input: 
 }
 
 export async function reassignFirebaseWorkspaceClassroomManagerWithExistingUid(input: Omit<ReassignWorkspaceClassroomManagerWithExistingUidRequest, 'workspaceKey'>) {
+  await ensureFirebaseAuthenticatedUser()
   const firestore = requireFirestore()
   const config = getFirebaseBackendConfig()
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
@@ -208,6 +211,7 @@ export async function reassignFirebaseWorkspaceClassroomManagerWithExistingUid(i
 }
 
 export async function updateFirebaseWorkspaceClassroom(input: Omit<UpdateWorkspaceClassroomRequest, 'workspaceKey'>) {
+  await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<UpdateWorkspaceClassroomRequest, { classroomId: string }>(functions, 'updateWorkspaceClassroom')
@@ -219,6 +223,7 @@ export async function updateFirebaseWorkspaceClassroom(input: Omit<UpdateWorkspa
 }
 
 export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspaceClassroomRequest, 'workspaceKey'>) {
+  await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<DeleteWorkspaceClassroomRequest, { classroomId: string }>(functions, 'deleteWorkspaceClassroom')
@@ -230,6 +235,7 @@ export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspa
 }
 
 export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAutoBackupSummary[]> {
+  await ensureFirebaseAuthenticatedUser()
   const firestore = requireFirestore()
   const config = getFirebaseBackendConfig()
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
@@ -248,6 +254,7 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
 }
 
 export async function downloadFirebaseServerAutoBackup(backupDateKey: string): Promise<string> {
+  await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson: string }>(functions, 'downloadServerAutoBackup')
@@ -266,6 +273,7 @@ export type ClassroomFromServerAutoBackup = {
 }
 
 export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKey: string, classroomId: string): Promise<ClassroomFromServerAutoBackup> {
+  await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; classroomId: string }, ClassroomFromServerAutoBackup>(functions, 'downloadClassroomFromServerAutoBackup')

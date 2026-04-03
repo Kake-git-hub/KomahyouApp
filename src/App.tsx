@@ -978,6 +978,14 @@ function App() {
 
   const addClassroom = useCallback((input?: AddClassroomOptions) => {
     if (isRemoteBackendEnabled) {
+      const firebaseUser = getFirebaseCurrentUser()
+      if (!firebaseUser || (remoteSessionUserId && firebaseUser.uid !== remoteSessionUserId)) {
+        const message = 'Firebase のログイン状態を確認できません。再ログイン後にもう一度教室追加を実行してください。'
+        setPersistenceMessage(message)
+        window.alert(message)
+        return
+      }
+
       const classroomName = input?.classroomName?.trim() ?? window.prompt('追加する教室名を入力してください。', `新規教室 ${workspaceClassrooms.length + 1}`)?.trim() ?? ''
       if (!classroomName) {
         setPersistenceMessage('教室追加をキャンセルしました。')
@@ -1101,7 +1109,7 @@ function App() {
     setWorkspaceUsers((current) => [...current, nextManager])
     setWorkspaceClassrooms((current) => [...current, nextClassroom])
     setPersistenceMessage('教室を追加しました。管理者アカウントと契約状態を確認してください。')
-  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms.length])
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, reloadRemoteWorkspace, remoteSessionUserId, workspaceClassrooms.length])
 
   const updateClassroom = useCallback((classroomId: string, updates: {
     name?: string
