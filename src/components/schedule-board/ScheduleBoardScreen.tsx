@@ -5062,15 +5062,19 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     targetDesk.lesson.studentSlots[studentIndex] = nextStudent
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
-    if (stockPanelsRestoreState && selectedMakeupStockEntry.balance <= 1) {
+    const remainingBalance = selectedMakeupStockEntry.balance - 1
+    if (stockPanelsRestoreState && remainingBalance <= 0) {
       setIsLectureStockOpen(stockPanelsRestoreState.lecture)
       setIsMakeupStockOpen(stockPanelsRestoreState.makeup)
       setStockPanelsRestoreState(null)
     } else if (!stockPanelsRestoreState) {
       setIsMakeupStockOpen(true)
     }
-    setSelectedMakeupStockKey(selectedMakeupStockEntry.balance > 1 ? selectedMakeupStockEntry.key : null)
+    setSelectedMakeupStockKey(null)
     setSelectedMakeupStockRawKey(null)
+    if (remainingBalance > 0) {
+      setStockActionModal({ type: 'makeup', entryKey: selectedMakeupStockEntry.key })
+    }
     setStatusMessage(`${selectedMakeupStockEntry.displayName} の振替を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
@@ -5158,7 +5162,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     } else if (!stockPanelsRestoreState) {
       setIsLectureStockOpen(true)
     }
-    setSelectedLectureStockKey(selectedLectureStockEntry.requestedCount > 1 ? selectedLectureStockEntry.key : null)
+    setSelectedLectureStockKey(null)
+    if (selectedLectureStockEntry.requestedCount > 1) {
+      setStockActionModal({ type: 'lecture', entryKey: selectedLectureStockEntry.key })
+    }
     setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
