@@ -590,17 +590,24 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         width: 100%;
         z-index: 20;
         display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
+        flex-wrap: nowrap;
+        gap: 8px;
         align-items: end;
-        padding: 10px 16px;
+        padding: 6px 12px;
         border-bottom: 1px solid #c9c9c9;
         background: rgba(255, 255, 255, 0.97);
         transform-origin: top left;
         will-change: transform, width, left, top;
+        white-space: nowrap;
+        overflow: hidden;
       }
 
-      .toolbar-field { display: grid; gap: 4px; }
+      .toolbar-field {
+        display: grid;
+        gap: 2px;
+        flex-shrink: 1;
+        min-width: 0;
+      }
 
       .toolbar-spacer {
         flex: 1 1 auto;
@@ -610,14 +617,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .toolbar-actions {
         display: flex;
         align-items: end;
-        gap: 8px;
+        gap: 6px;
+        flex-shrink: 0;
       }
 
       .toolbar-field label,
       .toolbar-summary,
       .toolbar-title {
-        font-size: 12px;
+        font-size: 11px;
         color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .interaction-lock-banner {
@@ -636,58 +646,54 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .toolbar-title {
-        min-width: 220px;
+        flex-shrink: 0;
         font-weight: 700;
         color: var(--ink);
+        font-size: 13px;
       }
 
       .toolbar input {
-        min-width: 152px;
-        padding: 8px 10px;
+        min-width: 0;
+        width: 130px;
+        padding: 5px 6px;
         border: 1px solid #666666;
         border-radius: 0;
         font: inherit;
+        font-size: 13px;
       }
 
       .toolbar-field--search input {
-        min-width: 220px;
+        width: 150px;
       }
 
       .toolbar select {
-        min-width: 220px;
-        padding: 8px 10px;
+        min-width: 0;
+        width: 160px;
+        padding: 5px 6px;
         border: 1px solid #666666;
         border-radius: 0;
         font: inherit;
+        font-size: 13px;
         background: #ffffff;
       }
 
       .toolbar button {
-        height: 38px;
-        padding: 0 16px;
+        height: 32px;
+        padding: 0 12px;
         border: 1px solid #333333;
         border-radius: 0;
         background: #ffffff;
-        color: #fff;
         font: inherit;
+        font-size: 13px;
         font-weight: 700;
         cursor: pointer;
         color: #111111;
+        white-space: nowrap;
       }
 
       .toolbar button.secondary {
         background: #f3f3f3;
         color: var(--ink);
-      }
-
-      @media (max-width: 1180px) {
-        .toolbar-title {
-          min-width: 100%;
-        }
-
-        .toolbar-spacer {
-          display: none;
-        }
       }
 
       .pages {
@@ -708,8 +714,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 10px;
         box-shadow: none;
         break-inside: avoid;
-        width: max(277mm, calc(100vw - 24px));
-        min-height: 190mm;
+        width: calc(100vw - 24px);
+        aspect-ratio: 297 / 210;
         overflow: hidden;
       }
 

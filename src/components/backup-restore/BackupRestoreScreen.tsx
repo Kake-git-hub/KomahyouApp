@@ -381,7 +381,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             </div>
           </section>
 
-          <section className="basic-data-section-card" data-testid="ongoing-excel-tools-panel">
+          <section className="basic-data-section-card" data-testid="ongoing-excel-tools-panel" style={{ display: 'none' }}>
             <div className="basic-data-card-head">
               <h3>運用中の Excel 管理と追加ツール</h3>
               <p>初期設定後の更新で使う管理データ差分取り込みと、関連 Excel ツールをここにまとめています。</p>

@@ -328,8 +328,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     const html = write.mock.calls[0]?.[0]
     expect(typeof html).toBe('string')
-    expect(html).toContain('--sheet-screen-height: 760px;')
-    expect(html).toContain('width: min(calc(var(--sheet-screen-height) * 297 / 210), calc(100vw - 24px));')
+    expect(html).toContain('width: calc(100vw - 24px);')
     expect(html).toContain('aspect-ratio: 297 / 210;')
     expect(html).toContain('function updateSheetScreenSize()')
     vi.unstubAllGlobals()

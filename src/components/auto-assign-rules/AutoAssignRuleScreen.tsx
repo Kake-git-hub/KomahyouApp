@@ -48,7 +48,7 @@ const fixedAbsoluteConstraints = [
   {
     key: 'date-priority',
     label: '期間内割振',
-    description: '振替ストックは指定期間内に割振り、講習ストックはその特別講習期間内に割振ります。',
+    description: '講習ストックはその特別講習期間内に割振ります。',
   },
 ] as const
 const ruleGroupDefinitions: Array<{
