@@ -17,6 +17,7 @@ setGlobalOptions({
 const firestore = getFirestore()
 const auth = getAuth()
 const storage = getStorage()
+const STORAGE_BUCKET = process.env.STORAGE_BUCKET ?? 'komahyouapp-prod.firebasestorage.app'
 
 const WORKSPACE_AUTO_BACKUP_RETENTION_DAYS = 14
 const WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST = 2
@@ -360,7 +361,7 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
 async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDate: Date) {
   const cutoffKey = getWorkspaceAutoBackupCutoffKey(referenceDate, WORKSPACE_AUTO_BACKUP_RETENTION_DAYS)
   const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
-  const bucket = storage.bucket()
+  const bucket = storage.bucket(STORAGE_BUCKET)
   const summarySnapshots = await workspaceRef.collection('workspaceAutoBackupSummaries').get()
   const batch = firestore.batch()
   let deleteCount = 0
@@ -605,7 +606,7 @@ export const downloadServerAutoBackup = onCall(async (request) => {
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
 
   const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
-  const bucket = storage.bucket()
+  const bucket = storage.bucket(STORAGE_BUCKET)
   const file = bucket.file(storagePath)
   const [exists] = await file.exists()
   if (!exists) {
@@ -638,7 +639,7 @@ export const downloadClassroomFromServerAutoBackup = onCall(async (request) => {
   }
 
   const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
-  const bucket = storage.bucket()
+  const bucket = storage.bucket(STORAGE_BUCKET)
   const file = bucket.file(storagePath)
   const [exists] = await file.exists()
   if (!exists) {
@@ -668,7 +669,7 @@ export const createWorkspaceServerAutoBackups = onSchedule({
   const savedAt = now.toISOString()
   const backupDateKey = toOperationalDateKeyJst(now)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
-  const bucket = storage.bucket()
+  const bucket = storage.bucket(STORAGE_BUCKET)
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const workspaceKey = workspaceDoc.id

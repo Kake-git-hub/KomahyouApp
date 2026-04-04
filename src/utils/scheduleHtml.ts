@@ -596,8 +596,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 6px 12px;
         border-bottom: 1px solid #c9c9c9;
         background: rgba(255, 255, 255, 0.97);
-        transform-origin: top left;
-        will-change: transform, width, left, top;
         white-space: nowrap;
         overflow: hidden;
       }
@@ -1637,7 +1635,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           border: 0;
           padding: 0;
           width: 277mm;
-          min-height: 190mm;
+          height: 190mm;
+          aspect-ratio: 297 / 210;
+          overflow: hidden;
           page-break-after: always;
         }
         .teacher-lesson-person {
@@ -1762,21 +1762,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function updateSheetScreenSize() {
         if (!(toolbarElement instanceof HTMLElement)) return;
-
-        const viewport = window.visualViewport;
-        const viewportScale = viewport && Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
-        const viewportWidth = viewport && Number.isFinite(viewport.width) && viewport.width > 0 ? viewport.width : window.innerWidth;
-        const offsetLeft = viewport && Number.isFinite(viewport.offsetLeft) ? viewport.offsetLeft : 0;
-        const offsetTop = viewport && Number.isFinite(viewport.offsetTop) ? viewport.offsetTop : 0;
-        const inverseScale = 1 / viewportScale;
-
-        toolbarElement.style.left = offsetLeft + 'px';
-        toolbarElement.style.top = offsetTop + 'px';
-        toolbarElement.style.width = viewportWidth * viewportScale + 'px';
-        toolbarElement.style.transform = 'scale(' + inverseScale + ')';
-
         const toolbarRect = toolbarElement.getBoundingClientRect();
-        document.documentElement.style.setProperty('--schedule-toolbar-offset', Math.max(toolbarRect.height + offsetTop, 0) + 'px');
+        document.documentElement.style.setProperty('--schedule-toolbar-offset', Math.max(toolbarRect.height, 0) + 'px');
       }
 
       function normalizeSchoolInfo(value) {

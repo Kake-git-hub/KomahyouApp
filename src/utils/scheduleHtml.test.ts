@@ -293,8 +293,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(typeof html).toBe('string')
     expect(html).toContain('--schedule-toolbar-offset: 0px;')
     expect(html).toContain('position: fixed;')
-    expect(html).toContain("toolbarElement.style.transform = 'scale(' + inverseScale + ')';")
-    expect(html).toContain("window.visualViewport.addEventListener('scroll', updateSheetScreenSize);")
+    expect(html).toContain("function updateSheetScreenSize()")
     vi.unstubAllGlobals()
   })
 

@@ -197,6 +197,15 @@ type LectureConstraintGroupKey = 'two-students' | 'lesson-limit' | 'lesson-patte
 type StockActionModalState =
   | { type: 'lecture'; entryKey: string }
   | { type: 'makeup'; entryKey: string }
+
+type MakeupStockOriginItem = {
+  rawEntryKey: string
+  originIndex: number
+  date: string
+  label: string
+  reasonLabel: string
+  subject: string
+}
 type InteractionSurface = 'board' | 'student' | 'teacher'
 
 const editableSubjects: SubjectLabel[] = allStudentSubjectOptions
@@ -2169,6 +2178,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [selectedDeskIndex, setSelectedDeskIndex] = useState(initialBoardSnapshot.selectedDeskIndex)
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
   const [selectedMakeupStockKey, setSelectedMakeupStockKey] = useState<string | null>(null)
+  const [selectedMakeupStockRawKey, setSelectedMakeupStockRawKey] = useState<string | null>(null)
   const [selectedLectureStockKey, setSelectedLectureStockKey] = useState<string | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
   const [studentMenu, setStudentMenu] = useState<StudentMenuState | null>(null)
@@ -4991,7 +5001,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handlePlaceMakeupFromStock = (cellId: string, deskIndex: number, studentIndex: number) => {
     if (!selectedMakeupStockEntry) return
-    const placementEntry = selectedMakeupStockEntry.nextPlacementEntry
+    const placementEntry = selectedMakeupStockRawKey
+      ? rawMakeupStockEntries.find((raw) => raw.key === selectedMakeupStockRawKey) ?? selectedMakeupStockEntry.nextPlacementEntry
+      : selectedMakeupStockEntry.nextPlacementEntry
     if (!placementEntry) {
       setStatusMessage('この生徒は配置できる振替残数がありません。')
       return
@@ -5058,6 +5070,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setIsMakeupStockOpen(true)
     }
     setSelectedMakeupStockKey(selectedMakeupStockEntry.balance > 1 ? selectedMakeupStockEntry.key : null)
+    setSelectedMakeupStockRawKey(null)
     setStatusMessage(`${selectedMakeupStockEntry.displayName} の振替を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
@@ -6335,7 +6348,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage(`${entry.displayName} の未消化講習を選択しました。空欄セルを左クリックしてください。`)
   }
 
-  const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: { hidePanelsDuringPlacement?: boolean }) => {
+  const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: { hidePanelsDuringPlacement?: boolean; rawKey?: string }) => {
     if (entry.balance <= 0) {
       setStatusMessage(`${entry.displayName} は先取り済みのため、残数が発生するまで選択できません。`)
       return
@@ -6344,6 +6357,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setSelectedStudentId(null)
     setSelectedLectureStockKey(null)
     setSelectedMakeupStockKey(entry.key)
+    setSelectedMakeupStockRawKey(options?.rawKey ?? null)
     if (options?.hidePanelsDuringPlacement) {
       setStockPanelsRestoreState({ lecture: isLectureStockOpen, makeup: isMakeupStockOpen })
       setIsLectureStockOpen(false)
@@ -6541,62 +6555,125 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
           {!isTemplateMode && stockActionModal ? (() => {
-            const lectureEntry = stockActionModal.type === 'lecture'
-              ? lectureStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
-              : null
-            if (!lectureEntry) return null
-            const entryLabel = lectureEntry.displayName
-            const canAutoAssign = Boolean(lectureEntry.studentId && (lectureEntry.requestedCount ?? 0) > 0)
+            if (stockActionModal.type === 'lecture') {
+              const lectureEntry = lectureStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
+              if (!lectureEntry) return null
+              const entryLabel = lectureEntry.displayName
+              const canAutoAssign = Boolean(lectureEntry.studentId && (lectureEntry.requestedCount ?? 0) > 0)
+              const pendingItems = lecturePendingItemsByEntryKey.get(lectureEntry.key)?.pendingItems ?? []
 
-            return (
-              <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setStockActionModal(null) }}>
-                <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="stock-action-modal">
-                  <div className="auto-assign-modal-title">{entryLabel}</div>
-                  <div className="student-menu-help-text">個別割振で配置先を選ぶか、自動割振で候補へ一括配置します。</div>
-                                    <div className="student-menu-help-text">講習の自動割振は各講習期間内の空きコマだけを対象にします。</div>
-                  <div className="auto-assign-modal-actions">
-                    <button
-                      className="secondary-button slim"
-                      type="button"
-                      disabled={activeStockAutoAssignKey !== null}
-                      onClick={() => {
-                        handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
-                        setStockActionModal(null)
-                      }}
-                      data-testid="stock-action-modal-manual"
-                    >
-                      個別割振
-                    </button>
-                    <button
-                      className="primary-button"
-                      type="button"
-                      disabled={!canAutoAssign || activeStockAutoAssignKey !== null}
-                      onClick={async () => {
-                        const modalEntryKey = lectureEntry.key
-                        if (!modalEntryKey) return
-                        const restoreState = { lecture: isLectureStockOpen, makeup: isMakeupStockOpen }
-                        await runStockAutoAssign(modalEntryKey, () => {
-                          setStockPanelsRestoreState(restoreState)
-                          setIsLectureStockOpen(false)
-                          setIsMakeupStockOpen(false)
-                          handleAutoAssignLectureStockEntry(lectureEntry)
-                          setIsLectureStockOpen(restoreState.lecture)
-                          setIsMakeupStockOpen(restoreState.makeup)
-                          setStockPanelsRestoreState(null)
-                        })
-                        setStockActionModal(null)
-                      }}
-                      data-testid="stock-action-modal-auto"
-                    >
-                      {activeStockAutoAssignKey === lectureEntry.key
-                        ? <span className="button-loading-content"><span className="button-spinner" aria-hidden="true" />自動割振中</span>
-                        : '自動割振'}
-                    </button>
-                    <button className="secondary-button slim" type="button" disabled={activeStockAutoAssignKey !== null} onClick={() => setStockActionModal(null)} data-testid="stock-action-modal-cancel">キャンセル</button>
+              return (
+                <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setStockActionModal(null) }}>
+                  <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="stock-action-modal">
+                    <div className="auto-assign-modal-title">{entryLabel}{lectureEntry.sessionLabel ? ` (${lectureEntry.sessionLabel})` : ''}</div>
+                    <div className="student-menu-help-text">未消化の講習を選んで個別割振するか、自動割振で一括配置します。</div>
+                    <div className="stock-origin-list">
+                      {pendingItems.map((item, index) => (
+                        <button
+                          key={`${item.subject}-${item.sessionId ?? ''}-${index}`}
+                          type="button"
+                          className="stock-origin-item"
+                          disabled={activeStockAutoAssignKey !== null}
+                          onClick={() => {
+                            handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
+                            setStockActionModal(null)
+                          }}
+                          data-testid={`stock-origin-item-${index}`}
+                        >
+                          <span className="stock-origin-subject">{item.subject}</span>
+                          {item.sessionLabel ? <span className="stock-origin-meta">{item.sessionLabel}</span> : null}
+                          {item.startDate && item.endDate ? <span className="stock-origin-meta">{item.startDate} ～ {item.endDate}</span> : null}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="auto-assign-modal-actions">
+                      <button
+                        className="primary-button"
+                        type="button"
+                        disabled={!canAutoAssign || activeStockAutoAssignKey !== null}
+                        onClick={async () => {
+                          const modalEntryKey = lectureEntry.key
+                          if (!modalEntryKey) return
+                          const restoreState = { lecture: isLectureStockOpen, makeup: isMakeupStockOpen }
+                          await runStockAutoAssign(modalEntryKey, () => {
+                            setStockPanelsRestoreState(restoreState)
+                            setIsLectureStockOpen(false)
+                            setIsMakeupStockOpen(false)
+                            handleAutoAssignLectureStockEntry(lectureEntry)
+                            setIsLectureStockOpen(restoreState.lecture)
+                            setIsMakeupStockOpen(restoreState.makeup)
+                            setStockPanelsRestoreState(null)
+                          })
+                          setStockActionModal(null)
+                        }}
+                        data-testid="stock-action-modal-auto"
+                      >
+                        {activeStockAutoAssignKey === lectureEntry.key
+                          ? <span className="button-loading-content"><span className="button-spinner" aria-hidden="true" />自動割振中</span>
+                          : '自動割振'}
+                      </button>
+                      <button className="secondary-button slim" type="button" disabled={activeStockAutoAssignKey !== null} onClick={() => setStockActionModal(null)} data-testid="stock-action-modal-cancel">閉じる</button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )
+              )
+            }
+
+            if (stockActionModal.type === 'makeup') {
+              const makeupEntry = makeupStockEntries.find((entry) => entry.key === stockActionModal.entryKey) ?? null
+              if (!makeupEntry) return null
+              const stockStudentKey = makeupEntry.stockStudentKey
+              const rawEntries = rawMakeupStockEntries.filter((raw) => getStockStudentKeyFromEntryKey(raw.key) === stockStudentKey && raw.balance > 0)
+
+              const originItems: MakeupStockOriginItem[] = []
+              for (const raw of rawEntries) {
+                const visibleCount = Math.max(0, raw.balance)
+                for (let i = 0; i < visibleCount && i < raw.remainingOriginDates.length; i++) {
+                  originItems.push({
+                    rawEntryKey: raw.key,
+                    originIndex: i,
+                    date: raw.remainingOriginDates[i] ?? '',
+                    label: raw.remainingOriginLabels[i] ?? '',
+                    reasonLabel: raw.remainingOriginReasonLabels[i] ?? '振替発生',
+                    subject: raw.subject,
+                  })
+                }
+              }
+
+              return (
+                <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setStockActionModal(null) }}>
+                  <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="stock-action-modal">
+                    <div className="auto-assign-modal-title">{makeupEntry.displayName}</div>
+                    <div className="student-menu-help-text">配置したい未消化振替を選んでください。空欄セルをクリックして配置します。</div>
+                    <div className="stock-origin-list">
+                      {originItems.length === 0 ? (
+                        <div className="makeup-stock-empty">配置可能な未消化振替がありません。</div>
+                      ) : originItems.map((item, index) => (
+                        <button
+                          key={`${item.rawEntryKey}-${item.originIndex}`}
+                          type="button"
+                          className="stock-origin-item"
+                          onClick={() => {
+                            handleSelectMakeupStockEntry(makeupEntry, { hidePanelsDuringPlacement: true, rawKey: item.rawEntryKey })
+                            setStockActionModal(null)
+                          }}
+                          data-testid={`stock-origin-item-${index}`}
+                        >
+                          <span className="stock-origin-subject">{item.subject}</span>
+                          <span className="stock-origin-meta">{item.label}</span>
+                          <span className="stock-origin-meta">({item.reasonLabel})</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="auto-assign-modal-actions">
+                      <button className="secondary-button slim" type="button" onClick={() => setStockActionModal(null)} data-testid="stock-action-modal-cancel">閉じる</button>
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+
+            return null
           })() : null}
           <BoardGrid
             cells={displayCells}
@@ -6663,7 +6740,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                         type="button"
                         className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
                         onClick={() => {
-                          handleSelectMakeupStockEntry(entry, { hidePanelsDuringPlacement: true })
+                          setStockActionModal({ type: 'makeup', entryKey: entry.key })
                         }}
                         disabled={entry.balance <= 0}
                         title={entry.title}

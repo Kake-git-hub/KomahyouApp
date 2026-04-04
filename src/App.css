@@ -2208,6 +2208,43 @@ tr.sa-slot-first td {
   flex-wrap: wrap;
 }
 
+.stock-origin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.stock-origin-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid #c9c9c9;
+  background: #fafafa;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  border-radius: 2px;
+}
+
+.stock-origin-item:hover {
+  background: #e8f0fe;
+  border-color: #4285f4;
+}
+
+.stock-origin-subject {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.stock-origin-meta {
+  color: #666;
+  font-size: 12px;
+}
+
 .regular-template-modal {
   max-width: min(1180px, calc(100vw - 32px));
   gap: 16px;
