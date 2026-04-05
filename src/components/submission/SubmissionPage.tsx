@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 type SubmissionData = {
   personName: string
@@ -22,6 +22,7 @@ type DateSlot = {
   label: string
   dayOfWeek: number
   slots: number[]
+  isClosed: boolean
 }
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
@@ -54,16 +55,15 @@ function buildAvailableDates(startDate: string, endDate: string, closedWeekdays:
     const dayOfWeek = current.getDay()
 
     const isClosed = closedWeekdays.includes(dayOfWeek) && !forceOpenSet.has(dateKey)
-    if (!isClosed) {
-      const displayMonth = current.getMonth() + 1
-      const displayDay = current.getDate()
-      dates.push({
-        dateKey,
-        label: `${displayMonth}/${displayDay}(${WEEKDAY_LABELS[dayOfWeek]})`,
-        dayOfWeek,
-        slots: Array.from({ length: Math.min(slotCount, 5) }, (_, i) => i + 1),
-      })
-    }
+    const displayMonth = current.getMonth() + 1
+    const displayDay = current.getDate()
+    dates.push({
+      dateKey,
+      label: `${displayMonth}/${displayDay}(${WEEKDAY_LABELS[dayOfWeek]})`,
+      dayOfWeek,
+      slots: Array.from({ length: Math.min(slotCount, 5) }, (_, i) => i + 1),
+      isClosed,
+    })
     current.setDate(current.getDate() + 1)
   }
   return dates
@@ -78,6 +78,9 @@ export default function SubmissionPage({ token }: { token: string }) {
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set())
   const [subjectSlots, setSubjectSlots] = useState<Record<string, number>>({})
   const [regularOnly, setRegularOnly] = useState(false)
+
+  const selectedSlotsRef = useRef<Set<string>>(new Set())
+  selectedSlotsRef.current = selectedSlots
 
   const apiBase = useMemo(() => getSubmissionApiBaseUrl(), [])
 
@@ -124,54 +127,40 @@ export default function SubmissionPage({ token }: { token: string }) {
   }, [data])
 
   const toggleSlot = useCallback((slotKey: string, occupiedLabel?: string) => {
-    setSelectedSlots((prev) => {
-      if (prev.has(slotKey)) {
-        const next = new Set(prev)
-        next.delete(slotKey)
-        return next
-      }
-      if (occupiedLabel && !window.confirm(`${occupiedLabel}が組まれていますが出席不可として提出しますか？`)) {
-        return prev
-      }
-      const next = new Set(prev)
-      next.add(slotKey)
-      return next
-    })
+    if (selectedSlotsRef.current.has(slotKey)) {
+      setSelectedSlots((prev) => { const next = new Set(prev); next.delete(slotKey); return next })
+      return
+    }
+    if (occupiedLabel && !window.confirm(`${occupiedLabel}が組まれていますが出席不可として提出しますか？`)) return
+    setSelectedSlots((prev) => { const next = new Set(prev); next.add(slotKey); return next })
   }, [])
 
   const toggleAllSlotsForDate = useCallback((dateKey: string, slots: number[], occupiedMap: Record<string, string>) => {
     const keys = slots.map((s) => `${dateKey}_${s}`)
-    setSelectedSlots((prev) => {
-      const allSelected = keys.every((k) => prev.has(k))
-      if (allSelected) {
-        const next = new Set(prev)
-        keys.forEach((k) => next.delete(k))
-        return next
-      }
-      const occupiedKeys = keys.filter((k) => !prev.has(k) && occupiedMap[k])
-      if (occupiedKeys.length > 0) {
-        const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
-        if (!window.confirm(`${labels}が組まれている日ですが終日不可として提出しますか？`)) return prev
-      }
-      const next = new Set(prev)
-      keys.forEach((k) => next.add(k))
-      return next
-    })
+    const allSelected = keys.every((k) => selectedSlotsRef.current.has(k))
+    if (allSelected) {
+      setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.delete(k)); return next })
+      return
+    }
+    const occupiedKeys = keys.filter((k) => !selectedSlotsRef.current.has(k) && occupiedMap[k])
+    if (occupiedKeys.length > 0) {
+      const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
+      if (!window.confirm(`${labels}が組まれている日ですが終日不可として提出しますか？`)) return
+    }
+    setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.add(k)); return next })
   }, [])
 
+  const openDates = useMemo(() => availableDates.filter((d) => !d.isClosed), [availableDates])
+
   const toggleAllSlotsForColumn = useCallback((slotNumber: number) => {
-    setSelectedSlots((prev) => {
-      const keys = availableDates.map((d) => `${d.dateKey}_${slotNumber}`)
-      const allSelected = keys.every((k) => prev.has(k))
-      const next = new Set(prev)
-      if (allSelected) {
-        keys.forEach((k) => next.delete(k))
-      } else {
-        keys.forEach((k) => next.add(k))
-      }
-      return next
-    })
-  }, [availableDates])
+    const keys = openDates.map((d) => `${d.dateKey}_${slotNumber}`)
+    const allSelected = keys.every((k) => selectedSlotsRef.current.has(k))
+    if (allSelected) {
+      setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.delete(k)); return next })
+    } else {
+      setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.add(k)); return next })
+    }
+  }, [openDates])
 
   const handleSubjectChange = useCallback((subject: string, value: number) => {
     setSubjectSlots((prev) => ({ ...prev, [subject]: Math.max(0, value) }))
@@ -297,6 +286,18 @@ export default function SubmissionPage({ token }: { token: string }) {
               {availableDates.map((dateSlot) => {
                 const isSunday = dateSlot.dayOfWeek === 0
                 const isSaturday = dateSlot.dayOfWeek === 6
+
+                if (dateSlot.isClosed) {
+                  return (
+                    <tr key={dateSlot.dateKey} className={`sub-row-closed${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
+                      <td className="sub-td-date">{dateSlot.label}</td>
+                      {dateSlot.slots.map((slot) => (
+                        <td key={slot} className="sub-td-slot sub-slot-closed" />
+                      ))}
+                    </tr>
+                  )
+                }
+
                 const allSelected = dateSlot.slots.every((s) => selectedSlots.has(`${dateSlot.dateKey}_${s}`))
 
                 return (
@@ -403,11 +404,11 @@ export default function SubmissionPage({ token }: { token: string }) {
 
 const baseStyles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { font-size: 14px; -webkit-text-size-adjust: 100%; touch-action: pan-y; }
-  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; overflow-x: hidden; touch-action: pan-y; }
+  html { font-size: 14px; -webkit-text-size-adjust: 100%; touch-action: pan-y; overflow-x: hidden; }
+  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; overflow-x: hidden; touch-action: pan-y; width: 100vw; position: relative; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); max-width: 100vw; overflow-x: hidden; touch-action: pan-y; }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow-x: hidden; touch-action: pan-y; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
@@ -425,22 +426,22 @@ const baseStyles = `
   .sub-section-title { font-size: 15px; font-weight: 700; }
 
   /* Slot table — fit viewport width */
-  .sub-table-wrap { overflow-x: hidden; }
-  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 12px; touch-action: manipulation; }
+  .sub-table-wrap { overflow: hidden; width: 100%; }
+  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 12px; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
   .sub-th-date { width: 64px; min-width: 54px; padding: 5px 1px; background: #f0f0f0; font-weight: 600; font-size: 10px; position: sticky; left: 0; z-index: 1; }
-  .sub-th-slot { padding: 5px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; touch-action: manipulation; }
-  .sub-td-date { padding: 6px 1px; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; position: sticky; left: 0; z-index: 1; touch-action: manipulation; }
-  .sub-td-slot { padding: 2px 1px; min-width: 0; height: 40px; cursor: pointer; user-select: none; font-size: 11px; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .sub-th-slot { padding: 5px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-date { padding: 6px 1px; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; position: sticky; left: 0; z-index: 1; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-slot { padding: 2px 1px; min-width: 0; height: 40px; cursor: pointer; user-select: none; font-size: 11px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
   .sub-x-mark { display: block; font-size: 14px; line-height: 1; }
   .sub-x-label { display: block; font-size: 8px; line-height: 1; margin-top: 1px; }
   .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 10px; font-weight: 600; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
   .sub-row-sun .sub-td-date { color: #d00; }
-  .sub-row-sun .sub-td-slot:not(.sub-slot-x) { background: #fff5f5; }
   .sub-row-sat .sub-td-date { color: #00c; }
-  .sub-row-sat .sub-td-slot:not(.sub-slot-x) { background: #f5f5ff; }
+  .sub-row-closed .sub-td-date { color: #999; cursor: default; }
+  .sub-slot-closed { background: #f0f0f0 !important; cursor: default; }
 
   /* Subject */
   .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; }

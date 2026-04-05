@@ -657,6 +657,7 @@ function App() {
   const remoteClassroomUpdateTimeoutsRef = useRef<Record<string, number>>({})
   const teacherAutoAssignRequestIdRef = useRef(0)
   const studentScheduleRequestIdRef = useRef(0)
+  const recentlyResetSubmissionTokensRef = useRef<Set<string>>(new Set())
   const [screen, setScreen] = useState<AppScreen>('board')
   const [managers, setManagers] = useState<ManagerRow[]>(() => createInitialManagers())
   const [teachers, setTeachers] = useState(() => createInitialTeachers(useImportedMasterData))
@@ -1777,7 +1778,12 @@ function App() {
         for (const session of specialSessions) {
           const input = personType === 'teacher' ? session.teacherInputs[personId] : session.studentInputs[personId]
           if (input?.submissionToken) {
-            resetLectureSubmissionDoc(input.submissionToken).catch(() => { /* ignore */ })
+            recentlyResetSubmissionTokensRef.current.add(input.submissionToken)
+            resetLectureSubmissionDoc(input.submissionToken).then(() => {
+              recentlyResetSubmissionTokensRef.current.delete(input.submissionToken!)
+            }).catch(() => {
+              recentlyResetSubmissionTokensRef.current.delete(input.submissionToken!)
+            })
           }
           if (input?.countSubmitted && personType === 'teacher') {
             teacherAutoAssignRequestIdRef.current += 1
@@ -2117,11 +2123,15 @@ function App() {
     if (!isRemoteBackendEnabled || !actingClassroomId) return
 
     const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries) => {
-      const newlyAppliedEntries: typeof entries = []
+      // Skip entries whose tokens were recently reset to avoid race condition
+      const activeEntries = entries.filter((e) => !recentlyResetSubmissionTokensRef.current.has(e.token))
+      if (activeEntries.length === 0) return
+
+      const newlyAppliedEntries: typeof activeEntries = []
 
       setSpecialSessions((current) => {
         let updated = current
-        for (const entry of entries) {
+        for (const entry of activeEntries) {
           updated = updated.map((session) => {
             if (session.id !== entry.sessionId) return session
             const now = new Date().toISOString()
