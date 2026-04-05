@@ -1525,8 +1525,8 @@ function App() {
     if (overlapping.length !== 1) return
 
     const session = overlapping[0]
-    const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, session.startDate))
-    const activeTeachers = teachers.filter((t) => isActiveOnDate(t.entryDate, t.withdrawDate, t.isHidden, session.startDate))
+    const activeStudents = students.filter((s) => !s.isHidden && s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
+    const activeTeachers = teachers.filter((t) => !t.isHidden && t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
     const allStudentsHaveTokens = activeStudents.every((s) => session.studentInputs[s.id]?.submissionToken)
     const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)

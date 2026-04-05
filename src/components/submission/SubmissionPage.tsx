@@ -81,6 +81,14 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const apiBase = useMemo(() => getSubmissionApiBaseUrl(), [])
 
+  // Lock viewport scale for mobile
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="viewport"]')
+    if (meta) {
+      meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no')
+    }
+  }, [])
+
   useEffect(() => {
     async function loadData() {
       try {
@@ -117,13 +125,16 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const toggleSlot = useCallback((slotKey: string, occupiedLabel?: string) => {
     setSelectedSlots((prev) => {
-      const wasSelected = prev.has(slotKey)
-      if (wasSelected) {
+      if (prev.has(slotKey)) {
         const next = new Set(prev)
         next.delete(slotKey)
         return next
       }
-      // Selecting as unavailable — confirm if occupied
+      return prev
+    })
+    // Adding as unavailable (only when not currently selected)
+    setSelectedSlots((prev) => {
+      if (prev.has(slotKey)) return prev // already toggled off above
       if (occupiedLabel && !window.confirm(`${occupiedLabel}が組まれていますが出席不可として提出しますか？`)) {
         return prev
       }
@@ -134,20 +145,26 @@ export default function SubmissionPage({ token }: { token: string }) {
   }, [])
 
   const toggleAllSlotsForDate = useCallback((dateKey: string, slots: number[], occupiedMap: Record<string, string>) => {
+    const keys = slots.map((s) => `${dateKey}_${s}`)
     setSelectedSlots((prev) => {
-      const next = new Set(prev)
-      const keys = slots.map((s) => `${dateKey}_${s}`)
-      const allSelected = keys.every((k) => next.has(k))
+      const allSelected = keys.every((k) => prev.has(k))
       if (allSelected) {
+        const next = new Set(prev)
         keys.forEach((k) => next.delete(k))
-      } else {
-        const occupiedKeys = keys.filter((k) => !next.has(k) && occupiedMap[k])
-        if (occupiedKeys.length > 0) {
-          const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
-          if (!window.confirm(`${labels}が組まれている日ですが終日不可として提出しますか？`)) return prev
-        }
-        keys.forEach((k) => next.add(k))
+        return next
       }
+      return prev
+    })
+    // Adding all as unavailable (only when not all selected)
+    setSelectedSlots((prev) => {
+      if (keys.every((k) => prev.has(k))) return prev // was toggled off above
+      const occupiedKeys = keys.filter((k) => !prev.has(k) && occupiedMap[k])
+      if (occupiedKeys.length > 0) {
+        const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
+        if (!window.confirm(`${labels}が組まれている日ですが終日不可として提出しますか？`)) return prev
+      }
+      const next = new Set(prev)
+      keys.forEach((k) => next.add(k))
       return next
     })
   }, [])
@@ -284,7 +301,7 @@ export default function SubmissionPage({ token }: { token: string }) {
                     <td
                       className="sub-td-date"
                       style={dateColor ? { color: dateColor } : undefined}
-                      onPointerDown={() => toggleAllSlotsForDate(dateSlot.dateKey, dateSlot.slots, occupiedSlots)}
+                      onClick={() => toggleAllSlotsForDate(dateSlot.dateKey, dateSlot.slots, occupiedSlots)}
                     >
                       {dateSlot.label}
                     </td>
@@ -297,7 +314,7 @@ export default function SubmissionPage({ token }: { token: string }) {
                         <td
                           key={slot}
                           className={`sub-td-slot${isSelected ? ' sub-slot-x' : ''}${occupied && !isSelected ? ' sub-slot-occ' : ''}`}
-                          onPointerDown={() => toggleSlot(slotKey, occupied)}
+                          onClick={() => toggleSlot(slotKey, occupied)}
                         >
                           {isSelected
                             ? (occupied ? <><span className="sub-x-mark">✕</span><span className="sub-x-label">{occupied}</span></> : '✕')

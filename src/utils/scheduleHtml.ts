@@ -1733,7 +1733,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       </div>
       <div class="toolbar-actions">
         <button type="button" id="schedule-apply-button">反映</button>
-        <button type="button" id="schedule-print-all-button" class="secondary">${viewType === 'student' ? '全生徒一括表示' : '全講師一括表示'}</button>
       </div>
     </div>
     <main class="pages" id="schedule-pages"></main>
@@ -1752,7 +1751,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
       const applyButton = document.getElementById('schedule-apply-button');
-      const printAllButton = document.getElementById('schedule-print-all-button');
       const sharedStoragePrefix = 'schedule-shared:' + VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
@@ -1769,7 +1767,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let appliedEndDate = '';
       let appliedPeriodValue = '';
       let appliedPersonId = '';
-      let isBulkDisplayMode = false;
       const pendingUnavailableKeys = new Set();
       const pendingUnavailableTimers = new Map();
       const interactionLockStorageKey = 'schedule-shared:interaction-lock';
@@ -3927,65 +3924,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         applyFilters();
       });
       applyButton.addEventListener('click', applyFilters);
-      printAllButton.addEventListener('click', function() {
-        if (isBulkDisplayMode) {
-          // Restore original single-person view
-          isBulkDisplayMode = false;
-          printAllButton.textContent = VIEW_TYPE === 'student' ? '全生徒一括表示' : '全講師一括表示';
-          var startDate = startInput.value;
-          var endDate = endInput.value;
-          if (!startDate || !endDate) return;
-          var personId = personSelect.value || appliedPersonId;
-          if (!personId) {
-            personId = getDefaultAppliedPersonId(startDate, endDate);
-          }
-          if (VIEW_TYPE === 'student') {
-            renderStudentPages(startDate, endDate, personId);
-          } else {
-            renderTeacherPages(startDate, endDate, personId);
-          }
-          appliedPersonId = personId;
-          syncSharedInputsFromStorage();
-          syncSharedImagesFromStorage();
-          return;
-        }
-        var startDate = startInput.value;
-        var endDate = endInput.value;
-        if (!startDate || !endDate) return;
-        var people = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
-        if (!people.length) return;
-        // Save current person selection
-        var originalPersonId = appliedPersonId;
-        // Render all people pages
-        var allPagesHtml = '';
-        people.forEach(function(person, personIndex) {
-          appliedPersonId = person.id;
-          if (VIEW_TYPE === 'student') {
-            renderStudentPages(startDate, endDate, person.id);
-          } else {
-            renderTeacherPages(startDate, endDate, person.id);
-          }
-          var currentSheetHtml = pagesElement.innerHTML;
-          // Add page-break between people
-          if (personIndex > 0) {
-            currentSheetHtml = currentSheetHtml.replace('<section ', '<section style="page-break-before:always" ');
-          }
-          allPagesHtml += currentSheetHtml;
-        });
-        pagesElement.innerHTML = allPagesHtml;
-        // Restore shared inputs after bulk render
-        syncSharedInputsFromStorage();
-        syncSharedImagesFromStorage();
-        isBulkDisplayMode = true;
-        appliedPersonId = originalPersonId || people[0].id;
-        printAllButton.textContent = '個別表示に戻す';
-      });
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
         acquireInteractionLock();
       }, true);
       pagesElement.addEventListener('pointerdown', (event) => {
-        if (isBulkDisplayMode) return;
         if (event.button !== 0) return;
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
@@ -4018,7 +3961,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
         const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
-        if (isBulkDisplayMode) return;
         if (toggleTarget.getAttribute('data-role') === 'student-count-modal-backdrop' && toggleTarget !== target) return;
         if (toggleTarget.getAttribute('data-role') === 'teacher-register-modal-backdrop' && toggleTarget !== target) return;
         if ((toggleTarget.getAttribute('data-role') || '').includes('teacher')) {
