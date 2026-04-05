@@ -130,11 +130,6 @@ export default function SubmissionPage({ token }: { token: string }) {
         next.delete(slotKey)
         return next
       }
-      return prev
-    })
-    // Adding as unavailable (only when not currently selected)
-    setSelectedSlots((prev) => {
-      if (prev.has(slotKey)) return prev // already toggled off above
       if (occupiedLabel && !window.confirm(`${occupiedLabel}が組まれていますが出席不可として提出しますか？`)) {
         return prev
       }
@@ -153,11 +148,6 @@ export default function SubmissionPage({ token }: { token: string }) {
         keys.forEach((k) => next.delete(k))
         return next
       }
-      return prev
-    })
-    // Adding all as unavailable (only when not all selected)
-    setSelectedSlots((prev) => {
-      if (keys.every((k) => prev.has(k))) return prev // was toggled off above
       const occupiedKeys = keys.filter((k) => !prev.has(k) && occupiedMap[k])
       if (occupiedKeys.length > 0) {
         const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
@@ -168,6 +158,20 @@ export default function SubmissionPage({ token }: { token: string }) {
       return next
     })
   }, [])
+
+  const toggleAllSlotsForColumn = useCallback((slotNumber: number) => {
+    setSelectedSlots((prev) => {
+      const keys = availableDates.map((d) => `${d.dateKey}_${slotNumber}`)
+      const allSelected = keys.every((k) => prev.has(k))
+      const next = new Set(prev)
+      if (allSelected) {
+        keys.forEach((k) => next.delete(k))
+      } else {
+        keys.forEach((k) => next.add(k))
+      }
+      return next
+    })
+  }, [availableDates])
 
   const handleSubjectChange = useCallback((subject: string, value: number) => {
     setSubjectSlots((prev) => ({ ...prev, [subject]: Math.max(0, value) }))
@@ -285,7 +289,7 @@ export default function SubmissionPage({ token }: { token: string }) {
               <tr>
                 <th className="sub-th-date">日付</th>
                 {Array.from({ length: maxSlot }, (_, i) => (
-                  <th key={i} className="sub-th-slot">{i + 1}限</th>
+                  <th key={i} className="sub-th-slot" onClick={() => toggleAllSlotsForColumn(i + 1)}>{i + 1}限</th>
                 ))}
               </tr>
             </thead>
@@ -293,14 +297,12 @@ export default function SubmissionPage({ token }: { token: string }) {
               {availableDates.map((dateSlot) => {
                 const isSunday = dateSlot.dayOfWeek === 0
                 const isSaturday = dateSlot.dayOfWeek === 6
-                const dateColor = isSunday ? '#d00' : isSaturday ? '#00c' : undefined
                 const allSelected = dateSlot.slots.every((s) => selectedSlots.has(`${dateSlot.dateKey}_${s}`))
 
                 return (
-                  <tr key={dateSlot.dateKey} className={allSelected ? 'sub-row-all' : ''}>
+                    <tr key={dateSlot.dateKey} className={`${allSelected ? 'sub-row-all' : ''}${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
                     <td
                       className="sub-td-date"
-                      style={dateColor ? { color: dateColor } : undefined}
                       onClick={() => toggleAllSlotsForDate(dateSlot.dateKey, dateSlot.slots, occupiedSlots)}
                     >
                       {dateSlot.label}
@@ -401,11 +403,11 @@ export default function SubmissionPage({ token }: { token: string }) {
 
 const baseStyles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { font-size: 14px; -webkit-text-size-adjust: 100%; }
-  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; overflow-x: hidden; }
+  html { font-size: 14px; -webkit-text-size-adjust: 100%; touch-action: pan-y; }
+  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; overflow-x: hidden; touch-action: pan-y; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); max-width: 100vw; overflow-x: hidden; }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); max-width: 100vw; overflow-x: hidden; touch-action: pan-y; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
@@ -423,11 +425,11 @@ const baseStyles = `
   .sub-section-title { font-size: 15px; font-weight: 700; }
 
   /* Slot table — fit viewport width */
-  .sub-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .sub-table-wrap { overflow-x: hidden; }
   .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 12px; touch-action: manipulation; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
   .sub-th-date { width: 64px; min-width: 54px; padding: 5px 1px; background: #f0f0f0; font-weight: 600; font-size: 10px; position: sticky; left: 0; z-index: 1; }
-  .sub-th-slot { padding: 5px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; }
+  .sub-th-slot { padding: 5px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; touch-action: manipulation; }
   .sub-td-date { padding: 6px 1px; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; position: sticky; left: 0; z-index: 1; touch-action: manipulation; }
   .sub-td-slot { padding: 2px 1px; min-width: 0; height: 40px; cursor: pointer; user-select: none; font-size: 11px; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
@@ -435,6 +437,10 @@ const baseStyles = `
   .sub-x-label { display: block; font-size: 8px; line-height: 1; margin-top: 1px; }
   .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 10px; font-weight: 600; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
+  .sub-row-sun .sub-td-date { color: #d00; }
+  .sub-row-sun .sub-td-slot:not(.sub-slot-x) { background: #fff5f5; }
+  .sub-row-sat .sub-td-date { color: #00c; }
+  .sub-row-sat .sub-td-slot:not(.sub-slot-x) { background: #f5f5ff; }
 
   /* Subject */
   .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; }

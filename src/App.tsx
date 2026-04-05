@@ -1773,11 +1773,29 @@ function App() {
             updatedAt,
           }
         }))
-        // Also reset the Firestore submission document
+        // Also reset the Firestore submission document and trigger board unassign
         for (const session of specialSessions) {
           const input = personType === 'teacher' ? session.teacherInputs[personId] : session.studentInputs[personId]
           if (input?.submissionToken) {
             resetLectureSubmissionDoc(input.submissionToken).catch(() => { /* ignore */ })
+          }
+          if (input?.countSubmitted && personType === 'teacher') {
+            teacherAutoAssignRequestIdRef.current += 1
+            setTeacherAutoAssignRequest({
+              requestId: teacherAutoAssignRequestIdRef.current,
+              sessionId: session.id,
+              teacherId: personId,
+              mode: 'unassign',
+            })
+          }
+          if (input?.countSubmitted && personType === 'student') {
+            studentScheduleRequestIdRef.current += 1
+            setStudentScheduleRequest({
+              requestId: studentScheduleRequestIdRef.current,
+              sessionId: session.id,
+              studentId: personId,
+              mode: 'unassign',
+            })
           }
         }
         return
@@ -2099,6 +2117,8 @@ function App() {
     if (!isRemoteBackendEnabled || !actingClassroomId) return
 
     const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries) => {
+      const newlyAppliedEntries: typeof entries = []
+
       setSpecialSessions((current) => {
         let updated = current
         for (const entry of entries) {
@@ -2108,6 +2128,7 @@ function App() {
             if (entry.personType === 'teacher') {
               const existing = session.teacherInputs[entry.personId]
               if (existing?.countSubmitted) return session
+              newlyAppliedEntries.push(entry)
               return {
                 ...session,
                 teacherInputs: {
@@ -2124,6 +2145,7 @@ function App() {
             } else {
               const existing = session.studentInputs[entry.personId]
               if (existing?.countSubmitted) return session
+              newlyAppliedEntries.push(entry)
               return {
                 ...session,
                 studentInputs: {
@@ -2145,6 +2167,19 @@ function App() {
         }
         return updated
       })
+
+      // Trigger board placement for newly submitted teachers (same as schedule-teacher-count-save handler)
+      for (const entry of newlyAppliedEntries) {
+        if (entry.personType === 'teacher') {
+          teacherAutoAssignRequestIdRef.current += 1
+          setTeacherAutoAssignRequest({
+            requestId: teacherAutoAssignRequestIdRef.current,
+            sessionId: entry.sessionId,
+            teacherId: entry.personId,
+            mode: 'assign',
+          })
+        }
+      }
     })
 
     return unsubscribe
