@@ -1938,6 +1938,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function isVisibleInRange(item, startDate, endDate) {
+        var today = new Date().toISOString().slice(0, 10);
+        if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate < today) return false;
         return !item.isHidden && item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate >= startDate);
       }
 
@@ -4002,9 +4004,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // Handle submission reset badge click
         const resetBadge = target.closest('[data-role="submission-reset-badge"]');
         if (resetBadge && resetBadge instanceof HTMLElement) {
-          const personType = resetBadge.getAttribute('data-person-type');
-          const personId = resetBadge.getAttribute('data-person-id');
+          var personType = resetBadge.getAttribute('data-person-type');
+          var personId = resetBadge.getAttribute('data-person-id');
           if (personType && personId && window.opener) {
+            if (!window.confirm('提出データを解除して再提出可能にします。よろしいですか？')) return;
             window.opener.postMessage({
               type: 'schedule-submission-reset',
               personType: personType,

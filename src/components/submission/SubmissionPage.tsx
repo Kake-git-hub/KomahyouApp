@@ -115,22 +115,39 @@ export default function SubmissionPage({ token }: { token: string }) {
     return buildAvailableDates(data.sessionStartDate, data.sessionEndDate, data.closedWeekdays, data.forceOpenDates, data.slotCount)
   }, [data])
 
-  const toggleSlot = useCallback((slotKey: string) => {
+  const toggleSlot = useCallback((slotKey: string, occupiedLabel?: string) => {
     setSelectedSlots((prev) => {
+      const wasSelected = prev.has(slotKey)
+      if (wasSelected) {
+        const next = new Set(prev)
+        next.delete(slotKey)
+        return next
+      }
+      // Selecting as unavailable — confirm if occupied
+      if (occupiedLabel && !window.confirm(`${occupiedLabel}が組まれていますが出席不可として提出しますか？`)) {
+        return prev
+      }
       const next = new Set(prev)
-      if (next.has(slotKey)) next.delete(slotKey)
-      else next.add(slotKey)
+      next.add(slotKey)
       return next
     })
   }, [])
 
-  const toggleAllSlotsForDate = useCallback((dateKey: string, slots: number[]) => {
+  const toggleAllSlotsForDate = useCallback((dateKey: string, slots: number[], occupiedMap: Record<string, string>) => {
     setSelectedSlots((prev) => {
       const next = new Set(prev)
       const keys = slots.map((s) => `${dateKey}_${s}`)
       const allSelected = keys.every((k) => next.has(k))
-      if (allSelected) keys.forEach((k) => next.delete(k))
-      else keys.forEach((k) => next.add(k))
+      if (allSelected) {
+        keys.forEach((k) => next.delete(k))
+      } else {
+        const occupiedKeys = keys.filter((k) => !next.has(k) && occupiedMap[k])
+        if (occupiedKeys.length > 0) {
+          const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
+          if (!window.confirm(`${labels}が組まれている日ですが終日不可として提出しますか？`)) return prev
+        }
+        keys.forEach((k) => next.add(k))
+      }
       return next
     })
   }, [])
@@ -267,7 +284,7 @@ export default function SubmissionPage({ token }: { token: string }) {
                     <td
                       className="sub-td-date"
                       style={dateColor ? { color: dateColor } : undefined}
-                      onClick={() => toggleAllSlotsForDate(dateSlot.dateKey, dateSlot.slots)}
+                      onPointerDown={() => toggleAllSlotsForDate(dateSlot.dateKey, dateSlot.slots, occupiedSlots)}
                     >
                       {dateSlot.label}
                     </td>
@@ -279,10 +296,12 @@ export default function SubmissionPage({ token }: { token: string }) {
                       return (
                         <td
                           key={slot}
-                          className={`sub-td-slot${isSelected ? ' sub-slot-x' : ''}${occupied ? ' sub-slot-occ' : ''}`}
-                          onClick={() => toggleSlot(slotKey)}
+                          className={`sub-td-slot${isSelected ? ' sub-slot-x' : ''}${occupied && !isSelected ? ' sub-slot-occ' : ''}`}
+                          onPointerDown={() => toggleSlot(slotKey, occupied)}
                         >
-                          {isSelected ? '✕' : occupied || ''}
+                          {isSelected
+                            ? (occupied ? <><span className="sub-x-mark">✕</span><span className="sub-x-label">{occupied}</span></> : '✕')
+                            : (occupied || '')}
                         </td>
                       )
                     })}
@@ -366,10 +385,10 @@ export default function SubmissionPage({ token }: { token: string }) {
 const baseStyles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html { font-size: 14px; -webkit-text-size-adjust: 100%; }
-  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; }
+  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; overflow-x: hidden; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); max-width: 100vw; overflow-x: hidden; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
@@ -382,46 +401,49 @@ const baseStyles = `
   .sub-inline-error { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #fee; color: #c00; font-size: 13px; }
   .sub-dismiss { background: none; border: none; color: #c00; font-size: 16px; cursor: pointer; padding: 0 4px; }
 
-  .sub-section { background: #fff; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 12px; margin: 8px 0; }
-  .sub-section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .sub-section { background: #fff; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 8px; margin: 8px 0; }
+  .sub-section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; padding: 0 4px; }
   .sub-section-title { font-size: 15px; font-weight: 700; }
 
-  /* Slot table */
+  /* Slot table — fit viewport width */
   .sub-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .sub-slot-table { border-collapse: collapse; width: 100%; min-width: 280px; font-size: 12px; }
+  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 12px; touch-action: manipulation; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
-  .sub-th-date { width: 72px; min-width: 72px; padding: 6px 2px; background: #f0f0f0; font-weight: 600; font-size: 11px; position: sticky; left: 0; z-index: 1; }
-  .sub-th-slot { padding: 6px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; }
-  .sub-td-date { padding: 8px 2px; font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; position: sticky; left: 0; z-index: 1; }
-  .sub-td-slot { padding: 6px 2px; min-width: 40px; height: 36px; cursor: pointer; user-select: none; font-size: 11px; transition: background .1s; }
-  .sub-td-slot:active { background: #eef; }
-  .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; font-size: 14px; }
+  .sub-th-date { width: 64px; min-width: 54px; padding: 5px 1px; background: #f0f0f0; font-weight: 600; font-size: 10px; position: sticky; left: 0; z-index: 1; }
+  .sub-th-slot { padding: 5px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; }
+  .sub-td-date { padding: 6px 1px; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; position: sticky; left: 0; z-index: 1; touch-action: manipulation; }
+  .sub-td-slot { padding: 2px 1px; min-width: 0; height: 40px; cursor: pointer; user-select: none; font-size: 11px; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+  .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
+  .sub-x-mark { display: block; font-size: 14px; line-height: 1; }
+  .sub-x-label { display: block; font-size: 8px; line-height: 1; margin-top: 1px; }
   .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 10px; font-weight: 600; }
-  .sub-slot-x.sub-slot-occ { background: #fee5e5 !important; color: #c00; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
 
   /* Subject */
-  .sub-subject-list { display: flex; flex-direction: column; gap: 6px; }
+  .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; }
   .sub-subject-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px; border-bottom: 1px solid #eee; }
   .sub-subject-label { font-size: 15px; font-weight: 600; min-width: 36px; }
   .sub-subject-ctrl { display: flex; align-items: center; gap: 6px; }
-  .sub-counter-btn { width: 36px; height: 36px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .sub-counter-btn { width: 36px; height: 36px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; }
   .sub-counter-btn:disabled { opacity: .3; }
   .sub-counter-input { width: 48px; height: 36px; text-align: center; font-size: 16px; font-weight: 600; border: 1px solid #ccc; border-radius: 6px; -moz-appearance: textfield; }
   .sub-counter-input::-webkit-inner-spin-button, .sub-counter-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .sub-checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; cursor: pointer; }
+  .sub-checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 4px; font-size: 14px; cursor: pointer; }
   .sub-checkbox { width: 18px; height: 18px; accent-color: #333; }
 
   /* Submit */
   .sub-submit-section { padding: 12px; }
   .sub-summary { display: flex; gap: 12px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
-  .sub-submit-btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
+  .sub-submit-btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
   .sub-disabled { opacity: .5; cursor: not-allowed; }
 
   @media (max-width: 360px) {
-    .sub-th-date { width: 60px; min-width: 60px; font-size: 10px; }
-    .sub-td-date { font-size: 11px; }
-    .sub-td-slot { min-width: 34px; }
-    .sub-slot-table { font-size: 11px; }
+    .sub-th-date { width: 52px; min-width: 48px; font-size: 9px; padding: 4px 0; }
+    .sub-td-date { font-size: 10px; padding: 5px 0; }
+    .sub-th-slot { font-size: 10px; }
+    .sub-td-slot { height: 38px; font-size: 10px; }
+    .sub-x-label { font-size: 7px; }
+    .sub-slot-occ { font-size: 9px; }
+    .sub-section { padding: 6px; }
   }
 `
