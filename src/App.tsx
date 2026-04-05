@@ -5,7 +5,7 @@ import { validateImportedBasicDataBundle } from './components/basic-data/basicDa
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
-import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions, removedDefaultSpecialSessionIds } from './components/special-data/specialSessionModel'
@@ -17,13 +17,14 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
+import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
-import { createLegacyLessonScheduleQrConfig } from './utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
+import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -656,7 +657,6 @@ function App() {
   const remoteClassroomUpdateTimeoutsRef = useRef<Record<string, number>>({})
   const teacherAutoAssignRequestIdRef = useRef(0)
   const studentScheduleRequestIdRef = useRef(0)
-  const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const [screen, setScreen] = useState<AppScreen>('board')
   const [managers, setManagers] = useState<ManagerRow[]>(() => createInitialManagers())
   const [teachers, setTeachers] = useState(() => createInitialTeachers(useImportedMasterData))
@@ -1517,6 +1517,36 @@ function App() {
     || (classroomSettings.initialSetupLectureStocks?.length ?? 0) > 0
   ), [autoAssignRules, boardState, classroomSettings.initialSetupLectureStocks, classroomSettings.initialSetupMakeupStocks, classroomSettings.regularLessonTemplate, groupLessons.length, managers.length, pairConstraints.length, regularLessons.length, specialSessions, students.length, teachers.length])
 
+  const ensureScheduleSubmissionTokens = useCallback(async (scheduleStartDate: string, scheduleEndDate: string) => {
+    const config = getFirebaseBackendConfig()
+    if (!config.enabled || !actingClassroomId) return
+
+    const overlapping = specialSessions.filter((s) => s.startDate <= scheduleEndDate && s.endDate >= scheduleStartDate)
+    if (overlapping.length !== 1) return
+
+    const session = overlapping[0]
+    const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, session.startDate))
+    const activeTeachers = teachers.filter((t) => isActiveOnDate(t.entryDate, t.withdrawDate, t.isHidden, session.startDate))
+
+    const allStudentsHaveTokens = activeStudents.every((s) => session.studentInputs[s.id]?.submissionToken)
+    const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)
+    if (allStudentsHaveTokens && allTeachersHaveTokens) return
+
+    const referenceDate = session.startDate
+    const studentsWithSubjects = activeStudents.map((s) => ({
+      id: s.id,
+      name: getStudentDisplayName(s),
+      availableSubjects: getSelectableStudentSubjectsForGrade(resolveCurrentStudentGradeLabel(s, referenceDate)),
+    }))
+    const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t) }))
+
+    const { updatedSession, newTokens } = await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings)
+    if (newTokens.length === 0) return
+
+    await writeSubmissionDocs(newTokens, actingClassroomId)
+    setSpecialSessions((current) => current.map((s) => s.id === updatedSession.id ? updatedSession : s))
+  }, [actingClassroomId, classroomSettings, specialSessions, students, teachers])
+
   const syncStudentSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const studentPopup = runtimeWindow.__lessonScheduleStudentWindow
@@ -1557,10 +1587,9 @@ function App() {
       classroomSettings,
       periodBands: specialSessions,
       specialSessions,
-      qrConfig: scheduleQrConfig,
       targetWindow: studentPopup,
     })
-  }, [boardState?.scheduleCountAdjustments, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, scheduleQrConfig, specialSessions, studentScheduleRange, students, teachers])
+  }, [boardState?.scheduleCountAdjustments, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1600,10 +1629,9 @@ function App() {
       classroomSettings,
       periodBands: specialSessions,
       specialSessions,
-      qrConfig: scheduleQrConfig,
       targetWindow: teacherPopup,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, scheduleQrConfig, specialSessions, students, teacherScheduleRange, teachers])
+  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1652,8 +1680,68 @@ function App() {
       }
 
       if (message.type === 'schedule-popup-ready') {
-        if (message.viewType === 'student') syncStudentSchedulePopup()
-        if (message.viewType === 'teacher') syncTeacherSchedulePopup()
+        if (message.viewType === 'student') {
+          const range = buildNormalizedScheduleRange('student', studentScheduleRange)
+          ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
+          syncStudentSchedulePopup()
+        }
+        if (message.viewType === 'teacher') {
+          const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange)
+          ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
+          syncTeacherSchedulePopup()
+        }
+        return
+      }
+
+      if (message.type === 'schedule-submission-reset') {
+        const personType = message.personType
+        const personId = message.personId
+        if (!personId || typeof personId !== 'string') return
+        if (personType !== 'teacher' && personType !== 'student') return
+        const updatedAt = new Date().toISOString()
+        setSpecialSessions((current) => current.map((session) => {
+          if (personType === 'teacher') {
+            const input = session.teacherInputs[personId]
+            if (!input?.countSubmitted) return session
+            return {
+              ...session,
+              teacherInputs: {
+                ...session.teacherInputs,
+                [personId]: {
+                  ...input,
+                  countSubmitted: false,
+                  unavailableSlots: [],
+                  updatedAt,
+                },
+              },
+              updatedAt,
+            }
+          }
+          const input = session.studentInputs[personId]
+          if (!input?.countSubmitted) return session
+          return {
+            ...session,
+            studentInputs: {
+              ...session.studentInputs,
+              [personId]: {
+                ...input,
+                countSubmitted: false,
+                unavailableSlots: [],
+                subjectSlots: {},
+                regularOnly: false,
+                updatedAt,
+              },
+            },
+            updatedAt,
+          }
+        }))
+        // Also reset the Firestore submission document
+        for (const session of specialSessions) {
+          const input = personType === 'teacher' ? session.teacherInputs[personId] : session.studentInputs[personId]
+          if (input?.submissionToken) {
+            resetLectureSubmissionDoc(input.submissionToken).catch(() => { /* ignore */ })
+          }
+        }
         return
       }
 
@@ -1946,7 +2034,7 @@ function App() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     syncSpecialSessionPopup()

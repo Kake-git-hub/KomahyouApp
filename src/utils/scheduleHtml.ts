@@ -5,7 +5,7 @@ import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { generateQrSvg } from './qrcode'
-import { buildLegacyLessonScheduleAvailabilityUrl, type ScheduleQrConfig } from './scheduleQrConfig'
+import { buildSubmissionUrl } from './scheduleQrConfig'
 import { resolveDisplayedSubjectForGrade } from './studentGradeSubject'
 
 const scheduleQrSvgCache = new Map<string, string>()
@@ -21,6 +21,7 @@ type SerializedStudent = {
   withdrawDate: string
   isHidden: boolean
   qrSvg?: string
+  submissionSubmitted?: boolean
 }
 
 type SerializedTeacher = {
@@ -33,6 +34,7 @@ type SerializedTeacher = {
   memo: string
   subjects: string[]
   qrSvg?: string
+  submissionSubmitted?: boolean
 }
 
 type SerializedStudentEntry = {
@@ -84,11 +86,13 @@ type SerializedStudentSpecialSessionInput = {
   subjectSlots: Record<string, number>
   regularOnly: boolean
   countSubmitted: boolean
+  submissionToken?: string
 }
 
 type SerializedTeacherSpecialSessionInput = {
   unavailableSlots: string[]
   countSubmitted: boolean
+  submissionToken?: string
 }
 
 type SerializedSpecialSession = {
@@ -137,7 +141,6 @@ type SchedulePayload = {
   }
   countAdjustments: SerializedScheduleCountAdjustment[]
   specialSessions: SerializedSpecialSession[]
-  qrSchoolNamePattern: string
 }
 
 type OpenScheduleHtmlParams = {
@@ -151,21 +154,25 @@ type OpenScheduleHtmlParams = {
   periodBands?: Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate'>[]
   specialSessions?: SpecialSessionRow[]
   targetWindow?: Window | null
-  qrConfig?: ScheduleQrConfig
 }
 
-function buildScheduleQrSvg(qrConfig: ScheduleQrConfig | undefined, personType: 'student' | 'teacher', personId: string) {
-  if (!qrConfig?.baseUrl || !qrConfig.classroomId || !qrConfig.sessionId || !personId) return undefined
+function buildSubmissionQrSvg(token: string | undefined) {
+  if (!token) return undefined
+  const url = buildSubmissionUrl(token)
+  if (!url) return undefined
+  const cached = scheduleQrSvgCache.get(token)
+  if (cached) return cached
+  const svg = generateQrSvg(url, 52)
+  scheduleQrSvgCache.set(token, svg)
+  return svg
+}
 
-  const inputUrl = buildLegacyLessonScheduleAvailabilityUrl(qrConfig, personType, personId)
-  if (!inputUrl) return undefined
-  const cacheKey = `${qrConfig.baseUrl}\n${qrConfig.classroomId}\n${qrConfig.sessionId}\n${personType}\n${personId}`
-  const cachedSvg = scheduleQrSvgCache.get(cacheKey)
-  if (cachedSvg) return cachedSvg
-
-  const generatedSvg = generateQrSvg(inputUrl, 52)
-  scheduleQrSvgCache.set(cacheKey, generatedSvg)
-  return generatedSvg
+function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined, startDate: string, endDate: string) {
+  if (!specialSessions?.length) return { session: undefined, error: undefined }
+  const overlapping = specialSessions.filter((s) => s.startDate <= endDate && s.endDate >= startDate)
+  if (overlapping.length === 0) return { session: undefined, error: undefined }
+  if (overlapping.length > 1) return { session: undefined, error: '複数の講習期間が重複しています。QRを表示できません。' }
+  return { session: overlapping[0], error: undefined }
 }
 
 type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
@@ -374,15 +381,16 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       teacherInputs: Object.fromEntries(Object.entries(session.teacherInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         countSubmitted: Boolean(input.countSubmitted),
+        submissionToken: input.submissionToken ?? undefined,
       }])),
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         subjectSlots: input.subjectSlots && typeof input.subjectSlots === 'object' ? { ...input.subjectSlots } : {},
         regularOnly: Boolean(input.regularOnly),
         countSubmitted: Boolean(input.countSubmitted),
+        submissionToken: input.submissionToken ?? undefined,
       }])),
     })),
-    qrSchoolNamePattern: params.qrConfig?.schoolNamePattern ?? '',
   }
 }
 
@@ -459,6 +467,8 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
   })
 
   const currentReferenceDate = getReferenceDateKey(new Date())
+  const overlappingResult = findOverlappingSession(params.specialSessions, params.defaultStartDate, params.defaultEndDate)
+  const targetSession = overlappingResult.session
 
   return {
     ...basePayload,
@@ -471,7 +481,9 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
     students: params.students
       .slice()
       .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, currentReferenceDate))
-      .map((student) => ({
+      .map((student) => {
+      const studentInput = targetSession?.studentInputs[student.id]
+      return {
       id: student.id,
       name: getStudentDisplayName(student),
       fullName: student.name,
@@ -494,20 +506,25 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
       entryDate: student.entryDate,
       withdrawDate: student.withdrawDate,
       isHidden: student.isHidden,
-      qrSvg: buildScheduleQrSvg(params.qrConfig, 'student', student.id),
-    })),
+      qrSvg: studentInput?.countSubmitted ? undefined : buildSubmissionQrSvg(studentInput?.submissionToken),
+      submissionSubmitted: Boolean(studentInput?.countSubmitted),
+    }}),
     teachers: [],
   }
 }
 
 function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params)
+  const overlappingResult = findOverlappingSession(params.specialSessions, params.defaultStartDate, params.defaultEndDate)
+  const targetSession = overlappingResult.session
 
   return {
     ...basePayload,
     countAdjustments: [],
     students: [],
-    teachers: params.teachers.map((teacher) => ({
+    teachers: params.teachers.map((teacher) => {
+      const teacherInput = targetSession?.teacherInputs[teacher.id]
+      return {
       id: teacher.id,
       name: getTeacherDisplayName(teacher),
       fullName: teacher.name,
@@ -516,8 +533,9 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
       isHidden: teacher.isHidden,
       memo: teacher.memo,
       subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
-      qrSvg: buildScheduleQrSvg(params.qrConfig, 'teacher', teacher.id),
-    })),
+      qrSvg: teacherInput?.countSubmitted ? undefined : buildSubmissionQrSvg(teacherInput?.submissionToken),
+      submissionSubmitted: Boolean(teacherInput?.countSubmitted),
+    }}),
   }
 }
 
@@ -849,6 +867,26 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .qr-code svg {
         display: block;
+      }
+
+      .submission-badge {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 10px;
+        background: #e8f5e8;
+        color: #2a7e2a;
+        font-size: 11px;
+        font-weight: 700;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #b5d9b5;
+        white-space: nowrap;
+      }
+
+      .submission-badge:hover {
+        background: #d0ecd0;
       }
 
       table.schedule-table {
@@ -1695,6 +1733,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       </div>
       <div class="toolbar-actions">
         <button type="button" id="schedule-apply-button">反映</button>
+        <button type="button" id="schedule-print-all-button" class="secondary">${viewType === 'student' ? '全生徒一括印刷' : '全講師一括印刷'}</button>
       </div>
     </div>
     <main class="pages" id="schedule-pages"></main>
@@ -1713,6 +1752,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
       const applyButton = document.getElementById('schedule-apply-button');
+      const printAllButton = document.getElementById('schedule-print-all-button');
       const sharedStoragePrefix = 'schedule-shared:' + VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
@@ -1889,17 +1929,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function shouldShowScheduleQr() {
-        const schoolPattern = normalizeSchoolInfo(DATA.qrSchoolNamePattern || '');
-        if (!schoolPattern) return false;
-        return normalizeSchoolInfo(resolveSharedInputValue('school-info')).includes(schoolPattern);
+        return true;
       }
 
       function syncScheduleQrVisibility() {
-        const shouldShow = shouldShowScheduleQr();
-        document.querySelectorAll('.qr-code').forEach((element) => {
-          if (!(element instanceof HTMLElement)) return;
-          element.classList.toggle('is-hidden', !shouldShow);
-        });
+        // QR visibility is now based on submission status per person, handled at render time
       }
 
       function isVisibleInRange(item, startDate, endDate) {
@@ -3338,7 +3372,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const absenceRows = toMakeupRows(absenceNotes, 7);
         const makeupRows = toMakeupRows(makeupNotes, 7);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
-        const qrHtml = student.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + student.qrSvg + '</span>' : '';
+        const qrHtml = student.submissionSubmitted
+          ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="student" data-person-id="' + student.id + '">希望提出済</span>'
+          : student.qrSvg ? '<span class="qr-code">' + student.qrSvg + '</span>' : '';
         const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
         pagesElement.innerHTML = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
         return student;
@@ -3401,7 +3437,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const makeupRows = toMakeupRows(makeupNotes, 7);
         const salaryData = buildTeacherSalaryData(entries, teacher.id);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
-        const qrHtml = teacher.qrSvg ? '<span class="qr-code' + (showQr ? '' : ' is-hidden') + '">' + teacher.qrSvg + '</span>' : '';
+        const qrHtml = teacher.submissionSubmitted
+          ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="teacher" data-person-id="' + teacher.id + '">希望提出済</span>'
+          : teacher.qrSvg ? '<span class="qr-code">' + teacher.qrSvg + '</span>' : '';
         const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
         pagesElement.innerHTML = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
         return teacher;
@@ -3886,6 +3924,45 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         applyFilters();
       });
       applyButton.addEventListener('click', applyFilters);
+      printAllButton.addEventListener('click', function() {
+        var startDate = startInput.value;
+        var endDate = endInput.value;
+        if (!startDate || !endDate) return;
+        var people = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
+        if (!people.length) return;
+        // Save current person selection
+        var originalPersonId = appliedPersonId;
+        // Render all people pages
+        var allPagesHtml = '';
+        people.forEach(function(person, personIndex) {
+          appliedPersonId = person.id;
+          if (VIEW_TYPE === 'student') {
+            renderStudentPages(startDate, endDate, person.id);
+          } else {
+            renderTeacherPages(startDate, endDate, person.id);
+          }
+          var currentSheetHtml = pagesElement.innerHTML;
+          // Add page-break between people
+          if (personIndex > 0) {
+            currentSheetHtml = currentSheetHtml.replace('<section ', '<section style="page-break-before:always" ');
+          }
+          allPagesHtml += currentSheetHtml;
+        });
+        pagesElement.innerHTML = allPagesHtml;
+        // Restore shared inputs after bulk render
+        syncSharedInputsFromStorage();
+        syncSharedImagesFromStorage();
+        window.print();
+        // Restore original person
+        appliedPersonId = originalPersonId || people[0].id;
+        if (VIEW_TYPE === 'student') {
+          renderStudentPages(startDate, endDate, appliedPersonId);
+        } else {
+          renderTeacherPages(startDate, endDate, appliedPersonId);
+        }
+        syncSharedInputsFromStorage();
+        syncSharedImagesFromStorage();
+      });
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
         acquireInteractionLock();
@@ -3906,6 +3983,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       pagesElement.addEventListener('click', (event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
+        // Handle submission reset badge click
+        const resetBadge = target.closest('[data-role="submission-reset-badge"]');
+        if (resetBadge && resetBadge instanceof HTMLElement) {
+          const personType = resetBadge.getAttribute('data-person-type');
+          const personId = resetBadge.getAttribute('data-person-id');
+          if (personType && personId && window.opener) {
+            window.opener.postMessage({
+              type: 'schedule-submission-reset',
+              personType: personType,
+              personId: personId,
+            }, '*');
+          }
+          return;
+        }
         const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
         if (toggleTarget.getAttribute('data-role') === 'student-count-modal-backdrop' && toggleTarget !== target) return;

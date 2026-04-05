@@ -35,11 +35,26 @@ function isLoopbackUrl(value: string) {
   }
 }
 
-function getRuntimeShortUrlBase() {
+function getRuntimeOrigin() {
   if (typeof window === 'undefined') return ''
-  const origin = readEnvText(window.location.origin)
+  return trimTrailingSlashes(readEnvText(window.location.origin))
+}
+
+function getRuntimeShortUrlBase() {
+  const origin = getRuntimeOrigin()
   if (!origin || isLoopbackUrl(origin)) return ''
-  return trimTrailingSlashes(origin)
+  return origin
+}
+
+export function buildSubmissionUrl(token: string) {
+  const origin = getRuntimeOrigin()
+  if (!origin || !token) return undefined
+  // Use short path for smaller QR codes
+  if (!isLoopbackUrl(origin)) {
+    return `${origin}/s/${encodeURIComponent(token)}`
+  }
+  // In dev, use hash route
+  return `${origin}/#/submit/${encodeURIComponent(token)}`
 }
 
 export function buildLegacyLessonScheduleLongUrl(baseUrl: string, classroomId: string, sessionId: string, personType: ScheduleQrPersonType, personId: string) {

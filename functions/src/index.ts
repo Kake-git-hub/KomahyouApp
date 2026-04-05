@@ -3,7 +3,7 @@ import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
-import { HttpsError, onCall } from 'firebase-functions/v2/https'
+import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 
@@ -701,4 +701,172 @@ export const createWorkspaceServerAutoBackups = onSchedule({
 
     await pruneWorkspaceServerAutoBackups(workspaceKey, now)
   }
+})
+
+// ---------------------------------------------------------------------------
+// Lecture submission API (unauthenticated access via token)
+// ---------------------------------------------------------------------------
+
+type LectureSubmissionDoc = {
+  workspaceKey: string
+  classroomId: string
+  sessionId: string
+  personType: 'student' | 'teacher'
+  personId: string
+  personName: string
+  sessionLabel: string
+  sessionStartDate: string
+  sessionEndDate: string
+  closedWeekdays: number[]
+  forceOpenDates: string[]
+  availableSubjects: string[]
+  slotCount: number
+  status: 'pending' | 'submitted'
+  unavailableSlots: string[]
+  subjectSlots: Record<string, number>
+  regularOnly: boolean
+  submittedAt: string | null
+  createdAt: string
+}
+
+function extractTokenFromPath(rawPath: string) {
+  const segments = rawPath.replace(/^\/+|\/+$/g, '').split('/')
+  return segments.pop() || ''
+}
+
+function isValidSlotKey(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  return /^\d{4}-\d{2}-\d{2}_\d+$/.test(value)
+}
+
+function sanitizeUnavailableSlots(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isValidSlotKey).slice(0, 5000)
+}
+
+function sanitizeSubjectSlots(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Record<string, number> = {}
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof key === 'string' && key.length <= 10 && typeof val === 'number' && Number.isInteger(val) && val >= 0 && val <= 999) {
+      result[key] = val
+    }
+  }
+  return result
+}
+
+export const lectureSubmissionApi = onRequest({
+  cors: true,
+  region: process.env.FUNCTION_REGION ?? 'asia-northeast1',
+  maxInstances: 10,
+}, async (req, res) => {
+  const token = extractTokenFromPath(req.path)
+  if (!token || token.length < 16 || token.length > 64) {
+    res.status(400).json({ error: 'Invalid token' })
+    return
+  }
+
+  const docRef = firestore.collection('lectureSubmissions').doc(token)
+
+  if (req.method === 'GET') {
+    const doc = await docRef.get()
+    if (!doc.exists) {
+      res.status(404).json({ error: 'Not found' })
+      return
+    }
+
+    const data = doc.data() as LectureSubmissionDoc
+    res.json({
+      personName: data.personName ?? '',
+      personType: data.personType ?? '',
+      sessionLabel: data.sessionLabel ?? '',
+      sessionStartDate: data.sessionStartDate ?? '',
+      sessionEndDate: data.sessionEndDate ?? '',
+      closedWeekdays: data.closedWeekdays ?? [],
+      forceOpenDates: data.forceOpenDates ?? [],
+      availableSubjects: data.availableSubjects ?? [],
+      slotCount: data.slotCount ?? 7,
+      status: data.status ?? 'pending',
+      unavailableSlots: data.unavailableSlots ?? [],
+      subjectSlots: data.subjectSlots ?? {},
+      regularOnly: data.regularOnly ?? false,
+    })
+    return
+  }
+
+  if (req.method === 'POST') {
+    const doc = await docRef.get()
+    if (!doc.exists) {
+      res.status(404).json({ error: 'Not found' })
+      return
+    }
+
+    const data = doc.data() as LectureSubmissionDoc
+    if (data.status === 'submitted') {
+      res.status(409).json({ error: 'Already submitted' })
+      return
+    }
+
+    const body = typeof req.body === 'object' && req.body !== null ? req.body : {}
+    const unavailableSlots = sanitizeUnavailableSlots(body.unavailableSlots)
+    const subjectSlots = data.personType === 'student' ? sanitizeSubjectSlots(body.subjectSlots) : {}
+    const regularOnly = data.personType === 'student' ? Boolean(body.regularOnly) : false
+    const now = new Date().toISOString()
+
+    await docRef.update({
+      status: 'submitted',
+      unavailableSlots,
+      subjectSlots,
+      regularOnly,
+      submittedAt: now,
+    })
+
+    // Also update the classroom snapshot so admin sees the data immediately
+    try {
+      const snapshotRef = firestore
+        .collection('workspaces').doc(data.workspaceKey)
+        .collection('classroomSnapshots').doc(data.classroomId)
+
+      await firestore.runTransaction(async (transaction) => {
+        const snapshotDoc = await transaction.get(snapshotRef)
+        if (!snapshotDoc.exists) return
+
+        const snapshotData = snapshotDoc.data() as FirebaseClassroomSnapshotDoc
+        const payload = snapshotData?.data
+        if (!payload?.specialSessions || !Array.isArray(payload.specialSessions)) return
+
+        const sessions = payload.specialSessions as Array<Record<string, unknown>>
+        const sessionIndex = sessions.findIndex((s) => s.id === data.sessionId)
+        if (sessionIndex < 0) return
+
+        const session = sessions[sessionIndex]
+        const inputKey = data.personType === 'teacher' ? 'teacherInputs' : 'studentInputs'
+        const inputs = (session[inputKey] ?? {}) as Record<string, Record<string, unknown>>
+        const existingInput = inputs[data.personId] ?? {}
+
+        inputs[data.personId] = {
+          ...existingInput,
+          unavailableSlots,
+          ...(data.personType === 'student' ? { subjectSlots, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
+          countSubmitted: true,
+          submissionToken: token,
+          updatedAt: now,
+        }
+        session[inputKey] = inputs
+        sessions[sessionIndex] = session
+
+        transaction.update(snapshotRef, {
+          data: sanitizeForFirestore({ ...payload, specialSessions: sessions }),
+          updatedAt: now,
+        })
+      })
+    } catch {
+      // Non-fatal: submission is saved even if snapshot update fails
+    }
+
+    res.json({ success: true, submittedAt: now })
+    return
+  }
+
+  res.status(405).json({ error: 'Method not allowed' })
 })

@@ -14,7 +14,6 @@ import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignReques
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry, ScheduleCountAdjustmentKind } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { exportBoardPdf } from '../../utils/pdf'
-import { createLegacyLessonScheduleQrConfig } from '../../utils/scheduleQrConfig'
 import { formatWeeklyScheduleTitle, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
@@ -2162,7 +2161,6 @@ function autoAssignTeacherToSpecialSession(params: {
 export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
-  const scheduleQrConfig = createLegacyLessonScheduleQrConfig()
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
   const initialBoardSnapshotRef = useRef<ReturnType<typeof createInitialBoardSnapshot> | null>(null)
@@ -3807,10 +3805,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       classroomSettings,
       periodBands: specialSessions,
       specialSessions,
-      qrConfig: scheduleQrConfig,
       targetWindow: studentScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleSyncTrigger, scheduleQrConfig, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
+  }, [classroomSettings, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleSyncTrigger, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
 
   useEffect(() => {
     syncTeacherScheduleHtml({
@@ -3824,10 +3821,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       classroomSettings,
       periodBands: specialSessions,
       specialSessions,
-      qrConfig: scheduleQrConfig,
       targetWindow: teacherScheduleWindowRef.current,
     })
-  }, [classroomSettings, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleSyncTrigger, scheduleQrConfig, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
+  }, [classroomSettings, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleSyncTrigger, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
@@ -5792,7 +5788,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       classroomSettings,
       periodBands: specialSessions,
       specialSessions,
-      qrConfig: scheduleQrConfig,
       targetWindow: studentScheduleWindowRef.current,
     })
     if (!nextWindow) return
@@ -5847,7 +5842,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       classroomSettings,
       periodBands: specialSessions,
       specialSessions,
-      qrConfig: scheduleQrConfig,
       targetWindow: teacherScheduleWindowRef.current,
     })
     if (!nextWindow) return

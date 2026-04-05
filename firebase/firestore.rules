@@ -59,5 +59,10 @@ service cloud.firestore {
         allow write: if false;
       }
     }
+
+    // Lecture submissions: admin creates/deletes, Cloud Functions handle public access
+    match /lectureSubmissions/{token} {
+      allow read, write: if isSignedIn();
+    }
   }
 }
