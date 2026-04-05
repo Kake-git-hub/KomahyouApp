@@ -14,6 +14,7 @@ type SubmissionData = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   regularOnly: boolean
+  occupiedSlots: Record<string, string>
 }
 
 type DateSlot = {
@@ -24,16 +25,13 @@ type DateSlot = {
 }
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
-const SLOT_LABELS = ['1限', '2限', '3限', '4限', '5限', '6限', '7限']
 
 function getSubmissionApiBaseUrl() {
   if (typeof window === 'undefined') return ''
   const origin = window.location.origin
-  // In production (Firebase Hosting), use the rewrite path
   if (!origin.includes('localhost') && !origin.includes('127.0.0.1')) {
     return `${origin}/api/submission`
   }
-  // In dev, call the Cloud Function directly
   const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID || ''
   const region = import.meta.env.VITE_FIREBASE_FUNCTIONS_REGION || 'asia-northeast1'
   if (projectId) {
@@ -63,7 +61,7 @@ function buildAvailableDates(startDate: string, endDate: string, closedWeekdays:
         dateKey,
         label: `${displayMonth}/${displayDay}(${WEEKDAY_LABELS[dayOfWeek]})`,
         dayOfWeek,
-        slots: Array.from({ length: slotCount }, (_, i) => i + 1),
+        slots: Array.from({ length: Math.min(slotCount, 5) }, (_, i) => i + 1),
       })
     }
     current.setDate(current.getDate() + 1)
@@ -80,7 +78,6 @@ export default function SubmissionPage({ token }: { token: string }) {
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set())
   const [subjectSlots, setSubjectSlots] = useState<Record<string, number>>({})
   const [regularOnly, setRegularOnly] = useState(false)
-  const [expandedDate, setExpandedDate] = useState<string | null>(null)
 
   const apiBase = useMemo(() => getSubmissionApiBaseUrl(), [])
 
@@ -121,11 +118,8 @@ export default function SubmissionPage({ token }: { token: string }) {
   const toggleSlot = useCallback((slotKey: string) => {
     setSelectedSlots((prev) => {
       const next = new Set(prev)
-      if (next.has(slotKey)) {
-        next.delete(slotKey)
-      } else {
-        next.add(slotKey)
-      }
+      if (next.has(slotKey)) next.delete(slotKey)
+      else next.add(slotKey)
       return next
     })
   }, [])
@@ -133,13 +127,10 @@ export default function SubmissionPage({ token }: { token: string }) {
   const toggleAllSlotsForDate = useCallback((dateKey: string, slots: number[]) => {
     setSelectedSlots((prev) => {
       const next = new Set(prev)
-      const dateSlotKeys = slots.map((s) => `${dateKey}_${s}`)
-      const allSelected = dateSlotKeys.every((k) => next.has(k))
-      if (allSelected) {
-        dateSlotKeys.forEach((k) => next.delete(k))
-      } else {
-        dateSlotKeys.forEach((k) => next.add(k))
-      }
+      const keys = slots.map((s) => `${dateKey}_${s}`)
+      const allSelected = keys.every((k) => next.has(k))
+      if (allSelected) keys.forEach((k) => next.delete(k))
+      else keys.forEach((k) => next.add(k))
       return next
     })
   }, [])
@@ -150,6 +141,7 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const handleSubmit = useCallback(async () => {
     if (submitting || submitted) return
+    if (!window.confirm('提出します。提出後の変更はできません。よろしいですか？')) return
     setSubmitting(true)
     try {
       const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`, {
@@ -181,22 +173,24 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   if (loading) {
     return (
-      <div style={styles.container}>
-        <div style={styles.loadingBox}>
-          <div style={styles.spinner} />
-          <p style={styles.loadingText}>読み込み中...</p>
+      <div className="sub-container">
+        <div className="sub-center-box">
+          <div className="sub-spinner" />
+          <p className="sub-muted">読み込み中...</p>
         </div>
+        <style>{baseStyles}</style>
       </div>
     )
   }
 
   if (error && !data) {
     return (
-      <div style={styles.container}>
-        <div style={styles.errorBox}>
-          <p style={styles.errorIcon}>⚠</p>
-          <p style={styles.errorText}>{error}</p>
+      <div className="sub-container">
+        <div className="sub-center-box">
+          <p style={{ fontSize: 48 }}>⚠</p>
+          <p>{error}</p>
         </div>
+        <style>{baseStyles}</style>
       </div>
     )
   }
@@ -205,15 +199,16 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   if (submitted) {
     return (
-      <div style={styles.container}>
-        <div style={styles.successBox}>
-          <p style={styles.successIcon}>✓</p>
-          <h2 style={styles.successTitle}>提出完了</h2>
-          <p style={styles.successText}>
+      <div className="sub-container">
+        <div className="sub-center-box">
+          <p className="sub-success-icon">✓</p>
+          <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 8px' }}>提出完了</h2>
+          <p style={{ fontSize: 14, color: '#333' }}>
             {data.personName}さんの{data.sessionLabel}の希望を受け付けました。
           </p>
-          <p style={styles.successNote}>このページを閉じてください。</p>
+          <p className="sub-muted" style={{ marginTop: 8 }}>このページを閉じてください。</p>
         </div>
+        <style>{baseStyles}</style>
       </div>
     )
   }
@@ -221,421 +216,212 @@ export default function SubmissionPage({ token }: { token: string }) {
   const isStudent = data.personType === 'student'
   const totalUnavailable = selectedSlots.size
   const totalSubjectCount = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
+  const occupiedSlots = data.occupiedSlots ?? {}
+  const maxSlot = availableDates.length > 0 ? Math.max(...availableDates.map((d) => d.slots.length)) : 5
 
   return (
-    <div style={styles.container}>
-      <header style={styles.header}>
-        <h1 style={styles.headerTitle}>{data.sessionLabel}</h1>
-        <p style={styles.headerSub}>{data.personName}</p>
-        <p style={styles.headerPeriod}>
+    <div className="sub-container">
+      <header className="sub-header">
+        <div className="sub-header-title">{data.sessionLabel}</div>
+        <div className="sub-header-name">{data.personName}</div>
+        <div className="sub-muted" style={{ fontSize: 12 }}>
           {data.sessionStartDate.replace(/-/g, '/')} 〜 {data.sessionEndDate.replace(/-/g, '/')}
-        </p>
+        </div>
       </header>
 
       {error && (
-        <div style={styles.inlineError}>
-          <p>{error}</p>
-          <button type="button" onClick={() => setError('')} style={styles.dismissButton}>✕</button>
+        <div className="sub-inline-error">
+          <span>{error}</span>
+          <button type="button" onClick={() => setError('')} className="sub-dismiss">✕</button>
         </div>
       )}
 
-      <section style={styles.section}>
-        <h2 style={styles.sectionTitle}>出席不可コマ</h2>
-        <p style={styles.sectionDesc}>
-          出席できないコマをタップしてください（選択中: {totalUnavailable}コマ）
+      <section className="sub-section">
+        <div className="sub-section-head">
+          <span className="sub-section-title">出席不可コマ</span>
+          <span className="sub-muted">不可: <strong>{totalUnavailable}</strong>コマ</span>
+        </div>
+        <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 11, lineHeight: 1.4 }}>
+          出席できないコマをタップしてください。日付をタップすると終日不可になります。
         </p>
-        <div style={styles.dateList}>
-          {availableDates.map((dateSlot) => {
-            const isExpanded = expandedDate === dateSlot.dateKey
-            const dateUnavailableCount = dateSlot.slots.filter((s) => selectedSlots.has(`${dateSlot.dateKey}_${s}`)).length
-            const isSunday = dateSlot.dayOfWeek === 0
-            const isSaturday = dateSlot.dayOfWeek === 6
 
-            return (
-              <div key={dateSlot.dateKey} style={styles.dateGroup}>
-                <button
-                  type="button"
-                  onClick={() => setExpandedDate(isExpanded ? null : dateSlot.dateKey)}
-                  style={{
-                    ...styles.dateHeader,
-                    color: isSunday ? '#d00000' : isSaturday ? '#003cff' : '#111',
-                  }}
-                >
-                  <span style={styles.dateLabel}>{dateSlot.label}</span>
-                  {dateUnavailableCount > 0 && (
-                    <span style={styles.dateBadge}>{dateUnavailableCount}コマ不可</span>
-                  )}
-                  <span style={styles.chevron}>{isExpanded ? '▲' : '▼'}</span>
-                </button>
-                {isExpanded && (
-                  <div style={styles.slotList}>
-                    <button
-                      type="button"
+        <div className="sub-table-wrap">
+          <table className="sub-slot-table">
+            <thead>
+              <tr>
+                <th className="sub-th-date">日付</th>
+                {Array.from({ length: maxSlot }, (_, i) => (
+                  <th key={i} className="sub-th-slot">{i + 1}限</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {availableDates.map((dateSlot) => {
+                const isSunday = dateSlot.dayOfWeek === 0
+                const isSaturday = dateSlot.dayOfWeek === 6
+                const dateColor = isSunday ? '#d00' : isSaturday ? '#00c' : undefined
+                const allSelected = dateSlot.slots.every((s) => selectedSlots.has(`${dateSlot.dateKey}_${s}`))
+
+                return (
+                  <tr key={dateSlot.dateKey} className={allSelected ? 'sub-row-all' : ''}>
+                    <td
+                      className="sub-td-date"
+                      style={dateColor ? { color: dateColor } : undefined}
                       onClick={() => toggleAllSlotsForDate(dateSlot.dateKey, dateSlot.slots)}
-                      style={styles.selectAllButton}
                     >
-                      {dateSlot.slots.every((s) => selectedSlots.has(`${dateSlot.dateKey}_${s}`))
-                        ? '全解除'
-                        : '全選択（終日不可）'}
-                    </button>
+                      {dateSlot.label}
+                    </td>
                     {dateSlot.slots.map((slot) => {
                       const slotKey = `${dateSlot.dateKey}_${slot}`
                       const isSelected = selectedSlots.has(slotKey)
+                      const occupied = occupiedSlots[slotKey]
+
                       return (
-                        <button
-                          key={slotKey}
-                          type="button"
+                        <td
+                          key={slot}
+                          className={`sub-td-slot${isSelected ? ' sub-slot-x' : ''}${occupied ? ' sub-slot-occ' : ''}`}
                           onClick={() => toggleSlot(slotKey)}
-                          style={{
-                            ...styles.slotButton,
-                            ...(isSelected ? styles.slotButtonSelected : {}),
-                          }}
                         >
-                          <span style={styles.slotLabel}>{SLOT_LABELS[slot - 1] ?? `${slot}限`}</span>
-                          <span style={styles.slotStatus}>{isSelected ? '不可' : '可'}</span>
-                        </button>
+                          {isSelected ? '✕' : occupied || ''}
+                        </td>
                       )
                     })}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       </section>
 
       {isStudent && (
-        <section style={styles.section}>
-          <h2 style={styles.sectionTitle}>希望科目数</h2>
-          <p style={styles.sectionDesc}>
-            受講を希望する科目ごとのコマ数を入力してください（合計: {totalSubjectCount}コマ）
-          </p>
-          <div style={styles.subjectList}>
+        <section className="sub-section">
+          <div className="sub-section-head">
+            <span className="sub-section-title">希望科目数</span>
+            <span className="sub-muted">合計: <strong>{totalSubjectCount}</strong>コマ</span>
+          </div>
+          <div className="sub-subject-list">
             {data.availableSubjects.map((subject) => (
-              <div key={subject} style={styles.subjectRow}>
-                <label style={styles.subjectLabel}>{subject}</label>
-                <div style={styles.subjectControls}>
+              <div key={subject} className="sub-subject-row">
+                <span className="sub-subject-label">{subject}</span>
+                <div className="sub-subject-ctrl">
                   <button
                     type="button"
+                    className="sub-counter-btn"
                     onClick={() => handleSubjectChange(subject, (subjectSlots[subject] ?? 0) - 1)}
-                    style={styles.counterButton}
                     disabled={(subjectSlots[subject] ?? 0) <= 0}
-                  >
-                    −
-                  </button>
+                  >−</button>
                   <input
                     type="number"
                     inputMode="numeric"
                     min="0"
                     max="999"
+                    className="sub-counter-input"
                     value={subjectSlots[subject] ?? 0}
                     onChange={(e) => handleSubjectChange(subject, parseInt(e.target.value, 10) || 0)}
-                    style={styles.counterInput}
                   />
                   <button
                     type="button"
+                    className="sub-counter-btn"
                     onClick={() => handleSubjectChange(subject, (subjectSlots[subject] ?? 0) + 1)}
-                    style={styles.counterButton}
-                  >
-                    +
-                  </button>
+                  >+</button>
                 </div>
               </div>
             ))}
           </div>
-          <label style={styles.checkboxRow}>
+          <label className="sub-checkbox-row">
             <input
               type="checkbox"
               checked={regularOnly}
               onChange={(e) => setRegularOnly(e.target.checked)}
-              style={styles.checkbox}
+              className="sub-checkbox"
             />
             <span>通常授業のみ（講習なし）</span>
           </label>
         </section>
       )}
 
-      <section style={styles.submitSection}>
-        <div style={styles.summaryBox}>
-          <p>出席不可: <strong>{totalUnavailable}</strong>コマ</p>
-          {isStudent && <p>希望科目合計: <strong>{totalSubjectCount}</strong>コマ</p>}
-          {isStudent && regularOnly && <p style={styles.regularOnlyLabel}>※ 通常授業のみ</p>}
+      <section className="sub-section sub-submit-section">
+        <div className="sub-summary">
+          <span>不可: <strong>{totalUnavailable}</strong>コマ</span>
+          {isStudent && <span>科目計: <strong>{totalSubjectCount}</strong>コマ</span>}
+          {isStudent && regularOnly && <span style={{ color: '#888' }}>通常のみ</span>}
         </div>
         <button
           type="button"
+          className={`sub-submit-btn${submitting ? ' sub-disabled' : ''}`}
           onClick={handleSubmit}
           disabled={submitting}
-          style={{
-            ...styles.submitButton,
-            ...(submitting ? styles.submitButtonDisabled : {}),
-          }}
         >
           {submitting ? '送信中...' : '提出する'}
         </button>
-        <p style={styles.submitNote}>※ 提出後の変更はできません</p>
+        <p className="sub-muted" style={{ textAlign: 'center', marginTop: 6, fontSize: 11 }}>※ 提出後の変更はできません</p>
       </section>
+
+      <style>{baseStyles}</style>
     </div>
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100dvh',
-    background: '#f5f5f5',
-    fontFamily: "'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif",
-    color: '#111',
-    paddingBottom: 'env(safe-area-inset-bottom, 0px)',
-  },
-  // Loading
-  loadingBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '60dvh',
-    gap: 16,
-  },
-  spinner: {
-    width: 40,
-    height: 40,
-    border: '3px solid #ddd',
-    borderTopColor: '#333',
-    borderRadius: '50%',
-    animation: 'spin 0.8s linear infinite',
-  },
-  loadingText: { fontSize: 14, color: '#666' },
-  // Error
-  errorBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '60dvh',
-    padding: 24,
-    textAlign: 'center',
-  },
-  errorIcon: { fontSize: 48, marginBottom: 8 },
-  errorText: { fontSize: 16, color: '#333' },
-  inlineError: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '12px 16px',
-    background: '#fee',
-    color: '#c00',
-    fontSize: 14,
-  },
-  dismissButton: {
-    background: 'none',
-    border: 'none',
-    color: '#c00',
-    fontSize: 18,
-    cursor: 'pointer',
-    padding: '0 4px',
-  },
-  // Success
-  successBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: '60dvh',
-    padding: 24,
-    textAlign: 'center',
-  },
-  successIcon: {
-    fontSize: 56,
-    color: '#2a7e2a',
-    background: '#e8f5e8',
-    borderRadius: '50%',
-    width: 80,
-    height: 80,
-    lineHeight: '80px',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  successTitle: { fontSize: 22, fontWeight: 700, marginBottom: 8 },
-  successText: { fontSize: 15, color: '#333', marginBottom: 8 },
-  successNote: { fontSize: 13, color: '#666' },
-  // Header
-  header: {
-    background: '#fff',
-    borderBottom: '1px solid #ddd',
-    padding: '20px 16px',
-    textAlign: 'center',
-  },
-  headerTitle: { fontSize: 20, fontWeight: 700, margin: '0 0 4px' },
-  headerSub: { fontSize: 16, fontWeight: 600, margin: '0 0 4px', color: '#333' },
-  headerPeriod: { fontSize: 13, color: '#666', margin: 0 },
-  // Section
-  section: {
-    margin: '12px 0',
-    background: '#fff',
-    borderTop: '1px solid #ddd',
-    borderBottom: '1px solid #ddd',
-    padding: '16px',
-  },
-  sectionTitle: { fontSize: 16, fontWeight: 700, margin: '0 0 4px' },
-  sectionDesc: { fontSize: 13, color: '#666', margin: '0 0 12px' },
-  // Date list
-  dateList: { display: 'flex', flexDirection: 'column', gap: 2 },
-  dateGroup: {
-    borderBottom: '1px solid #eee',
-  },
-  dateHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-    padding: '12px 4px',
-    background: 'none',
-    border: 'none',
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: 'pointer',
-    textAlign: 'left',
-    gap: 8,
-  },
-  dateLabel: { flex: 1 },
-  dateBadge: {
-    fontSize: 12,
-    color: '#c00',
-    fontWeight: 700,
-    background: '#fee',
-    padding: '2px 8px',
-    borderRadius: 4,
-  },
-  chevron: { fontSize: 11, color: '#999' },
-  // Slot list
-  slotList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 4,
-    padding: '0 4px 12px',
-  },
-  selectAllButton: {
-    display: 'block',
-    width: '100%',
-    padding: '8px',
-    border: '1px solid #ccc',
-    borderRadius: 6,
-    background: '#fafafa',
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#555',
-    cursor: 'pointer',
-    marginBottom: 4,
-  },
-  slotButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    width: '100%',
-    padding: '12px 16px',
-    border: '1px solid #ddd',
-    borderRadius: 8,
-    background: '#fff',
-    fontSize: 15,
-    cursor: 'pointer',
-    transition: 'background 0.15s, border-color 0.15s',
-  },
-  slotButtonSelected: {
-    background: '#fee5e5',
-    borderColor: '#e88',
-    color: '#c00',
-  },
-  slotLabel: { fontWeight: 600 },
-  slotStatus: { fontSize: 13 },
-  // Subject list
-  subjectList: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  subjectRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '8px 4px',
-    borderBottom: '1px solid #eee',
-  },
-  subjectLabel: {
-    fontSize: 16,
-    fontWeight: 600,
-    minWidth: 40,
-  },
-  subjectControls: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-  },
-  counterButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-    border: '1px solid #ccc',
-    background: '#f8f8f8',
-    fontSize: 20,
-    fontWeight: 700,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  counterInput: {
-    width: 56,
-    height: 40,
-    textAlign: 'center',
-    fontSize: 18,
-    fontWeight: 600,
-    border: '1px solid #ccc',
-    borderRadius: 6,
-    MozAppearance: 'textfield',
-  },
-  // Checkbox
-  checkboxRow: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 16,
-    fontSize: 15,
-    cursor: 'pointer',
-  },
-  checkbox: { width: 20, height: 20, accentColor: '#333' },
-  // Submit
-  submitSection: {
-    padding: '16px',
-    background: '#fff',
-    borderTop: '1px solid #ddd',
-    margin: '12px 0 0',
-  },
-  summaryBox: {
-    background: '#f8f8f8',
-    borderRadius: 8,
-    padding: '12px 16px',
-    marginBottom: 16,
-    fontSize: 14,
-  },
-  regularOnlyLabel: { color: '#888', fontSize: 13 },
-  submitButton: {
-    display: 'block',
-    width: '100%',
-    padding: '16px',
-    border: 'none',
-    borderRadius: 10,
-    background: '#111',
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: 700,
-    cursor: 'pointer',
-  },
-  submitButtonDisabled: {
-    opacity: 0.5,
-    cursor: 'not-allowed',
-  },
-  submitNote: {
-    textAlign: 'center',
-    fontSize: 12,
-    color: '#999',
-    marginTop: 8,
-  },
-}
+const baseStyles = `
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-size: 14px; -webkit-text-size-adjust: 100%; }
+  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); }
+  .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
+  .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
+  .sub-muted { font-size: 13px; color: #666; }
+  .sub-success-icon { font-size: 48px; color: #2a7e2a; background: #e8f5e8; border-radius: 50%; width: 72px; height: 72px; line-height: 72px; text-align: center; margin-bottom: 12px; }
+
+  .sub-header { background: #fff; border-bottom: 1px solid #ddd; padding: 16px 12px; text-align: center; }
+  .sub-header-title { font-size: 17px; font-weight: 700; margin-bottom: 2px; }
+  .sub-header-name { font-size: 15px; font-weight: 600; color: #333; margin-bottom: 2px; }
+
+  .sub-inline-error { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #fee; color: #c00; font-size: 13px; }
+  .sub-dismiss { background: none; border: none; color: #c00; font-size: 16px; cursor: pointer; padding: 0 4px; }
+
+  .sub-section { background: #fff; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 12px; margin: 8px 0; }
+  .sub-section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .sub-section-title { font-size: 15px; font-weight: 700; }
+
+  /* Slot table */
+  .sub-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .sub-slot-table { border-collapse: collapse; width: 100%; min-width: 280px; font-size: 12px; }
+  .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
+  .sub-th-date { width: 72px; min-width: 72px; padding: 6px 2px; background: #f0f0f0; font-weight: 600; font-size: 11px; position: sticky; left: 0; z-index: 1; }
+  .sub-th-slot { padding: 6px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; }
+  .sub-td-date { padding: 8px 2px; font-weight: 600; font-size: 12px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; position: sticky; left: 0; z-index: 1; }
+  .sub-td-slot { padding: 6px 2px; min-width: 40px; height: 36px; cursor: pointer; user-select: none; font-size: 11px; transition: background .1s; }
+  .sub-td-slot:active { background: #eef; }
+  .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; font-size: 14px; }
+  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 10px; font-weight: 600; }
+  .sub-slot-x.sub-slot-occ { background: #fee5e5 !important; color: #c00; }
+  .sub-row-all .sub-td-date { background: #fff0f0; }
+
+  /* Subject */
+  .sub-subject-list { display: flex; flex-direction: column; gap: 6px; }
+  .sub-subject-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px; border-bottom: 1px solid #eee; }
+  .sub-subject-label { font-size: 15px; font-weight: 600; min-width: 36px; }
+  .sub-subject-ctrl { display: flex; align-items: center; gap: 6px; }
+  .sub-counter-btn { width: 36px; height: 36px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .sub-counter-btn:disabled { opacity: .3; }
+  .sub-counter-input { width: 48px; height: 36px; text-align: center; font-size: 16px; font-weight: 600; border: 1px solid #ccc; border-radius: 6px; -moz-appearance: textfield; }
+  .sub-counter-input::-webkit-inner-spin-button, .sub-counter-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  .sub-checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 14px; cursor: pointer; }
+  .sub-checkbox { width: 18px; height: 18px; accent-color: #333; }
+
+  /* Submit */
+  .sub-submit-section { padding: 12px; }
+  .sub-summary { display: flex; gap: 12px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
+  .sub-submit-btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; }
+  .sub-disabled { opacity: .5; cursor: not-allowed; }
+
+  @media (max-width: 360px) {
+    .sub-th-date { width: 60px; min-width: 60px; font-size: 10px; }
+    .sub-td-date { font-size: 11px; }
+    .sub-td-slot { min-width: 34px; }
+    .sub-slot-table { font-size: 11px; }
+  }
+`

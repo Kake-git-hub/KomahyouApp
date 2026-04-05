@@ -1733,7 +1733,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       </div>
       <div class="toolbar-actions">
         <button type="button" id="schedule-apply-button">反映</button>
-        <button type="button" id="schedule-print-all-button" class="secondary">${viewType === 'student' ? '全生徒一括印刷' : '全講師一括印刷'}</button>
+        <button type="button" id="schedule-print-all-button" class="secondary">${viewType === 'student' ? '全生徒一括表示' : '全講師一括表示'}</button>
       </div>
     </div>
     <main class="pages" id="schedule-pages"></main>
@@ -1769,6 +1769,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let appliedEndDate = '';
       let appliedPeriodValue = '';
       let appliedPersonId = '';
+      let isBulkDisplayMode = false;
       const pendingUnavailableKeys = new Set();
       const pendingUnavailableTimers = new Map();
       const interactionLockStorageKey = 'schedule-shared:interaction-lock';
@@ -3183,7 +3184,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '<div class="logo-box" data-shared-image="logo"><span class="logo-placeholder">ロゴ欄</span></div>'
           + '<div class="school-box"><textarea class="school-input shared-input" data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等"></textarea></div>'
           + '<div class="title-box"><input class="title-input shared-input" data-shared-input="sheet-title" value="" placeholder="授業日程表" /></div>'
-          + '<div class="meta-box"><div class="meta-row"><span class="meta-label">期間:</span> ' + escapeHtml(periodLabel) + '</div><div class="meta-row person-meta-row">' + (qrHtml || '') + '<span class="page-count print-only-hidden">' + (pageIndex + 1) + 'ページ目</span><span><span class="meta-label">' + escapeHtml(nameLabel) + ':</span> ' + escapeHtml(subLabel) + '</span></div></div>'
+          + '<div class="meta-box"><div class="meta-row"><span class="meta-label">期間:</span> ' + escapeHtml(periodLabel) + '</div><div class="meta-row person-meta-row">' + (qrHtml || '') + '<span><span class="meta-label">' + escapeHtml(nameLabel) + ':</span> ' + escapeHtml(subLabel) + '</span></div><div class="meta-row"><span class="page-count print-only-hidden">' + (pageIndex + 1) + 'ページ目</span></div></div>'
           + '</div>';
       }
 
@@ -3925,6 +3926,27 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       });
       applyButton.addEventListener('click', applyFilters);
       printAllButton.addEventListener('click', function() {
+        if (isBulkDisplayMode) {
+          // Restore original single-person view
+          isBulkDisplayMode = false;
+          printAllButton.textContent = VIEW_TYPE === 'student' ? '全生徒一括表示' : '全講師一括表示';
+          var startDate = startInput.value;
+          var endDate = endInput.value;
+          if (!startDate || !endDate) return;
+          var personId = personSelect.value || appliedPersonId;
+          if (!personId) {
+            personId = getDefaultAppliedPersonId(startDate, endDate);
+          }
+          if (VIEW_TYPE === 'student') {
+            renderStudentPages(startDate, endDate, personId);
+          } else {
+            renderTeacherPages(startDate, endDate, personId);
+          }
+          appliedPersonId = personId;
+          syncSharedInputsFromStorage();
+          syncSharedImagesFromStorage();
+          return;
+        }
         var startDate = startInput.value;
         var endDate = endInput.value;
         if (!startDate || !endDate) return;
@@ -3952,22 +3974,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // Restore shared inputs after bulk render
         syncSharedInputsFromStorage();
         syncSharedImagesFromStorage();
-        window.print();
-        // Restore original person
+        isBulkDisplayMode = true;
         appliedPersonId = originalPersonId || people[0].id;
-        if (VIEW_TYPE === 'student') {
-          renderStudentPages(startDate, endDate, appliedPersonId);
-        } else {
-          renderTeacherPages(startDate, endDate, appliedPersonId);
-        }
-        syncSharedInputsFromStorage();
-        syncSharedImagesFromStorage();
+        printAllButton.textContent = '個別表示に戻す';
       });
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
         acquireInteractionLock();
       }, true);
       pagesElement.addEventListener('pointerdown', (event) => {
+        if (isBulkDisplayMode) return;
         if (event.button !== 0) return;
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
@@ -3999,6 +4015,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
         const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
+        if (isBulkDisplayMode) return;
         if (toggleTarget.getAttribute('data-role') === 'student-count-modal-backdrop' && toggleTarget !== target) return;
         if (toggleTarget.getAttribute('data-role') === 'teacher-register-modal-backdrop' && toggleTarget !== target) return;
         if ((toggleTarget.getAttribute('data-role') || '').includes('teacher')) {

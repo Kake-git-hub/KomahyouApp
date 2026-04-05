@@ -725,6 +725,7 @@ type LectureSubmissionDoc = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   regularOnly: boolean
+  occupiedSlots: Record<string, string>
   submittedAt: string | null
   createdAt: string
 }
@@ -790,6 +791,7 @@ export const lectureSubmissionApi = onRequest({
       unavailableSlots: data.unavailableSlots ?? [],
       subjectSlots: data.subjectSlots ?? {},
       regularOnly: data.regularOnly ?? false,
+      occupiedSlots: data.occupiedSlots ?? {},
     })
     return
   }

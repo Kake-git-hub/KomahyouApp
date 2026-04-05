@@ -17,7 +17,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
@@ -1532,20 +1532,58 @@ function App() {
     const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)
     if (allStudentsHaveTokens && allTeachersHaveTokens) return
 
+    // Build occupied slots from board cells
+    const runtimeWindow = getSchedulePopupRuntimeWindow()
+    const sessionCells = buildScheduleCellsForRange({
+      range: { startDate: session.startDate, endDate: session.endDate, periodValue: '' },
+      fallbackStartDate: session.startDate,
+      fallbackEndDate: session.endDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons: displayRegularLessons,
+      boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+    })
+    const lessonTypeLabels: Record<string, string> = { regular: '通常', makeup: '振替', special: '講習' }
+    const studentOccupiedMap = new Map<string, Record<string, string>>()
+    const teacherOccupiedMap = new Map<string, Record<string, string>>()
+    for (const cell of sessionCells) {
+      const slotKey = `${cell.dateKey}_${cell.slotNumber}`
+      for (const desk of cell.desks) {
+        if (!desk.lesson) continue
+        const teacherName = desk.teacher
+        const matchedTeacher = activeTeachers.find((t) => getTeacherDisplayName(t) === teacherName)
+        if (matchedTeacher) {
+          if (!teacherOccupiedMap.has(matchedTeacher.id)) teacherOccupiedMap.set(matchedTeacher.id, {})
+          const existing = teacherOccupiedMap.get(matchedTeacher.id)!
+          if (!existing[slotKey]) existing[slotKey] = lessonTypeLabels[desk.lesson.studentSlots[0]?.lessonType ?? ''] ?? ''
+        }
+        for (const studentSlot of desk.lesson.studentSlots) {
+          if (!studentSlot) continue
+          const studentId = studentSlot.managedStudentId ?? studentSlot.id
+          if (!studentOccupiedMap.has(studentId)) studentOccupiedMap.set(studentId, {})
+          const existing = studentOccupiedMap.get(studentId)!
+          if (!existing[slotKey]) existing[slotKey] = lessonTypeLabels[studentSlot.lessonType] ?? ''
+        }
+      }
+    }
+
     const referenceDate = session.startDate
     const studentsWithSubjects = activeStudents.map((s) => ({
       id: s.id,
       name: getStudentDisplayName(s),
       availableSubjects: getSelectableStudentSubjectsForGrade(resolveCurrentStudentGradeLabel(s, referenceDate)),
+      occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
     }))
-    const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t) }))
+    const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
 
     const { updatedSession, newTokens } = await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings)
     if (newTokens.length === 0) return
 
     await writeSubmissionDocs(newTokens, actingClassroomId)
     setSpecialSessions((current) => current.map((s) => s.id === updatedSession.id ? updatedSession : s))
-  }, [actingClassroomId, classroomSettings, specialSessions, students, teachers])
+  }, [actingClassroomId, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
 
   const syncStudentSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -2055,6 +2093,62 @@ function App() {
     syncStudentSchedulePopup()
     syncTeacherSchedulePopup()
   }, [boardState, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+
+  // Real-time submission reflection from Firestore
+  useEffect(() => {
+    if (!isRemoteBackendEnabled || !actingClassroomId) return
+
+    const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries) => {
+      setSpecialSessions((current) => {
+        let updated = current
+        for (const entry of entries) {
+          updated = updated.map((session) => {
+            if (session.id !== entry.sessionId) return session
+            const now = new Date().toISOString()
+            if (entry.personType === 'teacher') {
+              const existing = session.teacherInputs[entry.personId]
+              if (existing?.countSubmitted) return session
+              return {
+                ...session,
+                teacherInputs: {
+                  ...session.teacherInputs,
+                  [entry.personId]: {
+                    ...existing,
+                    unavailableSlots: entry.unavailableSlots,
+                    countSubmitted: true,
+                    updatedAt: now,
+                  },
+                },
+                updatedAt: now,
+              }
+            } else {
+              const existing = session.studentInputs[entry.personId]
+              if (existing?.countSubmitted) return session
+              return {
+                ...session,
+                studentInputs: {
+                  ...session.studentInputs,
+                  [entry.personId]: {
+                    ...existing,
+                    unavailableSlots: entry.unavailableSlots,
+                    regularBreakSlots: existing?.regularBreakSlots ?? [],
+                    subjectSlots: entry.subjectSlots,
+                    regularOnly: entry.regularOnly,
+                    countSubmitted: true,
+                    updatedAt: now,
+                  },
+                },
+                updatedAt: now,
+              }
+            }
+          })
+        }
+        return updated
+      })
+    })
+
+    return unsubscribe
+  }, [isRemoteBackendEnabled, actingClassroomId])
 
   useEffect(() => {
     if (!isRemoteBackendEnabled) return

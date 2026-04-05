@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore'
+import { doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import type { SpecialSessionRow } from '../../components/special-data/specialSessionModel'
@@ -30,14 +30,15 @@ export type LectureSubmissionDoc = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   regularOnly: boolean
+  occupiedSlots: Record<string, string>
   submittedAt: string | null
   createdAt: string
 }
 
 export async function ensureSubmissionTokens(
   session: SpecialSessionRow,
-  students: Array<{ id: string; name: string; availableSubjects: string[] }>,
-  teachers: Array<{ id: string; name: string }>,
+  students: Array<{ id: string; name: string; availableSubjects: string[]; occupiedSlots?: Record<string, string> }>,
+  teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; forceOpenDates: string[] },
 ): Promise<{ updatedSession: SpecialSessionRow; newTokens: Array<{ token: string; doc: LectureSubmissionDoc }> }> {
   const config = getFirebaseBackendConfig()
@@ -76,6 +77,7 @@ export async function ensureSubmissionTokens(
         unavailableSlots: [],
         subjectSlots: {},
         regularOnly: false,
+        occupiedSlots: teacher.occupiedSlots ?? {},
         submittedAt: null,
         createdAt: updatedAt,
       },
@@ -110,6 +112,7 @@ export async function ensureSubmissionTokens(
         unavailableSlots: [],
         subjectSlots: {},
         regularOnly: false,
+        occupiedSlots: student.occupiedSlots ?? {},
         submittedAt: null,
         createdAt: updatedAt,
       },
@@ -160,4 +163,49 @@ export async function deleteLectureSubmissionDoc(token: string) {
 
   const docRef = doc(db, 'lectureSubmissions', token)
   await deleteDoc(docRef)
+}
+
+export type SubmissionChangeEntry = {
+  token: string
+  sessionId: string
+  personType: 'student' | 'teacher'
+  personId: string
+  unavailableSlots: string[]
+  subjectSlots: Record<string, number>
+  regularOnly: boolean
+}
+
+export function subscribeLectureSubmissions(
+  classroomId: string,
+  onSubmitted: (entries: SubmissionChangeEntry[]) => void,
+): () => void {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !classroomId) return () => {}
+
+  const q = query(
+    collection(db, 'lectureSubmissions'),
+    where('classroomId', '==', classroomId),
+    where('status', '==', 'submitted'),
+  )
+
+  const unsubscribe = onSnapshot(q, (snapshot) => {
+    const entries: SubmissionChangeEntry[] = []
+    for (const change of snapshot.docChanges()) {
+      if (change.type === 'added' || change.type === 'modified') {
+        const data = change.doc.data() as LectureSubmissionDoc
+        entries.push({
+          token: change.doc.id,
+          sessionId: data.sessionId,
+          personType: data.personType,
+          personId: data.personId,
+          unavailableSlots: data.unavailableSlots ?? [],
+          subjectSlots: data.subjectSlots ?? {},
+          regularOnly: data.regularOnly ?? false,
+        })
+      }
+    }
+    if (entries.length > 0) onSubmitted(entries)
+  })
+
+  return unsubscribe
 }
