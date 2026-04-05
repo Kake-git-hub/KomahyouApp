@@ -1839,6 +1839,7 @@ function App() {
                 [message.personId]: {
                   unavailableSlots,
                   countSubmitted: Boolean(session.teacherInputs[message.personId]?.countSubmitted),
+                  submissionToken: session.teacherInputs[message.personId]?.submissionToken,
                   updatedAt,
                 },
               },
@@ -1856,6 +1857,7 @@ function App() {
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 regularOnly,
                 countSubmitted: Boolean(session.studentInputs[message.personId]?.countSubmitted),
+                submissionToken: session.studentInputs[message.personId]?.submissionToken,
                 updatedAt,
               },
             },
@@ -1886,6 +1888,7 @@ function App() {
                 subjectSlots: previousInput?.subjectSlots ?? {},
                 regularOnly: Boolean(previousInput?.regularOnly),
                 countSubmitted: Boolean(previousInput?.countSubmitted),
+                submissionToken: previousInput?.submissionToken,
                 updatedAt,
               },
             },
@@ -1928,6 +1931,7 @@ function App() {
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 regularOnly,
                 countSubmitted,
+                submissionToken: previousInput?.submissionToken,
                 updatedAt,
               },
             },
@@ -1965,6 +1969,7 @@ function App() {
               [message.personId]: {
                 unavailableSlots,
                 countSubmitted: Boolean(previousInput?.countSubmitted),
+                submissionToken: previousInput?.submissionToken,
                 updatedAt,
               },
             },
@@ -1991,6 +1996,7 @@ function App() {
               [message.personId]: {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
                 countSubmitted,
+                submissionToken: previousInput?.submissionToken,
                 updatedAt,
               },
             },
@@ -2061,12 +2067,14 @@ function App() {
 
           const nextStudentInputs = { ...session.studentInputs }
           for (const entry of normalizedEntries) {
+            const previousInput = session.studentInputs[entry.personId]
             nextStudentInputs[entry.personId] = {
               unavailableSlots: entry.unavailableSlots,
               regularBreakSlots: entry.regularBreakSlots,
               subjectSlots: entry.regularOnly ? {} : entry.subjectSlots,
               regularOnly: entry.regularOnly,
               countSubmitted: entry.countSubmitted,
+              submissionToken: previousInput?.submissionToken,
               updatedAt,
             }
           }

@@ -506,7 +506,7 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
       entryDate: student.entryDate,
       withdrawDate: student.withdrawDate,
       isHidden: student.isHidden,
-      qrSvg: studentInput?.countSubmitted ? undefined : buildSubmissionQrSvg(studentInput?.submissionToken),
+      qrSvg: buildSubmissionQrSvg(studentInput?.submissionToken),
       submissionSubmitted: Boolean(studentInput?.countSubmitted),
     }}),
     teachers: [],
@@ -533,7 +533,7 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
       isHidden: teacher.isHidden,
       memo: teacher.memo,
       subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
-      qrSvg: teacherInput?.countSubmitted ? undefined : buildSubmissionQrSvg(teacherInput?.submissionToken),
+      qrSvg: buildSubmissionQrSvg(teacherInput?.submissionToken),
       submissionSubmitted: Boolean(teacherInput?.countSubmitted),
     }}),
   }
@@ -3127,6 +3127,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const currentInput = getStudentSessionInput(activeCountDialog.studentId, activeCountDialog.sessionId);
         updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, currentInput.subjectSlots, currentInput.regularOnly, false);
         persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, currentInput.subjectSlots, currentInput.regularOnly, false);
+        var matchedStudent = (DATA.students || []).find(function(s) { return s.id === activeCountDialog.studentId; });
+        if (matchedStudent) matchedStudent.submissionSubmitted = false;
         activeCountDialog = null;
         syncPayloadFingerprint();
         render();
@@ -3145,6 +3147,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!activeTeacherRegisterDialog || !activeTeacherRegisterDialog.teacherId || !activeTeacherRegisterDialog.sessionId) return;
         updateTeacherCountLocally(activeTeacherRegisterDialog.sessionId, activeTeacherRegisterDialog.teacherId, false);
         persistTeacherCount(activeTeacherRegisterDialog.sessionId, activeTeacherRegisterDialog.teacherId, false);
+        var matchedTeacher = (DATA.teachers || []).find(function(t) { return t.id === activeTeacherRegisterDialog.teacherId; });
+        if (matchedTeacher) matchedTeacher.submissionSubmitted = false;
         activeTeacherRegisterDialog = null;
         syncPayloadFingerprint();
         render();
