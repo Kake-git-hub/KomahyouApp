@@ -63,7 +63,7 @@ async function setFirestoreDoc(path: string, fields: Record<string, unknown>) {
   const url = `${EMULATOR_FIRESTORE_URL}/v1/projects/demo-komahyou/databases/(default)/documents/${path}`
   await fetch(url, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer owner' },
     body: JSON.stringify({ fields: firestoreFields }),
   })
 }
@@ -259,6 +259,7 @@ test.describe('Firestore データ永続化', () => {
       displayName: 'テスト開発者',
       email: 'dev@example.com',
       role: 'developer',
+      assignedClassroomId: TEST_CLASSROOM_ID,
     })
 
     await setFirestoreDoc(`workspaces/${WORKSPACE_KEY}/classrooms/${TEST_CLASSROOM_ID}`, {
@@ -281,7 +282,7 @@ test.describe('Firestore データ永続化', () => {
     await page.waitForTimeout(5000)
 
     // 開発者は developer 画面か board 画面に到達する
-    const hasDeveloperScreen = await page.locator('[data-testid="developer-admin-screen"]').count()
+    const hasDeveloperScreen = await page.locator('text=Developer Control').count()
     const hasBoardScreen = await page.getByTestId('week-label').count()
     expect(hasDeveloperScreen > 0 || hasBoardScreen > 0).toBeTruthy()
   })

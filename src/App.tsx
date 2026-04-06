@@ -205,7 +205,7 @@ function shouldUseImportedMasterData() {
 }
 
 function isSnapshotPersistenceRuntimeEnabled() {
-  if (typeof navigator !== 'undefined' && navigator.webdriver) return false
+  if (typeof navigator !== 'undefined' && navigator.webdriver && !isFirebaseBackendEnabled()) return false
   return true
 }
 
