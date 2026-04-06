@@ -6,6 +6,7 @@ import {
   buildRegularLessonTemplateWorkbook,
   buildTemplateBoardCells,
   createRegularLessonTemplate,
+  listTemplateStartDatesFromWorkbook,
   normalizeRegularLessonTemplate,
   parseRegularLessonTemplateWorkbook,
   regularTemplateDayOptions,
@@ -69,6 +70,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
   const [draftTemplate, setDraftTemplate] = useState<RegularLessonTemplate>(() => normalizeRegularLessonTemplate(classroomSettings.regularLessonTemplate, classroomSettings.deskCount))
   const [selectedDesk, setSelectedDesk] = useState<SelectedDeskState>(createDefaultSelectedDesk)
   const [statusMessage, setStatusMessage] = useState('')
+  const [importDateOptions, setImportDateOptions] = useState<{ dates: string[]; xlsxModule: typeof import('xlsx'); workbook: import('xlsx').WorkBook } | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -170,6 +172,12 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
+      const dates = listTemplateStartDatesFromWorkbook(xlsx, workbook)
+      if (dates.length > 1) {
+        // 複数日付がある場合は選択モーダルを表示
+        setImportDateOptions({ dates, xlsxModule: xlsx, workbook })
+        return
+      }
       const importedTemplate = parseRegularLessonTemplateWorkbook(xlsx, workbook, {
         fallbackTemplate: normalizedTemplate,
         teachers,
@@ -182,6 +190,22 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     } catch {
       setStatusMessage('通常授業テンプレートの Excel 取り込みに失敗しました。列名を確認してください。')
     }
+  }
+
+  const handleImportWithDate = (selectedDate: string) => {
+    if (!importDateOptions) return
+    const { xlsxModule, workbook } = importDateOptions
+    const importedTemplate = parseRegularLessonTemplateWorkbook(xlsxModule, workbook, {
+      fallbackTemplate: normalizedTemplate,
+      teachers,
+      students,
+      deskCount: classroomSettings.deskCount,
+      selectedStartDate: selectedDate,
+    })
+    setDraftTemplate(importedTemplate)
+    setSelectedDesk(createDefaultSelectedDesk())
+    setImportDateOptions(null)
+    setStatusMessage(`開始日 ${selectedDate} のテンプレートを Excel から取り込みました。`)
   }
 
   const handleReset = () => {
@@ -363,6 +387,20 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
             ) : null}
           </aside>
         </div>
+
+        {importDateOptions ? (
+          <div className="auto-assign-modal-overlay" style={{ position: 'absolute', inset: 0, zIndex: 100, background: 'rgba(0,0,0,.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ background: '#fff', borderRadius: 8, padding: '24px 28px', minWidth: 260 }}>
+              <div style={{ fontWeight: 700, marginBottom: 12 }}>取り込むテンプレートの開始日を選択</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {importDateOptions.dates.map((d) => (
+                  <button key={d} className="primary-button" type="button" onClick={() => handleImportWithDate(d)}>{d}</button>
+                ))}
+              </div>
+              <button className="secondary-button slim" type="button" style={{ marginTop: 16, width: '100%' }} onClick={() => setImportDateOptions(null)}>キャンセル</button>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )

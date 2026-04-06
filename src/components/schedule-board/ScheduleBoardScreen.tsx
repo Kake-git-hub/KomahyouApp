@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
@@ -2210,6 +2210,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [templateRedoStack, setTemplateRedoStack] = useState<TemplateHistoryEntry[]>([])
   const templateFileInputRef = useRef<HTMLInputElement | null>(null)
   const [templateSaveConfirm, setTemplateSaveConfirm] = useState<TemplateSaveConfirmState | null>(null)
+  const [templateImportDateOptions, setTemplateImportDateOptions] = useState<{ dates: string[]; xlsxModule: typeof import('xlsx'); workbook: import('xlsx').WorkBook } | null>(null)
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
@@ -4583,28 +4584,45 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       const buffer = await file.arrayBuffer()
       const xlsx = await import('xlsx')
       const workbook = xlsx.read(buffer, { type: 'array' })
-      const currentTemplate = convertTemplateCellsToTemplate({
-        cells: templateCells,
-        teachers,
-        students,
-        effectiveStartDate: templateEffectiveStartDate,
-        deskCount: classroomSettings.deskCount,
-      })
-      const normalizedCurrent = normalizeRegularLessonTemplate(currentTemplate, classroomSettings.deskCount)
-      const importedTemplate = parseRegularLessonTemplateWorkbook(xlsx, workbook, {
-        fallbackTemplate: normalizedCurrent,
-        teachers,
-        students,
-        deskCount: classroomSettings.deskCount,
-      })
-      const importedCells = buildTemplateBoardCells({ template: importedTemplate, teachers, students, deskCount: classroomSettings.deskCount })
-      pushTemplateUndo(templateCells)
-      setTemplateCells(importedCells)
-      setTemplateEffectiveStartDate(importedTemplate.effectiveStartDate)
-      setStatusMessage('通常授業テンプレートを Excel から取り込みました。')
+      const dates = listTemplateStartDatesFromWorkbook(xlsx, workbook)
+      if (dates.length > 1) {
+        setTemplateImportDateOptions({ dates, xlsxModule: xlsx, workbook })
+        return
+      }
+      applyTemplateImport(xlsx, workbook)
     } catch {
       setStatusMessage('通常授業テンプレートの Excel 取り込みに失敗しました。')
     }
+  }
+
+  const applyTemplateImport = (xlsx: typeof import('xlsx'), workbook: import('xlsx').WorkBook, selectedStartDate?: string) => {
+    const currentTemplate = convertTemplateCellsToTemplate({
+      cells: templateCells,
+      teachers,
+      students,
+      effectiveStartDate: templateEffectiveStartDate,
+      deskCount: classroomSettings.deskCount,
+    })
+    const normalizedCurrent = normalizeRegularLessonTemplate(currentTemplate, classroomSettings.deskCount)
+    const importedTemplate = parseRegularLessonTemplateWorkbook(xlsx, workbook, {
+      fallbackTemplate: normalizedCurrent,
+      teachers,
+      students,
+      deskCount: classroomSettings.deskCount,
+      selectedStartDate,
+    })
+    const importedCells = buildTemplateBoardCells({ template: importedTemplate, teachers, students, deskCount: classroomSettings.deskCount })
+    pushTemplateUndo(templateCells)
+    setTemplateCells(importedCells)
+    setTemplateEffectiveStartDate(importedTemplate.effectiveStartDate)
+    setStatusMessage(selectedStartDate ? `開始日 ${selectedStartDate} のテンプレートを Excel から取り込みました。` : '通常授業テンプレートを Excel から取り込みました。')
+  }
+
+  const handleTemplateImportWithDate = (selectedDate: string) => {
+    if (!templateImportDateOptions) return
+    const { xlsxModule, workbook } = templateImportDateOptions
+    applyTemplateImport(xlsxModule, workbook, selectedDate)
+    setTemplateImportDateOptions(null)
   }
 
   const handleTemplatePackSort = () => {
@@ -6830,6 +6848,21 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                 {teacherMenuContext?.desk.teacher ? (
                   <button type="button" className="menu-link-button danger" onClick={isTemplateMode ? handleTemplateDeleteTeacher : handleDeleteTeacher} data-testid="teacher-delete-button">講師削除</button>
                 ) : null}
+              </div>
+            </div>
+          ) : null}
+          {templateImportDateOptions ? (
+            <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplateImportDateOptions(null) }}>
+              <div className="auto-assign-modal" role="dialog" aria-modal="true" style={{ minWidth: 260 }}>
+                <div className="auto-assign-modal-title">取り込むテンプレートの開始日を選択</div>
+                <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {templateImportDateOptions.dates.map((d) => (
+                    <button key={d} className="primary-button" type="button" onClick={() => handleTemplateImportWithDate(d)}>{d}</button>
+                  ))}
+                </div>
+                <div className="student-menu-section student-menu-actions">
+                  <button type="button" className="secondary-button" onClick={() => setTemplateImportDateOptions(null)}>キャンセル</button>
+                </div>
               </div>
             </div>
           ) : null}

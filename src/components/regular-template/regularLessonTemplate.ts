@@ -298,11 +298,24 @@ export function buildRegularLessonTemplateWorkbook(xlsx: XlsxModule, params: {
   return workbook
 }
 
+export function listTemplateStartDatesFromWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook): string[] {
+  const sheet = workbook.Sheets['通常授業テンプレ']
+  if (!sheet) return []
+  const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+  const dateSet = new Set<string>()
+  for (const row of rows) {
+    const dateStr = normalizeDateString(row['開始日'], xlsx)
+    if (dateStr) dateSet.add(dateStr)
+  }
+  return Array.from(dateSet).sort((a, b) => a.localeCompare(b))
+}
+
 export function parseRegularLessonTemplateWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, params: {
   fallbackTemplate: RegularLessonTemplate | null | undefined
   teachers: TeacherRow[]
   students: StudentRow[]
   deskCount: number
+  selectedStartDate?: string
 }) {
   const sheet = workbook.Sheets['通常授業テンプレ']
   if (!sheet) return normalizeRegularLessonTemplate(params.fallbackTemplate, params.deskCount)
@@ -319,9 +332,15 @@ export function parseRegularLessonTemplateWorkbook(xlsx: XlsxModule, workbook: i
     studentIdByName.set(getStudentDisplayName(student), student.id)
   }
 
-  const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+  const allRows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+  // selectedStartDate が指定されている場合、その日付の行のみ使用
+  const rows = params.selectedStartDate
+    ? allRows.filter((row) => normalizeDateString(row['開始日'], xlsx) === params.selectedStartDate)
+    : allRows
   const fallback = normalizeRegularLessonTemplate(params.fallbackTemplate, params.deskCount)
-  const effectiveStartDate = normalizeDateString(rows.find((row) => normalizeDateString(row['開始日'], xlsx))?.['開始日'], xlsx) || fallback.effectiveStartDate
+  const effectiveStartDate = params.selectedStartDate
+    || normalizeDateString(rows.find((row) => normalizeDateString(row['開始日'], xlsx))?.['開始日'], xlsx)
+    || fallback.effectiveStartDate
   const nextTemplate = createRegularLessonTemplate(params.deskCount, effectiveStartDate)
   const nextCellByKey = new Map(nextTemplate.cells.map((cell) => [buildTemplateCellKey(cell.dayOfWeek, cell.slotNumber), cell]))
 
