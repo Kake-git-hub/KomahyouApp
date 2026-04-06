@@ -513,7 +513,12 @@ export async function saveAppSnapshot(snapshot: AppSnapshot) {
 
 export async function loadWorkspaceSnapshot() {
   const indexedDbSnapshot = await readWorkspaceFromIndexedDb().catch(() => null)
-  return indexedDbSnapshot ?? readWorkspaceFromLocalStorage()
+  const localStorageSnapshot = readWorkspaceFromLocalStorage()
+  if (!indexedDbSnapshot) return localStorageSnapshot
+  if (!localStorageSnapshot) return indexedDbSnapshot
+  // Return the snapshot with the newer savedAt timestamp to prevent stale IndexedDB reads
+  if (localStorageSnapshot.savedAt > indexedDbSnapshot.savedAt) return localStorageSnapshot
+  return indexedDbSnapshot
 }
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {

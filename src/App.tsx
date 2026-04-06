@@ -697,6 +697,7 @@ function App() {
   const [remoteAuthMessage, setRemoteAuthMessage] = useState('')
   const [isRemoteLoginSubmitting, setIsRemoteLoginSubmitting] = useState(false)
   const [hasHydratedSnapshot, setHasHydratedSnapshot] = useState(false)
+  const [undoSnapshot, setUndoSnapshot] = useState<{ label: string; data: AppSnapshotPayload } | null>(null)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const displayRegularLessons = useMemo(() => {
@@ -887,6 +888,44 @@ function App() {
       }
     }))
   }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+
+  const saveUndoSnapshot = useCallback((label: string) => {
+    setUndoSnapshot({
+      label,
+      data: buildClassroomSnapshotPayload({
+        screen: screen === 'developer' ? 'board' : screen,
+        classroomSettings,
+        managers,
+        teachers,
+        students,
+        regularLessons,
+        groupLessons,
+        specialSessions,
+        autoAssignRules,
+        pairConstraints,
+        boardState,
+      }),
+    })
+  }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+
+  const restoreUndoSnapshot = useCallback(() => {
+    if (!undoSnapshot) return
+    applyClassroomPayloadToState(undoSnapshot.data, {
+      setScreen: (value) => setScreen(value),
+      setManagers,
+      setTeachers,
+      setStudents,
+      setRegularLessons,
+      setGroupLessons,
+      setSpecialSessions,
+      setAutoAssignRules,
+      setPairConstraints,
+      setClassroomSettings,
+      setBoardState,
+    })
+    setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
+    setUndoSnapshot(null)
+  }, [undoSnapshot])
 
   const navigateClassroomScreen = useCallback((nextScreen: ClassroomScreen) => {
     syncCurrentClassroomData(actingClassroomId)
@@ -1429,9 +1468,10 @@ function App() {
       setDeveloperRestoreModalState(null)
       return
     }
+    saveUndoSnapshot('開発者バックアップ復元')
     applyWorkspaceSnapshot(mergeResult.snapshot, `選択した教室だけ${developerRestoreModalState.sourceLabel}から復元しました。`)
     setDeveloperRestoreModalState(null)
-  }, [applyWorkspaceSnapshot, developerRestoreModalState])
+  }, [applyWorkspaceSnapshot, developerRestoreModalState, saveUndoSnapshot])
 
   const loginAsUser = useCallback((userId: string) => {
     syncCurrentClassroomData(actingClassroomId)
@@ -1492,6 +1532,25 @@ function App() {
     if (isSnapshotPersistenceRuntimeEnabled()) {
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
       void saveWorkspaceSnapshot(snapshot)
+
+      // Sync to Firebase before signing out so the remote snapshot is up to date
+      if (isRemoteBackendEnabled && remoteSessionUserId) {
+        void saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId)
+          .catch(() => {})
+          .finally(() => {
+            void signOutFromFirebase()
+              .then(() => {
+                setCurrentUserId('')
+                setScreen('board')
+                setPersistenceMessage('Firebase からログアウトしました。')
+              })
+              .catch((error) => {
+                const message = error instanceof Error ? error.message : 'ログアウトに失敗しました。'
+                setPersistenceMessage(message)
+              })
+          })
+        return
+      }
     }
 
     if (isRemoteBackendEnabled) {
@@ -1511,7 +1570,7 @@ function App() {
     setCurrentUserId('')
     setScreen('board')
     setPersistenceMessage('ログアウトしました。')
-  }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, syncCurrentClassroomData])
+  }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncCurrentClassroomData])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
@@ -2451,11 +2510,12 @@ function App() {
   }, [classroomSettings.initialSetupCompletedAt, hasHydratedSnapshot, screen])
 
   const savePreTemplateSaveBackup = useCallback(async () => {
+    saveUndoSnapshot('テンプレート上書き保存')
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
     const result = await saveDailyWorkspaceAutoBackup(snapshot)
     setLocalAutoBackupSummaries(result.summaries)
     setPersistenceMessage('テンプレート上書き前のバックアップを保存しました。')
-  }, [buildWorkspaceSnapshot])
+  }, [buildWorkspaceSnapshot, saveUndoSnapshot])
 
   const refreshLocalAutoBackupSummaries = useCallback(async () => {
     const summaries = await loadWorkspaceAutoBackupSummaries()
@@ -2476,6 +2536,7 @@ function App() {
       setPersistenceMessage('バックアップにこの教室のデータが含まれていませんでした。')
       return
     }
+    saveUndoSnapshot('ローカルバックアップ復元')
     applyClassroomPayloadToState(classroomEntry.data, {
       setScreen: (value) => setScreen(value),
       setManagers,
@@ -2490,7 +2551,7 @@ function App() {
       setBoardState,
     })
     setPersistenceMessage(`ローカルバックアップ (${backupDateKey}) からこの教室を復元しました。`)
-  }, [actingClassroomId])
+  }, [actingClassroomId, saveUndoSnapshot])
 
   const exportBackup = useCallback(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -2556,11 +2617,12 @@ function App() {
         setPersistenceMessage('バックアップの復元をキャンセルしました。')
         return
       }
+      saveUndoSnapshot('バックアップ復元')
       applySnapshot(snapshot, 'バックアップを読み込みました。')
     } catch {
       setPersistenceMessage('バックアップの読み込みに失敗しました。ファイル形式を確認してください。')
     }
-  }, [actingClassroomId, applySnapshot])
+  }, [actingClassroomId, applySnapshot, saveUndoSnapshot])
 
   const loadServerAutoBackupSummaries = useCallback(async () => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
@@ -2630,6 +2692,8 @@ function App() {
     try {
       const result = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, actingClassroomId)
 
+      saveUndoSnapshot('サーバーバックアップ復元')
+
       const updatedClassrooms = workspaceClassrooms.map((classroom) =>
         classroom.id === actingClassroomId
           ? { ...classroom, data: result.data }
@@ -2654,7 +2718,7 @@ function App() {
       const message = error instanceof Error ? error.message : 'サーバーバックアップからの教室復元に失敗しました。'
       setPersistenceMessage(message)
     }
-  }, [actingClassroomId, isRemoteBackendEnabled, workspaceClassrooms])
+  }, [actingClassroomId, isRemoteBackendEnabled, saveUndoSnapshot, workspaceClassrooms])
 
   const exportBasicDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -2708,6 +2772,8 @@ function App() {
         return
       }
 
+      saveUndoSnapshot('基本データ初期取込')
+
       setManagers(initialImportedBundle.managers)
       setTeachers(initialImportedBundle.teachers)
       setStudents(initialImportedBundle.students)
@@ -2731,7 +2797,7 @@ function App() {
     } catch {
       setPersistenceMessage('基本データの Excel 初期取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [classroomSettings, hasAnyExistingSetupData, managers, students, teachers])
+  }, [classroomSettings, hasAnyExistingSetupData, managers, saveUndoSnapshot, students, teachers])
 
   const importDiffBasicDataWorkbook = useCallback(async (file: File) => {
     try {
@@ -3095,6 +3161,8 @@ function App() {
         onExportAutoAssignTemplate={exportAutoAssignTemplate}
         onExportAutoAssignCurrent={exportAutoAssignCurrent}
         onImportAutoAssignWorkbook={importAutoAssignWorkbookFile}
+        undoSnapshotLabel={undoSnapshot?.label ?? null}
+        onRestoreUndoSnapshot={restoreUndoSnapshot}
       />
     )
   }
@@ -3120,6 +3188,8 @@ function App() {
       onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
       onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
       onPreTemplateSaveBackup={savePreTemplateSaveBackup}
+      undoSnapshotLabel={undoSnapshot?.label ?? null}
+      onRestoreUndoSnapshot={restoreUndoSnapshot}
       onLogout={logout}
     />
   )

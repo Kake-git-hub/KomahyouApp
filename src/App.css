@@ -628,6 +628,17 @@
   flex-wrap: wrap;
 }
 
+.toolbar-undo-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  background: #fff3cd;
+  border-top: 1px solid #ffc107;
+  font-size: 13px;
+  color: #664d03;
+}
+
 .toolbar-inline-count {
   display: inline-flex;
   min-width: 20px;
