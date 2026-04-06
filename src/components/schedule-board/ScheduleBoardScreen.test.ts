@@ -992,3 +992,487 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
     expect(firstStudentDesk?.desks[firstDeskIndex]?.lesson?.studentSlots[0]?.name).toBe(originalName)
   })
 })
+
+// ──────────────────────────────────────────────────────
+// 意図しない操作に対するデータ堅牢性テスト
+// ──────────────────────────────────────────────────────
+
+describe('データ堅牢性 意図しない操作 removeStudentFromDeskLesson', () => {
+  it('既に null のスロットを削除しても lesson や他スロットが壊れない', () => {
+    const desk: DeskCell = {
+      id: 'test_desk',
+      teacher: '講師',
+      lesson: {
+        id: 'test_lesson',
+        studentSlots: [null, createStudentEntry('s001', 'A', '数')],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 0)
+
+    // lesson は残っている（slot[1] がまだある）
+    expect(desk.lesson).toBeDefined()
+    expect(desk.lesson!.studentSlots[0]).toBeNull()
+    expect(desk.lesson!.studentSlots[1]!.name).toBe('A')
+  })
+
+  it('同じスロットを連続で2回削除しても安全', () => {
+    const desk: DeskCell = {
+      id: 'test_desk',
+      teacher: '講師',
+      lesson: {
+        id: 'test_lesson',
+        studentSlots: [
+          createStudentEntry('s001', 'A', '数'),
+          createStudentEntry('s002', 'B', '英'),
+        ],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 0)
+    expect(desk.lesson).toBeDefined()
+    expect(desk.lesson!.studentSlots[0]).toBeNull()
+
+    // 2回目: 既に null のスロットを再度削除
+    removeStudentFromDeskLesson(desk, 0)
+    expect(desk.lesson).toBeDefined()
+    expect(desk.lesson!.studentSlots[1]!.name).toBe('B')
+  })
+
+  it('両スロット削除後に lesson undefined 状態で再度呼んでも安全', () => {
+    const desk: DeskCell = {
+      id: 'test_desk',
+      teacher: '講師',
+      lesson: {
+        id: 'test_lesson',
+        studentSlots: [createStudentEntry('s001', 'A', '数'), null],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 0) // lesson → undefined
+    expect(desk.lesson).toBeUndefined()
+
+    removeStudentFromDeskLesson(desk, 0) // lesson なしで再呼び出し
+    expect(desk.lesson).toBeUndefined()
+    expect(desk.teacher).toBe('講師') // 他のプロパティは壊れていない
+  })
+
+  it('生徒を削除しても teacher, memoSlots, statusSlots は変わらない', () => {
+    const statusEntry = {
+      id: 'status_1',
+      studentId: 's099',
+      sourceManagedLesson: true,
+      name: '過去生徒',
+      grade: '中1' as const,
+      subject: '英' as const,
+      lessonType: 'regular' as const,
+      teacherType: 'normal' as const,
+      teacherName: '講師',
+      dateKey: '2026-04-07',
+      slotNumber: 1,
+      recordedAt: '2026-04-07T10:00:00',
+      status: 'absent' as const,
+      sourceLessonId: 'old_lesson',
+    }
+    const desk: DeskCell = {
+      id: 'test_desk',
+      teacher: '講師名',
+      manualTeacher: true,
+      memoSlots: ['メモ1', 'メモ2'],
+      statusSlots: [statusEntry, null],
+      lesson: {
+        id: 'test_lesson',
+        note: 'ノート',
+        studentSlots: [createStudentEntry('s001', 'A', '数'), null],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 0)
+
+    // lesson は消えるが他のプロパティは残る
+    expect(desk.lesson).toBeUndefined()
+    expect(desk.teacher).toBe('講師名')
+    expect(desk.manualTeacher).toBe(true)
+    expect(desk.memoSlots).toEqual(['メモ1', 'メモ2'])
+    expect(desk.statusSlots![0]).toBe(statusEntry) // 参照も変わらない
+    expect(desk.statusSlots![1]).toBeNull()
+  })
+
+  it('範囲外インデックス (2) で呼んでも既存スロットを壊さない', () => {
+    const desk: DeskCell = {
+      id: 'test_desk',
+      teacher: '講師',
+      lesson: {
+        id: 'test_lesson',
+        studentSlots: [
+          createStudentEntry('s001', 'A', '数'),
+          createStudentEntry('s002', 'B', '英'),
+        ],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 2)
+
+    // 既存スロットは壊れていない
+    expect(desk.lesson!.studentSlots[0]!.name).toBe('A')
+    expect(desk.lesson!.studentSlots[1]!.name).toBe('B')
+  })
+})
+
+describe('データ堅牢性 意図しない操作 cloneWeeks', () => {
+  it('空の weeks 配列を cloneWeeks しても安全', () => {
+    const empty: SlotCell[][] = []
+    const cloned = cloneWeeks(empty)
+
+    expect(cloned).toEqual([])
+    expect(cloned).not.toBe(empty)
+  })
+
+  it('セルのない週を cloneWeeks しても安全', () => {
+    const emptyWeek: SlotCell[][] = [[]]
+    const cloned = cloneWeeks(emptyWeek)
+
+    expect(cloned).toEqual([[]])
+    expect(cloned[0]).not.toBe(emptyWeek[0])
+  })
+
+  it('desks が空のセルを cloneWeeks しても安全', () => {
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [],
+    }]]
+    const cloned = cloneWeeks(weeks)
+
+    expect(cloned[0][0].desks).toEqual([])
+    expect(cloned[0][0].desks).not.toBe(weeks[0][0].desks)
+    cloned[0][0].desks.push({ id: 'new', teacher: 'x' })
+    expect(weeks[0][0].desks.length).toBe(0)
+  })
+
+  it('statusSlots を cloneWeeks で独立コピーする', () => {
+    const statusEntry = {
+      id: 'status_1',
+      studentId: 's001',
+      sourceManagedLesson: true,
+      name: '生徒A',
+      grade: '中3' as const,
+      subject: '数' as const,
+      lessonType: 'regular' as const,
+      teacherType: 'normal' as const,
+      teacherName: '田中',
+      dateKey: '2026-04-07',
+      slotNumber: 1,
+      recordedAt: '2026-04-07T10:00:00',
+      status: 'attended' as const,
+      sourceLessonId: 'lesson_1',
+    }
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{
+        id: 'desk_1',
+        teacher: '田中',
+        statusSlots: [statusEntry, null],
+        lesson: {
+          id: 'lesson_1',
+          studentSlots: [createStudentEntry('s001', '生徒A', '数'), null],
+        },
+      }],
+    }]]
+
+    const cloned = cloneWeeks(weeks)
+
+    // 参照が異なる
+    expect(cloned[0][0].desks[0].statusSlots).not.toBe(weeks[0][0].desks[0].statusSlots)
+    expect(cloned[0][0].desks[0].statusSlots![0]).not.toBe(statusEntry)
+
+    // 内容は同一
+    expect(cloned[0][0].desks[0].statusSlots![0]!.name).toBe('生徒A')
+    expect(cloned[0][0].desks[0].statusSlots![0]!.status).toBe('attended')
+
+    // クローン側を変更しても元は影響なし
+    cloned[0][0].desks[0].statusSlots![0]!.name = '変更済み'
+    expect(weeks[0][0].desks[0].statusSlots![0]!.name).toBe('生徒A')
+  })
+
+  it('クローン後に元データのデスクを追加してもクローン側に影響しない', () => {
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{ id: 'desk_1', teacher: '講師A' }],
+    }]]
+
+    const cloned = cloneWeeks(weeks)
+
+    // 元データにデスクを追加
+    weeks[0][0].desks.push({ id: 'desk_2', teacher: '講師B' })
+
+    // クローン側は影響なし
+    expect(cloned[0][0].desks.length).toBe(1)
+    expect(cloned[0][0].desks[0].teacher).toBe('講師A')
+  })
+
+  it('teacherAssignmentSource 等のオプショナルフィールドもクローンされる', () => {
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{
+        id: 'desk_1',
+        teacher: '田中',
+        manualTeacher: true,
+        teacherAssignmentSource: 'deleted',
+        teacherAssignmentTeacherId: 't001',
+      }],
+    }]]
+
+    const cloned = cloneWeeks(weeks)
+
+    expect(cloned[0][0].desks[0].manualTeacher).toBe(true)
+    expect(cloned[0][0].desks[0].teacherAssignmentSource).toBe('deleted')
+    expect(cloned[0][0].desks[0].teacherAssignmentTeacherId).toBe('t001')
+
+    // クローン側を変更しても元は影響なし
+    cloned[0][0].desks[0].teacherAssignmentSource = 'manual'
+    expect(weeks[0][0].desks[0].teacherAssignmentSource).toBe('deleted')
+  })
+})
+
+describe('データ堅牢性 意図しない操作 packSortCellDesks', () => {
+  it('デスクが1つだけのセルでも安全にソートできる', () => {
+    const cell: SlotCell = {
+      id: 'single_desk_cell',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{
+        id: 'desk_1',
+        teacher: '講師',
+        lesson: {
+          id: 'lesson_1',
+          studentSlots: [createStudentEntry('s001', 'A', '数'), null],
+        },
+      }],
+    }
+
+    const sorted = packSortCellDesks(cell)
+
+    expect(sorted.length).toBe(1)
+    expect(sorted[0].lesson!.studentSlots[0]!.name).toBe('A')
+    // 元データは変更されていない
+    expect(cell.desks[0].lesson!.studentSlots[0]!.name).toBe('A')
+  })
+
+  it('全デスクが空でもクラッシュしない', () => {
+    const cell: SlotCell = {
+      id: 'all_empty',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [
+        { id: 'desk_1', teacher: '' },
+        { id: 'desk_2', teacher: '' },
+        { id: 'desk_3', teacher: '' },
+      ],
+    }
+
+    const sorted = packSortCellDesks(cell)
+
+    expect(sorted.length).toBe(3)
+    expect(sorted.every((d) => d.teacher === '')).toBe(true)
+  })
+
+  it('全デスクに生徒がいてもソート時に生徒が失われない', () => {
+    const cell: SlotCell = {
+      id: 'all_full',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [
+        {
+          id: 'desk_1',
+          teacher: '講師A',
+          lesson: { id: 'l1', studentSlots: [createStudentEntry('s1', 'A', '数'), createStudentEntry('s2', 'B', '英')] },
+        },
+        {
+          id: 'desk_2',
+          teacher: '講師B',
+          lesson: { id: 'l2', studentSlots: [createStudentEntry('s3', 'C', '国'), createStudentEntry('s4', 'D', '理')] },
+        },
+        {
+          id: 'desk_3',
+          teacher: '講師C',
+          lesson: { id: 'l3', studentSlots: [createStudentEntry('s5', 'E', '社'), null] },
+        },
+      ],
+    }
+
+    const sorted = packSortCellDesks(cell)
+
+    // すべての生徒名を集約
+    const allStudentNames = sorted
+      .flatMap((d) => d.lesson?.studentSlots ?? [])
+      .filter(Boolean)
+      .map((s) => s!.name)
+      .sort()
+
+    expect(allStudentNames).toEqual(['A', 'B', 'C', 'D', 'E'])
+  })
+
+  it('desks が空配列のセルでもクラッシュしない', () => {
+    const cell: SlotCell = {
+      id: 'no_desks',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [],
+    }
+
+    const sorted = packSortCellDesks(cell)
+
+    expect(sorted.length).toBe(0)
+  })
+})
+
+describe('データ堅牢性 意図しない操作 cloneWeeks → removeStudentFromDeskLesson 連携', () => {
+  it('クローンしたデスクから生徒を削除しても元のデスクは影響なし', () => {
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{
+        id: 'desk_1',
+        teacher: '講師',
+        lesson: {
+          id: 'lesson_1',
+          studentSlots: [
+            createStudentEntry('s001', 'A', '数'),
+            createStudentEntry('s002', 'B', '英'),
+          ],
+        },
+      }],
+    }]]
+
+    const cloned = cloneWeeks(weeks)
+    removeStudentFromDeskLesson(cloned[0][0].desks[0], 0)
+
+    // クローン側は変更されている
+    expect(cloned[0][0].desks[0].lesson!.studentSlots[0]).toBeNull()
+
+    // 元データは影響なし
+    expect(weeks[0][0].desks[0].lesson!.studentSlots[0]!.name).toBe('A')
+    expect(weeks[0][0].desks[0].lesson!.studentSlots[1]!.name).toBe('B')
+  })
+
+  it('クローンしたデスクの全生徒を削除しても元の lesson は残る', () => {
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{
+        id: 'desk_1',
+        teacher: '講師',
+        lesson: {
+          id: 'lesson_1',
+          studentSlots: [createStudentEntry('s001', 'A', '数'), null],
+        },
+      }],
+    }]]
+
+    const cloned = cloneWeeks(weeks)
+    removeStudentFromDeskLesson(cloned[0][0].desks[0], 0)
+
+    // クローン側の lesson は消えている
+    expect(cloned[0][0].desks[0].lesson).toBeUndefined()
+
+    // 元データの lesson は残っている
+    expect(weeks[0][0].desks[0].lesson).toBeDefined()
+    expect(weeks[0][0].desks[0].lesson!.studentSlots[0]!.name).toBe('A')
+  })
+
+  it('同一 weeks から2回 cloneWeeks しても互いに独立', () => {
+    const weeks: SlotCell[][] = [[{
+      id: 'cell_1',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{
+        id: 'desk_1',
+        teacher: '講師',
+        lesson: {
+          id: 'lesson_1',
+          studentSlots: [createStudentEntry('s001', 'A', '数'), null],
+        },
+      }],
+    }]]
+
+    const clone1 = cloneWeeks(weeks)
+    const clone2 = cloneWeeks(weeks)
+
+    // clone1 を変更
+    clone1[0][0].desks[0].teacher = '変更講師1'
+    removeStudentFromDeskLesson(clone1[0][0].desks[0], 0)
+
+    // clone2 は影響なし
+    expect(clone2[0][0].desks[0].teacher).toBe('講師')
+    expect(clone2[0][0].desks[0].lesson!.studentSlots[0]!.name).toBe('A')
+
+    // 元データも影響なし
+    expect(weeks[0][0].desks[0].teacher).toBe('講師')
+    expect(weeks[0][0].desks[0].lesson!.studentSlots[0]!.name).toBe('A')
+  })
+})
