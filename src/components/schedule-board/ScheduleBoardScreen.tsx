@@ -2402,26 +2402,40 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               })),
             }
           }
-          // effectiveStart以前のセル: 起点日がeffectiveStart以降の振替だけ除去
-          const hasEarlyMakeupToRemove = cell.desks.some((desk) =>
-            desk.lesson?.studentSlots.some((s) =>
-              s && s.lessonType === 'makeup' && !s.manualAdded && s.makeupSourceDate && s.makeupSourceDate >= effectiveStart,
-            ),
-          )
-          if (!hasEarlyMakeupToRemove) return cell
+          // effectiveStart以前のセル: managed lessons を board 固定データに変換して保護する
+          // （regularLessons 置換後の useEffect マージで消されないようにする）
+          // また、起点日がeffectiveStart以降の振替は除去する
           return {
             ...cell,
             desks: cell.desks.map((desk) => {
-              if (!desk.lesson) return desk
-              const nextSlots = desk.lesson.studentSlots.map((s) => {
-                if (!s || s.lessonType !== 'makeup' || s.manualAdded) return s
-                if (s.makeupSourceDate && s.makeupSourceDate >= effectiveStart) return null
-                return s
-              }) as [StudentEntry | null, StudentEntry | null]
-              const hasAnyStudent = nextSlots.some(Boolean)
+              const lesson = desk.lesson
+              // managed lesson を non-managed に焼き込む
+              const frozenLesson = lesson && isManagedLesson(lesson)
+                ? {
+                    ...lesson,
+                    id: lesson.id.replace(/^managed_/, 'frozen_'),
+                    note: lesson.note === '管理データ反映' ? undefined : lesson.note,
+                    studentSlots: lesson.studentSlots.map((s) => (s ? { ...s } : null)) as [StudentEntry | null, StudentEntry | null],
+                  }
+                : lesson
+              // 起点日がeffectiveStart以降の振替は除去
+              const cleanedLesson = frozenLesson
+                ? (() => {
+                    const nextSlots = frozenLesson.studentSlots.map((s) => {
+                      if (!s || s.lessonType !== 'makeup' || s.manualAdded) return s
+                      if (s.makeupSourceDate && s.makeupSourceDate >= effectiveStart) return null
+                      return s
+                    }) as [StudentEntry | null, StudentEntry | null]
+                    return nextSlots.some(Boolean) ? { ...frozenLesson, studentSlots: nextSlots } : undefined
+                  })()
+                : undefined
+              // managed lessons の講師も board 固定にする
+              const needsFreezeTeacher = lesson && isManagedLesson(lesson) && !desk.manualTeacher
               return {
                 ...desk,
-                lesson: hasAnyStudent ? { ...desk.lesson, studentSlots: nextSlots } : undefined,
+                teacher: desk.teacher,
+                manualTeacher: needsFreezeTeacher ? true : desk.manualTeacher,
+                lesson: cleanedLesson,
               }
             }),
           }
