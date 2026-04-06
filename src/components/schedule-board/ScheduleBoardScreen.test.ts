@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
-import type { SlotCell, StudentEntry } from './types'
-import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, normalizeLessonPlacement, packSortCellDesks } from './ScheduleBoardScreen'
+import type { DeskCell, SlotCell, StudentEntry } from './types'
+import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, cloneWeeks, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 
 const classroomSettings: ClassroomSettings = {
   closedWeekdays: [0],
@@ -699,5 +699,296 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     const teacherNames = mergedCell?.desks.filter((desk) => desk.teacher.trim()).map((desk) => desk.teacher) ?? []
 
     expect(teacherNames).toEqual(['佐藤講師'])
+  })
+})
+
+describe('データ堅牢性 cloneWeeks', () => {
+  function createTestWeeks(): SlotCell[][] {
+    return [[
+      {
+        id: '2026-04-07_1',
+        dateKey: '2026-04-07',
+        dayLabel: '月',
+        dateLabel: '4/7',
+        slotLabel: '1限',
+        slotNumber: 1,
+        timeLabel: '13:00-14:30',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-07_1_desk_1',
+            teacher: '田中講師',
+            memoSlots: ['メモA', null],
+            lesson: {
+              id: 'lesson_1',
+              note: '通常授業',
+              studentSlots: [
+                createStudentEntry('s001', '生徒A', '数'),
+                createStudentEntry('s002', '生徒B', '英'),
+              ],
+            },
+          },
+          {
+            id: '2026-04-07_1_desk_2',
+            teacher: '佐藤講師',
+            lesson: {
+              id: 'lesson_2',
+              studentSlots: [createStudentEntry('s003', '生徒C', '国'), null],
+            },
+          },
+          {
+            id: '2026-04-07_1_desk_3',
+            teacher: '',
+          },
+        ],
+      },
+      {
+        id: '2026-04-07_2',
+        dateKey: '2026-04-07',
+        dayLabel: '月',
+        dateLabel: '4/7',
+        slotLabel: '2限',
+        slotNumber: 2,
+        timeLabel: '14:40-16:10',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-07_2_desk_1',
+            teacher: '田中講師',
+            lesson: {
+              id: 'lesson_3',
+              studentSlots: [createStudentEntry('s004', '生徒D', '英'), null],
+            },
+          },
+        ],
+      },
+    ]]
+  }
+
+  it('cloneWeeks はすべてのネストレベルで独立したオブジェクトを返す', () => {
+    const original = createTestWeeks()
+    const cloned = cloneWeeks(original)
+
+    // トップレベル
+    expect(cloned).not.toBe(original)
+    expect(cloned[0]).not.toBe(original[0])
+
+    // セルレベル
+    expect(cloned[0][0]).not.toBe(original[0][0])
+    expect(cloned[0][1]).not.toBe(original[0][1])
+
+    // デスクレベル
+    expect(cloned[0][0].desks).not.toBe(original[0][0].desks)
+    expect(cloned[0][0].desks[0]).not.toBe(original[0][0].desks[0])
+
+    // レッスンレベル
+    expect(cloned[0][0].desks[0].lesson).not.toBe(original[0][0].desks[0].lesson)
+
+    // 生徒スロットレベル
+    expect(cloned[0][0].desks[0].lesson!.studentSlots).not.toBe(original[0][0].desks[0].lesson!.studentSlots)
+    expect(cloned[0][0].desks[0].lesson!.studentSlots[0]).not.toBe(original[0][0].desks[0].lesson!.studentSlots[0])
+
+    // メモスロットレベル
+    expect(cloned[0][0].desks[0].memoSlots).not.toBe(original[0][0].desks[0].memoSlots)
+  })
+
+  it('cloneWeeks で生成したコピーを変更しても元データに影響しない', () => {
+    const original = createTestWeeks()
+    const originalStudent0Name = original[0][0].desks[0].lesson!.studentSlots[0]!.name
+    const originalTeacher = original[0][0].desks[0].teacher
+    const originalMemo = original[0][0].desks[0].memoSlots![0]
+    const originalNote = original[0][0].desks[0].lesson!.note
+
+    const cloned = cloneWeeks(original)
+
+    // クローン側を書き換え
+    cloned[0][0].desks[0].lesson!.studentSlots[0]!.name = '変更済み生徒'
+    cloned[0][0].desks[0].teacher = '変更済み講師'
+    cloned[0][0].desks[0].memoSlots![0] = '変更済みメモ'
+    cloned[0][0].desks[0].lesson!.note = '変更済みノート'
+    cloned[0][0].desks[0].lesson!.studentSlots[1] = null
+
+    // 元データは変更されていないこと
+    expect(original[0][0].desks[0].lesson!.studentSlots[0]!.name).toBe(originalStudent0Name)
+    expect(original[0][0].desks[0].teacher).toBe(originalTeacher)
+    expect(original[0][0].desks[0].memoSlots![0]).toBe(originalMemo)
+    expect(original[0][0].desks[0].lesson!.note).toBe(originalNote)
+    expect(original[0][0].desks[0].lesson!.studentSlots[1]).not.toBeNull()
+  })
+
+  it('cloneWeeks でセル削除・追加しても元データに影響しない', () => {
+    const original = createTestWeeks()
+    const originalCellCount = original[0].length
+
+    const cloned = cloneWeeks(original)
+    cloned[0].push({
+      id: '2026-04-07_3',
+      dateKey: '2026-04-07',
+      dayLabel: '月',
+      dateLabel: '4/7',
+      slotLabel: '3限',
+      slotNumber: 3,
+      timeLabel: '16:20-17:50',
+      isOpenDay: true,
+      desks: [],
+    })
+
+    expect(original[0].length).toBe(originalCellCount)
+    expect(cloned[0].length).toBe(originalCellCount + 1)
+  })
+
+  it('cloneWeeks で別セルの desk を変更しても他セルに影響しない', () => {
+    const original = createTestWeeks()
+    const cloned = cloneWeeks(original)
+
+    // 1限のdesk 0に変更
+    cloned[0][0].desks[0].lesson!.studentSlots[0]!.subject = '国'
+    cloned[0][0].desks[0].teacher = '変更講師'
+
+    // 2限のdesk 0は影響なし
+    expect(cloned[0][1].desks[0].lesson!.studentSlots[0]!.subject).toBe('英')
+    expect(cloned[0][1].desks[0].teacher).toBe('田中講師')
+
+    // 1限のdesk 1も影響なし
+    expect(cloned[0][0].desks[1].lesson!.studentSlots[0]!.subject).toBe('国')
+    expect(cloned[0][0].desks[1].teacher).toBe('佐藤講師')
+  })
+
+  it('cloneWeeks は lesson が undefined のデスクも正しくコピーする', () => {
+    const original = createTestWeeks()
+    const cloned = cloneWeeks(original)
+
+    expect(cloned[0][0].desks[2].lesson).toBeUndefined()
+    expect(cloned[0][0].desks[2].teacher).toBe('')
+
+    // undefined のデスクに lesson を追加しても元は影響なし
+    cloned[0][0].desks[2].lesson = {
+      id: 'new_lesson',
+      studentSlots: [createStudentEntry('new', '新生徒', '算'), null],
+    }
+
+    expect(original[0][0].desks[2].lesson).toBeUndefined()
+  })
+})
+
+describe('データ堅牢性 removeStudentFromDeskLesson', () => {
+  it('指定スロットの生徒だけを削除し、他スロットの生徒は残す', () => {
+    const desk = {
+      id: 'test_desk',
+      teacher: '講師',
+      lesson: {
+        id: 'test_lesson',
+        studentSlots: [
+          createStudentEntry('s001', 'A', '数'),
+          createStudentEntry('s002', 'B', '英'),
+        ] as [StudentEntry | null, StudentEntry | null],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 0)
+
+    expect(desk.lesson).toBeDefined()
+    expect(desk.lesson!.studentSlots[0]).toBeNull()
+    expect(desk.lesson!.studentSlots[1]!.name).toBe('B')
+  })
+
+  it('両方のスロットが空になると lesson を undefined にする', () => {
+    const desk = {
+      id: 'test_desk',
+      teacher: '講師',
+      lesson: {
+        id: 'test_lesson',
+        studentSlots: [
+          createStudentEntry('s001', 'A', '数'),
+          null,
+        ] as [StudentEntry | null, StudentEntry | null],
+      },
+    }
+
+    removeStudentFromDeskLesson(desk, 0)
+
+    expect(desk.lesson).toBeUndefined()
+  })
+
+  it('lesson が undefined の場合は何もしない', () => {
+    const desk: DeskCell = {
+      id: 'test_desk',
+      teacher: '講師',
+    }
+
+    removeStudentFromDeskLesson(desk, 0)
+
+    expect(desk.lesson).toBeUndefined()
+  })
+})
+
+describe('データ堅牢性 packSortCellDesks', () => {
+  it('元のセルの desks 配列を変更しない', () => {
+    const cell = createPackTestCell()
+    const originalTeachers = cell.desks.map((d) => d.teacher)
+    const originalStudentNames = cell.desks
+      .flatMap((d) => d.lesson?.studentSlots ?? [])
+      .filter(Boolean)
+      .map((s) => s!.name)
+
+    const sorted = packSortCellDesks(cell)
+
+    // ソート後の講師順は並び替えられているが、元データは変更されていない
+    expect(cell.desks.map((d) => d.teacher)).toEqual(originalTeachers)
+    expect(cell.desks.flatMap((d) => d.lesson?.studentSlots ?? []).filter(Boolean).map((s) => s!.name)).toEqual(originalStudentNames)
+
+    // ソート結果が元とは異なる講師順序であること（テストが意味を持つことの確認）
+    expect(sorted.map((d) => d.teacher)).not.toEqual(originalTeachers)
+  })
+})
+
+describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
+  it('ボード週の生徒を変更してもマージ結果が元ボード週に遡及しない', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const regularLessons = createInitialRegularLessons(new Date('2026-04-01T00:00:00'))
+
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    // ボード週の最初の生徒名を記録
+    const firstStudentDesk = boardWeek.find((c) => c.desks.some((d) => d.lesson?.studentSlots[0]))
+    const firstDeskIndex = firstStudentDesk?.desks.findIndex((d) => d.lesson?.studentSlots[0]) ?? -1
+    const originalName = firstStudentDesk?.desks[firstDeskIndex]?.lesson?.studentSlots[0]?.name
+
+    // マージ実行
+    const merged = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    // マージ結果を変更
+    const mergedStudentCell = merged.find((c) => c.id === firstStudentDesk?.id)
+    const mergedDesk = mergedStudentCell?.desks.find((d) => d.lesson?.studentSlots[0]?.name === originalName)
+    if (mergedDesk?.lesson?.studentSlots[0]) {
+      mergedDesk.lesson.studentSlots[0].name = '書き換え済み'
+    }
+
+    // 元のボード週は変更されていないこと
+    expect(firstStudentDesk?.desks[firstDeskIndex]?.lesson?.studentSlots[0]?.name).toBe(originalName)
   })
 })

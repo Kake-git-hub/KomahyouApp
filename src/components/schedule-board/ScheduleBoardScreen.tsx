@@ -422,7 +422,7 @@ function formatWeekScheduleTitle(cells: Array<{ dateKey: string }>) {
   return formatWeeklyScheduleTitle(first, last)
 }
 
-function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
+export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
   return weeks.map((week) =>
     week.map((cell) => ({
       ...cell,
@@ -706,7 +706,7 @@ function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
   }
 }
 
-function removeStudentFromDeskLesson(desk: DeskCell, studentIndex: number) {
+export function removeStudentFromDeskLesson(desk: DeskCell, studentIndex: number) {
   if (!desk.lesson) return
 
   desk.lesson.studentSlots[studentIndex] = null
