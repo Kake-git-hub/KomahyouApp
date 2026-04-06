@@ -460,6 +460,7 @@ type ScheduleBoardScreenProps = {
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
   onOpenBackupRestore: () => void
+  onPreTemplateSaveBackup?: () => Promise<void>
   onLogout: () => void
 }
 
@@ -2163,7 +2164,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, onLogout }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -2286,6 +2287,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }, [templateCells])
 
   const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate, overwrite: boolean) => {
+    // テンプレ上書き前にバックアップを保存（非同期、完了を待たない）
+    if (overwrite && onPreTemplateSaveBackup) {
+      void onPreTemplateSaveBackup()
+    }
+
     const normalizedTemplateRegularLessons = buildRegularLessonsFromTemplate({
       template,
       teachers,
@@ -2451,7 +2457,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setIsTemplateMode(false)
     setTemplateCells([])
     setTemplateSaveConfirm(null)
-  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
+  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
 
   useEffect(() => {
     if (!onBoardStateChange) return

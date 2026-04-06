@@ -20,7 +20,7 @@ import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './
 import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
@@ -2440,26 +2440,18 @@ function App() {
     setScreen('backup-restore')
   }, [classroomSettings.initialSetupCompletedAt, hasHydratedSnapshot, screen])
 
+  const savePreTemplateSaveBackup = useCallback(async () => {
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    await saveDailyWorkspaceAutoBackup(snapshot)
+    setPersistenceMessage('テンプレート上書き前のバックアップを保存しました。')
+  }, [buildWorkspaceSnapshot])
+
   const exportBackup = useCallback(() => {
-    const snapshot: AppSnapshot = {
-      schemaVersion: 1,
-      savedAt: new Date().toISOString(),
-      screen: screen === 'developer' ? 'board' : screen,
-      classroomSettings,
-      managers,
-      teachers,
-      students,
-      regularLessons,
-      groupLessons,
-      specialSessions,
-      autoAssignRules,
-      pairConstraints,
-      boardState,
-    }
-    downloadTextFile(formatBackupFileName(snapshot.savedAt, '手動バックアップ'), serializeAppSnapshot(snapshot), 'application/json')
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    downloadTextFile(formatBackupFileName(snapshot.savedAt, '手動バックアップ'), serializeWorkspaceSnapshot(snapshot), 'application/json')
     setLastSavedAt(snapshot.savedAt)
     setPersistenceMessage('バックアップを書き出しました。')
-  }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+  }, [buildWorkspaceSnapshot])
 
   const exportWorkspaceBackup = useCallback(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -2490,7 +2482,24 @@ function App() {
   const importBackup = useCallback(async (file: File) => {
     try {
       const text = await file.text()
-      const snapshot = parseAppSnapshot(text)
+      let snapshot: AppSnapshot
+      try {
+        snapshot = parseAppSnapshot(text)
+      } catch {
+        // AppSnapshot形式でない場合、WorkspaceSnapshot形式を試す
+        const workspaceSnapshot = parseWorkspaceSnapshot(text)
+        const targetClassroom = workspaceSnapshot.classrooms.find((c) => c.id === actingClassroomId)
+          ?? workspaceSnapshot.classrooms[0]
+        if (!targetClassroom) {
+          setPersistenceMessage('バックアップに教室データが含まれていません。')
+          return
+        }
+        snapshot = {
+          schemaVersion: workspaceSnapshot.schemaVersion,
+          savedAt: workspaceSnapshot.savedAt,
+          ...targetClassroom.data,
+        }
+      }
       const confirmed = window.confirm([
         'バックアップを復元します。',
         `保存日時: ${new Date(snapshot.savedAt).toLocaleString('ja-JP')}`,
@@ -2505,7 +2514,7 @@ function App() {
     } catch {
       setPersistenceMessage('バックアップの読み込みに失敗しました。ファイル形式を確認してください。')
     }
-  }, [applySnapshot])
+  }, [actingClassroomId, applySnapshot])
 
   const loadServerAutoBackupSummaries = useCallback(async () => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
@@ -3066,6 +3075,7 @@ function App() {
       onOpenSpecialData={() => navigateClassroomScreen('special-data')}
       onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
       onOpenBackupRestore={() => navigateClassroomScreen('backup-restore')}
+      onPreTemplateSaveBackup={savePreTemplateSaveBackup}
       onLogout={logout}
     />
   )
