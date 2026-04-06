@@ -987,6 +987,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
   const [frozenRowOrders, setFrozenRowOrders] = useState<Partial<Record<RowEditScope, string[]>>>({})
+  const [teacherDrafts, setTeacherDrafts] = useState<Record<string, Partial<TeacherRow>>>({})
   const [teacherRosterView, setTeacherRosterView] = useState<RosterView>('active')
   const [studentRosterView, setStudentRosterView] = useState<RosterView>('active')
   const [tableControls, setTableControls] = useState<Record<BasicDataTab, TableControl>>({
@@ -1052,6 +1053,18 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
     if (nextIsEditing) {
       captureFrozenRowOrder(scope, visibleRowIds)
     } else {
+      // Commit teacher draft on close
+      if (scope === 'teacher') {
+        const draft = teacherDrafts[id]
+        if (draft) {
+          onUpdateTeachers((current) => current.map((row) => (row.id === id ? { ...row, ...draft } : row)))
+          setTeacherDrafts((current) => {
+            const next = { ...current }
+            delete next[id]
+            return next
+          })
+        }
+      }
       releaseFrozenRowOrder(scope, key)
       if (scope === 'teacher') {
         setTeacherEditorModalState((previous) => previous?.target === 'row' && previous.rowId === id ? null : previous)
@@ -1065,7 +1078,11 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   }
 
   const updateTeacher = (id: string, patch: Partial<TeacherRow>) => {
-    onUpdateTeachers((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+    if (isRowEditing('teacher', id)) {
+      setTeacherDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))
+    } else {
+      onUpdateTeachers((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
+    }
   }
 
   const updateStudent = (id: string, patch: Partial<StudentRow>) => {
@@ -1101,8 +1118,9 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
           }
     }
 
-    const targetTeacher = teachers.find((row) => row.id === teacherEditorModalState.rowId)
-    if (!targetTeacher) return null
+    const baseTeacher = teachers.find((row) => row.id === teacherEditorModalState.rowId)
+    if (!baseTeacher) return null
+    const targetTeacher = { ...baseTeacher, ...teacherDrafts[baseTeacher.id] }
 
     return teacherEditorModalState.editor === 'capabilities'
       ? {
@@ -1333,8 +1351,8 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
               filterValue={tableControls.teachers.filterText}
               sortKey={tableControls.teachers.sortKey}
               direction={tableControls.teachers.direction}
-              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目・出勤可能コマで絞り込み' : '退塾講師を名前・表示名・メールで絞り込み'}
-              sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }, { value: 'availability', label: '出勤可' }]}
+              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目で絞り込み' : '退塾講師を名前・表示名・メールで絞り込み'}
+              sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }]}
               onFilterChange={(value) => updateTableControl('teachers', { filterText: value })}
               onSortKeyChange={(value) => updateTableControl('teachers', { sortKey: value })}
               onDirectionChange={(value) => updateTableControl('teachers', { direction: value })}
@@ -1345,9 +1363,12 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
             </div>
           </div>
           <table className="basic-data-table" data-testid="basic-data-teachers-table">
-            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>出勤可能コマ</th><th>メモ</th><th>操作</th></tr></thead>
+            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>メモ</th><th>操作</th></tr></thead>
             <tbody>
-              {orderedTeachers.map((row) => (
+              {orderedTeachers.map((originalRow) => {
+                const draft = teacherDrafts[originalRow.id]
+                const row = draft ? { ...originalRow, ...draft } : originalRow
+                return (
                 <tr key={row.id}>
                   <td>
                     {isRowEditing('teacher', row.id)
@@ -1391,32 +1412,19 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
                   </td>
                   <td>
                     {isRowEditing('teacher', row.id)
-                      ? (
-                          <button
-                            className="basic-data-inline-summary basic-data-inline-summary-button"
-                            type="button"
-                            onClick={() => setTeacherEditorModalState({ target: 'row', rowId: row.id, editor: 'availability' })}
-                          >
-                            <span className="basic-data-inline-summary-label">出勤可</span>
-                            <strong>{formatTeacherAvailabilitySummary(row.availableSlots)}</strong>
-                          </button>
-                        )
-                      : <span className="basic-data-cell-summary" data-testid={`basic-data-teacher-availability-${row.id}`}>{formatTeacherAvailabilitySummary(row.availableSlots)}</span>}
-                  </td>
-                  <td>
-                    {isRowEditing('teacher', row.id)
                       ? <input value={row.memo} onChange={(event) => updateTeacher(row.id, { memo: event.target.value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.memo)}</span>}
                   </td>
                   <td>
                     <div className="basic-data-row-actions">
-                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('teacher', row.id, orderedTeachers.map((entry) => entry.id))} data-testid={`basic-data-edit-teacher-${row.id}`}>{isRowEditing('teacher', row.id) ? '編集終了' : '編集'}</button>
+                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('teacher', row.id, orderedTeachers.map((entry) => entry.id))} data-testid={`basic-data-edit-teacher-${row.id}`}>{isRowEditing('teacher', row.id) ? '保存' : '編集'}</button>
                       <button className="secondary-button slim" type="button" onClick={() => removeTeacher(row.id)}>削除</button>
                     </div>
                   </td>
                 </tr>
-              ))}
-              {orderedTeachers.length === 0 ? <tr><td colSpan={10} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
+                )
+              })}
+              {orderedTeachers.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
