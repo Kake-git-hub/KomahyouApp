@@ -1936,7 +1936,6 @@ function removeStudentAssignmentsFromSpecialSession(params: {
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
   fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
   restoreSessionStock?: boolean
-  skipManualAdded?: boolean
 }) {
   const nextWeeks = cloneWeeks(params.weeks)
   const clearedSessionAdjustments = clearLectureStockAdjustmentsForStudentSession({
@@ -1965,7 +1964,6 @@ function removeStudentAssignmentsFromSpecialSession(params: {
           lesson.studentSlots.forEach((studentEntry, studentIndex) => {
           if (!studentEntry) return
           if (studentEntry.lessonType !== 'special') return
-          if (params.skipManualAdded && studentEntry.manualAdded) return
           const entryStudentNameKey = normalizeStudentNameKey(studentEntry.name)
           const matchesStudent = studentEntry.managedStudentId === params.student.id
             || entryStudentNameKey === registeredStudentNameKey
@@ -2231,6 +2229,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [pointerPreviewPosition, setPointerPreviewPosition] = useState({ x: 0, y: 0 })
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
+  const prevUnsubmittedSessionStudentKeysRef = useRef<Set<string>>(new Set())
 
   const handleEnterTemplateMode = useCallback(() => {
     const savedTemplate = classroomSettings.regularLessonTemplate
@@ -2629,11 +2628,23 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }, [classroomSettings.forceOpenDates, classroomSettings.holidayDates, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRequest, students, suppressedMakeupOrigins, weekIndex])
 
   useEffect(() => {
+    const currentUnsubmittedKeys = new Set<string>()
     const pendingUnsubmittedSessionStudents = specialSessions.flatMap((session) => Object.entries(session.studentInputs)
       .filter(([, input]) => !input.countSubmitted)
-      .map(([studentId]) => ({ session, student: students.find((entry) => entry.id === studentId) ?? null })))
+      .map(([studentId]) => {
+        currentUnsubmittedKeys.add(`${session.id}__${studentId}`)
+        return { session, student: students.find((entry) => entry.id === studentId) ?? null }
+      }))
       .filter((entry): entry is { session: SpecialSessionRow; student: StudentRow } => Boolean(entry.student))
-    if (pendingUnsubmittedSessionStudents.length === 0) return
+
+    // Only clean up student+session pairs that are newly unsubmitted (not previously known)
+    const prevKeys = prevUnsubmittedSessionStudentKeysRef.current
+    const newlyUnsubmitted = pendingUnsubmittedSessionStudents.filter(
+      ({ session, student }) => !prevKeys.has(`${session.id}__${student.id}`),
+    )
+    prevUnsubmittedSessionStudentKeysRef.current = currentUnsubmittedKeys
+
+    if (newlyUnsubmitted.length === 0) return
 
     let nextWeeks = cloneWeeks(normalizedWeeks)
     let nextManualLectureStockCounts = { ...manualLectureStockCounts }
@@ -2641,7 +2652,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     let nextFallbackLectureStockStudents = { ...fallbackLectureStockStudents }
     let hasChanges = false
 
-    for (const { session, student } of pendingUnsubmittedSessionStudents) {
+    for (const { session, student } of newlyUnsubmitted) {
       const result = removeStudentAssignmentsFromSpecialSession({
         weeks: nextWeeks,
         session,
@@ -2649,7 +2660,6 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         manualLectureStockCounts: nextManualLectureStockCounts,
         manualLectureStockOrigins: nextManualLectureStockOrigins,
         fallbackLectureStockStudents: nextFallbackLectureStockStudents,
-        skipManualAdded: true,
       })
       if (!result.hasChanges) continue
 

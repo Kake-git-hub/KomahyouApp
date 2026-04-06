@@ -1,4 +1,4 @@
-import { type Dispatch, type SetStateAction, useMemo, useRef, useState } from 'react'
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
   buildTeacherAvailableSlotLabel,
@@ -988,6 +988,22 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
   const [frozenRowOrders, setFrozenRowOrders] = useState<Partial<Record<RowEditScope, string[]>>>({})
   const [teacherDrafts, setTeacherDrafts] = useState<Record<string, Partial<TeacherRow>>>({})
+  const teacherDraftsRef = useRef(teacherDrafts)
+  teacherDraftsRef.current = teacherDrafts
+  const onUpdateTeachersRef = useRef(onUpdateTeachers)
+  onUpdateTeachersRef.current = onUpdateTeachers
+
+  useEffect(() => {
+    return () => {
+      const pending = teacherDraftsRef.current
+      const ids = Object.keys(pending)
+      if (ids.length === 0) return
+      onUpdateTeachersRef.current((current) => current.map((row) => {
+        const draft = pending[row.id]
+        return draft ? { ...row, ...draft } : row
+      }))
+    }
+  }, [])
   const [teacherRosterView, setTeacherRosterView] = useState<RosterView>('active')
   const [studentRosterView, setStudentRosterView] = useState<RosterView>('active')
   const [tableControls, setTableControls] = useState<Record<BasicDataTab, TableControl>>({
