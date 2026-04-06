@@ -84,6 +84,7 @@ export function BoardGrid({
     lessonType: LessonType | null,
     teacherType: TeacherType,
     studentWarning: string | undefined,
+    warningHighlight: boolean | undefined,
     lessonNote: string | undefined,
     isPicked: boolean,
     statusEntry: StudentStatusEntry | null = null,
@@ -113,7 +114,7 @@ export function BoardGrid({
     const displaySubjectWithNote = `${displaySubject}${effectiveNoteSuffix}`
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
-    const hasWarning = Boolean(studentWarning || missingTeacherWarning)
+    const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
     const hasMemo = !studentName && Boolean(memoLabel)
     const hasStatus = !studentName && Boolean(statusEntry)
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
@@ -385,6 +386,7 @@ export function BoardGrid({
                           firstStudent?.lessonType ?? null,
                           firstStudent?.teacherType ?? 'normal',
                           firstStudent?.warning,
+                          firstStudent?.warningHighlight,
                           lesson?.note,
                           firstSelected,
                           firstStatus,
@@ -405,6 +407,7 @@ export function BoardGrid({
                           secondStudent?.lessonType ?? null,
                           secondStudent?.teacherType ?? 'normal',
                           secondStudent?.warning,
+                          secondStudent?.warningHighlight,
                           lesson?.note,
                           secondSelected,
                           secondStatus,

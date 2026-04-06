@@ -3901,13 +3901,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }, [emptyMenuContext, specialSessions])
 
   const boardStudentWarningsByLocation = useMemo(() => {
-    const warningMap = new Map<string, { reasons: Set<string>; hasConstraintReason: boolean }>()
-    const addWarning = (locationKeys: string[], reason: string, hasConstraintReason: boolean) => {
+    const warningMap = new Map<string, { reasons: Set<string>; hasConstraintReason: boolean; shouldHighlight: boolean }>()
+    const addWarning = (locationKeys: string[], reason: string, hasConstraintReason: boolean, shouldHighlight = false) => {
       if (!reason) return
       for (const locationKey of locationKeys) {
-        const current = warningMap.get(locationKey) ?? { reasons: new Set<string>(), hasConstraintReason: false }
+        const current = warningMap.get(locationKey) ?? { reasons: new Set<string>(), hasConstraintReason: false, shouldHighlight: false }
         current.reasons.add(reason)
         current.hasConstraintReason = current.hasConstraintReason || hasConstraintReason
+        current.shouldHighlight = current.shouldHighlight || shouldHighlight
         warningMap.set(locationKey, current)
       }
     }
@@ -3934,22 +3935,22 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           const slotKey = `${cell.dateKey}_${cell.slotNumber}`
 
           if (desk.teacher.trim() && !teacher) {
-            addWarning([currentLocationKey], 'データ不整合: 講師データ不一致', true)
+            addWarning([currentLocationKey], 'データ不整合: 講師データ不一致', true, true)
           }
 
           if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
-            addWarning([currentLocationKey], '制約事項: 科目対応講師のみ', true)
+            addWarning([currentLocationKey], '制約事項: 科目対応講師のみ', true, true)
           }
 
           if (managedStudent) {
             if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && cell.slotNumber === 1) {
-              addWarning([currentLocationKey], '制約事項: 1限禁止', true)
+              addWarning([currentLocationKey], '制約事項: 1限禁止', true, true)
             }
 
             const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
             const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
             if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
-              addWarning([currentLocationKey], '制約事項: 通常講師のみ', true)
+              addWarning([currentLocationKey], '制約事項: 通常講師のみ', true, true)
             }
 
             const twoStudentsRuleApplied = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('preferTwoStudentsPerTeacher'), managedStudent.id, studentGradeOnDate)
@@ -3991,18 +3992,18 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
             const unavailableSlots = studentUnavailableSlotsById.get(managedStudent.id)
             if (unavailableSlots?.has(slotKey)) {
-              addWarning([currentLocationKey], '絶対事項: 出席可能コマのみ', true)
+              addWarning([currentLocationKey], '絶対事項: 出席可能コマのみ', true, true)
             }
 
             if (teacher && isPairConstraintBlocked(teacher.id, managedStudent.id, pairedStudent)) {
-              addWarning([currentLocationKey], '制約: 組み合わせ不可', true)
+              addWarning([currentLocationKey], '制約: 組み合わせ不可', true, true)
             }
           }
 
           if (student.lessonType === 'special') {
             const session = resolveSpecialSessionById(student.specialSessionId)
             if (session && (cell.dateKey < session.startDate || cell.dateKey > session.endDate)) {
-              addWarning([currentLocationKey], '絶対事項: 講習期間内割振', true)
+              addWarning([currentLocationKey], '絶対事項: 講習期間内割振', true, true)
             }
           }
         }
@@ -4011,7 +4012,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
     return new Map(Array.from(warningMap.entries()).map(([locationKey, value]) => {
       const reasons = Array.from(value.reasons)
-      return [locationKey, value.hasConstraintReason ? ['制約違反', ...reasons].join('\n') : reasons.join('\n')]
+      const text = value.hasConstraintReason ? ['制約違反', ...reasons].join('\n') : reasons.join('\n')
+      return [locationKey, { text, highlight: value.shouldHighlight }] as const
     }))
   }, [autoAssignRuleByKey, cells, isPairConstraintBlocked, lectureConstraintGroups, managedStudentByAnyName, managedStudentByRegisteredName, normalizedWeeks, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, studentUnavailableSlotsById, students])
 
@@ -4024,12 +4026,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         lesson: desk.lesson
           ? {
               ...desk.lesson,
-              studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => (student
-                ? {
+              studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => {
+                if (!student) return null
+                const warningEntry = isTemplateMode ? undefined : boardStudentWarningsByLocation.get(buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex))
+                return {
                     ...student,
-                    warning: isTemplateMode ? undefined : boardStudentWarningsByLocation.get(buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex)),
+                    warning: warningEntry?.text,
+                    warningHighlight: warningEntry?.highlight,
                   }
-                : null)) as [StudentEntry | null, StudentEntry | null],
+              }) as [StudentEntry | null, StudentEntry | null],
             }
           : undefined,
       })),

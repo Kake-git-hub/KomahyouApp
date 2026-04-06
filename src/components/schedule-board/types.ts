@@ -33,6 +33,7 @@ export type StudentEntry = {
   specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
   warning?: string
+  warningHighlight?: boolean
   subject: SubjectLabel
   lessonType: LessonType
   teacherType: TeacherType
