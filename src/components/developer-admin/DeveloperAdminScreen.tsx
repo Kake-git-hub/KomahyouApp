@@ -57,6 +57,7 @@ type DeveloperAdminScreenProps = {
     contractEndDate?: string
     managerName?: string
     managerEmail?: string
+    studentUnitPrice?: number
   }) => void
   onReplaceClassroomManagerUid: (classroomId: string, managerUserId: string, managerEmail: string) => void
   onExportWorkspaceBackup: () => void
@@ -164,12 +165,13 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     const now = new Date()
     return `${now.getFullYear()}年${now.getMonth() + 1}月現在`
   }, [])
-  const STUDENT_UNIT_PRICE = 300
+  const DEFAULT_STUDENT_UNIT_PRICE = 300
   const classroomActiveStudents = useMemo(() =>
     classrooms.map((classroom) => ({
       id: classroom.id,
       name: classroom.name,
       count: countActiveStudents(classroom.data, todayDateKey),
+      unitPrice: classroom.studentUnitPrice ?? DEFAULT_STUDENT_UNIT_PRICE,
     })),
     [classrooms, todayDateKey],
   )
@@ -252,24 +254,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
           </div>
           {sparkManualAdminMode ? <div className="toolbar-status">教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
 
-          <div className="developer-summary-grid">
-            <article className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => setSubPage('classrooms')}>
-              <strong>{classrooms.length}</strong>
-              <span>校舎数（{todayLabel}）</span>
-            </article>
-            {classroomActiveStudents.slice(0, 3).map((entry) => (
-              <article key={entry.id} className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => onLoadStudentHistory(entry.id)}>
-                <strong>{entry.count}</strong>
-                <span>{entry.name} 在籍生徒数</span>
-              </article>
-            ))}
-            {classroomActiveStudents.length > 3 ? (
-              <article className="basic-data-section-card developer-summary-card" style={{ cursor: 'pointer' }} onClick={() => setSubPage('classrooms')}>
-                <strong>…</strong>
-                <span>他 {classroomActiveStudents.length - 3} 校舎</span>
-              </article>
-            ) : null}
-          </div>
           <div className="basic-data-row-actions" style={{ marginBottom: 12 }}>
             <button className="secondary-button slim" type="button" onClick={() => setSubPage('classrooms')}>生徒数・請求一覧を表示</button>
           </div>
@@ -449,7 +433,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
 
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
-              <h3>請求金額サマリー（生徒単価 {STUDENT_UNIT_PRICE.toLocaleString()}円）</h3>
+              <h3>請求金額サマリー</h3>
             </div>
             <table className="developer-billing-table">
               <thead>
@@ -465,8 +449,20 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                   <tr key={entry.id}>
                     <td>{entry.name || '名称未設定'}</td>
                     <td style={{ textAlign: 'right' }}>{entry.count} 人</td>
-                    <td style={{ textAlign: 'right' }}>{STUDENT_UNIT_PRICE.toLocaleString()}円</td>
-                    <td style={{ textAlign: 'right' }}>{(entry.count * STUDENT_UNIT_PRICE).toLocaleString()}円</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <input
+                        type="number"
+                        value={entry.unitPrice}
+                        min={0}
+                        style={{ width: 80, textAlign: 'right' }}
+                        onChange={(event) => {
+                          const value = Number(event.target.value)
+                          if (!Number.isFinite(value) || value < 0) return
+                          onUpdateClassroom(entry.id, { studentUnitPrice: value })
+                        }}
+                      />円
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{(entry.count * entry.unitPrice).toLocaleString()}円</td>
                   </tr>
                 ))}
               </tbody>
@@ -475,7 +471,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                   <td><strong>合計（{classroomActiveStudents.length} 校舎）</strong></td>
                   <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count, 0)} 人</strong></td>
                   <td></td>
-                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count * STUDENT_UNIT_PRICE, 0).toLocaleString()}円</strong></td>
+                  <td style={{ textAlign: 'right' }}><strong>{classroomActiveStudents.reduce((sum, e) => sum + e.count * e.unitPrice, 0).toLocaleString()}円</strong></td>
                 </tr>
               </tfoot>
             </table>

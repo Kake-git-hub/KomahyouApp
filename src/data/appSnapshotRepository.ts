@@ -517,9 +517,9 @@ export async function loadWorkspaceSnapshot() {
 }
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
-  const savedToIndexedDb = await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
-  if (!savedToIndexedDb) writeWorkspaceToLocalStorage(snapshot)
-  else writeWorkspaceToLocalStorage(snapshot)
+  // Write to localStorage first (synchronous) to prevent data loss on logout/close
+  writeWorkspaceToLocalStorage(snapshot)
+  await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
 }
 
 export async function loadDeveloperCloudBackupHandle() {

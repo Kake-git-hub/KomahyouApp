@@ -136,6 +136,7 @@ export type WorkspaceClassroom = {
   managerUserId: string
   isTemporarilySuspended?: boolean
   temporarySuspensionReason?: string
+  studentUnitPrice?: number
   data: AppSnapshotPayload
 }
 

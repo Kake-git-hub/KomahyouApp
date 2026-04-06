@@ -1110,6 +1110,7 @@ function App() {
     contractEndDate?: string
     managerName?: string
     managerEmail?: string
+    studentUnitPrice?: number
   }) => {
     const targetClassroom = workspaceClassrooms.find((classroom) => classroom.id === classroomId)
     if (!targetClassroom) return
@@ -1128,6 +1129,7 @@ function App() {
       contractEndDate: updates.contractEndDate ?? targetClassroom.contractEndDate,
       isTemporarilySuspended: (updates.contractStatus ?? targetClassroom.contractStatus) === 'suspended' ? false : targetClassroom.isTemporarilySuspended,
       temporarySuspensionReason: (updates.contractStatus ?? targetClassroom.contractStatus) === 'suspended' ? '' : targetClassroom.temporarySuspensionReason,
+      studentUnitPrice: updates.studentUnitPrice ?? targetClassroom.studentUnitPrice,
     }
     const nextManager: WorkspaceUser = {
       ...currentManager,
@@ -1485,6 +1487,13 @@ function App() {
 
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
+
+    // Flush save synchronously before clearing state
+    if (isSnapshotPersistenceRuntimeEnabled()) {
+      const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+      void saveWorkspaceSnapshot(snapshot)
+    }
+
     if (isRemoteBackendEnabled) {
       void signOutFromFirebase()
         .then(() => {
@@ -1502,7 +1511,7 @@ function App() {
     setCurrentUserId('')
     setScreen('board')
     setPersistenceMessage('ログアウトしました。')
-  }, [actingClassroomId, isRemoteBackendEnabled, syncCurrentClassroomData])
+  }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, syncCurrentClassroomData])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
