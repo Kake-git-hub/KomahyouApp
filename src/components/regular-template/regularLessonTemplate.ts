@@ -57,8 +57,16 @@ function parseDateKey(dateKey: string) {
 }
 
 function normalizeDateString(value: unknown, xlsx?: XlsxModule) {
+  if (value instanceof Date) {
+    const y = value.getFullYear()
+    const m = value.getMonth() + 1
+    const d = value.getDate()
+    if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return ''
+    return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  }
+
   if (typeof value === 'number') {
-    const parsed = xlsx?.SSF.parse_date_code(value)
+    const parsed = xlsx?.SSF?.parse_date_code(value)
     if (!parsed) return ''
     return `${String(parsed.y).padStart(4, '0')}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`
   }
@@ -68,9 +76,20 @@ function normalizeDateString(value: unknown, xlsx?: XlsxModule) {
   if (/^\d{4}-\d{2}-\d{2}$/u.test(text)) return text
 
   const slashMatch = text.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/u)
-  if (!slashMatch) return ''
-  const [, year, month, day] = slashMatch
-  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  if (slashMatch) {
+    const [, year, month, day] = slashMatch
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
+
+  // M/D/YY or M/D/YYYY (Excel formatted text fallback)
+  const mdyMatch = text.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})$/u)
+  if (mdyMatch) {
+    const [, monthStr, dayStr, yearStr] = mdyMatch
+    const year = yearStr.length === 2 ? 2000 + Number(yearStr) : Number(yearStr)
+    return `${String(year).padStart(4, '0')}-${monthStr.padStart(2, '0')}-${dayStr.padStart(2, '0')}`
+  }
+
+  return ''
 }
 
 function toWorkbookDateCellValue(value: string) {
@@ -301,13 +320,16 @@ export function buildRegularLessonTemplateWorkbook(xlsx: XlsxModule, params: {
 export function listTemplateStartDatesFromWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook): string[] {
   const sheet = workbook.Sheets['通常授業テンプレ']
   if (!sheet) return []
-  const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' })
+  const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: true })
   const dateSet = new Set<string>()
   for (const row of rows) {
-    const dateStr = normalizeDateString(row['開始日'], xlsx)
+    const rawVal = row['開始日']
+    const dateStr = normalizeDateString(rawVal, xlsx)
     if (dateStr) dateSet.add(dateStr)
   }
-  return Array.from(dateSet).sort((a, b) => a.localeCompare(b))
+  const result = Array.from(dateSet).sort((a, b) => a.localeCompare(b))
+  console.log('[template-import] detected dates:', result, '(row count:', rows.length, ')')
+  return result
 }
 
 export function parseRegularLessonTemplateWorkbook(xlsx: XlsxModule, workbook: import('xlsx').WorkBook, params: {

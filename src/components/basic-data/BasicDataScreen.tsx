@@ -260,8 +260,16 @@ function normalizeText(value: unknown) {
 }
 
 function normalizeDateString(value: unknown, xlsx?: XlsxModule) {
+  if (value instanceof Date) {
+    const y = value.getFullYear()
+    const m = value.getMonth() + 1
+    const d = value.getDate()
+    if (Number.isNaN(y) || Number.isNaN(m) || Number.isNaN(d)) return ''
+    return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+  }
+
   if (typeof value === 'number') {
-    const parsed = xlsx?.SSF.parse_date_code(value)
+    const parsed = xlsx?.SSF?.parse_date_code(value)
     if (!parsed) return ''
     return `${String(parsed.y).padStart(4, '0')}-${String(parsed.m).padStart(2, '0')}-${String(parsed.d).padStart(2, '0')}`
   }
@@ -273,10 +281,19 @@ function normalizeDateString(value: unknown, xlsx?: XlsxModule) {
   if (directMatch) return text
 
   const slashMatch = text.match(/^(\d{4})[/.](\d{1,2})[/.](\d{1,2})$/)
-  if (!slashMatch) return ''
+  if (slashMatch) {
+    const [, year, month, day] = slashMatch
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  }
 
-  const [, year, month, day] = slashMatch
-  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+  const mdyMatch = text.match(/^(\d{1,2})[/.](\d{1,2})[/.](\d{2,4})$/)
+  if (mdyMatch) {
+    const [, monthStr, dayStr, yearStr] = mdyMatch
+    const year = yearStr.length === 2 ? 2000 + Number(yearStr) : Number(yearStr)
+    return `${String(year).padStart(4, '0')}-${monthStr.padStart(2, '0')}-${dayStr.padStart(2, '0')}`
+  }
+
+  return ''
 }
 
 function toWorkbookDateCellValue(value: unknown) {
