@@ -15,7 +15,8 @@
     "deploy:firebase:with-functions": "npm run build:firebase && npm run build:functions && npx firebase-tools deploy --only hosting,firestore,functions",
     "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:firebase": "playwright test --config playwright.firebase.config.ts"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

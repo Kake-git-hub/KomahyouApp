@@ -1,8 +1,10 @@
 import { initializeApp, deleteApp, getApp, getApps } from 'firebase/app'
-import { EmailAuthProvider, getAuth, createUserWithEmailAndPassword, onAuthStateChanged, reauthenticateWithCredential, sendPasswordResetEmail as firebaseSendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
-import { getFirestore } from 'firebase/firestore'
+import { EmailAuthProvider, connectAuthEmulator, getAuth, createUserWithEmailAndPassword, onAuthStateChanged, reauthenticateWithCredential, sendPasswordResetEmail as firebaseSendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
+import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled } from './config'
+
+const emulatorConnected = { auth: false, firestore: false }
 
 function getFirebaseApp() {
   const config = getFirebaseBackendConfig()
@@ -20,14 +22,31 @@ function getFirebaseApp() {
   })
 }
 
+function shouldUseEmulators() {
+  return typeof import.meta !== 'undefined'
+    && import.meta.env?.VITE_FIREBASE_USE_EMULATOR === 'true'
+}
+
 export function getFirebaseAuthInstance() {
   const app = getFirebaseApp()
-  return app ? getAuth(app) : null
+  if (!app) return null
+  const auth = getAuth(app)
+  if (shouldUseEmulators() && !emulatorConnected.auth) {
+    connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true })
+    emulatorConnected.auth = true
+  }
+  return auth
 }
 
 export function getFirebaseFirestoreInstance() {
   const app = getFirebaseApp()
-  return app ? getFirestore(app) : null
+  if (!app) return null
+  const db = getFirestore(app)
+  if (shouldUseEmulators() && !emulatorConnected.firestore) {
+    connectFirestoreEmulator(db, '127.0.0.1', 8080)
+    emulatorConnected.firestore = true
+  }
+  return db
 }
 
 export function getFirebaseFunctionsInstance() {

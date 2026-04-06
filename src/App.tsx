@@ -2950,7 +2950,7 @@ function App() {
     if (isRemoteBackendEnabled) {
       return (
         <div className="workspace-auth-shell">
-          <div className="workspace-auth-card">
+          <div className="workspace-auth-card" data-testid="firebase-login-card">
             <h1>コマ表アプリログイン</h1>
             <form className="workspace-auth-form" onSubmit={(event) => {
               event.preventDefault()
@@ -2958,20 +2958,20 @@ function App() {
             }}>
               <label className="workspace-auth-field">
                 <span>メールアドレス</span>
-                <input type="email" value={remoteLoginEmail} onChange={(event) => setRemoteLoginEmail(event.target.value)} autoComplete="username" />
+                <input data-testid="firebase-login-email" type="email" value={remoteLoginEmail} onChange={(event) => setRemoteLoginEmail(event.target.value)} autoComplete="username" />
               </label>
               <label className="workspace-auth-field">
                 <span>パスワード</span>
-                <input type="password" value={remoteLoginPassword} onChange={(event) => setRemoteLoginPassword(event.target.value)} autoComplete="current-password" />
+                <input data-testid="firebase-login-password" type="password" value={remoteLoginPassword} onChange={(event) => setRemoteLoginPassword(event.target.value)} autoComplete="current-password" />
               </label>
               <div className="workspace-auth-actions">
-                <button className="primary-button" type="submit" disabled={isRemoteLoginSubmitting}>{isRemoteLoginSubmitting ? 'ログイン中...' : 'ログイン'}</button>
+                <button data-testid="firebase-login-submit" className="primary-button" type="submit" disabled={isRemoteLoginSubmitting}>{isRemoteLoginSubmitting ? 'ログイン中...' : 'ログイン'}</button>
               </div>
             </form>
             <div className="workspace-auth-actions">
-              <button className="menu-link-button" type="button" onClick={() => void submitPasswordReset()}>パスワードを忘れた方はこちら</button>
+              <button data-testid="firebase-password-reset" className="menu-link-button" type="button" onClick={() => void submitPasswordReset()}>パスワードを忘れた方はこちら</button>
             </div>
-            {remoteAuthMessage ? <div className="workspace-auth-note workspace-auth-note-error">{remoteAuthMessage}</div> : null}
+            {remoteAuthMessage ? <div data-testid="firebase-auth-message" className="workspace-auth-note workspace-auth-note-error">{remoteAuthMessage}</div> : null}
           </div>
         </div>
       )
