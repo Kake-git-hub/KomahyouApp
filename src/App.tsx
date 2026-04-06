@@ -2857,9 +2857,7 @@ function App() {
       return (
         <div className="workspace-auth-shell">
           <div className="workspace-auth-card">
-            <p className="panel-kicker">Firebase Auth</p>
-            <h1>外部ログイン</h1>
-            <p className="page-summary">外部データベースを有効化しているため、教室ワークスペースは Firebase 認証後に読み込みます。管理者は担当教室のみ、開発者は全教室へアクセスします。</p>
+            <h1>コマ表アプリログイン</h1>
             <form className="workspace-auth-form" onSubmit={(event) => {
               event.preventDefault()
               void submitRemoteLogin()
@@ -2873,14 +2871,13 @@ function App() {
                 <input type="password" value={remoteLoginPassword} onChange={(event) => setRemoteLoginPassword(event.target.value)} autoComplete="current-password" />
               </label>
               <div className="workspace-auth-actions">
-                <button className="primary-button" type="submit" disabled={isRemoteLoginSubmitting}>{isRemoteLoginSubmitting ? 'ログイン中...' : 'Firebase にログイン'}</button>
+                <button className="primary-button" type="submit" disabled={isRemoteLoginSubmitting}>{isRemoteLoginSubmitting ? 'ログイン中...' : 'ログイン'}</button>
               </div>
             </form>
             <div className="workspace-auth-actions">
               <button className="menu-link-button" type="button" onClick={() => void submitPasswordReset()}>パスワードを忘れた方はこちら</button>
             </div>
             {remoteAuthMessage ? <div className="workspace-auth-note workspace-auth-note-error">{remoteAuthMessage}</div> : null}
-            <div className="workspace-auth-note">接続先の設定は `.env.example` と `firebase/firestore.rules` を参照してください。</div>
           </div>
         </div>
       )
