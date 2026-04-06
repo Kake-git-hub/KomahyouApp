@@ -20,7 +20,7 @@ import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './
 import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
@@ -677,6 +677,7 @@ function App() {
   const [lastSavedAt, setLastSavedAt] = useState('')
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
+  const [localAutoBackupSummaries, setLocalAutoBackupSummaries] = useState<{ backupDateKey: string; savedAt: string }[]>([])
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
   const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([])
   const [workspaceClassrooms, setWorkspaceClassrooms] = useState<WorkspaceClassroom[]>([])
@@ -2442,9 +2443,45 @@ function App() {
 
   const savePreTemplateSaveBackup = useCallback(async () => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    await saveDailyWorkspaceAutoBackup(snapshot)
+    const result = await saveDailyWorkspaceAutoBackup(snapshot)
+    setLocalAutoBackupSummaries(result.summaries)
     setPersistenceMessage('テンプレート上書き前のバックアップを保存しました。')
   }, [buildWorkspaceSnapshot])
+
+  const refreshLocalAutoBackupSummaries = useCallback(async () => {
+    const summaries = await loadWorkspaceAutoBackupSummaries()
+    setLocalAutoBackupSummaries(summaries)
+  }, [])
+
+  const restoreLocalAutoBackup = useCallback(async (backupDateKey: string) => {
+    const snapshot = await loadWorkspaceAutoBackupSnapshot(backupDateKey)
+    if (!snapshot) {
+      setPersistenceMessage('指定された日付のバックアップが見つかりませんでした。')
+      return
+    }
+    // actingClassroomId に該当する教室データを抽出して復元
+    const classroomEntry = actingClassroomId
+      ? snapshot.classrooms?.find((c) => c.id === actingClassroomId)
+      : snapshot.classrooms?.[0]
+    if (!classroomEntry?.data) {
+      setPersistenceMessage('バックアップにこの教室のデータが含まれていませんでした。')
+      return
+    }
+    applyClassroomPayloadToState(classroomEntry.data, {
+      setScreen: (value) => setScreen(value),
+      setManagers,
+      setTeachers,
+      setStudents,
+      setRegularLessons,
+      setGroupLessons,
+      setSpecialSessions,
+      setAutoAssignRules,
+      setPairConstraints,
+      setClassroomSettings,
+      setBoardState,
+    })
+    setPersistenceMessage(`ローカルバックアップ (${backupDateKey}) からこの教室を復元しました。`)
+  }, [actingClassroomId])
 
   const exportBackup = useCallback(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -3027,10 +3064,11 @@ function App() {
         persistenceMessage={persistenceMessage}
         lastSavedAt={lastSavedAt}
         classroomName={actingClassroom?.name ?? '教室'}
-        autoBackupSummaries={[]}
+        autoBackupSummaries={localAutoBackupSummaries}
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
-        onRestoreAutoBackup={() => {}}
+        onRestoreAutoBackup={(backupDateKey) => void restoreLocalAutoBackup(backupDateKey)}
+        onRefreshAutoBackupSummaries={() => void refreshLocalAutoBackupSummaries()}
         showServerBackups={isRemoteBackendEnabled}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}

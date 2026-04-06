@@ -22,6 +22,7 @@ type BackupRestoreScreenProps = {
   onExportBackup: () => void
   onImportBackup: (file: File) => void
   onRestoreAutoBackup: (backupDateKey: string) => void
+  onRefreshAutoBackupSummaries: () => void
   showServerBackups: boolean
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
   serverAutoBackupLoading: boolean
@@ -66,7 +67,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, onExportBackup, onImportBackup, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -85,6 +86,25 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
 
   const [serverBackupModalOpen, setServerBackupModalOpen] = useState(false)
   const [confirmingBackupKey, setConfirmingBackupKey] = useState<string | null>(null)
+  const [localBackupModalOpen, setLocalBackupModalOpen] = useState(false)
+  const [confirmingLocalBackupKey, setConfirmingLocalBackupKey] = useState<string | null>(null)
+
+  const handleOpenLocalBackupModal = () => {
+    setLocalBackupModalOpen(true)
+    onRefreshAutoBackupSummaries()
+  }
+
+  const closeLocalBackupModal = () => {
+    setLocalBackupModalOpen(false)
+    setConfirmingLocalBackupKey(null)
+  }
+
+  const handleConfirmLocalRestore = () => {
+    if (!confirmingLocalBackupKey) return
+    onRestoreAutoBackup(confirmingLocalBackupKey)
+    setLocalBackupModalOpen(false)
+    setConfirmingLocalBackupKey(null)
+  }
 
   const handleOpenServerBackupModal = () => {
     setServerBackupModalOpen(true)
@@ -252,6 +272,16 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
               </div>
             </section>
           ) : null}
+
+          <section className="basic-data-section-card" data-testid="local-backup-panel">
+            <div className="basic-data-card-head">
+              <h3>ローカル自動バックアップから復元</h3>
+              <p>テンプレート上書き保存時に自動保存されたバックアップから復元します（日単位で最大14日間保持）。</p>
+            </div>
+            <div className="basic-data-row-actions">
+              <button className="secondary-button slim" type="button" onClick={handleOpenLocalBackupModal}>ローカルバックアップ一覧を開く</button>
+            </div>
+          </section>
 
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
@@ -469,6 +499,55 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 </div>
                 <div className="auto-assign-modal-actions">
                   <button className="secondary-button slim" type="button" onClick={closeServerBackupModal}>閉じる</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {localBackupModalOpen ? (
+        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) closeLocalBackupModal() }}>
+          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="ローカルバックアップ復元モーダル">
+            <div className="auto-assign-modal-title">ローカル自動バックアップから復元</div>
+            <div className="detail-note">対象教室: <strong>{classroomName}</strong>　この教室のみ復元されます。他の教室には影響しません。</div>
+            {confirmingLocalBackupKey ? (
+              <>
+                <div className="developer-restore-modal-list">
+                  <div className="backup-restore-auto-backup-row">
+                    <div className="backup-restore-auto-backup-meta">
+                      <strong>{confirmingLocalBackupKey}</strong>
+                      <span className="basic-data-subcopy">を選択中</span>
+                    </div>
+                  </div>
+                  <p className="detail-note" style={{ marginTop: 8 }}>この教室の現在のデータはバックアップ時点の内容で上書きされます。この操作は元に戻せません。</p>
+                </div>
+                <div className="auto-assign-modal-actions">
+                  <button className="primary-button" type="button" onClick={handleConfirmLocalRestore}>この教室を復元する</button>
+                  <button className="secondary-button slim" type="button" onClick={() => setConfirmingLocalBackupKey(null)}>戻る</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="basic-data-row-actions">
+                  <button className="secondary-button slim" type="button" onClick={onRefreshAutoBackupSummaries}>一覧を更新</button>
+                </div>
+                <div className="developer-restore-modal-list">
+                  {autoBackupSummaries.length === 0 ? (
+                    <span className="basic-data-muted-inline">ローカルバックアップはありません。テンプレートの上書き保存時に自動保存されます。</span>
+                  ) : null}
+                  {autoBackupSummaries.map((summary) => (
+                    <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                      <div className="backup-restore-auto-backup-meta">
+                        <strong>{summary.backupDateKey}</strong>
+                        <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                      </div>
+                      <button className="secondary-button slim" type="button" onClick={() => setConfirmingLocalBackupKey(summary.backupDateKey)}>この時点から復元</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="auto-assign-modal-actions">
+                  <button className="secondary-button slim" type="button" onClick={closeLocalBackupModal}>閉じる</button>
                 </div>
               </>
             )}
