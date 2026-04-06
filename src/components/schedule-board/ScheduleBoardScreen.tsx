@@ -4039,29 +4039,42 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }))
   }, [autoAssignRuleByKey, cells, isPairConstraintBlocked, lectureConstraintGroups, managedStudentByAnyName, managedStudentByRegisteredName, normalizedWeeks, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, studentUnavailableSlotsById, students])
 
+  const isTeacherWithdrawnOnDate = useCallback((teacherId: string | undefined, teacherName: string, dateKey: string) => {
+    if (!teacherName) return false
+    const teacher = teacherId
+      ? teachers.find((t) => t.id === teacherId)
+      : teachers.find((t) => getTeacherDisplayName(t) === teacherName)
+    if (!teacher) return false
+    return resolveTeacherRosterStatus(teacher, dateKey) !== '在籍'
+  }, [teachers])
+
   const displayCells = useMemo(() => {
     const sourceCells = isTemplateMode ? templateCells : cells
     return sourceCells.map((cell) => ({
       ...cell,
-      desks: cell.desks.map((desk, deskIndex) => ({
-        ...desk,
-        lesson: desk.lesson
-          ? {
-              ...desk.lesson,
-              studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => {
-                if (!student) return null
-                const warningEntry = isTemplateMode ? undefined : boardStudentWarningsByLocation.get(buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex))
-                return {
-                    ...student,
-                    warning: warningEntry?.text,
-                    warningHighlight: warningEntry?.highlight,
-                  }
-              }) as [StudentEntry | null, StudentEntry | null],
-            }
-          : undefined,
-      })),
+      desks: cell.desks.map((desk, deskIndex) => {
+        const teacherWithdrawn = !isTemplateMode && desk.teacher && isTeacherWithdrawnOnDate(desk.teacherAssignmentTeacherId, desk.teacher, cell.dateKey)
+        return {
+          ...desk,
+          teacher: teacherWithdrawn ? '' : desk.teacher,
+          lesson: desk.lesson
+            ? {
+                ...desk.lesson,
+                studentSlots: desk.lesson.studentSlots.map((student, studentIndex) => {
+                  if (!student) return null
+                  const warningEntry = isTemplateMode ? undefined : boardStudentWarningsByLocation.get(buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex))
+                  return {
+                      ...student,
+                      warning: warningEntry?.text,
+                      warningHighlight: warningEntry?.highlight,
+                    }
+                }) as [StudentEntry | null, StudentEntry | null],
+              }
+            : undefined,
+        }
+      }),
     }))
-  }, [boardStudentWarningsByLocation, cells, isTemplateMode, templateCells])
+  }, [boardStudentWarningsByLocation, cells, isTeacherWithdrawnOnDate, isTemplateMode, templateCells])
 
   useEffect(() => {
     if (studentMenu?.mode !== 'add') return
