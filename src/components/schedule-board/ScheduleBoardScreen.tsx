@@ -1330,7 +1330,7 @@ function buildManagedRegularLessonsRange(params: {
     const scheduledDateKeys = monthDatesInScope.flatMap(({ year, monthIndex }) => getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)).filter((dateKey) => {
       const date = parseDateKey(dateKey)
       if (row.schoolYear !== resolveOperationalSchoolYear(date)) return false
-      return !teacher || resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+      return true
     })
     if (scheduledDateKeys.length === 0) continue
 
@@ -1396,7 +1396,8 @@ function buildManagedRegularLessonsRange(params: {
         ?? cell.desks.find((desk) => !desk.lesson && !desk.teacher)
       if (!targetDesk) continue
 
-      targetDesk.teacher = teacher ? getTeacherDisplayName(teacher) : '講師未割当'
+      const teacherActive = teacher && resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+      targetDesk.teacher = teacherActive ? getTeacherDisplayName(teacher) : (teacher ? '' : '講師未割当')
       resetManagedTeacherAssignment(targetDesk)
 
       if (!firstStudent && !secondStudent) {
