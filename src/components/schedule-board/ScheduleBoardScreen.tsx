@@ -2298,9 +2298,17 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       students,
     })
 
+    // テンプレート履歴を更新: effectiveStartDate >= 新テンプレの開始日を除去し、新テンプレを追加
+    const prevHistory = classroomSettings.regularLessonTemplateHistory ?? []
+    const nextHistory = [
+      ...prevHistory.filter((h) => h.effectiveStartDate < template.effectiveStartDate),
+      template,
+    ]
+
     onUpdateClassroomSettings({
       ...classroomSettings,
       regularLessonTemplate: template,
+      regularLessonTemplateHistory: nextHistory,
       ...(overwrite ? { templateFreezeBeforeDate: template.effectiveStartDate } : {}),
     })
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
@@ -4557,7 +4565,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     })
     const xlsx = await import('xlsx')
     xlsx.writeFile(
-      buildRegularLessonTemplateWorkbook(xlsx, { template, teachers, students, deskCount: classroomSettings.deskCount }),
+      buildRegularLessonTemplateWorkbook(xlsx, { template, templateHistory: classroomSettings.regularLessonTemplateHistory, teachers, students, deskCount: classroomSettings.deskCount }),
       '通常授業テンプレート.xlsx',
     )
     setStatusMessage('通常授業テンプレートを Excel 出力しました。')

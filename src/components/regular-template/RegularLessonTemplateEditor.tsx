@@ -147,6 +147,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     xlsx.writeFile(
       buildRegularLessonTemplateWorkbook(xlsx, {
         template: normalizedTemplate,
+        templateHistory: classroomSettings.regularLessonTemplateHistory,
         teachers,
         students,
         deskCount: classroomSettings.deskCount,

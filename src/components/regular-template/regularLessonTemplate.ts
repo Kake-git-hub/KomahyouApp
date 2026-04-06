@@ -256,29 +256,43 @@ export function buildRegularLessonsFromTemplate(params: {
 
 export function buildRegularLessonTemplateWorkbook(xlsx: XlsxModule, params: {
   template: RegularLessonTemplate | null | undefined
+  templateHistory?: RegularLessonTemplate[]
   teachers: TeacherRow[]
   students: StudentRow[]
   deskCount: number
 }) {
-  const { template, teachers, students, deskCount } = params
+  const { template, templateHistory, teachers, students, deskCount } = params
   const workbook = xlsx.utils.book_new()
-  const normalizedTemplate = normalizeRegularLessonTemplate(template, deskCount)
   const teacherNameById = new Map(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const studentNameById = new Map(students.map((student) => [student.id, getStudentDisplayName(student)]))
 
-  const rows = normalizedTemplate.cells.flatMap((cell) => cell.desks.map((desk) => ({
-    開始日: normalizedTemplate.effectiveStartDate,
-    曜日: dayLabelByValue[cell.dayOfWeek] ?? '月',
-    時限: `${cell.slotNumber}限`,
-    机: desk.deskIndex,
-    講師: teacherNameById.get(desk.teacherId) ?? '',
-    生徒1: studentNameById.get(desk.students[0]?.studentId ?? '') ?? '',
-    科目1: desk.students[0]?.subject ?? '',
-    注記1: normalizeRegularLessonNote(desk.students[0]?.note),
-    生徒2: studentNameById.get(desk.students[1]?.studentId ?? '') ?? '',
-    科目2: desk.students[1]?.subject ?? '',
-    注記2: normalizeRegularLessonNote(desk.students[1]?.note),
-  })))
+  // 履歴と現在のテンプレを合算し、開始日昇順で並べる
+  const allTemplates: RegularLessonTemplate[] = []
+  for (const hist of templateHistory ?? []) {
+    allTemplates.push(normalizeRegularLessonTemplate(hist, deskCount))
+  }
+  const current = normalizeRegularLessonTemplate(template, deskCount)
+  // 現在のテンプレが履歴に含まれていない場合は追加
+  if (!allTemplates.some((t) => t.effectiveStartDate === current.effectiveStartDate)) {
+    allTemplates.push(current)
+  }
+  allTemplates.sort((a, b) => a.effectiveStartDate.localeCompare(b.effectiveStartDate))
+
+  const rows = allTemplates.flatMap((tmpl) =>
+    tmpl.cells.flatMap((cell) => cell.desks.map((desk) => ({
+      開始日: tmpl.effectiveStartDate,
+      曜日: dayLabelByValue[cell.dayOfWeek] ?? '月',
+      時限: `${cell.slotNumber}限`,
+      机: desk.deskIndex,
+      講師: teacherNameById.get(desk.teacherId) ?? '',
+      生徒1: studentNameById.get(desk.students[0]?.studentId ?? '') ?? '',
+      科目1: desk.students[0]?.subject ?? '',
+      注記1: normalizeRegularLessonNote(desk.students[0]?.note),
+      生徒2: studentNameById.get(desk.students[1]?.studentId ?? '') ?? '',
+      科目2: desk.students[1]?.subject ?? '',
+      注記2: normalizeRegularLessonNote(desk.students[1]?.note),
+    }))),
+  )
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, rows, ['開始日']), '通常授業テンプレ')
   return workbook
