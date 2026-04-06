@@ -1005,7 +1005,12 @@ function createInitialBoardSnapshot(params: {
           students: params.students,
           regularLessons: params.regularLessons,
         })
-        return overlayBoardWeeksOnScheduleCells(managedWeek, [week], params.initialBoardState?.suppressedRegularLessonOccurrences ?? [])
+        const overlaid = overlayBoardWeeksOnScheduleCells(managedWeek, [week], params.initialBoardState?.suppressedRegularLessonOccurrences ?? [])
+        const freezeDate = params.classroomSettings.templateFreezeBeforeDate ?? ''
+        if (!freezeDate) return overlaid
+        // Pre-freeze cells: keep existing board data without managed overlay
+        const boardById = new Map(week.map((c) => [c.id, c]))
+        return overlaid.map((cell) => (cell.dateKey < freezeDate ? (boardById.get(cell.id) ?? cell) : cell))
       }),
       params.classroomSettings.deskCount,
     )
@@ -2290,6 +2295,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     onUpdateClassroomSettings({
       ...classroomSettings,
       regularLessonTemplate: template,
+      ...(overwrite ? { templateFreezeBeforeDate: template.effectiveStartDate } : {}),
     })
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
 
@@ -2402,40 +2408,22 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               })),
             }
           }
-          // effectiveStart以前のセル: managed lessons を board 固定データに変換して保護する
-          // （regularLessons 置換後の useEffect マージで消されないようにする）
-          // また、起点日がeffectiveStart以降の振替は除去する
+          // effectiveStart以前のセル: 起点日がeffectiveStart以降の振替のみ除去
+          // （managed overlay のスキップは useEffect 側の templateFreezeBeforeDate で処理）
           return {
             ...cell,
             desks: cell.desks.map((desk) => {
               const lesson = desk.lesson
-              // managed lesson を non-managed に焼き込む
-              const frozenLesson = lesson && isManagedLesson(lesson)
-                ? {
-                    ...lesson,
-                    id: lesson.id.replace(/^managed_/, 'frozen_'),
-                    note: lesson.note === '管理データ反映' ? undefined : lesson.note,
-                    studentSlots: lesson.studentSlots.map((s) => (s ? { ...s } : null)) as [StudentEntry | null, StudentEntry | null],
-                  }
-                : lesson
+              if (!lesson) return { ...desk }
               // 起点日がeffectiveStart以降の振替は除去
-              const cleanedLesson = frozenLesson
-                ? (() => {
-                    const nextSlots = frozenLesson.studentSlots.map((s) => {
-                      if (!s || s.lessonType !== 'makeup' || s.manualAdded) return s
-                      if (s.makeupSourceDate && s.makeupSourceDate >= effectiveStart) return null
-                      return s
-                    }) as [StudentEntry | null, StudentEntry | null]
-                    return nextSlots.some(Boolean) ? { ...frozenLesson, studentSlots: nextSlots } : undefined
-                  })()
-                : undefined
-              // managed lessons の講師も board 固定にする
-              const needsFreezeTeacher = lesson && isManagedLesson(lesson) && !desk.manualTeacher
+              const nextSlots = lesson.studentSlots.map((s) => {
+                if (!s || s.lessonType !== 'makeup' || s.manualAdded) return s
+                if (s.makeupSourceDate && s.makeupSourceDate >= effectiveStart) return null
+                return s
+              }) as [StudentEntry | null, StudentEntry | null]
               return {
                 ...desk,
-                teacher: desk.teacher,
-                manualTeacher: needsFreezeTeacher ? true : desk.manualTeacher,
-                lesson: cleanedLesson,
+                lesson: nextSlots.some(Boolean) ? { ...lesson, studentSlots: nextSlots } : undefined,
               }
             }),
           }
@@ -2506,11 +2494,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   ])
 
   useEffect(() => {
+    const freezeDate = classroomSettings.templateFreezeBeforeDate ?? ''
     setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => {
       const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
       const weekStart = getWeekStart(parseDateKey(firstDateKey))
       const managedWeek = createBoardWeek(weekStart, { classroomSettings, teachers, students, regularLessons })
-      return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedRegularLessonOccurrences)
+      const overlaid = overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedRegularLessonOccurrences)
+      if (!freezeDate) return overlaid
+      // Pre-freeze cells: keep existing board data without managed overlay
+      const boardById = new Map(week.map((c) => [c.id, c]))
+      return overlaid.map((cell) => (cell.dateKey < freezeDate ? (boardById.get(cell.id) ?? cell) : cell))
     }), classroomSettings.deskCount))
   }, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])
 

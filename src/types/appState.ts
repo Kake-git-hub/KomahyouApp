@@ -17,6 +17,7 @@ export type ClassroomSettings = {
   forceOpenDates: string[]
   deskCount: number
   regularLessonTemplate?: RegularLessonTemplate | null
+  templateFreezeBeforeDate?: string
   initialSetupCompletedAt?: string
   initialSetupMakeupStocks?: InitialSetupMakeupStockRow[]
   initialSetupLectureStocks?: InitialSetupLectureStockRow[]
