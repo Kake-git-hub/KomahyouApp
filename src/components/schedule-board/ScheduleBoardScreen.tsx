@@ -1936,6 +1936,7 @@ function removeStudentAssignmentsFromSpecialSession(params: {
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
   fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
   restoreSessionStock?: boolean
+  skipManualAdded?: boolean
 }) {
   const nextWeeks = cloneWeeks(params.weeks)
   const clearedSessionAdjustments = clearLectureStockAdjustmentsForStudentSession({
@@ -1964,6 +1965,7 @@ function removeStudentAssignmentsFromSpecialSession(params: {
           lesson.studentSlots.forEach((studentEntry, studentIndex) => {
           if (!studentEntry) return
           if (studentEntry.lessonType !== 'special') return
+          if (params.skipManualAdded && studentEntry.manualAdded) return
           const entryStudentNameKey = normalizeStudentNameKey(studentEntry.name)
           const matchesStudent = studentEntry.managedStudentId === params.student.id
             || entryStudentNameKey === registeredStudentNameKey
@@ -2647,6 +2649,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         manualLectureStockCounts: nextManualLectureStockCounts,
         manualLectureStockOrigins: nextManualLectureStockOrigins,
         fallbackLectureStockStudents: nextFallbackLectureStockStudents,
+        skipManualAdded: true,
       })
       if (!result.hasChanges) continue
 
