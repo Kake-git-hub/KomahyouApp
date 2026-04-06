@@ -20,7 +20,7 @@ import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './
 import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
@@ -926,6 +926,10 @@ function App() {
     setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
     setUndoSnapshot(null)
   }, [undoSnapshot])
+
+  const dismissUndoSnapshot = useCallback(() => {
+    setUndoSnapshot(null)
+  }, [])
 
   const navigateClassroomScreen = useCallback((nextScreen: ClassroomScreen) => {
     syncCurrentClassroomData(actingClassroomId)
@@ -2465,6 +2469,21 @@ function App() {
     return () => window.clearTimeout(timeoutId)
   }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
 
+  // Flush save on browser close / tab close to prevent data loss
+  useEffect(() => {
+    if (!hasHydratedSnapshot) return
+    if (!isSnapshotPersistenceRuntimeEnabled()) return
+
+    const handleBeforeUnload = () => {
+      if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
+      const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+      writeWorkspaceToLocalStorageSync(snapshot)
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, workspaceClassrooms.length, workspaceUsers.length])
+
   useEffect(() => {
     if (!currentUser) return
     if (currentUser.role !== 'manager') return
@@ -3163,6 +3182,7 @@ function App() {
         onImportAutoAssignWorkbook={importAutoAssignWorkbookFile}
         undoSnapshotLabel={undoSnapshot?.label ?? null}
         onRestoreUndoSnapshot={restoreUndoSnapshot}
+        onDismissUndoSnapshot={dismissUndoSnapshot}
       />
     )
   }
@@ -3190,6 +3210,7 @@ function App() {
       onPreTemplateSaveBackup={savePreTemplateSaveBackup}
       undoSnapshotLabel={undoSnapshot?.label ?? null}
       onRestoreUndoSnapshot={restoreUndoSnapshot}
+      onDismissUndoSnapshot={dismissUndoSnapshot}
       onLogout={logout}
     />
   )

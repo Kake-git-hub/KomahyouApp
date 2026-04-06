@@ -459,7 +459,7 @@ function writeToLocalStorage(snapshot: AppSnapshot) {
   window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(snapshot))
 }
 
-function writeWorkspaceToLocalStorage(snapshot: WorkspaceSnapshot) {
+export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
 }
@@ -523,7 +523,7 @@ export async function loadWorkspaceSnapshot() {
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
   // Write to localStorage first (synchronous) to prevent data loss on logout/close
-  writeWorkspaceToLocalStorage(snapshot)
+  writeWorkspaceToLocalStorageSync(snapshot)
   await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
 }
 

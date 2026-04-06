@@ -36,6 +36,7 @@ type BoardToolbarProps = {
   onLogout: () => void
   undoSnapshotLabel: string | null
   onRestoreUndoSnapshot?: () => void
+  onDismissUndoSnapshot?: () => void
   onTemplateExport?: () => void
   onTemplateImport?: () => void
   onTemplateSaveOverwrite?: () => void
@@ -79,6 +80,7 @@ export function BoardToolbar({
   onLogout,
   undoSnapshotLabel,
   onRestoreUndoSnapshot,
+  onDismissUndoSnapshot,
   onTemplateExport,
   onTemplateImport,
   onTemplateSaveOverwrite,
@@ -171,6 +173,7 @@ export function BoardToolbar({
         <div className="toolbar-row toolbar-undo-banner">
           <span>「{undoSnapshotLabel}」を実行しました。</span>
           <button className="secondary-button slim" type="button" onClick={onRestoreUndoSnapshot} data-testid="restore-undo-snapshot-button">直前の状態に戻す</button>
+          <button className="icon-action-button toolbar-undo-dismiss" type="button" onClick={onDismissUndoSnapshot} data-testid="dismiss-undo-snapshot-button" aria-label="閉じる" title="閉じる">✕</button>
         </div>
       )}
     </section>

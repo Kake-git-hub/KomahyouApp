@@ -463,6 +463,7 @@ type ScheduleBoardScreenProps = {
   onPreTemplateSaveBackup?: () => Promise<void>
   undoSnapshotLabel?: string | null
   onRestoreUndoSnapshot?: () => void
+  onDismissUndoSnapshot?: () => void
   onLogout: () => void
 }
 
@@ -2167,7 +2168,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onLogout }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -6623,6 +6624,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             onLogout={onLogout}
             undoSnapshotLabel={undoSnapshotLabel ?? null}
             onRestoreUndoSnapshot={onRestoreUndoSnapshot}
+            onDismissUndoSnapshot={onDismissUndoSnapshot}
             onTemplateExport={() => void handleTemplateExport()}
             onTemplateImport={handleTemplateImportClick}
             onTemplateSaveOverwrite={handleTemplateSaveRequest}

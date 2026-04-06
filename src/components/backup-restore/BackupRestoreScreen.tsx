@@ -45,6 +45,7 @@ type BackupRestoreScreenProps = {
   onImportAutoAssignWorkbook: (file: File) => void
   undoSnapshotLabel?: string | null
   onRestoreUndoSnapshot?: () => void
+  onDismissUndoSnapshot?: () => void
 }
 
 const dayOptions = [
@@ -69,7 +70,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -233,6 +234,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           <div className="toolbar-row toolbar-undo-banner">
             <span>「{undoSnapshotLabel}」を実行しました。</span>
             <button className="secondary-button slim" type="button" onClick={onRestoreUndoSnapshot} data-testid="restore-undo-snapshot-button">直前の状態に戻す</button>
+            <button className="icon-action-button toolbar-undo-dismiss" type="button" onClick={onDismissUndoSnapshot} data-testid="dismiss-undo-snapshot-button" aria-label="閉じる" title="閉じる">✕</button>
           </div>
         )}
       </section>
