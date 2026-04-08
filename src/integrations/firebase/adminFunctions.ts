@@ -291,14 +291,18 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
 }
 
 export async function downloadFirebaseServerAutoBackup(backupDateKey: string): Promise<string> {
+  console.log('[downloadFirebaseServerAutoBackup] start, backupDateKey:', backupDateKey)
   await ensureFirebaseAuthenticatedUser()
+  console.log('[downloadFirebaseServerAutoBackup] auth OK')
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson: string }>(functions, 'downloadServerAutoBackup', { timeout: 120_000 })
+  console.log('[downloadFirebaseServerAutoBackup] calling Cloud Function...')
   const result = await callable({
     workspaceKey: config.workspaceKey,
     backupDateKey,
   })
+  console.log('[downloadFirebaseServerAutoBackup] Cloud Function returned, data length:', result.data.snapshotJson?.length ?? 'undefined')
   return result.data.snapshotJson
 }
 

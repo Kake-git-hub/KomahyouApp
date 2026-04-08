@@ -2722,14 +2722,17 @@ function App() {
     setServerAutoBackupLoading(true)
     setPersistenceMessage('サーバーバックアップをダウンロードしています…')
     try {
+      console.log('[restoreServerAutoBackup] downloading backup:', backupDateKey)
       const snapshotJson = await downloadFirebaseServerAutoBackup(backupDateKey)
+      console.log('[restoreServerAutoBackup] downloaded, json length:', snapshotJson.length)
       const snapshot = parseWorkspaceSnapshot(snapshotJson)
+      console.log('[restoreServerAutoBackup] parsed snapshot, classrooms:', snapshot.classrooms.length)
       openDeveloperRestoreModal(snapshot, `サーバーバックアップ (${backupDateKey})`)
       setPersistenceMessage('復元する教室をモーダルで選択してください。')
     } catch (error) {
-      console.error('restoreServerAutoBackup error:', error)
+      console.error('[restoreServerAutoBackup] error:', error)
       const message = error instanceof Error ? error.message : 'サーバーバックアップのダウンロードに失敗しました。'
-      setPersistenceMessage(message)
+      setPersistenceMessage(`復元エラー: ${message}`)
     } finally {
       setServerAutoBackupLoading(false)
     }
