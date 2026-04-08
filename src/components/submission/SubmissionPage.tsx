@@ -152,14 +152,19 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const openDates = useMemo(() => availableDates.filter((d) => !d.isClosed), [availableDates])
 
-  const toggleAllSlotsForColumn = useCallback((slotNumber: number) => {
+  const toggleAllSlotsForColumn = useCallback((slotNumber: number, occupiedMap: Record<string, string>) => {
     const keys = openDates.map((d) => `${d.dateKey}_${slotNumber}`)
     const allSelected = keys.every((k) => selectedSlotsRef.current.has(k))
     if (allSelected) {
       setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.delete(k)); return next })
-    } else {
-      setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.add(k)); return next })
+      return
     }
+    const occupiedKeys = keys.filter((k) => !selectedSlotsRef.current.has(k) && occupiedMap[k])
+    if (occupiedKeys.length > 0) {
+      const labels = [...new Set(occupiedKeys.map((k) => occupiedMap[k]))].join('・')
+      if (!window.confirm(`${labels}が組まれているコマがありますが全て不可として提出しますか？`)) return
+    }
+    setSelectedSlots((prev) => { const next = new Set(prev); keys.forEach((k) => next.add(k)); return next })
   }, [openDates])
 
   const handleSubjectChange = useCallback((subject: string, value: number) => {
@@ -278,7 +283,7 @@ export default function SubmissionPage({ token }: { token: string }) {
               <tr>
                 <th className="sub-th-date">日付</th>
                 {Array.from({ length: maxSlot }, (_, i) => (
-                  <th key={i} className="sub-th-slot" onClick={() => toggleAllSlotsForColumn(i + 1)}>{i + 1}限</th>
+                  <th key={i} className="sub-th-slot" onClick={() => toggleAllSlotsForColumn(i + 1, occupiedSlots)}>{i + 1}限</th>
                 ))}
               </tr>
             </thead>
@@ -404,11 +409,13 @@ export default function SubmissionPage({ token }: { token: string }) {
 
 const baseStyles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { font-size: 14px; -webkit-text-size-adjust: 100%; overflow-x: hidden; overflow-y: auto; height: 100%; }
-  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; height: 100%; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; }
+  html, body, #root { min-width: 0 !important; width: 100% !important; max-width: 100% !important; overflow-x: hidden !important; }
+  html { font-size: 14px; -webkit-text-size-adjust: 100%; height: 100%; }
+  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; }
+  #root { height: auto !important; min-height: 100% !important; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow-x: hidden; }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
