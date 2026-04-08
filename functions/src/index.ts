@@ -599,7 +599,7 @@ export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (req
   }
 })
 
-export const downloadServerAutoBackup = onCall({ invoker: 'public' }, async (request) => {
+export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
@@ -622,7 +622,7 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public' }, async (req
   return { snapshotJson: content.toString('utf-8') }
 })
 
-export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public' }, async (request) => {
+export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
@@ -673,7 +673,7 @@ export const createWorkspaceServerAutoBackups = onSchedule({
   await runWorkspaceServerAutoBackup()
 })
 
-export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public' }, async (request) => {
+export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   await requireDeveloperMember(request.auth?.uid, workspaceKey)

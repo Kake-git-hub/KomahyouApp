@@ -303,7 +303,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                         <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
                         <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
                       </div>
-                      <button className="secondary-button slim" type="button" onClick={() => onRestoreServerAutoBackup(summary.backupDateKey)} disabled={serverAutoBackupLoading}>この時点へ復元</button>
+                      <button className="secondary-button slim" type="button" onClick={() => { console.log('RESTORE CLICKED:', summary.backupDateKey); onRestoreServerAutoBackup(summary.backupDateKey) }} disabled={serverAutoBackupLoading}>この時点へ復元</button>
                     </div>
                   ))}
                 </div>
