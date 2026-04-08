@@ -5131,13 +5131,10 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetDayOfWeek = targetDate.getDay()
     const schoolYear = resolveOperationalSchoolYear(targetDate)
     const studentByIdLocal = new Map(students.map((s) => [s.id, s]))
-    const teacherByIdLocal = new Map(teachers.map((t) => [t.id, t]))
 
     for (const row of regularLessons) {
       if (row.dayOfWeek !== targetDayOfWeek) continue
       if (row.schoolYear !== schoolYear) continue
-      const teacher = teacherByIdLocal.get(row.teacherId)
-      if (teacher && resolveTeacherRosterStatus(teacher, dateKey) !== '在籍') continue
       if (!isRegularLessonParticipantActiveOnDate(row, dateKey)) continue
 
       const participants = [
