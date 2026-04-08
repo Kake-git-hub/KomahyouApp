@@ -5125,7 +5125,50 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }
     }
 
-    commitWeeks(nextWeeks, weekIndex, selectedCellId, selectedDeskIndex)
+    // Suppress managed regular lessons so the overlay doesn't re-place them
+    let nextSuppressedRegularLessonOccurrences = [...suppressedRegularLessonOccurrences]
+    const targetDate = parseDateKey(dateKey)
+    const targetDayOfWeek = targetDate.getDay()
+    const schoolYear = resolveOperationalSchoolYear(targetDate)
+    const studentByIdLocal = new Map(students.map((s) => [s.id, s]))
+    const teacherByIdLocal = new Map(teachers.map((t) => [t.id, t]))
+
+    for (const row of regularLessons) {
+      if (row.dayOfWeek !== targetDayOfWeek) continue
+      if (row.schoolYear !== schoolYear) continue
+      const teacher = teacherByIdLocal.get(row.teacherId)
+      if (teacher && resolveTeacherRosterStatus(teacher, dateKey) !== '在籍') continue
+      if (!isRegularLessonParticipantActiveOnDate(row, dateKey)) continue
+
+      const participants = [
+        { studentId: row.student1Id, subject: row.subject1 },
+        { studentId: row.student2Id, subject: row.subject2 },
+      ].filter((p) => p.studentId && p.subject)
+
+      for (const participant of participants) {
+        const student = studentByIdLocal.get(participant.studentId)
+        if (!student) continue
+        if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)) continue
+        const occurrenceKey = `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`
+        nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, occurrenceKey)
+      }
+    }
+
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      nextSuppressedRegularLessonOccurrences,
+    )
     setDayHeaderMenu(null)
     setSelectedHolidayDate(dateKey)
     setStudentMenu(null)
