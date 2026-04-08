@@ -2727,6 +2727,7 @@ function App() {
       openDeveloperRestoreModal(snapshot, `サーバーバックアップ (${backupDateKey})`)
       setPersistenceMessage('復元する教室をモーダルで選択してください。')
     } catch (error) {
+      console.error('restoreServerAutoBackup error:', error)
       const message = error instanceof Error ? error.message : 'サーバーバックアップのダウンロードに失敗しました。'
       setPersistenceMessage(message)
     } finally {

@@ -294,7 +294,7 @@ export async function downloadFirebaseServerAutoBackup(backupDateKey: string): P
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson: string }>(functions, 'downloadServerAutoBackup')
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson: string }>(functions, 'downloadServerAutoBackup', { timeout: 120_000 })
   const result = await callable({
     workspaceKey: config.workspaceKey,
     backupDateKey,
@@ -306,7 +306,7 @@ export async function triggerFirebaseServerAutoBackup(): Promise<{ backupDateKey
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string }, { backupDateKey: string; workspaceCount: number }>(functions, 'triggerWorkspaceServerAutoBackup')
+  const callable = httpsCallable<{ workspaceKey: string }, { backupDateKey: string; workspaceCount: number }>(functions, 'triggerWorkspaceServerAutoBackup', { timeout: 120_000 })
   const result = await callable({ workspaceKey: config.workspaceKey })
   return result.data
 }
@@ -322,7 +322,7 @@ export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKe
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; classroomId: string }, ClassroomFromServerAutoBackup>(functions, 'downloadClassroomFromServerAutoBackup')
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; classroomId: string }, ClassroomFromServerAutoBackup>(functions, 'downloadClassroomFromServerAutoBackup', { timeout: 120_000 })
   const result = await callable({
     workspaceKey: config.workspaceKey,
     backupDateKey,

@@ -604,6 +604,8 @@ export const downloadServerAutoBackup = onCall(async (request) => {
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
 
+  logger.info(`downloadServerAutoBackup: workspaceKey=${workspaceKey}, backupDateKey=${backupDateKey}`)
+
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
 
   const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
@@ -611,10 +613,12 @@ export const downloadServerAutoBackup = onCall(async (request) => {
   const file = bucket.file(storagePath)
   const [exists] = await file.exists()
   if (!exists) {
-    throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
+    logger.warn(`downloadServerAutoBackup: file not found at ${storagePath}`)
+    throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${storagePath})`)
   }
 
   const [content] = await file.download()
+  logger.info(`downloadServerAutoBackup: downloaded ${content.length} bytes from ${storagePath}`)
   return { snapshotJson: content.toString('utf-8') }
 })
 

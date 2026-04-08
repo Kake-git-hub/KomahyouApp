@@ -53,6 +53,7 @@
 	- Firebase server auto-backup can run daily without an open browser only on Blaze with Functions and Cloud Storage; the current developer-screen backup list still reflects browser-local auto backups.
 	- After board or schedule changes, run `npm run build`. Run Playwright only when the user explicitly requests E2E verification.
 	- After stock calculation or PDF changes, also run `npm run test:unit`.
+	- Every deploy-capable change must bump `package.json` version (patch level) before building.
 
 - [x] Maintain regression coverage
 	Current expected regression baseline: `tests/schedule-board.spec.ts` remains the E2E reference suite, but only run it when the user explicitly asks for Playwright verification.
