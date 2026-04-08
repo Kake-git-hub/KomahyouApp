@@ -817,15 +817,39 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .meta-box {
-        display: grid;
-        align-content: center;
-        justify-items: end;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
         padding: 3px 8px;
-        gap: 2px;
+        gap: 10px;
         font-size: 13px;
         font-weight: 700;
         min-width: 0;
         max-width: 100%;
+      }
+
+      .meta-qr-block {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1px;
+        line-height: 0;
+      }
+
+      .meta-qr-caption {
+        font-size: 8px;
+        font-weight: 600;
+        color: #666;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .meta-info {
+        display: grid;
+        align-content: center;
+        justify-items: end;
+        gap: 2px;
       }
 
       .meta-row {
@@ -874,15 +898,19 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 4px 10px;
+        width: 52px;
+        height: 52px;
         background: #e8f5e8;
         color: #2a7e2a;
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 700;
         border-radius: 4px;
         cursor: pointer;
         border: 1px solid #b5d9b5;
         white-space: nowrap;
+        text-align: center;
+        line-height: 1.2;
+        padding: 2px;
       }
 
       .submission-badge:hover {
@@ -958,7 +986,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 6px;
+        gap: 4px;
         min-height: 22px;
         background: #ffe48a;
         color: #5a4200;
@@ -966,6 +994,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-weight: 700;
         border: 1.5px solid #b18d26;
         padding: 0 6px;
+      }
+
+      .period-pill-center {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
       }
 
       .period-pill-button {
@@ -990,6 +1027,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 10px;
         font-weight: 700;
         white-space: nowrap;
+      }
+
+      .period-pill-state-inline {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 700;
+        white-space: nowrap;
+        color: #5a4200;
       }
 
       .count-modal-backdrop {
@@ -1070,9 +1115,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .period-pill-label {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        flex: 0 0 auto;
         white-space: nowrap;
       }
 
@@ -2693,9 +2736,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const input = getStudentSessionInput(studentId, segment.sessionId);
         const buttonClasses = ['period-pill-button'];
         if (input.countSubmitted) buttonClasses.push('is-registered');
-        const stateClassName = input.countSubmitted ? 'period-pill-state' : 'period-pill-state print-only-hidden';
         const stateLabel = input.countSubmitted ? '希望科目数登録済' : '希望科目数設定はここをクリック';
-        return '<th class="period-band" colspan="' + segment.colSpan + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="open-student-count-modal" data-student-id="' + studentId + '" data-session-id="' + segment.sessionId + '" data-testid="student-schedule-period-button-' + studentId + '-' + segment.sessionId + '"><span class="period-pill">' + renderPeriodPill(segment, '<span class="' + stateClassName + '">' + escapeHtml(stateLabel) + '</span>') + '</span></button></th>';
+        return '<th class="period-band" colspan="' + segment.colSpan + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="open-student-count-modal" data-student-id="' + studentId + '" data-session-id="' + segment.sessionId + '" data-testid="student-schedule-period-button-' + studentId + '-' + segment.sessionId + '"><span class="period-pill">' + renderPeriodPill(segment, escapeHtml(stateLabel)) + '</span></button></th>';
       }
 
       function renderTeacherPeriodBandCell(teacherId, segment) {
@@ -2704,9 +2746,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const input = getTeacherSessionInput(teacherId, segment.sessionId);
         const buttonClasses = ['period-pill-button'];
         if (input.countSubmitted) buttonClasses.push('is-registered');
-        const stateClassName = input.countSubmitted ? 'period-pill-state' : 'period-pill-state print-only-hidden';
         const stateLabel = input.countSubmitted ? '講師予定登録済' : '講師予定をここをクリックして登録';
-        return '<th class="period-band" colspan="' + segment.colSpan + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="open-teacher-register-modal" data-teacher-id="' + teacherId + '" data-session-id="' + segment.sessionId + '" data-testid="teacher-schedule-period-button-' + teacherId + '-' + segment.sessionId + '"><span class="period-pill">' + renderPeriodPill(segment, '<span class="' + stateClassName + '">' + escapeHtml(stateLabel) + '</span>') + '</span></button></th>';
+        return '<th class="period-band" colspan="' + segment.colSpan + '"><button type="button" class="' + buttonClasses.join(' ') + '" data-role="open-teacher-register-modal" data-teacher-id="' + teacherId + '" data-session-id="' + segment.sessionId + '" data-testid="teacher-schedule-period-button-' + teacherId + '-' + segment.sessionId + '"><span class="period-pill">' + renderPeriodPill(segment, escapeHtml(stateLabel)) + '</span></button></th>';
       }
 
       function refreshStudentUnavailableUi(studentId) {
@@ -3022,7 +3063,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function renderPeriodPill(segment, stateHtml) {
-        return '<span class="period-pill-edge">◀</span><span class="period-pill-label">' + escapeHtml(segment.label) + '</span>' + (stateHtml || '') + '<span class="period-pill-edge">▶</span>';
+        return '<span class="period-pill-edge">◀</span><span class="period-pill-center"><span class="period-pill-label">' + escapeHtml(segment.label) + '</span>' + (stateHtml ? '<span class="period-pill-state-inline print-only-hidden">' + stateHtml + '</span>' : '') + '</span><span class="period-pill-edge">▶</span>';
       }
 
       function renderStudentCountModal() {
@@ -3183,11 +3224,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function buildHeaderHtml(title, nameLabel, subLabel, pageIndex, periodLabel, qrHtml) {
+        var qrBlock = '';
+        if (qrHtml) {
+          qrBlock = '<div class="meta-qr-block print-only-hidden">' + qrHtml + '<span class="meta-qr-caption">↑QRからスマホ提出</span></div>';
+        }
         return '<div class="sheet-top">'
           + '<div class="logo-box" data-shared-image="logo"><span class="logo-placeholder">ロゴ欄</span></div>'
           + '<div class="school-box"><textarea class="school-input shared-input" data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等"></textarea></div>'
           + '<div class="title-box"><input class="title-input shared-input" data-shared-input="sheet-title" value="" placeholder="授業日程表" /></div>'
-          + '<div class="meta-box"><div class="meta-row"><span class="meta-label">期間:</span> ' + escapeHtml(periodLabel) + '</div><div class="meta-row person-meta-row">' + (qrHtml || '') + '<span><span class="meta-label">' + escapeHtml(nameLabel) + ':</span> ' + escapeHtml(subLabel) + '</span></div><div class="meta-row"><span class="page-count print-only-hidden">' + (pageIndex + 1) + 'ページ目</span></div></div>'
+          + '<div class="meta-box">' + qrBlock + '<div class="meta-info"><div class="meta-row"><span class="meta-label">期間:</span> ' + escapeHtml(periodLabel) + '</div><div class="meta-row person-meta-row"><span><span class="meta-label">' + escapeHtml(nameLabel) + ':</span> ' + escapeHtml(subLabel) + '</span></div><div class="meta-row"><span class="page-count print-only-hidden">' + (pageIndex + 1) + 'ページ目</span></div></div></div>'
           + '</div>';
       }
 
@@ -3377,7 +3422,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const makeupRows = toMakeupRows(makeupNotes, 7);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
         const qrHtml = student.submissionSubmitted
-          ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="student" data-person-id="' + student.id + '">希望提出済</span>'
+          ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="student" data-person-id="' + student.id + '">希望<br>提出済</span>'
           : student.qrSvg ? '<span class="qr-code">' + student.qrSvg + '</span>' : '';
         const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
         pagesElement.innerHTML = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
@@ -3442,7 +3487,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const salaryData = buildTeacherSalaryData(entries, teacher.id);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
         const qrHtml = teacher.submissionSubmitted
-          ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="teacher" data-person-id="' + teacher.id + '">希望提出済</span>'
+          ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="teacher" data-person-id="' + teacher.id + '">希望<br>提出済</span>'
           : teacher.qrSvg ? '<span class="qr-code">' + teacher.qrSvg + '</span>' : '';
         const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
         pagesElement.innerHTML = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';

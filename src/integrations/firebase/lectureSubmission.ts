@@ -203,6 +203,25 @@ export async function deleteLectureSubmissionDoc(token: string) {
   await deleteDoc(docRef)
 }
 
+/** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
+export async function updateSubmissionOccupiedSlots(
+  entries: Array<{ token: string; occupiedSlots: Record<string, string> }>,
+) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !entries.length) return
+
+  for (const entry of entries) {
+    if (!entry.token) continue
+    const docRef = doc(db, 'lectureSubmissions', entry.token)
+    const existing = await getDoc(docRef)
+    if (!existing.exists()) continue
+    const data = existing.data()
+    // Only update pending docs (submitted docs are locked)
+    if (data.status !== 'pending') continue
+    await setDoc(docRef, { ...data, occupiedSlots: entry.occupiedSlots })
+  }
+}
+
 export type SubmissionChangeEntry = {
   token: string
   sessionId: string

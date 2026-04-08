@@ -17,7 +17,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync } from './data/appSnapshotRepository'
@@ -1604,7 +1604,6 @@ function App() {
 
     const allStudentsHaveTokens = activeStudents.every((s) => session.studentInputs[s.id]?.submissionToken)
     const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)
-    if (allStudentsHaveTokens && allTeachersHaveTokens) return
 
     // Build occupied slots from board cells
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1652,11 +1651,33 @@ function App() {
     }))
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
 
-    const { updatedSession, newTokens } = await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings)
-    if (newTokens.length === 0) return
+    const { updatedSession, newTokens } = allStudentsHaveTokens && allTeachersHaveTokens
+      ? { updatedSession: session, newTokens: [] }
+      : await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings)
 
-    await writeSubmissionDocs(newTokens, actingClassroomId)
-    setSpecialSessions((current) => current.map((s) => s.id === updatedSession.id ? updatedSession : s))
+    if (newTokens.length > 0) {
+      await writeSubmissionDocs(newTokens, actingClassroomId)
+      setSpecialSessions((current) => current.map((s) => s.id === updatedSession.id ? updatedSession : s))
+    }
+
+    // Update occupiedSlots on existing pending submission docs so phone shows current board state
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string> }> = []
+    const newTokenSet = new Set(newTokens.map((t) => t.token))
+    for (const s of activeStudents) {
+      const token = updatedSession.studentInputs[s.id]?.submissionToken
+      if (token && !newTokenSet.has(token)) {
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {} })
+      }
+    }
+    for (const t of activeTeachers) {
+      const token = updatedSession.teacherInputs[t.id]?.submissionToken
+      if (token && !newTokenSet.has(token)) {
+        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} })
+      }
+    }
+    if (existingTokenEntries.length > 0) {
+      updateSubmissionOccupiedSlots(existingTokenEntries).catch(() => { /* non-fatal */ })
+    }
   }, [actingClassroomId, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
 
   const syncStudentSchedulePopup = useCallback(() => {
