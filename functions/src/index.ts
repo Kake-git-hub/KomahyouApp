@@ -6,6 +6,7 @@ import { getStorage } from 'firebase-admin/storage'
 import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
+import * as logger from 'firebase-functions/logger'
 
 initializeApp()
 
@@ -665,14 +666,30 @@ export const createWorkspaceServerAutoBackups = onSchedule({
   schedule: WORKSPACE_AUTO_BACKUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
 }, async () => {
+  await runWorkspaceServerAutoBackup()
+})
+
+export const triggerWorkspaceServerAutoBackup = onCall(async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  await requireDeveloperMember(request.auth?.uid, workspaceKey)
+  const result = await runWorkspaceServerAutoBackup()
+  return result
+})
+
+async function runWorkspaceServerAutoBackup() {
   const now = new Date()
   const savedAt = now.toISOString()
   const backupDateKey = toOperationalDateKeyJst(now)
+  logger.info(`[AutoBackup] Starting backup run: backupDateKey=${backupDateKey}, savedAt=${savedAt}, bucket=${STORAGE_BUCKET}`)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
+  logger.info(`[AutoBackup] Found ${workspacesSnapshot.docs.length} workspace(s)`)
   const bucket = storage.bucket(STORAGE_BUCKET)
+  const results: Array<{ workspaceKey: string; backupDateKey: string; storagePath: string }> = []
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const workspaceKey = workspaceDoc.id
+    logger.info(`[AutoBackup] Processing workspace: ${workspaceKey}`)
     const { snapshot, latestSourceSavedAt } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
     const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
 
@@ -683,6 +700,7 @@ export const createWorkspaceServerAutoBackups = onSchedule({
         cacheControl: 'private, max-age=0, no-transform',
       },
     })
+    logger.info(`[AutoBackup] Saved to Storage: ${storagePath}`)
 
     await Promise.all([
       workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey).set({
@@ -698,10 +716,15 @@ export const createWorkspaceServerAutoBackups = onSchedule({
         serverAutoBackupLastStoragePath: storagePath,
       }, { merge: true }),
     ])
+    logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}`)
 
     await pruneWorkspaceServerAutoBackups(workspaceKey, now)
+    results.push({ workspaceKey, backupDateKey, storagePath })
   }
-})
+
+  logger.info(`[AutoBackup] Completed: ${results.length} workspace(s) backed up`)
+  return { backupDateKey, workspaceCount: results.length, results }
+}
 
 // ---------------------------------------------------------------------------
 // Lecture submission API (unauthenticated access via token)

@@ -45,6 +45,7 @@ type DeveloperAdminScreenProps = {
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
   serverAutoBackupLoading: boolean
   onLoadServerAutoBackupSummaries: () => void
+  onTriggerServerAutoBackup: () => void
   onRestoreServerAutoBackup: (backupDateKey: string) => void
   bulkTemporarySuspensionReason: string
   onBulkTemporarySuspensionReasonChange: (value: string) => void
@@ -141,7 +142,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [subPage, setSubPage] = useState<'main' | 'classrooms'>('main')
@@ -291,6 +292,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <>
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : 'サーバーバックアップ一覧を取得'}</button>
+                  <button className="secondary-button slim" type="button" onClick={onTriggerServerAutoBackup} disabled={serverAutoBackupLoading}>今すぐバックアップ実行</button>
                 </div>
                 <div className="backup-restore-auto-backup-list">
                   {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}

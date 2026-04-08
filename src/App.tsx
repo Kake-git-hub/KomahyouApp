@@ -13,7 +13,7 @@ import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCe
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -2666,6 +2666,23 @@ function App() {
     }
   }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
 
+  const triggerServerAutoBackup = useCallback(async () => {
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    setServerAutoBackupLoading(true)
+    try {
+      const result = await triggerFirebaseServerAutoBackup()
+      setPersistenceMessage(`サーバーバックアップを実行しました。(${result.backupDateKey}, ${result.workspaceCount} ワークスペース)`)
+      // 完了後に一覧を再取得
+      const summaries = await listFirebaseServerAutoBackupSummaries()
+      setServerAutoBackupSummaries(summaries)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'サーバーバックアップの実行に失敗しました。'
+      setPersistenceMessage(message)
+    } finally {
+      setServerAutoBackupLoading(false)
+    }
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
+
   const loadStudentHistory = useCallback((classroomId: string) => {
     const allClassrooms = workspaceClassrooms.map((c) =>
       c.id === actingClassroomId
@@ -3042,6 +3059,7 @@ function App() {
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
         onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
+        onTriggerServerAutoBackup={() => void triggerServerAutoBackup()}
         onRestoreServerAutoBackup={(backupDateKey) => void restoreServerAutoBackup(backupDateKey)}
         bulkTemporarySuspensionReason={bulkTemporarySuspensionReason}
         onBulkTemporarySuspensionReasonChange={setBulkTemporarySuspensionReason}

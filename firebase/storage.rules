@@ -1,0 +1,11 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Server-side auto-backups: deny all client access.
+    // Only Firebase Admin SDK (Cloud Functions) can read/write.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

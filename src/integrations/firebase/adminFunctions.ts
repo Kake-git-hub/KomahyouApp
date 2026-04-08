@@ -302,6 +302,15 @@ export async function downloadFirebaseServerAutoBackup(backupDateKey: string): P
   return result.data.snapshotJson
 }
 
+export async function triggerFirebaseServerAutoBackup(): Promise<{ backupDateKey: string; workspaceCount: number }> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string }, { backupDateKey: string; workspaceCount: number }>(functions, 'triggerWorkspaceServerAutoBackup')
+  const result = await callable({ workspaceKey: config.workspaceKey })
+  return result.data
+}
+
 export type ClassroomFromServerAutoBackup = {
   classroomId: string
   classroomName: string
