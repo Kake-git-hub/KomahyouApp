@@ -49,7 +49,7 @@ type BoardGridProps = {
   resolveStudentDisplayName: (name: string) => string
   resolveStudentGradeLabel: (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => string
   resolveDisplayedLessonType: (name: string, subject: string, lessonType: LessonType | null, dateKey: string, slotNumber: number) => LessonType | null
-  onDayHeaderClick: (dateKey: string) => void
+  onDayHeaderClick: (dateKey: string, x: number, y: number) => void
   onTeacherClick: (cellId: string, deskIndex: number, x: number, y: number) => void
   onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, statusKind: StudentStatusKind | null, x: number, y: number) => void
 }
@@ -300,7 +300,7 @@ export function BoardGrid({
                   colSpan={3}
                   className={`sa-day-header sa-day-group-header${day.isOpenDay ? '' : ' sa-day-inactive'}${highlightedHolidayDate === day.dateKey ? ' sa-day-header-picked' : ''}`}
                   data-testid={`day-header-${day.dateKey}`}
-                  onClick={() => onDayHeaderClick(day.dateKey)}
+                  onClick={(e) => onDayHeaderClick(day.dateKey, e.clientX, e.clientY)}
                 >
                   {day.dayLabel ? `${day.dateLabel}(${day.dayLabel})` : day.dateLabel}
                 </th>

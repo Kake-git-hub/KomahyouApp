@@ -2189,6 +2189,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [selectedMakeupStockRawKey, setSelectedMakeupStockRawKey] = useState<string | null>(null)
   const [selectedLectureStockKey, setSelectedLectureStockKey] = useState<string | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
+  const [dayHeaderMenu, setDayHeaderMenu] = useState<{ dateKey: string; x: number; y: number } | null>(null)
   const [studentMenu, setStudentMenu] = useState<StudentMenuState | null>(null)
   const [memoDraft, setMemoDraft] = useState('')
   const [editStudentDraft, setEditStudentDraft] = useState<EditStudentDraft | null>(null)
@@ -5069,6 +5070,70 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setStatusMessage(`${dateKey} を休日に設定しました。${movedStudentCount > 0 ? `${movedStudentCount}件の授業をストックへ移しました。` : '移行対象の授業はありませんでした。'}`)
   }
 
+  const handleDayHeaderClick = (dateKey: string, x: number, y: number) => {
+    const isHoliday = classroomSettings.holidayDates.includes(dateKey)
+    const isForceOpen = classroomSettings.forceOpenDates.includes(dateKey)
+    const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
+
+    if (isHoliday || isForceOpen || isClosedWeekday) {
+      handleToggleHolidayDate(dateKey)
+      setDayHeaderMenu(null)
+      return
+    }
+
+    setDayHeaderMenu({ dateKey, x, y })
+  }
+
+  const handleClearStudentsOnDate = (dateKey: string) => {
+    const confirmed = window.confirm(`${dateKey} の全コマの生徒を削除します。\n講師はそのまま残ります。\nストックへの移行は行いません。\nよろしいですか。`)
+    if (!confirmed) {
+      setDayHeaderMenu(null)
+      setStatusMessage('生徒削除をキャンセルしました。')
+      return
+    }
+
+    const nextWeeks = cloneWeeks(weeks)
+    let clearedCount = 0
+
+    for (const week of nextWeeks) {
+      for (const cell of week) {
+        if (cell.dateKey !== dateKey) continue
+        for (const desk of cell.desks) {
+          if (desk.lesson) {
+            for (let slotIdx = 0; slotIdx < desk.lesson.studentSlots.length; slotIdx++) {
+              if (desk.lesson.studentSlots[slotIdx]) {
+                clearedCount += 1
+                desk.lesson.studentSlots[slotIdx] = null
+              }
+            }
+            if (desk.lesson.studentSlots.every((s) => s === null)) {
+              desk.lesson = undefined
+            }
+          }
+          if (desk.statusSlots) {
+            for (let slotIdx = 0; slotIdx < desk.statusSlots.length; slotIdx++) {
+              if (desk.statusSlots[slotIdx]) {
+                clearedCount += 1
+                desk.statusSlots[slotIdx] = null
+              }
+            }
+            if (desk.statusSlots.every((s) => s === null)) {
+              desk.statusSlots = undefined
+            }
+          }
+        }
+      }
+    }
+
+    commitWeeks(nextWeeks, weekIndex, selectedCellId, selectedDeskIndex)
+    setDayHeaderMenu(null)
+    setSelectedHolidayDate(dateKey)
+    setStudentMenu(null)
+    setSelectedStudentId(null)
+    setSelectedMakeupStockKey(null)
+    setStatusMessage(`${dateKey} の生徒を削除しました。${clearedCount > 0 ? `${clearedCount}件の生徒を削除しました。` : '対象の生徒はいませんでした。'}`)
+  }
+
   const handlePlaceMakeupFromStock = (cellId: string, deskIndex: number, studentIndex: number) => {
     if (!selectedMakeupStockEntry) return
     const placementEntry = selectedMakeupStockRawKey
@@ -6763,10 +6828,38 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             resolveStudentDisplayName={resolveBoardStudentDisplayName}
             resolveStudentGradeLabel={isTemplateMode ? ((_name, fallbackGrade, _dateKey, birthDate) => birthDate ? resolveSchoolGradeLabel(birthDate, new Date()) : fallbackGrade) : resolveBoardStudentGradeLabel}
             resolveDisplayedLessonType={isTemplateMode ? ((_name, _subject, lessonType) => lessonType) : resolveDisplayedLessonType}
-            onDayHeaderClick={isTemplateMode ? (() => {}) : handleToggleHolidayDate}
+            onDayHeaderClick={isTemplateMode ? (() => {}) : handleDayHeaderClick}
             onTeacherClick={isTemplateMode ? handleTemplateSelectDesk : handleSelectDesk}
             onStudentClick={isTemplateMode ? handleTemplateStudentClick : handleStudentClick}
           />
+          {dayHeaderMenu ? (
+            <div className="day-header-menu-backdrop" onClick={() => setDayHeaderMenu(null)}>
+              <div
+                className="day-header-menu"
+                style={{ left: dayHeaderMenu.x, top: dayHeaderMenu.y }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="day-header-menu-title">{dayHeaderMenu.dateKey}</div>
+                <button
+                  className="day-header-menu-button"
+                  data-testid="day-header-menu-holiday"
+                  onClick={() => {
+                    const dk = dayHeaderMenu.dateKey
+                    setDayHeaderMenu(null)
+                    handleToggleHolidayDate(dk)
+                  }}
+                >休日設定</button>
+                <button
+                  className="day-header-menu-button"
+                  data-testid="day-header-menu-clear-students"
+                  onClick={() => {
+                    const dk = dayHeaderMenu.dateKey
+                    handleClearStudentsOnDate(dk)
+                  }}
+                >生徒を空にする</button>
+              </div>
+            </div>
+          ) : null}
           </div>
           {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && (isLectureStockOpen || isMakeupStockOpen || autoAssignDebugReport) ? (
             <div className="stock-floating-modals">
