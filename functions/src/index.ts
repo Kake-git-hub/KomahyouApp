@@ -427,7 +427,7 @@ async function countClassrooms(workspaceKey: string) {
   return classroomsSnapshot.data().count
 }
 
-export const provisionWorkspaceClassroom = onCall(async (request) => {
+export const provisionWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const classroomName = readString(rawData.classroomName, 'classroomName')
@@ -508,7 +508,7 @@ export const provisionWorkspaceClassroom = onCall(async (request) => {
   }
 })
 
-export const updateWorkspaceClassroom = onCall(async (request) => {
+export const updateWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const classroomId = readString(rawData.classroomId, 'classroomId')
@@ -563,7 +563,7 @@ export const updateWorkspaceClassroom = onCall(async (request) => {
   }
 })
 
-export const deleteWorkspaceClassroom = onCall(async (request) => {
+export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const classroomId = readString(rawData.classroomId, 'classroomId')
@@ -599,7 +599,7 @@ export const deleteWorkspaceClassroom = onCall(async (request) => {
   }
 })
 
-export const downloadServerAutoBackup = onCall(async (request) => {
+export const downloadServerAutoBackup = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
@@ -622,7 +622,7 @@ export const downloadServerAutoBackup = onCall(async (request) => {
   return { snapshotJson: content.toString('utf-8') }
 })
 
-export const downloadClassroomFromServerAutoBackup = onCall(async (request) => {
+export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const backupDateKey = readString(rawData.backupDateKey, 'backupDateKey')
@@ -673,7 +673,7 @@ export const createWorkspaceServerAutoBackups = onSchedule({
   await runWorkspaceServerAutoBackup()
 })
 
-export const triggerWorkspaceServerAutoBackup = onCall(async (request) => {
+export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
