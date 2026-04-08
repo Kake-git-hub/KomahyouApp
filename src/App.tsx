@@ -2644,7 +2644,10 @@ function App() {
   }, [actingClassroomId, applySnapshot, saveUndoSnapshot])
 
   const loadServerAutoBackupSummaries = useCallback(async () => {
-    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) {
+      setPersistenceMessage('Firebase Functions が無効です。接続設定を確認してください。')
+      return
+    }
     setServerAutoBackupLoading(true)
     try {
       const summaries = await listFirebaseServerAutoBackupSummaries()
@@ -2667,7 +2670,10 @@ function App() {
   }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
 
   const triggerServerAutoBackup = useCallback(async () => {
-    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) {
+      setPersistenceMessage('Firebase Functions が無効です。接続設定を確認してください。')
+      return
+    }
     setServerAutoBackupLoading(true)
     try {
       const result = await triggerFirebaseServerAutoBackup()
@@ -2709,7 +2715,11 @@ function App() {
   }, [workspaceClassrooms, actingClassroomId, screen, classroomSettings, managers, teachers, students, regularLessons, groupLessons, specialSessions, autoAssignRules, pairConstraints, boardState])
 
   const restoreServerAutoBackup = useCallback(async (backupDateKey: string) => {
-    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) {
+      setPersistenceMessage('Firebase Functions が無効です。接続設定を確認してください。')
+      return
+    }
+    setServerAutoBackupLoading(true)
     setPersistenceMessage('サーバーバックアップをダウンロードしています…')
     try {
       const snapshotJson = await downloadFirebaseServerAutoBackup(backupDateKey)
@@ -2719,6 +2729,8 @@ function App() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'サーバーバックアップのダウンロードに失敗しました。'
       setPersistenceMessage(message)
+    } finally {
+      setServerAutoBackupLoading(false)
     }
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openDeveloperRestoreModal])
 
