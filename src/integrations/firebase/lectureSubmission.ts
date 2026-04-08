@@ -157,6 +157,44 @@ export async function resetLectureSubmissionDoc(token: string) {
   })
 }
 
+/** Mark a submission doc as submitted (lock from phone editing) without changing the submitted data */
+export async function markLectureSubmissionDocAsSubmitted(token: string) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !token) return
+
+  const docRef = doc(db, 'lectureSubmissions', token)
+  const existing = await getDoc(docRef)
+  if (!existing.exists()) return
+
+  const data = existing.data()
+  if (data.status === 'submitted') return
+
+  await setDoc(docRef, {
+    ...data,
+    status: 'submitted',
+    submittedAt: new Date().toISOString(),
+  })
+}
+
+/** Unlock a submission doc so the phone user can re-edit and re-submit (preserves existing data) */
+export async function unlockLectureSubmissionDoc(token: string) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !token) return
+
+  const docRef = doc(db, 'lectureSubmissions', token)
+  const existing = await getDoc(docRef)
+  if (!existing.exists()) return
+
+  const data = existing.data()
+  if (data.status === 'pending') return
+
+  await setDoc(docRef, {
+    ...data,
+    status: 'pending',
+    submittedAt: null,
+  })
+}
+
 export async function deleteLectureSubmissionDoc(token: string) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return

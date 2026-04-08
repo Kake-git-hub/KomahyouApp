@@ -17,7 +17,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync } from './data/appSnapshotRepository'
@@ -2021,6 +2021,17 @@ function App() {
             mode: 'unassign',
           })
         }
+
+        // Sync Firestore submission doc status with app-side countSubmitted
+        const targetSession = specialSessions.find((s) => s.id === message.sessionId)
+        const studentToken = targetSession?.studentInputs[message.personId]?.submissionToken
+        if (studentToken) {
+          if (countSubmitted) {
+            markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
+          } else {
+            unlockLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
+          }
+        }
         return
       }
 
@@ -2084,6 +2095,17 @@ function App() {
           teacherId: message.personId,
           mode: countSubmitted ? 'assign' : 'unassign',
         })
+
+        // Sync Firestore submission doc status with app-side countSubmitted
+        const targetTeacherSession = specialSessions.find((s) => s.id === message.sessionId)
+        const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
+        if (teacherToken) {
+          if (countSubmitted) {
+            markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
+          } else {
+            unlockLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
+          }
+        }
         return
       }
 

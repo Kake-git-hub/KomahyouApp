@@ -168,7 +168,7 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const handleSubmit = useCallback(async () => {
     if (submitting || submitted) return
-    if (!window.confirm('提出します。提出後の変更はできません。よろしいですか？')) return
+    if (!window.confirm('提出します。よろしいですか？')) return
     setSubmitting(true)
     try {
       const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`, {
@@ -183,7 +183,7 @@ export default function SubmissionPage({ token }: { token: string }) {
       if (!response.ok) {
         const result = await response.json().catch(() => ({}))
         if (response.status === 409) {
-          setError('既に提出済みです。')
+          setError('既に提出済みです。教室側で登録済みの場合は変更できません。')
           setSubmitted(true)
           return
         }
@@ -233,7 +233,7 @@ export default function SubmissionPage({ token }: { token: string }) {
           <p style={{ fontSize: 14, color: '#333' }}>
             {data.personName}さんの{data.sessionLabel}の希望を受け付けました。
           </p>
-          <p className="sub-muted" style={{ marginTop: 8 }}>このページを閉じてください。</p>
+          <p className="sub-muted" style={{ marginTop: 8 }}>変更が必要な場合は教室にお問い合わせください。</p>
         </div>
         <style>{baseStyles}</style>
       </div>
@@ -394,7 +394,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         >
           {submitting ? '送信中...' : '提出する'}
         </button>
-        <p className="sub-muted" style={{ textAlign: 'center', marginTop: 6, fontSize: 11 }}>※ 提出後の変更はできません</p>
+        <p className="sub-muted" style={{ textAlign: 'center', marginTop: 6, fontSize: 11 }}>※ 提出後に変更が必要な場合は教室にお問い合わせください</p>
       </section>
 
       <style>{baseStyles}</style>
@@ -404,11 +404,11 @@ export default function SubmissionPage({ token }: { token: string }) {
 
 const baseStyles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  html { font-size: 14px; -webkit-text-size-adjust: 100%; overflow: hidden; width: 100%; height: 100%; }
-  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; width: 100%; height: 100%; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; }
+  html { font-size: 14px; -webkit-text-size-adjust: 100%; overflow-x: hidden; overflow-y: auto; height: 100%; }
+  body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; height: 100%; overflow-x: hidden; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; max-width: 100vw; overflow: hidden; }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow-x: hidden; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
