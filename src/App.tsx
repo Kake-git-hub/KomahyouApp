@@ -2487,11 +2487,14 @@ function App() {
 
     if (developerCloudBackupFolderName && developerCloudBackupHandle) {
       setDeveloperCloudBackupStatus(`${developerCloudBackupFolderName} を保存フォルダとして使用します。`)
+      // アプリ起動時に同期フォルダへ現在のスナップショットを差分同期する
+      const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+      void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {})
       return
     }
 
     setDeveloperCloudBackupStatus('保存フォルダの再接続が必要です。')
-  }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle, hasHydratedSnapshot])
+  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle, hasHydratedSnapshot, syncDeveloperCloudAutoBackups])
 
   useEffect(() => {
     if (!hasHydratedSnapshot) return
@@ -2517,10 +2520,6 @@ function App() {
             }
           }
 
-          // 同期フォルダが設定されていれば自動同期する
-          if (developerCloudBackupEnabled && developerCloudBackupHandle) {
-            void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {})
-          }
         })
         .catch(() => {
           setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
@@ -2528,7 +2527,7 @@ function App() {
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncDeveloperCloudAutoBackups, workspaceClassrooms.length, workspaceUsers.length])
+  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
 
   // Flush save on browser close / tab close to prevent data loss
   useEffect(() => {
@@ -2744,16 +2743,6 @@ function App() {
       setServerAutoBackupLoading(false)
     }
   }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
-
-  // 開発者画面を開いた時にサーバーバックアップ一覧を自動取得する
-  useEffect(() => {
-    if (!hasHydratedSnapshot) return
-    if (screen !== 'developer') return
-    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
-    if (serverAutoBackupLoading) return
-    if (serverAutoBackupSummaries.length > 0) return
-    void loadServerAutoBackupSummaries()
-  }, [hasHydratedSnapshot, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, loadServerAutoBackupSummaries, screen, serverAutoBackupLoading, serverAutoBackupSummaries.length])
 
   const triggerServerAutoBackup = useCallback(async () => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) {
