@@ -1240,8 +1240,12 @@ function isStudentSlotBlocked(desk: DeskCell, studentIndex: number) {
   return Boolean(desk.lesson?.studentSlots[studentIndex]) || hasMemoInStudentSlot(desk, studentIndex)
 }
 
+function isStudentSlotFilled(student: StudentEntry | null | undefined): student is StudentEntry {
+  return Boolean(student && (student.id || student.name))
+}
+
 function resolveDeskPackPriority(desk: DeskCell) {
-  const filledStudentCount = desk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
+  const filledStudentCount = desk.lesson?.studentSlots.filter(isStudentSlotFilled).length ?? 0
   if (filledStudentCount >= 2) return 0
   if (filledStudentCount === 1) return 1
   if (desk.teacher.trim()) return 2
@@ -1257,15 +1261,18 @@ export function packSortCellDesks(cell: SlotCell) {
       lesson: desk.lesson
         ? {
           ...desk.lesson,
-          studentSlots: [desk.lesson.studentSlots[0] ?? null, desk.lesson.studentSlots[1] ?? null] as [StudentEntry | null, StudentEntry | null],
+          studentSlots: [
+            isStudentSlotFilled(desk.lesson.studentSlots[0]) ? { ...desk.lesson.studentSlots[0] } : null,
+            isStudentSlotFilled(desk.lesson.studentSlots[1]) ? { ...desk.lesson.studentSlots[1] } : null,
+          ] as [StudentEntry | null, StudentEntry | null],
         }
         : undefined,
     }
 
     if (!nextDesk.lesson) return nextDesk
 
-    const firstStudent = nextDesk.lesson.studentSlots[0] ?? null
-    const secondStudent = nextDesk.lesson.studentSlots[1] ?? null
+    const firstStudent = nextDesk.lesson.studentSlots[0]
+    const secondStudent = nextDesk.lesson.studentSlots[1]
     if (!firstStudent && secondStudent) {
       nextDesk.lesson.studentSlots = [secondStudent, null]
       if (nextDesk.memoSlots && !nextDesk.memoSlots[0]) {
@@ -1274,6 +1281,11 @@ export function packSortCellDesks(cell: SlotCell) {
       if (nextDesk.statusSlots && !nextDesk.statusSlots[0]) {
         nextDesk.statusSlots = [nextDesk.statusSlots[1] ?? null, null]
       }
+    }
+
+    // Both slots empty → clear lesson
+    if (!nextDesk.lesson.studentSlots[0] && !nextDesk.lesson.studentSlots[1]) {
+      nextDesk.lesson = undefined
     }
 
     return nextDesk

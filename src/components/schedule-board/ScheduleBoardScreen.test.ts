@@ -132,6 +132,36 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(packedDesks[0]?.lesson?.studentSlots[1]).toBeNull()
   })
 
+  it('packs student from slot2 to slot1 when slot1 has a ghost empty entry', () => {
+    const ghostCell: SlotCell = {
+      id: '2026-04-09_2',
+      dateKey: '2026-04-09',
+      dayLabel: '木',
+      dateLabel: '4/9',
+      slotLabel: '2限',
+      slotNumber: 2,
+      timeLabel: '14:40-16:10',
+      isOpenDay: true,
+      desks: [
+        {
+          id: '2026-04-09_2_desk_1',
+          teacher: 'ゴースト先生',
+          lesson: {
+            id: 'ghost-slot',
+            studentSlots: [
+              { id: '', name: '', managedStudentId: '', grade: '', subject: '', lessonType: 'regular', teacherType: 'normal' } as unknown as StudentEntry,
+              createStudentEntry('s-real', '実生徒', '英'),
+            ],
+          },
+        },
+      ],
+    }
+    const packedDesks = packSortCellDesks(ghostCell)
+
+    expect(packedDesks[0]?.lesson?.studentSlots[0]?.name).toBe('実生徒')
+    expect(packedDesks[0]?.lesson?.studentSlots[1]).toBeNull()
+  })
+
   it('keeps all remaining weekly student placements when a regular lesson starts mid-month with fewer than four active weeks left', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {
