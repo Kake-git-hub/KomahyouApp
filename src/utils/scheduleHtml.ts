@@ -831,18 +831,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .meta-qr-block {
         flex: 0 0 auto;
         display: flex;
-        flex-direction: column;
         align-items: center;
-        gap: 1px;
         line-height: 0;
-      }
-
-      .meta-qr-caption {
-        font-size: 8px;
-        font-weight: 600;
-        color: #666;
-        line-height: 1.2;
-        white-space: nowrap;
       }
 
       .meta-info {
@@ -3226,7 +3216,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function buildHeaderHtml(title, nameLabel, subLabel, pageIndex, periodLabel, qrHtml) {
         var qrBlock = '';
         if (qrHtml) {
-          qrBlock = '<div class="meta-qr-block print-only-hidden">' + qrHtml + '<span class="meta-qr-caption">↑QRからスマホ提出</span></div>';
+          qrBlock = '<div class="meta-qr-block">' + qrHtml + '</div>';
         }
         return '<div class="sheet-top">'
           + '<div class="logo-box" data-shared-image="logo"><span class="logo-placeholder">ロゴ欄</span></div>'
