@@ -1502,7 +1502,13 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
     if (!student) return
 
     // Preserve only non-managed carryovers such as manual additions or makeup/special placements.
-    if (student.lessonType === 'regular' && !student.manualAdded && !isReturnedToOriginalDate(student, dateKey)) return
+    // For regular students (non-manual, non-returned): skip only if the student still exists
+    // somewhere in the managed lesson (they are already accounted for by managed data).
+    if (student.lessonType === 'regular' && !student.manualAdded && !isReturnedToOriginalDate(student, dateKey)) {
+      const stillInManaged = nextLesson.studentSlots.some((entry) => entry?.id === student.id)
+      if (stillInManaged) return
+      // Student was left-packed from a different slot; preserve them in the merged result.
+    }
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
     if (managedStudent?.id === student.id) return

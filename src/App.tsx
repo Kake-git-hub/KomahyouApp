@@ -2503,6 +2503,11 @@ function App() {
               setPersistenceMessage(`自動保存しましたが、${message}`)
             }
           }
+
+          // 同期フォルダが設定されていれば自動同期する
+          if (developerCloudBackupEnabled && developerCloudBackupHandle) {
+            void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {})
+          }
         })
         .catch(() => {
           setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
@@ -2510,7 +2515,7 @@ function App() {
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
+  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncDeveloperCloudAutoBackups, workspaceClassrooms.length, workspaceUsers.length])
 
   // Flush save on browser close / tab close to prevent data loss
   useEffect(() => {
@@ -2711,6 +2716,16 @@ function App() {
       setServerAutoBackupLoading(false)
     }
   }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
+
+  // 開発者画面を開いた時にサーバーバックアップ一覧を自動取得する
+  useEffect(() => {
+    if (!hasHydratedSnapshot) return
+    if (screen !== 'developer') return
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return
+    if (serverAutoBackupLoading) return
+    if (serverAutoBackupSummaries.length > 0) return
+    void loadServerAutoBackupSummaries()
+  }, [hasHydratedSnapshot, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, loadServerAutoBackupSummaries, screen, serverAutoBackupLoading, serverAutoBackupSummaries.length])
 
   const triggerServerAutoBackup = useCallback(async () => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) {
