@@ -75,7 +75,7 @@ function createPackTestCell(): SlotCell {
   }
 }
 
-function createTeacherOnlyThenGapThenStudentCell(): SlotCell {
+function createUndefinedRightOnlyCell(): SlotCell {
   return {
     id: '2026-04-08_3',
     dateKey: '2026-04-08',
@@ -88,18 +88,10 @@ function createTeacherOnlyThenGapThenStudentCell(): SlotCell {
     desks: [
       {
         id: '2026-04-08_3_desk_1',
-        teacher: '講師のみ',
-      },
-      {
-        id: '2026-04-08_3_desk_2',
-        teacher: '',
-      },
-      {
-        id: '2026-04-08_3_desk_3',
-        teacher: '生徒あり',
+        teacher: '右寄せ生徒',
         lesson: {
-          id: 'single-right',
-          studentSlots: [null, createStudentEntry('s-packed', '詰め対象', '数')],
+          id: 'undefined-right',
+          studentSlots: [undefined as unknown as StudentEntry | null, createStudentEntry('s-packed', '詰め対象', '数')],
         },
       },
     ],
@@ -125,20 +117,19 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(normalized.makeupSourceLabel).toBe('2026/4/7(火) 1限')
   })
 
-  it('packs desk rows within the same slot as teacher only, then student desks, then empty', () => {
+  it('packs desk rows within the same slot as two students, one student, teacher only, then empty', () => {
     const packedDesks = packSortCellDesks(createPackTestCell())
 
-    expect(packedDesks.map((desk) => desk.teacher)).toEqual(['講師だけ', '二人生徒', '一人生徒', '右だけ生徒', '', ''])
-    expect(packedDesks[3]?.lesson?.studentSlots[0]?.name).toBe('右生徒')
-    expect(packedDesks[3]?.lesson?.studentSlots[1]).toBeNull()
+    expect(packedDesks.map((desk) => desk.teacher)).toEqual(['二人生徒', '一人生徒', '右だけ生徒', '講師だけ', '', ''])
+    expect(packedDesks[2]?.lesson?.studentSlots[0]?.name).toBe('右生徒')
+    expect(packedDesks[2]?.lesson?.studentSlots[1]).toBeNull()
   })
 
-  it('keeps a teacher-only desk ahead of a later student desk while removing the empty gap between them', () => {
-    const packedDesks = packSortCellDesks(createTeacherOnlyThenGapThenStudentCell())
+  it('packs a right-only student into student1 even when slot1 is undefined', () => {
+    const packedDesks = packSortCellDesks(createUndefinedRightOnlyCell())
 
-    expect(packedDesks.map((desk) => desk.teacher)).toEqual(['講師のみ', '生徒あり', ''])
-    expect(packedDesks[1]?.lesson?.studentSlots[0]?.name).toBe('詰め対象')
-    expect(packedDesks[1]?.lesson?.studentSlots[1]).toBeNull()
+    expect(packedDesks[0]?.lesson?.studentSlots[0]?.name).toBe('詰め対象')
+    expect(packedDesks[0]?.lesson?.studentSlots[1]).toBeNull()
   })
 
   it('keeps all remaining weekly student placements when a regular lesson starts mid-month with fewer than four active weeks left', () => {

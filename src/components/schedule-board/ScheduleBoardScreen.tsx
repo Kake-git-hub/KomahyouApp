@@ -1242,20 +1242,44 @@ function isStudentSlotBlocked(desk: DeskCell, studentIndex: number) {
 
 function resolveDeskPackPriority(desk: DeskCell) {
   const filledStudentCount = desk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
-  if (desk.teacher.trim() && filledStudentCount === 0) return 0
-  if (filledStudentCount >= 2) return 1
-  if (filledStudentCount === 1) return 2
+  if (filledStudentCount >= 2) return 0
+  if (filledStudentCount === 1) return 1
+  if (desk.teacher.trim()) return 2
   return 3
 }
 
 export function packSortCellDesks(cell: SlotCell) {
-  for (const desk of cell.desks) {
-    if (desk.lesson?.studentSlots[0] === null && desk.lesson?.studentSlots[1]) {
-      desk.lesson.studentSlots = [desk.lesson.studentSlots[1], null]
+  const normalizedDesks = cell.desks.map((desk) => {
+    const nextDesk: DeskCell = {
+      ...desk,
+      memoSlots: desk.memoSlots ? [...desk.memoSlots] as [string | null, string | null] : undefined,
+      statusSlots: desk.statusSlots ? [...desk.statusSlots] as [StudentStatusEntry | null, StudentStatusEntry | null] : undefined,
+      lesson: desk.lesson
+        ? {
+          ...desk.lesson,
+          studentSlots: [desk.lesson.studentSlots[0] ?? null, desk.lesson.studentSlots[1] ?? null] as [StudentEntry | null, StudentEntry | null],
+        }
+        : undefined,
     }
-  }
 
-  return [...cell.desks]
+    if (!nextDesk.lesson) return nextDesk
+
+    const firstStudent = nextDesk.lesson.studentSlots[0] ?? null
+    const secondStudent = nextDesk.lesson.studentSlots[1] ?? null
+    if (!firstStudent && secondStudent) {
+      nextDesk.lesson.studentSlots = [secondStudent, null]
+      if (nextDesk.memoSlots && !nextDesk.memoSlots[0]) {
+        nextDesk.memoSlots = [nextDesk.memoSlots[1] ?? null, null]
+      }
+      if (nextDesk.statusSlots && !nextDesk.statusSlots[0]) {
+        nextDesk.statusSlots = [nextDesk.statusSlots[1] ?? null, null]
+      }
+    }
+
+    return nextDesk
+  })
+
+  return normalizedDesks
     .sort((leftDesk, rightDesk) => {
       const leftPriority = resolveDeskPackPriority(leftDesk)
       const rightPriority = resolveDeskPackPriority(rightDesk)
