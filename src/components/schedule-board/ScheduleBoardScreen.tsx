@@ -1855,10 +1855,28 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
       targetDesk.lesson = cloneDeskLesson(managedDesk.lesson)
     }
 
+    // Left-pack student slots: if slot[0] is empty but slot[1] has a student, shift to slot[0]
+    const packedDesks = nextDesks.map((desk) => {
+      if (!desk.lesson || isStudentSlotFilled(desk.lesson.studentSlots[0]) || !isStudentSlotFilled(desk.lesson.studentSlots[1])) return desk
+      return {
+        ...desk,
+        lesson: {
+          ...desk.lesson,
+          studentSlots: [desk.lesson.studentSlots[1], null] as [StudentEntry | null, StudentEntry | null],
+        },
+        memoSlots: desk.memoSlots && !desk.memoSlots[0]
+          ? [desk.memoSlots[1] ?? null, null] as [string | null, string | null]
+          : desk.memoSlots,
+        statusSlots: desk.statusSlots && !desk.statusSlots[0]
+          ? [desk.statusSlots[1] ?? null, null] as [StudentStatusEntry | null, StudentStatusEntry | null]
+          : desk.statusSlots,
+      }
+    })
+
     return {
       ...cell,
       isOpenDay: managedCell.isOpenDay,
-      desks: nextDesks,
+      desks: packedDesks,
     }
   })
 }
