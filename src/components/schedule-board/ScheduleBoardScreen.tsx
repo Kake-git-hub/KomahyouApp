@@ -1242,9 +1242,9 @@ function isStudentSlotBlocked(desk: DeskCell, studentIndex: number) {
 
 function resolveDeskPackPriority(desk: DeskCell) {
   const filledStudentCount = desk.lesson?.studentSlots.filter((student) => student !== null).length ?? 0
-  if (filledStudentCount >= 2) return 0
-  if (filledStudentCount === 1) return 1
-  if (desk.teacher.trim()) return 2
+  if (desk.teacher.trim() && filledStudentCount === 0) return 0
+  if (filledStudentCount >= 2) return 1
+  if (filledStudentCount === 1) return 2
   return 3
 }
 
