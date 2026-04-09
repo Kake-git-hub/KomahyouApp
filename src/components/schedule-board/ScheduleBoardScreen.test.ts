@@ -688,6 +688,84 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(managedDesk?.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001')).toBe(false)
   })
 
+  it('preserves a makeup student in a desk whose managed lesson is fully suppressed', () => {
+    // Board has managed lesson with [regular-s001, makeup-s002]
+    // Suppress regular-s001 → managed lesson becomes [null, null] → removed from managed
+    // The makeup placement of s002 should survive the merge
+    const regularLesson = {
+      id: 'suppress-test',
+      schoolYear: 2025,
+      teacherId: 't001',
+      student1Id: 's001',
+      subject1: '数' as const,
+      startDate: '',
+      endDate: '',
+      student2Id: '',
+      subject2: '' as const,
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '' as const,
+      nextStudent2Id: '',
+      nextSubject2: '' as const,
+      dayOfWeek: 1,
+      slotNumber: 1,
+    }
+
+    // Build board week with managed data (has s001 as regular)
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range: { startDate: '2026-03-23', endDate: '2026-03-29', periodValue: '' },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [regularLesson],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    // Add a makeup student to the same desk at slot[1]
+    const targetCell = boardWeek.find((cell) => cell.dateKey === '2026-03-23' && cell.slotNumber === 1)!
+    const targetDesk = targetCell.desks.find((desk) => desk.lesson?.studentSlots[0]?.managedStudentId === 's001')!
+    targetDesk.lesson!.studentSlots[1] = {
+      id: 's002_makeup',
+      name: '中村花子',
+      managedStudentId: 's002',
+      grade: '中3',
+      subject: '英',
+      lessonType: 'makeup',
+      makeupSourceDate: '2026-03-20',
+      makeupSourceLabel: '2026/3/20(金) 1限',
+      teacherType: 'normal',
+    }
+
+    // Now suppress s001 and overlay
+    const suppressKey = `s001__数__2026-03-23__1`
+    const cells = buildScheduleCellsForRange({
+      range: { startDate: '2026-03-23', endDate: '2026-03-29', periodValue: '' },
+      fallbackStartDate: '2026-03-23',
+      fallbackEndDate: '2026-03-29',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [regularLesson],
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [suppressKey],
+    })
+
+    const resultCell = cells.find((cell) => cell.dateKey === '2026-03-23' && cell.slotNumber === 1)!
+    const resultDesk = resultCell.desks.find((desk) =>
+      desk.lesson?.studentSlots.some((s) => s?.managedStudentId === 's002'),
+    )
+
+    // The makeup student should survive even though the managed lesson was fully suppressed
+    expect(resultDesk).toBeDefined()
+    expect(resultDesk?.lesson?.studentSlots.some((s) => s?.lessonType === 'makeup' && s?.managedStudentId === 's002')).toBe(true)
+    // The suppressed regular student should NOT be present
+    expect(resultDesk?.lesson?.studentSlots.some((s) => s?.managedStudentId === 's001')).toBe(false)
+  })
+
   it('replaces a managed teacher-only desk without leaving the previous teacher in a lower row', () => {
     const range = {
       startDate: '2026-03-01',

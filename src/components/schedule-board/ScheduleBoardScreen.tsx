@@ -1501,13 +1501,10 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
   currentLesson.studentSlots.forEach((student, slotIndex) => {
     if (!student) return
 
-    // Preserve only non-managed carryovers such as manual additions or makeup/special placements.
-    // For regular students (non-manual, non-returned): skip only if the student still exists
-    // somewhere in the managed lesson (they are already accounted for by managed data).
+    // Regular (non-manual, non-returned) students are always handled by managed data.
+    // Skip them so the managed lesson drives their placement.
     if (student.lessonType === 'regular' && !student.manualAdded && !isReturnedToOriginalDate(student, dateKey)) {
-      const stillInManaged = nextLesson.studentSlots.some((entry) => entry?.id === student.id)
-      if (stillInManaged) return
-      // Student was left-packed from a different slot; preserve them in the merged result.
+      return
     }
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
@@ -1779,6 +1776,23 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
           statusSlots: cloneStatusSlots(desk.statusSlots),
           teacher: desk.manualTeacher ? desk.teacher : managedDesk.teacher,
           lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson, cell.dateKey),
+        }
+      }
+
+      // Managed lesson was fully suppressed (all managed students removed).
+      // Preserve any non-managed carryover students (makeup, special, manual additions, returned-to-original).
+      const carryoverSlots = lesson.studentSlots.map((s) => {
+        if (!s) return null
+        if (s.lessonType !== 'regular' || s.manualAdded || isReturnedToOriginalDate(s, cell.dateKey)) return { ...s }
+        return null
+      }) as [StudentEntry | null, StudentEntry | null]
+
+      if (carryoverSlots[0] || carryoverSlots[1]) {
+        preservedLessonIds.add(lesson.id)
+        return {
+          ...desk,
+          statusSlots: cloneStatusSlots(desk.statusSlots),
+          lesson: { ...lesson, studentSlots: carryoverSlots },
         }
       }
 

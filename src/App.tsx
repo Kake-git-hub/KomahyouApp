@@ -640,12 +640,25 @@ function buildClassroomSnapshotPayload(params: {
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
 
-  return {
+  const merged: WorkspaceSnapshot = {
     ...remoteSnapshot,
     developerCloudBackupEnabled: localSnapshot.developerCloudBackupEnabled ?? remoteSnapshot.developerCloudBackupEnabled,
     developerCloudBackupFolderName: localSnapshot.developerCloudBackupFolderName ?? remoteSnapshot.developerCloudBackupFolderName,
     developerCloudSyncedAutoBackupKeys: localSnapshot.developerCloudSyncedAutoBackupKeys ?? remoteSnapshot.developerCloudSyncedAutoBackupKeys,
   }
+
+  // If local snapshot is newer than Firebase, merge its classroom data
+  // This handles the case where the browser was closed without logging out
+  if (localSnapshot.savedAt > remoteSnapshot.savedAt && localSnapshot.actingClassroomId) {
+    const localClassroom = localSnapshot.classrooms.find((c) => c.id === localSnapshot.actingClassroomId)
+    if (localClassroom?.data) {
+      merged.classrooms = merged.classrooms.map((c) =>
+        c.id === localClassroom.id ? { ...c, data: localClassroom.data } : c,
+      )
+    }
+  }
+
+  return merged
 }
 
 function App() {
@@ -2528,9 +2541,24 @@ function App() {
       writeWorkspaceToLocalStorageSync(snapshot)
     }
 
+    // Save to Firebase when tab becomes hidden (tab switch, minimize, close)
+    // This covers the case where the user closes the browser without logging out
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'hidden') return
+      if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
+      if (!isRemoteBackendEnabled || !remoteSessionUserId) return
+      const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+      writeWorkspaceToLocalStorageSync(snapshot)
+      void saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId).catch(() => {})
+    }
+
     window.addEventListener('beforeunload', handleBeforeUnload)
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
-  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, workspaceClassrooms.length, workspaceUsers.length])
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
 
   useEffect(() => {
     if (!currentUser) return
