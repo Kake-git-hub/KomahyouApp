@@ -1707,16 +1707,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .count-warning-stamp {
-        border: 3px solid #c3342f;
+        border: 2px solid #c3342f;
         color: #c3342f;
-        font-size: 21px;
+        font-size: 11px;
         font-weight: 800;
-        line-height: 1.15;
+        line-height: 1.2;
         text-align: center;
-        padding: 10px 8px;
+        padding: 4px 4px;
         background: rgba(255, 244, 244, 0.94);
         transform: rotate(-4deg);
-        letter-spacing: 0.08em;
+        letter-spacing: 0.04em;
       }
 
       .box-table-title {
@@ -1821,7 +1821,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
   </head>
   <body${isAllView ? ' class="all-view"' : ''}>
     ${isAllView ? '' : `<div class="toolbar">
-      <div class="toolbar-title">${viewLabel}</div>
       <div class="toolbar-field">
         <label for="schedule-start-date">開始日</label>
         <input id="schedule-start-date" type="date" />
@@ -1836,7 +1835,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           <option value="">選択してください</option>
         </select>
       </div>
-      <div class="toolbar-summary" id="schedule-summary-label"></div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         <button type="button" id="schedule-show-all-button" class="secondary">印刷用全員表示</button>
@@ -1856,11 +1854,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       </div>
     </div>`}
     <main class="pages" id="schedule-pages"></main>
-    ${isAllView ? '' : '<input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />'}
+    <input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />
     <script id="schedule-data" type="application/json">${serializedPayload}</script>
     <script>
       const VIEW_TYPE = '${viewType}';
       const VIEW_LABEL = '${viewLabel}';
+      const BASE_VIEW_TYPE = VIEW_TYPE === 'all-student' ? 'student' : VIEW_TYPE === 'all-teacher' ? 'teacher' : VIEW_TYPE;
+      const IS_ALL_VIEW = VIEW_TYPE === 'all-student' || VIEW_TYPE === 'all-teacher';
       let DATA = JSON.parse(document.getElementById('schedule-data').textContent || '{}');
       const startInput = document.getElementById('schedule-start-date');
       const endInput = document.getElementById('schedule-end-date');
@@ -1871,7 +1871,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
       const applyButton = document.getElementById('schedule-apply-button');
-      const sharedStoragePrefix = 'schedule-shared:' + VIEW_TYPE + ':';
+      const sharedStoragePrefix = 'schedule-shared:' + BASE_VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
       const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '講習' };
@@ -3669,7 +3669,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function bindNotes() {
         document.querySelectorAll('.memo-input').forEach((element) => {
           const noteKey = element.getAttribute('data-note-key');
-          const key = 'schedule-note:' + VIEW_TYPE + ':' + noteKey;
+          const key = 'schedule-note:' + BASE_VIEW_TYPE + ':' + noteKey;
           const storage = getSharedStorage();
           try {
             const saved = storage ? storage.getItem(key) : null;
@@ -3687,7 +3687,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function bindSalaryInputs() {
         document.querySelectorAll('.salary-input[data-salary-key]').forEach(function(element) {
           var salaryKey = element.getAttribute('data-salary-key');
-          var key = 'schedule-salary:' + VIEW_TYPE + ':' + salaryKey;
+          var key = 'schedule-salary:' + BASE_VIEW_TYPE + ':' + salaryKey;
           var storage = getSharedStorage();
           try {
             var saved = storage ? storage.getItem(key) : null;
@@ -4003,6 +4003,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           }
           document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate);
           updateSheetScreenSize();
+          bindNotes();
+          bindSalaryInputs();
+          bindSharedInputs();
+          if (window.__scheduleReadStoredLogo) syncLogo(window.__scheduleReadStoredLogo());
           return;
         }
 
@@ -4024,7 +4028,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const personLabel = displayedPerson
           ? (VIEW_TYPE === 'student' ? formatStudentHeaderName(displayedPerson, startDate) : formatTeacherHeaderName(displayedPerson))
           : '対象なし';
-        summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
+        if (summaryLabel) summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
         document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate) + ' | ' + personLabel;
         updateSheetScreenSize();
         syncPendingUnavailableUi(pagesElement);
@@ -4078,6 +4082,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       if (VIEW_TYPE === 'all-student' || VIEW_TYPE === 'all-teacher' || VIEW_TYPE === 'all') {
+        window.__scheduleReadStoredLogo = bindLogoControls();
         appliedStartDate = DATA.defaultStartDate || DATA.availableStartDate;
         appliedEndDate = DATA.defaultEndDate || DATA.availableEndDate;
         render();
