@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
-import type { DeskCell, SlotCell, StudentEntry } from './types'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, cloneWeeks, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 
 const classroomSettings: ClassroomSettings = {
@@ -160,6 +160,53 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     expect(packedDesks[0]?.lesson?.studentSlots[0]?.name).toBe('実生徒')
     expect(packedDesks[0]?.lesson?.studentSlots[1]).toBeNull()
+  })
+
+  it('keeps a right-only student in slot2 when slot1 has a recorded status', () => {
+    const statusEntry: StudentStatusEntry = {
+      id: 'status_attended_1',
+      studentId: 's-status',
+      sourceManagedLesson: true,
+      name: '出席済み生徒',
+      managedStudentId: 's-status',
+      grade: '中3',
+      subject: '数',
+      lessonType: 'regular',
+      teacherType: 'normal',
+      teacherName: '講師A',
+      dateKey: '2026-04-09',
+      slotNumber: 2,
+      recordedAt: '2026-04-09T10:00:00',
+      status: 'attended',
+      sourceLessonId: 'lesson_status_1',
+    }
+    const cell: SlotCell = {
+      id: '2026-04-09_2',
+      dateKey: '2026-04-09',
+      dayLabel: '木',
+      dateLabel: '4/9',
+      slotLabel: '2限',
+      slotNumber: 2,
+      timeLabel: '14:40-16:10',
+      isOpenDay: true,
+      desks: [
+        {
+          id: '2026-04-09_2_desk_1',
+          teacher: '講師A',
+          statusSlots: [statusEntry, null],
+          lesson: {
+            id: 'right-only-with-status',
+            studentSlots: [null, createStudentEntry('s-real', '右側生徒', '英')],
+          },
+        },
+      ],
+    }
+
+    const packedDesks = packSortCellDesks(cell, { skipStatusSlotPack: true })
+
+    expect(packedDesks[0]?.lesson?.studentSlots[0]).toBeNull()
+    expect(packedDesks[0]?.lesson?.studentSlots[1]?.name).toBe('右側生徒')
+    expect(packedDesks[0]?.statusSlots?.[0]?.status).toBe('attended')
   })
 
   it('keeps all remaining weekly student placements when a regular lesson starts mid-month with fewer than four active weeks left', () => {
@@ -1128,6 +1175,87 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
 
     // 元のボード週は変更されていないこと
     expect(firstStudentDesk?.desks[firstDeskIndex]?.lesson?.studentSlots[0]?.name).toBe(originalName)
+  })
+
+  it('statusSlots[0] がある右側生徒を merge 後も左詰めしない', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const regularLessons = createInitialRegularLessons(new Date('2026-04-01T00:00:00'))
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = boardWeek.find((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots[0]))
+    const targetDesk = targetCell?.desks.find((desk) => desk.lesson?.studentSlots[0])
+    const originalStudent = targetDesk?.lesson?.studentSlots[0]
+
+    expect(targetCell).toBeDefined()
+    expect(targetDesk).toBeDefined()
+    expect(originalStudent).toBeDefined()
+
+    const statusEntry: StudentStatusEntry = {
+      id: 'status_merge_1',
+      studentId: originalStudent!.id,
+      sourceManagedLesson: true,
+      name: originalStudent!.name,
+      managedStudentId: originalStudent!.managedStudentId,
+      grade: originalStudent!.grade,
+      subject: originalStudent!.subject,
+      lessonType: originalStudent!.lessonType,
+      teacherType: originalStudent!.teacherType,
+      teacherName: targetDesk!.teacher,
+      dateKey: targetCell!.dateKey,
+      slotNumber: targetCell!.slotNumber,
+      recordedAt: '2026-04-07T10:00:00',
+      status: 'absent-no-makeup',
+      sourceLessonId: targetDesk!.lesson!.id,
+    }
+
+    targetDesk!.statusSlots = [statusEntry, null]
+    targetDesk!.lesson = {
+      ...targetDesk!.lesson!,
+      id: `manual_${targetDesk!.lesson!.id}`,
+      studentSlots: [
+        null,
+        {
+          ...originalStudent!,
+          lessonType: 'makeup',
+          makeupSourceDate: '2026-04-01',
+          makeupSourceLabel: '2026/4/1(水) 1限',
+        },
+      ],
+    }
+
+    const merged = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const mergedCell = merged.find((cell) => cell.id === targetCell!.id)
+    const mergedDesk = mergedCell?.desks.find((desk) => desk.id === targetDesk!.id)
+
+    expect(mergedDesk?.statusSlots?.[0]?.status).toBe('absent-no-makeup')
+    expect(mergedDesk?.lesson?.studentSlots[0]).toBeNull()
+    expect(mergedDesk?.lesson?.studentSlots[1]?.name).toBe(originalStudent!.name)
+    expect(mergedDesk?.lesson?.studentSlots[1]?.lessonType).toBe('makeup')
   })
 })
 
