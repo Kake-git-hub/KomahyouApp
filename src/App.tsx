@@ -594,6 +594,7 @@ function applyClassroomPayloadToState(payload: AppSnapshotPayload, handlers: {
   setPairConstraints: (value: typeof initialPairConstraints) => void
   setClassroomSettings: (value: ClassroomSettings) => void
   setBoardState: (value: PersistedBoardState | null) => void
+  setBoardMountKey?: (updater: (prev: number) => number) => void
 }) {
   const sanitizedPayload = sanitizeClassroomPayload(payload)
   handlers.setScreen(sanitizedPayload.screen)
@@ -607,6 +608,7 @@ function applyClassroomPayloadToState(payload: AppSnapshotPayload, handlers: {
   handlers.setPairConstraints(sanitizedPayload.pairConstraints)
   handlers.setClassroomSettings(sanitizedPayload.classroomSettings)
   handlers.setBoardState(sanitizedPayload.boardState)
+  handlers.setBoardMountKey?.((prev) => prev + 1)
 }
 
 function buildClassroomSnapshotPayload(params: {
@@ -682,6 +684,7 @@ function App() {
   const [pairConstraints, setPairConstraints] = useState(() => createInitialPairConstraintRows())
   const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [boardState, setBoardState] = useState<PersistedBoardState | null>(null)
+  const [boardMountKey, setBoardMountKey] = useState(0)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherAutoAssignRequest, setTeacherAutoAssignRequest] = useState<TeacherAutoAssignRequest | null>(null)
@@ -935,6 +938,7 @@ function App() {
       setPairConstraints,
       setClassroomSettings,
       setBoardState,
+      setBoardMountKey,
     })
     setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
     setUndoSnapshot(null)
@@ -967,6 +971,7 @@ function App() {
       setPairConstraints,
       setClassroomSettings,
       setBoardState,
+      setBoardMountKey,
     })
   }, [actingClassroomId, syncCurrentClassroomData, workspaceClassrooms])
 
@@ -1001,6 +1006,7 @@ function App() {
         setPairConstraints,
         setClassroomSettings,
         setBoardState,
+        setBoardMountKey,
       })
     } else {
       setScreen(currentWorkspaceUser?.role === 'developer' ? 'developer' : 'board')
@@ -2674,6 +2680,7 @@ function App() {
       setPairConstraints,
       setClassroomSettings,
       setBoardState,
+      setBoardMountKey,
     })
     setPersistenceMessage(`ローカルバックアップ (${backupDateKey}) からこの教室を復元しました。`)
   }, [actingClassroomId, saveUndoSnapshot])
@@ -2869,6 +2876,7 @@ function App() {
         setPairConstraints,
         setClassroomSettings,
         setBoardState,
+        setBoardMountKey,
       })
       setPersistenceMessage(`サーバーバックアップ (${backupDateKey}) からこの教室を復元しました。`)
     } catch (error) {
@@ -3328,6 +3336,7 @@ function App() {
 
   return (
     <ScheduleBoardScreen
+      key={boardMountKey}
       classroomSettings={classroomSettings}
       teachers={teachers}
       students={students}

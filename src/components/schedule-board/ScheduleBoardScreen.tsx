@@ -2426,7 +2426,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       let nextManualLectureStockCounts = { ...manualLectureStockCounts }
       let nextManualLectureStockOrigins = cloneManualLectureStockOrigins(manualLectureStockOrigins)
       const nextFallbackLectureStockStudents = { ...fallbackLectureStockStudents }
-      let nextManualMakeupAdjustments = cloneOriginMap(manualMakeupAdjustments)
+      let nextManualMakeupAdjustments = Object.fromEntries(
+        Object.entries(manualMakeupAdjustments)
+          .map(([key, origins]) => [key, origins.filter((origin) => origin.dateKey < effectiveStart)])
+          .filter(([, origins]) => (origins as ManualMakeupOrigin[]).length > 0),
+      ) as MakeupOriginMap
       const nextFallbackMakeupStudents = { ...fallbackMakeupStudents }
       let restoredCount = 0
 
