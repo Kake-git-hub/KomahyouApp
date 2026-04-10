@@ -1346,8 +1346,9 @@ function App() {
     setPersistenceMessage('契約中教室を一時利用停止に変更しました。')
   }, [bulkTemporarySuspensionReason, workspaceClassrooms])
 
-  const syncDeveloperCloudAutoBackups = useCallback(async (handleOverride?: DeveloperCloudBackupDirectoryHandle | null, snapshotOverride?: WorkspaceSnapshot) => {
+  const syncDeveloperCloudAutoBackups = useCallback(async (handleOverride?: DeveloperCloudBackupDirectoryHandle | null) => {
     if (!developerCloudBackupEnabled) return { synced: false, message: '' }
+    if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) return { synced: false, message: '' }
 
     if (!isDeveloperCloudBackupSupported()) {
       const message = 'このブラウザでは保存フォルダ連携を利用できません。'
@@ -1369,21 +1370,39 @@ function App() {
       return { synced: false, message }
     }
 
-    const snapshot = snapshotOverride
-    if (!snapshot) {
-      const folderName = developerCloudBackupFolderName || targetHandle.name
-      const message = `${folderName}: 同期するスナップショットがありません。`
+    const folderName = developerCloudBackupFolderName || targetHandle.name
+
+    // サーバーバックアップ一覧を取得して未同期分をダウンロード・書き込み
+    const summaries = await listFirebaseServerAutoBackupSummaries()
+    setServerAutoBackupSummaries(summaries)
+    const unsyncedSummaries = summaries.filter((s) => !developerCloudSyncedAutoBackupKeys.includes(s.backupDateKey))
+    if (unsyncedSummaries.length === 0) {
+      const message = `${folderName}: 同期済みです。(${summaries.length} 件)`
       setDeveloperCloudBackupStatus(message)
-      return { synced: false, message: '' }
+      return { synced: true, message }
     }
 
-    await syncWorkspaceArtifactsToDeveloperCloudDirectory(snapshot, targetHandle)
+    setDeveloperCloudBackupStatus(`${folderName}: ${unsyncedSummaries.length} 件のバックアップを同期中…`)
+    const newlySyncedKeys: string[] = []
+    for (const summary of unsyncedSummaries) {
+      try {
+        const snapshotJson = await downloadFirebaseServerAutoBackup(summary.backupDateKey)
+        const fileName = formatPreciseBackupFileName(summary.savedAt, '開発者バックアップ_自動保存')
+        await writeTextFileToDeveloperCloudDirectory(targetHandle, fileName, snapshotJson)
+        newlySyncedKeys.push(summary.backupDateKey)
+      } catch {
+        // 1件の失敗で全体を止めない
+      }
+    }
 
-    const folderName = developerCloudBackupFolderName || targetHandle.name
-    const message = `${folderName} にバックアップを保存しました。`
+    if (newlySyncedKeys.length > 0) {
+      setDeveloperCloudSyncedAutoBackupKeys((current) => [...current, ...newlySyncedKeys])
+    }
+
+    const message = `${folderName}: ${newlySyncedKeys.length} 件を同期しました。(全 ${summaries.length} 件)`
     setDeveloperCloudBackupStatus(message)
     return { synced: true, message }
-  }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle])
+  }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle, developerCloudSyncedAutoBackupKeys, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
 
   const connectDeveloperCloudBackupFolder = useCallback(async () => {
     if (!isDeveloperCloudBackupSupported()) {
@@ -2487,14 +2506,13 @@ function App() {
 
     if (developerCloudBackupFolderName && developerCloudBackupHandle) {
       setDeveloperCloudBackupStatus(`${developerCloudBackupFolderName} を保存フォルダとして使用します。`)
-      // アプリ起動時に同期フォルダへ現在のスナップショットを差分同期する
-      const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {})
+      // アプリ起動時にサーバーバックアップを差分同期する
+      void syncDeveloperCloudAutoBackups().catch(() => {})
       return
     }
 
     setDeveloperCloudBackupStatus('保存フォルダの再接続が必要です。')
-  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle, hasHydratedSnapshot, syncDeveloperCloudAutoBackups])
+  }, [developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupHandle, hasHydratedSnapshot, syncDeveloperCloudAutoBackups])
 
   useEffect(() => {
     if (!hasHydratedSnapshot) return
@@ -2731,8 +2749,7 @@ function App() {
 
       // サーバーバックアップ一覧取得のタイミングで自動同期フォルダへ同期する
       if (summaries.length > 0 && developerCloudBackupEnabled && developerCloudBackupHandle) {
-        const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-        void syncDeveloperCloudAutoBackups(undefined, snapshot).catch(() => {
+        void syncDeveloperCloudAutoBackups().catch(() => {
           setDeveloperCloudBackupStatus('自動同期フォルダへの同期に失敗しました。')
         })
       }
@@ -2742,7 +2759,7 @@ function App() {
     } finally {
       setServerAutoBackupLoading(false)
     }
-  }, [buildWorkspaceSnapshot, developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
+  }, [developerCloudBackupEnabled, developerCloudBackupHandle, isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, syncDeveloperCloudAutoBackups])
 
   const triggerServerAutoBackup = useCallback(async () => {
     if (!isRemoteBackendEnabled || !isRemoteAdminAutomationEnabled) {
