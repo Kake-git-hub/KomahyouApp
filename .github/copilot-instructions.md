@@ -51,6 +51,9 @@
 	- `classroomSettings.holidayDates` must be cleared on load/import so all classrooms treat holidays as normal weekdays.
 	- Classroom-screen auto-backup restore now extracts only the acting classroom from the workspace-wide daily backup, keeping other classrooms unchanged.
 	- Firebase server auto-backup can run daily without an open browser only on Blaze with Functions and Cloud Storage; the current developer-screen backup list still reflects browser-local auto backups.
+	- For board operation changes that can alter previous user actions, present the behavior change and get approval before modifying the rule. Add both positive and negative regression tests across direct helpers and merge/render paths.
+	- `packSortCellDesks` and `mergeManagedWeek` must not left-pack slot 2 into slot 1 when `statusSlots[0]` already contains `attended`, `absent`, or `absent-no-makeup` history.
+	- Firebase classroom manager UID reassignment must delete the previous Firebase Auth user when Functions automation is enabled, and classroom provisioning should clean up orphaned stale Auth users that are no longer referenced by the workspace before retrying email-based account creation.
 	- After board or schedule changes, run `npm run build`. Run Playwright only when the user explicitly requests E2E verification.
 	- After stock calculation or PDF changes, also run `npm run test:unit`.
 	- Every deploy-capable change must bump `package.json` version (patch level) before building.

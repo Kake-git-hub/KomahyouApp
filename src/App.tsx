@@ -1259,13 +1259,18 @@ function App() {
       managerName: currentManager.name,
       managerEmail: normalizedManagerEmail,
       managerUserId: normalizedManagerUserId,
-    }).then(async () => {
-      await reloadRemoteWorkspace('管理者 UID を差し替えました。新しい Authentication ユーザーでこの教室へログインできます。', classroomId)
+    }).then(async (result) => {
+      const successMessage = result.cleanupWarning
+        ? `管理者 UID を差し替えました。${result.cleanupWarning}`
+        : isRemoteAdminAutomationEnabled
+          ? '管理者 UID を差し替えました。旧 Authentication ユーザーも削除しました。'
+          : '管理者 UID を差し替えました。旧 Authentication ユーザーの削除は Firebase Console で確認してください。'
+      await reloadRemoteWorkspace(successMessage, classroomId)
     }).catch((error) => {
       const message = error instanceof Error ? error.message : '管理者 UID の差し替えに失敗しました。'
       setPersistenceMessage(message)
     })
-  }, [isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
 
   const deleteClassroom = useCallback(async (classroomId: string, password: string) => {
     if (isRemoteBackendEnabled) {

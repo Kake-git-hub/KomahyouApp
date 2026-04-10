@@ -56,6 +56,14 @@ type ClassroomDeletePayload = {
   classroomId: string
 }
 
+type ClassroomReassignManagerPayload = {
+  workspaceKey: string
+  classroomId: string
+  managerName: string
+  managerEmail: string
+  managerUserId: string
+}
+
 type WorkspaceUserRole = 'developer' | 'manager'
 
 type FirebaseWorkspaceMemberDoc = {
@@ -427,6 +435,67 @@ async function countClassrooms(workspaceKey: string) {
   return classroomsSnapshot.data().count
 }
 
+function isFirebaseAuthError(error: unknown, code: string) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: unknown }).code === code)
+}
+
+async function deleteOrphanedWorkspaceAuthUserByEmail(workspaceKey: string, email: string) {
+  let existingUser: Awaited<ReturnType<typeof auth.getUserByEmail>>
+
+  try {
+    existingUser = await auth.getUserByEmail(email)
+  } catch (error) {
+    if (isFirebaseAuthError(error, 'auth/user-not-found')) {
+      return { deleted: false, uid: '' }
+    }
+    throw error
+  }
+
+  const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
+  const [memberSnapshot, classroomSnapshot] = await Promise.all([
+    workspaceRef.collection('members').doc(existingUser.uid).get(),
+    workspaceRef.collection('classrooms').where('managerUserId', '==', existingUser.uid).limit(1).get(),
+  ])
+
+  if (memberSnapshot.exists || !classroomSnapshot.empty) {
+    return { deleted: false, uid: existingUser.uid }
+  }
+
+  await auth.deleteUser(existingUser.uid)
+  logger.info(`Deleted orphaned Auth user before classroom provision: workspace=${workspaceKey}, uid=${existingUser.uid}`)
+  return { deleted: true, uid: existingUser.uid }
+}
+
+async function createWorkspaceManagerAuthUser(params: {
+  workspaceKey: string
+  managerEmail: string
+  managerName: string
+  temporaryPassword: string
+}) {
+  try {
+    return await auth.createUser({
+      email: params.managerEmail,
+      displayName: params.managerName,
+      password: params.temporaryPassword,
+    })
+  } catch (error) {
+    if (!isFirebaseAuthError(error, 'auth/email-already-exists')) {
+      throw error
+    }
+
+    const cleanup = await deleteOrphanedWorkspaceAuthUserByEmail(params.workspaceKey, params.managerEmail)
+    if (!cleanup.deleted) {
+      throw error
+    }
+
+    return await auth.createUser({
+      email: params.managerEmail,
+      displayName: params.managerName,
+      password: params.temporaryPassword,
+    })
+  }
+}
+
 export const provisionWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
@@ -450,10 +519,11 @@ export const provisionWorkspaceClassroom = onCall({ invoker: 'public' }, async (
   let managerUserId = ''
 
   try {
-    const managerUser = await auth.createUser({
-      email: managerEmail,
-      displayName: managerName,
-      password: temporaryPassword,
+    const managerUser = await createWorkspaceManagerAuthUser({
+      workspaceKey,
+      managerEmail,
+      managerName,
+      temporaryPassword,
     })
     managerUserId = managerUser.uid
 
@@ -505,6 +575,92 @@ export const provisionWorkspaceClassroom = onCall({ invoker: 'public' }, async (
 
     const message = error instanceof Error ? error.message : '教室の追加に失敗しました。'
     throw new HttpsError('internal', message)
+  }
+})
+
+export const reassignWorkspaceClassroomManager = onCall({ invoker: 'public' }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  const classroomId = readString(rawData.classroomId, 'classroomId')
+  const managerName = readString(rawData.managerName, 'managerName')
+  const managerEmail = validateEmailAddress(readString(rawData.managerEmail, 'managerEmail'), 'managerEmail')
+  const managerUserId = readString(rawData.managerUserId, 'managerUserId')
+
+  await requireDeveloperMember(request.auth?.uid, workspaceKey)
+
+  const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
+  const classroomRef = workspaceRef.collection('classrooms').doc(classroomId)
+  const classroomSnapshot = await classroomRef.get()
+  if (!classroomSnapshot.exists) {
+    throw new HttpsError('not-found', '対象の教室が見つかりません。')
+  }
+
+  const currentManagerUserId = readString(classroomSnapshot.get('managerUserId') ?? '', 'managerUserId')
+  if (currentManagerUserId === managerUserId) {
+    return {
+      classroomId,
+      managerUserId,
+    }
+  }
+
+  try {
+    await auth.getUser(managerUserId)
+  } catch (error) {
+    if (isFirebaseAuthError(error, 'auth/user-not-found')) {
+      throw new HttpsError('not-found', '差し替え先の Authentication ユーザーが見つかりません。')
+    }
+    const message = error instanceof Error ? error.message : '差し替え先の Authentication ユーザー確認に失敗しました。'
+    throw new HttpsError('internal', message)
+  }
+
+  const currentMemberRef = workspaceRef.collection('members').doc(currentManagerUserId)
+  const nextMemberRef = workspaceRef.collection('members').doc(managerUserId)
+  const nextMemberSnapshot = await nextMemberRef.get()
+  if (nextMemberSnapshot.exists) {
+    const assignedClassroomId = readOptionalString(nextMemberSnapshot.get('assignedClassroomId'), 'assignedClassroomId')
+    if (assignedClassroomId && assignedClassroomId !== classroomId) {
+      throw new HttpsError('already-exists', 'この UID はすでに別の教室へ割り当てられています。別ユーザーかどうかを確認してください。')
+    }
+  }
+
+  const now = new Date().toISOString()
+  const batch = firestore.batch()
+  batch.set(workspaceRef, {
+    name: workspaceKey,
+    schemaVersion: 1,
+    updatedAt: Timestamp.now(),
+  }, { merge: true })
+  batch.set(nextMemberRef, {
+    displayName: managerName,
+    email: managerEmail,
+    role: 'manager',
+    assignedClassroomId: classroomId,
+    updatedAt: now,
+  }, { merge: true })
+  batch.set(classroomRef, {
+    managerUserId,
+    updatedAt: now,
+  }, { merge: true })
+  batch.delete(currentMemberRef)
+  await batch.commit()
+
+  let cleanupWarning = ''
+  await auth.deleteUser(currentManagerUserId).catch((error) => {
+    if (isFirebaseAuthError(error, 'auth/user-not-found')) {
+      return undefined
+    }
+    cleanupWarning = error instanceof Error
+      ? `旧 Authentication ユーザー削除に失敗しました: ${error.message}`
+      : '旧 Authentication ユーザー削除に失敗しました。'
+    logger.warn(`Failed to delete previous manager auth user: workspace=${workspaceKey}, uid=${currentManagerUserId}, message=${cleanupWarning}`)
+    return undefined
+  })
+
+  return {
+    classroomId,
+    managerUserId,
+    deletedPreviousManagerUserId: currentManagerUserId,
+    cleanupWarning: cleanupWarning || undefined,
   }
 })
 

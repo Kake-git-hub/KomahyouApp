@@ -35,6 +35,13 @@ type ReassignWorkspaceClassroomManagerWithExistingUidRequest = {
   managerUserId: string
 }
 
+type ReassignWorkspaceClassroomManagerWithExistingUidResponse = {
+  classroomId: string
+  managerUserId: string
+  deletedPreviousManagerUserId?: string
+  cleanupWarning?: string
+}
+
 type ProvisionWorkspaceClassroomResponse = {
   classroomId: string
   managerUserId: string
@@ -145,8 +152,18 @@ export async function provisionFirebaseWorkspaceClassroomWithExistingUid(input: 
 
 export async function reassignFirebaseWorkspaceClassroomManagerWithExistingUid(input: Omit<ReassignWorkspaceClassroomManagerWithExistingUidRequest, 'workspaceKey'>) {
   await ensureFirebaseAuthenticatedUser()
-  const firestore = requireFirestore()
   const config = getFirebaseBackendConfig()
+  if (config.adminFunctionsEnabled) {
+    const functions = requireFunctions()
+    const callable = httpsCallable<ReassignWorkspaceClassroomManagerWithExistingUidRequest, ReassignWorkspaceClassroomManagerWithExistingUidResponse>(functions, 'reassignWorkspaceClassroomManager')
+    const result = await callable({
+      workspaceKey: config.workspaceKey,
+      ...input,
+    })
+    return result.data
+  }
+
+  const firestore = requireFirestore()
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
   const membersCollectionRef = collection(workspaceRef, 'members')
   const classroomsCollectionRef = collection(workspaceRef, 'classrooms')
