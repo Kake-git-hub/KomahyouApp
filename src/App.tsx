@@ -1056,28 +1056,36 @@ function App() {
       const contractEndDate = input?.contractEndDate?.trim() || ''
 
       const managerPassword = input?.managerPassword?.trim() ?? ''
+      const managerUserId = input?.managerUserId?.trim() ?? ''
+
+      if (managerUserId) {
+        setPersistenceMessage('教室を追加しています…')
+
+        void provisionFirebaseWorkspaceClassroomWithExistingUid({
+          classroomName,
+          managerName,
+          managerEmail,
+          managerUserId,
+          contractStartDate,
+          contractEndDate,
+          initialPayload: buildEmptyClassroomPayload(),
+        }).then(async (result) => {
+          await reloadRemoteWorkspace('教室を追加しました。既存の Firebase Auth UID を管理者として割り当てました。', result.classroomId)
+          window.alert([
+            `${classroomName} を追加しました。`,
+            `管理者メール: ${managerEmail}`,
+            `管理者 UID: ${managerUserId}`,
+            'Firebase Auth 側で設定した既存パスワードをそのまま使用してください。',
+          ].join('\n'))
+        }).catch((error) => {
+          const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
+          setPersistenceMessage(message)
+          window.alert('教室追加に失敗しました: ' + message)
+        })
+        return
+      }
 
       if (!isRemoteAdminAutomationEnabled) {
-        const managerUserId = input?.managerUserId?.trim() ?? ''
-
-        if (managerUserId) {
-          void provisionFirebaseWorkspaceClassroomWithExistingUid({
-            classroomName,
-            managerName,
-            managerEmail,
-            managerUserId,
-            contractStartDate,
-            contractEndDate,
-            initialPayload: buildEmptyClassroomPayload(),
-          }).then(async (result) => {
-            await reloadRemoteWorkspace('教室を追加しました。', result.classroomId)
-          }).catch((error) => {
-            const message = error instanceof Error ? error.message : '教室追加に失敗しました。'
-            setPersistenceMessage(message)
-          })
-          return
-        }
-
         const temporaryPassword = managerPassword || ('Koma' + Math.random().toString(36).slice(2, 8) + '!')
         setPersistenceMessage('管理者アカウントを作成しています…')
 

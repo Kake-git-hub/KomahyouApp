@@ -54,6 +54,8 @@
 	- For board operation changes that can alter previous user actions, present the behavior change and get approval before modifying the rule. Add both positive and negative regression tests across direct helpers and merge/render paths.
 	- `packSortCellDesks` and `mergeManagedWeek` must not left-pack slot 2 into slot 1 when `statusSlots[0]` already contains `attended`, `absent`, or `absent-no-makeup` history.
 	- `buildManagedRegularLessonsRange` must skip teacher-conflict checks so the same teacher can teach multiple desks in the same slot (common in small classrooms). Only student duplication is blocked. `computeScheduleConflictOrigins` and `computeOccupiedSlotOrigins` must also skip teacher-conflict checks for the same reason.
+	- Template student move must reject the operation when the destination cell already contains the same student in another desk/slot. Keep the move selection active, show a warning, and avoid saving duplicate-student template states that later corrupt board reconstruction.
+	- When the developer enters an existing Firebase Auth UID during classroom creation, reuse that existing Auth account and password as-is. Do not auto-generate or display a replacement password in that path.
 	- Firebase classroom manager UID reassignment must delete the previous Firebase Auth user when Functions automation is enabled, and classroom provisioning should clean up orphaned stale Auth users that are no longer referenced by the workspace before retrying email-based account creation.
 	- After board or schedule changes, run `npm run build`. Run Playwright only when the user explicitly requests E2E verification.
 	- After stock calculation or PDF changes, also run `npm run test:unit`.

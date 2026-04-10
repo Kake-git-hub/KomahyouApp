@@ -1154,6 +1154,24 @@ function resolveStockComparableStudentKey(student: StudentEntry, managedStudentB
   return managedId ?? `name:${resolveBoardStudentDisplayName(student.name)}`
 }
 
+export function findDuplicateStudentInCellByKey(
+  targetCell: SlotCell,
+  studentKey: string,
+  resolveComparableStudentKey: (student: StudentEntry) => string,
+  excludedStudentId?: string,
+) {
+  for (const desk of targetCell.desks) {
+    for (const student of desk.lesson?.studentSlots ?? []) {
+      if (!student || student.id === excludedStudentId) continue
+      const existingKey = resolveComparableStudentKey(student)
+      if (existingKey === studentKey) {
+        return student
+      }
+    }
+  }
+  return null
+}
+
 function resolveDeskLabel(desk: DeskCell, deskIndex: number) {
   return desk.teacher.trim() || `${deskIndex + 1}机目`
 }
@@ -4442,6 +4460,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const targetLesson = targetDesk.lesson
     const targetStudent = targetLesson?.studentSlots[targetStudentIndex] ?? null
 
+    const comparableStudentKey = resolveStockComparableStudentKey(sourceStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
+    const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey, sourceStudent.id)
+    if (duplicateStudent) {
+      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているためテンプレ移動不可です。`)
+      return
+    }
+
     // Save undo
     pushTemplateUndo(templateCells)
 
@@ -4750,16 +4775,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   // ── End template mode helpers ──
 
   const findDuplicateStudentInCell = (targetCell: SlotCell, studentKey: string, excludedStudentId?: string) => {
-    for (const desk of targetCell.desks) {
-      for (const student of desk.lesson?.studentSlots ?? []) {
-        if (!student || student.id === excludedStudentId) continue
-        const existingKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
-        if (existingKey === studentKey) {
-          return student
-        }
-      }
-    }
-    return null
+    return findDuplicateStudentInCellByKey(
+      targetCell,
+      studentKey,
+      (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName),
+      excludedStudentId,
+    )
   }
 
   const cloneLesson = (lesson: DeskLesson, student: StudentEntry): DeskLesson => ({

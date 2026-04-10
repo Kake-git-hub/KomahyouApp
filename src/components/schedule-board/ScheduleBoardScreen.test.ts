@@ -3,7 +3,7 @@ import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, cloneWeeks, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, cloneWeeks, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -101,6 +101,86 @@ function createUndefinedRightOnlyCell(): SlotCell {
 }
 
 describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
+  it('detects a duplicate student elsewhere in the same target cell', () => {
+    const targetCell: SlotCell = {
+      id: 'template_2_4',
+      dateKey: 'template_2',
+      dayLabel: '',
+      dateLabel: '火',
+      slotLabel: '4限',
+      slotNumber: 4,
+      timeLabel: '',
+      isOpenDay: true,
+      desks: [
+        {
+          id: 'template_2_4_1',
+          teacher: '講師A',
+          lesson: {
+            id: 'desk-1',
+            studentSlots: [createStudentEntry('source-entry', '移動元', '数'), null],
+          },
+        },
+        {
+          id: 'template_2_4_2',
+          teacher: '講師B',
+          lesson: {
+            id: 'desk-2',
+            studentSlots: [{ ...createStudentEntry('duplicate-entry', '移動元', '数'), managedStudentId: 'source-entry' }, null],
+          },
+        },
+      ],
+    }
+
+    const duplicate = findDuplicateStudentInCellByKey(
+      targetCell,
+      'source-entry',
+      (student) => student.managedStudentId ?? student.name,
+      'source-entry',
+    )
+
+    expect(duplicate?.id).toBe('duplicate-entry')
+  })
+
+  it('ignores the moving student itself when no other duplicate exists in the target cell', () => {
+    const targetCell: SlotCell = {
+      id: 'template_2_4',
+      dateKey: 'template_2',
+      dayLabel: '',
+      dateLabel: '火',
+      slotLabel: '4限',
+      slotNumber: 4,
+      timeLabel: '',
+      isOpenDay: true,
+      desks: [
+        {
+          id: 'template_2_4_1',
+          teacher: '講師A',
+          lesson: {
+            id: 'desk-1',
+            studentSlots: [createStudentEntry('source-entry', '移動元', '数'), null],
+          },
+        },
+        {
+          id: 'template_2_4_2',
+          teacher: '講師B',
+          lesson: {
+            id: 'desk-2',
+            studentSlots: [createStudentEntry('other-entry', '別生徒', '英'), null],
+          },
+        },
+      ],
+    }
+
+    const duplicate = findDuplicateStudentInCellByKey(
+      targetCell,
+      'source-entry',
+      (student) => student.managedStudentId ?? student.name,
+      'source-entry',
+    )
+
+    expect(duplicate).toBeNull()
+  })
+
   it('treats a same-day return as regular even when the destination slot changes', () => {
     const normalized = normalizeLessonPlacement({
       id: 'same-day-return',
@@ -1966,5 +2046,45 @@ describe('テンプレ移動 → 上書き反映 regression', () => {
     const s002Stock = stockEntries.filter((e) => e.studentId === 's002')
     expect(s001Stock.reduce((sum, e) => sum + e.balance, 0)).toBe(0)
     expect(s002Stock.reduce((sum, e) => sum + e.balance, 0)).toBe(0)
+  })
+
+  it('テンプレ移動先セルの別行に同生徒がいる場合は重複として検出される', () => {
+    const targetCell: SlotCell = {
+      id: 'template_2_4',
+      dateKey: 'template_2',
+      dayLabel: '',
+      dateLabel: '火',
+      slotLabel: '4限',
+      slotNumber: 4,
+      timeLabel: '',
+      isOpenDay: true,
+      desks: [
+        {
+          id: 'template_2_4_1',
+          teacher: '大澤講師',
+          lesson: {
+            id: 'desk-oosawa',
+            studentSlots: [createStudentEntry('existing-entry', '既存生徒', '英'), null],
+          },
+        },
+        {
+          id: 'template_2_4_2',
+          teacher: '別講師',
+          lesson: {
+            id: 'desk-other',
+            studentSlots: [{ ...createStudentEntry('duplicate-entry', '既存生徒', '数'), managedStudentId: 'existing-entry' }, null],
+          },
+        },
+      ],
+    }
+
+    const duplicate = findDuplicateStudentInCellByKey(
+      targetCell,
+      'existing-entry',
+      (student) => student.managedStudentId ?? student.name,
+      'moving-entry',
+    )
+
+    expect(duplicate?.managedStudentId).toBe('existing-entry')
   })
 })

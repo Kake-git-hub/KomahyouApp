@@ -159,7 +159,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
   const sparkManualAdminMode = authMode === 'firebase' && accountProvisioningLocked
   const firebaseSummary = accountProvisioningLocked || managerEmailLocked
     ? 'Firebase Hosting / Auth / Firestore で運用します。教室追加はこの画面から実行でき、既存教室の管理者 UID 差し替えもここで行えます。旧 Authentication ユーザー削除と管理者メール変更は Firebase Console で手動確認が必要です。'
-    : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が Auth ユーザー発行まで処理し、管理者 UID 差し替え時は旧 Authentication ユーザーも自動削除します。'
+    : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が処理し、管理者 UID 差し替え時は旧 Authentication ユーザーも自動削除します。教室追加で UID を指定した場合は、その既存 Auth アカウントと既存パスワードをそのまま使います。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
   const todayDateKey = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const todayLabel = useMemo(() => {
@@ -559,7 +559,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setShowProvisioningGuide(false) }}>
           <div className="auto-assign-modal developer-provision-guide-modal" role="dialog" aria-modal="true" aria-label="教室追加">
             <div className="auto-assign-modal-title">教室追加</div>
-            <div className="detail-note">教室名・管理者情報を入力して追加します。Firebase Auth コンソールでアカウントを作成し、UID を貼り付けてください。</div>
+            <div className="detail-note">教室名・管理者情報を入力して追加します。Firebase Auth コンソールでアカウントを作成し、UID を貼り付けてください。追加時は、その既存 UID と既存パスワードをそのまま利用します。</div>
 
             <section className="developer-guide-section">
               {firebaseAuthUrl ? <div className="detail-note"><a href={firebaseAuthUrl} target="_blank" rel="noopener noreferrer">Firebase Auth コンソールを開く</a>（UID をコピーできます）</div> : null}
