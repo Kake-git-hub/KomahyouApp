@@ -1,5 +1,5 @@
 import type { ClassroomSettings } from '../../types/appState'
-import { formatStudentSelectionLabel, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { formatStudentSelectionLabel, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
@@ -440,10 +440,11 @@ function computeScheduleConflictOrigins(
 
     rows.sort((left, right) => left.rowIndex - right.rowIndex)
     for (const row of rows) {
-      const hasTeacherConflict = Boolean(row.teacherId) && usedTeacherIds.has(row.teacherId)
+      // 同一講師が同一スロットで複数デスクを担当するのは正当な構成のため、
+      // 講師重複ではなく生徒重複のみを衝突として扱う
       const hasStudentConflict = row.participants.some((participant) => usedStudentIds.has(participant.studentId))
 
-      if (hasTeacherConflict || hasStudentConflict) {
+      if (hasStudentConflict) {
         for (const participant of row.participants) {
           if (setupFloorKey && dateKey < setupFloorKey) continue
           pushOrigin(conflicts, buildMakeupStockKey(participant.studentId, participant.subject), dateKey)
@@ -552,10 +553,6 @@ function computeOccupiedSlotOrigins(params: {
       if (activeParticipants.length === 0) continue
 
       const participantStudentIds = new Set(activeParticipants.map((participant) => participant.studentId))
-      const teacherName = teacher ? getTeacherDisplayName(teacher) : ''
-      const hasTeacherConflict = teacherName
-        ? cell.desks.some((desk) => (desk.teacher === teacherName || desk.teacher === teacher?.name) && Boolean(desk.lesson))
-        : false
       const hasStudentConflict = cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => {
         if (!student) return false
         const studentKey = resolveStudentKey(student).replace(/^manual:/, '').replace(/^name:/, '')
@@ -563,7 +560,9 @@ function computeOccupiedSlotOrigins(params: {
       }) ?? false)
       const hasEmptyDesk = cell.desks.some((desk) => !desk.lesson)
 
-      if (!hasTeacherConflict && !hasStudentConflict && hasEmptyDesk) continue
+      // 同一講師が複数デスクを担当するのは正当な構成のため、
+      // 講師衝突ではなく生徒衝突と空きデスク有無のみで判定する
+      if (!hasStudentConflict && hasEmptyDesk) continue
 
       for (const participant of activeParticipants) {
         pushOrigin(origins, buildMakeupStockKey(participant.studentId, participant.subject), dateKey)

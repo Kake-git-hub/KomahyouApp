@@ -4,6 +4,8 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, cloneWeeks, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildMakeupStockEntries } from './makeupStock'
 
 const classroomSettings: ClassroomSettings = {
   closedWeekdays: [0],
@@ -1740,5 +1742,229 @@ describe('データ堅牢性 意図しない操作 cloneWeeks → removeStudentF
     // 元データも影響なし
     expect(weeks[0][0].desks[0].teacher).toBe('講師')
     expect(weeks[0][0].desks[0].lesson!.studentSlots[0]!.name).toBe('A')
+  })
+})
+
+// ──────────────────────────────────────────────────────
+// テンプレ移動 → 上書き反映後のコマ表・振替ストック再現テスト
+// ──────────────────────────────────────────────────────
+describe('テンプレ移動 → 上書き反映 regression', () => {
+  // s001: 月曜1限 → 火曜2限へテンプレ移動したシナリオ
+  const template: RegularLessonTemplate = {
+    version: 1,
+    effectiveStartDate: '2026-04-01',
+    savedAt: new Date().toISOString(),
+    cells: [
+      // 月曜1限: 生徒なし（移動済のため空）、講師のみ
+      { dayOfWeek: 1, slotNumber: 1, desks: [{ deskIndex: 1, teacherId: 't001', students: [null, null] }] },
+      // 火曜2限: 移動先 – t002 + s001
+      { dayOfWeek: 2, slotNumber: 2, desks: [{ deskIndex: 1, teacherId: 't002', students: [{ studentId: 's001', subject: '数' }, null] }] },
+    ],
+  }
+
+  const templateRegularLessons = buildRegularLessonsFromTemplate({
+    template,
+    teachers: initialTeachers,
+    students: initialStudents,
+  })
+
+  const range = { startDate: '2026-04-06', endDate: '2026-04-12', periodValue: '' }
+
+  it('テンプレ移動後の生徒がコマ表に表示される', () => {
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: templateRegularLessons,
+      boardWeeks: [], // 上書き反映後は空ボード
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    // 火曜(2026-04-07)2限に s001 が存在するか
+    const tuesdaySlot2 = cells.find((cell) => cell.dateKey === '2026-04-07' && cell.slotNumber === 2)
+    expect(tuesdaySlot2).toBeDefined()
+    const placed = tuesdaySlot2!.desks.some((desk) =>
+      desk.lesson?.studentSlots.some((s) => s?.managedStudentId === 's001'),
+    )
+    expect(placed).toBe(true)
+  })
+
+  it('テンプレ移動後の生徒が空きコマ不足にならない', () => {
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: templateRegularLessons,
+      boardWeeks: [], // 上書き反映後は空ボード
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const stockEntries = buildMakeupStockEntries({
+      students: initialStudents,
+      teachers: initialTeachers,
+      regularLessons: templateRegularLessons,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      weeks: [cells],
+      manualAdjustments: {},
+      resolveStudentKey: (student) => student.managedStudentId ?? student.name,
+    })
+
+    const s001Stock = stockEntries.filter((entry) => entry.studentId === 's001')
+    const totalBalance = s001Stock.reduce((sum, e) => sum + e.balance, 0)
+    expect(totalBalance).toBe(0)
+  })
+
+  it('移動先スロットに既存デスクが複数ある場合でも正常に配置される', () => {
+    // 火曜2限に3机あり、2机埋まっている状態で3机目に移動した生徒が配置されるか
+    const filledTemplate: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-04-01',
+      savedAt: new Date().toISOString(),
+      cells: [
+        // 月曜1限: 空き（移動元）
+        { dayOfWeek: 1, slotNumber: 1, desks: [{ deskIndex: 1, teacherId: 't001', students: [null, null] }] },
+        // 火曜2限: 3机あり、1机目と2机目は既存生徒、3机目に移動生徒
+        {
+          dayOfWeek: 2, slotNumber: 2, desks: [
+            { deskIndex: 1, teacherId: 't002', students: [{ studentId: 's002', subject: '英' }, { studentId: 's003', subject: '英' }] },
+            { deskIndex: 2, teacherId: 't003', students: [{ studentId: 's004', subject: '数' }, null] },
+            { deskIndex: 3, teacherId: 't004', students: [{ studentId: 's001', subject: '数' }, null] },
+          ],
+        },
+      ],
+    }
+
+    const filledLessons = buildRegularLessonsFromTemplate({
+      template: filledTemplate,
+      teachers: initialTeachers,
+      students: initialStudents,
+    })
+
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: filledLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const tuesdaySlot2 = cells.find((cell) => cell.dateKey === '2026-04-07' && cell.slotNumber === 2)
+    expect(tuesdaySlot2).toBeDefined()
+
+    // s001, s002, s003, s004 の4人全員配置されている
+    const placedStudentIds = tuesdaySlot2!.desks
+      .flatMap((desk) => desk.lesson?.studentSlots ?? [])
+      .filter(Boolean)
+      .map((s) => s!.managedStudentId)
+    expect(placedStudentIds).toContain('s001')
+    expect(placedStudentIds).toContain('s002')
+    expect(placedStudentIds).toContain('s003')
+    expect(placedStudentIds).toContain('s004')
+  })
+
+  it('同一講師が同一スロットの複数デスクを担当するテンプレ移動', () => {
+    // 同じ講師が2机を担当する場合（小規模教室でよくある）
+    const sameTeacherTemplate: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-04-01',
+      savedAt: new Date().toISOString(),
+      cells: [
+        { dayOfWeek: 1, slotNumber: 1, desks: [{ deskIndex: 1, teacherId: 't001', students: [null, null] }] },
+        {
+          dayOfWeek: 2, slotNumber: 2, desks: [
+            { deskIndex: 1, teacherId: 't001', students: [{ studentId: 's002', subject: '英' }, null] },
+            { deskIndex: 2, teacherId: 't001', students: [{ studentId: 's001', subject: '数' }, null] },
+          ],
+        },
+      ],
+    }
+
+    const sameTeacherLessons = buildRegularLessonsFromTemplate({
+      template: sameTeacherTemplate,
+      teachers: initialTeachers,
+      students: initialStudents,
+    })
+
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: sameTeacherLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const tuesdaySlot2 = cells.find((cell) => cell.dateKey === '2026-04-07' && cell.slotNumber === 2)
+    expect(tuesdaySlot2).toBeDefined()
+
+    // 同一講師でも両方の生徒が配置されるべき
+    const placedStudentIds = tuesdaySlot2!.desks
+      .flatMap((desk) => desk.lesson?.studentSlots ?? [])
+      .filter(Boolean)
+      .map((s) => s!.managedStudentId)
+    expect(placedStudentIds).toContain('s001')
+    expect(placedStudentIds).toContain('s002')
+  })
+
+  it('同一講師複数デスクで空きコマ不足ストックが発生しない', () => {
+    const sameTeacherTemplate: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-04-01',
+      savedAt: new Date().toISOString(),
+      cells: [
+        {
+          dayOfWeek: 2, slotNumber: 2, desks: [
+            { deskIndex: 1, teacherId: 't001', students: [{ studentId: 's002', subject: '英' }, null] },
+            { deskIndex: 2, teacherId: 't001', students: [{ studentId: 's001', subject: '数' }, null] },
+          ],
+        },
+      ],
+    }
+
+    const sameTeacherLessons = buildRegularLessonsFromTemplate({
+      template: sameTeacherTemplate,
+      teachers: initialTeachers,
+      students: initialStudents,
+    })
+
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: sameTeacherLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const stockEntries = buildMakeupStockEntries({
+      students: initialStudents,
+      teachers: initialTeachers,
+      regularLessons: sameTeacherLessons,
+      classroomSettings: { ...classroomSettings, deskCount: 3 },
+      weeks: [cells],
+      manualAdjustments: {},
+      resolveStudentKey: (student) => student.managedStudentId ?? student.name,
+    })
+
+    const s001Stock = stockEntries.filter((e) => e.studentId === 's001')
+    const s002Stock = stockEntries.filter((e) => e.studentId === 's002')
+    expect(s001Stock.reduce((sum, e) => sum + e.balance, 0)).toBe(0)
+    expect(s002Stock.reduce((sum, e) => sum + e.balance, 0)).toBe(0)
   })
 })

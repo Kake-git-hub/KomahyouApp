@@ -1431,7 +1431,9 @@ function buildManagedRegularLessonsRange(params: {
         firstStudent ? row.student1Id : '',
         secondStudent ? row.student2Id : '',
       ].filter(Boolean)
-      if (hasRegularPlacementConflict(cell, row.teacherId, participantIds, teacherById)) continue
+      // テンプレ由来の管理データ配置では、同一講師が複数デスクを担当するケースが
+      // 正当に存在するため講師衝突チェックをスキップし、生徒重複のみ確認する
+      if (hasRegularPlacementConflict(cell, '', participantIds, teacherById)) continue
 
       const targetDesk = cell.desks.find((desk) => !desk.lesson && !desk.teacher.trim())
         ?? cell.desks.find((desk) => !desk.lesson && !desk.teacher)
