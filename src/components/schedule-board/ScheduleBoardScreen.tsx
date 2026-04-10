@@ -3825,10 +3825,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const handleOpenAllSchedule = (event: MessageEvent) => {
       const message = event.data
       if (!message || message.type !== 'open-all-schedule') return
+      const requestedViewType = message.viewType === 'all-teacher' ? 'all-teacher' as const : 'all-student' as const
       const requestedStartDate = typeof message.startDate === 'string' ? message.startDate : scheduleFallbackStartDate
       const requestedEndDate = typeof message.endDate === 'string' ? message.endDate : scheduleFallbackEndDate
       const range = { startDate: requestedStartDate, endDate: requestedEndDate, periodValue: '' }
       openAllScheduleHtml({
+        viewType: requestedViewType,
         cells: buildScheduleCellsForRange({
           range,
           fallbackStartDate: scheduleFallbackStartDate,
