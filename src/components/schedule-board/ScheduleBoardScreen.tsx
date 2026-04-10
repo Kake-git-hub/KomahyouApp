@@ -1252,7 +1252,8 @@ function resolveDeskPackPriority(desk: DeskCell) {
   return 3
 }
 
-export function packSortCellDesks(cell: SlotCell) {
+export function packSortCellDesks(cell: SlotCell, options?: { skipStatusSlotPack?: boolean }) {
+  const skipStatusSlotPack = options?.skipStatusSlotPack ?? false
   const normalizedDesks = cell.desks.map((desk) => {
     const nextDesk: DeskCell = {
       ...desk,
@@ -1273,7 +1274,8 @@ export function packSortCellDesks(cell: SlotCell) {
 
     const firstStudent = nextDesk.lesson.studentSlots[0]
     const secondStudent = nextDesk.lesson.studentSlots[1]
-    if (!firstStudent && secondStudent) {
+    const hasSlot0Status = skipStatusSlotPack && nextDesk.statusSlots?.[0] != null
+    if (!firstStudent && secondStudent && !hasSlot0Status) {
       nextDesk.lesson.studentSlots = [secondStudent, null]
       if (nextDesk.memoSlots && !nextDesk.memoSlots[0]) {
         nextDesk.memoSlots = [nextDesk.memoSlots[1] ?? null, null]
@@ -1876,8 +1878,10 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
     }
 
     // Left-pack student slots: if slot[0] is empty but slot[1] has a student, shift to slot[0]
+    // ただしステータス（出席/休み/振替なし休み）が記録されている場合はスキップ
     const packedDesks = nextDesks.map((desk) => {
       if (!desk.lesson || isStudentSlotFilled(desk.lesson.studentSlots[0]) || !isStudentSlotFilled(desk.lesson.studentSlots[1])) return desk
+      if (desk.statusSlots?.[0] != null) return desk
       return {
         ...desk,
         lesson: {
@@ -6734,7 +6738,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     const nextCells = nextWeeks[weekIndex]
 
     for (const cell of nextCells) {
-      cell.desks = packSortCellDesks(cell)
+      cell.desks = packSortCellDesks(cell, { skipStatusSlotPack: true })
     }
 
     commitWeeks(nextWeeks, weekIndex, selectedCellId, 0)
