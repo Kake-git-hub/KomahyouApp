@@ -14,7 +14,7 @@ import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignReques
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry, ScheduleCountAdjustmentKind } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { exportBoardPdf } from '../../utils/pdf'
-import { formatWeeklyScheduleTitle, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
+import { formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
@@ -3820,6 +3820,52 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const weekScheduleTitle = useMemo(() => formatWeekScheduleTitle(weekDates), [weekDates])
   const scheduleFallbackStartDate = weekDates[0]?.dateKey ?? displayWeekDate
   const scheduleFallbackEndDate = weekDates[weekDates.length - 1]?.dateKey ?? displayWeekDate
+
+  useEffect(() => {
+    const handleOpenAllSchedule = (event: MessageEvent) => {
+      const message = event.data
+      if (!message || message.type !== 'open-all-schedule') return
+      const requestedStartDate = typeof message.startDate === 'string' ? message.startDate : scheduleFallbackStartDate
+      const requestedEndDate = typeof message.endDate === 'string' ? message.endDate : scheduleFallbackEndDate
+      const range = { startDate: requestedStartDate, endDate: requestedEndDate, periodValue: '' }
+      openAllScheduleHtml({
+        cells: buildScheduleCellsForRange({
+          range,
+          fallbackStartDate: scheduleFallbackStartDate,
+          fallbackEndDate: scheduleFallbackEndDate,
+          classroomSettings,
+          teachers,
+          students,
+          regularLessons,
+          boardWeeks: normalizedWeeks,
+          suppressedRegularLessonOccurrences,
+        }),
+        plannedCells: buildManagedScheduleCellsForRange({
+          range,
+          fallbackStartDate: scheduleFallbackStartDate,
+          fallbackEndDate: scheduleFallbackEndDate,
+          classroomSettings,
+          teachers,
+          students,
+          regularLessons,
+          boardWeeks: normalizedWeeks,
+          suppressedRegularLessonOccurrences,
+        }),
+        students,
+        teachers,
+        regularLessons,
+        scheduleCountAdjustments,
+        defaultStartDate: range.startDate,
+        defaultEndDate: range.endDate,
+        titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
+        classroomSettings,
+        periodBands: specialSessions,
+        specialSessions,
+      })
+    }
+    window.addEventListener('message', handleOpenAllSchedule)
+    return () => window.removeEventListener('message', handleOpenAllSchedule)
+  }, [scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, teachers, students, regularLessons, normalizedWeeks, suppressedRegularLessonOccurrences, scheduleCountAdjustments, specialSessions])
 
   const effectiveStudentScheduleRange = useMemo(
     () => normalizeScheduleRange(studentScheduleRange ?? { startDate: scheduleFallbackStartDate, endDate: scheduleFallbackEndDate, periodValue: '' }, scheduleFallbackStartDate, scheduleFallbackEndDate),

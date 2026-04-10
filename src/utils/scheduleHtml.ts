@@ -192,6 +192,13 @@ type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
   teachers: TeacherRow[]
 }
 
+export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
+  students: StudentRow[]
+  teachers: TeacherRow[]
+  regularLessons: RegularLessonRow[]
+  scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
+}
+
 function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName: string) => string | undefined): SerializedCell[] {
   return cells
     .slice()
@@ -539,9 +546,77 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
   }
 }
 
-function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher') {
+function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
+  const basePayload = createBasePayload(params, params.students)
+  const expectedRegularOccurrences = buildExpectedRegularOccurrences({
+    students: params.students,
+    regularLessons: params.regularLessons,
+    startDate: basePayload.availableStartDate,
+    endDate: basePayload.availableEndDate,
+  })
+
+  const currentReferenceDate = getReferenceDateKey(new Date())
+  const overlappingResult = findOverlappingSession(params.specialSessions, params.defaultStartDate, params.defaultEndDate)
+  const targetSession = overlappingResult.session
+
+  return {
+    ...basePayload,
+    expectedRegularOccurrences,
+    countAdjustments: buildSerializedScheduleCountAdjustments({
+      cells: params.cells,
+      scheduleCountAdjustments: params.scheduleCountAdjustments,
+    }),
+    students: params.students
+      .slice()
+      .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, currentReferenceDate))
+      .map((student) => {
+      const studentInput = targetSession?.studentInputs[student.id]
+      return {
+      id: student.id,
+      name: getStudentDisplayName(student),
+      fullName: student.name,
+      currentGradeLabel: resolveCurrentStudentGradeLabel(student, currentReferenceDate),
+      currentGradeOrder: (() => {
+        const gradeLabel = resolveCurrentStudentGradeLabel(student, currentReferenceDate)
+        if (gradeLabel === '未就学') return 0
+        const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
+        if (elementaryMatch) return Number(elementaryMatch[1])
+        const middleMatch = gradeLabel.match(/^中(\d+)$/)
+        if (middleMatch) return 100 + Number(middleMatch[1])
+        const highMatch = gradeLabel.match(/^高(\d+)$/)
+        if (highMatch) return 200 + Number(highMatch[1])
+        if (gradeLabel === '入塾前') return 900
+        if (gradeLabel === '退塾') return 901
+        if (gradeLabel === '非表示') return 902
+        return 999
+      })(),
+      birthDate: student.birthDate,
+      entryDate: student.entryDate,
+      withdrawDate: student.withdrawDate,
+      isHidden: student.isHidden,
+      qrSvg: buildSubmissionQrSvg(studentInput?.submissionToken),
+      submissionSubmitted: Boolean(studentInput?.countSubmitted),
+    }}),
+    teachers: params.teachers.map((teacher) => {
+      const teacherInput = targetSession?.teacherInputs[teacher.id]
+      return {
+      id: teacher.id,
+      name: getTeacherDisplayName(teacher),
+      fullName: teacher.name,
+      entryDate: teacher.entryDate,
+      withdrawDate: teacher.withdrawDate,
+      isHidden: teacher.isHidden,
+      memo: teacher.memo,
+      subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
+      qrSvg: buildSubmissionQrSvg(teacherInput?.submissionToken),
+      submissionSubmitted: Boolean(teacherInput?.countSubmitted),
+    }}),
+  }
+}
+
+function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher' | 'all') {
   const serializedPayload = JSON.stringify(payload).replace(/</g, '\\u003c')
-  const viewLabel = viewType === 'student' ? '生徒日程表' : '講師日程表'
+  const viewLabel = viewType === 'student' ? '生徒日程表' : viewType === 'teacher' ? '講師日程表' : '全員日程表'
 
   return `<!doctype html>
 <html lang="ja">
@@ -721,6 +796,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         overflow: auto;
         scrollbar-width: thin;
         scrollbar-color: #8f9cac #e6ebf2;
+      }
+
+      body.all-view .pages {
+        padding-top: 12px;
+      }
+
+      body.all-view .sheet {
+        pointer-events: none;
+      }
+
+      .section-divider {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--ink);
+        margin: 24px 0 8px;
+        padding: 8px 12px;
+        border-bottom: 2px solid var(--line);
+        text-align: center;
+      }
+
+      .section-divider:first-child {
+        margin-top: 0;
       }
 
       .sheet {
@@ -1735,8 +1832,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
     </style>
   </head>
-  <body>
-    <div class="toolbar">
+  <body${viewType === 'all' ? ' class="all-view"' : ''}>
+    ${viewType === 'all' ? '' : `<div class="toolbar">
       <div class="toolbar-title">${viewLabel}</div>
       <div class="toolbar-field">
         <label for="schedule-start-date">開始日</label>
@@ -1754,6 +1851,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       </div>
       <div class="toolbar-summary" id="schedule-summary-label"></div>
       <div class="toolbar-spacer"></div>
+      <div class="toolbar-actions">
+        <button type="button" id="schedule-show-all-button" class="secondary">全員表示</button>
+      </div>
       <div class="toolbar-field toolbar-field--search">
         <label for="schedule-person-search">${viewType === 'student' ? '生徒名検索' : '講師名検索'}</label>
         <input id="schedule-person-search" type="search" placeholder="${viewType === 'student' ? '生徒名を検索' : '講師名を検索'}" />
@@ -1767,9 +1867,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       <div class="toolbar-actions">
         <button type="button" id="schedule-apply-button">反映</button>
       </div>
-    </div>
+    </div>`}
     <main class="pages" id="schedule-pages"></main>
-    <input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />
+    ${viewType === 'all' ? '' : '<input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />'}
     <script id="schedule-data" type="application/json">${serializedPayload}</script>
     <script>
       const VIEW_TYPE = '${viewType}';
@@ -3331,7 +3431,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return next;
       }
 
-      function renderStudentPages(startDate, endDate, studentId) {
+      function buildStudentSheetHtml(startDate, endDate, studentId, indexOverride) {
         const filteredCells = filterCells(startDate, endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
@@ -3344,12 +3444,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const tableDensityClass = getTableDensityClass(dateHeaders);
         const students = getVisibleStudents(startDate, endDate);
         const student = students.find((entry) => entry.id === studentId) || students[0] || null;
-        if (!student) {
-          pagesElement.innerHTML = '<div class="empty-state">表示できる生徒が見つかりません。</div>';
-          return null;
-        }
+        if (!student) return { html: null, student: null };
         const showQr = shouldShowScheduleQr();
-        const studentIndex = Math.max(0, students.findIndex((entry) => entry.id === student.id));
+        const studentIndex = typeof indexOverride === 'number' ? indexOverride : Math.max(0, students.findIndex((entry) => entry.id === student.id));
         const entries = assignmentMap.get(student.id) || assignmentMap.get(student.name) || [];
         const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
         const unavailableSlots = getUnavailableSlotsForStudent(student.id);
@@ -3416,11 +3513,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="student" data-person-id="' + student.id + '">希望<br>提出済</span>'
           : student.qrSvg ? '<span class="qr-code">' + student.qrSvg + '</span>' : '';
         const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
-        pagesElement.innerHTML = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
-        return student;
+        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('student-common', 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+        return { html: html, student: student };
       }
 
-      function renderTeacherPages(startDate, endDate, teacherId) {
+      function renderStudentPages(startDate, endDate, studentId) {
+        const result = buildStudentSheetHtml(startDate, endDate, studentId);
+        if (!result.html) {
+          pagesElement.innerHTML = '<div class="empty-state">表示できる生徒が見つかりません。</div>';
+          return null;
+        }
+        pagesElement.innerHTML = result.html;
+        return result.student;
+      }
+
+      function buildTeacherSheetHtml(startDate, endDate, teacherId, indexOverride) {
         const filteredCells = filterCells(startDate, endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
@@ -3433,12 +3540,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const tableDensityClass = getTableDensityClass(dateHeaders);
         const teachers = getVisibleTeachers(startDate, endDate);
         const teacher = teachers.find((entry) => entry.id === teacherId) || teachers[0] || null;
-        if (!teacher) {
-          pagesElement.innerHTML = '<div class="empty-state">表示できる講師が見つかりません。</div>';
-          return null;
-        }
+        if (!teacher) return { html: null, teacher: null };
         const showQr = shouldShowScheduleQr();
-        const teacherIndex = Math.max(0, teachers.findIndex((entry) => entry.id === teacher.id));
+        const teacherIndex = typeof indexOverride === 'number' ? indexOverride : Math.max(0, teachers.findIndex((entry) => entry.id === teacher.id));
         const entries = assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
         const keyMap = new Map(entries.map((entry) => [entry.dateKey + '_' + entry.slotNumber, entry]));
         const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
@@ -3481,8 +3585,43 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ? '<span class="submission-badge print-only-hidden" data-role="submission-reset-badge" data-person-type="teacher" data-person-id="' + teacher.id + '">希望<br>提出済</span>'
           : teacher.qrSvg ? '<span class="qr-code">' + teacher.qrSvg + '</span>' : '';
         const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-        pagesElement.innerHTML = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
-        return teacher;
+        var html = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
+        return { html: html, teacher: teacher };
+      }
+
+      function renderTeacherPages(startDate, endDate, teacherId) {
+        const result = buildTeacherSheetHtml(startDate, endDate, teacherId);
+        if (!result.html) {
+          pagesElement.innerHTML = '<div class="empty-state">表示できる講師が見つかりません。</div>';
+          return null;
+        }
+        pagesElement.innerHTML = result.html;
+        return result.teacher;
+      }
+
+      function renderAllPages(startDate, endDate) {
+        var allHtml = '';
+        var students = getVisibleStudents(startDate, endDate);
+        if (students.length > 0) {
+          allHtml += '<div class="section-divider">生徒日程表（' + students.length + '名）</div>';
+          students.forEach(function(student, idx) {
+            var result = buildStudentSheetHtml(startDate, endDate, student.id, idx);
+            if (result.html) allHtml += result.html;
+          });
+        }
+        var teachers = getVisibleTeachers(startDate, endDate);
+        if (teachers.length > 0) {
+          allHtml += '<div class="section-divider">講師日程表（' + teachers.length + '名）</div>';
+          teachers.forEach(function(teacher, idx) {
+            var result = buildTeacherSheetHtml(startDate, endDate, teacher.id, idx);
+            if (result.html) allHtml += result.html;
+          });
+        }
+        if (!allHtml) {
+          pagesElement.innerHTML = '<div class="empty-state">表示できるデータが見つかりません。</div>';
+          return;
+        }
+        pagesElement.innerHTML = allHtml;
       }
 
       function applyIncomingPayload(nextPayload) {
@@ -3869,6 +4008,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           appliedEndDate = endDate;
         }
 
+        if (VIEW_TYPE === 'all') {
+          try {
+            renderAllPages(startDate, endDate);
+          } catch (error) {
+            pagesElement.innerHTML = '<div class="empty-state">表示中にエラーが発生しました: ' + escapeHtml(String(error)) + '</div>';
+          }
+          document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate);
+          updateSheetScreenSize();
+          return;
+        }
+
         const visiblePeople = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
         if (!visiblePeople.some((person) => person.id === appliedPersonId)) {
           appliedPersonId = getDefaultAppliedPersonId(startDate, endDate);
@@ -3938,6 +4088,27 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const selectedPersonId = syncPersonSelectOptions(personSelect.value || appliedPersonId)
           || getDefaultAppliedPersonId(draftRange.startDate, draftRange.endDate);
         setRangeAndRender(draftRange.startDate, draftRange.endDate, draftRange.periodValue, selectedPersonId);
+      }
+
+      if (VIEW_TYPE === 'all') {
+        appliedStartDate = DATA.defaultStartDate || DATA.availableStartDate;
+        appliedEndDate = DATA.defaultEndDate || DATA.availableEndDate;
+        render();
+      } else {
+
+      const showAllButton = document.getElementById('schedule-show-all-button');
+      if (showAllButton) {
+        showAllButton.addEventListener('click', function() {
+          if (window.opener && !window.opener.closed) {
+            var currentStartDate = (startInput && startInput.value) || appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
+            var currentEndDate = (endInput && endInput.value) || appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
+            window.opener.postMessage({
+              type: 'open-all-schedule',
+              startDate: currentStartDate,
+              endDate: currentEndDate,
+            }, '*');
+          }
+        });
       }
 
       const preferredRange = getPreferredRange();
@@ -4071,6 +4242,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       window.setTimeout(() => {
         notifyPopupReady();
       }, 0);
+
+      } // end if VIEW_TYPE !== 'all'
     </script>
   </body>
 </html>`
@@ -4115,6 +4288,35 @@ export function openStudentScheduleHtml(params: OpenStudentScheduleHtmlParams) {
 
 export function openTeacherScheduleHtml(params: OpenTeacherScheduleHtmlParams) {
   return openScheduleHtml(buildTeacherPayload(params), 'teacher', params.targetWindow)
+}
+
+export function openAllScheduleHtml(params: OpenAllScheduleHtmlParams) {
+  const payload = buildAllPayload(params)
+  const popupWindow = createPopupWindow(payload.titleLabel + '-all')
+  if (!popupWindow) {
+    alert('全員日程表を開けませんでした。ポップアップを許可してください。')
+    return null
+  }
+
+  const html = createScheduleHtml(payload, 'all')
+  const writeScheduleDocument = () => {
+    popupWindow.document.open()
+    popupWindow.document.write(html)
+    popupWindow.document.close()
+  }
+
+  writeScheduleDocument()
+  window.setTimeout(() => {
+    try {
+      if (!popupWindow.document.getElementById('schedule-pages')) {
+        writeScheduleDocument()
+      }
+    } catch {
+      writeScheduleDocument()
+    }
+  }, 0)
+  popupWindow.focus()
+  return popupWindow
 }
 
 export function syncStudentScheduleHtml(params: OpenStudentScheduleHtmlParams) {
