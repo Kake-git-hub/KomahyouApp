@@ -1,3 +1,5 @@
+import { useEffect, useRef, useState } from 'react'
+
 export type AppMenuScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
 
 type AppMenuProps = {
@@ -41,12 +43,47 @@ export function AppMenu({
   onFooterActionClick,
   footerActionTestId,
 }: AppMenuProps) {
+  const [isOpen, setIsOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const testIdByScreen: Partial<Record<AppMenuScreen, string>> = {
     board: boardItemTestId,
     'basic-data': basicDataItemTestId,
     'special-data': specialDataItemTestId,
     'auto-assign-rules': autoAssignRulesItemTestId,
     'backup-restore': backupRestoreItemTestId,
+  }
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen])
+
+  const handleNavigate = (screen: AppMenuScreen) => {
+    setIsOpen(false)
+    onNavigate(screen)
+  }
+
+  const handleFooterActionClick = () => {
+    setIsOpen(false)
+    onFooterActionClick?.()
   }
 
   if (actionButtonLabel && onActionButtonClick) {
@@ -58,35 +95,45 @@ export function AppMenu({
   }
 
   return (
-    <details className="menu-dropdown">
-      <summary className="primary-button menu-button" data-testid={buttonTestId}>メニュー</summary>
-      <div className="menu-dropdown-list">
-        {menuItems.map((item) => (
-          <button
-            key={item.screen}
-            className={`menu-link-button${currentScreen === item.screen ? ' active' : ''}`}
-            type="button"
-            disabled={currentScreen === item.screen}
-            onClick={() => onNavigate(item.screen)}
-            data-testid={testIdByScreen[item.screen]}
-          >
-            {item.label}
-          </button>
-        ))}
-        {footerActionLabel && onFooterActionClick ? (
-          <>
-            <div className="menu-dropdown-divider" aria-hidden="true" />
+    <div className="menu-dropdown" ref={rootRef}>
+      <button
+        className="primary-button menu-button"
+        type="button"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+        data-testid={buttonTestId}
+      >
+        メニュー
+      </button>
+      {isOpen ? (
+        <div className="menu-dropdown-list">
+          {menuItems.map((item) => (
             <button
-              className="menu-link-button menu-link-button-footer"
+              key={item.screen}
+              className={`menu-link-button${currentScreen === item.screen ? ' active' : ''}`}
               type="button"
-              onClick={onFooterActionClick}
-              data-testid={footerActionTestId}
+              disabled={currentScreen === item.screen}
+              onClick={() => handleNavigate(item.screen)}
+              data-testid={testIdByScreen[item.screen]}
             >
-              {footerActionLabel}
+              {item.label}
             </button>
-          </>
-        ) : null}
-      </div>
-    </details>
+          ))}
+          {footerActionLabel && onFooterActionClick ? (
+            <>
+              <div className="menu-dropdown-divider" aria-hidden="true" />
+              <button
+                className="menu-link-button menu-link-button-footer"
+                type="button"
+                onClick={handleFooterActionClick}
+                data-testid={footerActionTestId}
+              >
+                {footerActionLabel}
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   )
 }

@@ -561,12 +561,8 @@
   min-width: 104px;
 }
 
-.menu-dropdown[open] .menu-dropdown-list {
-  display: grid;
-}
-
 .menu-dropdown-list {
-  display: none;
+  display: grid;
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
