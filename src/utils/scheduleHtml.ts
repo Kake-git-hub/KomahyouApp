@@ -2257,6 +2257,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function normalizeSubjectForStudent(subject, student, referenceDate) {
+        if (subject === '算国') return getPreferredMathSubject(student, referenceDate) === '算' ? '算国' : '数';
         if (subject !== '算' && subject !== '数') return subject;
         return getPreferredMathSubject(student, referenceDate);
       }

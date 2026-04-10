@@ -64,7 +64,18 @@ export function resolveDisplayedSubjectForGrade(subject: string, gradeLabel?: st
   return isElementaryGradeLabel(gradeLabel) ? '算' : '数'
 }
 
+export function normalizeRequestedSubjectForGrade(subject: string, gradeLabel?: string) {
+  if (subject === '算国') return isElementaryGradeLabel(gradeLabel) ? '算国' : '数'
+  if (subject === '算' || subject === '数') return isElementaryGradeLabel(gradeLabel) ? '算' : '数'
+  return subject
+}
+
 export function resolveDisplayedSubjectForBirthDate(subject: string, birthDate: string | undefined, referenceDate: string | Date, fallbackGrade = '') {
   const gradeLabel = birthDate ? resolveGradeLabelFromBirthDate(birthDate, referenceDate) : fallbackGrade
   return resolveDisplayedSubjectForGrade(subject, gradeLabel)
+}
+
+export function normalizeRequestedSubjectForBirthDate(subject: string, birthDate: string | undefined, referenceDate: string | Date, fallbackGrade = '') {
+  const gradeLabel = birthDate ? resolveGradeLabelFromBirthDate(birthDate, referenceDate) : fallbackGrade
+  return normalizeRequestedSubjectForGrade(subject, gradeLabel)
 }

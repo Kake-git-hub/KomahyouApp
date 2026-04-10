@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   getSelectableStudentSubjectsForGrade,
+  normalizeRequestedSubjectForBirthDate,
+  normalizeRequestedSubjectForGrade,
   resolveDisplayedSubjectForBirthDate,
   resolveDisplayedSubjectForGrade,
   resolveGradeLabelFromBirthDate,
@@ -25,6 +27,18 @@ describe('studentGradeSubject', () => {
   it('keeps 算国 displayed as-is', () => {
     expect(resolveDisplayedSubjectForGrade('算国', '小4')).toBe('算国')
     expect(resolveDisplayedSubjectForBirthDate('算国', '2012-05-10', '2026-03-25')).toBe('算国')
+  })
+
+  it('normalizes legacy elementary requested subjects for middle school students', () => {
+    expect(normalizeRequestedSubjectForGrade('算', '中1')).toBe('数')
+    expect(normalizeRequestedSubjectForGrade('算国', '中1')).toBe('数')
+    expect(normalizeRequestedSubjectForBirthDate('算国', '2012-05-10', '2026-04-10')).toBe('数')
+  })
+
+  it('keeps elementary requested subjects for elementary students', () => {
+    expect(normalizeRequestedSubjectForGrade('算', '小4')).toBe('算')
+    expect(normalizeRequestedSubjectForGrade('算国', '小4')).toBe('算国')
+    expect(normalizeRequestedSubjectForBirthDate('算国', '2015-05-10', '2026-03-25')).toBe('算国')
   })
 
   it('returns 算国 only for elementary selectable subjects', () => {

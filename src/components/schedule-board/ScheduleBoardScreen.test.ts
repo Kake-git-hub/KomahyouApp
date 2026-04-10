@@ -1339,6 +1339,85 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
     expect(mergedDesk?.lesson?.studentSlots[1]?.name).toBe(originalStudent!.name)
     expect(mergedDesk?.lesson?.studentSlots[1]?.lessonType).toBe('makeup')
   })
+
+  it('1人デスクで出席ステータス設定後も merge で講師名を保持する', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const regularLessons = createInitialRegularLessons(new Date('2026-04-01T00:00:00'))
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    // 生徒が1人だけ入っているデスクを探す
+    const targetCell = boardWeek.find((cell) => cell.desks.some((desk) =>
+      desk.lesson?.studentSlots[0] && !desk.lesson?.studentSlots[1] && desk.teacher,
+    ))
+    const targetDesk = targetCell?.desks.find((desk) =>
+      desk.lesson?.studentSlots[0] && !desk.lesson?.studentSlots[1] && desk.teacher,
+    )
+    if (!targetCell || !targetDesk || !targetDesk.lesson) {
+      // テストデータに1人デスクがなければスキップ
+      return
+    }
+
+    const originalStudent = targetDesk.lesson.studentSlots[0]!
+    const originalTeacher = targetDesk.teacher
+
+    // 出席ステータスを設定し、lesson をクリア（実際のハンドラと同じ操作）
+    const statusEntry: StudentStatusEntry = {
+      id: 'status_teacher_preserve_1',
+      studentId: originalStudent.id,
+      sourceManagedLesson: true,
+      name: originalStudent.name,
+      managedStudentId: originalStudent.managedStudentId,
+      grade: originalStudent.grade,
+      subject: originalStudent.subject,
+      lessonType: originalStudent.lessonType,
+      teacherType: originalStudent.teacherType,
+      teacherName: targetDesk.teacher,
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+      recordedAt: '2026-04-07T10:00:00',
+      status: 'attended',
+      sourceLessonId: targetDesk.lesson.id,
+    }
+
+    removeStudentFromDeskLesson(targetDesk, 0)
+    targetDesk.statusSlots = [statusEntry, null]
+
+    // suppressedRegularLessonOccurrences にこの生徒を追加
+    const suppressedKey = `${originalStudent.managedStudentId ?? originalStudent.name}__${originalStudent.subject}__${targetCell.dateKey}__${targetCell.slotNumber}`
+
+    const merged = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [suppressedKey],
+    })
+
+    const mergedCell = merged.find((cell) => cell.id === targetCell.id)
+    const mergedDesk = mergedCell?.desks.find((desk) => desk.statusSlots?.[0]?.studentId === originalStudent.id)
+
+    expect(mergedDesk).toBeDefined()
+    expect(mergedDesk?.teacher).toBe(originalTeacher)
+    expect(mergedDesk?.statusSlots?.[0]?.status).toBe('attended')
+  })
 })
 
 // ──────────────────────────────────────────────────────

@@ -1778,11 +1778,12 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
     const nextDesks = cell.desks.map((desk) => {
       const lesson = desk.lesson
       if (!lesson || !isManagedLesson(lesson)) {
+        const hasRecordedStatus = desk.statusSlots?.some((s) => s != null) ?? false
         return {
           ...desk,
           statusSlots: cloneStatusSlots(desk.statusSlots),
-          teacher: !lesson && !desk.manualTeacher ? '' : desk.teacher,
-          manualTeacher: !lesson && !desk.manualTeacher ? false : desk.manualTeacher,
+          teacher: !lesson && !desk.manualTeacher && !hasRecordedStatus ? '' : desk.teacher,
+          manualTeacher: !lesson && !desk.manualTeacher && !hasRecordedStatus ? false : desk.manualTeacher,
           teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
           teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
           teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : undefined,

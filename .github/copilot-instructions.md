@@ -39,6 +39,7 @@
 	- Student schedule regular counts compare actual assigned lessons against planned managed lessons.
 	- Regular warning stamps stay directly below the regular count table; lecture warning stamps stay directly below the lecture count table.
 	- Student schedule subject lists must show only one math label: `算` for elementary grades, `数` for middle/high grades.
+	- Student special-lecture count registration must also collapse legacy elementary math labels for middle/high students: `算` and `算国` must not remain visible when the header grade is `中*` or `高*`; treat them as `数` in that UI.
 	- Keep focused unit coverage for stock math in `src/components/schedule-board/makeupStock.test.ts`, including holiday shortage, manual-added exclusion, and occupied-slot shortage cases.
 	- Keep PDF export rules documented in `docs/board-pdf-design.md`; time-column labels must stay large and centered, and stock side panels must stay out of exported PDFs.
 	- Sending an existing 振替授業 back to stock must not double-count stock; compare against the original regular lesson basis.
