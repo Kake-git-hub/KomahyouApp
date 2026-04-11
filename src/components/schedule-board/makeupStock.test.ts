@@ -389,4 +389,45 @@ describe('makeupStock', () => {
       negativeReason: '残数がマイナスです。希望回数を 1 件上回って配置しています。',
     })
   })
+
+  it('consumes manual-adjustment stock when a makeup is placed for a student without regular lessons', () => {
+    const student = createStudent({ id: 'orphan-student', name: '古賀 爽太', displayName: '古賀爽太' })
+    const teacher = createTeacher()
+    const weeks = [[createCell({
+      id: 'placement-cell',
+      dateKey: '2026-04-06',
+      dayLabel: '月',
+      dateLabel: '4/6',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'placed-makeup',
+          studentSlots: [createStudentEntry({
+            id: 'placed-entry',
+            name: '古賀爽太',
+            managedStudentId: 'orphan-student',
+            lessonType: 'makeup',
+            makeupSourceDate: '2026-04-02',
+            makeupSourceLabel: '4/2(木)',
+          }), null],
+        },
+      }],
+    })]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {
+        'orphan-student__数': [{ dateKey: '2026-04-02' }],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-04-10T00:00:00'),
+    })
+
+    expect(entries).toEqual([])
+  })
 })

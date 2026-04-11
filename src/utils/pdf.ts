@@ -18,7 +18,7 @@ function resolveTargetExportWidth(currentWidth: number, currentHeight: number, t
 
 function fitMemoTextForPdf(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-student-name-note').forEach((node) => {
-    const initialFontSize = 20
+    const initialFontSize = 24
 
     node.style.whiteSpace = 'pre-line'
     node.style.overflow = 'hidden'
@@ -206,10 +206,16 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher').forEach((node) => {
     node.style.minHeight = '62px'
+    node.style.width = '50px'
+    node.style.maxWidth = '50px'
+    node.style.minWidth = '50px'
+    node.style.overflow = 'hidden'
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
     node.style.fontSize = '20px'
     node.style.lineHeight = '1.25'
+    node.style.overflow = 'hidden'
+    node.style.textOverflow = 'clip'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student').forEach((node) => {
     node.style.minHeight = '62px'
@@ -228,7 +234,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.lineHeight = '1.2'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-origin-date').forEach((node) => {
-    node.style.fontSize = '10px'
+    node.style.fontSize = '18px'
     node.style.lineHeight = '1.1'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {

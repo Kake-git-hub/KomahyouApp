@@ -5390,6 +5390,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     targetDesk.lesson.studentSlots[studentIndex] = nextStudent
+    console.debug('[振替ストック配置]', {
+      placedStudent: { name: nextStudent.name, managedStudentId: nextStudent.managedStudentId, subject: nextStudent.subject, lessonType: nextStudent.lessonType, makeupSourceDate: nextStudent.makeupSourceDate },
+      stockEntry: { key: selectedMakeupStockEntry.key, balance: selectedMakeupStockEntry.balance, studentId: selectedMakeupStockEntry.studentId },
+      placementEntry: { key: placementEntry.key, studentId: placementEntry.studentId, nextOriginDate: placementEntry.nextOriginDate },
+      targetDate: targetCell.dateKey,
+    })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
     const remainingBalance = selectedMakeupStockEntry.balance - 1
     if (stockPanelsRestoreState && remainingBalance <= 0) {
@@ -6491,9 +6497,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     let nextManualLectureStockOrigins = manualLectureStockOrigins
     let nextSuppressedRegularLessonOccurrences = suppressedRegularLessonOccurrences
 
-    if (!statusEntry.sourceManagedLesson) {
-      restoreStudentToDesk(targetDesk, studentMenu.studentIndex, statusEntry)
-    }
+    restoreStudentToDesk(targetDesk, studentMenu.studentIndex, statusEntry)
     setDeskStudentStatus(targetDesk, studentMenu.studentIndex, null)
 
     const restoredStudent = buildStudentEntryFromStatus(statusEntry)
