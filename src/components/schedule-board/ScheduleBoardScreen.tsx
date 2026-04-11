@@ -5390,7 +5390,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     }
 
     targetDesk.lesson.studentSlots[studentIndex] = nextStudent
-    console.debug('[振替ストック配置]', {
+    console.log('[振替ストック配置]', {
       placedStudent: { name: nextStudent.name, managedStudentId: nextStudent.managedStudentId, subject: nextStudent.subject, lessonType: nextStudent.lessonType, makeupSourceDate: nextStudent.makeupSourceDate },
       stockEntry: { key: selectedMakeupStockEntry.key, balance: selectedMakeupStockEntry.balance, studentId: selectedMakeupStockEntry.studentId },
       placementEntry: { key: placementEntry.key, studentId: placementEntry.studentId, nextOriginDate: placementEntry.nextOriginDate },

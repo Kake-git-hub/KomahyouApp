@@ -611,9 +611,9 @@ export function buildMakeupStockEntries(params: {
     }
   }
   if (_diagPlacedStudents.length > 0) {
-    console.debug('[振替ストック計算] placed students with makeupSourceDate:', _diagPlacedStudents)
-    console.debug('[振替ストック計算] manualAdjustments keys:', Object.keys(manualAdjustments), 'values:', manualAdjustments)
-    console.debug('[振替ストック計算] makeupUsage:', { counts: makeupUsage.counts, usedOriginDates: makeupUsage.usedOriginDates })
+    console.log('[振替ストック計算] placed students with makeupSourceDate:', _diagPlacedStudents)
+    console.log('[振替ストック計算] manualAdjustments keys:', Object.keys(manualAdjustments), 'values:', manualAdjustments)
+    console.log('[振替ストック計算] makeupUsage:', { counts: makeupUsage.counts, usedOriginDates: makeupUsage.usedOriginDates })
   }
   // ── end diagnostic ──
 
@@ -665,7 +665,7 @@ export function buildMakeupStockEntries(params: {
 
     // diagnostic: log entries that still have balance despite having origin dates
     if (balance > 0 && manualOriginDates.length > 0) {
-      console.debug(`[振替ストック計算] key=${key} balance=${balance}`, {
+      console.log(`[振替ストック計算] key=${key} balance=${balance}`, {
         allOriginDates, usedOriginDates, remainingOriginDates,
         plannedCount, assignedRegularCount, totalLessonCount,
         overAssignedRegularLessons, manualIndependentPlannedMakeups,
