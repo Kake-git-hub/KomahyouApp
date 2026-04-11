@@ -598,6 +598,25 @@ export function buildMakeupStockEntries(params: {
   const trackedAssignedRegularKeys = Object.keys(assignedRegularLessons)
   const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(occupiedSlotOrigins), ...Object.keys(manualAdjustments), ...eligiblePlannedMakeupKeys, ...Object.keys(fallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
 
+  // ── diagnostic: dump all placed students with makeupSourceDate ──
+  const _diagPlacedStudents: Array<{ cellId: string; dateKey: string; isOpenDay: boolean; name: string; subject: string; lessonType: string; managedStudentId?: string; makeupSourceDate?: string; resolvedKey: string }> = []
+  for (const week of weeks) {
+    for (const cell of week) {
+      for (const desk of cell.desks) {
+        for (const student of desk.lesson?.studentSlots ?? []) {
+          if (!student || !student.makeupSourceDate) continue
+          _diagPlacedStudents.push({ cellId: cell.id, dateKey: cell.dateKey, isOpenDay: cell.isOpenDay, name: student.name, subject: student.subject, lessonType: student.lessonType, managedStudentId: student.managedStudentId, makeupSourceDate: student.makeupSourceDate, resolvedKey: buildMakeupStockKey(resolveStudentKey(student), student.subject) })
+        }
+      }
+    }
+  }
+  if (_diagPlacedStudents.length > 0) {
+    console.debug('[振替ストック計算] placed students with makeupSourceDate:', _diagPlacedStudents)
+    console.debug('[振替ストック計算] manualAdjustments keys:', Object.keys(manualAdjustments), 'values:', manualAdjustments)
+    console.debug('[振替ストック計算] makeupUsage:', { counts: makeupUsage.counts, usedOriginDates: makeupUsage.usedOriginDates })
+  }
+  // ── end diagnostic ──
+
   const entries = Array.from(allKeys).map((key) => {
     const [studentKey, subject = ''] = key.split('__')
     const isManualEntry = studentKey.startsWith('manual:')
@@ -643,6 +662,17 @@ export function buildMakeupStockEntries(params: {
     const manualIndependentPlannedMakeups = isManualEntry ? Math.max(0, plannedCount - allOriginDates.length) : 0
     const balance = remainingOriginDates.length - overAssignedRegularLessons - manualIndependentPlannedMakeups
     const negativeReasonParts: string[] = []
+
+    // diagnostic: log entries that still have balance despite having origin dates
+    if (balance > 0 && manualOriginDates.length > 0) {
+      console.debug(`[振替ストック計算] key=${key} balance=${balance}`, {
+        allOriginDates, usedOriginDates, remainingOriginDates,
+        plannedCount, assignedRegularCount, totalLessonCount,
+        overAssignedRegularLessons, manualIndependentPlannedMakeups,
+        makeupUsageCounts: makeupUsage.counts[key],
+        makeupUsageOrigins: makeupUsage.usedOriginDates[key],
+      })
+    }
 
     if (overAssignedRegularLessons > 0) {
       negativeReasonParts.push(`希望回数を ${overAssignedRegularLessons} 件上回って配置しています。`)
