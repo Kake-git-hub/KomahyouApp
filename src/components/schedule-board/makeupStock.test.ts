@@ -430,4 +430,45 @@ describe('makeupStock', () => {
 
     expect(entries).toEqual([])
   })
+
+  it('consumes legacy manual-prefixed stock for a managed student', () => {
+    const student = createStudent({ id: 's024', name: '古賀 爽太', displayName: '古賀爽太' })
+    const teacher = createTeacher()
+    const weeks = [[createCell({
+      id: 'placement-cell',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'placed-makeup',
+          studentSlots: [createStudentEntry({
+            id: 'placed-entry',
+            name: '古賀爽太',
+            managedStudentId: 's024',
+            lessonType: 'makeup',
+            makeupSourceDate: '2026-04-03',
+            makeupSourceLabel: '4/3(金)',
+          }), null],
+        },
+      }],
+    })]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {
+        'manual:s024__数': [{ dateKey: '2026-04-03' }],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-04-10T00:00:00'),
+    })
+
+    expect(entries).toEqual([])
+  })
 })

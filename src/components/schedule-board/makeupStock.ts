@@ -37,6 +37,60 @@ export type MakeupStockEntry = {
 const DAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const
 const INITIAL_SETUP_ORIGIN_PREFIX = '__initial_setup__'
 
+function splitMakeupStockKey(key: string) {
+  const separatorIndex = key.indexOf('__')
+  if (separatorIndex < 0) return [key, ''] as const
+  return [key.slice(0, separatorIndex), key.slice(separatorIndex + 2)] as const
+}
+
+function normalizeManagedMakeupStockKeyByIdSet(key: string, managedStudentIds: Set<string>) {
+  const [studentKey, subject] = splitMakeupStockKey(key)
+  if (!studentKey.startsWith('manual:')) return key
+
+  const rawStudentKey = studentKey.replace(/^manual:/, '')
+  if (rawStudentKey.startsWith('name:')) return key
+  if (!managedStudentIds.has(rawStudentKey)) return key
+
+  return buildMakeupStockKey(rawStudentKey, subject)
+}
+
+function normalizeNumberMapKeys(source: Record<string, number>, managedStudentIds: Set<string>) {
+  return Object.entries(source).reduce<Record<string, number>>((accumulator, [key, value]) => {
+    const normalizedKey = normalizeManagedMakeupStockKeyByIdSet(key, managedStudentIds)
+    accumulator[normalizedKey] = (accumulator[normalizedKey] ?? 0) + value
+    return accumulator
+  }, {})
+}
+
+function normalizeStringArrayMapKeys(source: Record<string, string[]>, managedStudentIds: Set<string>) {
+  return Object.entries(source).reduce<Record<string, string[]>>((accumulator, [key, values]) => {
+    const normalizedKey = normalizeManagedMakeupStockKeyByIdSet(key, managedStudentIds)
+    const mergedValues = [...(accumulator[normalizedKey] ?? []), ...values]
+    accumulator[normalizedKey] = Array.from(new Set(mergedValues)).sort((left, right) => left.localeCompare(right))
+    return accumulator
+  }, {})
+}
+
+function normalizeMakeupOriginMapKeysByIdSet(source: Record<string, ManualMakeupOrigin[]>, managedStudentIds: Set<string>) {
+  return Object.entries(source).reduce<Record<string, ManualMakeupOrigin[]>>((accumulator, [key, origins]) => {
+    const normalizedKey = normalizeManagedMakeupStockKeyByIdSet(key, managedStudentIds)
+    const mergedOrigins = [...(accumulator[normalizedKey] ?? []), ...origins.map((origin) => ({ ...origin }))]
+    accumulator[normalizedKey] = Array.from(new Map(mergedOrigins.map((origin) => [
+      `${origin.dateKey}__${origin.slotNumber ?? ''}__${origin.reasonLabel ?? ''}`,
+      origin,
+    ])).values()).sort((left, right) => left.dateKey.localeCompare(right.dateKey))
+    return accumulator
+  }, {})
+}
+
+export function normalizeManagedMakeupStockKey(key: string, students: StudentRow[]) {
+  return normalizeManagedMakeupStockKeyByIdSet(key, new Set(students.map((student) => student.id)))
+}
+
+export function normalizeMakeupOriginMapKeys(source: Record<string, ManualMakeupOrigin[]>, students: StudentRow[]) {
+  return normalizeMakeupOriginMapKeysByIdSet(source, new Set(students.map((student) => student.id)))
+}
+
 function pad(value: number) {
   return String(value).padStart(2, '0')
 }
@@ -590,13 +644,21 @@ export function buildMakeupStockEntries(params: {
   const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
   const occupiedSlotOrigins = computeOccupiedSlotOrigins({ regularLessons, students, teachers, classroomSettings, weeks, resolveStudentKey })
   const makeupUsage = collectMakeupUsageByKey(weeks, resolveStudentKey)
-  const plannedMakeups = makeupUsage.counts
-  const assignedRegularLessons = countAssignedLessonsByKey(weeks, resolveStudentKey, 'regular')
-  const totalLessonCounts = countTotalLessonQuotaByKey(regularLessons)
   const studentById = new Map(students.map((student) => [student.id, student]))
+  const managedStudentIds = new Set(students.map((student) => student.id))
+  const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)
+  const normalizedSuppressedOrigins = normalizeMakeupOriginMapKeysByIdSet(suppressedOrigins, managedStudentIds)
+  const normalizedFallbackStudents = Object.entries(fallbackStudents).reduce<Record<string, { studentName: string; displayName: string; subject: string }>>((accumulator, [key, value]) => {
+    accumulator[normalizeManagedMakeupStockKeyByIdSet(key, managedStudentIds)] = value
+    return accumulator
+  }, {})
+  const plannedMakeups = normalizeNumberMapKeys(makeupUsage.counts, managedStudentIds)
+  const usedOriginDatesByKey = normalizeStringArrayMapKeys(makeupUsage.usedOriginDates, managedStudentIds)
+  const assignedRegularLessons = normalizeNumberMapKeys(countAssignedLessonsByKey(weeks, resolveStudentKey, 'regular'), managedStudentIds)
+  const totalLessonCounts = countTotalLessonQuotaByKey(regularLessons)
   const eligiblePlannedMakeupKeys = Object.keys(plannedMakeups)
   const trackedAssignedRegularKeys = Object.keys(assignedRegularLessons)
-  const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(occupiedSlotOrigins), ...Object.keys(manualAdjustments), ...eligiblePlannedMakeupKeys, ...Object.keys(fallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
+  const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(occupiedSlotOrigins), ...Object.keys(normalizedManualAdjustments), ...eligiblePlannedMakeupKeys, ...Object.keys(normalizedFallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
 
   // ── diagnostic: dump all placed students with makeupSourceDate ──
   const _diagPlacedStudents: Array<{ cellId: string; dateKey: string; isOpenDay: boolean; name: string; subject: string; lessonType: string; managedStudentId?: string; makeupSourceDate?: string; resolvedKey: string }> = []
@@ -612,8 +674,8 @@ export function buildMakeupStockEntries(params: {
   }
   if (_diagPlacedStudents.length > 0) {
     console.log('[振替ストック計算] placed students with makeupSourceDate:', _diagPlacedStudents)
-    console.log('[振替ストック計算] manualAdjustments keys:', Object.keys(manualAdjustments), 'values:', manualAdjustments)
-    console.log('[振替ストック計算] makeupUsage:', { counts: makeupUsage.counts, usedOriginDates: makeupUsage.usedOriginDates })
+    console.log('[振替ストック計算] manualAdjustments keys:', Object.keys(normalizedManualAdjustments), 'values:', normalizedManualAdjustments)
+    console.log('[振替ストック計算] makeupUsage:', { counts: plannedMakeups, usedOriginDates: usedOriginDatesByKey })
   }
   // ── end diagnostic ──
 
@@ -622,13 +684,13 @@ export function buildMakeupStockEntries(params: {
     const isManualEntry = studentKey.startsWith('manual:')
     const normalizedStudentKey = studentKey.replace(/^manual:/, '')
     const student = studentById.get(normalizedStudentKey) ?? null
-    const fallback = fallbackStudents[key]
+    const fallback = normalizedFallbackStudents[key]
     const autoOriginDates = automaticShortages[key] ?? []
     const conflictOriginDates = conflictOrigins[key] ?? []
     const occupiedOriginDates = occupiedSlotOrigins[key] ?? []
-    const manualOrigins = manualAdjustments[key] ?? []
+    const manualOrigins = normalizedManualAdjustments[key] ?? []
     const manualOriginDates = manualOrigins.map((origin) => origin.dateKey)
-    const suppressedOriginDates = (suppressedOrigins[key] ?? []).map((origin) => origin.dateKey)
+    const suppressedOriginDates = (normalizedSuppressedOrigins[key] ?? []).map((origin) => origin.dateKey)
     const manualOriginReasonLabels = manualOrigins.reduce<Record<string, string>>((accumulator, origin) => {
       if (!origin.reasonLabel || accumulator[origin.dateKey]) return accumulator
       accumulator[origin.dateKey] = origin.reasonLabel
@@ -642,7 +704,7 @@ export function buildMakeupStockEntries(params: {
     const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates]))
       .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
       .sort()
-    const usedOriginDates = makeupUsage.usedOriginDates[key] ?? []
+    const usedOriginDates = usedOriginDatesByKey[key] ?? []
     const plannedCount = plannedMakeups[key] ?? 0
     const assignedRegularCount = assignedRegularLessons[key] ?? 0
     const totalLessonCount = totalLessonCounts[key] ?? 0
@@ -669,8 +731,8 @@ export function buildMakeupStockEntries(params: {
         allOriginDates, usedOriginDates, remainingOriginDates,
         plannedCount, assignedRegularCount, totalLessonCount,
         overAssignedRegularLessons, manualIndependentPlannedMakeups,
-        makeupUsageCounts: makeupUsage.counts[key],
-        makeupUsageOrigins: makeupUsage.usedOriginDates[key],
+        makeupUsageCounts: plannedMakeups[key],
+        makeupUsageOrigins: usedOriginDatesByKey[key],
       })
     }
 

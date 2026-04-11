@@ -7,7 +7,7 @@ import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { buildLectureStockEntries } from './lectureStock'
-import { buildMakeupStockEntries, buildMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignRequest } from '../../App'
@@ -648,6 +648,16 @@ function cloneManualLectureStockOrigins(originMap: Record<string, ManualLectureS
   return Object.fromEntries(Object.entries(originMap).map(([key, values]) => [key, values.map((value) => ({ ...value }))]))
 }
 
+function normalizeFallbackMakeupStudentKeys(
+  fallbackStudents: Record<string, FallbackMakeupStudent>,
+  students: StudentRow[],
+) {
+  return Object.entries(fallbackStudents).reduce<Record<string, FallbackMakeupStudent>>((accumulator, [key, value]) => {
+    accumulator[normalizeManagedMakeupStockKey(key, students)] = value
+    return accumulator
+  }, {})
+}
+
 function appendManualLectureStockOrigin(originMap: Record<string, ManualLectureStockOrigin[]>, key: string, origin: ManualLectureStockOrigin) {
   const currentOrigins = originMap[key] ?? []
   return {
@@ -1038,9 +1048,9 @@ function createInitialBoardSnapshot(params: {
     ),
     suppressedRegularLessonOccurrences: [...(params.initialBoardState?.suppressedRegularLessonOccurrences ?? [])],
     scheduleCountAdjustments: cloneScheduleCountAdjustments(params.initialBoardState?.scheduleCountAdjustments ?? []),
-    manualMakeupAdjustments: cloneOriginMap(params.initialBoardState?.manualMakeupAdjustments ?? buildInitialSetupMakeupAdjustmentsFromSettings(params.classroomSettings)),
-    suppressedMakeupOrigins: cloneOriginMap(params.initialBoardState?.suppressedMakeupOrigins ?? {}),
-    fallbackMakeupStudents: { ...(params.initialBoardState?.fallbackMakeupStudents ?? {}) },
+    manualMakeupAdjustments: cloneOriginMap(normalizeMakeupOriginMapKeys(params.initialBoardState?.manualMakeupAdjustments ?? buildInitialSetupMakeupAdjustmentsFromSettings(params.classroomSettings), params.students)),
+    suppressedMakeupOrigins: cloneOriginMap(normalizeMakeupOriginMapKeys(params.initialBoardState?.suppressedMakeupOrigins ?? {}, params.students)),
+    fallbackMakeupStudents: normalizeFallbackMakeupStudentKeys(params.initialBoardState?.fallbackMakeupStudents ?? {}, params.students),
     manualLectureStockCounts: { ...(params.initialBoardState?.manualLectureStockCounts ?? buildInitialSetupLectureStockCountsFromSettings(params.classroomSettings)) },
     manualLectureStockOrigins: cloneManualLectureStockOrigins(params.initialBoardState?.manualLectureStockOrigins ?? buildInitialSetupLectureStockOriginsFromSettings(params.classroomSettings, params.students)),
     fallbackLectureStockStudents: { ...(params.initialBoardState?.fallbackLectureStockStudents ?? buildInitialSetupFallbackLectureStudentsFromSettings(params.classroomSettings, params.students)) },
@@ -2997,8 +3007,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     return matchesStudent2 ? 'regular' : 'regular'
   }
   const resolveBoardStudentStockId = (student: StudentEntry) => {
-    const managedId = student.managedStudentId ?? managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
-    return student.manualAdded ? `manual:${managedId}` : managedId
+    const managedId = student.managedStudentId ?? managedStudentByAnyName.get(student.name)?.id
+    if (managedId) return managedId
+
+    const fallbackId = `name:${resolveBoardStudentDisplayName(student.name)}`
+    return student.manualAdded ? `manual:${fallbackId}` : fallbackId
   }
   const getSelectableSubjectsForStudent = useCallback((student: StudentRow | null, dateKey: string) => {
     if (!student) return editableSubjects
