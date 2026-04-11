@@ -107,6 +107,25 @@ test.describe('基本データ管理', () => {
     await expect(studentsTable.locator('tbody tr').filter({ hasText: 'テスト 生徒A' })).toHaveCount(1)
   })
 
+  test('追加した生徒を削除すると一覧から消える', async ({ page }) => {
+    await openBasicDataScreen(page)
+
+    await page.getByTestId('basic-data-student-draft-name').fill('テスト 生徒削除')
+    await page.getByTestId('basic-data-student-draft-display-name').fill('生徒削除')
+    await setHiddenDateInput(page, 'basic-data-student-draft-entry-date-input', '2026-04-01')
+    await setHiddenDateInput(page, 'basic-data-student-draft-birthdate-input', '2013-07-01')
+    await page.getByTestId('basic-data-add-student-button').click()
+
+    const studentsTable = page.getByTestId('basic-data-students-table')
+    const createdRow = studentsTable.locator('tbody tr').filter({ hasText: 'テスト 生徒削除' })
+    await expect(createdRow).toHaveCount(1)
+
+    acceptNextDialog(page)
+    await createdRow.getByRole('button', { name: '削除' }).click()
+
+    await expect(createdRow).toHaveCount(0)
+  })
+
   test('新しい講師を追加して一覧に表示される', async ({ page }) => {
     await openBasicDataScreen(page)
     await page.getByTestId('basic-data-tab-teachers').click()
@@ -116,13 +135,35 @@ test.describe('基本データ管理', () => {
 
     // 講師追加
     await page.getByTestId('basic-data-teacher-draft-name').fill('新規テスト講師')
-    await setHiddenDateInput(page, 'basic-data-teacher-draft-entry-date-input', '2026-04-01')
+    await setHiddenDateInput(page, 'basic-data-teacher-draft-entry-date-input', '2026-03-01')
     await page.getByTestId('basic-data-teacher-draft-subject-chip-英').click()
+    await page.getByRole('button', { name: '完了' }).click()
     await page.getByTestId('basic-data-add-teacher-button').click()
 
     // テーブルに追加された
     const teachersTable = page.getByTestId('basic-data-teachers-table')
     await expect(teachersTable.locator('tbody tr').filter({ hasText: '新規テスト講師' })).toHaveCount(1)
+  })
+
+  test('追加した講師を削除すると一覧から消える', async ({ page }) => {
+    await openBasicDataScreen(page)
+    await page.getByTestId('basic-data-tab-teachers').click()
+
+    await page.getByTestId('basic-data-teacher-draft-capabilities-summary').click()
+    await page.getByTestId('basic-data-teacher-draft-name').fill('削除対象講師')
+    await setHiddenDateInput(page, 'basic-data-teacher-draft-entry-date-input', '2026-03-01')
+    await page.getByTestId('basic-data-teacher-draft-subject-chip-英').click()
+    await page.getByRole('button', { name: '完了' }).click()
+    await page.getByTestId('basic-data-add-teacher-button').click()
+
+    const teachersTable = page.getByTestId('basic-data-teachers-table')
+    const createdRow = teachersTable.locator('tbody tr').filter({ hasText: '削除対象講師' })
+    await expect(createdRow).toHaveCount(1)
+
+    acceptNextDialog(page)
+    await createdRow.getByRole('button', { name: '削除' }).click()
+
+    await expect(createdRow).toHaveCount(0)
   })
 
   test('既存生徒の編集ボタンで名前を変更できる', async ({ page }) => {
@@ -140,8 +181,8 @@ test.describe('基本データ管理', () => {
     // 名前を変更
     await nameInput.fill('青木 太郎更新')
 
-    // 別のセルをクリックして確定（またはEnter）
-    await page.getByTestId('basic-data-student-name-s002').click()
+    // 編集ボタンを再度押して確定
+    await page.getByTestId('basic-data-edit-student-s001').click()
 
     // 変更が反映される
     await expect(page.getByTestId('basic-data-student-name-s001')).toHaveText('青木 太郎更新')
@@ -160,7 +201,7 @@ test.describe('基本データ管理', () => {
     await expect(nameInput).toHaveValue('田中講師')
 
     await nameInput.fill('田中講師A')
-    await page.getByTestId('basic-data-teacher-name-t002').click()
+    await page.getByTestId('basic-data-edit-teacher-t001').click()
 
     await expect(page.getByTestId('basic-data-teacher-name-t001')).toHaveText('田中講師A')
   })

@@ -1,6 +1,6 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
-import { getMemoLineHeight, getMemoTextMetrics } from '../components/schedule-board/memoText'
+import { getMemoLineHeight } from '../components/schedule-board/memoText'
 
 type ExportBoardPdfParams = {
   element: HTMLElement
@@ -18,8 +18,7 @@ function resolveTargetExportWidth(currentWidth: number, currentHeight: number, t
 
 function fitMemoTextForPdf(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-student-name-note').forEach((node) => {
-    const label = node.textContent ?? ''
-    const { fontSize: initialFontSize, lineHeight } = getMemoTextMetrics(label)
+    const initialFontSize = 20
 
     node.style.whiteSpace = 'pre-line'
     node.style.overflow = 'hidden'
@@ -28,7 +27,7 @@ function fitMemoTextForPdf(root: HTMLElement) {
     node.style.boxSizing = 'border-box'
     node.style.paddingBottom = '1px'
     node.style.fontSize = `${initialFontSize}px`
-    node.style.lineHeight = String(lineHeight)
+    node.style.lineHeight = '1.2'
     node.style.setProperty('-webkit-box-orient', 'vertical')
     node.style.setProperty('-webkit-line-clamp', '2')
 
@@ -81,7 +80,7 @@ function fitStudentDetailTextForPdf(root: HTMLElement) {
 
     segments.forEach(({ element }) => node.appendChild(element))
 
-    let fontSize = 10.4
+    let fontSize = 14
     const applyFontSizes = () => {
       node.style.fontSize = `${fontSize}px`
       node.style.lineHeight = '1'
@@ -209,7 +208,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.minHeight = '62px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
-    node.style.fontSize = '13px'
+    node.style.fontSize = '20px'
     node.style.lineHeight = '1.25'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student').forEach((node) => {
@@ -220,13 +219,12 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-name').forEach((node) => {
     if (node.classList.contains('sa-student-name-note')) {
-      const { fontSize, lineHeight } = getMemoTextMetrics(node.textContent ?? '')
-      node.style.fontSize = `${fontSize}px`
-      node.style.lineHeight = String(lineHeight)
+      node.style.fontSize = '20px'
+      node.style.lineHeight = '1.2'
       return
     }
 
-    node.style.fontSize = '13px'
+    node.style.fontSize = '20px'
     node.style.lineHeight = '1.2'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-origin-date').forEach((node) => {
@@ -234,15 +232,15 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.lineHeight = '1.1'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
-    node.style.fontSize = '10.4px'
+    node.style.fontSize = '14px'
     node.style.lineHeight = '1'
     node.style.gap = '0'
     node.style.whiteSpace = 'nowrap'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-star').forEach((node) => {
-    node.style.fontSize = '9.4px'
+    node.style.fontSize = '13px'
     node.style.minWidth = '8px'
-    node.style.height = '10px'
+    node.style.height = '14px'
   })
 
   exportRoot.appendChild(clone)
