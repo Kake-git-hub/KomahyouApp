@@ -7391,15 +7391,21 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   {emptyMenuContext?.statusEntry?.status === 'attended' ? (
                     <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-attendance-button">出席解除</button>
                   ) : emptyMenuContext?.statusEntry?.status === 'absent' ? (
-                    <div className="student-menu-button-row student-menu-button-row-two-up">
-                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
-                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
-                    </div>
+                    <>
+                      <div className="student-menu-button-row student-menu-button-row-three-up">
+                        <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
+                        <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
+                        <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
+                      </div>
+                    </>
                   ) : emptyMenuContext?.statusEntry?.status === 'absent-no-makeup' ? (
-                    <div className="student-menu-button-row student-menu-button-row-two-up">
-                      <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
-                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-no-makeup-button">振無休解除</button>
-                    </div>
+                    <>
+                      <div className="student-menu-button-row student-menu-button-row-three-up">
+                        <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
+                        <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
+                        <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-no-makeup-button">振無休解除</button>
+                      </div>
+                    </>
                   ) : (
                     <div className="student-menu-button-row">
                       <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
