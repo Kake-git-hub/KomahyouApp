@@ -118,7 +118,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     ])
   })
 
-  it('serializes manual board additions and explicit count deletions for student schedule counts', () => {
+  it('serializes only lecture count adjustments for student schedule counts', () => {
     const adjustments = buildSerializedScheduleCountAdjustments({
       cells: [createManualScheduleCell()],
       scheduleCountAdjustments: [{
@@ -133,19 +133,53 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(adjustments).toEqual([
       {
         studentKey: 'student-1',
-        subject: '数',
-        countKind: 'regular',
-        dateKey: '2026-03-24',
-        delta: 1,
-      },
-      {
-        studentKey: 'student-1',
         subject: '英',
         countKind: 'special',
         dateKey: '2026-03-25',
         delta: -1,
       },
     ])
+  })
+
+  it('keeps regular desired counts based on contractual occurrences even when regular deletions exist', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [createRegularLesson()],
+      defaultStartDate: '2026-03-02',
+      defaultEndDate: '2026-03-31',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      scheduleCountAdjustments: [{
+        studentKey: 'student-1',
+        subject: '数',
+        countKind: 'regular',
+        dateKey: '2026-03-10',
+        delta: -2,
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain('<tr><td>数</td><td>0(4)</td></tr>')
+    vi.unstubAllGlobals()
   })
 
   it('orders student schedule sheets by current grade and display name', () => {

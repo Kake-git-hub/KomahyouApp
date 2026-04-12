@@ -435,6 +435,7 @@ export function buildSerializedScheduleCountAdjustments(params: {
     cell.desks.forEach((desk) => {
       desk.lesson?.studentSlots.forEach((student) => {
         if (!student?.manualAdded) return
+        if (student.lessonType !== 'special') return
         appendEntry({
           studentKey: student.managedStudentId ?? student.name,
           subject: student.subject,
@@ -447,6 +448,7 @@ export function buildSerializedScheduleCountAdjustments(params: {
   })
 
   for (const adjustment of params.scheduleCountAdjustments ?? []) {
+    if (adjustment.countKind !== 'special') continue
     appendEntry({
       studentKey: adjustment.studentKey,
       subject: adjustment.subject,
@@ -3443,7 +3445,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const plannedRegularCounts = {};
         const lectureCounts = {};
         const desiredLectureCounts = buildDesiredLectureCountMap(student, startDate, endDate);
-        const regularCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'regular');
         const lectureCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'special');
         const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
         const makeupNotes = collectStudentMakeupNotes(entries);
@@ -3458,7 +3459,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1;
         });
         const visibleRegularCounts = normalizeCountMapSubjects(subjectCounts, student, startDate);
-        const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments);
+        const visiblePlannedRegularCounts = normalizeCountMapSubjects(plannedRegularCounts, student, startDate);
         const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate);
         const visibleDesiredLectureCounts = applyCountAdjustments(normalizeCountMapSubjects(desiredLectureCounts, student, startDate), lectureCountAdjustments);
         const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
