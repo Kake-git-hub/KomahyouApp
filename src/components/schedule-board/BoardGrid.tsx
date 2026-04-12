@@ -115,11 +115,10 @@ export function BoardGrid({
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
-    const hasMemo = !studentName && Boolean(memoLabel) && !statusEntry
-    const hasStatusMemo = !studentName && Boolean(memoLabel) && Boolean(statusEntry)
-    const hasStatus = !studentName && Boolean(statusEntry)
-    const memoFirstLine = hasMemo ? displayName.replace(/\r/g, '').split('\n')[0] : ''
-    const memoRestLines = hasMemo ? displayName.replace(/\r/g, '').split('\n').slice(1).join('\n') : ''
+    const hasMemo = !studentName && Boolean(memoLabel)
+    const hasStatus = !studentName && Boolean(statusEntry) && !hasMemo
+    const memoFirstLine = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n')[0] : ''
+    const memoRestLines = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(1).join('\n') : ''
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const statusNotice = statusEntry
       ? [getStudentStatusLabel(statusEntry.status), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
@@ -164,14 +163,6 @@ export function BoardGrid({
               style={getMemoTextStyle(memoRestLines)}
             >
               {memoRestLines}
-            </span>
-          ) : null}
-          {hasStatusMemo ? (
-            <span
-              className="sa-student-name sa-student-name-note sa-student-name-note-rest"
-              style={getMemoTextStyle(memoLabel!)}
-            >
-              {memoLabel}
             </span>
           ) : null}
           {hasMemo ? null : (
