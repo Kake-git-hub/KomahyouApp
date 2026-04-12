@@ -1366,6 +1366,11 @@ tr.sa-slot-first td {
   padding-bottom: 1px;
 }
 
+.sa-student-name-note-rest {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
 .sa-student-name-absence {
   color: #6d7f93;
   font-weight: 500;

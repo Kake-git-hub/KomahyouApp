@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
+import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SlotCell } from '../components/schedule-board/types'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
@@ -176,9 +177,83 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       targetWindow: popup,
     })
 
-    const html = write.mock.calls[0]?.[0]
+    const html = write.mock.calls[0]?.[0] as string
     expect(typeof html).toBe('string')
-    expect(html).toContain('<tr><td>数</td><td>0(4)</td></tr>')
+    // Verify embedded payload: 4 expected regular occurrences for 数, and no countAdjustments applied to regular
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const mathOccurrences = payload.expectedRegularOccurrences.filter((o: { subject: string }) => o.subject === '数')
+    expect(mathOccurrences).toHaveLength(4)
+    expect(payload.countAdjustments).toEqual([])
+    vi.unstubAllGlobals()
+  })
+
+  it('uses combined regular lessons from template history when spanning multiple templates', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    // Template A: student-1 takes 英 on Tuesday slot 4 starting 2025-10-01
+    // Template B: student-1 takes 数 on Wednesday slot 3 starting 2026-04-01
+    const templateA: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2025-10-01',
+      savedAt: '2025-10-01T00:00:00Z',
+      cells: [{
+        dayOfWeek: 2,
+        slotNumber: 4,
+        desks: [{ deskIndex: 1, teacherId: 'teacher-1', students: [{ studentId: 'student-1', subject: '英' }, null] }],
+      }],
+    }
+    const templateB: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-04-01',
+      savedAt: '2026-04-01T00:00:00Z',
+      cells: [{
+        dayOfWeek: 3,
+        slotNumber: 3,
+        desks: [{ deskIndex: 1, teacherId: 'teacher-1', students: [{ studentId: 'student-1', subject: '数' }, null] }],
+      }],
+    }
+
+    // Range spans both templates: March 2026 (template A) and April 2026 (template B)
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      regularLessonTemplateHistory: [templateA, templateB],
+      teachers: [createTeacher()],
+      defaultStartDate: '2026-03-01',
+      defaultEndDate: '2026-04-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const occurrences = payload.expectedRegularOccurrences as Array<{ subject: string; dateKey: string }>
+    // March: template A active → 英 on Tuesdays (3/3, 3/10, 3/17, 3/24, 3/31)
+    const marchEng = occurrences.filter((o) => o.subject === '英' && o.dateKey.startsWith('2026-03'))
+    expect(marchEng.length).toBeGreaterThanOrEqual(4)
+    // April: template B active → 数 on Wednesdays
+    const aprilMath = occurrences.filter((o) => o.subject === '数' && o.dateKey.startsWith('2026-04'))
+    expect(aprilMath.length).toBeGreaterThanOrEqual(4)
+    // No 英 in April (template A's lessons clipped before April)
+    const aprilEng = occurrences.filter((o) => o.subject === '英' && o.dateKey.startsWith('2026-04'))
+    expect(aprilEng).toHaveLength(0)
     vi.unstubAllGlobals()
   })
 

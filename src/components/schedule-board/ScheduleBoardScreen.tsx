@@ -3869,6 +3869,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         students,
         teachers,
         regularLessons,
+        regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
         scheduleCountAdjustments,
         defaultStartDate: range.startDate,
         defaultEndDate: range.endDate,
@@ -3992,6 +3993,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       plannedCells: studentPlannedScheduleCells,
       students,
       regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      teachers,
       scheduleCountAdjustments,
       highlightedStudentSlot: movingStudentContext
         ? {
@@ -6132,6 +6135,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       }),
       students,
       regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      teachers,
       scheduleCountAdjustments,
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,

@@ -1,5 +1,6 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
+import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell } from '../components/schedule-board/types'
@@ -178,6 +179,8 @@ function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined
 type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  regularLessonTemplateHistory?: RegularLessonTemplate[]
+  teachers?: TeacherRow[]
   scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
   highlightedStudentSlot?: {
     studentId: string
@@ -196,6 +199,7 @@ export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   teachers: TeacherRow[]
   regularLessons: RegularLessonRow[]
+  regularLessonTemplateHistory?: RegularLessonTemplate[]
   scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
 }
 
@@ -466,11 +470,59 @@ export function buildSerializedScheduleCountAdjustments(params: {
   ))
 }
 
+function dayBefore(dateKey: string): string {
+  const [year, month, day] = dateKey.split('-').map(Number)
+  const date = new Date(year, (month || 1) - 1, (day || 1))
+  date.setDate(date.getDate() - 1)
+  return toDateKey(date)
+}
+
+function buildCombinedRegularLessonsFromHistory(params: {
+  regularLessons: RegularLessonRow[]
+  regularLessonTemplateHistory?: RegularLessonTemplate[]
+  teachers?: TeacherRow[]
+  students: StudentRow[]
+}): RegularLessonRow[] {
+  const { regularLessons, regularLessonTemplateHistory, teachers, students } = params
+  if (!regularLessonTemplateHistory || regularLessonTemplateHistory.length <= 1) return regularLessons
+
+  const allTemplates = [...regularLessonTemplateHistory].sort((a, b) => a.effectiveStartDate.localeCompare(b.effectiveStartDate))
+  const combinedLessons: RegularLessonRow[] = []
+
+  for (let i = 0; i < allTemplates.length; i++) {
+    const template = allTemplates[i]
+    const nextTemplate = allTemplates[i + 1]
+    const lessons = buildRegularLessonsFromTemplate({ template, teachers: teachers ?? [], students })
+
+    if (nextTemplate) {
+      const clipEndDate = dayBefore(nextTemplate.effectiveStartDate)
+      for (const lesson of lessons) {
+        if (lesson.startDate > clipEndDate) continue
+        combinedLessons.push({
+          ...lesson,
+          endDate: lesson.endDate > clipEndDate ? clipEndDate : lesson.endDate,
+          student2EndDate: lesson.student2EndDate > clipEndDate ? clipEndDate : lesson.student2EndDate,
+        })
+      }
+    } else {
+      combinedLessons.push(...lessons)
+    }
+  }
+
+  return combinedLessons
+}
+
 function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params, params.students)
+  const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
+    regularLessons: params.regularLessons,
+    regularLessonTemplateHistory: params.regularLessonTemplateHistory,
+    teachers: params.teachers,
+    students: params.students,
+  })
   const expectedRegularOccurrences = buildExpectedRegularOccurrences({
     students: params.students,
-    regularLessons: params.regularLessons,
+    regularLessons: effectiveRegularLessons,
     startDate: basePayload.availableStartDate,
     endDate: basePayload.availableEndDate,
   })
@@ -550,9 +602,15 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
 
 function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params, params.students)
+  const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
+    regularLessons: params.regularLessons,
+    regularLessonTemplateHistory: params.regularLessonTemplateHistory,
+    teachers: params.teachers,
+    students: params.students,
+  })
   const expectedRegularOccurrences = buildExpectedRegularOccurrences({
     students: params.students,
-    regularLessons: params.regularLessons,
+    regularLessons: effectiveRegularLessons,
     startDate: basePayload.availableStartDate,
     endDate: basePayload.availableEndDate,
   })

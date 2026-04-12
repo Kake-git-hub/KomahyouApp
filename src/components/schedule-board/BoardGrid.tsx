@@ -117,6 +117,8 @@ export function BoardGrid({
     const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
     const hasMemo = !studentName && Boolean(memoLabel)
     const hasStatus = !studentName && Boolean(statusEntry)
+    const memoFirstLine = hasMemo ? displayName.replace(/\r/g, '').split('\n')[0] : ''
+    const memoRestLines = hasMemo ? displayName.replace(/\r/g, '').split('\n').slice(1).join('\n') : ''
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const statusNotice = statusEntry
       ? [getStudentStatusLabel(statusEntry.status), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
@@ -150,12 +152,19 @@ export function BoardGrid({
               className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasMemo ? ' sa-student-name-note' : ''}${hasStatus ? ' sa-student-name-absence' : ''}`}
               data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
               title={hoverText}
-              style={hasMemo ? getMemoTextStyle(displayName) : undefined}
             >
-              {displayName}
+              {hasMemo ? memoFirstLine : displayName}
             </span>
             {makeupSourceDateLabel ? <span className="sa-student-origin-date">{makeupSourceDateLabel}</span> : null}
           </span>
+          {hasMemo && memoRestLines ? (
+            <span
+              className="sa-student-name sa-student-name-note sa-student-name-note-rest"
+              style={getMemoTextStyle(memoRestLines)}
+            >
+              {memoRestLines}
+            </span>
+          ) : null}
           {hasMemo ? null : (
             <span className={`sa-student-detail${hasStatus ? ' sa-student-detail-muted' : ''}`}>
               {lessonPrefix || teacherStar ? (
