@@ -109,25 +109,25 @@ describe('makeupStock', () => {
     const regularLesson = createRegularLesson()
     const settings = createSettings({ holidayDates: ['2025-04-07'] })
 
-    const shortages = computeAutomaticShortageOrigins(
+    const result = computeAutomaticShortageOrigins(
       [regularLesson],
       [student],
       settings,
       new Date('2025-04-10T00:00:00'),
     )
 
-    expect(shortages).toEqual({
+    expect(result.origins).toEqual({
       'student-1__数': ['2025-04-07'],
     })
 
-    const reopenedShortages = computeAutomaticShortageOrigins(
+    const reopenedResult = computeAutomaticShortageOrigins(
       [regularLesson],
       [student],
       createSettings({ holidayDates: ['2025-04-07'], forceOpenDates: ['2025-04-07'] }),
       new Date('2025-04-10T00:00:00'),
     )
 
-    expect(reopenedShortages).toEqual({})
+    expect(reopenedResult.origins).toEqual({})
   })
 
   it('counts holiday shortages only from the app-added lesson date onward', () => {
@@ -137,14 +137,14 @@ describe('makeupStock', () => {
     })
     const settings = createSettings({ holidayDates: ['2025-04-07', '2025-04-21'] })
 
-    const shortages = computeAutomaticShortageOrigins(
+    const result = computeAutomaticShortageOrigins(
       [regularLesson],
       [student],
       settings,
       new Date('2025-04-30T00:00:00'),
     )
 
-    expect(shortages).toEqual({
+    expect(result.origins).toEqual({
       'student-1__数': ['2025-04-21'],
     })
   })
@@ -157,14 +157,14 @@ describe('makeupStock', () => {
     })
     const settings = createSettings({ holidayDates: ['2026-03-10'] })
 
-    const shortages = computeAutomaticShortageOrigins(
+    const result = computeAutomaticShortageOrigins(
       [regularLesson],
       [student],
       settings,
       new Date('2026-03-31T00:00:00'),
     )
 
-    expect(shortages).toEqual({})
+    expect(result.origins).toEqual({})
   })
 
   it('ignores manual-added makeup students in planned makeup counts', () => {
@@ -786,5 +786,68 @@ describe('makeupStock', () => {
     // No spurious occupied-slot origin from the old managed lesson at 4/13.
     const entry = entries.find((e) => e.key === 'nagashima__英')
     expect(entry).toBeUndefined()
+  })
+
+  it('stores slot numbers alongside automatic shortage origins and includes them in labels', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({ slotNumber: 3 })
+    const settings = createSettings({ holidayDates: ['2025-04-07'] })
+
+    const result = computeAutomaticShortageOrigins(
+      [regularLesson],
+      [student],
+      settings,
+      new Date('2025-04-10T00:00:00'),
+    )
+
+    expect(result.slotNumbers).toEqual({
+      'student-1__数': { '2025-04-07': 3 },
+    })
+
+    // End-to-end: the slot number should appear in origin labels
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: settings,
+      weeks: [],
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-10T00:00:00'),
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      remainingOriginLabels: ['2025/4/7(月) 3限'],
+      nextOriginLabel: '2025/4/7(月) 3限',
+    })
+  })
+
+  it('includes slot number in occupied-slot origin labels', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({ slotNumber: 2 })
+    const weeks = [[createCell({
+      slotNumber: 2,
+      slotLabel: '2限',
+    })]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      remainingOriginLabels: ['2025/4/7(月) 2限'],
+      nextOriginLabel: '2025/4/7(月) 2限',
+    })
   })
 })

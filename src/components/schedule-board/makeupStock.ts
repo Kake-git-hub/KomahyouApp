@@ -4,6 +4,7 @@ import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, resolveOp
 import type { SlotCell, StudentEntry } from './types'
 
 type OriginMap = Record<string, string[]>
+type OriginSlotMap = Record<string, Record<string, number>>
 
 export type ManualMakeupOrigin = {
   dateKey: string
@@ -147,9 +148,9 @@ function resolveOriginSlotNumber(key: string, dateKey: string, regularLessons: R
   return null
 }
 
-function buildOriginLabels(originDates: string[], key: string, regularLessons: RegularLessonRow[], manualSlotNumbers?: Record<string, number>) {
+function buildOriginLabels(originDates: string[], key: string, regularLessons: RegularLessonRow[], storedSlotNumbers?: Record<string, number>) {
   return originDates.map((dateKey) => {
-    const slotNumber = resolveOriginSlotNumber(key, dateKey, regularLessons) ?? manualSlotNumbers?.[dateKey] ?? null
+    const slotNumber = storedSlotNumbers?.[dateKey] ?? resolveOriginSlotNumber(key, dateKey, regularLessons) ?? null
     return formatOriginLabel(dateKey, slotNumber)
   })
 }
@@ -288,6 +289,11 @@ function pushOrigin(originMap: OriginMap, key: string, dateKey: string) {
   originMap[key] = [...nextDates, dateKey].sort()
 }
 
+function pushOriginSlot(slotMap: OriginSlotMap, key: string, dateKey: string, slotNumber: number) {
+  if (!slotMap[key]) slotMap[key] = {}
+  if (!slotMap[key][dateKey]) slotMap[key][dateKey] = slotNumber
+}
+
 function countTotalLessonQuotaByKey(regularLessons: RegularLessonRow[]) {
   const totals: Record<string, number> = {}
 
@@ -375,6 +381,7 @@ export function computeAutomaticShortageOrigins(
   const currentSchoolYear = resolveOperationalSchoolYear(today)
   const studentById = new Map(students.map((student) => [student.id, student]))
   const shortages: OriginMap = {}
+  const shortageSlots: OriginSlotMap = {}
   const setupFloorKey = classroomSettings.initialSetupCompletedAt
     ? toDateKey(new Date(classroomSettings.initialSetupCompletedAt))
     : null
@@ -414,12 +421,13 @@ export function computeAutomaticShortageOrigins(
         for (const shortageDate of shortageDates) {
           if (setupFloorKey && shortageDate < setupFloorKey) continue
           pushOrigin(shortages, stockKey, shortageDate)
+          pushOriginSlot(shortageSlots, stockKey, shortageDate, row.slotNumber)
         }
       }
     }
   }
 
-  return shortages
+  return { origins: shortages, slotNumbers: shortageSlots }
 }
 
 function computeScheduleConflictOrigins(
@@ -487,8 +495,10 @@ function computeScheduleConflictOrigins(
   }
 
   const conflicts: OriginMap = {}
+  const conflictSlots: OriginSlotMap = {}
   for (const [occurrenceKey, rows] of occurrences.entries()) {
-    const [dateKey] = occurrenceKey.split('_')
+    const [dateKey, slotNumberStr] = occurrenceKey.split('_')
+    const originSlotNumber = parseInt(slotNumberStr, 10)
     const usedTeacherIds = new Set<string>()
     const usedStudentIds = new Set<string>()
 
@@ -501,7 +511,9 @@ function computeScheduleConflictOrigins(
       if (hasStudentConflict) {
         for (const participant of row.participants) {
           if (setupFloorKey && dateKey < setupFloorKey) continue
-          pushOrigin(conflicts, buildMakeupStockKey(participant.studentId, participant.subject), dateKey)
+          const conflictKey = buildMakeupStockKey(participant.studentId, participant.subject)
+          pushOrigin(conflicts, conflictKey, dateKey)
+          pushOriginSlot(conflictSlots, conflictKey, dateKey, originSlotNumber)
         }
         continue
       }
@@ -513,7 +525,7 @@ function computeScheduleConflictOrigins(
     }
   }
 
-  return conflicts
+  return { origins: conflicts, slotNumbers: conflictSlots }
 }
 
 function consumeOriginDates(originDates: string[], usedOriginDates: string[], usedCount: number) {
@@ -551,8 +563,9 @@ function computeOccupiedSlotOrigins(params: {
   const weekDateKeys = Array.from(new Set(weeks.flat().map((cell) => cell.dateKey))).sort((left, right) => left.localeCompare(right))
   const cellByDateSlot = new Map(weeks.flat().map((cell) => [`${cell.dateKey}_${cell.slotNumber}`, cell]))
   const origins: OriginMap = {}
+  const occupiedSlots: OriginSlotMap = {}
 
-  if (weekDateKeys.length === 0) return origins
+  if (weekDateKeys.length === 0) return { origins, slotNumbers: occupiedSlots }
 
   const startDateKey = weekDateKeys[0]
   const endDateKey = weekDateKeys[weekDateKeys.length - 1]
@@ -635,12 +648,14 @@ function computeOccupiedSlotOrigins(params: {
       if (!hasStudentConflict && hasEmptyDesk) continue
 
       for (const participant of activeParticipants) {
-        pushOrigin(origins, buildMakeupStockKey(participant.studentId, participant.subject), dateKey)
+        const occupiedKey = buildMakeupStockKey(participant.studentId, participant.subject)
+        pushOrigin(origins, occupiedKey, dateKey)
+        pushOriginSlot(occupiedSlots, occupiedKey, dateKey, row.slotNumber)
       }
     }
   }
 
-  return origins
+  return { origins, slotNumbers: occupiedSlots }
 }
 
 export function buildMakeupStockEntries(params: {
@@ -656,9 +671,12 @@ export function buildMakeupStockEntries(params: {
   today?: Date
 }) {
   const { students, teachers, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
-  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
-  const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
-  const occupiedSlotOrigins = computeOccupiedSlotOrigins({ regularLessons, students, teachers, classroomSettings, weeks, resolveStudentKey })
+  const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
+  const conflictResult = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
+  const occupiedResult = computeOccupiedSlotOrigins({ regularLessons, students, teachers, classroomSettings, weeks, resolveStudentKey })
+  const automaticShortages = automaticShortageResult.origins
+  const conflictOrigins = conflictResult.origins
+  const occupiedSlotOrigins = occupiedResult.origins
   const makeupUsage = collectMakeupUsageByKey(weeks, resolveStudentKey)
   const studentById = new Map(students.map((student) => [student.id, student]))
   const managedStudentIds = new Set(students.map((student) => student.id))
@@ -717,6 +735,12 @@ export function buildMakeupStockEntries(params: {
       accumulator[origin.dateKey] = origin.slotNumber
       return accumulator
     }, {})
+    const allSlotNumbers: Record<string, number> = {
+      ...(automaticShortageResult.slotNumbers[key] ?? {}),
+      ...(conflictResult.slotNumbers[key] ?? {}),
+      ...(occupiedResult.slotNumbers[key] ?? {}),
+      ...manualSlotNumbers,
+    }
     const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates]))
       .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
       .sort()
@@ -728,7 +752,7 @@ export function buildMakeupStockEntries(params: {
       ? Math.max(0, assignedRegularCount + plannedCount - totalLessonCount)
       : 0
     const remainingOriginDates = consumeOriginDates(allOriginDates, usedOriginDates, plannedCount)
-    const remainingOriginLabels = buildOriginLabels(remainingOriginDates, key, regularLessons, manualSlotNumbers)
+    const remainingOriginLabels = buildOriginLabels(remainingOriginDates, key, regularLessons, allSlotNumbers)
     const remainingOriginReasonLabels = remainingOriginDates.map((dateKey) => resolveOriginReasonLabel(dateKey, {
       classroomSettings,
       autoOriginDates,
