@@ -231,6 +231,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
             lessonType: entry.lessonType,
             teacherType: entry.teacherType,
             teacherName: entry.teacherName,
+            makeupSourceLabel: entry.makeupSourceLabel,
             recordedAt: entry.recordedAt,
             status: entry.status,
           })),

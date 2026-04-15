@@ -1589,7 +1589,13 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
     const emptySlotIndex = nextLesson.studentSlots.findIndex((entry) => !entry)
     if (emptySlotIndex >= 0) {
       nextLesson.studentSlots[emptySlotIndex] = { ...student }
+      return
     }
+
+    // 管理データの通常生徒で全スロットが埋まっている場合、
+    // 盤面の非通常生徒（振替・手動追加等）が元のスロット位置の管理生徒を上書きする。
+    // 盤面操作が管理データより優先される。
+    nextLesson.studentSlots[slotIndex] = { ...student }
   })
 
   return nextLesson
