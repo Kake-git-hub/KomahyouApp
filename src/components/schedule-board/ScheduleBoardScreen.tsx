@@ -13,7 +13,7 @@ import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEnt
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry, ScheduleCountAdjustmentKind } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
-import { exportBoardPdf } from '../../utils/pdf'
+import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
@@ -4817,8 +4817,17 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setTemplateSaveConfirm({ mode: 'overwrite', template })
   }
 
-  const handleTemplateSaveConfirm = () => {
+  const handleTemplateSaveConfirm = async () => {
     if (!templateSaveConfirm) return
+    try {
+      await exportTemplateOverwriteReport({
+        weeks,
+        effectiveStartDate: templateSaveConfirm.template.effectiveStartDate,
+        resolveDisplayName: resolveBoardStudentDisplayName,
+      })
+    } catch {
+      // PDF export failure should not block template save
+    }
     handleSaveRegularLessonTemplate(templateSaveConfirm.template, true)
   }
 

@@ -1,6 +1,7 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import { getMemoLineHeight } from '../components/schedule-board/memoText'
+import type { SlotCell } from '../components/schedule-board/types'
 
 type ExportBoardPdfParams = {
   element: HTMLElement
@@ -305,4 +306,226 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   pdf.addImage(imageData, 'PNG', offsetX, offsetY, renderWidth, renderHeight, undefined, 'FAST')
 
   pdf.save(fileName)
+}
+
+const dayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
+
+type OverwriteReportRow = {
+  dateLabel: string
+  slotLabel: string
+  deskIndex: number
+  category: string
+  studentName: string
+  subject: string
+  detail: string
+}
+
+function collectOverwriteReportRows(
+  weeks: SlotCell[][],
+  effectiveStartDate: string,
+  resolveDisplayName: (name: string) => string,
+): OverwriteReportRow[] {
+  const rows: OverwriteReportRow[] = []
+
+  const statusLabel = (status: string) => {
+    if (status === 'attended') return '出席'
+    if (status === 'absent') return '欠席(振替あり)'
+    if (status === 'absent-no-makeup') return '振無休'
+    return status
+  }
+  const lessonTypeLabel = (type: string) => {
+    if (type === 'makeup') return '振替'
+    if (type === 'special') return '講習'
+    if (type === 'regular') return '通常'
+    return type
+  }
+
+  for (const week of weeks) {
+    for (const cell of week) {
+      if (cell.dateKey < effectiveStartDate) continue
+      const date = new Date(cell.dateKey + 'T00:00:00')
+      const dateLabel = `${cell.dateKey} (${dayLabels[date.getDay()]})`
+
+      for (let deskIdx = 0; deskIdx < cell.desks.length; deskIdx++) {
+        const desk = cell.desks[deskIdx]
+
+        // Collect status entries (attended/absent/absent-no-makeup)
+        if (desk.statusSlots) {
+          for (const entry of desk.statusSlots) {
+            if (!entry) continue
+            rows.push({
+              dateLabel,
+              slotLabel: cell.slotLabel,
+              deskIndex: deskIdx + 1,
+              category: '出欠実績',
+              studentName: resolveDisplayName(entry.name),
+              subject: entry.subject,
+              detail: `${statusLabel(entry.status)} / ${lessonTypeLabel(entry.lessonType)}`,
+            })
+          }
+        }
+
+        // Collect non-regular students (makeup / special / manualAdded)
+        if (desk.lesson) {
+          for (const student of desk.lesson.studentSlots) {
+            if (!student) continue
+            if (student.lessonType === 'regular' && !student.manualAdded) continue
+            const parts: string[] = [lessonTypeLabel(student.lessonType)]
+            if (student.manualAdded) parts.push('手入力')
+            if (student.makeupSourceLabel) parts.push(`元: ${student.makeupSourceLabel}`)
+            rows.push({
+              dateLabel,
+              slotLabel: cell.slotLabel,
+              deskIndex: deskIdx + 1,
+              category: student.manualAdded ? '手入力生徒' : lessonTypeLabel(student.lessonType),
+              studentName: resolveDisplayName(student.name),
+              subject: student.subject,
+              detail: parts.join(' / '),
+            })
+          }
+
+          // Collect lesson note/memo
+          if (desk.lesson.note && desk.lesson.note !== '管理データ反映') {
+            rows.push({
+              dateLabel,
+              slotLabel: cell.slotLabel,
+              deskIndex: deskIdx + 1,
+              category: '授業メモ',
+              studentName: '',
+              subject: '',
+              detail: desk.lesson.note,
+            })
+          }
+        }
+
+        // Collect desk memoSlots
+        if (desk.memoSlots) {
+          for (let slotIdx = 0; slotIdx < desk.memoSlots.length; slotIdx++) {
+            const memo = desk.memoSlots[slotIdx]
+            if (!memo) continue
+            rows.push({
+              dateLabel,
+              slotLabel: cell.slotLabel,
+              deskIndex: deskIdx + 1,
+              category: 'メモ',
+              studentName: `スロット${slotIdx + 1}`,
+              subject: '',
+              detail: memo,
+            })
+          }
+        }
+
+        // Collect manual teacher assignments
+        if (desk.manualTeacher && desk.teacher) {
+          rows.push({
+            dateLabel,
+            slotLabel: cell.slotLabel,
+            deskIndex: deskIdx + 1,
+            category: '手入力講師',
+            studentName: '',
+            subject: '',
+            detail: desk.teacher,
+          })
+        }
+      }
+    }
+  }
+
+  return rows
+}
+
+function escapeHtmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function buildOverwriteReportHtml(rows: OverwriteReportRow[], effectiveStartDate: string): string {
+  const headerRow = '<tr><th>日付</th><th>コマ</th><th>机</th><th>種別</th><th>生徒名</th><th>科目</th><th>詳細</th></tr>'
+  const bodyRows = rows.map((row) =>
+    `<tr><td>${escapeHtmlText(row.dateLabel)}</td><td>${escapeHtmlText(row.slotLabel)}</td><td>${row.deskIndex}</td><td>${escapeHtmlText(row.category)}</td><td>${escapeHtmlText(row.studentName)}</td><td>${escapeHtmlText(row.subject)}</td><td>${escapeHtmlText(row.detail)}</td></tr>`
+  ).join('')
+
+  return `<div style="font-family:'Hiragino Sans','Meiryo','sans-serif';padding:16px;background:#fff;">
+<h2 style="margin:0 0 8px;font-size:16px;">テンプレート上書き削除データ一覧</h2>
+<p style="margin:0 0 12px;font-size:12px;color:#555;">反映日: ${escapeHtmlText(effectiveStartDate)} 以降 / 出力日時: ${new Date().toLocaleString('ja-JP')} / ${rows.length}件</p>
+${rows.length === 0
+    ? '<p style="font-size:13px;color:#888;">削除される通常授業以外のデータはありません。</p>'
+    : `<table style="border-collapse:collapse;width:100%;font-size:11px;">
+<thead style="background:#f0f0f0;">${headerRow}</thead>
+<tbody>${bodyRows}</tbody>
+</table>`}
+<style>
+th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;white-space:nowrap;}
+td:last-child{white-space:normal;max-width:300px;word-break:break-all;}
+</style>
+</div>`
+}
+
+export async function exportTemplateOverwriteReport(params: {
+  weeks: SlotCell[][]
+  effectiveStartDate: string
+  resolveDisplayName: (name: string) => string
+}): Promise<void> {
+  const rows = collectOverwriteReportRows(params.weeks, params.effectiveStartDate, params.resolveDisplayName)
+  const html = buildOverwriteReportHtml(rows, params.effectiveStartDate)
+
+  const container = document.createElement('div')
+  container.style.position = 'fixed'
+  container.style.left = '-100000px'
+  container.style.top = '0'
+  container.style.background = '#ffffff'
+  container.style.zIndex = '-1'
+  container.style.width = 'max-content'
+  container.innerHTML = html
+  document.body.appendChild(container)
+
+  const canvas = await html2canvas(container, {
+    backgroundColor: '#ffffff',
+    scale: 2,
+    useCORS: true,
+    logging: false,
+    width: Math.ceil(container.scrollWidth),
+    height: Math.ceil(container.scrollHeight),
+    windowWidth: Math.ceil(container.scrollWidth),
+    windowHeight: Math.ceil(container.scrollHeight),
+  })
+
+  document.body.removeChild(container)
+
+  const orientation = canvas.width > canvas.height ? 'landscape' as const : 'portrait' as const
+  const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a4' })
+  const pageWidth = pdf.internal.pageSize.getWidth()
+  const pageHeight = pdf.internal.pageSize.getHeight()
+  const marginX = 6
+  const marginY = 6
+  const contentWidth = pageWidth - marginX * 2
+  const contentHeight = pageHeight - marginY * 2
+
+  const totalPages = Math.ceil(canvas.height / (canvas.width * (contentHeight / contentWidth)))
+
+  for (let page = 0; page < totalPages; page++) {
+    if (page > 0) pdf.addPage()
+    const sliceHeight = canvas.width * (contentHeight / contentWidth)
+    const sourceY = page * sliceHeight
+    const actualSliceHeight = Math.min(sliceHeight, canvas.height - sourceY)
+    if (actualSliceHeight <= 0) break
+
+    const sliceCanvas = document.createElement('canvas')
+    sliceCanvas.width = canvas.width
+    sliceCanvas.height = Math.ceil(actualSliceHeight)
+    const ctx = sliceCanvas.getContext('2d')
+    if (!ctx) continue
+    ctx.drawImage(canvas, 0, sourceY, canvas.width, actualSliceHeight, 0, 0, canvas.width, actualSliceHeight)
+
+    const sliceImage = sliceCanvas.toDataURL('image/png')
+    const renderWidth = contentWidth
+    const renderHeight = (actualSliceHeight / canvas.width) * contentWidth
+    pdf.addImage(sliceImage, 'PNG', marginX, marginY, renderWidth, renderHeight, undefined, 'FAST')
+  }
+
+  const dateLabel = params.effectiveStartDate.replace(/-/g, '')
+  pdf.save(`テンプレ上書き削除データ_${dateLabel}.pdf`)
 }
