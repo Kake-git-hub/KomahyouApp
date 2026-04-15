@@ -607,6 +607,22 @@ function computeOccupiedSlotOrigins(params: {
       if (activeParticipants.length === 0) continue
 
       const participantStudentIds = new Set(activeParticipants.map((participant) => participant.studentId))
+
+      // テンプレ上書き後、regularLessons は新テンプレの row ID を持つが、
+      // templateFreezeBeforeDate 以前の盤面には旧テンプレの managed lesson が残る。
+      // 旧 managed lesson に同一生徒が含まれていれば「配置済み」とみなし、
+      // 偽の occupied origin を生成しない。
+      const hasManagedCoverage = cell.desks.some((desk) => {
+        const lesson = desk.lesson
+        if (!lesson || !lesson.id.startsWith('managed_')) return false
+        return lesson.studentSlots.some((s) => {
+          if (!s) return false
+          const sid = resolveStudentKey(s).replace(/^manual:/, '').replace(/^name:/, '')
+          return participantStudentIds.has(sid)
+        })
+      })
+      if (hasManagedCoverage) continue
+
       const hasStudentConflict = cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => {
         if (!student) return false
         const studentKey = resolveStudentKey(student).replace(/^manual:/, '').replace(/^name:/, '')

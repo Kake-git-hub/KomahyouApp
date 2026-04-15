@@ -431,6 +431,93 @@ describe('makeupStock', () => {
     expect(entries).toEqual([])
   })
 
+  it('preserves manual origin slot labels and reason labels on remaining stock entries', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [],
+      classroomSettings: createSettings(),
+      weeks: [],
+      manualAdjustments: {
+        'student-1__数': [
+          { dateKey: '2025-04-07', slotNumber: 2, reasonLabel: '通常振替' },
+          { dateKey: '2025-04-14', slotNumber: 3, reasonLabel: '通常振替' },
+        ],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      key: 'student-1__数',
+      balance: 2,
+      remainingOriginDates: ['2025-04-07', '2025-04-14'],
+      remainingOriginLabels: ['2025/4/7(月) 2限', '2025/4/14(月) 3限'],
+      remainingOriginReasonLabels: ['通常振替', '通常振替'],
+      nextOriginDate: '2025-04-07',
+      nextOriginLabel: '2025/4/7(月) 2限',
+      nextOriginReasonLabel: '通常振替',
+    })
+  })
+
+  it('consumes only the matched manual origin date and keeps the remaining label metadata', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const weeks = [[createCell({
+      id: 'placement-cell',
+      dateKey: '2025-04-21',
+      dayLabel: '月',
+      dateLabel: '4/21',
+      slotNumber: 1,
+      slotLabel: '1限',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'placed-makeup',
+          studentSlots: [createStudentEntry({
+            id: 'placed-entry',
+            lessonType: 'makeup',
+            makeupSourceDate: '2025-04-07',
+            makeupSourceLabel: '4/7(月) 2限',
+          }), null],
+        },
+      }],
+    })]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {
+        'student-1__数': [
+          { dateKey: '2025-04-07', slotNumber: 2, reasonLabel: '通常振替' },
+          { dateKey: '2025-04-14', slotNumber: 3, reasonLabel: '通常振替' },
+        ],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-30T00:00:00'),
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      key: 'student-1__数',
+      balance: 1,
+      remainingOriginDates: ['2025-04-14'],
+      remainingOriginLabels: ['2025/4/14(月) 3限'],
+      remainingOriginReasonLabels: ['通常振替'],
+      nextOriginDate: '2025-04-14',
+      nextOriginLabel: '2025/4/14(月) 3限',
+      nextOriginReasonLabel: '通常振替',
+    })
+  })
+
   it('consumes legacy manual-prefixed stock for a managed student', () => {
     const student = createStudent({ id: 's024', name: '古賀 爽太', displayName: '古賀爽太' })
     const teacher = createTeacher()
@@ -470,5 +557,234 @@ describe('makeupStock', () => {
     })
 
     expect(entries).toEqual([])
+  })
+
+  it('does not generate spurious occupied-slot origins when template row ID changes but managed lesson still contains the student', () => {
+    // Scenario: template overwrite changes the regularLessons row ID (e.g. desk move).
+    // The frozen board still has the OLD managed lesson with the old row ID.
+    // computeOccupiedSlotOrigins should not treat the old managed lesson as an "occupied" slot
+    // when the student is already placed by a managed lesson from the previous template.
+    const student = createStudent({ id: 'nagashima', name: '長嶋', displayName: '長嶋' })
+    const teacher = createTeacher()
+
+    // Old managed lesson on the board (from previous template, row ID 'old-row')
+    const boardCell = createCell({
+      id: 'cell-apr6',
+      dateKey: '2026-04-06',
+      dayLabel: '月',
+      dateLabel: '4/6',
+      slotNumber: 4,
+      slotLabel: '4限',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'managed_old-row_2026-04-06', // OLD template row ID
+          note: '管理データ反映',
+          studentSlots: [
+            createStudentEntry({
+              id: 'managed-nagashima',
+              name: '長嶋',
+              managedStudentId: 'nagashima',
+              subject: '英',
+              lessonType: 'regular',
+            }),
+            null,
+          ],
+        },
+      }],
+    })
+
+    // NEW regular lesson row with different ID but same student/slot
+    const newRegularLesson = createRegularLesson({
+      id: 'new-row', // Different from 'old-row'
+      schoolYear: 2026,
+      teacherId: 'teacher-1',
+      student1Id: 'nagashima',
+      subject1: '英',
+      dayOfWeek: 1, // Monday
+      slotNumber: 4,
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [newRegularLesson],
+      classroomSettings: createSettings(),
+      weeks: [[boardCell]],
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-04-10T00:00:00'),
+    })
+
+    // No spurious stock entry should appear
+    expect(entries).toEqual([])
+  })
+
+  it('still generates occupied-slot origin when cell is fully occupied by non-managed lessons after template change', () => {
+    // If the cell is fully occupied by NON-managed lessons (user-placed),
+    // the managed regular lesson can't be placed → occupied origin generated.
+    const student = createStudent({ id: 'nagashima', name: '長嶋', displayName: '長嶋' })
+    const teacher = createTeacher()
+
+    const boardCell = createCell({
+      id: 'cell-apr6',
+      dateKey: '2026-04-06',
+      dayLabel: '月',
+      dateLabel: '4/6',
+      slotNumber: 4,
+      slotLabel: '4限',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'user-placed-lesson', // NOT a managed lesson
+          studentSlots: [
+            createStudentEntry({
+              id: 'other-entry',
+              name: '別の生徒',
+              managedStudentId: 'other-student',
+              subject: '数',
+              lessonType: 'regular',
+            }),
+            null,
+          ],
+        },
+      }],
+    })
+
+    const regularLesson = createRegularLesson({
+      id: 'new-row',
+      schoolYear: 2026,
+      teacherId: 'teacher-1',
+      student1Id: 'nagashima',
+      subject1: '英',
+      dayOfWeek: 1,
+      slotNumber: 4,
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks: [[boardCell]],
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-04-10T00:00:00'),
+    })
+
+    // Cell occupied by non-managed lesson → occupied origin generated
+    const entry = entries.find((e) => e.key === 'nagashima__英')
+    expect(entry).toBeTruthy()
+    expect(entry!.balance).toBeGreaterThan(0)
+  })
+
+  it('does not double-count stock when template overwrites and makeup is already consumed', () => {
+    // Full end-to-end scenario:
+    // 1. Regular lesson stocked on 4/6 (manual adjustment)
+    // 2. Placed as 振替 on 4/15
+    // 3. Template changed → regularLessons has new row ID
+    // 4. Frozen board at 4/13 has old managed lesson with old row ID
+    // The stock balance should remain 0 (consumed by the 振替).
+    const student = createStudent({ id: 'nagashima', name: '長嶋', displayName: '長嶋' })
+    const teacher = createTeacher()
+
+    // April 6: suppressed (desk empty)
+    const cellApr6 = createCell({
+      id: 'cell-apr6',
+      dateKey: '2026-04-06',
+      dayLabel: '月',
+      dateLabel: '4/6',
+      slotNumber: 4,
+      slotLabel: '4限',
+      desks: [{ id: 'desk-1', teacher: '', lesson: undefined }],
+    })
+
+    // April 13: old managed lesson still present (not suppressed)
+    const cellApr13 = createCell({
+      id: 'cell-apr13',
+      dateKey: '2026-04-13',
+      dayLabel: '月',
+      dateLabel: '4/13',
+      slotNumber: 4,
+      slotLabel: '4限',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'managed_old-row_2026-04-13',
+          note: '管理データ反映',
+          studentSlots: [
+            createStudentEntry({
+              id: 'managed-nagashima-13',
+              name: '長嶋',
+              managedStudentId: 'nagashima',
+              subject: '英',
+              lessonType: 'regular',
+            }),
+            null,
+          ],
+        },
+      }],
+    })
+
+    // April 15: 振替 placed (consuming the 4/6 stock)
+    const cellApr15 = createCell({
+      id: 'cell-apr15',
+      dateKey: '2026-04-15',
+      dayLabel: '水',
+      dateLabel: '4/15',
+      slotNumber: 4,
+      slotLabel: '4限',
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'makeup-lesson',
+          studentSlots: [
+            createStudentEntry({
+              id: 'makeup-nagashima',
+              name: '長嶋',
+              managedStudentId: 'nagashima',
+              subject: '英',
+              lessonType: 'makeup',
+              makeupSourceDate: '2026-04-06',
+              makeupSourceLabel: '4/6 4限',
+            }),
+            null,
+          ],
+        },
+      }],
+    })
+
+    // New regular lesson row (different ID from old template)
+    const newRegularLesson = createRegularLesson({
+      id: 'new-row',
+      schoolYear: 2026,
+      teacherId: 'teacher-1',
+      student1Id: 'nagashima',
+      subject1: '英',
+      dayOfWeek: 1,
+      slotNumber: 4,
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [newRegularLesson],
+      classroomSettings: createSettings(),
+      weeks: [[cellApr6, cellApr13, cellApr15]],
+      manualAdjustments: {
+        'nagashima__英': [{ dateKey: '2026-04-06' }],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-04-16T00:00:00'),
+    })
+
+    // Balance should be 0: the manual origin for 4/6 is consumed by the 振替 on 4/15.
+    // No spurious occupied-slot origin from the old managed lesson at 4/13.
+    const entry = entries.find((e) => e.key === 'nagashima__英')
+    expect(entry).toBeUndefined()
   })
 })
