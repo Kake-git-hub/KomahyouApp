@@ -3164,6 +3164,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function collectStudentMakeupNotes(entries) {
         return entries.reduce((notes, entry) => {
           if (entry.lesson.status === 'absent' || entry.lesson.status === 'absent-no-makeup') return notes;
+          if (entry.lesson.lessonType === 'regular') return notes;
           const note = formatMakeupNote(entry.lesson.subject, entry.lesson.makeupSourceLabel, entry.dateKey, entry.slotNumber);
           if (note) notes.push(note);
           return notes;
@@ -3173,11 +3174,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function collectTeacherMakeupNotes(entries) {
         return entries.reduce((notes, entry) => {
           entry.students.forEach((student) => {
+            if (student.lessonType === 'regular') return;
             const note = formatTeacherMakeupNote(student.name, student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
             if (note) notes.push(note);
           });
           (entry.statuses || []).forEach((student) => {
             if (student.status === 'absent' || student.status === 'absent-no-makeup') return;
+            if (student.lessonType === 'regular') return;
             const note = formatTeacherMakeupNote(student.name, student.subject, student.makeupSourceLabel, entry.dateKey, entry.slotNumber);
             if (note) notes.push(note);
           });
