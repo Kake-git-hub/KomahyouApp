@@ -326,24 +326,21 @@ export function buildExpectedRegularOccurrences(params: {
       const student = studentById.get(participant.studentId)
       if (!student) continue
 
-      // Use explicit row dates when set; otherwise extend to the full display range
-      // so expected counts are not clipped by the school year default period.
+      // Always iterate the full participant period so the popup receives all
+      // expected occurrences regardless of the current cell/display range.
+      // The popup filters by its own selected date range.
       const participantPeriod = resolveRegularLessonParticipantPeriod(row)
-      const hasExplicitStart = Boolean(row.startDate || row.student2StartDate)
-      const hasExplicitEnd = Boolean(row.endDate || row.student2EndDate)
-      const effectiveStart = hasExplicitStart ? participantPeriod.startDate : startDate
-      const effectiveEnd = hasExplicitEnd ? participantPeriod.endDate : endDate
-      const visibleStartDate = effectiveStart > startDate ? effectiveStart : startDate
-      const visibleEndDate = effectiveEnd < endDate ? effectiveEnd : endDate
-      if (visibleEndDate < visibleStartDate) continue
+      const periodStart = participantPeriod.startDate || startDate
+      const periodEnd = participantPeriod.endDate || endDate
+      if (periodEnd < periodStart) continue
 
-      for (const { year, monthIndex } of iterateMonthsInRange(visibleStartDate, visibleEndDate)) {
+      for (const { year, monthIndex } of iterateMonthsInRange(periodStart, periodEnd)) {
         const monthScheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
           .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
 
         const cappedDates = capRegularLessonDatesPerMonth(monthScheduledDates)
         for (const dateKey of cappedDates) {
-          if (dateKey < visibleStartDate || dateKey > visibleEndDate) continue
+          if (dateKey < periodStart || dateKey > periodEnd) continue
           const dedupKey = `${student.id}|${dateKey}|${participant.subject}`
           if (seen.has(dedupKey)) continue
           seen.add(dedupKey)

@@ -89,7 +89,7 @@ function createManualScheduleCell(): SlotCell {
 }
 
 describe('scheduleHtml buildExpectedRegularOccurrences', () => {
-  it('counts the first four scheduled weekly occurrences even when one date is later closed as a holiday', () => {
+  it('caps to four dates per month even when five weekly occurrences exist', () => {
     const occurrences = buildExpectedRegularOccurrences({
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
@@ -97,7 +97,11 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       endDate: '2026-03-31',
     })
 
-    expect(occurrences.map((entry) => entry.dateKey)).toEqual([
+    // Function now returns occurrences for the full participant period (school year 2025).
+    // Filter to March 2026 to verify the cap behavior.
+    const marchDates = occurrences.filter((e) => e.dateKey >= '2026-03-01' && e.dateKey <= '2026-03-31').map((e) => e.dateKey)
+    // March 2026 has 5 Tuesdays (3/3,3/10,3/17,3/24,3/31) → capped to 4
+    expect(marchDates).toEqual([
       '2026-03-03',
       '2026-03-10',
       '2026-03-17',
@@ -105,7 +109,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     ])
   })
 
-  it('applies the monthly cap before slicing to a later partial range', () => {
+  it('applies the monthly cap consistently across full participant period', () => {
     const occurrences = buildExpectedRegularOccurrences({
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
@@ -113,24 +117,33 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       endDate: '2026-03-31',
     })
 
-    expect(occurrences.map((entry) => entry.dateKey)).toEqual([
+    // Even though display range starts at 3/16, the full month is capped first.
+    // March Tuesdays after 3/16 that survive the cap: 3/17, 3/24
+    const lateMarchDates = occurrences.filter((e) => e.dateKey >= '2026-03-16' && e.dateKey <= '2026-03-31').map((e) => e.dateKey)
+    expect(lateMarchDates).toEqual([
       '2026-03-17',
       '2026-03-24',
     ])
   })
 
   it('accumulates expected occurrences across school year boundary', () => {
-    // School year 2026 starts April 2026; display spans March-April
+    // Display spans March-April, crossing the 2025→2026 school year boundary.
+    // Both school year lessons are needed to cover March (2025) and April (2026).
     const occurrences = buildExpectedRegularOccurrences({
       students: [createStudent()],
-      regularLessons: [createRegularLesson({ schoolYear: 2026 })],
+      regularLessons: [
+        createRegularLesson({ schoolYear: 2025 }),
+        createRegularLesson({ id: 'regular-sy2026', schoolYear: 2026 }),
+      ],
       startDate: '2026-03-02',
       endDate: '2026-04-30',
     })
 
-    // March 2026 Tuesdays: 3/3,3/10,3/17,3/24,3/31 → capped to 4: 3/3,3/10,3/17,3/24
-    // April 2026 Tuesdays: 4/7,4/14,4/21,4/28 → 4 dates
-    expect(occurrences.map((entry) => entry.dateKey)).toEqual([
+    // Filter to March-April to verify cross-boundary behavior
+    const springDates = occurrences.filter((e) => e.dateKey >= '2026-03-02' && e.dateKey <= '2026-04-30').map((e) => e.dateKey)
+    // March 2026 Tuesdays (from schoolYear 2025): 3/3,3/10,3/17,3/24,3/31 → capped to 4
+    // April 2026 Tuesdays (from schoolYear 2026): 4/7,4/14,4/21,4/28 → 4 dates
+    expect(springDates).toEqual([
       '2026-03-03',
       '2026-03-10',
       '2026-03-17',
@@ -154,9 +167,8 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     })
 
     // Both lessons generate same student+day+subject; dedup ensures no double-counting
-    // March 2026 Tuesdays (capped to 4): 3/3,3/10,3/17,3/24
-    // April 2026 Tuesdays: 4/7,4/14,4/21,4/28
-    expect(occurrences.map((entry) => entry.dateKey)).toEqual([
+    const springDates = occurrences.filter((e) => e.dateKey >= '2026-03-02' && e.dateKey <= '2026-04-30').map((e) => e.dateKey)
+    expect(springDates).toEqual([
       '2026-03-03',
       '2026-03-10',
       '2026-03-17',
@@ -165,6 +177,35 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       '2026-04-14',
       '2026-04-21',
       '2026-04-28',
+    ])
+  })
+
+  it('returns full participant period occurrences even when display range is narrow', () => {
+    // Template-generated lessons have explicit startDate/endDate set.
+    // Even with a narrow display range (1 week), the function returns all
+    // occurrences in the participant period so the popup can filter freely.
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: [createRegularLesson({
+        schoolYear: 2026,
+        startDate: '2026-04-01',
+        endDate: '2027-03-31',
+        student2StartDate: '2026-04-01',
+        student2EndDate: '2027-03-31',
+      })],
+      startDate: '2026-05-04',
+      endDate: '2026-05-09',
+    })
+
+    // Function returns the full school year, not just the display range.
+    // Verify April-May occurrences are present even though display range is May week 1 only.
+    const aprilMayDates = occurrences.filter((e) => e.dateKey >= '2026-04-06' && e.dateKey <= '2026-05-09').map((e) => e.dateKey)
+    expect(aprilMayDates).toEqual([
+      '2026-04-07',
+      '2026-04-14',
+      '2026-04-21',
+      '2026-04-28',
+      '2026-05-05',
     ])
   })
 
@@ -233,7 +274,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
     const mathOccurrences = payload.expectedRegularOccurrences.filter((o: { subject: string }) => o.subject === '数')
-    expect(mathOccurrences).toHaveLength(4)
+    // Function returns full participant period; verify March subset has the expected 4 capped dates
+    const marchMathOccurrences = mathOccurrences.filter((o: { dateKey: string }) => o.dateKey >= '2026-03-01' && o.dateKey <= '2026-03-31')
+    expect(marchMathOccurrences).toHaveLength(4)
     expect(payload.countAdjustments).toEqual([])
     vi.unstubAllGlobals()
   })
