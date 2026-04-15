@@ -1833,6 +1833,15 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
     )
     const preservedLessonIds = new Set<string>()
 
+    // Pre-compute which managed lesson IDs have direct ID matches from board desks
+    // so fallback doesn't steal a managed desk that another board desk will ID-match.
+    const idMatchedManagedIds = new Set<string>()
+    cell.desks.forEach((desk) => {
+      if (desk.lesson && isManagedLesson(desk.lesson) && managedDesksByLessonId.has(desk.lesson.id)) {
+        idMatchedManagedIds.add(desk.lesson.id)
+      }
+    })
+
     const nextDesks = cell.desks.map((desk) => {
       const lesson = desk.lesson
       if (!lesson || !isManagedLesson(lesson)) {
@@ -1857,6 +1866,32 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[]) {
           statusSlots: cloneStatusSlots(desk.statusSlots),
           teacher: desk.manualTeacher ? desk.teacher : managedDesk.teacher,
           lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson, cell.dateKey),
+        }
+      }
+
+      // Fallback: テンプレート行ID変更後にボードのmanaged lesson IDと管理セルのIDが不一致のとき、
+      // ボード側に通常生徒（ドロップ対象）が残っている場合のみ、
+      // 同じ生徒を含む管理デスクがあればそれをマージ対象にする（直接IDマッチ済みの管理デスクは除外）。
+      const hasRegularStudentToPreserve = lesson.studentSlots.some((s) =>
+        s && s.lessonType === 'regular' && !s.manualAdded && !isReturnedToOriginalDate(s, cell.dateKey))
+      if (hasRegularStudentToPreserve) {
+        for (const [mId, md] of managedDesksByLessonId.entries()) {
+          if (!md.lesson) continue
+          if (idMatchedManagedIds.has(mId) || preservedLessonIds.has(mId)) continue
+          const hasSharedStudent = md.lesson.studentSlots.some((ms) =>
+            ms && lesson.studentSlots.some((bs) =>
+              bs && (bs.managedStudentId && ms.managedStudentId
+                ? bs.managedStudentId === ms.managedStudentId
+                : bs.name === ms.name)))
+          if (hasSharedStudent) {
+            preservedLessonIds.add(mId)
+            return {
+              ...desk,
+              statusSlots: cloneStatusSlots(desk.statusSlots),
+              teacher: desk.manualTeacher ? desk.teacher : md.teacher,
+              lesson: mergeManagedDeskLesson(lesson, md.lesson, cell.dateKey),
+            }
+          }
         }
       }
 
