@@ -119,6 +119,55 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     ])
   })
 
+  it('accumulates expected occurrences across school year boundary', () => {
+    // School year 2026 starts April 2026; display spans March-April
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: [createRegularLesson({ schoolYear: 2026 })],
+      startDate: '2026-03-02',
+      endDate: '2026-04-30',
+    })
+
+    // March 2026 Tuesdays: 3/3,3/10,3/17,3/24,3/31 → capped to 4: 3/3,3/10,3/17,3/24
+    // April 2026 Tuesdays: 4/7,4/14,4/21,4/28 → 4 dates
+    expect(occurrences.map((entry) => entry.dateKey)).toEqual([
+      '2026-03-03',
+      '2026-03-10',
+      '2026-03-17',
+      '2026-03-24',
+      '2026-04-07',
+      '2026-04-14',
+      '2026-04-21',
+      '2026-04-28',
+    ])
+  })
+
+  it('deduplicates occurrences when multiple school year lessons cover overlapping dates', () => {
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: [
+        createRegularLesson({ schoolYear: 2025 }),
+        createRegularLesson({ id: 'regular-2', schoolYear: 2026 }),
+      ],
+      startDate: '2026-03-02',
+      endDate: '2026-04-30',
+    })
+
+    // Both lessons generate same student+day+subject; dedup ensures no double-counting
+    // March 2026 Tuesdays (capped to 4): 3/3,3/10,3/17,3/24
+    // April 2026 Tuesdays: 4/7,4/14,4/21,4/28
+    expect(occurrences.map((entry) => entry.dateKey)).toEqual([
+      '2026-03-03',
+      '2026-03-10',
+      '2026-03-17',
+      '2026-03-24',
+      '2026-04-07',
+      '2026-04-14',
+      '2026-04-21',
+      '2026-04-28',
+    ])
+  })
+
   it('serializes only lecture count adjustments for student schedule counts', () => {
     const adjustments = buildSerializedScheduleCountAdjustments({
       cells: [createManualScheduleCell()],

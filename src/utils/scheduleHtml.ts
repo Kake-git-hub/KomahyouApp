@@ -1,5 +1,5 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
-import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
+import { capRegularLessonDatesPerMonth, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { ScheduleCountAdjustmentEntry } from '../types/appState'
@@ -314,6 +314,7 @@ export function buildExpectedRegularOccurrences(params: {
   const { students, regularLessons, startDate, endDate } = params
   const studentById = new Map(students.map((student) => [student.id, student]))
   const occurrences: SerializedExpectedRegularOccurrence[] = []
+  const seen = new Set<string>()
 
   for (const row of regularLessons) {
     const participants = [
@@ -325,20 +326,27 @@ export function buildExpectedRegularOccurrences(params: {
       const student = studentById.get(participant.studentId)
       if (!student) continue
 
+      // Use explicit row dates when set; otherwise extend to the full display range
+      // so expected counts are not clipped by the school year default period.
       const participantPeriod = resolveRegularLessonParticipantPeriod(row)
-      const visibleStartDate = participantPeriod.startDate > startDate ? participantPeriod.startDate : startDate
-      const visibleEndDate = participantPeriod.endDate < endDate ? participantPeriod.endDate : endDate
+      const hasExplicitStart = Boolean(row.startDate || row.student2StartDate)
+      const hasExplicitEnd = Boolean(row.endDate || row.student2EndDate)
+      const effectiveStart = hasExplicitStart ? participantPeriod.startDate : startDate
+      const effectiveEnd = hasExplicitEnd ? participantPeriod.endDate : endDate
+      const visibleStartDate = effectiveStart > startDate ? effectiveStart : startDate
+      const visibleEndDate = effectiveEnd < endDate ? effectiveEnd : endDate
       if (visibleEndDate < visibleStartDate) continue
 
       for (const { year, monthIndex } of iterateMonthsInRange(visibleStartDate, visibleEndDate)) {
         const monthScheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
-          .filter((dateKey) => dateKey >= participantPeriod.startDate && dateKey <= participantPeriod.endDate)
-          .filter((dateKey) => isRegularLessonParticipantActiveOnDate(row, dateKey))
           .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
 
         const cappedDates = capRegularLessonDatesPerMonth(monthScheduledDates)
         for (const dateKey of cappedDates) {
           if (dateKey < visibleStartDate || dateKey > visibleEndDate) continue
+          const dedupKey = `${student.id}|${dateKey}|${participant.subject}`
+          if (seen.has(dedupKey)) continue
+          seen.add(dedupKey)
           occurrences.push({ linkedStudentId: student.id, subject: participant.subject, dateKey })
         }
       }
