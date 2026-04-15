@@ -1378,6 +1378,42 @@ function resetManagedTeacherAssignment(desk: DeskCell) {
   desk.teacherAssignmentTeacherId = undefined
 }
 
+export function buildTeacherSelectionOptions(params: {
+  teachers: TeacherRow[]
+  cell: SlotCell
+  deskIndex: number
+  isTemplateMode: boolean
+}) {
+  const { teachers, cell, deskIndex, isTemplateMode } = params
+  const targetDesk = cell.desks[deskIndex]
+  if (!targetDesk) return []
+
+  const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
+  const visibleTeachers = isTemplateMode
+    ? teachers
+    : teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, cell.dateKey) === '在籍')
+  const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
+    ? [...visibleTeachers, currentTeacher]
+    : visibleTeachers
+
+  const otherDeskTeacherNames = new Set(
+    cell.desks
+      .filter((_, index) => index !== deskIndex)
+      .map((desk) => desk.teacher)
+      .filter((name) => name.trim()),
+  )
+
+  return mergedTeachers
+    .filter((teacher) => {
+      const displayName = getTeacherDisplayName(teacher)
+      if (currentTeacher && teacher.id === currentTeacher.id) return true
+      return !otherDeskTeacherNames.has(displayName) && !otherDeskTeacherNames.has(teacher.name)
+    })
+    .slice()
+    .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
+    .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher) }))
+}
+
 function buildManagedRegularLessonsRange(params: {
   startDate: string
   endDate: string
@@ -4389,33 +4425,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   }, [teacherMenu])
 
   const teacherOptions = useMemo(() => {
-    if (!teacherMenuContext) return []
-    const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === teacherMenuContext.desk.teacher || teacher.name === teacherMenuContext.desk.teacher)
-    const visibleTeachers = isTemplateMode
-      ? teachers
-      : teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, teacherMenuContext.cell.dateKey) === '在籍')
-    const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
-      ? [...visibleTeachers, currentTeacher]
-      : visibleTeachers
-
-    // Exclude teachers already assigned to other desks in the same cell
-    const otherDeskTeacherNames = new Set(
-      teacherMenuContext.cell.desks
-        .filter((_, idx) => idx !== teacherMenu?.deskIndex)
-        .map((desk) => desk.teacher)
-        .filter((name) => name.trim()),
-    )
-
-    return mergedTeachers
-      .filter((teacher) => {
-        const displayName = getTeacherDisplayName(teacher)
-        // Always keep the current desk's teacher in the list
-        if (currentTeacher && teacher.id === currentTeacher.id) return true
-        return !otherDeskTeacherNames.has(displayName) && !otherDeskTeacherNames.has(teacher.name)
-      })
-      .slice()
-      .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
-      .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher) }))
+    if (!teacherMenuContext || !teacherMenu) return []
+    return buildTeacherSelectionOptions({
+      teachers,
+      cell: teacherMenuContext.cell,
+      deskIndex: teacherMenu.deskIndex,
+      isTemplateMode,
+    })
   }, [isTemplateMode, teacherMenu?.deskIndex, teacherMenuContext, teachers])
 
   const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('不可です。') ? statusMessage : null

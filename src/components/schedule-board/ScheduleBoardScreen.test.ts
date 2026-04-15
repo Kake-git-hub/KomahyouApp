@@ -3,7 +3,7 @@ import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, cloneWeeks, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, cloneWeeks, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -2165,5 +2165,90 @@ describe('テンプレ移動 → 上書き反映 regression', () => {
     )
 
     expect(duplicate?.managedStudentId).toBe('existing-entry')
+  })
+})
+
+describe('buildTeacherSelectionOptions', () => {
+  it('通常コマ表では同じコマの他机にいる講師を候補から除外する', () => {
+    const cell: SlotCell = {
+      id: '2026-04-07_2',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '2限',
+      slotNumber: 2,
+      timeLabel: '14:40-16:10',
+      isOpenDay: true,
+      desks: [
+        { id: 'desk-1', teacher: '' },
+        { id: 'desk-2', teacher: '田中講師' },
+        { id: 'desk-3', teacher: '佐藤講師' },
+      ],
+    }
+
+    const options = buildTeacherSelectionOptions({
+      teachers: initialTeachers,
+      cell,
+      deskIndex: 0,
+      isTemplateMode: false,
+    })
+
+    expect(options.map((option) => option.name)).not.toContain('田中講師')
+    expect(options.map((option) => option.name)).not.toContain('佐藤講師')
+    expect(options.map((option) => option.name)).toContain('鈴木講師')
+  })
+
+  it('通常コマ表では現在の机に設定済みの講師は候補に残す', () => {
+    const cell: SlotCell = {
+      id: '2026-04-07_2',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '2限',
+      slotNumber: 2,
+      timeLabel: '14:40-16:10',
+      isOpenDay: true,
+      desks: [
+        { id: 'desk-1', teacher: '田中講師' },
+        { id: 'desk-2', teacher: '佐藤講師' },
+      ],
+    }
+
+    const options = buildTeacherSelectionOptions({
+      teachers: initialTeachers,
+      cell,
+      deskIndex: 0,
+      isTemplateMode: false,
+    })
+
+    expect(options.map((option) => option.name)).toContain('田中講師')
+    expect(options.map((option) => option.name)).not.toContain('佐藤講師')
+  })
+
+  it('テンプレモードでも同じコマの他机にいる講師を候補から除外する', () => {
+    const cell: SlotCell = {
+      id: 'template_1_2',
+      dateKey: 'template_1',
+      dayLabel: '月',
+      dateLabel: '月',
+      slotLabel: '2限',
+      slotNumber: 2,
+      timeLabel: '14:40-16:10',
+      isOpenDay: true,
+      desks: [
+        { id: 'desk-1', teacher: '' },
+        { id: 'desk-2', teacher: '田中講師' },
+      ],
+    }
+
+    const options = buildTeacherSelectionOptions({
+      teachers: initialTeachers,
+      cell,
+      deskIndex: 0,
+      isTemplateMode: true,
+    })
+
+    expect(options.map((option) => option.name)).not.toContain('田中講師')
+    expect(options.map((option) => option.name)).toContain('吉田講師')
   })
 })
