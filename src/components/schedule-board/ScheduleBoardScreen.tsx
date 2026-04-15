@@ -14,7 +14,7 @@ import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignReques
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry, ScheduleCountAdjustmentKind } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { exportBoardPdf } from '../../utils/pdf'
-import { formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
@@ -1764,6 +1764,12 @@ function buildBaseManagedScheduleCellsForRange(params: {
   boardWeeks: SlotCell[][]
 }) {
   const normalizedRange = normalizeScheduleRange(params.range, params.fallbackStartDate, params.fallbackEndDate)
+  const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
+    regularLessons: params.regularLessons,
+    regularLessonTemplateHistory: params.classroomSettings.regularLessonTemplateHistory,
+    teachers: params.teachers,
+    students: params.students,
+  })
   return buildManagedRegularLessonsRange({
     startDate: normalizedRange.startDate,
     endDate: normalizedRange.endDate,
@@ -1771,7 +1777,7 @@ function buildBaseManagedScheduleCellsForRange(params: {
     classroomSettings: params.classroomSettings,
     teachers: params.teachers,
     students: params.students,
-    regularLessons: params.regularLessons,
+    regularLessons: effectiveRegularLessons,
   })
 }
 

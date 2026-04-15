@@ -477,7 +477,7 @@ function dayBefore(dateKey: string): string {
   return toDateKey(date)
 }
 
-function buildCombinedRegularLessonsFromHistory(params: {
+export function buildCombinedRegularLessonsFromHistory(params: {
   regularLessons: RegularLessonRow[]
   regularLessonTemplateHistory?: RegularLessonTemplate[]
   teachers?: TeacherRow[]
