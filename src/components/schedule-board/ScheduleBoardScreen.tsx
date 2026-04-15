@@ -1732,12 +1732,24 @@ function overlayManualRegularAdditionsOnPlannedCells(scheduleCells: SlotCell[], 
 function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
   const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys)
   const boardCellsById = new Map(boardWeeks.flat().map((cell) => [cell.id, cell]))
-  return scheduleCells.map((managedCell) => {
+  const managedCellIds = new Set(scheduleCells.map((cell) => cell.id))
+
+  const mergedCells = scheduleCells.map((managedCell) => {
     const adjustedManagedCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
     const boardCell = boardCellsById.get(managedCell.id)
     if (!boardCell) return adjustedManagedCell
     return mergeManagedWeek([boardCell], [adjustedManagedCell])[0] ?? adjustedManagedCell
   })
+
+  // ボードにあるが managed cells にないセルも結果に追加する。
+  // テンプレ反映前日付など managed cells が生成されないケースで
+  // ボード上の実績・振替データが日程表から消えないようにする。
+  for (const boardCell of boardWeeks.flat()) {
+    if (managedCellIds.has(boardCell.id)) continue
+    mergedCells.push(cloneSlotCell(boardCell))
+  }
+
+  return mergedCells
 }
 
 export function normalizeScheduleRange(range: ScheduleRangePreference, fallbackStartDate: string, fallbackEndDate: string): ScheduleRangePreference {
