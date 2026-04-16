@@ -2679,6 +2679,16 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           rangeEnd: debugEndKey,
           template: { effectiveStartDate: template.effectiveStartDate, cellCount: template.cells.length },
           cells: beforeCells,
+          stock: {
+            manualMakeupAdjustments,
+            suppressedMakeupOrigins,
+            manualLectureStockCounts,
+            manualLectureStockOrigins,
+            fallbackMakeupStudents,
+            fallbackLectureStockStudents,
+            scheduleCountAdjustments,
+            suppressedRegularLessonOccurrences,
+          },
         }, 'before')
         downloadJson({
           effectiveStartDate: effectiveStart,
@@ -2686,6 +2696,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           rangeEnd: debugEndKey,
           template: { effectiveStartDate: template.effectiveStartDate, cellCount: template.cells.length },
           cells: afterCells,
+          stock: {
+            manualMakeupAdjustments: nextManualMakeupAdjustments,
+            suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+            manualLectureStockCounts: nextManualLectureStockCounts,
+            manualLectureStockOrigins: nextManualLectureStockOrigins,
+            fallbackMakeupStudents: nextFallbackMakeupStudents,
+            fallbackLectureStockStudents: nextFallbackLectureStockStudents,
+            scheduleCountAdjustments: nextScheduleCountAdjustments,
+          },
         }, 'after')
       }
 
