@@ -48,6 +48,9 @@
 	- The 講師未選択 dropdown option has been removed; use the 講師削除 button instead.
 	- Student move on the normal board supports swap: when the target slot is occupied, the two students are swapped.
 	- Template save uses overwrite mode only: clears all board data for dates >= effectiveStartDate and rebuilds from template. A confirmation dialog is shown before execution. The toolbar also provides a clear-template button.
+	- `buildRegularLessonsFromTemplate` must preserve the template's desk order (deskIndex) within each slot. It must NOT use `packSortRegularLessonRows` with pack-priority or teacher-name sorting; use a simple (schoolYear, dayOfWeek, slotNumber, originalIndex) sort instead.
+	- Template overwrite must only restore manual makeup adjustments that existed in the original `manualMakeupAdjustments` for the same stockKey+originDate. Automatic shortage origins (occupied slots, holidays) are recalculated by the managed cell rebuild and must not be converted to manual adjustments.
+	- Debug JSON for template overwrite must capture `suppressedRegularLessonOccurrences` in the after stock as a pre-computed variable, not via callback setter.
 	- New classrooms and reset states must start with empty `specialSessions`; the legacy sample session IDs `session_2026_summer`, `session_2026_spring`, `session_2026_exam`, and `session_2026_winter` should be removed from loaded classroom data.
 	- `classroomSettings.holidayDates` must be cleared on load/import so all classrooms treat holidays as normal weekdays.
 	- Classroom-screen auto-backup restore now extracts only the acting classroom from the workspace-wide daily backup, keeping other classrooms unchanged.
