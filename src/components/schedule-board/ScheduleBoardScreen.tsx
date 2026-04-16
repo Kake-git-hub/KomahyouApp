@@ -2424,6 +2424,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [templateRedoStack, setTemplateRedoStack] = useState<TemplateHistoryEntry[]>([])
   const templateFileInputRef = useRef<HTMLInputElement | null>(null)
   const [templateSaveConfirm, setTemplateSaveConfirm] = useState<TemplateSaveConfirmState | null>(null)
+  const [pendingDisplayVerification, setPendingDisplayVerification] = useState<{ effectiveStart: string; timestamp: string } | null>(null)
   const [templateImportDateOptions, setTemplateImportDateOptions] = useState<{ dates: string[]; xlsxModule: typeof import('xlsx'); workbook: import('xlsx').WorkBook } | null>(null)
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
@@ -2670,6 +2671,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         regularLessonTemplateHistory: nextHistory,
         templateFreezeBeforeDate: template.effectiveStartDate,
       }
+      const allManagedWeeks: SlotCell[][] = []
       const overlaidWeeks = clearedWeeks.map((week) => {
         const firstDateKey = week[0]?.dateKey ?? ''
         if (!firstDateKey) return week
@@ -2682,6 +2684,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           students,
           regularLessons: normalizedTemplateRegularLessons,
         })
+        allManagedWeeks.push(managedWeek)
         const preFreezeBoard = week.filter((c) => c.dateKey < effectiveStart)
         const postFreezeBoard = week.filter((c) => c.dateKey >= effectiveStart)
         const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= effectiveStart)
@@ -2741,6 +2744,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           rangeEnd: debugEndKey,
           template: { effectiveStartDate: template.effectiveStartDate, cellCount: template.cells.length },
           cells: afterCells,
+          managedCells: extractCells(allManagedWeeks),
+          clearedCells: extractCells(clearedWeeks),
+          regularLessons: normalizedTemplateRegularLessons.map((row) => ({
+            id: row.id, schoolYear: row.schoolYear, dayOfWeek: row.dayOfWeek, slotNumber: row.slotNumber,
+            teacherId: row.teacherId, student1Id: row.student1Id, subject1: row.subject1,
+            student2Id: row.student2Id, subject2: row.subject2, startDate: row.startDate, endDate: row.endDate,
+          })),
           stock: {
             manualMakeupAdjustments: nextManualMakeupAdjustments,
             suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
@@ -2758,6 +2768,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
+      setPendingDisplayVerification({ effectiveStart, timestamp: new Date().toISOString().replace(/[:.]/g, '-') })
 
       if (restoredCount > 0) {
         setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。${restoredCount}件の振替・講習を未消化ストックへ戻しました。`)
@@ -2837,6 +2848,37 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       })
     }), classroomSettings.deskCount))
   }, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])
+
+  // テンプレ上書き後、Reactの全レンダリング＋useEffect再overlayが完了した後に
+  // 実際に表示されているデータ（normalizedWeeks）をダウンロードする。
+  // これにより「コマ表上の表示を生として」デバッグJSONのcellsデータと比較できる。
+  useEffect(() => {
+    if (!pendingDisplayVerification) return
+    const { effectiveStart, timestamp } = pendingDisplayVerification
+    setPendingDisplayVerification(null)
+    const debugStart = new Date(effectiveStart + 'T00:00:00')
+    debugStart.setMonth(debugStart.getMonth() - 1)
+    const debugEnd = new Date(effectiveStart + 'T00:00:00')
+    debugEnd.setMonth(debugEnd.getMonth() + 1)
+    const debugStartKey = debugStart.toISOString().slice(0, 10)
+    const debugEndKey = debugEnd.toISOString().slice(0, 10)
+    const displayedCells = normalizedWeeks.flatMap((week) =>
+      week.filter((cell) => cell.dateKey >= debugStartKey && cell.dateKey <= debugEndKey),
+    )
+    const blob = new Blob([JSON.stringify({
+      effectiveStartDate: effectiveStart,
+      rangeStart: debugStartKey,
+      rangeEnd: debugEndKey,
+      note: 'React render完了後に表示中のnormalizedWeeksから取得。after JSONのcellsと比較用。',
+      cells: displayedCells,
+    }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `template-debug-display-${effectiveStart}-${timestamp}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [pendingDisplayVerification, normalizedWeeks])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
