@@ -377,7 +377,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(placedDateKeys).toEqual(['2026-03-02', '2026-03-09', '2026-03-16'])
   })
 
-  it('keeps the regular teacher assigned on a fifth weekly slot after regular students are capped at four lessons per month', () => {
+  it('places the regular student on all five weekly slots when a month has five occurrences', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {
         startDate: '2026-03-01',
@@ -399,7 +399,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     const teacherDesk = fifthMondayCell?.desks.find((desk) => desk.teacher === '田中講師')
     expect(teacherDesk).toBeDefined()
-    expect(teacherDesk?.lesson).toBeUndefined()
+    expect(teacherDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s001')
 
     const firstMondayCell = cells.find((cell) => cell.dateKey === '2026-03-02' && cell.slotNumber === 1)
     const firstMondayDesk = firstMondayCell?.desks.find((desk) => desk.teacher === '田中講師')
@@ -494,7 +494,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(student?.noteSuffix).toBe('宿題')
   })
 
-  it('stores a holiday-shortened regular lesson as stock instead of moving the student to the fifth week', () => {
+  it('places the student on all available Tuesdays including the fifth week when a holiday shortens the month', () => {
     const holidayAwareSettings: ClassroomSettings = {
       ...classroomSettings,
       holidayDates: ['2026-03-10'],
@@ -539,15 +539,11 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
       .filter((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001')))
       .map((cell) => cell.dateKey)
 
-    const fifthTuesdayCell = cells.find((cell) => cell.dateKey === '2026-03-31' && cell.slotNumber === 1)
-    const fifthTuesdayTeacherDesk = fifthTuesdayCell?.desks.find((desk) => desk.teacher === '田中講師')
-
-    expect(placedDateKeys).toEqual(['2026-03-03', '2026-03-17', '2026-03-24'])
-    expect(fifthTuesdayTeacherDesk).toBeDefined()
-    expect(fifthTuesdayTeacherDesk?.lesson).toBeUndefined()
+    // Holiday on 3/10 skipped; student placed on all other Tuesdays including 3/31
+    expect(placedDateKeys).toEqual(['2026-03-03', '2026-03-17', '2026-03-24', '2026-03-31'])
   })
 
-  it('keeps the regular teacher assigned on a fifth weekly slot after board-week overlay merges managed cells', () => {
+  it('places the regular student on the fifth weekly slot after board-week overlay merges managed cells', () => {
     const weeklyRange = {
       startDate: '2026-03-29',
       endDate: '2026-04-04',
@@ -582,7 +578,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     const teacherDesk = fifthMondayCell?.desks.find((desk) => desk.teacher === '田中講師')
 
     expect(teacherDesk).toBeDefined()
-    expect(teacherDesk?.lesson).toBeUndefined()
+    expect(teacherDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s001')
   })
 
   it('keeps planned regular lessons visible even when actual occurrences are suppressed on the board', () => {

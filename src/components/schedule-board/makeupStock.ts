@@ -1,6 +1,6 @@
 import type { ClassroomSettings } from '../../types/appState'
 import { formatStudentSelectionLabel, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
-import { capRegularLessonDatesPerMonth, hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
+import { hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
 type OriginMap = Record<string, string[]>
@@ -413,8 +413,8 @@ export function computeAutomaticShortageOrigins(
         if (pastScheduledDates.length === 0) continue
 
         const openCandidateDates = pastScheduledDates.filter((dateKey) => !isClosedDate(dateKey, classroomSettings))
-        const openScheduledDates = capRegularLessonDatesPerMonth(openCandidateDates)
-        const expectedLessonCount = capRegularLessonDatesPerMonth(pastScheduledDates).length
+        const openScheduledDates = openCandidateDates
+        const expectedLessonCount = pastScheduledDates.length
         const shortageCount = Math.max(0, expectedLessonCount - openScheduledDates.length)
         const missedDates = pastScheduledDates.filter((dateKey) => isClosedDate(dateKey, classroomSettings))
         const shortageDates = missedDates.slice(0, shortageCount)
@@ -468,7 +468,7 @@ function computeScheduleConflictOrigins(
                 && isRegularParticipantScheduledOnDate(row, dateKey)
               ))
             : []
-          const dateKeys = capRegularLessonDatesPerMonth(candidateDateKeys)
+          const dateKeys = candidateDateKeys
 
           return {
             studentId: entry.studentId,
@@ -602,7 +602,7 @@ function computeOccupiedSlotOrigins(params: {
               && isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
             ))
           : []
-        const contractedDateKeys = capRegularLessonDatesPerMonth(candidateParticipantDateKeys)
+        const contractedDateKeys = candidateParticipantDateKeys
           .filter((dateKey) => dateKey >= startDateKey && dateKey <= endDateKey)
 
         contractedDateKeys.forEach((dateKey) => participantDateSet.dateKeys.add(dateKey))

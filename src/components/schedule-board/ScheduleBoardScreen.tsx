@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
-import { capRegularLessonDatesPerMonth, isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
+import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
@@ -1011,6 +1011,11 @@ function createInitialBoardSnapshot(params: {
   const weeks = params.initialBoardState?.weeks?.length
     ? normalizeWeeksDeskCount(
       params.initialBoardState.weeks.map((week) => {
+        const freezeDate = params.classroomSettings.templateFreezeBeforeDate ?? ''
+        // Pre-freeze week: 全セルが freezeDate 未満なら managed overlay を完全スキップ
+        const lastDateKey = week[week.length - 1]?.dateKey ?? ''
+        if (freezeDate && lastDateKey < freezeDate) return week
+
         const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
         const weekStart = getWeekStart(parseDateKey(firstDateKey))
         const managedWeek = createBoardWeek(weekStart, {
@@ -1019,12 +1024,19 @@ function createInitialBoardSnapshot(params: {
           students: params.students,
           regularLessons: params.regularLessons,
         })
-        const overlaid = overlayBoardWeeksOnScheduleCells(managedWeek, [week], params.initialBoardState?.suppressedRegularLessonOccurrences ?? [])
-        const freezeDate = params.classroomSettings.templateFreezeBeforeDate ?? ''
-        if (!freezeDate) return overlaid
-        // Pre-freeze cells: keep existing board data without managed overlay
-        const boardById = new Map(week.map((c) => [c.id, c]))
-        return overlaid.map((cell) => (cell.dateKey < freezeDate ? (boardById.get(cell.id) ?? cell) : cell))
+        const suppressedKeys = params.initialBoardState?.suppressedRegularLessonOccurrences ?? []
+        if (!freezeDate) {
+          return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedKeys)
+        }
+        // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
+        const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
+        const postFreezeBoard = week.filter((c) => c.dateKey >= freezeDate)
+        const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= freezeDate)
+        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], suppressedKeys)
+        return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
+          if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+          return a.slotNumber - b.slotNumber
+        })
       }),
       params.classroomSettings.deskCount,
     )
@@ -1453,7 +1465,6 @@ function buildManagedRegularLessonsRange(params: {
     const hasTeacherOnlyDesk = Boolean(row.teacherId) && !hasAssignedStudents
     if (!hasAssignedStudents && !hasTeacherOnlyDesk) continue
 
-    const limitDateKeys = (dateKeys: string[]) => capRegularLessonDatesPerMonth(dateKeys)
     const student1ActiveDateKeys = student1
       ? scheduledDateKeys.filter((dateKey) => (
         isRegularLessonParticipantActiveOnDate(row, dateKey)
@@ -1467,11 +1478,9 @@ function buildManagedRegularLessonsRange(params: {
       ))
       : []
 
-    const student1DateKeys = student1
-      ? new Set(limitDateKeys(student1ActiveDateKeys))
-      : new Set<string>()
+    const student1DateKeys = new Set(student1ActiveDateKeys)
     const student2DateKeys = student2 && row.subject2
-      ? new Set(limitDateKeys(student2ActiveDateKeys))
+      ? new Set(student2ActiveDateKeys)
       : new Set<string>()
 
     const activeDateKeys = hasTeacherOnlyDesk
@@ -2633,25 +2642,8 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               })),
             }
           }
-          // effectiveStart以前のセル: 起点日がeffectiveStart以降の振替のみ除去
-          // （managed overlay のスキップは useEffect 側の templateFreezeBeforeDate で処理）
-          return {
-            ...cell,
-            desks: cell.desks.map((desk) => {
-              const lesson = desk.lesson
-              if (!lesson) return { ...desk }
-              // 起点日がeffectiveStart以降の振替は除去
-              const nextSlots = lesson.studentSlots.map((s) => {
-                if (!s || s.lessonType !== 'makeup' || s.manualAdded) return s
-                if (s.makeupSourceDate && s.makeupSourceDate >= effectiveStart) return null
-                return s
-              }) as [StudentEntry | null, StudentEntry | null]
-              return {
-                ...desk,
-                lesson: nextSlots.some(Boolean) ? { ...lesson, studentSlots: nextSlots } : undefined,
-              }
-            }),
-          }
+          // effectiveStart以前のセルは一切変更しない（禁忌: テンプレ反映日以前のコマ表は不変）
+          return cell
         }),
       )
       setWeeks(clearedWeeks)
@@ -2721,14 +2713,25 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   useEffect(() => {
     const freezeDate = classroomSettings.templateFreezeBeforeDate ?? ''
     setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => {
+      // Pre-freeze week: 全セルが freezeDate 未満なら managed overlay を完全スキップ（禁忌: テンプレ反映日以前のコマ表は不変）
+      const lastDateKey = week[week.length - 1]?.dateKey ?? ''
+      if (freezeDate && lastDateKey < freezeDate) return week
+
       const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
       const weekStart = getWeekStart(parseDateKey(firstDateKey))
       const managedWeek = createBoardWeek(weekStart, { classroomSettings, teachers, students, regularLessons })
-      const overlaid = overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedRegularLessonOccurrences)
-      if (!freezeDate) return overlaid
-      // Pre-freeze cells: keep existing board data without managed overlay
-      const boardById = new Map(week.map((c) => [c.id, c]))
-      return overlaid.map((cell) => (cell.dateKey < freezeDate ? (boardById.get(cell.id) ?? cell) : cell))
+      if (!freezeDate) {
+        return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedRegularLessonOccurrences)
+      }
+      // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
+      const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
+      const postFreezeBoard = week.filter((c) => c.dateKey >= freezeDate)
+      const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= freezeDate)
+      const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], suppressedRegularLessonOccurrences)
+      return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
+        if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+        return a.slotNumber - b.slotNumber
+      })
     }), classroomSettings.deskCount))
   }, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])
 

@@ -89,7 +89,7 @@ function createManualScheduleCell(): SlotCell {
 }
 
 describe('scheduleHtml buildExpectedRegularOccurrences', () => {
-  it('caps to four dates per month even when five weekly occurrences exist', () => {
+  it('returns all weekly occurrences in a month without monthly cap', () => {
     const occurrences = buildExpectedRegularOccurrences({
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
@@ -97,19 +97,19 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       endDate: '2026-03-31',
     })
 
-    // Function now returns occurrences for the full participant period (school year 2025).
-    // Filter to March 2026 to verify the cap behavior.
+    // Filter to March 2026 to verify all 5 Tuesdays are included (no cap)
     const marchDates = occurrences.filter((e) => e.dateKey >= '2026-03-01' && e.dateKey <= '2026-03-31').map((e) => e.dateKey)
-    // March 2026 has 5 Tuesdays (3/3,3/10,3/17,3/24,3/31) → capped to 4
+    // March 2026 has 5 Tuesdays (3/3,3/10,3/17,3/24,3/31) → all included
     expect(marchDates).toEqual([
       '2026-03-03',
       '2026-03-10',
       '2026-03-17',
       '2026-03-24',
+      '2026-03-31',
     ])
   })
 
-  it('applies the monthly cap consistently across full participant period', () => {
+  it('returns all occurrences in display range without monthly cap', () => {
     const occurrences = buildExpectedRegularOccurrences({
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
@@ -117,12 +117,12 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       endDate: '2026-03-31',
     })
 
-    // Even though display range starts at 3/16, the full month is capped first.
-    // March Tuesdays after 3/16 that survive the cap: 3/17, 3/24
+    // All March Tuesdays after 3/16 (no cap): 3/17, 3/24, 3/31
     const lateMarchDates = occurrences.filter((e) => e.dateKey >= '2026-03-16' && e.dateKey <= '2026-03-31').map((e) => e.dateKey)
     expect(lateMarchDates).toEqual([
       '2026-03-17',
       '2026-03-24',
+      '2026-03-31',
     ])
   })
 
@@ -141,13 +141,14 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     // Filter to March-April to verify cross-boundary behavior
     const springDates = occurrences.filter((e) => e.dateKey >= '2026-03-02' && e.dateKey <= '2026-04-30').map((e) => e.dateKey)
-    // March 2026 Tuesdays (from schoolYear 2025): 3/3,3/10,3/17,3/24,3/31 → capped to 4
+    // March 2026 Tuesdays (from schoolYear 2025): 3/3,3/10,3/17,3/24,3/31 → all 5
     // April 2026 Tuesdays (from schoolYear 2026): 4/7,4/14,4/21,4/28 → 4 dates
     expect(springDates).toEqual([
       '2026-03-03',
       '2026-03-10',
       '2026-03-17',
       '2026-03-24',
+      '2026-03-31',
       '2026-04-07',
       '2026-04-14',
       '2026-04-21',
@@ -173,6 +174,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       '2026-03-10',
       '2026-03-17',
       '2026-03-24',
+      '2026-03-31',
       '2026-04-07',
       '2026-04-14',
       '2026-04-21',
@@ -274,9 +276,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
     const mathOccurrences = payload.expectedRegularOccurrences.filter((o: { subject: string }) => o.subject === '数')
-    // Function returns full participant period; verify March subset has the expected 4 capped dates
+    // Function returns full participant period; March has 5 Tuesdays (no monthly cap)
     const marchMathOccurrences = mathOccurrences.filter((o: { dateKey: string }) => o.dateKey >= '2026-03-01' && o.dateKey <= '2026-03-31')
-    expect(marchMathOccurrences).toHaveLength(4)
+    expect(marchMathOccurrences).toHaveLength(5)
     expect(payload.countAdjustments).toEqual([])
     vi.unstubAllGlobals()
   })

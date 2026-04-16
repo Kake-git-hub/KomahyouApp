@@ -1,5 +1,5 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
-import { capRegularLessonDatesPerMonth, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
+import { resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { ScheduleCountAdjustmentEntry } from '../types/appState'
@@ -338,8 +338,7 @@ export function buildExpectedRegularOccurrences(params: {
         const monthScheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
           .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
 
-        const cappedDates = capRegularLessonDatesPerMonth(monthScheduledDates)
-        for (const dateKey of cappedDates) {
+        for (const dateKey of monthScheduledDates) {
           if (dateKey < periodStart || dateKey > periodEnd) continue
           const dedupKey = `${student.id}|${dateKey}|${participant.subject}`
           if (seen.has(dedupKey)) continue

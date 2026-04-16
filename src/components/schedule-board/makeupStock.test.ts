@@ -149,7 +149,7 @@ describe('makeupStock', () => {
     })
   })
 
-  it('does not treat a holiday in a five-week month as shortage stock when four contractual lessons still fit', () => {
+  it('treats a holiday in a five-week month as shortage stock when all weekly occurrences are expected', () => {
     const student = createStudent()
     const regularLesson = createRegularLesson({
       dayOfWeek: 2,
@@ -164,7 +164,9 @@ describe('makeupStock', () => {
       new Date('2026-03-31T00:00:00'),
     )
 
-    expect(result.origins).toEqual({})
+    expect(result.origins).toEqual({
+      'student-1__数': ['2026-03-10'],
+    })
   })
 
   it('ignores manual-added makeup students in planned makeup counts', () => {
@@ -228,7 +230,7 @@ describe('makeupStock', () => {
     })
   })
 
-  it('does not create stock for an occupied fifth weekly occurrence that is outside the four-lesson contract', () => {
+  it('creates stock for an occupied fifth weekly occurrence when all weekly occurrences are expected', () => {
     const student = createStudent()
     const teacher = createTeacher()
     const regularLesson = createRegularLesson({
@@ -263,7 +265,16 @@ describe('makeupStock', () => {
       today: new Date('2026-03-31T00:00:00'),
     })
 
-    expect(entries).toEqual([])
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      key: 'student-1__数',
+      autoShortage: 1,
+      balance: 1,
+      nextOriginDate: '2026-03-31',
+      nextOriginReasonLabel: '空きコマ不足',
+      remainingOriginDates: ['2026-03-31'],
+      remainingOriginReasonLabels: ['空きコマ不足'],
+    })
   })
 
   it('consumes the origin when a makeup is returned to the original slot as a regular lesson', () => {
