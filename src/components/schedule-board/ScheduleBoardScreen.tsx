@@ -2646,6 +2646,49 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           return cell
         }),
       )
+
+      // デバッグ: テンプレ反映前後のコマ表データをダウンロード（反映日 ± 1ヶ月）
+      {
+        const debugStart = new Date(effectiveStart + 'T00:00:00')
+        debugStart.setMonth(debugStart.getMonth() - 1)
+        const debugEnd = new Date(effectiveStart + 'T00:00:00')
+        debugEnd.setMonth(debugEnd.getMonth() + 1)
+        const debugStartKey = debugStart.toISOString().slice(0, 10)
+        const debugEndKey = debugEnd.toISOString().slice(0, 10)
+
+        const extractCells = (src: typeof weeks) =>
+          src.flatMap((week) => week.filter((cell) => cell.dateKey >= debugStartKey && cell.dateKey <= debugEndKey))
+
+        const beforeCells = extractCells(weeks)
+        const afterCells = extractCells(clearedWeeks)
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+
+        const downloadJson = (data: unknown, label: string) => {
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `template-debug-${label}-${effectiveStart}-${timestamp}.json`
+          a.click()
+          URL.revokeObjectURL(url)
+        }
+
+        downloadJson({
+          effectiveStartDate: effectiveStart,
+          rangeStart: debugStartKey,
+          rangeEnd: debugEndKey,
+          template: { effectiveStartDate: template.effectiveStartDate, cellCount: template.cells.length },
+          cells: beforeCells,
+        }, 'before')
+        downloadJson({
+          effectiveStartDate: effectiveStart,
+          rangeStart: debugStartKey,
+          rangeEnd: debugEndKey,
+          template: { effectiveStartDate: template.effectiveStartDate, cellCount: template.cells.length },
+          cells: afterCells,
+        }, 'after')
+      }
+
       setWeeks(clearedWeeks)
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
