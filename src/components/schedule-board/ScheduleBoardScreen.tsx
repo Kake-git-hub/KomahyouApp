@@ -2574,7 +2574,18 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               }
               if (student.lessonType === 'makeup' && !student.manualAdded) {
                 const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
-                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
+                const originDate = resolveOriginalRegularDate(student, cell.dateKey)
+                // Pre-freeze origins are already preserved by the initial dateKey < effectiveStart filter.
+                // Re-appending them would create duplicate stock entries.
+                // For post-freeze origins, only restore those that were explicitly tracked as manual adjustments.
+                // Automatic shortages (occupied slots, holidays) will be recalculated by the managed cell rebuild,
+                // so creating manual adjustments for them would cause double-counting.
+                if (originDate >= effectiveStart) {
+                  const hadOriginalManualOrigin = (manualMakeupAdjustments[stockKey] ?? []).some((o) => o.dateKey === originDate)
+                  if (hadOriginalManualOrigin) {
+                    nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, originDate)
+                  }
+                }
                 const managedStudent = managedStudentByAnyName.get(student.name)
                 if (!managedStudent) {
                   nextFallbackMakeupStudents[stockKey] = {
@@ -2622,6 +2633,13 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       // (E) effectiveStart以降の授業削除による希望回数補正をクリア
       // （テンプレで通常授業が再生成されるため、削除補正が残ると希望回数が二重に減る）
       const nextScheduleCountAdjustments = scheduleCountAdjustments.filter((adj) => adj.dateKey < effectiveStart)
+
+      // (F) effectiveStart以降の通常授業抑制をクリア（テンプレで通常授業が再生成されるため）
+      const nextSuppressedRegularLessonOccurrences = suppressedRegularLessonOccurrences.filter((key) => {
+        const parts = key.split('__')
+        const dateKey = parts[2] ?? ''
+        return dateKey < effectiveStart
+      })
 
       const clearedWeeks = weeks.map((week) =>
         week.map((cell) => {
@@ -2704,6 +2722,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
             fallbackMakeupStudents: nextFallbackMakeupStudents,
             fallbackLectureStockStudents: nextFallbackLectureStockStudents,
             scheduleCountAdjustments: nextScheduleCountAdjustments,
+            suppressedRegularLessonOccurrences: nextSuppressedRegularLessonOccurrences,
           },
         }, 'after')
       }
@@ -2711,12 +2730,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       setWeeks(clearedWeeks)
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
-      // Clear suppressed managed occurrences for dates >= effectiveStartDate so fresh managed data is applied
-      setSuppressedRegularLessonOccurrences((prev) => prev.filter((key) => {
-        const parts = key.split('__')
-        const dateKey = parts[2] ?? ''
-        return dateKey < effectiveStart
-      }))
+      setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
 
       if (restoredCount > 0) {
         setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。${restoredCount}件の振替・講習を未消化ストックへ戻しました。`)
