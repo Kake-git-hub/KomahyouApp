@@ -1084,13 +1084,9 @@ export function createPackedInitialBoardState(params: {
     initialBoardState: null,
   })
 
-  return {
-    ...snapshot,
-    weeks: snapshot.weeks.map((week) => week.map((cell) => ({
-      ...cell,
-      desks: packSortCellDesks(cell),
-    }))),
-  }
+  // packSortCellDesks はユーザーが「詰めて並び替え」ボタンを押したときだけ適用する。
+  // 初期盤面生成時に自動ソートするとテンプレの desk 順序を崩すため除外する。
+  return snapshot
 }
 
 function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: string) {
@@ -2665,6 +2661,37 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         }),
       )
 
+      // テンプレ上書き直後に managed overlay を即時適用する。
+      // setWeeks(clearedWeeks) だけでは管理データ反映が次回マウント時まで遅延し、
+      // その間ストック計算が空セルを参照して未消化が増加するバグが発生する。
+      const nextClassroomSettingsForOverlay: ClassroomSettings = {
+        ...classroomSettings,
+        regularLessonTemplate: template,
+        regularLessonTemplateHistory: nextHistory,
+        templateFreezeBeforeDate: template.effectiveStartDate,
+      }
+      const overlaidWeeks = clearedWeeks.map((week) => {
+        const firstDateKey = week[0]?.dateKey ?? ''
+        if (!firstDateKey) return week
+        const lastDateKey = week[week.length - 1]?.dateKey ?? ''
+        if (lastDateKey < effectiveStart) return week
+        const weekStart = getWeekStart(parseDateKey(firstDateKey))
+        const managedWeek = createBoardWeek(weekStart, {
+          classroomSettings: nextClassroomSettingsForOverlay,
+          teachers,
+          students,
+          regularLessons: normalizedTemplateRegularLessons,
+        })
+        const preFreezeBoard = week.filter((c) => c.dateKey < effectiveStart)
+        const postFreezeBoard = week.filter((c) => c.dateKey >= effectiveStart)
+        const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= effectiveStart)
+        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], nextSuppressedRegularLessonOccurrences)
+        return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
+          if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+          return a.slotNumber - b.slotNumber
+        })
+      })
+
       // デバッグ: テンプレ反映前後のコマ表データをダウンロード（反映日 ± 1ヶ月）
       {
         const debugStart = new Date(effectiveStart + 'T00:00:00')
@@ -2678,7 +2705,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
           src.flatMap((week) => week.filter((cell) => cell.dateKey >= debugStartKey && cell.dateKey <= debugEndKey))
 
         const beforeCells = extractCells(weeks)
-        const afterCells = extractCells(clearedWeeks)
+        const afterCells = extractCells(overlaidWeeks)
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
 
         const downloadJson = (data: unknown, label: string) => {
@@ -2727,7 +2754,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
         }, 'after')
       }
 
-      setWeeks(clearedWeeks)
+      setWeeks(overlaidWeeks)
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
