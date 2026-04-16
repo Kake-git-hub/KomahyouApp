@@ -2542,58 +2542,54 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       for (const week of weeks) {
         for (const cell of week) {
           const isInEffectiveRange = cell.dateKey >= effectiveStart
+          if (!isInEffectiveRange) continue
           for (const desk of cell.desks) {
             // (A) effectiveStart以降の通常授業セル: 振替・講習を未消化へ返す
-            // (B) effectiveStart以前のセルでも起点日がeffectiveStart以降の振替: 盤面から除去（未消化へは返さない）
             for (const student of desk.lesson?.studentSlots ?? []) {
               if (!student) continue
-              if (isInEffectiveRange) {
-                if (student.lessonType === 'special' && student.specialStockSource === 'session') {
-                  const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
-                  const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
-                  nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-                  nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
+              if (student.lessonType === 'special' && student.specialStockSource === 'session') {
+                const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
+                const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
+                nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
+                  displayName: resolveBoardStudentDisplayName(student.name),
+                  sessionId: student.specialSessionId,
+                })
+                if (!managedStudentByAnyName.get(student.name)) {
+                  nextFallbackLectureStockStudents[lectureStockKey] = {
                     displayName: resolveBoardStudentDisplayName(student.name),
-                    sessionId: student.specialSessionId,
-                  })
-                  if (!managedStudentByAnyName.get(student.name)) {
-                    nextFallbackLectureStockStudents[lectureStockKey] = {
-                      displayName: resolveBoardStudentDisplayName(student.name),
-                      subject: student.subject,
-                    }
-                  }
-                  restoredCount += 1
-                }
-                if (student.lessonType === 'makeup' && !student.manualAdded) {
-                  const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
-                  nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
-                  const managedStudent = managedStudentByAnyName.get(student.name)
-                  if (!managedStudent) {
-                    nextFallbackMakeupStudents[stockKey] = {
-                      studentName: student.name,
-                      displayName: resolveBoardStudentDisplayName(student.name),
-                      subject: student.subject,
-                    }
-                  }
-                  restoredCount += 1
-                }
-                // (C) effectiveStart以降のabsent statusSlots が作った未消化振替・講習を相殺
-                for (const statusEntry of desk.statusSlots ?? []) {
-                  if (!statusEntry || statusEntry.status !== 'absent') continue
-                  if (statusEntry.lessonType === 'special' && statusEntry.specialStockSource === 'session') {
-                    const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
-                    const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
-                    nextManualLectureStockCounts = removeLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-                    nextManualLectureStockOrigins = removeManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, { sessionId: statusEntry.specialSessionId })
-                  } else if (statusEntry.lessonType === 'regular' || !statusEntry.makeupSourceDate) {
-                    const restoredStudent = buildStudentEntryFromStatus(statusEntry)
-                    const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(restoredStudent), statusEntry.subject)
-                    nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey))
+                    subject: student.subject,
                   }
                 }
-              } else {
-                // effectiveStart以前のセルでも、起点日がeffectiveStart以降の振替は除去する（未消化へ返さない）
-                // → 盤面クリア時に除去するためここではマーキングのみ不要（clearedWeeksで処理）
+                restoredCount += 1
+              }
+              if (student.lessonType === 'makeup' && !student.manualAdded) {
+                const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
+                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
+                const managedStudent = managedStudentByAnyName.get(student.name)
+                if (!managedStudent) {
+                  nextFallbackMakeupStudents[stockKey] = {
+                    studentName: student.name,
+                    displayName: resolveBoardStudentDisplayName(student.name),
+                    subject: student.subject,
+                  }
+                }
+                restoredCount += 1
+              }
+            }
+            // (C) effectiveStart以降のabsent statusSlots が作った未消化振替・講習を相殺
+            // ※ studentSlots ループの外で1回だけ処理する（二重相殺を防止）
+            for (const statusEntry of desk.statusSlots ?? []) {
+              if (!statusEntry || statusEntry.status !== 'absent') continue
+              if (statusEntry.lessonType === 'special' && statusEntry.specialStockSource === 'session') {
+                const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
+                const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
+                nextManualLectureStockCounts = removeLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
+                nextManualLectureStockOrigins = removeManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, { sessionId: statusEntry.specialSessionId })
+              } else if (statusEntry.lessonType === 'regular' || !statusEntry.makeupSourceDate) {
+                const restoredStudent = buildStudentEntryFromStatus(statusEntry)
+                const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(restoredStudent), statusEntry.subject)
+                nextManualMakeupAdjustments = removeMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(restoredStudent, statusEntry.dateKey))
               }
             }
           }
@@ -2680,7 +2676,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     setIsTemplateMode(false)
     setTemplateCells([])
     setTemplateSaveConfirm(null)
-  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences])
+  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences, scheduleCountAdjustments, suppressedMakeupOrigins])
 
   useEffect(() => {
     if (!onBoardStateChange) return
