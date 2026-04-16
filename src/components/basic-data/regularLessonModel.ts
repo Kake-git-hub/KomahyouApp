@@ -80,7 +80,7 @@ export function normalizeRegularLessonNote(value: string | undefined) {
   return String(value ?? '').trim().slice(0, 4)
 }
 
-function normalizeRegularLessonStudentColumns<T extends Pick<RegularLessonRow, 'student1Id' | 'subject1' | 'student2Id' | 'subject2'> & Partial<Pick<RegularLessonRow, 'student1Note' | 'student2Note'>>>(row: T): T {
+export function normalizeRegularLessonStudentColumns<T extends Pick<RegularLessonRow, 'student1Id' | 'subject1' | 'student2Id' | 'subject2'> & Partial<Pick<RegularLessonRow, 'student1Note' | 'student2Note'>>>(row: T): T {
   if (row.student1Id || !row.student2Id) return row
   return {
     ...row,

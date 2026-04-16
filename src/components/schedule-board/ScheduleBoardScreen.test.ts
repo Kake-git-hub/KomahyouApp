@@ -2162,6 +2162,62 @@ describe('テンプレ移動 → 上書き反映 regression', () => {
 
     expect(duplicate?.managedStudentId).toBe('existing-entry')
   })
+
+  it('テンプレ由来の regularLessons はデスク順序を維持し、講師名ソートで並び替えない', () => {
+    // 講師名の辞書順: 佐藤(さ) < 鈴木(す) < 高橋(た) だが、テンプレでは 鈴木→高橋→佐藤 の順
+    const orderTemplate: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-04-01',
+      savedAt: new Date().toISOString(),
+      cells: [
+        {
+          dayOfWeek: 2, slotNumber: 3, desks: [
+            { deskIndex: 1, teacherId: 't003', students: [{ studentId: 's001', subject: '数' }, null] },
+            { deskIndex: 2, teacherId: 't004', students: [{ studentId: 's002', subject: '英' }, { studentId: 's003', subject: '英' }] },
+            { deskIndex: 3, teacherId: 't002', students: [{ studentId: 's004', subject: '数' }, null] },
+          ],
+        },
+      ],
+    }
+
+    const lessons = buildRegularLessonsFromTemplate({
+      template: orderTemplate,
+      teachers: initialTeachers,
+      students: initialStudents,
+    })
+
+    // 火曜3限の行だけ抽出
+    const slot3Lessons = lessons.filter((r) => r.dayOfWeek === 2 && r.slotNumber === 3 && r.schoolYear === 2026)
+    expect(slot3Lessons).toHaveLength(3)
+
+    // テンプレの deskIndex 順 (t003→t004→t002) が保持されること
+    expect(slot3Lessons[0].teacherId).toBe('t003')
+    expect(slot3Lessons[1].teacherId).toBe('t004')
+    expect(slot3Lessons[2].teacherId).toBe('t002')
+
+    // buildScheduleCellsForRange でもデスク順が維持されること
+    const cells = buildScheduleCellsForRange({
+      range: { startDate: '2026-04-06', endDate: '2026-04-12', periodValue: '' },
+      fallbackStartDate: '2026-04-06',
+      fallbackEndDate: '2026-04-12',
+      classroomSettings: { ...classroomSettings, deskCount: 5 },
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: lessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const tuesdaySlot3 = cells.find((c) => c.dateKey === '2026-04-07' && c.slotNumber === 3)
+    expect(tuesdaySlot3).toBeDefined()
+
+    // デスクの講師順がテンプレ通りであること
+    const teacherDesks = tuesdaySlot3!.desks.filter((d) => d.teacher.trim())
+    expect(teacherDesks).toHaveLength(3)
+    expect(teacherDesks[0].teacher).toBe('鈴木講師')   // t003
+    expect(teacherDesks[1].teacher).toBe('高橋講師')   // t004
+    expect(teacherDesks[2].teacher).toBe('佐藤講師')   // t002
+  })
 })
 
 describe('buildTeacherSelectionOptions', () => {

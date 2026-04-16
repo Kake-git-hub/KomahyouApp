@@ -1,5 +1,5 @@
 import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
-import { normalizeRegularLessonNote, packSortRegularLessonRows, resolveOperationalSchoolYear, resolveSchoolYearDateRange, type RegularLessonRow } from '../basic-data/regularLessonModel'
+import { normalizeRegularLessonNote, normalizeRegularLessonStudentColumns, resolveOperationalSchoolYear, resolveSchoolYearDateRange, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, GradeLabel, SlotCell, StudentEntry, SubjectLabel } from '../schedule-board/types'
 import { resolveDisplayedSubjectForBirthDate, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 
@@ -219,12 +219,11 @@ export function buildRegularLessonsFromTemplate(params: {
   students: StudentRow[]
   maxSchoolYear?: number
 }) {
-  const { template, teachers, students, maxSchoolYear = 2031 } = params
+  const { template, teachers: _teachers, students, maxSchoolYear = 2031 } = params
   if (!template || !hasRegularLessonTemplateAssignments(template)) return []
 
   const normalizedTemplate = normalizeRegularLessonTemplate(template, Math.max(...template.cells.map((cell) => cell.desks.length), 1))
   const studentById = new Map(students.map((student) => [student.id, student]))
-  const teacherLabelById = new Map(teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
   const effectiveStartDate = normalizedTemplate.effectiveStartDate
   const effectiveSchoolYear = resolveOperationalSchoolYear(parseDateKey(effectiveStartDate))
   const rows: RegularLessonRow[] = []
@@ -270,7 +269,18 @@ export function buildRegularLessonsFromTemplate(params: {
     }
   }
 
-  return packSortRegularLessonRows(rows, (row) => teacherLabelById.get(row.teacherId) ?? '')
+  // テンプレ由来の regularLessons はテンプレの deskIndex 順を保持する。
+  // packSortRegularLessonRows の packPriority・講師名ソートは使わず、
+  // (schoolYear, dayOfWeek, slotNumber, originalIndex) のみで安定ソートする。
+  return rows
+    .map((row, index) => ({ row: normalizeRegularLessonStudentColumns(row), index }))
+    .sort((a, b) => {
+      if (a.row.schoolYear !== b.row.schoolYear) return a.row.schoolYear - b.row.schoolYear
+      if (a.row.dayOfWeek !== b.row.dayOfWeek) return a.row.dayOfWeek - b.row.dayOfWeek
+      if (a.row.slotNumber !== b.row.slotNumber) return a.row.slotNumber - b.row.slotNumber
+      return a.index - b.index
+    })
+    .map((entry) => entry.row)
 }
 
 export function buildRegularLessonTemplateWorkbook(xlsx: XlsxModule, params: {
