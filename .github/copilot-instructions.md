@@ -28,7 +28,7 @@
 - Current implementation notes
 	- Remove standalone `未入力` date-clear buttons when the calendar UI already provides cancellation.
 	- Treat manual-added students as excluded from 振替ストック counts.
-	- Regular lesson `月 4 回` means a monthly cap only; partial start/end months count the remaining active weekly occurrences, and only months with 5+ active occurrences are capped to 4 student placements.
+	- Regular lesson `月 4 回` monthly cap has been removed entirely; all weekly occurrences in a month are placed without cap. Monthly count control is handled by the classroom manager via deletion operations.
 	- Keep warning display scoped per student slot rather than per desk when only one side is problematic.
 	- Keep 振替ストック visible across board operations unless the user explicitly closes it.
 	- Student/teacher schedule tabs auto-apply date input changes, and the lecture-period selector must stay sorted by `startDate` ascending.
