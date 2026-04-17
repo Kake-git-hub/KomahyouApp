@@ -1508,8 +1508,9 @@ function buildManagedRegularLessonsRange(params: {
         ?? cell.desks.find((desk) => !desk.lesson && !desk.teacher)
       if (!targetDesk) continue
 
-      const teacherActive = teacher && resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
-      targetDesk.teacher = teacherActive ? getTeacherDisplayName(teacher) : (teacher ? '' : '講師未割当')
+      // テンプレ由来の管理データ配置では講師の在籍ステータスに関わらず講師名を表示する。
+      // テンプレに明示的に設定された講師を忠実に反映し、「講師なし・生徒だけ」の状態を防ぐ。
+      targetDesk.teacher = teacher ? getTeacherDisplayName(teacher) : '講師未割当'
       resetManagedTeacherAssignment(targetDesk)
 
       if (!firstStudent && !secondStudent) {
@@ -2571,18 +2572,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               }
               if (student.lessonType === 'makeup' && !student.manualAdded) {
                 const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
-                const originDate = resolveOriginalRegularDate(student, cell.dateKey)
                 // Pre-freeze origins are already preserved by the initial dateKey < effectiveStart filter.
                 // Re-appending them would create duplicate stock entries.
-                // For post-freeze origins, only restore those that were explicitly tracked as manual adjustments.
-                // Automatic shortages (occupied slots, holidays) will be recalculated by the managed cell rebuild,
-                // so creating manual adjustments for them would cause double-counting.
-                if (originDate >= effectiveStart) {
-                  const hadOriginalManualOrigin = (manualMakeupAdjustments[stockKey] ?? []).some((o) => o.dateKey === originDate)
-                  if (hadOriginalManualOrigin) {
-                    nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, originDate)
-                  }
-                }
+                // Post-freeze origins は復元しない:
+                // テンプレ上書きで全抑制がクリアされ通常授業が再配置されるため、
+                // 手動調整を復元すると「ボード上に通常授業 + ストックに未消化」の二重計上が発生する。
+                // 実際のショートage（占有スロット、休日）は管理セル再構築で自動再計算される。
                 const managedStudent = managedStudentByAnyName.get(student.name)
                 if (!managedStudent) {
                   nextFallbackMakeupStudents[stockKey] = {
