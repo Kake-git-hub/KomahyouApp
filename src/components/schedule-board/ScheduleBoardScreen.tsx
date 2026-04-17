@@ -4919,12 +4919,21 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (!targetCell || !targetDesk) return
 
     const matchedTeacher = teachers.find((t) => getTeacherDisplayName(t) === targetDesk.teacher || t.name === targetDesk.teacher)
+    const initialName = matchedTeacher ? getTeacherDisplayName(matchedTeacher) : targetDesk.teacher
+    const options = buildTeacherSelectionOptions({
+      teachers,
+      cell: targetCell,
+      deskIndex,
+      isTemplateMode: true,
+      templateReferenceDate: templateEffectiveStartDate,
+    })
+    const resolvedName = options.some((o) => o.name === initialName) ? initialName : (options[0]?.name ?? '')
     setTeacherMenu({
       cellId,
       deskIndex,
       x,
       y,
-      selectedTeacherName: matchedTeacher ? getTeacherDisplayName(matchedTeacher) : targetDesk.teacher,
+      selectedTeacherName: resolvedName,
     })
     setStatusMessage(`講師選択を開きました: ${targetCell.dateLabel} ${targetCell.slotLabel} / ${deskIndex + 1}机目`)
   }
