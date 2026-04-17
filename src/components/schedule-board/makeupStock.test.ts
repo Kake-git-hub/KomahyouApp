@@ -861,4 +861,56 @@ describe('makeupStock', () => {
       nextOriginLabel: '2025/4/7(月) 2限',
     })
   })
+
+  it('ignores stale makeupSourceDate on regular-type students', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({ dayOfWeek: 1, slotNumber: 1 })
+    // 4/7 is Monday; student has manual absence origin on 4/7
+    // 4/14 cell contains regular lesson with stale makeupSourceDate (data corruption)
+    const cellWith4_14 = createCell({
+      id: 'cell-4-14',
+      dateKey: '2025-04-14',
+      dayLabel: '月',
+      dateLabel: '4/14',
+      slotNumber: 1,
+      desks: [
+        {
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'managed_regular-1_2025-04-14',
+            studentSlots: [
+              createStudentEntry({
+                id: 'student-1_2025-04-14_数',
+                managedStudentId: 'student-1',
+                lessonType: 'regular',
+                makeupSourceDate: '2025-04-14', // stale data from previous operation
+              }),
+              null,
+            ],
+          },
+        },
+      ],
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks: [[cellWith4_14]],
+      manualAdjustments: {
+        'student-1__数': [{ dateKey: '2025-04-07' }],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    // Manual origin on 4/7 should remain visible (balance +1)
+    // The stale makeupSourceDate on the regular entry must not consume it
+    const match = entries.find((e) => e.key === 'student-1__数')
+    expect(match).toBeDefined()
+    expect(match!.balance).toBe(1)
+  })
 })

@@ -535,8 +535,6 @@ function consumeOriginDates(originDates: string[], usedOriginDates: string[], us
     const index = remaining.indexOf(usedOriginDate)
     if (index >= 0) {
       remaining.splice(index, 1)
-    } else if (remaining.length > 0) {
-      remaining.shift()
     }
   }
 
