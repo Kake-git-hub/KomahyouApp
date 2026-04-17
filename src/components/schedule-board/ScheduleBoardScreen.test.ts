@@ -2298,9 +2298,12 @@ describe('buildTeacherSelectionOptions', () => {
       cell,
       deskIndex: 0,
       isTemplateMode: true,
+      templateReferenceDate: '2026-04-17',
     })
 
     expect(options.map((option) => option.name)).not.toContain('田中講師')
-    expect(options.map((option) => option.name)).toContain('吉田講師')
+    // hidden teachers must be excluded in template mode
+    expect(options.map((option) => option.name)).not.toContain('吉田講師')
+    expect(options.map((option) => option.name)).toContain('鈴木講師')
   })
 })

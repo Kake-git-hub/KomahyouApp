@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
-import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
@@ -1391,14 +1391,15 @@ export function buildTeacherSelectionOptions(params: {
   cell: SlotCell
   deskIndex: number
   isTemplateMode: boolean
+  templateReferenceDate?: string
 }) {
-  const { teachers, cell, deskIndex, isTemplateMode } = params
+  const { teachers, cell, deskIndex, isTemplateMode, templateReferenceDate } = params
   const targetDesk = cell.desks[deskIndex]
   if (!targetDesk) return []
 
   const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
   const visibleTeachers = isTemplateMode
-    ? teachers
+    ? teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, templateReferenceDate || cell.dateKey) === '在籍')
     : teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, cell.dateKey) === '在籍')
   const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
     ? [...visibleTeachers, currentTeacher]
@@ -2448,11 +2449,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handleEnterTemplateMode = useCallback(() => {
     const savedTemplate = classroomSettings.regularLessonTemplate
-    const templateBoardCells = savedTemplate
-      ? buildTemplateBoardCells({ template: savedTemplate, teachers, students, deskCount: classroomSettings.deskCount })
+    const filteredTemplate = savedTemplate
+      ? filterTemplateParticipantsForReferenceDate({ template: savedTemplate, deskCount: classroomSettings.deskCount, teachers, students })
+      : null
+    const templateBoardCells = filteredTemplate
+      ? buildTemplateBoardCells({ template: filteredTemplate, teachers, students, deskCount: classroomSettings.deskCount })
       : copyBoardCellsForTemplate(cells)
     setTemplateCells(templateBoardCells)
-    setTemplateEffectiveStartDate(toDateKey(new Date()))
+    setTemplateEffectiveStartDate(filteredTemplate?.effectiveStartDate || toDateKey(new Date()))
     setIsTemplateMode(true)
     setStudentMenu(null)
     setTeacherMenu(null)
@@ -4629,8 +4633,9 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       cell: teacherMenuContext.cell,
       deskIndex: teacherMenu.deskIndex,
       isTemplateMode,
+      templateReferenceDate: isTemplateMode ? templateEffectiveStartDate : undefined,
     })
-  }, [isTemplateMode, teacherMenu?.deskIndex, teacherMenuContext, teachers])
+  }, [isTemplateMode, teacherMenu?.deskIndex, teacherMenuContext, teachers, templateEffectiveStartDate])
 
   const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('不可です。') ? statusMessage : null
 
@@ -4656,10 +4661,14 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const templateAddableStudents = useMemo(() => {
     if (!isTemplateMode) return []
     return students
+      .filter((s) => {
+        const status = resolveScheduledStatus(s.entryDate, s.withdrawDate, s.isHidden, templateEffectiveStartDate)
+        return status !== '退塾' && status !== '非表示'
+      })
       .slice()
       .sort((a, b) => getStudentDisplayName(a).localeCompare(getStudentDisplayName(b), 'ja'))
       .map((s) => ({ id: s.id, displayName: getStudentDisplayName(s), student: s }))
-  }, [isTemplateMode, students])
+  }, [isTemplateMode, students, templateEffectiveStartDate])
 
   const templateEditableSubjects = allStudentSubjectOptions
 
@@ -5039,10 +5048,11 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       deskCount: classroomSettings.deskCount,
       selectedStartDate,
     })
-    const importedCells = buildTemplateBoardCells({ template: importedTemplate, teachers, students, deskCount: classroomSettings.deskCount })
+    const filteredImported = filterTemplateParticipantsForReferenceDate({ template: importedTemplate, deskCount: classroomSettings.deskCount, teachers, students })
+    const importedCells = buildTemplateBoardCells({ template: filteredImported, teachers, students, deskCount: classroomSettings.deskCount })
     pushTemplateUndo(templateCells)
     setTemplateCells(importedCells)
-    setTemplateEffectiveStartDate(importedTemplate.effectiveStartDate)
+    setTemplateEffectiveStartDate(filteredImported.effectiveStartDate)
     setStatusMessage(selectedStartDate ? `開始日 ${selectedStartDate} のテンプレートを Excel から取り込みました。` : '通常授業テンプレートを Excel から取り込みました。')
   }
 
