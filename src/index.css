@@ -56,13 +56,9 @@ select:focus-visible {
   position: fixed;
   bottom: 4px;
   right: 8px;
-  font-size: 10px;
-  color: rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.55);
   pointer-events: none;
   z-index: 9999;
-  line-height: 1.2;
-  display: grid;
-  justify-items: end;
-  gap: 1px;
   text-align: right;
 }
