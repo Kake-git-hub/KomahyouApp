@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getTeacherDisplayName, isActiveOnDate, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getTeacherDisplayName, resolveScheduledStatus, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import {
   buildRegularLessonTemplateWorkbook,
   buildTemplateBoardCells,
   createRegularLessonTemplate,
+  filterTemplateParticipantsForReferenceDate,
   listTemplateStartDatesFromWorkbook,
   normalizeRegularLessonTemplate,
   parseRegularLessonTemplateWorkbook,
@@ -83,35 +84,50 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     () => normalizeRegularLessonTemplate(draftTemplate, classroomSettings.deskCount),
     [classroomSettings.deskCount, draftTemplate],
   )
+  const filteredTemplate = useMemo(
+    () => filterTemplateParticipantsForReferenceDate({
+      template: normalizedTemplate,
+      deskCount: classroomSettings.deskCount,
+      teachers,
+      students,
+    }),
+    [classroomSettings.deskCount, normalizedTemplate, students, teachers],
+  )
+  const templateReferenceDate = filteredTemplate.effectiveStartDate || toDateKey(new Date())
+  const visibleTeachers = useMemo(
+    () => teachers
+      .filter((teacher) => resolveTeacherRosterStatus(teacher, templateReferenceDate) === '在籍')
+      .slice()
+      .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja')),
+    [teachers, templateReferenceDate],
+  )
+  const visibleStudents = useMemo(
+    () => students
+      .filter((student) => {
+        const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, templateReferenceDate)
+        return status !== '退塾' && status !== '非表示'
+      })
+      .slice()
+      .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, templateReferenceDate)),
+    [students, templateReferenceDate],
+  )
 
   const cellByKey = useMemo(
-    () => new Map(normalizedTemplate.cells.map((cell) => [buildCellKey(cell.dayOfWeek, cell.slotNumber), cell])),
-    [normalizedTemplate.cells],
+    () => new Map(filteredTemplate.cells.map((cell) => [buildCellKey(cell.dayOfWeek, cell.slotNumber), cell])),
+    [filteredTemplate.cells],
   )
 
-  const selectedCell = cellByKey.get(buildCellKey(selectedDesk.dayOfWeek, selectedDesk.slotNumber)) ?? normalizedTemplate.cells[0]
+  const selectedCell = cellByKey.get(buildCellKey(selectedDesk.dayOfWeek, selectedDesk.slotNumber)) ?? filteredTemplate.cells[0]
   const selectedDeskDraft = selectedCell?.desks[selectedDesk.deskIndex - 1] ?? selectedCell?.desks[0] ?? null
 
-  const teacherOptions = useMemo(
-    () => teachers.slice().sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja')),
-    [teachers],
-  )
-
-  const studentOptions = useMemo(() => {
-    const referenceDate = new Date().toISOString().slice(0, 10)
-    return students
-      .filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, referenceDate))
-      .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right))
-  }, [students])
-
   const occupiedDeskCount = useMemo(
-    () => normalizedTemplate.cells.reduce((total, cell) => total + cell.desks.filter((desk) => desk.teacherId || desk.students.some((student) => student?.studentId)).length, 0),
-    [normalizedTemplate.cells],
+    () => filteredTemplate.cells.reduce((total, cell) => total + cell.desks.filter((desk) => desk.teacherId || desk.students.some((student) => student?.studentId)).length, 0),
+    [filteredTemplate.cells],
   )
 
   const boardCells = useMemo(
-    () => buildTemplateBoardCells({ template: normalizedTemplate, teachers, students, deskCount: classroomSettings.deskCount }),
-    [normalizedTemplate, teachers, students, classroomSettings.deskCount],
+    () => buildTemplateBoardCells({ template: filteredTemplate, teachers: visibleTeachers, students: visibleStudents, deskCount: classroomSettings.deskCount }),
+    [filteredTemplate, visibleTeachers, visibleStudents, classroomSettings.deskCount],
   )
 
   const highlightedCell = useMemo(() => ({
@@ -148,7 +164,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     const xlsx = await import('xlsx')
     xlsx.writeFile(
       buildRegularLessonTemplateWorkbook(xlsx, {
-        template: normalizedTemplate,
+        template: filteredTemplate,
         templateHistory: classroomSettings.regularLessonTemplateHistory,
         teachers,
         students,
@@ -217,7 +233,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
 
   const handleSave = () => {
     onSave({
-      ...normalizeRegularLessonTemplate(draftTemplate, classroomSettings.deskCount),
+      ...filteredTemplate,
       savedAt: new Date().toISOString(),
     })
     onClose()
@@ -302,7 +318,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                     onChange={(event) => updateDesk((desk) => ({ ...desk, teacherId: event.target.value }))}
                   >
                     <option value="">講師未設定</option>
-                    {teacherOptions.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherDisplayName(teacher)}</option>)}
+                    {visibleTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherDisplayName(teacher)}</option>)}
                   </select>
                 </label>
 
@@ -329,7 +345,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                           })}
                         >
                           <option value="">生徒なし</option>
-                          {studentOptions.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student)}</option>)}
+                          {visibleStudents.map((student) => <option key={student.id} value={student.id}>{formatStudentSelectionLabel(student, templateReferenceDate)}</option>)}
                         </select>
                       </label>
                       <label className="basic-data-inline-field basic-data-inline-field-short">

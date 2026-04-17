@@ -1,4 +1,4 @@
-import { getStudentDisplayName, getTeacherDisplayName, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getStudentDisplayName, getTeacherDisplayName, resolveScheduledStatus, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { normalizeRegularLessonNote, normalizeRegularLessonStudentColumns, resolveOperationalSchoolYear, resolveSchoolYearDateRange, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, GradeLabel, SlotCell, StudentEntry, SubjectLabel } from '../schedule-board/types'
 import { resolveDisplayedSubjectForBirthDate, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
@@ -202,6 +202,45 @@ export function normalizeRegularLessonTemplate(template: RegularLessonTemplate |
           }
         }),
       }
+    })),
+  }
+}
+
+export function filterTemplateParticipantsForReferenceDate(params: {
+  template: RegularLessonTemplate | null | undefined
+  deskCount: number
+  teachers: TeacherRow[]
+  students: StudentRow[]
+}) {
+  const { template, deskCount, teachers, students } = params
+  const normalizedTemplate = normalizeRegularLessonTemplate(template, deskCount)
+  const referenceDate = normalizedTemplate.effectiveStartDate
+  const visibleTeacherIds = new Set(
+    teachers
+      .filter((teacher) => resolveTeacherRosterStatus(teacher, referenceDate) === '在籍')
+      .map((teacher) => teacher.id),
+  )
+  const visibleStudentIds = new Set(
+    students
+      .filter((student) => {
+        const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)
+        return status !== '退塾' && status !== '非表示'
+      })
+      .map((student) => student.id),
+  )
+
+  return {
+    ...normalizedTemplate,
+    cells: normalizedTemplate.cells.map((cell) => ({
+      ...cell,
+      desks: cell.desks.map((desk) => ({
+        ...desk,
+        teacherId: visibleTeacherIds.has(desk.teacherId) ? desk.teacherId : '',
+        students: desk.students.map((student) => {
+          if (!student?.studentId) return null
+          return visibleStudentIds.has(student.studentId) ? normalizeTemplateStudent(student) : null
+        }) as RegularLessonTemplateDesk['students'],
+      })),
     })),
   }
 }
