@@ -2449,14 +2449,15 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
 
   const handleEnterTemplateMode = useCallback(() => {
     const savedTemplate = classroomSettings.regularLessonTemplate
+    const today = toDateKey(new Date())
     const filteredTemplate = savedTemplate
-      ? filterTemplateParticipantsForReferenceDate({ template: savedTemplate, deskCount: classroomSettings.deskCount, teachers, students })
+      ? filterTemplateParticipantsForReferenceDate({ template: savedTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: today })
       : null
     const templateBoardCells = filteredTemplate
       ? buildTemplateBoardCells({ template: filteredTemplate, teachers, students, deskCount: classroomSettings.deskCount })
       : copyBoardCellsForTemplate(cells)
     setTemplateCells(templateBoardCells)
-    setTemplateEffectiveStartDate(filteredTemplate?.effectiveStartDate || toDateKey(new Date()))
+    setTemplateEffectiveStartDate(filteredTemplate?.effectiveStartDate || today)
     setIsTemplateMode(true)
     setStudentMenu(null)
     setTeacherMenu(null)
@@ -5048,7 +5049,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
       deskCount: classroomSettings.deskCount,
       selectedStartDate,
     })
-    const filteredImported = filterTemplateParticipantsForReferenceDate({ template: importedTemplate, deskCount: classroomSettings.deskCount, teachers, students })
+    const filteredImported = filterTemplateParticipantsForReferenceDate({ template: importedTemplate, deskCount: classroomSettings.deskCount, teachers, students, referenceDate: toDateKey(new Date()) })
     const importedCells = buildTemplateBoardCells({ template: filteredImported, teachers, students, deskCount: classroomSettings.deskCount })
     pushTemplateUndo(templateCells)
     setTemplateCells(importedCells)

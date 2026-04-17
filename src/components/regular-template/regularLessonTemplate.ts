@@ -211,10 +211,11 @@ export function filterTemplateParticipantsForReferenceDate(params: {
   deskCount: number
   teachers: TeacherRow[]
   students: StudentRow[]
+  referenceDate?: string
 }) {
-  const { template, deskCount, teachers, students } = params
+  const { template, deskCount, teachers, students, referenceDate: overrideDate } = params
   const normalizedTemplate = normalizeRegularLessonTemplate(template, deskCount)
-  const referenceDate = normalizedTemplate.effectiveStartDate
+  const referenceDate = overrideDate || normalizedTemplate.effectiveStartDate
   const visibleTeacherIds = new Set(
     teachers
       .filter((teacher) => resolveTeacherRosterStatus(teacher, referenceDate) === '在籍')
