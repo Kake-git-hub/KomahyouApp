@@ -7583,6 +7583,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
               )}
               {studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">
+                  {menuStudent?.student.lessonType === 'trial' ? (
+                    <>
+                      <button type="button" className="menu-link-button" onClick={handleMarkStudentAttended} data-testid="menu-attendance-button">出席</button>
+                      <button type="button" className="menu-link-button" onClick={handleDeleteStudent} data-testid="menu-delete-button">削除</button>
+                    </>
+                  ) : (
+                    <>
                   <div className="student-menu-button-row student-menu-button-row-three-up">
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAttended} data-testid="menu-attendance-button">出席</button>
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsent} data-testid="menu-absence-button">休み</button>
@@ -7599,6 +7606,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
                     </>
                   )}
                   <button type="button" className="menu-link-button" onClick={handleDeleteStudent} data-testid="menu-delete-button">削除</button>
+                    </>
+                  )}
                 </div>
               ) : studentMenu?.mode === 'empty' ? (
                 <div className="student-menu-section">
