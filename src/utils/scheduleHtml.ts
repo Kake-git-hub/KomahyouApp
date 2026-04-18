@@ -180,6 +180,7 @@ type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   regularLessonTemplateHistory?: RegularLessonTemplate[]
+  preTemplateRegularLessons?: RegularLessonRow[]
   teachers?: TeacherRow[]
   scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
   highlightedStudentSlot?: {
@@ -200,6 +201,7 @@ export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
   teachers: TeacherRow[]
   regularLessons: RegularLessonRow[]
   regularLessonTemplateHistory?: RegularLessonTemplate[]
+  preTemplateRegularLessons?: RegularLessonRow[]
   scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
 }
 
@@ -485,14 +487,37 @@ function dayBefore(dateKey: string): string {
 export function buildCombinedRegularLessonsFromHistory(params: {
   regularLessons: RegularLessonRow[]
   regularLessonTemplateHistory?: RegularLessonTemplate[]
+  preTemplateRegularLessons?: RegularLessonRow[]
   teachers?: TeacherRow[]
   students: StudentRow[]
 }): RegularLessonRow[] {
-  const { regularLessons, regularLessonTemplateHistory, teachers, students } = params
-  if (!regularLessonTemplateHistory || regularLessonTemplateHistory.length <= 1) return regularLessons
+  const { regularLessons, regularLessonTemplateHistory, preTemplateRegularLessons, teachers, students } = params
+  if (!regularLessonTemplateHistory || regularLessonTemplateHistory.length === 0) return regularLessons
 
   const allTemplates = [...regularLessonTemplateHistory].sort((a, b) => a.effectiveStartDate.localeCompare(b.effectiveStartDate))
-  const combinedLessons: RegularLessonRow[] = []
+  const firstTemplateStartDate = allTemplates[0].effectiveStartDate
+
+  // テンプレ適用前の通常授業を最初のテンプレ開始日前にクリップして結合
+  const preTemplateLessons: RegularLessonRow[] = []
+  if (preTemplateRegularLessons?.length) {
+    const clipEndDate = dayBefore(firstTemplateStartDate)
+    if (clipEndDate >= '2000-01-01') {
+      for (const lesson of preTemplateRegularLessons) {
+        if (lesson.startDate && lesson.startDate > clipEndDate) continue
+        preTemplateLessons.push({
+          ...lesson,
+          endDate: (!lesson.endDate || lesson.endDate > clipEndDate) ? clipEndDate : lesson.endDate,
+          student2EndDate: (!lesson.student2EndDate || lesson.student2EndDate > clipEndDate) ? clipEndDate : lesson.student2EndDate,
+        })
+      }
+    }
+  }
+
+  if (allTemplates.length === 1) {
+    return [...preTemplateLessons, ...regularLessons]
+  }
+
+  const combinedLessons: RegularLessonRow[] = [...preTemplateLessons]
 
   for (let i = 0; i < allTemplates.length; i++) {
     const template = allTemplates[i]
@@ -522,6 +547,7 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
   const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
     regularLessons: params.regularLessons,
     regularLessonTemplateHistory: params.regularLessonTemplateHistory,
+    preTemplateRegularLessons: params.preTemplateRegularLessons,
     teachers: params.teachers,
     students: params.students,
   })
@@ -610,6 +636,7 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
   const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
     regularLessons: params.regularLessons,
     regularLessonTemplateHistory: params.regularLessonTemplateHistory,
+    preTemplateRegularLessons: params.preTemplateRegularLessons,
     teachers: params.teachers,
     students: params.students,
   })

@@ -18,6 +18,7 @@ export type ClassroomSettings = {
   deskCount: number
   regularLessonTemplate?: RegularLessonTemplate | null
   regularLessonTemplateHistory?: RegularLessonTemplate[]
+  preTemplateRegularLessons?: RegularLessonRow[]
   templateFreezeBeforeDate?: string
   initialSetupCompletedAt?: string
   initialSetupMakeupStocks?: InitialSetupMakeupStockRow[]

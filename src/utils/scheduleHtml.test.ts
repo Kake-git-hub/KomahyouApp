@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -605,5 +605,188 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('function formatTeacherTooltipEntry(student)')
     expect(html).toContain("return [getVerboseStatusLabel(student.status), student.name, lessonLabel].filter(Boolean).join(' / ');")
     vi.unstubAllGlobals()
+  })
+})
+
+describe('buildCombinedRegularLessonsFromHistory', () => {
+  function createTemplate(effectiveStartDate: string, studentCell: { dayOfWeek: number; slotNumber: number; studentId: string; subject: string; teacherId?: string }): RegularLessonTemplate {
+    return {
+      version: 1,
+      effectiveStartDate,
+      savedAt: new Date().toISOString(),
+      cells: [
+        {
+          dayOfWeek: studentCell.dayOfWeek,
+          slotNumber: studentCell.slotNumber,
+          desks: [{
+            deskIndex: 1,
+            teacherId: studentCell.teacherId ?? 'teacher-1',
+            students: [
+              { studentId: studentCell.studentId, subject: studentCell.subject as '算' },
+              null,
+            ],
+          }],
+        },
+      ],
+    }
+  }
+
+  it('combines occurrences from old and new templates with different effective dates', () => {
+    const oldTemplate = createTemplate('2026-04-01', { dayOfWeek: 1, slotNumber: 3, studentId: 'student-1', subject: '英' })
+    const newTemplate = createTemplate('2026-04-15', { dayOfWeek: 1, slotNumber: 3, studentId: 'student-1', subject: '英' })
+
+    const combined = buildCombinedRegularLessonsFromHistory({
+      regularLessons: [],
+      regularLessonTemplateHistory: [oldTemplate, newTemplate],
+      teachers: [createTeacher()],
+      students: [createStudent()],
+    })
+
+    // Old template SY 2026: startDate=2026-04-01, endDate clipped to 2026-04-14
+    // New template SY 2026: startDate=2026-04-15, endDate=2027-03-31
+    const sy2026Lessons = combined.filter((r) => r.schoolYear === 2026 && r.student1Id === 'student-1')
+    expect(sy2026Lessons.length).toBeGreaterThanOrEqual(2)
+    const oldLesson = sy2026Lessons.find((r) => r.startDate === '2026-04-01')
+    const newLesson = sy2026Lessons.find((r) => r.startDate === '2026-04-15')
+    expect(oldLesson).toBeDefined()
+    expect(oldLesson!.endDate).toBe('2026-04-14')
+    expect(oldLesson!.student1Id).toBe('student-1')
+    expect(oldLesson!.subject1).toBe('英')
+    expect(newLesson).toBeDefined()
+    expect(newLesson!.endDate).toBe('2027-03-31')
+
+    // Now check buildExpectedRegularOccurrences counts both
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: combined,
+      startDate: '2026-04-01',
+      endDate: '2026-05-09',
+    })
+    const studentOccurrences = occurrences
+      .filter((e) => e.linkedStudentId === 'student-1' && e.subject === '英')
+      .filter((e) => e.dateKey >= '2026-04-01' && e.dateKey <= '2026-05-09')
+    // April 2026 Mondays: 4/6, 4/13, 4/20, 4/27; May 2026 Monday: 5/4
+    // All 5 should be counted (2 from old template + 3 from new template)
+    expect(studentOccurrences.map((e) => e.dateKey)).toEqual([
+      '2026-04-06',
+      '2026-04-13',
+      '2026-04-20',
+      '2026-04-27',
+      '2026-05-04',
+    ])
+  })
+
+  it('returns regularLessons unchanged when history has only 1 entry and no preTemplate', () => {
+    const template = createTemplate('2026-04-15', { dayOfWeek: 1, slotNumber: 3, studentId: 'student-1', subject: '算' })
+    const rawLessons = [createRegularLesson({ startDate: '2026-04-01', endDate: '2027-03-31' })]
+
+    const result = buildCombinedRegularLessonsFromHistory({
+      regularLessons: rawLessons,
+      regularLessonTemplateHistory: [template],
+      teachers: [createTeacher()],
+      students: [createStudent()],
+    })
+
+    // With only 1 template and no preTemplateRegularLessons, returns regularLessons content
+    expect(result).toStrictEqual(rawLessons)
+  })
+
+  it('with 1 template in history, regularLessons determines expected counts', () => {
+    // After template save, regularLessons is replaced with template-generated lessons
+    // that start from effectiveStartDate. Pre-template period occurrences are lost.
+    const template = createTemplate('2026-04-15', { dayOfWeek: 1, slotNumber: 3, studentId: 'student-1', subject: '英' })
+
+    // Simulate what onReplaceRegularLessons sets: lessons from buildRegularLessonsFromTemplate
+    // These start from effectiveStartDate (2026-04-15), NOT from the school year start
+    const templateRegularLessons = [createRegularLesson({
+      dayOfWeek: 1,
+      subject1: '英',
+      startDate: '2026-04-15',
+      endDate: '2027-03-31',
+      student2StartDate: '2026-04-15',
+      student2EndDate: '2027-03-31',
+      schoolYear: 2026,
+    })]
+
+    const combined = buildCombinedRegularLessonsFromHistory({
+      regularLessons: templateRegularLessons,
+      regularLessonTemplateHistory: [template],
+      teachers: [createTeacher()],
+      students: [createStudent()],
+    })
+
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: combined,
+      startDate: '2026-04-01',
+      endDate: '2026-05-09',
+    })
+
+    const studentOccurrences = occurrences
+      .filter((e) => e.linkedStudentId === 'student-1' && e.subject === '英')
+      .filter((e) => e.dateKey >= '2026-04-01' && e.dateKey <= '2026-05-09')
+
+    // Without preTemplateRegularLessons, only template period is counted: 4/20, 4/27, 5/4
+    expect(studentOccurrences.map((e) => e.dateKey)).toEqual([
+      '2026-04-20',
+      '2026-04-27',
+      '2026-05-04',
+    ])
+  })
+
+  it('includes pre-template occurrences when preTemplateRegularLessons is provided', () => {
+    const template = createTemplate('2026-04-15', { dayOfWeek: 1, slotNumber: 3, studentId: 'student-1', subject: '英' })
+
+    // Template-generated regularLessons (starting from effectiveStartDate)
+    const templateRegularLessons = [createRegularLesson({
+      dayOfWeek: 1,
+      subject1: '英',
+      startDate: '2026-04-15',
+      endDate: '2027-03-31',
+      student2StartDate: '2026-04-15',
+      student2EndDate: '2027-03-31',
+      schoolYear: 2026,
+    })]
+
+    // Pre-template regular lessons (original basic data, covering full school year)
+    const preTemplateRegularLessons = [createRegularLesson({
+      dayOfWeek: 1,
+      subject1: '英',
+      startDate: '',
+      endDate: '',
+      student2StartDate: '',
+      student2EndDate: '',
+      schoolYear: 2026,
+    })]
+
+    const combined = buildCombinedRegularLessonsFromHistory({
+      regularLessons: templateRegularLessons,
+      regularLessonTemplateHistory: [template],
+      preTemplateRegularLessons,
+      teachers: [createTeacher()],
+      students: [createStudent()],
+    })
+
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: combined,
+      startDate: '2026-04-01',
+      endDate: '2026-05-09',
+    })
+
+    const studentOccurrences = occurrences
+      .filter((e) => e.linkedStudentId === 'student-1' && e.subject === '英')
+      .filter((e) => e.dateKey >= '2026-04-01' && e.dateKey <= '2026-05-09')
+
+    // Pre-template covers 4/6, 4/13 (clipped before 4/15)
+    // Template covers 4/20, 4/27, 5/4 (from 4/15 onwards)
+    // Total: 5 occurrences
+    expect(studentOccurrences.map((e) => e.dateKey)).toEqual([
+      '2026-04-06',
+      '2026-04-13',
+      '2026-04-20',
+      '2026-04-27',
+      '2026-05-04',
+    ])
   })
 })

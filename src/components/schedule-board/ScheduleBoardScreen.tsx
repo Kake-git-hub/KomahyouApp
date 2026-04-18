@@ -1799,6 +1799,7 @@ function buildBaseManagedScheduleCellsForRange(params: {
   const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
     regularLessons: params.regularLessons,
     regularLessonTemplateHistory: params.classroomSettings.regularLessonTemplateHistory,
+    preTemplateRegularLessons: params.classroomSettings.preTemplateRegularLessons,
     teachers: params.teachers,
     students: params.students,
   })
@@ -2535,10 +2536,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
       template,
     ]
 
+    // 初回テンプレ保存時、テンプレ適用前の通常授業データを保存（予定回数計算用）
+    const preTemplateRegularLessons = prevHistory.length === 0
+      ? (classroomSettings.preTemplateRegularLessons ?? regularLessons)
+      : classroomSettings.preTemplateRegularLessons
+
     onUpdateClassroomSettings({
       ...classroomSettings,
       regularLessonTemplate: template,
       regularLessonTemplateHistory: nextHistory,
+      preTemplateRegularLessons,
       ...(overwrite ? { templateFreezeBeforeDate: template.effectiveStartDate } : {}),
     })
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
@@ -4014,6 +4021,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
         teachers,
         regularLessons,
         regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+        preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
         scheduleCountAdjustments,
         defaultStartDate: range.startDate,
         defaultEndDate: range.endDate,
@@ -4138,6 +4146,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
       students,
       regularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
       teachers,
       scheduleCountAdjustments,
       highlightedStudentSlot: movingStudentContext
@@ -6348,6 +6357,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
       students,
       regularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
       teachers,
       scheduleCountAdjustments,
       defaultStartDate: storedRange.startDate,

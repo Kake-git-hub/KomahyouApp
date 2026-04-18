@@ -1449,6 +1449,14 @@ tr.sa-slot-first td {
   color: #e00000;
 }
 
+.sa-student.sa-student-trial .sa-student-name.sa-student-name-absence,
+.sa-student.sa-student-trial .sa-student-detail-muted,
+.sa-student.sa-student-trial .sa-student-detail-muted .sa-student-detail-prefix,
+.sa-student.sa-student-trial .sa-student-detail-muted .sa-student-detail-grade,
+.sa-student.sa-student-trial .sa-student-detail-muted .sa-student-detail-subject {
+  color: #f09090;
+}
+
 .sa-student-star.star-lesson-regular {
   color: #2f8a2f;
 }
