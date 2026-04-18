@@ -4202,7 +4202,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
   }, [editStudentDraft, menuStudent])
 
   const emptyMenuContext = useMemo(() => {
-    if (!studentMenu || (studentMenu.mode !== 'empty' && studentMenu.mode !== 'add' && studentMenu.mode !== 'memo')) return null
+    if (!studentMenu || (studentMenu.mode !== 'empty' && studentMenu.mode !== 'add' && studentMenu.mode !== 'memo' && studentMenu.mode !== 'trial')) return null
     const targetCell = cells.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     if (!targetCell || !targetDesk) return null
@@ -4505,7 +4505,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
       }
     }
 
-    const estimatedHeight = studentMenu.mode === 'add' ? 520 : studentMenu.mode === 'empty' ? 180 : studentMenu.mode === 'memo' ? 360 : 340
+    const estimatedHeight = studentMenu.mode === 'add' ? 520 : studentMenu.mode === 'trial' ? 420 : studentMenu.mode === 'empty' ? 180 : studentMenu.mode === 'memo' ? 360 : 340
     return {
       left: Math.max(12, Math.min(studentMenu.x + 10, window.innerWidth - 336)),
       top: Math.max(12, Math.min(studentMenu.y + 10, window.innerHeight - estimatedHeight - 12)),
