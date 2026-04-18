@@ -3338,6 +3338,7 @@ function App() {
     <ScheduleBoardScreen
       key={boardMountKey}
       classroomSettings={classroomSettings}
+      classroomName={actingClassroom?.name}
       teachers={teachers}
       students={students}
       regularLessons={displayRegularLessons}

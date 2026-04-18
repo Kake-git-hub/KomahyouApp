@@ -58,7 +58,7 @@ type StudentMenuState = {
   studentIndex: number
   x: number
   y: number
-  mode: 'root' | 'edit' | 'memo' | 'empty' | 'add'
+  mode: 'root' | 'edit' | 'memo' | 'empty' | 'add' | 'trial'
 }
 
 type TeacherMenuState = {
@@ -85,6 +85,12 @@ type AddExistingStudentDraft = {
   subject: SubjectLabel
   lessonType: LessonType
   specialSessionId: string
+}
+
+type TrialStudentDraft = {
+  name: string
+  grade: GradeLabel
+  subject: SubjectLabel
 }
 
 type FallbackMakeupStudent = {
@@ -443,6 +449,7 @@ export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
 
 type ScheduleBoardScreenProps = {
   classroomSettings: ClassroomSettings
+  classroomName?: string
   teachers: TeacherRow[]
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
@@ -2379,7 +2386,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -2405,6 +2412,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
   const [memoDraft, setMemoDraft] = useState('')
   const [editStudentDraft, setEditStudentDraft] = useState<EditStudentDraft | null>(null)
   const [addExistingStudentDraft, setAddExistingStudentDraft] = useState<AddExistingStudentDraft | null>(null)
+  const [trialStudentDraft, setTrialStudentDraft] = useState<TrialStudentDraft | null>(null)
   const [statusMessage, setStatusMessage] = useState('左クリックで生徒を選ぶか、空欄の生徒マスを左クリックしてメモを保存できます。')
   const [suppressedRegularLessonOccurrences, setSuppressedRegularLessonOccurrences] = useState<string[]>(initialBoardSnapshot.suppressedRegularLessonOccurrences)
   const [scheduleCountAdjustments, setScheduleCountAdjustments] = useState<ScheduleCountAdjustmentEntry[]>(initialBoardSnapshot.scheduleCountAdjustments)
@@ -6162,7 +6170,71 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
     if (!studentMenu) return
     setEditStudentDraft(null)
     setAddExistingStudentDraft(null)
+    setTrialStudentDraft(null)
     setStudentMenu({ ...studentMenu, mode: menuStudent ? 'root' : 'empty' })
+  }
+
+  const handleOpenTrialStudent = () => {
+    if (!studentMenu || !emptyMenuContext) return
+    setTrialStudentDraft({ name: '', grade: '中1', subject: '英' })
+    setStudentMenu({ ...studentMenu, mode: 'trial' })
+  }
+
+  const handleSaveTrialStudent = () => {
+    if (!studentMenu || studentMenu.mode !== 'trial' || !emptyMenuContext || !trialStudentDraft) return
+    if (!trialStudentDraft.name.trim()) {
+      setStatusMessage('名前を入力してください。')
+      return
+    }
+
+    const nextWeeks = cloneWeeks(weeks)
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
+    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    if (!targetCell || !targetDesk) return
+
+    if (targetDesk.lesson?.studentSlots[studentMenu.studentIndex]) {
+      setStatusMessage('この生徒マスにはすでに生徒が入っています。')
+      return
+    }
+    if (hasMemoInStudentSlot(targetDesk, studentMenu.studentIndex)) {
+      setStatusMessage('この生徒マスにはメモがあります。メモを削除してから追加してください。')
+      return
+    }
+
+    const nextStudent: StudentEntry = {
+      id: createStudentId(targetCell.id, studentMenu.deskIndex, studentMenu.studentIndex),
+      name: trialStudentDraft.name.trim(),
+      grade: trialStudentDraft.grade,
+      subject: trialStudentDraft.subject,
+      lessonType: 'trial',
+      teacherType: 'normal',
+      manualAdded: true,
+    }
+
+    if (!targetDesk.lesson) {
+      targetDesk.lesson = {
+        id: `${targetCell.id}_desk_${studentMenu.deskIndex + 1}_manual`,
+        studentSlots: [null, null],
+      }
+    }
+    targetDesk.lesson.studentSlots[studentMenu.studentIndex] = nextStudent
+
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      studentMenu.cellId,
+      studentMenu.deskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    )
+    setTrialStudentDraft(null)
+    setStatusMessage(`${trialStudentDraft.name.trim()} を体験授業として追加しました。`)
   }
 
   const handleConfirmEdit = () => {
@@ -7482,7 +7554,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
               ) : null}
             </div>
           ) : null}
-          {!isTemplateMode && studentMenu && (studentMenu.mode === 'memo' || studentMenu.mode === 'empty' || studentMenu.mode === 'add' || menuStudent) ? (
+          {!isTemplateMode && studentMenu && (studentMenu.mode === 'memo' || studentMenu.mode === 'empty' || studentMenu.mode === 'add' || studentMenu.mode === 'trial' || menuStudent) ? (
             <div
               className={`student-menu-popover${studentMenu.mode === 'memo' ? ' student-menu-popover-memo' : ''}`}
               style={menuPosition}
@@ -7495,10 +7567,12 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     ? '空欄メニュー'
                     : studentMenu?.mode === 'add'
                       ? '生徒追加'
-                      : resolveBoardStudentDisplayName(menuStudent?.student.name ?? '')}</strong>
+                      : studentMenu?.mode === 'trial'
+                        ? '体験授業'
+                        : resolveBoardStudentDisplayName(menuStudent?.student.name ?? '')}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setStudentMenu(null)}>x</button>
               </div>
-              {studentMenu?.mode === 'memo' ? null : studentMenu?.mode === 'empty' || studentMenu?.mode === 'add' ? (
+              {studentMenu?.mode === 'memo' ? null : studentMenu?.mode === 'empty' || studentMenu?.mode === 'add' || studentMenu?.mode === 'trial' ? (
                 <div className="student-menu-meta">
                   {`${emptyMenuContext?.cell.dateLabel ?? ''} ${emptyMenuContext?.cell.slotLabel ?? ''} / ${studentMenu.deskIndex + 1}机目`}
                 </div>
@@ -7534,6 +7608,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <>
                       <div className="student-menu-button-row student-menu-button-row-three-up">
                         <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
+                        {classroomName === '開発用教室' ? <button type="button" className="menu-link-button" onClick={handleOpenTrialStudent} data-testid="menu-open-trial-button">体験授業</button> : null}
                         <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
                         <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
                       </div>
@@ -7542,6 +7617,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                     <>
                       <div className="student-menu-button-row student-menu-button-row-three-up">
                         <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
+                        {classroomName === '開発用教室' ? <button type="button" className="menu-link-button" onClick={handleOpenTrialStudent} data-testid="menu-open-trial-button">体験授業</button> : null}
                         <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
                         <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-no-makeup-button">振無休解除</button>
                       </div>
@@ -7549,6 +7625,7 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                   ) : (
                     <div className="student-menu-button-row">
                       <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
+                      {classroomName === '開発用教室' ? <button type="button" className="menu-link-button" onClick={handleOpenTrialStudent} data-testid="menu-open-trial-button">体験授業</button> : null}
                       <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
                     </div>
                   )}
@@ -7641,6 +7718,55 @@ export function ScheduleBoardScreen({ classroomSettings, teachers, students, reg
                       </select>
                     </div>
                   ) : null}
+                </>
+              ) : studentMenu?.mode === 'trial' ? (
+                <>
+                  <div className="student-menu-section student-menu-inline-head">
+                    <strong className="student-menu-section-title">体験授業</strong>
+                    <button type="button" className="menu-link-button subtle" onClick={handleCloseEdit} data-testid="menu-trial-back-button">戻る</button>
+                  </div>
+                  <div className="student-menu-section student-menu-actions">
+                    <button type="button" className="primary-button" onClick={handleSaveTrialStudent} data-testid="menu-trial-confirm-button">追加</button>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="menu-trial-name-input">名前</label>
+                    <input
+                      id="menu-trial-name-input"
+                      className="student-menu-input"
+                      value={trialStudentDraft?.name ?? ''}
+                      onChange={(event) => setTrialStudentDraft((current) => current ? { ...current, name: event.target.value } : current)}
+                      data-testid="menu-trial-name-input"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="menu-trial-grade-select">学年</label>
+                    <select
+                      id="menu-trial-grade-select"
+                      className="student-menu-select"
+                      value={trialStudentDraft?.grade ?? '中1'}
+                      onChange={(event) => setTrialStudentDraft((current) => current ? { ...current, grade: event.target.value as GradeLabel } : current)}
+                      data-testid="menu-trial-grade-select"
+                    >
+                      {(['小1', '小2', '小3', '小4', '小5', '小6', '中1', '中2', '中3', '高1', '高2', '高3'] as GradeLabel[]).map((grade) => (
+                        <option key={grade} value={grade}>{grade}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="menu-trial-subject-select">科目</label>
+                    <select
+                      id="menu-trial-subject-select"
+                      className="student-menu-select"
+                      value={trialStudentDraft?.subject ?? '英'}
+                      onChange={(event) => setTrialStudentDraft((current) => current ? { ...current, subject: event.target.value as SubjectLabel } : current)}
+                      data-testid="menu-trial-subject-select"
+                    >
+                      {(['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社'] as SubjectLabel[]).map((subject) => (
+                        <option key={subject} value={subject}>{subject}</option>
+                      ))}
+                    </select>
+                  </div>
                 </>
               ) : studentMenu?.mode === 'memo' ? (
                 <>

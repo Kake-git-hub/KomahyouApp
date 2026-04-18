@@ -1,4 +1,4 @@
-export type LessonType = 'regular' | 'makeup' | 'special'
+export type LessonType = 'regular' | 'makeup' | 'special' | 'trial'
 
 export type TeacherType = 'normal' | 'substitute' | 'outside'
 

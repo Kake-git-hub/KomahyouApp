@@ -25,6 +25,8 @@ function getLessonPrefix(lessonType: LessonType) {
       return { label: lessonTypeLabels[lessonType], text: '振)', className: 'prefix-lesson-makeup' }
     case 'special':
       return { label: lessonTypeLabels[lessonType], text: '講)', className: 'prefix-lesson-special' }
+    case 'trial':
+      return { label: lessonTypeLabels[lessonType], text: '体験)', className: 'prefix-lesson-trial' }
   }
 }
 
@@ -114,6 +116,7 @@ export function BoardGrid({
     const displaySubjectWithNote = `${displaySubject}${effectiveNoteSuffix}`
     const missingTeacherWarning = studentName && !teacherName.trim() ? '講師なし' : undefined
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
+    const isTrial = resolvedLessonType === 'trial'
     const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
     const hasMemo = !studentName && Boolean(memoLabel)
     const hasStatus = !studentName && Boolean(statusEntry) && !hasMemo
@@ -142,7 +145,7 @@ export function BoardGrid({
     return (
       <td
         key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
-        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
+        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${isTrial ? ' sa-student-trial' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
         onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, statusEntry?.status ?? null, event.clientX, event.clientY)}
         data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
       >

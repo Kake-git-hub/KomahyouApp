@@ -1939,7 +1939,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const sharedStoragePrefix = 'schedule-shared:' + BASE_VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:global:';
       const rangeStoragePrefix = sharedStoragePrefix + 'range:';
-      const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '講習' };
+      const lessonTypeLabels = { regular: '通常', makeup: '振替', special: '講習', trial: '体験' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
       const subjectDefinitions = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社'];
@@ -3002,6 +3002,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (lessonType === 'regular') return '通';
         if (lessonType === 'makeup') return '振';
         if (lessonType === 'special') return '講';
+        if (lessonType === 'trial') return '体';
         return lessonTypeLabels[lessonType] || lessonType || '';
       }
 
