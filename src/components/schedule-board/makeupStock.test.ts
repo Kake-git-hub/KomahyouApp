@@ -913,4 +913,155 @@ describe('makeupStock', () => {
     expect(match).toBeDefined()
     expect(match!.balance).toBe(1)
   })
+
+  it('counts attended makeup in statusSlots as consumed (not unconsumed)', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson()
+
+    const cellWithAttendedMakeup = createCell({
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [{
+          id: 'status-attended-1',
+          studentId: 'student-1',
+          sourceManagedLesson: true,
+          name: '山田 太郎',
+          managedStudentId: 'student-1',
+          grade: '中1' as const,
+          subject: '数' as const,
+          lessonType: 'makeup' as const,
+          teacherType: 'normal' as const,
+          teacherName: '田中講師',
+          dateKey: '2025-04-14',
+          slotNumber: 1,
+          recordedAt: new Date().toISOString(),
+          status: 'attended' as const,
+          sourceLessonId: 'lesson-1',
+          makeupSourceDate: '2025-04-07',
+        }, null],
+        lesson: {
+          id: 'lesson-1',
+          studentSlots: [null, null],
+        },
+      }],
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings({ holidayDates: ['2025-04-07'] }),
+      weeks: [[cellWithAttendedMakeup]],
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    // The holiday shortage on 4/7 is consumed by the attended makeup → balance 0
+    const match = entries.find((e) => e.key === 'student-1__数')
+    expect(match).toBeUndefined()
+  })
+
+  it('does not count absent makeup in statusSlots as consumed (remains unconsumed)', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson()
+
+    const cellWithAbsentMakeup = createCell({
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [{
+          id: 'status-absent-1',
+          studentId: 'student-1',
+          sourceManagedLesson: true,
+          name: '山田 太郎',
+          managedStudentId: 'student-1',
+          grade: '中1' as const,
+          subject: '数' as const,
+          lessonType: 'makeup' as const,
+          teacherType: 'normal' as const,
+          teacherName: '田中講師',
+          dateKey: '2025-04-14',
+          slotNumber: 1,
+          recordedAt: new Date().toISOString(),
+          status: 'absent' as const,
+          sourceLessonId: 'lesson-1',
+          makeupSourceDate: '2025-04-07',
+        }, null],
+        lesson: {
+          id: 'lesson-1',
+          studentSlots: [null, null],
+        },
+      }],
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings({ holidayDates: ['2025-04-07'] }),
+      weeks: [[cellWithAbsentMakeup]],
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    // The holiday shortage on 4/7 is NOT consumed by the absent makeup → balance 1
+    const match = entries.find((e) => e.key === 'student-1__数')
+    expect(match).toBeDefined()
+    expect(match!.balance).toBe(1)
+  })
+
+  it('counts absent-no-makeup in statusSlots as consumed (not unconsumed)', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson()
+
+    const cellWithAbsentNoMakeup = createCell({
+      desks: [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [{
+          id: 'status-anm-1',
+          studentId: 'student-1',
+          sourceManagedLesson: true,
+          name: '山田 太郎',
+          managedStudentId: 'student-1',
+          grade: '中1' as const,
+          subject: '数' as const,
+          lessonType: 'makeup' as const,
+          teacherType: 'normal' as const,
+          teacherName: '田中講師',
+          dateKey: '2025-04-14',
+          slotNumber: 1,
+          recordedAt: new Date().toISOString(),
+          status: 'absent-no-makeup' as const,
+          sourceLessonId: 'lesson-1',
+          makeupSourceDate: '2025-04-07',
+        }, null],
+        lesson: {
+          id: 'lesson-1',
+          studentSlots: [null, null],
+        },
+      }],
+    })
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings({ holidayDates: ['2025-04-07'] }),
+      weeks: [[cellWithAbsentNoMakeup]],
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    // The holiday shortage on 4/7 is consumed by absent-no-makeup → balance 0
+    const match = entries.find((e) => e.key === 'student-1__数')
+    expect(match).toBeUndefined()
+  })
 })

@@ -334,6 +334,13 @@ export function countPlannedMakeupsByKey(weeks: SlotCell[][], resolveStudentKey:
           const key = buildMakeupStockKey(resolveStudentKey(student), student.subject)
           counts[key] = (counts[key] ?? 0) + 1
         }
+        for (const statusEntry of desk.statusSlots ?? []) {
+          if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup') continue
+          if (statusEntry.status === 'absent') continue
+          const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
+          const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
+          counts[key] = (counts[key] ?? 0) + 1
+        }
       }
     }
   }
@@ -357,6 +364,16 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
           }
           if (student.makeupSourceDate) {
             pushOrigin(usedOriginDates, key, student.makeupSourceDate)
+          }
+        }
+        for (const statusEntry of desk.statusSlots ?? []) {
+          if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup') continue
+          if (statusEntry.status === 'absent') continue
+          const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
+          const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
+          counts[key] = (counts[key] ?? 0) + 1
+          if (statusEntry.makeupSourceDate) {
+            pushOrigin(usedOriginDates, key, statusEntry.makeupSourceDate)
           }
         }
       }
