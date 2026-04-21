@@ -22,6 +22,7 @@ import {
   getTeacherDisplayName,
   initialStudents,
   initialTeachers,
+  isTeacherVisibleInManagement,
   resolveScheduledStatus,
   resolveTeacherRosterStatus,
 } from './basicDataModel'
@@ -1030,7 +1031,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
     [students, todayReferenceDate],
   )
   const activeTeacherRows = useMemo(
-    () => teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, todayReferenceDate) === '在籍'),
+    () => teachers.filter((teacher) => isTeacherVisibleInManagement(teacher, todayReferenceDate)),
     [teachers, todayReferenceDate],
   )
   const withdrawnTeacherRows = useMemo(

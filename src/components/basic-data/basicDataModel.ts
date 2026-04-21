@@ -258,6 +258,11 @@ export function resolveTeacherRosterStatus(teacher: TeacherRow, referenceDate: s
   return '在籍'
 }
 
+export function isTeacherVisibleInManagement(teacher: TeacherRow, referenceDate: string) {
+  const status = resolveTeacherRosterStatus(teacher, referenceDate)
+  return status === '在籍' || status === '入塾前'
+}
+
 export function resolveScheduledStatus(entryDate: string, withdrawDate: string, isHidden: boolean, referenceDate: string) {
   if (isHidden) return '非表示'
   const normalizedEntryDate = normalizeDateText(entryDate)

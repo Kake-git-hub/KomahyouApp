@@ -529,6 +529,34 @@ describe('makeupStock', () => {
     })
   })
 
+  it('hides individually suppressed pending makeup origins while keeping other origins visible', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [],
+      classroomSettings: createSettings(),
+      weeks: [],
+      manualAdjustments: {
+        'student-1__数': [
+          { dateKey: '2025-04-07', reasonLabel: '手動調整' },
+          { dateKey: '2025-04-14', reasonLabel: '手動調整' },
+        ],
+      },
+      suppressedOrigins: {
+        'student-1__数': [{ dateKey: '2025-04-07' }],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2025-04-20T00:00:00'),
+    })
+
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.remainingOriginDates).toEqual(['2025-04-14'])
+    expect(entries[0]?.balance).toBe(1)
+  })
+
   it('consumes legacy manual-prefixed stock for a managed student', () => {
     const student = createStudent({ id: 's024', name: '古賀 爽太', displayName: '古賀爽太' })
     const teacher = createTeacher()

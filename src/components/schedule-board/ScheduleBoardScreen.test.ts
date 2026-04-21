@@ -3,7 +3,7 @@ import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, cloneWeeks, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, cloneWeeks, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -101,6 +101,81 @@ function createUndefinedRightOnlyCell(): SlotCell {
 }
 
 describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
+  it('shows upcoming teachers in board selection but keeps them out of template selection before their start date', () => {
+    const upcomingTeacher = {
+      ...initialTeachers[0]!,
+      id: 't-upcoming',
+      name: '未来講師',
+      displayName: '未来講師',
+      entryDate: '2026-05-01',
+    }
+    const cell: SlotCell = {
+      id: '2026-04-21_1',
+      dateKey: '2026-04-21',
+      dayLabel: '火',
+      dateLabel: '4/21',
+      slotLabel: '1限',
+      slotNumber: 1,
+      timeLabel: '13:00-14:30',
+      isOpenDay: true,
+      desks: [{ id: '2026-04-21_1_desk_1', teacher: '講師未割当' }],
+    }
+
+    const boardOptions = buildTeacherSelectionOptions({
+      teachers: [upcomingTeacher],
+      cell,
+      deskIndex: 0,
+      isTemplateMode: false,
+    })
+    const templateOptions = buildTeacherSelectionOptions({
+      teachers: [upcomingTeacher],
+      cell,
+      deskIndex: 0,
+      isTemplateMode: true,
+      templateReferenceDate: '2026-04-21',
+    })
+
+    expect(boardOptions.map((teacher) => teacher.id)).toContain('t-upcoming')
+    expect(templateOptions).toEqual([])
+  })
+
+  it('removes lecture pending items from the correct stock source', () => {
+    const sessionItemResult = removeLecturePendingItemFromStockState({
+      manualLectureStockCounts: {},
+      manualLectureStockOrigins: {},
+      item: {
+        stockKey: 'student-1__数__session-1',
+        source: 'session',
+        sessionId: 'session-1',
+      },
+    })
+    const manualItemResult = removeLecturePendingItemFromStockState({
+      manualLectureStockCounts: { 'student-1__数__session-1': 2 },
+      manualLectureStockOrigins: {
+        'student-1__数__session-1': [
+          { displayName: '山田', sessionId: 'session-1' },
+          { displayName: '山田', sessionId: 'session-1' },
+        ],
+      },
+      item: {
+        stockKey: 'student-1__数__session-1',
+        source: 'manual',
+        sessionId: 'session-1',
+      },
+    })
+
+    expect(sessionItemResult.nextManualLectureStockCounts).toEqual({
+      'student-1__数__session-1': -1,
+    })
+    expect(sessionItemResult.nextManualLectureStockOrigins).toEqual({})
+    expect(manualItemResult.nextManualLectureStockCounts).toEqual({
+      'student-1__数__session-1': 1,
+    })
+    expect(manualItemResult.nextManualLectureStockOrigins).toEqual({
+      'student-1__数__session-1': [{ displayName: '山田', sessionId: 'session-1' }],
+    })
+  })
+
   it('detects a duplicate student elsewhere in the same target cell', () => {
     const targetCell: SlotCell = {
       id: 'template_2_4',

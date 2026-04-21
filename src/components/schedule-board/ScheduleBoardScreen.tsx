@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, isTeacherVisibleInManagement, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
@@ -122,6 +122,7 @@ type GroupedLectureStockEntry = {
 }
 
 type LectureStockPendingItem = {
+  stockKey: string
   subject: SubjectLabel
   source: 'session' | 'manual'
   sessionId?: string
@@ -757,6 +758,31 @@ function removeLectureStockCount(countMap: LectureStockCountMap, key: string, de
   return {
     ...countMap,
     [key]: nextCount,
+  }
+}
+
+export function removeLecturePendingItemFromStockState(params: {
+  manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
+  item: {
+    stockKey: string
+    source: 'session' | 'manual'
+    sessionId?: string
+  }
+}) {
+  const { manualLectureStockCounts, manualLectureStockOrigins, item } = params
+  const nextManualLectureStockCounts = item.source === 'session'
+    ? appendLectureStockCount(manualLectureStockCounts, item.stockKey, -1)
+    : removeLectureStockCount(manualLectureStockCounts, item.stockKey)
+  const nextManualLectureStockOrigins = item.source === 'manual'
+    ? (item.sessionId
+      ? removeManualLectureStockOrigin(manualLectureStockOrigins, item.stockKey, { sessionId: item.sessionId })
+      : removeManualLectureStockOrigin(manualLectureStockOrigins, item.stockKey))
+    : cloneManualLectureStockOrigins(manualLectureStockOrigins)
+
+  return {
+    nextManualLectureStockCounts,
+    nextManualLectureStockOrigins,
   }
 }
 
@@ -1407,7 +1433,7 @@ export function buildTeacherSelectionOptions(params: {
   const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
   const visibleTeachers = isTemplateMode
     ? teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, templateReferenceDate || cell.dateKey) === '在籍')
-    : teachers.filter((teacher) => resolveTeacherRosterStatus(teacher, cell.dateKey) === '在籍')
+    : teachers.filter((teacher) => isTeacherVisibleInManagement(teacher, cell.dateKey))
   const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
     ? [...visibleTeachers, currentTeacher]
     : visibleTeachers
@@ -3261,6 +3287,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
           studentId: stockEntry.studentId,
           displayName: stockEntry.displayName,
           item: {
+            stockKey,
             subject: stockEntry.subject,
             source: 'session',
             sessionId: stockEntry.sessionId,
@@ -3321,6 +3348,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
           studentId: studentKey.startsWith('name:') ? null : studentKey,
           displayName: metadata?.displayName ?? fallbackDisplayName,
           item: {
+            stockKey,
             subject: (fallback?.subject ?? subject) as SubjectLabel,
             source: 'manual',
             sessionId: resolvedSessionId,
@@ -5815,6 +5843,61 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
     )
   }
 
+  const handleDeleteLecturePendingItem = (entry: GroupedLectureStockEntry, item: LectureStockPendingItem) => {
+    const { nextManualLectureStockCounts, nextManualLectureStockOrigins } = removeLecturePendingItemFromStockState({
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      item,
+    })
+
+    commitWeeks(
+      weeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      nextManualLectureStockCounts,
+      nextManualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    )
+
+    if (entry.requestedCount <= 1) {
+      setStockActionModal(null)
+    }
+
+    const sessionLabel = item.sessionLabel ? ` (${item.sessionLabel})` : ''
+    setStatusMessage(`${entry.displayName} の未消化講習 ${item.subject}${sessionLabel} を削除しました。`)
+  }
+
+  const handleDeleteMakeupOriginItem = (entry: GroupedMakeupStockEntry, item: MakeupStockOriginItem) => {
+    const nextSuppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, item.rawEntryKey, item.date)
+
+    commitWeeks(
+      weeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      nextSuppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    )
+
+    if (entry.balance <= 1) {
+      setStockActionModal(null)
+    }
+
+    setStatusMessage(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除しました。`)
+  }
+
   const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number) => {
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
@@ -7149,22 +7232,35 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
                     <div className="auto-assign-modal-title">{entryLabel}{lectureEntry.sessionLabel ? ` (${lectureEntry.sessionLabel})` : ''}</div>
                     <div className="student-menu-help-text">未消化の講習を選んで個別割振するか、自動割振で一括配置します。</div>
                     <div className="stock-origin-list">
-                      {pendingItems.map((item, index) => (
-                        <button
-                          key={`${item.subject}-${item.sessionId ?? ''}-${index}`}
-                          type="button"
-                          className="stock-origin-item"
-                          disabled={activeStockAutoAssignKey !== null}
-                          onClick={() => {
-                            handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
-                            setStockActionModal(null)
-                          }}
-                          data-testid={`stock-origin-item-${index}`}
-                        >
-                          <span className="stock-origin-subject">{item.subject}</span>
-                          {item.sessionLabel ? <span className="stock-origin-meta">{item.sessionLabel}</span> : null}
-                          {item.startDate && item.endDate ? <span className="stock-origin-meta">{item.startDate} ～ {item.endDate}</span> : null}
-                        </button>
+                      {pendingItems.length === 0 ? (
+                        <div className="makeup-stock-empty">配置可能な未消化講習がありません。</div>
+                      ) : pendingItems.map((item, index) => (
+                        <div className="stock-origin-item-shell" key={`${item.subject}-${item.sessionId ?? ''}-${index}`}>
+                          <button
+                            type="button"
+                            className="stock-origin-item stock-origin-item-main"
+                            disabled={activeStockAutoAssignKey !== null}
+                            onClick={() => {
+                              handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
+                              setStockActionModal(null)
+                            }}
+                            data-testid={`stock-origin-item-${index}`}
+                          >
+                            <span className="stock-origin-subject">{item.subject}</span>
+                            {item.sessionLabel ? <span className="stock-origin-meta">{item.sessionLabel}</span> : null}
+                            {item.startDate && item.endDate ? <span className="stock-origin-meta">{item.startDate} ～ {item.endDate}</span> : null}
+                          </button>
+                          <button
+                            type="button"
+                            className="stock-origin-delete"
+                            disabled={activeStockAutoAssignKey !== null}
+                            onClick={() => handleDeleteLecturePendingItem(lectureEntry, item)}
+                            aria-label={`${entryLabel} の未消化講習 ${item.subject} を削除`}
+                            data-testid={`stock-origin-delete-${index}`}
+                          >
+                            x
+                          </button>
+                        </div>
                       ))}
                     </div>
                     <div className="auto-assign-modal-actions">
@@ -7230,20 +7326,30 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
                       {originItems.length === 0 ? (
                         <div className="makeup-stock-empty">配置可能な未消化振替がありません。</div>
                       ) : originItems.map((item, index) => (
-                        <button
-                          key={`${item.rawEntryKey}-${item.originIndex}`}
-                          type="button"
-                          className="stock-origin-item"
-                          onClick={() => {
-                            handleSelectMakeupStockEntry(makeupEntry, { hidePanelsDuringPlacement: true, rawKey: item.rawEntryKey })
-                            setStockActionModal(null)
-                          }}
-                          data-testid={`stock-origin-item-${index}`}
-                        >
-                          <span className="stock-origin-subject">{item.subject}</span>
-                          <span className="stock-origin-meta">{item.label}</span>
-                          <span className="stock-origin-meta">({item.reasonLabel})</span>
-                        </button>
+                        <div className="stock-origin-item-shell" key={`${item.rawEntryKey}-${item.originIndex}`}>
+                          <button
+                            type="button"
+                            className="stock-origin-item stock-origin-item-main"
+                            onClick={() => {
+                              handleSelectMakeupStockEntry(makeupEntry, { hidePanelsDuringPlacement: true, rawKey: item.rawEntryKey })
+                              setStockActionModal(null)
+                            }}
+                            data-testid={`stock-origin-item-${index}`}
+                          >
+                            <span className="stock-origin-subject">{item.subject}</span>
+                            <span className="stock-origin-meta">{item.label}</span>
+                            <span className="stock-origin-meta">({item.reasonLabel})</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="stock-origin-delete"
+                            onClick={() => handleDeleteMakeupOriginItem(makeupEntry, item)}
+                            aria-label={`${makeupEntry.displayName} の未消化振替 ${item.subject} を削除`}
+                            data-testid={`stock-origin-delete-${index}`}
+                          >
+                            x
+                          </button>
+                        </div>
                       ))}
                     </div>
                     <div className="auto-assign-modal-actions">
