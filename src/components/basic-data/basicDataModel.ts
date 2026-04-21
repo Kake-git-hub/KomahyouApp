@@ -182,8 +182,7 @@ function resolveSchoolGradeLabelFromBirthDate(birthDate: string, today = new Dat
   if (age < 6) return '未就学'
   if (age <= 11) return `小${age - 5}`
   if (age <= 14) return `中${age - 11}`
-  if (age <= 17) return `高${age - 14}`
-  return '退塾'
+  return `高${Math.min(age - 14, 3)}`
 }
 
 function resolveStudentGradeSortOrder(gradeLabel: string) {
@@ -198,7 +197,6 @@ function resolveStudentGradeSortOrder(gradeLabel: string) {
   const highMatch = gradeLabel.match(/^高(\d+)$/)
   if (highMatch) return 200 + Number(highMatch[1])
 
-  if (gradeLabel === '入塾前') return 900
   if (gradeLabel === '退塾') return 901
   if (gradeLabel === '非表示') return 902
   return 999

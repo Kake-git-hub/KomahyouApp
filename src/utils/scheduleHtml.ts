@@ -589,7 +589,6 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
         if (middleMatch) return 100 + Number(middleMatch[1])
         const highMatch = gradeLabel.match(/^高(\d+)$/)
         if (highMatch) return 200 + Number(highMatch[1])
-        if (gradeLabel === '入塾前') return 900
         if (gradeLabel === '退塾') return 901
         if (gradeLabel === '非表示') return 902
         return 999
@@ -677,7 +676,6 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
         if (middleMatch) return 100 + Number(middleMatch[1])
         const highMatch = gradeLabel.match(/^高(\d+)$/)
         if (highMatch) return 200 + Number(highMatch[1])
-        if (gradeLabel === '入塾前') return 900
         if (gradeLabel === '退塾') return 901
         if (gradeLabel === '非表示') return 902
         return 999

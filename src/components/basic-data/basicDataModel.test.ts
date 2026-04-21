@@ -58,4 +58,22 @@ describe('basicDataModel student labels and sorting', () => {
     expect(isTeacherVisibleInManagement(upcomingTeacher, '2026-04-21')).toBe(true)
     expect(isTeacherVisibleInManagement(hiddenTeacher, '2026-04-21')).toBe(false)
   })
+
+  it('keeps students with empty or 未定 withdrawDate as 在籍 regardless of entry date', () => {
+    const futureEntryEmptyWithdraw = createStudent({ entryDate: '2027-04-01', withdrawDate: '' })
+    const pastEntryUndefinedWithdraw = createStudent({ id: 'student-2', entryDate: '2020-04-01', withdrawDate: '未定' })
+    const pastEntryEmptyWithdraw = createStudent({ id: 'student-3', entryDate: '2020-04-01', withdrawDate: '' })
+
+    expect(resolveCurrentStudentGradeLabel(futureEntryEmptyWithdraw, '2026-04-22')).not.toBe('退塾')
+    expect(resolveCurrentStudentGradeLabel(pastEntryUndefinedWithdraw, '2026-04-22')).not.toBe('退塾')
+    expect(resolveCurrentStudentGradeLabel(pastEntryEmptyWithdraw, '2026-04-22')).not.toBe('退塾')
+  })
+
+  it('clamps students aged 18 or older to 高3 instead of returning 退塾', () => {
+    const adult = createStudent({ birthDate: '2006-05-01' })
+    const withdrawnAdult = createStudent({ id: 'student-w', birthDate: '2006-05-01', withdrawDate: '2025-03-31' })
+
+    expect(resolveCurrentStudentGradeLabel(adult, '2026-04-22')).toBe('高3')
+    expect(resolveCurrentStudentGradeLabel(withdrawnAdult, '2026-04-22')).toBe('退塾')
+  })
 })

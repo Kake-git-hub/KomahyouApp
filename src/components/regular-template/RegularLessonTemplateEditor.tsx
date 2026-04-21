@@ -120,6 +120,18 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
   const selectedCell = cellByKey.get(buildCellKey(selectedDesk.dayOfWeek, selectedDesk.slotNumber)) ?? filteredTemplate.cells[0]
   const selectedDeskDraft = selectedCell?.desks[selectedDesk.deskIndex - 1] ?? selectedCell?.desks[0] ?? null
 
+  const teacherSelectOptions = useMemo(() => {
+    if (!selectedCell) return visibleTeachers
+    const otherDeskTeacherIds = new Set(
+      selectedCell.desks
+        .filter((_, index) => index !== selectedDesk.deskIndex - 1)
+        .map((desk) => desk.teacherId)
+        .filter((id) => id),
+    )
+    const currentTeacherId = selectedDeskDraft?.teacherId ?? ''
+    return visibleTeachers.filter((teacher) => teacher.id === currentTeacherId || !otherDeskTeacherIds.has(teacher.id))
+  }, [selectedCell, selectedDesk.deskIndex, selectedDeskDraft?.teacherId, visibleTeachers])
+
   const occupiedDeskCount = useMemo(
     () => filteredTemplate.cells.reduce((total, cell) => total + cell.desks.filter((desk) => desk.teacherId || desk.students.some((student) => student?.studentId)).length, 0),
     [filteredTemplate.cells],
@@ -318,7 +330,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                     onChange={(event) => updateDesk((desk) => ({ ...desk, teacherId: event.target.value }))}
                   >
                     <option value="">講師未設定</option>
-                    {visibleTeachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherDisplayName(teacher)}</option>)}
+                    {teacherSelectOptions.map((teacher) => <option key={teacher.id} value={teacher.id}>{getTeacherDisplayName(teacher)}</option>)}
                   </select>
                 </label>
 
