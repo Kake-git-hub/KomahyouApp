@@ -1,7 +1,7 @@
 {
   "name": "komahyouapp",
   "private": true,
-  "version": "1.5.88",
+  "version": "1.5.89",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,10 +9,11 @@
     "build:firebase": "npm run build",
     "build:functions": "npm --prefix functions run build",
     "firebase:first-classroom": "node tools/firebase-first-classroom-helper.mjs",
+    "hosting:retention:enforce": "node tools/firebase-hosting-retention.mjs --count 5",
     "lint": "eslint .",
     "preview": "vite preview",
-    "deploy:firebase": "npm run build:firebase && npx firebase-tools deploy --only hosting,firestore",
-    "deploy:firebase:with-functions": "npm run build:firebase && npm run build:functions && npx firebase-tools deploy --only hosting,firestore,functions",
+    "deploy:firebase": "npm run build:firebase && npx firebase-tools deploy --only hosting,firestore && npm run hosting:retention:enforce",
+    "deploy:firebase:with-functions": "npm run build:firebase && npm run build:functions && npx firebase-tools deploy --only hosting,firestore,functions && npm run hosting:retention:enforce",
     "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
