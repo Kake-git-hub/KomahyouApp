@@ -50,11 +50,11 @@ describe('basicDataModel student labels and sorting', () => {
     expect(sorted.map((student) => student.displayName)).toEqual(['伊藤', '青木', '高橋'])
   })
 
-  it('keeps upcoming teachers visible in management views while preserving their roster status', () => {
+  it('treats upcoming teachers as 在籍 so they always appear in management views', () => {
     const upcomingTeacher = createTeacher({ entryDate: '2026-05-01' })
     const hiddenTeacher = createTeacher({ id: 'teacher-2', isHidden: true })
 
-    expect(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21')).toBe('入塾前')
+    expect(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21')).toBe('在籍')
     expect(isTeacherVisibleInManagement(upcomingTeacher, '2026-04-21')).toBe(true)
     expect(isTeacherVisibleInManagement(hiddenTeacher, '2026-04-21')).toBe(false)
   })

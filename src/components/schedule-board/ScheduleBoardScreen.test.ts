@@ -101,7 +101,7 @@ function createUndefinedRightOnlyCell(): SlotCell {
 }
 
 describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
-  it('shows upcoming teachers in board selection but keeps them out of template selection before their start date', () => {
+  it('shows upcoming teachers in both board and template selection regardless of entry date', () => {
     const upcomingTeacher = {
       ...initialTeachers[0]!,
       id: 't-upcoming',
@@ -136,7 +136,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     })
 
     expect(boardOptions.map((teacher) => teacher.id)).toContain('t-upcoming')
-    expect(templateOptions).toEqual([])
+    expect(templateOptions.map((teacher) => teacher.id)).toContain('t-upcoming')
   })
 
   it('removes lecture pending items from the correct stock source', () => {

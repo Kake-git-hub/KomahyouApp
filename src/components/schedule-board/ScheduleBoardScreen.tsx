@@ -5844,6 +5844,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
   }
 
   const handleDeleteLecturePendingItem = (entry: GroupedLectureStockEntry, item: LectureStockPendingItem) => {
+    const sessionLabel = item.sessionLabel ? ` (${item.sessionLabel})` : ''
+    if (!window.confirm(`${entry.displayName} の未消化講習 ${item.subject}${sessionLabel} を削除します。よろしいですか。`)) {
+      setStatusMessage('未消化講習の削除をキャンセルしました。')
+      return
+    }
     const { nextManualLectureStockCounts, nextManualLectureStockOrigins } = removeLecturePendingItemFromStockState({
       manualLectureStockCounts,
       manualLectureStockOrigins,
@@ -5869,11 +5874,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
       setStockActionModal(null)
     }
 
-    const sessionLabel = item.sessionLabel ? ` (${item.sessionLabel})` : ''
     setStatusMessage(`${entry.displayName} の未消化講習 ${item.subject}${sessionLabel} を削除しました。`)
   }
 
   const handleDeleteMakeupOriginItem = (entry: GroupedMakeupStockEntry, item: MakeupStockOriginItem) => {
+    if (!window.confirm(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除します。よろしいですか。`)) {
+      setStatusMessage('未消化振替の削除をキャンセルしました。')
+      return
+    }
     const nextSuppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, item.rawEntryKey, item.date)
 
     commitWeeks(

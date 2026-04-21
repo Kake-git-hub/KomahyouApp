@@ -358,7 +358,7 @@ function resolveSchoolGradeLabel(birthDate: string, today = new Date()) {
 function resolveStudentStatusLabel(student: StudentRow, today = new Date()) {
   const referenceDate = getReferenceDateKey(today)
   const scheduledStatus = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)
-  if (scheduledStatus === '入塾前' || scheduledStatus === '退塾' || scheduledStatus === '非表示') return scheduledStatus
+  if (scheduledStatus === '退塾' || scheduledStatus === '非表示') return scheduledStatus
   return resolveSchoolGradeLabel(student.birthDate, today)
 }
 
