@@ -473,6 +473,7 @@ type ScheduleBoardScreenProps = {
   onRestoreUndoSnapshot?: () => void
   onDismissUndoSnapshot?: () => void
   onLogout: () => void
+  onSaveAndClose?: () => void
 }
 
 export type ScheduleRangePreference = {
@@ -2413,7 +2414,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onSaveAndClose }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -7224,6 +7225,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, teachers
             onTemplateSaveOverwrite={handleTemplateSaveRequest}
             onTemplateClear={handleTemplateClear}
             onTemplateClose={handleExitTemplateMode}
+            onSaveAndClose={onSaveAndClose}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
           {!isTemplateMode && stockActionModal ? (() => {
