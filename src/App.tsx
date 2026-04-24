@@ -1627,6 +1627,86 @@ function App() {
     setPersistenceMessage('ログアウトしました。')
   }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncCurrentClassroomData])
 
+  const saveAndCloseBoard = useCallback(() => {
+    syncCurrentClassroomData(actingClassroomId)
+
+    // Build the latest snapshot and write it synchronously to localStorage so the
+    // data is persisted even if the browser blocks async work during page unload.
+    const snapshot = isSnapshotPersistenceRuntimeEnabled()
+      ? buildWorkspaceSnapshot(new Date().toISOString())
+      : null
+    if (snapshot) {
+      try {
+        writeWorkspaceToLocalStorageSync(snapshot)
+      } catch {
+        // Local sync write best-effort; subsequent async save may still succeed.
+      }
+    }
+
+    const tryCloseWindow = () => {
+      try {
+        window.close()
+      } catch {
+        // window.close may throw in some browsers; swallow and let the message guide the user.
+      }
+      // Fallback: if the browser refuses window.close (common when the tab was not
+      // opened by script), inform the user that it is now safe to close manually.
+      // 200ms is enough for the browser to actually unload the tab when window.close()
+      // succeeds; if we are still here after that, we know the close was blocked.
+      window.setTimeout(() => {
+        if (typeof document !== 'undefined' && !document.hidden) {
+          setPersistenceMessage('保存しました。ブラウザのタブを閉じてください。')
+        }
+      }, 200)
+    }
+
+    if (snapshot) {
+      let localFailed = false
+      const localPromise = saveWorkspaceSnapshot(snapshot).catch(() => {
+        localFailed = true
+      })
+      if (isRemoteBackendEnabled && remoteSessionUserId) {
+        setPersistenceMessage('保存しています…')
+        void Promise.allSettled([
+          localPromise,
+          saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId),
+        ]).then((results) => {
+          const firebaseResult = results[1]
+          if (firebaseResult.status === 'rejected') {
+            const reason = firebaseResult.reason
+            const message = reason instanceof Error ? reason.message : 'Firebase 同期に失敗しました。'
+            if (localFailed) {
+              setPersistenceMessage(`保存に失敗しました: ${message} バックアップを書き出してください。`)
+            } else {
+              setLastSavedAt(snapshot.savedAt)
+              setPersistenceMessage(`ローカルに保存しましたが、${message} ブラウザのタブを閉じてください。`)
+            }
+          } else {
+            setLastSavedAt(snapshot.savedAt)
+            setPersistenceMessage(localFailed
+              ? 'Firebase へ保存しました（ローカル保存は失敗）。ブラウザのタブを閉じてください。'
+              : '保存しました。ブラウザのタブを閉じてください。')
+          }
+          tryCloseWindow()
+        })
+        return
+      }
+
+      void localPromise.then(() => {
+        if (localFailed) {
+          setPersistenceMessage('ローカル保存に失敗しました。バックアップを書き出してください。')
+          return
+        }
+        setLastSavedAt(snapshot.savedAt)
+        setPersistenceMessage('保存しました。ブラウザのタブを閉じてください。')
+        tryCloseWindow()
+      })
+      return
+    }
+
+    tryCloseWindow()
+  }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncCurrentClassroomData])
+
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
     || teachers.length > 0
@@ -3361,6 +3441,7 @@ function App() {
       onRestoreUndoSnapshot={restoreUndoSnapshot}
       onDismissUndoSnapshot={dismissUndoSnapshot}
       onLogout={logout}
+      onSaveAndClose={saveAndCloseBoard}
     />
   )
 }

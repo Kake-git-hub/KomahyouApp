@@ -42,6 +42,7 @@ type BoardToolbarProps = {
   onTemplateSaveOverwrite?: () => void
   onTemplateClear?: () => void
   onTemplateClose?: () => void
+  onSaveAndClose?: () => void
 }
 
 export function BoardToolbar({
@@ -86,6 +87,7 @@ export function BoardToolbar({
   onTemplateSaveOverwrite,
   onTemplateClear,
   onTemplateClose,
+  onSaveAndClose,
 }: BoardToolbarProps) {
   return (
     <section className="toolbar-panel" aria-label={isTemplateMode ? '通常授業テンプレート操作バー' : 'コマ調整の操作バー'}>
@@ -165,6 +167,15 @@ export function BoardToolbar({
                 <span className="week-label" data-testid="week-label">{weekLabel}</span>
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
+              <button
+                className="primary-button slim"
+                type="button"
+                onClick={onSaveAndClose}
+                data-testid="save-and-close-button"
+                title="現在の内容を保存してから、ブラウザのタブを閉じます。"
+              >
+                保存して閉じる
+              </button>
             </>
           )}
         </div>
