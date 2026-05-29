@@ -235,11 +235,10 @@ function countMonthlyLessonQuota(row: RegularLessonRow, year: number, monthIndex
   const activeEndKey = period.endDate < monthEndKey ? period.endDate : monthEndKey
 
   if (activeEndKey < activeStartKey) return 0
-  if (activeStartKey === monthStartKey && activeEndKey === monthEndKey) return 4
 
-  return Math.min(4, getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
+  return getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
     .filter((dateKey) => dateKey >= activeStartKey && dateKey <= activeEndKey)
-    .length)
+    .length
 }
 
 function resolveAutomaticStockPeriod(row: RegularLessonRow) {
@@ -261,20 +260,42 @@ function countTotalLessonQuota(row: RegularLessonRow) {
     .reduce((total, { year, monthIndex }) => total + countMonthlyLessonQuota(row, year, monthIndex), 0)
 }
 
-function countAssignedLessonsByKey(
+function buildRegularAssignmentPeriodsByKey(regularLessons: RegularLessonRow[]) {
+  const periodsByKey: Record<string, Array<{ startDate: string; endDate: string }>> = {}
+
+  for (const row of regularLessons) {
+    const period = resolveRegularLessonParticipantPeriod(row)
+    const participants = [
+      { studentId: row.student1Id, subject: row.subject1 },
+      { studentId: row.student2Id, subject: row.subject2 },
+    ].filter((entry) => entry.studentId && entry.subject)
+
+    for (const participant of participants) {
+      const key = buildMakeupStockKey(participant.studentId, participant.subject)
+      periodsByKey[key] = [...(periodsByKey[key] ?? []), period]
+    }
+  }
+
+  return periodsByKey
+}
+
+function countAssignedRegularLessonsByKey(
   weeks: SlotCell[][],
   resolveStudentKey: (student: StudentEntry) => string,
-  lessonType: 'regular' | 'makeup',
+  regularLessons: RegularLessonRow[],
 ) {
   const counts: Record<string, number> = {}
+  const periodsByKey = buildRegularAssignmentPeriodsByKey(regularLessons)
 
   for (const week of weeks) {
     for (const cell of week) {
       if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const student of desk.lesson?.studentSlots ?? []) {
-          if (!student || student.manualAdded || student.lessonType !== lessonType) continue
+          if (!student || student.manualAdded || student.lessonType !== 'regular') continue
           const key = buildMakeupStockKey(resolveStudentKey(student), student.subject)
+          const periods = periodsByKey[key] ?? []
+          if (!periods.some((period) => cell.dateKey >= period.startDate && cell.dateKey <= period.endDate)) continue
           counts[key] = (counts[key] ?? 0) + 1
         }
       }
@@ -703,7 +724,7 @@ export function buildMakeupStockEntries(params: {
   }, {})
   const plannedMakeups = normalizeNumberMapKeys(makeupUsage.counts, managedStudentIds)
   const usedOriginDatesByKey = normalizeStringArrayMapKeys(makeupUsage.usedOriginDates, managedStudentIds)
-  const assignedRegularLessons = normalizeNumberMapKeys(countAssignedLessonsByKey(weeks, resolveStudentKey, 'regular'), managedStudentIds)
+  const assignedRegularLessons = normalizeNumberMapKeys(countAssignedRegularLessonsByKey(weeks, resolveStudentKey, regularLessons), managedStudentIds)
   const totalLessonCounts = countTotalLessonQuotaByKey(regularLessons)
   const eligiblePlannedMakeupKeys = Object.keys(plannedMakeups)
   const trackedAssignedRegularKeys = Object.keys(assignedRegularLessons)

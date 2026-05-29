@@ -169,6 +169,86 @@ describe('makeupStock', () => {
     })
   })
 
+  it('does not treat the fifth weekly regular lesson in a month as over-assigned stock', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({
+      dayOfWeek: 2,
+      slotNumber: 4,
+      startDate: '2026-03-01',
+      endDate: '2026-03-31',
+    })
+    const weeks = [['2026-03-03', '2026-03-10', '2026-03-17', '2026-03-24', '2026-03-31'].map((dateKey) => createCell({
+      dateKey,
+      slotNumber: 4,
+      desks: [{
+        id: `desk-${dateKey}`,
+        teacher: '田中講師',
+        lesson: {
+          id: `managed_${regularLesson.id}_${dateKey}`,
+          studentSlots: [createStudentEntry({
+            id: `regular-${dateKey}`,
+            lessonType: 'regular',
+            managedStudentId: 'student-1',
+          }), null],
+        },
+      }],
+    }))]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-03-31T00:00:00'),
+    })
+
+    expect(entries.find((entry) => entry.key === 'student-1__数')).toBeUndefined()
+  })
+
+  it('does not count frozen regular placements before the current template period as over-assigned stock', () => {
+    const student = createStudent()
+    const teacher = createTeacher()
+    const regularLesson = createRegularLesson({
+      dayOfWeek: 2,
+      slotNumber: 4,
+      startDate: '2026-03-10',
+      endDate: '2026-03-31',
+    })
+    const weeks = [['2026-03-03', '2026-03-10', '2026-03-17', '2026-03-24', '2026-03-31'].map((dateKey) => createCell({
+      dateKey,
+      slotNumber: 4,
+      desks: [{
+        id: `desk-${dateKey}`,
+        teacher: '田中講師',
+        lesson: {
+          id: dateKey < regularLesson.startDate ? `managed_old_${dateKey}` : `managed_${regularLesson.id}_${dateKey}`,
+          studentSlots: [createStudentEntry({
+            id: `regular-${dateKey}`,
+            lessonType: 'regular',
+            managedStudentId: 'student-1',
+          }), null],
+        },
+      }],
+    }))]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-03-31T00:00:00'),
+    })
+
+    expect(entries.find((entry) => entry.key === 'student-1__数')).toBeUndefined()
+  })
+
   it('ignores manual-added makeup students in planned makeup counts', () => {
     const weeks = [[createCell({
       desks: [{
