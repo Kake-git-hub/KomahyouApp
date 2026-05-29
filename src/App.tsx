@@ -1694,6 +1694,7 @@ function AuthenticatedApp() {
 
   const publishBoardStateSnapshot = useCallback((nextBoardState: PersistedBoardState) => {
     if (!actingClassroomId || !actingClassroom) return
+    if (!isFirebaseBackendEnabled()) return
     const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
     if (!classroomSettings.boardShareToken) {
       setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })

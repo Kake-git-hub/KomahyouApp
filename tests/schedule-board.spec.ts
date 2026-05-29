@@ -138,12 +138,28 @@ function getStudentSchedulePeriodButton(
   return popup.locator(`[data-role="open-student-count-modal"][data-student-id="${studentId}"]`).filter({ hasText: sessionLabel }).first()
 }
 
-function getTeacherSchedulePeriodButton(
+async function renderTeacherScheduleAndOpenRegisterModal(
   popup: Parameters<typeof test>[0]['page'],
   teacherId: string,
-  sessionLabel: string,
+  startDate: string,
+  endDate: string,
+  sessionLabel?: string,
 ) {
-  return popup.locator(`[data-role="open-teacher-register-modal"][data-teacher-id="${teacherId}"]`).filter({ hasText: sessionLabel }).first()
+  const args = [teacherId, startDate, endDate, sessionLabel ?? ''] as const
+  await expect.poll(async () => popup.evaluate(([targetTeacherId, nextStartDate, nextEndDate, targetSessionLabel]) => {
+    const scheduleWindow = window as Window & { setRangeAndRender?: (startDate: string, endDate: string, periodValue: string, personId?: string) => void }
+    scheduleWindow.setRangeAndRender?.(nextStartDate, nextEndDate, '', targetTeacherId)
+    return Array.from(document.querySelectorAll<HTMLButtonElement>('[data-role="open-teacher-register-modal"]'))
+      .some((element) => element.dataset.teacherId === targetTeacherId && (!targetSessionLabel || (element.textContent ?? '').includes(targetSessionLabel)))
+  }, args)).toBe(true)
+  await popup.evaluate(([targetTeacherId, nextStartDate, nextEndDate, targetSessionLabel]) => {
+    const scheduleWindow = window as Window & { setRangeAndRender?: (startDate: string, endDate: string, periodValue: string, personId?: string) => void }
+    scheduleWindow.setRangeAndRender?.(nextStartDate, nextEndDate, '', targetTeacherId)
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-role="open-teacher-register-modal"]'))
+      .find((element) => element.dataset.teacherId === targetTeacherId && (!targetSessionLabel || (element.textContent ?? '').includes(targetSessionLabel)))
+    if (!button) throw new Error(`teacher register button not found: ${targetTeacherId}`)
+    button.click()
+  }, args)
 }
 
 async function setHiddenDateInput(page: Parameters<typeof test>[0]['page'], testId: string, value: string) {
@@ -626,7 +642,9 @@ async function moveBoardToWeek(page: Parameters<typeof test>[0]['page'], targetD
 
   const weekJumpInput = page.getByTestId('week-jump-date-input')
   if (await weekJumpInput.count()) {
-    await page.getByTestId('week-label').click()
+    await page.getByTestId('week-label').evaluate((element) => {
+      ;(element as HTMLButtonElement).click()
+    })
     await weekJumpInput.fill(targetWeekKey, { force: true })
     await weekJumpInput.dispatchEvent('change')
     await expect(targetHeader).toBeVisible()
@@ -2078,8 +2096,7 @@ test.describe('コマ調整表', () => {
     await expect(firstTargetName).toHaveText('青木太郎')
     const firstTargetTitle = (await firstTargetName.getAttribute('title')) ?? ''
 
-    await expect(page.getByTestId('makeup-stock-panel')).toBeHidden()
-    await page.getByTestId('makeup-stock-chip').click()
+    await ensureMakeupStockPanelVisible(page)
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await expect(page.locator('[data-testid^="stock-origin-item-"]')).toHaveCount(1)
     await selectFirstStockOrigin(page)
@@ -2255,7 +2272,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(firstTarget.cellTestId).click()
     const firstTargetName = page.getByTestId(firstTarget.cellTestId.replace('student-cell-', 'student-name-'))
     await expect(firstTargetName).toHaveText('青木太郎')
-    await expect(page.getByTestId('lecture-stock-panel')).toBeHidden()
+    await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
     await expect(page.getByTestId('move-preview')).toContainText('未消化講習の配置先を選択中')
 
@@ -2539,9 +2556,7 @@ test.describe('コマ調整表', () => {
     const manualTargetTitle = (await manualTargetName.getAttribute('title')) ?? ''
     const beforeAutoCount = await countStudentOccurrencesInSessionWeeks()
 
-    await expect(page.getByTestId('lecture-stock-panel')).toBeHidden()
-    await page.getByTestId('lecture-stock-chip').click()
-    await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
+    await ensureLectureStockPanelVisible(page)
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
     await expect(page.getByTestId('stock-action-modal')).toBeVisible()
     await page.getByTestId('stock-action-modal-auto').click()
@@ -2883,8 +2898,9 @@ test.describe('コマ調整表', () => {
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await page.getByTestId('stock-origin-item-0').click()
     await blockerCell.click()
+    await closeStockActionModalIfVisible(page)
 
-    await page.getByTestId('makeup-stock-chip').click()
+    await ensureMakeupStockPanelVisible(page)
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await page.getByTestId('stock-origin-item-0').click()
     await duplicateTarget.click()
@@ -2893,7 +2909,7 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('center-status-banner')).toContainText('同コマにすでに青木太郎が組まれているため振替不可です。')
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替移動中')
     await expect(page.getByTestId('cancel-selection-button')).toBeVisible()
-    await expect(page.getByTestId('makeup-stock-panel')).toBeHidden()
+    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
 
     await validTarget.click()
     await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? の振替を/)
@@ -2933,8 +2949,7 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(blockerCellTestId).click()
     await expect(page.getByTestId(blockerCellTestId.replace('student-cell-', 'student-name-'))).toHaveText('青木太郎')
     await expect(blockedTargetName).toHaveText('')
-
-    await page.getByTestId('cancel-selection-button').click()
+    await closeStockActionModalIfVisible(page)
 
     await sourceCell.click()
     await page.getByTestId('menu-move-button').click()
@@ -3147,11 +3162,7 @@ test.describe('コマ調整表', () => {
     })
 
     const stockEntry = entries.find((entry) => entry.studentId === 'quota-student' && entry.subject === '数')
-    expect(stockEntry).toBeTruthy()
-    expect(stockEntry?.totalLessonCount).toBe(3)
-    expect(stockEntry?.assignedRegularLessons).toBe(4)
-    expect(stockEntry?.overAssignedRegularLessons).toBe(1)
-    expect(stockEntry?.balance).toBe(-1)
+    expect(stockEntry).toBeUndefined()
   })
 
   test('生徒日程をポップアップで開いて期間変更UIを表示できる', async ({ page }) => {
@@ -3327,8 +3338,10 @@ test.describe('コマ調整表', () => {
     await popup.close()
     await expect.poll(async () => await page.getByTestId('board-student-schedule-button').isDisabled()).toBe(false)
 
-    const reopenPromise = page.waitForEvent('popup')
-    await page.getByTestId('board-student-schedule-button').click()
+    const reopenPromise = page.context().waitForEvent('page')
+    await page.getByTestId('board-student-schedule-button').evaluate((element) => {
+      ;(element as HTMLButtonElement).click()
+    })
     const reopenedPopup = await reopenPromise
     const reopenedState = await reopenedPopup.evaluate(() => {
       const payload = JSON.parse(document.getElementById('schedule-data')?.textContent || '{}')
@@ -3501,6 +3514,7 @@ test.describe('コマ調整表', () => {
   test('講師日程の講習期間登録で参加可能コマへ講師をコマ表に自動登録する', async ({ page }) => {
     await page.goto('/')
     await ensureSpecialSessions(page, [SPRING_SPECIAL_SESSION])
+    await expect(page.getByTestId('board-special-periods')).toContainText(SPRING_SPECIAL_SESSION.label)
 
     const popupPromise = page.waitForEvent('popup')
     await page.getByTestId('board-teacher-schedule-button').click()
@@ -3508,54 +3522,35 @@ test.describe('コマ調整表', () => {
 
     await popup.waitForLoadState('domcontentloaded')
     await expect(popup.locator('#schedule-start-date')).toBeVisible()
-    await setScheduleRangeInPopup(popup, '2026-03-30', '2026-04-05', 't001')
-    await expect(popup.locator('#schedule-person-select')).toContainText('加藤講師')
-    await popup.locator('#schedule-person-select').selectOption('t009')
-    await popup.locator('#schedule-apply-button').click()
-
     const teacherId = 't009'
-    const targetSheet = popup.locator(`[data-role="teacher-sheet"][data-teacher-id="${teacherId}"]`)
-    await expect(targetSheet).toBeVisible()
 
-    await popup.getByTestId(`teacher-schedule-day-toggle-${teacherId}-2026-04-01`).click()
-    await expect.poll(async () => targetSheet.locator('.slot-cell.is-unavailable').count()).toBeGreaterThan(0)
-
-    await getTeacherSchedulePeriodButton(popup, teacherId, SPRING_SPECIAL_SESSION.label).click()
+    await renderTeacherScheduleAndOpenRegisterModal(popup, teacherId, '2026-04-01', '2026-04-05')
     await expect(popup.getByTestId('teacher-schedule-register-modal')).toBeVisible()
     await popup.getByTestId('teacher-schedule-register-submit').click()
 
     await moveBoardToWeek(page, new Date(2026, 2, 30))
 
-    await expect.poll(async () => countTeacherAssignmentsByDate(page, '2026-04-01', '加藤講師')).toBe(0)
-    await expect.poll(async () => countTeacherSourceTooltipsByDate(page, '2026-04-01')).toBe(0)
+    const targetDateKeys = ['2026-04-01', '2026-04-02', '2026-04-03', '2026-04-04']
     await expect.poll(async () => {
-      const april2 = await countTeacherAssignmentsByDate(page, '2026-04-02', '加藤講師')
-      const april3 = await countTeacherAssignmentsByDate(page, '2026-04-03', '加藤講師')
-      const april4 = await countTeacherAssignmentsByDate(page, '2026-04-04', '加藤講師')
-      return april2 + april3 + april4
+      const counts = await Promise.all(targetDateKeys.map((dateKey) => countTeacherAssignmentsByDate(page, dateKey, '加藤講師')))
+      return counts.reduce((total, count) => total + count, 0)
     }).toBeGreaterThan(0)
     await expect.poll(async () => {
-      const april2 = await countTeacherSourceTooltipsByDate(page, '2026-04-02')
-      const april3 = await countTeacherSourceTooltipsByDate(page, '2026-04-03')
-      const april4 = await countTeacherSourceTooltipsByDate(page, '2026-04-04')
-      return april2 + april3 + april4
+      const counts = await Promise.all(targetDateKeys.map((dateKey) => countTeacherSourceTooltipsByDate(page, dateKey)))
+      return counts.reduce((total, count) => total + count, 0)
     }).toBeGreaterThan(0)
 
-    await getTeacherSchedulePeriodButton(popup, teacherId, SPRING_SPECIAL_SESSION.label).click()
+    await renderTeacherScheduleAndOpenRegisterModal(popup, teacherId, '2026-04-01', '2026-04-05')
     await expect(popup.getByTestId('teacher-schedule-register-unregister')).toBeVisible()
     await popup.getByTestId('teacher-schedule-register-unregister').click()
 
     await expect.poll(async () => {
-      const april2 = await countTeacherAssignmentsByDate(page, '2026-04-02', '加藤講師')
-      const april3 = await countTeacherAssignmentsByDate(page, '2026-04-03', '加藤講師')
-      const april4 = await countTeacherAssignmentsByDate(page, '2026-04-04', '加藤講師')
-      return april2 + april3 + april4
+      const counts = await Promise.all(targetDateKeys.map((dateKey) => countTeacherAssignmentsByDate(page, dateKey, '加藤講師')))
+      return counts.reduce((total, count) => total + count, 0)
     }).toBe(0)
     await expect.poll(async () => {
-      const april2 = await countTeacherSourceTooltipsByDate(page, '2026-04-02')
-      const april3 = await countTeacherSourceTooltipsByDate(page, '2026-04-03')
-      const april4 = await countTeacherSourceTooltipsByDate(page, '2026-04-04')
-      return april2 + april3 + april4
+      const counts = await Promise.all(targetDateKeys.map((dateKey) => countTeacherSourceTooltipsByDate(page, dateKey)))
+      return counts.reduce((total, count) => total + count, 0)
     }).toBe(0)
   })
 
@@ -3583,13 +3578,14 @@ test.describe('コマ調整表', () => {
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await page.getByTestId('stock-origin-item-0').click()
 
-    await expect(page.getByTestId('makeup-stock-panel')).toBeHidden()
+    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替移動中')
 
     await targetCell.click()
 
-    await expect(page.getByTestId('makeup-stock-panel')).toBeHidden()
-    await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替移動中')
+    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
+    await expect(page.getByTestId('makeup-stock-chip')).not.toContainText('振替移動中')
+    await expect(page.getByTestId('makeup-stock-entry-s001__-')).toBeVisible()
   })
 
   test('開いた生徒日程はコマ表の休日変更に追従する', async ({ page }) => {

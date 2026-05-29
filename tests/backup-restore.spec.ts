@@ -1,11 +1,41 @@
 import { expect, test } from '@playwright/test'
-import { installFixedDate, navigateToBoard, setNumberInput, acceptNextDialog } from './helpers'
+import { installFixedDate, navigateToBoard, setNumberInput, acceptNextDialog, navigateFromSpecialDataToBoard, getSpecialSessionDateButton } from './helpers'
+
+const SPRING_SPECIAL_SESSION = {
+  label: '2026 新年度準備講座',
+  startDate: '2026-03-23',
+  endDate: '2026-04-05',
+}
 
 test.beforeEach(async ({ page }) => {
   await installFixedDate(page)
 })
 
 test.describe('バックアップと初期設定', () => {
+  async function ensureSpecialSession(page: Parameters<typeof test>[0]['page']) {
+    await navigateToBoard(page)
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-special-data-button').click()
+    await expect(page.getByTestId('special-data-screen')).toBeVisible()
+
+    const sessionsTable = page.getByTestId('special-data-sessions-table')
+    const existingRow = sessionsTable.locator('tbody tr').filter({ hasText: SPRING_SPECIAL_SESSION.label })
+    if (!await existingRow.count()) {
+      if (!await page.getByTestId('special-data-create-form').isVisible().catch(() => false)) {
+        await page.getByTestId('special-data-toggle-create-button').click()
+      }
+
+      await page.getByTestId('special-data-draft-label').fill(SPRING_SPECIAL_SESSION.label)
+      await page.getByTestId('special-data-clear-period-button').click()
+      await (await getSpecialSessionDateButton(page, SPRING_SPECIAL_SESSION.startDate)).click()
+      await (await getSpecialSessionDateButton(page, SPRING_SPECIAL_SESSION.endDate)).click()
+      await page.getByTestId('special-data-create-button').click()
+      await expect(existingRow).toHaveCount(1)
+    }
+
+    await navigateFromSpecialDataToBoard(page)
+  }
+
   async function openBackupRestoreScreen(page: Parameters<typeof test>[0]['page']) {
     await navigateToBoard(page)
     await page.getByTestId('menu-button').click()
@@ -84,7 +114,10 @@ test.describe('バックアップと初期設定', () => {
   })
 
   test('初期設定で未消化講習ストックを追加できる', async ({ page }) => {
-    await openBackupRestoreScreen(page)
+    await ensureSpecialSession(page)
+    await page.getByTestId('menu-button').click()
+    await page.getByTestId('menu-open-backup-restore-button').click()
+    await expect(page.getByTestId('backup-restore-screen')).toBeVisible()
 
     const studentSelect = page.getByTestId('setup-lecture-student')
     await expect(studentSelect).toBeVisible()
@@ -93,10 +126,7 @@ test.describe('バックアップと初期設定', () => {
     await page.getByTestId('setup-lecture-subject').selectOption({ index: 1 })
 
     // 講習セッションが存在する場合のみセッションを選択
-    const sessionSelect = page.getByTestId('setup-lecture-session')
-    if (await sessionSelect.count() && (await sessionSelect.locator('option').count()) > 1) {
-      await sessionSelect.selectOption({ index: 1 })
-    }
+    await page.getByTestId('setup-lecture-session').selectOption({ label: SPRING_SPECIAL_SESSION.label })
 
     await setNumberInput(page, 'setup-lecture-count', 3)
     await page.getByTestId('setup-lecture-add').click()
@@ -122,6 +152,7 @@ test.describe('バックアップと初期設定', () => {
   test('コマ表へ戻るボタンで画面遷移できる', async ({ page }) => {
     await openBackupRestoreScreen(page)
 
+    await page.getByTestId('backup-restore-menu-button').click()
     await page.getByTestId('backup-restore-open-board-button').click()
     await expect(page.getByTestId('week-label')).toBeVisible()
   })

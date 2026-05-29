@@ -37,6 +37,7 @@ test.describe('画面遷移', () => {
     await page.getByTestId('menu-button').click()
     await page.getByTestId('menu-open-backup-restore-button').click()
     await expect(page.getByTestId('backup-restore-screen')).toBeVisible()
+    await page.getByTestId('backup-restore-menu-button').click()
     await page.getByTestId('backup-restore-open-board-button').click()
     await expect(page.getByTestId('week-label')).toBeVisible()
   })

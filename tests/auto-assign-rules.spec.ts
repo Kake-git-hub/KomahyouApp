@@ -28,18 +28,18 @@ test.describe('自動割振ルール', () => {
   test('ルールに学年単位で対象を追加できる', async ({ page }) => {
     await openAutoAssignRulesScreen(page)
 
-    // forbidFirstPeriod ルールに中学生を追加
+    // forbidFirstPeriod ルールに、現在選べる最初の学年を追加
     await page.getByTestId('auto-assign-open-modal-forbidFirstPeriod').click()
     await page.getByTestId('auto-assign-type-grade-forbidFirstPeriod').click()
 
-    // 中学生の学年ボタンをクリック
-    const gradeButton = page.getByTestId('auto-assign-grade-中-forbidFirstPeriod')
-    if (await gradeButton.count()) {
-      await gradeButton.click()
-    }
+    const gradeButton = page.locator('[data-testid^="auto-assign-grade-"][data-testid$="-forbidFirstPeriod"]').first()
+    await expect(gradeButton).toBeVisible()
+    const selectedGrade = ((await gradeButton.textContent()) ?? '').trim()
+    expect(selectedGrade).not.toBe('')
+    await gradeButton.click()
     await page.getByTestId('auto-assign-modal-confirm-forbidFirstPeriod').click()
 
-    await expect(page.getByTestId('auto-assign-rule-targets-forbidFirstPeriod')).toContainText(/中/)
+    await expect(page.getByTestId('auto-assign-rule-targets-forbidFirstPeriod')).toContainText(selectedGrade)
   })
 
   test('ルールに個人単位で対象を追加できる', async ({ page }) => {
@@ -162,8 +162,10 @@ test.describe('自動割振ルール', () => {
     const removeButton = pairTable.locator('[data-testid^="auto-assign-pair-remove-"]').first()
     await removeButton.click()
 
-    // テーブルが空になる
-    await expect(pairTable.locator('tbody tr')).toHaveCount(0)
+    // 空状態表示だけが残り、削除ボタンとサマリーは消える
+    await expect(pairTable.locator('[data-testid^="auto-assign-pair-remove-"]')).toHaveCount(0)
+    await expect(pairTable).toContainText('ペア制約はまだありません。')
+    await expect(page.getByTestId('auto-assign-pair-summary-list')).toBeEmpty()
   })
 
   test('モーダルをキャンセルしても対象は変更されない', async ({ page }) => {
