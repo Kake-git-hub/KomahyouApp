@@ -475,6 +475,11 @@ export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
   )
 }
 
+export function filterTemplateOverwriteHolidayDates(sourceHolidayDates: string[], effectiveStartDate: string): string[] {
+  if (!effectiveStartDate) return [...sourceHolidayDates]
+  return sourceHolidayDates.filter((dateKey) => dateKey < effectiveStartDate)
+}
+
 type ScheduleBoardScreenProps = {
   classroomSettings: ClassroomSettings
   classroomName?: string
@@ -2860,13 +2865,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       ? (classroomSettings.preTemplateRegularLessons ?? regularLessons)
       : classroomSettings.preTemplateRegularLessons
 
-    onUpdateClassroomSettings({
+    const nextHolidayDates = overwrite
+      ? filterTemplateOverwriteHolidayDates(classroomSettings.holidayDates, template.effectiveStartDate)
+      : classroomSettings.holidayDates
+
+    const nextClassroomSettings: ClassroomSettings = {
       ...classroomSettings,
       regularLessonTemplate: template,
       regularLessonTemplateHistory: nextHistory,
       preTemplateRegularLessons,
+      holidayDates: nextHolidayDates,
       ...(overwrite ? { templateFreezeBeforeDate: template.effectiveStartDate } : {}),
-    })
+    }
+
+    classroomSettingsRef.current = nextClassroomSettings
+    onUpdateClassroomSettings(nextClassroomSettings)
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
 
     if (overwrite) {
@@ -3005,9 +3018,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       // setWeeks(clearedWeeks) だけでは管理データ反映が次回マウント時まで遅延し、
       // その間ストック計算が空セルを参照して未消化が増加するバグが発生する。
       const nextClassroomSettingsForOverlay: ClassroomSettings = {
-        ...classroomSettings,
-        regularLessonTemplate: template,
-        regularLessonTemplateHistory: nextHistory,
+        ...nextClassroomSettings,
         templateFreezeBeforeDate: template.effectiveStartDate,
       }
       const allManagedWeeks: SlotCell[][] = []
@@ -7979,7 +7990,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
                             type="button"
                             className="stock-origin-item stock-origin-item-main"
                             onClick={() => {
-                              handleSelectMakeupStockEntry(makeupEntry, { hidePanelsDuringPlacement: true, rawKey: item.rawEntryKey })
+                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}

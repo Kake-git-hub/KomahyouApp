@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -73,6 +73,16 @@ describe('appendDeletedStudentScheduleCountAdjustment', () => {
       dateKey: '2026-03-23',
       delta: -1,
     }])
+  })
+})
+
+describe('filterTemplateOverwriteHolidayDates', () => {
+  it('drops manual holiday dates on or after the template overwrite start date', () => {
+    expect(filterTemplateOverwriteHolidayDates([
+      '2026-03-31',
+      '2026-04-01',
+      '2026-04-02',
+    ], '2026-04-01')).toEqual(['2026-03-31'])
   })
 })
 
