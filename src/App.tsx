@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
+import { BoardShareScreen } from './components/board-share/BoardShareScreen'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
@@ -9,25 +10,50 @@ import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName,
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions, removedDefaultSpecialSessionIds } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
+import { BillingAutomationScreen } from './components/billing/BillingAutomationScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, downloadLatestFirebaseClassroomRollback, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
-import { loadFirebaseWorkspaceSnapshot, saveFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, resetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
+import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, updateSubmissionOccupiedSlots, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
+import { publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
+import { useClassroomTabLock } from './utils/useClassroomTabLock'
+import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
+
+function createRemoteSaveId(savedAt: string, classroomId: string) {
+  const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
+function useLatestState<T>(initialValue: T | (() => T)) {
+  const [state, setState] = useState<T>(() => (typeof initialValue === 'function' ? (initialValue as () => T)() : initialValue))
+  const ref = useRef(state)
+  ref.current = state
+
+  const setLatestState = useCallback((nextValue: SetStateAction<T>) => {
+    const resolvedValue = typeof nextValue === 'function'
+      ? (nextValue as (currentValue: T) => T)(ref.current)
+      : nextValue
+    ref.current = resolvedValue
+    setState(resolvedValue)
+  }, [])
+
+  return [state, setLatestState, ref] as const
+}
 
 export type TeacherAutoAssignRequest = {
   requestId: number
@@ -89,10 +115,12 @@ type BlazeFreeTierEstimate = {
   estimatedReferenceMaxRetentionDays: number
   referenceClassroomCount: number
   retentionDays: number
+  hourlyRetentionHours: number
   freeTierStorageBytes: number
 }
 
 const SERVER_AUTO_BACKUP_RETENTION_DAYS = 14
+const SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS = 72
 const BLAZE_STORAGE_FREE_TIER_BYTES = 5_000_000_000
 const BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT = 50
 
@@ -114,7 +142,7 @@ type DeveloperRestoreModalOption = {
 
 type DeveloperRestoreModalState = {
   sourceLabel: string
-  savedAt: string
+  dataTimestampLabel?: string
   currentSnapshot: WorkspaceSnapshot
   restoringSnapshot: WorkspaceSnapshot
   options: DeveloperRestoreModalOption[]
@@ -128,6 +156,15 @@ type AddClassroomOptions = {
   managerUserId?: string
   contractStartDate?: string
   contractEndDate?: string
+}
+
+type SaveDiagnosticEntry = {
+  at: string
+  elapsedMs: number | null
+  stage: string
+  percent?: number
+  label?: string
+  details?: Record<string, unknown>
 }
 
 function downloadTextFile(fileName: string, content: string, mimeType: string) {
@@ -190,10 +227,10 @@ function formatPreciseBackupFileName(savedAt: string, kind: string) {
   return `コマ表アプリ_${kind}_${year}年${month}月${day}日_${hour}時${minute}分${second}秒${millisecond}.json`
 }
 
-function buildNormalizedScheduleRange(viewType: 'student' | 'teacher', range: ScheduleRangePreference | null) {
+function buildNormalizedScheduleRange(viewType: 'student' | 'teacher', range: ScheduleRangePreference | null, classroomStorageKey?: string | null) {
   const fallbackRange = getScheduleFallbackRange()
   return normalizeScheduleRange(
-    range ?? readStoredScheduleRange(viewType, fallbackRange.startDate, fallbackRange.endDate),
+    range ?? readStoredScheduleRange(viewType, fallbackRange.startDate, fallbackRange.endDate, classroomStorageKey ?? undefined),
     fallbackRange.startDate,
     fallbackRange.endDate,
   )
@@ -253,24 +290,32 @@ async function writeTextFileToDeveloperCloudDirectory(handle: DeveloperCloudBack
 
 const removedDefaultSpecialSessionIdSet = new Set(removedDefaultSpecialSessionIds)
 
-function sanitizeClassroomSettings(settings: ClassroomSettings): ClassroomSettings {
+export function sanitizeClassroomSettings(settings: ClassroomSettings): ClassroomSettings {
   const initialSettings = createInitialClassroomSettings()
   const normalizedClosedWeekdays = Array.from(new Set(
     (Array.isArray(settings.closedWeekdays) ? settings.closedWeekdays : initialSettings.closedWeekdays)
       .filter((value): value is number => Number.isInteger(value) && value >= 0 && value <= 6),
   )).sort((left, right) => left - right)
+  const normalizedHolidayDates = Array.from(new Set(
+    (Array.isArray(settings.holidayDates) ? settings.holidayDates : initialSettings.holidayDates)
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
+  )).sort((left, right) => left.localeCompare(right))
   const normalizedForceOpenDates = Array.from(new Set(
     (Array.isArray(settings.forceOpenDates) ? settings.forceOpenDates : initialSettings.forceOpenDates)
       .filter((value): value is string => typeof value === 'string' && value.trim().length > 0),
   )).sort((left, right) => left.localeCompare(right))
+  const normalizedScheduleNotes = Object.fromEntries(Object.entries(settings.scheduleNotes ?? {})
+    .filter((entry): entry is [string, string] => typeof entry[0] === 'string' && entry[0].trim().length > 0 && typeof entry[1] === 'string'))
 
   return {
     ...initialSettings,
     ...settings,
     closedWeekdays: normalizedClosedWeekdays.length > 0 ? normalizedClosedWeekdays : initialSettings.closedWeekdays,
-    holidayDates: [],
+    holidayDates: normalizedHolidayDates,
     forceOpenDates: normalizedForceOpenDates,
     deskCount: Math.max(1, Number(settings.deskCount) || initialSettings.deskCount),
+    scheduleNotes: normalizedScheduleNotes,
+    boardShareToken: typeof settings.boardShareToken === 'string' ? settings.boardShareToken : initialSettings.boardShareToken,
     initialSetupCompletedAt: typeof settings.initialSetupCompletedAt === 'string' ? settings.initialSetupCompletedAt : initialSettings.initialSetupCompletedAt,
     initialSetupMakeupStocks: Array.isArray(settings.initialSetupMakeupStocks) ? settings.initialSetupMakeupStocks : initialSettings.initialSetupMakeupStocks,
     initialSetupLectureStocks: Array.isArray(settings.initialSetupLectureStocks) ? settings.initialSetupLectureStocks : initialSettings.initialSetupLectureStocks,
@@ -363,12 +408,12 @@ function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnap
   }
 }
 
-function buildDeveloperRestoreModalState(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, sourceLabel: string): DeveloperRestoreModalState {
+function buildDeveloperRestoreModalState(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, sourceLabel: string, dataTimestampLabel?: string): DeveloperRestoreModalState {
   const currentClassroomById = new Map(currentSnapshot.classrooms.map((classroom) => [classroom.id, classroom]))
   const restoringManagerById = new Map(restoringSnapshot.users.filter((user) => user.role === 'manager').map((user) => [user.id, user.name]))
   return {
     sourceLabel,
-    savedAt: restoringSnapshot.savedAt,
+    dataTimestampLabel,
     currentSnapshot,
     restoringSnapshot,
     options: restoringSnapshot.classrooms.map((classroom) => ({
@@ -492,6 +537,8 @@ function createInitialClassroomSettings(): ClassroomSettings {
     holidayDates: [],
     forceOpenDates: [],
     deskCount: 14,
+    scheduleNotes: {},
+    boardShareToken: '',
     regularLessonTemplate: null,
     initialSetupCompletedAt: '',
     initialSetupMakeupStocks: [],
@@ -639,6 +686,11 @@ function buildClassroomSnapshotPayload(params: {
   })
 }
 
+function clampScreenForUserRole(screen: AppScreen, role: WorkspaceUser['role'] | null | undefined): AppScreen {
+  if (role === 'developer') return screen
+  return screen === 'developer' ? 'board' : screen
+}
+
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
 
@@ -649,41 +701,126 @@ function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, l
     developerCloudSyncedAutoBackupKeys: localSnapshot.developerCloudSyncedAutoBackupKeys ?? remoteSnapshot.developerCloudSyncedAutoBackupKeys,
   }
 
-  // If local snapshot is newer than Firebase, merge its classroom data
-  // This handles the case where the browser was closed without logging out
-  if (localSnapshot.savedAt > remoteSnapshot.savedAt && localSnapshot.actingClassroomId) {
-    const localClassroom = localSnapshot.classrooms.find((c) => c.id === localSnapshot.actingClassroomId)
-    if (localClassroom?.data) {
-      merged.classrooms = merged.classrooms.map((c) =>
-        c.id === localClassroom.id ? { ...c, data: localClassroom.data } : c,
-      )
-    }
-  }
+  // NOTE: We intentionally do NOT merge local classroom data over remote here.
+  // Firebase is the source of truth for classroom data in remote backend mode.
+  // Allowing local to override remote based on savedAt caused stale/empty local
+  // snapshots to wipe restored data on next login (e.g. after a backup restore).
+  // Offline edits are still persisted to Firebase via the autosave + visibility
+  // change handlers, so remote stays current under normal usage.
 
   return merged
 }
 
-function App() {
+function getTimestampMillis(value: string) {
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) ? timestamp : 0
+}
+
+function haveSameWorkspaceIds(left: WorkspaceSnapshot, right: WorkspaceSnapshot) {
+  const leftUserIds = left.users.map((user) => user.id).sort()
+  const rightUserIds = right.users.map((user) => user.id).sort()
+  const leftClassroomIds = left.classrooms.map((classroom) => classroom.id).sort()
+  const rightClassroomIds = right.classrooms.map((classroom) => classroom.id).sort()
+  return JSON.stringify(leftUserIds) === JSON.stringify(rightUserIds)
+    && JSON.stringify(leftClassroomIds) === JSON.stringify(rightClassroomIds)
+}
+
+export function resolveRemoteWorkspaceSnapshot(
+  remoteSnapshot: WorkspaceSnapshot,
+  localSnapshot: WorkspaceSnapshot | null,
+  marker: PendingRemoteWorkspaceSnapshotMarker | null,
+  authenticatedUserId: string,
+) {
+  const mergedRemote = mergeWorkspaceWithLocalPreferences(remoteSnapshot, localSnapshot)
+  if (!localSnapshot || !marker) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
+  if (marker.authenticatedUserId !== authenticatedUserId) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
+  if (marker.savedAt !== localSnapshot.savedAt) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
+  if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
+  if (!haveSameWorkspaceIds(localSnapshot, remoteSnapshot)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
+  return { snapshot: localSnapshot, usedPendingLocalSnapshot: true }
+}
+
+function getBoardShareTokenFromUrl() {
+  const queryToken = new URLSearchParams(window.location.search).get('boardShare')?.trim()
+  if (queryToken) return queryToken
+
+  const hashMatch = window.location.hash.match(/^#\/?board-share\/([^/?#]+)/)
+  if (hashMatch?.[1]) return decodeURIComponent(hashMatch[1]).trim()
+
+  const pathMatch = window.location.pathname.match(/^\/board-share\/([^/]+)\/?$/)
+  return pathMatch?.[1] ? decodeURIComponent(pathMatch[1]).trim() : ''
+}
+
+function getStoredBoardShareToken(classroomId: string) {
+  const storageKey = `boardShareToken:${classroomId}`
+  try {
+    const stored = window.localStorage.getItem(storageKey)
+    if (stored) return stored
+    const token = window.crypto?.randomUUID?.() ?? `${classroomId}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    window.localStorage.setItem(storageKey, token)
+    return token
+  } catch {
+    return window.crypto?.randomUUID?.() ?? `${classroomId}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  }
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
+}
+
+function getBoardShareOrigin() {
+  if (window.location.origin === 'https://komahyouapp-prod.web.app') {
+    return 'https://komahyouapp-prod.firebaseapp.com'
+  }
+  return window.location.origin
+}
+
+function buildBoardShareUrl(token: string) {
+  return `${getBoardShareOrigin()}/share.html?token=${encodeURIComponent(token)}`
+}
+
+function resolveBoardShareToken(classroomId: string, classroomSettings: ClassroomSettings) {
+  return classroomSettings.boardShareToken || getStoredBoardShareToken(classroomId)
+}
+
+function AuthenticatedApp() {
   const isRemoteBackendEnabled = isFirebaseBackendEnabled()
   const isRemoteAdminAutomationEnabled = isFirebaseAdminFunctionsEnabled()
   const firebaseBackendConfig = getFirebaseBackendConfig()
+  const isBillingRoute = window.location.pathname.replace(/\/+$/u, '') === '/billing'
   const useImportedMasterData = shouldUseImportedMasterData()
+  useAppVersionMonitor(__APP_VERSION__)
   const initialSetupAutoOpenRef = useRef(false)
   const remoteClassroomUpdateTimeoutsRef = useRef<Record<string, number>>({})
   const teacherAutoAssignRequestIdRef = useRef(0)
   const studentScheduleRequestIdRef = useRef(0)
   const recentlyResetSubmissionTokensRef = useRef<Set<string>>(new Set())
-  const [screen, setScreen] = useState<AppScreen>('board')
-  const [managers, setManagers] = useState<ManagerRow[]>(() => createInitialManagers())
-  const [teachers, setTeachers] = useState(() => createInitialTeachers(useImportedMasterData))
-  const [students, setStudents] = useState(() => createInitialStudents(useImportedMasterData))
-  const [regularLessons, setRegularLessons] = useState(() => createInitialRegularLessonRows(useImportedMasterData))
-  const [groupLessons, setGroupLessons] = useState<GroupLessonRow[]>(() => createInitialGroupLessonRows())
-  const [specialSessions, setSpecialSessions] = useState(() => createInitialSpecialSessionRows())
-  const [autoAssignRules, setAutoAssignRules] = useState(() => createInitialAutoAssignRuleRows())
-  const [pairConstraints, setPairConstraints] = useState(() => createInitialPairConstraintRows())
-  const [classroomSettings, setClassroomSettings] = useState<ClassroomSettings>(() => createInitialClassroomSettings())
-  const [boardState, setBoardState] = useState<PersistedBoardState | null>(null)
+  const [screen, setScreen, screenRef] = useLatestState<AppScreen>('board')
+  const [managers, setManagers, managersRef] = useLatestState<ManagerRow[]>(() => createInitialManagers())
+  const [teachers, setTeachers, teachersRef] = useLatestState(() => createInitialTeachers(useImportedMasterData))
+  const [students, setStudents, studentsRef] = useLatestState(() => createInitialStudents(useImportedMasterData))
+  const [regularLessons, setRegularLessons, regularLessonsRef] = useLatestState(() => createInitialRegularLessonRows(useImportedMasterData))
+  const [groupLessons, setGroupLessons, groupLessonsRef] = useLatestState<GroupLessonRow[]>(() => createInitialGroupLessonRows())
+  const [specialSessions, setSpecialSessions, specialSessionsRef] = useLatestState(() => createInitialSpecialSessionRows())
+  const [autoAssignRules, setAutoAssignRules, autoAssignRulesRef] = useLatestState(() => createInitialAutoAssignRuleRows())
+  const [pairConstraints, setPairConstraints, pairConstraintsRef] = useLatestState(() => createInitialPairConstraintRows())
+  const [classroomSettings, setClassroomSettings, classroomSettingsRef] = useLatestState<ClassroomSettings>(() => createInitialClassroomSettings())
+  const [boardState, setBoardState, boardStateRef] = useLatestState<PersistedBoardState | null>(null)
+  const boardSharePublishTimerRef = useRef<number | null>(null)
+  const boardShareStateChangePublishTimerRef = useRef<number | null>(null)
   const [boardMountKey, setBoardMountKey] = useState(0)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
@@ -691,12 +828,65 @@ function App() {
   const [studentScheduleRequest, setStudentScheduleRequest] = useState<StudentScheduleRequest | null>(null)
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
+  const [isDirty, setIsDirty] = useState(false)
+  const [isSavingNow, setIsSavingNow] = useState(false)
+  const [isRemoteSyncPending, setIsRemoteSyncPending] = useState(false)
+  const [isRemoteSyncVisible, setIsRemoteSyncVisible] = useState(false)
+  const [remoteSyncProgress, setRemoteSyncProgress] = useState<{ percent: number; label: string; elapsedSeconds: number } | null>(null)
+  const isDirtyRef = useRef(false)
+  const isSavingNowRef = useRef(false)
+  const isRemoteSyncPendingRef = useRef(false)
+  const isRemoteSyncVisibleRef = useRef(false)
+  const remoteSaveInFlightRef = useRef(false)
+  const queuedRemoteSnapshotRef = useRef<{
+    snapshot: WorkspaceSnapshot
+    targetClassroomIds?: string[]
+    showSlowMessage?: boolean
+    onSuccess?: () => void
+    onFailure?: (error: unknown) => void
+  } | null>(null)
+  const remoteSyncSlowTimerRef = useRef<number | null>(null)
+  const remoteSyncProgressTimerRef = useRef<number | null>(null)
+  const delayedAutoRemoteSyncTimerRef = useRef<number | null>(null)
+  const remoteSyncStartedAtRef = useRef(0)
+  const saveDiagnosticsRef = useRef<SaveDiagnosticEntry[]>([])
+  isDirtyRef.current = isDirty
+  isSavingNowRef.current = isSavingNow
+  isRemoteSyncPendingRef.current = isRemoteSyncPending
+  isRemoteSyncVisibleRef.current = isRemoteSyncVisible
+  const updateSavingNow = useCallback((nextIsSaving: boolean) => {
+    isSavingNowRef.current = nextIsSaving
+    setIsSavingNow(nextIsSaving)
+  }, [])
+
+  const appendSaveDiagnostic = useCallback((entry: Omit<SaveDiagnosticEntry, 'at' | 'elapsedMs'>) => {
+    const startedAt = remoteSyncStartedAtRef.current
+    const diagnostic: SaveDiagnosticEntry = {
+      at: new Date().toISOString(),
+      elapsedMs: startedAt ? Math.max(0, Date.now() - startedAt) : null,
+      ...entry,
+    }
+    saveDiagnosticsRef.current = [...saveDiagnosticsRef.current.slice(-199), diagnostic]
+    console.info('[komahyou-save]', diagnostic)
+  }, [])
+
+  const updateRemoteSyncPending = useCallback((nextIsPending: boolean) => {
+    isRemoteSyncPendingRef.current = nextIsPending
+    setIsRemoteSyncPending(nextIsPending)
+  }, [])
+  const updateRemoteSyncVisible = useCallback((nextIsVisible: boolean) => {
+    isRemoteSyncVisibleRef.current = nextIsVisible
+    setIsRemoteSyncVisible(nextIsVisible)
+  }, [])
+  const skipNextDirtyRef = useRef(true)
+  const pendingLoadedCleanSignatureRef = useRef<string | null>(null)
+  const dirtyTokenRef = useRef(0)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
   const [localAutoBackupSummaries, setLocalAutoBackupSummaries] = useState<{ backupDateKey: string; savedAt: string }[]>([])
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
-  const [workspaceUsers, setWorkspaceUsers] = useState<WorkspaceUser[]>([])
-  const [workspaceClassrooms, setWorkspaceClassrooms] = useState<WorkspaceClassroom[]>([])
+  const [workspaceUsers, setWorkspaceUsers, workspaceUsersRef] = useLatestState<WorkspaceUser[]>([])
+  const [workspaceClassrooms, setWorkspaceClassrooms, workspaceClassroomsRef] = useLatestState<WorkspaceClassroom[]>([])
   const [developerCloudBackupEnabled, setDeveloperCloudBackupEnabled] = useState(false)
   const [developerCloudBackupFolderName, setDeveloperCloudBackupFolderName] = useState('')
   const [developerCloudBackupStatus, setDeveloperCloudBackupStatus] = useState('個人クラウドへの自動保存は未設定です。')
@@ -733,35 +923,50 @@ function App() {
     return contractedClassrooms.every((classroom) => classroom.isTemporarilySuspended)
   }, [workspaceClassrooms])
 
-  const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => ({
-    schemaVersion: 1,
-    savedAt,
-    developerCloudBackupEnabled,
-    developerCloudBackupFolderName,
-    developerCloudSyncedAutoBackupKeys,
-    currentUserId,
-    actingClassroomId,
-    users: workspaceUsers,
-    classrooms: workspaceClassrooms.map((classroom) => {
-      if (classroom.id !== actingClassroomId) return classroom
-      return {
-        ...classroom,
-        data: buildClassroomSnapshotPayload({
-          screen: screen === 'developer' ? 'board' : screen,
-          classroomSettings,
-          managers,
-          teachers,
-          students,
-          regularLessons,
-          groupLessons,
-          specialSessions,
-          autoAssignRules,
-          pairConstraints,
-          boardState,
-        }),
-      }
-    }),
-  }), [actingClassroomId, autoAssignRules, boardState, classroomSettings, currentUserId, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudSyncedAutoBackupKeys, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers, workspaceClassrooms, workspaceUsers])
+  const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
+    const latestScreen = screenRef.current
+    const latestManagers = managersRef.current
+    const latestTeachers = teachersRef.current
+    const latestStudents = studentsRef.current
+    const latestRegularLessons = regularLessonsRef.current
+    const latestGroupLessons = groupLessonsRef.current
+    const latestSpecialSessions = specialSessionsRef.current
+    const latestAutoAssignRules = autoAssignRulesRef.current
+    const latestPairConstraints = pairConstraintsRef.current
+    const latestClassroomSettings = classroomSettingsRef.current
+    const latestBoardState = boardStateRef.current
+    const latestWorkspaceUsers = workspaceUsersRef.current
+    const latestWorkspaceClassrooms = workspaceClassroomsRef.current
+    return {
+      schemaVersion: 1,
+      savedAt,
+      developerCloudBackupEnabled,
+      developerCloudBackupFolderName,
+      developerCloudSyncedAutoBackupKeys,
+      currentUserId,
+      actingClassroomId,
+      users: latestWorkspaceUsers,
+      classrooms: latestWorkspaceClassrooms.map((classroom) => {
+        if (classroom.id !== actingClassroomId) return classroom
+        return {
+          ...classroom,
+          data: buildClassroomSnapshotPayload({
+            screen: latestScreen === 'developer' ? 'board' : latestScreen,
+            classroomSettings: latestClassroomSettings,
+            managers: latestManagers,
+            teachers: latestTeachers,
+            students: latestStudents,
+            regularLessons: latestRegularLessons,
+            groupLessons: latestGroupLessons,
+            specialSessions: latestSpecialSessions,
+            autoAssignRules: latestAutoAssignRules,
+            pairConstraints: latestPairConstraints,
+            boardState: latestBoardState,
+          }),
+        }
+      }),
+    }
+  }, [actingClassroomId, currentUserId, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudSyncedAutoBackupKeys, autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef, workspaceClassroomsRef, workspaceUsersRef])
 
   const blazeFreeTierEstimate = useMemo<BlazeFreeTierEstimate | null>(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -781,6 +986,7 @@ function App() {
         estimatedReferenceMaxRetentionDays: 0,
         referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
         retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
+        hourlyRetentionHours: SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS,
         freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
       }
     }
@@ -805,9 +1011,9 @@ function App() {
     const estimatedAverageClassroomBytes = Math.max(1, Math.round((totalClassroomBytes + totalManagerBytes) / currentClassroomCount))
     const estimateDailyBytes = (classroomCount: number) => fixedSnapshotBytes + estimatedAverageClassroomBytes * Math.max(0, classroomCount)
 
-    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * SERVER_AUTO_BACKUP_RETENTION_DAYS
+    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * (SERVER_AUTO_BACKUP_RETENTION_DAYS + SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS)
     const estimatedReferenceDailyBytes = estimateDailyBytes(BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT)
-    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * SERVER_AUTO_BACKUP_RETENTION_DAYS
+    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * (SERVER_AUTO_BACKUP_RETENTION_DAYS + SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS)
 
     return {
       currentClassroomCount,
@@ -822,6 +1028,7 @@ function App() {
       estimatedReferenceMaxRetentionDays: Math.floor(BLAZE_STORAGE_FREE_TIER_BYTES / estimatedReferenceDailyBytes),
       referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
       retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
+      hourlyRetentionHours: SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS,
       freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
     }
   }, [buildWorkspaceSnapshot])
@@ -863,6 +1070,396 @@ function App() {
     }, 700)
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled])
 
+  // Compute a content signature that excludes purely UI-only fields (current week,
+  // selected cell/desk, side-panel open state, schedule popup ranges). Navigating
+  // weeks or opening the management screen must not flip the save button to 「保存」.
+  const dataSignature = useMemo(() => {
+    const boardData = boardState
+      ? {
+          weeks: boardState.weeks,
+          suppressedRegularLessonOccurrences: boardState.suppressedRegularLessonOccurrences,
+          scheduleCountAdjustments: boardState.scheduleCountAdjustments,
+          manualMakeupAdjustments: boardState.manualMakeupAdjustments,
+          suppressedMakeupOrigins: boardState.suppressedMakeupOrigins,
+          fallbackMakeupStudents: boardState.fallbackMakeupStudents,
+          manualLectureStockCounts: boardState.manualLectureStockCounts,
+          manualLectureStockOrigins: boardState.manualLectureStockOrigins,
+          fallbackLectureStockStudents: boardState.fallbackLectureStockStudents,
+        }
+      : null
+    try {
+      return JSON.stringify({
+        b: boardData,
+        rl: regularLessons,
+        st: students,
+        tc: teachers,
+        ss: specialSessions,
+        ar: autoAssignRules,
+        pc: pairConstraints,
+        cs: classroomSettings,
+        mg: managers,
+        gl: groupLessons,
+      })
+    } catch {
+      return ''
+    }
+  }, [boardState, regularLessons, students, teachers, specialSessions, autoAssignRules, pairConstraints, classroomSettings, managers, groupLessons])
+
+  const buildCurrentDataSignature = useCallback(() => {
+    const latestBoardState = boardStateRef.current
+    const boardData = latestBoardState
+      ? {
+          weeks: latestBoardState.weeks,
+          suppressedRegularLessonOccurrences: latestBoardState.suppressedRegularLessonOccurrences,
+          scheduleCountAdjustments: latestBoardState.scheduleCountAdjustments,
+          manualMakeupAdjustments: latestBoardState.manualMakeupAdjustments,
+          suppressedMakeupOrigins: latestBoardState.suppressedMakeupOrigins,
+          fallbackMakeupStudents: latestBoardState.fallbackMakeupStudents,
+          manualLectureStockCounts: latestBoardState.manualLectureStockCounts,
+          manualLectureStockOrigins: latestBoardState.manualLectureStockOrigins,
+          fallbackLectureStockStudents: latestBoardState.fallbackLectureStockStudents,
+        }
+      : null
+    try {
+      return JSON.stringify({
+        b: boardData,
+        rl: regularLessonsRef.current,
+        st: studentsRef.current,
+        tc: teachersRef.current,
+        ss: specialSessionsRef.current,
+        ar: autoAssignRulesRef.current,
+        pc: pairConstraintsRef.current,
+        cs: classroomSettingsRef.current,
+        mg: managersRef.current,
+        gl: groupLessonsRef.current,
+      })
+    } catch {
+      return ''
+    }
+  }, [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, specialSessionsRef, studentsRef, teachersRef])
+
+  const writePendingWorkspaceSnapshotForRemoteSync = useCallback(() => {
+    if (!isSnapshotPersistenceRuntimeEnabled()) return null
+    if (workspaceUsersRef.current.length === 0 || workspaceClassroomsRef.current.length === 0) return null
+
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    try {
+      if (isRemoteBackendEnabled && remoteSessionUserId) {
+        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+      }
+      void saveWorkspaceSnapshot(snapshot).catch(() => {})
+      return snapshot
+    } catch {
+      return null
+    }
+  }, [buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassroomsRef, workspaceUsersRef])
+
+  const clearRemoteSyncSlowTimer = useCallback(() => {
+    if (remoteSyncSlowTimerRef.current !== null) {
+      window.clearTimeout(remoteSyncSlowTimerRef.current)
+      remoteSyncSlowTimerRef.current = null
+    }
+  }, [])
+
+  const clearRemoteSyncProgressTimer = useCallback(() => {
+    if (remoteSyncProgressTimerRef.current !== null) {
+      window.clearInterval(remoteSyncProgressTimerRef.current)
+      remoteSyncProgressTimerRef.current = null
+    }
+  }, [])
+
+  const clearDelayedAutoRemoteSyncTimer = useCallback(() => {
+    if (delayedAutoRemoteSyncTimerRef.current !== null) {
+      window.clearTimeout(delayedAutoRemoteSyncTimerRef.current)
+      delayedAutoRemoteSyncTimerRef.current = null
+    }
+  }, [])
+
+  const getRemoteSyncElapsedSeconds = useCallback(() => {
+    if (!remoteSyncStartedAtRef.current) return 0
+    return Math.max(0, Math.floor((Date.now() - remoteSyncStartedAtRef.current) / 1000))
+  }, [])
+
+  const getCurrentClassroomSyncTargetIds = useCallback((snapshot: WorkspaceSnapshot) => {
+    const targetClassroomId = actingClassroomId ?? snapshot.actingClassroomId
+    return targetClassroomId && snapshot.classrooms.some((classroom) => classroom.id === targetClassroomId)
+      ? [targetClassroomId]
+      : undefined
+  }, [actingClassroomId])
+
+  const cleanSignatureRef = useRef<string>('')
+
+  const buildClassroomDataSignature = useCallback((payload: AppSnapshotPayload | null | undefined) => {
+    const payloadBoardState = payload?.boardState ?? null
+    const boardData = payloadBoardState
+      ? {
+          weeks: payloadBoardState.weeks,
+          suppressedRegularLessonOccurrences: payloadBoardState.suppressedRegularLessonOccurrences,
+          scheduleCountAdjustments: payloadBoardState.scheduleCountAdjustments,
+          manualMakeupAdjustments: payloadBoardState.manualMakeupAdjustments,
+          suppressedMakeupOrigins: payloadBoardState.suppressedMakeupOrigins,
+          fallbackMakeupStudents: payloadBoardState.fallbackMakeupStudents,
+          manualLectureStockCounts: payloadBoardState.manualLectureStockCounts,
+          manualLectureStockOrigins: payloadBoardState.manualLectureStockOrigins,
+          fallbackLectureStockStudents: payloadBoardState.fallbackLectureStockStudents,
+        }
+      : null
+    try {
+      return JSON.stringify({
+        b: boardData,
+        rl: payload?.regularLessons ?? [],
+        st: payload?.students ?? [],
+        tc: payload?.teachers ?? [],
+        ss: payload?.specialSessions ?? [],
+        ar: payload?.autoAssignRules ?? [],
+        pc: payload?.pairConstraints ?? [],
+        cs: payload?.classroomSettings,
+        mg: payload?.managers ?? [],
+        gl: payload?.groupLessons ?? [],
+      })
+    } catch {
+      return ''
+    }
+  }, [])
+
+  const markCleanIfSnapshotMatchesCurrent = useCallback((snapshot: WorkspaceSnapshot) => {
+    const targetClassroomId = actingClassroomId ?? snapshot.actingClassroomId
+    const snapshotClassroom = targetClassroomId
+      ? snapshot.classrooms.find((classroom) => classroom.id === targetClassroomId)
+      : null
+    const snapshotSignature = buildClassroomDataSignature(snapshotClassroom?.data)
+    const currentSignature = buildCurrentDataSignature()
+    if (!snapshotSignature || snapshotSignature !== currentSignature) return false
+    cleanSignatureRef.current = currentSignature
+    isDirtyRef.current = false
+    setIsDirty(false)
+    return true
+  }, [actingClassroomId, buildClassroomDataSignature, buildCurrentDataSignature])
+
+  const queueFirebaseWorkspaceSync = useCallback((snapshot: WorkspaceSnapshot, showSlowMessage = false, showProgress = false, targetClassroomIds?: string[], callbacks?: {
+    onSuccess?: () => void
+    onFailure?: (error: unknown) => void
+  }) => {
+    if (!isRemoteBackendEnabled || !remoteSessionUserId) return false
+
+    try {
+      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+    } catch {
+      // The local snapshot save path still preserves the data for the next login.
+    }
+
+    const existingQueuedItem = queuedRemoteSnapshotRef.current
+    appendSaveDiagnostic({
+      stage: 'firebase-queue',
+      details: {
+        showProgress,
+        targetClassroomIds: targetClassroomIds ?? null,
+        replacedQueuedSnapshot: Boolean(existingQueuedItem),
+        classroomCount: snapshot.classrooms.length,
+      },
+    })
+    queuedRemoteSnapshotRef.current = {
+      snapshot,
+      targetClassroomIds,
+      showSlowMessage: showSlowMessage || existingQueuedItem?.showSlowMessage,
+      onSuccess: () => {
+        existingQueuedItem?.onSuccess?.()
+        callbacks?.onSuccess?.()
+      },
+      onFailure: (error) => {
+        existingQueuedItem?.onFailure?.(error)
+        callbacks?.onFailure?.(error)
+      },
+    }
+    updateRemoteSyncPending(true)
+    if (showProgress) updateRemoteSyncVisible(true)
+    if (showProgress) {
+      remoteSyncStartedAtRef.current = Date.now()
+      clearRemoteSyncProgressTimer()
+      setRemoteSyncProgress({ percent: 1, label: 'データベースへ保存準備中', elapsedSeconds: 0 })
+      remoteSyncProgressTimerRef.current = window.setInterval(() => {
+        setRemoteSyncProgress((current) => current ? { ...current, elapsedSeconds: getRemoteSyncElapsedSeconds() } : current)
+      }, 1000)
+    }
+    if (remoteSaveInFlightRef.current) return true
+
+    remoteSaveInFlightRef.current = true
+    const runNext = async (): Promise<void> => {
+      const nextItem = queuedRemoteSnapshotRef.current
+      if (!nextItem) {
+        remoteSaveInFlightRef.current = false
+        updateRemoteSyncPending(false)
+        updateRemoteSyncVisible(false)
+        setRemoteSyncProgress(null)
+        clearRemoteSyncProgressTimer()
+        clearRemoteSyncSlowTimer()
+        return
+      }
+
+      queuedRemoteSnapshotRef.current = null
+      remoteSyncStartedAtRef.current = Date.now()
+      clearRemoteSyncSlowTimer()
+      if (isRemoteSyncVisibleRef.current) {
+        setRemoteSyncProgress({ percent: 1, label: 'データベースへ保存準備中', elapsedSeconds: 0 })
+      }
+      appendSaveDiagnostic({
+        stage: 'firebase-start',
+        details: {
+          targetClassroomIds: nextItem.targetClassroomIds ?? null,
+          savedAt: nextItem.snapshot.savedAt,
+        },
+      })
+      if (nextItem.showSlowMessage) {
+        remoteSyncSlowTimerRef.current = window.setTimeout(() => {
+          remoteSyncSlowTimerRef.current = null
+          setPersistenceMessage('ブラウザ内には保存済みです。Firebase 同期が遅れています。反映確認前に閉じる場合は確認ダイアログでキャンセルしてください。')
+        }, 5000)
+      }
+
+      let failed = false
+      try {
+        const targetClassrooms = nextItem.targetClassroomIds && nextItem.targetClassroomIds.length > 0
+          ? nextItem.snapshot.classrooms.filter((classroom) => nextItem.targetClassroomIds?.includes(classroom.id))
+          : nextItem.snapshot.classrooms
+        if (targetClassrooms.length === 0) throw new Error('保存対象の教室データが見つかりません。')
+        const startProgress = { percent: 20, label: 'Cloud Functions 経由で保存準備中' }
+        appendSaveDiagnostic({
+          stage: 'firebase-progress',
+          percent: startProgress.percent,
+          label: startProgress.label,
+          details: { writeMode: 'cloud-function-verified', classroomCount: targetClassrooms.length },
+        })
+        if (isRemoteSyncVisibleRef.current) {
+          const elapsedSeconds = getRemoteSyncElapsedSeconds()
+          setRemoteSyncProgress({ ...startProgress, elapsedSeconds })
+          setPersistenceMessage(`${startProgress.label}(${startProgress.percent}%完了)`)
+        }
+        for (const [classroomIndex, targetClassroom] of targetClassrooms.entries()) {
+          const percent = 20 + Math.floor((classroomIndex / targetClassrooms.length) * 75)
+          appendSaveDiagnostic({
+            stage: 'firebase-progress',
+            percent,
+            label: `Cloud Functions 経由で保存中: ${classroomIndex + 1}/${targetClassrooms.length}教室`,
+            details: { writeMode: 'cloud-function-verified', classroomId: targetClassroom.id },
+          })
+          if (isRemoteSyncVisibleRef.current) {
+            const elapsedSeconds = getRemoteSyncElapsedSeconds()
+            const progress = { percent, label: `Cloud Functions 経由で保存中: ${classroomIndex + 1}/${targetClassrooms.length}教室` }
+            setRemoteSyncProgress({ ...progress, elapsedSeconds })
+            setPersistenceMessage(`${progress.label}(${progress.percent}%完了)`)
+          }
+          const result = await saveClassroomSnapshotViaFunction({
+            classroomId: targetClassroom.id,
+            savedAt: nextItem.snapshot.savedAt,
+            saveId: createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id),
+            payload: targetClassroom.data,
+          })
+          appendSaveDiagnostic({
+            stage: 'firebase-progress',
+            percent: 20 + Math.floor(((classroomIndex + 1) / targetClassrooms.length) * 75),
+            label: `Cloud Functions 保存検証完了: ${classroomIndex + 1}/${targetClassrooms.length}教室`,
+            details: result,
+          })
+        }
+        const finishedProgress = { percent: 100, label: 'Cloud Functions 経由のデータベース保存完了' }
+        if (isRemoteSyncVisibleRef.current) {
+          const elapsedSeconds = getRemoteSyncElapsedSeconds()
+          setRemoteSyncProgress({ ...finishedProgress, elapsedSeconds })
+          setPersistenceMessage(`${finishedProgress.label}(${finishedProgress.percent}%完了)`)
+        }
+        setLastSavedAt(nextItem.snapshot.savedAt)
+        appendSaveDiagnostic({ stage: 'firebase-success', details: { savedAt: nextItem.snapshot.savedAt } })
+        nextItem.onSuccess?.()
+        const markedClean = markCleanIfSnapshotMatchesCurrent(nextItem.snapshot)
+        if (!queuedRemoteSnapshotRef.current) {
+          const wasRemoteSyncVisible = isRemoteSyncVisibleRef.current
+          clearPendingRemoteWorkspaceSnapshotMarker()
+          updateRemoteSyncPending(false)
+          updateRemoteSyncVisible(false)
+          setRemoteSyncProgress(null)
+          clearRemoteSyncProgressTimer()
+          if (wasRemoteSyncVisible) {
+            setPersistenceMessage(markedClean
+              ? 'Firebase へ同期しました。'
+              : 'Firebase 同期は完了しました。最新データ表示への切り替えを確認中です。')
+          }
+        }
+      } catch (error) {
+        failed = true
+        updateRemoteSyncPending(Boolean(queuedRemoteSnapshotRef.current))
+        if (isRemoteSyncVisibleRef.current) {
+          setRemoteSyncProgress(null)
+          clearRemoteSyncProgressTimer()
+        }
+        isDirtyRef.current = true
+        setIsDirty(true)
+        const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
+        if (isRemoteSyncVisibleRef.current) setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}`)
+        appendSaveDiagnostic({
+          stage: 'firebase-failure',
+          details: { message },
+        })
+        nextItem.onFailure?.(error)
+      } finally {
+        clearRemoteSyncSlowTimer()
+        if (queuedRemoteSnapshotRef.current) {
+          void runNext()
+        } else {
+          remoteSaveInFlightRef.current = false
+          if (failed) {
+            updateRemoteSyncVisible(false)
+            setRemoteSyncProgress(null)
+            clearRemoteSyncProgressTimer()
+          }
+        }
+      }
+    }
+
+    void runNext()
+    return true
+  }, [appendSaveDiagnostic, clearRemoteSyncProgressTimer, clearRemoteSyncSlowTimer, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, markCleanIfSnapshotMatchesCurrent, remoteSessionUserId, updateRemoteSyncPending, updateRemoteSyncVisible])
+
+  // Re-evaluate dirty whenever the signature changes. Mark clean only when current
+  // signature exactly equals the last known saved/loaded baseline.
+  useEffect(() => {
+    const pendingLoadedCleanSignature = pendingLoadedCleanSignatureRef.current
+    if (pendingLoadedCleanSignature) {
+      if (dataSignature === pendingLoadedCleanSignature) {
+        pendingLoadedCleanSignatureRef.current = null
+        skipNextDirtyRef.current = false
+        cleanSignatureRef.current = dataSignature
+      }
+      isDirtyRef.current = false
+      setIsDirty(false)
+      return
+    }
+    if (skipNextDirtyRef.current) {
+      skipNextDirtyRef.current = false
+      cleanSignatureRef.current = dataSignature
+      isDirtyRef.current = false
+      setIsDirty(false)
+      return
+    }
+    if (dataSignature === cleanSignatureRef.current) {
+      isDirtyRef.current = false
+      setIsDirty(false)
+      return
+    }
+    dirtyTokenRef.current += 1
+    isDirtyRef.current = true
+    setIsDirty(true)
+  }, [dataSignature])
+
+  const markStateLoadedClean = useCallback((expectedCleanSignature?: string) => {
+    const cleanSignature = expectedCleanSignature || buildCurrentDataSignature()
+    cleanSignatureRef.current = cleanSignature
+    pendingLoadedCleanSignatureRef.current = cleanSignature
+    skipNextDirtyRef.current = true
+    isDirtyRef.current = false
+    setIsDirty(false)
+  }, [buildCurrentDataSignature])
+
+
   const applySnapshot = useCallback((snapshot: AppSnapshot, successMessage: string) => {
     const sanitizedSnapshot = sanitizeAppSnapshot(snapshot)
     setScreen(sanitizedSnapshot.screen)
@@ -878,10 +1475,22 @@ function App() {
     setBoardState(sanitizedSnapshot.boardState)
     setLastSavedAt(sanitizedSnapshot.savedAt)
     setPersistenceMessage(successMessage)
-  }, [])
+    markStateLoadedClean(buildClassroomDataSignature(sanitizedSnapshot))
+  }, [buildClassroomDataSignature, markStateLoadedClean])
 
   const syncCurrentClassroomData = useCallback((targetClassroomId: string | null) => {
     if (!targetClassroomId) return
+    const latestScreen = screenRef.current
+    const latestManagers = managersRef.current
+    const latestTeachers = teachersRef.current
+    const latestStudents = studentsRef.current
+    const latestRegularLessons = regularLessonsRef.current
+    const latestGroupLessons = groupLessonsRef.current
+    const latestSpecialSessions = specialSessionsRef.current
+    const latestAutoAssignRules = autoAssignRulesRef.current
+    const latestPairConstraints = pairConstraintsRef.current
+    const latestClassroomSettings = classroomSettingsRef.current
+    const latestBoardState = boardStateRef.current
 
     setWorkspaceClassrooms((current) => current.map((classroom) => {
       if (classroom.id !== targetClassroomId) return classroom
@@ -889,40 +1498,46 @@ function App() {
       return {
         ...classroom,
         data: buildClassroomSnapshotPayload({
-          screen: screen === 'developer' ? 'board' : screen,
-          classroomSettings,
-          managers,
-          teachers,
-          students,
-          regularLessons,
-          groupLessons,
-          specialSessions,
-          autoAssignRules,
-          pairConstraints,
-          boardState,
+          screen: latestScreen === 'developer' ? 'board' : latestScreen,
+          classroomSettings: latestClassroomSettings,
+          managers: latestManagers,
+          teachers: latestTeachers,
+          students: latestStudents,
+          regularLessons: latestRegularLessons,
+          groupLessons: latestGroupLessons,
+          specialSessions: latestSpecialSessions,
+          autoAssignRules: latestAutoAssignRules,
+          pairConstraints: latestPairConstraints,
+          boardState: latestBoardState,
         }),
       }
     }))
-  }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+  }, [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef, setWorkspaceClassrooms])
+
+  const updateClassroomSettings = useCallback((nextClassroomSettings: ClassroomSettings) => {
+    classroomSettingsRef.current = nextClassroomSettings
+    setClassroomSettings(nextClassroomSettings)
+  }, [])
 
   const saveUndoSnapshot = useCallback((label: string) => {
+    const latestScreen = screenRef.current
     setUndoSnapshot({
       label,
       data: buildClassroomSnapshotPayload({
-        screen: screen === 'developer' ? 'board' : screen,
-        classroomSettings,
-        managers,
-        teachers,
-        students,
-        regularLessons,
-        groupLessons,
-        specialSessions,
-        autoAssignRules,
-        pairConstraints,
-        boardState,
+        screen: latestScreen === 'developer' ? 'board' : latestScreen,
+        classroomSettings: classroomSettingsRef.current,
+        managers: managersRef.current,
+        teachers: teachersRef.current,
+        students: studentsRef.current,
+        regularLessons: regularLessonsRef.current,
+        groupLessons: groupLessonsRef.current,
+        specialSessions: specialSessionsRef.current,
+        autoAssignRules: autoAssignRulesRef.current,
+        pairConstraints: pairConstraintsRef.current,
+        boardState: boardStateRef.current,
       }),
     })
-  }, [autoAssignRules, boardState, classroomSettings, groupLessons, managers, pairConstraints, regularLessons, screen, specialSessions, students, teachers])
+  }, [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef])
 
   const restoreUndoSnapshot = useCallback(() => {
     if (!undoSnapshot) return
@@ -940,9 +1555,10 @@ function App() {
       setBoardState,
       setBoardMountKey,
     })
+    markStateLoadedClean()
     setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
     setUndoSnapshot(null)
-  }, [undoSnapshot])
+  }, [markStateLoadedClean, undoSnapshot])
 
   const dismissUndoSnapshot = useCallback(() => {
     setUndoSnapshot(null)
@@ -960,7 +1576,7 @@ function App() {
 
     setActingClassroomId(classroomId)
     applyClassroomPayloadToState(nextClassroom.data, {
-      setScreen: (value) => setScreen(nextScreen ?? value),
+      setScreen: (value) => setScreen(clampScreenForUserRole(nextScreen ?? value, currentUser?.role)),
       setManagers,
       setTeachers,
       setStudents,
@@ -973,7 +1589,8 @@ function App() {
       setBoardState,
       setBoardMountKey,
     })
-  }, [actingClassroomId, syncCurrentClassroomData, workspaceClassrooms])
+    markStateLoadedClean(buildClassroomDataSignature(nextClassroom.data))
+  }, [actingClassroomId, buildClassroomDataSignature, currentUser?.role, markStateLoadedClean, syncCurrentClassroomData, workspaceClassrooms])
 
   const applyWorkspaceSnapshot = useCallback((workspaceSnapshot: WorkspaceSnapshot, successMessage: string) => {
     const sanitizedWorkspaceSnapshot = sanitizeWorkspaceSnapshot(workspaceSnapshot)
@@ -995,7 +1612,7 @@ function App() {
 
     if (targetClassroom) {
       applyClassroomPayloadToState(targetClassroom.data, {
-        setScreen: (value) => setScreen(currentWorkspaceUser?.role === 'developer' ? 'developer' : value),
+        setScreen: (value) => setScreen(currentWorkspaceUser?.role === 'developer' ? 'developer' : clampScreenForUserRole(value, currentWorkspaceUser?.role)),
         setManagers,
         setTeachers,
         setStudents,
@@ -1011,7 +1628,8 @@ function App() {
     } else {
       setScreen(currentWorkspaceUser?.role === 'developer' ? 'developer' : 'board')
     }
-  }, [])
+    markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data))
+  }, [buildClassroomDataSignature, markStateLoadedClean])
 
   const reloadRemoteWorkspace = useCallback(async (successMessage: string, preferredActingClassroomId?: string | null) => {
     if (!remoteSessionUserId) return
@@ -1024,15 +1642,109 @@ function App() {
       loadWorkspaceSnapshot().catch(() => null),
     ])
 
-    const mergedSnapshot = mergeWorkspaceWithLocalPreferences(remoteSnapshot, localWorkspaceSnapshot)
+    const { snapshot: mergedSnapshot, usedPendingLocalSnapshot } = resolveRemoteWorkspaceSnapshot(
+      remoteSnapshot,
+      localWorkspaceSnapshot,
+      readPendingRemoteWorkspaceSnapshotMarker(),
+      remoteSessionUserId,
+    )
     const nextActingClassroomId = preferredActingClassroomId ?? actingClassroomId
     if (nextActingClassroomId && mergedSnapshot.classrooms.some((classroom) => classroom.id === nextActingClassroomId)) {
       mergedSnapshot.actingClassroomId = nextActingClassroomId
     }
 
-    applyWorkspaceSnapshot(mergedSnapshot, successMessage)
+    applyWorkspaceSnapshot(mergedSnapshot, usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : successMessage)
+    if (usedPendingLocalSnapshot) {
+      queueFirebaseWorkspaceSync(mergedSnapshot, true, true, undefined, {
+        onSuccess: () => {
+          clearPendingRemoteWorkspaceSnapshotMarker()
+          setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
+        },
+        onFailure: (error) => {
+          const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
+          setPersistenceMessage(`前回終了時の未同期データを復元しました。${message}`)
+        },
+      })
+    }
     setRemoteAuthMessage('')
-  }, [actingClassroomId, applyWorkspaceSnapshot, remoteSessionUserId])
+  }, [actingClassroomId, applyWorkspaceSnapshot, queueFirebaseWorkspaceSync, remoteSessionUserId])
+
+  const copyBoardDistributionUrl = useCallback(async () => {
+    if (!actingClassroomId || !actingClassroom) throw new Error('配布対象の教室が見つかりません。')
+    if (!boardState) throw new Error('配布できる盤面データがまだありません。')
+
+    const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
+    if (!classroomSettings.boardShareToken) {
+      setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
+    }
+    const url = buildBoardShareUrl(token)
+    await copyTextToClipboard(url)
+    publishBoardShare({
+      schemaVersion: 1,
+      token,
+      classroomId: actingClassroomId,
+      classroomName: actingClassroom.name,
+      sharedAt: new Date().toISOString(),
+      cells: boardState.weeks.flat(),
+    }).catch((error) => {
+      console.warn('Board share publish after QR display failed', error)
+    })
+    return url
+  }, [actingClassroom, actingClassroomId, boardState, classroomSettings])
+
+  const publishBoardStateSnapshot = useCallback((nextBoardState: PersistedBoardState) => {
+    if (!actingClassroomId || !actingClassroom) return
+    const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
+    if (!classroomSettings.boardShareToken) {
+      setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
+    }
+    publishBoardShare({
+      schemaVersion: 1,
+      token,
+      classroomId: actingClassroomId,
+      classroomName: actingClassroom.name,
+      sharedAt: new Date().toISOString(),
+      cells: nextBoardState.weeks.flat(),
+    }).catch((error) => {
+      console.warn('Board share publish from board state change failed', error)
+    })
+  }, [actingClassroom, actingClassroomId, classroomSettings])
+
+  const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState) => {
+    setBoardState(nextBoardState)
+    writePendingWorkspaceSnapshotForRemoteSync()
+    if (boardShareStateChangePublishTimerRef.current) window.clearTimeout(boardShareStateChangePublishTimerRef.current)
+    boardShareStateChangePublishTimerRef.current = window.setTimeout(() => {
+      boardShareStateChangePublishTimerRef.current = null
+      publishBoardStateSnapshot(nextBoardState)
+    }, 250)
+  }, [publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
+
+  useEffect(() => {
+    if (!actingClassroomId || !actingClassroom || !boardState) return
+    if (boardSharePublishTimerRef.current) window.clearTimeout(boardSharePublishTimerRef.current)
+
+    boardSharePublishTimerRef.current = window.setTimeout(() => {
+      const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
+      if (!classroomSettings.boardShareToken) {
+        setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
+      }
+      publishBoardStateSnapshot(boardState)
+    }, 200)
+
+    return () => {
+      if (boardSharePublishTimerRef.current) {
+        window.clearTimeout(boardSharePublishTimerRef.current)
+        boardSharePublishTimerRef.current = null
+      }
+    }
+  }, [actingClassroom, actingClassroomId, boardState, classroomSettings, publishBoardStateSnapshot])
+
+  useEffect(() => {
+    if (screen !== 'developer') return
+    if (!currentUser || currentUser.role === 'developer') return
+    setScreen('board')
+  }, [currentUser, screen])
 
   const addClassroom = useCallback((input?: AddClassroomOptions) => {
     if (isRemoteBackendEnabled) {
@@ -1479,9 +2191,9 @@ function App() {
     setPersistenceMessage('保存フォルダへの自動保存を停止しました。')
   }, [])
 
-  const openDeveloperRestoreModal = useCallback((restoringSnapshot: WorkspaceSnapshot, sourceLabel: string) => {
+  const openDeveloperRestoreModal = useCallback((restoringSnapshot: WorkspaceSnapshot, sourceLabel: string, dataTimestampLabel?: string) => {
     const currentSnapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    setDeveloperRestoreModalState(buildDeveloperRestoreModalState(currentSnapshot, restoringSnapshot, sourceLabel))
+    setDeveloperRestoreModalState(buildDeveloperRestoreModalState(currentSnapshot, restoringSnapshot, sourceLabel, dataTimestampLabel))
   }, [buildWorkspaceSnapshot])
 
   const closeDeveloperRestoreModal = useCallback(() => {
@@ -1583,28 +2295,17 @@ function App() {
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
 
-    // Flush save synchronously before clearing state
+    // Flush locally before clearing state; Firebase sync continues in the background.
     if (isSnapshotPersistenceRuntimeEnabled()) {
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      void saveWorkspaceSnapshot(snapshot)
-
-      // Sync to Firebase before signing out so the remote snapshot is up to date
       if (isRemoteBackendEnabled && remoteSessionUserId) {
-        void saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId)
-          .catch(() => {})
-          .finally(() => {
-            void signOutFromFirebase()
-              .then(() => {
-                setCurrentUserId('')
-                setScreen('board')
-                setPersistenceMessage('Firebase からログアウトしました。')
-              })
-              .catch((error) => {
-                const message = error instanceof Error ? error.message : 'ログアウトに失敗しました。'
-                setPersistenceMessage(message)
-              })
-          })
-        return
+        try {
+          markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+        } catch {}
+      }
+      void saveWorkspaceSnapshot(snapshot).catch(() => {})
+      if (isRemoteBackendEnabled && remoteSessionUserId) {
+        queueFirebaseWorkspaceSync(snapshot, false, false, getCurrentClassroomSyncTargetIds(snapshot))
       }
     }
 
@@ -1625,87 +2326,90 @@ function App() {
     setCurrentUserId('')
     setScreen('board')
     setPersistenceMessage('ログアウトしました。')
-  }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncCurrentClassroomData])
+  }, [actingClassroomId, buildWorkspaceSnapshot, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData])
 
-  const saveAndCloseBoard = useCallback(() => {
+  const saveBoard = useCallback(() => {
+    clearDelayedAutoRemoteSyncTimer()
     syncCurrentClassroomData(actingClassroomId)
+    if (!remoteSaveInFlightRef.current) remoteSyncStartedAtRef.current = Date.now()
+    appendSaveDiagnostic({ stage: 'manual-save-start', details: { actingClassroomId } })
 
-    // Build the latest snapshot and write it synchronously to localStorage so the
-    // data is persisted even if the browser blocks async work during page unload.
-    const snapshot = isSnapshotPersistenceRuntimeEnabled()
-      ? buildWorkspaceSnapshot(new Date().toISOString())
-      : null
-    if (snapshot) {
-      try {
-        writeWorkspaceToLocalStorageSync(snapshot)
-      } catch {
-        // Local sync write best-effort; subsequent async save may still succeed.
-      }
-    }
-
-    const tryCloseWindow = () => {
-      try {
-        window.close()
-      } catch {
-        // window.close may throw in some browsers; swallow and let the message guide the user.
-      }
-      // Fallback: if the browser refuses window.close (common when the tab was not
-      // opened by script), inform the user that it is now safe to close manually.
-      // 200ms is enough for the browser to actually unload the tab when window.close()
-      // succeeds; if we are still here after that, we know the close was blocked.
-      window.setTimeout(() => {
-        if (typeof document !== 'undefined' && !document.hidden) {
-          setPersistenceMessage('保存しました。ブラウザのタブを閉じてください。')
-        }
-      }, 200)
-    }
-
-    if (snapshot) {
-      let localFailed = false
-      const localPromise = saveWorkspaceSnapshot(snapshot).catch(() => {
-        localFailed = true
-      })
-      if (isRemoteBackendEnabled && remoteSessionUserId) {
-        setPersistenceMessage('保存しています…')
-        void Promise.allSettled([
-          localPromise,
-          saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId),
-        ]).then((results) => {
-          const firebaseResult = results[1]
-          if (firebaseResult.status === 'rejected') {
-            const reason = firebaseResult.reason
-            const message = reason instanceof Error ? reason.message : 'Firebase 同期に失敗しました。'
-            if (localFailed) {
-              setPersistenceMessage(`保存に失敗しました: ${message} バックアップを書き出してください。`)
-            } else {
-              setLastSavedAt(snapshot.savedAt)
-              setPersistenceMessage(`ローカルに保存しましたが、${message} ブラウザのタブを閉じてください。`)
-            }
-          } else {
-            setLastSavedAt(snapshot.savedAt)
-            setPersistenceMessage(localFailed
-              ? 'Firebase へ保存しました（ローカル保存は失敗）。ブラウザのタブを閉じてください。'
-              : '保存しました。ブラウザのタブを閉じてください。')
-          }
-          tryCloseWindow()
-        })
-        return
-      }
-
-      void localPromise.then(() => {
-        if (localFailed) {
-          setPersistenceMessage('ローカル保存に失敗しました。バックアップを書き出してください。')
-          return
-        }
-        setLastSavedAt(snapshot.savedAt)
-        setPersistenceMessage('保存しました。ブラウザのタブを閉じてください。')
-        tryCloseWindow()
-      })
+    if (!isSnapshotPersistenceRuntimeEnabled()) {
+      setPersistenceMessage('スナップショット保存が無効化されています。')
       return
     }
 
-    tryCloseWindow()
-  }, [actingClassroomId, buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, syncCurrentClassroomData])
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    updateSavingNow(true)
+    if (isRemoteBackendEnabled && remoteSessionUserId) {
+      try {
+        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+      } catch {
+        // The async save path below still attempts IndexedDB/localStorage persistence.
+      }
+    }
+
+    // Capture the data signature at save start. If the user edits during the async
+    // save, the token advances and we keep showing 「保存」 instead of 「最新データ」.
+    const tokenAtStart = dirtyTokenRef.current
+    const signatureAtStart = buildCurrentDataSignature()
+    const finalizeClean = () => {
+      if (dirtyTokenRef.current === tokenAtStart && buildCurrentDataSignature() === signatureAtStart) {
+        cleanSignatureRef.current = signatureAtStart
+        isDirtyRef.current = false
+        setIsDirty(false)
+      }
+    }
+
+    const downloadFallbackBackup = () => {
+      try {
+        downloadTextFile(
+          formatBackupFileName(snapshot.savedAt, '保存失敗時バックアップ'),
+          serializeWorkspaceSnapshot(snapshot),
+          'application/json',
+        )
+        return true
+      } catch {
+        return false
+      }
+    }
+
+    void (async () => {
+      const localResult = await saveWorkspaceSnapshot(snapshot).catch(() => ({ savedToIndexedDb: false, savedToLocalStorage: false }))
+      const savedLocally = localResult.savedToIndexedDb || localResult.savedToLocalStorage
+      appendSaveDiagnostic({
+        stage: 'local-save-finished',
+        details: localResult,
+      })
+
+      if (savedLocally) {
+        setLastSavedAt(snapshot.savedAt)
+        if (isRemoteBackendEnabled && remoteSessionUserId) {
+          queueFirebaseWorkspaceSync(snapshot, true, true, getCurrentClassroomSyncTargetIds(snapshot), {
+            onSuccess: () => {
+              finalizeClean()
+              updateSavingNow(false)
+            },
+            onFailure: () => {
+              updateSavingNow(false)
+            },
+          })
+          return
+        }
+        finalizeClean()
+        updateSavingNow(false)
+        setPersistenceMessage('保存しました。')
+        return
+      }
+
+      updateSavingNow(false)
+      const downloaded = downloadFallbackBackup()
+      appendSaveDiagnostic({ stage: 'local-save-failure', details: { downloadedFallback: downloaded } })
+      setPersistenceMessage(downloaded
+        ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
+        : '保存に失敗しました。バックアップを書き出してください。')
+    })()
+  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, updateSavingNow])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
@@ -1738,6 +2442,15 @@ function App() {
 
     // Build occupied slots from board cells
     const runtimeWindow = getSchedulePopupRuntimeWindow()
+    const sessionBoardWeeks = ensureWeeksCoverDateRange({
+      weeks: boardState?.weeks ?? runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      startDate: session.startDate,
+      endDate: session.endDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons: displayRegularLessons,
+    }).weeks
     const sessionCells = buildScheduleCellsForRange({
       range: { startDate: session.startDate, endDate: session.endDate, periodValue: '' },
       fallbackStartDate: session.startDate,
@@ -1746,10 +2459,11 @@ function App() {
       teachers,
       students,
       regularLessons: displayRegularLessons,
-      boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      boardWeeks: sessionBoardWeeks,
       suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
     })
-    const lessonTypeLabels: Record<string, string> = { regular: '通常', makeup: '振替', special: '講習' }
+    const lessonTypeLabels: Record<string, string> = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習' }
+    const slotNumbers = Array.from(new Set(sessionCells.map((cell) => cell.slotNumber))).sort((left, right) => left - right)
     const studentOccupiedMap = new Map<string, Record<string, string>>()
     const teacherOccupiedMap = new Map<string, Record<string, string>>()
     for (const cell of sessionCells) {
@@ -1784,7 +2498,7 @@ function App() {
 
     const { updatedSession, newTokens } = allStudentsHaveTokens && allTeachersHaveTokens
       ? { updatedSession: session, newTokens: [] }
-      : await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings)
+      : await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings, slotNumbers)
 
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
@@ -1792,31 +2506,61 @@ function App() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string> }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[] }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     for (const s of activeStudents) {
       const token = updatedSession.studentInputs[s.id]?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {} })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers })
       }
     }
     for (const t of activeTeachers) {
       const token = updatedSession.teacherInputs[t.id]?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} })
+        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers })
       }
     }
     if (existingTokenEntries.length > 0) {
       updateSubmissionOccupiedSlots(existingTokenEntries).catch(() => { /* non-fatal */ })
     }
-  }, [actingClassroomId, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
+  }, [actingClassroomId, boardState?.suppressedRegularLessonOccurrences, boardState?.weeks, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
+
+  const buildPopupBoardWeeksForRange = useCallback((range: ScheduleRangePreference) => {
+    const runtimeWindow = getSchedulePopupRuntimeWindow()
+    const latestBoardState = boardStateRef.current
+    const sourceWeeks = latestBoardState?.weeks ?? runtimeWindow.__lessonScheduleBoardWeeks ?? []
+    return ensureWeeksCoverDateRange({
+      weeks: sourceWeeks,
+      startDate: range.startDate,
+      endDate: range.endDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons: displayRegularLessons,
+    }).weeks
+  }, [boardStateRef, classroomSettings, displayRegularLessons, students, teachers])
+
+  const getHighlightedTeacherIdFromBoardState = useCallback((nextBoardState: PersistedBoardState | null | undefined) => {
+    const selectedCellId = nextBoardState?.selectedCellId
+    const selectedDeskIndex = nextBoardState?.selectedDeskIndex
+    if (!selectedCellId || typeof selectedDeskIndex !== 'number' || selectedDeskIndex < 0) return undefined
+
+    const selectedCell = (nextBoardState?.weeks ?? []).flat().find((cell) => cell.id === selectedCellId)
+    const selectedDesk = selectedCell?.desks?.[selectedDeskIndex]
+    const teacherName = typeof selectedDesk?.teacher === 'string' ? selectedDesk.teacher.trim() : ''
+    if (!teacherName) return undefined
+
+    return teachers.find((teacher) => getTeacherDisplayName(teacher) === teacherName)?.id
+  }, [teachers])
 
   const syncStudentSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const studentPopup = runtimeWindow.__lessonScheduleStudentWindow
     if (!studentPopup || studentPopup.closed) return
+    const latestBoardState = boardStateRef.current
 
-    const range = buildNormalizedScheduleRange('student', studentScheduleRange)
+    const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
+  const scheduleBoardWeeks = buildPopupBoardWeeksForRange(range)
 
     syncStudentScheduleHtml({
       cells: buildScheduleCellsForRange({
@@ -1827,8 +2571,8 @@ function App() {
         teachers,
         students,
         regularLessons: displayRegularLessons,
-        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       plannedCells: buildManagedScheduleCellsForRange({
         range,
@@ -1838,29 +2582,33 @@ function App() {
         teachers,
         students,
         regularLessons: displayRegularLessons,
-        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       students,
       regularLessons: displayRegularLessons,
-      scheduleCountAdjustments: boardState?.scheduleCountAdjustments ?? [],
+      scheduleCountAdjustments: latestBoardState?.scheduleCountAdjustments ?? [],
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
+      classroomStorageKey: actingClassroomId ?? undefined,
       periodBands: specialSessions,
       specialSessions,
       targetWindow: studentPopup,
     })
-  }, [boardState?.scheduleCountAdjustments, boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, studentScheduleRange, students, teachers])
+  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessions, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const teacherPopup = runtimeWindow.__lessonScheduleTeacherWindow
     if (!teacherPopup || teacherPopup.closed) return
+    const latestBoardState = boardStateRef.current
+    const highlightedTeacherId = getHighlightedTeacherIdFromBoardState(latestBoardState)
 
-    const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange)
+    const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
+  const scheduleBoardWeeks = buildPopupBoardWeeksForRange(range)
 
     syncTeacherScheduleHtml({
       cells: buildScheduleCellsForRange({
@@ -1871,8 +2619,8 @@ function App() {
         teachers,
         students,
         regularLessons: displayRegularLessons,
-        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       plannedCells: buildManagedScheduleCellsForRange({
         range,
@@ -1882,8 +2630,8 @@ function App() {
         teachers,
         students,
         regularLessons: displayRegularLessons,
-        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       teachers,
       defaultStartDate: range.startDate,
@@ -1891,11 +2639,13 @@ function App() {
       defaultPeriodValue: range.periodValue,
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
+      classroomStorageKey: actingClassroomId ?? undefined,
+      highlightedTeacherId,
       periodBands: specialSessions,
       specialSessions,
       targetWindow: teacherPopup,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teacherScheduleRange, teachers])
+  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessions, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -1945,89 +2695,14 @@ function App() {
 
       if (message.type === 'schedule-popup-ready') {
         if (message.viewType === 'student') {
-          const range = buildNormalizedScheduleRange('student', studentScheduleRange)
+          const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
           ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
           syncStudentSchedulePopup()
         }
         if (message.viewType === 'teacher') {
-          const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange)
+          const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
           ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
           syncTeacherSchedulePopup()
-        }
-        return
-      }
-
-      if (message.type === 'schedule-submission-reset') {
-        const personType = message.personType
-        const personId = message.personId
-        if (!personId || typeof personId !== 'string') return
-        if (personType !== 'teacher' && personType !== 'student') return
-        const updatedAt = new Date().toISOString()
-        setSpecialSessions((current) => current.map((session) => {
-          if (personType === 'teacher') {
-            const input = session.teacherInputs[personId]
-            if (!input?.countSubmitted) return session
-            return {
-              ...session,
-              teacherInputs: {
-                ...session.teacherInputs,
-                [personId]: {
-                  ...input,
-                  countSubmitted: false,
-                  unavailableSlots: [],
-                  updatedAt,
-                },
-              },
-              updatedAt,
-            }
-          }
-          const input = session.studentInputs[personId]
-          if (!input?.countSubmitted) return session
-          return {
-            ...session,
-            studentInputs: {
-              ...session.studentInputs,
-              [personId]: {
-                ...input,
-                countSubmitted: false,
-                unavailableSlots: [],
-                subjectSlots: {},
-                regularOnly: false,
-                updatedAt,
-              },
-            },
-            updatedAt,
-          }
-        }))
-        // Also reset the Firestore submission document and trigger board unassign
-        for (const session of specialSessions) {
-          const input = personType === 'teacher' ? session.teacherInputs[personId] : session.studentInputs[personId]
-          if (input?.submissionToken) {
-            recentlyResetSubmissionTokensRef.current.add(input.submissionToken)
-            resetLectureSubmissionDoc(input.submissionToken).then(() => {
-              recentlyResetSubmissionTokensRef.current.delete(input.submissionToken!)
-            }).catch(() => {
-              recentlyResetSubmissionTokensRef.current.delete(input.submissionToken!)
-            })
-          }
-          if (input?.countSubmitted && personType === 'teacher') {
-            teacherAutoAssignRequestIdRef.current += 1
-            setTeacherAutoAssignRequest({
-              requestId: teacherAutoAssignRequestIdRef.current,
-              sessionId: session.id,
-              teacherId: personId,
-              mode: 'unassign',
-            })
-          }
-          if (input?.countSubmitted && personType === 'student') {
-            studentScheduleRequestIdRef.current += 1
-            setStudentScheduleRequest({
-              requestId: studentScheduleRequestIdRef.current,
-              sessionId: session.id,
-              studentId: personId,
-              mode: 'unassign',
-            })
-          }
         }
         return
       }
@@ -2174,15 +2849,11 @@ function App() {
           })
         }
 
-        // Sync Firestore submission doc status with app-side countSubmitted
+        // QR submissions are single-submit. Manual unsubmit does not reopen the public link.
         const targetSession = specialSessions.find((s) => s.id === message.sessionId)
         const studentToken = targetSession?.studentInputs[message.personId]?.submissionToken
-        if (studentToken) {
-          if (countSubmitted) {
-            markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
-          } else {
-            unlockLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
-          }
+        if (studentToken && countSubmitted) {
+          markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -2248,15 +2919,11 @@ function App() {
           mode: countSubmitted ? 'assign' : 'unassign',
         })
 
-        // Sync Firestore submission doc status with app-side countSubmitted
+        // QR submissions are single-submit. Manual unsubmit does not reopen the public link.
         const targetTeacherSession = specialSessions.find((s) => s.id === message.sessionId)
         const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
-        if (teacherToken) {
-          if (countSubmitted) {
-            markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
-          } else {
-            unlockLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
-          }
+        if (teacherToken && countSubmitted) {
+          markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -2351,7 +3018,7 @@ function App() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     syncSpecialSessionPopup()
@@ -2367,11 +3034,15 @@ function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined' || !boardState) return
+    // 日程表ポップアップは __lessonScheduleBoardWeeks をボード実績データとして参照する。
+    // 以前は screen !== 'board' のときだけ更新していたが、コマ表画面のままハードリロード
+    // した場合などに global が初期化されず、ポップアップが空 boardWeeks で overlay して
+    // 生徒授業が脱落していたため、screen に関わらず常に最新の boardState.weeks を反映する。
     getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = boardState.weeks
     syncSpecialSessionPopup()
     syncStudentSchedulePopup()
     syncTeacherSchedulePopup()
-  }, [boardState, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [boardState, screen, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   // Real-time submission reflection from Firestore
   useEffect(() => {
@@ -2533,10 +3204,28 @@ function App() {
           if (isDeveloperCloudBackupDirectoryHandle(storedDeveloperCloudBackupHandle)) {
             setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
           }
-          applyWorkspaceSnapshot(
-            mergeWorkspaceWithLocalPreferences(remoteSnapshot, localWorkspaceSnapshot),
-            'Firebase から教室ワークスペースを読み込みました。',
+          const { snapshot: resolvedSnapshot, usedPendingLocalSnapshot } = resolveRemoteWorkspaceSnapshot(
+            remoteSnapshot,
+            localWorkspaceSnapshot,
+            readPendingRemoteWorkspaceSnapshotMarker(),
+            remoteSessionUserId,
           )
+          applyWorkspaceSnapshot(
+            resolvedSnapshot,
+            usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : 'Firebase から教室ワークスペースを読み込みました。',
+          )
+          if (usedPendingLocalSnapshot) {
+            queueFirebaseWorkspaceSync(resolvedSnapshot, true, true, undefined, {
+              onSuccess: () => {
+                clearPendingRemoteWorkspaceSnapshotMarker()
+                setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
+              },
+              onFailure: (error) => {
+                const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
+                setPersistenceMessage(`前回終了時の未同期データを復元しました。${message}`)
+              },
+            })
+          }
           setRemoteAuthMessage('')
           setHasHydratedSnapshot(true)
         })
@@ -2594,7 +3283,7 @@ function App() {
     return () => {
       disposed = true
     }
-  }, [applyWorkspaceSnapshot, hasCheckedRemoteSession, isRemoteBackendEnabled, remoteSessionUserId, useImportedMasterData])
+  }, [applyWorkspaceSnapshot, hasCheckedRemoteSession, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, useImportedMasterData])
 
   useEffect(() => {
     if (!hasHydratedSnapshot) return
@@ -2617,44 +3306,90 @@ function App() {
     if (!hasHydratedSnapshot) return
     if (!isSnapshotPersistenceRuntimeEnabled()) return
     if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
+    if (buildCurrentDataSignature() === cleanSignatureRef.current) return
+    writePendingWorkspaceSnapshotForRemoteSync()
+  }, [buildCurrentDataSignature, dataSignature, hasHydratedSnapshot, workspaceClassrooms.length, workspaceUsers.length, writePendingWorkspaceSnapshotForRemoteSync])
+
+  useEffect(() => {
+    if (!hasHydratedSnapshot) return
+    if (!isSnapshotPersistenceRuntimeEnabled()) return
+    if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
+    if (buildCurrentDataSignature() === cleanSignatureRef.current) return
 
     const savedAt = new Date().toISOString()
     const snapshot = buildWorkspaceSnapshot(savedAt)
+    const tokenAtStart = dirtyTokenRef.current
+    const signatureAtStart = buildCurrentDataSignature()
+    const finalizeClean = () => {
+      if (dirtyTokenRef.current === tokenAtStart && buildCurrentDataSignature() === signatureAtStart) {
+        cleanSignatureRef.current = signatureAtStart
+        isDirtyRef.current = false
+        setIsDirty(false)
+      }
+    }
 
     const timeoutId = window.setTimeout(() => {
+      if (!remoteSaveInFlightRef.current) remoteSyncStartedAtRef.current = Date.now()
+      appendSaveDiagnostic({ stage: 'auto-save-start', details: { actingClassroomId } })
       void saveWorkspaceSnapshot(snapshot)
-        .then(async () => {
+        .then(() => {
           setLastSavedAt(snapshot.savedAt)
-          setPersistenceMessage('自動保存しました。')
+          appendSaveDiagnostic({ stage: 'auto-local-save-finished', details: { savedAt: snapshot.savedAt } })
 
           if (isRemoteBackendEnabled && remoteSessionUserId) {
-            try {
-              await saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId)
-              setPersistenceMessage('自動保存し、Firebase へ同期しました。')
-            } catch (error) {
-              const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
-              setPersistenceMessage(`自動保存しましたが、${message}`)
-            }
+            clearDelayedAutoRemoteSyncTimer()
+            updateRemoteSyncPending(true)
+            delayedAutoRemoteSyncTimerRef.current = window.setTimeout(() => {
+              delayedAutoRemoteSyncTimerRef.current = null
+              queueFirebaseWorkspaceSync(snapshot, false, false, getCurrentClassroomSyncTargetIds(snapshot), {
+                onSuccess: finalizeClean,
+              })
+            }, 12000)
+            if (!isRemoteSyncVisibleRef.current) setPersistenceMessage('自動保存しました。')
+          } else {
+            finalizeClean()
+            setPersistenceMessage('自動保存しました。')
           }
 
         })
         .catch(() => {
+          appendSaveDiagnostic({ stage: 'auto-local-save-failure' })
           setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
         })
     }, 250)
 
     return () => window.clearTimeout(timeoutId)
-  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
+    // dataSignature を依存に含めることで、教室設定/通常授業/盤面など全ての保存対象データ変更後に
+    // 自動保存(ローカル + Firebase)が必ず再走するようにする。これを外すと休日変更などが
+    // ブラウザ終了前に Firebase へ同期されず、再ログイン時に古いリモートが優先されてしまう。
+  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, dataSignature, getCurrentClassroomSyncTargetIds, hasHydratedSnapshot, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
 
   // Flush save on browser close / tab close to prevent data loss
   useEffect(() => {
     if (!hasHydratedSnapshot) return
     if (!isSnapshotPersistenceRuntimeEnabled()) return
 
-    const handleBeforeUnload = () => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
+      const hasUnsavedLatestChanges = buildCurrentDataSignature() !== cleanSignatureRef.current
+      const shouldBlockUnload = hasUnsavedLatestChanges || isSavingNowRef.current || isRemoteSyncPendingRef.current
+      if (shouldBlockUnload) {
+        event.preventDefault()
+        event.returnValue = ''
+      }
+
+      if (!hasUnsavedLatestChanges) return
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      writeWorkspaceToLocalStorageSync(snapshot)
+      if (isRemoteBackendEnabled && remoteSessionUserId) {
+        try {
+          markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+        } catch {}
+      }
+      try {
+        writeWorkspaceToLocalStorageSync(snapshot)
+      } catch {
+        void saveWorkspaceSnapshot(snapshot).catch(() => {})
+      }
     }
 
     // Save to Firebase when tab becomes hidden (tab switch, minimize, close)
@@ -2664,8 +3399,9 @@ function App() {
       if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
       if (!isRemoteBackendEnabled || !remoteSessionUserId) return
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      writeWorkspaceToLocalStorageSync(snapshot)
-      void saveFirebaseWorkspaceSnapshot(snapshot, remoteSessionUserId).catch(() => {})
+      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+      void saveWorkspaceSnapshot(snapshot).catch(() => {})
+      queueFirebaseWorkspaceSync(snapshot, false, false, getCurrentClassroomSyncTargetIds(snapshot))
     }
 
     window.addEventListener('beforeunload', handleBeforeUnload)
@@ -2674,7 +3410,7 @@ function App() {
       window.removeEventListener('beforeunload', handleBeforeUnload)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
-  }, [buildWorkspaceSnapshot, hasHydratedSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
+  }, [buildCurrentDataSignature, buildWorkspaceSnapshot, getCurrentClassroomSyncTargetIds, hasHydratedSnapshot, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
 
   useEffect(() => {
     if (!currentUser) return
@@ -2911,6 +3647,7 @@ function App() {
       setPersistenceMessage('Firebase Functions が無効です。接続設定を確認してください。')
       return
     }
+    const summary = serverAutoBackupSummaries.find((entry) => entry.backupDateKey === backupDateKey)
     setServerAutoBackupLoading(true)
     setPersistenceMessage('サーバーバックアップをダウンロードしています…')
     try {
@@ -2919,7 +3656,11 @@ function App() {
       console.log('[restoreServerAutoBackup] downloaded, json length:', snapshotJson.length)
       const snapshot = parseWorkspaceSnapshot(snapshotJson)
       console.log('[restoreServerAutoBackup] parsed snapshot, classrooms:', snapshot.classrooms.length)
-      openDeveloperRestoreModal(snapshot, `サーバーバックアップ (${backupDateKey})`)
+      openDeveloperRestoreModal(
+        snapshot,
+        `サーバーバックアップ (${summary?.displayLabel ?? backupDateKey})`,
+        summary?.sourceSavedAt,
+      )
       setPersistenceMessage('復元する教室をモーダルで選択してください。')
     } catch (error) {
       console.error('[restoreServerAutoBackup] error:', error)
@@ -2928,7 +3669,7 @@ function App() {
     } finally {
       setServerAutoBackupLoading(false)
     }
-  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openDeveloperRestoreModal])
+  }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openDeveloperRestoreModal, serverAutoBackupSummaries])
 
   const restoreClassroomFromServerAutoBackup = useCallback(async (backupDateKey: string) => {
     if (!isRemoteBackendEnabled || !actingClassroomId) return
@@ -2961,6 +3702,41 @@ function App() {
       setPersistenceMessage(`サーバーバックアップ (${backupDateKey}) からこの教室を復元しました。`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'サーバーバックアップからの教室復元に失敗しました。'
+      setPersistenceMessage(message)
+    }
+  }, [actingClassroomId, isRemoteBackendEnabled, saveUndoSnapshot, workspaceClassrooms])
+
+  const restoreLatestClassroomRollback = useCallback(async () => {
+    if (!isRemoteBackendEnabled || !actingClassroomId) return
+    setPersistenceMessage('直前の Firebase 保存前データをダウンロードしています…')
+    try {
+      const result = await downloadLatestFirebaseClassroomRollback(actingClassroomId)
+
+      saveUndoSnapshot('直前 Firebase 保存前復元')
+
+      const updatedClassrooms = workspaceClassrooms.map((classroom) =>
+        classroom.id === actingClassroomId
+          ? { ...classroom, data: result.data }
+          : classroom,
+      )
+      setWorkspaceClassrooms(updatedClassrooms)
+      applyClassroomPayloadToState(result.data, {
+        setScreen: (value) => setScreen(value),
+        setManagers,
+        setTeachers,
+        setStudents,
+        setRegularLessons,
+        setGroupLessons,
+        setSpecialSessions,
+        setAutoAssignRules,
+        setPairConstraints,
+        setClassroomSettings,
+        setBoardState,
+        setBoardMountKey,
+      })
+      setPersistenceMessage(`直前の Firebase 保存前状態 (${result.sourceSavedAt || result.capturedAt}) からこの教室を復元しました。`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '直前の Firebase 保存前データの復元に失敗しました。'
       setPersistenceMessage(message)
     }
   }, [actingClassroomId, isRemoteBackendEnabled, saveUndoSnapshot, workspaceClassrooms])
@@ -3168,8 +3944,28 @@ function App() {
     setScreen('board')
   }, [classroomSettings, displayRegularLessons, students, teachers])
 
+  const { blocked: isDuplicateTab } = useClassroomTabLock({
+    enabled: hasHydratedSnapshot && currentUser?.role === 'manager',
+    classroomId: actingClassroomId,
+    userId: currentUser?.id ?? null,
+  })
+
   if (!hasHydratedSnapshot) {
     return <div className="workspace-auth-shell"><div className="workspace-auth-card"><h2>読み込み中</h2><p>教室ワークスペースを準備しています。</p></div></div>
+  }
+
+  if (isDuplicateTab) {
+    return (
+      <div className="workspace-auth-shell">
+        <div className="workspace-auth-card" data-testid="duplicate-tab-block">
+          <h2>このタブは利用できません</h2>
+          <p>同じ教室を既に別のタブまたはウィンドウで開いています。</p>
+          <p>データの整合性を保つため、コマ表アプリは教室ごとに 1 タブのみで利用できます。</p>
+          <p>先に開いているタブを閉じてから、このページを再読み込みしてください。</p>
+          <button type="button" onClick={() => window.location.reload()} style={{ marginTop: 16 }}>再読み込み</button>
+        </div>
+      </div>
+    )
   }
 
   if (!currentUser) {
@@ -3229,6 +4025,39 @@ function App() {
     )
   }
 
+  if (isBillingRoute) {
+    return (
+      <BillingAutomationScreen
+        currentUser={currentUser}
+        authMode={isRemoteBackendEnabled ? 'firebase' : 'local'}
+        classrooms={workspaceClassrooms.map((classroom) => classroom.id === actingClassroomId
+          ? {
+            ...classroom,
+            data: buildClassroomSnapshotPayload({
+              screen: screen === 'developer' ? 'board' : screen,
+              classroomSettings,
+              managers,
+              teachers,
+              students,
+              regularLessons,
+              groupLessons,
+              specialSessions,
+              autoAssignRules,
+              pairConstraints,
+              boardState,
+            }),
+          }
+          : classroom)}
+        users={workspaceUsers}
+        onBackToDeveloper={() => {
+          window.history.pushState({}, '', '/')
+          setScreen('developer')
+        }}
+        onLogout={logout}
+      />
+    )
+  }
+
   if (screen === 'developer' && currentUser.role === 'developer') {
     return (
       <DeveloperAdminScreen
@@ -3285,7 +4114,7 @@ function App() {
         onCloseStudentHistory={() => setStudentHistoryState(null)}
         restoreModalState={developerRestoreModalState ? {
           sourceLabel: developerRestoreModalState.sourceLabel,
-          savedAt: developerRestoreModalState.savedAt,
+          dataTimestampLabel: developerRestoreModalState.dataTimestampLabel,
           options: developerRestoreModalState.options,
         } : null}
         onToggleRestoreClassroom={toggleDeveloperRestoreClassroom}
@@ -3392,6 +4221,7 @@ function App() {
         serverAutoBackupLoading={serverAutoBackupLoading}
         onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
         onRestoreClassroomFromServerAutoBackup={(backupDateKey) => void restoreClassroomFromServerAutoBackup(backupDateKey)}
+        onRestoreLatestClassroomRollback={() => void restoreLatestClassroomRollback()}
         classroomSettings={classroomSettings}
         students={students}
         specialSessions={specialSessions}
@@ -3414,11 +4244,14 @@ function App() {
     )
   }
 
+  const shouldShowRemoteSyncStatus = isRemoteSyncPending && (isRemoteSyncVisible || isDirty)
+
   return (
     <ScheduleBoardScreen
       key={boardMountKey}
       classroomSettings={classroomSettings}
       classroomName={actingClassroom?.name}
+      classroomStorageKey={actingClassroomId ?? undefined}
       teachers={teachers}
       students={students}
       regularLessons={displayRegularLessons}
@@ -3428,10 +4261,10 @@ function App() {
       teacherAutoAssignRequest={teacherAutoAssignRequest}
       studentScheduleRequest={studentScheduleRequest}
       initialBoardState={boardState}
-      onBoardStateChange={setBoardState}
+      onBoardStateChange={handleBoardStateChange}
       onReplaceRegularLessons={setRegularLessons}
       onUpdateSpecialSessions={setSpecialSessions}
-      onUpdateClassroomSettings={setClassroomSettings}
+      onUpdateClassroomSettings={updateClassroomSettings}
       onOpenBasicData={() => navigateClassroomScreen('basic-data')}
       onOpenSpecialData={() => navigateClassroomScreen('special-data')}
       onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
@@ -3441,9 +4274,24 @@ function App() {
       onRestoreUndoSnapshot={restoreUndoSnapshot}
       onDismissUndoSnapshot={dismissUndoSnapshot}
       onLogout={logout}
-      onSaveAndClose={saveAndCloseBoard}
+      onCopyDistributionUrl={copyBoardDistributionUrl}
+      onSaveBoard={saveBoard}
+      isBoardDirty={isDirty}
+      isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
+      isBoardSaveDisabled={isRemoteSyncPending && isRemoteSyncVisible}
+      syncStatusMessage={shouldShowRemoteSyncStatus
+        ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')
+        : ((isSavingNow || isDirty) ? persistenceMessage : undefined)}
+      syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
+      syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
     />
   )
+}
+
+function App() {
+  const boardShareToken = getBoardShareTokenFromUrl()
+  if (boardShareToken) return <BoardShareScreen token={boardShareToken} />
+  return <AuthenticatedApp />
 }
 
 export default App

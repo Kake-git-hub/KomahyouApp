@@ -31,11 +31,24 @@ function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
 }
 
 describe('basicDataModel student labels and sorting', () => {
-  it('formats student selection labels with the current grade', () => {
+  it('formats student selection labels with the school-year grade', () => {
     const student = createStudent({ displayName: '山田太郎', birthDate: '2013-05-01' })
 
-    expect(resolveCurrentStudentGradeLabel(student, '2026-03-27')).toBe('中1')
-    expect(formatStudentSelectionLabel(student, '2026-03-27')).toBe('山田太郎 (中1)')
+    expect(resolveCurrentStudentGradeLabel(student, '2026-03-27')).toBe('小6')
+    expect(formatStudentSelectionLabel(student, '2026-03-27')).toBe('山田太郎 (小6)')
+  })
+
+  it('does not advance the grade after the birthday inside the same school year', () => {
+    const student = createStudent({ birthDate: '2013-05-01' })
+
+    expect(resolveCurrentStudentGradeLabel(student, '2026-05-08')).toBe('中1')
+  })
+
+  it('treats April 1 births in the same school-year group as other April births', () => {
+    expect(resolveCurrentStudentGradeLabel(createStudent({ id: 'student-a', birthDate: '2012-04-01' }), '2026-05-09')).toBe('中2')
+    expect(resolveCurrentStudentGradeLabel(createStudent({ id: 'student-b', birthDate: '2012-04-02' }), '2026-05-09')).toBe('中2')
+    expect(resolveCurrentStudentGradeLabel(createStudent({ id: 'student-c', birthDate: '2013-04-01' }), '2026-05-09')).toBe('中1')
+    expect(resolveCurrentStudentGradeLabel(createStudent({ id: 'student-d', birthDate: '2013-04-02' }), '2026-05-09')).toBe('中1')
   })
 
   it('sorts students by smaller current grade first and then by display name', () => {
@@ -50,21 +63,21 @@ describe('basicDataModel student labels and sorting', () => {
     expect(sorted.map((student) => student.displayName)).toEqual(['伊藤', '青木', '高橋'])
   })
 
-  it('treats upcoming teachers as 在籍 so they always appear in management views', () => {
+  it('treats upcoming teachers as 入塾前 and hides them from active management views until entry', () => {
     const upcomingTeacher = createTeacher({ entryDate: '2026-05-01' })
     const hiddenTeacher = createTeacher({ id: 'teacher-2', isHidden: true })
 
-    expect(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21')).toBe('在籍')
-    expect(isTeacherVisibleInManagement(upcomingTeacher, '2026-04-21')).toBe(true)
+    expect(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21')).toBe('入塾前')
+    expect(isTeacherVisibleInManagement(upcomingTeacher, '2026-04-21')).toBe(false)
     expect(isTeacherVisibleInManagement(hiddenTeacher, '2026-04-21')).toBe(false)
   })
 
-  it('keeps students with empty or 未定 withdrawDate as 在籍 regardless of entry date', () => {
+  it('treats future-entry students as 入塾前 while keeping active students with empty or 未定 withdrawDate enrolled', () => {
     const futureEntryEmptyWithdraw = createStudent({ entryDate: '2027-04-01', withdrawDate: '' })
     const pastEntryUndefinedWithdraw = createStudent({ id: 'student-2', entryDate: '2020-04-01', withdrawDate: '未定' })
     const pastEntryEmptyWithdraw = createStudent({ id: 'student-3', entryDate: '2020-04-01', withdrawDate: '' })
 
-    expect(resolveCurrentStudentGradeLabel(futureEntryEmptyWithdraw, '2026-04-22')).not.toBe('退塾')
+    expect(resolveCurrentStudentGradeLabel(futureEntryEmptyWithdraw, '2026-04-22')).toBe('入塾前')
     expect(resolveCurrentStudentGradeLabel(pastEntryUndefinedWithdraw, '2026-04-22')).not.toBe('退塾')
     expect(resolveCurrentStudentGradeLabel(pastEntryEmptyWithdraw, '2026-04-22')).not.toBe('退塾')
   })

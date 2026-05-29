@@ -28,6 +28,7 @@ type BackupRestoreScreenProps = {
   serverAutoBackupLoading: boolean
   onLoadServerAutoBackupSummaries: () => void
   onRestoreClassroomFromServerAutoBackup: (backupDateKey: string) => void
+  onRestoreLatestClassroomRollback: () => void
   classroomSettings: ClassroomSettings
   students: StudentRow[]
   specialSessions: SpecialSessionRow[]
@@ -70,7 +71,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, onRestoreLatestClassroomRollback, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -272,10 +273,22 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
           </div>
 
           {showServerBackups ? (
+            <section className="basic-data-section-card" data-testid="latest-classroom-rollback-panel">
+              <div className="basic-data-card-head">
+                <h3>直前の Firebase 保存前へ戻す</h3>
+                <p>この教室の直前 1 件だけを圧縮保持しています。保存容量は教室数ぶんで頭打ちのままです。</p>
+              </div>
+              <div className="basic-data-row-actions">
+                <button className="secondary-button slim" type="button" onClick={onRestoreLatestClassroomRollback} data-testid="restore-latest-classroom-rollback-button">直前の状態へ戻す</button>
+              </div>
+            </section>
+          ) : null}
+
+          {showServerBackups ? (
             <section className="basic-data-section-card" data-testid="server-backup-panel">
               <div className="basic-data-card-head">
                 <h3>サーバーバックアップから復元</h3>
-                <p>Firebase サーバーに保存された自動バックアップから、この教室のデータだけを復元します。他の教室には影響しません。</p>
+                <p>Firebase サーバーに保存された自動バックアップから、この教室のデータだけを復元します。直近 3 日間は毎時、さらに日次 14 日分を保持します。他の教室には影響しません。</p>
               </div>
               <div className="basic-data-row-actions">
                 <button className="secondary-button slim" type="button" onClick={handleOpenServerBackupModal}>サーバーバックアップ一覧を開く</button>
@@ -500,8 +513,8 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                   {serverAutoBackupSummaries.map((summary) => (
                     <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
                       <div className="backup-restore-auto-backup-meta">
-                        <strong>{summary.backupDateKey}</strong>
-                        <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
+                        <strong>{summary.displayLabel}</strong>
+                        <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
                       </div>
                       <button className="secondary-button slim" type="button" onClick={() => setConfirmingBackupKey(summary.backupDateKey)}>この時点から復元</button>
                     </div>

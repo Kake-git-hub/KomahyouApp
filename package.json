@@ -1,23 +1,26 @@
 {
   "name": "komahyouapp",
   "private": true,
-  "version": "1.5.90",
+    "version": "1.5.244",
   "type": "module",
   "scripts": {
+    "prebuild": "node tools/clean-dist.mjs",
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node tools/write-version-file.mjs",
     "build:firebase": "npm run build",
     "build:functions": "npm --prefix functions run build",
     "firebase:first-classroom": "node tools/firebase-first-classroom-helper.mjs",
     "hosting:retention:enforce": "node tools/firebase-hosting-retention.mjs --count 5",
+    "verify:firebase:live": "node tools/verify-firebase-hosting.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
-    "deploy:firebase": "npm run build:firebase && npx firebase-tools deploy --only hosting,firestore && npm run hosting:retention:enforce",
-    "deploy:firebase:with-functions": "npm run build:firebase && npm run build:functions && npx firebase-tools deploy --only hosting,firestore,functions && npm run hosting:retention:enforce",
+    "deploy:firebase": "node tools/deploy-firebase.mjs",
+    "deploy:firebase:with-functions": "node tools/deploy-firebase.mjs --with-functions",
     "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:firebase": "playwright test --config playwright.firebase.config.ts"
+    "test:e2e:firebase": "playwright test --config playwright.firebase.config.ts",
+    "test:e2e:live-save-debug": "playwright test --config playwright.live-save-debug.config.ts"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",
@@ -43,7 +46,6 @@
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.48.0",
     "vite": "^7.3.1",
-    "vite-plugin-pwa": "^1.2.0",
     "vitest": "^4.1.0"
   }
 }

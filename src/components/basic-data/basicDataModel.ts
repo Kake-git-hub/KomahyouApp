@@ -1,3 +1,5 @@
+import { resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+
 export type GradeCeiling = '小' | '中' | '高1' | '高2' | '高3'
 export type ManagerRow = { id: string; name: string; email: string }
 export type TeacherSubjectCapability = { subject: string; maxGrade: GradeCeiling }
@@ -174,15 +176,14 @@ function resolveSchoolGradeLabelFromBirthDate(birthDate: string, today = new Dat
   const birthDay = Number(dayText)
   if ([birthYear, birthMonth, birthDay].some((value) => Number.isNaN(value))) return '-'
 
-  let age = today.getFullYear() - birthYear
-  if (today.getMonth() + 1 < birthMonth || (today.getMonth() + 1 === birthMonth && today.getDate() < birthDay)) {
-    age -= 1
-  }
+  const referenceDate = new Date(today)
+  if (Number.isNaN(referenceDate.getTime())) return '-'
 
-  if (age < 6) return '未就学'
-  if (age <= 11) return `小${age - 5}`
-  if (age <= 14) return `中${age - 11}`
-  return `高${Math.min(age - 14, 3)}`
+  const schoolYear = referenceDate >= new Date(referenceDate.getFullYear(), 3, 1) ? referenceDate.getFullYear() : referenceDate.getFullYear() - 1
+  const enrollmentYear = resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
+  if (schoolYear < enrollmentYear) return '未就学'
+
+  return resolveGradeLabelFromBirthDate(normalized, referenceDate) || '-'
 }
 
 function resolveStudentGradeSortOrder(gradeLabel: string) {
@@ -240,6 +241,8 @@ export function getReferenceDateKey(date: Date) {
 
 export function isActiveOnDate(_entryDate: string, withdrawDate: string, isHidden: boolean, referenceDate: string) {
   if (isHidden) return false
+  const normalizedEntryDate = normalizeDateText(_entryDate)
+  if (normalizedEntryDate && referenceDate < normalizedEntryDate) return false
   const normalizedWithdrawDate = normalizeDateText(withdrawDate)
   if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return false
   return true
@@ -247,6 +250,8 @@ export function isActiveOnDate(_entryDate: string, withdrawDate: string, isHidde
 
 export function resolveTeacherRosterStatus(teacher: TeacherRow, referenceDate: string) {
   if (teacher.isHidden) return '非表示'
+  const normalizedEntryDate = normalizeDateText(teacher.entryDate)
+  if (normalizedEntryDate && referenceDate < normalizedEntryDate) return '入塾前'
   const normalizedWithdrawDate = normalizeDateText(teacher.withdrawDate)
   if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return '退塾'
   return '在籍'
@@ -256,8 +261,14 @@ export function isTeacherVisibleInManagement(teacher: TeacherRow, referenceDate:
   return resolveTeacherRosterStatus(teacher, referenceDate) === '在籍'
 }
 
+export function isStudentVisibleInManagement(student: StudentRow, referenceDate: string) {
+  return resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate) === '在籍'
+}
+
 export function resolveScheduledStatus(_entryDate: string, withdrawDate: string, isHidden: boolean, referenceDate: string) {
   if (isHidden) return '非表示'
+  const normalizedEntryDate = normalizeDateText(_entryDate)
+  if (normalizedEntryDate && referenceDate < normalizedEntryDate) return '入塾前'
   const normalizedWithdrawDate = normalizeDateText(withdrawDate)
   if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return '退塾'
   return '在籍'

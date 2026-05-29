@@ -26,6 +26,16 @@ service cloud.firestore {
       return hasWorkspaceMembership(workspaceKey) && workspaceRole(workspaceKey) == 'developer';
     }
 
+    function isBillingDeveloper(workspaceKey) {
+      return isDeveloper(workspaceKey)
+        && (
+          get(memberDoc(workspaceKey)).data.email == 'dai.in.the.mood@gmail.com'
+          || get(memberDoc(workspaceKey)).data.email == 'bkkdmzn@gmail.com'
+          || request.auth.token.email == 'dai.in.the.mood@gmail.com'
+          || request.auth.token.email == 'bkkdmzn@gmail.com'
+        );
+    }
+
     function canAccessClassroom(workspaceKey, classroomId) {
       return hasWorkspaceMembership(workspaceKey)
         && (
@@ -52,12 +62,47 @@ service cloud.firestore {
         allow read: if canAccessClassroom(workspaceKey, classroomId);
         allow create, update: if canAccessClassroom(workspaceKey, classroomId);
         allow delete: if isDeveloper(workspaceKey);
+
+        match /chunks/{chunkId} {
+          allow read: if canAccessClassroom(workspaceKey, classroomId);
+          allow create, update, delete: if canAccessClassroom(workspaceKey, classroomId);
+        }
+
+        match /parts/{partId} {
+          allow read: if canAccessClassroom(workspaceKey, classroomId);
+          allow create, update, delete: if canAccessClassroom(workspaceKey, classroomId);
+        }
+
+        match /boardWeeks/{weekId} {
+          allow read: if canAccessClassroom(workspaceKey, classroomId);
+          allow create, update, delete: if canAccessClassroom(workspaceKey, classroomId);
+        }
+      }
+
+      match /classroomSettings/{classroomId} {
+        allow read: if canAccessClassroom(workspaceKey, classroomId);
+        allow create, update: if canAccessClassroom(workspaceKey, classroomId);
+        allow delete: if isDeveloper(workspaceKey);
       }
 
       match /workspaceAutoBackupSummaries/{backupDateKey} {
         allow read: if hasWorkspaceMembership(workspaceKey);
         allow write: if false;
       }
+
+      match /billingMonths/{monthKey} {
+        allow read, write: if isBillingDeveloper(workspaceKey);
+
+        match /classrooms/{classroomId} {
+          allow read, write: if isBillingDeveloper(workspaceKey);
+        }
+      }
+    }
+
+    match /boardShares/{token} {
+      allow read: if true;
+      allow create, update: if isSignedIn();
+      allow delete: if false;
     }
 
     // Lecture submissions: admin creates/deletes, Cloud Functions handle public access

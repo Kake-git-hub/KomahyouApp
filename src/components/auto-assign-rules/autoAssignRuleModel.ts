@@ -1,3 +1,4 @@
+import { resolveEnrollmentYearFromBirthDateParts } from '../../utils/studentGradeSubject'
 import type { StudentRow } from '../basic-data/basicDataModel'
 
 export type AutoAssignRuleKey =
@@ -140,8 +141,8 @@ export const initialAutoAssignRules: AutoAssignRuleRow[] = autoAssignRuleDefinit
   updatedAt: '',
 }))
 
-function getEnrollmentYear(birthYear: number, birthMonth: number, birthDay: number) {
-  return birthMonth < 4 || (birthMonth === 4 && birthDay === 1) ? birthYear + 6 : birthYear + 7
+function getEnrollmentYear(birthYear: number, birthMonth: number) {
+  return resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
 }
 
 export function resolveReferenceSchoolYear(referenceDate: string) {
@@ -160,7 +161,7 @@ export function resolveStudentGradeLabel(birthDate: string, referenceDate: strin
   if (!birthYear || !birthMonth || !birthDay) return ''
 
   const schoolYear = resolveReferenceSchoolYear(referenceDate)
-  const gradeNumber = schoolYear - getEnrollmentYear(birthYear, birthMonth, birthDay) + 1
+  const gradeNumber = schoolYear - getEnrollmentYear(birthYear, birthMonth) + 1
 
   if (gradeNumber <= 1) return '小1'
   if (gradeNumber === 2) return '小2'

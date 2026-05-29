@@ -26,6 +26,7 @@ export type LectureSubmissionDoc = {
   forceOpenDates: string[]
   availableSubjects: string[]
   slotCount: number
+  slotNumbers?: number[]
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
@@ -40,6 +41,7 @@ export async function ensureSubmissionTokens(
   students: Array<{ id: string; name: string; availableSubjects: string[]; occupiedSlots?: Record<string, string> }>,
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; forceOpenDates: string[] },
+  slotNumbers: number[],
 ): Promise<{ updatedSession: SpecialSessionRow; newTokens: Array<{ token: string; doc: LectureSubmissionDoc }> }> {
   const config = getFirebaseBackendConfig()
   if (!config.enabled) return { updatedSession: session, newTokens: [] }
@@ -72,7 +74,8 @@ export async function ensureSubmissionTokens(
         closedWeekdays: [...classroomSettings.closedWeekdays],
         forceOpenDates: [...classroomSettings.forceOpenDates],
         availableSubjects: [],
-        slotCount: 7,
+        slotCount: slotNumbers.length,
+        slotNumbers: [...slotNumbers],
         status: 'pending',
         unavailableSlots: [],
         subjectSlots: {},
@@ -107,7 +110,8 @@ export async function ensureSubmissionTokens(
         closedWeekdays: [...classroomSettings.closedWeekdays],
         forceOpenDates: [...classroomSettings.forceOpenDates],
         availableSubjects: [...student.availableSubjects],
-        slotCount: 7,
+        slotCount: slotNumbers.length,
+        slotNumbers: [...slotNumbers],
         status: 'pending',
         unavailableSlots: [],
         subjectSlots: {},
@@ -205,7 +209,7 @@ export async function deleteLectureSubmissionDoc(token: string) {
 
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string> }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[] }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -216,9 +220,11 @@ export async function updateSubmissionOccupiedSlots(
     const existing = await getDoc(docRef)
     if (!existing.exists()) continue
     const data = existing.data()
-    // Only update pending docs (submitted docs are locked)
-    if (data.status !== 'pending') continue
-    await setDoc(docRef, { ...data, occupiedSlots: entry.occupiedSlots })
+    await setDoc(docRef, {
+      ...data,
+      occupiedSlots: entry.occupiedSlots,
+      ...(entry.slotNumbers ? { slotNumbers: [...entry.slotNumbers], slotCount: entry.slotNumbers.length } : {}),
+    })
   }
 }
 

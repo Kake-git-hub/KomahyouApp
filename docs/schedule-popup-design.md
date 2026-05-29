@@ -27,6 +27,7 @@
 
 - popup の `planned` は managed regular lessons を使う
 - popup の `actual` は board overlay 後の cells を使う
+- board overlay は `cell.id` が古い保存形式でも `dateKey + slotNumber` で同じコマを照合する
 - 通常授業を振替ストックへ回しただけで未割当の origin は、`actual` から消す
 - 実際に振替として配置されたものだけ `actual` に残す
 

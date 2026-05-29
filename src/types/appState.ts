@@ -16,6 +16,8 @@ export type ClassroomSettings = {
   holidayDates: string[]
   forceOpenDates: string[]
   deskCount: number
+  scheduleNotes?: Record<string, string>
+  boardShareToken?: string
   regularLessonTemplate?: RegularLessonTemplate | null
   regularLessonTemplateHistory?: RegularLessonTemplate[]
   preTemplateRegularLessons?: RegularLessonRow[]
@@ -58,6 +60,8 @@ export type LectureStockCountMap = Record<string, number>
 export type ManualLectureStockOrigin = {
   displayName: string
   sessionId?: string
+  originDateKey?: string
+  originSlotNumber?: number
 }
 
 export type ScheduleCountAdjustmentKind = 'regular' | 'special'

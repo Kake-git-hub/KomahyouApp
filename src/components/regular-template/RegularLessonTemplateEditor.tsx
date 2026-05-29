@@ -380,22 +380,25 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                         </select>
                       </label>
                       <label className="basic-data-inline-field basic-data-inline-field-short">
-                        <span>注記</span>
-                        <input
+                        <span>授業時間</span>
+                        <select
                           data-testid={`regular-template-note-input-${studentIndex + 1}`}
-                          value={draftStudent?.note ?? ''}
-                          maxLength={4}
+                          value={draftStudent?.note === '60' ? '60' : draftStudent?.note === '45' ? '45' : ''}
                           disabled={!draftStudent?.studentId}
                           onChange={(event) => updateDesk((desk) => {
                             const nextStudents = [...desk.students] as RegularLessonTemplateDesk['students']
                             if (!nextStudents[studentIndex]) return desk
                             nextStudents[studentIndex] = {
                               ...nextStudents[studentIndex],
-                              note: event.target.value.slice(0, 4),
+                              note: event.target.value,
                             }
                             return { ...desk, students: nextStudents }
                           })}
-                        />
+                        >
+                          <option value="">未選択 (90)</option>
+                          <option value="60">60</option>
+                          <option value="45">45</option>
+                        </select>
                       </label>
                     </div>
                   )

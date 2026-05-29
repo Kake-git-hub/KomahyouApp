@@ -14,6 +14,20 @@ describe('studentGradeSubject', () => {
     expect(resolveGradeLabelFromBirthDate('2012-05-10', '2026-03-25')).toBe('中1')
   })
 
+  it('uses the April 1 to next March 31 school-year grouping', () => {
+    expect(resolveGradeLabelFromBirthDate('2012-04-01', '2026-05-09')).toBe('中2')
+    expect(resolveGradeLabelFromBirthDate('2012-04-02', '2026-05-09')).toBe('中2')
+    expect(resolveGradeLabelFromBirthDate('2013-04-01', '2026-05-09')).toBe('中1')
+    expect(resolveGradeLabelFromBirthDate('2013-04-02', '2026-05-09')).toBe('中1')
+  })
+
+  it('advances grades on the April 1 school-year boundary, not on birthdays inside the year', () => {
+    expect(resolveGradeLabelFromBirthDate('2013-04-01', '2026-03-31')).toBe('小6')
+    expect(resolveGradeLabelFromBirthDate('2013-04-01', '2026-04-01')).toBe('中1')
+    expect(resolveGradeLabelFromBirthDate('2012-04-02', '2026-03-31')).toBe('中1')
+    expect(resolveGradeLabelFromBirthDate('2012-04-02', '2026-04-01')).toBe('中2')
+  })
+
   it('maps math display subject to 算 for elementary grades', () => {
     expect(resolveDisplayedSubjectForGrade('数', '小4')).toBe('算')
     expect(resolveDisplayedSubjectForBirthDate('数', '2015-05-10', '2026-03-25')).toBe('算')

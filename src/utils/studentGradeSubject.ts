@@ -10,6 +10,10 @@ function toDate(value: string | Date) {
   return new Date(`${value}T00:00:00`)
 }
 
+export function resolveEnrollmentYearFromBirthDateParts(birthYear: number, birthMonth: number) {
+  return birthMonth < 4 ? birthYear + 6 : birthYear + 7
+}
+
 export function resolveGradeLabelFromBirthDate(birthDate?: string, referenceDate: string | Date = new Date()): GradeLabel | '' {
   if (!birthDate) return ''
 
@@ -23,7 +27,7 @@ export function resolveGradeLabelFromBirthDate(birthDate?: string, referenceDate
   if (Number.isNaN(date.getTime())) return ''
 
   const schoolYear = date >= new Date(date.getFullYear(), 3, 1) ? date.getFullYear() : date.getFullYear() - 1
-  const enrollmentYear = birthMonth < 4 || (birthMonth === 4 && birthDay === 1) ? birthYear + 6 : birthYear + 7
+  const enrollmentYear = resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
   const gradeNumber = schoolYear - enrollmentYear + 1
 
   if (gradeNumber <= 1) return '小1'

@@ -36,7 +36,7 @@
 	- Schedule popup no longer exposes a manual refresh button; board-side sync is the only refresh path.
 	- Schedule popup labels lecture lessons as `講習`, not `特別`.
 	- Stocked-but-unassigned regular lessons must disappear from schedule actual display; only placed 振替 lessons stay visible.
-	- Student schedule regular counts compare actual assigned lessons against planned managed lessons.
+	- Student schedule regular counts compare actual assigned lessons against planned managed lessons, but explicit board deletion operations (`生徒を空にする` from the date menu and `削除` from the student menu) must subtract from the displayed regular desired count via `scheduleCountAdjustments`.
 	- Regular warning stamps stay directly below the regular count table; lecture warning stamps stay directly below the lecture count table.
 	- Student schedule subject lists must show only one math label: `算` for elementary grades, `数` for middle/high grades.
 	- Student special-lecture count registration must also collapse legacy elementary math labels for middle/high students: `算` and `算国` must not remain visible when the header grade is `中*` or `高*`; treat them as `数` in that UI.
@@ -47,13 +47,19 @@
 	- Teacher delete on the normal board uses `teacherAssignmentSource: 'deleted'` with `manualTeacher: true` so the merge preserves the deletion without triggering the manual-teacher warning color.
 	- The 講師未選択 dropdown option has been removed; use the 講師削除 button instead.
 	- Student move on the normal board supports swap: when the target slot is occupied, the two students are swapped.
+	- Preserve existing visible board behavior as a hard requirement. If a requested change would remove or hide an existing visible behavior, explicitly describe the behavior loss and get user approval before editing.
+	- Cross-day student moves must leave the source slot as a gray moved-origin marker (`(移`) via `status: 'moved'`; same-day moves must not create this marker.
+	- Moved-origin gray markers can be cleared from the empty-cell menu. Clearing a `status: 'moved'` marker removes only the marker and must not restore the student to the original slot or undo the move.
+	- Same-day regular student moves must stay `regular` without visible original-lesson hover/source labels; keep only hidden internal origin metadata for overlay preservation. Moving `extra` lessons must keep `lessonType: 'extra'`, including swap paths.
+	- Existing/manual-added regular and extra lessons on the board must expose lesson-minute controls: 90 minutes as empty note suffix, 60 as `noteSuffix: '60'`, and 45 as `noteSuffix: '45'`.
+	- Empty student-cell menus must show the `体験授業` button for all classrooms; do not gate it to `開発用教室`.
 	- Template save uses overwrite mode only: clears all board data for dates >= effectiveStartDate and rebuilds from template. A confirmation dialog is shown before execution. The toolbar also provides a clear-template button. After clearing, the managed overlay (`createBoardWeek` + `overlayBoardWeeksOnScheduleCells`) must be applied inline immediately so that the saved weeks already contain managed content. Deferring overlay to next mount causes stock miscalculation and empty board display.
 	- `buildRegularLessonsFromTemplate` must preserve the template's desk order (deskIndex) within each slot. It must NOT use `packSortRegularLessonRows` with pack-priority or teacher-name sorting; use a simple (schoolYear, dayOfWeek, slotNumber, originalIndex) sort instead.
 	- `packSortCellDesks` must only be applied when the user explicitly presses the "詰めて並び替え" button. `createPackedInitialBoardState` must NOT call `packSortCellDesks`; the initial board state follows the template desk order directly.
 	- Template overwrite must only restore manual makeup adjustments that existed in the original `manualMakeupAdjustments` for the same stockKey+originDate. Automatic shortage origins (occupied slots, holidays) are recalculated by the managed cell rebuild and must not be converted to manual adjustments.
 	- Debug JSON for template overwrite must capture `suppressedRegularLessonOccurrences` in the after stock as a pre-computed variable, not via callback setter.
 	- New classrooms and reset states must start with empty `specialSessions`; the legacy sample session IDs `session_2026_summer`, `session_2026_spring`, `session_2026_exam`, and `session_2026_winter` should be removed from loaded classroom data.
-	- `classroomSettings.holidayDates` must be cleared on load/import so all classrooms treat holidays as normal weekdays.
+	- `classroomSettings.holidayDates` must be preserved when loading saved classroom snapshots; only basic-data import/reset paths clear imported holiday dates.
 	- Classroom-screen auto-backup restore now extracts only the acting classroom from the workspace-wide daily backup, keeping other classrooms unchanged.
 	- Firebase server auto-backup can run daily without an open browser only on Blaze with Functions and Cloud Storage; the current developer-screen backup list still reflects browser-local auto backups.
 	- For board operation changes that can alter previous user actions, present the behavior change and get approval before modifying the rule. Add both positive and negative regression tests across direct helpers and merge/render paths.
@@ -69,6 +75,8 @@
 	- After board or schedule changes, run `npm run build`. Run Playwright only when the user explicitly requests E2E verification.
 	- After stock calculation or PDF changes, also run `npm run test:unit`.
 	- Every deploy-capable change must bump `package.json` version (patch level) before building.
+	- `/billing` is the separate invoice automation support URL. Access is limited in the UI and Firestore rules to Firebase developer users with `dai.in.the.mood@gmail.com` or `bkkdmzn@gmail.com`; Firestore billing docs live under `workspaces/{workspaceKey}/billingMonths/{YYYY-MM}/classrooms/{classroomId}`.
+	- Billing snapshots use active students at the selected month’s 15th 0:00 point, with payment due at the end of the following month. Gmail draft creation requires `VITE_GOOGLE_OAUTH_CLIENT_ID` and the Gmail `gmail.compose` scope.
 
 - [x] Maintain regression coverage
 	Current expected regression baseline: `tests/schedule-board.spec.ts` remains the E2E reference suite, but only run it when the user explicitly asks for Playwright verification.

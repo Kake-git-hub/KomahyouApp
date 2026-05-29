@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { buildLegacyLessonScheduleAvailabilityUrl, buildLegacyLessonScheduleLongUrl, resolveLegacyLessonScheduleShortUrl, type ScheduleQrConfig } from './scheduleQrConfig'
+import { describe, expect, it, vi } from 'vitest'
+import { buildLegacyLessonScheduleAvailabilityUrl, buildLegacyLessonScheduleLongUrl, buildSubmissionUrl, resolveLegacyLessonScheduleShortUrl, type ScheduleQrConfig } from './scheduleQrConfig'
 
 describe('scheduleQrConfig', () => {
   const baseConfig: ScheduleQrConfig = {
@@ -38,5 +38,13 @@ describe('scheduleQrConfig', () => {
 
   it('returns undefined for unrelated paths', () => {
     expect(resolveLegacyLessonScheduleShortUrl('/developer', baseConfig.baseUrl)).toBeUndefined()
+  })
+
+  it('builds the current token submission url on hosting', () => {
+    vi.stubGlobal('window', { location: { origin: 'https://komahyouapp-prod.web.app' } })
+
+    expect(buildSubmissionUrl('abc123token')).toBe('https://komahyouapp-prod.web.app/s/abc123token')
+
+    vi.unstubAllGlobals()
   })
 })

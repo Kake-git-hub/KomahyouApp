@@ -77,7 +77,12 @@ export function packRegularLessonSlotNumbers<T extends Pick<RegularLessonRow, 's
 }
 
 export function normalizeRegularLessonNote(value: string | undefined) {
-  return String(value ?? '').trim().slice(0, 4)
+  // 旧「注記」フィールドを「授業時間 (90 / 60 / 45 分)」へ転用するための正規化。
+  // デフォルトは未選択 (= 90 分扱い)。値は空文字 '' / '60' / '45' のいずれかへ寄せる。
+  const trimmed = String(value ?? '').trim()
+  if (trimmed === '60') return '60'
+  if (trimmed === '45') return '45'
+  return ''
 }
 
 export function normalizeRegularLessonStudentColumns<T extends Pick<RegularLessonRow, 'student1Id' | 'subject1' | 'student2Id' | 'subject2'> & Partial<Pick<RegularLessonRow, 'student1Note' | 'student2Note'>>>(row: T): T {

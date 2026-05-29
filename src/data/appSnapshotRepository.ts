@@ -12,6 +12,7 @@ const LOCAL_STORAGE_AUTO_BACKUPS_KEY = 'komahyouapp:auto-backups'
 const WORKSPACE_SNAPSHOT_KEY = 'primary'
 const LOCAL_STORAGE_WORKSPACE_KEY = 'komahyouapp:workspace-snapshot'
 const LOCAL_STORAGE_WORKSPACE_AUTO_BACKUPS_KEY = 'komahyouapp:workspace-auto-backups'
+const LOCAL_STORAGE_PENDING_REMOTE_WORKSPACE_KEY = 'komahyouapp:pending-remote-workspace-snapshot'
 const DEVELOPER_CLOUD_BACKUP_HANDLE_KEY = 'primary'
 const HOUR_IN_MS = 60 * 60 * 1000
 const DAY_IN_MS = 24 * HOUR_IN_MS
@@ -27,6 +28,11 @@ export type WorkspaceAutoBackupEntry = {
   backupDateKey: string
   savedAt: string
   snapshot: WorkspaceSnapshot
+}
+
+export type PendingRemoteWorkspaceSnapshotMarker = {
+  savedAt: string
+  authenticatedUserId: string
 }
 
 type AutoBackupRecord = AutoBackupSummary & {
@@ -464,6 +470,41 @@ export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
   window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
 }
 
+export function markPendingRemoteWorkspaceSnapshotSync(snapshot: WorkspaceSnapshot, authenticatedUserId: string) {
+  if (typeof window === 'undefined') return
+  const marker: PendingRemoteWorkspaceSnapshotMarker = { savedAt: snapshot.savedAt, authenticatedUserId }
+  window.localStorage.setItem(LOCAL_STORAGE_PENDING_REMOTE_WORKSPACE_KEY, JSON.stringify(marker))
+}
+
+export function readPendingRemoteWorkspaceSnapshotMarker(): PendingRemoteWorkspaceSnapshotMarker | null {
+  if (typeof window === 'undefined') return null
+
+  try {
+    const rawValue = window.localStorage.getItem(LOCAL_STORAGE_PENDING_REMOTE_WORKSPACE_KEY)
+    if (!rawValue) return null
+    const parsed = JSON.parse(rawValue)
+    if (!isRecord(parsed)) return null
+    if (typeof parsed.savedAt !== 'string' || typeof parsed.authenticatedUserId !== 'string') return null
+    return { savedAt: parsed.savedAt, authenticatedUserId: parsed.authenticatedUserId }
+  } catch {
+    return null
+  }
+}
+
+export function clearPendingRemoteWorkspaceSnapshotMarker() {
+  if (typeof window === 'undefined') return
+  window.localStorage.removeItem(LOCAL_STORAGE_PENDING_REMOTE_WORKSPACE_KEY)
+}
+
+function tryWriteWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
+  try {
+    writeWorkspaceToLocalStorageSync(snapshot)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function readAutoBackupRecordsFromLocalStorage(): AutoBackupRecord[] {
   if (typeof window === 'undefined') return []
 
@@ -522,9 +563,9 @@ export async function loadWorkspaceSnapshot() {
 }
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
-  // Write to localStorage first (synchronous) to prevent data loss on logout/close
-  writeWorkspaceToLocalStorageSync(snapshot)
-  await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
+  const savedToIndexedDb = await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
+  const savedToLocalStorage = tryWriteWorkspaceToLocalStorageSync(snapshot)
+  return { savedToIndexedDb, savedToLocalStorage }
 }
 
 export async function loadDeveloperCloudBackupHandle() {

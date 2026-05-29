@@ -1,6 +1,5 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
-import { getMemoLineHeight } from '../components/schedule-board/memoText'
 import type { SlotCell } from '../components/schedule-board/types'
 
 type ExportBoardPdfParams = {
@@ -8,6 +7,13 @@ type ExportBoardPdfParams = {
   fileName: string
   title: string
 }
+
+const PDF_SEAT_COLUMN_WIDTH = 30
+const PDF_SEAT_FONT_SIZE = 22
+const PDF_TEACHER_COLUMN_WIDTH = 54
+const PDF_STUDENT_COLUMN_WIDTH = 115.5
+const PDF_STUDENT_MAX_FONT_SIZE = 34
+const PDF_STUDENT_MIN_FONT_SIZE = 4.8
 
 function resolveTargetExportWidth(currentWidth: number, currentHeight: number, targetAspectRatio: number) {
   if (currentWidth <= 0 || currentHeight <= 0 || targetAspectRatio <= 0) {
@@ -17,91 +23,215 @@ function resolveTargetExportWidth(currentWidth: number, currentHeight: number, t
   return Math.max(currentWidth, Math.ceil(currentHeight * targetAspectRatio))
 }
 
-function fitMemoTextForPdf(root: HTMLElement) {
-  root.querySelectorAll<HTMLElement>('.sa-student-name-note').forEach((node) => {
-    const initialFontSize = 24
+function getPdfMemoLineHeight(fontSize: number) {
+  if (fontSize <= 8) return 1.02
+  if (fontSize <= 14) return 1
+  return 0.98
+}
 
-    node.style.whiteSpace = 'pre-line'
-    node.style.overflow = 'hidden'
-    node.style.textOverflow = 'clip'
-    node.style.display = '-webkit-box'
-    node.style.boxSizing = 'border-box'
-    node.style.paddingBottom = '1px'
-    node.style.fontSize = `${initialFontSize}px`
-    node.style.lineHeight = '1.2'
-    node.style.setProperty('-webkit-box-orient', 'vertical')
-    node.style.setProperty('-webkit-line-clamp', '2')
+type PreparedStudentTextEntry = {
+  cell: HTMLElement | null
+  inner: HTMLElement
+  nameRow: HTMLElement | null
+  nameNode: HTMLElement | null
+  originDateNode: HTMLElement | null
+  memoNode: HTMLElement | null
+  detail: HTMLElement | null
+  detailSegments: Array<{ element: HTMLSpanElement; isStar: boolean }> | null
+}
 
-    let fontSize = initialFontSize
-    while (node.scrollHeight > node.clientHeight + 1 && fontSize > 4.5) {
-      fontSize -= 0.4
-      node.style.fontSize = `${fontSize}px`
-      node.style.lineHeight = String(getMemoLineHeight(fontSize))
+function applyStudentTextEntryFontSize(entry: PreparedStudentTextEntry, fontSize: number) {
+  const { nameRow, nameNode, originDateNode, memoNode, detail, detailSegments } = entry
+
+  if (nameRow) {
+    nameRow.style.gap = '1px'
+    nameRow.style.overflow = 'hidden'
+  }
+  if (memoNode) {
+    memoNode.style.fontSize = `${fontSize}px`
+    memoNode.style.lineHeight = String(getPdfMemoLineHeight(fontSize))
+  }
+  if (nameNode) {
+    nameNode.style.fontSize = `${fontSize}px`
+    nameNode.style.lineHeight = '1'
+    nameNode.style.minHeight = '0'
+    nameNode.style.whiteSpace = 'nowrap'
+    nameNode.style.display = 'inline-block'
+    nameNode.style.maxWidth = 'none'
+    nameNode.style.overflow = 'visible'
+    nameNode.style.textOverflow = 'clip'
+  }
+  if (originDateNode) {
+    originDateNode.style.fontSize = `${fontSize}px`
+    originDateNode.style.lineHeight = '1'
+    originDateNode.style.minHeight = '0'
+    originDateNode.style.whiteSpace = 'nowrap'
+    originDateNode.style.display = 'inline-block'
+    originDateNode.style.maxWidth = 'none'
+    originDateNode.style.overflow = 'visible'
+    originDateNode.style.textOverflow = 'clip'
+  }
+  if (detail && detailSegments) {
+    detail.style.fontSize = `${fontSize}px`
+    detail.style.lineHeight = '1'
+    detail.style.minHeight = '0'
+    detailSegments.forEach(({ element, isStar }) => {
+      const segmentSize = isStar ? Math.max(fontSize - 1.2, 5.5) : fontSize
+      element.style.fontSize = `${segmentSize}px`
+      element.style.lineHeight = '1'
+      if (isStar) {
+        element.style.minWidth = '0'
+        element.style.height = `${Math.max(segmentSize + 1, 7)}px`
+      }
+    })
+  }
+}
+
+function doesStudentTextEntryOverflow(entry: PreparedStudentTextEntry) {
+  const { inner, nameRow, memoNode, detail } = entry
+  const nameOverflow = nameRow ? nameRow.scrollWidth > nameRow.clientWidth + 1 : false
+  const memoOverflow = memoNode ? memoNode.scrollHeight > memoNode.clientHeight + 1 : false
+  const detailOverflow = detail ? detail.scrollWidth > detail.clientWidth + 1 : false
+  const heightOverflow = inner.scrollHeight > inner.clientHeight + 1
+
+  return nameOverflow || memoOverflow || detailOverflow || heightOverflow
+}
+
+function measureStudentTextEntryFontSize(entry: PreparedStudentTextEntry, initialFontSize: number, minimumFontSize: number) {
+  applyStudentTextEntryFontSize(entry, initialFontSize)
+  if (!doesStudentTextEntryOverflow(entry)) return initialFontSize
+
+  let low = minimumFontSize
+  let high = initialFontSize
+  for (let index = 0; index < 8; index += 1) {
+    const candidate = (low + high) / 2
+    applyStudentTextEntryFontSize(entry, candidate)
+    if (doesStudentTextEntryOverflow(entry)) {
+      high = candidate
+    } else {
+      low = candidate
     }
+  }
+
+  applyStudentTextEntryFontSize(entry, low)
+  return low
+}
+
+function compactStudentDetailSegmentsForPdf(node: HTMLElement) {
+  const segments = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-detail-prefix, .sa-student-star, .sa-student-detail-grade, .sa-student-detail-subject'))
+    .map((entry) => {
+      const text = (entry.textContent ?? '').replace(/\s+/gu, '')
+      if (!text) return null
+
+      const compactSegment = document.createElement('span')
+      compactSegment.className = entry.className
+      compactSegment.textContent = text
+      compactSegment.style.display = 'inline'
+      compactSegment.style.margin = '0'
+      compactSegment.style.padding = '0'
+      compactSegment.style.minWidth = '0'
+      compactSegment.style.whiteSpace = 'nowrap'
+      compactSegment.style.flex = '0 0 auto'
+
+      return {
+        element: compactSegment,
+        isStar: entry.classList.contains('sa-student-star'),
+      }
+    })
+    .filter((entry): entry is { element: HTMLSpanElement; isStar: boolean } => entry !== null)
+
+  if (segments.length === 0) return null
+
+  node.innerHTML = ''
+  node.style.display = 'flex'
+  node.style.width = '100%'
+  node.style.maxWidth = '100%'
+  node.style.justifyContent = 'center'
+  node.style.alignItems = 'center'
+  node.style.whiteSpace = 'nowrap'
+  node.style.gap = '0'
+  node.style.overflow = 'hidden'
+  node.style.textOverflow = 'clip'
+  node.style.letterSpacing = '-0.02em'
+
+  segments.forEach(({ element }) => node.appendChild(element))
+
+  return segments
+}
+
+function prepareStudentTextEntriesForPdf(root: HTMLElement): PreparedStudentTextEntry[] {
+  return Array.from(root.querySelectorAll<HTMLElement>('.sa-student-inner'))
+    .map((inner) => {
+      const cell = inner.closest<HTMLElement>('.sa-student')
+      const nameRow = inner.querySelector<HTMLElement>('.sa-student-name-row')
+      const nameNode = nameRow
+        ? Array.from(nameRow.querySelectorAll<HTMLElement>('.sa-student-name')).find((entry) => !entry.classList.contains('sa-student-name-note')) ?? null
+        : null
+      const originDateNode = nameRow?.querySelector<HTMLElement>('.sa-student-origin-date') ?? null
+      const memoNode = inner.querySelector<HTMLElement>('.sa-student-name-note')
+      const detail = inner.querySelector<HTMLElement>('.sa-student-detail')
+      const detailSegments = detail ? compactStudentDetailSegmentsForPdf(detail) : null
+      if (!nameNode && !originDateNode && !memoNode && !detailSegments) return null
+
+      if (memoNode) {
+        memoNode.style.whiteSpace = 'pre-line'
+        memoNode.style.overflow = 'hidden'
+        memoNode.style.textOverflow = 'clip'
+        memoNode.style.display = '-webkit-box'
+        memoNode.style.boxSizing = 'border-box'
+        memoNode.style.paddingBottom = '0'
+        memoNode.style.letterSpacing = '-0.04em'
+        memoNode.style.setProperty('-webkit-box-orient', 'vertical')
+        memoNode.style.setProperty('-webkit-line-clamp', '2')
+      }
+
+      return {
+        cell,
+        inner,
+        nameRow,
+        nameNode,
+        originDateNode,
+        memoNode,
+        detail,
+        detailSegments,
+      }
+    })
+    .filter((entry): entry is PreparedStudentTextEntry => entry !== null)
+}
+
+function fitStudentTextForPdf(root: HTMLElement) {
+  const preparedEntries = prepareStudentTextEntriesForPdf(root)
+  if (preparedEntries.length === 0) return
+
+  const initialFontSize = PDF_STUDENT_MAX_FONT_SIZE
+  const minimumFontSize = PDF_STUDENT_MIN_FONT_SIZE
+
+  preparedEntries.forEach((entry) => {
+    const fontSize = measureStudentTextEntryFontSize(entry, initialFontSize, minimumFontSize)
+    applyStudentTextEntryFontSize(entry, fontSize)
   })
 }
 
-function fitStudentDetailTextForPdf(root: HTMLElement) {
-  root.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
-    const segments = Array.from(node.querySelectorAll<HTMLElement>('.sa-student-detail-prefix, .sa-student-star, .sa-student-detail-grade, .sa-student-detail-subject'))
-      .map((entry) => {
-        const text = (entry.textContent ?? '').replace(/\s+/gu, '')
-        if (!text) return null
+function applyBoardPdfColumnWidths(table: HTMLElement) {
+  const dayCount = table.querySelectorAll('.sa-day-header').length
+  if (dayCount <= 0) return
 
-        const compactSegment = document.createElement('span')
-        compactSegment.className = entry.className
-        compactSegment.textContent = text
-        compactSegment.style.display = 'inline'
-        compactSegment.style.margin = '0'
-        compactSegment.style.padding = '0'
-        compactSegment.style.minWidth = '0'
-        compactSegment.style.whiteSpace = 'nowrap'
-        compactSegment.style.flex = '0 0 auto'
+  table.querySelector('colgroup')?.remove()
+  const columnGroup = document.createElement('colgroup')
+  const widths = [72]
+  for (let dayIndex = 0; dayIndex < dayCount; dayIndex += 1) {
+    widths.push(PDF_SEAT_COLUMN_WIDTH, PDF_TEACHER_COLUMN_WIDTH, PDF_STUDENT_COLUMN_WIDTH, PDF_STUDENT_COLUMN_WIDTH)
+  }
 
-        return {
-          element: compactSegment,
-          isStar: entry.classList.contains('sa-student-star'),
-        }
-      })
-      .filter((entry): entry is { element: HTMLSpanElement; isStar: boolean } => entry !== null)
-
-    if (segments.length === 0) return
-
-    node.innerHTML = ''
-    node.style.display = 'flex'
-    node.style.width = '100%'
-    node.style.maxWidth = '100%'
-    node.style.justifyContent = 'center'
-    node.style.alignItems = 'center'
-    node.style.whiteSpace = 'nowrap'
-    node.style.gap = '0'
-    node.style.overflow = 'hidden'
-    node.style.textOverflow = 'clip'
-    node.style.letterSpacing = '-0.02em'
-
-    segments.forEach(({ element }) => node.appendChild(element))
-
-    let fontSize = 14
-    const applyFontSizes = () => {
-      node.style.fontSize = `${fontSize}px`
-      node.style.lineHeight = '1'
-      segments.forEach(({ element, isStar }) => {
-        const segmentFontSize = isStar ? Math.max(fontSize - 1.2, 5.2) : fontSize
-        element.style.fontSize = `${segmentFontSize}px`
-        element.style.lineHeight = '1'
-        if (isStar) {
-          element.style.minWidth = '0'
-          element.style.height = `${Math.max(segmentFontSize + 1, 7)}px`
-        }
-      })
-    }
-
-    applyFontSizes()
-    while (node.scrollWidth > node.clientWidth + 1 && fontSize > 5.8) {
-      fontSize -= 0.25
-      applyFontSizes()
-    }
+  widths.forEach((width) => {
+    const column = document.createElement('col')
+    column.style.width = `${width}px`
+    columnGroup.appendChild(column)
   })
+  table.insertBefore(columnGroup, table.firstChild)
+  table.style.tableLayout = 'fixed'
+  table.style.width = `${widths.reduce((total, width) => total + width, 0)}px`
+  table.style.minWidth = table.style.width
 }
 
 export async function exportBoardPdf({ element, fileName, title }: ExportBoardPdfParams) {
@@ -127,7 +257,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     grid.style.overflow = 'visible'
     grid.style.maxHeight = 'none'
     grid.style.height = 'auto'
-    grid.style.width = `${Math.ceil(sourceTable.scrollWidth)}px`
+    grid.style.width = 'max-content'
     grid.style.maxWidth = 'none'
     grid.style.display = 'block'
     grid.scrollLeft = 0
@@ -135,9 +265,13 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   }
 
   if (cloneTable && sourceTable) {
-    cloneTable.style.width = `${Math.ceil(sourceTable.scrollWidth)}px`
-    cloneTable.style.minWidth = `${Math.ceil(sourceTable.scrollWidth)}px`
+    cloneTable.style.width = 'max-content'
+    cloneTable.style.minWidth = '0'
     cloneTable.style.fontSize = '13px'
+  }
+
+  if (cloneTable) {
+    applyBoardPdfColumnWidths(cloneTable)
   }
 
   clone.querySelectorAll<HTMLElement>('thead th, .sa-time-cell').forEach((cell) => {
@@ -152,17 +286,35 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.background = '#ffffff'
   })
   clone.querySelectorAll<HTMLElement>('.slot-adjust-grid th, .slot-adjust-grid td').forEach((node) => {
-    node.style.padding = '6px 7px'
+    node.style.padding = '2px 3px'
     node.style.borderColor = '#111111'
+  })
+  clone.querySelectorAll<HTMLElement>('tr.sa-slot-first td, tr.sa-slot-first th').forEach((node) => {
+    node.style.borderTopWidth = '3px'
+  })
+  clone.querySelectorAll<HTMLElement>('tr.sa-slot-last td, tr.sa-slot-last th').forEach((node) => {
+    node.style.borderBottomWidth = '3px'
+  })
+  clone.querySelectorAll<HTMLElement>('.sa-day-group-start, .sa-day-group-header').forEach((node) => {
+    node.style.borderLeftWidth = '3px'
+  })
+  clone.querySelectorAll<HTMLElement>('.sa-day-group-end, .sa-day-group-header').forEach((node) => {
+    node.style.borderRightWidth = '3px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-period-row th').forEach((node) => {
     node.style.height = '22px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-header-row1 th').forEach((node) => {
-    node.style.height = '38px'
-    node.style.fontSize = '14px'
+    node.style.height = '54px'
+    node.style.fontSize = '26px'
+    node.style.fontWeight = '800'
     node.style.background = '#f4f4f4'
     node.style.color = '#111111'
+  })
+  clone.querySelectorAll<HTMLElement>('.sa-day-header').forEach((node) => {
+    node.style.fontSize = '26px'
+    node.style.fontWeight = '800'
+    node.style.lineHeight = '1'
   })
   clone.querySelectorAll<HTMLElement>('.sa-header-row2 th').forEach((node) => {
     node.style.height = '34px'
@@ -186,7 +338,7 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     rotatedLabel.textContent = rotatedText
     rotatedLabel.style.display = 'inline-block'
     rotatedLabel.style.whiteSpace = 'nowrap'
-    rotatedLabel.style.fontSize = '20px'
+      rotatedLabel.style.fontSize = '36px'
     rotatedLabel.style.fontWeight = '800'
     rotatedLabel.style.lineHeight = '1'
     rotatedLabel.style.transform = 'rotate(-90deg)'
@@ -206,40 +358,53 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     node.style.lineHeight = '1.3'
   })
   clone.querySelectorAll<HTMLElement>('.sa-teacher').forEach((node) => {
+    node.style.height = '62px'
     node.style.minHeight = '62px'
     node.style.width = '50px'
     node.style.maxWidth = '50px'
     node.style.minWidth = '50px'
     node.style.overflow = 'hidden'
   })
+  clone.querySelectorAll<HTMLElement>('.sa-seat-header, .sa-seat-number').forEach((node) => {
+    node.style.width = `${PDF_SEAT_COLUMN_WIDTH}px`
+    node.style.minWidth = `${PDF_SEAT_COLUMN_WIDTH}px`
+    node.style.maxWidth = `${PDF_SEAT_COLUMN_WIDTH}px`
+    node.style.paddingLeft = '0'
+    node.style.paddingRight = '0'
+    node.style.fontSize = `${PDF_SEAT_FONT_SIZE}px`
+    node.style.fontWeight = '800'
+    node.style.lineHeight = '1'
+    node.style.letterSpacing = '0'
+  })
   clone.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
-    node.style.fontSize = '20px'
-    node.style.lineHeight = '1.25'
+    node.style.fontSize = '24px'
+    node.style.lineHeight = '1.02'
     node.style.overflow = 'hidden'
     node.style.textOverflow = 'clip'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student').forEach((node) => {
+    node.style.height = '62px'
     node.style.minHeight = '62px'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((node) => {
-    node.style.gap = '1px'
+    node.style.gap = '0'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-name').forEach((node) => {
     if (node.classList.contains('sa-student-name-note')) {
-      node.style.fontSize = '20px'
-      node.style.lineHeight = '1.2'
+      node.style.fontSize = '24px'
+      node.style.lineHeight = '1.05'
       return
     }
 
-    node.style.fontSize = '20px'
-    node.style.lineHeight = '1.2'
+    node.style.fontSize = '24px'
+    node.style.lineHeight = '1.05'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-origin-date').forEach((node) => {
-    node.style.fontSize = '18px'
-    node.style.lineHeight = '1.1'
+    node.style.fontSize = '24px'
+    node.style.lineHeight = '1.05'
   })
   clone.querySelectorAll<HTMLElement>('.sa-student-detail').forEach((node) => {
-    node.style.fontSize = '14px'
+    node.style.fontSize = '24px'
     node.style.lineHeight = '1'
     node.style.gap = '0'
     node.style.whiteSpace = 'nowrap'
@@ -252,9 +417,9 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
 
   exportRoot.appendChild(clone)
   document.body.appendChild(exportRoot)
-  fitMemoTextForPdf(exportRoot)
-  fitStudentDetailTextForPdf(exportRoot)
 
+  const exportWidth = Math.ceil(exportRoot.scrollWidth)
+  const exportHeight = Math.ceil(exportRoot.scrollHeight)
   const orientation = 'portrait'
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
@@ -264,8 +429,8 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   const contentWidth = pageWidth - marginX * 2
   const contentHeight = pageHeight - marginY * 2
   const targetExportWidth = resolveTargetExportWidth(
-    Math.ceil(exportRoot.scrollWidth),
-    Math.ceil(exportRoot.scrollHeight),
+    exportWidth,
+    exportHeight,
     contentWidth / contentHeight,
   )
 
@@ -283,9 +448,14 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
     }
   }
 
+  // Fit after final PDF table width is known; otherwise student text is measured
+  // against the pre-expanded table and stays unnecessarily small.
+  void exportRoot.offsetWidth
+  fitStudentTextForPdf(exportRoot)
+
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',
-    scale: 2,
+    scale: 1.1,
     useCORS: true,
     logging: false,
     width: Math.ceil(exportRoot.scrollWidth),
@@ -331,12 +501,14 @@ function collectOverwriteReportRows(
     if (status === 'attended') return '出席'
     if (status === 'absent') return '欠席(振替あり)'
     if (status === 'absent-no-makeup') return '振無休'
+    if (status === 'moved') return '移動元'
     return status
   }
   const lessonTypeLabel = (type: string) => {
     if (type === 'makeup') return '振替'
     if (type === 'special') return '講習'
     if (type === 'regular') return '通常'
+    if (type === 'extra') return '増コマ'
     return type
   }
 

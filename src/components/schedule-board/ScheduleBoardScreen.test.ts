@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { initialStudents, initialTeachers } from '../basic-data/basicDataModel'
+import { initialStudents, initialTeachers, type StudentRow } from '../basic-data/basicDataModel'
 import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
+import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, cloneWeeks, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -13,6 +14,36 @@ const classroomSettings: ClassroomSettings = {
   forceOpenDates: [],
   deskCount: 14,
 }
+
+describe('clampPopoverPosition', () => {
+  it('clamps popovers above the viewport bottom when the clicked cell is near the footer', () => {
+    expect(clampPopoverPosition({
+      anchorX: 160,
+      anchorY: 730,
+      viewportWidth: 1280,
+      viewportHeight: 800,
+      popoverWidth: 320,
+      popoverHeight: 220,
+    })).toEqual({
+      left: 170,
+      top: 568,
+    })
+  })
+
+  it('keeps popovers near the click point when there is enough room below', () => {
+    expect(clampPopoverPosition({
+      anchorX: 160,
+      anchorY: 120,
+      viewportWidth: 1280,
+      viewportHeight: 800,
+      popoverWidth: 320,
+      popoverHeight: 220,
+    })).toEqual({
+      left: 170,
+      top: 130,
+    })
+  })
+})
 
 function createStudentEntry(id: string, name: string, subject: StudentEntry['subject']): StudentEntry {
   return {
@@ -25,6 +56,25 @@ function createStudentEntry(id: string, name: string, subject: StudentEntry['sub
     teacherType: 'normal',
   }
 }
+
+describe('appendDeletedStudentScheduleCountAdjustment', () => {
+  it('uses the managed student id override instead of a board-local student id', () => {
+    const adjustments = appendDeletedStudentScheduleCountAdjustment([], {
+      studentId: 'board-local-s1',
+      name: '青木太郎',
+      subject: '数',
+      lessonType: 'regular',
+    }, '2026-03-23', 's001')
+
+    expect(adjustments).toEqual([{
+      studentKey: 's001',
+      subject: '数',
+      countKind: 'regular',
+      dateKey: '2026-03-23',
+      delta: -1,
+    }])
+  })
+})
 
 function createPackTestCell(): SlotCell {
   return {
@@ -139,6 +189,91 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(templateOptions.map((teacher) => teacher.id)).toContain('t-upcoming')
   })
 
+  it('sorts template addable students by current grade and shows the same labels as the board selector', () => {
+    const studentBase = initialStudents[0] as StudentRow
+    const students: StudentRow[] = [
+      {
+        ...studentBase,
+        id: 'student-high',
+        name: '高橋 花子',
+        displayName: '高橋',
+        birthDate: '2008-04-02',
+        withdrawDate: '',
+        isHidden: false,
+      },
+      {
+        ...studentBase,
+        id: 'student-mid',
+        name: '青木 太郎',
+        displayName: '青木',
+        birthDate: '2012-04-02',
+        withdrawDate: '',
+        isHidden: false,
+      },
+      {
+        ...studentBase,
+        id: 'student-elm',
+        name: '伊藤 次郎',
+        displayName: '伊藤',
+        birthDate: '2015-04-02',
+        withdrawDate: '',
+        isHidden: false,
+      },
+      {
+        ...studentBase,
+        id: 'student-hidden',
+        name: '非表示 生徒',
+        displayName: '非表示',
+        birthDate: '2014-04-02',
+        withdrawDate: '',
+        isHidden: true,
+      },
+      {
+        ...studentBase,
+        id: 'student-withdrawn',
+        name: '退塾 生徒',
+        displayName: '退塾',
+        birthDate: '2013-04-02',
+        withdrawDate: '2026-03-31',
+        isHidden: false,
+      },
+    ]
+
+    const options = buildTemplateStudentSelectionOptions(students, '2026-04-01')
+
+    expect(options.map((entry) => entry.id)).toEqual(['student-elm', 'student-mid', 'student-high'])
+    expect(options.map((entry) => entry.displayName)).toEqual(['伊藤 (小5)', '青木 (中2)', '高橋 (高3)'])
+  })
+
+  it('excludes students already withdrawn in management from board add options', () => {
+    const studentBase = initialStudents[0] as StudentRow
+    const students: StudentRow[] = [
+      {
+        ...studentBase,
+        id: 'student-active',
+        name: '在籍 生徒',
+        displayName: '在籍',
+        birthDate: '2012-04-02',
+        withdrawDate: '',
+        isHidden: false,
+      },
+      {
+        ...studentBase,
+        id: 'student-withdrawn',
+        name: '退塾 生徒',
+        displayName: '退塾',
+        birthDate: '2013-04-02',
+        withdrawDate: '2026-03-31',
+        isHidden: false,
+      },
+    ]
+
+    const options = buildBoardStudentSelectionOptions(students, '2026-03-01', '2026-04-01')
+
+    expect(options.map((entry) => entry.id)).toEqual(['student-active'])
+    expect(options.map((entry) => entry.displayName)).toEqual(['在籍 (中1)'])
+  })
+
   it('removes lecture pending items from the correct stock source', () => {
     const sessionItemResult = removeLecturePendingItemFromStockState({
       manualLectureStockCounts: {},
@@ -173,6 +308,399 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     })
     expect(manualItemResult.nextManualLectureStockOrigins).toEqual({
       'student-1__数__session-1': [{ displayName: '山田', sessionId: 'session-1' }],
+    })
+  })
+
+  it('links an absent regular status to the placed makeup destination date', () => {
+    const cells: SlotCell[] = [
+      {
+        id: '2026-04-01_1',
+        dateKey: '2026-04-01',
+        dayLabel: '水',
+        dateLabel: '4/1',
+        slotLabel: '1限',
+        slotNumber: 1,
+        timeLabel: '13:00-14:30',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-01_1_desk_1',
+            teacher: '講師A',
+            statusSlots: [
+              {
+                id: 'status-absent',
+                studentId: 'student-1',
+                sourceManagedLesson: true,
+                name: '青木 太郎',
+                managedStudentId: 'student-1',
+                grade: '中3',
+                subject: '数',
+                lessonType: 'regular',
+                teacherType: 'normal',
+                teacherName: '講師A',
+                dateKey: '2026-04-01',
+                slotNumber: 1,
+                recordedAt: '2026-04-01T00:00:00Z',
+                status: 'absent',
+                sourceLessonId: 'managed-1',
+              },
+              null,
+            ],
+          },
+        ],
+      },
+      {
+        id: '2026-04-08_2',
+        dateKey: '2026-04-08',
+        dayLabel: '水',
+        dateLabel: '4/8',
+        slotLabel: '2限',
+        slotNumber: 2,
+        timeLabel: '14:40-16:10',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-08_2_desk_1',
+            teacher: '講師A',
+            lesson: {
+              id: 'makeup-1',
+              studentSlots: [
+                {
+                  id: 'placed-1',
+                  name: '青木 太郎',
+                  managedStudentId: 'student-1',
+                  grade: '中3',
+                  subject: '数',
+                  lessonType: 'makeup',
+                  teacherType: 'normal',
+                  makeupSourceDate: '2026-04-01',
+                  makeupSourceLabel: '2026/4/1(水) 1限',
+                },
+                null,
+              ],
+            },
+          },
+        ],
+      },
+    ]
+
+    expect(buildLinkedLessonDestinationMap(cells).get('status-absent')).toEqual({
+      dateKey: '2026-04-08',
+      slotNumber: 2,
+    })
+  })
+
+  it('does not link an absent status when the placed lesson has no source relation', () => {
+    const cells: SlotCell[] = [
+      {
+        id: '2026-04-01_1',
+        dateKey: '2026-04-01',
+        dayLabel: '水',
+        dateLabel: '4/1',
+        slotLabel: '1限',
+        slotNumber: 1,
+        timeLabel: '13:00-14:30',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-01_1_desk_1',
+            teacher: '講師A',
+            statusSlots: [
+              {
+                id: 'status-unlinked',
+                studentId: 'student-1',
+                sourceManagedLesson: true,
+                name: '青木 太郎',
+                managedStudentId: 'student-1',
+                grade: '中3',
+                subject: '数',
+                lessonType: 'regular',
+                teacherType: 'normal',
+                teacherName: '講師A',
+                dateKey: '2026-04-01',
+                slotNumber: 1,
+                recordedAt: '2026-04-01T00:00:00Z',
+                status: 'absent',
+                sourceLessonId: 'managed-1',
+              },
+              null,
+            ],
+          },
+        ],
+      },
+      {
+        id: '2026-04-08_2',
+        dateKey: '2026-04-08',
+        dayLabel: '水',
+        dateLabel: '4/8',
+        slotLabel: '2限',
+        slotNumber: 2,
+        timeLabel: '14:40-16:10',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-08_2_desk_1',
+            teacher: '講師A',
+            lesson: {
+              id: 'manual-special',
+              studentSlots: [
+                {
+                  id: 'placed-manual',
+                  name: '青木 太郎',
+                  managedStudentId: 'student-1',
+                  grade: '中3',
+                  subject: '数',
+                  lessonType: 'special',
+                  teacherType: 'normal',
+                },
+                null,
+              ],
+            },
+          },
+        ],
+      },
+    ]
+
+    expect(buildLinkedLessonDestinationMap(cells).has('status-unlinked')).toBe(false)
+  })
+
+  it('links an absent special status to the placed lecture destination date', () => {
+    const cells: SlotCell[] = [
+      {
+        id: '2026-04-02_3',
+        dateKey: '2026-04-02',
+        dayLabel: '木',
+        dateLabel: '4/2',
+        slotLabel: '3限',
+        slotNumber: 3,
+        timeLabel: '16:20-17:50',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-02_3_desk_1',
+            teacher: '講師A',
+            statusSlots: [
+              {
+                id: 'status-special',
+                studentId: 'student-1',
+                sourceManagedLesson: false,
+                name: '青木 太郎',
+                managedStudentId: 'student-1',
+                grade: '中3',
+                subject: '数',
+                lessonType: 'special',
+                teacherType: 'normal',
+                teacherName: '講師A',
+                dateKey: '2026-04-02',
+                slotNumber: 3,
+                recordedAt: '2026-04-02T00:00:00Z',
+                status: 'absent',
+                sourceLessonId: 'special-1',
+                specialSessionId: 'session-1',
+                specialStockSource: 'session',
+              },
+              null,
+            ],
+          },
+        ],
+      },
+      {
+        id: '2026-04-09_4',
+        dateKey: '2026-04-09',
+        dayLabel: '木',
+        dateLabel: '4/9',
+        slotLabel: '4限',
+        slotNumber: 4,
+        timeLabel: '18:00-19:30',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-09_4_desk_1',
+            teacher: '講師A',
+            lesson: {
+              id: 'special-placed',
+              studentSlots: [
+                {
+                  id: 'placed-special',
+                  name: '青木 太郎',
+                  managedStudentId: 'student-1',
+                  grade: '中3',
+                  subject: '数',
+                  lessonType: 'special',
+                  teacherType: 'normal',
+                  specialSessionId: 'session-1',
+                  specialStockSource: 'session',
+                  makeupSourceDate: '2026-04-02',
+                  makeupSourceLabel: '2026/4/2(木) 3限',
+                },
+                null,
+              ],
+            },
+          },
+        ],
+      },
+    ]
+
+    expect(buildLinkedLessonDestinationMap(cells).get('status-special')).toEqual({
+      dateKey: '2026-04-09',
+      slotNumber: 4,
+    })
+  })
+
+  it('links absent regular and placed makeup even when only one side carries managedStudentId', () => {
+    const cells: SlotCell[] = [
+      {
+        id: '2026-04-29_3',
+        dateKey: '2026-04-29',
+        dayLabel: '水',
+        dateLabel: '4/29',
+        slotLabel: '3限',
+        slotNumber: 3,
+        timeLabel: '16:20-17:50',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-29_3_desk_1',
+            teacher: '講師A',
+            statusSlots: [
+              {
+                id: 'status-ishige',
+                studentId: 'ishige-1',
+                sourceManagedLesson: true,
+                name: '石毛',
+                managedStudentId: 'ishige-1',
+                grade: '小5',
+                subject: '算',
+                lessonType: 'regular',
+                teacherType: 'normal',
+                teacherName: '講師A',
+                dateKey: '2026-04-29',
+                slotNumber: 3,
+                recordedAt: '2026-04-29T00:00:00Z',
+                status: 'absent',
+                sourceLessonId: 'managed-ishige-1',
+              },
+              null,
+            ],
+          },
+        ],
+      },
+      {
+        id: '2026-05-01_5',
+        dateKey: '2026-05-01',
+        dayLabel: '金',
+        dateLabel: '5/1',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:40-21:10',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-05-01_5_desk_1',
+            teacher: '講師A',
+            lesson: {
+              id: 'makeup-ishige',
+              studentSlots: [
+                {
+                  id: 'placed-ishige',
+                  name: '石毛',
+                  grade: '小5',
+                  subject: '算',
+                  lessonType: 'makeup',
+                  teacherType: 'normal',
+                  makeupSourceDate: '2026-04-29',
+                  makeupSourceLabel: '2026/4/29(水) 3限',
+                },
+                null,
+              ],
+            },
+          },
+        ],
+      },
+    ]
+
+    expect(buildLinkedLessonDestinationMap(cells).get('status-ishige')).toEqual({
+      dateKey: '2026-05-01',
+      slotNumber: 5,
+    })
+  })
+
+  it('links absent regular and placed makeup even when the placed source label has no slot suffix', () => {
+    const cells: SlotCell[] = [
+      {
+        id: '2026-04-29_3',
+        dateKey: '2026-04-29',
+        dayLabel: '水',
+        dateLabel: '4/29',
+        slotLabel: '3限',
+        slotNumber: 3,
+        timeLabel: '16:20-17:50',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-04-29_3_desk_1',
+            teacher: '講師A',
+            statusSlots: [
+              {
+                id: 'status-ishige-no-slot',
+                studentId: 'ishige-1',
+                sourceManagedLesson: true,
+                name: '石毛',
+                managedStudentId: 'ishige-1',
+                grade: '小5',
+                subject: '算',
+                lessonType: 'regular',
+                teacherType: 'normal',
+                teacherName: '講師A',
+                dateKey: '2026-04-29',
+                slotNumber: 3,
+                recordedAt: '2026-04-29T00:00:00Z',
+                status: 'absent',
+                sourceLessonId: 'managed-ishige-1',
+              },
+              null,
+            ],
+          },
+        ],
+      },
+      {
+        id: '2026-05-01_3',
+        dateKey: '2026-05-01',
+        dayLabel: '金',
+        dateLabel: '5/1',
+        slotLabel: '3限',
+        slotNumber: 3,
+        timeLabel: '16:20-17:50',
+        isOpenDay: true,
+        desks: [
+          {
+            id: '2026-05-01_3_desk_1',
+            teacher: '講師A',
+            lesson: {
+              id: 'makeup-ishige-no-slot',
+              studentSlots: [
+                {
+                  id: 'placed-ishige-no-slot',
+                  name: '石毛',
+                  managedStudentId: 'ishige-1',
+                  grade: '小5',
+                  subject: '算',
+                  lessonType: 'makeup',
+                  teacherType: 'normal',
+                  makeupSourceDate: '2026-04-29',
+                  makeupSourceLabel: '2026/4/29(水)',
+                },
+                null,
+              ],
+            },
+          },
+        ],
+      },
+    ]
+
+    expect(buildLinkedLessonDestinationMap(cells).get('status-ishige-no-slot')).toEqual({
+      dateKey: '2026-05-01',
+      slotNumber: 3,
     })
   })
 
@@ -272,6 +800,73 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(normalized.lessonType).toBe('regular')
     expect(normalized.makeupSourceDate).toBe('2026-04-07')
     expect(normalized.makeupSourceLabel).toBe('2026/4/7(火) 1限')
+  })
+
+  it('keeps same-day regular moves regular without visible source labels', () => {
+    const moved = prepareStudentForMove({
+      id: 'same-day-regular',
+      name: '青木太郎',
+      managedStudentId: 's001',
+      grade: '中3',
+      subject: '数',
+      lessonType: 'regular',
+      teacherType: 'normal',
+    }, '2026-04-07', 1, '2026-04-07')
+
+    expect(moved.lessonType).toBe('regular')
+    expect(moved.makeupSourceDate).toBeUndefined()
+    expect(moved.makeupSourceLabel).toBeUndefined()
+    expect(moved.sameDayMoveSourceDate).toBe('2026-04-07')
+  })
+
+  it('keeps extra lessons as extra when moved on the same day', () => {
+    const moved = prepareStudentForMove({
+      id: 'same-day-extra',
+      name: '青木太郎',
+      managedStudentId: 's001',
+      grade: '中3',
+      subject: '数',
+      lessonType: 'extra',
+      teacherType: 'normal',
+      noteSuffix: '45',
+    }, '2026-04-07', 1, '2026-04-07')
+
+    expect(moved.lessonType).toBe('extra')
+    expect(moved.noteSuffix).toBe('45')
+    expect(moved.makeupSourceDate).toBeUndefined()
+  })
+
+  it('clears a moved-origin marker without restoring a duplicate student', () => {
+    const statusEntry: StudentStatusEntry = {
+      id: 'status_moved_1',
+      studentId: 'student-moved',
+      sourceManagedLesson: true,
+      managedStudentId: 'student-moved',
+      name: '移動済み生徒',
+      grade: '中3',
+      subject: '数',
+      lessonType: 'regular',
+      teacherType: 'normal',
+      teacherName: '講師A',
+      dateKey: '2026-04-07',
+      slotNumber: 2,
+      recordedAt: '2026-04-07T10:00:00',
+      status: 'moved',
+      sourceLessonId: 'lesson-source',
+      moveDestinationDateKey: '2026-04-08',
+      moveDestinationSlotNumber: 3,
+    }
+    const desk: DeskCell = {
+      id: 'desk-moved',
+      teacher: '講師A',
+      statusSlots: [statusEntry, null],
+    }
+
+    const restoredStudent = clearStudentStatusFromDesk(desk, 0, statusEntry)
+
+    expect(restoredStudent).toBeNull()
+    expect(desk.statusSlots).toBeUndefined()
+    expect(desk.lesson).toBeUndefined()
   })
 
   it('packs desk rows within the same slot as two students, one student, teacher only, then empty', () => {
@@ -481,6 +1076,71 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(firstMondayDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('s001')
   })
 
+  it('builds schedule cells for a future unopened week by generating covered board weeks', () => {
+    const regularLesson = {
+      id: 'future-unopened-regular',
+      schoolYear: 2026,
+      teacherId: 't001',
+      student1Id: 's001',
+      subject1: '数' as const,
+      startDate: '',
+      endDate: '',
+      student2Id: '',
+      subject2: '' as const,
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '' as const,
+      nextStudent2Id: '',
+      nextSubject2: '' as const,
+      dayOfWeek: 1,
+      slotNumber: 1,
+    }
+    const currentOnlyWeek = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-05-11',
+        endDate: '2026-05-17',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-05-11',
+      fallbackEndDate: '2026-05-17',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [regularLesson],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+    const coveredWeeks = ensureWeeksCoverDateRange({
+      weeks: [currentOnlyWeek],
+      startDate: '2026-07-13',
+      endDate: '2026-07-19',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [regularLesson],
+    }).weeks
+
+    const cells = buildScheduleCellsForRange({
+      range: {
+        startDate: '2026-07-13',
+        endDate: '2026-07-19',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-07-13',
+      fallbackEndDate: '2026-07-19',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [regularLesson],
+      boardWeeks: coveredWeeks,
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = cells.find((cell) => cell.dateKey === '2026-07-13' && cell.slotNumber === 1)
+    expect(targetCell?.desks.some((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001'))).toBe(true)
+  })
+
   it('adds teacher-only desks from regular template derived rows even without student assignments', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {
@@ -526,7 +1186,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(teacherDesk?.lesson).toBeUndefined()
   })
 
-  it('propagates regular lesson notes into managed board student entries', () => {
+  it('propagates regular lesson lesson-minutes into managed board student entries', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {
         startDate: '2026-04-01',
@@ -544,7 +1204,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         teacherId: 't001',
         student1Id: 's001',
         subject1: '数',
-        student1Note: '宿題',
+        student1Note: '45',
         startDate: '2026-04-01',
         endDate: '2027-03-31',
         student2Id: '',
@@ -566,7 +1226,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     const targetCell = cells.find((cell) => cell.dateKey === '2026-04-06' && cell.slotNumber === 1)
     const student = targetCell?.desks.find((desk) => desk.teacher === '田中講師')?.lesson?.studentSlots[0]
 
-    expect(student?.noteSuffix).toBe('宿題')
+    expect(student?.noteSuffix).toBe('45')
   })
 
   it('places the student on all available Tuesdays including the fifth week when a holiday shortens the month', () => {
@@ -616,6 +1276,66 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     // Holiday on 3/10 skipped; student placed on all other Tuesdays including 3/31
     expect(placedDateKeys).toEqual(['2026-03-03', '2026-03-17', '2026-03-24', '2026-03-31'])
+  })
+
+  it('drops saved managed regular lessons from actual schedule cells after the date becomes a holiday', () => {
+    const range = {
+      startDate: '2026-03-09',
+      endDate: '2026-03-15',
+      periodValue: '',
+    }
+    const regularLessons = [{
+      id: 'holiday-regular',
+      schoolYear: 2025,
+      teacherId: 't001',
+      student1Id: 's001',
+      subject1: '数' as const,
+      startDate: '',
+      endDate: '',
+      student2Id: '',
+      subject2: '' as const,
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '' as const,
+      nextStudent2Id: '',
+      nextSubject2: '' as const,
+      dayOfWeek: 2,
+      slotNumber: 1,
+    }]
+    const savedBoardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+    const holidaySettings: ClassroomSettings = {
+      ...classroomSettings,
+      holidayDates: ['2026-03-10'],
+    }
+
+    const cells = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: holidaySettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [savedBoardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const holidayCell = cells.find((cell) => cell.dateKey === '2026-03-10' && cell.slotNumber === 1)
+    const holidayStudents = holidayCell?.desks.flatMap((desk) => desk.lesson?.studentSlots.filter((student) => student !== null) ?? []) ?? []
+
+    expect(holidayCell?.isOpenDay).toBe(false)
+    expect(holidayStudents.some((student) => student.managedStudentId === 's001')).toBe(false)
   })
 
   it('places the regular student on the fifth weekly slot after board-week overlay merges managed cells', () => {
@@ -1281,6 +2001,109 @@ describe('データ堅牢性 packSortCellDesks', () => {
 })
 
 describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
+  it('ボードセルIDが古い形式でも日付と時限で実績授業を日程表へ反映する', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const regularLessons = createInitialRegularLessons(new Date('2026-04-01T00:00:00'))
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = boardWeek.find((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots[0]))
+    const targetDesk = targetCell?.desks.find((desk) => desk.lesson?.studentSlots[0])
+    const targetStudent = targetDesk?.lesson?.studentSlots[0]
+    expect(targetCell).toBeDefined()
+    expect(targetDesk).toBeDefined()
+    expect(targetStudent).toBeDefined()
+
+    targetCell!.id = `legacy_${targetCell!.dateKey}_${targetCell!.slotNumber}`
+    targetDesk!.lesson = {
+      ...targetDesk!.lesson!,
+      id: `legacy_${targetDesk!.lesson!.id}`,
+      studentSlots: [{ ...targetStudent!, lessonType: 'makeup', makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' }, null],
+    }
+
+    const merged = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const mergedCell = merged.find((cell) => cell.dateKey === targetCell!.dateKey && cell.slotNumber === targetCell!.slotNumber)
+    const mergedStudents = mergedCell?.desks.flatMap((desk) => desk.lesson?.studentSlots.filter((student) => student !== null) ?? []) ?? []
+    expect(merged.filter((cell) => cell.dateKey === targetCell!.dateKey && cell.slotNumber === targetCell!.slotNumber)).toHaveLength(1)
+    expect(mergedStudents.some((student) => student.name === targetStudent!.name && student.lessonType === 'makeup')).toBe(true)
+  })
+
+  it('ボードセルIDが古い形式でも手動追加した通常授業を予定日程へ反映する', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+    const targetCell = boardWeek[0]
+    const targetDesk = targetCell.desks[0]
+    targetCell.id = `legacy_${targetCell.dateKey}_${targetCell.slotNumber}`
+    targetDesk.teacher = initialTeachers[0].name
+    targetDesk.lesson = {
+      id: 'manual_regular_legacy_id',
+      studentSlots: [{
+        id: 'manual_student_entry',
+        name: initialStudents[0].name,
+        managedStudentId: initialStudents[0].id,
+        grade: '中1',
+        subject: '英',
+        lessonType: 'regular',
+        teacherType: 'normal',
+        manualAdded: true,
+      }, null],
+    }
+
+    const planned = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: [],
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const plannedCell = planned.find((cell) => cell.dateKey === targetCell.dateKey && cell.slotNumber === targetCell.slotNumber)
+    const plannedStudents = plannedCell?.desks.flatMap((desk) => desk.lesson?.studentSlots.filter((student) => student !== null) ?? []) ?? []
+    expect(plannedStudents.some((student) => student.managedStudentId === initialStudents[0].id && student.manualAdded)).toBe(true)
+  })
+
   it('ボード週の生徒を変更してもマージ結果が元ボード週に遡及しない', () => {
     const range = {
       startDate: '2026-04-06',
@@ -1409,6 +2232,124 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
     expect(mergedDesk?.lesson?.studentSlots[0]).toBeNull()
     expect(mergedDesk?.lesson?.studentSlots[1]?.name).toBe(originalStudent!.name)
     expect(mergedDesk?.lesson?.studentSlots[1]?.lessonType).toBe('makeup')
+  })
+
+  it('通常授業を休みにしても schedule cells に status-only desk を保持する', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const regularLessons = createInitialRegularLessons(new Date('2026-04-01T00:00:00'))
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = boardWeek.find((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots[0]))
+    const targetDesk = targetCell?.desks.find((desk) => desk.lesson?.studentSlots[0])
+    const originalStudent = targetDesk?.lesson?.studentSlots[0]
+
+    expect(targetCell).toBeDefined()
+    expect(targetDesk).toBeDefined()
+    expect(originalStudent).toBeDefined()
+
+    const absentStatusEntry: StudentStatusEntry = {
+      id: 'status_absent_popup_1',
+      studentId: originalStudent!.id,
+      sourceManagedLesson: true,
+      name: originalStudent!.name,
+      managedStudentId: originalStudent!.managedStudentId,
+      grade: originalStudent!.grade,
+      subject: originalStudent!.subject,
+      lessonType: originalStudent!.lessonType,
+      teacherType: originalStudent!.teacherType,
+      teacherName: targetDesk!.teacher,
+      dateKey: targetCell!.dateKey,
+      slotNumber: targetCell!.slotNumber,
+      recordedAt: '2026-04-07T10:00:00',
+      status: 'absent',
+      sourceLessonId: targetDesk!.lesson!.id,
+    }
+
+    removeStudentFromDeskLesson(targetDesk!, 0)
+    targetDesk!.statusSlots = [absentStatusEntry, null]
+
+    const suppressedKey = `${originalStudent!.managedStudentId ?? originalStudent!.name}__${originalStudent!.subject}__${targetCell!.dateKey}__${targetCell!.slotNumber}`
+    const merged = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [suppressedKey],
+    })
+
+    const mergedCell = merged.find((cell) => cell.id === targetCell!.id)
+    const mergedDesk = mergedCell?.desks.find((desk) => desk.statusSlots?.[0]?.studentId === originalStudent!.id)
+
+    expect(mergedDesk?.teacher).toBe(targetDesk!.teacher)
+    expect(mergedDesk?.lesson).toBeUndefined()
+    expect(mergedDesk?.statusSlots?.[0]?.status).toBe('absent')
+    expect(mergedDesk?.statusSlots?.[0]?.teacherName).toBe(targetDesk!.teacher)
+  })
+
+  it('通常授業をストックへ回した source cell を schedule cells で再表示しない', () => {
+    const range = {
+      startDate: '2026-04-06',
+      endDate: '2026-04-12',
+      periodValue: '',
+    }
+    const regularLessons = createInitialRegularLessons(new Date('2026-04-01T00:00:00'))
+    const boardWeek = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const targetCell = boardWeek.find((cell) => cell.desks.some((desk) => desk.lesson?.studentSlots[0]))
+    const targetDesk = targetCell?.desks.find((desk) => desk.lesson?.studentSlots[0])
+    const originalStudent = targetDesk?.lesson?.studentSlots[0]
+
+    expect(targetCell).toBeDefined()
+    expect(targetDesk).toBeDefined()
+    expect(originalStudent).toBeDefined()
+
+    removeStudentFromDeskLesson(targetDesk!, 0)
+
+    const suppressedKey = `${originalStudent!.managedStudentId ?? originalStudent!.name}__${originalStudent!.subject}__${targetCell!.dateKey}__${targetCell!.slotNumber}`
+    const merged = buildScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons,
+      boardWeeks: [boardWeek],
+      suppressedRegularLessonOccurrences: [suppressedKey],
+    })
+
+    const mergedCell = merged.find((cell) => cell.id === targetCell!.id)
+    const mergedStudents = mergedCell?.desks.flatMap((desk) => desk.lesson?.studentSlots.filter(Boolean) ?? []) ?? []
+
+    expect(mergedStudents.some((student) => student!.id === originalStudent!.id || student!.managedStudentId === originalStudent!.managedStudentId)).toBe(false)
   })
 
   it('1人デスクで出席ステータス設定後も merge で講師名を保持する', () => {
@@ -2296,7 +3237,7 @@ describe('テンプレ移動 → 上書き反映 regression', () => {
 })
 
 describe('buildTeacherSelectionOptions', () => {
-  it('通常コマ表では同じコマの他机にいる講師を候補から除外する', () => {
+  it('通常コマ表では同じコマの他机にいる講師も候補に残す', () => {
     const cell: SlotCell = {
       id: '2026-04-07_2',
       dateKey: '2026-04-07',
@@ -2320,12 +3261,12 @@ describe('buildTeacherSelectionOptions', () => {
       isTemplateMode: false,
     })
 
-    expect(options.map((option) => option.name)).not.toContain('田中講師')
-    expect(options.map((option) => option.name)).not.toContain('佐藤講師')
+    expect(options.map((option) => option.name)).toContain('田中講師')
+    expect(options.map((option) => option.name)).toContain('佐藤講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')
   })
 
-  it('通常コマ表では現在の机に設定済みの講師は候補に残す', () => {
+  it('通常コマ表では現在の机に設定済みの講師も候補に残す', () => {
     const cell: SlotCell = {
       id: '2026-04-07_2',
       dateKey: '2026-04-07',
@@ -2349,10 +3290,10 @@ describe('buildTeacherSelectionOptions', () => {
     })
 
     expect(options.map((option) => option.name)).toContain('田中講師')
-    expect(options.map((option) => option.name)).not.toContain('佐藤講師')
+    expect(options.map((option) => option.name)).toContain('佐藤講師')
   })
 
-  it('テンプレモードでも同じコマの他机にいる講師を候補から除外する', () => {
+  it('テンプレモードでも同じコマの他机にいる講師を候補に残す', () => {
     const cell: SlotCell = {
       id: 'template_1_2',
       dateKey: 'template_1',
@@ -2376,7 +3317,7 @@ describe('buildTeacherSelectionOptions', () => {
       templateReferenceDate: '2026-04-17',
     })
 
-    expect(options.map((option) => option.name)).not.toContain('田中講師')
+    expect(options.map((option) => option.name)).toContain('田中講師')
     // hidden teachers must be excluded in template mode
     expect(options.map((option) => option.name)).not.toContain('吉田講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')

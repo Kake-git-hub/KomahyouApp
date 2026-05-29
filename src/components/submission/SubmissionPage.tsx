@@ -10,6 +10,7 @@ type SubmissionData = {
   forceOpenDates: string[]
   availableSubjects: string[]
   slotCount: number
+  slotNumbers?: number[]
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
@@ -41,7 +42,18 @@ function getSubmissionApiBaseUrl() {
   return `${origin}/api/submission`
 }
 
-function buildAvailableDates(startDate: string, endDate: string, closedWeekdays: number[], forceOpenDates: string[], slotCount: number): DateSlot[] {
+function normalizeSlotNumbers(slotNumbers: number[] | undefined, slotCount: number) {
+  const source = Array.isArray(slotNumbers) && slotNumbers.length > 0
+    ? slotNumbers
+    : Array.from({ length: Math.max(1, Math.min(20, slotCount || 7)) }, (_, index) => index + 1)
+
+  return Array.from(new Set(source
+    .map((slotNumber) => Math.trunc(Number(slotNumber)))
+    .filter((slotNumber) => Number.isFinite(slotNumber) && slotNumber > 0 && slotNumber <= 20)))
+    .sort((left, right) => left - right)
+}
+
+function buildAvailableDates(startDate: string, endDate: string, closedWeekdays: number[], forceOpenDates: string[], slotNumbers: number[]): DateSlot[] {
   const dates: DateSlot[] = []
   const forceOpenSet = new Set(forceOpenDates)
   const current = new Date(startDate + 'T00:00:00')
@@ -61,7 +73,7 @@ function buildAvailableDates(startDate: string, endDate: string, closedWeekdays:
       dateKey,
       label: `${displayMonth}/${displayDay}(${WEEKDAY_LABELS[dayOfWeek]})`,
       dayOfWeek,
-      slots: Array.from({ length: Math.min(slotCount, 5) }, (_, i) => i + 1),
+      slots: [...slotNumbers],
       isClosed,
     })
     current.setDate(current.getDate() + 1)
@@ -123,7 +135,13 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const availableDates = useMemo(() => {
     if (!data) return []
-    return buildAvailableDates(data.sessionStartDate, data.sessionEndDate, data.closedWeekdays, data.forceOpenDates, data.slotCount)
+    return buildAvailableDates(
+      data.sessionStartDate,
+      data.sessionEndDate,
+      data.closedWeekdays,
+      data.forceOpenDates,
+      normalizeSlotNumbers(data.slotNumbers, data.slotCount),
+    )
   }, [data])
 
   const toggleSlot = useCallback((slotKey: string, occupiedLabel?: string) => {

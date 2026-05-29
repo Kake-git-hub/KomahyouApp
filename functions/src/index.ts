@@ -1,9 +1,11 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
-import { HttpsError, onCall, onRequest } from 'firebase-functions/v2/https'
+import { onDocumentWritten } from 'firebase-functions/v2/firestore'
+import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
@@ -20,12 +22,19 @@ const auth = getAuth()
 const storage = getStorage()
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET ?? 'komahyouapp-prod.firebasestorage.app'
 
-const WORKSPACE_AUTO_BACKUP_RETENTION_DAYS = 14
+const WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS = 14
+const WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS = 72
 const WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST = 2
-const WORKSPACE_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_AUTO_BACKUP_SCHEDULE ?? '10 2 * * *'
+const WORKSPACE_DAILY_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_AUTO_BACKUP_SCHEDULE ?? '10 2 * * *'
+const WORKSPACE_HOURLY_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_HOURLY_AUTO_BACKUP_SCHEDULE ?? '10 * * * *'
 const WORKSPACE_AUTO_BACKUP_TIME_ZONE = 'Asia/Tokyo'
+const WORKSPACE_INCIDENT_BACKUP_PREFIX = 'workspace-incident-backups'
+const WORKSPACE_LATEST_ROLLBACK_PREFIX = 'workspace-latest-rollbacks'
+const DEVELOPMENT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
 const HOUR_IN_MS = 60 * 60 * 1000
 const JST_OFFSET_IN_MS = 9 * HOUR_IN_MS
+const FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT = 700_000
+const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 
 type ClassroomContractStatus = 'active' | 'suspended'
 
@@ -110,6 +119,9 @@ type FirebaseClassroomSnapshotDoc = {
   schemaVersion?: number
   savedAt?: string
   data?: FirebaseAppSnapshotPayload
+  dataEncoding?: typeof FIREBASE_COMPRESSED_SNAPSHOT_ENCODING
+  compressedData?: string
+  dataByteLength?: number
   updatedBy?: string
   updatedAt?: string
 }
@@ -147,12 +159,23 @@ type WorkspaceSnapshot = {
   users: WorkspaceUser[]
 }
 
+type WorkspaceAutoBackupKind = 'daily' | 'hourly'
+
 type WorkspaceAutoBackupSummaryDoc = {
   backupDateKey: string
+  backupKind?: WorkspaceAutoBackupKind
+  displayLabel?: string
   savedAt: string
   sourceSavedAt: string
   storagePath: string
   createdAt: string
+}
+
+type ClassroomLatestRollbackStorageDoc = {
+  classroomId: string
+  sourceSavedAt: string
+  capturedAt: string
+  snapshot: FirebaseClassroomSnapshotDoc
 }
 
 function readString(value: unknown, fieldName: string) {
@@ -214,6 +237,65 @@ function sanitizeForFirestore<T>(value: T): T {
   return sanitizeFirestoreValue(value) as T
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((entry) => stableStringify(entry)).join(',')}]`
+  const objectValue = value as Record<string, unknown>
+  return `{${Object.keys(objectValue).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(objectValue[key])}`).join(',')}}`
+}
+
+function hashSnapshotPayload(payload: Record<string, unknown>) {
+  return createHash('sha256').update(stableStringify(payload), 'utf8').digest('hex')
+}
+
+function countRegularTemplateEntries(template: unknown) {
+  if (!template || typeof template !== 'object' || !Array.isArray((template as { cells?: unknown[] }).cells)) return 0
+  return ((template as { cells: unknown[] }).cells).reduce<number>((cellTotal, cell) => {
+    if (!cell || typeof cell !== 'object' || !Array.isArray((cell as { desks?: unknown[] }).desks)) return cellTotal
+    return cellTotal + ((cell as { desks: unknown[] }).desks).reduce<number>((deskTotal, desk) => {
+      if (!desk || typeof desk !== 'object') return deskTotal
+      const students = Array.isArray((desk as { students?: unknown[] }).students)
+        ? (desk as { students: unknown[] }).students.filter(Boolean).length
+        : 0
+      const teacher = typeof (desk as { teacherId?: unknown }).teacherId === 'string' && (desk as { teacherId: string }).teacherId.trim() ? 1 : 0
+      return deskTotal + students + teacher
+    }, 0)
+  }, 0)
+}
+
+function countClassroomManagementData(payload: Record<string, unknown>) {
+  const settings = payload.classroomSettings && typeof payload.classroomSettings === 'object'
+    ? payload.classroomSettings as Record<string, unknown>
+    : {}
+  return [
+    payload.managers,
+    payload.teachers,
+    payload.students,
+    payload.regularLessons,
+    payload.groupLessons,
+    settings.regularLessonTemplateHistory,
+    settings.preTemplateRegularLessons,
+    settings.initialSetupMakeupStocks,
+    settings.initialSetupLectureStocks,
+  ].reduce<number>((total, rows) => total + (Array.isArray(rows) ? rows.length : 0), 0)
+    + countRegularTemplateEntries(settings.regularLessonTemplate)
+}
+
+async function assertNoSnapshotDataLoss(params: {
+  previousSnapshot: FirebaseClassroomSnapshotDoc | null
+  nextPayload: Record<string, unknown>
+}) {
+  const nextManagementCount = countClassroomManagementData(params.nextPayload)
+  if (nextManagementCount > 0) return
+  if (!params.previousSnapshot) return
+
+  const previousPayload = readStoredSnapshotPayload(params.previousSnapshot)
+  const previousManagementCount = previousPayload ? countClassroomManagementData(previousPayload) : 1
+  if (previousManagementCount <= 0) return
+
+  throw new HttpsError('failed-precondition', `既存の教室管理データがあるため、空の管理データでのFirebase上書きを中止しました。前回データ件数=${previousManagementCount}`)
+}
+
 function toUtcDateKey(date: Date) {
   const year = date.getUTCFullYear()
   const month = `${date.getUTCMonth() + 1}`.padStart(2, '0')
@@ -221,20 +303,119 @@ function toUtcDateKey(date: Date) {
   return `${year}-${month}-${day}`
 }
 
+function toUtcHourKey(date: Date) {
+  const dateKey = toUtcDateKey(date)
+  const hour = `${date.getUTCHours()}`.padStart(2, '0')
+  return `${dateKey}T${hour}`
+}
+
 function toOperationalDateKeyJst(date: Date, boundaryHourJst = WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST) {
   const operationalDate = new Date(date.getTime() + JST_OFFSET_IN_MS - boundaryHourJst * HOUR_IN_MS)
   return toUtcDateKey(operationalDate)
 }
 
-function getWorkspaceAutoBackupCutoffKey(referenceDate: Date, retentionDays: number) {
+function toHourlyDateKeyJst(date: Date) {
+  const jstDate = new Date(date.getTime() + JST_OFFSET_IN_MS)
+  return toUtcHourKey(jstDate)
+}
+
+function getWorkspaceDailyAutoBackupCutoffKey(referenceDate: Date, retentionDays: number) {
   const safeRetentionDays = Math.max(1, Math.trunc(retentionDays) || 1)
   const operationalDate = new Date(referenceDate.getTime() + JST_OFFSET_IN_MS - WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST * HOUR_IN_MS)
   operationalDate.setUTCDate(operationalDate.getUTCDate() - (safeRetentionDays - 1))
   return toUtcDateKey(operationalDate)
 }
 
-function buildWorkspaceAutoBackupStoragePath(workspaceKey: string, backupDateKey: string) {
+function buildWorkspaceAutoBackupStoragePath(workspaceKey: string, backupDateKey: string, backupKind: WorkspaceAutoBackupKind = 'daily') {
+  if (backupKind === 'hourly') {
+    return `workspace-auto-backups/${workspaceKey}/hourly/${backupDateKey}.json`
+  }
   return `workspace-auto-backups/${workspaceKey}/${backupDateKey}.json`
+}
+
+function buildWorkspaceAutoBackupDisplayLabel(backupDateKey: string, backupKind: WorkspaceAutoBackupKind) {
+  if (backupKind === 'hourly') {
+    const [datePart, hourPart = '00'] = backupDateKey.split('T')
+    return `${datePart} ${hourPart}:10 毎時`
+  }
+  return `${backupDateKey} 日次`
+}
+
+function buildClassroomLatestRollbackStoragePath(workspaceKey: string, classroomId: string) {
+  return `${WORKSPACE_LATEST_ROLLBACK_PREFIX}/${workspaceKey}/classrooms/${classroomId}/latest.json`
+}
+
+function buildWorkspaceIncidentBackupStoragePath(workspaceKey: string, reason: string, savedAt: string) {
+  const safeReason = reason.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'incident'
+  const safeTimestamp = savedAt.replace(/[:.]/g, '-')
+  return `${WORKSPACE_INCIDENT_BACKUP_PREFIX}/${workspaceKey}/${safeReason}-${safeTimestamp}.json`
+}
+
+async function writeWorkspaceIncidentBackup(workspaceKey: string, reason: string) {
+  const savedAt = new Date().toISOString()
+  try {
+    const { snapshot } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
+    const storagePath = buildWorkspaceIncidentBackupStoragePath(workspaceKey, reason, savedAt)
+    const bucket = storage.bucket(STORAGE_BUCKET)
+    await bucket.file(storagePath).save(JSON.stringify(snapshot, null, 2), {
+      resumable: false,
+      contentType: 'application/json; charset=utf-8',
+      metadata: {
+        cacheControl: 'private, max-age=0, no-transform',
+      },
+    })
+    logger.info(`[IncidentBackup] Saved pre-restore safety snapshot to ${storagePath}`)
+    return { storagePath, savedAt }
+  } catch (error) {
+    logger.error(`[IncidentBackup] Failed to save safety snapshot for workspace=${workspaceKey} reason=${reason}`, error)
+    return null
+  }
+}
+
+function stringifySnapshotPayload(payload: Record<string, unknown> | null) {
+  if (!payload) return ''
+  return JSON.stringify(payload)
+}
+
+async function writeLatestClassroomRollback(params: {
+  workspaceKey: string
+  classroomId: string
+  beforeSnapshot: FirebaseClassroomSnapshotDoc
+  afterSnapshot?: FirebaseClassroomSnapshotDoc | null
+}) {
+  const beforePayload = readStoredSnapshotPayload(params.beforeSnapshot)
+  if (!beforePayload) return false
+
+  const afterPayload = readStoredSnapshotPayload(params.afterSnapshot ?? null)
+  if (afterPayload && stringifySnapshotPayload(beforePayload) === stringifySnapshotPayload(afterPayload)) {
+    return false
+  }
+
+  const capturedAt = new Date().toISOString()
+  const storagePath = buildClassroomLatestRollbackStoragePath(params.workspaceKey, params.classroomId)
+  const storageDoc: ClassroomLatestRollbackStorageDoc = {
+    classroomId: params.classroomId,
+    sourceSavedAt: params.beforeSnapshot.savedAt ?? '',
+    capturedAt,
+    snapshot: createStoredSnapshotDoc({
+      payload: beforePayload,
+      savedAt: params.beforeSnapshot.savedAt ?? capturedAt,
+      updatedBy: params.beforeSnapshot.updatedBy ?? 'system',
+      updatedAt: params.beforeSnapshot.updatedAt ?? params.beforeSnapshot.savedAt ?? capturedAt,
+      schemaVersion: params.beforeSnapshot.schemaVersion ?? 1,
+    }),
+  }
+
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  await bucket.file(storagePath).save(JSON.stringify(storageDoc, null, 2), {
+    resumable: false,
+    contentType: 'application/json; charset=utf-8',
+    metadata: {
+      cacheControl: 'private, max-age=0, no-transform',
+    },
+  })
+  logger.info(`[LatestRollback] Saved latest classroom rollback: workspace=${params.workspaceKey}, classroom=${params.classroomId}, sourceSavedAt=${storageDoc.sourceSavedAt}`)
+  return true
 }
 
 function deserializeBoardState(boardState: FirebasePersistedBoardState | Record<string, unknown> | null | undefined) {
@@ -259,6 +440,55 @@ function deserializeSnapshotPayload(payload: FirebaseAppSnapshotPayload | null |
     ...payload,
     boardState: deserializeBoardState(payload.boardState),
   }
+}
+
+function createStoredSnapshotDoc(params: {
+  payload: Record<string, unknown>
+  savedAt: string
+  updatedBy: string
+  updatedAt?: string
+  schemaVersion?: number
+}): FirebaseClassroomSnapshotDoc {
+  const sanitizedPayload = sanitizeForFirestore(params.payload) as FirebaseAppSnapshotPayload
+  const json = JSON.stringify(sanitizedPayload)
+  const dataByteLength = Buffer.byteLength(json, 'utf8')
+  const updatedAt = typeof params.updatedAt === 'string' ? params.updatedAt : params.savedAt
+  const schemaVersion = typeof params.schemaVersion === 'number' ? params.schemaVersion : 1
+
+  if (dataByteLength <= FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT) {
+    return {
+      schemaVersion,
+      savedAt: params.savedAt,
+      data: sanitizedPayload,
+      updatedBy: params.updatedBy,
+      updatedAt,
+    }
+  }
+
+  return {
+    schemaVersion,
+    savedAt: params.savedAt,
+    dataEncoding: FIREBASE_COMPRESSED_SNAPSHOT_ENCODING,
+    compressedData: gzipSync(Buffer.from(json, 'utf8')).toString('base64'),
+    dataByteLength,
+    updatedBy: params.updatedBy,
+    updatedAt,
+  }
+}
+
+function readStoredSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc | null | undefined) {
+  if (!snapshot) return null
+
+  if (snapshot.data && typeof snapshot.data === 'object') {
+    return deserializeSnapshotPayload(snapshot.data)
+  }
+
+  if (snapshot.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING && typeof snapshot.compressedData === 'string' && snapshot.compressedData) {
+    const json = gunzipSync(Buffer.from(snapshot.compressedData, 'base64')).toString('utf8')
+    return deserializeSnapshotPayload(JSON.parse(json) as FirebaseAppSnapshotPayload)
+  }
+
+  return null
 }
 
 function createEmptyAppSnapshotPayload() {
@@ -341,7 +571,7 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
   const classrooms = classroomSnapshots.docs.map((entry) => {
     const classroomData = entry.data() as FirebaseClassroomDoc
     const snapshotData = snapshotByClassroomId.get(entry.id)
-    return toWorkspaceClassroom(entry.id, classroomData, deserializeSnapshotPayload(snapshotData?.data) ?? null)
+    return toWorkspaceClassroom(entry.id, classroomData, readStoredSnapshotPayload(snapshotData) ?? null)
   })
 
   const latestSourceSavedAt = getLatestSavedAt(
@@ -368,7 +598,8 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
 }
 
 async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDate: Date) {
-  const cutoffKey = getWorkspaceAutoBackupCutoffKey(referenceDate, WORKSPACE_AUTO_BACKUP_RETENTION_DAYS)
+  const dailyCutoffKey = getWorkspaceDailyAutoBackupCutoffKey(referenceDate, WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS)
+  const hourlyCutoffTime = referenceDate.getTime() - WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS * HOUR_IN_MS
   const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
   const bucket = storage.bucket(STORAGE_BUCKET)
   const summarySnapshots = await workspaceRef.collection('workspaceAutoBackupSummaries').get()
@@ -376,9 +607,15 @@ async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDa
   let deleteCount = 0
 
   await Promise.all(summarySnapshots.docs.map(async (summaryDoc) => {
-    if (summaryDoc.id >= cutoffKey) return
-
     const summary = summaryDoc.data() as WorkspaceAutoBackupSummaryDoc
+    const backupKind: WorkspaceAutoBackupKind = summary.backupKind === 'hourly' || summaryDoc.id.includes('T')
+      ? 'hourly'
+      : 'daily'
+    const shouldKeep = backupKind === 'hourly'
+      ? (Date.parse(summary.savedAt || '') || 0) >= hourlyCutoffTime
+      : summaryDoc.id >= dailyCutoffKey
+    if (shouldKeep) return
+
     if (typeof summary.storagePath === 'string' && summary.storagePath.trim()) {
       await bucket.file(summary.storagePath).delete().catch(() => undefined)
     }
@@ -421,6 +658,25 @@ async function requireDeveloperMember(authUid: string | undefined, workspaceKey:
   const member = memberSnapshot.data() as { role?: string } | undefined
   if (member?.role !== 'developer') {
     throw new HttpsError('permission-denied', '開発者権限が必要です。')
+  }
+
+  return memberRef
+}
+
+async function requireClassroomAccessMember(authUid: string | undefined, workspaceKey: string, classroomId: string) {
+  if (!authUid) {
+    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+  }
+
+  const memberRef = firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(authUid)
+  const memberSnapshot = await memberRef.get()
+  if (!memberSnapshot.exists) {
+    throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+  }
+
+  const member = memberSnapshot.data() as { role?: string; assignedClassroomId?: string | null } | undefined
+  if (member?.role !== 'developer' && member?.assignedClassroomId !== classroomId) {
+    throw new HttpsError('permission-denied', 'この教室を保存する権限がありません。')
   }
 
   return memberRef
@@ -550,13 +806,13 @@ export const provisionWorkspaceClassroom = onCall({ invoker: 'public' }, async (
       temporarySuspensionReason: '',
       updatedAt: now,
     })
-    batch.set(snapshotRef, {
-      schemaVersion: 1,
+    batch.set(snapshotRef, createStoredSnapshotDoc({
+      payload: sanitizedInitialPayload,
       savedAt: now,
-      data: sanitizedInitialPayload,
       updatedBy: request.auth?.uid ?? '',
       updatedAt: now,
-    })
+      schemaVersion: 1,
+    }))
     await batch.commit()
 
     return {
@@ -719,6 +975,119 @@ export const updateWorkspaceClassroom = onCall({ invoker: 'public' }, async (req
   }
 })
 
+async function saveClassroomSnapshotFromCallable(request: CallableRequest, options?: { developmentOnly?: boolean }) {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  const classroomId = readString(rawData.classroomId, 'classroomId')
+  const savedAt = readString(rawData.savedAt, 'savedAt')
+  const saveId = readString(rawData.saveId, 'saveId')
+  const payload = readPayloadObject(rawData.payload, 'payload')
+
+  if (options?.developmentOnly && classroomId !== DEVELOPMENT_CLASSROOM_ID) {
+    throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
+  }
+
+  const memberRef = await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+  const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
+  const classroomRef = workspaceRef.collection('classrooms').doc(classroomId)
+  const snapshotRef = workspaceRef.collection('classroomSnapshots').doc(classroomId)
+  const saveAttemptRef = snapshotRef.collection('saveAttempts').doc(saveId)
+  const payloadHash = hashSnapshotPayload(payload)
+
+  const existingAttemptSnapshot = await saveAttemptRef.get()
+  if (existingAttemptSnapshot.exists) {
+    const existingAttempt = existingAttemptSnapshot.data() as { payloadHash?: string; verified?: boolean; savedAt?: string; writeMode?: string; dataByteLength?: number } | undefined
+    if (existingAttempt?.payloadHash !== payloadHash) {
+      throw new HttpsError('already-exists', '同じ saveId で異なる保存内容が送信されました。')
+    }
+    if (existingAttempt.verified) {
+      return {
+        classroomId,
+        savedAt: existingAttempt.savedAt || savedAt,
+        saveId,
+        payloadHash,
+        verified: true,
+        idempotentReplay: true,
+        writeMode: existingAttempt.writeMode || 'cloud-function-verified-replay',
+        dataByteLength: existingAttempt.dataByteLength ?? 0,
+      }
+    }
+  }
+
+  const classroomSnapshot = await classroomRef.get()
+  if (!classroomSnapshot.exists) {
+    throw new HttpsError('not-found', '対象の教室が見つかりません。')
+  }
+  const previousSnapshot = await snapshotRef.get()
+  await assertNoSnapshotDataLoss({
+    previousSnapshot: previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null,
+    nextPayload: payload,
+  })
+
+  const snapshotDoc = createStoredSnapshotDoc({
+    payload,
+    savedAt,
+    updatedBy: memberRef.id,
+    updatedAt: savedAt,
+    schemaVersion: 1,
+  })
+  const writeMode = snapshotDoc.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING ? 'cloud-function-compressed' : 'cloud-function-inline'
+  const dataByteLength = snapshotDoc.dataByteLength ?? Buffer.byteLength(JSON.stringify(snapshotDoc.data ?? {}), 'utf8')
+  await saveAttemptRef.set({
+    classroomId,
+    savedAt,
+    saveId,
+    payloadHash,
+    status: 'started',
+    verified: false,
+    writeMode,
+    dataByteLength,
+    updatedBy: memberRef.id,
+    createdAt: new Date().toISOString(),
+    snapshot: snapshotDoc,
+  })
+  await snapshotRef.set(snapshotDoc)
+
+  const readbackSnapshot = await snapshotRef.get()
+  const readbackPayload = readStoredSnapshotPayload(readbackSnapshot.exists ? readbackSnapshot.data() as FirebaseClassroomSnapshotDoc : null)
+  const readbackHash = readbackPayload ? hashSnapshotPayload(readbackPayload) : ''
+  if (readbackHash !== payloadHash) {
+    await saveAttemptRef.set({
+      status: 'verification-failed',
+      verified: false,
+      readbackHash,
+      failedAt: new Date().toISOString(),
+    }, { merge: true })
+    throw new HttpsError('internal', 'Firebase保存後の読み戻し検証に失敗しました。')
+  }
+
+  await saveAttemptRef.set({
+    status: 'verified',
+    verified: true,
+    readbackHash,
+    verifiedAt: new Date().toISOString(),
+  }, { merge: true })
+
+  return {
+    classroomId,
+    savedAt,
+    saveId,
+    payloadHash,
+    verified: true,
+    idempotentReplay: false,
+    writeMode,
+    dataByteLength,
+  }
+}
+
+export const saveClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  return saveClassroomSnapshotFromCallable(request)
+})
+
+export const saveDevelopmentClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  return saveClassroomSnapshotFromCallable(request, { developmentOnly: true })
+})
+
 export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
@@ -764,7 +1133,14 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
 
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
 
-  const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
+  const summarySnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('workspaceAutoBackupSummaries').doc(backupDateKey).get()
+  if (!summarySnapshot.exists) {
+    throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${backupDateKey})`)
+  }
+  const summary = summarySnapshot.data() as WorkspaceAutoBackupSummaryDoc
+  const storagePath = typeof summary.storagePath === 'string' && summary.storagePath.trim()
+    ? summary.storagePath
+    : buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, summary.backupKind === 'hourly' ? 'hourly' : 'daily')
   const bucket = storage.bucket(STORAGE_BUCKET)
   const file = bucket.file(storagePath)
   const [exists] = await file.exists()
@@ -772,6 +1148,8 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
     logger.warn(`downloadServerAutoBackup: file not found at ${storagePath}`)
     throw new HttpsError('not-found', `指定したサーバーバックアップが見つかりません。(${storagePath})`)
   }
+
+  await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
 
   const [content] = await file.download()
   logger.info(`downloadServerAutoBackup: downloaded ${content.length} bytes from ${storagePath}`)
@@ -799,13 +1177,22 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
     throw new HttpsError('permission-denied', 'この教室のバックアップにアクセスする権限がありません。')
   }
 
-  const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
+  const summarySnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('workspaceAutoBackupSummaries').doc(backupDateKey).get()
+  if (!summarySnapshot.exists) {
+    throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
+  }
+  const summary = summarySnapshot.data() as WorkspaceAutoBackupSummaryDoc
+  const storagePath = typeof summary.storagePath === 'string' && summary.storagePath.trim()
+    ? summary.storagePath
+    : buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, summary.backupKind === 'hourly' ? 'hourly' : 'daily')
   const bucket = storage.bucket(STORAGE_BUCKET)
   const file = bucket.file(storagePath)
   const [exists] = await file.exists()
   if (!exists) {
     throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
   }
+
+  await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-classroom-${classroomId}-${backupDateKey}`)
 
   const [content] = await file.download()
   const snapshot = JSON.parse(content.toString('utf-8')) as WorkspaceSnapshot
@@ -822,36 +1209,111 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
   }
 })
 
+export const mirrorLatestClassroomRollback = onDocumentWritten({
+  document: 'workspaces/{workspaceKey}/classroomSnapshots/{classroomId}',
+  timeoutSeconds: 120,
+  memory: '512MiB',
+}, async (event) => {
+  const beforeSnapshot = event.data?.before.data() as FirebaseClassroomSnapshotDoc | undefined
+  const afterSnapshot = event.data?.after.data() as FirebaseClassroomSnapshotDoc | undefined
+
+  if (!beforeSnapshot) return
+
+  try {
+    await writeLatestClassroomRollback({
+      workspaceKey: event.params.workspaceKey,
+      classroomId: event.params.classroomId,
+      beforeSnapshot,
+      afterSnapshot,
+    })
+  } catch (error) {
+    logger.error(`[LatestRollback] Failed to mirror previous classroom snapshot: workspace=${event.params.workspaceKey}, classroom=${event.params.classroomId}`, error)
+    throw error
+  }
+})
+
+export const downloadLatestClassroomRollback = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  const classroomId = readString(rawData.classroomId, 'classroomId')
+
+  if (!request.auth?.uid) {
+    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+  }
+
+  const memberRef = firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(request.auth.uid)
+  const memberSnapshot = await memberRef.get()
+  if (!memberSnapshot.exists) {
+    throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+  }
+
+  const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc | undefined
+  if (member?.role !== 'developer' && member?.assignedClassroomId !== classroomId) {
+    throw new HttpsError('permission-denied', 'この教室の直前保存にアクセスする権限がありません。')
+  }
+
+  const storagePath = buildClassroomLatestRollbackStoragePath(workspaceKey, classroomId)
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  const file = bucket.file(storagePath)
+  const [exists] = await file.exists()
+  if (!exists) {
+    throw new HttpsError('not-found', 'この教室にはまだ直前の Firebase 保存データがありません。')
+  }
+
+  await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-latest-classroom-${classroomId}`)
+
+  const [content] = await file.download()
+  const rollbackDoc = JSON.parse(content.toString('utf-8')) as ClassroomLatestRollbackStorageDoc
+  const payload = readStoredSnapshotPayload(rollbackDoc.snapshot)
+  if (!payload) {
+    throw new HttpsError('data-loss', '直前保存データの読み込みに失敗しました。')
+  }
+
+  return {
+    classroomId: rollbackDoc.classroomId,
+    sourceSavedAt: rollbackDoc.sourceSavedAt,
+    capturedAt: rollbackDoc.capturedAt,
+    data: payload,
+  }
+})
+
 export const createWorkspaceServerAutoBackups = onSchedule({
-  schedule: WORKSPACE_AUTO_BACKUP_SCHEDULE,
+  schedule: WORKSPACE_DAILY_AUTO_BACKUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
 }, async () => {
-  await runWorkspaceServerAutoBackup()
+  await runWorkspaceServerAutoBackup('daily')
+})
+
+export const createWorkspaceServerHourlyBackups = onSchedule({
+  schedule: WORKSPACE_HOURLY_AUTO_BACKUP_SCHEDULE,
+  timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
+}, async () => {
+  await runWorkspaceServerAutoBackup('hourly')
 })
 
 export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
-  const result = await runWorkspaceServerAutoBackup()
+  const result = await runWorkspaceServerAutoBackup('hourly')
   return result
 })
 
-async function runWorkspaceServerAutoBackup() {
+async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind) {
   const now = new Date()
   const savedAt = now.toISOString()
-  const backupDateKey = toOperationalDateKeyJst(now)
-  logger.info(`[AutoBackup] Starting backup run: backupDateKey=${backupDateKey}, savedAt=${savedAt}, bucket=${STORAGE_BUCKET}`)
+  const backupDateKey = backupKind === 'daily' ? toOperationalDateKeyJst(now) : toHourlyDateKeyJst(now)
+  logger.info(`[AutoBackup] Starting ${backupKind} backup run: backupDateKey=${backupDateKey}, savedAt=${savedAt}, bucket=${STORAGE_BUCKET}`)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   logger.info(`[AutoBackup] Found ${workspacesSnapshot.docs.length} workspace(s)`)
   const bucket = storage.bucket(STORAGE_BUCKET)
-  const results: Array<{ workspaceKey: string; backupDateKey: string; storagePath: string }> = []
+  const results: Array<{ workspaceKey: string; backupDateKey: string; storagePath: string; backupKind: WorkspaceAutoBackupKind }> = []
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const workspaceKey = workspaceDoc.id
-    logger.info(`[AutoBackup] Processing workspace: ${workspaceKey}`)
+    logger.info(`[AutoBackup] Processing workspace: ${workspaceKey} (${backupKind})`)
     const { snapshot, latestSourceSavedAt } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
-    const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey)
+    const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, backupKind)
 
     await bucket.file(storagePath).save(JSON.stringify(snapshot, null, 2), {
       resumable: false,
@@ -865,6 +1327,8 @@ async function runWorkspaceServerAutoBackup() {
     await Promise.all([
       workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey).set({
         backupDateKey,
+        backupKind,
+        displayLabel: buildWorkspaceAutoBackupDisplayLabel(backupDateKey, backupKind),
         savedAt,
         sourceSavedAt: latestSourceSavedAt,
         storagePath,
@@ -873,17 +1337,18 @@ async function runWorkspaceServerAutoBackup() {
       workspaceDoc.ref.set({
         serverAutoBackupLastSavedAt: savedAt,
         serverAutoBackupLastBackupDateKey: backupDateKey,
+        serverAutoBackupLastBackupKind: backupKind,
         serverAutoBackupLastStoragePath: storagePath,
       }, { merge: true }),
     ])
-    logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}`)
+    logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`)
 
     await pruneWorkspaceServerAutoBackups(workspaceKey, now)
-    results.push({ workspaceKey, backupDateKey, storagePath })
+    results.push({ workspaceKey, backupDateKey, storagePath, backupKind })
   }
 
-  logger.info(`[AutoBackup] Completed: ${results.length} workspace(s) backed up`)
-  return { backupDateKey, workspaceCount: results.length, results }
+  logger.info(`[AutoBackup] Completed ${backupKind}: ${results.length} workspace(s) backed up`)
+  return { backupDateKey, backupKind, workspaceCount: results.length, results }
 }
 
 // ---------------------------------------------------------------------------
@@ -904,6 +1369,7 @@ type LectureSubmissionDoc = {
   forceOpenDates: string[]
   availableSubjects: string[]
   slotCount: number
+  slotNumbers?: number[]
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
@@ -939,6 +1405,17 @@ function sanitizeSubjectSlots(value: unknown): Record<string, number> {
   return result
 }
 
+function sanitizeSlotNumbers(value: unknown, fallbackCount: number) {
+  const source = Array.isArray(value) && value.length > 0
+    ? value
+    : Array.from({ length: Math.max(1, Math.min(20, fallbackCount || 7)) }, (_, index) => index + 1)
+
+  return Array.from(new Set(source
+    .map((slotNumber) => Math.trunc(Number(slotNumber)))
+    .filter((slotNumber) => Number.isFinite(slotNumber) && slotNumber > 0 && slotNumber <= 20)))
+    .sort((left, right) => left - right)
+}
+
 export const lectureSubmissionApi = onRequest({
   cors: true,
   region: process.env.FUNCTION_REGION ?? 'asia-northeast1',
@@ -970,6 +1447,7 @@ export const lectureSubmissionApi = onRequest({
       forceOpenDates: data.forceOpenDates ?? [],
       availableSubjects: data.availableSubjects ?? [],
       slotCount: data.slotCount ?? 7,
+      slotNumbers: sanitizeSlotNumbers(data.slotNumbers, data.slotCount ?? 7),
       status: data.status ?? 'pending',
       unavailableSlots: data.unavailableSlots ?? [],
       subjectSlots: data.subjectSlots ?? {},
@@ -1017,7 +1495,7 @@ export const lectureSubmissionApi = onRequest({
         if (!snapshotDoc.exists) return
 
         const snapshotData = snapshotDoc.data() as FirebaseClassroomSnapshotDoc
-        const payload = snapshotData?.data
+        const payload = readStoredSnapshotPayload(snapshotData)
         if (!payload?.specialSessions || !Array.isArray(payload.specialSessions)) return
 
         const sessions = payload.specialSessions as Array<Record<string, unknown>>
@@ -1040,10 +1518,13 @@ export const lectureSubmissionApi = onRequest({
         session[inputKey] = inputs
         sessions[sessionIndex] = session
 
-        transaction.update(snapshotRef, {
-          data: sanitizeForFirestore({ ...payload, specialSessions: sessions }),
+        transaction.set(snapshotRef, createStoredSnapshotDoc({
+          payload: { ...payload, specialSessions: sessions },
+          savedAt: typeof snapshotData?.savedAt === 'string' && snapshotData.savedAt ? snapshotData.savedAt : now,
+          updatedBy: typeof snapshotData?.updatedBy === 'string' ? snapshotData.updatedBy : '',
           updatedAt: now,
-        })
+          schemaVersion: typeof snapshotData?.schemaVersion === 'number' ? snapshotData.schemaVersion : 1,
+        }))
       })
     } catch {
       // Non-fatal: submission is saved even if snapshot update fails

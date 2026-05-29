@@ -1,7 +1,9 @@
+import { useRef } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 
 type BoardToolbarProps = {
   weekLabel: string
+  weekStartDate: string
   statusMessage: string
   lectureStockEntryCount: number
   isLectureStockOpen: boolean
@@ -20,8 +22,10 @@ type BoardToolbarProps = {
   onUndo: () => void
   onRedo: () => void
   onPackSort: () => void
+  onCopyDistributionUrl?: () => void
   onGoPrevWeek: () => void
   onGoNextWeek: () => void
+  onJumpToDate: (dateKey: string) => void
   onToggleLectureStock: () => void
   onToggleMakeupStock: () => void
   onOpenStudentSchedule: () => void
@@ -42,11 +46,18 @@ type BoardToolbarProps = {
   onTemplateSaveOverwrite?: () => void
   onTemplateClear?: () => void
   onTemplateClose?: () => void
-  onSaveAndClose?: () => void
+  onSaveBoard?: () => void
+  isBoardDirty?: boolean
+  isBoardSaving?: boolean
+  isBoardSaveDisabled?: boolean
+  syncStatusMessage?: string
+  syncProgressPercent?: number | null
+  syncElapsedSeconds?: number | null
 }
 
 export function BoardToolbar({
   weekLabel,
+  weekStartDate,
   statusMessage,
   lectureStockEntryCount,
   isLectureStockOpen,
@@ -65,8 +76,10 @@ export function BoardToolbar({
   onUndo,
   onRedo,
   onPackSort,
+  onCopyDistributionUrl,
   onGoPrevWeek,
   onGoNextWeek,
+  onJumpToDate,
   onToggleLectureStock,
   onToggleMakeupStock,
   onOpenStudentSchedule,
@@ -87,8 +100,23 @@ export function BoardToolbar({
   onTemplateSaveOverwrite,
   onTemplateClear,
   onTemplateClose,
-  onSaveAndClose,
+  onSaveBoard,
+  isBoardDirty,
+  isBoardSaving,
+  isBoardSaveDisabled,
+  syncStatusMessage,
+  syncProgressPercent,
+  syncElapsedSeconds,
 }: BoardToolbarProps) {
+  const weekJumpInputRef = useRef<HTMLInputElement | null>(null)
+
+  const openWeekJumpPicker = () => {
+    const input = weekJumpInputRef.current
+    if (!input) return
+    if (typeof input.showPicker === 'function') input.showPicker()
+    else input.click()
+  }
+
   return (
     <section className="toolbar-panel" aria-label={isTemplateMode ? '通常授業テンプレート操作バー' : 'コマ調整の操作バー'}>
       <div className="toolbar-row toolbar-row-primary">
@@ -130,8 +158,23 @@ export function BoardToolbar({
             </svg>
           </button>
           <button className="secondary-button slim" type="button" onClick={onPackSort} data-testid="pack-sort-button">詰めて並び替え</button>
+          {!isTemplateMode && onCopyDistributionUrl ? (
+            <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">配布用URL</button>
+          ) : null}
         </div>
-        <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}`} data-testid="toolbar-status">{statusMessage}</div>
+        <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}`} data-testid="toolbar-status">
+          {syncProgressPercent !== null && syncProgressPercent !== undefined ? (
+            <div className="toolbar-sync-progress" aria-label={`Firebase 同期 ${syncProgressPercent}%`}>
+              <div className="toolbar-sync-progress-text">
+                {syncStatusMessage || `データベースへ保存中(${syncProgressPercent}%完了)`}
+                {syncElapsedSeconds !== null && syncElapsedSeconds !== undefined ? ` / ${syncElapsedSeconds}秒経過` : ''}
+              </div>
+              <div className="toolbar-sync-progress-track" aria-hidden="true">
+                <div className="toolbar-sync-progress-bar" style={{ width: `${Math.max(0, Math.min(100, syncProgressPercent))}%` }} />
+              </div>
+            </div>
+          ) : (syncStatusMessage || statusMessage)}
+        </div>
         <div className="toolbar-group toolbar-group-end">
           {isTemplateMode ? (
             <>
@@ -164,17 +207,34 @@ export function BoardToolbar({
               </button>
               <div className="toolbar-segmented">
                 <button className="segment-button" type="button" onClick={onGoPrevWeek} disabled={!canGoPrevWeek} data-testid="prev-week-button">◀ 前週</button>
-                <span className="week-label" data-testid="week-label">{weekLabel}</span>
+                <span className="week-jump-control">
+                  <button className="week-label week-jump-button" type="button" onClick={openWeekJumpPicker} data-testid="week-label" aria-label="表示週を選択" title="表示したい日付を選択">
+                    {weekLabel}
+                  </button>
+                  <input
+                    ref={weekJumpInputRef}
+                    className="week-jump-input"
+                    type="date"
+                    value={weekStartDate}
+                    onChange={(event) => {
+                      if (event.currentTarget.value) onJumpToDate(event.currentTarget.value)
+                    }}
+                    data-testid="week-jump-date-input"
+                    aria-label="表示したい日付"
+                  />
+                </span>
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
               <button
-                className="primary-button slim"
+                className={`primary-button slim${isBoardDirty ? '' : ' is-clean'}`}
                 type="button"
-                onClick={onSaveAndClose}
-                data-testid="save-and-close-button"
-                title="現在の内容を保存してから、ブラウザのタブを閉じます。"
+                onClick={onSaveBoard}
+                disabled={!isBoardDirty || !!isBoardSaving || !!isBoardSaveDisabled}
+                data-testid="save-board-button"
+                data-state={isBoardSaving ? 'saving' : (isBoardDirty ? 'dirty' : 'clean')}
+                title={isBoardDirty ? '現在の内容をデータベースとローカルに保存します。' : 'データベースと同期済みです。'}
               >
-                保存して閉じる
+                {isBoardSaving ? '保存中…' : (isBoardDirty ? '保存' : '最新データ')}
               </button>
             </>
           )}

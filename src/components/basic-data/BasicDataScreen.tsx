@@ -333,33 +333,8 @@ function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], 
   return sheet
 }
 
-function resolveSchoolGradeLabel(birthDate: string, today = new Date()) {
-  const normalized = normalizeDateString(birthDate)
-  if (!normalized) return '-'
-
-  const [yearText, monthText, dayText] = normalized.split('-')
-  const birthYear = Number(yearText)
-  const birthMonth = Number(monthText)
-  const birthDay = Number(dayText)
-  if ([birthYear, birthMonth, birthDay].some((value) => Number.isNaN(value))) return '-'
-
-  let age = today.getFullYear() - birthYear
-  if (today.getMonth() + 1 < birthMonth || (today.getMonth() + 1 === birthMonth && today.getDate() < birthDay)) {
-    age -= 1
-  }
-
-  if (age < 6) return '未就学'
-  if (age <= 11) return `小${age - 5}`
-  if (age <= 14) return `中${age - 11}`
-  if (age <= 17) return `高${age - 14}`
-  return '退塾'
-}
-
 function resolveStudentStatusLabel(student: StudentRow, today = new Date()) {
-  const referenceDate = getReferenceDateKey(today)
-  const scheduledStatus = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)
-  if (scheduledStatus === '退塾' || scheduledStatus === '非表示') return scheduledStatus
-  return resolveSchoolGradeLabel(student.birthDate, today)
+  return resolveCurrentStudentGradeLabel(student, getReferenceDateKey(today))
 }
 
 function resolveTeacherStatusLabel(teacher: TeacherRow, today = new Date()) {

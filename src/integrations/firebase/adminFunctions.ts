@@ -7,6 +7,8 @@ import { sanitizeForFirestore } from './firestoreSanitize'
 
 export type ServerAutoBackupSummary = {
   backupDateKey: string
+  backupKind: 'daily' | 'hourly'
+  displayLabel: string
   savedAt: string
   sourceSavedAt: string
   storagePath: string
@@ -57,6 +59,14 @@ type UpdateWorkspaceClassroomRequest = {
   contractStatus: WorkspaceClassroom['contractStatus']
   contractStartDate: string
   contractEndDate: string
+}
+
+type SaveClassroomSnapshotRequest = {
+  workspaceKey: string
+  classroomId: string
+  savedAt: string
+  saveId: string
+  payload: AppSnapshotPayload
 }
 
 type DeleteWorkspaceClassroomRequest = {
@@ -239,6 +249,36 @@ export async function updateFirebaseWorkspaceClassroom(input: Omit<UpdateWorkspa
   return result.data
 }
 
+export async function saveClassroomSnapshotViaFunction(input: Omit<SaveClassroomSnapshotRequest, 'workspaceKey'>): Promise<{
+  classroomId: string
+  savedAt: string
+  saveId: string
+  payloadHash: string
+  verified: boolean
+  idempotentReplay: boolean
+  writeMode: string
+  dataByteLength: number
+}> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<SaveClassroomSnapshotRequest, {
+    classroomId: string
+    savedAt: string
+    saveId: string
+    payloadHash: string
+    verified: boolean
+    idempotentReplay: boolean
+    writeMode: string
+    dataByteLength: number
+  }>(functions, 'saveClassroomSnapshot', { timeout: 120_000 })
+  const result = await callable({
+    workspaceKey: config.workspaceKey,
+    ...input,
+  })
+  return result.data
+}
+
 export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspaceClassroomRequest, 'workspaceKey'>) {
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
@@ -294,12 +334,16 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
   const config = getFirebaseBackendConfig()
   const workspaceRef = doc(firestore, 'workspaces', config.workspaceKey)
   const summariesRef = collection(workspaceRef, 'workspaceAutoBackupSummaries')
-  const q = query(summariesRef, orderBy('backupDateKey', 'desc'))
+  const q = query(summariesRef, orderBy('savedAt', 'desc'))
   const snapshot = await getDocs(q)
   return snapshot.docs.map((entry) => {
     const data = entry.data()
+    const backupDateKey = String(data.backupDateKey ?? entry.id)
+    const backupKind = data.backupKind === 'hourly' ? 'hourly' : 'daily'
     return {
-      backupDateKey: String(data.backupDateKey ?? entry.id),
+      backupDateKey,
+      backupKind,
+      displayLabel: String(data.displayLabel ?? backupDateKey),
       savedAt: String(data.savedAt ?? ''),
       sourceSavedAt: String(data.sourceSavedAt ?? ''),
       storagePath: String(data.storagePath ?? ''),
@@ -339,6 +383,13 @@ export type ClassroomFromServerAutoBackup = {
   data: AppSnapshotPayload
 }
 
+export type ClassroomLatestRollback = {
+  classroomId: string
+  sourceSavedAt: string
+  capturedAt: string
+  data: AppSnapshotPayload
+}
+
 export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKey: string, classroomId: string): Promise<ClassroomFromServerAutoBackup> {
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
@@ -347,6 +398,18 @@ export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKe
   const result = await callable({
     workspaceKey: config.workspaceKey,
     backupDateKey,
+    classroomId,
+  })
+  return result.data
+}
+
+export async function downloadLatestFirebaseClassroomRollback(classroomId: string): Promise<ClassroomLatestRollback> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string; classroomId: string }, ClassroomLatestRollback>(functions, 'downloadLatestClassroomRollback', { timeout: 120_000 })
+  const result = await callable({
+    workspaceKey: config.workspaceKey,
     classroomId,
   })
   return result.data

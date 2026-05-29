@@ -40,6 +40,7 @@ type DeveloperAdminScreenProps = {
     estimatedReferenceMaxRetentionDays: number
     referenceClassroomCount: number
     retentionDays: number
+    hourlyRetentionHours: number
     freeTierStorageBytes: number
   }
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
@@ -74,7 +75,7 @@ type DeveloperAdminScreenProps = {
   onCloseStudentHistory: () => void
   restoreModalState: null | {
     sourceLabel: string
-    savedAt: string
+    dataTimestampLabel?: string
     options: Array<{
       classroomId: string
       classroomName: string
@@ -145,6 +146,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
 export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
+  const [serverBackupListExpanded, setServerBackupListExpanded] = useState(false)
   const [subPage, setSubPage] = useState<'main' | 'classrooms'>('main')
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
   const [managerEmailDrafts, setManagerEmailDrafts] = useState<Record<string, string>>({})
@@ -256,7 +258,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
           {sparkManualAdminMode ? <div className="toolbar-status">教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
 
           <div className="basic-data-row-actions" style={{ marginBottom: 12 }}>
-            <button className="secondary-button slim" type="button" onClick={() => setSubPage('classrooms')}>生徒数・請求一覧を表示</button>
+            <a className="secondary-button slim developer-guide-link-button" href="/billing">生徒数・請求一覧を表示</a>
           </div>
 
           {authMode === 'firebase' && blazeFreeTierEstimate ? (
@@ -264,14 +266,14 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <div className="basic-data-card-head">
                 <h3>Blaze 無料枠の目安</h3>
               </div>
-              <div className="toolbar-status">Cloud Storage 5 GB 中 <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong> 使用中（{blazeFreeTierEstimate.retentionDays} 日保持 × {blazeFreeTierEstimate.currentClassroomCount} 教室で概算）</div>
+              <div className="toolbar-status">Cloud Storage 5 GB 中 <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong> 使用中（毎時 {blazeFreeTierEstimate.hourlyRetentionHours} 本 + 日次 {blazeFreeTierEstimate.retentionDays} 日 × {blazeFreeTierEstimate.currentClassroomCount} 教室で概算）</div>
             </section>
           ) : null}
 
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
               <h3>サーバーバックアップ</h3>
-              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎日 02:10 JST に自動バックアップが作成されます。' : ''}</p>
+              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎時 10 分に hourly、毎日 02:10 JST に daily の自動バックアップが作成されます。' : ''}</p>
             </div>
             <div className="developer-backup-grid">
               <div className="basic-data-row-actions">
@@ -293,20 +295,24 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : 'サーバーバックアップ一覧を取得'}</button>
                   <button className="secondary-button slim" type="button" onClick={onTriggerServerAutoBackup} disabled={serverAutoBackupLoading}>今すぐバックアップ実行</button>
+                  {serverAutoBackupSummaries.length > 0 ? (
+                    <button className="secondary-button slim" type="button" onClick={() => setServerBackupListExpanded((value) => !value)}>{serverBackupListExpanded ? `バックアップ一覧を隠す (${serverAutoBackupSummaries.length} 件)` : `バックアップ一覧を表示 (${serverAutoBackupSummaries.length} 件)`}</button>
+                  ) : null}
                 </div>
-                <div className="backup-restore-auto-backup-list">
-                  {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
-                  {serverAutoBackupSummaries.map((summary) => (
-                    <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                      <div className="backup-restore-auto-backup-meta">
-                        <strong>{summary.backupDateKey}</strong>
-                        <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
-                        <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
+                {serverBackupListExpanded ? (
+                  <div className="backup-restore-auto-backup-list">
+                    {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
+                    {serverAutoBackupSummaries.map((summary) => (
+                      <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
+                        <div className="backup-restore-auto-backup-meta">
+                          <strong>{summary.displayLabel}</strong>
+                          <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
+                        </div>
+                        <button className="secondary-button slim" type="button" onClick={() => { console.log('RESTORE CLICKED:', summary.backupDateKey); onRestoreServerAutoBackup(summary.backupDateKey) }} disabled={serverAutoBackupLoading}>この時点へ復元</button>
                       </div>
-                      <button className="secondary-button slim" type="button" onClick={() => { console.log('RESTORE CLICKED:', summary.backupDateKey); onRestoreServerAutoBackup(summary.backupDateKey) }} disabled={serverAutoBackupLoading}>この時点へ復元</button>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : null}
               </>
             ) : null}
           </section>
@@ -502,7 +508,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
         <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) onCancelRestoreSelection() }}>
           <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="教室復元選択モーダル">
             <div className="auto-assign-modal-title">{restoreModalState.sourceLabel}から復元する教室を選択</div>
-            <div className="detail-note">保存日時: {formatSavedAt(restoreModalState.savedAt)}</div>
+            {restoreModalState.dataTimestampLabel ? <div className="detail-note">元データ日時: {formatSavedAt(restoreModalState.dataTimestampLabel)}</div> : null}
             <div className="developer-restore-modal-actions-top">
               <button className="secondary-button slim" type="button" onClick={onSelectAllRestoreClassrooms}>すべて復元</button>
               <button className="secondary-button slim" type="button" onClick={onClearAllRestoreClassrooms}>すべて現状維持</button>

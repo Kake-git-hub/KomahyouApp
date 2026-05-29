@@ -1,5 +1,7 @@
+import { useLayoutEffect, useMemo, useRef } from 'react'
+import { buildLinkedLessonDestinationMap, formatShortDateLabel } from './lessonLinks'
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
-import { getMemoTextStyle } from './memoText'
+import { getMemoLineHeight, getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, TeacherType } from './types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
@@ -7,18 +9,14 @@ import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject
 function getStudentStatusLabel(status: StudentStatusKind) {
   if (status === 'attended') return '出'
   if (status === 'absent-no-makeup') return '振無休'
+  if (status === 'moved') return '移'
   return '休'
-}
-
-function formatMakeupSourceDate(dateKey?: string) {
-  if (!dateKey) return ''
-  const [, month = '', day = ''] = dateKey.split('-')
-  if (!month || !day) return ''
-  return `${Number(month)}/${Number(day)}`
 }
 
 function getLessonPrefix(lessonType: LessonType) {
   switch (lessonType) {
+    case 'extra':
+      return { label: lessonTypeLabels[lessonType], text: '増)', className: 'prefix-lesson-extra' }
     case 'regular':
       return { label: lessonTypeLabels[lessonType], text: '通)', className: 'prefix-lesson-regular' }
     case 'makeup':
@@ -26,7 +24,7 @@ function getLessonPrefix(lessonType: LessonType) {
     case 'special':
       return { label: lessonTypeLabels[lessonType], text: '講)', className: 'prefix-lesson-special' }
     case 'trial':
-      return { label: lessonTypeLabels[lessonType], text: '体験)', className: 'prefix-lesson-trial' }
+      return { label: lessonTypeLabels[lessonType], text: '体)', className: 'prefix-lesson-trial' }
   }
 }
 
@@ -41,8 +39,136 @@ function getTeacherStar(teacherType: TeacherType) {
   }
 }
 
+function fitFontSize(options: {
+  initialFontSize: number
+  minFontSize: number
+  apply: (fontSize: number) => void
+  overflows: () => boolean
+}) {
+  const { initialFontSize, minFontSize, apply, overflows } = options
+  apply(initialFontSize)
+  if (!overflows()) return
+
+  let low = minFontSize
+  let high = initialFontSize
+  for (let index = 0; index < 6; index += 1) {
+    const mid = (low + high) / 2
+    apply(mid)
+    if (overflows()) high = mid
+    else low = mid
+  }
+  apply(low)
+}
+
+function fitTeacherTextForBoard(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
+    if (!node.textContent?.trim()) return
+
+    node.style.overflow = 'hidden'
+    node.style.textOverflow = 'clip'
+    // 講師名は必ず 1 行で表示し、幅が足りない場合はフォントを縮める (縦書き見えを避ける)
+    node.style.whiteSpace = 'nowrap'
+    node.style.width = '100%'
+    node.style.height = '100%'
+
+    fitFontSize({
+      initialFontSize: 20,
+      minFontSize: 7.5,
+      apply: (fontSize) => {
+        node.style.fontSize = `${fontSize}px`
+        node.style.lineHeight = fontSize > 15 ? '1.02' : '1.08'
+      },
+      overflows: () => node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1,
+    })
+  })
+}
+
+function hasVisibleText(node: HTMLElement) {
+  return Boolean(node.textContent?.trim())
+}
+
+function fitStudentNameAndDetailTextForBoard(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((inner) => {
+    if (!hasVisibleText(inner)) return
+
+    const nameRow = inner.querySelector<HTMLElement>('.sa-student-name-row')
+    const nameNode = nameRow
+      ? Array.from(nameRow.querySelectorAll<HTMLElement>('.sa-student-name')).find((entry) => !entry.classList.contains('sa-student-name-note')) ?? null
+      : null
+    const originDateNode = nameRow?.querySelector<HTMLElement>('.sa-student-origin-date') ?? null
+    const detail = inner.querySelector<HTMLElement>('.sa-student-detail')
+    if (!nameNode && !originDateNode && !detail) return
+
+    fitFontSize({
+      initialFontSize: 19,
+      minFontSize: 7,
+      apply: (fontSize) => {
+        if (nameNode) {
+          nameNode.style.fontSize = `${fontSize}px`
+          nameNode.style.lineHeight = '1'
+          nameNode.style.minHeight = '0'
+          nameNode.style.whiteSpace = 'nowrap'
+        }
+        if (originDateNode) {
+          originDateNode.style.fontSize = `${fontSize}px`
+          originDateNode.style.lineHeight = '1'
+          originDateNode.style.minHeight = '0'
+          originDateNode.style.whiteSpace = 'nowrap'
+        }
+        if (detail) {
+          detail.style.fontSize = `${fontSize}px`
+          detail.style.lineHeight = '1'
+          detail.style.minHeight = '0'
+          detail.style.gap = '0'
+          detail.style.whiteSpace = 'nowrap'
+          detail.style.overflow = 'hidden'
+          detail.style.textOverflow = 'clip'
+        }
+      },
+      overflows: () => {
+        const nameOverflow = nameRow ? nameRow.scrollWidth > nameRow.clientWidth + 1 : false
+        const detailOverflow = detail ? detail.scrollWidth > detail.clientWidth + 1 : false
+        const heightOverflow = inner.scrollHeight > inner.clientHeight + 1
+        return nameOverflow || detailOverflow || heightOverflow
+      },
+    })
+  })
+}
+
+function fitMemoTextForBoard(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('.sa-student-name-note').forEach((node) => {
+    if (!node.textContent?.trim()) return
+
+    node.style.whiteSpace = 'pre-line'
+    node.style.overflow = 'hidden'
+    node.style.textOverflow = 'clip'
+    node.style.display = '-webkit-box'
+    node.style.boxSizing = 'border-box'
+    node.style.paddingBottom = '1px'
+    node.style.setProperty('-webkit-box-orient', 'vertical')
+    node.style.setProperty('-webkit-line-clamp', '2')
+
+    fitFontSize({
+      initialFontSize: 20,
+      minFontSize: 5.5,
+      apply: (fontSize) => {
+      node.style.fontSize = `${fontSize}px`
+        node.style.lineHeight = String(getMemoLineHeight(fontSize))
+      },
+      overflows: () => node.scrollHeight > node.clientHeight + 1 || node.scrollWidth > node.clientWidth + 1,
+    })
+  })
+}
+
+function applyBoardTextSizing(root: HTMLElement) {
+  fitTeacherTextForBoard(root)
+  fitMemoTextForBoard(root)
+  fitStudentNameAndDetailTextForBoard(root)
+}
+
 type BoardGridProps = {
   cells: SlotCell[]
+  linkResolutionCells?: SlotCell[]
   selectedStudentId: string | null
   highlightedCell: { cellId: string; deskIndex: number; studentIndex: number } | null
   highlightedHolidayDate: string | null
@@ -58,6 +184,7 @@ type BoardGridProps = {
 
 export function BoardGrid({
   cells,
+  linkResolutionCells,
   selectedStudentId,
   highlightedCell,
   highlightedHolidayDate,
@@ -70,6 +197,29 @@ export function BoardGrid({
   onTeacherClick,
   onStudentClick,
 }: BoardGridProps) {
+  const gridRef = useRef<HTMLDivElement | null>(null)
+  const linkedLessonDestinationByStatusId = useMemo(
+    () => buildLinkedLessonDestinationMap(linkResolutionCells ?? cells),
+    [cells, linkResolutionCells],
+  )
+
+  useLayoutEffect(() => {
+    const root = gridRef.current
+    if (!root) return
+
+    let frameId = window.requestAnimationFrame(() => applyBoardTextSizing(root))
+    const handleResize = () => {
+      window.cancelAnimationFrame(frameId)
+      frameId = window.requestAnimationFrame(() => applyBoardTextSizing(root))
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.cancelAnimationFrame(frameId)
+      window.removeEventListener('resize', handleResize)
+    }
+  }, [cells, linkResolutionCells])
+
   const renderStudentCell = (
     cell: SlotCell,
     deskIndex: number,
@@ -110,7 +260,11 @@ export function BoardGrid({
       : statusEntry
         ? `${resolveStudentDisplayName(statusEntry.name)}(${statusLabel}`
         : (memoLabel ?? '')
-    const makeupSourceDateLabel = effectiveName && resolvedLessonType === 'makeup' ? formatMakeupSourceDate(effectiveMakeupSourceDate) : ''
+    const linkedDestination = statusEntry ? linkedLessonDestinationByStatusId.get(statusEntry.id) : null
+    const makeupSourceDateLabel = effectiveName && resolvedLessonType === 'makeup' ? formatShortDateLabel(effectiveMakeupSourceDate) : ''
+    const moveDestinationDateLabel = statusEntry?.status === 'moved' ? formatShortDateLabel(statusEntry.moveDestinationDateKey) : ''
+    const linkedDestinationDateLabel = statusEntry ? formatShortDateLabel(linkedDestination?.dateKey) : ''
+    const visibleDateLabel = makeupSourceDateLabel || moveDestinationDateLabel || linkedDestinationDateLabel
     const displayGrade = effectiveName ? resolveStudentGradeLabel(effectiveName, effectiveGrade, cell.dateKey, effectiveBirthDate) : ''
     const displaySubject = resolveDisplayedSubjectForGrade(effectiveSubject, displayGrade || effectiveGrade)
     const displaySubjectWithNote = `${displaySubject}${effectiveNoteSuffix}`
@@ -120,8 +274,7 @@ export function BoardGrid({
     const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
     const hasMemo = !studentName && Boolean(memoLabel)
     const hasStatus = !studentName && Boolean(statusEntry) && !hasMemo
-    const memoFirstLine = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n')[0] : ''
-    const memoRestLines = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(1).join('\n') : ''
+    const memoText = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(0, 2).join('\n') : ''
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const statusNotice = statusEntry
       ? [getStudentStatusLabel(statusEntry.status), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
@@ -150,53 +303,56 @@ export function BoardGrid({
         data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
       >
         <div className="sa-student-inner">
-          <span className="sa-student-name-row">
+          {hasMemo ? (
             <span
-              className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasMemo ? ' sa-student-name-note' : ''}${hasStatus ? ' sa-student-name-absence' : ''}`}
+              className={`sa-student-name sa-student-name-note${hasWarning ? ' sa-student-name-warning' : ''}`}
+              style={getMemoTextStyle(memoText)}
               data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
               title={hoverText}
             >
-              {hasMemo ? memoFirstLine : displayName}
+              {memoText}
             </span>
-            {makeupSourceDateLabel ? <span className="sa-student-origin-date">{makeupSourceDateLabel}</span> : null}
-          </span>
-          {hasMemo && memoRestLines ? (
-            <span
-              className="sa-student-name sa-student-name-note sa-student-name-note-rest"
-              style={getMemoTextStyle(memoRestLines)}
-            >
-              {memoRestLines}
-            </span>
-          ) : null}
-          {hasMemo ? null : (
-            <span className={`sa-student-detail${hasStatus ? ' sa-student-detail-muted' : ''}`}>
-              {lessonPrefix || teacherStar ? (
-                <span className="sa-student-markers">
-                  {lessonPrefix ? (
-                    <span
-                      className={`sa-student-detail-prefix ${lessonPrefix.className}`}
-                      title={lessonPrefix.label}
-                      aria-label={lessonPrefix.label}
-                    >
-                      {lessonPrefix.text}
-                    </span>
-                  ) : null}
-                  {teacherStar ? (
-                    <span
-                      className={`sa-student-star ${teacherStar.className}`}
-                      title={teacherStar.label}
-                      aria-label={teacherStar.label}
-                    >
-                      ★
-                    </span>
-                  ) : null}
+          ) : (
+            <>
+              <span className="sa-student-name-row">
+                <span
+                  className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasStatus ? ' sa-student-name-absence' : ''}`}
+                  data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
+                  title={hoverText}
+                >
+                  {displayName}
                 </span>
-              ) : null}
-              <>
-                <span className="sa-student-detail-grade">{displayGrade}</span>
-                <span className="sa-student-detail-subject">{displaySubjectWithNote}</span>
-              </>
-            </span>
+                {visibleDateLabel ? <span className="sa-student-origin-date">{visibleDateLabel}</span> : null}
+              </span>
+              <span className={`sa-student-detail${hasStatus ? ' sa-student-detail-muted' : ''}`}>
+                {lessonPrefix || teacherStar ? (
+                  <span className="sa-student-markers">
+                    {lessonPrefix ? (
+                      <span
+                        className={`sa-student-detail-prefix ${lessonPrefix.className}`}
+                        title={lessonPrefix.label}
+                        aria-label={lessonPrefix.label}
+                      >
+                        {lessonPrefix.text}
+                      </span>
+                    ) : null}
+                    {teacherStar ? (
+                      <span
+                        className={`sa-student-star ${teacherStar.className}`}
+                        title={teacherStar.label}
+                        aria-label={teacherStar.label}
+                      >
+                        ★
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+                <>
+                  <span className="sa-student-detail-grade">{displayGrade}</span>
+                  <span className="sa-student-detail-subject">{displaySubjectWithNote}</span>
+                </>
+              </span>
+            </>
           )}
         </div>
       </td>
@@ -204,6 +360,8 @@ export function BoardGrid({
   }
 
   const hasManualTeacherWarning = (_desk: SlotCell['desks'][number]) => false
+
+  const hasUnavailableTeacherWarning = (desk: SlotCell['desks'][number]) => Boolean(desk.teacherUnavailableWarning)
 
   const getTeacherAssignmentHint = (desk: SlotCell['desks'][number]) => {
     if (desk.teacherAssignmentSource === 'schedule-registration') return '日程表より登録'
@@ -262,7 +420,7 @@ export function BoardGrid({
       specialPeriodSegments.push({
         type: 'gap',
         key: `gap_${dayCursor}`,
-        colSpan: (startIndex - dayCursor) * 3,
+        colSpan: (startIndex - dayCursor) * 4,
       })
     }
 
@@ -272,7 +430,7 @@ export function BoardGrid({
     specialPeriodSegments.push({
       type: 'band',
       key: period.id,
-      colSpan: daySpan * 3,
+      colSpan: daySpan * 4,
       label: period.label,
     })
     dayCursor = period.endIndex + 1
@@ -282,12 +440,12 @@ export function BoardGrid({
     specialPeriodSegments.push({
       type: 'gap',
       key: `gap_tail_${dayCursor}`,
-      colSpan: (days.length - dayCursor) * 3,
+      colSpan: (days.length - dayCursor) * 4,
     })
   }
 
   return (
-    <div className="slot-adjust-grid" role="grid" aria-label="週次のコマ調整テーブル" data-testid="slot-adjust-grid">
+    <div ref={gridRef} className="slot-adjust-grid" role="grid" aria-label="週次のコマ調整テーブル" data-testid="slot-adjust-grid">
       <table>
           <thead>
             {specialPeriodSegments.length > 0 ? (
@@ -309,7 +467,7 @@ export function BoardGrid({
               {days.map((day) => (
                 <th
                   key={day.dateKey}
-                  colSpan={3}
+                  colSpan={4}
                   className={`sa-day-header sa-day-group-header${day.isOpenDay ? '' : ' sa-day-inactive'}${highlightedHolidayDate === day.dateKey ? ' sa-day-header-picked' : ''}`}
                   data-testid={`day-header-${day.dateKey}`}
                   onClick={(e) => onDayHeaderClick(day.dateKey, e.clientX, e.clientY)}
@@ -321,7 +479,8 @@ export function BoardGrid({
             <tr className={`sa-header-row2${specialPeriodSegments.length > 0 ? ' has-periods' : ''}`}>
               <th className="sa-time-sub-header"></th>
               {days.flatMap((day) => ([
-                <th key={`${day.dateKey}_teacher`} className={`sa-sub-header sa-day-group-start${day.isOpenDay ? '' : ' sa-day-inactive'}`}>講師</th>,
+                <th key={`${day.dateKey}_seat`} className={`sa-sub-header sa-seat-header sa-day-group-start${day.isOpenDay ? '' : ' sa-day-inactive'}`}>席</th>,
+                <th key={`${day.dateKey}_teacher`} className={`sa-sub-header${day.isOpenDay ? '' : ' sa-day-inactive'}`}>講師</th>,
                 <th key={`${day.dateKey}_student1`} className={`sa-sub-header${day.isOpenDay ? '' : ' sa-day-inactive'}`}>生徒</th>,
                 <th key={`${day.dateKey}_student2`} className={`sa-sub-header sa-day-group-end${day.isOpenDay ? '' : ' sa-day-inactive'}`}>生徒</th>,
               ]))}
@@ -334,9 +493,10 @@ export function BoardGrid({
 
               return Array.from({ length: deskCount }, (_, deskIndex) => {
                 const isFirstDesk = deskIndex === 0
+                const isLastDesk = deskIndex === deskCount - 1
 
                 return (
-                  <tr key={`${slotNumber}_${deskIndex}`} className={isFirstDesk ? 'sa-slot-first' : ''}>
+                  <tr key={`${slotNumber}_${deskIndex}`} className={[isFirstDesk ? 'sa-slot-first' : '', isLastDesk ? 'sa-slot-last' : ''].filter(Boolean).join(' ')}>
                     {isFirstDesk ? (
                       <td className="sa-time-cell" rowSpan={deskCount}>
                         <div className="sa-time-cell-inner">
@@ -351,7 +511,9 @@ export function BoardGrid({
 
                       const desk = cell.desks[deskIndex]
                       const lesson = desk.lesson
-                      const teacherWarning = hasManualTeacherWarning(desk)
+                      const teacherManualWarning = hasManualTeacherWarning(desk)
+                      const teacherUnavailableWarning = hasUnavailableTeacherWarning(desk)
+                      const teacherWarning = teacherManualWarning || teacherUnavailableWarning
                       const teacherAssignmentHint = getTeacherAssignmentHint(desk)
                       const teacherClassName = [
                         'sa-teacher',
@@ -370,14 +532,21 @@ export function BoardGrid({
                         (highlightedCell?.cellId === cell.id && highlightedCell.deskIndex === deskIndex && highlightedCell.studentIndex === 1)
                       return [
                         <td
+                          key={`${cell.id}_${deskIndex}_seat`}
+                          className={`sa-seat-number sa-day-group-start${!cell.isOpenDay ? ' sa-inactive' : ''}`}
+                          data-testid={`seat-number-cell-${cell.id}-${deskIndex}`}
+                        >
+                          {cell.isOpenDay ? deskIndex + 1 : ''}
+                        </td>,
+                        <td
                           key={`${cell.id}_${deskIndex}_teacher`}
-                          className={`${teacherClassName} sa-day-group-start`}
+                          className={teacherClassName}
                           onClick={(event) => onTeacherClick(cell.id, deskIndex, event.clientX, event.clientY)}
                           data-testid={`teacher-cell-${cell.id}-${deskIndex}`}
                         >
                           <div
                             className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}`}
-                            title={teacherWarning ? '手動追加のため注意' : teacherAssignmentHint}
+                            title={teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : teacherAssignmentHint)}
                           >
                             {cell.isOpenDay ? desk.teacher : ''}
                           </div>

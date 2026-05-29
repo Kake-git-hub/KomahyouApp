@@ -26,6 +26,7 @@
 - 生徒日程表 / 講師日程表の別タブ出力
 - ローカル自動保存とバックアップ JSON の書き出し / 復元
 - 開発者画面での教室編集、利用中 / 停止中の切り替え、管理者アカウント編集
+- `/billing` で請求書自動化支援画面を開き、許可済み開発者アカウントだけが月次生徒数・単価・請求金額を管理できる
 - ローカル運用または Functions 有効時は開発者画面で教室追加 / 削除も可能
 - 管理者は割り当てられた教室だけ開けて、停止中は停止画面のみ表示
 - 本番環境のアプリ起点 URL は `https://komahyouapp-prod.web.app/` を使う
@@ -65,6 +66,8 @@
 - Spark 無料プランでも開発者画面の `教室を追加` ボタンから、Authentication で作成済みの UID を貼り付けて `members` / `classrooms` / `classroomSnapshots` を追加できる
 - 新規教室と初期状態の特別講習データは空で開始し、過去のサンプル講習データはロード時に除去する
 - 祝日データは保持せず、全教室で平日扱いに統一する
+- 請求書自動化支援では各月15日0:00時点の在籍生徒数を月次スナップショットとして扱い、支払期限は選択月の翌月末日とする
+- `/billing` へアクセスできるのは Firebase Auth のログインメールが `dai.in.the.mood@gmail.com` または `bkkdmzn@gmail.com` の開発者ユーザーのみ
 
 ## 設計メモ
 
@@ -78,6 +81,7 @@
 - 現在の採用方針は Firebase です
 - 現段階の外部保存は Firestore の `workspaces/{workspaceKey}/classroomSnapshots/{classroomId}` に教室単位で同期します
 - Firebase Hosting で `dist` を配信し、Firestore に教室メタ情報と snapshot を保存します
+- Firebase Hosting の `/` と `/index.html` は `no-store` で配信し、deploy 後のリロードで旧版 HTML が残らないようにします
 - Blaze へ移行して Functions と Cloud Storage を有効化すると、`workspace-auto-backups/{workspaceKey}/{backupDateKey}.json` に日次サーバーバックアップを保存できます
 - Spark 前提では管理者アカウント削除 / 管理者メール変更はアプリ内で行わず、Firebase Console で手動更新してください
 - 最初の教室を作るときは `npm run firebase:first-classroom` を実行すると、Firebase Console に貼る JSON 一式を対話形式で生成できます
@@ -85,6 +89,7 @@
 - アプリ自体は `https://komahyouapp-prod.web.app/` を直接開いて運用します
 - `firebase/firestore.rules` を適用し、`.env` に `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID` / `VITE_FIREBASE_APP_ID` / `VITE_FIREBASE_WORKSPACE_KEY` を設定すると有効化されます
 - `VITE_FIREBASE_ENABLE_FUNCTIONS=true` は Blaze へ移行する場合のみ使ってください
+- Gmail API で請求書PDF付き下書きを作成する場合は、Google Cloud で OAuth クライアントを作成し、`.env` に `VITE_GOOGLE_OAUTH_CLIENT_ID` を設定してください。スコープは `https://www.googleapis.com/auth/gmail.compose` を使用します
 - サーバー側の自動バックアップを使う場合は Cloud Storage も有効化し、`npm run deploy:firebase:with-functions` で Functions を含めてデプロイしてください
 - `/KomahyouApp/...` 転送経路は互換性のため残していますが、現運用では本番 Hosting のルート URL を使います
 - 詳細な構成は [docs/firebase-backend.md](docs/firebase-backend.md) を参照してください
@@ -100,6 +105,8 @@ npm run build:firebase
 npm run build:functions
 npm run firebase:first-classroom
 npx firebase-tools deploy --only hosting,firestore
+npm run verify:firebase:live
+npm run deploy:firebase
 npm run deploy:firebase:with-functions
 npm run test:unit
 npm run test:e2e -- tests/schedule-board.spec.ts

@@ -1,4 +1,4 @@
-export type LessonType = 'regular' | 'makeup' | 'special' | 'trial'
+export type LessonType = 'extra' | 'regular' | 'makeup' | 'special' | 'trial'
 
 export type TeacherType = 'normal' | 'substitute' | 'outside'
 
@@ -18,7 +18,7 @@ export type GradeLabel =
 
 export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '生' | '物' | '化' | '社'
 
-export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended'
+export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended' | 'moved'
 
 export type StudentEntry = {
   id: string
@@ -29,6 +29,8 @@ export type StudentEntry = {
   noteSuffix?: string
   makeupSourceDate?: string
   makeupSourceLabel?: string
+  sameDayMoveSourceDate?: string
+  sameDayMoveSourceLabel?: string
   specialSessionId?: string
   specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
@@ -50,6 +52,8 @@ export type StudentStatusEntry = {
   noteSuffix?: string
   makeupSourceDate?: string
   makeupSourceLabel?: string
+  sameDayMoveSourceDate?: string
+  sameDayMoveSourceLabel?: string
   specialSessionId?: string
   specialStockSource?: 'session' | 'manual'
   manualAdded?: boolean
@@ -59,6 +63,8 @@ export type StudentStatusEntry = {
   teacherName: string
   dateKey: string
   slotNumber: number
+  moveDestinationDateKey?: string
+  moveDestinationSlotNumber?: number
   recordedAt: string
   status: StudentStatusKind
   sourceLessonId: string
@@ -80,6 +86,7 @@ export type DeskCell = {
   teacherAssignmentSource?: 'manual' | 'manual-replaced' | 'schedule-registration' | 'deleted'
   teacherAssignmentSessionId?: string
   teacherAssignmentTeacherId?: string
+  teacherUnavailableWarning?: boolean
   memoSlots?: [string | null, string | null]
   statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null]
   lesson?: DeskLesson

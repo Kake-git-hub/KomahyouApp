@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -211,19 +211,35 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     ])
   })
 
-  it('serializes only lecture count adjustments for student schedule counts', () => {
+  it('serializes regular and lecture count adjustments for student schedule counts', () => {
     const adjustments = buildSerializedScheduleCountAdjustments({
       cells: [createManualScheduleCell()],
-      scheduleCountAdjustments: [{
-        studentKey: 'student-1',
-        subject: '英',
-        countKind: 'special',
-        dateKey: '2026-03-25',
-        delta: -1,
-      }],
+      scheduleCountAdjustments: [
+        {
+          studentKey: 'student-1',
+          subject: '数',
+          countKind: 'regular',
+          dateKey: '2026-03-24',
+          delta: -1,
+        },
+        {
+          studentKey: 'student-1',
+          subject: '英',
+          countKind: 'special',
+          dateKey: '2026-03-25',
+          delta: -1,
+        },
+      ],
     })
 
     expect(adjustments).toEqual([
+      {
+        studentKey: 'student-1',
+        subject: '数',
+        countKind: 'regular',
+        dateKey: '2026-03-24',
+        delta: -1,
+      },
       {
         studentKey: 'student-1',
         subject: '英',
@@ -234,7 +250,353 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     ])
   })
 
-  it('keeps regular desired counts based on contractual occurrences even when regular deletions exist', () => {
+  it('links board-visible lessons by managed student id even when the stored display name is stale', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    const cell = createManualScheduleCell()
+    cell.desks[0].lesson!.studentSlots[0]!.name = '旧表示名'
+
+    openStudentScheduleHtml({
+      cells: [cell],
+      plannedCells: [],
+      students: [createStudent({ displayName: '新表示名' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(student?.name).toBe('旧表示名')
+    expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('links board-visible lessons by normalized student name when managed student id is missing', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    const cell = createManualScheduleCell()
+    const studentEntry = cell.desks[0].lesson!.studentSlots[0]!
+    delete studentEntry.managedStudentId
+    studentEntry.name = '山野櫂'
+
+    openStudentScheduleHtml({
+      cells: [cell],
+      plannedCells: [],
+      students: [createStudent({ name: '山野 櫂', displayName: '山野　櫂' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(student?.name).toBe('山野櫂')
+    expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('does not link ambiguous display-name lessons to one student in all-student print view', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openAllScheduleHtml({
+      viewType: 'all-student',
+      cells: [{
+        id: '2026-03-24_3',
+        dateKey: '2026-03-24',
+        dayLabel: '火',
+        dateLabel: '3/24',
+        slotLabel: '3限',
+        slotNumber: 3,
+        timeLabel: '16:20-17:50',
+        isOpenDay: true,
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'lesson-ambiguous',
+            studentSlots: [{
+              id: 'entry-ambiguous',
+              name: '佐藤',
+              grade: '中2',
+              subject: '英',
+              lessonType: 'regular',
+              teacherType: 'normal',
+            }, null],
+          },
+        }],
+      }],
+      plannedCells: [],
+      students: [
+        createStudent({ id: 'student-sato-taro', name: '佐藤 太郎', displayName: '佐藤', birthDate: '2012-05-01' }),
+        createStudent({ id: 'student-sato-hanako', name: '佐藤 花子', displayName: '佐藤', birthDate: '2012-09-01' }),
+      ],
+      teachers: [createTeacher()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      classroomStorageKey: 'classroom_green',
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(student?.name).toBe('佐藤')
+    expect(student?.linkedStudentId).toBeUndefined()
+    expect(html).toContain('getStudentAssignmentKeys(student).flatMap')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('shows submitted status without a QR resubmission reset action', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      location: { origin: 'https://komahyouapp-prod.web.app' },
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      specialSessions: [{
+        id: 'session-1',
+        label: '春期講習',
+        startDate: '2026-03-20',
+        endDate: '2026-03-31',
+        teacherInputs: {},
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: [],
+            regularBreakSlots: [],
+            subjectSlots: { 数: 2 },
+            regularOnly: false,
+            countSubmitted: true,
+            submissionToken: 'submittedtoken123456',
+            updatedAt: '2026-03-01T00:00:00.000Z',
+          },
+        },
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-01T00:00:00.000Z',
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('希望<br>提出済')
+    expect(html).not.toContain('submission-reset-badge')
+    expect(html).not.toContain('schedule-submission-reset')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('stores schedule notices by classroom and shares student common notices by grade', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openAllScheduleHtml({
+      viewType: 'all-student',
+      cells: [],
+      plannedCells: [],
+      students: [
+        createStudent({ id: 'student-1', birthDate: '2012-05-01' }),
+        createStudent({ id: 'student-2', name: '佐藤 花子', displayName: '佐藤', birthDate: '2012-09-01' }),
+        createStudent({ id: 'student-3', name: '鈴木 次郎', displayName: '鈴木', birthDate: '2011-05-01' }),
+      ],
+      teachers: [],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: {
+        closedWeekdays: [0],
+        holidayDates: [],
+        forceOpenDates: [],
+        scheduleNotes: {
+          'student:student-common-grade-中2': '中2 共通連絡',
+          'student:student-student-1': '山田 個別連絡',
+        },
+      },
+      classroomStorageKey: 'classroom_green',
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain("const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'))")
+    expect(html).toContain("schedule-note:' + STORAGE_SCOPE + ':' + BASE_VIEW_TYPE")
+    expect(html).toContain('共通連絡事項(学年別)')
+    expect(html).toContain("var gradeCommonKey = 'student-common-grade-' + (student.currentGradeLabel || '未設定')")
+    expect(html).toContain('renderBottomSection(gradeCommonKey')
+    expect(html).toContain('中2 共通連絡')
+    expect(html).toContain('山田 個別連絡')
+    expect(html).toContain("type: 'schedule-note-update'")
+    expect(html).toContain('delete clone.scheduleNotes')
+    expect(html).toContain('syncScheduleNoteInputs()')
+    expect(html).not.toContain("renderBottomSection('student-common'")
+
+    vi.unstubAllGlobals()
+  })
+
+  it('opens print-all schedules into the prepared named popup window', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+    } as unknown as Window
+    const open = vi.fn(() => popup)
+    vi.stubGlobal('window', {
+      open,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openAllScheduleHtml({
+      viewType: 'all-teacher',
+      targetWindowName: 'schedule-print-all-all-teacher-123',
+      cells: [],
+      plannedCells: [],
+      students: [],
+      teachers: [],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      classroomStorageKey: 'classroom_green',
+    })
+
+    expect(open).toHaveBeenCalledWith('', 'schedule-print-all-all-teacher-123')
+    expect(write.mock.calls[0]?.[0]).toContain('印刷用講師日程表')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('renders schedule cells from grouped date-slot assignments instead of last-entry overwrite', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('function groupScheduleEntriesBySlot(entries)')
+    expect(html).toContain('const keyMap = groupScheduleEntriesBySlot(entries)')
+    expect(html).toContain('const assignments = keyMap.get(dateHeader.dateKey + \'_\' + slotNumber) || []')
+    expect(html).toContain('renderStudentCellCards(assignments)')
+    expect(html).toContain('const slotEntries = keyMap.get(dateHeader.dateKey + \'_\' + slotNumber) || []')
+    expect(html).not.toContain('new Map(entries.map((entry) => [entry.dateKey + \'_\' + entry.slotNumber, entry]))')
+
+    vi.unstubAllGlobals()
+  })
+  it('applies regular deletion adjustments to regular desired counts', () => {
     const write = vi.fn()
     const popup = {
       closed: false,
@@ -271,15 +633,22 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     const html = write.mock.calls[0]?.[0] as string
     expect(typeof html).toBe('string')
-    // Verify embedded payload: 4 expected regular occurrences for 数, and no countAdjustments applied to regular
+    // Verify embedded payload: March has 5 Tuesdays, and board deletion adjustments are passed through for desired counts.
     const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
     const mathOccurrences = payload.expectedRegularOccurrences.filter((o: { subject: string }) => o.subject === '数')
-    // Function returns full participant period; March has 5 Tuesdays (no monthly cap)
     const marchMathOccurrences = mathOccurrences.filter((o: { dateKey: string }) => o.dateKey >= '2026-03-01' && o.dateKey <= '2026-03-31')
     expect(marchMathOccurrences).toHaveLength(5)
-    expect(payload.countAdjustments).toEqual([])
+    expect(payload.countAdjustments).toEqual([{
+      studentKey: 'student-1',
+      subject: '数',
+      countKind: 'regular',
+      dateKey: '2026-03-10',
+      delta: -2,
+    }])
+    expect(html).toContain("const regularCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'regular')")
+    expect(html).toContain('const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments)')
     vi.unstubAllGlobals()
   })
 
@@ -464,6 +833,191 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('shows the assigned destination date next to absent statuses in student schedules', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [
+        {
+          id: '2026-04-01_1',
+          dateKey: '2026-04-01',
+          dayLabel: '水',
+          dateLabel: '4/1',
+          slotLabel: '1限',
+          slotNumber: 1,
+          timeLabel: '13:00-14:30',
+          isOpenDay: true,
+          desks: [
+            {
+              id: '2026-04-01_1_desk_1',
+              teacher: '田中講師',
+              statusSlots: [
+                {
+                  id: 'status-1',
+                  studentId: 'student-entry-1',
+                  sourceManagedLesson: true,
+                  name: '山田',
+                  managedStudentId: 'student-1',
+                  grade: '中3',
+                  subject: '数',
+                  lessonType: 'regular',
+                  teacherType: 'normal',
+                  teacherName: '田中講師',
+                  dateKey: '2026-04-01',
+                  slotNumber: 1,
+                  recordedAt: '2026-04-01T00:00:00Z',
+                  status: 'absent',
+                  sourceLessonId: 'managed-1',
+                },
+                null,
+              ],
+            },
+          ],
+        },
+        {
+          id: '2026-04-08_2',
+          dateKey: '2026-04-08',
+          dayLabel: '水',
+          dateLabel: '4/8',
+          slotLabel: '2限',
+          slotNumber: 2,
+          timeLabel: '14:40-16:10',
+          isOpenDay: true,
+          desks: [
+            {
+              id: '2026-04-08_2_desk_1',
+              teacher: '田中講師',
+              lesson: {
+                id: 'makeup-1',
+                studentSlots: [
+                  {
+                    id: 'placed-1',
+                    name: '山田',
+                    managedStudentId: 'student-1',
+                    grade: '中3',
+                    subject: '数',
+                    lessonType: 'makeup',
+                    teacherType: 'normal',
+                    makeupSourceDate: '2026-04-01',
+                    makeupSourceLabel: '2026/4/1(水) 1限',
+                  },
+                  null,
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [createRegularLesson()],
+      defaultStartDate: '2026-04-01',
+      defaultEndDate: '2026-04-08',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const statusEntry = payload.cells[0]?.desks?.[0]?.statuses?.[0]
+    expect(statusEntry?.linkedDestinationDateKey).toBe('2026-04-08')
+    expect(statusEntry?.linkedDestinationSlotNumber).toBe(2)
+    expect(html).toContain("var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';")
+    expect(html).toContain("base += ' → ' + formatCompactDateSlot(arguments[6], arguments[7]);")
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps moved-origin board markers out of schedule payload statuses', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [
+        {
+          id: '2026-04-01_1',
+          dateKey: '2026-04-01',
+          dayLabel: '水',
+          dateLabel: '4/1',
+          slotLabel: '1限',
+          slotNumber: 1,
+          timeLabel: '13:00-14:30',
+          isOpenDay: true,
+          desks: [
+            {
+              id: '2026-04-01_1_desk_1',
+              teacher: '田中講師',
+              statusSlots: [
+                {
+                  id: 'status-moved-1',
+                  studentId: 'student-entry-1',
+                  sourceManagedLesson: true,
+                  name: '山田',
+                  managedStudentId: 'student-1',
+                  grade: '中3',
+                  subject: '数',
+                  lessonType: 'regular',
+                  teacherType: 'normal',
+                  teacherName: '田中講師',
+                  dateKey: '2026-04-01',
+                  slotNumber: 1,
+                  moveDestinationDateKey: '2026-04-08',
+                  moveDestinationSlotNumber: 2,
+                  recordedAt: '2026-04-01T00:00:00Z',
+                  status: 'moved',
+                  sourceLessonId: 'managed-1',
+                },
+                null,
+              ],
+            },
+          ],
+        },
+      ],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [createRegularLesson()],
+      defaultStartDate: '2026-04-01',
+      defaultEndDate: '2026-04-08',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.cells[0]?.desks?.[0]?.statuses).toEqual([])
+    vi.unstubAllGlobals()
+  })
+
   it('embeds middle-school legacy math subject normalization for lecture count registration', () => {
     const write = vi.fn()
     const popup = {
@@ -604,6 +1158,89 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('isHighSchoolOrAbove(s.grade)')
     expect(html).toContain('function formatTeacherTooltipEntry(student)')
     expect(html).toContain("return [getVerboseStatusLabel(student.status), student.name, lessonLabel].filter(Boolean).join(' / ');")
+    vi.unstubAllGlobals()
+  })
+
+  it('counts a 2-student slot as D when at least one attended student is high school or above', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [{
+        id: '2026-03-24_3',
+        dateKey: '2026-03-24',
+        dayLabel: '火',
+        dateLabel: '3/24',
+        slotLabel: '3限',
+        slotNumber: 3,
+        timeLabel: '16:20-17:50',
+        isOpenDay: true,
+        desks: [{
+          id: '2026-03-24_3_desk_1',
+          teacher: '田中講師',
+          statusSlots: [
+            {
+              id: 'status-high',
+              studentId: 'student-high',
+              sourceManagedLesson: true,
+              name: '高橋',
+              managedStudentId: 'student-high',
+              grade: '高1',
+              subject: '英',
+              lessonType: 'regular',
+              teacherType: 'normal',
+              teacherName: '田中講師',
+              dateKey: '2026-03-24',
+              slotNumber: 3,
+              recordedAt: '2026-03-24T00:00:00Z',
+              status: 'attended',
+              sourceLessonId: 'lesson-high',
+            },
+            {
+              id: 'status-elementary',
+              studentId: 'student-elementary',
+              sourceManagedLesson: true,
+              name: '佐藤',
+              managedStudentId: 'student-elementary',
+              grade: '小6',
+              subject: '算',
+              lessonType: 'regular',
+              teacherType: 'normal',
+              teacherName: '田中講師',
+              dateKey: '2026-03-24',
+              slotNumber: 3,
+              recordedAt: '2026-03-24T00:00:00Z',
+              status: 'attended',
+              sourceLessonId: 'lesson-elementary',
+            },
+          ],
+        }],
+      }],
+      plannedCells: [],
+      teachers: [createTeacher()],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0]
+    expect(typeof html).toBe('string')
+    expect(html).toContain("var hasHigh = attendedStatuses.some(function(s) { return isHighSchoolOrAbove(s.grade); });")
+    expect(html).toContain("var rank2 = hasHigh ? 'D' : 'B';")
     vi.unstubAllGlobals()
   })
 })
