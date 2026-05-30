@@ -51,7 +51,8 @@ export async function setHiddenDateInput(page: Page, testId: string, value: stri
 export async function setNumberInput(page: Page, testId: string, value: number) {
   await page.getByTestId(testId).evaluate((element, nextValue) => {
     const input = element as HTMLInputElement
-    input.value = String(nextValue)
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+    descriptor?.set?.call(input, String(nextValue))
     input.dispatchEvent(new Event('input', { bubbles: true }))
     input.dispatchEvent(new Event('change', { bubbles: true }))
   }, value)
