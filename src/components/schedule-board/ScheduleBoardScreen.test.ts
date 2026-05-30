@@ -1014,6 +1014,89 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(placedDateKeys).toEqual(['2026-03-16', '2026-03-23', '2026-03-30'])
   })
 
+  it('keeps managed regular teacher ids through schedule overlay for teacher schedules', () => {
+    const teachers = [{
+      ...initialTeachers[0]!,
+      id: 'teacher-ochiai',
+      name: 'Ochiai Taro',
+      displayName: 'Ochiai',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+      isHidden: false,
+    }]
+    const students = [{
+      ...initialStudents[0]!,
+      id: 'student-inoue',
+      name: 'Inoue Hana',
+      displayName: 'Inoue',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+      isHidden: false,
+    }]
+    const regularLessons = [{
+      id: 'regular-ochiai-inoue',
+      schoolYear: 2026,
+      teacherId: 'teacher-ochiai',
+      student1Id: 'student-inoue',
+      subject1: '数',
+      startDate: '2026-04-01',
+      endDate: '未定',
+      student2Id: '',
+      subject2: '',
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '',
+      nextStudent2Id: '',
+      nextSubject2: '',
+      dayOfWeek: 5,
+      slotNumber: 5,
+    }]
+
+    const planned = buildManagedScheduleCellsForRange({
+      range: { startDate: '2026-07-01', endDate: '2026-07-31', periodValue: '' },
+      fallbackStartDate: '2026-07-01',
+      fallbackEndDate: '2026-07-31',
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+    const plannedTarget = planned.find((cell) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)
+    const plannedDesk = plannedTarget?.desks.find((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 'student-inoue'))
+
+    expect(plannedDesk?.teacher).toBe('Ochiai')
+    expect(plannedDesk?.teacherAssignmentTeacherId).toBe('teacher-ochiai')
+
+    const legacyBoardWeek = planned.map((cell) => cell.id === plannedTarget?.id
+      ? {
+          ...cell,
+          desks: cell.desks.map((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 'student-inoue')
+            ? { ...desk, teacher: 'Ochiai ', teacherAssignmentTeacherId: undefined }
+            : desk),
+        }
+      : cell)
+
+    const actual = buildScheduleCellsForRange({
+      range: { startDate: '2026-07-01', endDate: '2026-07-31', periodValue: '' },
+      fallbackStartDate: '2026-07-01',
+      fallbackEndDate: '2026-07-31',
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      boardWeeks: [legacyBoardWeek],
+      suppressedRegularLessonOccurrences: [],
+    })
+    const actualTarget = actual.find((cell) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)
+    const actualDesk = actualTarget?.desks.find((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 'student-inoue'))
+
+    expect(actualDesk?.teacher).toBe('Ochiai')
+    expect(actualDesk?.teacherAssignmentTeacherId).toBe('teacher-ochiai')
+  })
+
   it('keeps all remaining weekly student placements when a regular lesson ends mid-month with fewer than four active weeks left', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {

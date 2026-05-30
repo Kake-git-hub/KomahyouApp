@@ -2566,6 +2566,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return map;
       }
 
+      function normalizeTeacherAssignmentName(value) {
+        return Array.from(String(value || '')).filter(function(char) { return char.trim(); }).join('');
+      }
+
       function buildTeacherAssignments(cells) {
         const map = new Map();
         cells.forEach((cell) => {
@@ -2573,7 +2577,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
             if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
             const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
-            const teacherKeys = [desk.teacherId, desk.teacher].filter(Boolean);
+            const teacherKeys = [desk.teacherId, desk.teacher, normalizeTeacherAssignmentName(desk.teacher)].filter(Boolean);
             teacherKeys.forEach((teacherKey) => {
               if (!map.has(teacherKey)) map.set(teacherKey, []);
               map.get(teacherKey).push(entry);
@@ -2623,9 +2627,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const teacherName = typeof desk.teacher === 'string' ? desk.teacher.trim() : '';
             if (!teacherName) continue;
             const teacherId = typeof desk.teacherId === 'string' ? desk.teacherId.trim() : '';
+            const teacherNameKey = normalizeTeacherAssignmentName(teacherName);
             const matchedTeacher = teacherId
               ? visibleTeachers.find((teacher) => teacher.id === teacherId)
-              : visibleTeachers.find((teacher) => teacher.name === teacherName || teacher.fullName === teacherName);
+              : visibleTeachers.find((teacher) => teacher.name === teacherName || teacher.fullName === teacherName || normalizeTeacherAssignmentName(teacher.name) === teacherNameKey || normalizeTeacherAssignmentName(teacher.fullName) === teacherNameKey);
             if (!matchedTeacher) continue;
             const hasLesson = Boolean(desk.lesson && Array.isArray(desk.lesson.students) && desk.lesson.students.some((student) => student && student.lessonType !== 'trial'));
             const hasStatus = Array.isArray(desk.statuses) && desk.statuses.some((statusEntry) => statusEntry && statusEntry.lessonType !== 'trial' && statusEntry.status !== 'moved');
@@ -3962,7 +3967,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!teacher) return { html: null, teacher: null };
         const showQr = shouldShowScheduleQr();
         const teacherIndex = typeof indexOverride === 'number' ? indexOverride : Math.max(0, teachers.findIndex((entry) => entry.id === teacher.id));
-        const entries = assignmentMap.get(teacher.id) || assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
+        const teacherNameKey = normalizeTeacherAssignmentName(teacher.name);
+        const teacherFullNameKey = normalizeTeacherAssignmentName(teacher.fullName);
+        const entries = assignmentMap.get(teacher.id) || assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) : undefined) || assignmentMap.get(teacherNameKey) || (teacherFullNameKey ? assignmentMap.get(teacherFullNameKey) : undefined) || [];
         const keyMap = groupScheduleEntriesBySlot(entries);
         const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
         const regularCounts = {};

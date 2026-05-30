@@ -1565,7 +1565,9 @@ export function buildTeacherSelectionOptions(params: {
   if (!targetDesk) return []
 
   const referenceDate = isTemplateMode ? (templateReferenceDate || cell.dateKey) : cell.dateKey
-  const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
+  const currentTeacher = targetDesk.teacherAssignmentTeacherId
+    ? teachers.find((teacher) => teacher.id === targetDesk.teacherAssignmentTeacherId)
+    : teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
   const visibleTeachers = teachers.filter((teacher) => {
     const status = resolveTeacherRosterStatus(teacher, referenceDate)
     return status !== '非表示' && status !== '退塾'
@@ -1701,6 +1703,7 @@ function buildManagedRegularLessonsRange(params: {
       // テンプレに明示的に設定された講師を忠実に反映し、「講師なし・生徒だけ」の状態を防ぐ。
       targetDesk.teacher = teacher ? getTeacherDisplayName(teacher) : '講師未割当'
       resetManagedTeacherAssignment(targetDesk)
+      targetDesk.teacherAssignmentTeacherId = row.teacherId || undefined
 
       if (!firstStudent && !secondStudent) {
         targetDesk.lesson = undefined
@@ -2169,6 +2172,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
           ...desk,
           statusSlots: cloneStatusSlots(desk.statusSlots),
           teacher: desk.manualTeacher ? desk.teacher : managedDesk.teacher,
+          teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
+          teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
+          teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : managedDesk.teacherAssignmentTeacherId,
           lesson: mergeManagedDeskLesson(lesson, managedDesk.lesson, cell.dateKey),
         }
       }
@@ -2193,6 +2199,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
               ...desk,
               statusSlots: cloneStatusSlots(desk.statusSlots),
               teacher: desk.manualTeacher ? desk.teacher : md.teacher,
+              teacherAssignmentSource: desk.manualTeacher ? desk.teacherAssignmentSource : undefined,
+              teacherAssignmentSessionId: desk.manualTeacher ? desk.teacherAssignmentSessionId : undefined,
+              teacherAssignmentTeacherId: desk.manualTeacher ? desk.teacherAssignmentTeacherId : md.teacherAssignmentTeacherId,
               lesson: mergeManagedDeskLesson(lesson, md.lesson, cell.dateKey),
             }
           }
@@ -2300,7 +2309,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
         targetDesk.manualTeacher = false
         targetDesk.teacherAssignmentSource = undefined
         targetDesk.teacherAssignmentSessionId = undefined
-        targetDesk.teacherAssignmentTeacherId = undefined
+        targetDesk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
         targetDesk.lesson = undefined
         continue
       }
@@ -2316,7 +2325,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       targetDesk.manualTeacher = false
       targetDesk.teacherAssignmentSource = undefined
       targetDesk.teacherAssignmentSessionId = undefined
-      targetDesk.teacherAssignmentTeacherId = undefined
+      targetDesk.teacherAssignmentTeacherId = managedDesk.teacherAssignmentTeacherId
       targetDesk.lesson = cloneDeskLesson(managedDesk.lesson)
     }
 
