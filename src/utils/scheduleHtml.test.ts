@@ -401,6 +401,54 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('links board-visible regular lessons by management data when the board name is ambiguous', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    const cell = createManualScheduleCell()
+    const studentEntry = cell.desks[0].lesson!.studentSlots[0]!
+    delete studentEntry.managedStudentId
+    studentEntry.name = '井上'
+
+    openStudentScheduleHtml({
+      cells: [cell],
+      plannedCells: [],
+      students: [
+        createStudent({ id: 'student-1', name: '井上 開斗', displayName: '井上' }),
+        createStudent({ id: 'student-2', name: '井上 花子', displayName: '井上', email: 'student2@example.com' }),
+      ],
+      teachers: [createTeacher()],
+      regularLessons: [createRegularLesson({ slotNumber: 3, student1Id: 'student-1', subject1: '数' })],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(student?.name).toBe('井上')
+    expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
   it('keeps student count tables printable while hiding only desired-count text in print', () => {
     const write = vi.fn()
     const popup = {
