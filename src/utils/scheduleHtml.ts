@@ -84,6 +84,7 @@ type SerializedCell = {
   isOpenDay: boolean
   desks: Array<{
     teacher: string
+    teacherId?: string
     statuses?: SerializedStudentStatusEntry[]
     lesson?: {
       note?: string
@@ -240,9 +241,8 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
       slotLabel: cell.slotLabel,
       timeLabel: cell.timeLabel,
       isOpenDay: cell.isOpenDay,
-      desks: cell.desks.map((desk) => ({
-        teacher: desk.teacher,
-        statuses: desk.statusSlots
+      desks: cell.desks.map((desk) => {
+        const statuses = desk.statusSlots
           ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
           .map((entry) => {
             const linkedDestination = linkedDestinationByStatusId.get(entry.id)
@@ -263,8 +263,8 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
               linkedDestinationDateKey: linkedDestination?.dateKey,
               linkedDestinationSlotNumber: linkedDestination?.slotNumber,
             }
-          }),
-        lesson: desk.lesson
+          })
+        const lesson = desk.lesson
           ? {
               note: desk.lesson.note,
               students: desk.lesson.studentSlots
@@ -283,8 +283,15 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
                   warning: student.warning,
                 })),
             }
-          : undefined,
-      })),
+          : undefined
+        if (!lesson && (!statuses || statuses.length === 0)) return null
+        return {
+          teacher: desk.teacher,
+          teacherId: desk.teacherAssignmentTeacherId,
+          statuses,
+          lesson,
+        }
+      }).filter((desk): desk is NonNullable<typeof desk> => desk !== null),
     }))
 }
 
@@ -2565,8 +2572,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           cell.desks.forEach((desk) => {
             const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
             if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
-            if (!map.has(desk.teacher)) map.set(desk.teacher, []);
-            map.get(desk.teacher).push({ dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' });
+            const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
+            const teacherKeys = [desk.teacherId, desk.teacher].filter(Boolean);
+            teacherKeys.forEach((teacherKey) => {
+              if (!map.has(teacherKey)) map.set(teacherKey, []);
+              map.get(teacherKey).push(entry);
+            });
           });
         });
         return map;
@@ -2611,7 +2622,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           for (const desk of cell.desks || []) {
             const teacherName = typeof desk.teacher === 'string' ? desk.teacher.trim() : '';
             if (!teacherName) continue;
-            const matchedTeacher = visibleTeachers.find((teacher) => teacher.name === teacherName || teacher.fullName === teacherName);
+            const teacherId = typeof desk.teacherId === 'string' ? desk.teacherId.trim() : '';
+            const matchedTeacher = teacherId
+              ? visibleTeachers.find((teacher) => teacher.id === teacherId)
+              : visibleTeachers.find((teacher) => teacher.name === teacherName || teacher.fullName === teacherName);
             if (!matchedTeacher) continue;
             const hasLesson = Boolean(desk.lesson && Array.isArray(desk.lesson.students) && desk.lesson.students.some((student) => student && student.lessonType !== 'trial'));
             const hasStatus = Array.isArray(desk.statuses) && desk.statuses.some((statusEntry) => statusEntry && statusEntry.lessonType !== 'trial' && statusEntry.status !== 'moved');
@@ -3948,7 +3962,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!teacher) return { html: null, teacher: null };
         const showQr = shouldShowScheduleQr();
         const teacherIndex = typeof indexOverride === 'number' ? indexOverride : Math.max(0, teachers.findIndex((entry) => entry.id === teacher.id));
-        const entries = assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
+        const entries = assignmentMap.get(teacher.id) || assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) || [] : []);
         const keyMap = groupScheduleEntriesBySlot(entries);
         const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
         const regularCounts = {};

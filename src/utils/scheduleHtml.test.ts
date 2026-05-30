@@ -1035,7 +1035,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
-    expect(payload.cells[0]?.desks?.[0]?.statuses).toEqual([])
+    expect(payload.cells[0]?.desks).toEqual([])
     vi.unstubAllGlobals()
   })
 
@@ -1222,6 +1222,74 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain("storage.setItem(rangeStoragePrefix + 'person', personId || '')")
     expect(html).toContain('personId: personId ||')
     expect(html).toContain('preferredRange.personId || DATA.defaultPersonId')
+    vi.unstubAllGlobals()
+  })
+
+  it('serializes teacher ids and omits empty desks so teacher schedules match board assignments with less payload', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [{
+        id: '2026-07-03_5',
+        dateKey: '2026-07-03',
+        dayLabel: '金',
+        dateLabel: '7/3',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:40-21:10',
+        isOpenDay: true,
+        desks: [
+          { id: '2026-07-03_5_desk_empty', teacher: '', statusSlots: [null, null] },
+          {
+            id: '2026-07-03_5_desk_1',
+            teacher: '旧表示名',
+            teacherAssignmentTeacherId: 'teacher-ochiai',
+            lesson: {
+              id: 'lesson-inoue',
+              studentSlots: [{
+                id: 'student-inoue-entry',
+                name: '井上',
+                managedStudentId: 'student-inoue',
+                grade: '中2',
+                subject: '数',
+                lessonType: 'regular',
+                teacherType: 'normal',
+              }, null],
+            },
+          },
+        ],
+      }],
+      plannedCells: [],
+      teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合', displayName: '落合' })],
+      defaultStartDate: '2026-07-01',
+      defaultEndDate: '2026-07-31',
+      defaultPersonId: 'teacher-ochiai',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.cells[0]?.desks).toHaveLength(1)
+    expect(payload.cells[0]?.desks?.[0]?.teacherId).toBe('teacher-ochiai')
+    expect(html).toContain('const teacherKeys = [desk.teacherId, desk.teacher].filter(Boolean);')
+    expect(html).toContain('assignmentMap.get(teacher.id)')
     vi.unstubAllGlobals()
   })
 
