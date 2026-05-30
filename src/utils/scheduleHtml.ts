@@ -2463,7 +2463,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
-        <button type="button" id="schedule-debug-button" class="secondary">診断JSON</button>
         <button type="button" id="schedule-apply-button">反映</button>
       </div>
     </div>`}
@@ -2484,7 +2483,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const pagesElement = document.getElementById('schedule-pages');
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
-      const debugButton = document.getElementById('schedule-debug-button');
       const applyButton = document.getElementById('schedule-apply-button');
       const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'));
       const sharedStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':' + BASE_VIEW_TYPE + ':';
@@ -2569,95 +2567,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var clone = { ...(payload || {}) };
         delete clone.scheduleNotes;
         return JSON.stringify(clone);
-      }
-
-      function downloadJsonFile(fileName, value) {
-        try {
-          var blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
-          var url = URL.createObjectURL(blob);
-          var anchor = document.createElement('a');
-          anchor.href = url;
-          anchor.download = fileName;
-          anchor.click();
-          URL.revokeObjectURL(url);
-        } catch {}
-      }
-
-      function buildScheduleDebugExport() {
-        var startDate = appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
-        var endDate = appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
-        if (startDate > endDate) {
-          var previous = startDate;
-          startDate = endDate;
-          endDate = previous;
-        }
-        var currentPersonId = appliedPersonId || DATA.defaultPersonId || '';
-        var visiblePeople = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
-        var currentPerson = visiblePeople.find(function(person) { return person.id === currentPersonId; }) || visiblePeople[0] || null;
-        var filteredActualCells = filterCells(startDate, endDate);
-        var filteredPlannedCells = (Array.isArray(DATA.plannedCells) ? DATA.plannedCells : []).filter(function(cell) {
-          return cell && cell.dateKey >= startDate && cell.dateKey <= endDate;
-        });
-        var diagnosticsInRange = (Array.isArray(DATA.debugLinkDiagnostics) ? DATA.debugLinkDiagnostics : []).filter(function(entry) {
-          return entry && entry.dateKey >= startDate && entry.dateKey <= endDate;
-        });
-        var debugExport = {
-          generatedAt: new Date().toISOString(),
-          viewType: VIEW_TYPE,
-          titleLabel: DATA.titleLabel,
-          range: {
-            startDate: startDate,
-            endDate: endDate,
-            periodValue: appliedPeriodValue || DATA.defaultPeriodValue || '',
-          },
-          defaultPersonId: DATA.defaultPersonId || '',
-          appliedPersonId: currentPerson ? currentPerson.id : currentPersonId,
-          selectedPerson: currentPerson ? {
-            id: currentPerson.id,
-            name: currentPerson.name,
-            fullName: currentPerson.fullName || currentPerson.name,
-          } : null,
-          diagnosticsInRange: diagnosticsInRange,
-          actualCells: filteredActualCells,
-          plannedCells: filteredPlannedCells,
-          countAdjustments: (Array.isArray(DATA.countAdjustments) ? DATA.countAdjustments : []).filter(function(entry) {
-            return entry && entry.dateKey >= startDate && entry.dateKey <= endDate;
-          }),
-          expectedRegularOccurrences: (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).filter(function(entry) {
-            return entry && entry.dateKey >= startDate && entry.dateKey <= endDate;
-          }),
-        };
-
-        if (VIEW_TYPE === 'student' && currentPerson) {
-          var assignmentMap = buildStudentAssignments(filteredActualCells);
-          var assignmentKeys = getStudentAssignmentKeys(currentPerson);
-          debugExport.assignmentKeys = assignmentKeys;
-          debugExport.assignments = assignmentKeys.flatMap(function(key) { return assignmentMap.get(key) || []; });
-          debugExport.relevantDiagnostics = diagnosticsInRange.filter(function(entry) {
-            return entry.linkedStudentId === currentPerson.id
-              || entry.name === currentPerson.name
-              || entry.name === currentPerson.fullName;
-          });
-        }
-
-        if (VIEW_TYPE === 'teacher' && currentPerson) {
-          var teacherAssignmentMap = buildTeacherAssignments(filteredActualCells);
-          debugExport.assignments = collectTeacherAssignmentEntries(teacherAssignmentMap, currentPerson);
-          debugExport.relevantDiagnostics = diagnosticsInRange.filter(function(entry) {
-            return entry.teacherAssignmentTeacherId === currentPerson.id
-              || entry.teacherName === currentPerson.name
-              || entry.deskTeacher === currentPerson.name
-              || entry.deskTeacher === currentPerson.fullName;
-          });
-        }
-
-        return debugExport;
-      }
-
-      function exportScheduleDebugJson() {
-        var rangeStart = appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate || 'range';
-        var personId = appliedPersonId || DATA.defaultPersonId || 'person';
-        downloadJsonFile('schedule-debug-' + VIEW_TYPE + '-' + rangeStart + '-' + personId + '.json', buildScheduleDebugExport());
       }
 
       function syncScheduleNoteInputs() {
@@ -5150,9 +5059,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         event.preventDefault();
         applyFilters();
       });
-      if (debugButton) {
-        debugButton.addEventListener('click', exportScheduleDebugJson);
-      }
       applyButton.addEventListener('click', applyFilters);
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;

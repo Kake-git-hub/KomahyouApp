@@ -705,7 +705,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
-  it('embeds popup student-link diagnostics and exposes the debug export button', () => {
+  it('embeds popup student-link diagnostics in the payload', () => {
     const write = vi.fn()
     const popup = {
       closed: false,
@@ -787,8 +787,8 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(diagnostic.slotCandidates).toEqual([
       { studentId: 'student-1', studentName: '井上 開斗', studentDisplayName: '井上' },
     ])
-    expect(html).toContain('id="schedule-debug-button"')
-    expect(html).toContain('function buildScheduleDebugExport()')
+    expect(html).not.toContain('id="schedule-debug-button"')
+    expect(html).not.toContain('function buildScheduleDebugExport()')
 
     vi.unstubAllGlobals()
   })
