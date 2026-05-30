@@ -412,6 +412,16 @@ export function buildExpectedRegularOccurrences(params: {
 
 function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: StudentRow[] = []): Omit<SchedulePayload, 'students' | 'teachers'> {
   const linkedStudentIdByName = new Map<string, string>()
+  const linkedStudentCandidates = linkedStudents.map((student) => {
+    const displayName = getStudentDisplayName(student)
+    return {
+      id: student.id,
+      keys: Array.from(new Set([
+        normalizeStudentNameLookupKey(student.name),
+        normalizeStudentNameLookupKey(displayName),
+      ].filter(Boolean))),
+    }
+  })
   const addLinkedStudentLookup = (key: string, studentId: string) => {
     const normalizedKey = normalizeStudentNameLookupKey(key)
     if (!normalizedKey) return
@@ -428,7 +438,27 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     addLinkedStudentLookup(student.name, student.id)
     addLinkedStudentLookup(displayName, student.id)
   })
-  const resolveLinkedStudentId = (studentName: string) => linkedStudentIdByName.get(normalizeStudentNameLookupKey(studentName)) || undefined
+  const resolveLinkedStudentId = (studentName: string) => {
+    const normalizedName = normalizeStudentNameLookupKey(studentName)
+    if (!normalizedName) return undefined
+
+    const exactMatch = linkedStudentIdByName.get(normalizedName)
+    if (exactMatch) return exactMatch
+    if (exactMatch === '') return undefined
+    if (normalizedName.length < 2) return undefined
+
+    const matchedStudentIds = new Set(
+      linkedStudentCandidates
+        .filter((student) => student.keys.some((key) => (
+          key.length >= 2
+          && key !== normalizedName
+          && (key.includes(normalizedName) || normalizedName.includes(key))
+        )))
+        .map((student) => student.id),
+    )
+
+    return matchedStudentIds.size === 1 ? Array.from(matchedStudentIds)[0] : undefined
+  }
   const paramsWithRegularLessons = params as OpenScheduleHtmlParams & {
     regularLessons?: RegularLessonRow[]
     regularLessonTemplateHistory?: RegularLessonTemplate[]
@@ -2711,6 +2741,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function toCountRows(countMap, desiredCountMap, forcedLabels, options) {
         var hideZeroZero = options && options.hideZeroZero;
+        var hideDesiredCountOnPrint = options && options.hideDesiredCountOnPrint;
         const mergedLabels = Array.from(new Set([
           ...(forcedLabels || []),
           ...Object.keys(countMap || {}),
@@ -2721,7 +2752,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const count = Number(countMap && countMap[label] ? countMap[label] : 0);
           const desiredCount = Number(desiredCountMap && desiredCountMap[label] ? desiredCountMap[label] : count);
           if (hideZeroZero && count === 0 && desiredCount === 0) return [];
-          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + '(' + desiredCount + ')</td></tr>'];
+          const desiredCountHtml = hideDesiredCountOnPrint
+            ? '<span class="print-only-hidden">(' + desiredCount + ')</span>'
+            : '(' + desiredCount + ')';
+          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + desiredCountHtml + '</td></tr>'];
         });
         return rows.length > 0 ? rows.join('') : '<tr><td>予定なし</td><td>0</td></tr>';
       }
@@ -3534,6 +3568,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const isTeacher = options && options.isTeacher;
         const salaryData = options && options.salaryData;
         const absenceTestId = options && options.absenceTestId ? options.absenceTestId : 'student-schedule-absence-table';
+        const studentRegularCountTitle = '通常回数<span class="print-only-hidden">(希望数)</span>';
+        const studentLectureCountTitle = '講習回数<span class="print-only-hidden">(希望数)</span>';
         const absenceSectionHtml = isTeacher
           ? ''
           : '<div class="box-stack"><div class="box-table-title">休み</div><table class="absence-table" data-testid="' + escapeHtml(absenceTestId) + '"><tbody>' + absenceRows + '</tbody></table></div>';
@@ -3550,7 +3586,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(getScheduleNoteValue(individualKey)) + '</textarea></div></div>' +
           absenceSectionHtml +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
-          '<div class="count-stack print-only-hidden"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
+          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">' + studentRegularCountTitle + '</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">' + studentLectureCountTitle + '</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
         '</div>';
       }
 
@@ -4005,7 +4041,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           : student.qrSvg ? '<span class="qr-code">' + student.qrSvg + '</span>' : '';
         const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
         var gradeCommonKey = 'student-common-grade-' + (student.currentGradeLabel || '未設定');
-        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, getVisibleSubjectsForStudent(student, startDate), {hideZeroZero: true}), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts, undefined, { hideDesiredCountOnPrint: true }), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, getVisibleSubjectsForStudent(student, startDate), { hideZeroZero: true, hideDesiredCountOnPrint: true }), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
         return { html: html, student: student };
       }
 
