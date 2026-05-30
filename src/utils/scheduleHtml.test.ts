@@ -1333,6 +1333,251 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps planned cells aligned with expected regular occurrences across template history', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    const teachers = [createTeacher({
+      id: 'teacher-english',
+      name: '三井',
+      displayName: '三井',
+      subjectCapabilities: [{ subject: '英', maxGrade: '高3' }],
+    })]
+    const students = [
+      createStudent({ id: 'student-old', name: '井上 陽斗', displayName: '井上陽斗', birthDate: '2012-04-02' }),
+      createStudent({ id: 'student-new', name: '黒田 遼', displayName: '黒田遼', birthDate: '2012-04-02', email: 'kuroda@example.com' }),
+    ]
+    const oldTemplate: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-04-01',
+      savedAt: '2026-04-01T00:00:00Z',
+      cells: [{
+        dayOfWeek: 5,
+        slotNumber: 5,
+        desks: [{
+          deskIndex: 1,
+          teacherId: 'teacher-english',
+          students: [{ studentId: 'student-old', subject: '英' }, null],
+        }],
+      }],
+    }
+    const newTemplate: RegularLessonTemplate = {
+      version: 1,
+      effectiveStartDate: '2026-08-01',
+      savedAt: '2026-08-01T00:00:00Z',
+      cells: [{
+        dayOfWeek: 5,
+        slotNumber: 5,
+        desks: [{
+          deskIndex: 1,
+          teacherId: 'teacher-english',
+          students: [{ studentId: 'student-new', subject: '英' }, null],
+        }],
+      }],
+    }
+    const classroomSettings: ClassroomSettings = {
+      ...scheduleBoardClassroomSettings,
+      regularLessonTemplateHistory: [oldTemplate, newTemplate],
+    }
+    const range = {
+      startDate: '2026-07-21',
+      endDate: '2026-08-09',
+      periodValue: '',
+    }
+
+    const plannedCells = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons: [],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    openStudentScheduleHtml({
+      cells: plannedCells,
+      plannedCells,
+      students,
+      teachers,
+      regularLessons: [],
+      regularLessonTemplateHistory: [oldTemplate, newTemplate],
+      defaultStartDate: range.startDate,
+      defaultEndDate: range.endDate,
+      titleLabel: 'テスト',
+      classroomSettings,
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const julyExpected = payload.expectedRegularOccurrences.find((entry: { linkedStudentId: string; dateKey: string; subject: string }) => (
+      entry.linkedStudentId === 'student-old' && entry.dateKey === '2026-07-24' && entry.subject === '英'
+    ))
+    const augustExpected = payload.expectedRegularOccurrences.find((entry: { linkedStudentId: string; dateKey: string; subject: string }) => (
+      entry.linkedStudentId === 'student-new' && entry.dateKey === '2026-08-07' && entry.subject === '英'
+    ))
+    const julyPlannedStudents = payload.plannedCells
+      .find((cell: { dateKey: string; slotNumber: number }) => cell.dateKey === '2026-07-24' && cell.slotNumber === 5)
+      ?.desks.flatMap((desk: { lesson?: { students?: Array<{ linkedStudentId?: string; subject: string }> } }) => desk.lesson?.students ?? [])
+      ?? []
+    const augustPlannedStudents = payload.plannedCells
+      .find((cell: { dateKey: string; slotNumber: number }) => cell.dateKey === '2026-08-07' && cell.slotNumber === 5)
+      ?.desks.flatMap((desk: { lesson?: { students?: Array<{ linkedStudentId?: string; subject: string }> } }) => desk.lesson?.students ?? [])
+      ?? []
+
+    expect(julyExpected).toBeDefined()
+    expect(augustExpected).toBeDefined()
+    expect(julyPlannedStudents).toContainEqual(expect.objectContaining({ linkedStudentId: 'student-old', subject: '英' }))
+    expect(augustPlannedStudents).toContainEqual(expect.objectContaining({ linkedStudentId: 'student-new', subject: '英' }))
+    vi.unstubAllGlobals()
+  })
+
+  it('keeps planned cells aligned when a historical regular lesson has explicit dates beyond its stored school year', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    const teachers = [createTeacher({
+      id: 'teacher-english',
+      name: '三井',
+      displayName: '三井',
+      subjectCapabilities: [{ subject: '英', maxGrade: '高3' }],
+    })]
+    const students = [createStudent({
+      id: 'student-old',
+      name: '井上 陽斗',
+      displayName: '井上陽斗',
+      birthDate: '2012-04-02',
+    })]
+    const range = {
+      startDate: '2026-07-21',
+      endDate: '2026-07-31',
+      periodValue: '',
+    }
+    const historicalLesson = createRegularLesson({
+      id: 'historical-friday-english',
+      schoolYear: 2025,
+      teacherId: 'teacher-english',
+      student1Id: 'student-old',
+      subject1: '英',
+      dayOfWeek: 5,
+      slotNumber: 5,
+      startDate: '2026-04-01',
+      endDate: '2026-07-31',
+      student2StartDate: '2026-04-01',
+      student2EndDate: '2026-07-31',
+    })
+
+    const plannedCells = buildManagedScheduleCellsForRange({
+      range,
+      fallbackStartDate: range.startDate,
+      fallbackEndDate: range.endDate,
+      classroomSettings: scheduleBoardClassroomSettings,
+      teachers,
+      students,
+      regularLessons: [historicalLesson],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    openStudentScheduleHtml({
+      cells: plannedCells,
+      plannedCells,
+      students,
+      teachers,
+      regularLessons: [historicalLesson],
+      defaultStartDate: range.startDate,
+      defaultEndDate: range.endDate,
+      titleLabel: 'テスト',
+      classroomSettings: scheduleBoardClassroomSettings,
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const julyExpected = payload.expectedRegularOccurrences.find((entry: { linkedStudentId: string; dateKey: string; subject: string }) => (
+      entry.linkedStudentId === 'student-old' && entry.dateKey === '2026-07-24' && entry.subject === '英'
+    ))
+    const julyPlannedStudents = payload.plannedCells
+      .find((cell: { dateKey: string; slotNumber: number }) => cell.dateKey === '2026-07-24' && cell.slotNumber === 5)
+      ?.desks.flatMap((desk: { lesson?: { students?: Array<{ linkedStudentId?: string; subject: string }> } }) => desk.lesson?.students ?? [])
+      ?? []
+
+    expect(julyExpected).toBeDefined()
+    expect(julyPlannedStudents).toContainEqual(expect.objectContaining({ linkedStudentId: 'student-old', subject: '英' }))
+    vi.unstubAllGlobals()
+  })
+
+  it('does not revive historical regular lessons beyond their stored school year when no explicit dates exist', () => {
+    const teachers = [createTeacher({
+      id: 'teacher-english',
+      name: '三井',
+      displayName: '三井',
+      subjectCapabilities: [{ subject: '英', maxGrade: '高3' }],
+    })]
+    const students = [createStudent({
+      id: 'student-old',
+      name: '井上 陽斗',
+      displayName: '井上陽斗',
+      birthDate: '2012-04-02',
+    })]
+    const plannedCells = buildManagedScheduleCellsForRange({
+      range: {
+        startDate: '2026-07-21',
+        endDate: '2026-07-31',
+        periodValue: '',
+      },
+      fallbackStartDate: '2026-07-21',
+      fallbackEndDate: '2026-07-31',
+      classroomSettings: scheduleBoardClassroomSettings,
+      teachers,
+      students,
+      regularLessons: [createRegularLesson({
+        id: 'historical-without-explicit-period',
+        schoolYear: 2025,
+        teacherId: 'teacher-english',
+        student1Id: 'student-old',
+        subject1: '英',
+        dayOfWeek: 5,
+        slotNumber: 5,
+      })],
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+
+    const julyPlannedStudents = plannedCells
+      .find((cell) => cell.dateKey === '2026-07-24' && cell.slotNumber === 5)
+      ?.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])
+      .filter(Boolean)
+      ?? []
+
+    expect(julyPlannedStudents).toHaveLength(0)
+  })
+
   it('orders student schedule sheets by current grade and display name', () => {
     const write = vi.fn()
     const popup = {
