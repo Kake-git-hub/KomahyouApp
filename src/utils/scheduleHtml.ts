@@ -1,9 +1,9 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
-import { resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
+import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { ScheduleCountAdjustmentEntry } from '../types/appState'
-import type { SlotCell } from '../components/schedule-board/types'
+import type { SlotCell, StudentEntry } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { buildLinkedLessonDestinationMap } from '../components/schedule-board/lessonLinks'
 import { generateQrSvg } from './qrcode'
@@ -14,6 +14,10 @@ const scheduleQrSvgCache = new Map<string, string>()
 
 function normalizeStudentNameLookupKey(value: string) {
   return value.replace(/\s+/gu, '').trim()
+}
+
+function parseDateKey(dateKey: string) {
+  return new Date(`${dateKey}T00:00:00`)
 }
 
 type SerializedStudent = {
@@ -85,6 +89,7 @@ type SerializedCell = {
   desks: Array<{
     teacher: string
     teacherId?: string
+    regularTeacherIds?: string[]
     statuses?: SerializedStudentStatusEntry[]
     lesson?: {
       note?: string
@@ -211,6 +216,10 @@ type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
 
 type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
   teachers: TeacherRow[]
+  students?: StudentRow[]
+  regularLessons?: RegularLessonRow[]
+  regularLessonTemplateHistory?: RegularLessonTemplate[]
+  preTemplateRegularLessons?: RegularLessonRow[]
   highlightedTeacherId?: string | null
 }
 
@@ -224,7 +233,11 @@ export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
   targetWindowName?: string
 }
 
-function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName: string) => string | undefined): SerializedCell[] {
+function serializeCells(
+  cells: SlotCell[],
+  resolveLinkedStudentId?: (studentName: string) => string | undefined,
+  resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell) => string[],
+): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
 
   return cells
@@ -285,9 +298,13 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
             }
           : undefined
         if (!lesson && (!statuses || statuses.length === 0)) return null
+        const regularTeacherIds = Array.from(new Set(
+          (desk.lesson?.studentSlots ?? []).flatMap((student) => student ? resolveRegularTeacherIds?.(student, cell) ?? [] : []),
+        ))
         return {
           teacher: desk.teacher,
           teacherId: desk.teacherAssignmentTeacherId,
+          ...(regularTeacherIds.length > 0 ? { regularTeacherIds } : {}),
           statuses,
           lesson,
         }
@@ -412,8 +429,42 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     addLinkedStudentLookup(displayName, student.id)
   })
   const resolveLinkedStudentId = (studentName: string) => linkedStudentIdByName.get(normalizeStudentNameLookupKey(studentName)) || undefined
-  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId)
-  const serializedPlannedCells = serializeCells(params.plannedCells, resolveLinkedStudentId)
+  const paramsWithRegularLessons = params as OpenScheduleHtmlParams & {
+    regularLessons?: RegularLessonRow[]
+    regularLessonTemplateHistory?: RegularLessonTemplate[]
+    preTemplateRegularLessons?: RegularLessonRow[]
+    teachers?: TeacherRow[]
+    students?: StudentRow[]
+  }
+  const teacherLookupRegularLessons = paramsWithRegularLessons.regularLessons
+    ? buildCombinedRegularLessonsFromHistory({
+        regularLessons: paramsWithRegularLessons.regularLessons,
+        regularLessonTemplateHistory: paramsWithRegularLessons.regularLessonTemplateHistory,
+        preTemplateRegularLessons: paramsWithRegularLessons.preTemplateRegularLessons,
+        teachers: paramsWithRegularLessons.teachers,
+        students: paramsWithRegularLessons.students ?? linkedStudents,
+      })
+    : []
+  const resolveRegularTeacherIds = (student: StudentEntry, cell: SlotCell) => {
+    if (student.lessonType !== 'regular') return []
+    const studentId = student.managedStudentId ?? resolveLinkedStudentId(student.name)
+    if (!studentId || teacherLookupRegularLessons.length === 0) return []
+    const lessonDate = parseDateKey(cell.dateKey)
+    const schoolYear = resolveOperationalSchoolYear(lessonDate)
+    const dayOfWeek = lessonDate.getDay()
+    return teacherLookupRegularLessons
+      .filter((row) => row.schoolYear === schoolYear && row.dayOfWeek === dayOfWeek && row.slotNumber === cell.slotNumber)
+      .flatMap((row) => {
+        const subject1Matches = row.subject1 === student.subject || resolveDisplayedSubjectForGrade(row.subject1, student.grade) === student.subject
+        const subject2Matches = row.subject2 === student.subject || resolveDisplayedSubjectForGrade(row.subject2, student.grade) === student.subject
+        if (row.student1Id === studentId && subject1Matches && isRegularLessonParticipantActiveOnDate(row, cell.dateKey)) return [row.teacherId]
+        if (row.student2Id === studentId && subject2Matches && isRegularLessonParticipantActiveOnDate(row, cell.dateKey)) return [row.teacherId]
+        return []
+      })
+      .filter(Boolean)
+  }
+  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds)
+  const serializedPlannedCells = serializeCells(params.plannedCells, resolveLinkedStudentId, resolveRegularTeacherIds)
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -2577,7 +2628,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
             if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
             const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
-            const teacherKeys = [desk.teacherId, desk.teacher, normalizeTeacherAssignmentName(desk.teacher)].filter(Boolean);
+            const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);
             teacherKeys.forEach((teacherKey) => {
               if (!map.has(teacherKey)) map.set(teacherKey, []);
               map.get(teacherKey).push(entry);

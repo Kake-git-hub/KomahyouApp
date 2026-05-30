@@ -1711,15 +1711,19 @@ function AuthenticatedApp() {
     })
   }, [actingClassroom, actingClassroomId, classroomSettings])
 
-  const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState) => {
+  const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState, meta: { userInitiated: boolean } = { userInitiated: true }) => {
     setBoardState(nextBoardState)
+    if (!meta.userInitiated) {
+      markStateLoadedClean()
+      return
+    }
     writePendingWorkspaceSnapshotForRemoteSync()
     if (boardShareStateChangePublishTimerRef.current) window.clearTimeout(boardShareStateChangePublishTimerRef.current)
     boardShareStateChangePublishTimerRef.current = window.setTimeout(() => {
       boardShareStateChangePublishTimerRef.current = null
       publishBoardStateSnapshot(nextBoardState)
     }, 250)
-  }, [publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
+  }, [markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
 
   useEffect(() => {
     if (!actingClassroomId || !actingClassroom || !boardState) return
@@ -2638,6 +2642,10 @@ function AuthenticatedApp() {
         suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
       teachers,
+      students,
+      regularLessons: displayRegularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,

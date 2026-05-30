@@ -488,7 +488,7 @@ type ScheduleBoardScreenProps = {
   teacherAutoAssignRequest?: TeacherAutoAssignRequest | null
   studentScheduleRequest?: StudentScheduleRequest | null
   initialBoardState?: PersistedBoardState | null
-  onBoardStateChange?: (state: PersistedBoardState) => void
+  onBoardStateChange?: (state: PersistedBoardState, meta?: { userInitiated: boolean }) => void
   onReplaceRegularLessons?: Dispatch<SetStateAction<RegularLessonRow[]>>
   onUpdateSpecialSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
@@ -2751,6 +2751,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
   const prevUnsubmittedSessionStudentKeysRef = useRef<Set<string>>(new Set())
+  const committedBoardChangeVersionRef = useRef(0)
+  const lastSyncedCommittedBoardChangeVersionRef = useRef(0)
 
   useEffect(() => {
     classroomSettingsRef.current = classroomSettings
@@ -3022,6 +3024,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
+      committedBoardChangeVersionRef.current += 1
       onBoardStateChange?.({
         weeks: cloneWeeks(applyClassroomAvailability(overlaidWeeks, nextClassroomSettingsForOverlay)),
         weekIndex,
@@ -3039,7 +3042,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         isMakeupStockOpen,
         studentScheduleRange,
         teacherScheduleRange,
-      })
+      }, { userInitiated: true })
       if (restoredCount > 0) {
         setStatusMessage(`通常授業テンプレートを上書き保存しました。${template.effectiveStartDate} 以降のコマ表をテンプレ内容で再構築します。${restoredCount}件の振替・講習を未消化ストックへ戻しました。`)
       } else {
@@ -3056,6 +3059,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
 
   useEffect(() => {
     if (!onBoardStateChange) return
+    if (lastSyncedCommittedBoardChangeVersionRef.current !== committedBoardChangeVersionRef.current) {
+      lastSyncedCommittedBoardChangeVersionRef.current = committedBoardChangeVersionRef.current
+      return
+    }
     onBoardStateChange({
       weeks: cloneWeeks(normalizedWeeks),
       weekIndex,
@@ -3073,7 +3080,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       isMakeupStockOpen,
       studentScheduleRange,
       teacherScheduleRange,
-    })
+    }, { userInitiated: false })
   }, [
     fallbackLectureStockStudents,
     fallbackMakeupStudents,
@@ -4566,6 +4573,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       cells: teacherScheduleCells,
       plannedCells: teacherPlannedScheduleCells,
       teachers,
+      students,
+      regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
       defaultStartDate: effectiveTeacherScheduleRange.startDate,
       defaultEndDate: effectiveTeacherScheduleRange.endDate,
       defaultPeriodValue: effectiveTeacherScheduleRange.periodValue,
@@ -5542,6 +5553,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     setStudentMenu(null)
     setTeacherMenu(null)
     setEditStudentDraft(null)
+    committedBoardChangeVersionRef.current += 1
     onBoardStateChange?.({
       weeks: cloneWeeks(applyClassroomAvailability(nextWeeks, persistedClassroomSettings)),
       weekIndex: nextWeekIndex,
@@ -5559,7 +5571,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       isMakeupStockOpen,
       studentScheduleRange,
       teacherScheduleRange,
-    })
+    }, { userInitiated: true })
   }
 
   const handleSelectDesk = (cellId: string, deskIndex: number, x: number, y: number) => {
@@ -7012,6 +7024,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         suppressedRegularLessonOccurrences,
       }),
       teachers,
+      students,
+      regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,
       defaultPeriodValue: storedRange.periodValue,
