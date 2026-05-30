@@ -1294,6 +1294,63 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps teacher-only desk assignments in teacher schedule payloads with their desk number', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [{
+        id: '2026-07-24_5',
+        dateKey: '2026-07-24',
+        dayLabel: '金',
+        dateLabel: '7/24',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:40-21:10',
+        isOpenDay: true,
+        desks: [
+          ...Array.from({ length: 8 }, (_, index) => ({ id: `2026-07-24_5_desk_${index + 1}`, teacher: '' })),
+          {
+            id: '2026-07-24_5_desk_9',
+            teacher: '落合',
+            teacherAssignmentTeacherId: 'teacher-ochiai',
+          },
+        ],
+      }],
+      plannedCells: [],
+      teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 太郎', displayName: '落合' })],
+      defaultStartDate: '2026-07-01',
+      defaultEndDate: '2026-07-31',
+      defaultPersonId: 'teacher-ochiai',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.cells[0]?.desks).toHaveLength(1)
+    expect(payload.cells[0]?.desks?.[0]).toMatchObject({ teacher: '落合', teacherId: 'teacher-ochiai', deskNumber: 9 })
+    expect(html).toContain('teacherOnly: !desk.lesson && statuses.length === 0')
+    expect(html).toContain('講師のみ')
+    expect(html).toContain('机')
+    vi.unstubAllGlobals()
+  })
+
   it('counts a 2-student slot as D when at least one attended student is high school or above', () => {
     const write = vi.fn()
     const popup = {
