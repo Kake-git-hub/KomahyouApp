@@ -1,7 +1,7 @@
 {
   "name": "komahyouapp",
   "private": true,
-    "version": "1.5.247",
+    "version": "1.5.181",
   "type": "module",
   "scripts": {
     "prebuild": "node tools/clean-dist.mjs",
@@ -19,8 +19,7 @@
     "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:firebase": "playwright test --config playwright.firebase.config.ts",
-    "test:e2e:live-save-debug": "playwright test --config playwright.live-save-debug.config.ts"
+    "test:e2e:firebase": "playwright test --config playwright.firebase.config.ts"
   },
   "dependencies": {
     "@types/qrcode": "^1.5.6",

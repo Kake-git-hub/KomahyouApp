@@ -134,6 +134,7 @@ type SchedulePayload = {
   defaultStartDate: string
   defaultEndDate: string
   defaultPeriodValue: string
+  defaultPersonId?: string
   availableStartDate: string
   availableEndDate: string
   availability: Pick<ClassroomSettings, 'closedWeekdays' | 'holidayDates' | 'forceOpenDates'>
@@ -163,6 +164,7 @@ type OpenScheduleHtmlParams = {
   defaultStartDate: string
   defaultEndDate: string
   defaultPeriodValue?: string
+  defaultPersonId?: string
   titleLabel: string
   classroomSettings: Pick<ClassroomSettings, 'closedWeekdays' | 'holidayDates' | 'forceOpenDates' | 'scheduleNotes'>
   periodBands?: Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate'>[]
@@ -413,6 +415,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     defaultStartDate: params.defaultStartDate,
     defaultEndDate: params.defaultEndDate,
     defaultPeriodValue: params.defaultPeriodValue || '',
+    defaultPersonId: params.defaultPersonId || '',
     availableStartDate,
     availableEndDate,
     availability: {
@@ -2088,6 +2091,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let appliedEndDate = '';
       let appliedPeriodValue = '';
       let appliedPersonId = '';
+      let personSelectionLocked = false;
       const pendingUnavailableKeys = new Set();
       const pendingUnavailableTimers = new Map();
       const interactionLockStorageKey = 'schedule-shared:interaction-lock';
@@ -3763,6 +3767,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const people = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
         if (!people.length) return '';
         if (appliedPersonId && people.some((person) => person.id === appliedPersonId)) return appliedPersonId;
+        if (DATA.defaultPersonId && people.some((person) => person.id === DATA.defaultPersonId)) return DATA.defaultPersonId;
         if (VIEW_TYPE === 'student') {
           const highlightedStudentId = DATA.highlightedStudentSlot && typeof DATA.highlightedStudentSlot.studentId === 'string'
             ? DATA.highlightedStudentSlot.studentId
@@ -4037,13 +4042,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return;
         }
 
-        // Auto-switch to highlighted student when highlight data arrives
+        // Auto-switch until the user explicitly applies a person selection.
         var highlightPersonId = nextPayload.highlightedStudentSlot && nextPayload.highlightedStudentSlot.studentId;
-        if (VIEW_TYPE === 'student' && highlightPersonId && highlightPersonId !== appliedPersonId) {
+        if (VIEW_TYPE === 'student' && !personSelectionLocked && highlightPersonId) {
           appliedPersonId = highlightPersonId;
         }
         var highlightedTeacherId = typeof nextPayload.highlightedTeacherId === 'string' ? nextPayload.highlightedTeacherId : '';
-        if (VIEW_TYPE === 'teacher' && highlightedTeacherId && highlightedTeacherId !== appliedPersonId) {
+        if (VIEW_TYPE === 'teacher' && !personSelectionLocked && highlightedTeacherId) {
           appliedPersonId = highlightedTeacherId;
         }
 
@@ -4217,23 +4222,25 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             startDate: storage ? storage.getItem(rangeStoragePrefix + 'start') || '' : '',
             endDate: storage ? storage.getItem(rangeStoragePrefix + 'end') || '' : '',
             periodValue: storage ? storage.getItem(rangeStoragePrefix + 'period') || '' : '',
+            personId: storage ? storage.getItem(rangeStoragePrefix + 'person') || '' : '',
           };
         } catch {
-          return { startDate: '', endDate: '', periodValue: '' };
+          return { startDate: '', endDate: '', periodValue: '', personId: '' };
         }
       }
 
-      function writeStoredRange(startDate, endDate, periodValue) {
+      function writeStoredRange(startDate, endDate, periodValue, personId) {
         const storage = getSharedStorage();
         try {
           if (!storage) return;
           storage.setItem(rangeStoragePrefix + 'start', startDate || '');
           storage.setItem(rangeStoragePrefix + 'end', endDate || '');
           storage.setItem(rangeStoragePrefix + 'period', periodValue || '');
+          storage.setItem(rangeStoragePrefix + 'person', personId || '');
         } catch {}
       }
 
-      function notifyRangeChange(startDate, endDate, periodValue) {
+      function notifyRangeChange(startDate, endDate, periodValue, personId) {
         try {
           if (!window.opener || window.opener.closed) return;
           window.opener.postMessage({
@@ -4242,6 +4249,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             startDate: startDate || '',
             endDate: endDate || '',
             periodValue: periodValue || '',
+            personId: personId || '',
           }, '*');
         } catch {}
       }
@@ -4523,9 +4531,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         setDateInputValue(endInput, endDate);
         syncPeriodSelectOptions(nextPeriodValue);
         appliedPersonId = nextPersonId || getDefaultAppliedPersonId(startDate, endDate);
-        syncPersonSelectOptions(appliedPersonId);
-        writeStoredRange(startDate, endDate, periodSelect.value || nextPeriodValue || '');
-        notifyRangeChange(startDate, endDate, periodSelect.value || nextPeriodValue || '');
+        appliedPersonId = syncPersonSelectOptions(appliedPersonId) || appliedPersonId;
+        writeStoredRange(startDate, endDate, periodSelect.value || nextPeriodValue || '', appliedPersonId);
+        notifyRangeChange(startDate, endDate, periodSelect.value || nextPeriodValue || '', appliedPersonId);
         render();
       }
 
@@ -4547,6 +4555,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const draftRange = getDraftRange();
         const selectedPersonId = syncPersonSelectOptions(personSelect.value || appliedPersonId)
           || getDefaultAppliedPersonId(draftRange.startDate, draftRange.endDate);
+        personSelectionLocked = true;
         setRangeAndRender(draftRange.startDate, draftRange.endDate, draftRange.periodValue, selectedPersonId);
       }
 
@@ -4646,7 +4655,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       });
       window.addEventListener('beforeunload', () => {
         releaseInteractionLock();
-        notifyRangeChange(appliedStartDate, appliedEndDate, appliedPeriodValue);
+        notifyRangeChange(appliedStartDate, appliedEndDate, appliedPeriodValue, appliedPersonId);
       });
       window.addEventListener('focus', acquireInteractionLock);
       window.addEventListener('blur', releaseInteractionLock);
@@ -4692,7 +4701,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         preferredRange.startDate,
         preferredRange.endDate,
         preferredRange.periodValue,
-        getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
+        preferredRange.personId || DATA.defaultPersonId || getDefaultAppliedPersonId(preferredRange.startDate, preferredRange.endDate),
       );
       if (!document.hidden && document.hasFocus()) acquireInteractionLock();
       window.setTimeout(() => {

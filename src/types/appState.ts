@@ -48,6 +48,7 @@ export type ScheduleRangePreference = {
   startDate: string
   endDate: string
   periodValue: string
+  personId?: string
 }
 
 export type MakeupOrigin = {

@@ -475,11 +475,6 @@ export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
   )
 }
 
-export function filterTemplateOverwriteHolidayDates(sourceHolidayDates: string[], effectiveStartDate: string): string[] {
-  if (!effectiveStartDate) return [...sourceHolidayDates]
-  return sourceHolidayDates.filter((dateKey) => dateKey < effectiveStartDate)
-}
-
 type ScheduleBoardScreenProps = {
   classroomSettings: ClassroomSettings
   classroomName?: string
@@ -520,6 +515,7 @@ export type ScheduleRangePreference = {
   startDate: string
   endDate: string
   periodValue: string
+  personId?: string
 }
 
 type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
@@ -565,6 +561,7 @@ export function readStoredScheduleRange(viewType: 'student' | 'teacher', fallbac
       startDate: window.localStorage.getItem(`${prefix}start`) || window.localStorage.getItem(`${legacyPrefix}start`) || fallbackStartDate,
       endDate: window.localStorage.getItem(`${prefix}end`) || window.localStorage.getItem(`${legacyPrefix}end`) || fallbackEndDate,
       periodValue: window.localStorage.getItem(`${prefix}period`) || window.localStorage.getItem(`${legacyPrefix}period`) || '',
+      personId: window.localStorage.getItem(`${prefix}person`) || window.localStorage.getItem(`${legacyPrefix}person`) || '',
     }
   } catch {
     return { startDate: fallbackStartDate, endDate: fallbackEndDate, periodValue: '' }
@@ -577,6 +574,7 @@ function writeStoredScheduleRange(viewType: 'student' | 'teacher', range: Schedu
     window.localStorage.setItem(`${prefix}start`, range.startDate)
     window.localStorage.setItem(`${prefix}end`, range.endDate)
     window.localStorage.setItem(`${prefix}period`, range.periodValue)
+    window.localStorage.setItem(`${prefix}person`, range.personId ?? '')
   } catch {
     // Ignore storage failures so the popup remains usable.
   }
@@ -952,16 +950,20 @@ export function appendDeletedStudentScheduleCountAdjustment(
   adjustments: ScheduleCountAdjustmentEntry[],
   student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject' | 'lessonType' | 'manualAdded'> & { studentId?: string },
   dateKey: string,
-  studentKeyOverride?: string,
+  managedStudentIdOverride?: string,
 ) {
   if (student.manualAdded) return adjustments
   return appendScheduleCountAdjustment(adjustments, {
-    studentKey: (studentKeyOverride ?? student.managedStudentId ?? student.studentId ?? student.name).trim(),
+    studentKey: (managedStudentIdOverride ?? student.managedStudentId ?? student.studentId ?? student.name).trim(),
     subject: student.subject,
     countKind: student.lessonType === 'special' ? 'special' : 'regular',
     dateKey,
     delta: -1,
   })
+}
+
+export function filterTemplateOverwriteHolidayDates(holidayDates: string[], effectiveStartDate: string) {
+  return holidayDates.filter((dateKey) => dateKey < effectiveStartDate)
 }
 
 function buildDateCoverageScore(dateKeys: string[]) {
@@ -1562,11 +1564,11 @@ export function buildTeacherSelectionOptions(params: {
   const targetDesk = cell.desks[deskIndex]
   if (!targetDesk) return []
 
-  const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
   const referenceDate = isTemplateMode ? (templateReferenceDate || cell.dateKey) : cell.dateKey
+  const currentTeacher = teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
   const visibleTeachers = teachers.filter((teacher) => {
     const status = resolveTeacherRosterStatus(teacher, referenceDate)
-    return status !== '退塾' && status !== '非表示'
+    return status !== '非表示' && status !== '退塾'
   })
   const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
     ? [...visibleTeachers, currentTeacher]
@@ -1756,42 +1758,6 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
   }
 }
 
-function mergeManagedStudentEntry(currentStudent: StudentEntry, managedStudent: StudentEntry): StudentEntry {
-  return {
-    ...managedStudent,
-    subject: currentStudent.subject,
-    lessonType: currentStudent.lessonType,
-    teacherType: currentStudent.teacherType,
-    noteSuffix: currentStudent.noteSuffix,
-    makeupSourceDate: currentStudent.makeupSourceDate,
-    makeupSourceLabel: currentStudent.makeupSourceLabel,
-    sameDayMoveSourceDate: currentStudent.sameDayMoveSourceDate,
-    sameDayMoveSourceLabel: currentStudent.sameDayMoveSourceLabel,
-    specialSessionId: currentStudent.specialSessionId,
-    specialStockSource: currentStudent.specialStockSource,
-    manualAdded: currentStudent.manualAdded,
-    warning: currentStudent.warning,
-    warningHighlight: currentStudent.warningHighlight,
-  }
-}
-
-function hasManagedStudentOverride(currentStudent: StudentEntry, managedStudent: StudentEntry | null | undefined, dateKey: string) {
-  if (!managedStudent || managedStudent.id !== currentStudent.id) return false
-
-  return currentStudent.subject !== managedStudent.subject
-    || currentStudent.lessonType !== managedStudent.lessonType
-    || currentStudent.teacherType !== managedStudent.teacherType
-    || normalizeRegularLessonNote(currentStudent.noteSuffix) !== normalizeRegularLessonNote(managedStudent.noteSuffix)
-    || currentStudent.manualAdded !== managedStudent.manualAdded
-    || currentStudent.specialSessionId !== managedStudent.specialSessionId
-    || currentStudent.specialStockSource !== managedStudent.specialStockSource
-    || currentStudent.makeupSourceDate !== managedStudent.makeupSourceDate
-    || currentStudent.makeupSourceLabel !== managedStudent.makeupSourceLabel
-    || currentStudent.sameDayMoveSourceDate !== managedStudent.sameDayMoveSourceDate
-    || currentStudent.sameDayMoveSourceLabel !== managedStudent.sameDayMoveSourceLabel
-    || (isReturnedToOriginalDate(currentStudent, dateKey) !== isReturnedToOriginalDate(managedStudent, dateKey))
-}
-
 function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson, dateKey: string) {
   const nextLesson = cloneDeskLesson(managedLesson)
 
@@ -1799,18 +1765,23 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
     if (!student) return
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
-    const hasOverride = hasManagedStudentOverride(student, managedStudent, dateKey)
+    const isSameManagedStudent = managedStudent && (
+      (student.managedStudentId && managedStudent.managedStudentId && student.managedStudentId === managedStudent.managedStudentId)
+      || student.id === managedStudent.id
+      || student.name === managedStudent.name
+    )
+    if (isSameManagedStudent) {
+      nextLesson.studentSlots[slotIndex] = { ...managedStudent, ...student }
+      return
+    }
 
     // Regular (non-manual, non-returned) students are always handled by managed data.
     // Skip them so the managed lesson drives their placement.
-    if (student.lessonType === 'regular' && !student.manualAdded && !isReturnedToOriginalDate(student, dateKey) && !hasOverride) {
+    if (student.lessonType === 'regular' && !student.manualAdded && !isReturnedToOriginalDate(student, dateKey)) {
       return
     }
 
-    if (managedStudent?.id === student.id) {
-      nextLesson.studentSlots[slotIndex] = mergeManagedStudentEntry(student, managedStudent)
-      return
-    }
+    if (managedStudent?.id === student.id) return
 
     const alreadyPresent = nextLesson.studentSlots.some((entry) => entry?.id === student.id)
     if (alreadyPresent) return
@@ -1988,6 +1959,7 @@ export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boar
     const adjustedManagedCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
     const boardCell = findMatchingBoardCell(managedCell, boardCellMaps)
     if (!boardCell) return adjustedManagedCell
+    if (!adjustedManagedCell.isOpenDay) return adjustedManagedCell
     return mergeManagedWeek([boardCell], [adjustedManagedCell], [managedCell])[0] ?? adjustedManagedCell
   })
 
@@ -2012,6 +1984,7 @@ export function normalizeScheduleRange(range: ScheduleRangePreference, fallbackS
       startDate,
       endDate,
       periodValue: range.periodValue || '',
+      personId: range.personId || '',
     }
   }
 
@@ -2019,6 +1992,7 @@ export function normalizeScheduleRange(range: ScheduleRangePreference, fallbackS
     startDate: endDate,
     endDate: startDate,
     periodValue: range.periodValue || '',
+    personId: range.personId || '',
   }
 }
 
@@ -2134,27 +2108,22 @@ export function buildScheduleCellsForRange(params: {
 
 function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], originalManagedWeek?: SlotCell[]) {
   const managedCellById = new Map(managedWeek.map((cell) => [cell.id, cell]))
-  const managedCellByDateSlot = new Map(managedWeek.map((cell) => [buildCellDateSlotKey(cell), cell]))
   const originalManagedCellById = originalManagedWeek
     ? new Map(originalManagedWeek.map((cell) => [cell.id, cell]))
     : undefined
-  const originalManagedCellByDateSlot = originalManagedWeek
-    ? new Map(originalManagedWeek.map((cell) => [buildCellDateSlotKey(cell), cell]))
-    : undefined
 
   return currentWeek.map((cell) => {
-    const cellDateSlotKey = buildCellDateSlotKey(cell)
-    const managedCell = managedCellById.get(cell.id) ?? managedCellByDateSlot.get(cellDateSlotKey)
+    const managedCell = managedCellById.get(cell.id)
     if (!managedCell) return cell
 
     // テンプレが当該コマについて「本当に沈黙している」(=管理セルに元から managed lesson が無い) か、
     // 抑止により managed lesson が消えただけかを区別するため、抑止前の管理セルも参照する。
-    const originalManagedCell = originalManagedCellById?.get(cell.id) ?? originalManagedCellByDateSlot?.get(cellDateSlotKey) ?? managedCell
+    const originalManagedCell = originalManagedCellById?.get(cell.id) ?? managedCell
     const originalManagedLessonCount = originalManagedCell.desks.reduce(
       (acc, desk) => acc + (desk.lesson && isManagedLesson(desk.lesson) ? 1 : 0),
       0,
     )
-    const isTemplateSilentForCell = managedCell.isOpenDay && originalManagedLessonCount === 0
+    const isTemplateSilentForCell = originalManagedLessonCount === 0
 
     const managedDesksByLessonId = new Map(
       managedCell.desks
@@ -2231,7 +2200,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
 
         const originalSameLessonWasSuppressed = originalManagedDesksByLessonId.has(lesson.id)
         const sameDeskManagedLesson = managedCell.desks[deskIndex]?.lesson
-        if (managedCell.isOpenDay && !originalSameLessonWasSuppressed && (!sameDeskManagedLesson || !isManagedLesson(sameDeskManagedLesson))) {
+        if (!originalSameLessonWasSuppressed && (!sameDeskManagedLesson || !isManagedLesson(sameDeskManagedLesson))) {
           preservedLessonIds.add(lesson.id)
           return {
             ...desk,
@@ -2708,7 +2677,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
   const classroomSettingsRef = useRef(classroomSettings)
-  classroomSettingsRef.current = classroomSettings
   const initialBoardSnapshotRef = useRef<ReturnType<typeof createInitialBoardSnapshot> | null>(null)
   if (!initialBoardSnapshotRef.current) {
     initialBoardSnapshotRef.current = createInitialBoardSnapshot({ classroomSettings, teachers, students, regularLessons, initialBoardState })
@@ -2865,21 +2833,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       ? (classroomSettings.preTemplateRegularLessons ?? regularLessons)
       : classroomSettings.preTemplateRegularLessons
 
-    const nextHolidayDates = overwrite
-      ? filterTemplateOverwriteHolidayDates(classroomSettings.holidayDates, template.effectiveStartDate)
-      : classroomSettings.holidayDates
-
-    const nextClassroomSettings: ClassroomSettings = {
+    onUpdateClassroomSettings({
       ...classroomSettings,
+      ...(overwrite ? { holidayDates: filterTemplateOverwriteHolidayDates(classroomSettings.holidayDates, template.effectiveStartDate) } : {}),
       regularLessonTemplate: template,
       regularLessonTemplateHistory: nextHistory,
       preTemplateRegularLessons,
-      holidayDates: nextHolidayDates,
       ...(overwrite ? { templateFreezeBeforeDate: template.effectiveStartDate } : {}),
-    }
-
-    classroomSettingsRef.current = nextClassroomSettings
-    onUpdateClassroomSettings(nextClassroomSettings)
+    })
     onReplaceRegularLessons?.(normalizedTemplateRegularLessons)
 
     if (overwrite) {
@@ -3018,7 +2979,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       // setWeeks(clearedWeeks) だけでは管理データ反映が次回マウント時まで遅延し、
       // その間ストック計算が空セルを参照して未消化が増加するバグが発生する。
       const nextClassroomSettingsForOverlay: ClassroomSettings = {
-        ...nextClassroomSettings,
+        ...classroomSettings,
+        holidayDates: filterTemplateOverwriteHolidayDates(classroomSettings.holidayDates, template.effectiveStartDate),
+        regularLessonTemplate: template,
+        regularLessonTemplateHistory: nextHistory,
         templateFreezeBeforeDate: template.effectiveStartDate,
       }
       const allManagedWeeks: SlotCell[][] = []
@@ -3416,12 +3380,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         startDate: message.startDate,
         endDate: message.endDate,
         periodValue: typeof message.periodValue === 'string' ? message.periodValue : '',
+        personId: typeof message.personId === 'string' ? message.personId : '',
       }, classroomStorageKey)
 
       const nextRange = {
         startDate: message.startDate,
         endDate: message.endDate,
         periodValue: typeof message.periodValue === 'string' ? message.periodValue : '',
+        personId: typeof message.personId === 'string' ? message.personId : '',
       }
 
       if (message.viewType === 'student') setStudentScheduleRange(nextRange)
@@ -3545,11 +3511,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
 
     const fallbackId = `name:${resolveBoardStudentDisplayName(student.name)}`
     return student.manualAdded ? `manual:${fallbackId}` : fallbackId
-  }
-  const resolveBoardStudentScheduleCountKey = (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'> & { studentId?: string }) => {
-    const managedId = student.managedStudentId ?? managedStudentByAnyName.get(student.name)?.id ?? student.studentId
-    if (managedId) return managedId
-    return `name:${resolveBoardStudentDisplayName(student.name)}`
   }
   const getSelectableSubjectsForStudent = useCallback((student: StudentRow | null, dateKey: string) => {
     if (!student) return editableSubjects
@@ -4581,6 +4542,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       defaultStartDate: effectiveStudentScheduleRange.startDate,
       defaultEndDate: effectiveStudentScheduleRange.endDate,
       defaultPeriodValue: effectiveStudentScheduleRange.periodValue,
+      defaultPersonId: effectiveStudentScheduleRange.personId,
       titleLabel: studentScheduleTitle,
       classroomSettings,
       classroomStorageKey,
@@ -4598,6 +4560,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       defaultStartDate: effectiveTeacherScheduleRange.startDate,
       defaultEndDate: effectiveTeacherScheduleRange.endDate,
       defaultPeriodValue: effectiveTeacherScheduleRange.periodValue,
+      defaultPersonId: effectiveTeacherScheduleRange.personId,
       titleLabel: teacherScheduleTitle,
       classroomSettings,
       classroomStorageKey,
@@ -5529,8 +5492,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     nextWeekIndex: number,
     nextCellId: string,
     nextDeskIndex: number,
-    nextHolidayDates?: string[],
-    nextForceOpenDates?: string[],
+    nextHolidayDates: string[] = classroomSettings.holidayDates,
+    nextForceOpenDates: string[] = classroomSettings.forceOpenDates,
     nextManualMakeupAdjustments: MakeupOriginMap = manualMakeupAdjustments,
     nextSuppressedMakeupOrigins: MakeupOriginMap = suppressedMakeupOrigins,
     nextFallbackMakeupStudents: Record<string, FallbackMakeupStudent> = fallbackMakeupStudents,
@@ -5540,24 +5503,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     nextSuppressedRegularLessonOccurrences: string[] = suppressedRegularLessonOccurrences,
     nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[] = scheduleCountAdjustments,
   ) => {
-    const currentClassroomSettings = classroomSettingsRef.current
-    const resolvedHolidayDates = nextHolidayDates ?? currentClassroomSettings.holidayDates
-    const resolvedForceOpenDates = nextForceOpenDates ?? currentClassroomSettings.forceOpenDates
-    let persistedClassroomSettings = currentClassroomSettings
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, currentClassroomSettings.holidayDates, currentClassroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setRedoStack([])
-    if (!areStringArraysEqual(resolvedHolidayDates, currentClassroomSettings.holidayDates) || !areStringArraysEqual(resolvedForceOpenDates, currentClassroomSettings.forceOpenDates)) {
-      const nextClassroomSettings = {
-        ...currentClassroomSettings,
-        holidayDates: [...resolvedHolidayDates],
-        forceOpenDates: [...resolvedForceOpenDates],
+    const persistedClassroomSettings = !areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates)
+      ? {
+        ...classroomSettings,
+        holidayDates: [...nextHolidayDates],
+        forceOpenDates: [...nextForceOpenDates],
       }
-      persistedClassroomSettings = nextClassroomSettings
-      classroomSettingsRef.current = nextClassroomSettings
-      onUpdateClassroomSettings(nextClassroomSettings)
+      : classroomSettings
+    if (persistedClassroomSettings !== classroomSettings) {
+      onUpdateClassroomSettings(persistedClassroomSettings)
     }
     setWeeks(nextWeeks)
     setWeekIndex(nextWeekIndex)
@@ -5682,10 +5641,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   }
 
   const handleToggleHolidayDate = (dateKey: string) => {
-    const currentClassroomSettings = classroomSettingsRef.current
-    const isHoliday = currentClassroomSettings.holidayDates.includes(dateKey)
-    const isForceOpen = currentClassroomSettings.forceOpenDates.includes(dateKey)
-    const isClosedWeekday = currentClassroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
+    const isHoliday = classroomSettings.holidayDates.includes(dateKey)
+    const isForceOpen = classroomSettings.forceOpenDates.includes(dateKey)
+    const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
 
     if (isForceOpen) {
       commitWeeks(
@@ -5693,8 +5651,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         weekIndex,
         selectedCellId,
         selectedDeskIndex,
-        currentClassroomSettings.holidayDates,
-        currentClassroomSettings.forceOpenDates.filter((value) => value !== dateKey),
+        classroomSettings.holidayDates,
+        classroomSettings.forceOpenDates.filter((value) => value !== dateKey),
       )
       setSelectedHolidayDate(dateKey)
       setStudentMenu(null)
@@ -5706,8 +5664,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
 
     if (isHoliday) {
       const nextForceOpenDates = isClosedWeekday
-        ? [...currentClassroomSettings.forceOpenDates.filter((value) => value !== dateKey), dateKey].sort()
-        : currentClassroomSettings.forceOpenDates.filter((value) => value !== dateKey)
+        ? [...classroomSettings.forceOpenDates.filter((value) => value !== dateKey), dateKey].sort()
+        : classroomSettings.forceOpenDates.filter((value) => value !== dateKey)
 
       // Suppress managed regular lessons so they don't get re-placed by the overlay.
       // The manual makeup adjustments added when the holiday was set still apply,
@@ -5745,7 +5703,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         weekIndex,
         selectedCellId,
         selectedDeskIndex,
-        currentClassroomSettings.holidayDates.filter((value) => value !== dateKey),
+        classroomSettings.holidayDates.filter((value) => value !== dateKey),
         nextForceOpenDates,
         undefined,
         undefined,
@@ -5769,8 +5727,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         weekIndex,
         selectedCellId,
         selectedDeskIndex,
-        currentClassroomSettings.holidayDates,
-        [...currentClassroomSettings.forceOpenDates, dateKey].sort(),
+        classroomSettings.holidayDates,
+        [...classroomSettings.forceOpenDates, dateKey].sort(),
       )
       setSelectedHolidayDate(dateKey)
       setStudentMenu(null)
@@ -5894,8 +5852,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       weekIndex,
       selectedCellId,
       selectedDeskIndex,
-      [...currentClassroomSettings.holidayDates, dateKey].sort(),
-      currentClassroomSettings.forceOpenDates.filter((value) => value !== dateKey),
+      [...classroomSettings.holidayDates, dateKey].sort(),
+      classroomSettings.forceOpenDates.filter((value) => value !== dateKey),
       nextManualMakeupAdjustments,
       suppressedMakeupOrigins,
       nextFallbackMakeupStudents,
@@ -5909,10 +5867,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   }
 
   const handleDayHeaderClick = (dateKey: string, x: number, y: number) => {
-    const currentClassroomSettings = classroomSettingsRef.current
-    const isHoliday = currentClassroomSettings.holidayDates.includes(dateKey)
-    const isForceOpen = currentClassroomSettings.forceOpenDates.includes(dateKey)
-    const isClosedWeekday = currentClassroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
+    const isHoliday = classroomSettings.holidayDates.includes(dateKey)
+    const isForceOpen = classroomSettings.forceOpenDates.includes(dateKey)
+    const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
 
     if (isHoliday || isForceOpen || isClosedWeekday) {
       handleToggleHolidayDate(dateKey)
@@ -5944,7 +5901,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
               const student = desk.lesson.studentSlots[slotIdx]
               if (student) {
                 clearedCount += 1
-                nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, student, cell.dateKey, resolveBoardStudentScheduleCountKey(student))
+                nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, student, cell.dateKey)
                 desk.lesson.studentSlots[slotIdx] = null
               }
             }
@@ -5957,7 +5914,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
               const statusEntry = desk.statusSlots[slotIdx]
               if (statusEntry) {
                 clearedCount += 1
-                nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, statusEntry, cell.dateKey, resolveBoardStudentScheduleCountKey(statusEntry))
+                nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, statusEntry, cell.dateKey)
                 desk.statusSlots[slotIdx] = null
               }
             }
@@ -6089,22 +6046,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
     const remainingBalance = selectedMakeupStockEntry.balance - 1
-    if (stockPanelsRestoreState) {
+    if (stockPanelsRestoreState && remainingBalance <= 0) {
       setIsLectureStockOpen(stockPanelsRestoreState.lecture)
       setIsMakeupStockOpen(stockPanelsRestoreState.makeup)
       setStockPanelsRestoreState(null)
     } else if (!stockPanelsRestoreState) {
       setIsMakeupStockOpen(true)
     }
-    if (stockPanelsRestoreState && remainingBalance > 0) {
-      setSelectedMakeupStockRawKey(null)
-    } else {
-      setSelectedMakeupStockKey(null)
-      setSelectedMakeupStockRawKey(null)
-    }
-    if (!stockPanelsRestoreState && remainingBalance > 0) {
-      setStockActionModal({ type: 'makeup', entryKey: selectedMakeupStockEntry.key })
-    }
+    setSelectedMakeupStockRawKey(null)
+    setSelectedMakeupStockKey(null)
     setStatusMessage(`${selectedMakeupStockEntry.displayName} の振替を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
@@ -6193,18 +6143,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
-    if (stockPanelsRestoreState) {
+    if (stockPanelsRestoreState && selectedLectureStockEntry.requestedCount <= 1) {
       setIsLectureStockOpen(stockPanelsRestoreState.lecture)
       setIsMakeupStockOpen(stockPanelsRestoreState.makeup)
       setStockPanelsRestoreState(null)
     } else if (!stockPanelsRestoreState) {
       setIsLectureStockOpen(true)
     }
-    if (!(stockPanelsRestoreState && selectedLectureStockEntry.requestedCount > 1)) {
+    if (selectedLectureStockEntry.requestedCount <= 1) {
       setSelectedLectureStockKey(null)
-    }
-    if (!stockPanelsRestoreState && selectedLectureStockEntry.requestedCount > 1) {
-      setStockActionModal({ type: 'lecture', entryKey: selectedLectureStockEntry.key })
     }
     setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
@@ -6533,7 +6480,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         targetDesk.lesson.studentSlots = [null, movedStudent]
       }
     }
-    setDeskStudentStatus(targetDesk, studentIndex, null)
 
     // If swap: convert the swap student to makeup and place at source position
     if (swapStudent) {
@@ -6554,7 +6500,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       }
     }
 
-    if (!swapStudent && sourceDateKey !== targetCell.dateKey && (movedStudent.lessonType === 'regular' || movedStudent.lessonType === 'makeup')) {
+    if (!swapStudent && sourceDateKey !== targetCell.dateKey && movedStatusStudent.lessonType === 'regular') {
       const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
       const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
       if (sourceCell && sourceDesk) {
@@ -7003,6 +6949,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,
       defaultPeriodValue: storedRange.periodValue,
+      defaultPersonId: storedRange.personId,
       titleLabel: formatWeeklyScheduleTitle(storedRange.startDate, storedRange.endDate),
       classroomSettings,
       classroomStorageKey,
@@ -7059,6 +7006,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       defaultStartDate: storedRange.startDate,
       defaultEndDate: storedRange.endDate,
       defaultPeriodValue: storedRange.periodValue,
+      defaultPersonId: storedRange.personId,
       titleLabel: formatWeeklyScheduleTitle(storedRange.startDate, storedRange.endDate),
       classroomSettings,
       classroomStorageKey,
@@ -7451,7 +7399,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
-    const nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey, resolveBoardStudentScheduleCountKey(menuStudent.student))
+    const nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let statusSuffix = '振替対象にはしません。'
 
@@ -7653,21 +7601,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const handleUndo = () => {
     const previous = undoStack[undoStack.length - 1]
     if (!previous) return
-    const currentClassroomSettings = classroomSettingsRef.current
-    const restoredClassroomSettings = {
-      ...currentClassroomSettings,
-      holidayDates: [...previous.holidayDates],
-      forceOpenDates: [...previous.forceOpenDates],
-    }
 
     setRedoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, currentClassroomSettings.holidayDates, currentClassroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setUndoStack((current) => current.slice(0, -1))
-    if (!areStringArraysEqual(previous.holidayDates, currentClassroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, currentClassroomSettings.forceOpenDates)) {
-      classroomSettingsRef.current = restoredClassroomSettings
-      onUpdateClassroomSettings(restoredClassroomSettings)
+    if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
+      onUpdateClassroomSettings({
+        ...classroomSettings,
+        holidayDates: [...previous.holidayDates],
+        forceOpenDates: [...previous.forceOpenDates],
+      })
     }
     setWeeks(previous.weeks)
     setWeekIndex(previous.weekIndex)
@@ -7686,45 +7631,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     setSelectedLectureStockKey(null)
     setStudentMenu(null)
     setEditStudentDraft(null)
-    onBoardStateChange?.({
-      weeks: cloneWeeks(applyClassroomAvailability(previous.weeks, restoredClassroomSettings)),
-      weekIndex: previous.weekIndex,
-      selectedCellId: previous.selectedCellId,
-      selectedDeskIndex: previous.selectedDeskIndex,
-      suppressedRegularLessonOccurrences: [...previous.suppressedRegularLessonOccurrences],
-      scheduleCountAdjustments: cloneScheduleCountAdjustments(previous.scheduleCountAdjustments),
-      manualMakeupAdjustments: cloneOriginMap(previous.manualMakeupAdjustments),
-      suppressedMakeupOrigins: cloneOriginMap(previous.suppressedMakeupOrigins),
-      fallbackMakeupStudents: { ...previous.fallbackMakeupStudents },
-      manualLectureStockCounts: { ...previous.manualLectureStockCounts },
-      manualLectureStockOrigins: cloneManualLectureStockOrigins(previous.manualLectureStockOrigins),
-      fallbackLectureStockStudents: { ...previous.fallbackLectureStockStudents },
-      isLectureStockOpen,
-      isMakeupStockOpen,
-      studentScheduleRange,
-      teacherScheduleRange,
-    })
     setStatusMessage('1つ前の状態に戻しました。')
   }
 
   const handleRedo = () => {
     const next = redoStack[redoStack.length - 1]
     if (!next) return
-    const currentClassroomSettings = classroomSettingsRef.current
-    const restoredClassroomSettings = {
-      ...currentClassroomSettings,
-      holidayDates: [...next.holidayDates],
-      forceOpenDates: [...next.forceOpenDates],
-    }
 
     setUndoStack((current) => [
       ...current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, currentClassroomSettings.holidayDates, currentClassroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
     ])
     setRedoStack((current) => current.slice(0, -1))
-    if (!areStringArraysEqual(next.holidayDates, currentClassroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, currentClassroomSettings.forceOpenDates)) {
-      classroomSettingsRef.current = restoredClassroomSettings
-      onUpdateClassroomSettings(restoredClassroomSettings)
+    if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
+      onUpdateClassroomSettings({
+        ...classroomSettings,
+        holidayDates: [...next.holidayDates],
+        forceOpenDates: [...next.forceOpenDates],
+      })
     }
     setWeeks(next.weeks)
     setWeekIndex(next.weekIndex)
@@ -7743,24 +7667,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     setSelectedLectureStockKey(null)
     setStudentMenu(null)
     setEditStudentDraft(null)
-    onBoardStateChange?.({
-      weeks: cloneWeeks(applyClassroomAvailability(next.weeks, restoredClassroomSettings)),
-      weekIndex: next.weekIndex,
-      selectedCellId: next.selectedCellId,
-      selectedDeskIndex: next.selectedDeskIndex,
-      suppressedRegularLessonOccurrences: [...next.suppressedRegularLessonOccurrences],
-      scheduleCountAdjustments: cloneScheduleCountAdjustments(next.scheduleCountAdjustments),
-      manualMakeupAdjustments: cloneOriginMap(next.manualMakeupAdjustments),
-      suppressedMakeupOrigins: cloneOriginMap(next.suppressedMakeupOrigins),
-      fallbackMakeupStudents: { ...next.fallbackMakeupStudents },
-      manualLectureStockCounts: { ...next.manualLectureStockCounts },
-      manualLectureStockOrigins: cloneManualLectureStockOrigins(next.manualLectureStockOrigins),
-      fallbackLectureStockStudents: { ...next.fallbackLectureStockStudents },
-      isLectureStockOpen,
-      isMakeupStockOpen,
-      studentScheduleRange,
-      teacherScheduleRange,
-    })
     setStatusMessage('取り消した操作をやり直しました。')
   }
 
@@ -7900,7 +7806,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
                             className="stock-origin-item stock-origin-item-main"
                             disabled={activeStockAutoAssignKey !== null}
                             onClick={() => {
-                              handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
+                              handleSelectLectureStockEntry(lectureEntry)
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}

@@ -2588,10 +2588,13 @@ function AuthenticatedApp() {
       }),
       students,
       regularLessons: displayRegularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
       scheduleCountAdjustments: latestBoardState?.scheduleCountAdjustments ?? [],
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,
+      defaultPersonId: range.personId,
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
@@ -2638,6 +2641,7 @@ function AuthenticatedApp() {
       defaultStartDate: range.startDate,
       defaultEndDate: range.endDate,
       defaultPeriodValue: range.periodValue,
+      defaultPersonId: range.personId,
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
@@ -3011,6 +3015,7 @@ function AuthenticatedApp() {
         startDate: message.startDate,
         endDate: message.endDate,
         periodValue: typeof message.periodValue === 'string' ? message.periodValue : '',
+        personId: typeof message.personId === 'string' ? message.personId : '',
       }
 
       if (message.viewType === 'student') setStudentScheduleRange(nextRange)

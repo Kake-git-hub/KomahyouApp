@@ -211,6 +211,27 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     ])
   })
 
+  it('keeps expected regular counts on both sides of a month boundary', () => {
+    const occurrences = buildExpectedRegularOccurrences({
+      students: [createStudent()],
+      regularLessons: [createRegularLesson({
+        schoolYear: 2026,
+        startDate: '2026-04-01',
+        endDate: '2027-03-31',
+        student2StartDate: '2026-04-01',
+        student2EndDate: '2027-03-31',
+      })],
+      startDate: '2026-04-27',
+      endDate: '2026-05-10',
+    })
+
+    const visibleDates = occurrences
+      .filter((entry) => entry.dateKey >= '2026-04-27' && entry.dateKey <= '2026-05-10')
+      .map((entry) => entry.dateKey)
+
+    expect(visibleDates).toEqual(['2026-04-28', '2026-05-05'])
+  })
+
   it('serializes regular and lecture count adjustments for student schedule counts', () => {
     const adjustments = buildSerializedScheduleCountAdjustments({
       cells: [createManualScheduleCell()],
@@ -1158,6 +1179,49 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('isHighSchoolOrAbove(s.grade)')
     expect(html).toContain('function formatTeacherTooltipEntry(student)')
     expect(html).toContain("return [getVerboseStatusLabel(student.status), student.name, lessonLabel].filter(Boolean).join(' / ');")
+    vi.unstubAllGlobals()
+  })
+
+  it('preserves the selected teacher id through popup payload, storage, and range notifications', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      teachers: [
+        createTeacher({ id: 'teacher-1', name: '田中講師', displayName: '田中' }),
+        createTeacher({ id: 'teacher-2', name: '佐藤講師', displayName: '佐藤' }),
+      ],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      defaultPersonId: 'teacher-2',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(typeof html).toBe('string')
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.defaultPersonId).toBe('teacher-2')
+    expect(html).toContain("storage.setItem(rangeStoragePrefix + 'person', personId || '')")
+    expect(html).toContain('personId: personId ||')
+    expect(html).toContain('preferredRange.personId || DATA.defaultPersonId')
     vi.unstubAllGlobals()
   })
 
