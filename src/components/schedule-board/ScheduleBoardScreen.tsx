@@ -1774,7 +1774,13 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
       || student.name === managedStudent.name
     )
     if (isSameManagedStudent) {
-      nextLesson.studentSlots[slotIndex] = { ...managedStudent, ...student }
+      nextLesson.studentSlots[slotIndex] = {
+        ...managedStudent,
+        ...student,
+        id: student.id || managedStudent.id,
+        managedStudentId: student.managedStudentId ?? managedStudent.managedStudentId,
+        birthDate: student.birthDate ?? managedStudent.birthDate,
+      }
       return
     }
 
