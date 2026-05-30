@@ -449,6 +449,169 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('links board-visible regular lessons by management data when the desk teacher is stale but the slot-subject candidate is unique', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    const cell: SlotCell = {
+      id: '2026-07-24_5',
+      dateKey: '2026-07-24',
+      dayLabel: '金',
+      dateLabel: '7/24',
+      slotLabel: '5限',
+      slotNumber: 5,
+      timeLabel: '19:40-21:10',
+      isOpenDay: true,
+      desks: [{
+        id: '2026-07-24_5_desk_1',
+        teacher: '別講師',
+        lesson: {
+          id: 'managed_legacy_ochiai_inoue',
+          studentSlots: [{
+            id: 'legacy-inoue-entry',
+            name: '井上',
+            grade: '中2',
+            subject: '英',
+            lessonType: 'regular',
+            teacherType: 'normal',
+            manualAdded: false,
+          }, null],
+        },
+      }],
+    }
+
+    openStudentScheduleHtml({
+      cells: [cell],
+      plannedCells: [],
+      students: [
+        createStudent({ id: 'student-1', name: '井上 開斗', displayName: '井上' }),
+        createStudent({ id: 'student-2', name: '井上 花子', displayName: '井上', email: 'student2@example.com' }),
+      ],
+      teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' })],
+      regularLessons: [createRegularLesson({
+        id: 'regular-ochiai-inoue',
+        schoolYear: 2026,
+        teacherId: 'teacher-ochiai',
+        student1Id: 'student-1',
+        subject1: '英',
+        dayOfWeek: 5,
+        slotNumber: 5,
+        startDate: '2026-04-01',
+        endDate: '未定',
+      })],
+      defaultStartDate: '2026-07-24',
+      defaultEndDate: '2026-07-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(student?.name).toBe('井上')
+    expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('links board-visible regular lessons by candidate-local name matching when same-slot same-subject candidates are multiple', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    const cell: SlotCell = {
+      id: '2026-07-24_5',
+      dateKey: '2026-07-24',
+      dayLabel: '金',
+      dateLabel: '7/24',
+      slotLabel: '5限',
+      slotNumber: 5,
+      timeLabel: '19:40-21:10',
+      isOpenDay: true,
+      desks: [{
+        id: '2026-07-24_5_desk_1',
+        teacher: '別講師',
+        lesson: {
+          id: 'managed_legacy_pair',
+          studentSlots: [{
+            id: 'legacy-inoue-entry',
+            name: '井上',
+            grade: '中2',
+            subject: '英',
+            lessonType: 'regular',
+            teacherType: 'normal',
+            manualAdded: false,
+          }, null],
+        },
+      }],
+    }
+
+    openStudentScheduleHtml({
+      cells: [cell],
+      plannedCells: [],
+      students: [
+        createStudent({ id: 'student-1', name: '井上 開斗', displayName: '井上' }),
+        createStudent({ id: 'student-2', name: '井上 花子', displayName: '井上', email: 'student2@example.com' }),
+        createStudent({ id: 'student-3', name: '山田 太郎', displayName: '山田', email: 'student3@example.com' }),
+      ],
+      teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' })],
+      regularLessons: [createRegularLesson({
+        id: 'regular-ochiai-pair',
+        schoolYear: 2026,
+        teacherId: 'teacher-ochiai',
+        student1Id: 'student-1',
+        subject1: '英',
+        student2Id: 'student-3',
+        subject2: '英',
+        dayOfWeek: 5,
+        slotNumber: 5,
+        startDate: '2026-04-01',
+        endDate: '未定',
+      })],
+      defaultStartDate: '2026-07-24',
+      defaultEndDate: '2026-07-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(student?.name).toBe('井上')
+    expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
   it('links regular status entries by management data when the desk teacher is stale', () => {
     const write = vi.fn()
     const popup = {

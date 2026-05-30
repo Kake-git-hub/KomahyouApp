@@ -493,6 +493,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       })
     : []
   const teacherById = new Map((paramsWithRegularLessons.teachers ?? []).map((teacher) => [teacher.id, teacher]))
+  const studentById = new Map((paramsWithRegularLessons.students ?? linkedStudents).map((student) => [student.id, student]))
   const doesDeskMatchTeacher = (teacherId: string, desk: SlotCell['desks'][number], teacherName?: string) => {
     if (desk.teacherAssignmentTeacherId) return desk.teacherAssignmentTeacherId === teacherId
     const teacher = teacherById.get(teacherId)
@@ -518,6 +519,30 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       return teacherKeys.has(value) || teacherKeys.has(normalized)
     })
   }
+  const selectCandidateStudentId = (candidateStudentIds: Set<string>, entryName: string) => {
+    if (candidateStudentIds.size === 1) return Array.from(candidateStudentIds)[0]
+
+    const normalizedEntryName = normalizeStudentNameLookupKey(entryName)
+    if (!normalizedEntryName || candidateStudentIds.size === 0) return undefined
+
+    const matchingStudentIds = Array.from(candidateStudentIds).filter((studentId) => {
+      const student = studentById.get(studentId)
+      if (!student) return false
+
+      const candidateNames = Array.from(new Set([
+        normalizeStudentNameLookupKey(student.name),
+        normalizeStudentNameLookupKey(getStudentDisplayName(student)),
+      ].filter(Boolean)))
+
+      return candidateNames.some((candidateName) => (
+        candidateName === normalizedEntryName
+        || candidateName.includes(normalizedEntryName)
+        || normalizedEntryName.includes(candidateName)
+      ))
+    })
+
+    return matchingStudentIds.length === 1 ? matchingStudentIds[0] : undefined
+  }
   const resolveManagedStudentIdFromManagementData = (entry: {
     name: string
     managedStudentId?: string
@@ -530,14 +555,14 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     const lessonDate = parseDateKey(cell.dateKey)
     const schoolYear = resolveOperationalSchoolYear(lessonDate)
     const dayOfWeek = lessonDate.getDay()
-    const candidateStudentIds = new Set(
+    const collectCandidateStudentIds = (requireTeacherMatch: boolean) => new Set(
       teacherLookupRegularLessons
         .filter((row) => (
           row.schoolYear === schoolYear
           && row.dayOfWeek === dayOfWeek
           && row.slotNumber === cell.slotNumber
           && isRegularLessonParticipantActiveOnDate(row, cell.dateKey)
-          && doesDeskMatchTeacher(row.teacherId, desk, entry.teacherName)
+          && (!requireTeacherMatch || doesDeskMatchTeacher(row.teacherId, desk, entry.teacherName))
         ))
         .flatMap((row) => {
           const subject1Matches = row.subject1 === entry.subject || resolveDisplayedSubjectForGrade(row.subject1, entry.grade ?? '') === entry.subject
@@ -549,7 +574,12 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         }),
     )
 
-    return candidateStudentIds.size === 1 ? Array.from(candidateStudentIds)[0] : undefined
+    const teacherMatchedCandidates = collectCandidateStudentIds(true)
+    const teacherMatchedStudentId = selectCandidateStudentId(teacherMatchedCandidates, entry.name)
+    if (teacherMatchedStudentId) return teacherMatchedStudentId
+    if (teacherMatchedCandidates.size > 0) return undefined
+
+    return selectCandidateStudentId(collectCandidateStudentIds(false), entry.name)
   }
   const resolveRegularTeacherIds = (student: StudentEntry, cell: SlotCell, desk: SlotCell['desks'][number]) => {
     if (student.lessonType !== 'regular') return []
