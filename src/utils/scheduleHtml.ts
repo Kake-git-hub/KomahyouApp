@@ -139,6 +139,49 @@ type SerializedScheduleCountAdjustment = {
   delta: number
 }
 
+type SerializedStudentLinkDebugCandidate = {
+  studentId: string
+  studentName: string
+  studentDisplayName: string
+}
+
+type SerializedStudentLinkDiagnostic = {
+  dateKey: string
+  slotNumber: number
+  deskId: string
+  deskIndex: number
+  entryKind: 'lesson' | 'status'
+  entryId: string
+  name: string
+  normalizedName: string
+  subject: string
+  grade?: string
+  lessonType: string
+  teacherName?: string
+  deskTeacher: string
+  teacherAssignmentTeacherId?: string
+  linkedStudentId?: string
+  resolutionSource: 'trial-skip' | 'managed-student-id' | 'management-data-teacher' | 'management-data-slot' | 'name-fallback' | 'unresolved'
+  teacherMatchedCandidates: SerializedStudentLinkDebugCandidate[]
+  slotCandidates: SerializedStudentLinkDebugCandidate[]
+  matchedByEntryNameCandidates: SerializedStudentLinkDebugCandidate[]
+}
+
+type SerializedStudentLinkInput = {
+  id: string
+  name: string
+  managedStudentId?: string
+  subject: string
+  grade?: string
+  lessonType: string
+  teacherName?: string
+}
+
+type SerializedStudentLinkResolution = {
+  linkedStudentId?: string
+  debugDiagnostic?: SerializedStudentLinkDiagnostic
+}
+
 type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
@@ -166,6 +209,7 @@ type SchedulePayload = {
   countAdjustments: SerializedScheduleCountAdjustment[]
   specialSessions: SerializedSpecialSession[]
   classroomStorageKey: string
+  debugLinkDiagnostics?: SerializedStudentLinkDiagnostic[]
 }
 
 type OpenScheduleHtmlParams = {
@@ -239,15 +283,9 @@ export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
 
 function serializeCells(
   cells: SlotCell[],
-  resolveLinkedStudentId?: (studentName: string) => string | undefined,
+  resolveStudentLink?: (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], entryKind: 'lesson' | 'status', deskIndex: number) => SerializedStudentLinkResolution,
   resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell, desk: SlotCell['desks'][number]) => string[],
-  resolveManagedStudentId?: (entry: {
-    name: string
-    managedStudentId?: string
-    subject: string
-    grade?: string
-    lessonType: string
-  }, cell: SlotCell, desk: SlotCell['desks'][number]) => string | undefined,
+  debugDiagnostics?: SerializedStudentLinkDiagnostic[],
 ): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
 
@@ -265,16 +303,24 @@ function serializeCells(
       slotLabel: cell.slotLabel,
       timeLabel: cell.timeLabel,
       isOpenDay: cell.isOpenDay,
-      desks: cell.desks.map((desk) => {
+      desks: cell.desks.map((desk, deskIndex) => {
         const statuses = desk.statusSlots
           ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
           .map((entry) => {
             const linkedDestination = linkedDestinationByStatusId.get(entry.id)
+            const resolution = resolveStudentLink?.({
+              id: entry.id,
+              name: entry.name,
+              managedStudentId: entry.managedStudentId,
+              subject: entry.subject,
+              grade: entry.grade,
+              lessonType: entry.lessonType,
+              teacherName: entry.teacherName,
+            }, cell, desk, 'status', deskIndex)
+            if (resolution?.debugDiagnostic) debugDiagnostics?.push(resolution.debugDiagnostic)
             return {
               id: entry.id,
-              linkedStudentId: entry.managedStudentId
-                ?? resolveManagedStudentId?.(entry, cell, desk)
-                ?? resolveLinkedStudentId?.(entry.name),
+              linkedStudentId: resolution?.linkedStudentId,
               name: entry.name,
               grade: entry.grade,
               subject: resolveDisplayedSubjectForGrade(entry.subject, entry.grade),
@@ -295,23 +341,29 @@ function serializeCells(
               note: desk.lesson.note,
               students: desk.lesson.studentSlots
                 .filter((student): student is NonNullable<typeof student> => Boolean(student))
-                .map((student) => ({
-                  id: student.id,
-                  // 体験授業の生徒は同名であっても既存生徒として扱わない
-                  linkedStudentId: student.lessonType === 'trial'
-                    ? undefined
-                    : student.managedStudentId
-                      ?? resolveManagedStudentId?.(student, cell, desk)
-                      ?? resolveLinkedStudentId?.(student.name),
-                  name: student.name,
-                  grade: student.grade,
-                  subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
-                  lessonType: student.lessonType,
-                  teacherType: student.teacherType,
-                  manualAdded: Boolean(student.manualAdded),
-                  makeupSourceLabel: student.makeupSourceLabel,
-                  warning: student.warning,
-                })),
+                .map((student) => {
+                  const resolution = resolveStudentLink?.({
+                    id: student.id,
+                    name: student.name,
+                    managedStudentId: student.managedStudentId,
+                    subject: student.subject,
+                    grade: student.grade,
+                    lessonType: student.lessonType,
+                  }, cell, desk, 'lesson', deskIndex)
+                  if (resolution?.debugDiagnostic) debugDiagnostics?.push(resolution.debugDiagnostic)
+                  return {
+                    id: student.id,
+                    linkedStudentId: resolution?.linkedStudentId,
+                    name: student.name,
+                    grade: student.grade,
+                    subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
+                    lessonType: student.lessonType,
+                    teacherType: student.teacherType,
+                    manualAdded: Boolean(student.manualAdded),
+                    makeupSourceLabel: student.makeupSourceLabel,
+                    warning: student.warning,
+                  }
+                }),
             }
           : undefined
         if (!lesson && (!statuses || statuses.length === 0)) return null
@@ -494,6 +546,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     : []
   const teacherById = new Map((paramsWithRegularLessons.teachers ?? []).map((teacher) => [teacher.id, teacher]))
   const studentById = new Map((paramsWithRegularLessons.students ?? linkedStudents).map((student) => [student.id, student]))
+  const debugLinkDiagnostics: SerializedStudentLinkDiagnostic[] = []
   const doesDeskMatchTeacher = (teacherId: string, desk: SlotCell['desks'][number], teacherName?: string) => {
     if (desk.teacherAssignmentTeacherId) return desk.teacherAssignmentTeacherId === teacherId
     const teacher = teacherById.get(teacherId)
@@ -519,11 +572,32 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       return teacherKeys.has(value) || teacherKeys.has(normalized)
     })
   }
+  const mapCandidateStudentIds = (candidateStudentIds: Iterable<string>): SerializedStudentLinkDebugCandidate[] => (
+    Array.from(new Set(candidateStudentIds)).map((studentId) => {
+      const student = studentById.get(studentId)
+      return {
+        studentId,
+        studentName: student?.name ?? studentId,
+        studentDisplayName: student ? getStudentDisplayName(student) : studentId,
+      }
+    })
+  )
   const selectCandidateStudentId = (candidateStudentIds: Set<string>, entryName: string) => {
-    if (candidateStudentIds.size === 1) return Array.from(candidateStudentIds)[0]
+    if (candidateStudentIds.size === 1) {
+      const studentId = Array.from(candidateStudentIds)[0]
+      return {
+        studentId,
+        matchedStudentIds: studentId ? [studentId] : [],
+      }
+    }
 
     const normalizedEntryName = normalizeStudentNameLookupKey(entryName)
-    if (!normalizedEntryName || candidateStudentIds.size === 0) return undefined
+    if (!normalizedEntryName || candidateStudentIds.size === 0) {
+      return {
+        studentId: undefined,
+        matchedStudentIds: [] as string[],
+      }
+    }
 
     const matchingStudentIds = Array.from(candidateStudentIds).filter((studentId) => {
       const student = studentById.get(studentId)
@@ -541,21 +615,16 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       ))
     })
 
-    return matchingStudentIds.length === 1 ? matchingStudentIds[0] : undefined
+    return {
+      studentId: matchingStudentIds.length === 1 ? matchingStudentIds[0] : undefined,
+      matchedStudentIds: matchingStudentIds,
+    }
   }
-  const resolveManagedStudentIdFromManagementData = (entry: {
-    name: string
-    managedStudentId?: string
-    subject: string
-    grade?: string
-    lessonType: string
-    teacherName?: string
-  }, cell: SlotCell, desk: SlotCell['desks'][number]) => {
-    if (entry.lessonType !== 'regular' || teacherLookupRegularLessons.length === 0) return undefined
+  const collectCandidateStudentIds = (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], requireTeacherMatch: boolean) => {
     const lessonDate = parseDateKey(cell.dateKey)
     const schoolYear = resolveOperationalSchoolYear(lessonDate)
     const dayOfWeek = lessonDate.getDay()
-    const collectCandidateStudentIds = (requireTeacherMatch: boolean) => new Set(
+    return new Set(
       teacherLookupRegularLessons
         .filter((row) => (
           row.schoolYear === schoolYear
@@ -573,19 +642,163 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
           return matches
         }),
     )
+  }
 
-    const teacherMatchedCandidates = collectCandidateStudentIds(true)
-    const teacherMatchedStudentId = selectCandidateStudentId(teacherMatchedCandidates, entry.name)
-    if (teacherMatchedStudentId) return teacherMatchedStudentId
-    if (teacherMatchedCandidates.size > 0) return undefined
+  const buildStudentLinkCacheKey = (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], entryKind: 'lesson' | 'status') => [
+    entryKind,
+    cell.dateKey,
+    cell.slotNumber,
+    desk.id,
+    entry.id,
+    entry.name,
+    entry.subject,
+    entry.lessonType,
+    entry.teacherName ?? '',
+  ].join('__')
 
-    return selectCandidateStudentId(collectCandidateStudentIds(false), entry.name)
+  const studentLinkResolutionCache = new Map<string, SerializedStudentLinkResolution>()
+
+  const resolveStudentLink = (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], entryKind: 'lesson' | 'status', deskIndex: number): SerializedStudentLinkResolution => {
+    const cacheKey = buildStudentLinkCacheKey(entry, cell, desk, entryKind)
+    const cached = studentLinkResolutionCache.get(cacheKey)
+    if (cached) return cached
+
+    const baseDiagnostic = {
+      dateKey: cell.dateKey,
+      slotNumber: cell.slotNumber,
+      deskId: desk.id,
+      deskIndex,
+      entryKind,
+      entryId: entry.id,
+      name: entry.name,
+      normalizedName: normalizeStudentNameLookupKey(entry.name),
+      subject: entry.subject,
+      grade: entry.grade,
+      lessonType: entry.lessonType,
+      teacherName: entry.teacherName,
+      deskTeacher: desk.teacher,
+      teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
+    }
+
+    let result: SerializedStudentLinkResolution
+
+    if (entry.lessonType === 'trial') {
+      result = {
+        linkedStudentId: undefined,
+        debugDiagnostic: {
+          ...baseDiagnostic,
+          resolutionSource: 'trial-skip',
+          teacherMatchedCandidates: [],
+          slotCandidates: [],
+          matchedByEntryNameCandidates: [],
+        },
+      }
+      studentLinkResolutionCache.set(cacheKey, result)
+      return result
+    }
+
+    if (entry.managedStudentId) {
+      result = {
+        linkedStudentId: entry.managedStudentId,
+        debugDiagnostic: {
+          ...baseDiagnostic,
+          linkedStudentId: entry.managedStudentId,
+          resolutionSource: 'managed-student-id',
+          teacherMatchedCandidates: [],
+          slotCandidates: [],
+          matchedByEntryNameCandidates: mapCandidateStudentIds([entry.managedStudentId]),
+        },
+      }
+      studentLinkResolutionCache.set(cacheKey, result)
+      return result
+    }
+
+    const teacherMatchedCandidateIds = entry.lessonType === 'regular' && teacherLookupRegularLessons.length > 0
+      ? collectCandidateStudentIds(entry, cell, desk, true)
+      : new Set<string>()
+    const teacherMatchedSelection = selectCandidateStudentId(teacherMatchedCandidateIds, entry.name)
+    const slotCandidateIds = teacherMatchedCandidateIds.size === 0 && entry.lessonType === 'regular' && teacherLookupRegularLessons.length > 0
+      ? collectCandidateStudentIds(entry, cell, desk, false)
+      : new Set<string>()
+    const slotSelection = teacherMatchedCandidateIds.size === 0
+      ? selectCandidateStudentId(slotCandidateIds, entry.name)
+      : { studentId: undefined, matchedStudentIds: [] as string[] }
+
+    if (teacherMatchedSelection.studentId) {
+      result = {
+        linkedStudentId: teacherMatchedSelection.studentId,
+        debugDiagnostic: {
+          ...baseDiagnostic,
+          linkedStudentId: teacherMatchedSelection.studentId,
+          resolutionSource: 'management-data-teacher',
+          teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
+          slotCandidates: mapCandidateStudentIds(slotCandidateIds),
+          matchedByEntryNameCandidates: mapCandidateStudentIds(teacherMatchedSelection.matchedStudentIds),
+        },
+      }
+      studentLinkResolutionCache.set(cacheKey, result)
+      return result
+    }
+
+    if (slotSelection.studentId) {
+      result = {
+        linkedStudentId: slotSelection.studentId,
+        debugDiagnostic: {
+          ...baseDiagnostic,
+          linkedStudentId: slotSelection.studentId,
+          resolutionSource: 'management-data-slot',
+          teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
+          slotCandidates: mapCandidateStudentIds(slotCandidateIds),
+          matchedByEntryNameCandidates: mapCandidateStudentIds(slotSelection.matchedStudentIds),
+        },
+      }
+      studentLinkResolutionCache.set(cacheKey, result)
+      return result
+    }
+
+    const linkedStudentId = resolveLinkedStudentId(entry.name)
+    if (linkedStudentId) {
+      result = {
+        linkedStudentId,
+        debugDiagnostic: {
+          ...baseDiagnostic,
+          linkedStudentId,
+          resolutionSource: 'name-fallback',
+          teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
+          slotCandidates: mapCandidateStudentIds(slotCandidateIds),
+          matchedByEntryNameCandidates: mapCandidateStudentIds([linkedStudentId]),
+        },
+      }
+      studentLinkResolutionCache.set(cacheKey, result)
+      return result
+    }
+
+    result = {
+      linkedStudentId: undefined,
+      debugDiagnostic: {
+        ...baseDiagnostic,
+        resolutionSource: 'unresolved',
+        teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
+        slotCandidates: mapCandidateStudentIds(slotCandidateIds),
+        matchedByEntryNameCandidates: mapCandidateStudentIds([
+          ...teacherMatchedSelection.matchedStudentIds,
+          ...slotSelection.matchedStudentIds,
+        ]),
+      },
+    }
+    studentLinkResolutionCache.set(cacheKey, result)
+    return result
   }
   const resolveRegularTeacherIds = (student: StudentEntry, cell: SlotCell, desk: SlotCell['desks'][number]) => {
     if (student.lessonType !== 'regular') return []
-    const studentId = student.managedStudentId
-      ?? resolveManagedStudentIdFromManagementData(student, cell, desk)
-      ?? resolveLinkedStudentId(student.name)
+    const studentId = resolveStudentLink({
+      id: student.id,
+      name: student.name,
+      managedStudentId: student.managedStudentId,
+      subject: student.subject,
+      grade: student.grade,
+      lessonType: student.lessonType,
+    }, cell, desk, 'lesson', -1).linkedStudentId
     if (!studentId || teacherLookupRegularLessons.length === 0) return []
     const lessonDate = parseDateKey(cell.dateKey)
     const schoolYear = resolveOperationalSchoolYear(lessonDate)
@@ -601,8 +814,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       })
       .filter(Boolean)
   }
-  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds, resolveManagedStudentIdFromManagementData)
-  const serializedPlannedCells = serializeCells(params.plannedCells, resolveLinkedStudentId, resolveRegularTeacherIds, resolveManagedStudentIdFromManagementData)
+  const serializedCells = serializeCells(params.cells, resolveStudentLink, resolveRegularTeacherIds, debugLinkDiagnostics)
+  const serializedPlannedCells = serializeCells(params.plannedCells, resolveStudentLink, resolveRegularTeacherIds)
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -651,6 +864,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       }])),
     })),
     classroomStorageKey: params.classroomStorageKey || 'default',
+    debugLinkDiagnostics,
   }
 }
 
@@ -2249,6 +2463,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
+        <button type="button" id="schedule-debug-button" class="secondary">診断JSON</button>
         <button type="button" id="schedule-apply-button">反映</button>
       </div>
     </div>`}
@@ -2269,6 +2484,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const pagesElement = document.getElementById('schedule-pages');
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
+      const debugButton = document.getElementById('schedule-debug-button');
       const applyButton = document.getElementById('schedule-apply-button');
       const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'));
       const sharedStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':' + BASE_VIEW_TYPE + ':';
@@ -2353,6 +2569,95 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var clone = { ...(payload || {}) };
         delete clone.scheduleNotes;
         return JSON.stringify(clone);
+      }
+
+      function downloadJsonFile(fileName, value) {
+        try {
+          var blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
+          var url = URL.createObjectURL(blob);
+          var anchor = document.createElement('a');
+          anchor.href = url;
+          anchor.download = fileName;
+          anchor.click();
+          URL.revokeObjectURL(url);
+        } catch {}
+      }
+
+      function buildScheduleDebugExport() {
+        var startDate = appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
+        var endDate = appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
+        if (startDate > endDate) {
+          var previous = startDate;
+          startDate = endDate;
+          endDate = previous;
+        }
+        var currentPersonId = appliedPersonId || DATA.defaultPersonId || '';
+        var visiblePeople = VIEW_TYPE === 'student' ? getVisibleStudents(startDate, endDate) : getVisibleTeachers(startDate, endDate);
+        var currentPerson = visiblePeople.find(function(person) { return person.id === currentPersonId; }) || visiblePeople[0] || null;
+        var filteredActualCells = filterCells(startDate, endDate);
+        var filteredPlannedCells = (Array.isArray(DATA.plannedCells) ? DATA.plannedCells : []).filter(function(cell) {
+          return cell && cell.dateKey >= startDate && cell.dateKey <= endDate;
+        });
+        var diagnosticsInRange = (Array.isArray(DATA.debugLinkDiagnostics) ? DATA.debugLinkDiagnostics : []).filter(function(entry) {
+          return entry && entry.dateKey >= startDate && entry.dateKey <= endDate;
+        });
+        var debugExport = {
+          generatedAt: new Date().toISOString(),
+          viewType: VIEW_TYPE,
+          titleLabel: DATA.titleLabel,
+          range: {
+            startDate: startDate,
+            endDate: endDate,
+            periodValue: appliedPeriodValue || DATA.defaultPeriodValue || '',
+          },
+          defaultPersonId: DATA.defaultPersonId || '',
+          appliedPersonId: currentPerson ? currentPerson.id : currentPersonId,
+          selectedPerson: currentPerson ? {
+            id: currentPerson.id,
+            name: currentPerson.name,
+            fullName: currentPerson.fullName || currentPerson.name,
+          } : null,
+          diagnosticsInRange: diagnosticsInRange,
+          actualCells: filteredActualCells,
+          plannedCells: filteredPlannedCells,
+          countAdjustments: (Array.isArray(DATA.countAdjustments) ? DATA.countAdjustments : []).filter(function(entry) {
+            return entry && entry.dateKey >= startDate && entry.dateKey <= endDate;
+          }),
+          expectedRegularOccurrences: (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).filter(function(entry) {
+            return entry && entry.dateKey >= startDate && entry.dateKey <= endDate;
+          }),
+        };
+
+        if (VIEW_TYPE === 'student' && currentPerson) {
+          var assignmentMap = buildStudentAssignments(filteredActualCells);
+          var assignmentKeys = getStudentAssignmentKeys(currentPerson);
+          debugExport.assignmentKeys = assignmentKeys;
+          debugExport.assignments = assignmentKeys.flatMap(function(key) { return assignmentMap.get(key) || []; });
+          debugExport.relevantDiagnostics = diagnosticsInRange.filter(function(entry) {
+            return entry.linkedStudentId === currentPerson.id
+              || entry.name === currentPerson.name
+              || entry.name === currentPerson.fullName;
+          });
+        }
+
+        if (VIEW_TYPE === 'teacher' && currentPerson) {
+          var teacherAssignmentMap = buildTeacherAssignments(filteredActualCells);
+          debugExport.assignments = collectTeacherAssignmentEntries(teacherAssignmentMap, currentPerson);
+          debugExport.relevantDiagnostics = diagnosticsInRange.filter(function(entry) {
+            return entry.teacherAssignmentTeacherId === currentPerson.id
+              || entry.teacherName === currentPerson.name
+              || entry.deskTeacher === currentPerson.name
+              || entry.deskTeacher === currentPerson.fullName;
+          });
+        }
+
+        return debugExport;
+      }
+
+      function exportScheduleDebugJson() {
+        var rangeStart = appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate || 'range';
+        var personId = appliedPersonId || DATA.defaultPersonId || 'person';
+        downloadJsonFile('schedule-debug-' + VIEW_TYPE + '-' + rangeStart + '-' + personId + '.json', buildScheduleDebugExport());
       }
 
       function syncScheduleNoteInputs() {
@@ -4845,6 +5150,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         event.preventDefault();
         applyFilters();
       });
+      if (debugButton) {
+        debugButton.addEventListener('click', exportScheduleDebugJson);
+      }
       applyButton.addEventListener('click', applyFilters);
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
