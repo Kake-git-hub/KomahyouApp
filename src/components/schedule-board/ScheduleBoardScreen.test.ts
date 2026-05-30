@@ -2145,7 +2145,7 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
     expect(mergedStudents.some((student) => student.name === targetStudent!.name && student.lessonType === 'makeup')).toBe(true)
   })
 
-  it('旧盤面の通常生徒に managedStudentId がなくても管理データの生徒IDを保持して生徒日程へ反映する', () => {
+  it('旧盤面の通常生徒が短縮名かつ managedStudentId がなくても管理データの生徒IDを保持して生徒日程へ反映する', () => {
     const range = {
       startDate: '2026-07-24',
       endDate: '2026-07-24',
@@ -2160,8 +2160,8 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
     const students = [{
       ...initialStudents[0]!,
       id: 'student-inoue',
-      name: '井上 花子',
-      displayName: '井上',
+      name: '井上 開斗',
+      displayName: '井上 開斗',
       birthDate: '2012-04-02',
       entryDate: '2026-04-01',
       withdrawDate: '未定',
@@ -2208,6 +2208,7 @@ describe('データ堅牢性 buildScheduleCellsForRange マージ', () => {
                 teacher: '落合',
                 lesson: {
                   ...desk.lesson!,
+                  id: 'managed_legacy_ochiai_inoue',
                   studentSlots: [{
                     ...desk.lesson!.studentSlots[0]!,
                     id: 'legacy-inoue-entry',

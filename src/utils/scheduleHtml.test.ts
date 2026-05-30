@@ -357,6 +357,44 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('keeps student count tables visible in HTML but hidden for print', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      plannedCells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('通常回数(希望数)')
+    expect(html).toContain('講習回数(希望数)')
+    expect(html).toContain('<div class="count-stack print-only-hidden">')
+    expect(html).toContain('@media print')
+    expect(html).toContain('.print-only-hidden { display: none; }')
+
+    vi.unstubAllGlobals()
+  })
+
   it('does not link ambiguous display-name lessons to one student in all-student print view', () => {
     const write = vi.fn()
     const popup = {

@@ -1761,6 +1761,25 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
   }
 }
 
+function normalizeStudentMergeName(value: string | undefined) {
+  return (value ?? '').replace(/[\s\u3000]+/gu, '').trim()
+}
+
+function isLikelySameStudentEntry(currentStudent: StudentEntry, managedStudent: StudentEntry) {
+  if (currentStudent.managedStudentId && managedStudent.managedStudentId) {
+    return currentStudent.managedStudentId === managedStudent.managedStudentId
+  }
+  if (currentStudent.id === managedStudent.id) return true
+  if (currentStudent.name === managedStudent.name) return true
+
+  const currentName = normalizeStudentMergeName(currentStudent.name)
+  const managedName = normalizeStudentMergeName(managedStudent.name)
+  if (!currentName || !managedName) return false
+  if (currentStudent.subject !== managedStudent.subject) return false
+
+  return currentName.includes(managedName) || managedName.includes(currentName)
+}
+
 function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson, dateKey: string) {
   const nextLesson = cloneDeskLesson(managedLesson)
 
@@ -1768,11 +1787,7 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
     if (!student) return
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
-    const isSameManagedStudent = managedStudent && (
-      (student.managedStudentId && managedStudent.managedStudentId && student.managedStudentId === managedStudent.managedStudentId)
-      || student.id === managedStudent.id
-      || student.name === managedStudent.name
-    )
+    const isSameManagedStudent = managedStudent && isLikelySameStudentEntry(student, managedStudent)
     if (isSameManagedStudent) {
       nextLesson.studentSlots[slotIndex] = {
         ...managedStudent,
@@ -2196,9 +2211,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
           if (idMatchedManagedIds.has(mId) || preservedLessonIds.has(mId)) continue
           const hasSharedStudent = md.lesson.studentSlots.some((ms) =>
             ms && lesson.studentSlots.some((bs) =>
-              bs && (bs.managedStudentId && ms.managedStudentId
-                ? bs.managedStudentId === ms.managedStudentId
-                : bs.name === ms.name)))
+              bs && isLikelySameStudentEntry(bs, ms)))
           if (hasSharedStudent) {
             preservedLessonIds.add(mId)
             return {
