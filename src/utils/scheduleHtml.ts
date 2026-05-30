@@ -85,7 +85,6 @@ type SerializedCell = {
   desks: Array<{
     teacher: string
     teacherId?: string
-    deskNumber?: number
     statuses?: SerializedStudentStatusEntry[]
     lesson?: {
       note?: string
@@ -242,8 +241,7 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
       slotLabel: cell.slotLabel,
       timeLabel: cell.timeLabel,
       isOpenDay: cell.isOpenDay,
-      desks: cell.desks.map((desk, deskIndex) => {
-        const rawStatuses = desk.statusSlots?.filter((entry) => Boolean(entry)) ?? []
+      desks: cell.desks.map((desk) => {
         const statuses = desk.statusSlots
           ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
           .map((entry) => {
@@ -286,11 +284,10 @@ function serializeCells(cells: SlotCell[], resolveLinkedStudentId?: (studentName
                 })),
             }
           : undefined
-        if (!lesson && (!statuses || statuses.length === 0) && (!desk.teacher || rawStatuses.length > 0)) return null
+        if (!lesson && (!statuses || statuses.length === 0)) return null
         return {
           teacher: desk.teacher,
           teacherId: desk.teacherAssignmentTeacherId,
-          deskNumber: deskIndex + 1,
           statuses,
           lesson,
         }
@@ -2578,8 +2575,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         cells.forEach((cell) => {
           cell.desks.forEach((desk) => {
             const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
-            if (!desk.teacher) return;
-            const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '', teacherOnly: !desk.lesson && statuses.length === 0, deskNumber: desk.deskNumber };
+            if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
+            const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
             const teacherKeys = [desk.teacherId, desk.teacher, normalizeTeacherAssignmentName(desk.teacher)].filter(Boolean);
             teacherKeys.forEach((teacherKey) => {
               if (!map.has(teacherKey)) map.set(teacherKey, []);
@@ -2588,6 +2585,23 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           });
         });
         return map;
+      }
+
+      function collectTeacherAssignmentEntries(assignmentMap, teacher) {
+        const keys = [teacher.id, teacher.name, teacher.fullName, normalizeTeacherAssignmentName(teacher.name), normalizeTeacherAssignmentName(teacher.fullName)].filter(Boolean);
+        const entries = [];
+        const seen = new Set();
+        keys.forEach((key) => {
+          (assignmentMap.get(key) || []).forEach((entry) => {
+            const studentKey = (entry.students || []).map((student) => student.id || student.name).join(',');
+            const statusKey = (entry.statuses || []).map((status) => status.id || status.name).join(',');
+            const dedupeKey = [entry.dateKey, entry.slotNumber, studentKey, statusKey, entry.note || ''].join('__');
+            if (seen.has(dedupeKey)) return;
+            seen.add(dedupeKey);
+            entries.push(entry);
+          });
+        });
+        return entries;
       }
 
       function findFirstVisibleStudentWithSchedule(startDate, endDate, students) {
@@ -3970,9 +3984,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!teacher) return { html: null, teacher: null };
         const showQr = shouldShowScheduleQr();
         const teacherIndex = typeof indexOverride === 'number' ? indexOverride : Math.max(0, teachers.findIndex((entry) => entry.id === teacher.id));
-        const teacherNameKey = normalizeTeacherAssignmentName(teacher.name);
-        const teacherFullNameKey = normalizeTeacherAssignmentName(teacher.fullName);
-        const entries = assignmentMap.get(teacher.id) || assignmentMap.get(teacher.name) || (teacher.fullName ? assignmentMap.get(teacher.fullName) : undefined) || assignmentMap.get(teacherNameKey) || (teacherFullNameKey ? assignmentMap.get(teacherFullNameKey) : undefined) || [];
+        const entries = collectTeacherAssignmentEntries(assignmentMap, teacher);
         const keyMap = groupScheduleEntriesBySlot(entries);
         const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
         const regularCounts = {};
@@ -4002,11 +4014,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
             const slotStudents = slotEntries.flatMap((entry) => entry.students || []);
             const slotStatuses = slotEntries.flatMap((entry) => entry.statuses || []);
-            const teacherOnlyEntries = slotEntries.filter((entry) => entry.teacherOnly);
             let content = '<div class="empty-label"></div>';
             if (slotStudents.length > 0 || slotStatuses.length > 0) content = renderTeacherCellCard(slotStudents, slotStatuses);
-            else if (teacherOnlyEntries.length > 0) content = '<div class="lesson-card lesson-card-teacher is-single"><div class="teacher-lesson-person"><span class="teacher-lesson-line teacher-lesson-name">講師のみ</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml(teacherOnlyEntries.map((entry) => entry.deskNumber ? '机' + entry.deskNumber : '').filter(Boolean).join(' / ')) + '</span></div></div>';
-            const title = slotEntries.length ? [...slotStudents, ...slotStatuses].map((student) => formatTeacherTooltipEntry(student)).concat(teacherOnlyEntries.map((entry) => entry.deskNumber ? '講師のみ / 机' + entry.deskNumber : '講師のみ')).join(' | ') : '';
+            const title = slotEntries.length ? [...slotStudents, ...slotStatuses].map((student) => formatTeacherTooltipEntry(student)).join(' | ') : '';
             return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
           }).join('');
           return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';

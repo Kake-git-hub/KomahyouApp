@@ -1290,11 +1290,12 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(payload.cells[0]?.desks?.[0]?.teacherId).toBe('teacher-ochiai')
     expect(html).toContain('const teacherKeys = [desk.teacherId, desk.teacher, normalizeTeacherAssignmentName(desk.teacher)].filter(Boolean);')
     expect(html).toContain('function normalizeTeacherAssignmentName(value)')
-    expect(html).toContain('assignmentMap.get(teacher.id)')
+    expect(html).toContain('function collectTeacherAssignmentEntries(assignmentMap, teacher)')
+    expect(html).toContain('const entries = collectTeacherAssignmentEntries(assignmentMap, teacher);')
     vi.unstubAllGlobals()
   })
 
-  it('keeps teacher-only desk assignments in teacher schedule payloads with their desk number', () => {
+  it('keeps student desks that match a teacher by display name when other desks match by teacher id', () => {
     const write = vi.fn()
     const popup = {
       closed: false,
@@ -1321,16 +1322,44 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
         timeLabel: '19:40-21:10',
         isOpenDay: true,
         desks: [
-          ...Array.from({ length: 8 }, (_, index) => ({ id: `2026-07-24_5_desk_${index + 1}`, teacher: '' })),
+          {
+            id: '2026-07-24_5_desk_1',
+            teacher: '旧表示名',
+            teacherAssignmentTeacherId: 'teacher-ochiai',
+            lesson: {
+              id: 'lesson-other',
+              studentSlots: [{
+                id: 'student-other-entry',
+                name: '別生徒',
+                managedStudentId: 'student-other',
+                grade: '中1',
+                subject: '英',
+                lessonType: 'regular',
+                teacherType: 'normal',
+              }, null],
+            },
+          },
+          ...Array.from({ length: 7 }, (_, index) => ({ id: `2026-07-24_5_desk_${index + 2}`, teacher: '' })),
           {
             id: '2026-07-24_5_desk_9',
             teacher: '落合',
-            teacherAssignmentTeacherId: 'teacher-ochiai',
+            lesson: {
+              id: 'lesson-inoue',
+              studentSlots: [{
+                id: 'student-inoue-entry',
+                name: '井上',
+                managedStudentId: 'student-inoue',
+                grade: '中2',
+                subject: '数',
+                lessonType: 'regular',
+                teacherType: 'normal',
+              }, null],
+            },
           },
         ],
       }],
       plannedCells: [],
-      teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 太郎', displayName: '落合' })],
+      teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' })],
       defaultStartDate: '2026-07-01',
       defaultEndDate: '2026-07-31',
       defaultPersonId: 'teacher-ochiai',
@@ -1343,11 +1372,12 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
-    expect(payload.cells[0]?.desks).toHaveLength(1)
-    expect(payload.cells[0]?.desks?.[0]).toMatchObject({ teacher: '落合', teacherId: 'teacher-ochiai', deskNumber: 9 })
-    expect(html).toContain('teacherOnly: !desk.lesson && statuses.length === 0')
-    expect(html).toContain('講師のみ')
-    expect(html).toContain('机')
+    expect(payload.cells[0]?.desks).toHaveLength(2)
+    expect(payload.cells[0]?.desks?.[0]).toMatchObject({ teacher: '旧表示名', teacherId: 'teacher-ochiai' })
+    expect(payload.cells[0]?.desks?.[1]).toMatchObject({ teacher: '落合', lesson: { students: [{ name: '井上' }] } })
+    expect(payload.cells[0]?.desks?.[1]?.teacherId).toBeUndefined()
+    expect(html).toContain('const entries = collectTeacherAssignmentEntries(assignmentMap, teacher);')
+    expect(html).not.toContain('講師のみ')
     vi.unstubAllGlobals()
   })
 
