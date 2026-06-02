@@ -45,6 +45,7 @@ type DeveloperAdminScreenProps = {
   }
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
   serverAutoBackupLoading: boolean
+  serverAutoBackupDiagnostics: unknown[]
   onLoadServerAutoBackupSummaries: () => void
   onTriggerServerAutoBackup: () => void
   onRestoreServerAutoBackup: (backupDateKey: string) => void
@@ -143,7 +144,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, serverAutoBackupDiagnostics, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [serverBackupListExpanded, setServerBackupListExpanded] = useState(false)
@@ -168,6 +169,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     const now = new Date()
     return `${now.getFullYear()}年${now.getMonth() + 1}月現在`
   }, [])
+  void serverAutoBackupDiagnostics
   const DEFAULT_STUDENT_UNIT_PRICE = 300
   const classroomActiveStudents = useMemo(() =>
     classrooms.map((classroom) => ({
