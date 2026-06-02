@@ -711,7 +711,7 @@ function buildClassroomSnapshotPayload(params: {
   })
 }
 
-function clampScreenForUserRole(screen: AppScreen, role: WorkspaceUser['role'] | null | undefined): AppScreen {
+export function clampScreenForUserRole(screen: AppScreen, role: WorkspaceUser['role'] | null | undefined): AppScreen {
   if (role === 'developer') return screen
   return screen === 'developer' ? 'board' : screen
 }
@@ -1646,7 +1646,7 @@ function AuthenticatedApp() {
 
     if (targetClassroom) {
       applyClassroomPayloadToState(targetClassroom.data, {
-        setScreen: (value) => setScreen(currentWorkspaceUser?.role === 'developer' ? 'developer' : clampScreenForUserRole(value, currentWorkspaceUser?.role)),
+        setScreen: (value) => setScreen(clampScreenForUserRole(value, currentWorkspaceUser?.role)),
         setManagers,
         setTeachers,
         setStudents,

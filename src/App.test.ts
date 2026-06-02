@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, clampScreenForUserRole, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 
 describe('sanitizeClassroomSettings', () => {
@@ -12,6 +12,17 @@ describe('sanitizeClassroomSettings', () => {
     }
 
     expect(sanitizeClassroomSettings(settings).holidayDates).toEqual(['2026-08-10', '2026-08-15'])
+  })
+})
+
+describe('clampScreenForUserRole', () => {
+  it('keeps classroom screens for developers', () => {
+    expect(clampScreenForUserRole('board', 'developer')).toBe('board')
+    expect(clampScreenForUserRole('backup-restore', 'developer')).toBe('backup-restore')
+  })
+
+  it('keeps managers out of the developer screen', () => {
+    expect(clampScreenForUserRole('developer', 'manager')).toBe('board')
   })
 })
 
