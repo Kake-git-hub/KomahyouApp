@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
-import { hasManagedRegularLessonPeriod, isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
+import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { BoardGrid } from './BoardGrid'
@@ -17,6 +17,7 @@ import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -1631,11 +1632,10 @@ function buildManagedRegularLessonsRange(params: {
 
   for (const row of regularLessons) {
     const teacher = teacherById.get(row.teacherId)
-    const rowHasManagedPeriod = hasManagedRegularLessonPeriod(row)
     const scheduledDateKeys = monthDatesInScope.flatMap(({ year, monthIndex }) => getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)).filter((dateKey) => {
       const date = parseDateKey(dateKey)
-      if (rowHasManagedPeriod) return isRegularLessonParticipantActiveOnDate(row, dateKey)
-      return row.schoolYear === resolveOperationalSchoolYear(date)
+      if (row.schoolYear !== resolveOperationalSchoolYear(date)) return false
+      return true
     })
     if (scheduledDateKeys.length === 0) continue
 
@@ -1762,25 +1762,6 @@ function cloneSlotCell(cell: SlotCell): SlotCell {
   }
 }
 
-function normalizeStudentMergeName(value: string | undefined) {
-  return (value ?? '').replace(/[\s\u3000]+/gu, '').trim()
-}
-
-function isLikelySameStudentEntry(currentStudent: StudentEntry, managedStudent: StudentEntry) {
-  if (currentStudent.managedStudentId && managedStudent.managedStudentId) {
-    return currentStudent.managedStudentId === managedStudent.managedStudentId
-  }
-  if (currentStudent.id === managedStudent.id) return true
-  if (currentStudent.name === managedStudent.name) return true
-
-  const currentName = normalizeStudentMergeName(currentStudent.name)
-  const managedName = normalizeStudentMergeName(managedStudent.name)
-  if (!currentName || !managedName) return false
-  if (currentStudent.subject !== managedStudent.subject) return false
-
-  return currentName.includes(managedName) || managedName.includes(currentName)
-}
-
 function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLesson, dateKey: string) {
   const nextLesson = cloneDeskLesson(managedLesson)
 
@@ -1788,15 +1769,13 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
     if (!student) return
 
     const managedStudent = managedLesson.studentSlots[slotIndex]
-    const isSameManagedStudent = managedStudent && isLikelySameStudentEntry(student, managedStudent)
+    const isSameManagedStudent = managedStudent && (
+      (student.managedStudentId && managedStudent.managedStudentId && student.managedStudentId === managedStudent.managedStudentId)
+      || student.id === managedStudent.id
+      || student.name === managedStudent.name
+    )
     if (isSameManagedStudent) {
-      nextLesson.studentSlots[slotIndex] = {
-        ...managedStudent,
-        ...student,
-        id: student.id || managedStudent.id,
-        managedStudentId: student.managedStudentId ?? managedStudent.managedStudentId,
-        birthDate: student.birthDate ?? managedStudent.birthDate,
-      }
+      nextLesson.studentSlots[slotIndex] = { ...managedStudent, ...student }
       return
     }
 
@@ -2212,7 +2191,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
           if (idMatchedManagedIds.has(mId) || preservedLessonIds.has(mId)) continue
           const hasSharedStudent = md.lesson.studentSlots.some((ms) =>
             ms && lesson.studentSlots.some((bs) =>
-              bs && isLikelySameStudentEntry(bs, ms)))
+              bs && (bs.managedStudentId && ms.managedStudentId
+                ? bs.managedStudentId === ms.managedStudentId
+                : bs.name === ms.name)))
           if (hasSharedStudent) {
             preservedLessonIds.add(mId)
             return {
@@ -2700,7 +2681,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -2756,6 +2737,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
+  const isDevelopmentClassroomActive = useMemo(() => isDevelopmentClassroom({ id: classroomStorageKey, name: classroomName }), [classroomName, classroomStorageKey])
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.studentScheduleRange)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.teacherScheduleRange)
   const [stockActionModal, setStockActionModal] = useState<StockActionModalState | null>(null)
@@ -4584,6 +4566,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      lazyQrLoading: isDevelopmentClassroomActive,
+      showSubmittedQr: isDevelopmentClassroomActive,
       targetWindow: studentScheduleWindowRef.current,
     })
   }, [classroomSettings, classroomStorageKey, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleSyncTrigger, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
@@ -4606,6 +4590,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      lazyQrLoading: isDevelopmentClassroomActive,
+      showSubmittedQr: isDevelopmentClassroomActive,
       targetWindow: teacherScheduleWindowRef.current,
     })
   }, [classroomSettings, classroomStorageKey, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleSyncTrigger, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, type ClassroomSettings } from './App'
-import type { WorkspaceSnapshot } from './types/appState'
+import { buildDevelopmentClassroomCopyPayload, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, type ClassroomSettings } from './App'
+import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 
 describe('sanitizeClassroomSettings', () => {
   it('preserves saved holiday dates when a classroom snapshot is loaded again', () => {
@@ -77,5 +77,74 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
 
     expect(result.usedPendingLocalSnapshot).toBe(false)
     expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
+  })
+})
+
+describe('buildDevelopmentClassroomCopyPayload', () => {
+  it('keeps classroom data while removing environment-specific sharing tokens', () => {
+    const sourcePayload: AppSnapshotPayload = {
+      screen: 'special-data',
+      classroomSettings: {
+        closedWeekdays: [0],
+        holidayDates: ['2026-08-13'],
+        forceOpenDates: ['2026-08-14'],
+        deskCount: 14,
+        boardShareToken: 'board-share-token',
+      },
+      managers: [],
+      teachers: [],
+      students: [],
+      regularLessons: [],
+      groupLessons: [],
+      specialSessions: [{
+        id: 'session-1',
+        label: '夏期講習',
+        startDate: '2026-08-10',
+        endDate: '2026-08-20',
+        teacherInputs: {
+          'teacher-1': {
+            unavailableSlots: ['2026-08-12_2'],
+            countSubmitted: true,
+            submissionToken: 'teacher-token',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          },
+        },
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: ['2026-08-12_1'],
+            regularBreakSlots: ['2026-08-13_2'],
+            subjectSlots: { 数: 2 },
+            regularOnly: false,
+            countSubmitted: true,
+            submissionToken: 'student-token',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          },
+        },
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      }],
+      autoAssignRules: [],
+      pairConstraints: [],
+      boardState: null,
+    }
+
+    const copied = buildDevelopmentClassroomCopyPayload(sourcePayload)
+
+    expect(copied.screen).toBe('board')
+    expect(copied.classroomSettings.boardShareToken).toBe('')
+    expect(copied.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+    expect(copied.specialSessions[0]?.studentInputs['student-1']).toEqual(expect.objectContaining({
+      unavailableSlots: ['2026-08-12_1'],
+      regularBreakSlots: ['2026-08-13_2'],
+      subjectSlots: { 数: 2 },
+      regularOnly: false,
+      countSubmitted: true,
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }))
+    expect(copied.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBeUndefined()
+    expect(copied.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBeUndefined()
+    expect(sourcePayload.classroomSettings.boardShareToken).toBe('board-share-token')
+    expect(sourcePayload.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBe('student-token')
+    expect(sourcePayload.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBe('teacher-token')
   })
 })

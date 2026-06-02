@@ -47,6 +47,9 @@ type BackupRestoreScreenProps = {
   undoSnapshotLabel?: string | null
   onRestoreUndoSnapshot?: () => void
   onDismissUndoSnapshot?: () => void
+  isDevelopmentClassroom?: boolean
+  developmentClassroomCopySources?: Array<{ id: string; name: string }>
+  onCopyClassroomDataToDevelopmentClassroom?: (sourceClassroomId: string) => void
 }
 
 const dayOptions = [
@@ -71,7 +74,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, onRestoreLatestClassroomRollback, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, onRestoreLatestClassroomRollback, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, isDevelopmentClassroom = false, developmentClassroomCopySources = [], onCopyClassroomDataToDevelopmentClassroom }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -92,6 +95,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const [confirmingBackupKey, setConfirmingBackupKey] = useState<string | null>(null)
   const [localBackupModalOpen, setLocalBackupModalOpen] = useState(false)
   const [confirmingLocalBackupKey, setConfirmingLocalBackupKey] = useState<string | null>(null)
+  const [developmentCopyClassroomId, setDevelopmentCopyClassroomId] = useState('')
 
   const handleOpenLocalBackupModal = () => {
     setLocalBackupModalOpen(true)
@@ -132,6 +136,9 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
 
   const referenceDate = new Date().toISOString().slice(0, 10)
   const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, referenceDate)).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
+  const selectedDevelopmentCopyClassroomId = developmentClassroomCopySources.some((classroom) => classroom.id === developmentCopyClassroomId)
+    ? developmentCopyClassroomId
+    : (developmentClassroomCopySources[0]?.id ?? '')
 
   const addMakeupStockRow = () => {
     if (!makeupDraftStudentId || makeupDraftCount < 1) return
@@ -270,6 +277,33 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 <button className="secondary-button slim" type="button" onClick={() => backupImportRef.current?.click()} data-testid="backup-restore-import-button">バックアップを読み込む</button>
               </div>
             </section>
+            {isDevelopmentClassroom ? (
+              <section className="basic-data-section-card" data-testid="backup-restore-development-copy-panel">
+                <div className="basic-data-card-head">
+                  <h3>他教室の現状データを再現</h3>
+                  <p>選んだ教室の現在データを開発用教室へ丸ごとコピーします。共有用トークンは開発用教室向けに自動で外します。</p>
+                </div>
+                <div className="basic-data-form-grid">
+                  <label className="basic-data-inline-field">
+                    <span>コピー元教室</span>
+                    <select value={selectedDevelopmentCopyClassroomId} onChange={(event) => setDevelopmentCopyClassroomId(event.target.value)} data-testid="backup-restore-development-copy-select">
+                      {developmentClassroomCopySources.length > 0 ? developmentClassroomCopySources.map((classroom) => (
+                        <option key={classroom.id} value={classroom.id}>{classroom.name}</option>
+                      )) : <option value="">コピー可能な教室がありません</option>}
+                    </select>
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => onCopyClassroomDataToDevelopmentClassroom?.(selectedDevelopmentCopyClassroomId)}
+                    disabled={!selectedDevelopmentCopyClassroomId}
+                    data-testid="backup-restore-development-copy-button"
+                  >
+                    現在データを開発用教室へコピー
+                  </button>
+                </div>
+              </section>
+            ) : null}
           </div>
 
           {showServerBackups ? (

@@ -16,10 +16,6 @@ function normalizeStudentNameLookupKey(value: string) {
   return value.replace(/\s+/gu, '').trim()
 }
 
-function normalizeTeacherNameLookupKey(value: string) {
-  return value.replace(/\s+/gu, '').trim()
-}
-
 function parseDateKey(dateKey: string) {
   return new Date(`${dateKey}T00:00:00`)
 }
@@ -34,6 +30,7 @@ type SerializedStudent = {
   entryDate: string
   withdrawDate: string
   isHidden: boolean
+  submissionToken?: string
   qrSvg?: string
   submissionSubmitted?: boolean
 }
@@ -47,6 +44,7 @@ type SerializedTeacher = {
   isHidden: boolean
   memo: string
   subjects: string[]
+  submissionToken?: string
   qrSvg?: string
   submissionSubmitted?: boolean
 }
@@ -139,49 +137,6 @@ type SerializedScheduleCountAdjustment = {
   delta: number
 }
 
-type SerializedStudentLinkDebugCandidate = {
-  studentId: string
-  studentName: string
-  studentDisplayName: string
-}
-
-type SerializedStudentLinkDiagnostic = {
-  dateKey: string
-  slotNumber: number
-  deskId: string
-  deskIndex: number
-  entryKind: 'lesson' | 'status'
-  entryId: string
-  name: string
-  normalizedName: string
-  subject: string
-  grade?: string
-  lessonType: string
-  teacherName?: string
-  deskTeacher: string
-  teacherAssignmentTeacherId?: string
-  linkedStudentId?: string
-  resolutionSource: 'trial-skip' | 'managed-student-id' | 'management-data-teacher' | 'management-data-slot' | 'name-fallback' | 'unresolved'
-  teacherMatchedCandidates: SerializedStudentLinkDebugCandidate[]
-  slotCandidates: SerializedStudentLinkDebugCandidate[]
-  matchedByEntryNameCandidates: SerializedStudentLinkDebugCandidate[]
-}
-
-type SerializedStudentLinkInput = {
-  id: string
-  name: string
-  managedStudentId?: string
-  subject: string
-  grade?: string
-  lessonType: string
-  teacherName?: string
-}
-
-type SerializedStudentLinkResolution = {
-  linkedStudentId?: string
-  debugDiagnostic?: SerializedStudentLinkDiagnostic
-}
-
 type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
@@ -209,7 +164,7 @@ type SchedulePayload = {
   countAdjustments: SerializedScheduleCountAdjustment[]
   specialSessions: SerializedSpecialSession[]
   classroomStorageKey: string
-  debugLinkDiagnostics?: SerializedStudentLinkDiagnostic[]
+  showSubmittedQr?: boolean
 }
 
 type OpenScheduleHtmlParams = {
@@ -225,6 +180,12 @@ type OpenScheduleHtmlParams = {
   specialSessions?: SpecialSessionRow[]
   classroomStorageKey?: string
   targetWindow?: Window | null
+  lazyQrLoading?: boolean
+  showSubmittedQr?: boolean
+}
+
+type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
+  __buildScheduleQrSvg?: (token?: string) => string | undefined
 }
 
 function buildSubmissionQrSvg(token: string | undefined) {
@@ -236,6 +197,11 @@ function buildSubmissionQrSvg(token: string | undefined) {
   const svg = generateQrSvg(url, 52)
   scheduleQrSvgCache.set(token, svg)
   return svg
+}
+
+function registerScheduleQrBuilder() {
+  if (typeof window === 'undefined') return
+  ;(window as ScheduleQrRuntimeWindow).__buildScheduleQrSvg = buildSubmissionQrSvg
 }
 
 function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined, startDate: string, endDate: string) {
@@ -283,9 +249,8 @@ export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
 
 function serializeCells(
   cells: SlotCell[],
-  resolveStudentLink?: (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], entryKind: 'lesson' | 'status', deskIndex: number) => SerializedStudentLinkResolution,
-  resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell, desk: SlotCell['desks'][number]) => string[],
-  debugDiagnostics?: SerializedStudentLinkDiagnostic[],
+  resolveLinkedStudentId?: (studentName: string) => string | undefined,
+  resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell) => string[],
 ): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
 
@@ -303,24 +268,14 @@ function serializeCells(
       slotLabel: cell.slotLabel,
       timeLabel: cell.timeLabel,
       isOpenDay: cell.isOpenDay,
-      desks: cell.desks.map((desk, deskIndex) => {
+      desks: cell.desks.map((desk) => {
         const statuses = desk.statusSlots
           ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
           .map((entry) => {
             const linkedDestination = linkedDestinationByStatusId.get(entry.id)
-            const resolution = resolveStudentLink?.({
-              id: entry.id,
-              name: entry.name,
-              managedStudentId: entry.managedStudentId,
-              subject: entry.subject,
-              grade: entry.grade,
-              lessonType: entry.lessonType,
-              teacherName: entry.teacherName,
-            }, cell, desk, 'status', deskIndex)
-            if (resolution?.debugDiagnostic) debugDiagnostics?.push(resolution.debugDiagnostic)
             return {
               id: entry.id,
-              linkedStudentId: resolution?.linkedStudentId,
+              linkedStudentId: entry.managedStudentId ?? resolveLinkedStudentId?.(entry.name),
               name: entry.name,
               grade: entry.grade,
               subject: resolveDisplayedSubjectForGrade(entry.subject, entry.grade),
@@ -341,34 +296,24 @@ function serializeCells(
               note: desk.lesson.note,
               students: desk.lesson.studentSlots
                 .filter((student): student is NonNullable<typeof student> => Boolean(student))
-                .map((student) => {
-                  const resolution = resolveStudentLink?.({
-                    id: student.id,
-                    name: student.name,
-                    managedStudentId: student.managedStudentId,
-                    subject: student.subject,
-                    grade: student.grade,
-                    lessonType: student.lessonType,
-                  }, cell, desk, 'lesson', deskIndex)
-                  if (resolution?.debugDiagnostic) debugDiagnostics?.push(resolution.debugDiagnostic)
-                  return {
-                    id: student.id,
-                    linkedStudentId: resolution?.linkedStudentId,
-                    name: student.name,
-                    grade: student.grade,
-                    subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
-                    lessonType: student.lessonType,
-                    teacherType: student.teacherType,
-                    manualAdded: Boolean(student.manualAdded),
-                    makeupSourceLabel: student.makeupSourceLabel,
-                    warning: student.warning,
-                  }
-                }),
+                .map((student) => ({
+                  id: student.id,
+                  // 体験授業の生徒は同名であっても既存生徒として扱わない
+                  linkedStudentId: student.lessonType === 'trial' ? undefined : student.managedStudentId ?? resolveLinkedStudentId?.(student.name),
+                  name: student.name,
+                  grade: student.grade,
+                  subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
+                  lessonType: student.lessonType,
+                  teacherType: student.teacherType,
+                  manualAdded: Boolean(student.manualAdded),
+                  makeupSourceLabel: student.makeupSourceLabel,
+                  warning: student.warning,
+                })),
             }
           : undefined
         if (!lesson && (!statuses || statuses.length === 0)) return null
         const regularTeacherIds = Array.from(new Set(
-          (desk.lesson?.studentSlots ?? []).flatMap((student) => student ? resolveRegularTeacherIds?.(student, cell, desk) ?? [] : []),
+          (desk.lesson?.studentSlots ?? []).flatMap((student) => student ? resolveRegularTeacherIds?.(student, cell) ?? [] : []),
         ))
         return {
           teacher: desk.teacher,
@@ -481,16 +426,6 @@ export function buildExpectedRegularOccurrences(params: {
 
 function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: StudentRow[] = []): Omit<SchedulePayload, 'students' | 'teachers'> {
   const linkedStudentIdByName = new Map<string, string>()
-  const linkedStudentCandidates = linkedStudents.map((student) => {
-    const displayName = getStudentDisplayName(student)
-    return {
-      id: student.id,
-      keys: Array.from(new Set([
-        normalizeStudentNameLookupKey(student.name),
-        normalizeStudentNameLookupKey(displayName),
-      ].filter(Boolean))),
-    }
-  })
   const addLinkedStudentLookup = (key: string, studentId: string) => {
     const normalizedKey = normalizeStudentNameLookupKey(key)
     if (!normalizedKey) return
@@ -507,27 +442,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     addLinkedStudentLookup(student.name, student.id)
     addLinkedStudentLookup(displayName, student.id)
   })
-  const resolveLinkedStudentId = (studentName: string) => {
-    const normalizedName = normalizeStudentNameLookupKey(studentName)
-    if (!normalizedName) return undefined
-
-    const exactMatch = linkedStudentIdByName.get(normalizedName)
-    if (exactMatch) return exactMatch
-    if (exactMatch === '') return undefined
-    if (normalizedName.length < 2) return undefined
-
-    const matchedStudentIds = new Set(
-      linkedStudentCandidates
-        .filter((student) => student.keys.some((key) => (
-          key.length >= 2
-          && key !== normalizedName
-          && (key.includes(normalizedName) || normalizedName.includes(key))
-        )))
-        .map((student) => student.id),
-    )
-
-    return matchedStudentIds.size === 1 ? Array.from(matchedStudentIds)[0] : undefined
-  }
+  const resolveLinkedStudentId = (studentName: string) => linkedStudentIdByName.get(normalizeStudentNameLookupKey(studentName)) || undefined
   const paramsWithRegularLessons = params as OpenScheduleHtmlParams & {
     regularLessons?: RegularLessonRow[]
     regularLessonTemplateHistory?: RegularLessonTemplate[]
@@ -544,261 +459,9 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         students: paramsWithRegularLessons.students ?? linkedStudents,
       })
     : []
-  const teacherById = new Map((paramsWithRegularLessons.teachers ?? []).map((teacher) => [teacher.id, teacher]))
-  const studentById = new Map((paramsWithRegularLessons.students ?? linkedStudents).map((student) => [student.id, student]))
-  const debugLinkDiagnostics: SerializedStudentLinkDiagnostic[] = []
-  const doesDeskMatchTeacher = (teacherId: string, desk: SlotCell['desks'][number], teacherName?: string) => {
-    if (desk.teacherAssignmentTeacherId) return desk.teacherAssignmentTeacherId === teacherId
-    const teacher = teacherById.get(teacherId)
-    if (!teacher) return true
-
-    const candidateTeacherNames = Array.from(new Set([
-      String(teacherName || '').trim(),
-      String(desk.teacher || '').trim(),
-    ].filter(Boolean)))
-    if (candidateTeacherNames.length === 0) return true
-
-    const teacherKeys = new Set(
-      [getTeacherDisplayName(teacher), teacher.name]
-        .flatMap((value) => {
-          const trimmed = String(value || '').trim()
-          const normalized = normalizeTeacherNameLookupKey(trimmed)
-          return [trimmed, normalized].filter(Boolean)
-        }),
-    )
-
-    return candidateTeacherNames.some((value) => {
-      const normalized = normalizeTeacherNameLookupKey(value)
-      return teacherKeys.has(value) || teacherKeys.has(normalized)
-    })
-  }
-  const mapCandidateStudentIds = (candidateStudentIds: Iterable<string>): SerializedStudentLinkDebugCandidate[] => (
-    Array.from(new Set(candidateStudentIds)).map((studentId) => {
-      const student = studentById.get(studentId)
-      return {
-        studentId,
-        studentName: student?.name ?? studentId,
-        studentDisplayName: student ? getStudentDisplayName(student) : studentId,
-      }
-    })
-  )
-  const selectCandidateStudentId = (candidateStudentIds: Set<string>, entryName: string) => {
-    if (candidateStudentIds.size === 1) {
-      const studentId = Array.from(candidateStudentIds)[0]
-      return {
-        studentId,
-        matchedStudentIds: studentId ? [studentId] : [],
-      }
-    }
-
-    const normalizedEntryName = normalizeStudentNameLookupKey(entryName)
-    if (!normalizedEntryName || candidateStudentIds.size === 0) {
-      return {
-        studentId: undefined,
-        matchedStudentIds: [] as string[],
-      }
-    }
-
-    const matchingStudentIds = Array.from(candidateStudentIds).filter((studentId) => {
-      const student = studentById.get(studentId)
-      if (!student) return false
-
-      const candidateNames = Array.from(new Set([
-        normalizeStudentNameLookupKey(student.name),
-        normalizeStudentNameLookupKey(getStudentDisplayName(student)),
-      ].filter(Boolean)))
-
-      return candidateNames.some((candidateName) => (
-        candidateName === normalizedEntryName
-        || candidateName.includes(normalizedEntryName)
-        || normalizedEntryName.includes(candidateName)
-      ))
-    })
-
-    return {
-      studentId: matchingStudentIds.length === 1 ? matchingStudentIds[0] : undefined,
-      matchedStudentIds: matchingStudentIds,
-    }
-  }
-  const collectCandidateStudentIds = (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], requireTeacherMatch: boolean) => {
-    const lessonDate = parseDateKey(cell.dateKey)
-    const schoolYear = resolveOperationalSchoolYear(lessonDate)
-    const dayOfWeek = lessonDate.getDay()
-    return new Set(
-      teacherLookupRegularLessons
-        .filter((row) => (
-          row.schoolYear === schoolYear
-          && row.dayOfWeek === dayOfWeek
-          && row.slotNumber === cell.slotNumber
-          && isRegularLessonParticipantActiveOnDate(row, cell.dateKey)
-          && (!requireTeacherMatch || doesDeskMatchTeacher(row.teacherId, desk, entry.teacherName))
-        ))
-        .flatMap((row) => {
-          const subject1Matches = row.subject1 === entry.subject || resolveDisplayedSubjectForGrade(row.subject1, entry.grade ?? '') === entry.subject
-          const subject2Matches = row.subject2 === entry.subject || resolveDisplayedSubjectForGrade(row.subject2, entry.grade ?? '') === entry.subject
-          const matches: string[] = []
-          if (row.student1Id && subject1Matches) matches.push(row.student1Id)
-          if (row.student2Id && subject2Matches) matches.push(row.student2Id)
-          return matches
-        }),
-    )
-  }
-
-  const buildStudentLinkCacheKey = (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], entryKind: 'lesson' | 'status') => [
-    entryKind,
-    cell.dateKey,
-    cell.slotNumber,
-    desk.id,
-    entry.id,
-    entry.name,
-    entry.subject,
-    entry.lessonType,
-    entry.teacherName ?? '',
-  ].join('__')
-
-  const studentLinkResolutionCache = new Map<string, SerializedStudentLinkResolution>()
-
-  const resolveStudentLink = (entry: SerializedStudentLinkInput, cell: SlotCell, desk: SlotCell['desks'][number], entryKind: 'lesson' | 'status', deskIndex: number): SerializedStudentLinkResolution => {
-    const cacheKey = buildStudentLinkCacheKey(entry, cell, desk, entryKind)
-    const cached = studentLinkResolutionCache.get(cacheKey)
-    if (cached) return cached
-
-    const baseDiagnostic = {
-      dateKey: cell.dateKey,
-      slotNumber: cell.slotNumber,
-      deskId: desk.id,
-      deskIndex,
-      entryKind,
-      entryId: entry.id,
-      name: entry.name,
-      normalizedName: normalizeStudentNameLookupKey(entry.name),
-      subject: entry.subject,
-      grade: entry.grade,
-      lessonType: entry.lessonType,
-      teacherName: entry.teacherName,
-      deskTeacher: desk.teacher,
-      teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
-    }
-
-    let result: SerializedStudentLinkResolution
-
-    if (entry.lessonType === 'trial') {
-      result = {
-        linkedStudentId: undefined,
-        debugDiagnostic: {
-          ...baseDiagnostic,
-          resolutionSource: 'trial-skip',
-          teacherMatchedCandidates: [],
-          slotCandidates: [],
-          matchedByEntryNameCandidates: [],
-        },
-      }
-      studentLinkResolutionCache.set(cacheKey, result)
-      return result
-    }
-
-    if (entry.managedStudentId) {
-      result = {
-        linkedStudentId: entry.managedStudentId,
-        debugDiagnostic: {
-          ...baseDiagnostic,
-          linkedStudentId: entry.managedStudentId,
-          resolutionSource: 'managed-student-id',
-          teacherMatchedCandidates: [],
-          slotCandidates: [],
-          matchedByEntryNameCandidates: mapCandidateStudentIds([entry.managedStudentId]),
-        },
-      }
-      studentLinkResolutionCache.set(cacheKey, result)
-      return result
-    }
-
-    const teacherMatchedCandidateIds = entry.lessonType === 'regular' && teacherLookupRegularLessons.length > 0
-      ? collectCandidateStudentIds(entry, cell, desk, true)
-      : new Set<string>()
-    const teacherMatchedSelection = selectCandidateStudentId(teacherMatchedCandidateIds, entry.name)
-    const slotCandidateIds = teacherMatchedCandidateIds.size === 0 && entry.lessonType === 'regular' && teacherLookupRegularLessons.length > 0
-      ? collectCandidateStudentIds(entry, cell, desk, false)
-      : new Set<string>()
-    const slotSelection = teacherMatchedCandidateIds.size === 0
-      ? selectCandidateStudentId(slotCandidateIds, entry.name)
-      : { studentId: undefined, matchedStudentIds: [] as string[] }
-
-    if (teacherMatchedSelection.studentId) {
-      result = {
-        linkedStudentId: teacherMatchedSelection.studentId,
-        debugDiagnostic: {
-          ...baseDiagnostic,
-          linkedStudentId: teacherMatchedSelection.studentId,
-          resolutionSource: 'management-data-teacher',
-          teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
-          slotCandidates: mapCandidateStudentIds(slotCandidateIds),
-          matchedByEntryNameCandidates: mapCandidateStudentIds(teacherMatchedSelection.matchedStudentIds),
-        },
-      }
-      studentLinkResolutionCache.set(cacheKey, result)
-      return result
-    }
-
-    if (slotSelection.studentId) {
-      result = {
-        linkedStudentId: slotSelection.studentId,
-        debugDiagnostic: {
-          ...baseDiagnostic,
-          linkedStudentId: slotSelection.studentId,
-          resolutionSource: 'management-data-slot',
-          teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
-          slotCandidates: mapCandidateStudentIds(slotCandidateIds),
-          matchedByEntryNameCandidates: mapCandidateStudentIds(slotSelection.matchedStudentIds),
-        },
-      }
-      studentLinkResolutionCache.set(cacheKey, result)
-      return result
-    }
-
-    const linkedStudentId = resolveLinkedStudentId(entry.name)
-    if (linkedStudentId) {
-      result = {
-        linkedStudentId,
-        debugDiagnostic: {
-          ...baseDiagnostic,
-          linkedStudentId,
-          resolutionSource: 'name-fallback',
-          teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
-          slotCandidates: mapCandidateStudentIds(slotCandidateIds),
-          matchedByEntryNameCandidates: mapCandidateStudentIds([linkedStudentId]),
-        },
-      }
-      studentLinkResolutionCache.set(cacheKey, result)
-      return result
-    }
-
-    result = {
-      linkedStudentId: undefined,
-      debugDiagnostic: {
-        ...baseDiagnostic,
-        resolutionSource: 'unresolved',
-        teacherMatchedCandidates: mapCandidateStudentIds(teacherMatchedCandidateIds),
-        slotCandidates: mapCandidateStudentIds(slotCandidateIds),
-        matchedByEntryNameCandidates: mapCandidateStudentIds([
-          ...teacherMatchedSelection.matchedStudentIds,
-          ...slotSelection.matchedStudentIds,
-        ]),
-      },
-    }
-    studentLinkResolutionCache.set(cacheKey, result)
-    return result
-  }
-  const resolveRegularTeacherIds = (student: StudentEntry, cell: SlotCell, desk: SlotCell['desks'][number]) => {
+  const resolveRegularTeacherIds = (student: StudentEntry, cell: SlotCell) => {
     if (student.lessonType !== 'regular') return []
-    const studentId = resolveStudentLink({
-      id: student.id,
-      name: student.name,
-      managedStudentId: student.managedStudentId,
-      subject: student.subject,
-      grade: student.grade,
-      lessonType: student.lessonType,
-    }, cell, desk, 'lesson', -1).linkedStudentId
+    const studentId = student.managedStudentId ?? resolveLinkedStudentId(student.name)
     if (!studentId || teacherLookupRegularLessons.length === 0) return []
     const lessonDate = parseDateKey(cell.dateKey)
     const schoolYear = resolveOperationalSchoolYear(lessonDate)
@@ -814,8 +477,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       })
       .filter(Boolean)
   }
-  const serializedCells = serializeCells(params.cells, resolveStudentLink, resolveRegularTeacherIds, debugLinkDiagnostics)
-  const serializedPlannedCells = serializeCells(params.plannedCells, resolveStudentLink, resolveRegularTeacherIds)
+  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds)
+  const serializedPlannedCells = serializeCells(params.plannedCells, resolveLinkedStudentId, resolveRegularTeacherIds)
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -844,6 +507,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     expectedRegularOccurrences: [],
     highlightedStudentSlot: undefined,
     highlightedTeacherId: undefined,
+    showSubmittedQr: Boolean(params.showSubmittedQr),
     countAdjustments: [],
     specialSessions: (params.specialSessions ?? []).map((session) => ({
       id: session.id,
@@ -864,7 +528,6 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       }])),
     })),
     classroomStorageKey: params.classroomStorageKey || 'default',
-    debugLinkDiagnostics,
   }
 }
 
@@ -1029,32 +692,35 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
       .slice()
       .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, currentReferenceDate))
       .map((student) => {
-      const studentInput = targetSession?.studentInputs[student.id]
-      return {
-      id: student.id,
-      name: getStudentDisplayName(student),
-      fullName: student.name,
-      currentGradeLabel: resolveCurrentStudentGradeLabel(student, currentReferenceDate),
-      currentGradeOrder: (() => {
-        const gradeLabel = resolveCurrentStudentGradeLabel(student, currentReferenceDate)
-        if (gradeLabel === '未就学') return 0
-        const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
-        if (elementaryMatch) return Number(elementaryMatch[1])
-        const middleMatch = gradeLabel.match(/^中(\d+)$/)
-        if (middleMatch) return 100 + Number(middleMatch[1])
-        const highMatch = gradeLabel.match(/^高(\d+)$/)
-        if (highMatch) return 200 + Number(highMatch[1])
-        if (gradeLabel === '退塾') return 901
-        if (gradeLabel === '非表示') return 902
-        return 999
-      })(),
-      birthDate: student.birthDate,
-      entryDate: student.entryDate,
-      withdrawDate: student.withdrawDate,
-      isHidden: student.isHidden,
-      qrSvg: buildSubmissionQrSvg(studentInput?.submissionToken),
-      submissionSubmitted: Boolean(studentInput?.countSubmitted),
-    }}),
+        const studentInput = targetSession?.studentInputs[student.id]
+        const submissionToken = studentInput?.submissionToken
+        return {
+          id: student.id,
+          name: getStudentDisplayName(student),
+          fullName: student.name,
+          currentGradeLabel: resolveCurrentStudentGradeLabel(student, currentReferenceDate),
+          currentGradeOrder: (() => {
+            const gradeLabel = resolveCurrentStudentGradeLabel(student, currentReferenceDate)
+            if (gradeLabel === '未就学') return 0
+            const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
+            if (elementaryMatch) return Number(elementaryMatch[1])
+            const middleMatch = gradeLabel.match(/^中(\d+)$/)
+            if (middleMatch) return 100 + Number(middleMatch[1])
+            const highMatch = gradeLabel.match(/^高(\d+)$/)
+            if (highMatch) return 200 + Number(highMatch[1])
+            if (gradeLabel === '退塾') return 901
+            if (gradeLabel === '非表示') return 902
+            return 999
+          })(),
+          birthDate: student.birthDate,
+          entryDate: student.entryDate,
+          withdrawDate: student.withdrawDate,
+          isHidden: student.isHidden,
+          submissionToken,
+          qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
+          submissionSubmitted: Boolean(studentInput?.countSubmitted),
+        }
+      }),
     teachers: [],
   }
 }
@@ -1071,18 +737,21 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
     students: [],
     teachers: params.teachers.map((teacher) => {
       const teacherInput = targetSession?.teacherInputs[teacher.id]
+      const submissionToken = teacherInput?.submissionToken
       return {
-      id: teacher.id,
-      name: getTeacherDisplayName(teacher),
-      fullName: teacher.name,
-      entryDate: teacher.entryDate,
-      withdrawDate: teacher.withdrawDate,
-      isHidden: teacher.isHidden,
-      memo: teacher.memo,
-      subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
-      qrSvg: buildSubmissionQrSvg(teacherInput?.submissionToken),
-      submissionSubmitted: Boolean(teacherInput?.countSubmitted),
-    }}),
+        id: teacher.id,
+        name: getTeacherDisplayName(teacher),
+        fullName: teacher.name,
+        entryDate: teacher.entryDate,
+        withdrawDate: teacher.withdrawDate,
+        isHidden: teacher.isHidden,
+        memo: teacher.memo,
+        subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
+        submissionToken,
+        qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
+        submissionSubmitted: Boolean(teacherInput?.countSubmitted),
+      }
+    }),
   }
 }
 
@@ -1117,46 +786,52 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
       .slice()
       .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, currentReferenceDate))
       .map((student) => {
-      const studentInput = targetSession?.studentInputs[student.id]
-      return {
-      id: student.id,
-      name: getStudentDisplayName(student),
-      fullName: student.name,
-      currentGradeLabel: resolveCurrentStudentGradeLabel(student, currentReferenceDate),
-      currentGradeOrder: (() => {
-        const gradeLabel = resolveCurrentStudentGradeLabel(student, currentReferenceDate)
-        if (gradeLabel === '未就学') return 0
-        const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
-        if (elementaryMatch) return Number(elementaryMatch[1])
-        const middleMatch = gradeLabel.match(/^中(\d+)$/)
-        if (middleMatch) return 100 + Number(middleMatch[1])
-        const highMatch = gradeLabel.match(/^高(\d+)$/)
-        if (highMatch) return 200 + Number(highMatch[1])
-        if (gradeLabel === '退塾') return 901
-        if (gradeLabel === '非表示') return 902
-        return 999
-      })(),
-      birthDate: student.birthDate,
-      entryDate: student.entryDate,
-      withdrawDate: student.withdrawDate,
-      isHidden: student.isHidden,
-      qrSvg: buildSubmissionQrSvg(studentInput?.submissionToken),
-      submissionSubmitted: Boolean(studentInput?.countSubmitted),
-    }}),
+        const studentInput = targetSession?.studentInputs[student.id]
+        const submissionToken = studentInput?.submissionToken
+        return {
+          id: student.id,
+          name: getStudentDisplayName(student),
+          fullName: student.name,
+          currentGradeLabel: resolveCurrentStudentGradeLabel(student, currentReferenceDate),
+          currentGradeOrder: (() => {
+            const gradeLabel = resolveCurrentStudentGradeLabel(student, currentReferenceDate)
+            if (gradeLabel === '未就学') return 0
+            const elementaryMatch = gradeLabel.match(/^小(\d+)$/)
+            if (elementaryMatch) return Number(elementaryMatch[1])
+            const middleMatch = gradeLabel.match(/^中(\d+)$/)
+            if (middleMatch) return 100 + Number(middleMatch[1])
+            const highMatch = gradeLabel.match(/^高(\d+)$/)
+            if (highMatch) return 200 + Number(highMatch[1])
+            if (gradeLabel === '退塾') return 901
+            if (gradeLabel === '非表示') return 902
+            return 999
+          })(),
+          birthDate: student.birthDate,
+          entryDate: student.entryDate,
+          withdrawDate: student.withdrawDate,
+          isHidden: student.isHidden,
+          submissionToken,
+          qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
+          submissionSubmitted: Boolean(studentInput?.countSubmitted),
+        }
+      }),
     teachers: params.teachers.map((teacher) => {
       const teacherInput = targetSession?.teacherInputs[teacher.id]
+      const submissionToken = teacherInput?.submissionToken
       return {
-      id: teacher.id,
-      name: getTeacherDisplayName(teacher),
-      fullName: teacher.name,
-      entryDate: teacher.entryDate,
-      withdrawDate: teacher.withdrawDate,
-      isHidden: teacher.isHidden,
-      memo: teacher.memo,
-      subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
-      qrSvg: buildSubmissionQrSvg(teacherInput?.submissionToken),
-      submissionSubmitted: Boolean(teacherInput?.countSubmitted),
-    }}),
+        id: teacher.id,
+        name: getTeacherDisplayName(teacher),
+        fullName: teacher.name,
+        entryDate: teacher.entryDate,
+        withdrawDate: teacher.withdrawDate,
+        isHidden: teacher.isHidden,
+        memo: teacher.memo,
+        subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
+        submissionToken,
+        qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
+        submissionSubmitted: Boolean(teacherInput?.countSubmitted),
+      }
+    }),
   }
 }
 
@@ -2474,7 +2149,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const VIEW_LABEL = '${viewLabel}';
       const BASE_VIEW_TYPE = VIEW_TYPE === 'all-student' ? 'student' : VIEW_TYPE === 'all-teacher' ? 'teacher' : VIEW_TYPE;
       const IS_ALL_VIEW = VIEW_TYPE === 'all-student' || VIEW_TYPE === 'all-teacher';
-      let DATA = JSON.parse(document.getElementById('schedule-data').textContent || '{}');
+      const scheduleDataElement = document.getElementById('schedule-data');
+      let DATA = JSON.parse(scheduleDataElement ? scheduleDataElement.textContent || '{}' : '{}');
+      if (scheduleDataElement) scheduleDataElement.remove();
       const startInput = document.getElementById('schedule-start-date');
       const endInput = document.getElementById('schedule-end-date');
       const periodSelect = document.getElementById('schedule-period-select');
@@ -2566,6 +2243,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function buildPayloadFingerprint(payload) {
         var clone = { ...(payload || {}) };
         delete clone.scheduleNotes;
+        clone.students = Array.isArray(clone.students) ? clone.students.map((student) => {
+          var nextStudent = { ...student };
+          delete nextStudent.qrSvg;
+          return nextStudent;
+        }) : [];
+        clone.teachers = Array.isArray(clone.teachers) ? clone.teachers.map((teacher) => {
+          var nextTeacher = { ...teacher };
+          delete nextTeacher.qrSvg;
+          return nextTeacher;
+        }) : [];
         return JSON.stringify(clone);
       }
 
@@ -2699,6 +2386,57 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // QR visibility is now based on submission status per person, handled at render time
       }
 
+      function resolveScheduleQrSvg(person) {
+        if (!person) return '';
+        if (typeof person.qrSvg === 'string' && person.qrSvg) return person.qrSvg;
+        const submissionToken = typeof person.submissionToken === 'string' ? person.submissionToken : '';
+        if (!submissionToken) return '';
+        let qrSvg = '';
+        try {
+          if (window.opener && window.opener !== window && typeof window.opener.__buildScheduleQrSvg === 'function') {
+            qrSvg = window.opener.__buildScheduleQrSvg(submissionToken) || '';
+          }
+        } catch {}
+        if (!qrSvg) {
+          try {
+            if (typeof window.__buildScheduleQrSvg === 'function') {
+              qrSvg = window.__buildScheduleQrSvg(submissionToken) || '';
+            }
+          } catch {}
+        }
+        if (qrSvg) person.qrSvg = qrSvg;
+        return qrSvg;
+      }
+
+      function buildScheduleQrHtml(person, showQr) {
+        if (!showQr || !person) return '';
+        const submittedBadgeHtml = person.submissionSubmitted ? '<span class="submission-badge print-only-hidden">希望<br>提出済</span>' : '';
+        if (person.submissionSubmitted && !DATA.showSubmittedQr) {
+          return submittedBadgeHtml;
+        }
+        const qrSvg = resolveScheduleQrSvg(person);
+        const qrHtml = qrSvg ? '<span class="qr-code">' + qrSvg + '</span>' : '';
+        return qrHtml + submittedBadgeHtml;
+      }
+
+      function mergeCachedQrSvg(nextPayload) {
+        if (!nextPayload || !DATA) return;
+        const currentStudentQrById = new Map((DATA.students || []).map((student) => [student.id, student.qrSvg || '']));
+        const currentTeacherQrById = new Map((DATA.teachers || []).map((teacher) => [teacher.id, teacher.qrSvg || '']));
+        (nextPayload.students || []).forEach((student) => {
+          if (!student.qrSvg) {
+            const cached = currentStudentQrById.get(student.id);
+            if (cached) student.qrSvg = cached;
+          }
+        });
+        (nextPayload.teachers || []).forEach((teacher) => {
+          if (!teacher.qrSvg) {
+            const cached = currentTeacherQrById.get(teacher.id);
+            if (cached) teacher.qrSvg = cached;
+          }
+        });
+      }
+
       function isVisibleInRange(item, startDate, endDate) {
         var today = new Date().toISOString().slice(0, 10);
         if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate < today) return false;
@@ -2796,7 +2534,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function syncPayloadFingerprint() {
-        payloadFingerprint = JSON.stringify(DATA);
+        payloadFingerprint = buildPayloadFingerprint(DATA);
         skipNextEquivalentPayload = true;
       }
 
@@ -3063,7 +2801,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function toCountRows(countMap, desiredCountMap, forcedLabels, options) {
         var hideZeroZero = options && options.hideZeroZero;
-        var hideDesiredCountOnPrint = options && options.hideDesiredCountOnPrint;
         const mergedLabels = Array.from(new Set([
           ...(forcedLabels || []),
           ...Object.keys(countMap || {}),
@@ -3074,10 +2811,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const count = Number(countMap && countMap[label] ? countMap[label] : 0);
           const desiredCount = Number(desiredCountMap && desiredCountMap[label] ? desiredCountMap[label] : count);
           if (hideZeroZero && count === 0 && desiredCount === 0) return [];
-          const desiredCountHtml = hideDesiredCountOnPrint
-            ? '<span class="print-only-hidden">(' + desiredCount + ')</span>'
-            : '(' + desiredCount + ')';
-          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + desiredCountHtml + '</td></tr>'];
+          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + '(' + desiredCount + ')</td></tr>'];
         });
         return rows.length > 0 ? rows.join('') : '<tr><td>予定なし</td><td>0</td></tr>';
       }
@@ -3890,8 +3624,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const isTeacher = options && options.isTeacher;
         const salaryData = options && options.salaryData;
         const absenceTestId = options && options.absenceTestId ? options.absenceTestId : 'student-schedule-absence-table';
-        const studentRegularCountTitle = '通常回数<span class="print-only-hidden">(希望数)</span>';
-        const studentLectureCountTitle = '講習回数<span class="print-only-hidden">(希望数)</span>';
         const absenceSectionHtml = isTeacher
           ? ''
           : '<div class="box-stack"><div class="box-table-title">休み</div><table class="absence-table" data-testid="' + escapeHtml(absenceTestId) + '"><tbody>' + absenceRows + '</tbody></table></div>';
@@ -3908,7 +3640,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(getScheduleNoteValue(individualKey)) + '</textarea></div></div>' +
           absenceSectionHtml +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
-          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">' + studentRegularCountTitle + '</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">' + studentLectureCountTitle + '</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
+          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
         '</div>';
       }
 
@@ -4358,12 +4090,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const absenceRows = toMakeupRows(absenceNotes, 7);
         const makeupRows = toMakeupRows(makeupNotes, 7);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
-        const qrHtml = student.submissionSubmitted
-          ? '<span class="submission-badge print-only-hidden">希望<br>提出済</span>'
-          : student.qrSvg ? '<span class="qr-code">' + student.qrSvg + '</span>' : '';
+        const qrHtml = buildScheduleQrHtml(student, showQr);
         const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
         var gradeCommonKey = 'student-common-grade-' + (student.currentGradeLabel || '未設定');
-        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts, undefined, { hideDesiredCountOnPrint: true }), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, getVisibleSubjectsForStudent(student, startDate), { hideZeroZero: true, hideDesiredCountOnPrint: true }), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, getVisibleSubjectsForStudent(student, startDate), {hideZeroZero: true}), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
         return { html: html, student: student };
       }
 
@@ -4433,9 +4163,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const makeupRows = toMakeupRows(makeupNotes, 7);
         const salaryData = buildTeacherSalaryData(entries, teacher.id);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
-        const qrHtml = teacher.submissionSubmitted
-          ? '<span class="submission-badge print-only-hidden">希望<br>提出済</span>'
-          : teacher.qrSvg ? '<span class="qr-code">' + teacher.qrSvg + '</span>' : '';
+        const qrHtml = buildScheduleQrHtml(teacher, showQr);
         const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
         var html = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
         return { html: html, teacher: teacher };
@@ -4475,6 +4203,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function applyIncomingPayload(nextPayload) {
+        mergeCachedQrSvg(nextPayload);
         const nextFingerprint = buildPayloadFingerprint(nextPayload);
         const draftStartDate = startInput.value;
         const draftEndDate = endInput.value;
@@ -5160,6 +4889,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 }
 
 function openScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher', targetWindow?: Window | null) {
+  registerScheduleQrBuilder()
   const popupWindow = createPopupWindow(payload.titleLabel + '-' + viewType, targetWindow)
   if (!popupWindow) {
     alert(`${viewType === 'student' ? '生徒' : '講師'}日程を開けませんでした。ポップアップを許可してください。`)
@@ -5188,6 +4918,7 @@ function openScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teach
 }
 
 function postSchedulePayload(targetWindow: Window | null | undefined, viewType: 'student' | 'teacher', payload: SchedulePayload) {
+  registerScheduleQrBuilder()
   if (!targetWindow || targetWindow.closed) return
   try {
     const directWindow = targetWindow as Window & {
@@ -5215,6 +4946,7 @@ export function openTeacherScheduleHtml(params: OpenTeacherScheduleHtmlParams) {
 }
 
 export function openAllScheduleHtml(params: OpenAllScheduleHtmlParams & { viewType?: 'all-student' | 'all-teacher' }) {
+  registerScheduleQrBuilder()
   const viewType = params.viewType || 'all-student'
   const payload = buildAllPayload(params)
   const viewLabel = viewType === 'all-student' ? '印刷用生徒日程表' : '印刷用講師日程表'

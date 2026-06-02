@@ -30,6 +30,7 @@ import { publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
+import { isDevelopmentClassroom } from './utils/developmentClassroom'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -332,6 +333,30 @@ function sanitizeClassroomPayload(payload: AppSnapshotPayload): AppSnapshotPaylo
     classroomSettings: sanitizeClassroomSettings(payload.classroomSettings),
     specialSessions: sanitizeSpecialSessions(payload.specialSessions),
   }
+}
+
+export function buildDevelopmentClassroomCopyPayload(sourcePayload: AppSnapshotPayload): AppSnapshotPayload {
+  const sanitizedSource = sanitizeClassroomPayload(sourcePayload)
+
+  return sanitizeClassroomPayload({
+    ...sanitizedSource,
+    screen: 'board',
+    classroomSettings: {
+      ...sanitizedSource.classroomSettings,
+      boardShareToken: '',
+    },
+    specialSessions: sanitizedSource.specialSessions.map((session) => ({
+      ...session,
+      teacherInputs: Object.fromEntries(Object.entries(session.teacherInputs).map(([personId, input]) => {
+        const { submissionToken: _submissionToken, ...restInput } = input
+        return [personId, restInput]
+      })),
+      studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => {
+        const { submissionToken: _submissionToken, ...restInput } = input
+        return [personId, restInput]
+      })),
+    })),
+  })
 }
 
 function sanitizeAppSnapshot(snapshot: AppSnapshot): AppSnapshot {
@@ -906,6 +931,15 @@ function AuthenticatedApp() {
   const [undoSnapshot, setUndoSnapshot] = useState<{ label: string; data: AppSnapshotPayload } | null>(null)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
+  const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
+  const developmentClassroomCopySources = useMemo(() => workspaceClassrooms
+    .filter((classroom) => classroom.id !== actingClassroomId)
+    .map((classroom) => ({
+      id: classroom.id,
+      name: classroom.name || '名称未設定の教室',
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name, 'ja')),
+  [actingClassroomId, workspaceClassrooms])
   const displayRegularLessons = useMemo(() => {
     const templateRows = buildRegularLessonsFromTemplate({
       template: classroomSettings.regularLessonTemplate,
@@ -2563,6 +2597,7 @@ function AuthenticatedApp() {
     const studentPopup = runtimeWindow.__lessonScheduleStudentWindow
     if (!studentPopup || studentPopup.closed) return
     const latestBoardState = boardStateRef.current
+    const latestSpecialSessions = specialSessionsRef.current
 
     const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
   const scheduleBoardWeeks = buildPopupBoardWeeksForRange(range)
@@ -2602,17 +2637,20 @@ function AuthenticatedApp() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
-      periodBands: specialSessions,
-      specialSessions,
+      periodBands: latestSpecialSessions,
+      specialSessions: latestSpecialSessions,
+      lazyQrLoading: isActingDevelopmentClassroom,
+      showSubmittedQr: isActingDevelopmentClassroom,
       targetWindow: studentPopup,
     })
-  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessions, studentScheduleRange, students, teachers])
+  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, isActingDevelopmentClassroom, specialSessionsRef, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const teacherPopup = runtimeWindow.__lessonScheduleTeacherWindow
     if (!teacherPopup || teacherPopup.closed) return
     const latestBoardState = boardStateRef.current
+    const latestSpecialSessions = specialSessionsRef.current
     const highlightedTeacherId = getHighlightedTeacherIdFromBoardState(latestBoardState)
 
     const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
@@ -2654,11 +2692,13 @@ function AuthenticatedApp() {
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
       highlightedTeacherId,
-      periodBands: specialSessions,
-      specialSessions,
+      periodBands: latestSpecialSessions,
+      specialSessions: latestSpecialSessions,
+      lazyQrLoading: isActingDevelopmentClassroom,
+      showSubmittedQr: isActingDevelopmentClassroom,
       targetWindow: teacherPopup,
     })
-  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessions, students, teacherScheduleRange, teachers])
+  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, isActingDevelopmentClassroom, specialSessionsRef, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -2709,13 +2749,25 @@ function AuthenticatedApp() {
       if (message.type === 'schedule-popup-ready') {
         if (message.viewType === 'student') {
           const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
-          ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
-          syncStudentSchedulePopup()
+          if (isActingDevelopmentClassroom) {
+            void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+              .then(() => { syncStudentSchedulePopup() })
+              .catch(() => { syncStudentSchedulePopup() })
+          } else {
+            ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
+            syncStudentSchedulePopup()
+          }
         }
         if (message.viewType === 'teacher') {
           const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
-          ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
-          syncTeacherSchedulePopup()
+          if (isActingDevelopmentClassroom) {
+            void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+              .then(() => { syncTeacherSchedulePopup() })
+              .catch(() => { syncTeacherSchedulePopup() })
+          } else {
+            ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
+            syncTeacherSchedulePopup()
+          }
         }
         return
       }
@@ -3032,7 +3084,7 @@ function AuthenticatedApp() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     syncSpecialSessionPopup()
@@ -3755,6 +3807,56 @@ function AuthenticatedApp() {
     }
   }, [actingClassroomId, isRemoteBackendEnabled, saveUndoSnapshot, workspaceClassrooms])
 
+  const copyClassroomDataToDevelopmentClassroom = useCallback((sourceClassroomId: string) => {
+    if (!actingClassroomId || !isActingDevelopmentClassroom) {
+      setPersistenceMessage('この操作は開発用教室でのみ実行できます。')
+      return
+    }
+
+    const sourceClassroom = workspaceClassroomsRef.current.find((classroom) => classroom.id === sourceClassroomId)
+    if (!sourceClassroom) {
+      setPersistenceMessage('コピー元の教室が見つかりません。')
+      return
+    }
+
+    if (sourceClassroom.id === actingClassroomId) {
+      setPersistenceMessage('開発用教室自身はコピー元にできません。')
+      return
+    }
+
+    const confirmed = window.confirm([
+      `「${sourceClassroom.name || sourceClassroom.id}」の現在データを開発用教室へコピーします。`,
+      '共有用トークン類は開発用教室向けに再発行されるよう自動で外します。',
+      '現在の開発用教室データは上書きされます。続行しますか?',
+    ].join('\n'))
+    if (!confirmed) {
+      setPersistenceMessage('他教室データのコピーをキャンセルしました。')
+      return
+    }
+
+    const copiedPayload = buildDevelopmentClassroomCopyPayload(sourceClassroom.data)
+    saveUndoSnapshot(`他教室コピー (${sourceClassroom.name || sourceClassroom.id})`)
+    setWorkspaceClassrooms((current) => current.map((classroom) =>
+      classroom.id === actingClassroomId
+        ? { ...classroom, data: copiedPayload }
+        : classroom))
+    applyClassroomPayloadToState(copiedPayload, {
+      setScreen: (value) => setScreen(value),
+      setManagers,
+      setTeachers,
+      setStudents,
+      setRegularLessons,
+      setGroupLessons,
+      setSpecialSessions,
+      setAutoAssignRules,
+      setPairConstraints,
+      setClassroomSettings,
+      setBoardState,
+      setBoardMountKey,
+    })
+    setPersistenceMessage(`「${sourceClassroom.name || sourceClassroom.id}」の現在データを開発用教室へコピーしました。`)
+  }, [actingClassroomId, isActingDevelopmentClassroom, saveUndoSnapshot, setWorkspaceClassrooms, workspaceClassroomsRef])
+
   const exportBasicDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
     xlsx.writeFile(buildBasicDataWorkbook(xlsx, createBasicDataTemplateBundle()), '基本データテンプレート.xlsx')
@@ -4110,6 +4212,7 @@ function AuthenticatedApp() {
         blazeFreeTierEstimate={blazeFreeTierEstimate}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
+        serverAutoBackupDiagnostics={[]}
         onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
         onTriggerServerAutoBackup={() => void triggerServerAutoBackup()}
         onRestoreServerAutoBackup={(backupDateKey) => void restoreServerAutoBackup(backupDateKey)}
@@ -4254,6 +4357,9 @@ function AuthenticatedApp() {
         undoSnapshotLabel={undoSnapshot?.label ?? null}
         onRestoreUndoSnapshot={restoreUndoSnapshot}
         onDismissUndoSnapshot={dismissUndoSnapshot}
+        isDevelopmentClassroom={isActingDevelopmentClassroom}
+        developmentClassroomCopySources={developmentClassroomCopySources}
+        onCopyClassroomDataToDevelopmentClassroom={copyClassroomDataToDevelopmentClassroom}
       />
     )
   }
