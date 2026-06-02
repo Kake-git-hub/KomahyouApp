@@ -10,12 +10,12 @@ import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName,
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions, removedDefaultSpecialSessionIds } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { BillingAutomationScreen } from './components/billing/BillingAutomationScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, downloadLatestFirebaseClassroomRollback, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, downloadLatestFirebaseClassroomRollback, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type GoogleDriveBackupDiagnostic, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -30,6 +30,7 @@ import { publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
+import { isDevelopmentClassroom } from './utils/developmentClassroom'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -37,6 +38,14 @@ export type ClassroomSettings = SharedClassroomSettings
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
+function formatGoogleDriveBackupDiagnosticMessage(diagnostics: GoogleDriveBackupDiagnostic[]) {
+  if (diagnostics.length === 0) return 'Google Drive 診断なし'
+  const primary = diagnostics[0]
+  if (primary.status === 'synced') return `Google Drive 同期成功: ${primary.fileName || primary.fileId || 'ファイル作成済み'}`
+  if (primary.status === 'disabled') return primary.errorHint || primary.error || 'Google Drive 同期は未設定です。'
+  return `Google Drive 同期失敗: ${primary.errorHint || primary.error || '詳細は診断欄を確認してください。'}`
 }
 
 function useLatestState<T>(initialValue: T | (() => T)) {
@@ -132,6 +141,19 @@ function measureJsonBytes(value: unknown) {
   return measureUtf8Bytes(JSON.stringify(value))
 }
 
+function buildCompactJsonSignature(value: unknown) {
+  try {
+    const json = JSON.stringify(value)
+    let hash = 2166136261
+    for (let index = 0; index < json.length; index += 1) {
+      hash = Math.imul(hash ^ json.charCodeAt(index), 16777619) >>> 0
+    }
+    return `${json.length}:${hash.toString(36)}`
+  } catch {
+    return ''
+  }
+}
+
 type DeveloperRestoreModalOption = {
   classroomId: string
   classroomName: string
@@ -165,6 +187,12 @@ type SaveDiagnosticEntry = {
   percent?: number
   label?: string
   details?: Record<string, unknown>
+}
+
+type SubmissionBanner = {
+  id: string
+  message: string
+  submittedAt: string
 }
 
 function downloadTextFile(fileName: string, content: string, mimeType: string) {
@@ -306,6 +334,12 @@ export function sanitizeClassroomSettings(settings: ClassroomSettings): Classroo
   )).sort((left, right) => left.localeCompare(right))
   const normalizedScheduleNotes = Object.fromEntries(Object.entries(settings.scheduleNotes ?? {})
     .filter((entry): entry is [string, string] => typeof entry[0] === 'string' && entry[0].trim().length > 0 && typeof entry[1] === 'string'))
+  const rawScheduleHeader = settings.scheduleHeader ?? initialSettings.scheduleHeader ?? {}
+  const normalizedScheduleHeader = {
+    schoolName: typeof rawScheduleHeader.schoolName === 'string' ? rawScheduleHeader.schoolName : '',
+    phoneNumber: typeof rawScheduleHeader.phoneNumber === 'string' ? rawScheduleHeader.phoneNumber : '',
+    logoDataUrl: typeof rawScheduleHeader.logoDataUrl === 'string' ? rawScheduleHeader.logoDataUrl : '',
+  }
 
   return {
     ...initialSettings,
@@ -315,6 +349,7 @@ export function sanitizeClassroomSettings(settings: ClassroomSettings): Classroo
     forceOpenDates: normalizedForceOpenDates,
     deskCount: Math.max(1, Number(settings.deskCount) || initialSettings.deskCount),
     scheduleNotes: normalizedScheduleNotes,
+    scheduleHeader: normalizedScheduleHeader,
     boardShareToken: typeof settings.boardShareToken === 'string' ? settings.boardShareToken : initialSettings.boardShareToken,
     initialSetupCompletedAt: typeof settings.initialSetupCompletedAt === 'string' ? settings.initialSetupCompletedAt : initialSettings.initialSetupCompletedAt,
     initialSetupMakeupStocks: Array.isArray(settings.initialSetupMakeupStocks) ? settings.initialSetupMakeupStocks : initialSettings.initialSetupMakeupStocks,
@@ -538,6 +573,11 @@ function createInitialClassroomSettings(): ClassroomSettings {
     forceOpenDates: [],
     deskCount: 14,
     scheduleNotes: {},
+    scheduleHeader: {
+      schoolName: '',
+      phoneNumber: '',
+      logoDataUrl: '',
+    },
     boardShareToken: '',
     regularLessonTemplate: null,
     initialSetupCompletedAt: '',
@@ -883,13 +923,14 @@ function AuthenticatedApp() {
   const dirtyTokenRef = useRef(0)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
+  const [serverAutoBackupDiagnostics, setServerAutoBackupDiagnostics] = useState<GoogleDriveBackupDiagnostic[]>([])
   const [localAutoBackupSummaries, setLocalAutoBackupSummaries] = useState<{ backupDateKey: string; savedAt: string }[]>([])
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
   const [workspaceUsers, setWorkspaceUsers, workspaceUsersRef] = useLatestState<WorkspaceUser[]>([])
   const [workspaceClassrooms, setWorkspaceClassrooms, workspaceClassroomsRef] = useLatestState<WorkspaceClassroom[]>([])
   const [developerCloudBackupEnabled, setDeveloperCloudBackupEnabled] = useState(false)
   const [developerCloudBackupFolderName, setDeveloperCloudBackupFolderName] = useState('')
-  const [developerCloudBackupStatus, setDeveloperCloudBackupStatus] = useState('個人クラウドへの自動保存は未設定です。')
+  const [developerCloudBackupStatus, setDeveloperCloudBackupStatus] = useState('ブラウザ同期フォルダは未設定です。')
   const [developerCloudBackupHandle, setDeveloperCloudBackupHandle] = useState<DeveloperCloudBackupDirectoryHandle | null>(null)
   const [developerCloudSyncedAutoBackupKeys, setDeveloperCloudSyncedAutoBackupKeys] = useState<string[]>([])
   const [developerRestoreModalState, setDeveloperRestoreModalState] = useState<DeveloperRestoreModalState | null>(null)
@@ -904,8 +945,10 @@ function AuthenticatedApp() {
   const [isRemoteLoginSubmitting, setIsRemoteLoginSubmitting] = useState(false)
   const [hasHydratedSnapshot, setHasHydratedSnapshot] = useState(false)
   const [undoSnapshot, setUndoSnapshot] = useState<{ label: string; data: AppSnapshotPayload } | null>(null)
+  const [submissionBanner, setSubmissionBanner] = useState<SubmissionBanner | null>(null)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
+  const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
   const displayRegularLessons = useMemo(() => {
     const templateRows = buildRegularLessonsFromTemplate({
       template: classroomSettings.regularLessonTemplate,
@@ -1087,22 +1130,18 @@ function AuthenticatedApp() {
           fallbackLectureStockStudents: boardState.fallbackLectureStockStudents,
         }
       : null
-    try {
-      return JSON.stringify({
-        b: boardData,
-        rl: regularLessons,
-        st: students,
-        tc: teachers,
-        ss: specialSessions,
-        ar: autoAssignRules,
-        pc: pairConstraints,
-        cs: classroomSettings,
-        mg: managers,
-        gl: groupLessons,
-      })
-    } catch {
-      return ''
-    }
+    return buildCompactJsonSignature({
+      b: boardData,
+      rl: regularLessons,
+      st: students,
+      tc: teachers,
+      ss: specialSessions,
+      ar: autoAssignRules,
+      pc: pairConstraints,
+      cs: classroomSettings,
+      mg: managers,
+      gl: groupLessons,
+    })
   }, [boardState, regularLessons, students, teachers, specialSessions, autoAssignRules, pairConstraints, classroomSettings, managers, groupLessons])
 
   const buildCurrentDataSignature = useCallback(() => {
@@ -1120,22 +1159,18 @@ function AuthenticatedApp() {
           fallbackLectureStockStudents: latestBoardState.fallbackLectureStockStudents,
         }
       : null
-    try {
-      return JSON.stringify({
-        b: boardData,
-        rl: regularLessonsRef.current,
-        st: studentsRef.current,
-        tc: teachersRef.current,
-        ss: specialSessionsRef.current,
-        ar: autoAssignRulesRef.current,
-        pc: pairConstraintsRef.current,
-        cs: classroomSettingsRef.current,
-        mg: managersRef.current,
-        gl: groupLessonsRef.current,
-      })
-    } catch {
-      return ''
-    }
+    return buildCompactJsonSignature({
+      b: boardData,
+      rl: regularLessonsRef.current,
+      st: studentsRef.current,
+      tc: teachersRef.current,
+      ss: specialSessionsRef.current,
+      ar: autoAssignRulesRef.current,
+      pc: pairConstraintsRef.current,
+      cs: classroomSettingsRef.current,
+      mg: managersRef.current,
+      gl: groupLessonsRef.current,
+    })
   }, [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, specialSessionsRef, studentsRef, teachersRef])
 
   const writePendingWorkspaceSnapshotForRemoteSync = useCallback(() => {
@@ -1204,22 +1239,18 @@ function AuthenticatedApp() {
           fallbackLectureStockStudents: payloadBoardState.fallbackLectureStockStudents,
         }
       : null
-    try {
-      return JSON.stringify({
-        b: boardData,
-        rl: payload?.regularLessons ?? [],
-        st: payload?.students ?? [],
-        tc: payload?.teachers ?? [],
-        ss: payload?.specialSessions ?? [],
-        ar: payload?.autoAssignRules ?? [],
-        pc: payload?.pairConstraints ?? [],
-        cs: payload?.classroomSettings,
-        mg: payload?.managers ?? [],
-        gl: payload?.groupLessons ?? [],
-      })
-    } catch {
-      return ''
-    }
+    return buildCompactJsonSignature({
+      b: boardData,
+      rl: payload?.regularLessons ?? [],
+      st: payload?.students ?? [],
+      tc: payload?.teachers ?? [],
+      ss: payload?.specialSessions ?? [],
+      ar: payload?.autoAssignRules ?? [],
+      pc: payload?.pairConstraints ?? [],
+      cs: payload?.classroomSettings,
+      mg: payload?.managers ?? [],
+      gl: payload?.groupLessons ?? [],
+    })
   }, [])
 
   const markCleanIfSnapshotMatchesCurrent = useCallback((snapshot: WorkspaceSnapshot) => {
@@ -1750,6 +1781,10 @@ function AuthenticatedApp() {
     if (!currentUser || currentUser.role === 'developer') return
     setScreen('board')
   }, [currentUser, screen])
+
+  useEffect(() => {
+    setSubmissionBanner(null)
+  }, [actingClassroomId])
 
   const addClassroom = useCallback((input?: AddClassroomOptions) => {
     if (isRemoteBackendEnabled) {
@@ -2579,17 +2614,7 @@ function AuthenticatedApp() {
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
-      plannedCells: buildManagedScheduleCellsForRange({
-        range,
-        fallbackStartDate: range.startDate,
-        fallbackEndDate: range.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons: displayRegularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
-      }),
+      plannedCells: [],
       students,
       regularLessons: displayRegularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
@@ -2630,17 +2655,7 @@ function AuthenticatedApp() {
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
-      plannedCells: buildManagedScheduleCellsForRange({
-        range,
-        fallbackStartDate: range.startDate,
-        fallbackEndDate: range.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons: displayRegularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
-      }),
+      plannedCells: [],
       teachers,
       students,
       regularLessons: displayRegularLessons,
@@ -3067,6 +3082,17 @@ function AuthenticatedApp() {
       const activeEntries = entries.filter((e) => !recentlyResetSubmissionTokensRef.current.has(e.token))
       if (activeEntries.length === 0) return
 
+      const currentSessions = specialSessionsRef.current
+      const currentTeachers = teachersRef.current
+      const currentStudents = studentsRef.current
+      const nextBannerEntries = activeEntries.filter((entry) => {
+        const session = currentSessions.find((candidate) => candidate.id === entry.sessionId)
+        if (!session) return false
+        const currentInput = entry.personType === 'teacher'
+          ? session.teacherInputs[entry.personId]
+          : session.studentInputs[entry.personId]
+        return !currentInput?.countSubmitted
+      })
       const newlyAppliedEntries: typeof activeEntries = []
 
       setSpecialSessions((current) => {
@@ -3130,10 +3156,28 @@ function AuthenticatedApp() {
           })
         }
       }
+
+      if (isDevelopmentClassroom(actingClassroom) && nextBannerEntries.length > 0) {
+        const labels = nextBannerEntries.map((entry) => {
+          const session = currentSessions.find((candidate) => candidate.id === entry.sessionId)
+          const personName = entry.personType === 'teacher'
+            ? currentTeachers.find((teacher) => teacher.id === entry.personId)?.name
+            : currentStudents.find((student) => student.id === entry.personId)?.name
+          return `${session?.label ?? entry.sessionId} / ${personName ?? entry.personId}`
+        })
+        const visibleLabels = labels.slice(0, 3).join('、')
+        const omittedCount = Math.max(0, labels.length - 3)
+        const submittedAt = new Date().toISOString()
+        setSubmissionBanner({
+          id: `submission_${submittedAt}_${nextBannerEntries.map((entry) => entry.token).join('_')}`,
+          submittedAt,
+          message: `QR提出を受信しました: ${visibleLabels}${omittedCount > 0 ? ` ほか${omittedCount}件` : ''}`,
+        })
+      }
     })
 
     return unsubscribe
-  }, [isRemoteBackendEnabled, actingClassroomId])
+  }, [isRemoteBackendEnabled, actingClassroomId, actingClassroom, specialSessionsRef, teachersRef, studentsRef])
 
   useEffect(() => {
     if (!isRemoteBackendEnabled) return
@@ -3619,7 +3663,8 @@ function AuthenticatedApp() {
     setServerAutoBackupLoading(true)
     try {
       const result = await triggerFirebaseServerAutoBackup()
-      setPersistenceMessage(`サーバーバックアップを実行しました。(${result.backupDateKey}, ${result.workspaceCount} ワークスペース)`)
+      setServerAutoBackupDiagnostics(result.googleDriveBackups)
+      setPersistenceMessage(`サーバーバックアップを実行しました。(${result.backupDateKey}, ${result.workspaceCount} ワークスペース) ${formatGoogleDriveBackupDiagnosticMessage(result.googleDriveBackups)}`)
       // 完了後に一覧を再取得
       const summaries = await listFirebaseServerAutoBackupSummaries()
       setServerAutoBackupSummaries(summaries)
@@ -4110,6 +4155,7 @@ function AuthenticatedApp() {
         blazeFreeTierEstimate={blazeFreeTierEstimate}
         serverAutoBackupSummaries={serverAutoBackupSummaries}
         serverAutoBackupLoading={serverAutoBackupLoading}
+        serverAutoBackupDiagnostics={serverAutoBackupDiagnostics}
         onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
         onTriggerServerAutoBackup={() => void triggerServerAutoBackup()}
         onRestoreServerAutoBackup={(backupDateKey) => void restoreServerAutoBackup(backupDateKey)}
@@ -4298,6 +4344,9 @@ function AuthenticatedApp() {
         : ((isSavingNow || isDirty) ? persistenceMessage : undefined)}
       syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
+      isDevelopmentClassroom={isActingDevelopmentClassroom}
+      submissionBanner={isActingDevelopmentClassroom ? submissionBanner : null}
+      onDismissSubmissionBanner={() => setSubmissionBanner(null)}
     />
   )
 }

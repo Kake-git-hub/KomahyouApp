@@ -736,6 +736,10 @@
   color: #58708d;
 }
 
+.status-banner-error {
+  color: #9f2f2f;
+}
+
 .page-header-actions,
 .board-header-actions,
 .detail-action-row,
@@ -1120,6 +1124,11 @@
   overflow: auto;
 }
 
+.data-integrity-panel {
+  border-color: #b9d3ff;
+  background: #f6f9ff;
+}
+
 .stock-row-shell,
 .lecture-stock-row-shell {
   display: inline-flex;
@@ -1465,6 +1474,30 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
+}
+
+.submission-received-banner {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  z-index: 70;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 4px;
+  width: min(720px, calc(100vw - 24px));
+  padding: 12px 16px;
+  border: 1px solid #f2cb6c;
+  border-radius: 14px;
+  background: #fff8df;
+  color: #704d00;
+  box-shadow: 0 14px 32px rgba(112, 77, 0, 0.18);
+  text-align: left;
+  cursor: pointer;
+}
+
+.submission-received-banner span {
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .slot-adjust-grid {

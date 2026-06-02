@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveMakeupPlacementSelection } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -3511,5 +3511,53 @@ describe('buildTeacherSelectionOptions', () => {
     // hidden teachers must be excluded in template mode
     expect(options.map((option) => option.name)).not.toContain('吉田講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')
+  })
+})
+
+describe('resolveMakeupPlacementSelection', () => {
+  it('uses the selected origin date from the stock modal instead of the first remaining origin date', () => {
+    const rawEntries = [
+      {
+        key: 'student-1__数',
+        studentId: 'student-1',
+        studentName: '山田 太郎',
+        displayName: '山田',
+        subject: '数',
+        balance: 2,
+        autoShortage: 0,
+        manualAdjustments: 0,
+        plannedMakeups: 0,
+        totalLessonCount: 0,
+        assignedRegularLessons: 0,
+        assignedMakeupLessons: 0,
+        overAssignedRegularLessons: 0,
+        remainingOriginDates: ['2026-04-01', '2026-04-15'],
+        remainingOriginLabels: ['2026/4/1(水) 1限', '2026/4/15(水) 1限'],
+        remainingOriginReasonLabels: ['振替発生', '振替発生'],
+        nextOriginDate: '2026-04-01',
+        nextOriginLabel: '2026/4/1(水) 1限',
+        nextOriginReasonLabel: '振替発生',
+        negativeReason: null,
+      },
+    ]
+
+    const resolved = resolveMakeupPlacementSelection({
+      defaultEntry: rawEntries[0],
+      rawEntries,
+      selectedRawKey: 'student-1__数',
+      selectedOrigin: {
+        rawKey: 'student-1__数',
+        originDate: '2026-04-15',
+        originLabel: '2026/4/15(水) 1限',
+        originReasonLabel: '振替発生',
+      },
+    })
+
+    expect(resolved).toMatchObject({
+      subject: '数',
+      originDate: '2026-04-15',
+      originLabel: '2026/4/15(水) 1限',
+      originReasonLabel: '振替発生',
+    })
   })
 })

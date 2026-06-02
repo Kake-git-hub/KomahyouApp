@@ -53,6 +53,9 @@ type BoardToolbarProps = {
   syncStatusMessage?: string
   syncProgressPercent?: number | null
   syncElapsedSeconds?: number | null
+  isDevelopmentClassroom?: boolean
+  onRunDataIntegrityCheck?: () => void
+  onCopyDebugSnapshot?: () => void
 }
 
 export function BoardToolbar({
@@ -107,6 +110,9 @@ export function BoardToolbar({
   syncStatusMessage,
   syncProgressPercent,
   syncElapsedSeconds,
+  isDevelopmentClassroom,
+  onRunDataIntegrityCheck,
+  onCopyDebugSnapshot,
 }: BoardToolbarProps) {
   const weekJumpInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -205,6 +211,12 @@ export function BoardToolbar({
               <button className="secondary-button slim" type="button" onClick={onOpenRegularTemplate} data-testid="board-regular-template-button">
                 通常授業テンプレ作成
               </button>
+              {isDevelopmentClassroom ? (
+                <>
+                  <button className="secondary-button slim dev-only-button" type="button" onClick={onRunDataIntegrityCheck} data-testid="dev-integrity-check-button">整合性チェック</button>
+                  <button className="secondary-button slim dev-only-button" type="button" onClick={onCopyDebugSnapshot} data-testid="dev-debug-snapshot-button">デバッグJSON</button>
+                </>
+              ) : null}
               <div className="toolbar-segmented">
                 <button className="segment-button" type="button" onClick={onGoPrevWeek} disabled={!canGoPrevWeek} data-testid="prev-week-button">◀ 前週</button>
                 <span className="week-jump-control">

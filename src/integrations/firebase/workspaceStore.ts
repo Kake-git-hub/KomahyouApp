@@ -117,6 +117,7 @@ type FirebaseClassroomSettingsCoreDoc = Pick<ClassroomSettings,
   | 'forceOpenDates'
   | 'deskCount'
   | 'scheduleNotes'
+  | 'scheduleHeader'
   | 'boardShareToken'
   | 'initialSetupCompletedAt'
 > & {
@@ -455,6 +456,7 @@ function splitClassroomSettings(settings: ClassroomSettings) {
     forceOpenDates: settings.forceOpenDates,
     deskCount: settings.deskCount,
     scheduleNotes: settings.scheduleNotes,
+    scheduleHeader: settings.scheduleHeader,
     boardShareToken: settings.boardShareToken,
     initialSetupCompletedAt: settings.initialSetupCompletedAt,
   }

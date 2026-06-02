@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { isActiveOnDate } from '../basic-data/basicDataModel'
-import type { ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
+import type { GoogleDriveBackupDiagnostic, ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 
 type DeveloperAdminScreenProps = {
@@ -45,6 +45,7 @@ type DeveloperAdminScreenProps = {
   }
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
   serverAutoBackupLoading: boolean
+  serverAutoBackupDiagnostics: GoogleDriveBackupDiagnostic[]
   onLoadServerAutoBackupSummaries: () => void
   onTriggerServerAutoBackup: () => void
   onRestoreServerAutoBackup: (backupDateKey: string) => void
@@ -133,6 +134,18 @@ function formatPercent(value: number) {
   return `${value.toFixed(2)}%`
 }
 
+function formatGoogleDriveBackupStatus(status?: 'disabled' | 'synced' | 'failed') {
+  if (status === 'synced') return '成功'
+  if (status === 'failed') return '失敗'
+  if (status === 'disabled') return '未設定'
+  return '未確認'
+}
+
+function formatGoogleDriveAuthSource(value: string) {
+  if (value === 'oauth-refresh-token') return 'Google Drive OAuth'
+  return value === 'service-account-json' ? '明示サービスアカウント JSON' : 'Functions 実行サービスアカウント'
+}
+
 function requestDeveloperPassword(actionLabel: string) {
   return window.prompt(`${actionLabel}ため、開発者パスワードを入力してください。`, '')
 }
@@ -143,7 +156,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, serverAutoBackupDiagnostics, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onExportAnalysisData, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [serverBackupListExpanded, setServerBackupListExpanded] = useState(false)
@@ -273,7 +286,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
               <h3>サーバーバックアップ</h3>
-              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎時 10 分に hourly、毎日 02:10 JST に daily の自動バックアップが作成されます。' : ''}</p>
+              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎時 10 分に hourly、毎日 02:10 JST に daily の自動バックアップが作成されます。Google Drive サーバー同期を設定している場合は、Web アプリを開かなくても同じ JSON が自動同期されます。' : ''}</p>
             </div>
             <div className="developer-backup-grid">
               <div className="basic-data-row-actions">
@@ -283,11 +296,11 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               </div>
             </div>
             <div className="developer-cloud-backup-row">
-              <div className="toolbar-status">{developerCloudBackupEnabled ? `保存先フォルダ: ${developerCloudBackupFolderName || '未接続'}` : '保存先フォルダ: 未設定'}</div>
+              <div className="toolbar-status">{developerCloudBackupEnabled ? `ブラウザ同期フォルダ: ${developerCloudBackupFolderName || '未接続'}` : 'ブラウザ同期フォルダ: 未設定'}</div>
               <div className="toolbar-status">{developerCloudBackupStatus}</div>
               <div className="basic-data-row-actions">
-                <button className="secondary-button slim" type="button" onClick={onConnectDeveloperCloudBackupFolder}>同期フォルダを設定</button>
-                {developerCloudBackupEnabled ? <button className="secondary-button slim" type="button" onClick={onDisconnectDeveloperCloudBackupFolder}>自動保存を停止</button> : null}
+                <button className="secondary-button slim" type="button" onClick={onConnectDeveloperCloudBackupFolder}>ブラウザ同期フォルダを設定</button>
+                {developerCloudBackupEnabled ? <button className="secondary-button slim" type="button" onClick={onDisconnectDeveloperCloudBackupFolder}>ブラウザ同期を停止</button> : null}
               </div>
             </div>
             {authMode === 'firebase' ? (
@@ -299,6 +312,25 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                     <button className="secondary-button slim" type="button" onClick={() => setServerBackupListExpanded((value) => !value)}>{serverBackupListExpanded ? `バックアップ一覧を隠す (${serverAutoBackupSummaries.length} 件)` : `バックアップ一覧を表示 (${serverAutoBackupSummaries.length} 件)`}</button>
                   ) : null}
                 </div>
+                {serverAutoBackupDiagnostics.length > 0 ? (
+                  <div className="toolbar-status" style={{ display: 'block', whiteSpace: 'normal' }}>
+                    <strong>Google Drive 診断</strong>
+                    {serverAutoBackupDiagnostics.map((diagnostic) => (
+                      <div key={`${diagnostic.workspaceKey}-${diagnostic.backupDateKey}`} className="detail-note">
+                        状態: {formatGoogleDriveBackupStatus(diagnostic.status)} / フォルダ: {diagnostic.folderIdMasked || '未設定'} / 認証: {formatGoogleDriveAuthSource(diagnostic.authSource)}
+                        {diagnostic.authSource === 'oauth-refresh-token' ? null : <span> / サービスアカウント: {diagnostic.serviceAccountEmail || '取得できませんでした'}</span>}
+                        {diagnostic.fileName ? <span> / Driveファイル: {diagnostic.fileName}</span> : null}
+                        {diagnostic.errorHint ? <div>対応: {diagnostic.errorHint}</div> : null}
+                        {diagnostic.error ? (
+                          <details>
+                            <summary>エラー詳細</summary>
+                            <pre style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{diagnostic.error}</pre>
+                          </details>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
                 {serverBackupListExpanded ? (
                   <div className="backup-restore-auto-backup-list">
                     {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? <span className="basic-data-muted-inline">サーバーバックアップはありません。一覧を取得してください。</span> : null}
@@ -307,6 +339,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                         <div className="backup-restore-auto-backup-meta">
                           <strong>{summary.displayLabel}</strong>
                           <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
+                          {summary.googleDriveBackupStatus ? <span className="basic-data-subcopy">Google Drive: {formatGoogleDriveBackupStatus(summary.googleDriveBackupStatus)}{summary.googleDriveBackupFileName ? ` (${summary.googleDriveBackupFileName})` : ''}</span> : null}
+                          {summary.googleDriveBackupErrorHint ? <span className="basic-data-subcopy">対応: {summary.googleDriveBackupErrorHint}</span> : null}
                         </div>
                         <button className="secondary-button slim" type="button" onClick={() => { console.log('RESTORE CLICKED:', summary.backupDateKey); onRestoreServerAutoBackup(summary.backupDateKey) }} disabled={serverAutoBackupLoading}>この時点へ復元</button>
                       </div>

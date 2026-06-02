@@ -17,6 +17,7 @@ import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+import { buildDebugSnapshot, runDataIntegrityChecks, type DataIntegrityReport } from '../../utils/dataIntegrity'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -135,6 +136,13 @@ type GroupedMakeupStockEntry = {
   title?: string
 }
 
+type SelectedMakeupOriginSelection = {
+  rawKey: string
+  originDate: string
+  originLabel: string
+  originReasonLabel: string
+}
+
 type GroupedLectureStockEntry = {
   key: string
   studentKey: string
@@ -158,6 +166,33 @@ type LectureStockPendingItem = {
   startDate?: string
   endDate?: string
   unavailableSlots?: string[]
+}
+
+export function resolveMakeupPlacementSelection(params: {
+  defaultEntry: MakeupStockEntry | null
+  rawEntries: MakeupStockEntry[]
+  selectedRawKey?: string | null
+  selectedOrigin?: SelectedMakeupOriginSelection | null
+}) {
+  const placementEntry = params.selectedRawKey
+    ? params.rawEntries.find((raw) => raw.key === params.selectedRawKey) ?? params.defaultEntry
+    : params.defaultEntry
+  if (!placementEntry) return null
+
+  const selectedOrigin = params.selectedOrigin
+  const shouldUseSelectedOrigin = Boolean(
+    selectedOrigin
+    && (!params.selectedRawKey || selectedOrigin.rawKey === params.selectedRawKey)
+    && selectedOrigin.originDate,
+  )
+
+  return {
+    placementEntry,
+    subject: placementEntry.subject as SubjectLabel,
+    originDate: shouldUseSelectedOrigin ? selectedOrigin?.originDate : (placementEntry.nextOriginDate ?? undefined),
+    originLabel: shouldUseSelectedOrigin ? selectedOrigin?.originLabel : (placementEntry.nextOriginLabel ?? undefined),
+    originReasonLabel: shouldUseSelectedOrigin ? selectedOrigin?.originReasonLabel : (placementEntry.nextOriginReasonLabel ?? undefined),
+  }
 }
 
 type TemplateEditDraft = {
@@ -225,6 +260,12 @@ type AutoAssignDebugReport = {
   title: string
   summary: string
   details: string
+}
+
+type SubmissionBanner = {
+  id: string
+  message: string
+  submittedAt: string
 }
 
 type LectureConstraintGroupKey = 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'day-spacing' | 'time-preference'
@@ -509,6 +550,9 @@ type ScheduleBoardScreenProps = {
   syncStatusMessage?: string
   syncProgressPercent?: number | null
   syncElapsedSeconds?: number | null
+  isDevelopmentClassroom?: boolean
+  submissionBanner?: SubmissionBanner | null
+  onDismissSubmissionBanner?: () => void
 }
 
 export type ScheduleRangePreference = {
@@ -2700,7 +2744,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, isDevelopmentClassroom, submissionBanner, onDismissSubmissionBanner }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -2720,6 +2764,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
   const [selectedMakeupStockKey, setSelectedMakeupStockKey] = useState<string | null>(null)
   const [selectedMakeupStockRawKey, setSelectedMakeupStockRawKey] = useState<string | null>(null)
+  const [selectedMakeupOriginSelection, setSelectedMakeupOriginSelection] = useState<SelectedMakeupOriginSelection | null>(null)
   const [selectedLectureStockKey, setSelectedLectureStockKey] = useState<string | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
   const [dayHeaderMenu, setDayHeaderMenu] = useState<{ dateKey: string; x: number; y: number } | null>(null)
@@ -2761,6 +2806,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const [stockActionModal, setStockActionModal] = useState<StockActionModalState | null>(null)
   const [stockPanelsRestoreState, setStockPanelsRestoreState] = useState<StockPanelsRestoreState | null>(null)
   const [autoAssignDebugReport, setAutoAssignDebugReport] = useState<AutoAssignDebugReport | null>(null)
+  const [dataIntegrityReport, setDataIntegrityReport] = useState<DataIntegrityReport | null>(null)
   const [scheduleSyncTrigger, setScheduleSyncTrigger] = useState(0)
   const boardInteractionTokenRef = useRef(createInteractionLockToken('board'))
   const [interactionLockOwner, setInteractionLockOwner] = useState<InteractionSurface | null>(() => parseInteractionLockOwner(typeof window === 'undefined' ? null : window.localStorage.getItem(interactionLockStorageKey)))
@@ -3447,7 +3493,28 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   useEffect(() => {
     const handleScheduleNoteMessage = (event: MessageEvent) => {
       const message = event.data
-      if (!message || message.type !== 'schedule-note-update') return
+      if (!message) return
+      const currentSettings = classroomSettingsRef.current
+
+      if (message.type === 'schedule-header-update') {
+        const rawHeaderKey = typeof message.headerKey === 'string' ? message.headerKey : ''
+        if (rawHeaderKey !== 'schoolName' && rawHeaderKey !== 'phoneNumber' && rawHeaderKey !== 'logoDataUrl') return
+        const headerKey: 'schoolName' | 'phoneNumber' | 'logoDataUrl' = rawHeaderKey
+        const value = typeof message.value === 'string' ? message.value : ''
+        if ((currentSettings.scheduleHeader ?? {})[headerKey] === value) return
+        const nextSettings = {
+          ...currentSettings,
+          scheduleHeader: {
+            ...(currentSettings.scheduleHeader ?? {}),
+            [headerKey]: value,
+          },
+        }
+        classroomSettingsRef.current = nextSettings
+        onUpdateClassroomSettings(nextSettings)
+        return
+      }
+
+      if (message.type !== 'schedule-note-update') return
       if (message.viewType !== 'student' && message.viewType !== 'teacher') return
       const noteId = typeof message.noteId === 'string' && message.noteId.trim().length > 0
         ? message.noteId
@@ -3456,7 +3523,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
           : ''
       if (!noteId) return
       const value = typeof message.value === 'string' ? message.value : ''
-      const currentSettings = classroomSettingsRef.current
       if ((currentSettings.scheduleNotes ?? {})[noteId] === value) return
       const nextSettings = {
         ...currentSettings,
@@ -3810,6 +3876,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   const selectedMakeupStockEntry = useMemo(
     () => makeupStockEntries.find((entry) => entry.key === selectedMakeupStockKey) ?? null,
     [makeupStockEntries, selectedMakeupStockKey],
+  )
+
+  const selectedMakeupPlacement = useMemo(
+    () => resolveMakeupPlacementSelection({
+      defaultEntry: selectedMakeupStockEntry?.nextPlacementEntry ?? null,
+      rawEntries: rawMakeupStockEntries,
+      selectedRawKey: selectedMakeupStockRawKey,
+      selectedOrigin: selectedMakeupOriginSelection,
+    }),
+    [rawMakeupStockEntries, selectedMakeupOriginSelection, selectedMakeupStockEntry, selectedMakeupStockRawKey],
   )
 
   const selectedLectureStockEntry = useMemo(
@@ -4228,6 +4304,60 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     }
   }, [autoAssignDebugReport])
 
+  const buildDataIntegrityInput = useCallback(() => ({
+    classroomId: classroomStorageKey,
+    classroomName,
+    classroomSettings,
+    boardState: {
+      weeks: normalizedWeeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      suppressedRegularLessonOccurrences,
+      scheduleCountAdjustments,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+      isLectureStockOpen,
+      isMakeupStockOpen,
+      studentScheduleRange,
+      teacherScheduleRange,
+    },
+    specialSessions,
+    studentIds: students.map((student) => student.id),
+    teacherIds: teachers.map((teacher) => teacher.id),
+  }), [classroomName, classroomSettings, classroomStorageKey, fallbackLectureStockStudents, fallbackMakeupStudents, isLectureStockOpen, isMakeupStockOpen, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, scheduleCountAdjustments, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRange, students, suppressedMakeupOrigins, suppressedRegularLessonOccurrences, teacherScheduleRange, teachers, weekIndex])
+
+  const runDevelopmentDataIntegrityCheck = useCallback(() => {
+    if (!isDevelopmentClassroom) return
+    const report = runDataIntegrityChecks(buildDataIntegrityInput())
+    setDataIntegrityReport(report)
+    console.info('[komahyou-integrity]', report)
+    setStatusMessage(report.summary)
+  }, [buildDataIntegrityInput, isDevelopmentClassroom])
+
+  const copyDevelopmentDebugSnapshot = useCallback(async () => {
+    if (!isDevelopmentClassroom) return
+    const report = dataIntegrityReport ?? runDataIntegrityChecks(buildDataIntegrityInput())
+    if (!dataIntegrityReport) setDataIntegrityReport(report)
+    const snapshot = buildDebugSnapshot({ ...buildDataIntegrityInput(), report })
+    const serialized = JSON.stringify(snapshot, null, 2)
+    console.info('[komahyou-debug-snapshot]', snapshot)
+    if (typeof navigator === 'undefined' || !navigator.clipboard) {
+      setStatusMessage('デバッグJSONをコンソールに出力しました。')
+      return
+    }
+    try {
+      await navigator.clipboard.writeText(serialized)
+      setStatusMessage('デバッグJSONをクリップボードへコピーし、コンソールにも出力しました。')
+    } catch {
+      setStatusMessage('クリップボードへコピーできなかったため、デバッグJSONをコンソールに出力しました。')
+    }
+  }, [buildDataIntegrityInput, dataIntegrityReport, isDevelopmentClassroom])
+
   const findBestLectureAutoAssignCandidate = (params: {
     sourceWeeks: SlotCell[][]
     pendingItems: LectureStockPendingItem[]
@@ -4422,17 +4552,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
           boardWeeks: scheduleBoardWeeks,
           suppressedRegularLessonOccurrences,
         }),
-        plannedCells: buildManagedScheduleCellsForRange({
-          range,
-          fallbackStartDate: scheduleFallbackStartDate,
-          fallbackEndDate: scheduleFallbackEndDate,
-          classroomSettings,
-          teachers,
-          students,
-          regularLessons,
-          boardWeeks: scheduleBoardWeeks,
-          suppressedRegularLessonOccurrences,
-        }),
+        plannedCells: [],
         students,
         teachers,
         regularLessons,
@@ -4461,54 +4581,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     () => normalizeScheduleRange(teacherScheduleRange ?? { startDate: scheduleFallbackStartDate, endDate: scheduleFallbackEndDate, periodValue: '' }, scheduleFallbackStartDate, scheduleFallbackEndDate),
     [scheduleFallbackEndDate, scheduleFallbackStartDate, teacherScheduleRange],
   )
-
-  const studentScheduleCells = useMemo(() => buildScheduleCellsForRange({
-    range: effectiveStudentScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
-
-  const studentPlannedScheduleCells = useMemo(() => buildManagedScheduleCellsForRange({
-    range: effectiveStudentScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
-
-  const teacherScheduleCells = useMemo(() => buildScheduleCellsForRange({
-    range: effectiveTeacherScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
-
-  const teacherPlannedScheduleCells = useMemo(() => buildManagedScheduleCellsForRange({
-    range: effectiveTeacherScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const studentScheduleTitle = useMemo(
     () => formatWeeklyScheduleTitle(effectiveStudentScheduleRange.startDate, effectiveStudentScheduleRange.endDate),
@@ -4557,9 +4629,23 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   }, [normalizedWeeks, selectedStudentId])
 
   useEffect(() => {
+    const targetWindow = studentScheduleWindowRef.current
+    if (!targetWindow || targetWindow.closed) return
+
+    const scheduleBoardWeeks = buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange)
     syncStudentScheduleHtml({
-      cells: studentScheduleCells,
-      plannedCells: studentPlannedScheduleCells,
+      cells: buildScheduleCellsForRange({
+        range: effectiveStudentScheduleRange,
+        fallbackStartDate: scheduleFallbackStartDate,
+        fallbackEndDate: scheduleFallbackEndDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences,
+      }),
+      plannedCells: [],
       students,
       regularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
@@ -4584,14 +4670,28 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
-      targetWindow: studentScheduleWindowRef.current,
+      targetWindow,
     })
-  }, [classroomSettings, classroomStorageKey, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleSyncTrigger, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, classroomStorageKey, effectiveStudentScheduleRange, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleFallbackEndDate, scheduleFallbackStartDate, scheduleSyncTrigger, specialSessions, studentScheduleTitle, students, suppressedRegularLessonOccurrences, teachers])
 
   useEffect(() => {
+    const targetWindow = teacherScheduleWindowRef.current
+    if (!targetWindow || targetWindow.closed) return
+
+    const scheduleBoardWeeks = buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange)
     syncTeacherScheduleHtml({
-      cells: teacherScheduleCells,
-      plannedCells: teacherPlannedScheduleCells,
+      cells: buildScheduleCellsForRange({
+        range: effectiveTeacherScheduleRange,
+        fallbackStartDate: scheduleFallbackStartDate,
+        fallbackEndDate: scheduleFallbackEndDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences,
+      }),
+      plannedCells: [],
       teachers,
       students,
       regularLessons,
@@ -4606,9 +4706,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
-      targetWindow: teacherScheduleWindowRef.current,
+      targetWindow,
     })
-  }, [classroomSettings, classroomStorageKey, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleSyncTrigger, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, classroomStorageKey, effectiveTeacherScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, scheduleSyncTrigger, specialSessions, students, suppressedRegularLessonOccurrences, teacherScheduleTitle, teachers])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
@@ -4890,10 +4990,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
   }, [addableSpecialSessions, addableStudents, displayWeekDate, emptyMenuContext, getSelectableSubjectsForStudent, studentMenu])
 
   const pointerPreviewLabel = useMemo(() => {
-    if (selectedMakeupStockEntry?.nextPlacementEntry) {
-      const entry = selectedMakeupStockEntry.nextPlacementEntry
-      const originLabel = entry.nextOriginLabel ?? '元コマ未設定'
-      return `${selectedMakeupStockEntry.displayName} / ${entry.subject} / ${originLabel} の振替先を選択中`
+    if (selectedMakeupStockEntry && selectedMakeupPlacement) {
+      const originLabel = selectedMakeupPlacement.originLabel ?? '元コマ未設定'
+      return `${selectedMakeupStockEntry.displayName} / ${selectedMakeupPlacement.subject} / ${originLabel} の振替先を選択中`
     }
 
     if (selectedLectureStockEntry) {
@@ -4912,7 +5011,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     }
 
     return null
-  }, [movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupStockEntry])
+  }, [movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupPlacement, selectedMakeupStockEntry])
+
+  useEffect(() => {
+    if (selectedMakeupStockKey !== null) return
+    setSelectedMakeupStockRawKey(null)
+    setSelectedMakeupOriginSelection(null)
+  }, [selectedMakeupStockKey])
 
   const isBoardInteractionLocked = interactionLockOwner !== null && interactionLockOwner !== 'board'
   const boardInteractionLockMessage = isBoardInteractionLocked
@@ -6019,13 +6124,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
 
   const handlePlaceMakeupFromStock = (cellId: string, deskIndex: number, studentIndex: number) => {
     if (!selectedMakeupStockEntry) return
-    const placementEntry = selectedMakeupStockRawKey
-      ? rawMakeupStockEntries.find((raw) => raw.key === selectedMakeupStockRawKey) ?? selectedMakeupStockEntry.nextPlacementEntry
-      : selectedMakeupStockEntry.nextPlacementEntry
-    if (!placementEntry) {
+    const resolvedPlacement = resolveMakeupPlacementSelection({
+      defaultEntry: selectedMakeupStockEntry.nextPlacementEntry,
+      rawEntries: rawMakeupStockEntries,
+      selectedRawKey: selectedMakeupStockRawKey,
+      selectedOrigin: selectedMakeupOriginSelection,
+    })
+    if (!resolvedPlacement) {
       setStatusMessage('この生徒は配置できる振替残数がありません。')
       return
     }
+    const { placementEntry } = resolvedPlacement
     if (selectedMakeupStockEntry.balance <= 0) {
       setStatusMessage('この生徒は振替残数がありません。新しい通常残が発生するまで待ってください。')
       return
@@ -6061,9 +6170,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
       managedStudentId: managedStudent?.id,
       grade: studentGrade,
       birthDate: managedStudent?.birthDate,
-      makeupSourceDate: placementEntry.nextOriginDate ?? undefined,
-      makeupSourceLabel: placementEntry.nextOriginLabel ?? undefined,
-      subject: placementEntry.subject as SubjectLabel,
+      makeupSourceDate: resolvedPlacement.originDate,
+      makeupSourceLabel: resolvedPlacement.originLabel,
+      subject: resolvedPlacement.subject,
       lessonType: 'makeup',
       teacherType: 'normal',
     }, targetCell.dateKey)
@@ -6071,8 +6180,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     if (!targetDesk.lesson) {
       targetDesk.lesson = {
         id: `${cellId}_desk_${deskIndex + 1}_${nextStudent.lessonType}`,
-        note: nextStudent.lessonType === 'makeup' && placementEntry.nextOriginLabel
-          ? `元の通常授業: ${placementEntry.nextOriginLabel}${placementEntry.nextOriginReasonLabel ? `（${placementEntry.nextOriginReasonLabel}）` : ''}`
+        note: nextStudent.lessonType === 'makeup' && resolvedPlacement.originLabel
+          ? `元の通常授業: ${resolvedPlacement.originLabel}${resolvedPlacement.originReasonLabel ? `（${resolvedPlacement.originReasonLabel}）` : ''}`
           : undefined,
         studentSlots: [null, null],
       }
@@ -6082,7 +6191,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     console.log('[振替ストック配置]', {
       placedStudent: { name: nextStudent.name, managedStudentId: nextStudent.managedStudentId, subject: nextStudent.subject, lessonType: nextStudent.lessonType, makeupSourceDate: nextStudent.makeupSourceDate },
       stockEntry: { key: selectedMakeupStockEntry.key, balance: selectedMakeupStockEntry.balance, studentId: selectedMakeupStockEntry.studentId },
-      placementEntry: { key: placementEntry.key, studentId: placementEntry.studentId, nextOriginDate: placementEntry.nextOriginDate },
+      placementEntry: { key: placementEntry.key, studentId: placementEntry.studentId, nextOriginDate: placementEntry.nextOriginDate, selectedOriginDate: resolvedPlacement.originDate },
       targetDate: targetCell.dateKey,
     })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
@@ -6970,17 +7079,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences,
       }),
-      plannedCells: buildManagedScheduleCellsForRange({
-        range: storedRange,
-        fallbackStartDate: scheduleFallbackStartDate,
-        fallbackEndDate: scheduleFallbackEndDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences,
-      }),
+      plannedCells: [],
       students,
       regularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
@@ -7032,17 +7131,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences,
       }),
-      plannedCells: buildManagedScheduleCellsForRange({
-        range: storedRange,
-        fallbackStartDate: scheduleFallbackStartDate,
-        fallbackEndDate: scheduleFallbackEndDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences,
-      }),
+      plannedCells: [],
       teachers,
       students,
       regularLessons,
@@ -7560,7 +7649,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     setStatusMessage(`${entry.displayName} の未消化講習を選択しました。空欄セルを左クリックしてください。`)
   }
 
-  const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: { hidePanelsDuringPlacement?: boolean; rawKey?: string }) => {
+  const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: {
+    hidePanelsDuringPlacement?: boolean
+    rawKey?: string
+    originSelection?: SelectedMakeupOriginSelection | null
+  }) => {
     if (entry.balance <= 0) {
       setStatusMessage(`${entry.displayName} は先取り済みのため、残数が発生するまで選択できません。`)
       return
@@ -7570,6 +7663,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
     setSelectedLectureStockKey(null)
     setSelectedMakeupStockKey(entry.key)
     setSelectedMakeupStockRawKey(options?.rawKey ?? null)
+    setSelectedMakeupOriginSelection(options?.originSelection ?? null)
     if (options?.hidePanelsDuringPlacement) {
       setStockPanelsRestoreState({ lecture: isLectureStockOpen, makeup: isMakeupStockOpen })
       setIsLectureStockOpen(false)
@@ -7755,6 +7849,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
           {centeredStatusMessage}
         </div>
       ) : null}
+      {isDevelopmentClassroom && submissionBanner ? (
+        <button
+          type="button"
+          className="submission-received-banner"
+          onClick={onDismissSubmissionBanner}
+          data-testid="submission-received-banner"
+          aria-label="QR提出通知を閉じる"
+        >
+          <strong>{submissionBanner.message}</strong>
+          <span>クリックするまで表示します / {new Date(submissionBanner.submittedAt).toLocaleString('ja-JP')}</span>
+        </button>
+      ) : null}
       {pointerPreviewLabel ? (
         <div className="cursor-follow-preview" style={pointerPreviewStyle} data-testid="move-preview" role="status" aria-live="polite">
           {pointerPreviewLabel}
@@ -7826,6 +7932,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
             syncStatusMessage={syncStatusMessage}
             syncProgressPercent={syncProgressPercent}
             syncElapsedSeconds={syncElapsedSeconds}
+            isDevelopmentClassroom={isDevelopmentClassroom}
+            onRunDataIntegrityCheck={runDevelopmentDataIntegrityCheck}
+            onCopyDebugSnapshot={copyDevelopmentDebugSnapshot}
           />
           <div ref={boardExportRef} className="board-export-surface" data-testid="board-export-surface">
           {!isTemplateMode && stockActionModal ? (() => {
@@ -7941,7 +8050,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
                             type="button"
                             className="stock-origin-item stock-origin-item-main"
                             onClick={() => {
-                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey })
+                              handleSelectMakeupStockEntry(makeupEntry, {
+                                rawKey: item.rawEntryKey,
+                                originSelection: {
+                                  rawKey: item.rawEntryKey,
+                                  originDate: item.date,
+                                  originLabel: item.label,
+                                  originReasonLabel: item.reasonLabel,
+                                },
+                              })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}
@@ -8016,7 +8133,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
             </div>
           ) : null}
           </div>
-          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && (isLectureStockOpen || isMakeupStockOpen || autoAssignDebugReport) ? (
+          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && (isLectureStockOpen || isMakeupStockOpen || autoAssignDebugReport || dataIntegrityReport) ? (
             <div className="stock-floating-modals">
               {isLectureStockOpen ? (
                 <section className="lecture-stock-panel stock-floating-panel" data-testid="lecture-stock-panel">
@@ -8093,6 +8210,26 @@ export function ScheduleBoardScreen({ classroomSettings, classroomStorageKey, te
                   </div>
                   <div className="status-banner">{autoAssignDebugReport.summary}</div>
                   <pre className="debug-preview auto-assign-debug-preview">{autoAssignDebugReport.details}</pre>
+                </section>
+              ) : null}
+              {dataIntegrityReport ? (
+                <section className="stock-floating-panel auto-assign-debug-panel data-integrity-panel" data-testid="data-integrity-panel">
+                  <div className="makeup-stock-panel-head">
+                    <div className="stock-floating-panel-title">
+                      <strong>データ整合性チェック</strong>
+                      <span className="basic-data-muted-inline">開発用教室限定で、盤面・QR提出・管理データの矛盾を検出します。</span>
+                    </div>
+                    <div className="auto-assign-debug-actions">
+                      <button className="secondary-button slim" type="button" onClick={copyDevelopmentDebugSnapshot} data-testid="data-integrity-debug-copy">JSONコピー</button>
+                      <button className="secondary-button slim" type="button" onClick={() => setDataIntegrityReport(null)} data-testid="data-integrity-close">閉じる</button>
+                    </div>
+                  </div>
+                  <div className={`status-banner${dataIntegrityReport.counts.errors > 0 ? ' status-banner-error' : ''}`}>{dataIntegrityReport.summary}</div>
+                  <pre className="debug-preview auto-assign-debug-preview">
+                    {dataIntegrityReport.issues.length === 0
+                      ? '問題は見つかりませんでした。'
+                      : dataIntegrityReport.issues.map((issue) => `[${issue.severity}] ${issue.title}\n${issue.detail}${issue.location ? `\n${issue.location}` : ''}`).join('\n\n')}
+                  </pre>
                 </section>
               ) : null}
             </div>

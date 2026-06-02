@@ -139,6 +139,12 @@ type SerializedScheduleCountAdjustment = {
   delta: number
 }
 
+type SerializedScheduleHeader = {
+  schoolName: string
+  phoneNumber: string
+  logoDataUrl: string
+}
+
 type SerializedStudentLinkDebugCandidate = {
   studentId: string
   studentName: string
@@ -197,6 +203,7 @@ type SchedulePayload = {
   cells: SerializedCell[]
   plannedCells: SerializedCell[]
   scheduleNotes: Record<string, string>
+  scheduleHeader: SerializedScheduleHeader
   expectedRegularOccurrences: SerializedExpectedRegularOccurrence[]
   highlightedStudentSlot?: {
     studentId: string
@@ -220,11 +227,12 @@ type OpenScheduleHtmlParams = {
   defaultPeriodValue?: string
   defaultPersonId?: string
   titleLabel: string
-  classroomSettings: Pick<ClassroomSettings, 'closedWeekdays' | 'holidayDates' | 'forceOpenDates' | 'scheduleNotes'>
+  classroomSettings: Pick<ClassroomSettings, 'closedWeekdays' | 'holidayDates' | 'forceOpenDates' | 'scheduleNotes' | 'scheduleHeader'>
   periodBands?: Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate'>[]
   specialSessions?: SpecialSessionRow[]
   classroomStorageKey?: string
   targetWindow?: Window | null
+  includeDebugLinkDiagnostics?: boolean
 }
 
 function buildSubmissionQrSvg(token: string | undefined) {
@@ -373,7 +381,7 @@ function serializeCells(
         return {
           teacher: desk.teacher,
           teacherId: desk.teacherAssignmentTeacherId,
-          ...(regularTeacherIds.length > 0 ? { regularTeacherIds } : {}),
+          ...(!desk.teacherAssignmentTeacherId && regularTeacherIds.length > 0 ? { regularTeacherIds } : {}),
           statuses,
           lesson,
         }
@@ -546,7 +554,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     : []
   const teacherById = new Map((paramsWithRegularLessons.teachers ?? []).map((teacher) => [teacher.id, teacher]))
   const studentById = new Map((paramsWithRegularLessons.students ?? linkedStudents).map((student) => [student.id, student]))
-  const debugLinkDiagnostics: SerializedStudentLinkDiagnostic[] = []
+  const debugLinkDiagnostics: SerializedStudentLinkDiagnostic[] | undefined = params.includeDebugLinkDiagnostics ? [] : undefined
   const doesDeskMatchTeacher = (teacherId: string, desk: SlotCell['desks'][number], teacherName?: string) => {
     if (desk.teacherAssignmentTeacherId) return desk.teacherAssignmentTeacherId === teacherId
     const teacher = teacherById.get(teacherId)
@@ -818,6 +826,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
   const serializedPlannedCells = serializeCells(params.plannedCells, resolveStudentLink, resolveRegularTeacherIds)
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
+  const scheduleHeader = params.classroomSettings.scheduleHeader ?? {}
 
   return {
     titleLabel: params.titleLabel,
@@ -841,6 +850,11 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     cells: serializedCells,
     plannedCells: serializedPlannedCells,
     scheduleNotes: { ...(params.classroomSettings.scheduleNotes ?? {}) },
+    scheduleHeader: {
+      schoolName: typeof scheduleHeader.schoolName === 'string' ? scheduleHeader.schoolName : '',
+      phoneNumber: typeof scheduleHeader.phoneNumber === 'string' ? scheduleHeader.phoneNumber : '',
+      logoDataUrl: typeof scheduleHeader.logoDataUrl === 'string' ? scheduleHeader.logoDataUrl : '',
+    },
     expectedRegularOccurrences: [],
     highlightedStudentSlot: undefined,
     highlightedTeacherId: undefined,
@@ -864,7 +878,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       }])),
     })),
     classroomStorageKey: params.classroomStorageKey || 'default',
-    debugLinkDiagnostics,
+    ...(debugLinkDiagnostics ? { debugLinkDiagnostics } : {}),
   }
 }
 
@@ -1406,24 +1420,32 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .school-box {
         display: flex;
-        align-items: center;
-        justify-content: flex-start;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: center;
+        gap: 1px;
         padding: 3px 8px;
         min-width: 200px;
       }
 
-      .school-input {
+      .schedule-header-input {
         width: 100%;
-        min-height: 34px;
         border: 0;
         outline: 0;
         font: inherit;
-        font-size: 13px;
         color: #444444;
         background: transparent;
-        resize: none;
-        line-height: 1.2;
+        line-height: 1.15;
         white-space: nowrap;
+      }
+
+      .school-name-input {
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .school-phone-input {
+        font-size: 12px;
       }
 
       .title-box {
@@ -2474,7 +2496,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const VIEW_LABEL = '${viewLabel}';
       const BASE_VIEW_TYPE = VIEW_TYPE === 'all-student' ? 'student' : VIEW_TYPE === 'all-teacher' ? 'teacher' : VIEW_TYPE;
       const IS_ALL_VIEW = VIEW_TYPE === 'all-student' || VIEW_TYPE === 'all-teacher';
-      let DATA = JSON.parse(document.getElementById('schedule-data').textContent || '{}');
+      const scheduleDataElement = document.getElementById('schedule-data');
+      let DATA = JSON.parse(scheduleDataElement ? scheduleDataElement.textContent || '{}' : '{}');
+      if (scheduleDataElement) scheduleDataElement.remove();
       const startInput = document.getElementById('schedule-start-date');
       const endInput = document.getElementById('schedule-end-date');
       const periodSelect = document.getElementById('schedule-period-select');
@@ -2504,6 +2528,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let personSelectionLocked = false;
       const pendingUnavailableKeys = new Set();
       const pendingUnavailableTimers = new Map();
+      const scheduleHeaderUpdateTimers = new Map();
       const interactionLockStorageKey = 'schedule-shared:interaction-lock';
       const interactionLockStaleMs = 5000;
       const interactionLockToken = VIEW_TYPE + '-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
@@ -2563,10 +2588,45 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         DATA.scheduleNotes[getScheduleNoteId(noteKey)] = String(value || '');
       }
 
+      function getScheduleHeaderStorageKey(headerKey) {
+        return sharedGlobalStoragePrefix + 'schedule-header:' + headerKey;
+      }
+
+      function getScheduleHeaderValue(headerKey) {
+        var header = DATA.scheduleHeader || {};
+        var value = header[headerKey];
+        return typeof value === 'string' ? value : '';
+      }
+
+      function setScheduleHeaderValue(headerKey, value) {
+        if (!DATA.scheduleHeader) DATA.scheduleHeader = {};
+        DATA.scheduleHeader[headerKey] = String(value || '');
+      }
+
+      function getLegacyScheduleHeaderValue(headerKey) {
+        if (headerKey !== 'schoolName' && headerKey !== 'phoneNumber') return '';
+        const storage = getSharedStorage();
+        try {
+          const legacyValue = storage ? storage.getItem(getSharedInputStorageKey('school-info')) || '' : '';
+          if (!legacyValue) return '';
+          const lines = legacyValue.replaceAll(String.fromCharCode(13), '').split(String.fromCharCode(10));
+          if (headerKey === 'schoolName') return lines[0] || '';
+          return lines.slice(1).join(' ').trim();
+        } catch {
+          return '';
+        }
+      }
+
       function buildPayloadFingerprint(payload) {
         var clone = { ...(payload || {}) };
         delete clone.scheduleNotes;
-        return JSON.stringify(clone);
+        delete clone.scheduleHeader;
+        var json = JSON.stringify(clone);
+        var hash = 2166136261;
+        for (var index = 0; index < json.length; index += 1) {
+          hash = Math.imul(hash ^ json.charCodeAt(index), 16777619) >>> 0;
+        }
+        return String(json.length) + ':' + hash.toString(36);
       }
 
       function syncScheduleNoteInputs() {
@@ -2576,6 +2636,51 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const value = getScheduleNoteValue(noteKey);
           if (element.value !== value) element.value = value;
         });
+      }
+
+      function syncScheduleHeaderInputs() {
+        document.querySelectorAll('.schedule-header-input[data-schedule-header-key]').forEach((element) => {
+          const headerKey = element.getAttribute('data-schedule-header-key');
+          if (!headerKey || document.activeElement === element) return;
+          const value = getScheduleHeaderValue(headerKey);
+          if (element.value !== value) element.value = value;
+        });
+      }
+
+      function postScheduleHeaderUpdate(headerKey, value) {
+        try {
+          if (!window.opener || window.opener.closed) return;
+          window.opener.postMessage({
+            type: 'schedule-header-update',
+            headerKey: headerKey,
+            value: String(value || ''),
+          }, '*');
+        } catch {}
+      }
+
+      function queueScheduleHeaderUpdate(headerKey, value) {
+        const previousTimer = scheduleHeaderUpdateTimers.get(headerKey);
+        if (previousTimer) window.clearTimeout(previousTimer);
+        scheduleHeaderUpdateTimers.set(headerKey, window.setTimeout(() => {
+          scheduleHeaderUpdateTimers.delete(headerKey);
+          postScheduleHeaderUpdate(headerKey, getScheduleHeaderValue(headerKey));
+        }, 400));
+      }
+
+      function flushScheduleHeaderUpdate(headerKey, value) {
+        const previousTimer = scheduleHeaderUpdateTimers.get(headerKey);
+        if (previousTimer) window.clearTimeout(previousTimer);
+        scheduleHeaderUpdateTimers.delete(headerKey);
+        postScheduleHeaderUpdate(headerKey, value);
+      }
+
+      function notifyScheduleHeaderChange(headerKey, value) {
+        setScheduleHeaderValue(headerKey, value);
+        flushScheduleHeaderUpdate(headerKey, value);
+      }
+
+      function updateScheduleHeaderDraft(headerKey, value) {
+        setScheduleHeaderValue(headerKey, value);
       }
 
       function setDateInputValue(input, value) {
@@ -2796,7 +2901,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function syncPayloadFingerprint() {
-        payloadFingerprint = JSON.stringify(DATA);
+        payloadFingerprint = buildPayloadFingerprint(DATA);
         skipNextEquivalentPayload = true;
       }
 
@@ -2980,7 +3085,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
             if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
             const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
-            const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);
+            const teacherKeys = desk.teacherId
+              ? [desk.teacherId]
+              : [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)].concat(desk.regularTeacherIds || []).filter(Boolean);
             teacherKeys.forEach((teacherKey) => {
               if (!map.has(teacherKey)) map.set(teacherKey, []);
               map.get(teacherKey).push(entry);
@@ -4165,7 +4272,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
         return '<div class="sheet-top">'
           + '<div class="logo-box" data-shared-image="logo"><span class="logo-placeholder">ロゴ欄</span></div>'
-          + '<div class="school-box"><textarea class="school-input shared-input" data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等"></textarea></div>'
+          + '<div class="school-box"><input class="school-name-input schedule-header-input" data-schedule-header-key="schoolName" value="" placeholder="校舎名" /><input class="school-phone-input schedule-header-input" data-schedule-header-key="phoneNumber" value="" placeholder="TEL" /></div>'
           + '<div class="title-box"><input class="title-input shared-input" data-shared-input="sheet-title" value="" placeholder="授業日程表" /></div>'
           + '<div class="meta-box">' + qrBlock + '<div class="meta-info"><div class="meta-row"><span class="meta-label">期間:</span> ' + escapeHtml(periodLabel) + '</div><div class="meta-row person-meta-row"><span><span class="meta-label">' + escapeHtml(nameLabel) + ':</span> ' + escapeHtml(subLabel) + '</span></div><div class="meta-row"><span class="page-count print-only-hidden">' + (pageIndex + 1) + 'ページ目</span></div></div></div>'
           + '</div>';
@@ -4484,6 +4591,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (nextFingerprint === payloadFingerprint) {
           DATA = nextPayload;
           syncScheduleNoteInputs();
+          syncScheduleHeaderInputs();
+          syncLogo(getScheduleHeaderValue('logoDataUrl'));
           return;
         }
 
@@ -4593,6 +4702,44 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           });
           element.addEventListener('change', () => notifyScheduleNoteChange(noteKey, element.value));
           element.addEventListener('blur', () => notifyScheduleNoteChange(noteKey, element.value));
+        });
+      }
+
+      function bindScheduleHeaderInputs() {
+        document.querySelectorAll('.schedule-header-input[data-schedule-header-key]').forEach((element) => {
+          const headerKey = element.getAttribute('data-schedule-header-key');
+          if (!headerKey) return;
+          const savedFromPayload = getScheduleHeaderValue(headerKey);
+          const storage = getSharedStorage();
+          const storageKey = getScheduleHeaderStorageKey(headerKey);
+          try {
+            const savedFromStorage = storage ? storage.getItem(storageKey) : null;
+            if (savedFromPayload) {
+              element.value = savedFromPayload;
+              storage && storage.setItem(storageKey, savedFromPayload);
+            } else if (savedFromStorage !== null) {
+              element.value = savedFromStorage;
+              updateScheduleHeaderDraft(headerKey, savedFromStorage);
+            } else {
+              const legacyValue = getLegacyScheduleHeaderValue(headerKey);
+              if (legacyValue) {
+                element.value = legacyValue;
+                notifyScheduleHeaderChange(headerKey, legacyValue);
+                storage && storage.setItem(storageKey, legacyValue);
+              }
+            }
+          } catch {}
+          element.addEventListener('input', () => {
+            const nextValue = element.value;
+            updateScheduleHeaderDraft(headerKey, nextValue);
+            try { storage && storage.setItem(storageKey, nextValue); } catch {}
+            document.querySelectorAll('.schedule-header-input[data-schedule-header-key="' + headerKey + '"]').forEach((other) => {
+              if (other !== element) other.value = nextValue;
+            });
+            queueScheduleHeaderUpdate(headerKey, nextValue);
+          });
+          element.addEventListener('change', () => notifyScheduleHeaderChange(headerKey, element.value));
+          element.addEventListener('blur', () => notifyScheduleHeaderChange(headerKey, element.value));
         });
       }
 
@@ -4847,23 +4994,88 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function syncLogo(src) {
         document.querySelectorAll('[data-shared-image="logo"]').forEach((element) => {
-          element.innerHTML = src ? '<img class="logo-image" src="' + src + '" alt="logo" />' : '<span class="logo-placeholder">ロゴ欄</span>';
+          element.innerHTML = src ? '<img class="logo-image" src="' + escapeHtml(src) + '" alt="logo" />' : '<span class="logo-placeholder">ロゴ欄</span>';
         });
+      }
+
+      function readLogoFileDataUrl(file) {
+        return new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+          reader.onerror = () => resolve('');
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function normalizeLogoDataUrl(sourceDataUrl) {
+        return new Promise((resolve) => {
+          if (!sourceDataUrl) {
+            resolve('');
+            return;
+          }
+          const image = new Image();
+          image.onload = () => {
+            const naturalWidth = image.naturalWidth || image.width || 0;
+            const naturalHeight = image.naturalHeight || image.height || 0;
+            if (!naturalWidth || !naturalHeight) {
+              resolve(sourceDataUrl);
+              return;
+            }
+            const scale = Math.min(1, 600 / naturalWidth, 160 / naturalHeight);
+            const width = Math.max(1, Math.round(naturalWidth * scale));
+            const height = Math.max(1, Math.round(naturalHeight * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext('2d');
+            if (!context) {
+              resolve(sourceDataUrl);
+              return;
+            }
+            context.clearRect(0, 0, width, height);
+            context.drawImage(image, 0, 0, width, height);
+            try {
+              resolve(canvas.toDataURL('image/png'));
+            } catch {
+              resolve(sourceDataUrl);
+            }
+          };
+          image.onerror = () => resolve(sourceDataUrl);
+          image.src = sourceDataUrl;
+        });
+      }
+
+      function applyLogoDataUrl(src, shouldNotify) {
+        const value = String(src || '');
+        setScheduleHeaderValue('logoDataUrl', value);
+        syncLogo(value);
+        try {
+          const storage = getSharedStorage();
+          storage && storage.setItem(getScheduleHeaderStorageKey('logoDataUrl'), value);
+          storage && storage.setItem(sharedGlobalStoragePrefix + 'logo', value);
+        } catch {}
+        if (shouldNotify) postScheduleHeaderUpdate('logoDataUrl', value);
       }
 
       function bindLogoControls() {
         const logoInput = document.getElementById('schedule-logo-input');
-        const storageKey = sharedGlobalStoragePrefix + 'logo';
+        const storageKey = getScheduleHeaderStorageKey('logoDataUrl');
+        const legacyStorageKey = sharedGlobalStoragePrefix + 'logo';
         const readStoredLogo = () => {
           const storage = getSharedStorage();
           try {
-            return storage ? storage.getItem(storageKey) || '' : '';
+            return storage ? storage.getItem(storageKey) || storage.getItem(legacyStorageKey) || '' : '';
           } catch {
             return '';
           }
         };
         try {
-          syncLogo(readStoredLogo());
+          const savedFromPayload = getScheduleHeaderValue('logoDataUrl');
+          if (savedFromPayload) applyLogoDataUrl(savedFromPayload, false);
+          else {
+            const savedFromStorage = readStoredLogo();
+            applyLogoDataUrl(savedFromStorage, Boolean(savedFromStorage));
+          }
         } catch {
           syncLogo('');
         }
@@ -4877,18 +5089,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         logoInput.addEventListener('change', () => {
           const file = logoInput.files && logoInput.files[0];
           if (!file) return;
-          const reader = new FileReader();
-          reader.onload = () => {
-            const result = typeof reader.result === 'string' ? reader.result : '';
-            syncLogo(result);
-            try {
-              const storage = getSharedStorage();
-              storage && storage.setItem(storageKey, result);
-            } catch {}
-          };
-          reader.readAsDataURL(file);
+          readLogoFileDataUrl(file).then((result) => normalizeLogoDataUrl(result)).then((result) => {
+            applyLogoDataUrl(result, true);
+            logoInput.value = '';
+          });
         });
-        return readStoredLogo;
+        return () => getScheduleHeaderValue('logoDataUrl') || readStoredLogo();
       }
 
       function getDraftRange() {
@@ -4927,6 +5133,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           updateSheetScreenSize();
           bindNotes();
           bindSalaryInputs();
+          bindScheduleHeaderInputs();
           bindSharedInputs();
           if (window.__scheduleReadStoredLogo) syncLogo(window.__scheduleReadStoredLogo());
           return;
@@ -4956,6 +5163,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         syncPendingUnavailableUi(pagesElement);
         bindNotes();
         bindSalaryInputs();
+        bindScheduleHeaderInputs();
         bindSharedInputs();
         if (window.__scheduleReadStoredLogo) syncLogo(window.__scheduleReadStoredLogo());
         syncScheduleQrVisibility();

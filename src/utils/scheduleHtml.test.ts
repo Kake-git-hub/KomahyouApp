@@ -309,6 +309,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -353,6 +354,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -445,6 +447,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -525,6 +528,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -608,6 +612,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -692,6 +697,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -772,6 +778,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -894,6 +901,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       titleLabel: 'テスト',
       classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
       targetWindow: popup,
+      includeDebugLinkDiagnostics: true,
     })
 
     const html = write.mock.calls[0]?.[0] as string
@@ -1109,6 +1117,11 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
         closedWeekdays: [0],
         holidayDates: [],
         forceOpenDates: [],
+        scheduleHeader: {
+          schoolName: '緑が丘校',
+          phoneNumber: 'TEL 03-1234-5678',
+          logoDataUrl: 'data:image/png;base64,logo',
+        },
         scheduleNotes: {
           'student:student-common-grade-中2': '中2 共通連絡',
           'student:student-student-1': '山田 個別連絡',
@@ -1127,9 +1140,24 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('中2 共通連絡')
     expect(html).toContain('山田 個別連絡')
     expect(html).toContain("type: 'schedule-note-update'")
+    expect(html).toContain('緑が丘校')
+    expect(html).toContain('TEL 03-1234-5678')
+    expect(html).toContain('data:image/png;base64,logo')
+    expect(html).toContain('data-schedule-header-key="schoolName"')
+    expect(html).toContain('data-schedule-header-key="phoneNumber"')
+    expect(html).toContain("type: 'schedule-header-update'")
+    expect(html).toContain('queueScheduleHeaderUpdate(headerKey, nextValue)')
     expect(html).toContain('delete clone.scheduleNotes')
+    expect(html).toContain('delete clone.scheduleHeader')
     expect(html).toContain('syncScheduleNoteInputs()')
+    expect(html).toContain('syncScheduleHeaderInputs()')
     expect(html).not.toContain("renderBottomSection('student-common'")
+    const scriptOpenTag = '<script>\n'
+    const scriptStart = html.indexOf(scriptOpenTag)
+    const scriptEnd = html.lastIndexOf('</script>')
+    expect(scriptStart).toBeGreaterThan(-1)
+    expect(scriptEnd).toBeGreaterThan(scriptStart)
+    expect(() => new Function(html.slice(scriptStart + scriptOpenTag.length, scriptEnd))).not.toThrow()
 
     vi.unstubAllGlobals()
   })
@@ -2125,7 +2153,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const payload = JSON.parse(payloadMatch![1])
     expect(payload.cells[0]?.desks).toHaveLength(1)
     expect(payload.cells[0]?.desks?.[0]?.teacherId).toBe('teacher-ochiai')
-    expect(html).toContain('const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);')
+    expect(html).toContain('const teacherKeys = desk.teacherId')
     expect(html).toContain('function normalizeTeacherAssignmentName(value)')
     expect(html).toContain('function collectTeacherAssignmentEntries(assignmentMap, teacher)')
     expect(html).toContain('const entries = collectTeacherAssignmentEntries(assignmentMap, teacher);')
@@ -2218,6 +2246,87 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('does not map an explicitly assigned teacher desk to another regular lesson teacher', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [{
+        id: '2026-07-24_5',
+        dateKey: '2026-07-24',
+        dayLabel: '金',
+        dateLabel: '7/24',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:40-21:10',
+        isOpenDay: true,
+        desks: [{
+          id: '2026-07-24_5_desk_1',
+          teacher: '山本拓',
+          teacherAssignmentTeacherId: 'teacher-yamamoto',
+          lesson: {
+            id: 'lesson-yamamoto',
+            studentSlots: [{
+              id: 'student-entry',
+              name: '生徒A',
+              managedStudentId: 'student-a',
+              grade: '中2',
+              subject: '英',
+              lessonType: 'regular',
+              teacherType: 'normal',
+            }, null],
+          },
+        }],
+      }],
+      plannedCells: [],
+      teachers: [
+        createTeacher({ id: 'teacher-masubuchi', name: '増渕講師', displayName: '増渕' }),
+        createTeacher({ id: 'teacher-yamamoto', name: '山本 拓', displayName: '山本拓' }),
+      ],
+      students: [createStudent({ id: 'student-a', name: '生徒A', displayName: '生徒A' })],
+      regularLessons: [createRegularLesson({
+        id: 'regular-masubuchi-student-a',
+        schoolYear: 2026,
+        teacherId: 'teacher-masubuchi',
+        student1Id: 'student-a',
+        subject1: '英',
+        dayOfWeek: 5,
+        slotNumber: 5,
+        startDate: '2026-04-01',
+        endDate: '未定',
+      })],
+      defaultStartDate: '2026-07-24',
+      defaultEndDate: '2026-07-24',
+      defaultPersonId: 'teacher-masubuchi',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.cells[0]?.desks?.[0]).toMatchObject({ teacher: '山本拓', teacherId: 'teacher-yamamoto' })
+    expect(payload.cells[0]?.desks?.[0]?.regularTeacherIds).toBeUndefined()
+    expect(html).toContain('const teacherKeys = desk.teacherId')
+    expect(html).toContain('? [desk.teacherId]')
+
+    vi.unstubAllGlobals()
+  })
+
   it('maps regular student desks to teacher schedules by the regular lesson teacher id when desk teacher metadata is stale', () => {
     const write = vi.fn()
     const popup = {
@@ -2300,7 +2409,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       regularTeacherIds: ['teacher-ochiai'],
       lesson: { students: [{ name: '井上' }] },
     })
-    expect(html).toContain('const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);')
+    expect(html).toContain('const teacherKeys = desk.teacherId')
     vi.unstubAllGlobals()
   })
 

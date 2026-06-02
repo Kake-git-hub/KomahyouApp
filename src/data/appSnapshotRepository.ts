@@ -465,6 +465,15 @@ function writeToLocalStorage(snapshot: AppSnapshot) {
   window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(snapshot))
 }
 
+function removeFromLocalStorage(key: string) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.removeItem(key)
+  } catch {
+    // localStorage cleanup is best-effort.
+  }
+}
+
 export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
@@ -549,7 +558,7 @@ export async function loadAppSnapshot() {
 export async function saveAppSnapshot(snapshot: AppSnapshot) {
   const savedToIndexedDb = await writeToIndexedDb(snapshot).catch(() => false)
   if (!savedToIndexedDb) writeToLocalStorage(snapshot)
-  else writeToLocalStorage(snapshot)
+  else removeFromLocalStorage(LOCAL_STORAGE_KEY)
 }
 
 export async function loadWorkspaceSnapshot() {
@@ -564,7 +573,8 @@ export async function loadWorkspaceSnapshot() {
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
   const savedToIndexedDb = await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
-  const savedToLocalStorage = tryWriteWorkspaceToLocalStorageSync(snapshot)
+  const savedToLocalStorage = savedToIndexedDb ? false : tryWriteWorkspaceToLocalStorageSync(snapshot)
+  if (savedToIndexedDb) removeFromLocalStorage(LOCAL_STORAGE_WORKSPACE_KEY)
   return { savedToIndexedDb, savedToLocalStorage }
 }
 
@@ -632,7 +642,7 @@ export async function saveDailyAutoBackup(snapshot: AppSnapshot, retentionDays =
   const savedToIndexedDb = await writeAutoBackupRecordsToIndexedDb(nextRecords).catch(() => false)
 
   if (!savedToIndexedDb) writeAutoBackupRecordsToLocalStorage(nextRecords)
-  else writeAutoBackupRecordsToLocalStorage(nextRecords)
+  else removeFromLocalStorage(LOCAL_STORAGE_AUTO_BACKUPS_KEY)
 
   return {
     created: !existingRecords.some((record) => record.backupDateKey === backupDateKey),
@@ -654,7 +664,7 @@ export async function saveDailyWorkspaceAutoBackup(snapshot: WorkspaceSnapshot, 
   const savedToIndexedDb = await writeWorkspaceAutoBackupRecordsToIndexedDb(nextRecords).catch(() => false)
 
   if (!savedToIndexedDb) writeWorkspaceAutoBackupRecordsToLocalStorage(nextRecords)
-  else writeWorkspaceAutoBackupRecordsToLocalStorage(nextRecords)
+  else removeFromLocalStorage(LOCAL_STORAGE_WORKSPACE_AUTO_BACKUPS_KEY)
 
   return {
     created: !existingRecords.some((record) => record.backupDateKey === backupDateKey),
