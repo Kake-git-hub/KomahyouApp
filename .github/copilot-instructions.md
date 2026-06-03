@@ -59,7 +59,7 @@
 	- Template overwrite must only restore manual makeup adjustments that existed in the original `manualMakeupAdjustments` for the same stockKey+originDate. Automatic shortage origins (occupied slots, holidays) are recalculated by the managed cell rebuild and must not be converted to manual adjustments.
 	- Debug JSON for template overwrite must capture `suppressedRegularLessonOccurrences` in the after stock as a pre-computed variable, not via callback setter.
 	- New classrooms and reset states must start with empty `specialSessions`; the legacy sample session IDs `session_2026_summer`, `session_2026_spring`, `session_2026_exam`, and `session_2026_winter` should be removed from loaded classroom data.
-	- `classroomSettings.holidayDates` must be preserved when loading saved classroom snapshots; only basic-data import/reset paths clear imported holiday dates.
+	- `classroomSettings.holidayDates` must be cleared on load/import so all classrooms treat holidays as normal weekdays.
 	- Classroom-screen auto-backup restore now extracts only the acting classroom from the workspace-wide daily backup, keeping other classrooms unchanged.
 	- Firebase server auto-backup can run daily without an open browser only on Blaze with Functions and Cloud Storage; the current developer-screen backup list still reflects browser-local auto backups.
 	- For board operation changes that can alter previous user actions, present the behavior change and get approval before modifying the rule. Add both positive and negative regression tests across direct helpers and merge/render paths.

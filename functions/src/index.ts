@@ -4,6 +4,7 @@ import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
 import { getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
+import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 import { onDocumentWritten } from 'firebase-functions/v2/firestore'
 import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { setGlobalOptions } from 'firebase-functions/v2/options'
@@ -35,6 +36,14 @@ const HOUR_IN_MS = 60 * 60 * 1000
 const JST_OFFSET_IN_MS = 9 * HOUR_IN_MS
 const FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT = 700_000
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
+const GOOGLE_DRIVE_API_SCOPE = 'https://www.googleapis.com/auth/drive'
+const GOOGLE_DRIVE_API_BASE_URL = 'https://www.googleapis.com/drive/v3'
+const GOOGLE_DRIVE_UPLOAD_API_BASE_URL = 'https://www.googleapis.com/upload/drive/v3'
+const GOOGLE_DRIVE_BACKUP_FOLDER_ID = (process.env.GOOGLE_DRIVE_BACKUP_FOLDER_ID ?? '').trim()
+const GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64 = (process.env.GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64 ?? '').trim()
+const GOOGLE_DRIVE_OAUTH_CLIENT_ID = (process.env.GOOGLE_DRIVE_OAUTH_CLIENT_ID ?? '').trim()
+const GOOGLE_DRIVE_OAUTH_CLIENT_SECRET = (process.env.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET ?? '').trim()
+const GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN = (process.env.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN ?? '').trim()
 
 type ClassroomContractStatus = 'active' | 'suspended'
 
@@ -161,6 +170,24 @@ type WorkspaceSnapshot = {
 
 type WorkspaceAutoBackupKind = 'daily' | 'hourly'
 
+type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
+
+type GoogleDriveBackupDiagnostic = {
+  workspaceKey: string
+  backupDateKey: string
+  backupKind: WorkspaceAutoBackupKind
+  status: GoogleDriveBackupStatus
+  configured: boolean
+  folderIdMasked: string
+  authSource: 'application-default' | 'service-account-json' | 'oauth-refresh-token'
+  serviceAccountEmail: string
+  fileId?: string
+  fileName?: string
+  error?: string
+  errorStatusCode?: number
+  errorHint?: string
+}
+
 type WorkspaceAutoBackupSummaryDoc = {
   backupDateKey: string
   backupKind?: WorkspaceAutoBackupKind
@@ -169,6 +196,15 @@ type WorkspaceAutoBackupSummaryDoc = {
   sourceSavedAt: string
   storagePath: string
   createdAt: string
+  googleDriveBackupStatus?: GoogleDriveBackupStatus
+  googleDriveBackupFileId?: string
+  googleDriveBackupFileName?: string
+  googleDriveBackupError?: string
+  googleDriveBackupErrorHint?: string
+  googleDriveBackupErrorAt?: string
+  googleDriveBackupAuthSource?: string
+  googleDriveBackupServiceAccountEmail?: string
+  googleDriveBackupFolderIdMasked?: string
 }
 
 type ClassroomLatestRollbackStorageDoc = {
@@ -177,6 +213,20 @@ type ClassroomLatestRollbackStorageDoc = {
   capturedAt: string
   snapshot: FirebaseClassroomSnapshotDoc
 }
+
+type GoogleDriveFileMetadata = {
+  id?: string
+  name?: string
+  appProperties?: Record<string, string>
+}
+
+type GoogleDriveFileListResponse = {
+  files?: GoogleDriveFileMetadata[]
+  nextPageToken?: string
+}
+
+let cachedGoogleDriveAuth: GoogleAuth | null = null
+let cachedGoogleDriveOAuthClient: OAuth2Client | null = null
 
 function readString(value: unknown, fieldName: string) {
   if (typeof value !== 'string') {
@@ -339,6 +389,412 @@ function buildWorkspaceAutoBackupDisplayLabel(backupDateKey: string, backupKind:
     return `${datePart} ${hourPart}:10 毎時`
   }
   return `${backupDateKey} 日次`
+}
+
+function isGoogleDriveBackupConfigured() {
+  return GOOGLE_DRIVE_BACKUP_FOLDER_ID.length > 0
+}
+
+function isGoogleDriveOAuthConfigured() {
+  return GOOGLE_DRIVE_OAUTH_CLIENT_ID.length > 0 && GOOGLE_DRIVE_OAUTH_CLIENT_SECRET.length > 0 && GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN.length > 0
+}
+
+function maskDiagnosticValue(value: string) {
+  if (!value) return ''
+  if (value.length <= 10) return `${value.slice(0, 2)}***${value.slice(-2)}`
+  return `${value.slice(0, 6)}...${value.slice(-4)}`
+}
+
+function truncateDiagnosticText(value: string, maxLength = 1800) {
+  if (value.length <= maxLength) return value
+  return `${value.slice(0, maxLength)}...`
+}
+
+function getGoogleDriveCredentialDiagnostic() {
+  const oauthParts = [GOOGLE_DRIVE_OAUTH_CLIENT_ID, GOOGLE_DRIVE_OAUTH_CLIENT_SECRET, GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN]
+  if (oauthParts.some((value) => value.length > 0)) {
+    const missingFields = [
+      GOOGLE_DRIVE_OAUTH_CLIENT_ID ? '' : 'GOOGLE_DRIVE_OAUTH_CLIENT_ID',
+      GOOGLE_DRIVE_OAUTH_CLIENT_SECRET ? '' : 'GOOGLE_DRIVE_OAUTH_CLIENT_SECRET',
+      GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN ? '' : 'GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN',
+    ].filter(Boolean)
+    return {
+      authSource: 'oauth-refresh-token' as const,
+      serviceAccountEmail: '',
+      credentialError: missingFields.length > 0 ? `Google Drive OAuth 設定が不足しています: ${missingFields.join(', ')}` : '',
+    }
+  }
+
+  if (!GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64) {
+    return {
+      authSource: 'application-default' as const,
+      serviceAccountEmail: '',
+      credentialError: '',
+    }
+  }
+
+  try {
+    const decodedJson = Buffer.from(GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64, 'base64').toString('utf8')
+    const parsed = JSON.parse(decodedJson)
+    const serviceAccountEmail = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof parsed.client_email === 'string'
+      ? parsed.client_email
+      : ''
+    return {
+      authSource: 'service-account-json' as const,
+      serviceAccountEmail,
+      credentialError: '',
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      authSource: 'service-account-json' as const,
+      serviceAccountEmail: '',
+      credentialError: `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64 の読込に失敗しました: ${message}`,
+    }
+  }
+}
+
+async function readDefaultRuntimeServiceAccountEmail() {
+  if (!process.env.K_SERVICE) return ''
+
+  try {
+    const response = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email', {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(1000),
+    })
+    if (!response.ok) return ''
+    return (await response.text()).trim()
+  } catch {
+    return ''
+  }
+}
+
+function getGoogleDriveErrorStatusCode(error: unknown) {
+  if (!(error instanceof Error)) return undefined
+  const match = error.message.match(/failed \((\d{3})\)/)
+  if (!match) return undefined
+  const statusCode = Number(match[1])
+  return Number.isFinite(statusCode) ? statusCode : undefined
+}
+
+function buildGoogleDriveErrorHint(message: string) {
+  if (!message) return ''
+  if (message.includes('GOOGLE_DRIVE_BACKUP_FOLDER_ID')) {
+    return 'Functions の GOOGLE_DRIVE_BACKUP_FOLDER_ID が未設定です。functions/.env を設定して Functions を再デプロイしてください。'
+  }
+  if (message.includes('SERVICE_DISABLED') || message.includes('accessNotConfigured') || message.includes('drive.googleapis.com/overview')) {
+    return 'Google Cloud Console で Google Drive API が未有効です。drive.googleapis.com を有効化して数分後に再実行してください。'
+  }
+  if (message.includes('storageQuotaExceeded') || message.includes('Service Accounts do not have storage quota')) {
+    return '通常のマイドライブフォルダへサービスアカウントでは新規作成できません。共有ドライブを使うか、Google Drive OAuth refresh token を Functions に設定してください。'
+  }
+  if (message.includes('File not found') || message.includes('notFound') || message.includes('404')) {
+    return 'Drive フォルダ ID が違うか、実行サービスアカウントにフォルダ共有権限がありません。フォルダ ID と共有先メールを確認してください。'
+  }
+  if (message.includes('insufficient') || message.includes('PERMISSION_DENIED') || message.includes('403')) {
+    return 'Drive 側の共有権限が不足しています。実行サービスアカウントを対象フォルダに編集者として共有してください。'
+  }
+  return ''
+}
+
+async function buildGoogleDriveBackupDiagnostic(params: {
+  workspaceKey: string
+  backupDateKey: string
+  backupKind: WorkspaceAutoBackupKind
+  status: GoogleDriveBackupStatus
+  fileId?: string
+  fileName?: string
+  error?: unknown
+}): Promise<GoogleDriveBackupDiagnostic> {
+  const credentialDiagnostic = getGoogleDriveCredentialDiagnostic()
+  const serviceAccountEmail = credentialDiagnostic.serviceAccountEmail || await readDefaultRuntimeServiceAccountEmail()
+  const rawErrorMessage = params.error instanceof Error
+    ? params.error.message
+    : typeof params.error === 'undefined'
+      ? (params.status === 'disabled' && !isGoogleDriveBackupConfigured()
+          ? 'GOOGLE_DRIVE_BACKUP_FOLDER_ID が未設定のため、Google Drive 同期は実行されません。'
+          : credentialDiagnostic.credentialError)
+      : String(params.error)
+  const error = rawErrorMessage ? truncateDiagnosticText(rawErrorMessage) : undefined
+
+  return {
+    workspaceKey: params.workspaceKey,
+    backupDateKey: params.backupDateKey,
+    backupKind: params.backupKind,
+    status: params.status,
+    configured: isGoogleDriveBackupConfigured(),
+    folderIdMasked: maskDiagnosticValue(GOOGLE_DRIVE_BACKUP_FOLDER_ID),
+    authSource: credentialDiagnostic.authSource,
+    serviceAccountEmail,
+    fileId: params.fileId,
+    fileName: params.fileName,
+    error,
+    errorStatusCode: getGoogleDriveErrorStatusCode(params.error),
+    errorHint: error ? buildGoogleDriveErrorHint(error) : undefined,
+  }
+}
+
+function buildGoogleDriveBackupSummaryFields(diagnostic: GoogleDriveBackupDiagnostic, savedAt: string) {
+  return {
+    googleDriveBackupStatus: diagnostic.status,
+    googleDriveBackupFileId: diagnostic.fileId ?? '',
+    googleDriveBackupFileName: diagnostic.fileName ?? '',
+    googleDriveBackupError: diagnostic.error ?? '',
+    googleDriveBackupErrorHint: diagnostic.errorHint ?? '',
+    googleDriveBackupErrorAt: diagnostic.status === 'failed' ? savedAt : '',
+    googleDriveBackupAuthSource: diagnostic.authSource,
+    googleDriveBackupServiceAccountEmail: diagnostic.serviceAccountEmail,
+    googleDriveBackupFolderIdMasked: diagnostic.folderIdMasked,
+  }
+}
+
+function requireGoogleDriveBackupFolderId() {
+  if (!GOOGLE_DRIVE_BACKUP_FOLDER_ID) {
+    throw new Error('GOOGLE_DRIVE_BACKUP_FOLDER_ID が未設定です。')
+  }
+  return GOOGLE_DRIVE_BACKUP_FOLDER_ID
+}
+
+function readGoogleDriveServiceAccountCredentials() {
+  if (!GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64) return undefined
+
+  try {
+    const decodedJson = Buffer.from(GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64, 'base64').toString('utf8')
+    const parsed = JSON.parse(decodedJson)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('decoded JSON is not an object')
+    }
+    return parsed as Record<string, unknown>
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'JSON parse failed'
+    throw new Error(`GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64 の読込に失敗しました: ${message}`)
+  }
+}
+
+function getGoogleDriveAuth() {
+  if (cachedGoogleDriveAuth) return cachedGoogleDriveAuth
+
+  const credentials = readGoogleDriveServiceAccountCredentials()
+  cachedGoogleDriveAuth = credentials
+    ? new GoogleAuth({ credentials, scopes: [GOOGLE_DRIVE_API_SCOPE] })
+    : new GoogleAuth({ scopes: [GOOGLE_DRIVE_API_SCOPE] })
+  return cachedGoogleDriveAuth
+}
+
+function getGoogleDriveOAuthClient() {
+  if (cachedGoogleDriveOAuthClient) return cachedGoogleDriveOAuthClient
+  if (!isGoogleDriveOAuthConfigured()) {
+    throw new Error('Google Drive OAuth 設定が不足しています。GOOGLE_DRIVE_OAUTH_CLIENT_ID / GOOGLE_DRIVE_OAUTH_CLIENT_SECRET / GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN を設定してください。')
+  }
+
+  cachedGoogleDriveOAuthClient = new OAuth2Client(GOOGLE_DRIVE_OAUTH_CLIENT_ID, GOOGLE_DRIVE_OAUTH_CLIENT_SECRET)
+  cachedGoogleDriveOAuthClient.setCredentials({ refresh_token: GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN })
+  return cachedGoogleDriveOAuthClient
+}
+
+async function getGoogleDriveAccessToken() {
+  const client = isGoogleDriveOAuthConfigured()
+    ? getGoogleDriveOAuthClient()
+    : await getGoogleDriveAuth().getClient()
+  const tokenResponse = await client.getAccessToken()
+  const accessToken = typeof tokenResponse === 'string' ? tokenResponse : tokenResponse?.token
+  if (!accessToken) {
+    throw new Error('Google Drive API 用のアクセストークンを取得できませんでした。')
+  }
+  return accessToken
+}
+
+async function googleDriveApiFetch(params: {
+  path: string
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  query?: Record<string, string | undefined>
+  headers?: Record<string, string>
+  body?: string | Buffer
+  upload?: boolean
+}) {
+  const accessToken = await getGoogleDriveAccessToken()
+  const baseUrl = params.upload ? GOOGLE_DRIVE_UPLOAD_API_BASE_URL : GOOGLE_DRIVE_API_BASE_URL
+  const url = new URL(`${baseUrl}${params.path}`)
+
+  Object.entries(params.query ?? {}).forEach(([key, value]) => {
+    if (typeof value === 'string' && value.length > 0) {
+      url.searchParams.set(key, value)
+    }
+  })
+
+  const response = await fetch(url, {
+    method: params.method ?? 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+      ...params.headers,
+    },
+    body: params.body,
+  })
+
+  if (response.ok) return response
+
+  const errorText = await response.text().catch(() => '')
+  throw new Error(`Google Drive API ${params.method ?? 'GET'} ${params.path} failed (${response.status}): ${errorText}`)
+}
+
+function escapeGoogleDriveQueryLiteral(value: string) {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
+}
+
+function buildGoogleDriveBackupFileName(workspaceKey: string, backupDateKey: string, backupKind: WorkspaceAutoBackupKind) {
+  const safeWorkspaceKey = workspaceKey.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace'
+  return `komahyouapp_${safeWorkspaceKey}_${backupKind}_${backupDateKey}.json`
+}
+
+async function findGoogleDriveBackupFile(fileName: string) {
+  const folderId = requireGoogleDriveBackupFolderId()
+  const query = [
+    `'${escapeGoogleDriveQueryLiteral(folderId)}' in parents`,
+    `name = '${escapeGoogleDriveQueryLiteral(fileName)}'`,
+    'trashed = false',
+  ].join(' and ')
+  const response = await googleDriveApiFetch({
+    path: '/files',
+    query: {
+      q: query,
+      fields: 'files(id,name,appProperties)',
+      pageSize: '1',
+      includeItemsFromAllDrives: 'true',
+      supportsAllDrives: 'true',
+    },
+  })
+  const payload = await response.json() as GoogleDriveFileListResponse
+  return payload.files?.[0] ?? null
+}
+
+function buildGoogleDriveMultipartBody(metadata: Record<string, unknown>, content: string) {
+  const boundary = `komahyouapp-drive-${randomBytes(8).toString('hex')}`
+  const body = Buffer.from([
+    `--${boundary}\r\n`,
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+    `${JSON.stringify(metadata)}\r\n`,
+    `--${boundary}\r\n`,
+    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
+    `${content}\r\n`,
+    `--${boundary}--\r\n`,
+  ].join(''), 'utf8')
+  return { boundary, body }
+}
+
+async function upsertWorkspaceGoogleDriveBackup(params: {
+  workspaceKey: string
+  backupDateKey: string
+  backupKind: WorkspaceAutoBackupKind
+  snapshotJson: string
+  savedAt: string
+  sourceSavedAt: string
+}) {
+  if (!isGoogleDriveBackupConfigured()) return null
+
+  const folderId = requireGoogleDriveBackupFolderId()
+  const fileName = buildGoogleDriveBackupFileName(params.workspaceKey, params.backupDateKey, params.backupKind)
+  const existingFile = await findGoogleDriveBackupFile(fileName)
+  const metadata: Record<string, unknown> = {
+    name: fileName,
+    mimeType: 'application/json',
+    appProperties: {
+      workspaceKey: params.workspaceKey,
+      backupDateKey: params.backupDateKey,
+      backupKind: params.backupKind,
+      savedAt: params.savedAt,
+      sourceSavedAt: params.sourceSavedAt,
+      managedBy: 'komahyouapp-functions',
+    },
+  }
+  if (!existingFile?.id) {
+    metadata.parents = [folderId]
+  }
+
+  const { boundary, body } = buildGoogleDriveMultipartBody(metadata, params.snapshotJson)
+  const response = await googleDriveApiFetch({
+    path: existingFile?.id ? `/files/${existingFile.id}` : '/files',
+    method: existingFile?.id ? 'PATCH' : 'POST',
+    upload: true,
+    query: {
+      uploadType: 'multipart',
+      supportsAllDrives: 'true',
+    },
+    headers: {
+      'Content-Type': `multipart/related; boundary=${boundary}`,
+    },
+    body,
+  })
+  const payload = await response.json() as GoogleDriveFileMetadata
+
+  return {
+    fileId: payload.id ?? existingFile?.id ?? '',
+    fileName: payload.name ?? fileName,
+  }
+}
+
+async function listWorkspaceGoogleDriveBackupFiles(workspaceKey: string) {
+  if (!isGoogleDriveBackupConfigured()) return [] as GoogleDriveFileMetadata[]
+
+  const folderId = requireGoogleDriveBackupFolderId()
+  const files: GoogleDriveFileMetadata[] = []
+  let pageToken = ''
+  const query = [
+    `'${escapeGoogleDriveQueryLiteral(folderId)}' in parents`,
+    'trashed = false',
+    `appProperties has { key='workspaceKey' and value='${escapeGoogleDriveQueryLiteral(workspaceKey)}' }`,
+  ].join(' and ')
+
+  do {
+    const response = await googleDriveApiFetch({
+      path: '/files',
+      query: {
+        q: query,
+        fields: 'nextPageToken,files(id,name,appProperties)',
+        pageSize: '1000',
+        includeItemsFromAllDrives: 'true',
+        supportsAllDrives: 'true',
+        pageToken: pageToken || undefined,
+      },
+    })
+    const payload = await response.json() as GoogleDriveFileListResponse
+    files.push(...(payload.files ?? []))
+    pageToken = payload.nextPageToken ?? ''
+  } while (pageToken)
+
+  return files
+}
+
+function shouldKeepGoogleDriveBackupFile(file: GoogleDriveFileMetadata, dailyCutoffKey: string, hourlyCutoffTime: number) {
+  const appProperties = file.appProperties ?? {}
+  const backupKind: WorkspaceAutoBackupKind = appProperties.backupKind === 'hourly' ? 'hourly' : 'daily'
+  if (backupKind === 'daily') {
+    return (appProperties.backupDateKey ?? '') >= dailyCutoffKey
+  }
+  const savedAt = appProperties.savedAt ?? appProperties.sourceSavedAt ?? ''
+  return (Date.parse(savedAt) || 0) >= hourlyCutoffTime
+}
+
+async function pruneWorkspaceGoogleDriveBackups(workspaceKey: string, referenceDate: Date) {
+  if (!isGoogleDriveBackupConfigured()) return
+
+  const dailyCutoffKey = getWorkspaceDailyAutoBackupCutoffKey(referenceDate, WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS)
+  const hourlyCutoffTime = referenceDate.getTime() - WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS * HOUR_IN_MS
+  const files = await listWorkspaceGoogleDriveBackupFiles(workspaceKey)
+  const staleFiles = files.filter((file) => !shouldKeepGoogleDriveBackupFile(file, dailyCutoffKey, hourlyCutoffTime))
+
+  await Promise.all(staleFiles.map(async (file) => {
+    if (!file.id) return
+    await googleDriveApiFetch({
+      path: `/files/${file.id}`,
+      method: 'DELETE',
+      query: {
+        supportsAllDrives: 'true',
+      },
+    }).catch((error) => {
+      logger.warn(`[AutoBackup] Failed to delete stale Google Drive backup: workspace=${workspaceKey}, fileId=${file.id}, message=${error instanceof Error ? error.message : String(error)}`)
+    })
+  }))
 }
 
 function buildClassroomLatestRollbackStoragePath(workspaceKey: string, classroomId: string) {
@@ -1280,6 +1736,8 @@ export const downloadLatestClassroomRollback = onCall({ invoker: 'public', timeo
 export const createWorkspaceServerAutoBackups = onSchedule({
   schedule: WORKSPACE_DAILY_AUTO_BACKUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
+  timeoutSeconds: 300,
+  memory: '1GiB',
 }, async () => {
   await runWorkspaceServerAutoBackup('daily')
 })
@@ -1287,11 +1745,13 @@ export const createWorkspaceServerAutoBackups = onSchedule({
 export const createWorkspaceServerHourlyBackups = onSchedule({
   schedule: WORKSPACE_HOURLY_AUTO_BACKUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
+  timeoutSeconds: 300,
+  memory: '1GiB',
 }, async () => {
   await runWorkspaceServerAutoBackup('hourly')
 })
 
-export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
+export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '1GiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   await requireDeveloperMember(request.auth?.uid, workspaceKey)
@@ -1307,15 +1767,16 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   logger.info(`[AutoBackup] Found ${workspacesSnapshot.docs.length} workspace(s)`)
   const bucket = storage.bucket(STORAGE_BUCKET)
-  const results: Array<{ workspaceKey: string; backupDateKey: string; storagePath: string; backupKind: WorkspaceAutoBackupKind }> = []
+  const results: Array<{ workspaceKey: string; backupDateKey: string; storagePath: string; backupKind: WorkspaceAutoBackupKind; googleDriveBackup: GoogleDriveBackupDiagnostic }> = []
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const workspaceKey = workspaceDoc.id
     logger.info(`[AutoBackup] Processing workspace: ${workspaceKey} (${backupKind})`)
     const { snapshot, latestSourceSavedAt } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
     const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, backupKind)
+    const snapshotJson = JSON.stringify(snapshot, null, 2)
 
-    await bucket.file(storagePath).save(JSON.stringify(snapshot, null, 2), {
+    await bucket.file(storagePath).save(snapshotJson, {
       resumable: false,
       contentType: 'application/json; charset=utf-8',
       metadata: {
@@ -1324,8 +1785,10 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
     })
     logger.info(`[AutoBackup] Saved to Storage: ${storagePath}`)
 
+    const summaryRef = workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey)
+
     await Promise.all([
-      workspaceDoc.ref.collection('workspaceAutoBackupSummaries').doc(backupDateKey).set({
+      summaryRef.set({
         backupDateKey,
         backupKind,
         displayLabel: buildWorkspaceAutoBackupDisplayLabel(backupDateKey, backupKind),
@@ -1344,11 +1807,73 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
     logger.info(`[AutoBackup] Saved summary for workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`)
 
     await pruneWorkspaceServerAutoBackups(workspaceKey, now)
-    results.push({ workspaceKey, backupDateKey, storagePath, backupKind })
+    let googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+      workspaceKey,
+      backupDateKey,
+      backupKind,
+      status: 'disabled',
+    })
+    if (isGoogleDriveBackupConfigured()) {
+      try {
+        const googleDriveResult = await upsertWorkspaceGoogleDriveBackup({
+          workspaceKey,
+          backupDateKey,
+          backupKind,
+          snapshotJson,
+          savedAt,
+          sourceSavedAt: latestSourceSavedAt,
+        })
+        await pruneWorkspaceGoogleDriveBackups(workspaceKey, now)
+        googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+          workspaceKey,
+          backupDateKey,
+          backupKind,
+          status: 'synced',
+          fileId: googleDriveResult?.fileId ?? '',
+          fileName: googleDriveResult?.fileName ?? '',
+        })
+        await workspaceDoc.ref.set({
+          googleDriveBackupLastSyncedAt: savedAt,
+          googleDriveBackupLastBackupDateKey: backupDateKey,
+          googleDriveBackupLastBackupKind: backupKind,
+          googleDriveBackupLastFileId: googleDriveResult?.fileId ?? '',
+          googleDriveBackupLastFileName: googleDriveResult?.fileName ?? '',
+          googleDriveBackupLastError: '',
+        }, { merge: true })
+        await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true })
+        logger.info(`[AutoBackup] Synced Google Drive backup: workspace=${workspaceKey}, fileName=${googleDriveResult?.fileName ?? ''}`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        googleDriveBackup = await buildGoogleDriveBackupDiagnostic({
+          workspaceKey,
+          backupDateKey,
+          backupKind,
+          status: 'failed',
+          error,
+        })
+        logger.error(`[AutoBackup] Google Drive sync failed: workspace=${workspaceKey}, backupDateKey=${backupDateKey}, backupKind=${backupKind}`, error)
+        await Promise.all([
+          workspaceDoc.ref.set({
+            googleDriveBackupLastError: message,
+            googleDriveBackupLastErrorHint: googleDriveBackup.errorHint ?? '',
+            googleDriveBackupLastErrorAt: savedAt,
+            googleDriveBackupLastBackupDateKey: backupDateKey,
+            googleDriveBackupLastBackupKind: backupKind,
+            googleDriveBackupLastAuthSource: googleDriveBackup.authSource,
+            googleDriveBackupLastServiceAccountEmail: googleDriveBackup.serviceAccountEmail,
+            googleDriveBackupLastFolderIdMasked: googleDriveBackup.folderIdMasked,
+          }, { merge: true }),
+          summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }),
+        ]).catch(() => undefined)
+      }
+    } else {
+      await summaryRef.set(buildGoogleDriveBackupSummaryFields(googleDriveBackup, savedAt), { merge: true }).catch(() => undefined)
+    }
+    results.push({ workspaceKey, backupDateKey, storagePath, backupKind, googleDriveBackup })
   }
 
   logger.info(`[AutoBackup] Completed ${backupKind}: ${results.length} workspace(s) backed up`)
-  return { backupDateKey, backupKind, workspaceCount: results.length, results }
+  return { backupDateKey, backupKind, workspaceCount: results.length, results, googleDriveBackups: results.map((result) => result.googleDriveBackup) }
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,24 @@ import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFireb
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 
+export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
+
+export type GoogleDriveBackupDiagnostic = {
+  workspaceKey: string
+  backupDateKey: string
+  backupKind: 'daily' | 'hourly'
+  status: GoogleDriveBackupStatus
+  configured: boolean
+  folderIdMasked: string
+  authSource: 'application-default' | 'service-account-json' | 'oauth-refresh-token'
+  serviceAccountEmail: string
+  fileId?: string
+  fileName?: string
+  error?: string
+  errorStatusCode?: number
+  errorHint?: string
+}
+
 export type ServerAutoBackupSummary = {
   backupDateKey: string
   backupKind: 'daily' | 'hourly'
@@ -12,6 +30,21 @@ export type ServerAutoBackupSummary = {
   savedAt: string
   sourceSavedAt: string
   storagePath: string
+  googleDriveBackupStatus?: GoogleDriveBackupStatus
+  googleDriveBackupFileId?: string
+  googleDriveBackupFileName?: string
+  googleDriveBackupError?: string
+  googleDriveBackupErrorHint?: string
+  googleDriveBackupAuthSource?: string
+  googleDriveBackupServiceAccountEmail?: string
+  googleDriveBackupFolderIdMasked?: string
+}
+
+export type TriggerServerAutoBackupResult = {
+  backupDateKey: string
+  backupKind: 'daily' | 'hourly'
+  workspaceCount: number
+  googleDriveBackups: GoogleDriveBackupDiagnostic[]
 }
 
 type ProvisionWorkspaceClassroomRequest = {
@@ -72,6 +105,35 @@ type SaveClassroomSnapshotRequest = {
 type DeleteWorkspaceClassroomRequest = {
   workspaceKey: string
   classroomId: string
+}
+
+function normalizeGoogleDriveBackupStatus(value: unknown): GoogleDriveBackupStatus | undefined {
+  if (value === 'disabled' || value === 'synced' || value === 'failed') return value
+  return undefined
+}
+
+function normalizeGoogleDriveBackupDiagnostic(value: unknown): GoogleDriveBackupDiagnostic | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const data = value as Record<string, unknown>
+  const status = normalizeGoogleDriveBackupStatus(data.status) ?? 'disabled'
+  const backupKind = data.backupKind === 'daily' ? 'daily' : 'hourly'
+  const errorStatusCode = Number(data.errorStatusCode)
+
+  return {
+    workspaceKey: String(data.workspaceKey ?? ''),
+    backupDateKey: String(data.backupDateKey ?? ''),
+    backupKind,
+    status,
+    configured: Boolean(data.configured),
+    folderIdMasked: String(data.folderIdMasked ?? ''),
+    authSource: data.authSource === 'service-account-json' || data.authSource === 'oauth-refresh-token' ? data.authSource : 'application-default',
+    serviceAccountEmail: String(data.serviceAccountEmail ?? ''),
+    fileId: String(data.fileId ?? '') || undefined,
+    fileName: String(data.fileName ?? '') || undefined,
+    error: String(data.error ?? '') || undefined,
+    errorStatusCode: Number.isFinite(errorStatusCode) ? errorStatusCode : undefined,
+    errorHint: String(data.errorHint ?? '') || undefined,
+  }
 }
 
 function requireFunctions() {
@@ -347,6 +409,14 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
       savedAt: String(data.savedAt ?? ''),
       sourceSavedAt: String(data.sourceSavedAt ?? ''),
       storagePath: String(data.storagePath ?? ''),
+      googleDriveBackupStatus: normalizeGoogleDriveBackupStatus(data.googleDriveBackupStatus),
+      googleDriveBackupFileId: String(data.googleDriveBackupFileId ?? ''),
+      googleDriveBackupFileName: String(data.googleDriveBackupFileName ?? ''),
+      googleDriveBackupError: String(data.googleDriveBackupError ?? ''),
+      googleDriveBackupErrorHint: String(data.googleDriveBackupErrorHint ?? ''),
+      googleDriveBackupAuthSource: String(data.googleDriveBackupAuthSource ?? ''),
+      googleDriveBackupServiceAccountEmail: String(data.googleDriveBackupServiceAccountEmail ?? ''),
+      googleDriveBackupFolderIdMasked: String(data.googleDriveBackupFolderIdMasked ?? ''),
     }
   })
 }
@@ -367,13 +437,25 @@ export async function downloadFirebaseServerAutoBackup(backupDateKey: string): P
   return result.data.snapshotJson
 }
 
-export async function triggerFirebaseServerAutoBackup(): Promise<{ backupDateKey: string; workspaceCount: number }> {
+export async function triggerFirebaseServerAutoBackup(): Promise<TriggerServerAutoBackupResult> {
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string }, { backupDateKey: string; workspaceCount: number }>(functions, 'triggerWorkspaceServerAutoBackup', { timeout: 120_000 })
+  const callable = httpsCallable<{ workspaceKey: string }, {
+    backupDateKey: string
+    backupKind?: 'daily' | 'hourly'
+    workspaceCount: number
+    googleDriveBackups?: unknown[]
+  }>(functions, 'triggerWorkspaceServerAutoBackup', { timeout: 120_000 })
   const result = await callable({ workspaceKey: config.workspaceKey })
-  return result.data
+  return {
+    backupDateKey: String(result.data.backupDateKey ?? ''),
+    backupKind: result.data.backupKind === 'daily' ? 'daily' : 'hourly',
+    workspaceCount: Number(result.data.workspaceCount ?? 0),
+    googleDriveBackups: (result.data.googleDriveBackups ?? [])
+      .map(normalizeGoogleDriveBackupDiagnostic)
+      .filter((entry): entry is GoogleDriveBackupDiagnostic => entry !== null),
+  }
 }
 
 export type ClassroomFromServerAutoBackup = {

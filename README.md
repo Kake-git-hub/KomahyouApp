@@ -83,6 +83,8 @@
 - Firebase Hosting で `dist` を配信し、Firestore に教室メタ情報と snapshot を保存します
 - Firebase Hosting の `/` と `/index.html` は `no-store` で配信し、deploy 後のリロードで旧版 HTML が残らないようにします
 - Blaze へ移行して Functions と Cloud Storage を有効化すると、`workspace-auto-backups/{workspaceKey}/{backupDateKey}.json` に日次サーバーバックアップを保存できます
+- `functions/.env` に `GOOGLE_DRIVE_BACKUP_FOLDER_ID` を設定し、Drive API を有効化すると、scheduled Functions がサーバーバックアップ JSON を Google Drive にも自動同期します
+- Google Drive サーバー同期は Web アプリ未起動でも動作します。バックアップ先フォルダは Cloud Functions の実行サービスアカウントへ共有してください。必要なら `GOOGLE_DRIVE_SERVICE_ACCOUNT_JSON_BASE64` で明示サービスアカウントも指定できます
 - Spark 前提では管理者アカウント削除 / 管理者メール変更はアプリ内で行わず、Firebase Console で手動更新してください
 - 最初の教室を作るときは `npm run firebase:first-classroom` を実行すると、Firebase Console に貼る JSON 一式を対話形式で生成できます
 - Spark 構成では開発者画面の `教室を追加` を押すと、Authentication で作成済みの管理者 UID を貼り付けて教室を追加できます
@@ -91,6 +93,7 @@
 - `VITE_FIREBASE_ENABLE_FUNCTIONS=true` は Blaze へ移行する場合のみ使ってください
 - Gmail API で請求書PDF付き下書きを作成する場合は、Google Cloud で OAuth クライアントを作成し、`.env` に `VITE_GOOGLE_OAUTH_CLIENT_ID` を設定してください。スコープは `https://www.googleapis.com/auth/gmail.compose` を使用します
 - サーバー側の自動バックアップを使う場合は Cloud Storage も有効化し、`npm run deploy:firebase:with-functions` で Functions を含めてデプロイしてください
+- Google Drive サーバー同期も使う場合は、Drive API を有効化したうえで `functions/.env` に必要な値を設定し、同じく `npm run deploy:firebase:with-functions` で反映してください
 - `/KomahyouApp/...` 転送経路は互換性のため残していますが、現運用では本番 Hosting のルート URL を使います
 - 詳細な構成は [docs/firebase-backend.md](docs/firebase-backend.md) を参照してください
 - Firebase CLI 側は [firebase.json](firebase.json) を使い、プロジェクト紐付けは各環境で `firebase use --add` を実行してください

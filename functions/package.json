@@ -7,11 +7,13 @@
   },
   "scripts": {
     "build": "tsc",
-    "clean": "node -e \"require('fs').rmSync('lib', { recursive: true, force: true })\""
+    "clean": "node -e \"require('fs').rmSync('lib', { recursive: true, force: true })\"",
+    "drive:oauth-token": "node tools/google-drive-oauth-token.mjs"
   },
   "dependencies": {
     "firebase-admin": "^13.6.0",
-    "firebase-functions": "^7.2.5"
+    "firebase-functions": "^7.2.5",
+    "google-auth-library": "^10.6.2"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

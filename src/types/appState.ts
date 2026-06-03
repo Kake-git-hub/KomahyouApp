@@ -11,12 +11,19 @@ export type ClassroomScreen = 'board' | 'basic-data' | 'special-data' | 'auto-as
 
 export type AppScreen = ClassroomScreen | 'developer'
 
+export type ScheduleHeaderSettings = {
+  schoolName?: string
+  phoneNumber?: string
+  logoDataUrl?: string
+}
+
 export type ClassroomSettings = {
   closedWeekdays: number[]
   holidayDates: string[]
   forceOpenDates: string[]
   deskCount: number
   scheduleNotes?: Record<string, string>
+  scheduleHeader?: ScheduleHeaderSettings
   boardShareToken?: string
   regularLessonTemplate?: RegularLessonTemplate | null
   regularLessonTemplateHistory?: RegularLessonTemplate[]

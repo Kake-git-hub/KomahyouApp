@@ -13,6 +13,12 @@ dist
 functions/lib
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+functions/.env
+functions/.env.*
+!functions/.env.example
 .firebase
 firebase-debug.log*
 playwright-report
