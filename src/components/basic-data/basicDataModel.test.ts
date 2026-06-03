@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isTeacherVisibleInManagement, resolveCurrentStudentGradeLabel, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from './basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isTeacherVisibleInManagement, resolveCurrentStudentGradeLabel, resolveManagementRosterStatusLabel, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from './basicDataModel'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -70,6 +70,9 @@ describe('basicDataModel student labels and sorting', () => {
     expect(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21')).toBe('入塾前')
     expect(isTeacherVisibleInManagement(upcomingTeacher, '2026-04-21')).toBe(false)
     expect(isTeacherVisibleInManagement(hiddenTeacher, '2026-04-21')).toBe(false)
+    expect(resolveManagementRosterStatusLabel(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21'))).toBe('非在籍')
+    expect(resolveManagementRosterStatusLabel('退塾')).toBe('非在籍')
+    expect(resolveManagementRosterStatusLabel('非表示')).toBe('非表示')
   })
 
   it('treats future-entry students as 入塾前 while keeping active students with empty or 未定 withdrawDate enrolled', () => {

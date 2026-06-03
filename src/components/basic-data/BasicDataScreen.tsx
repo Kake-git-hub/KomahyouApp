@@ -8,6 +8,7 @@ import {
   type ManagerRow,
   normalizeTeacherAvailableSlots,
   parseTeacherAvailableSlots,
+  resolveManagementRosterStatusLabel,
   resolveCurrentStudentGradeLabel,
   serializeTeacherAvailableSlots,
   type StudentRow,
@@ -994,14 +995,14 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   const activeStudentRows = useMemo(
     () => students.filter((student) => {
       const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, todayReferenceDate)
-      return status !== '退塾' && status !== '非表示'
+      return status === '在籍'
     }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const withdrawnStudentRows = useMemo(
     () => students.filter((student) => {
       const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, todayReferenceDate)
-      return status === '退塾' || status === '非表示'
+      return status !== '在籍'
     }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
@@ -1012,7 +1013,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   const withdrawnTeacherRows = useMemo(
     () => teachers.filter((teacher) => {
       const status = resolveTeacherRosterStatus(teacher, todayReferenceDate)
-      return status === '退塾' || status === '非表示'
+      return status !== '在籍'
     }),
     [teachers, todayReferenceDate],
   )
@@ -1343,7 +1344,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
               filterValue={tableControls.teachers.filterText}
               sortKey={tableControls.teachers.sortKey}
               direction={tableControls.teachers.direction}
-              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目で絞り込み' : '退塾講師を名前・表示名・メールで絞り込み'}
+              filterPlaceholder={teacherRosterView === 'active' ? '講師名・表示名・メール・科目で絞り込み' : '非在籍講師を名前・表示名・メールで絞り込み'}
               sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'status', label: '状態' }, { value: 'subjects', label: '科目' }]}
               onFilterChange={(value) => updateTableControl('teachers', { filterText: value })}
               onSortKeyChange={(value) => updateTableControl('teachers', { sortKey: value })}
@@ -1351,7 +1352,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
             />
             <div className="basic-data-table-visibility-toggle" data-testid="basic-data-teacher-roster-toggle">
               <button type="button" className={`basic-data-chip${teacherRosterView === 'active' ? ' active' : ''}`} onClick={() => setTeacherRosterView('active')} data-testid="basic-data-teacher-roster-active">在籍講師</button>
-              <button type="button" className={`basic-data-chip${teacherRosterView === 'withdrawn' ? ' active' : ''}`} onClick={() => setTeacherRosterView('withdrawn')} data-testid="basic-data-teacher-roster-withdrawn">退塾講師表示</button>
+              <button type="button" className={`basic-data-chip${teacherRosterView === 'withdrawn' ? ' active' : ''}`} onClick={() => setTeacherRosterView('withdrawn')} data-testid="basic-data-teacher-roster-withdrawn">非在籍講師表示</button>
             </div>
           </div>
           <table className="basic-data-table" data-testid="basic-data-teachers-table">
@@ -1387,7 +1388,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
                       ? <DateAssistInput value={row.withdrawDate} emptyLabel="退塾日を選択" hint="未定の場合未入力" onChange={(value) => updateTeacher(row.id, { withdrawDate: value })} />
                       : <span className="basic-data-cell-summary">{formatManagedDateValue(row.withdrawDate)}</span>}
                   </td>
-                  <td><span className="status-chip secondary" data-testid={`basic-data-teacher-status-${row.id}`}>{resolveTeacherStatusLabel(row)}</span></td>
+                  <td><span className="status-chip secondary" data-testid={`basic-data-teacher-status-${row.id}`}>{teacherRosterView === 'active' ? resolveTeacherStatusLabel(row) : resolveManagementRosterStatusLabel(resolveTeacherRosterStatus(row, todayReferenceDate))}</span></td>
                   <td>
                     {isRowEditing('teacher', row.id)
                       ? (
@@ -1416,7 +1417,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
                 </tr>
                 )
               })}
-              {orderedTeachers.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '退塾講師はまだありません。'}</td></tr> : null}
+              {orderedTeachers.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{teacherRosterView === 'active' ? '在籍講師はまだありません。' : '非在籍講師はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
@@ -1480,7 +1481,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
               filterValue={tableControls.students.filterText}
               sortKey={tableControls.students.sortKey}
               direction={tableControls.students.direction}
-              filterPlaceholder={studentRosterView === 'active' ? '生徒名・表示名・学年で絞り込み' : '退塾生徒を氏名・表示名で絞り込み'}
+              filterPlaceholder={studentRosterView === 'active' ? '生徒名・表示名・学年で絞り込み' : '非在籍生徒を氏名・表示名で絞り込み'}
               sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'birthDate', label: '生年月日' }, { value: 'status', label: '学年/状態' }]}
               onFilterChange={(value) => updateTableControl('students', { filterText: value })}
               onSortKeyChange={(value) => updateTableControl('students', { sortKey: value })}
@@ -1488,7 +1489,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
             />
             <div className="basic-data-table-visibility-toggle" data-testid="basic-data-student-roster-toggle">
               <button type="button" className={`basic-data-chip${studentRosterView === 'active' ? ' active' : ''}`} onClick={() => setStudentRosterView('active')} data-testid="basic-data-student-roster-active">在籍生徒</button>
-              <button type="button" className={`basic-data-chip${studentRosterView === 'withdrawn' ? ' active' : ''}`} onClick={() => setStudentRosterView('withdrawn')} data-testid="basic-data-student-roster-withdrawn">退塾生徒表示</button>
+              <button type="button" className={`basic-data-chip${studentRosterView === 'withdrawn' ? ' active' : ''}`} onClick={() => setStudentRosterView('withdrawn')} data-testid="basic-data-student-roster-withdrawn">非在籍生徒表示</button>
             </div>
           </div>
           <table className="basic-data-table" data-testid={studentRosterView === 'active' ? 'basic-data-students-table' : 'basic-data-withdrawn-students-table'}>
@@ -1526,7 +1527,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
                       ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudent(row.id, { birthDate: value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.birthDate)}</span>}
                   </td>
-                  <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{studentRosterView === 'active' ? resolveStudentStatusLabel(row) : resolveScheduledStatus(row.entryDate, row.withdrawDate, row.isHidden, todayReferenceDate)}</span></td>
+                  <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{studentRosterView === 'active' ? resolveStudentStatusLabel(row) : resolveManagementRosterStatusLabel(resolveScheduledStatus(row.entryDate, row.withdrawDate, row.isHidden, todayReferenceDate))}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
                       <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
@@ -1535,7 +1536,7 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
                   </td>
                 </tr>
               ))}
-              {orderedStudents.length === 0 ? <tr><td colSpan={8} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '退塾生徒はまだありません。'}</td></tr> : null}
+              {orderedStudents.length === 0 ? <tr><td colSpan={8} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '非在籍生徒はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>

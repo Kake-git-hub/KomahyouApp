@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
+import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
 describe('sanitizeClassroomSettings', () => {
   it('preserves saved holiday dates when a classroom snapshot is loaded again', () => {
@@ -79,6 +80,80 @@ describe('shouldSyncCurrentClassroomBeforeOpen', () => {
   it('keeps sync enabled for classroom sessions', () => {
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'developer')).toBe(true)
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'manager')).toBe(true)
+  })
+})
+
+describe('buildSubmissionAcknowledgementEntries', () => {
+  it('builds modal entries with resolved person and session labels', () => {
+    const entries: SubmissionChangeEntry[] = [{
+      token: 'student-token',
+      sessionId: 'session-1',
+      personType: 'student',
+      personId: 'student-1',
+      unavailableSlots: [],
+      subjectSlots: { 数: 2 },
+      regularOnly: false,
+    }, {
+      token: 'teacher-token',
+      sessionId: 'session-1',
+      personType: 'teacher',
+      personId: 'teacher-1',
+      unavailableSlots: [],
+      subjectSlots: {},
+      regularOnly: false,
+    }]
+
+    const result = buildSubmissionAcknowledgementEntries(entries, {
+      classroomName: '開発用教室',
+      specialSessions: [{
+        id: 'session-1',
+        label: '夏期講習',
+        startDate: '2026-07-20',
+        endDate: '2026-08-31',
+        createdAt: '2026-06-01T00:00:00.000Z',
+        studentInputs: {},
+        teacherInputs: {},
+        updatedAt: '2026-06-03T00:00:00.000Z',
+      }],
+      students: [{
+        id: 'student-1',
+        name: '山田 花子',
+        displayName: '山田',
+        email: '',
+        entryDate: '2026-04-01',
+        withdrawDate: '未定',
+        birthDate: '2012-05-01',
+        isHidden: false,
+      }],
+      teachers: [{
+        id: 'teacher-1',
+        name: '田中 一郎',
+        displayName: '田中',
+        email: '',
+        entryDate: '2026-04-01',
+        withdrawDate: '未定',
+        isHidden: false,
+        subjectCapabilities: [],
+        memo: '',
+      }],
+    })
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'student-token:session-1:student:student-1',
+        classroomName: '開発用教室',
+        sessionLabel: '夏期講習',
+        personType: 'student',
+        personName: '山田',
+      }),
+      expect.objectContaining({
+        id: 'teacher-token:session-1:teacher:teacher-1',
+        classroomName: '開発用教室',
+        sessionLabel: '夏期講習',
+        personType: 'teacher',
+        personName: '田中',
+      }),
+    ])
   })
 })
 

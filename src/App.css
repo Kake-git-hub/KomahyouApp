@@ -197,6 +197,59 @@
   justify-content: center;
 }
 
+.submission-acknowledgement-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(18, 36, 58, 0.62);
+}
+
+.submission-acknowledgement-modal {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid #d7e2f1;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 24px 54px rgba(31, 53, 82, 0.24);
+}
+
+.submission-acknowledgement-kicker {
+  color: #1f5d96;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.submission-acknowledgement-modal h2 {
+  margin: 0;
+  color: #16314f;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
+.submission-acknowledgement-message {
+  margin: 0;
+  color: #244564;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.submission-acknowledgement-meta {
+  color: #58708d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.submission-acknowledgement-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .board-share-shell {
   position: fixed;
   inset: 0;

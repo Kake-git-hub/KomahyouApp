@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
 import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
 import { BoardShareScreen } from './components/board-share/BoardShareScreen'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
@@ -9,7 +9,7 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { initialSpecialSessions, removedDefaultSpecialSessionIds } from './components/special-data/specialSessionModel'
+import { initialSpecialSessions, removedDefaultSpecialSessionIds, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
 import { BillingAutomationScreen } from './components/billing/BillingAutomationScreen'
@@ -19,7 +19,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, updateSubmissionOccupiedSlots, subscribeLectureSubmissions } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -70,6 +70,42 @@ export type StudentScheduleRequest = {
   sessionId: string
   studentId: string
   mode: 'unassign'
+}
+
+export type SubmissionAcknowledgementEntry = {
+  id: string
+  sessionId: string
+  sessionLabel: string
+  personType: 'student' | 'teacher'
+  personId: string
+  personName: string
+  classroomName: string
+}
+
+export function buildSubmissionAcknowledgementEntries(
+  entries: SubmissionChangeEntry[],
+  params: {
+    specialSessions: SpecialSessionRow[]
+    students: StudentRow[]
+    teachers: TeacherRow[]
+    classroomName?: string | null
+  },
+): SubmissionAcknowledgementEntry[] {
+  const sessionLabelById = new Map(params.specialSessions.map((session) => [session.id, session.label]))
+  const studentNameById = new Map(params.students.map((student) => [student.id, getStudentDisplayName(student)]))
+  const teacherNameById = new Map(params.teachers.map((teacher) => [teacher.id, getTeacherDisplayName(teacher)]))
+
+  return entries.map((entry) => ({
+    id: `${entry.token}:${entry.sessionId}:${entry.personType}:${entry.personId}`,
+    sessionId: entry.sessionId,
+    sessionLabel: sessionLabelById.get(entry.sessionId) ?? entry.sessionId,
+    personType: entry.personType,
+    personId: entry.personId,
+    personName: entry.personType === 'student'
+      ? (studentNameById.get(entry.personId) ?? entry.personId)
+      : (teacherNameById.get(entry.personId) ?? entry.personId),
+    classroomName: params.classroomName?.trim() || '教室',
+  }))
 }
 
 type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
@@ -1068,6 +1104,7 @@ function AuthenticatedApp() {
   const [isRemoteLoginSubmitting, setIsRemoteLoginSubmitting] = useState(false)
   const [hasHydratedSnapshot, setHasHydratedSnapshot] = useState(false)
   const [undoSnapshot, setUndoSnapshot] = useState<{ label: string; data: AppSnapshotPayload } | null>(null)
+  const [submissionAcknowledgements, setSubmissionAcknowledgements] = useState<SubmissionAcknowledgementEntry[]>([])
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
@@ -1090,11 +1127,56 @@ function AuthenticatedApp() {
   const isCurrentClassroomTemporarilySuspended = Boolean(actingClassroom?.isTemporarilySuspended)
   const isCurrentClassroomCancelled = actingClassroom?.contractStatus === 'suspended'
   const isCurrentClassroomSuspended = isCurrentClassroomCancelled || isCurrentClassroomTemporarilySuspended
+  const activeSubmissionAcknowledgement = submissionAcknowledgements[0] ?? null
   const areAllContractedClassroomsTemporarilySuspended = useMemo(() => {
     const contractedClassrooms = workspaceClassrooms.filter((classroom) => classroom.contractStatus === 'active')
     if (contractedClassrooms.length === 0) return false
     return contractedClassrooms.every((classroom) => classroom.isTemporarilySuspended)
   }, [workspaceClassrooms])
+  const acknowledgeSubmissionModal = useCallback(() => {
+    setSubmissionAcknowledgements((current) => current.slice(1))
+  }, [])
+  const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode) => {
+    if (!activeSubmissionAcknowledgement) return <>{content}</>
+
+    return (
+      <>
+        {content}
+        <div className="submission-acknowledgement-overlay" role="presentation">
+          <div
+            className="submission-acknowledgement-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="QR提出通知"
+            data-testid="submission-acknowledgement-modal"
+          >
+            <div className="submission-acknowledgement-kicker">QR提出通知</div>
+            <h2>{activeSubmissionAcknowledgement.classroomName}</h2>
+            <p className="submission-acknowledgement-message">
+              {activeSubmissionAcknowledgement.personType === 'student' ? '生徒' : '講師'}
+              {' '}
+              <strong>{activeSubmissionAcknowledgement.personName}</strong>
+              {' '}
+              が
+              {' '}
+              <strong>{activeSubmissionAcknowledgement.sessionLabel}</strong>
+              の QR 提出を完了しました。
+            </p>
+            {submissionAcknowledgements.length > 1 ? (
+              <div className="submission-acknowledgement-meta">
+                残り {submissionAcknowledgements.length - 1} 件の提出通知があります。
+              </div>
+            ) : null}
+            <div className="submission-acknowledgement-actions">
+              <button type="button" className="primary-button" onClick={acknowledgeSubmissionModal} data-testid="submission-acknowledgement-confirm">
+                確認
+              </button>
+            </div>
+          </div>
+        </div>
+      </>
+    )
+  }, [acknowledgeSubmissionModal, activeSubmissionAcknowledgement, submissionAcknowledgements.length])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
@@ -3108,11 +3190,11 @@ function AuthenticatedApp() {
           })
         }
 
-        // QR submissions are single-submit. Manual unsubmit does not reopen the public link.
-        const targetSession = specialSessions.find((s) => s.id === message.sessionId)
+        const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const studentToken = targetSession?.studentInputs[message.personId]?.submissionToken
-        if (studentToken && countSubmitted) {
-          markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
+        if (studentToken) {
+          if (countSubmitted) markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
+          else unlockLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -3178,11 +3260,11 @@ function AuthenticatedApp() {
           mode: countSubmitted ? 'assign' : 'unassign',
         })
 
-        // QR submissions are single-submit. Manual unsubmit does not reopen the public link.
-        const targetTeacherSession = specialSessions.find((s) => s.id === message.sessionId)
+        const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
-        if (teacherToken && countSubmitted) {
-          markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
+        if (teacherToken) {
+          if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
+          else unlockLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -3407,10 +3489,24 @@ function AuthenticatedApp() {
           })
         }
       }
+
+      const nextAcknowledgements = buildSubmissionAcknowledgementEntries(newlyAppliedEntries, {
+        specialSessions: specialSessionsRef.current,
+        students: studentsRef.current,
+        teachers: teachersRef.current,
+        classroomName: actingClassroom?.name,
+      })
+      if (nextAcknowledgements.length > 0) {
+        setSubmissionAcknowledgements((current) => {
+          const existingIds = new Set(current.map((entry) => entry.id))
+          const freshEntries = nextAcknowledgements.filter((entry) => !existingIds.has(entry.id))
+          return freshEntries.length > 0 ? [...current, ...freshEntries] : current
+        })
+      }
     })
 
     return unsubscribe
-  }, [isRemoteBackendEnabled, actingClassroomId])
+  }, [actingClassroom?.name, actingClassroomId, isRemoteBackendEnabled, specialSessionsRef, studentsRef, teachersRef])
 
   useEffect(() => {
     if (!isRemoteBackendEnabled) return
@@ -4298,7 +4394,7 @@ function AuthenticatedApp() {
   }
 
   if (isDuplicateTab) {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <div className="workspace-auth-shell">
         <div className="workspace-auth-card" data-testid="duplicate-tab-block">
           <h2>このタブは利用できません</h2>
@@ -4313,7 +4409,7 @@ function AuthenticatedApp() {
 
   if (!currentUser) {
     if (isRemoteBackendEnabled) {
-      return (
+      return renderWithSubmissionAcknowledgement(
         <div className="workspace-auth-shell">
           <div className="workspace-auth-card" data-testid="firebase-login-card">
             <h1>コマ表アプリログイン</h1>
@@ -4342,7 +4438,7 @@ function AuthenticatedApp() {
       )
     }
 
-    return (
+    return renderWithSubmissionAcknowledgement(
       <div className="workspace-auth-shell">
         <div className="workspace-auth-card">
           <p className="panel-kicker">Local Session</p>
@@ -4369,7 +4465,7 @@ function AuthenticatedApp() {
   }
 
   if (isBillingRoute) {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <BillingAutomationScreen
         currentUser={currentUser}
         authMode={isRemoteBackendEnabled ? 'firebase' : 'local'}
@@ -4402,7 +4498,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'developer' && currentUser.role === 'developer') {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <DeveloperAdminScreen
         currentUser={currentUser}
         authMode={isRemoteBackendEnabled ? 'firebase' : 'local'}
@@ -4474,7 +4570,7 @@ function AuthenticatedApp() {
   }
 
   if (currentUser.role === 'manager' && isCurrentClassroomSuspended) {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <div className="workspace-auth-shell">
         <div className="workspace-auth-card workspace-auth-card--warning">
           <p className="panel-kicker">Suspended</p>
@@ -4491,7 +4587,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'basic-data') {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <BasicDataScreen
         classroomSettings={classroomSettings}
         managers={managers}
@@ -4511,7 +4607,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'special-data') {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <SpecialSessionScreen
         sessions={specialSessions}
         students={students}
@@ -4527,7 +4623,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'auto-assign-rules') {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <AutoAssignRuleScreen
         rules={autoAssignRules}
         teachers={teachers}
@@ -4545,7 +4641,7 @@ function AuthenticatedApp() {
   }
 
   if (screen === 'backup-restore') {
-    return (
+    return renderWithSubmissionAcknowledgement(
       <BackupRestoreScreen
         onBackToBoard={() => navigateClassroomScreen('board')}
         onOpenBasicData={() => navigateClassroomScreen('basic-data')}
@@ -4593,7 +4689,7 @@ function AuthenticatedApp() {
 
   const shouldShowRemoteSyncStatus = isRemoteSyncPending && (isRemoteSyncVisible || isDirty)
 
-  return (
+  return renderWithSubmissionAcknowledgement(
     <ScheduleBoardScreen
       key={boardMountKey}
       classroomSettings={classroomSettings}

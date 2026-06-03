@@ -265,6 +265,12 @@ export function isStudentVisibleInManagement(student: StudentRow, referenceDate:
   return resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate) === '在籍'
 }
 
+export function resolveManagementRosterStatusLabel(status: string) {
+  if (status === '在籍') return '在籍'
+  if (status === '非表示') return '非表示'
+  return '非在籍'
+}
+
 export function resolveScheduledStatus(_entryDate: string, withdrawDate: string, isHidden: boolean, referenceDate: string) {
   if (isHidden) return '非表示'
   const normalizedEntryDate = normalizeDateText(_entryDate)
