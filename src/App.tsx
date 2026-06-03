@@ -725,11 +725,36 @@ export function resolveInitialScreenForUser(
   return clampScreenForUserRole(classroomScreen, role)
 }
 
+export function resolveHydratedScreenForUser(params: {
+  classroomScreen: ClassroomScreen | null | undefined
+  role: WorkspaceUser['role'] | null | undefined
+  currentScreen: AppScreen
+  previousUserId: string
+  nextUserId: string
+}): AppScreen {
+  if (params.role !== 'developer') {
+    return resolveInitialScreenForUser(params.classroomScreen, params.role)
+  }
+
+  const isSameDeveloperSession = Boolean(params.previousUserId) && params.previousUserId === params.nextUserId
+  if (isSameDeveloperSession && params.currentScreen !== 'developer') {
+    return clampScreenForUserRole(params.classroomScreen ?? 'board', params.role)
+  }
+  return 'developer'
+}
+
 export function shouldReturnDeveloperOnLogout(
   screen: AppScreen,
   role: WorkspaceUser['role'] | null | undefined,
 ) {
   return role === 'developer' && screen !== 'developer'
+}
+
+export function shouldSyncCurrentClassroomBeforeOpen(
+  currentScreen: AppScreen,
+  role: WorkspaceUser['role'] | null | undefined,
+) {
+  return !(role === 'developer' && currentScreen === 'developer')
 }
 
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
@@ -1620,7 +1645,9 @@ function AuthenticatedApp() {
   }, [actingClassroomId, syncCurrentClassroomData])
 
   const openClassroom = useCallback((classroomId: string, nextScreen?: AppScreen) => {
-    syncCurrentClassroomData(actingClassroomId)
+    if (shouldSyncCurrentClassroomBeforeOpen(screenRef.current, currentUser?.role)) {
+      syncCurrentClassroomData(actingClassroomId)
+    }
     const nextClassroom = workspaceClassrooms.find((classroom) => classroom.id === classroomId)
     if (!nextClassroom) return
 
@@ -1659,10 +1686,17 @@ function AuthenticatedApp() {
       ? currentWorkspaceUser.assignedClassroomId
       : sanitizedWorkspaceSnapshot.actingClassroomId
     const targetClassroom = sanitizedWorkspaceSnapshot.classrooms.find((classroom) => classroom.id === targetClassroomId) ?? sanitizedWorkspaceSnapshot.classrooms[0] ?? null
+    const nextScreen = resolveHydratedScreenForUser({
+      classroomScreen: targetClassroom?.data.screen,
+      role: currentWorkspaceUser?.role,
+      currentScreen: screenRef.current,
+      previousUserId: currentUserId,
+      nextUserId: sanitizedWorkspaceSnapshot.currentUserId,
+    })
 
-    if (targetClassroom) {
+    if (targetClassroom && nextScreen !== 'developer') {
       applyClassroomPayloadToState(targetClassroom.data, {
-        setScreen: (value) => setScreen(resolveInitialScreenForUser(value, currentWorkspaceUser?.role)),
+        setScreen: () => setScreen(nextScreen),
         setManagers,
         setTeachers,
         setStudents,
@@ -1676,10 +1710,10 @@ function AuthenticatedApp() {
         setBoardMountKey,
       })
     } else {
-      setScreen(resolveInitialScreenForUser(null, currentWorkspaceUser?.role))
+      setScreen(nextScreen)
     }
     markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data))
-  }, [buildClassroomDataSignature, markStateLoadedClean])
+  }, [buildClassroomDataSignature, currentUserId, markStateLoadedClean])
 
   const reloadRemoteWorkspace = useCallback(async (successMessage: string, preferredActingClassroomId?: string | null) => {
     if (!remoteSessionUserId) return

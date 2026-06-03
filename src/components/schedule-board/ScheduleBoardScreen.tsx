@@ -3130,8 +3130,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = normalizedWeeks
-  }, [normalizedWeeks])
+    const runtimeWindow = getSchedulePopupRuntimeWindow()
+    if (!isStudentScheduleOpen && !isTeacherScheduleOpen) {
+      runtimeWindow.__lessonScheduleBoardWeeks = undefined
+      return
+    }
+    runtimeWindow.__lessonScheduleBoardWeeks = normalizedWeeks
+  }, [isStudentScheduleOpen, isTeacherScheduleOpen, normalizedWeeks])
 
   useEffect(() => {
     if (!teacherAutoAssignRequest) return
@@ -4444,53 +4449,65 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     [scheduleFallbackEndDate, scheduleFallbackStartDate, teacherScheduleRange],
   )
 
-  const studentScheduleCells = useMemo(() => buildScheduleCellsForRange({
-    range: effectiveStudentScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  const studentScheduleCells = useMemo(() => {
+    if (!isStudentScheduleOpen) return []
+    return buildScheduleCellsForRange({
+      range: effectiveStudentScheduleRange,
+      fallbackStartDate: scheduleFallbackStartDate,
+      fallbackEndDate: scheduleFallbackEndDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
+      suppressedRegularLessonOccurrences,
+    })
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
-  const studentPlannedScheduleCells = useMemo(() => buildManagedScheduleCellsForRange({
-    range: effectiveStudentScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  const studentPlannedScheduleCells = useMemo(() => {
+    if (!isStudentScheduleOpen) return []
+    return buildManagedScheduleCellsForRange({
+      range: effectiveStudentScheduleRange,
+      fallbackStartDate: scheduleFallbackStartDate,
+      fallbackEndDate: scheduleFallbackEndDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
+      suppressedRegularLessonOccurrences,
+    })
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
-  const teacherScheduleCells = useMemo(() => buildScheduleCellsForRange({
-    range: effectiveTeacherScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  const teacherScheduleCells = useMemo(() => {
+    if (!isTeacherScheduleOpen) return []
+    return buildScheduleCellsForRange({
+      range: effectiveTeacherScheduleRange,
+      fallbackStartDate: scheduleFallbackStartDate,
+      fallbackEndDate: scheduleFallbackEndDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
+      suppressedRegularLessonOccurrences,
+    })
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
-  const teacherPlannedScheduleCells = useMemo(() => buildManagedScheduleCellsForRange({
-    range: effectiveTeacherScheduleRange,
-    fallbackStartDate: scheduleFallbackStartDate,
-    fallbackEndDate: scheduleFallbackEndDate,
-    classroomSettings,
-    teachers,
-    students,
-    regularLessons,
-    boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
-    suppressedRegularLessonOccurrences,
-  }), [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  const teacherPlannedScheduleCells = useMemo(() => {
+    if (!isTeacherScheduleOpen) return []
+    return buildManagedScheduleCellsForRange({
+      range: effectiveTeacherScheduleRange,
+      fallbackStartDate: scheduleFallbackStartDate,
+      fallbackEndDate: scheduleFallbackEndDate,
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
+      suppressedRegularLessonOccurrences,
+    })
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const studentScheduleTitle = useMemo(
     () => formatWeeklyScheduleTitle(effectiveStudentScheduleRange.startDate, effectiveStudentScheduleRange.endDate),

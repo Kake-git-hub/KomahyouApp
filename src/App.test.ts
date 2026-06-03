@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, clampScreenForUserRole, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, clampScreenForUserRole, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 
 describe('sanitizeClassroomSettings', () => {
@@ -37,6 +37,28 @@ describe('resolveInitialScreenForUser', () => {
   })
 })
 
+describe('resolveHydratedScreenForUser', () => {
+  it('starts a newly logged-in developer on the developer screen', () => {
+    expect(resolveHydratedScreenForUser({
+      classroomScreen: 'board',
+      role: 'developer',
+      currentScreen: 'board',
+      previousUserId: '',
+      nextUserId: 'developer-1',
+    })).toBe('developer')
+  })
+
+  it('keeps a developer in the opened classroom during the same session', () => {
+    expect(resolveHydratedScreenForUser({
+      classroomScreen: 'backup-restore',
+      role: 'developer',
+      currentScreen: 'backup-restore',
+      previousUserId: 'developer-1',
+      nextUserId: 'developer-1',
+    })).toBe('backup-restore')
+  })
+})
+
 describe('shouldReturnDeveloperOnLogout', () => {
   it('returns developers from classroom screens to the developer screen', () => {
     expect(shouldReturnDeveloperOnLogout('board', 'developer')).toBe(true)
@@ -46,6 +68,17 @@ describe('shouldReturnDeveloperOnLogout', () => {
   it('does not intercept real logout from the developer screen or manager screens', () => {
     expect(shouldReturnDeveloperOnLogout('developer', 'developer')).toBe(false)
     expect(shouldReturnDeveloperOnLogout('board', 'manager')).toBe(false)
+  })
+})
+
+describe('shouldSyncCurrentClassroomBeforeOpen', () => {
+  it('skips classroom sync when opening a classroom from the developer screen', () => {
+    expect(shouldSyncCurrentClassroomBeforeOpen('developer', 'developer')).toBe(false)
+  })
+
+  it('keeps sync enabled for classroom sessions', () => {
+    expect(shouldSyncCurrentClassroomBeforeOpen('board', 'developer')).toBe(true)
+    expect(shouldSyncCurrentClassroomBeforeOpen('board', 'manager')).toBe(true)
   })
 })
 
