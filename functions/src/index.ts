@@ -932,6 +932,46 @@ function createStoredSnapshotDoc(params: {
   }
 }
 
+function getStoredSnapshotEncoding(snapshot: FirebaseClassroomSnapshotDoc) {
+  return snapshot.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING ? FIREBASE_COMPRESSED_SNAPSHOT_ENCODING : 'inline'
+}
+
+function buildSaveAttemptPayload(params: {
+  classroomId: string
+  savedAt: string
+  saveId: string
+  payloadHash: string
+  status: 'started' | 'verification-failed' | 'verified'
+  verified: boolean
+  writeMode: string
+  dataByteLength: number
+  snapshotEncoding: string
+  updatedBy: string
+  createdAt: string
+  failedAt?: string
+  verifiedAt?: string
+  readbackHash?: string
+  errorMessage?: string
+}) {
+  return {
+    classroomId: params.classroomId,
+    savedAt: params.savedAt,
+    saveId: params.saveId,
+    payloadHash: params.payloadHash,
+    status: params.status,
+    verified: params.verified,
+    writeMode: params.writeMode,
+    dataByteLength: params.dataByteLength,
+    snapshotEncoding: params.snapshotEncoding,
+    updatedBy: params.updatedBy,
+    createdAt: params.createdAt,
+    ...(params.failedAt ? { failedAt: params.failedAt } : {}),
+    ...(params.verifiedAt ? { verifiedAt: params.verifiedAt } : {}),
+    ...(typeof params.readbackHash === 'string' ? { readbackHash: params.readbackHash } : {}),
+    ...(params.errorMessage ? { errorMessage: params.errorMessage } : {}),
+  }
+}
+
 function readStoredSnapshotPayload(snapshot: FirebaseClassroomSnapshotDoc | null | undefined) {
   if (!snapshot) return null
 
@@ -1438,6 +1478,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const savedAt = readString(rawData.savedAt, 'savedAt')
   const saveId = readString(rawData.saveId, 'saveId')
   const payload = readPayloadObject(rawData.payload, 'payload')
+  const sanitizedPayload = sanitizeForFirestore(payload)
 
   if (options?.developmentOnly && classroomId !== DEVELOPMENT_CLASSROOM_ID) {
     throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
@@ -1448,7 +1489,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const classroomRef = workspaceRef.collection('classrooms').doc(classroomId)
   const snapshotRef = workspaceRef.collection('classroomSnapshots').doc(classroomId)
   const saveAttemptRef = snapshotRef.collection('saveAttempts').doc(saveId)
-  const payloadHash = hashSnapshotPayload(payload)
+  const payloadHash = hashSnapshotPayload(sanitizedPayload)
 
   const existingAttemptSnapshot = await saveAttemptRef.get()
   if (existingAttemptSnapshot.exists) {
@@ -1477,11 +1518,11 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const previousSnapshot = await snapshotRef.get()
   await assertNoSnapshotDataLoss({
     previousSnapshot: previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null,
-    nextPayload: payload,
+    nextPayload: sanitizedPayload,
   })
 
   const snapshotDoc = createStoredSnapshotDoc({
-    payload,
+    payload: sanitizedPayload,
     savedAt,
     updatedBy: memberRef.id,
     updatedAt: savedAt,
@@ -1489,40 +1530,47 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   })
   const writeMode = snapshotDoc.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING ? 'cloud-function-compressed' : 'cloud-function-inline'
   const dataByteLength = snapshotDoc.dataByteLength ?? Buffer.byteLength(JSON.stringify(snapshotDoc.data ?? {}), 'utf8')
-  await saveAttemptRef.set({
+  const saveAttemptCreatedAt = new Date().toISOString()
+  const saveAttemptBase = {
     classroomId,
     savedAt,
     saveId,
     payloadHash,
-    status: 'started',
-    verified: false,
     writeMode,
     dataByteLength,
+    snapshotEncoding: getStoredSnapshotEncoding(snapshotDoc),
     updatedBy: memberRef.id,
-    createdAt: new Date().toISOString(),
-    snapshot: snapshotDoc,
-  })
+    createdAt: saveAttemptCreatedAt,
+  }
+  await saveAttemptRef.set(buildSaveAttemptPayload({
+    ...saveAttemptBase,
+    status: 'started',
+    verified: false,
+  }))
   await snapshotRef.set(snapshotDoc)
 
   const readbackSnapshot = await snapshotRef.get()
   const readbackPayload = readStoredSnapshotPayload(readbackSnapshot.exists ? readbackSnapshot.data() as FirebaseClassroomSnapshotDoc : null)
   const readbackHash = readbackPayload ? hashSnapshotPayload(readbackPayload) : ''
   if (readbackHash !== payloadHash) {
-    await saveAttemptRef.set({
+    await saveAttemptRef.set(buildSaveAttemptPayload({
+      ...saveAttemptBase,
       status: 'verification-failed',
       verified: false,
-      readbackHash,
       failedAt: new Date().toISOString(),
-    }, { merge: true })
+      readbackHash,
+      errorMessage: 'Firebase保存後の読み戻し検証に失敗しました。',
+    }), { merge: true })
     throw new HttpsError('internal', 'Firebase保存後の読み戻し検証に失敗しました。')
   }
 
-  await saveAttemptRef.set({
+  await saveAttemptRef.set(buildSaveAttemptPayload({
+    ...saveAttemptBase,
     status: 'verified',
     verified: true,
     readbackHash,
     verifiedAt: new Date().toISOString(),
-  }, { merge: true })
+  }), { merge: true })
 
   return {
     classroomId,

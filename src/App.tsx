@@ -1644,6 +1644,7 @@ function AuthenticatedApp() {
         }
         for (const [classroomIndex, targetClassroom] of targetClassrooms.entries()) {
           const percent = 20 + Math.floor((classroomIndex / targetClassrooms.length) * 75)
+          const saveId = createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id)
           appendSaveDiagnostic({
             stage: 'firebase-progress',
             percent,
@@ -1663,8 +1664,10 @@ function AuthenticatedApp() {
               result = await saveClassroomSnapshotViaFunction({
                 classroomId: targetClassroom.id,
                 savedAt: nextItem.snapshot.savedAt,
-                saveId: createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id),
+                saveId,
                 payload: targetClassroom.data,
+              }, {
+                developmentOnly: manualFirebaseSaveStabilityEnabled && isDevelopmentClassroom(targetClassroom),
               })
               break
             } catch (error) {
@@ -2722,6 +2725,11 @@ function AuthenticatedApp() {
 
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
     updateSavingNow(true)
+    const shouldShowManualSaveProgress = isRemoteBackendEnabled && Boolean(remoteSessionUserId)
+    if (shouldShowManualSaveProgress) {
+      updateRemoteSyncVisible(true)
+      setRemoteSyncProgress({ percent: 1, label: 'ブラウザへ保存中', elapsedSeconds: getRemoteSyncElapsedSeconds() })
+    }
     if (isRemoteBackendEnabled && remoteSessionUserId) {
       try {
         markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
@@ -2763,11 +2771,11 @@ function AuthenticatedApp() {
         details: localResult,
       })
 
-      if (savedLocally) {
-        setLastSavedAt(snapshot.savedAt)
-        if (isRemoteBackendEnabled && remoteSessionUserId) {
-          queueFirebaseWorkspaceSync(snapshot, true, true, getCurrentClassroomSyncTargetIds(snapshot), {
-            downloadBackupOnFailure: manualFirebaseSaveStabilityEnabled,
+        if (savedLocally) {
+          setLastSavedAt(snapshot.savedAt)
+          if (isRemoteBackendEnabled && remoteSessionUserId) {
+            queueFirebaseWorkspaceSync(snapshot, true, true, getCurrentClassroomSyncTargetIds(snapshot), {
+              downloadBackupOnFailure: manualFirebaseSaveStabilityEnabled,
             onSuccess: () => {
               finalizeClean()
               updateSavingNow(false)
@@ -2776,22 +2784,26 @@ function AuthenticatedApp() {
               updateSavingNow(false)
             },
           })
+            return
+          }
+          finalizeClean()
+          updateSavingNow(false)
+          updateRemoteSyncVisible(false)
+          setRemoteSyncProgress(null)
+          setPersistenceMessage('保存しました。')
           return
         }
-        finalizeClean()
-        updateSavingNow(false)
-        setPersistenceMessage('保存しました。')
-        return
-      }
 
-      updateSavingNow(false)
-      const downloaded = downloadFallbackBackup()
-      appendSaveDiagnostic({ stage: 'local-save-failure', details: { downloadedFallback: downloaded } })
-      setPersistenceMessage(downloaded
-        ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
-        : '保存に失敗しました。バックアップを書き出してください。')
-    })()
-  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, updateSavingNow])
+        updateSavingNow(false)
+        updateRemoteSyncVisible(false)
+        setRemoteSyncProgress(null)
+        const downloaded = downloadFallbackBackup()
+        appendSaveDiagnostic({ stage: 'local-save-failure', details: { downloadedFallback: downloaded } })
+        setPersistenceMessage(downloaded
+          ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
+          : '保存に失敗しました。バックアップを書き出してください。')
+      })()
+  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, updateRemoteSyncVisible, updateSavingNow])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0

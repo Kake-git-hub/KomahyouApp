@@ -102,6 +102,10 @@ type SaveClassroomSnapshotRequest = {
   payload: AppSnapshotPayload
 }
 
+export type SaveClassroomSnapshotOptions = {
+  developmentOnly?: boolean
+}
+
 type DeleteWorkspaceClassroomRequest = {
   workspaceKey: string
   classroomId: string
@@ -311,7 +315,14 @@ export async function updateFirebaseWorkspaceClassroom(input: Omit<UpdateWorkspa
   return result.data
 }
 
-export async function saveClassroomSnapshotViaFunction(input: Omit<SaveClassroomSnapshotRequest, 'workspaceKey'>): Promise<{
+export function resolveSaveClassroomSnapshotCallableName(options?: SaveClassroomSnapshotOptions) {
+  return options?.developmentOnly ? 'saveDevelopmentClassroomSnapshot' : 'saveClassroomSnapshot'
+}
+
+export async function saveClassroomSnapshotViaFunction(
+  input: Omit<SaveClassroomSnapshotRequest, 'workspaceKey'>,
+  options?: SaveClassroomSnapshotOptions,
+): Promise<{
   classroomId: string
   savedAt: string
   saveId: string
@@ -333,7 +344,7 @@ export async function saveClassroomSnapshotViaFunction(input: Omit<SaveClassroom
     idempotentReplay: boolean
     writeMode: string
     dataByteLength: number
-  }>(functions, 'saveClassroomSnapshot', { timeout: 120_000 })
+  }>(functions, resolveSaveClassroomSnapshotCallableName(options), { timeout: 120_000 })
   const result = await callable({
     workspaceKey: config.workspaceKey,
     ...input,

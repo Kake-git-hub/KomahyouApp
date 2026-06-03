@@ -236,7 +236,7 @@ export function BoardToolbar({
                 data-state={isBoardSaving ? 'saving' : (hasPendingSave ? 'dirty' : 'clean')}
                 title={hasPendingSave ? '保存完了まで最新変更を保持しています。' : 'データベースと同期済みです。'}
               >
-                {hasPendingSave ? '保存' : '最新データ'}
+                {isBoardSaving ? '保存中...' : (hasPendingSave ? '保存' : '最新データ')}
               </button>
             </>
           )}
