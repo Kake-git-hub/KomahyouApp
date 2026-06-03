@@ -120,6 +120,67 @@ function createWorkspaceSnapshot(savedAt: string, holidayDates: string[]): Works
   }
 }
 
+function createDeveloperWorkspaceSnapshot(savedAt: string, actingClassroomId: string, screen: 'board' | 'backup-restore' = 'board'): WorkspaceSnapshot {
+  return {
+    schemaVersion: 1,
+    savedAt,
+    developerCloudBackupEnabled: false,
+    developerCloudBackupFolderName: '',
+    developerCloudSyncedAutoBackupKeys: [],
+    currentUserId: 'developer-1',
+    actingClassroomId,
+    users: [
+      { id: 'developer-1', name: 'Developer', email: 'developer@example.com', role: 'developer', assignedClassroomId: null },
+      { id: 'manager-1', name: 'Manager', email: 'manager@example.com', role: 'manager', assignedClassroomId: 'classroom-1' },
+      { id: 'manager-2', name: 'Manager 2', email: 'manager2@example.com', role: 'manager', assignedClassroomId: 'development' },
+    ],
+    classrooms: [
+      {
+        id: 'classroom-1',
+        name: 'スクールIE 日大前校',
+        contractStatus: 'active',
+        contractStartDate: '2026-01-01',
+        contractEndDate: '2026-12-31',
+        managerUserId: 'manager-1',
+        data: {
+          screen: actingClassroomId === 'classroom-1' ? screen : 'board',
+          classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 14 },
+          managers: [],
+          teachers: [],
+          students: [],
+          regularLessons: [],
+          groupLessons: [],
+          specialSessions: [],
+          autoAssignRules: [],
+          pairConstraints: [],
+          boardState: null,
+        },
+      },
+      {
+        id: 'development',
+        name: '開発用教室',
+        contractStatus: 'active',
+        contractStartDate: '2026-01-01',
+        contractEndDate: '2026-12-31',
+        managerUserId: 'manager-2',
+        data: {
+          screen: actingClassroomId === 'development' ? screen : 'board',
+          classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 14 },
+          managers: [],
+          teachers: [],
+          students: [],
+          regularLessons: [],
+          groupLessons: [],
+          specialSessions: [],
+          autoAssignRules: [],
+          pairConstraints: [],
+          boardState: null,
+        },
+      },
+    ],
+  }
+}
+
 describe('resolveRemoteWorkspaceSnapshot', () => {
   it('restores a newer marked local close snapshot over an older Firebase snapshot', () => {
     const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
@@ -144,6 +205,17 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
 
     expect(result.usedPendingLocalSnapshot).toBe(false)
     expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
+  })
+
+  it('preserves a recent developer classroom selection across reload', () => {
+    const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'classroom-1', 'board')
+    const localSnapshot = createDeveloperWorkspaceSnapshot(new Date().toISOString(), 'development', 'backup-restore')
+
+    const result = resolveRemoteWorkspaceSnapshot(remoteSnapshot, localSnapshot, null, 'developer-1')
+
+    expect(result.usedPendingLocalSnapshot).toBe(false)
+    expect(result.snapshot.actingClassroomId).toBe('development')
+    expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.screen).toBe('backup-restore')
   })
 })
 

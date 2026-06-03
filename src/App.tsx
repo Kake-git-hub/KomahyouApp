@@ -774,6 +774,27 @@ function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, l
   // Offline edits are still persisted to Firebase via the autosave + visibility
   // change handlers, so remote stays current under normal usage.
 
+  const isRecentLocalSnapshot = Math.abs(getTimestampMillis(localSnapshot.savedAt) - Date.now()) <= 5 * 60 * 1000
+  const localCurrentUser = localSnapshot.users.find((user) => user.id === localSnapshot.currentUserId) ?? null
+  if (isRecentLocalSnapshot && localCurrentUser?.role === 'developer') {
+    const localActingClassroomId = localSnapshot.actingClassroomId
+    if (localActingClassroomId && merged.classrooms.some((classroom) => classroom.id === localActingClassroomId)) {
+      merged.actingClassroomId = localActingClassroomId
+      const localActingClassroom = localSnapshot.classrooms.find((classroom) => classroom.id === localActingClassroomId) ?? null
+      if (localActingClassroom) {
+        merged.classrooms = merged.classrooms.map((classroom) => classroom.id === localActingClassroomId
+          ? {
+              ...classroom,
+              data: {
+                ...classroom.data,
+                screen: localActingClassroom.data.screen,
+              },
+            }
+          : classroom)
+      }
+    }
+  }
+
   return merged
 }
 
