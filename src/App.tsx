@@ -1006,7 +1006,7 @@ function AuthenticatedApp() {
   const [developerCloudSyncedAutoBackupKeys, setDeveloperCloudSyncedAutoBackupKeys] = useState<string[]>([])
   const [developerRestoreModalState, setDeveloperRestoreModalState] = useState<DeveloperRestoreModalState | null>(null)
   const [currentUserId, setCurrentUserId, currentUserIdRef] = useLatestState('')
-  const [actingClassroomId, setActingClassroomId] = useState<string | null>(null)
+  const [actingClassroomId, setActingClassroomId, actingClassroomIdRef] = useLatestState<string | null>(null)
   const [bulkTemporarySuspensionReason, setBulkTemporarySuspensionReason] = useState('')
   const [hasCheckedRemoteSession, setHasCheckedRemoteSession] = useState(!isRemoteBackendEnabled)
   const [remoteSessionUserId, setRemoteSessionUserId] = useState<string | null>(null)
@@ -1302,11 +1302,11 @@ function AuthenticatedApp() {
   }, [])
 
   const getCurrentClassroomSyncTargetIds = useCallback((snapshot: WorkspaceSnapshot) => {
-    const targetClassroomId = actingClassroomId ?? snapshot.actingClassroomId
+    const targetClassroomId = actingClassroomIdRef.current ?? snapshot.actingClassroomId
     return targetClassroomId && snapshot.classrooms.some((classroom) => classroom.id === targetClassroomId)
       ? [targetClassroomId]
       : undefined
-  }, [actingClassroomId])
+  }, [actingClassroomIdRef])
 
   const cleanSignatureRef = useRef<string>('')
 
@@ -1344,7 +1344,7 @@ function AuthenticatedApp() {
   }, [])
 
   const markCleanIfSnapshotMatchesCurrent = useCallback((snapshot: WorkspaceSnapshot) => {
-    const targetClassroomId = actingClassroomId ?? snapshot.actingClassroomId
+    const targetClassroomId = actingClassroomIdRef.current ?? snapshot.actingClassroomId
     const snapshotClassroom = targetClassroomId
       ? snapshot.classrooms.find((classroom) => classroom.id === targetClassroomId)
       : null
@@ -1355,7 +1355,7 @@ function AuthenticatedApp() {
     isDirtyRef.current = false
     setIsDirty(false)
     return true
-  }, [actingClassroomId, buildClassroomDataSignature, buildCurrentDataSignature])
+  }, [actingClassroomIdRef, buildClassroomDataSignature, buildCurrentDataSignature])
 
   const queueFirebaseWorkspaceSync = useCallback((snapshot: WorkspaceSnapshot, showSlowMessage = false, showProgress = false, targetClassroomIds?: string[], callbacks?: {
     onSuccess?: () => void
