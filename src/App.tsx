@@ -4706,8 +4706,8 @@ function AuthenticatedApp() {
       onCopyDistributionUrl={copyBoardDistributionUrl}
       onSaveBoard={saveBoard}
       isBoardDirty={hasImmediateUnsavedBoardChanges}
-      isBoardSaving={isSavingNow}
-      isBoardSaveDisabled={isSavingNow}
+      isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
+      isBoardSaveDisabled={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
       hasPendingSave={boardHasPendingSave}
       syncStatusMessage={shouldShowRemoteSyncStatus
         ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')

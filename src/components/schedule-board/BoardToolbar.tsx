@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 
 type BoardToolbarProps = {
@@ -102,7 +102,6 @@ export function BoardToolbar({
   onTemplateClear,
   onTemplateClose,
   onSaveBoard,
-  isBoardDirty,
   isBoardSaving,
   isBoardSaveDisabled,
   hasPendingSave,
@@ -111,6 +110,27 @@ export function BoardToolbar({
   syncElapsedSeconds,
 }: BoardToolbarProps) {
   const weekJumpInputRef = useRef<HTMLInputElement | null>(null)
+
+  // 保存ボタンを押した瞬間に「保存中…」へ切り替えるためのローカル状態。
+  // 親の保存状態(isBoardSaving)の伝播タイミングに依存せず、クリック即フィードバックを保証する。
+  // 保存待ち(hasPendingSave)が解消した時点でリセットする（描画中の状態調整パターン）。
+  const [savePressed, setSavePressed] = useState(false)
+  if (savePressed && !hasPendingSave && !isBoardSaving && !isBoardSaveDisabled) {
+    setSavePressed(false)
+  }
+  const isSavingInProgress = savePressed || Boolean(isBoardSaving) || Boolean(isBoardSaveDisabled)
+  // 保存待ちのデータがある限り押せるようにする（「保存」表示なのに押せない状態を防ぐ）。
+  const isSaveButtonDisabled = isSavingInProgress || !hasPendingSave
+  const handleSaveBoardClick = () => {
+    setSavePressed(true)
+    // スピナーの描画を先に確定させてから保存処理を走らせる（同期的な重い処理で
+    // 「保存中…」表示が遅れる/飛ぶのを防ぐ）。
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => onSaveBoard?.())
+    } else {
+      setTimeout(() => onSaveBoard?.(), 0)
+    }
+  }
 
   const openWeekJumpPicker = () => {
     const input = weekJumpInputRef.current
@@ -229,15 +249,15 @@ export function BoardToolbar({
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
               <button
-                className={`primary-button slim${hasPendingSave ? '' : ' is-clean'}`}
+                className={`primary-button slim${hasPendingSave || isSavingInProgress ? '' : ' is-clean'}`}
                 type="button"
-                onClick={onSaveBoard}
-                disabled={!isBoardDirty || !!isBoardSaving || !!isBoardSaveDisabled}
+                onClick={handleSaveBoardClick}
+                disabled={isSaveButtonDisabled}
                 data-testid="save-board-button"
-                data-state={isBoardSaving ? 'saving' : (hasPendingSave ? 'dirty' : 'clean')}
-                title={hasPendingSave ? '保存完了まで最新変更を保持しています。' : 'データベースと同期済みです。'}
+                data-state={isSavingInProgress ? 'saving' : (hasPendingSave ? 'dirty' : 'clean')}
+                title={hasPendingSave ? '保存してデータベースへ同期します。' : 'データベースと同期済みです。'}
               >
-                {isBoardSaving ? (
+                {isSavingInProgress ? (
                   <span className="button-saving-content">
                     <span className="button-spinner" aria-hidden="true" />
                     保存中…
