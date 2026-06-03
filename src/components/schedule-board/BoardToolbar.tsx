@@ -50,6 +50,7 @@ type BoardToolbarProps = {
   isBoardDirty?: boolean
   isBoardSaving?: boolean
   isBoardSaveDisabled?: boolean
+  hasPendingSave?: boolean
   syncStatusMessage?: string
   syncProgressPercent?: number | null
   syncElapsedSeconds?: number | null
@@ -104,6 +105,7 @@ export function BoardToolbar({
   isBoardDirty,
   isBoardSaving,
   isBoardSaveDisabled,
+  hasPendingSave,
   syncStatusMessage,
   syncProgressPercent,
   syncElapsedSeconds,
@@ -226,15 +228,15 @@ export function BoardToolbar({
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
               <button
-                className={`primary-button slim${isBoardDirty ? '' : ' is-clean'}`}
+                className={`primary-button slim${hasPendingSave ? '' : ' is-clean'}`}
                 type="button"
                 onClick={onSaveBoard}
                 disabled={!isBoardDirty || !!isBoardSaving || !!isBoardSaveDisabled}
                 data-testid="save-board-button"
-                data-state={isBoardSaving ? 'saving' : (isBoardDirty ? 'dirty' : 'clean')}
-                title={isBoardDirty ? '現在の内容をデータベースとローカルに保存します。' : 'データベースと同期済みです。'}
+                data-state={isBoardSaving ? 'saving' : (hasPendingSave ? 'dirty' : 'clean')}
+                title={hasPendingSave ? '保存完了まで最新変更を保持しています。' : 'データベースと同期済みです。'}
               >
-                {isBoardSaving ? '保存中…' : (isBoardDirty ? '保存' : '最新データ')}
+                {hasPendingSave ? '保存' : '最新データ'}
               </button>
             </>
           )}

@@ -2173,6 +2173,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = buildPayloadFingerprint(DATA);
       let skipNextEquivalentPayload = false;
+      let pendingIncomingPayload = null;
+      let incomingPayloadJobId = 0;
       let suppressNextToggleClick = false;
       let appliedStartDate = '';
       let appliedEndDate = '';
@@ -4273,10 +4275,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         );
       }
 
+      function flushIncomingPayload() {
+        incomingPayloadJobId = 0;
+        const nextPayload = pendingIncomingPayload;
+        pendingIncomingPayload = null;
+        if (!nextPayload) return;
+        applyIncomingPayload(nextPayload);
+      }
+
+      function scheduleIncomingPayload(nextPayload) {
+        pendingIncomingPayload = nextPayload;
+        if (incomingPayloadJobId) return;
+        if (typeof window.requestAnimationFrame === 'function') {
+          incomingPayloadJobId = window.requestAnimationFrame(flushIncomingPayload);
+          return;
+        }
+        incomingPayloadJobId = window.setTimeout(flushIncomingPayload, 0);
+      }
+
       window.__scheduleViewType = VIEW_TYPE;
-      window.__applySchedulePayload = applyIncomingPayload;
+      window.__applySchedulePayload = scheduleIncomingPayload;
       if (window.__pendingSchedulePayload && window.__pendingSchedulePayload.viewType === VIEW_TYPE && window.__pendingSchedulePayload.payload) {
-        applyIncomingPayload(window.__pendingSchedulePayload.payload);
+        scheduleIncomingPayload(window.__pendingSchedulePayload.payload);
         window.__pendingSchedulePayload = null;
       }
 
@@ -4873,7 +4893,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return;
         }
         if (!message || message.type !== 'schedule-data-update' || message.viewType !== VIEW_TYPE || !message.payload) return;
-        applyIncomingPayload(message.payload);
+        scheduleIncomingPayload(message.payload);
       });
       window.__scheduleReadStoredLogo = bindLogoControls();
       setRangeAndRender(

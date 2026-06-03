@@ -545,6 +545,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('scheduleDataElement.remove()')
     expect(html).toContain('window.opener.__buildScheduleQrSvg')
     expect(html).toContain('buildScheduleQrHtml(student, showQr)')
+    expect(html).toContain('function scheduleIncomingPayload(nextPayload)')
+    expect(html).toContain('window.__applySchedulePayload = scheduleIncomingPayload')
+    expect(html).toContain("scheduleIncomingPayload(message.payload)")
 
     vi.unstubAllGlobals()
   })

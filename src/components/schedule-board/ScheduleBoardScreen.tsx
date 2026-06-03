@@ -506,6 +506,7 @@ type ScheduleBoardScreenProps = {
   isBoardDirty?: boolean
   isBoardSaving?: boolean
   isBoardSaveDisabled?: boolean
+  hasPendingSave?: boolean
   syncStatusMessage?: string
   syncProgressPercent?: number | null
   syncElapsedSeconds?: number | null
@@ -2680,7 +2681,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName: _classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName: _classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -7824,6 +7825,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
             isBoardDirty={isBoardDirty}
             isBoardSaving={isBoardSaving}
             isBoardSaveDisabled={isBoardSaveDisabled}
+            hasPendingSave={hasPendingSave}
             syncStatusMessage={syncStatusMessage}
             syncProgressPercent={syncProgressPercent}
             syncElapsedSeconds={syncElapsedSeconds}

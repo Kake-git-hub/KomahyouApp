@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
@@ -80,6 +80,18 @@ describe('shouldSyncCurrentClassroomBeforeOpen', () => {
   it('keeps sync enabled for classroom sessions', () => {
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'developer')).toBe(true)
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'manager')).toBe(true)
+  })
+})
+
+describe('hasPendingBoardSaveState', () => {
+  it('keeps the board save button active while any save is still pending', () => {
+    expect(hasPendingBoardSaveState({ isDirty: true, isSavingNow: false, isRemoteSyncPending: false })).toBe(true)
+    expect(hasPendingBoardSaveState({ isDirty: false, isSavingNow: true, isRemoteSyncPending: false })).toBe(true)
+    expect(hasPendingBoardSaveState({ isDirty: false, isSavingNow: false, isRemoteSyncPending: true })).toBe(true)
+  })
+
+  it('returns false only when the board is fully synced', () => {
+    expect(hasPendingBoardSaveState({ isDirty: false, isSavingNow: false, isRemoteSyncPending: false })).toBe(false)
   })
 })
 

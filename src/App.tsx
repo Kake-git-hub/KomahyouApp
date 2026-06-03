@@ -820,6 +820,14 @@ export function shouldSyncCurrentClassroomBeforeOpen(
   return !(role === 'developer' && currentScreen === 'developer')
 }
 
+export function hasPendingBoardSaveState(params: {
+  isDirty: boolean
+  isSavingNow: boolean
+  isRemoteSyncPending: boolean
+}) {
+  return params.isDirty || params.isSavingNow || params.isRemoteSyncPending
+}
+
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
 
@@ -2617,6 +2625,7 @@ function AuthenticatedApp() {
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
     const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence()
+    setSubmissionAcknowledgements([])
 
     if (shouldReturnDeveloperOnLogout(screenRef.current, currentUser?.role)) {
       setScreen('developer')
@@ -3400,7 +3409,7 @@ function AuthenticatedApp() {
     syncSpecialSessionPopup()
     syncStudentSchedulePopup()
     syncTeacherSchedulePopup()
-  }, [boardState, screen, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [boardState, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   // Real-time submission reflection from Firestore
   useEffect(() => {
@@ -3492,6 +3501,11 @@ function AuthenticatedApp() {
 
     return unsubscribe
   }, [actingClassroom?.name, actingClassroomId, isRemoteBackendEnabled, specialSessionsRef, studentsRef, teachersRef])
+
+  useEffect(() => {
+    if (currentUserId) return
+    setSubmissionAcknowledgements([])
+  }, [currentUserId])
 
   useEffect(() => {
     if (!isRemoteBackendEnabled) return
@@ -4672,6 +4686,11 @@ function AuthenticatedApp() {
     )
   }
 
+  const boardHasPendingSave = hasPendingBoardSaveState({
+    isDirty,
+    isSavingNow,
+    isRemoteSyncPending,
+  })
   const shouldShowRemoteSyncStatus = isRemoteSyncPending && (isRemoteSyncVisible || isDirty)
 
   return renderWithSubmissionAcknowledgement(
@@ -4707,6 +4726,7 @@ function AuthenticatedApp() {
       isBoardDirty={isDirty}
       isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
       isBoardSaveDisabled={isRemoteSyncPending && isRemoteSyncVisible}
+      hasPendingSave={boardHasPendingSave}
       syncStatusMessage={shouldShowRemoteSyncStatus
         ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')
         : ((isSavingNow || isDirty) ? persistenceMessage : undefined)}
