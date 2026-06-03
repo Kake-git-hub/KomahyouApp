@@ -164,15 +164,16 @@ export function BoardToolbar({
             <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">配布用URL</button>
           ) : null}
         </div>
-        <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}`} data-testid="toolbar-status">
+        <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}${syncProgressPercent !== null && syncProgressPercent !== undefined ? ' is-syncing' : ''}`} data-testid="toolbar-status">
           {syncProgressPercent !== null && syncProgressPercent !== undefined ? (
-            <div className="toolbar-sync-progress" aria-label={`Firebase 同期 ${syncProgressPercent}%`}>
+            <div className="toolbar-sync-progress" aria-label={`Firebase 同期 ${syncProgressPercent}%`} role="status" aria-live="polite">
               <div className="toolbar-sync-progress-text">
+                <span className="button-spinner" aria-hidden="true" />
                 {syncStatusMessage || `データベースへ保存中(${syncProgressPercent}%完了)`}
                 {syncElapsedSeconds !== null && syncElapsedSeconds !== undefined ? ` / ${syncElapsedSeconds}秒経過` : ''}
               </div>
-              <div className="toolbar-sync-progress-track" aria-hidden="true">
-                <div className="toolbar-sync-progress-bar" style={{ width: `${Math.max(0, Math.min(100, syncProgressPercent))}%` }} />
+              <div className="toolbar-sync-progress-track is-indeterminate" aria-hidden="true">
+                <div className="toolbar-sync-progress-bar" style={{ width: `${Math.max(4, Math.min(100, syncProgressPercent))}%` }} />
               </div>
             </div>
           ) : (syncStatusMessage || statusMessage)}
@@ -236,7 +237,12 @@ export function BoardToolbar({
                 data-state={isBoardSaving ? 'saving' : (hasPendingSave ? 'dirty' : 'clean')}
                 title={hasPendingSave ? '保存完了まで最新変更を保持しています。' : 'データベースと同期済みです。'}
               >
-                {isBoardSaving ? '保存中...' : (hasPendingSave ? '保存' : '最新データ')}
+                {isBoardSaving ? (
+                  <span className="button-saving-content">
+                    <span className="button-spinner" aria-hidden="true" />
+                    保存中…
+                  </span>
+                ) : (hasPendingSave ? '保存' : '最新データ')}
               </button>
             </>
           )}
