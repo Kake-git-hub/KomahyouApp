@@ -348,6 +348,7 @@ export async function saveClassroomSnapshotViaFunction(
   const result = await callable({
     workspaceKey: config.workspaceKey,
     ...input,
+    payload: sanitizeForFirestore(input.payload),
   })
   return result.data
 }
