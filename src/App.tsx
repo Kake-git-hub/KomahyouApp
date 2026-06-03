@@ -1872,6 +1872,8 @@ function AuthenticatedApp() {
 
   const applyWorkspaceSnapshot = useCallback((workspaceSnapshot: WorkspaceSnapshot, successMessage: string) => {
     const sanitizedWorkspaceSnapshot = sanitizeWorkspaceSnapshot(workspaceSnapshot)
+    const previousUserId = currentUserIdRef.current
+    const currentScreen = screenRef.current
     setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
     setWorkspaceClassrooms(sanitizedWorkspaceSnapshot.classrooms)
     setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
@@ -1890,8 +1892,8 @@ function AuthenticatedApp() {
     const nextScreen = resolveHydratedScreenForUser({
       classroomScreen: targetClassroom?.data.screen,
       role: currentWorkspaceUser?.role,
-      currentScreen: screenRef.current,
-      previousUserId: currentUserIdRef.current,
+      currentScreen,
+      previousUserId,
       nextUserId: sanitizedWorkspaceSnapshot.currentUserId,
     })
 
@@ -2915,11 +2917,11 @@ function AuthenticatedApp() {
       classroomStorageKey: actingClassroomId ?? undefined,
       periodBands: latestSpecialSessions,
       specialSessions: latestSpecialSessions,
-      lazyQrLoading: isActingDevelopmentClassroom,
-      showSubmittedQr: isActingDevelopmentClassroom,
+      lazyQrLoading: true,
+      showSubmittedQr: true,
       targetWindow: studentPopup,
     })
-  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, isActingDevelopmentClassroom, specialSessionsRef, studentScheduleRange, students, teachers])
+  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
 
   const syncTeacherSchedulePopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -2970,11 +2972,11 @@ function AuthenticatedApp() {
       highlightedTeacherId,
       periodBands: latestSpecialSessions,
       specialSessions: latestSpecialSessions,
-      lazyQrLoading: isActingDevelopmentClassroom,
-      showSubmittedQr: isActingDevelopmentClassroom,
+      lazyQrLoading: true,
+      showSubmittedQr: true,
       targetWindow: teacherPopup,
     })
-  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, isActingDevelopmentClassroom, specialSessionsRef, students, teacherScheduleRange, teachers])
+  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
 
   const syncSpecialSessionPopup = useCallback(() => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3025,25 +3027,15 @@ function AuthenticatedApp() {
       if (message.type === 'schedule-popup-ready') {
         if (message.viewType === 'student') {
           const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
-          if (isActingDevelopmentClassroom) {
-            void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
-              .then(() => { syncStudentSchedulePopup() })
-              .catch(() => { syncStudentSchedulePopup() })
-          } else {
-            ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
-            syncStudentSchedulePopup()
-          }
+          void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+            .then(() => { syncStudentSchedulePopup() })
+            .catch(() => { syncStudentSchedulePopup() })
         }
         if (message.viewType === 'teacher') {
           const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
-          if (isActingDevelopmentClassroom) {
-            void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
-              .then(() => { syncTeacherSchedulePopup() })
-              .catch(() => { syncTeacherSchedulePopup() })
-          } else {
-            ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
-            syncTeacherSchedulePopup()
-          }
+          void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+            .then(() => { syncTeacherSchedulePopup() })
+            .catch(() => { syncTeacherSchedulePopup() })
         }
         return
       }
@@ -3360,7 +3352,7 @@ function AuthenticatedApp() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     syncSpecialSessionPopup()
@@ -3383,27 +3375,20 @@ function AuthenticatedApp() {
         viewType === 'student' ? studentScheduleRange : teacherScheduleRange,
         actingClassroomId,
       )
-      if (isActingDevelopmentClassroom) {
-        void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
-          .then(() => {
-            if (viewType === 'student') syncStudentSchedulePopup()
-            else syncTeacherSchedulePopup()
-          })
-          .catch(() => {
-            if (viewType === 'student') syncStudentSchedulePopup()
-            else syncTeacherSchedulePopup()
-          })
-        return
-      }
-
-      ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
-      if (viewType === 'student') syncStudentSchedulePopup()
-      else syncTeacherSchedulePopup()
+      void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+        .then(() => {
+          if (viewType === 'student') syncStudentSchedulePopup()
+          else syncTeacherSchedulePopup()
+        })
+        .catch(() => {
+          if (viewType === 'student') syncStudentSchedulePopup()
+          else syncTeacherSchedulePopup()
+        })
     }
 
     syncSchedulePopupForRange('student')
     syncSchedulePopupForRange('teacher')
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, specialSessions, studentScheduleRange, teacherScheduleRange, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, specialSessions, studentScheduleRange, teacherScheduleRange, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !boardState) return
