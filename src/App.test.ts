@@ -207,6 +207,60 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
     expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
   })
 
+  it('reuses a newer pending local classroom snapshot for the assigned manager classroom', () => {
+    const remoteSnapshot: WorkspaceSnapshot = {
+      schemaVersion: 1,
+      savedAt: '2026-05-26T10:00:00.000Z',
+      developerCloudBackupEnabled: false,
+      developerCloudBackupFolderName: '',
+      developerCloudSyncedAutoBackupKeys: [],
+      currentUserId: 'manager-2',
+      actingClassroomId: 'development',
+      users: [
+        { id: 'manager-2', name: 'Manager 2', email: 'manager2@example.com', role: 'manager', assignedClassroomId: 'development' },
+      ],
+      classrooms: [
+        {
+          id: 'development',
+          name: '開発用教室',
+          contractStatus: 'active',
+          contractStartDate: '2026-01-01',
+          contractEndDate: '2026-12-31',
+          managerUserId: 'manager-2',
+          data: {
+            screen: 'board',
+            classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 14 },
+            managers: [],
+            teachers: [],
+            students: [],
+            regularLessons: [],
+            groupLessons: [],
+            specialSessions: [],
+            autoAssignRules: [],
+            pairConstraints: [],
+            boardState: null,
+          },
+        },
+      ],
+    }
+    const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'development')
+    const developmentClassroom = localSnapshot.classrooms.find((classroom) => classroom.id === 'development')
+    if (!developmentClassroom) throw new Error('development classroom missing in test fixture')
+    developmentClassroom.data.classroomSettings.holidayDates = ['2026-08-13']
+
+    const result = resolveRemoteWorkspaceSnapshot(
+      remoteSnapshot,
+      localSnapshot,
+      { savedAt: localSnapshot.savedAt, authenticatedUserId: 'developer-1', targetClassroomIds: ['development'] },
+      'manager-2',
+    )
+
+    expect(result.usedPendingLocalSnapshot).toBe(true)
+    expect(result.pendingTargetClassroomIds).toEqual(['development'])
+    expect(result.snapshot.currentUserId).toBe('manager-2')
+    expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+  })
+
   it('preserves a recent developer classroom selection across reload', () => {
     const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'classroom-1', 'board')
     const localSnapshot = createDeveloperWorkspaceSnapshot(new Date().toISOString(), 'development', 'backup-restore')

@@ -35,6 +35,8 @@ import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
 
+const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
+
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
@@ -837,6 +839,38 @@ function haveSameWorkspaceIds(left: WorkspaceSnapshot, right: WorkspaceSnapshot)
     && JSON.stringify(leftClassroomIds) === JSON.stringify(rightClassroomIds)
 }
 
+function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
+  remoteSnapshot: WorkspaceSnapshot,
+  localSnapshot: WorkspaceSnapshot | null,
+  marker: PendingRemoteWorkspaceSnapshotMarker | null,
+  authenticatedUserId: string,
+) {
+  if (!localSnapshot || !marker) return null
+  if (marker.savedAt !== localSnapshot.savedAt) return null
+  if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return null
+  if (marker.authenticatedUserId === authenticatedUserId) return null
+
+  const authenticatedUser = remoteSnapshot.users.find((user) => user.id === authenticatedUserId) ?? null
+  if (authenticatedUser?.role !== 'manager' || !authenticatedUser.assignedClassroomId) return null
+  if (!marker.targetClassroomIds?.includes(authenticatedUser.assignedClassroomId)) return null
+
+  const localAssignedClassroom = localSnapshot.classrooms.find((classroom) => classroom.id === authenticatedUser.assignedClassroomId) ?? null
+  if (!localAssignedClassroom) return null
+  if (!remoteSnapshot.classrooms.some((classroom) => classroom.id === authenticatedUser.assignedClassroomId)) return null
+
+  return {
+    snapshot: {
+      ...remoteSnapshot,
+      savedAt: localSnapshot.savedAt,
+      actingClassroomId: authenticatedUser.assignedClassroomId,
+      classrooms: remoteSnapshot.classrooms.map((classroom) => classroom.id === authenticatedUser.assignedClassroomId
+        ? normalizeWorkspaceClassroom(localAssignedClassroom)
+        : classroom),
+    },
+    pendingTargetClassroomIds: [authenticatedUser.assignedClassroomId],
+  }
+}
+
 export function resolveRemoteWorkspaceSnapshot(
   remoteSnapshot: WorkspaceSnapshot,
   localSnapshot: WorkspaceSnapshot | null,
@@ -844,12 +878,29 @@ export function resolveRemoteWorkspaceSnapshot(
   authenticatedUserId: string,
 ) {
   const mergedRemote = mergeWorkspaceWithLocalPreferences(remoteSnapshot, localSnapshot)
-  if (!localSnapshot || !marker) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
-  if (marker.authenticatedUserId !== authenticatedUserId) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
-  if (marker.savedAt !== localSnapshot.savedAt) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
-  if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
-  if (!haveSameWorkspaceIds(localSnapshot, remoteSnapshot)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false }
-  return { snapshot: localSnapshot, usedPendingLocalSnapshot: true }
+  const pendingLocalClassroom = resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
+    mergedRemote,
+    localSnapshot,
+    marker,
+    authenticatedUserId,
+  )
+  if (pendingLocalClassroom) {
+    return {
+      snapshot: pendingLocalClassroom.snapshot,
+      usedPendingLocalSnapshot: true,
+      pendingTargetClassroomIds: pendingLocalClassroom.pendingTargetClassroomIds,
+    }
+  }
+  if (!localSnapshot || !marker) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+  if (marker.authenticatedUserId !== authenticatedUserId) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+  if (marker.savedAt !== localSnapshot.savedAt) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+  if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+  if (!haveSameWorkspaceIds(localSnapshot, remoteSnapshot)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+  return {
+    snapshot: localSnapshot,
+    usedPendingLocalSnapshot: true,
+    pendingTargetClassroomIds: marker.targetClassroomIds,
+  }
 }
 
 function getBoardShareTokenFromUrl() {
@@ -993,6 +1044,7 @@ function AuthenticatedApp() {
   const skipNextDirtyRef = useRef(true)
   const pendingLoadedCleanSignatureRef = useRef<string | null>(null)
   const dirtyTokenRef = useRef(0)
+  const lastPendingWorkspaceSnapshotWriteAtRef = useRef(0)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
   const [localAutoBackupSummaries, setLocalAutoBackupSummaries] = useState<{ backupDateKey: string; savedAt: string }[]>([])
@@ -1263,17 +1315,28 @@ function AuthenticatedApp() {
     if (!isSnapshotPersistenceRuntimeEnabled()) return null
     if (workspaceUsersRef.current.length === 0 || workspaceClassroomsRef.current.length === 0) return null
 
+    const now = Date.now()
+    if (now - lastPendingWorkspaceSnapshotWriteAtRef.current < PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS) return null
+    lastPendingWorkspaceSnapshotWriteAtRef.current = now
+
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    const targetClassroomId = actingClassroomIdRef.current ?? snapshot.actingClassroomId
+    const targetClassroomIds = targetClassroomId && snapshot.classrooms.some((classroom) => classroom.id === targetClassroomId)
+      ? [targetClassroomId]
+      : undefined
     try {
       if (isRemoteBackendEnabled && remoteSessionUserId) {
-        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
       }
-      void saveWorkspaceSnapshot(snapshot).catch(() => {})
+      void saveWorkspaceSnapshot(snapshot).catch(() => {
+        lastPendingWorkspaceSnapshotWriteAtRef.current = 0
+      })
       return snapshot
     } catch {
+      lastPendingWorkspaceSnapshotWriteAtRef.current = 0
       return null
     }
-  }, [buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassroomsRef, workspaceUsersRef])
+  }, [actingClassroomIdRef, buildWorkspaceSnapshot, isRemoteBackendEnabled, remoteSessionUserId, workspaceClassroomsRef, workspaceUsersRef])
 
   const clearRemoteSyncSlowTimer = useCallback(() => {
     if (remoteSyncSlowTimerRef.current !== null) {
@@ -1364,7 +1427,7 @@ function AuthenticatedApp() {
     if (!isRemoteBackendEnabled || !remoteSessionUserId) return false
 
     try {
-      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
     } catch {
       // The local snapshot save path still preserves the data for the next login.
     }
@@ -1575,6 +1638,7 @@ function AuthenticatedApp() {
     const cleanSignature = expectedCleanSignature || buildCurrentDataSignature()
     cleanSignatureRef.current = cleanSignature
     pendingLoadedCleanSignatureRef.current = cleanSignature
+    lastPendingWorkspaceSnapshotWriteAtRef.current = 0
     skipNextDirtyRef.current = true
     isDirtyRef.current = false
     setIsDirty(false)
@@ -1784,7 +1848,7 @@ function AuthenticatedApp() {
       loadWorkspaceSnapshot().catch(() => null),
     ])
 
-    const { snapshot: mergedSnapshot, usedPendingLocalSnapshot } = resolveRemoteWorkspaceSnapshot(
+    const { snapshot: mergedSnapshot, usedPendingLocalSnapshot, pendingTargetClassroomIds } = resolveRemoteWorkspaceSnapshot(
       remoteSnapshot,
       localWorkspaceSnapshot,
       readPendingRemoteWorkspaceSnapshotMarker(),
@@ -1797,7 +1861,7 @@ function AuthenticatedApp() {
 
     applyWorkspaceSnapshot(mergedSnapshot, usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : successMessage)
     if (usedPendingLocalSnapshot) {
-      queueFirebaseWorkspaceSync(mergedSnapshot, true, true, undefined, {
+      queueFirebaseWorkspaceSync(mergedSnapshot, true, true, pendingTargetClassroomIds, {
         onSuccess: () => {
           clearPendingRemoteWorkspaceSnapshotMarker()
           setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
@@ -1810,6 +1874,33 @@ function AuthenticatedApp() {
     }
     setRemoteAuthMessage('')
   }, [actingClassroomId, applyWorkspaceSnapshot, queueFirebaseWorkspaceSync, remoteSessionUserId])
+
+  const queueCurrentWorkspaceSnapshotPersistence = useCallback(() => {
+    if (!isSnapshotPersistenceRuntimeEnabled()) return null
+    clearDelayedAutoRemoteSyncTimer()
+    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
+    const targetClassroomIds = getCurrentClassroomSyncTargetIds(snapshot)
+
+    if (isRemoteBackendEnabled && remoteSessionUserId) {
+      try {
+        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
+      } catch {
+        // The async local save below still preserves the snapshot.
+      }
+    }
+
+    void saveWorkspaceSnapshot(snapshot)
+      .then(() => {
+        setLastSavedAt(snapshot.savedAt)
+      })
+      .catch(() => {})
+
+    if (isRemoteBackendEnabled && remoteSessionUserId) {
+      queueFirebaseWorkspaceSync(snapshot, false, false, targetClassroomIds)
+    }
+
+    return snapshot
+  }, [buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId])
 
   const copyBoardDistributionUrl = useCallback(async () => {
     if (!actingClassroomId || !actingClassroom) throw new Error('配布対象の教室が見つかりません。')
@@ -2441,25 +2532,14 @@ function AuthenticatedApp() {
 
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
+    const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence()
 
     if (shouldReturnDeveloperOnLogout(screenRef.current, currentUser?.role)) {
       setScreen('developer')
-      setPersistenceMessage('開発者画面に戻りました。')
+      setPersistenceMessage(queuedSnapshot && isRemoteBackendEnabled && remoteSessionUserId
+        ? '開発者画面に戻りました。教室データを同期しています…'
+        : '開発者画面に戻りました。')
       return
-    }
-
-    // Flush locally before clearing state; Firebase sync continues in the background.
-    if (isSnapshotPersistenceRuntimeEnabled()) {
-      const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      if (isRemoteBackendEnabled && remoteSessionUserId) {
-        try {
-          markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
-        } catch {}
-      }
-      void saveWorkspaceSnapshot(snapshot).catch(() => {})
-      if (isRemoteBackendEnabled && remoteSessionUserId) {
-        queueFirebaseWorkspaceSync(snapshot, false, false, getCurrentClassroomSyncTargetIds(snapshot))
-      }
     }
 
     if (isRemoteBackendEnabled) {
@@ -2479,7 +2559,7 @@ function AuthenticatedApp() {
     setCurrentUserId('')
     setScreen('board')
     setPersistenceMessage('ログアウトしました。')
-  }, [actingClassroomId, buildWorkspaceSnapshot, currentUser?.role, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData])
+  }, [actingClassroomId, currentUser?.role, isRemoteBackendEnabled, queueCurrentWorkspaceSnapshotPersistence, remoteSessionUserId, syncCurrentClassroomData])
 
   const saveBoard = useCallback(() => {
     clearDelayedAutoRemoteSyncTimer()
@@ -2496,7 +2576,7 @@ function AuthenticatedApp() {
     updateSavingNow(true)
     if (isRemoteBackendEnabled && remoteSessionUserId) {
       try {
-        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
       } catch {
         // The async save path below still attempts IndexedDB/localStorage persistence.
       }
@@ -3384,7 +3464,7 @@ function AuthenticatedApp() {
           if (isDeveloperCloudBackupDirectoryHandle(storedDeveloperCloudBackupHandle)) {
             setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
           }
-          const { snapshot: resolvedSnapshot, usedPendingLocalSnapshot } = resolveRemoteWorkspaceSnapshot(
+          const { snapshot: resolvedSnapshot, usedPendingLocalSnapshot, pendingTargetClassroomIds } = resolveRemoteWorkspaceSnapshot(
             remoteSnapshot,
             localWorkspaceSnapshot,
             readPendingRemoteWorkspaceSnapshotMarker(),
@@ -3395,7 +3475,7 @@ function AuthenticatedApp() {
             usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : 'Firebase から教室ワークスペースを読み込みました。',
           )
           if (usedPendingLocalSnapshot) {
-            queueFirebaseWorkspaceSync(resolvedSnapshot, true, true, undefined, {
+            queueFirebaseWorkspaceSync(resolvedSnapshot, true, true, pendingTargetClassroomIds, {
               onSuccess: () => {
                 clearPendingRemoteWorkspaceSnapshotMarker()
                 setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
@@ -3562,8 +3642,10 @@ function AuthenticatedApp() {
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
       if (isRemoteBackendEnabled && remoteSessionUserId) {
         try {
-          markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
-        } catch {}
+          markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
+        } catch {
+          // The synchronous localStorage fallback below still preserves the snapshot.
+        }
       }
       try {
         writeWorkspaceToLocalStorageSync(snapshot)
@@ -3579,7 +3661,7 @@ function AuthenticatedApp() {
       if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
       if (!isRemoteBackendEnabled || !remoteSessionUserId) return
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId)
+      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
       void saveWorkspaceSnapshot(snapshot).catch(() => {})
       queueFirebaseWorkspaceSync(snapshot, false, false, getCurrentClassroomSyncTargetIds(snapshot))
     }

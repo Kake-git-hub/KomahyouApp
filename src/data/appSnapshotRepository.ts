@@ -33,6 +33,7 @@ export type WorkspaceAutoBackupEntry = {
 export type PendingRemoteWorkspaceSnapshotMarker = {
   savedAt: string
   authenticatedUserId: string
+  targetClassroomIds?: string[]
 }
 
 type AutoBackupRecord = AutoBackupSummary & {
@@ -479,9 +480,18 @@ export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
   window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
 }
 
-export function markPendingRemoteWorkspaceSnapshotSync(snapshot: WorkspaceSnapshot, authenticatedUserId: string) {
+export function markPendingRemoteWorkspaceSnapshotSync(snapshot: WorkspaceSnapshot, authenticatedUserId: string, targetClassroomIds?: string[]) {
   if (typeof window === 'undefined') return
-  const marker: PendingRemoteWorkspaceSnapshotMarker = { savedAt: snapshot.savedAt, authenticatedUserId }
+  const normalizedTargetClassroomIds = Array.isArray(targetClassroomIds)
+    ? Array.from(new Set(targetClassroomIds.filter((classroomId): classroomId is string => typeof classroomId === 'string' && classroomId.trim().length > 0)))
+    : undefined
+  const marker: PendingRemoteWorkspaceSnapshotMarker = {
+    savedAt: snapshot.savedAt,
+    authenticatedUserId,
+    targetClassroomIds: normalizedTargetClassroomIds && normalizedTargetClassroomIds.length > 0
+      ? normalizedTargetClassroomIds
+      : undefined,
+  }
   window.localStorage.setItem(LOCAL_STORAGE_PENDING_REMOTE_WORKSPACE_KEY, JSON.stringify(marker))
 }
 
@@ -494,7 +504,16 @@ export function readPendingRemoteWorkspaceSnapshotMarker(): PendingRemoteWorkspa
     const parsed = JSON.parse(rawValue)
     if (!isRecord(parsed)) return null
     if (typeof parsed.savedAt !== 'string' || typeof parsed.authenticatedUserId !== 'string') return null
-    return { savedAt: parsed.savedAt, authenticatedUserId: parsed.authenticatedUserId }
+    const targetClassroomIds = Array.isArray(parsed.targetClassroomIds)
+      ? Array.from(new Set(parsed.targetClassroomIds.filter((classroomId): classroomId is string => typeof classroomId === 'string' && classroomId.trim().length > 0)))
+      : undefined
+    return {
+      savedAt: parsed.savedAt,
+      authenticatedUserId: parsed.authenticatedUserId,
+      targetClassroomIds: targetClassroomIds && targetClassroomIds.length > 0
+        ? targetClassroomIds
+        : undefined,
+    }
   } catch {
     return null
   }
