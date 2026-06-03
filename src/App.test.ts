@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, clampScreenForUserRole, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 
 describe('sanitizeClassroomSettings', () => {
@@ -285,5 +285,22 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
     expect(sourcePayload.classroomSettings.boardShareToken).toBe('board-share-token')
     expect(sourcePayload.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBe('student-token')
     expect(sourcePayload.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBe('teacher-token')
+  })
+})
+
+describe('buildWorkspaceNavigationSnapshot', () => {
+  it('updates the acting classroom and persists the opened classroom screen', () => {
+    const snapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'classroom-1', 'board')
+
+    const result = buildWorkspaceNavigationSnapshot({
+      snapshot,
+      classroomId: 'development',
+      nextScreen: 'backup-restore',
+      savedAt: '2026-05-26T10:00:05.000Z',
+    })
+
+    expect(result.actingClassroomId).toBe('development')
+    expect(result.savedAt).toBe('2026-05-26T10:00:05.000Z')
+    expect(result.classrooms.find((classroom) => classroom.id === 'development')?.data.screen).toBe('backup-restore')
   })
 })

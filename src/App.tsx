@@ -503,6 +503,31 @@ function cloneInitialValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+export function buildWorkspaceNavigationSnapshot(params: {
+  snapshot: WorkspaceSnapshot
+  classroomId: string
+  nextScreen: AppScreen
+  savedAt: string
+}) {
+  const targetClassroom = params.snapshot.classrooms.find((classroom) => classroom.id === params.classroomId)
+  if (!targetClassroom) return params.snapshot
+
+  return {
+    ...params.snapshot,
+    savedAt: params.savedAt,
+    actingClassroomId: params.classroomId,
+    classrooms: params.snapshot.classrooms.map((classroom) => classroom.id === params.classroomId
+      ? {
+          ...classroom,
+          data: {
+            ...classroom.data,
+            screen: params.nextScreen === 'developer' ? 'board' : params.nextScreen,
+          },
+        }
+      : classroom),
+  }
+}
+
 function createImportedTeachers() {
   return importedMasterData.teachers.map((teacher) => ({
     ...teacher,
@@ -1671,10 +1696,11 @@ function AuthenticatedApp() {
     }
     const nextClassroom = workspaceClassrooms.find((classroom) => classroom.id === classroomId)
     if (!nextClassroom) return
+    const resolvedNextScreen = clampScreenForUserRole(nextScreen ?? nextClassroom.data.screen, currentUser?.role)
 
     setActingClassroomId(classroomId)
     applyClassroomPayloadToState(nextClassroom.data, {
-      setScreen: (value) => setScreen(clampScreenForUserRole(nextScreen ?? value, currentUser?.role)),
+      setScreen: () => setScreen(resolvedNextScreen),
       setManagers,
       setTeachers,
       setStudents,
@@ -1687,8 +1713,16 @@ function AuthenticatedApp() {
       setBoardState,
       setBoardMountKey,
     })
+    const navigationSnapshot = buildWorkspaceNavigationSnapshot({
+      snapshot: buildWorkspaceSnapshot(new Date().toISOString()),
+      classroomId,
+      nextScreen: resolvedNextScreen,
+      savedAt: new Date().toISOString(),
+    })
+    writeWorkspaceToLocalStorageSync(navigationSnapshot)
+    void saveWorkspaceSnapshot(navigationSnapshot).catch(() => {})
     markStateLoadedClean(buildClassroomDataSignature(nextClassroom.data))
-  }, [actingClassroomId, buildClassroomDataSignature, currentUser?.role, markStateLoadedClean, syncCurrentClassroomData, workspaceClassrooms])
+  }, [actingClassroomId, buildClassroomDataSignature, buildWorkspaceSnapshot, currentUser?.role, markStateLoadedClean, syncCurrentClassroomData, workspaceClassrooms])
 
   const applyWorkspaceSnapshot = useCallback((workspaceSnapshot: WorkspaceSnapshot, successMessage: string) => {
     const sanitizedWorkspaceSnapshot = sanitizeWorkspaceSnapshot(workspaceSnapshot)
