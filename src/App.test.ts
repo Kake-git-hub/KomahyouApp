@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, hasUnsavedBoardChanges, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
@@ -92,6 +92,24 @@ describe('hasPendingBoardSaveState', () => {
 
   it('returns false only when the board is fully synced', () => {
     expect(hasPendingBoardSaveState({ isDirty: false, isSavingNow: false, isRemoteSyncPending: false })).toBe(false)
+  })
+})
+
+describe('hasUnsavedBoardChanges', () => {
+  it('treats signature mismatches as unsaved immediately even before dirty state catches up', () => {
+    expect(hasUnsavedBoardChanges({
+      isDirty: false,
+      currentSignature: 'next',
+      cleanSignature: 'previous',
+    })).toBe(true)
+  })
+
+  it('returns false only when dirty is cleared and signatures match', () => {
+    expect(hasUnsavedBoardChanges({
+      isDirty: false,
+      currentSignature: 'same',
+      cleanSignature: 'same',
+    })).toBe(false)
   })
 })
 

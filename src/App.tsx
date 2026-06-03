@@ -834,6 +834,14 @@ export function hasPendingBoardSaveState(params: {
   return params.isDirty || params.isSavingNow || params.isRemoteSyncPending
 }
 
+export function hasUnsavedBoardChanges(params: {
+  isDirty: boolean
+  currentSignature: string
+  cleanSignature: string
+}) {
+  return params.isDirty || params.currentSignature !== params.cleanSignature
+}
+
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
 
@@ -4754,8 +4762,13 @@ function AuthenticatedApp() {
     )
   }
 
-  const boardHasPendingSave = hasPendingBoardSaveState({
+  const hasImmediateUnsavedBoardChanges = hasUnsavedBoardChanges({
     isDirty,
+    currentSignature: dataSignature,
+    cleanSignature: cleanSignatureRef.current,
+  })
+  const boardHasPendingSave = hasPendingBoardSaveState({
+    isDirty: hasImmediateUnsavedBoardChanges,
     isSavingNow,
     isRemoteSyncPending,
   })
@@ -4793,7 +4806,7 @@ function AuthenticatedApp() {
       onLogout={logout}
       onCopyDistributionUrl={copyBoardDistributionUrl}
       onSaveBoard={saveBoard}
-      isBoardDirty={isDirty}
+      isBoardDirty={hasImmediateUnsavedBoardChanges}
       isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
       isBoardSaveDisabled={isRemoteSyncPending && isRemoteSyncVisible}
       hasPendingSave={boardHasPendingSave}

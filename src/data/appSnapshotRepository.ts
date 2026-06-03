@@ -591,9 +591,8 @@ export async function loadWorkspaceSnapshot() {
 }
 
 export async function saveWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
+  const savedToLocalStorage = tryWriteWorkspaceToLocalStorageSync(snapshot)
   const savedToIndexedDb = await writeWorkspaceToIndexedDb(snapshot).catch(() => false)
-  const savedToLocalStorage = savedToIndexedDb ? false : tryWriteWorkspaceToLocalStorageSync(snapshot)
-  if (savedToIndexedDb) removeFromLocalStorage(LOCAL_STORAGE_WORKSPACE_KEY)
   return { savedToIndexedDb, savedToLocalStorage }
 }
 
