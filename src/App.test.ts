@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, clampScreenForUserRole, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, type ClassroomSettings } from './App'
+import { buildDevelopmentClassroomCopyPayload, clampScreenForUserRole, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 
 describe('sanitizeClassroomSettings', () => {
@@ -23,6 +23,29 @@ describe('clampScreenForUserRole', () => {
 
   it('keeps managers out of the developer screen', () => {
     expect(clampScreenForUserRole('developer', 'manager')).toBe('board')
+  })
+})
+
+describe('resolveInitialScreenForUser', () => {
+  it('starts developers on the developer screen even when a classroom is active', () => {
+    expect(resolveInitialScreenForUser('board', 'developer')).toBe('developer')
+    expect(resolveInitialScreenForUser('backup-restore', 'developer')).toBe('developer')
+  })
+
+  it('keeps managers on the classroom screen', () => {
+    expect(resolveInitialScreenForUser('board', 'manager')).toBe('board')
+  })
+})
+
+describe('shouldReturnDeveloperOnLogout', () => {
+  it('returns developers from classroom screens to the developer screen', () => {
+    expect(shouldReturnDeveloperOnLogout('board', 'developer')).toBe(true)
+    expect(shouldReturnDeveloperOnLogout('backup-restore', 'developer')).toBe(true)
+  })
+
+  it('does not intercept real logout from the developer screen or manager screens', () => {
+    expect(shouldReturnDeveloperOnLogout('developer', 'developer')).toBe(false)
+    expect(shouldReturnDeveloperOnLogout('board', 'manager')).toBe(false)
   })
 })
 

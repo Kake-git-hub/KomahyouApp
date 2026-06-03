@@ -716,6 +716,22 @@ export function clampScreenForUserRole(screen: AppScreen, role: WorkspaceUser['r
   return screen === 'developer' ? 'board' : screen
 }
 
+export function resolveInitialScreenForUser(
+  classroomScreen: ClassroomScreen | null | undefined,
+  role: WorkspaceUser['role'] | null | undefined,
+): AppScreen {
+  if (role === 'developer') return 'developer'
+  if (!classroomScreen) return 'board'
+  return clampScreenForUserRole(classroomScreen, role)
+}
+
+export function shouldReturnDeveloperOnLogout(
+  screen: AppScreen,
+  role: WorkspaceUser['role'] | null | undefined,
+) {
+  return role === 'developer' && screen !== 'developer'
+}
+
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
 
@@ -1646,7 +1662,7 @@ function AuthenticatedApp() {
 
     if (targetClassroom) {
       applyClassroomPayloadToState(targetClassroom.data, {
-        setScreen: (value) => setScreen(clampScreenForUserRole(value, currentWorkspaceUser?.role)),
+        setScreen: (value) => setScreen(resolveInitialScreenForUser(value, currentWorkspaceUser?.role)),
         setManagers,
         setTeachers,
         setStudents,
@@ -1660,7 +1676,7 @@ function AuthenticatedApp() {
         setBoardMountKey,
       })
     } else {
-      setScreen(currentWorkspaceUser?.role === 'developer' ? 'developer' : 'board')
+      setScreen(resolveInitialScreenForUser(null, currentWorkspaceUser?.role))
     }
     markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data))
   }, [buildClassroomDataSignature, markStateLoadedClean])
@@ -2334,6 +2350,12 @@ function AuthenticatedApp() {
   const logout = useCallback(() => {
     syncCurrentClassroomData(actingClassroomId)
 
+    if (shouldReturnDeveloperOnLogout(screenRef.current, currentUser?.role)) {
+      setScreen('developer')
+      setPersistenceMessage('開発者画面に戻りました。')
+      return
+    }
+
     // Flush locally before clearing state; Firebase sync continues in the background.
     if (isSnapshotPersistenceRuntimeEnabled()) {
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
@@ -2365,7 +2387,7 @@ function AuthenticatedApp() {
     setCurrentUserId('')
     setScreen('board')
     setPersistenceMessage('ログアウトしました。')
-  }, [actingClassroomId, buildWorkspaceSnapshot, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData])
+  }, [actingClassroomId, buildWorkspaceSnapshot, currentUser?.role, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData])
 
   const saveBoard = useCallback(() => {
     clearDelayedAutoRemoteSyncTimer()
