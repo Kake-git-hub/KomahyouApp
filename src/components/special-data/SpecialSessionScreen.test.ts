@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import * as xlsx from 'xlsx'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from './specialSessionModel'
-import { buildSpecialSessionWorkbook, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
+import { buildSpecialSessionWorkbook, findSessionDateRangeConflict, parseSpecialSessionWorkbook } from './SpecialSessionScreen'
 
 const students: StudentRow[] = [
   {
@@ -152,5 +152,29 @@ describe('SpecialSessionScreen Excel workbook', () => {
       countSubmitted: true,
       updatedAt: '2026-03-21 10:40',
     })
+  })
+})
+
+describe('findSessionDateRangeConflict', () => {
+  it('detects overlapping special session ranges', () => {
+    const conflict = findSessionDateRangeConflict(sessions, {
+      id: 'session_2026_summer',
+      label: '2026 夏期講習',
+      startDate: '2026-04-01',
+      endDate: '2026-04-10',
+    })
+
+    expect(conflict?.id).toBe('session_2026_spring')
+  })
+
+  it('allows adjacent non-overlapping special session ranges', () => {
+    const conflict = findSessionDateRangeConflict(sessions, {
+      id: 'session_2026_summer',
+      label: '2026 夏期講習',
+      startDate: '2026-04-06',
+      endDate: '2026-04-20',
+    })
+
+    expect(conflict).toBeNull()
   })
 })

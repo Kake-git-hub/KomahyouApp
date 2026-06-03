@@ -86,8 +86,41 @@ function hasSessionEditorChanges(previous: Pick<SpecialSessionRow, 'label' | 'st
     || previous.endDate !== next.endDate
 }
 
+type SpecialSessionIdentity = Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate'>
+
 function normalizeText(value: unknown) {
   return String(value ?? '').trim()
+}
+
+function findSessionWithSameLabel(sessions: SpecialSessionIdentity[], candidate: SpecialSessionIdentity) {
+  const normalizedLabel = normalizeSessionLabel(candidate.label)
+  if (!normalizedLabel) return null
+  return sessions.find((session) => session.id !== candidate.id && normalizeSessionLabel(session.label) === normalizedLabel) ?? null
+}
+
+export function findSessionDateRangeConflict(sessions: SpecialSessionIdentity[], candidate: SpecialSessionIdentity) {
+  if (!candidate.startDate || !candidate.endDate) return null
+  return sessions.find((session) => (
+    session.id !== candidate.id
+    && session.startDate
+    && session.endDate
+    && compareDateString(candidate.startDate, session.endDate) <= 0
+    && compareDateString(session.startDate, candidate.endDate) <= 0
+  )) ?? null
+}
+
+function validateSessionDraftAgainstSessions(sessions: SpecialSessionIdentity[], candidate: SpecialSessionIdentity) {
+  const duplicateLabelSession = findSessionWithSameLabel(sessions, candidate)
+  if (duplicateLabelSession) {
+    return '同じ講習名の特別講習データが既にあります。重複を解消してください。'
+  }
+
+  const conflictingSession = findSessionDateRangeConflict(sessions, candidate)
+  if (conflictingSession) {
+    return `「${conflictingSession.label}」と講習期間が重複しています。同期間の特別講習は作成できません。`
+  }
+
+  return ''
 }
 
 function normalizeBooleanCell(value: unknown) {
@@ -568,6 +601,12 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
     const session = sessions.find((row) => row.id === id)
 
     if (previous && session && hasSessionEditorChanges(previous, session)) {
+      const validationMessage = validateSessionDraftAgainstSessions(sessions, session)
+      if (validationMessage) {
+        onUpdateSessions((current) => current.map((row) => (row.id === id ? { ...row, ...previous } : row)))
+        setStatusMessage(validationMessage)
+        return
+      }
       onUpdateSessions((current) => current.map((row) => (row.id === id ? { ...row, updatedAt: updateTimestamp() } : row)))
       setStatusMessage('特別講習データを更新しました。')
     }
@@ -638,8 +677,14 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
       setStatusMessage('講習期間はカレンダーで開始日と終了日を選択してください。')
       return
     }
-    if (sessions.some((session) => normalizeSessionLabel(session.label) === normalizedLabel)) {
-      setStatusMessage('同じ講習名の特別講習データが既にあります。重複を解消してください。')
+    const validationMessage = validateSessionDraftAgainstSessions(sessions, {
+      id: '__draft__',
+      label: normalizedLabel,
+      startDate: draft.startDate,
+      endDate: draft.endDate,
+    })
+    if (validationMessage) {
+      setStatusMessage(validationMessage)
       return
     }
 

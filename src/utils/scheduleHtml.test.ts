@@ -1354,7 +1354,8 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const payload = JSON.parse(payloadMatch![1])
     expect(payload.cells[0]?.desks).toHaveLength(1)
     expect(payload.cells[0]?.desks?.[0]?.teacherId).toBe('teacher-ochiai')
-    expect(html).toContain('const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);')
+    expect(html).toContain('if (desk.teacherId) teacherKeys.push(desk.teacherId);')
+    expect(html).toContain('else if (Array.isArray(desk.regularTeacherIds)) teacherKeys.push.apply(teacherKeys, desk.regularTeacherIds.filter(Boolean));')
     expect(html).toContain('function normalizeTeacherAssignmentName(value)')
     expect(html).toContain('function collectTeacherAssignmentEntries(assignmentMap, teacher)')
     expect(html).toContain('const entries = collectTeacherAssignmentEntries(assignmentMap, teacher);')
@@ -1529,7 +1530,91 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       regularTeacherIds: ['teacher-ochiai'],
       lesson: { students: [{ name: '井上' }] },
     })
-    expect(html).toContain('const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);')
+    expect(html).toContain('if (desk.teacherId) teacherKeys.push(desk.teacherId);')
+    expect(html).toContain('else if (Array.isArray(desk.regularTeacherIds)) teacherKeys.push.apply(teacherKeys, desk.regularTeacherIds.filter(Boolean));')
+    vi.unstubAllGlobals()
+  })
+
+  it('prefers the actual assigned teacher over regular teacher ids for teacher schedules', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [{
+        id: '2026-07-21_4',
+        dateKey: '2026-07-21',
+        dayLabel: '火',
+        dateLabel: '7/21',
+        slotLabel: '4限',
+        slotNumber: 4,
+        timeLabel: '18:00-19:30',
+        isOpenDay: true,
+        desks: [{
+          id: '2026-07-21_4_desk_1',
+          teacher: '増渕',
+          teacherAssignmentTeacherId: 'teacher-masubuchi',
+          lesson: {
+            id: 'lesson-student',
+            studentSlots: [{
+              id: 'student-entry-1',
+              name: '井上',
+              managedStudentId: 'student-inoue',
+              grade: '中2',
+              subject: '英',
+              lessonType: 'regular',
+              teacherType: 'normal',
+            }, null],
+          },
+        }],
+      }],
+      plannedCells: [],
+      teachers: [
+        createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' }),
+        createTeacher({ id: 'teacher-masubuchi', name: '増渕 遼', displayName: '増渕' }),
+      ],
+      students: [createStudent({ id: 'student-inoue', name: '井上 花子', displayName: '井上' })],
+      regularLessons: [{
+        id: 'regular-ochiai-inoue',
+        schoolYear: 2026,
+        teacherId: 'teacher-ochiai',
+        student1Id: 'student-inoue',
+        subject1: '英',
+        startDate: '2026-04-01',
+        endDate: '未定',
+        student2Id: '',
+        subject2: '',
+        student2StartDate: '',
+        student2EndDate: '',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 2,
+        slotNumber: 4,
+      }],
+      defaultStartDate: '2026-07-21',
+      defaultEndDate: '2026-07-21',
+      defaultPersonId: 'teacher-ochiai',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('if (desk.teacherId) teacherKeys.push(desk.teacherId);')
+    expect(html).not.toContain('const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);')
     vi.unstubAllGlobals()
   })
 

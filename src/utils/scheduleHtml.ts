@@ -2718,8 +2718,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
             if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
             const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
-            const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);
-            teacherKeys.forEach((teacherKey) => {
+            const teacherKeys = [];
+            if (desk.teacherId) teacherKeys.push(desk.teacherId);
+            else if (Array.isArray(desk.regularTeacherIds)) teacherKeys.push.apply(teacherKeys, desk.regularTeacherIds.filter(Boolean));
+            [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)].filter(Boolean).forEach((teacherKey) => {
+              teacherKeys.push(teacherKey);
+            });
+            Array.from(new Set(teacherKeys)).forEach((teacherKey) => {
               if (!map.has(teacherKey)) map.set(teacherKey, []);
               map.get(teacherKey).push(entry);
             });

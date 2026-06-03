@@ -3293,6 +3293,37 @@ function AuthenticatedApp() {
   }, [syncTeacherSchedulePopup])
 
   useEffect(() => {
+    syncSpecialSessionPopup()
+
+    const syncSchedulePopupForRange = (viewType: 'student' | 'teacher') => {
+      const range = buildNormalizedScheduleRange(
+        viewType,
+        viewType === 'student' ? studentScheduleRange : teacherScheduleRange,
+        actingClassroomId,
+      )
+      if (isActingDevelopmentClassroom) {
+        void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+          .then(() => {
+            if (viewType === 'student') syncStudentSchedulePopup()
+            else syncTeacherSchedulePopup()
+          })
+          .catch(() => {
+            if (viewType === 'student') syncStudentSchedulePopup()
+            else syncTeacherSchedulePopup()
+          })
+        return
+      }
+
+      ensureScheduleSubmissionTokens(range.startDate, range.endDate).catch(() => { /* ignore */ })
+      if (viewType === 'student') syncStudentSchedulePopup()
+      else syncTeacherSchedulePopup()
+    }
+
+    syncSchedulePopupForRange('student')
+    syncSchedulePopupForRange('teacher')
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, specialSessions, studentScheduleRange, teacherScheduleRange, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !boardState) return
     // 日程表ポップアップは __lessonScheduleBoardWeeks をボード実績データとして参照する。
     // 以前は screen !== 'board' のときだけ更新していたが、コマ表画面のままハードリロード
