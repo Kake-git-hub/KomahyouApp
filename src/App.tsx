@@ -1141,17 +1141,19 @@ function AuthenticatedApp() {
   const isCurrentClassroomTemporarilySuspended = Boolean(actingClassroom?.isTemporarilySuspended)
   const isCurrentClassroomCancelled = actingClassroom?.contractStatus === 'suspended'
   const isCurrentClassroomSuspended = isCurrentClassroomCancelled || isCurrentClassroomTemporarilySuspended
-  const activeSubmissionAcknowledgement = submissionAcknowledgements[0] ?? null
   const areAllContractedClassroomsTemporarilySuspended = useMemo(() => {
     const contractedClassrooms = workspaceClassrooms.filter((classroom) => classroom.contractStatus === 'active')
     if (contractedClassrooms.length === 0) return false
     return contractedClassrooms.every((classroom) => classroom.isTemporarilySuspended)
   }, [workspaceClassrooms])
-  const acknowledgeSubmissionModal = useCallback(() => {
-    setSubmissionAcknowledgements((current) => current.slice(1))
+  const acknowledgeSubmissionEntry = useCallback((id: string) => {
+    setSubmissionAcknowledgements((current) => current.filter((entry) => entry.id !== id))
+  }, [])
+  const acknowledgeAllSubmissions = useCallback(() => {
+    setSubmissionAcknowledgements([])
   }, [])
   const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode) => {
-    if (!activeSubmissionAcknowledgement) return <>{content}</>
+    if (submissionAcknowledgements.length === 0) return <>{content}</>
 
     return (
       <>
@@ -1164,33 +1166,45 @@ function AuthenticatedApp() {
             aria-label="QR提出通知"
             data-testid="submission-acknowledgement-modal"
           >
-            <div className="submission-acknowledgement-kicker">QR提出通知</div>
-            <h2>{activeSubmissionAcknowledgement.classroomName}</h2>
-            <p className="submission-acknowledgement-message">
-              {activeSubmissionAcknowledgement.personType === 'student' ? '生徒' : '講師'}
-              {' '}
-              <strong>{activeSubmissionAcknowledgement.personName}</strong>
-              {' '}
-              が
-              {' '}
-              <strong>{activeSubmissionAcknowledgement.sessionLabel}</strong>
-              の QR 提出を完了しました。
-            </p>
-            {submissionAcknowledgements.length > 1 ? (
-              <div className="submission-acknowledgement-meta">
-                残り {submissionAcknowledgements.length - 1} 件の提出通知があります。
-              </div>
-            ) : null}
+            <div className="submission-acknowledgement-kicker">
+              QR提出通知{submissionAcknowledgements.length > 1 ? `（${submissionAcknowledgements.length}件）` : ''}
+            </div>
+            <ul className="submission-acknowledgement-list">
+              {submissionAcknowledgements.map((entry) => (
+                <li key={entry.id} className="submission-acknowledgement-item" data-testid="submission-acknowledgement-item">
+                  <button
+                    type="button"
+                    className="submission-acknowledgement-dismiss"
+                    onClick={() => acknowledgeSubmissionEntry(entry.id)}
+                    aria-label={`${entry.personName} の通知を消す`}
+                    data-testid="submission-acknowledgement-dismiss"
+                  >
+                    ×
+                  </button>
+                  <div className="submission-acknowledgement-item-classroom">{entry.classroomName}</div>
+                  <p className="submission-acknowledgement-message">
+                    {entry.personType === 'student' ? '生徒' : '講師'}
+                    {' '}
+                    <strong>{entry.personName}</strong>
+                    {' '}
+                    が
+                    {' '}
+                    <strong>{entry.sessionLabel}</strong>
+                    の QR 提出を完了しました。
+                  </p>
+                </li>
+              ))}
+            </ul>
             <div className="submission-acknowledgement-actions">
-              <button type="button" className="primary-button" onClick={acknowledgeSubmissionModal} data-testid="submission-acknowledgement-confirm">
-                確認
+              <button type="button" className="primary-button" onClick={acknowledgeAllSubmissions} data-testid="submission-acknowledgement-confirm">
+                すべて確認
               </button>
             </div>
           </div>
         </div>
       </>
     )
-  }, [acknowledgeSubmissionModal, activeSubmissionAcknowledgement, submissionAcknowledgements.length])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
@@ -1913,7 +1927,9 @@ function AuthenticatedApp() {
 
     applyWorkspaceSnapshot(mergedSnapshot, usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : successMessage)
     if (usedPendingLocalSnapshot) {
-      queueFirebaseWorkspaceSync(mergedSnapshot, true, true, pendingTargetClassroomIds, {
+      // ログイン直後の自動復元はユーザー操作ではないため、保存ボタンの「保存中」表示や
+      // 進捗バーは出さず、メッセージのみで静かに同期する。
+      queueFirebaseWorkspaceSync(mergedSnapshot, false, false, pendingTargetClassroomIds, {
         onSuccess: () => {
           clearPendingRemoteWorkspaceSnapshotMarker()
           setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
@@ -2615,22 +2631,28 @@ function AuthenticatedApp() {
   }, [actingClassroomId, currentUser?.role, isRemoteBackendEnabled, queueCurrentWorkspaceSnapshotPersistence, remoteSessionUserId, syncCurrentClassroomData])
 
   const saveBoard = useCallback(() => {
+    // クリックした瞬間に必ず「保存中…」表示へ切り替える。後続処理の順序やタイミングに
+    // 依存せず、ユーザーが押したことが一目で分かるよう最優先でフラグを立てる。
+    updateSavingNow(true)
+    const shouldShowManualSaveProgress = isRemoteBackendEnabled && Boolean(remoteSessionUserId)
+    if (shouldShowManualSaveProgress) {
+      updateRemoteSyncVisible(true)
+      setRemoteSyncProgress({ percent: 1, label: 'ブラウザへ保存中', elapsedSeconds: 0 })
+    }
+
     clearDelayedAutoRemoteSyncTimer()
     syncCurrentClassroomData(actingClassroomId)
     if (!remoteSaveInFlightRef.current) remoteSyncStartedAtRef.current = Date.now()
 
     if (!isSnapshotPersistenceRuntimeEnabled()) {
+      updateSavingNow(false)
+      updateRemoteSyncVisible(false)
+      setRemoteSyncProgress(null)
       setPersistenceMessage('スナップショット保存が無効化されています。')
       return
     }
 
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    updateSavingNow(true)
-    const shouldShowManualSaveProgress = isRemoteBackendEnabled && Boolean(remoteSessionUserId)
-    if (shouldShowManualSaveProgress) {
-      updateRemoteSyncVisible(true)
-      setRemoteSyncProgress({ percent: 1, label: 'ブラウザへ保存中', elapsedSeconds: getRemoteSyncElapsedSeconds() })
-    }
     if (isRemoteBackendEnabled && remoteSessionUserId) {
       try {
         markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
@@ -2696,7 +2718,7 @@ function AuthenticatedApp() {
           ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
           : '保存に失敗しました。バックアップを書き出してください。')
       })()
-  }, [actingClassroomId, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, setCleanSignature, updateRemoteSyncVisible, updateSavingNow])
+  }, [actingClassroomId, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, setCleanSignature, updateRemoteSyncVisible, updateSavingNow])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
@@ -3562,7 +3584,8 @@ function AuthenticatedApp() {
             usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : 'Firebase から教室ワークスペースを読み込みました。',
           )
           if (usedPendingLocalSnapshot) {
-            queueFirebaseWorkspaceSync(resolvedSnapshot, true, true, pendingTargetClassroomIds, {
+            // ログイン直後の自動復元は静かに同期する（保存ボタンの回転や進捗バーを出さない）。
+            queueFirebaseWorkspaceSync(resolvedSnapshot, false, false, pendingTargetClassroomIds, {
               onSuccess: () => {
                 clearPendingRemoteWorkspaceSnapshotMarker()
                 setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
@@ -4683,8 +4706,8 @@ function AuthenticatedApp() {
       onCopyDistributionUrl={copyBoardDistributionUrl}
       onSaveBoard={saveBoard}
       isBoardDirty={hasImmediateUnsavedBoardChanges}
-      isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
-      isBoardSaveDisabled={isRemoteSyncPending && isRemoteSyncVisible}
+      isBoardSaving={isSavingNow}
+      isBoardSaveDisabled={isSavingNow}
       hasPendingSave={boardHasPendingSave}
       syncStatusMessage={shouldShowRemoteSyncStatus
         ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')

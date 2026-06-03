@@ -232,17 +232,65 @@
   line-height: 1.2;
 }
 
-.submission-acknowledgement-message {
+.submission-acknowledgement-list {
   margin: 0;
-  color: #244564;
-  font-size: 16px;
-  line-height: 1.7;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
 }
 
-.submission-acknowledgement-meta {
-  color: #58708d;
-  font-size: 13px;
-  font-weight: 700;
+.submission-acknowledgement-item {
+  position: relative;
+  padding: 16px 48px 16px 18px;
+  border: 1px solid #d7e2f1;
+  border-radius: 14px;
+  background: #f7faff;
+}
+
+.submission-acknowledgement-item-classroom {
+  margin-bottom: 6px;
+  color: #1f5d96;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.submission-acknowledgement-message {
+  margin: 0;
+  color: #1c3a5c;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.submission-acknowledgement-message strong {
+  color: #16314f;
+  font-weight: 800;
+}
+
+.submission-acknowledgement-dismiss {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 50%;
+  background: #e7eef8;
+  color: #36506d;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.submission-acknowledgement-dismiss:hover {
+  background: #d4e2f7;
+  color: #16314f;
 }
 
 .submission-acknowledgement-actions {
