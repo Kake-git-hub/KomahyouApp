@@ -31,6 +31,7 @@ import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubjec
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom } from './utils/developmentClassroom'
+import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -40,6 +41,11 @@ const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
+}
+
+function isTransientFirebaseSyncError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return /INTERNAL|UNAVAILABLE|DEADLINE_EXCEEDED|timeout|timed out/i.test(message)
 }
 
 function useLatestState<T>(initialValue: T | (() => T)) {
@@ -1049,6 +1055,7 @@ function AuthenticatedApp() {
     snapshot: WorkspaceSnapshot
     targetClassroomIds?: string[]
     showSlowMessage?: boolean
+    downloadBackupOnFailure?: boolean
     onSuccess?: () => void
     onFailure?: (error: unknown) => void
   } | null>(null)
@@ -1056,6 +1063,7 @@ function AuthenticatedApp() {
   const remoteSyncProgressTimerRef = useRef<number | null>(null)
   const delayedAutoRemoteSyncTimerRef = useRef<number | null>(null)
   const remoteSyncStartedAtRef = useRef(0)
+  const downloadedFirebaseFailureBackupKeysRef = useRef<Set<string>>(new Set())
   const saveDiagnosticsRef = useRef<SaveDiagnosticEntry[]>([])
   isDirtyRef.current = isDirty
   isSavingNowRef.current = isSavingNow
@@ -1075,6 +1083,26 @@ function AuthenticatedApp() {
     }
     saveDiagnosticsRef.current = [...saveDiagnosticsRef.current.slice(-199), diagnostic]
     console.info('[komahyou-save]', diagnostic)
+  }, [])
+
+  const downloadFirebaseFailureBackup = useCallback((snapshot: WorkspaceSnapshot) => {
+    const backupKey = `${snapshot.savedAt}:${snapshot.currentUserId}:${snapshot.actingClassroomId ?? 'none'}`
+    if (downloadedFirebaseFailureBackupKeysRef.current.has(backupKey)) return false
+    try {
+      downloadTextFile(
+        formatBackupFileName(snapshot.savedAt, 'Firebase同期失敗時バックアップ'),
+        serializeWorkspaceSnapshot(snapshot),
+        'application/json',
+      )
+      downloadedFirebaseFailureBackupKeysRef.current.add(backupKey)
+      if (downloadedFirebaseFailureBackupKeysRef.current.size > 30) {
+        const retained = Array.from(downloadedFirebaseFailureBackupKeysRef.current).slice(-20)
+        downloadedFirebaseFailureBackupKeysRef.current = new Set(retained)
+      }
+      return true
+    } catch {
+      return false
+    }
   }, [])
 
   const updateRemoteSyncPending = useCallback((nextIsPending: boolean) => {
@@ -1116,6 +1144,10 @@ function AuthenticatedApp() {
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
+  const manualFirebaseSaveStabilityEnabled = useMemo(
+    () => isFeatureEnabledForClassroom('manualFirebaseSaveStability', actingClassroom),
+    [actingClassroom],
+  )
   const developmentClassroomCopySources = useMemo(() => workspaceClassrooms
     .filter((classroom) => classroom.id !== actingClassroomId)
     .map((classroom) => ({
@@ -1511,6 +1543,7 @@ function AuthenticatedApp() {
   }, [actingClassroomIdRef, buildClassroomDataSignature, buildCurrentDataSignature])
 
   const queueFirebaseWorkspaceSync = useCallback((snapshot: WorkspaceSnapshot, showSlowMessage = false, showProgress = false, targetClassroomIds?: string[], callbacks?: {
+    downloadBackupOnFailure?: boolean
     onSuccess?: () => void
     onFailure?: (error: unknown) => void
   }) => {
@@ -1536,6 +1569,7 @@ function AuthenticatedApp() {
       snapshot,
       targetClassroomIds,
       showSlowMessage: showSlowMessage || existingQueuedItem?.showSlowMessage,
+      downloadBackupOnFailure: Boolean(callbacks?.downloadBackupOnFailure || existingQueuedItem?.downloadBackupOnFailure),
       onSuccess: () => {
         existingQueuedItem?.onSuccess?.()
         callbacks?.onSuccess?.()
@@ -1622,12 +1656,27 @@ function AuthenticatedApp() {
             setRemoteSyncProgress({ ...progress, elapsedSeconds })
             setPersistenceMessage(`${progress.label}(${progress.percent}%完了)`)
           }
-          const result = await saveClassroomSnapshotViaFunction({
-            classroomId: targetClassroom.id,
-            savedAt: nextItem.snapshot.savedAt,
-            saveId: createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id),
-            payload: targetClassroom.data,
-          })
+          const maxAttempts = manualFirebaseSaveStabilityEnabled ? 3 : 1
+          let result: Awaited<ReturnType<typeof saveClassroomSnapshotViaFunction>> | null = null
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            try {
+              result = await saveClassroomSnapshotViaFunction({
+                classroomId: targetClassroom.id,
+                savedAt: nextItem.snapshot.savedAt,
+                saveId: createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id),
+                payload: targetClassroom.data,
+              })
+              break
+            } catch (error) {
+              if (!manualFirebaseSaveStabilityEnabled || !isTransientFirebaseSyncError(error) || attempt >= maxAttempts) {
+                throw error
+              }
+              await new Promise<void>((resolve) => {
+                window.setTimeout(resolve, 350 * attempt)
+              })
+            }
+          }
+          if (!result) throw new Error('Firebase 同期の再試行が完了できませんでした。')
           appendSaveDiagnostic({
             stage: 'firebase-progress',
             percent: 20 + Math.floor(((classroomIndex + 1) / targetClassrooms.length) * 75),
@@ -1668,10 +1717,16 @@ function AuthenticatedApp() {
         isDirtyRef.current = true
         setIsDirty(true)
         const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
+        const downloadedBackup = manualFirebaseSaveStabilityEnabled && nextItem.downloadBackupOnFailure
+          ? downloadFirebaseFailureBackup(nextItem.snapshot)
+          : false
         if (isRemoteSyncVisibleRef.current) setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}`)
+        if (isRemoteSyncVisibleRef.current && downloadedBackup) {
+          setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}。バックアップJSONを自動ダウンロードしました。`)
+        }
         appendSaveDiagnostic({
           stage: 'firebase-failure',
-          details: { message },
+          details: { message, downloadedBackup },
         })
         nextItem.onFailure?.(error)
       } finally {
@@ -1691,7 +1746,7 @@ function AuthenticatedApp() {
 
     void runNext()
     return true
-  }, [appendSaveDiagnostic, clearRemoteSyncProgressTimer, clearRemoteSyncSlowTimer, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, markCleanIfSnapshotMatchesCurrent, remoteSessionUserId, updateRemoteSyncPending, updateRemoteSyncVisible])
+  }, [appendSaveDiagnostic, clearRemoteSyncProgressTimer, clearRemoteSyncSlowTimer, downloadFirebaseFailureBackup, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, markCleanIfSnapshotMatchesCurrent, remoteSessionUserId, updateRemoteSyncPending, updateRemoteSyncVisible])
 
   // Re-evaluate dirty whenever the signature changes. Mark clean only when current
   // signature exactly equals the last known saved/loaded baseline.
@@ -2712,6 +2767,7 @@ function AuthenticatedApp() {
         setLastSavedAt(snapshot.savedAt)
         if (isRemoteBackendEnabled && remoteSessionUserId) {
           queueFirebaseWorkspaceSync(snapshot, true, true, getCurrentClassroomSyncTargetIds(snapshot), {
+            downloadBackupOnFailure: manualFirebaseSaveStabilityEnabled,
             onSuccess: () => {
               finalizeClean()
               updateSavingNow(false)
@@ -2735,7 +2791,7 @@ function AuthenticatedApp() {
         ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
         : '保存に失敗しました。バックアップを書き出してください。')
     })()
-  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, updateSavingNow])
+  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, updateSavingNow])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
@@ -4691,7 +4747,9 @@ function AuthenticatedApp() {
     isSavingNow,
     isRemoteSyncPending,
   })
-  const shouldShowRemoteSyncStatus = isRemoteSyncPending && (isRemoteSyncVisible || isDirty)
+  const shouldShowRemoteSyncStatus = manualFirebaseSaveStabilityEnabled
+    ? Boolean(isRemoteSyncVisible)
+    : isRemoteSyncPending && (isRemoteSyncVisible || isDirty)
 
   return renderWithSubmissionAcknowledgement(
     <ScheduleBoardScreen
@@ -4729,7 +4787,7 @@ function AuthenticatedApp() {
       hasPendingSave={boardHasPendingSave}
       syncStatusMessage={shouldShowRemoteSyncStatus
         ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')
-        : ((isSavingNow || isDirty) ? persistenceMessage : undefined)}
+        : (manualFirebaseSaveStabilityEnabled ? undefined : ((isSavingNow || isDirty) ? persistenceMessage : undefined))}
       syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
     />
