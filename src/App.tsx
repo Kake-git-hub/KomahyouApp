@@ -203,15 +203,6 @@ type AddClassroomOptions = {
   contractEndDate?: string
 }
 
-type SaveDiagnosticEntry = {
-  at: string
-  elapsedMs: number | null
-  stage: string
-  percent?: number
-  label?: string
-  details?: Record<string, unknown>
-}
-
 function downloadTextFile(fileName: string, content: string, mimeType: string) {
   const blob = new Blob([content], { type: mimeType })
   const url = URL.createObjectURL(blob)
@@ -834,13 +825,6 @@ export function hasPendingBoardSaveState(params: {
   return params.isDirty || params.isSavingNow || params.isRemoteSyncPending
 }
 
-export function hasUnsavedBoardChanges(params: {
-  isDirty: boolean
-  currentSignature: string
-  cleanSignature: string
-}) {
-  return params.isDirty || params.currentSignature !== params.cleanSignature
-}
 
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
@@ -1049,12 +1033,10 @@ function AuthenticatedApp() {
   const [studentScheduleRequest, setStudentScheduleRequest] = useState<StudentScheduleRequest | null>(null)
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
-  const [isDirty, setIsDirty] = useState(false)
   const [isSavingNow, setIsSavingNow] = useState(false)
   const [isRemoteSyncPending, setIsRemoteSyncPending] = useState(false)
   const [isRemoteSyncVisible, setIsRemoteSyncVisible] = useState(false)
   const [remoteSyncProgress, setRemoteSyncProgress] = useState<{ percent: number; label: string; elapsedSeconds: number } | null>(null)
-  const isDirtyRef = useRef(false)
   const isSavingNowRef = useRef(false)
   const isRemoteSyncPendingRef = useRef(false)
   const isRemoteSyncVisibleRef = useRef(false)
@@ -1072,25 +1054,12 @@ function AuthenticatedApp() {
   const delayedAutoRemoteSyncTimerRef = useRef<number | null>(null)
   const remoteSyncStartedAtRef = useRef(0)
   const downloadedFirebaseFailureBackupKeysRef = useRef<Set<string>>(new Set())
-  const saveDiagnosticsRef = useRef<SaveDiagnosticEntry[]>([])
-  isDirtyRef.current = isDirty
   isSavingNowRef.current = isSavingNow
   isRemoteSyncPendingRef.current = isRemoteSyncPending
   isRemoteSyncVisibleRef.current = isRemoteSyncVisible
   const updateSavingNow = useCallback((nextIsSaving: boolean) => {
     isSavingNowRef.current = nextIsSaving
     setIsSavingNow(nextIsSaving)
-  }, [])
-
-  const appendSaveDiagnostic = useCallback((entry: Omit<SaveDiagnosticEntry, 'at' | 'elapsedMs'>) => {
-    const startedAt = remoteSyncStartedAtRef.current
-    const diagnostic: SaveDiagnosticEntry = {
-      at: new Date().toISOString(),
-      elapsedMs: startedAt ? Math.max(0, Date.now() - startedAt) : null,
-      ...entry,
-    }
-    saveDiagnosticsRef.current = [...saveDiagnosticsRef.current.slice(-199), diagnostic]
-    console.info('[komahyou-save]', diagnostic)
   }, [])
 
   const downloadFirebaseFailureBackup = useCallback((snapshot: WorkspaceSnapshot) => {
@@ -1121,9 +1090,6 @@ function AuthenticatedApp() {
     isRemoteSyncVisibleRef.current = nextIsVisible
     setIsRemoteSyncVisible(nextIsVisible)
   }, [])
-  const skipNextDirtyRef = useRef(true)
-  const pendingLoadedCleanSignatureRef = useRef<string | null>(null)
-  const dirtyTokenRef = useRef(0)
   const lastPendingWorkspaceSnapshotWriteAtRef = useRef(0)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
@@ -1501,7 +1467,9 @@ function AuthenticatedApp() {
       : undefined
   }, [actingClassroomIdRef])
 
-  const cleanSignatureRef = useRef<string>('')
+  // 最後に保存/読込が完了した時点のデータ署名。state なので更新で再描画され、
+  // ref (useLatestState が同期更新) なので各コールバックから常に最新値を読める。
+  const [cleanSignature, setCleanSignature, cleanSignatureRef] = useLatestState<string>('')
 
   const buildClassroomDataSignature = useCallback((payload: AppSnapshotPayload | null | undefined) => {
     const payloadBoardState = payload?.boardState ?? null
@@ -1544,11 +1512,9 @@ function AuthenticatedApp() {
     const snapshotSignature = buildClassroomDataSignature(snapshotClassroom?.data)
     const currentSignature = buildCurrentDataSignature()
     if (!snapshotSignature || snapshotSignature !== currentSignature) return false
-    cleanSignatureRef.current = currentSignature
-    isDirtyRef.current = false
-    setIsDirty(false)
+    setCleanSignature(currentSignature)
     return true
-  }, [actingClassroomIdRef, buildClassroomDataSignature, buildCurrentDataSignature])
+  }, [actingClassroomIdRef, buildClassroomDataSignature, buildCurrentDataSignature, setCleanSignature])
 
   const queueFirebaseWorkspaceSync = useCallback((snapshot: WorkspaceSnapshot, showSlowMessage = false, showProgress = false, targetClassroomIds?: string[], callbacks?: {
     downloadBackupOnFailure?: boolean
@@ -1564,15 +1530,6 @@ function AuthenticatedApp() {
     }
 
     const existingQueuedItem = queuedRemoteSnapshotRef.current
-    appendSaveDiagnostic({
-      stage: 'firebase-queue',
-      details: {
-        showProgress,
-        targetClassroomIds: targetClassroomIds ?? null,
-        replacedQueuedSnapshot: Boolean(existingQueuedItem),
-        classroomCount: snapshot.classrooms.length,
-      },
-    })
     queuedRemoteSnapshotRef.current = {
       snapshot,
       targetClassroomIds,
@@ -1618,13 +1575,6 @@ function AuthenticatedApp() {
       if (isRemoteSyncVisibleRef.current) {
         setRemoteSyncProgress({ percent: 1, label: 'データベースへ保存準備中', elapsedSeconds: 0 })
       }
-      appendSaveDiagnostic({
-        stage: 'firebase-start',
-        details: {
-          targetClassroomIds: nextItem.targetClassroomIds ?? null,
-          savedAt: nextItem.snapshot.savedAt,
-        },
-      })
       if (nextItem.showSlowMessage) {
         remoteSyncSlowTimerRef.current = window.setTimeout(() => {
           remoteSyncSlowTimerRef.current = null
@@ -1639,12 +1589,6 @@ function AuthenticatedApp() {
           : nextItem.snapshot.classrooms
         if (targetClassrooms.length === 0) throw new Error('保存対象の教室データが見つかりません。')
         const startProgress = { percent: 20, label: 'Cloud Functions 経由で保存準備中' }
-        appendSaveDiagnostic({
-          stage: 'firebase-progress',
-          percent: startProgress.percent,
-          label: startProgress.label,
-          details: { writeMode: 'cloud-function-verified', classroomCount: targetClassrooms.length },
-        })
         if (isRemoteSyncVisibleRef.current) {
           const elapsedSeconds = getRemoteSyncElapsedSeconds()
           setRemoteSyncProgress({ ...startProgress, elapsedSeconds })
@@ -1653,12 +1597,6 @@ function AuthenticatedApp() {
         for (const [classroomIndex, targetClassroom] of targetClassrooms.entries()) {
           const percent = 20 + Math.floor((classroomIndex / targetClassrooms.length) * 75)
           const saveId = createRemoteSaveId(nextItem.snapshot.savedAt, targetClassroom.id)
-          appendSaveDiagnostic({
-            stage: 'firebase-progress',
-            percent,
-            label: `Cloud Functions 経由で保存中: ${classroomIndex + 1}/${targetClassrooms.length}教室`,
-            details: { writeMode: 'cloud-function-verified', classroomId: targetClassroom.id },
-          })
           if (isRemoteSyncVisibleRef.current) {
             const elapsedSeconds = getRemoteSyncElapsedSeconds()
             const progress = { percent, label: `Cloud Functions 経由で保存中: ${classroomIndex + 1}/${targetClassrooms.length}教室` }
@@ -1669,13 +1607,14 @@ function AuthenticatedApp() {
           let result: Awaited<ReturnType<typeof saveClassroomSnapshotViaFunction>> | null = null
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
+              // すべての教室で同一の保存経路 (saveClassroomSnapshot) を使う。
+              // かつて開発用教室だけ saveDevelopmentClassroomSnapshot へ分岐していたが、
+              // 関数側が単一のハードコード ID しか受け付けず開発用教室の保存が必ず失敗していたため撤去した。
               result = await saveClassroomSnapshotViaFunction({
                 classroomId: targetClassroom.id,
                 savedAt: nextItem.snapshot.savedAt,
                 saveId,
                 payload: targetClassroom.data,
-              }, {
-                developmentOnly: manualFirebaseSaveStabilityEnabled && isDevelopmentClassroom(targetClassroom),
               })
               break
             } catch (error) {
@@ -1688,12 +1627,6 @@ function AuthenticatedApp() {
             }
           }
           if (!result) throw new Error('Firebase 同期の再試行が完了できませんでした。')
-          appendSaveDiagnostic({
-            stage: 'firebase-progress',
-            percent: 20 + Math.floor(((classroomIndex + 1) / targetClassrooms.length) * 75),
-            label: `Cloud Functions 保存検証完了: ${classroomIndex + 1}/${targetClassrooms.length}教室`,
-            details: result,
-          })
         }
         const finishedProgress = { percent: 100, label: 'Cloud Functions 経由のデータベース保存完了' }
         if (isRemoteSyncVisibleRef.current) {
@@ -1702,7 +1635,6 @@ function AuthenticatedApp() {
           setPersistenceMessage(`${finishedProgress.label}(${finishedProgress.percent}%完了)`)
         }
         setLastSavedAt(nextItem.snapshot.savedAt)
-        appendSaveDiagnostic({ stage: 'firebase-success', details: { savedAt: nextItem.snapshot.savedAt } })
         nextItem.onSuccess?.()
         const markedClean = markCleanIfSnapshotMatchesCurrent(nextItem.snapshot)
         if (!queuedRemoteSnapshotRef.current) {
@@ -1725,8 +1657,7 @@ function AuthenticatedApp() {
           setRemoteSyncProgress(null)
           clearRemoteSyncProgressTimer()
         }
-        isDirtyRef.current = true
-        setIsDirty(true)
+        // 失敗時は cleanSignature を更新しないため、未保存状態 (dataSignature !== cleanSignature) が自動的に維持される。
         const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
         const downloadedBackup = manualFirebaseSaveStabilityEnabled && nextItem.downloadBackupOnFailure
           ? downloadFirebaseFailureBackup(nextItem.snapshot)
@@ -1735,10 +1666,6 @@ function AuthenticatedApp() {
         if (isRemoteSyncVisibleRef.current && downloadedBackup) {
           setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}。バックアップJSONを自動ダウンロードしました。`)
         }
-        appendSaveDiagnostic({
-          stage: 'firebase-failure',
-          details: { message, downloadedBackup },
-        })
         nextItem.onFailure?.(error)
       } finally {
         clearRemoteSyncSlowTimer()
@@ -1757,48 +1684,15 @@ function AuthenticatedApp() {
 
     void runNext()
     return true
-  }, [appendSaveDiagnostic, clearRemoteSyncProgressTimer, clearRemoteSyncSlowTimer, downloadFirebaseFailureBackup, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, markCleanIfSnapshotMatchesCurrent, remoteSessionUserId, updateRemoteSyncPending, updateRemoteSyncVisible])
+  }, [clearRemoteSyncProgressTimer, clearRemoteSyncSlowTimer, downloadFirebaseFailureBackup, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, markCleanIfSnapshotMatchesCurrent, remoteSessionUserId, updateRemoteSyncPending, updateRemoteSyncVisible])
 
-  // Re-evaluate dirty whenever the signature changes. Mark clean only when current
-  // signature exactly equals the last known saved/loaded baseline.
-  useEffect(() => {
-    const pendingLoadedCleanSignature = pendingLoadedCleanSignatureRef.current
-    if (pendingLoadedCleanSignature) {
-      if (dataSignature === pendingLoadedCleanSignature) {
-        pendingLoadedCleanSignatureRef.current = null
-        skipNextDirtyRef.current = false
-        cleanSignatureRef.current = dataSignature
-      }
-      isDirtyRef.current = false
-      setIsDirty(false)
-      return
-    }
-    if (skipNextDirtyRef.current) {
-      skipNextDirtyRef.current = false
-      cleanSignatureRef.current = dataSignature
-      isDirtyRef.current = false
-      setIsDirty(false)
-      return
-    }
-    if (dataSignature === cleanSignatureRef.current) {
-      isDirtyRef.current = false
-      setIsDirty(false)
-      return
-    }
-    dirtyTokenRef.current += 1
-    isDirtyRef.current = true
-    setIsDirty(true)
-  }, [dataSignature])
-
+  // 未保存判定は描画時に dataSignature !== cleanSignature で導出するため、専用の同期 effect は不要。
+  // 保存/読込が完了したタイミングで cleanSignature を更新するだけでよい。
   const markStateLoadedClean = useCallback((expectedCleanSignature?: string) => {
-    const cleanSignature = expectedCleanSignature || buildCurrentDataSignature()
-    cleanSignatureRef.current = cleanSignature
-    pendingLoadedCleanSignatureRef.current = cleanSignature
+    const nextCleanSignature = expectedCleanSignature || buildCurrentDataSignature()
     lastPendingWorkspaceSnapshotWriteAtRef.current = 0
-    skipNextDirtyRef.current = true
-    isDirtyRef.current = false
-    setIsDirty(false)
-  }, [buildCurrentDataSignature])
+    setCleanSignature(nextCleanSignature)
+  }, [buildCurrentDataSignature, setCleanSignature])
 
 
   const applySnapshot = useCallback((snapshot: AppSnapshot, successMessage: string) => {
@@ -2724,7 +2618,6 @@ function AuthenticatedApp() {
     clearDelayedAutoRemoteSyncTimer()
     syncCurrentClassroomData(actingClassroomId)
     if (!remoteSaveInFlightRef.current) remoteSyncStartedAtRef.current = Date.now()
-    appendSaveDiagnostic({ stage: 'manual-save-start', details: { actingClassroomId } })
 
     if (!isSnapshotPersistenceRuntimeEnabled()) {
       setPersistenceMessage('スナップショット保存が無効化されています。')
@@ -2746,15 +2639,12 @@ function AuthenticatedApp() {
       }
     }
 
-    // Capture the data signature at save start. If the user edits during the async
-    // save, the token advances and we keep showing 「保存」 instead of 「最新データ」.
-    const tokenAtStart = dirtyTokenRef.current
+    // 保存開始時のデータ署名を記録。保存完了時に現在のデータが当時と同じなら（＝保存中に
+    // ユーザーが編集していなければ）clean 署名を更新して「最新データ」表示へ切り替える。
     const signatureAtStart = buildCurrentDataSignature()
     const finalizeClean = () => {
-      if (dirtyTokenRef.current === tokenAtStart && buildCurrentDataSignature() === signatureAtStart) {
-        cleanSignatureRef.current = signatureAtStart
-        isDirtyRef.current = false
-        setIsDirty(false)
+      if (buildCurrentDataSignature() === signatureAtStart) {
+        setCleanSignature(signatureAtStart)
       }
     }
 
@@ -2774,10 +2664,6 @@ function AuthenticatedApp() {
     void (async () => {
       const localResult = await saveWorkspaceSnapshot(snapshot).catch(() => ({ savedToIndexedDb: false, savedToLocalStorage: false }))
       const savedLocally = localResult.savedToIndexedDb || localResult.savedToLocalStorage
-      appendSaveDiagnostic({
-        stage: 'local-save-finished',
-        details: localResult,
-      })
 
         if (savedLocally) {
           setLastSavedAt(snapshot.savedAt)
@@ -2806,12 +2692,11 @@ function AuthenticatedApp() {
         updateRemoteSyncVisible(false)
         setRemoteSyncProgress(null)
         const downloaded = downloadFallbackBackup()
-        appendSaveDiagnostic({ stage: 'local-save-failure', details: { downloadedFallback: downloaded } })
         setPersistenceMessage(downloaded
           ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
           : '保存に失敗しました。バックアップを書き出してください。')
       })()
-  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, updateRemoteSyncVisible, updateSavingNow])
+  }, [actingClassroomId, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, getRemoteSyncElapsedSeconds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, setCleanSignature, updateRemoteSyncVisible, updateSavingNow])
 
   const hasAnyExistingSetupData = useCallback(() => (
     managers.length > 0
@@ -3780,23 +3665,18 @@ function AuthenticatedApp() {
 
     const savedAt = new Date().toISOString()
     const snapshot = buildWorkspaceSnapshot(savedAt)
-    const tokenAtStart = dirtyTokenRef.current
     const signatureAtStart = buildCurrentDataSignature()
     const finalizeClean = () => {
-      if (dirtyTokenRef.current === tokenAtStart && buildCurrentDataSignature() === signatureAtStart) {
-        cleanSignatureRef.current = signatureAtStart
-        isDirtyRef.current = false
-        setIsDirty(false)
+      if (buildCurrentDataSignature() === signatureAtStart) {
+        setCleanSignature(signatureAtStart)
       }
     }
 
     const timeoutId = window.setTimeout(() => {
       if (!remoteSaveInFlightRef.current) remoteSyncStartedAtRef.current = Date.now()
-      appendSaveDiagnostic({ stage: 'auto-save-start', details: { actingClassroomId } })
       void saveWorkspaceSnapshot(snapshot)
         .then(() => {
           setLastSavedAt(snapshot.savedAt)
-          appendSaveDiagnostic({ stage: 'auto-local-save-finished', details: { savedAt: snapshot.savedAt } })
 
           if (isRemoteBackendEnabled && remoteSessionUserId) {
             clearDelayedAutoRemoteSyncTimer()
@@ -3815,7 +3695,6 @@ function AuthenticatedApp() {
 
         })
         .catch(() => {
-          appendSaveDiagnostic({ stage: 'auto-local-save-failure' })
           setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
         })
     }, 250)
@@ -3824,7 +3703,7 @@ function AuthenticatedApp() {
     // dataSignature を依存に含めることで、教室設定/通常授業/盤面など全ての保存対象データ変更後に
     // 自動保存(ローカル + Firebase)が必ず再走するようにする。これを外すと休日変更などが
     // ブラウザ終了前に Firebase へ同期されず、再ログイン時に古いリモートが優先されてしまう。
-  }, [actingClassroomId, appendSaveDiagnostic, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, dataSignature, getCurrentClassroomSyncTargetIds, hasHydratedSnapshot, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, workspaceClassrooms.length, workspaceUsers.length])
+  }, [actingClassroomId, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, dataSignature, getCurrentClassroomSyncTargetIds, hasHydratedSnapshot, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, setCleanSignature, workspaceClassrooms.length, workspaceUsers.length])
 
   // Flush save on browser close / tab close to prevent data loss
   useEffect(() => {
@@ -4762,11 +4641,8 @@ function AuthenticatedApp() {
     )
   }
 
-  const hasImmediateUnsavedBoardChanges = hasUnsavedBoardChanges({
-    isDirty,
-    currentSignature: dataSignature,
-    cleanSignature: cleanSignatureRef.current,
-  })
+  // 未保存判定はデータ署名と clean 署名の単純比較に一本化。ハイドレーション前は未保存扱いしない。
+  const hasImmediateUnsavedBoardChanges = hasHydratedSnapshot && dataSignature !== cleanSignature
   const boardHasPendingSave = hasPendingBoardSaveState({
     isDirty: hasImmediateUnsavedBoardChanges,
     isSavingNow,
@@ -4774,7 +4650,7 @@ function AuthenticatedApp() {
   })
   const shouldShowRemoteSyncStatus = manualFirebaseSaveStabilityEnabled
     ? Boolean(isRemoteSyncVisible)
-    : isRemoteSyncPending && (isRemoteSyncVisible || isDirty)
+    : isRemoteSyncPending && (isRemoteSyncVisible || hasImmediateUnsavedBoardChanges)
 
   return renderWithSubmissionAcknowledgement(
     <ScheduleBoardScreen
@@ -4812,7 +4688,7 @@ function AuthenticatedApp() {
       hasPendingSave={boardHasPendingSave}
       syncStatusMessage={shouldShowRemoteSyncStatus
         ? (remoteSyncProgress ? `${remoteSyncProgress.label}(${remoteSyncProgress.percent}%完了)` : 'データベースへ保存準備中')
-        : (manualFirebaseSaveStabilityEnabled ? undefined : ((isSavingNow || isDirty) ? persistenceMessage : undefined))}
+        : (manualFirebaseSaveStabilityEnabled ? undefined : ((isSavingNow || hasImmediateUnsavedBoardChanges) ? persistenceMessage : undefined))}
       syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
     />

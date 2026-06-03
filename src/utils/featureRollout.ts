@@ -9,9 +9,10 @@ type FeatureRolloutDefinition = {
 }
 
 export const featureRolloutRegistry = {
-  // Current validation phase: stabilize manual Firebase saves in 開発用教室 first.
+  // Validated in 開発用教室 and promoted to every classroom: all classrooms now share the
+  // same save flow (retries, immediate progress bar, fallback backup on Firebase failures).
   manualFirebaseSaveStability: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Manual save retries and fallback backup download on Firebase failures.',
   },
   // Already promoted to all classrooms.
