@@ -1005,7 +1005,7 @@ function AuthenticatedApp() {
   const [developerCloudBackupHandle, setDeveloperCloudBackupHandle] = useState<DeveloperCloudBackupDirectoryHandle | null>(null)
   const [developerCloudSyncedAutoBackupKeys, setDeveloperCloudSyncedAutoBackupKeys] = useState<string[]>([])
   const [developerRestoreModalState, setDeveloperRestoreModalState] = useState<DeveloperRestoreModalState | null>(null)
-  const [currentUserId, setCurrentUserId] = useState('')
+  const [currentUserId, setCurrentUserId, currentUserIdRef] = useLatestState('')
   const [actingClassroomId, setActingClassroomId] = useState<string | null>(null)
   const [bulkTemporarySuspensionReason, setBulkTemporarySuspensionReason] = useState('')
   const [hasCheckedRemoteSession, setHasCheckedRemoteSession] = useState(!isRemoteBackendEnabled)
@@ -1745,7 +1745,7 @@ function AuthenticatedApp() {
       classroomScreen: targetClassroom?.data.screen,
       role: currentWorkspaceUser?.role,
       currentScreen: screenRef.current,
-      previousUserId: currentUserId,
+      previousUserId: currentUserIdRef.current,
       nextUserId: sanitizedWorkspaceSnapshot.currentUserId,
     })
 
@@ -1768,7 +1768,10 @@ function AuthenticatedApp() {
       setScreen(nextScreen)
     }
     markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data))
-  }, [buildClassroomDataSignature, currentUserId, markStateLoadedClean])
+  // currentUserIdRef is stable (ref object), so no need to include currentUserId in deps.
+  // This prevents the load effect from re-running when currentUserId changes during initial load.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildClassroomDataSignature, currentUserIdRef, markStateLoadedClean])
 
   const reloadRemoteWorkspace = useCallback(async (successMessage: string, preferredActingClassroomId?: string | null) => {
     if (!remoteSessionUserId) return
