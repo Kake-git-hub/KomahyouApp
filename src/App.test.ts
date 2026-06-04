@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
@@ -80,6 +80,31 @@ describe('shouldSyncCurrentClassroomBeforeOpen', () => {
   it('keeps sync enabled for classroom sessions', () => {
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'developer')).toBe(true)
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'manager')).toBe(true)
+  })
+})
+
+describe('buildClassroomScopedBoardShareToken', () => {
+  it('教室IDで一意化し、別教室がトークンをコピーしても衝突しない', () => {
+    const base = 'abc-123'
+    const tokenForA = buildClassroomScopedBoardShareToken('classroomA', base)
+    const tokenForB = buildClassroomScopedBoardShareToken('classroomB', base)
+    expect(tokenForA).toBe('classroomA__abc-123')
+    expect(tokenForB).toBe('classroomB__abc-123')
+    expect(tokenForA).not.toBe(tokenForB)
+  })
+
+  it('既にスコープ済みのトークンを二重接頭辞しない（冪等）', () => {
+    const scoped = buildClassroomScopedBoardShareToken('classroomA', 'abc-123')
+    expect(buildClassroomScopedBoardShareToken('classroomA', scoped)).toBe(scoped)
+  })
+
+  it('別教室がスコープ済みトークンをコピーしても自教室スコープへ付け替える', () => {
+    const scopedForA = buildClassroomScopedBoardShareToken('classroomA', 'abc-123')
+    const scopedForB = buildClassroomScopedBoardShareToken('classroomB', scopedForA)
+    expect(scopedForB).toBe('classroomB__classroomA__abc-123')
+    expect(scopedForB).not.toBe(scopedForA)
+    // B 側で再解決しても冪等
+    expect(buildClassroomScopedBoardShareToken('classroomB', scopedForB)).toBe(scopedForB)
   })
 })
 

@@ -997,8 +997,21 @@ function buildBoardShareUrl(token: string) {
   return `${getBoardShareOrigin()}/share.html?token=${encodeURIComponent(token)}`
 }
 
+// 配布用トークンを教室 ID で必ず一意化する（冪等）。
+// boardShareToken がバックアップ復元や教室データのコピーで別教室へ複製されても、
+// 公開先ドキュメント boardShares/{token} と QR トークンが教室ごとに必ず異なるようにし、
+// 異なる教室のデータで上書き・表示されるのを防ぐ。
+export function buildClassroomScopedBoardShareToken(classroomId: string, baseToken: string) {
+  const safeClassroomId = (classroomId ?? '').trim()
+  const safeBaseToken = (baseToken ?? '').trim()
+  if (!safeClassroomId) return safeBaseToken
+  const prefix = `${safeClassroomId}__`
+  return safeBaseToken.startsWith(prefix) ? safeBaseToken : `${prefix}${safeBaseToken}`
+}
+
 function resolveBoardShareToken(classroomId: string, classroomSettings: ClassroomSettings) {
-  return classroomSettings.boardShareToken || getStoredBoardShareToken(classroomId)
+  const baseToken = classroomSettings.boardShareToken || getStoredBoardShareToken(classroomId)
+  return buildClassroomScopedBoardShareToken(classroomId, baseToken)
 }
 
 function AuthenticatedApp() {
