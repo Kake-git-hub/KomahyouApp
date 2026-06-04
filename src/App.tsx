@@ -1992,17 +1992,21 @@ function AuthenticatedApp() {
       setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
     }
     const url = buildBoardShareUrl(token)
-    await copyTextToClipboard(url)
-    publishBoardShare({
+    // 公開を待ってから URL を返す。公開が失敗した状態で QR を表示すると配布先で
+    // 「見つかりません」になるため、失敗時は例外を投げて呼び出し側でエラー表示する。
+    await publishBoardShare({
       schemaVersion: 1,
       token,
       classroomId: actingClassroomId,
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
       cells: boardState.weeks.flat(),
-    }).catch((error) => {
-      console.warn('Board share publish after QR display failed', error)
     })
+    try {
+      await copyTextToClipboard(url)
+    } catch {
+      // クリップボードコピー失敗は致命的でない（URL は QR とテキストで表示される）。
+    }
     return url
   }, [actingClassroom, actingClassroomId, boardState, classroomSettings])
 
