@@ -4,6 +4,7 @@ import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
+import { useStableCallback } from '../../utils/useStableCallback'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { buildLectureStockEntries } from './lectureStock'
@@ -27,6 +28,9 @@ const boardSlotTimes = [
   '18:00-19:30',
   '19:40-21:10',
 ] as const
+
+// テンプレモードで BoardGrid に渡す安定した空配列（毎レンダリングの新規 [] を避け memo を効かせる）
+const EMPTY_SPECIAL_PERIODS: Array<{ id: string; label: string; startDate: string; endDate: string }> = []
 
 type MakeupOriginMap = Record<string, ManualMakeupOrigin[]>
 type LectureStockCountMap = Record<string, number>
@@ -7729,6 +7733,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
     setStatusMessage('表示中の週だけ、埋まっている机を上に詰めて並び替えました。')
   }
 
+  // BoardGrid を memo 化するため、渡す関数/配列 props を安定参照化する。
+  // useStableCallback は identity を固定しつつ常に最新のクロージャを呼ぶため挙動は変わらない。
+  const stableHandleSelectDesk = useStableCallback(handleSelectDesk)
+  const stableHandleStudentClick = useStableCallback(handleStudentClick)
+  const stableHandleDayHeaderClick = useStableCallback(handleDayHeaderClick)
+  const stableHandleTemplateSelectDesk = useStableCallback(handleTemplateSelectDesk)
+  const stableHandleTemplateStudentClick = useStableCallback(handleTemplateStudentClick)
+  const stableResolveStudentGradeLabel = useStableCallback(resolveBoardStudentGradeLabel)
+  const stableResolveDisplayedLessonType = useStableCallback(resolveDisplayedLessonType)
+  const stableTemplateGradeLabel = useStableCallback((_name: string, fallbackGrade: string, _dateKey: string, birthDate?: string) => (birthDate ? resolveSchoolGradeLabel(birthDate, new Date()) : fallbackGrade))
+  const stableTemplateLessonType = useStableCallback((_name: string, _subject: string, lessonType: LessonType | null) => lessonType)
+  const stableNoopDayHeaderClick = useStableCallback(() => {})
+  const normalizedWeeksFlat = useMemo(() => normalizedWeeks.flat(), [normalizedWeeks])
+
   return (
     <div className="page-shell page-shell-board-only">
       {distributionQrModal ? (
@@ -7977,18 +7995,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
           })() : null}
           <BoardGrid
             cells={displayCells}
-            linkResolutionCells={isTemplateMode ? displayCells : normalizedWeeks.flat()}
+            linkResolutionCells={isTemplateMode ? displayCells : normalizedWeeksFlat}
             selectedStudentId={selectedStudentId}
             highlightedCell={highlightedCell}
             highlightedHolidayDate={isTemplateMode ? null : selectedHolidayDate}
             yearLabel={isTemplateMode ? '' : yearLabel}
-            specialPeriods={isTemplateMode ? [] : visibleSpecialSessions}
+            specialPeriods={isTemplateMode ? EMPTY_SPECIAL_PERIODS : visibleSpecialSessions}
             resolveStudentDisplayName={resolveBoardStudentDisplayName}
-            resolveStudentGradeLabel={isTemplateMode ? ((_name, fallbackGrade, _dateKey, birthDate) => birthDate ? resolveSchoolGradeLabel(birthDate, new Date()) : fallbackGrade) : resolveBoardStudentGradeLabel}
-            resolveDisplayedLessonType={isTemplateMode ? ((_name, _subject, lessonType) => lessonType) : resolveDisplayedLessonType}
-            onDayHeaderClick={isTemplateMode ? (() => {}) : handleDayHeaderClick}
-            onTeacherClick={isTemplateMode ? handleTemplateSelectDesk : handleSelectDesk}
-            onStudentClick={isTemplateMode ? handleTemplateStudentClick : handleStudentClick}
+            resolveStudentGradeLabel={isTemplateMode ? stableTemplateGradeLabel : stableResolveStudentGradeLabel}
+            resolveDisplayedLessonType={isTemplateMode ? stableTemplateLessonType : stableResolveDisplayedLessonType}
+            onDayHeaderClick={isTemplateMode ? stableNoopDayHeaderClick : stableHandleDayHeaderClick}
+            onTeacherClick={isTemplateMode ? stableHandleTemplateSelectDesk : stableHandleSelectDesk}
+            onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
           />
           {dayHeaderMenu ? (
             <div className="day-header-menu-backdrop" onClick={() => setDayHeaderMenu(null)}>

@@ -3676,26 +3676,29 @@ function AuthenticatedApp() {
     if (!hasHydratedSnapshot) return
     if (!isSnapshotPersistenceRuntimeEnabled()) return
     if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
-    if (buildCurrentDataSignature() === cleanSignatureRef.current) return
+    // 算出済みの dataSignature を使い、変更ごとの余計な全データ stringify を避ける。
+    if (dataSignature === cleanSignatureRef.current) return
     writePendingWorkspaceSnapshotForRemoteSync()
-  }, [buildCurrentDataSignature, dataSignature, hasHydratedSnapshot, workspaceClassrooms.length, workspaceUsers.length, writePendingWorkspaceSnapshotForRemoteSync])
+  }, [dataSignature, hasHydratedSnapshot, workspaceClassrooms.length, workspaceUsers.length, writePendingWorkspaceSnapshotForRemoteSync])
 
   useEffect(() => {
     if (!hasHydratedSnapshot) return
     if (!isSnapshotPersistenceRuntimeEnabled()) return
     if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
-    if (buildCurrentDataSignature() === cleanSignatureRef.current) return
-
-    const savedAt = new Date().toISOString()
-    const snapshot = buildWorkspaceSnapshot(savedAt)
-    const signatureAtStart = buildCurrentDataSignature()
-    const finalizeClean = () => {
-      if (buildCurrentDataSignature() === signatureAtStart) {
-        setCleanSignature(signatureAtStart)
-      }
-    }
+    // 既に算出済みの dataSignature を使い、変更ごとの余計な全データ stringify を避ける。
+    if (dataSignature === cleanSignatureRef.current) return
 
     const timeoutId = window.setTimeout(() => {
+      // 全データの deep clone と署名生成はデバウンス後にだけ行う。連続変更のたびに
+      // workspace 全体を clone / stringify するのを避け、メモリ確保を大幅に削減する。
+      const savedAt = new Date().toISOString()
+      const snapshot = buildWorkspaceSnapshot(savedAt)
+      const signatureAtStart = buildCurrentDataSignature()
+      const finalizeClean = () => {
+        if (buildCurrentDataSignature() === signatureAtStart) {
+          setCleanSignature(signatureAtStart)
+        }
+      }
       if (!remoteSaveInFlightRef.current) remoteSyncStartedAtRef.current = Date.now()
       void saveWorkspaceSnapshot(snapshot)
         .then(() => {

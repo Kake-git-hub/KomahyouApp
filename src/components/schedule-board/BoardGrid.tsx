@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef } from 'react'
 import { buildLinkedLessonDestinationMap, formatShortDateLabel } from './lessonLinks'
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoLineHeight, getMemoTextStyle } from './memoText'
@@ -182,7 +182,7 @@ type BoardGridProps = {
   onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, statusKind: StudentStatusKind | null, x: number, y: number) => void
 }
 
-export function BoardGrid({
+function BoardGridComponent({
   cells,
   linkResolutionCells,
   selectedStudentId,
@@ -605,3 +605,8 @@ export function BoardGrid({
     </div>
   )
 }
+
+// 盤面グリッドはセル数が多く再描画コストが大きい。props が変わらない限り再描画しない
+// よう memo 化する（自動保存フラグ・進捗タイマー・ポインタプレビュー等、盤面データと
+// 無関係な親の再描画でグリッド全体が作り直されるのを防ぐ）。
+export const BoardGrid = memo(BoardGridComponent)
