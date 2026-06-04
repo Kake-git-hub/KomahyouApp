@@ -5,6 +5,7 @@ import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, res
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { useStableCallback } from '../../utils/useStableCallback'
+import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
@@ -2688,6 +2689,7 @@ function autoAssignTeacherToSpecialSession(params: {
 
 export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
+  bumpMemCounter('board-render')
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
@@ -3068,6 +3070,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       lastSyncedCommittedBoardChangeVersionRef.current = committedBoardChangeVersionRef.current
       return
     }
+    bumpMemCounter('board-sync-publish')
     onBoardStateChange({
       weeks: cloneWeeks(normalizedWeeks),
       weekIndex,
@@ -3107,6 +3110,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   ])
 
   useEffect(() => {
+    bumpMemCounter('overlay-recompute')
     const freezeDate = classroomSettings.templateFreezeBeforeDate ?? ''
     setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => {
       // Pre-freeze week: 全セルが freezeDate 未満なら managed overlay を完全スキップ（禁忌: テンプレ反映日以前のコマ表は不変）

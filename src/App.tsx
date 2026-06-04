@@ -32,6 +32,7 @@ import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
+import { bumpMemCounter } from './utils/memoryDiagnostics'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -1093,6 +1094,7 @@ function combineDataSignature(boardSignaturePart: string, slices: DataSignatureS
 }
 
 function AuthenticatedApp() {
+  bumpMemCounter('app-render')
   const isRemoteBackendEnabled = isFirebaseBackendEnabled()
   const isRemoteAdminAutomationEnabled = isFirebaseAdminFunctionsEnabled()
   const firebaseBackendConfig = getFirebaseBackendConfig()
@@ -2059,6 +2061,7 @@ function AuthenticatedApp() {
   const publishBoardStateSnapshot = useCallback((nextBoardState: PersistedBoardState) => {
     if (!actingClassroomId || !actingClassroom) return
     if (!isFirebaseBackendEnabled()) return
+    bumpMemCounter('boardshare-publish')
     const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
     if (!classroomSettings.boardShareToken) {
       setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
@@ -3462,6 +3465,7 @@ function AuthenticatedApp() {
     if (!isRemoteBackendEnabled || !actingClassroomId) return
 
     const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries) => {
+      bumpMemCounter('submission-snapshot')
       // Skip entries whose tokens were recently reset to avoid race condition
       const activeEntries = entries.filter((e) => !recentlyResetSubmissionTokensRef.current.has(e.token))
       if (activeEntries.length === 0) return
@@ -3753,6 +3757,7 @@ function AuthenticatedApp() {
     if (dataSignature === cleanSignatureRef.current) return
 
     const timeoutId = window.setTimeout(() => {
+      bumpMemCounter('autosave-run')
       // 全データの deep clone と署名生成はデバウンス後にだけ行う。連続変更のたびに
       // workspace 全体を clone / stringify するのを避け、メモリ確保を大幅に削減する。
       const savedAt = new Date().toISOString()

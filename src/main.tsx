@@ -2,6 +2,10 @@ import { StrictMode, lazy, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import packageJson from '../package.json'
+import { startMemoryDiagnostics } from './utils/memoryDiagnostics'
+
+// ?memlog=1 のときだけメモリ診断ログを開始する（通常は何もしない）。
+startMemoryDiagnostics()
 
 // 旧 PWA (Service Worker) を導入していたユーザー向けに登録解除と CacheStorage 掃除を実施。
 // PWA 機能は廃止済みのため、残存する SW がアプリ更新を阻害しないよう一度だけ無効化する。
