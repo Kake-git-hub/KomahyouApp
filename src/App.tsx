@@ -997,6 +997,26 @@ function buildBoardShareUrl(token: string) {
   return `${getBoardShareOrigin()}/share.html?token=${encodeURIComponent(token)}`
 }
 
+// 配布用盤面には「現在週（今日を含む週）以降」のセルだけを含める。過去週を除外することで
+// 配布ペイロードを縮小しつつ、配布先では現在〜先の予定を表示できる（手動編集済みの先の週も含まれる）。
+function selectBoardShareCells(weeks: SlotCell[][]): SlotCell[] {
+  const now = new Date()
+  const todayKey = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, '0')}-${`${now.getDate()}`.padStart(2, '0')}`
+  const cells: SlotCell[] = []
+  for (const week of weeks) {
+    if (!Array.isArray(week) || week.length === 0) continue
+    let maxDateKey = ''
+    for (const cell of week) {
+      if (cell.dateKey > maxDateKey) maxDateKey = cell.dateKey
+    }
+    if (maxDateKey >= todayKey) {
+      for (const cell of week) cells.push(cell)
+    }
+  }
+  // 現在週以降が1件も無い（過去週しか保持していない）場合は、空配信を避けて全週にフォールバック。
+  return cells.length > 0 ? cells : weeks.flat()
+}
+
 // 配布用トークンを教室 ID で必ず一意化する（冪等）。
 // boardShareToken がバックアップ復元や教室データのコピーで別教室へ複製されても、
 // 公開先ドキュメント boardShares/{token} と QR トークンが教室ごとに必ず異なるようにし、
@@ -2026,7 +2046,7 @@ function AuthenticatedApp() {
       classroomId: actingClassroomId,
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
-      cells: boardState.weeks.flat(),
+      cells: selectBoardShareCells(boardState.weeks),
     })
     try {
       await copyTextToClipboard(url)
@@ -2049,7 +2069,7 @@ function AuthenticatedApp() {
       classroomId: actingClassroomId,
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
-      cells: nextBoardState.weeks.flat(),
+      cells: selectBoardShareCells(nextBoardState.weeks),
     }).catch((error) => {
       console.warn('Board share publish from board state change failed', error)
     })
