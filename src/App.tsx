@@ -3514,7 +3514,8 @@ function AuthenticatedApp() {
             }
           })
         }
-        return updated
+        // 新規反映が無ければ参照を維持し、不要な再描画・配列確保を避ける。
+        return newlyAppliedEntries.length > 0 ? updated : current
       })
 
       // Trigger board placement for newly submitted teachers (same as schedule-teacher-count-save handler)

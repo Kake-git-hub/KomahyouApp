@@ -2686,7 +2686,7 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName: _classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
@@ -7753,8 +7753,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
     <div className="page-shell page-shell-board-only">
       {distributionQrModal ? (
         <div className="distribution-qr-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setDistributionQrModal(null) }}>
-          <div className="distribution-qr-modal" role="dialog" aria-modal="true" aria-label="配布用URL QR" data-testid="distribution-qr-modal">
-            <div className="distribution-qr-title">配布用URL</div>
+          <div className="distribution-qr-modal" role="dialog" aria-modal="true" aria-label="講師日程共有 QR" data-testid="distribution-qr-modal">
+            {classroomName ? <div className="distribution-qr-classroom">{classroomName}</div> : null}
+            <div className="distribution-qr-title">講師日程共有</div>
             {distributionQrModal.isLoading ? (
               <div className="distribution-qr-loading" role="status" aria-live="polite">
                 <span className="distribution-qr-spinner" aria-hidden="true" />

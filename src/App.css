@@ -140,6 +140,12 @@
   box-shadow: 0 24px 54px rgba(31, 53, 82, 0.24);
 }
 
+.distribution-qr-classroom {
+  color: #1f5d96;
+  font-size: 15px;
+  font-weight: 800;
+}
+
 .distribution-qr-title {
   color: #16314f;
   font-size: 20px;

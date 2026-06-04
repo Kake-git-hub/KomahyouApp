@@ -181,7 +181,7 @@ function BoardToolbarComponent({
           </button>
           <button className="secondary-button slim" type="button" onClick={onPackSort} data-testid="pack-sort-button">詰めて並び替え</button>
           {!isTemplateMode && onCopyDistributionUrl ? (
-            <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">配布用URL</button>
+            <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">講師日程共有</button>
           ) : null}
         </div>
         <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}${syncProgressPercent !== null && syncProgressPercent !== undefined ? ' is-syncing' : ''}`} data-testid="toolbar-status">
