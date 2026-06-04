@@ -1014,6 +1014,64 @@ function resolveBoardShareToken(classroomId: string, classroomSettings: Classroo
   return buildClassroomScopedBoardShareToken(classroomId, baseToken)
 }
 
+// データ署名（ダーティ判定用）はスライスごとに分割して結合する。
+// こうすることで dataSignature をスライス単位でメモ化でき、生徒1人の編集で盤面全体を
+// 再 stringify する無駄を避けられる。3つの生成器（dataSignature / buildCurrentDataSignature /
+// buildClassroomDataSignature）が必ず同一フォーマットになるよう共通化する（ズレるとダーティ判定が壊れる）。
+const DATA_SIGNATURE_SEPARATOR = ''
+
+function buildBoardDataForSignature(boardState: PersistedBoardState | null | undefined) {
+  if (!boardState) return null
+  return {
+    weeks: boardState.weeks,
+    suppressedRegularLessonOccurrences: boardState.suppressedRegularLessonOccurrences,
+    scheduleCountAdjustments: boardState.scheduleCountAdjustments,
+    manualMakeupAdjustments: boardState.manualMakeupAdjustments,
+    suppressedMakeupOrigins: boardState.suppressedMakeupOrigins,
+    fallbackMakeupStudents: boardState.fallbackMakeupStudents,
+    manualLectureStockCounts: boardState.manualLectureStockCounts,
+    manualLectureStockOrigins: boardState.manualLectureStockOrigins,
+    fallbackLectureStockStudents: boardState.fallbackLectureStockStudents,
+  }
+}
+
+function stringifySignaturePart(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value)
+    return typeof serialized === 'string' ? serialized : 'null'
+  } catch {
+    return ' '
+  }
+}
+
+type DataSignatureSlices = {
+  regularLessons: unknown
+  students: unknown
+  teachers: unknown
+  specialSessions: unknown
+  autoAssignRules: unknown
+  pairConstraints: unknown
+  classroomSettings: unknown
+  managers: unknown
+  groupLessons: unknown
+}
+
+// boardSignaturePart は事前に stringify 済み（メモ再利用のため）、残りは生値を受け取る。
+function combineDataSignature(boardSignaturePart: string, slices: DataSignatureSlices): string {
+  return [
+    boardSignaturePart,
+    stringifySignaturePart(slices.regularLessons),
+    stringifySignaturePart(slices.students),
+    stringifySignaturePart(slices.teachers),
+    stringifySignaturePart(slices.specialSessions),
+    stringifySignaturePart(slices.autoAssignRules),
+    stringifySignaturePart(slices.pairConstraints),
+    stringifySignaturePart(slices.classroomSettings),
+    stringifySignaturePart(slices.managers),
+    stringifySignaturePart(slices.groupLessons),
+  ].join(DATA_SIGNATURE_SEPARATOR)
+}
+
 function AuthenticatedApp() {
   const isRemoteBackendEnabled = isFirebaseBackendEnabled()
   const isRemoteAdminAutomationEnabled = isFirebaseAdminFunctionsEnabled()
@@ -1369,70 +1427,56 @@ function AuthenticatedApp() {
   // Compute a content signature that excludes purely UI-only fields (current week,
   // selected cell/desk, side-panel open state, schedule popup ranges). Navigating
   // weeks or opening the management screen must not flip the save button to 「保存」.
-  const dataSignature = useMemo(() => {
-    const boardData = boardState
-      ? {
-          weeks: boardState.weeks,
-          suppressedRegularLessonOccurrences: boardState.suppressedRegularLessonOccurrences,
-          scheduleCountAdjustments: boardState.scheduleCountAdjustments,
-          manualMakeupAdjustments: boardState.manualMakeupAdjustments,
-          suppressedMakeupOrigins: boardState.suppressedMakeupOrigins,
-          fallbackMakeupStudents: boardState.fallbackMakeupStudents,
-          manualLectureStockCounts: boardState.manualLectureStockCounts,
-          manualLectureStockOrigins: boardState.manualLectureStockOrigins,
-          fallbackLectureStockStudents: boardState.fallbackLectureStockStudents,
-        }
-      : null
-    try {
-      return JSON.stringify({
-        b: boardData,
-        rl: regularLessons,
-        st: students,
-        tc: teachers,
-        ss: specialSessions,
-        ar: autoAssignRules,
-        pc: pairConstraints,
-        cs: classroomSettings,
-        mg: managers,
-        gl: groupLessons,
-      })
-    } catch {
-      return ''
-    }
-  }, [boardState, regularLessons, students, teachers, specialSessions, autoAssignRules, pairConstraints, classroomSettings, managers, groupLessons])
+  // 盤面（最も大きい）と各スライスを個別にメモ化し、変更されたスライスだけ再 stringify する。
+  // 例: 生徒1人の編集では students の署名だけ再計算され、盤面全週の再 stringify は発生しない。
+  const boardStateSignaturePart = useMemo(() => stringifySignaturePart(buildBoardDataForSignature(boardState)), [boardState])
+  const regularLessonsSignaturePart = useMemo(() => stringifySignaturePart(regularLessons), [regularLessons])
+  const studentsSignaturePart = useMemo(() => stringifySignaturePart(students), [students])
+  const teachersSignaturePart = useMemo(() => stringifySignaturePart(teachers), [teachers])
+  const specialSessionsSignaturePart = useMemo(() => stringifySignaturePart(specialSessions), [specialSessions])
+  const autoAssignRulesSignaturePart = useMemo(() => stringifySignaturePart(autoAssignRules), [autoAssignRules])
+  const pairConstraintsSignaturePart = useMemo(() => stringifySignaturePart(pairConstraints), [pairConstraints])
+  const classroomSettingsSignaturePart = useMemo(() => stringifySignaturePart(classroomSettings), [classroomSettings])
+  const managersSignaturePart = useMemo(() => stringifySignaturePart(managers), [managers])
+  const groupLessonsSignaturePart = useMemo(() => stringifySignaturePart(groupLessons), [groupLessons])
+  const dataSignature = useMemo(() => [
+    boardStateSignaturePart,
+    regularLessonsSignaturePart,
+    studentsSignaturePart,
+    teachersSignaturePart,
+    specialSessionsSignaturePart,
+    autoAssignRulesSignaturePart,
+    pairConstraintsSignaturePart,
+    classroomSettingsSignaturePart,
+    managersSignaturePart,
+    groupLessonsSignaturePart,
+  ].join(DATA_SIGNATURE_SEPARATOR), [
+    boardStateSignaturePart,
+    regularLessonsSignaturePart,
+    studentsSignaturePart,
+    teachersSignaturePart,
+    specialSessionsSignaturePart,
+    autoAssignRulesSignaturePart,
+    pairConstraintsSignaturePart,
+    classroomSettingsSignaturePart,
+    managersSignaturePart,
+    groupLessonsSignaturePart,
+  ])
 
-  const buildCurrentDataSignature = useCallback(() => {
-    const latestBoardState = boardStateRef.current
-    const boardData = latestBoardState
-      ? {
-          weeks: latestBoardState.weeks,
-          suppressedRegularLessonOccurrences: latestBoardState.suppressedRegularLessonOccurrences,
-          scheduleCountAdjustments: latestBoardState.scheduleCountAdjustments,
-          manualMakeupAdjustments: latestBoardState.manualMakeupAdjustments,
-          suppressedMakeupOrigins: latestBoardState.suppressedMakeupOrigins,
-          fallbackMakeupStudents: latestBoardState.fallbackMakeupStudents,
-          manualLectureStockCounts: latestBoardState.manualLectureStockCounts,
-          manualLectureStockOrigins: latestBoardState.manualLectureStockOrigins,
-          fallbackLectureStockStudents: latestBoardState.fallbackLectureStockStudents,
-        }
-      : null
-    try {
-      return JSON.stringify({
-        b: boardData,
-        rl: regularLessonsRef.current,
-        st: studentsRef.current,
-        tc: teachersRef.current,
-        ss: specialSessionsRef.current,
-        ar: autoAssignRulesRef.current,
-        pc: pairConstraintsRef.current,
-        cs: classroomSettingsRef.current,
-        mg: managersRef.current,
-        gl: groupLessonsRef.current,
-      })
-    } catch {
-      return ''
-    }
-  }, [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, specialSessionsRef, studentsRef, teachersRef])
+  const buildCurrentDataSignature = useCallback(() => combineDataSignature(
+    stringifySignaturePart(buildBoardDataForSignature(boardStateRef.current)),
+    {
+      regularLessons: regularLessonsRef.current,
+      students: studentsRef.current,
+      teachers: teachersRef.current,
+      specialSessions: specialSessionsRef.current,
+      autoAssignRules: autoAssignRulesRef.current,
+      pairConstraints: pairConstraintsRef.current,
+      classroomSettings: classroomSettingsRef.current,
+      managers: managersRef.current,
+      groupLessons: groupLessonsRef.current,
+    },
+  ), [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, specialSessionsRef, studentsRef, teachersRef])
 
   const writePendingWorkspaceSnapshotForRemoteSync = useCallback(() => {
     if (!isSnapshotPersistenceRuntimeEnabled()) return null
@@ -1498,38 +1542,20 @@ function AuthenticatedApp() {
   // ref (useLatestState が同期更新) なので各コールバックから常に最新値を読める。
   const [cleanSignature, setCleanSignature, cleanSignatureRef] = useLatestState<string>('')
 
-  const buildClassroomDataSignature = useCallback((payload: AppSnapshotPayload | null | undefined) => {
-    const payloadBoardState = payload?.boardState ?? null
-    const boardData = payloadBoardState
-      ? {
-          weeks: payloadBoardState.weeks,
-          suppressedRegularLessonOccurrences: payloadBoardState.suppressedRegularLessonOccurrences,
-          scheduleCountAdjustments: payloadBoardState.scheduleCountAdjustments,
-          manualMakeupAdjustments: payloadBoardState.manualMakeupAdjustments,
-          suppressedMakeupOrigins: payloadBoardState.suppressedMakeupOrigins,
-          fallbackMakeupStudents: payloadBoardState.fallbackMakeupStudents,
-          manualLectureStockCounts: payloadBoardState.manualLectureStockCounts,
-          manualLectureStockOrigins: payloadBoardState.manualLectureStockOrigins,
-          fallbackLectureStockStudents: payloadBoardState.fallbackLectureStockStudents,
-        }
-      : null
-    try {
-      return JSON.stringify({
-        b: boardData,
-        rl: payload?.regularLessons ?? [],
-        st: payload?.students ?? [],
-        tc: payload?.teachers ?? [],
-        ss: payload?.specialSessions ?? [],
-        ar: payload?.autoAssignRules ?? [],
-        pc: payload?.pairConstraints ?? [],
-        cs: payload?.classroomSettings,
-        mg: payload?.managers ?? [],
-        gl: payload?.groupLessons ?? [],
-      })
-    } catch {
-      return ''
-    }
-  }, [])
+  const buildClassroomDataSignature = useCallback((payload: AppSnapshotPayload | null | undefined) => combineDataSignature(
+    stringifySignaturePart(buildBoardDataForSignature(payload?.boardState ?? null)),
+    {
+      regularLessons: payload?.regularLessons ?? [],
+      students: payload?.students ?? [],
+      teachers: payload?.teachers ?? [],
+      specialSessions: payload?.specialSessions ?? [],
+      autoAssignRules: payload?.autoAssignRules ?? [],
+      pairConstraints: payload?.pairConstraints ?? [],
+      classroomSettings: payload?.classroomSettings,
+      managers: payload?.managers ?? [],
+      groupLessons: payload?.groupLessons ?? [],
+    },
+  ), [])
 
   const markCleanIfSnapshotMatchesCurrent = useCallback((snapshot: WorkspaceSnapshot) => {
     const targetClassroomId = actingClassroomIdRef.current ?? snapshot.actingClassroomId

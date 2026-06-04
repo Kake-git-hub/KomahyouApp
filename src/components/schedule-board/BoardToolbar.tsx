@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { memo, useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 
 type BoardToolbarProps = {
@@ -56,7 +56,7 @@ type BoardToolbarProps = {
   syncElapsedSeconds?: number | null
 }
 
-export function BoardToolbar({
+function BoardToolbarComponent({
   weekLabel,
   weekStartDate,
   statusMessage,
@@ -278,3 +278,7 @@ export function BoardToolbar({
     </section>
   )
 }
+
+// ツールバーは盤面データと無関係な親再描画（メニュー/モーダル開閉など）でも作り直されるため
+// memo 化する。関数 props は呼び出し側で useStableCallback により参照安定化している。
+export const BoardToolbar = memo(BoardToolbarComponent)

@@ -7,6 +7,7 @@ import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
+import { CursorFollowPreview } from './CursorFollowPreview'
 import { buildLectureStockEntries } from './lectureStock'
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
@@ -2752,7 +2753,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
   const [teacherMenu, setTeacherMenu] = useState<TeacherMenuState | null>(null)
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
-  const [pointerPreviewPosition, setPointerPreviewPosition] = useState({ x: 0, y: 0 })
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
   const prevUnsubmittedSessionStudentKeysRef = useRef<Set<string>>(new Set())
@@ -4925,25 +4925,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
     ? `${getInteractionSurfaceLabel(interactionLockOwner)} を操作中です。この画面をクリックするとコマ表の操作へ切り替わります。`
     : ''
 
-  useEffect(() => {
-    if (!pointerPreviewLabel || typeof window === 'undefined') return
-
-    let frameId: number | null = null
-    const handlePointerMove = (event: MouseEvent) => {
-      if (frameId !== null) window.cancelAnimationFrame(frameId)
-      frameId = window.requestAnimationFrame(() => {
-        setPointerPreviewPosition({ x: event.clientX, y: event.clientY })
-        frameId = null
-      })
-    }
-
-    window.addEventListener('mousemove', handlePointerMove)
-    return () => {
-      if (frameId !== null) window.cancelAnimationFrame(frameId)
-      window.removeEventListener('mousemove', handlePointerMove)
-    }
-  }, [pointerPreviewLabel])
-
   useLayoutEffect(() => {
     if (!studentMenu) {
       setStudentMenuPopoverSize(null)
@@ -4980,14 +4961,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
     }
   }, [studentMenu])
 
-  const pointerPreviewStyle = useMemo(() => {
-    if (typeof window === 'undefined') return { left: 16, top: 16 }
-
-    return {
-      left: Math.max(12, Math.min(pointerPreviewPosition.x + 18, window.innerWidth - 320)),
-      top: Math.max(12, Math.min(pointerPreviewPosition.y + 18, window.innerHeight - 80)),
-    }
-  }, [pointerPreviewPosition])
 
   const menuPosition = useMemo(() => {
     if (!studentMenu || typeof window === 'undefined') {
@@ -7747,6 +7720,35 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
   const stableNoopDayHeaderClick = useStableCallback(() => {})
   const normalizedWeeksFlat = useMemo(() => normalizedWeeks.flat(), [normalizedWeeks])
 
+  // BoardToolbar を memo 化するため、渡す関数 props を参照安定化する（挙動は不変）。
+  const tbOnUndo = useStableCallback(isTemplateMode ? handleTemplateUndo : handleUndo)
+  const tbOnRedo = useStableCallback(isTemplateMode ? handleTemplateRedo : handleRedo)
+  const tbOnPackSort = useStableCallback(isTemplateMode ? handleTemplatePackSort : handlePackSort)
+  const tbOnCopyDistributionUrl = useStableCallback(handleCopyDistributionUrl)
+  const tbOnGoPrevWeek = useStableCallback(() => switchWeek(weekIndex - 1))
+  const tbOnGoNextWeek = useStableCallback(() => switchWeek(weekIndex + 1))
+  const tbOnJumpToDate = useStableCallback(jumpToWeekByDate)
+  const tbOnToggleLectureStock = useStableCallback(handleToggleLectureStock)
+  const tbOnToggleMakeupStock = useStableCallback(handleToggleMakeupStock)
+  const tbOnOpenStudentSchedule = useStableCallback(handleOpenStudentSchedule)
+  const tbOnOpenTeacherSchedule = useStableCallback(handleOpenTeacherSchedule)
+  const tbOnOpenRegularTemplate = useStableCallback(handleEnterTemplateMode)
+  const tbOnPrintPdf = useStableCallback(handlePrintPdf)
+  const tbOnCancelSelection = useStableCallback(handleCancelSelection)
+  const tbOnOpenBasicData = useStableCallback(onOpenBasicData)
+  const tbOnOpenSpecialData = useStableCallback(onOpenSpecialData)
+  const tbOnOpenAutoAssignRules = useStableCallback(onOpenAutoAssignRules)
+  const tbOnOpenBackupRestore = useStableCallback(onOpenBackupRestore)
+  const tbOnLogout = useStableCallback(onLogout)
+  const tbOnRestoreUndoSnapshot = useStableCallback(onRestoreUndoSnapshot ?? (() => {}))
+  const tbOnDismissUndoSnapshot = useStableCallback(onDismissUndoSnapshot ?? (() => {}))
+  const tbOnTemplateExport = useStableCallback(() => void handleTemplateExport())
+  const tbOnTemplateImport = useStableCallback(handleTemplateImportClick)
+  const tbOnTemplateSaveOverwrite = useStableCallback(handleTemplateSaveRequest)
+  const tbOnTemplateClear = useStableCallback(handleTemplateClear)
+  const tbOnTemplateClose = useStableCallback(handleExitTemplateMode)
+  const tbOnSaveBoard = useStableCallback(onSaveBoard ?? (() => {}))
+
   return (
     <div className="page-shell page-shell-board-only">
       {distributionQrModal ? (
@@ -7775,11 +7777,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
           {centeredStatusMessage}
         </div>
       ) : null}
-      {pointerPreviewLabel ? (
-        <div className="cursor-follow-preview" style={pointerPreviewStyle} data-testid="move-preview" role="status" aria-live="polite">
-          {pointerPreviewLabel}
-        </div>
-      ) : null}
+      {pointerPreviewLabel ? <CursorFollowPreview label={pointerPreviewLabel} /> : null}
       <main className={`page-main page-main-board-only${isTemplateMode ? ' template-mode-active' : ''}`} onPointerDownCapture={acquireBoardInteraction}>
         <section className="board-panel board-panel-unified">
           {isBoardInteractionLocked && !isTemplateMode ? <div className="interaction-lock-banner" data-testid="board-interaction-lock-banner">{boardInteractionLockMessage}</div> : null}
@@ -7812,34 +7810,34 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName: _classro
             canGoPrevWeek={!isTemplateMode}
             canGoNextWeek={!isTemplateMode}
             isTemplateMode={isTemplateMode}
-            onUndo={isTemplateMode ? handleTemplateUndo : handleUndo}
-            onRedo={isTemplateMode ? handleTemplateRedo : handleRedo}
-            onPackSort={isTemplateMode ? handleTemplatePackSort : handlePackSort}
-            onCopyDistributionUrl={handleCopyDistributionUrl}
-            onGoPrevWeek={() => switchWeek(weekIndex - 1)}
-            onGoNextWeek={() => switchWeek(weekIndex + 1)}
-            onJumpToDate={jumpToWeekByDate}
-            onToggleLectureStock={handleToggleLectureStock}
-            onToggleMakeupStock={handleToggleMakeupStock}
-            onOpenStudentSchedule={handleOpenStudentSchedule}
-            onOpenTeacherSchedule={handleOpenTeacherSchedule}
-            onOpenRegularTemplate={handleEnterTemplateMode}
-            onPrintPdf={handlePrintPdf}
-            onCancelSelection={handleCancelSelection}
-            onOpenBasicData={onOpenBasicData}
-            onOpenSpecialData={onOpenSpecialData}
-            onOpenAutoAssignRules={onOpenAutoAssignRules}
-            onOpenBackupRestore={onOpenBackupRestore}
-            onLogout={onLogout}
+            onUndo={tbOnUndo}
+            onRedo={tbOnRedo}
+            onPackSort={tbOnPackSort}
+            onCopyDistributionUrl={tbOnCopyDistributionUrl}
+            onGoPrevWeek={tbOnGoPrevWeek}
+            onGoNextWeek={tbOnGoNextWeek}
+            onJumpToDate={tbOnJumpToDate}
+            onToggleLectureStock={tbOnToggleLectureStock}
+            onToggleMakeupStock={tbOnToggleMakeupStock}
+            onOpenStudentSchedule={tbOnOpenStudentSchedule}
+            onOpenTeacherSchedule={tbOnOpenTeacherSchedule}
+            onOpenRegularTemplate={tbOnOpenRegularTemplate}
+            onPrintPdf={tbOnPrintPdf}
+            onCancelSelection={tbOnCancelSelection}
+            onOpenBasicData={tbOnOpenBasicData}
+            onOpenSpecialData={tbOnOpenSpecialData}
+            onOpenAutoAssignRules={tbOnOpenAutoAssignRules}
+            onOpenBackupRestore={tbOnOpenBackupRestore}
+            onLogout={tbOnLogout}
             undoSnapshotLabel={undoSnapshotLabel ?? null}
-            onRestoreUndoSnapshot={onRestoreUndoSnapshot}
-            onDismissUndoSnapshot={onDismissUndoSnapshot}
-            onTemplateExport={() => void handleTemplateExport()}
-            onTemplateImport={handleTemplateImportClick}
-            onTemplateSaveOverwrite={handleTemplateSaveRequest}
-            onTemplateClear={handleTemplateClear}
-            onTemplateClose={handleExitTemplateMode}
-            onSaveBoard={onSaveBoard}
+            onRestoreUndoSnapshot={tbOnRestoreUndoSnapshot}
+            onDismissUndoSnapshot={tbOnDismissUndoSnapshot}
+            onTemplateExport={tbOnTemplateExport}
+            onTemplateImport={tbOnTemplateImport}
+            onTemplateSaveOverwrite={tbOnTemplateSaveOverwrite}
+            onTemplateClear={tbOnTemplateClear}
+            onTemplateClose={tbOnTemplateClose}
+            onSaveBoard={tbOnSaveBoard}
             isBoardDirty={isBoardDirty}
             isBoardSaving={isBoardSaving}
             isBoardSaveDisabled={isBoardSaveDisabled}
