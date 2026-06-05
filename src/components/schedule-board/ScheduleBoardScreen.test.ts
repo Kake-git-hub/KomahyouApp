@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -42,6 +42,30 @@ describe('clampPopoverPosition', () => {
       left: 170,
       top: 130,
     })
+  })
+})
+
+describe('appendHistoryEntry', () => {
+  const makeEntry = (id: number) => ({ weeks: [], weekIndex: id }) as unknown as Parameters<typeof appendHistoryEntry>[1]
+
+  it('appends entries until the depth cap is reached', () => {
+    let stack: ReturnType<typeof appendHistoryEntry> = []
+    for (let i = 0; i < MAX_HISTORY_DEPTH; i += 1) {
+      stack = appendHistoryEntry(stack, makeEntry(i))
+    }
+    expect(stack).toHaveLength(MAX_HISTORY_DEPTH)
+    expect(stack[stack.length - 1].weekIndex).toBe(MAX_HISTORY_DEPTH - 1)
+  })
+
+  it('drops the oldest entry once over the cap so memory stays bounded', () => {
+    let stack: ReturnType<typeof appendHistoryEntry> = []
+    for (let i = 0; i < MAX_HISTORY_DEPTH + 25; i += 1) {
+      stack = appendHistoryEntry(stack, makeEntry(i))
+    }
+    expect(stack).toHaveLength(MAX_HISTORY_DEPTH)
+    // 古い側が捨てられ、最新 MAX_HISTORY_DEPTH 件だけが残る
+    expect(stack[0].weekIndex).toBe(25)
+    expect(stack[stack.length - 1].weekIndex).toBe(MAX_HISTORY_DEPTH + 24)
   })
 })
 

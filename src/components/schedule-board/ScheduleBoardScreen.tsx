@@ -462,6 +462,18 @@ function formatWeekScheduleTitle(cells: Array<{ dateKey: string }>) {
   return formatWeeklyScheduleTitle(first, last)
 }
 
+// Undo/Redo 履歴の保持上限。1 エントリは全週(週bounding後)のディープクローンを含むため、
+// 上限を設けないと「出席/欠席/振替を埋めていく」操作のたびに履歴がメモリへ線形蓄積し動作が重くなる。
+// 10 手分あれば実運用の「戻す」には十分。超過分は古い側から破棄する。
+export const MAX_HISTORY_DEPTH = 10
+
+export function appendHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
+  if (stack.length >= MAX_HISTORY_DEPTH) {
+    return [...stack.slice(stack.length - MAX_HISTORY_DEPTH + 1), entry]
+  }
+  return [...stack, entry]
+}
+
 export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
   return weeks.map((week) =>
     week.map((cell) => ({
@@ -5526,10 +5538,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     nextSuppressedRegularLessonOccurrences: string[] = suppressedRegularLessonOccurrences,
     nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[] = scheduleCountAdjustments,
   ) => {
-    setUndoStack((current) => [
-      ...current,
+    setUndoStack((current) => appendHistoryEntry(
+      current,
       createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
-    ])
+    ))
     setRedoStack([])
     const persistedClassroomSettings = !areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates)
       ? {
@@ -7630,10 +7642,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const previous = undoStack[undoStack.length - 1]
     if (!previous) return
 
-    setRedoStack((current) => [
-      ...current,
+    setRedoStack((current) => appendHistoryEntry(
+      current,
       createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
-    ])
+    ))
     setUndoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
       onUpdateClassroomSettings({
@@ -7666,10 +7678,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const next = redoStack[redoStack.length - 1]
     if (!next) return
 
-    setUndoStack((current) => [
-      ...current,
+    setUndoStack((current) => appendHistoryEntry(
+      current,
       createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
-    ])
+    ))
     setRedoStack((current) => current.slice(0, -1))
     if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
       onUpdateClassroomSettings({
