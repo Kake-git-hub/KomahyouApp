@@ -3517,16 +3517,13 @@ function AuthenticatedApp() {
     // 以前は screen !== 'board' のときだけ更新していたが、コマ表画面のままハードリロード
     // した場合などに global が初期化されず、ポップアップが空 boardWeeks で overlay して
     // 生徒授業が脱落していたため、screen に関わらず常に最新の boardState.weeks を反映する。
+    // ※ この代入は軽量(参照差し替えのみ)。手動「盤面を反映」ボタン押下時に最新が使われる。
     getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = boardState.weeks
-    // 盤面変更のたびに講師/生徒の全日程を再生成すると(両popup同時に開いていると特に)
-    // 大量メモリを確保するため、変更が落ち着いてから一度だけ再同期する(デバウンス)。
-    const timerId = window.setTimeout(() => {
-      syncSpecialSessionPopup()
-      syncStudentSchedulePopup()
-      syncTeacherSchedulePopup()
-    }, 400)
-    return () => window.clearTimeout(timerId)
-  }, [boardState, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+    // 以前は盤面変更のたびに講師/生徒/講習の全日程ポップアップを再生成していたが、出席等を
+    // 連続入力する教室では(特に両 popup を開いたまま)毎編集の全日程再生成がメモリの最大スパイク要因
+    // だった。日程表は popup ツールバーの「盤面を反映」ボタン(schedule-refresh-request)や範囲変更時
+    // にのみ再同期する方式へ変更し、編集ごとの自動再生成を停止する。
+  }, [boardState])
 
   // Real-time submission reflection from Firestore
   useEffect(() => {

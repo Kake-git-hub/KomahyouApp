@@ -2138,6 +2138,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
+        <button type="button" id="schedule-refresh-board-button" class="secondary" title="コマ表(盤面)で行った出欠・振替などの最新の変更をこの日程表に反映します">盤面を反映</button>
         <button type="button" id="schedule-apply-button">反映</button>
       </div>
     </div>`}
@@ -4764,6 +4765,25 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         appliedEndDate = DATA.defaultEndDate || DATA.availableEndDate;
         render();
       } else {
+
+      const refreshBoardButton = document.getElementById('schedule-refresh-board-button');
+      if (refreshBoardButton) {
+        refreshBoardButton.addEventListener('click', function() {
+          // 盤面編集ごとの自動同期を止めているため、最新の盤面内容をこの日程表へ手動で取り込む。
+          var originalLabel = refreshBoardButton.textContent;
+          try {
+            if (window.opener && !window.opener.closed) {
+              window.opener.postMessage({ type: 'schedule-refresh-request', viewType: BASE_VIEW_TYPE }, '*');
+              refreshBoardButton.textContent = '反映中…';
+              refreshBoardButton.disabled = true;
+              window.setTimeout(function() {
+                refreshBoardButton.textContent = originalLabel;
+                refreshBoardButton.disabled = false;
+              }, 800);
+            }
+          } catch {}
+        });
+      }
 
       const showAllButton = document.getElementById('schedule-show-all-button');
       if (showAllButton) {
