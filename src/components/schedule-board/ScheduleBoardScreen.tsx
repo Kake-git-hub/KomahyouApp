@@ -507,6 +507,24 @@ export function cloneWeeksForActiveWeek(weeks: SlotCell[][], activeWeekIndex: nu
   return next
 }
 
+// onBoardStateChange(publish)用の週クローン。published weeks は App 側で読み取り専用に扱われる
+// (署名生成 / スナップショット保存 / 日程表popup参照 などいずれも非破壊。コード監査済み)、かつ
+// 盤面側も normalizedWeeks を描画専用に扱い破壊しない。applyClassroomAvailability の出力週は
+// メモ化により未変更週で参照が安定するため、その参照をキーに deep clone をキャッシュして
+// 未変更(過去)週は前回のクローンを再利用する。これで1編集あたりの publish クローンを
+// 「変更された週」だけに限定でき、巨大教室での全週ディープクローン(メモリスパイク)を解消する。
+// WeakMap なので未参照になった週のクローンは自然に解放される。
+const publishWeekCloneCache = new WeakMap<SlotCell[], SlotCell[]>()
+export function cloneWeeksForPublish(weeks: SlotCell[][]): SlotCell[][] {
+  return weeks.map((week) => {
+    const cached = publishWeekCloneCache.get(week)
+    if (cached) return cached
+    const clone = cloneWeek(week)
+    publishWeekCloneCache.set(week, clone)
+    return clone
+  })
+}
+
 type ScheduleBoardScreenProps = {
   classroomSettings: ClassroomSettings
   classroomName?: string
@@ -3092,7 +3110,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
       committedBoardChangeVersionRef.current += 1
       onBoardStateChange?.({
-        weeks: cloneWeeks(applyClassroomAvailability(overlaidWeeks, nextClassroomSettingsForOverlay)),
+        weeks: cloneWeeksForPublish(applyClassroomAvailability(overlaidWeeks, nextClassroomSettingsForOverlay)),
         weekIndex,
         selectedCellId,
         selectedDeskIndex,
@@ -3131,7 +3149,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     bumpMemCounter('board-sync-publish')
     onBoardStateChange({
-      weeks: cloneWeeks(normalizedWeeks),
+      weeks: cloneWeeksForPublish(normalizedWeeks),
       weekIndex,
       selectedCellId,
       selectedDeskIndex,
@@ -5627,7 +5645,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setEditStudentDraft(null)
     committedBoardChangeVersionRef.current += 1
     onBoardStateChange?.({
-      weeks: cloneWeeks(applyClassroomAvailability(nextWeeks, persistedClassroomSettings)),
+      weeks: cloneWeeksForPublish(applyClassroomAvailability(nextWeeks, persistedClassroomSettings)),
       weekIndex: nextWeekIndex,
       selectedCellId: nextCellId,
       selectedDeskIndex: nextDeskIndex,

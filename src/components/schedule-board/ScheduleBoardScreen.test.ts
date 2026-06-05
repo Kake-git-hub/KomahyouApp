@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -112,6 +112,26 @@ describe('cloneWeeksForActiveWeek', () => {
     // cloneWeeks と等価
     expect(next).toEqual(cloneWeeks(weeks))
     expect(cloneWeek(week0)).toEqual(week0)
+  })
+})
+
+describe('cloneWeeksForPublish', () => {
+  it('deep-clones weeks and reuses the same clone for the same week reference', () => {
+    const week = [makeBoardCell('2026-06-01', 1)]
+    const out1 = cloneWeeksForPublish([week])
+    const out2 = cloneWeeksForPublish([week])
+    expect(out1[0]).not.toBe(week) // ディープクローン
+    expect(out1[0][0]).not.toBe(week[0])
+    expect(out1[0]).toEqual(week) // 内容一致
+    expect(out2[0]).toBe(out1[0]) // 同一週参照 → クローン再利用(未変更週の再クローンを回避)
+  })
+
+  it('produces a distinct clone for a different (changed) week reference', () => {
+    const weekA = [makeBoardCell('2026-06-01', 1)]
+    const weekB = [makeBoardCell('2026-06-01', 1)] // 内容同じでも別参照(=変更後の週)
+    const outA = cloneWeeksForPublish([weekA])
+    const outB = cloneWeeksForPublish([weekB])
+    expect(outB[0]).not.toBe(outA[0]) // 別参照は別クローン → 変更が必ず反映される
   })
 })
 
