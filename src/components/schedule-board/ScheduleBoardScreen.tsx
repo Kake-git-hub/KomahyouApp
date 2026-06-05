@@ -474,23 +474,37 @@ export function appendHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry): 
   return [...stack, entry]
 }
 
-export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
-  return weeks.map((week) =>
-    week.map((cell) => ({
-      ...cell,
-      desks: cell.desks.map((desk) => ({
-        ...desk,
-        memoSlots: desk.memoSlots ? [...desk.memoSlots] as [string | null, string | null] : undefined,
-        statusSlots: desk.statusSlots ? desk.statusSlots.map((entry) => (entry ? { ...entry } : null)) as [StudentStatusEntry | null, StudentStatusEntry | null] : undefined,
-        lesson: desk.lesson
-          ? {
-              ...desk.lesson,
-              studentSlots: desk.lesson.studentSlots.map((student) => (student ? { ...student } : null)) as [StudentEntry | null, StudentEntry | null],
-            }
-          : undefined,
-      })),
+export function cloneWeek(week: SlotCell[]): SlotCell[] {
+  return week.map((cell) => ({
+    ...cell,
+    desks: cell.desks.map((desk) => ({
+      ...desk,
+      memoSlots: desk.memoSlots ? [...desk.memoSlots] as [string | null, string | null] : undefined,
+      statusSlots: desk.statusSlots ? desk.statusSlots.map((entry) => (entry ? { ...entry } : null)) as [StudentStatusEntry | null, StudentStatusEntry | null] : undefined,
+      lesson: desk.lesson
+        ? {
+            ...desk.lesson,
+            studentSlots: desk.lesson.studentSlots.map((student) => (student ? { ...student } : null)) as [StudentEntry | null, StudentEntry | null],
+          }
+        : undefined,
     })),
-  )
+  }))
+}
+
+export function cloneWeeks(weeks: SlotCell[][]): SlotCell[][] {
+  return weeks.map((week) => cloneWeek(week))
+}
+
+// 出席/欠席など「現在表示している週のセルだけ」を編集するハンドラ用。
+// 全週ディープクローン(cloneWeeks)は巨大教室で1編集ごとに過去週まで複製してメモリを圧迫するため、
+// 編集対象の週だけ複製し、他週は参照を維持(構造共有)する。未変更週の参照が保たれることで
+// normalizedWeeks(applyClassroomAvailability) の週単位メモ化もヒットし、再生成も回避できる。
+// activeWeekIndex が範囲外のときは安全側で従来どおり全週クローンする。
+export function cloneWeeksForActiveWeek(weeks: SlotCell[][], activeWeekIndex: number): SlotCell[][] {
+  if (activeWeekIndex < 0 || activeWeekIndex >= weeks.length) return cloneWeeks(weeks)
+  const next = weeks.slice()
+  next[activeWeekIndex] = cloneWeek(weeks[activeWeekIndex])
+  return next
 }
 
 type ScheduleBoardScreenProps = {
@@ -706,12 +720,45 @@ function normalizeWeeksDeskCount(weeks: SlotCell[][], deskCount: number): SlotCe
   }))
 }
 
-function applyClassroomAvailability(weeks: SlotCell[][], classroomSettings: ClassroomSettings) {
-  return normalizeWeeksDeskCount(weeks, classroomSettings.deskCount).map((week) => week.map((cell) => ({
-    ...cell,
-    isOpenDay: classroomSettings.forceOpenDates.includes(cell.dateKey)
-      || (!classroomSettings.closedWeekdays.includes(parseDateKey(cell.dateKey).getDay()) && !classroomSettings.holidayDates.includes(cell.dateKey)),
-  })))
+function computeWeekAvailability(week: SlotCell[], classroomSettings: ClassroomSettings): SlotCell[] {
+  const deskCount = classroomSettings.deskCount
+  return week.map((cell) => {
+    const nextDesks = cell.desks.length === deskCount
+      ? cell.desks
+      : Array.from({ length: deskCount }, (_, deskIndex) => cell.desks[deskIndex] ?? {
+          id: `${cell.id}_desk_${deskIndex + 1}`,
+          teacher: createPlaceholderTeacherName(),
+        })
+    return {
+      ...cell,
+      desks: nextDesks,
+      isOpenDay: classroomSettings.forceOpenDates.includes(cell.dateKey)
+        || (!classroomSettings.closedWeekdays.includes(parseDateKey(cell.dateKey).getDay()) && !classroomSettings.holidayDates.includes(cell.dateKey)),
+    }
+  })
+}
+
+// applyClassroomAvailability は normalizedWeeks(useMemo) や commitWeeks/publish で頻繁に呼ばれ、
+// 毎回 全週・全セルを再生成していた。巨大教室では1編集ごとにこの全週再生成がメモリ確保の山を作る。
+// 入力週オブジェクトの参照＋可用性に関わる設定(token)をキーに WeakMap でメモ化し、未変更週は
+// 前回結果をそのまま返す。出力は描画・publish元として読み取り専用に使われる(publish時は別途
+// cloneWeeks で複製される)ため、キャッシュ共有しても安全。WeakMap なので未参照週は自然に解放。
+const weekAvailabilityCache = new WeakMap<SlotCell[], { token: string; result: SlotCell[] }>()
+
+export function applyClassroomAvailability(weeks: SlotCell[][], classroomSettings: ClassroomSettings) {
+  const token = [
+    classroomSettings.deskCount,
+    classroomSettings.closedWeekdays.join(','),
+    classroomSettings.forceOpenDates.join(','),
+    classroomSettings.holidayDates.join(','),
+  ].join('|')
+  return weeks.map((week) => {
+    const cached = weekAvailabilityCache.get(week)
+    if (cached && cached.token === token) return cached.result
+    const result = computeWeekAvailability(week, classroomSettings)
+    weekAvailabilityCache.set(week, { token, result })
+    return result
+  })
 }
 
 function areStringArraysEqual(left: string[], right: string[]) {
@@ -7179,7 +7226,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleMarkStudentAbsent = () => {
     if (!studentMenu || !menuStudent) return
 
-    const nextWeeks = cloneWeeks(weeks)
+    const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     const targetLesson = targetDesk?.lesson
@@ -7288,7 +7335,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleMarkStudentAbsentNoMakeup = () => {
     if (!studentMenu || !menuStudent) return
 
-    const nextWeeks = cloneWeeks(weeks)
+    const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     const targetLesson = targetDesk?.lesson
@@ -7325,7 +7372,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleMarkStudentAttended = () => {
     if (!studentMenu || !menuStudent) return
 
-    const nextWeeks = cloneWeeks(weeks)
+    const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     const targetLesson = targetDesk?.lesson
@@ -7362,7 +7409,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!studentMenu || !emptyMenuContext?.statusEntry) return
 
     const statusEntry = emptyMenuContext.statusEntry
-    const nextWeeks = cloneWeeks(weeks)
+    const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
     const targetDesk = targetCell?.desks[studentMenu.deskIndex]
     if (!targetCell || !targetDesk) return

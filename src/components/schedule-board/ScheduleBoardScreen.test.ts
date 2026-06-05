@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -66,6 +66,77 @@ describe('appendHistoryEntry', () => {
     // 古い側が捨てられ、最新 MAX_HISTORY_DEPTH 件だけが残る
     expect(stack[0].weekIndex).toBe(25)
     expect(stack[stack.length - 1].weekIndex).toBe(MAX_HISTORY_DEPTH + 24)
+  })
+})
+
+function makeBoardCell(dateKey: string, slotNumber: number, deskCount = 2): SlotCell {
+  return {
+    id: `${dateKey}_${slotNumber}`,
+    dateKey,
+    dayLabel: '',
+    dateLabel: '',
+    slotLabel: `${slotNumber}限`,
+    slotNumber,
+    isOpenDay: true,
+    desks: Array.from({ length: deskCount }, (_, index) => ({
+      id: `${dateKey}_${slotNumber}_desk_${index + 1}`,
+      teacher: '',
+    })),
+  } as SlotCell
+}
+
+describe('cloneWeeksForActiveWeek', () => {
+  it('deep-clones only the active week and keeps other week references (structural sharing)', () => {
+    const week0 = [makeBoardCell('2026-06-01', 1)]
+    const week1 = [makeBoardCell('2026-06-08', 1)]
+    const weeks = [week0, week1]
+
+    const next = cloneWeeksForActiveWeek(weeks, 1)
+    expect(next).not.toBe(weeks)
+    expect(next[0]).toBe(week0) // 未変更週は参照維持
+    expect(next[1]).not.toBe(week1) // 編集対象週はクローン
+    expect(next[1][0]).not.toBe(week1[0]) // セルまでディープクローン
+    expect(next[1][0].desks[0]).not.toBe(week1[0].desks[0])
+    expect(next[1]).toEqual(week1) // 内容は同一
+  })
+
+  it('falls back to full clone when the active index is out of range', () => {
+    const week0 = [makeBoardCell('2026-06-01', 1)]
+    const week1 = [makeBoardCell('2026-06-08', 1)]
+    const weeks = [week0, week1]
+
+    const next = cloneWeeksForActiveWeek(weeks, 5)
+    expect(next[0]).not.toBe(week0)
+    expect(next[1]).not.toBe(week1)
+    expect(next).toEqual(weeks)
+    // cloneWeeks と等価
+    expect(next).toEqual(cloneWeeks(weeks))
+    expect(cloneWeek(week0)).toEqual(week0)
+  })
+})
+
+describe('applyClassroomAvailability memoization', () => {
+  it('returns the cached result for an unchanged week reference and same settings', () => {
+    const week = [makeBoardCell('2026-06-01', 1)]
+    const first = applyClassroomAvailability([week], classroomSettings)
+    const second = applyClassroomAvailability([week], classroomSettings)
+    expect(second[0]).toBe(first[0]) // 同一週参照＋同一設定 → キャッシュ再利用
+    expect(first[0][0].desks).toHaveLength(classroomSettings.deskCount) // デスク数正規化
+  })
+
+  it('recomputes when availability settings change', () => {
+    const week = [makeBoardCell('2026-06-01', 1)]
+    const base = applyClassroomAvailability([week], classroomSettings)
+    const holiday = applyClassroomAvailability([week], { ...classroomSettings, holidayDates: ['2026-06-01'] })
+    expect(holiday[0]).not.toBe(base[0])
+    expect(base[0][0].isOpenDay).toBe(true)
+    expect(holiday[0][0].isOpenDay).toBe(false) // 休日指定で休校
+  })
+
+  it('marks closed weekdays as not open', () => {
+    const sunday = [makeBoardCell('2026-06-07', 1)] // 2026-06-07 は日曜(closedWeekdays:[0])
+    const result = applyClassroomAvailability([sunday], classroomSettings)
+    expect(result[0][0].isOpenDay).toBe(false)
   })
 })
 
