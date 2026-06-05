@@ -33,6 +33,7 @@ import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
+import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -1018,6 +1019,28 @@ function selectBoardShareCells(weeks: SlotCell[][]): SlotCell[] {
   return cells.length > 0 ? cells : weeks.flat()
 }
 
+// メモリ削減のため盤面の週を「表示範囲＋手動編集週」に絞る。週配列が変わると weekIndex が
+// ズレるため、トリム後に「見ていた週」を dateKey で再特定して weekIndex を補正する
+// （見えなくなった未編集の遠い週は今週へフォールバック）。
+function trimBoardStateForMemory(boardState: PersistedBoardState | null | undefined): PersistedBoardState | null {
+  if (!boardState) return boardState ?? null
+  const weeks = boardState.weeks
+  if (!Array.isArray(weeks) || weeks.length <= 1) return boardState
+  const trimmedWeeks = trimBoardWeeksForMemory(weeks)
+  if (trimmedWeeks === weeks) return boardState
+
+  const prevIndex = Math.min(Math.max(boardState.weekIndex ?? 0, 0), weeks.length - 1)
+  const viewedDateKey = weeks[prevIndex]?.[0]?.dateKey ?? ''
+  let nextIndex = viewedDateKey ? trimmedWeeks.findIndex((week) => week[0]?.dateKey === viewedDateKey) : -1
+  if (nextIndex < 0) {
+    const now = new Date()
+    const todayKey = `${now.getFullYear()}-${`${now.getMonth() + 1}`.padStart(2, '0')}-${`${now.getDate()}`.padStart(2, '0')}`
+    nextIndex = trimmedWeeks.findIndex((week) => week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '') >= todayKey)
+    if (nextIndex < 0) nextIndex = 0
+  }
+  return { ...boardState, weeks: trimmedWeeks, weekIndex: nextIndex }
+}
+
 // 配布用トークンを教室 ID で必ず一意化する（冪等）。
 // boardShareToken がバックアップ復元や教室データのコピーで別教室へ複製されても、
 // 公開先ドキュメント boardShares/{token} と QR トークンが教室ごとに必ず異なるようにし、
@@ -1771,7 +1794,13 @@ function AuthenticatedApp() {
 
 
   const applySnapshot = useCallback((snapshot: AppSnapshot, successMessage: string) => {
-    const sanitizedSnapshot = sanitizeAppSnapshot(snapshot)
+    const sanitizedBase = sanitizeAppSnapshot(snapshot)
+    // 読込時に週をトリムしてメモリを抑える。clean 署名もトリム後の状態で計算し、
+    // 読込直後に誤って「保存」(dirty)にならないよう一致させる。
+    const trimmedBoardState = trimBoardStateForMemory(sanitizedBase.boardState)
+    const sanitizedSnapshot = trimmedBoardState === sanitizedBase.boardState
+      ? sanitizedBase
+      : { ...sanitizedBase, boardState: trimmedBoardState }
     setScreen(sanitizedSnapshot.screen)
     setManagers(sanitizedSnapshot.managers)
     setTeachers(sanitizedSnapshot.teachers)
@@ -1818,7 +1847,8 @@ function AuthenticatedApp() {
           specialSessions: latestSpecialSessions,
           autoAssignRules: latestAutoAssignRules,
           pairConstraints: latestPairConstraints,
-          boardState: latestBoardState,
+          // 保存・workspace コピーは週をトリムして肥大を防ぐ（手動編集週は保持。ライブ盤面は不変）。
+          boardState: trimBoardStateForMemory(latestBoardState),
         }),
       }
     }))
@@ -1915,10 +1945,16 @@ function AuthenticatedApp() {
 
   const applyWorkspaceSnapshot = useCallback((workspaceSnapshot: WorkspaceSnapshot, successMessage: string) => {
     const sanitizedWorkspaceSnapshot = sanitizeWorkspaceSnapshot(workspaceSnapshot)
+    // メモリ削減: 各教室の盤面の週を「表示範囲＋手動編集週」へトリムする（手動編集は必ず保持）。
+    const trimmedClassrooms = sanitizedWorkspaceSnapshot.classrooms.map((classroom) => {
+      const trimmedBoardState = trimBoardStateForMemory(classroom.data.boardState)
+      if (trimmedBoardState === classroom.data.boardState) return classroom
+      return { ...classroom, data: { ...classroom.data, boardState: trimmedBoardState } }
+    })
     const previousUserId = currentUserIdRef.current
     const currentScreen = screenRef.current
     setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
-    setWorkspaceClassrooms(sanitizedWorkspaceSnapshot.classrooms)
+    setWorkspaceClassrooms(trimmedClassrooms)
     setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
     setDeveloperCloudBackupFolderName(sanitizedWorkspaceSnapshot.developerCloudBackupFolderName ?? '')
     setDeveloperCloudSyncedAutoBackupKeys(sanitizedWorkspaceSnapshot.developerCloudSyncedAutoBackupKeys ?? [])
@@ -1931,7 +1967,7 @@ function AuthenticatedApp() {
     const targetClassroomId = currentWorkspaceUser?.role === 'manager'
       ? currentWorkspaceUser.assignedClassroomId
       : sanitizedWorkspaceSnapshot.actingClassroomId
-    const targetClassroom = sanitizedWorkspaceSnapshot.classrooms.find((classroom) => classroom.id === targetClassroomId) ?? sanitizedWorkspaceSnapshot.classrooms[0] ?? null
+    const targetClassroom = trimmedClassrooms.find((classroom) => classroom.id === targetClassroomId) ?? trimmedClassrooms[0] ?? null
     const nextScreen = resolveHydratedScreenForUser({
       classroomScreen: targetClassroom?.data.screen,
       role: currentWorkspaceUser?.role,
