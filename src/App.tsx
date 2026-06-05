@@ -2968,6 +2968,7 @@ function AuthenticatedApp() {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const studentPopup = runtimeWindow.__lessonScheduleStudentWindow
     if (!studentPopup || studentPopup.closed) return
+    bumpMemCounter('student-schedule-sync')
     const latestBoardState = boardStateRef.current
     const latestSpecialSessions = specialSessionsRef.current
 
@@ -3021,6 +3022,7 @@ function AuthenticatedApp() {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const teacherPopup = runtimeWindow.__lessonScheduleTeacherWindow
     if (!teacherPopup || teacherPopup.closed) return
+    bumpMemCounter('teacher-schedule-sync')
     const latestBoardState = boardStateRef.current
     const latestSpecialSessions = specialSessionsRef.current
     const highlightedTeacherId = getHighlightedTeacherIdFromBoardState(latestBoardState)
@@ -3453,35 +3455,41 @@ function AuthenticatedApp() {
   }, [syncSpecialSessionPopup])
 
   useEffect(() => {
-    syncStudentSchedulePopup()
+    const timerId = window.setTimeout(() => syncStudentSchedulePopup(), 400)
+    return () => window.clearTimeout(timerId)
   }, [syncStudentSchedulePopup])
 
   useEffect(() => {
-    syncTeacherSchedulePopup()
+    const timerId = window.setTimeout(() => syncTeacherSchedulePopup(), 400)
+    return () => window.clearTimeout(timerId)
   }, [syncTeacherSchedulePopup])
 
   useEffect(() => {
-    syncSpecialSessionPopup()
+    // 範囲・講習・コールバック変更時の再同期もデバウンスして、popup の全日程再生成の連発を防ぐ。
+    const timerId = window.setTimeout(() => {
+      syncSpecialSessionPopup()
 
-    const syncSchedulePopupForRange = (viewType: 'student' | 'teacher') => {
-      const range = buildNormalizedScheduleRange(
-        viewType,
-        viewType === 'student' ? studentScheduleRange : teacherScheduleRange,
-        actingClassroomId,
-      )
-      void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
-        .then(() => {
-          if (viewType === 'student') syncStudentSchedulePopup()
-          else syncTeacherSchedulePopup()
-        })
-        .catch(() => {
-          if (viewType === 'student') syncStudentSchedulePopup()
-          else syncTeacherSchedulePopup()
-        })
-    }
+      const syncSchedulePopupForRange = (viewType: 'student' | 'teacher') => {
+        const range = buildNormalizedScheduleRange(
+          viewType,
+          viewType === 'student' ? studentScheduleRange : teacherScheduleRange,
+          actingClassroomId,
+        )
+        void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+          .then(() => {
+            if (viewType === 'student') syncStudentSchedulePopup()
+            else syncTeacherSchedulePopup()
+          })
+          .catch(() => {
+            if (viewType === 'student') syncStudentSchedulePopup()
+            else syncTeacherSchedulePopup()
+          })
+      }
 
-    syncSchedulePopupForRange('student')
-    syncSchedulePopupForRange('teacher')
+      syncSchedulePopupForRange('student')
+      syncSchedulePopupForRange('teacher')
+    }, 400)
+    return () => window.clearTimeout(timerId)
   }, [actingClassroomId, ensureScheduleSubmissionTokens, specialSessions, studentScheduleRange, teacherScheduleRange, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
@@ -3491,9 +3499,14 @@ function AuthenticatedApp() {
     // した場合などに global が初期化されず、ポップアップが空 boardWeeks で overlay して
     // 生徒授業が脱落していたため、screen に関わらず常に最新の boardState.weeks を反映する。
     getSchedulePopupRuntimeWindow().__lessonScheduleBoardWeeks = boardState.weeks
-    syncSpecialSessionPopup()
-    syncStudentSchedulePopup()
-    syncTeacherSchedulePopup()
+    // 盤面変更のたびに講師/生徒の全日程を再生成すると(両popup同時に開いていると特に)
+    // 大量メモリを確保するため、変更が落ち着いてから一度だけ再同期する(デバウンス)。
+    const timerId = window.setTimeout(() => {
+      syncSpecialSessionPopup()
+      syncStudentSchedulePopup()
+      syncTeacherSchedulePopup()
+    }, 400)
+    return () => window.clearTimeout(timerId)
   }, [boardState, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   // Real-time submission reflection from Firestore
