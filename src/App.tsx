@@ -2988,7 +2988,13 @@ function AuthenticatedApp() {
     return teachers.find((teacher) => getTeacherDisplayName(teacher) === teacherName)?.id
   }, [teachers])
 
-  const syncStudentSchedulePopup = useCallback(() => {
+  // force=false の自動同期は実行しない(ゲート)。日程表の再生成は popup を開いた時/「最新表示」
+  // ボタン押下時など明示パス(force=true)のみに限定する。本番では編集→Firestore往復で
+  // specialSessions 等が更新され、それを依存する effect が再発火して毎編集で popup を再生成して
+  // しまう(メモリ最大スパイク)。トリガを個別に潰すのではなく、ここで一括して自動再生成を止める。
+  // rangeOverride を渡すと state 反映待ちなしにその範囲で即同期できる(「最新表示」用)。
+  const syncStudentSchedulePopup = useCallback((force = false, rangeOverride: ScheduleRangePreference | null = null) => {
+    if (!force) return
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const studentPopup = runtimeWindow.__lessonScheduleStudentWindow
     if (!studentPopup || studentPopup.closed) return
@@ -2996,7 +3002,7 @@ function AuthenticatedApp() {
     const latestBoardState = boardStateRef.current
     const latestSpecialSessions = specialSessionsRef.current
 
-    const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
+    const range = buildNormalizedScheduleRange('student', rangeOverride ?? studentScheduleRange, actingClassroomId)
   const scheduleBoardWeeks = buildPopupBoardWeeksForRange(range)
 
     syncStudentScheduleHtml({
@@ -3042,7 +3048,9 @@ function AuthenticatedApp() {
     })
   }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
 
-  const syncTeacherSchedulePopup = useCallback(() => {
+  // syncStudentSchedulePopup と同様に force=true の明示パスのみ同期する(自動再生成の停止)。
+  const syncTeacherSchedulePopup = useCallback((force = false, rangeOverride: ScheduleRangePreference | null = null) => {
+    if (!force) return
     const runtimeWindow = getSchedulePopupRuntimeWindow()
     const teacherPopup = runtimeWindow.__lessonScheduleTeacherWindow
     if (!teacherPopup || teacherPopup.closed) return
@@ -3051,7 +3059,7 @@ function AuthenticatedApp() {
     const latestSpecialSessions = specialSessionsRef.current
     const highlightedTeacherId = getHighlightedTeacherIdFromBoardState(latestBoardState)
 
-    const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
+    const range = buildNormalizedScheduleRange('teacher', rangeOverride ?? teacherScheduleRange, actingClassroomId)
   const scheduleBoardWeeks = buildPopupBoardWeeksForRange(range)
 
     syncTeacherScheduleHtml({
@@ -3140,23 +3148,25 @@ function AuthenticatedApp() {
       if (!message) return
 
       if (message.type === 'schedule-refresh-request') {
-        if (message.viewType === 'student') syncStudentSchedulePopup()
-        if (message.viewType === 'teacher') syncTeacherSchedulePopup()
+        // 明示リフレッシュ(force=true)
+        if (message.viewType === 'student') syncStudentSchedulePopup(true)
+        if (message.viewType === 'teacher') syncTeacherSchedulePopup(true)
         return
       }
 
       if (message.type === 'schedule-popup-ready') {
+        // popup を開いた直後の初期同期(force=true)
         if (message.viewType === 'student') {
           const range = buildNormalizedScheduleRange('student', studentScheduleRange, actingClassroomId)
           void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
-            .then(() => { syncStudentSchedulePopup() })
-            .catch(() => { syncStudentSchedulePopup() })
+            .then(() => { syncStudentSchedulePopup(true) })
+            .catch(() => { syncStudentSchedulePopup(true) })
         }
         if (message.viewType === 'teacher') {
           const range = buildNormalizedScheduleRange('teacher', teacherScheduleRange, actingClassroomId)
           void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
-            .then(() => { syncTeacherSchedulePopup() })
-            .catch(() => { syncTeacherSchedulePopup() })
+            .then(() => { syncTeacherSchedulePopup(true) })
+            .catch(() => { syncTeacherSchedulePopup(true) })
         }
         return
       }
@@ -3467,8 +3477,21 @@ function AuthenticatedApp() {
         personId: typeof message.personId === 'string' ? message.personId : '',
       }
 
-      if (message.viewType === 'student') setStudentScheduleRange(nextRange)
-      else setTeacherScheduleRange(nextRange)
+      // 「最新表示」ボタン由来。範囲を保存しつつ、state 反映を待たずに nextRange で即 force 同期する
+      // (これが popup を更新する唯一の能動パス)。QR トークンも範囲分を確保してから同期。
+      if (message.viewType === 'student') {
+        setStudentScheduleRange(nextRange)
+        const range = buildNormalizedScheduleRange('student', nextRange, actingClassroomId)
+        void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+          .then(() => { syncStudentSchedulePopup(true, nextRange) })
+          .catch(() => { syncStudentSchedulePopup(true, nextRange) })
+      } else {
+        setTeacherScheduleRange(nextRange)
+        const range = buildNormalizedScheduleRange('teacher', nextRange, actingClassroomId)
+        void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
+          .then(() => { syncTeacherSchedulePopup(true, nextRange) })
+          .catch(() => { syncTeacherSchedulePopup(true, nextRange) })
+      }
     }
 
     window.addEventListener('message', handleScheduleRangeMessage)

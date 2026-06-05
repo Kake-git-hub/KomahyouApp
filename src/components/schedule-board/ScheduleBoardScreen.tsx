@@ -3481,6 +3481,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
       if (message.viewType === 'student') setStudentScheduleRange(nextRange)
       else setTeacherScheduleRange(nextRange)
+      // 「最新表示」ボタン(範囲適用)由来。日程表同期は scheduleSyncTrigger 変化時のみ行うため、
+      // ここで明示的に trigger を進めて最新の盤面内容で1回だけ再生成する。
+      setScheduleSyncTrigger((prev) => prev + 1)
     }
 
     window.addEventListener('message', handleScheduleRangeMessage)
@@ -4653,7 +4656,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       showSubmittedQr: true,
       targetWindow: studentScheduleWindowRef.current,
     })
-  }, [classroomSettings, classroomStorageKey, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.periodValue, effectiveStudentScheduleRange.startDate, movingStudentContext, regularLessons, resolveBoardStudentDisplayName, scheduleCountAdjustments, scheduleSyncTrigger, specialSessions, studentPlannedScheduleCells, studentScheduleCells, studentScheduleTitle, students])
+    // 日程表は「開いた時(schedule-popup-ready)」と「最新表示ボタン(range-update)」でのみ再生成する。
+    // 以前は studentScheduleCells 等のデータ依存で出席編集ごとに全日程を再生成し、popup を開いたまま
+    // 編集するとメモリの最大スパイク要因になっていた。依存を scheduleSyncTrigger だけにして自動再生成を停止。
+    // 実行時には最新の studentScheduleCells 等(クロージャの最新値)を読むため内容は最新になる。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleSyncTrigger])
 
   useEffect(() => {
     syncTeacherScheduleHtml({
@@ -4677,7 +4685,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       showSubmittedQr: true,
       targetWindow: teacherScheduleWindowRef.current,
     })
-  }, [classroomSettings, classroomStorageKey, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.periodValue, effectiveTeacherScheduleRange.startDate, scheduleSyncTrigger, specialSessions, teacherPlannedScheduleCells, teacherScheduleCells, teacherScheduleTitle, teachers])
+    // 生徒側と同様、scheduleSyncTrigger(開いた時/最新表示)でのみ再生成し、編集ごとの自動再生成を停止。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scheduleSyncTrigger])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
