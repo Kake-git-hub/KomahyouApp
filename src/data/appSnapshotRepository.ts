@@ -475,17 +475,23 @@ function removeFromLocalStorage(key: string) {
   }
 }
 
+// 一度でも localStorage の quota を超過したら、このセッションでは workspace ミラー書き込みを
+// 諦める。巨大教室では毎自動保存ごとに「全教室を JSON.stringify → setItem で quota 例外 → 破棄」
+// を繰り返しており、捨てられる巨大文字列の生成自体が1編集ごとのメモリスパイク要因になっていた。
+// 正本は IndexedDB(saveWorkspaceSnapshot)なので、ミラーを止めても保存・復元に支障はない。
+let workspaceLocalStorageMirrorDisabled = false
+
 export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot): boolean {
   if (typeof window === 'undefined') return false
-  // localStorage は数MBで quota 超過する。巨大なワークスペース（多教室・多週の盤面）は
-  // 正本である IndexedDB 側 (saveWorkspaceSnapshot) に保存されるため、ここでの高速キャッシュ
-  // 書き込みは失敗しても致命的でない。QuotaExceededError 等で例外を投げると教室を開く処理が
-  // 中断してしまうので、超過時は古いキャッシュを消して握りつぶす（false を返す）。
+  // 既に quota 超過済みなら、巨大 stringify を試みずに即スキップ(メモリ確保を避ける)。
+  if (workspaceLocalStorageMirrorDisabled) return false
   try {
     window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
     return true
   } catch {
+    // QuotaExceededError 等。教室を開く処理を中断させないよう握りつぶし、以後はミラーを無効化する。
     removeFromLocalStorage(LOCAL_STORAGE_WORKSPACE_KEY)
+    workspaceLocalStorageMirrorDisabled = true
     return false
   }
 }

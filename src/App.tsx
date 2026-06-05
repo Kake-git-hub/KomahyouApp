@@ -2872,8 +2872,13 @@ function AuthenticatedApp() {
 
     // Build occupied slots from board cells
     const runtimeWindow = getSchedulePopupRuntimeWindow()
+    // 盤面データは boardStateRef(最新)から読む。boardState を依存に入れると出席等の編集ごとに
+    // この callback の identity が変わり、これを依存する日程表同期 effect が毎編集で再発火して
+    // popup を再生成してしまう(メモリ最大スパイク要因)。ref 経由なら呼び出し時に最新を参照しつつ
+    // identity を安定化でき、同期は「popup を開いた時/範囲変更時/手動『最新表示』時」だけになる。
+    const latestBoardStateForTokens = boardStateRef.current
     const sessionBoardWeeks = ensureWeeksCoverDateRange({
-      weeks: boardState?.weeks ?? runtimeWindow.__lessonScheduleBoardWeeks ?? [],
+      weeks: latestBoardStateForTokens?.weeks ?? runtimeWindow.__lessonScheduleBoardWeeks ?? [],
       startDate: session.startDate,
       endDate: session.endDate,
       classroomSettings,
@@ -2890,7 +2895,7 @@ function AuthenticatedApp() {
       students,
       regularLessons: displayRegularLessons,
       boardWeeks: sessionBoardWeeks,
-      suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+      suppressedRegularLessonOccurrences: latestBoardStateForTokens?.suppressedRegularLessonOccurrences ?? [],
     })
     const lessonTypeLabels: Record<string, string> = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習' }
     const slotNumbers = Array.from(new Set(sessionCells.map((cell) => cell.slotNumber))).sort((left, right) => left - right)
@@ -2953,7 +2958,7 @@ function AuthenticatedApp() {
     if (existingTokenEntries.length > 0) {
       updateSubmissionOccupiedSlots(existingTokenEntries).catch(() => { /* non-fatal */ })
     }
-  }, [actingClassroomId, boardState?.suppressedRegularLessonOccurrences, boardState?.weeks, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
+  }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
 
   const buildPopupBoardWeeksForRange = useCallback((range: ScheduleRangePreference) => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3121,12 +3126,13 @@ function AuthenticatedApp() {
         students,
         regularLessons: displayRegularLessons,
         boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-        suppressedRegularLessonOccurrences: boardState?.suppressedRegularLessonOccurrences ?? [],
+        suppressedRegularLessonOccurrences: boardStateRef.current?.suppressedRegularLessonOccurrences ?? [],
       }),
       boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
       targetWindow: popupWindow,
     })
-  }, [boardState?.suppressedRegularLessonOccurrences, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
+    // boardState は依存に入れず boardStateRef 経由で読む(出席等の編集ごとの再同期を避けて identity を安定化)。
+  }, [boardStateRef, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
 
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
