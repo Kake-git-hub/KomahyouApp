@@ -475,9 +475,19 @@ function removeFromLocalStorage(key: string) {
   }
 }
 
-export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
+export function writeWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot): boolean {
+  if (typeof window === 'undefined') return false
+  // localStorage は数MBで quota 超過する。巨大なワークスペース（多教室・多週の盤面）は
+  // 正本である IndexedDB 側 (saveWorkspaceSnapshot) に保存されるため、ここでの高速キャッシュ
+  // 書き込みは失敗しても致命的でない。QuotaExceededError 等で例外を投げると教室を開く処理が
+  // 中断してしまうので、超過時は古いキャッシュを消して握りつぶす（false を返す）。
+  try {
+    window.localStorage.setItem(LOCAL_STORAGE_WORKSPACE_KEY, JSON.stringify(snapshot))
+    return true
+  } catch {
+    removeFromLocalStorage(LOCAL_STORAGE_WORKSPACE_KEY)
+    return false
+  }
 }
 
 export function markPendingRemoteWorkspaceSnapshotSync(snapshot: WorkspaceSnapshot, authenticatedUserId: string, targetClassroomIds?: string[]) {
@@ -525,12 +535,8 @@ export function clearPendingRemoteWorkspaceSnapshotMarker() {
 }
 
 function tryWriteWorkspaceToLocalStorageSync(snapshot: WorkspaceSnapshot) {
-  try {
-    writeWorkspaceToLocalStorageSync(snapshot)
-    return true
-  } catch {
-    return false
-  }
+  // writeWorkspaceToLocalStorageSync は内部で quota 超過を握りつぶし、成否を boolean で返す。
+  return writeWorkspaceToLocalStorageSync(snapshot)
 }
 
 function readAutoBackupRecordsFromLocalStorage(): AutoBackupRecord[] {

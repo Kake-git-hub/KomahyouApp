@@ -26,7 +26,7 @@ import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMar
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
-import { publishBoardShare } from './integrations/firebase/boardShare'
+import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
@@ -1140,8 +1140,13 @@ function AuthenticatedApp() {
   const [pairConstraints, setPairConstraints, pairConstraintsRef] = useLatestState(() => createInitialPairConstraintRows())
   const [classroomSettings, setClassroomSettings, classroomSettingsRef] = useLatestState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [boardState, setBoardState, boardStateRef] = useLatestState<PersistedBoardState | null>(null)
-  const boardSharePublishTimerRef = useRef<number | null>(null)
   const boardShareStateChangePublishTimerRef = useRef<number | null>(null)
+  // boardShare 公開の多重発行ガード。出席などの連続編集で同一内容を何度も setDoc し、
+  // Firestore 書き込みキューが枯渇 (resource-exhausted) してメモリが暴走するのを防ぐ。
+  const boardSharePublishInFlightRef = useRef(false)
+  const boardSharePendingStateRef = useRef<PersistedBoardState | null>(null)
+  const lastPublishedBoardShareSignatureRef = useRef<string | null>(null)
+  const publishBoardStateSnapshotRef = useRef<(state: PersistedBoardState) => void>(() => {})
   const [boardMountKey, setBoardMountKey] = useState(0)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
@@ -2097,22 +2102,56 @@ function AuthenticatedApp() {
   const publishBoardStateSnapshot = useCallback((nextBoardState: PersistedBoardState) => {
     if (!actingClassroomId || !actingClassroom) return
     if (!isFirebaseBackendEnabled()) return
-    bumpMemCounter('boardshare-publish')
     const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
     if (!classroomSettings.boardShareToken) {
       setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
     }
+    const sharedCells = selectBoardShareCells(nextBoardState.weeks)
+    // 共有対象セルを compact 化した内容で署名を作り、前回公開と同一なら publish をスキップ。
+    // （出席などの連続編集で同一内容を何度も setDoc しないようにする。）
+    const compactedCells = compactBoardSharePayload({
+      schemaVersion: 1,
+      token,
+      classroomId: actingClassroomId,
+      classroomName: actingClassroom.name,
+      sharedAt: '',
+      cells: sharedCells,
+    }).cells
+    const signature = `${token}|${actingClassroom.name}|${JSON.stringify(compactedCells)}`
+    if (signature === lastPublishedBoardShareSignatureRef.current) return
+
+    // 公開中に新たな変更が来たら最新内容だけを保留し、完了後に1回だけ追い公開する
+    // （同時 setDoc の多重発行を防ぐ single-flight）。
+    if (boardSharePublishInFlightRef.current) {
+      boardSharePendingStateRef.current = nextBoardState
+      return
+    }
+    boardSharePublishInFlightRef.current = true
+    bumpMemCounter('boardshare-publish')
     publishBoardShare({
       schemaVersion: 1,
       token,
       classroomId: actingClassroomId,
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
-      cells: selectBoardShareCells(nextBoardState.weeks),
-    }).catch((error) => {
-      console.warn('Board share publish from board state change failed', error)
+      cells: sharedCells,
     })
+      .then(() => {
+        lastPublishedBoardShareSignatureRef.current = signature
+      })
+      .catch((error) => {
+        console.warn('Board share publish from board state change failed', error)
+      })
+      .finally(() => {
+        boardSharePublishInFlightRef.current = false
+        const pending = boardSharePendingStateRef.current
+        if (pending) {
+          boardSharePendingStateRef.current = null
+          publishBoardStateSnapshotRef.current(pending)
+        }
+      })
   }, [actingClassroom, actingClassroomId, classroomSettings])
+  publishBoardStateSnapshotRef.current = publishBoardStateSnapshot
 
   const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState, meta: { userInitiated: boolean } = { userInitiated: true }) => {
     setBoardState(nextBoardState)
@@ -2127,26 +2166,6 @@ function AuthenticatedApp() {
       publishBoardStateSnapshot(nextBoardState)
     }, 250)
   }, [markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
-
-  useEffect(() => {
-    if (!actingClassroomId || !actingClassroom || !boardState) return
-    if (boardSharePublishTimerRef.current) window.clearTimeout(boardSharePublishTimerRef.current)
-
-    boardSharePublishTimerRef.current = window.setTimeout(() => {
-      const token = resolveBoardShareToken(actingClassroomId, classroomSettings)
-      if (!classroomSettings.boardShareToken) {
-        setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
-      }
-      publishBoardStateSnapshot(boardState)
-    }, 200)
-
-    return () => {
-      if (boardSharePublishTimerRef.current) {
-        window.clearTimeout(boardSharePublishTimerRef.current)
-        boardSharePublishTimerRef.current = null
-      }
-    }
-  }, [actingClassroom, actingClassroomId, boardState, classroomSettings, publishBoardStateSnapshot])
 
   useEffect(() => {
     if (screen !== 'developer') return
