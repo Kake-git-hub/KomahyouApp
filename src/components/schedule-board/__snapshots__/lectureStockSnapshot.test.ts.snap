@@ -1,0 +1,8 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`講習ストックゴールデンスナップショット (buildLectureStockEntries) > 代表講習データの集計が固定スナップショットと一致する 1`] = `
+"夏期講習 | 岡本美咲 (中3) | 国 | 希望2
+夏期講習 | 青木太郎 (中3) | 英 | 希望2
+夏期講習 | 青木太郎 (中3) | 数 | 希望3
+冬期講習 | 青木太郎 (中3) | 数 | 希望1"
+`;
