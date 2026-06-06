@@ -1174,6 +1174,8 @@ function AuthenticatedApp() {
   const remoteSyncProgressTimerRef = useRef<number | null>(null)
   const delayedAutoRemoteSyncTimerRef = useRef<number | null>(null)
   const remoteSyncStartedAtRef = useRef(0)
+  // 直近のローカル自動保存(IndexedDB書込)を開始した時刻。連続編集中の保存間隔を制御する。
+  const autosaveLastStartedAtRef = useRef(0)
   const downloadedFirebaseFailureBackupKeysRef = useRef<Set<string>>(new Set())
   isSavingNowRef.current = isSavingNow
   isRemoteSyncPendingRef.current = isRemoteSyncPending
@@ -3850,7 +3852,18 @@ function AuthenticatedApp() {
     // 既に算出済みの dataSignature を使い、変更ごとの余計な全データ stringify を避ける。
     if (dataSignature === cleanSignatureRef.current) return
 
+    // 自動保存は1編集ごとに workspace 全体を IndexedDB へ直列化(structuredClone)するため、
+    // 出席を連続入力する巨大教室では編集ピークの一因になっていた。debounce を 2 秒に延ばして
+    // 連続入力中の保存をまとめる。ただし保存されない時間が延びすぎないよう、前回保存から
+    // 最大 15 秒(maxWait)で必ず保存する。タブ切替/最小化/クローズ時は別途 visibilitychange/
+    // beforeunload で flush されるため、通常の離脱でデータは失われない(クラッシュ時の未保存幅のみ拡大)。
+    const AUTOSAVE_DEBOUNCE_MS = 2000
+    const AUTOSAVE_MAX_WAIT_MS = 15000
+    const elapsedSinceLastSave = Date.now() - autosaveLastStartedAtRef.current
+    const autosaveDelay = Math.max(0, Math.min(AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS - elapsedSinceLastSave))
+
     const timeoutId = window.setTimeout(() => {
+      autosaveLastStartedAtRef.current = Date.now()
       bumpMemCounter('autosave-run')
       // 全データの deep clone と署名生成はデバウンス後にだけ行う。連続変更のたびに
       // workspace 全体を clone / stringify するのを避け、メモリ確保を大幅に削減する。
@@ -3886,7 +3899,7 @@ function AuthenticatedApp() {
         .catch(() => {
           setPersistenceMessage('自動保存に失敗しました。バックアップを書き出してください。')
         })
-    }, 250)
+    }, autosaveDelay)
 
     return () => window.clearTimeout(timeoutId)
     // dataSignature を依存に含めることで、教室設定/通常授業/盤面など全ての保存対象データ変更後に
