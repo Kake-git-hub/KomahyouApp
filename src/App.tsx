@@ -40,6 +40,17 @@ export type ClassroomSettings = SharedClassroomSettings
 
 const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
 
+// 保存失敗時の作業指示(spec-save-restore.md §2)。自動リトライに頼らず、
+// 自動ダウンロードしたバックアップを使って再ログイン後に復元する手順を明示する。
+const SAVE_FAILURE_GUIDANCE_MESSAGE = [
+  '保存に失敗しました。',
+  '',
+  'データ保護のため、バックアップJSONを自動でダウンロードしました。',
+  'お手数ですが次の手順で復元してください。',
+  '  1. 一度ログアウトし、再ログインする',
+  '  2. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
+].join('\n')
+
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
@@ -1771,6 +1782,11 @@ function AuthenticatedApp() {
         if (isRemoteSyncVisibleRef.current && downloadedBackup) {
           setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}。バックアップJSONを自動ダウンロードしました。`)
         }
+        // バックアップを新規ダウンロードした失敗時のみ、再ログイン→復元の作業指示を明示する
+        // (downloadFirebaseFailureBackup はスナップショット単位で重複DLを抑止するため、案内も重複しない)。
+        if (downloadedBackup) {
+          window.alert(SAVE_FAILURE_GUIDANCE_MESSAGE)
+        }
         nextItem.onFailure?.(error)
       } finally {
         clearRemoteSyncSlowTimer()
@@ -2838,8 +2854,11 @@ function AuthenticatedApp() {
         setRemoteSyncProgress(null)
         const downloaded = downloadFallbackBackup()
         setPersistenceMessage(downloaded
-          ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
+          ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。'
           : '保存に失敗しました。バックアップを書き出してください。')
+        if (downloaded) {
+          window.alert(SAVE_FAILURE_GUIDANCE_MESSAGE)
+        }
       })()
   }, [actingClassroomId, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, setCleanSignature, updateRemoteSyncVisible, updateSavingNow])
 
