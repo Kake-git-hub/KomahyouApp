@@ -22,7 +22,7 @@ import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspace
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
@@ -4046,12 +4046,32 @@ function AuthenticatedApp() {
     setPersistenceMessage(`ローカルバックアップ (${backupDateKey}) からこの教室を復元しました。`)
   }, [actingClassroomId, saveUndoSnapshot])
 
+  // 手動バックアップは「開いている1教室分の完全スナップショット(テンプレ・設定・盤面・ストックを含む)」を
+  // AppSnapshot 形式で書き出す。読み込み(importBackup)は AppSnapshot を優先的に完全復元するため、
+  // この1ファイルだけで現在の教室を丸ごと復元できる(spec-save-restore.md §5)。
   const exportBackup = useCallback(() => {
-    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    downloadTextFile(formatBackupFileName(snapshot.savedAt, '手動バックアップ'), serializeWorkspaceSnapshot(snapshot), 'application/json')
-    setLastSavedAt(snapshot.savedAt)
-    setPersistenceMessage('バックアップを書き出しました。')
-  }, [buildWorkspaceSnapshot])
+    const savedAt = new Date().toISOString()
+    const snapshot: AppSnapshot = {
+      schemaVersion: 1,
+      savedAt,
+      ...buildClassroomSnapshotPayload({
+        screen: screen === 'developer' ? 'board' : screen,
+        classroomSettings,
+        managers,
+        teachers,
+        students,
+        regularLessons,
+        groupLessons,
+        specialSessions,
+        autoAssignRules,
+        pairConstraints,
+        boardState,
+      }),
+    }
+    downloadTextFile(formatBackupFileName(savedAt, '手動バックアップ'), serializeAppSnapshot(snapshot), 'application/json')
+    setLastSavedAt(savedAt)
+    setPersistenceMessage('この教室のバックアップを書き出しました。')
+  }, [screen, classroomSettings, managers, teachers, students, regularLessons, groupLessons, specialSessions, autoAssignRules, pairConstraints, boardState])
 
   const exportWorkspaceBackup = useCallback(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
