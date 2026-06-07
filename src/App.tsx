@@ -22,7 +22,7 @@ import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspace
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
@@ -39,6 +39,17 @@ import './App.css'
 export type ClassroomSettings = SharedClassroomSettings
 
 const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
+
+// 保存失敗時の作業指示(spec-save-restore.md §2)。自動リトライに頼らず、
+// 自動ダウンロードしたバックアップを使って再ログイン後に復元する手順を明示する。
+const SAVE_FAILURE_GUIDANCE_MESSAGE = [
+  '保存に失敗しました。',
+  '',
+  'データ保護のため、バックアップJSONを自動でダウンロードしました。',
+  'お手数ですが次の手順で復元してください。',
+  '  1. 一度ログアウトし、再ログインする',
+  '  2. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
+].join('\n')
 
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -1771,6 +1782,11 @@ function AuthenticatedApp() {
         if (isRemoteSyncVisibleRef.current && downloadedBackup) {
           setPersistenceMessage(`ブラウザ内には保存済みです。Firebase 同期は未完了です: ${message}。バックアップJSONを自動ダウンロードしました。`)
         }
+        // バックアップを新規ダウンロードした失敗時のみ、再ログイン→復元の作業指示を明示する
+        // (downloadFirebaseFailureBackup はスナップショット単位で重複DLを抑止するため、案内も重複しない)。
+        if (downloadedBackup) {
+          window.alert(SAVE_FAILURE_GUIDANCE_MESSAGE)
+        }
         nextItem.onFailure?.(error)
       } finally {
         clearRemoteSyncSlowTimer()
@@ -2838,8 +2854,11 @@ function AuthenticatedApp() {
         setRemoteSyncProgress(null)
         const downloaded = downloadFallbackBackup()
         setPersistenceMessage(downloaded
-          ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。後で開発者画面から復元できます。'
+          ? '保存に失敗したため、バックアップJSONを自動ダウンロードしました。'
           : '保存に失敗しました。バックアップを書き出してください。')
+        if (downloaded) {
+          window.alert(SAVE_FAILURE_GUIDANCE_MESSAGE)
+        }
       })()
   }, [actingClassroomId, buildCurrentDataSignature, buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, manualFirebaseSaveStabilityEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, syncCurrentClassroomData, setCleanSignature, updateRemoteSyncVisible, updateSavingNow])
 
@@ -4046,12 +4065,32 @@ function AuthenticatedApp() {
     setPersistenceMessage(`ローカルバックアップ (${backupDateKey}) からこの教室を復元しました。`)
   }, [actingClassroomId, saveUndoSnapshot])
 
+  // 手動バックアップは「開いている1教室分の完全スナップショット(テンプレ・設定・盤面・ストックを含む)」を
+  // AppSnapshot 形式で書き出す。読み込み(importBackup)は AppSnapshot を優先的に完全復元するため、
+  // この1ファイルだけで現在の教室を丸ごと復元できる(spec-save-restore.md §5)。
   const exportBackup = useCallback(() => {
-    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    downloadTextFile(formatBackupFileName(snapshot.savedAt, '手動バックアップ'), serializeWorkspaceSnapshot(snapshot), 'application/json')
-    setLastSavedAt(snapshot.savedAt)
-    setPersistenceMessage('バックアップを書き出しました。')
-  }, [buildWorkspaceSnapshot])
+    const savedAt = new Date().toISOString()
+    const snapshot: AppSnapshot = {
+      schemaVersion: 1,
+      savedAt,
+      ...buildClassroomSnapshotPayload({
+        screen: screen === 'developer' ? 'board' : screen,
+        classroomSettings,
+        managers,
+        teachers,
+        students,
+        regularLessons,
+        groupLessons,
+        specialSessions,
+        autoAssignRules,
+        pairConstraints,
+        boardState,
+      }),
+    }
+    downloadTextFile(formatBackupFileName(savedAt, '手動バックアップ'), serializeAppSnapshot(snapshot), 'application/json')
+    setLastSavedAt(savedAt)
+    setPersistenceMessage('この教室のバックアップを書き出しました。')
+  }, [screen, classroomSettings, managers, teachers, students, regularLessons, groupLessons, specialSessions, autoAssignRules, pairConstraints, boardState])
 
   const exportWorkspaceBackup = useCallback(() => {
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
