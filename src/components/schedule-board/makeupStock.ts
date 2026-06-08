@@ -415,7 +415,6 @@ export function computeAutomaticShortageOrigins(
   classroomSettings: ClassroomSettings,
   today = new Date(),
 ) {
-  const todayKey = toDateKey(today)
   const currentSchoolYear = resolveOperationalSchoolYear(today)
   const studentById = new Map(students.map((student) => [student.id, student]))
   const shortages: OriginMap = {}
@@ -433,7 +432,7 @@ export function computeAutomaticShortageOrigins(
     const stockPeriod = resolveAutomaticStockPeriod(row)
 
     for (const participant of participants) {
-      const periodEndKey = stockPeriod.endDate < todayKey ? stockPeriod.endDate : todayKey
+      const periodEndKey = stockPeriod.endDate
       if (periodEndKey < stockPeriod.startDate) continue
       const monthRange = iterateMonthsInRange(stockPeriod.startDate, periodEndKey)
       const student = studentById.get(participant.studentId)
@@ -442,19 +441,16 @@ export function computeAutomaticShortageOrigins(
       const stockKey = buildMakeupStockKey(student.id, participant.subject)
 
       for (const { year, monthIndex } of monthRange) {
+        // 休日設定した時点で即時に振替計上する(過去/未来問わず)。旧実装の「今日まで」制限は撤廃(spec-makeup-stock.md §1-A)。
         const scheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
           .filter((dateKey) => dateKey >= stockPeriod.startDate && dateKey <= periodEndKey)
           .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey))
         if (scheduledDates.length === 0) continue
 
-        const pastScheduledDates = scheduledDates.filter((dateKey) => dateKey <= todayKey)
-        if (pastScheduledDates.length === 0) continue
-
-        const openCandidateDates = pastScheduledDates.filter((dateKey) => !isClosedDate(dateKey, classroomSettings))
-        const openScheduledDates = openCandidateDates
-        const expectedLessonCount = pastScheduledDates.length
+        const openScheduledDates = scheduledDates.filter((dateKey) => !isClosedDate(dateKey, classroomSettings))
+        const expectedLessonCount = scheduledDates.length
         const shortageCount = Math.max(0, expectedLessonCount - openScheduledDates.length)
-        const missedDates = pastScheduledDates.filter((dateKey) => isClosedDate(dateKey, classroomSettings))
+        const missedDates = scheduledDates.filter((dateKey) => isClosedDate(dateKey, classroomSettings))
         const shortageDates = missedDates.slice(0, shortageCount)
         for (const shortageDate of shortageDates) {
           if (setupFloorKey && shortageDate < setupFloorKey) continue
@@ -779,18 +775,9 @@ export function buildMakeupStockEntries(params: {
       manualOriginReasonLabels,
     }))
     const manualIndependentPlannedMakeups = isManualEntry ? Math.max(0, plannedCount - allOriginDates.length) : 0
-    const balance = remainingOriginDates.length - overAssignedRegularLessons - manualIndependentPlannedMakeups
-    const negativeReasonParts: string[] = []
-
-    if (overAssignedRegularLessons > 0) {
-      negativeReasonParts.push(`希望回数を ${overAssignedRegularLessons} 件上回って配置しています。`)
-    }
-    if (manualIndependentPlannedMakeups > 0) {
-      negativeReasonParts.push(`手動追加した振替を ${manualIndependentPlannedMakeups} 件先に使っています。`)
-    }
-    const negativeReason = negativeReasonParts.length > 0
-      ? `残数がマイナスです。${negativeReasonParts.join(' ')}`
-      : null
+    // マイナス残(過剰配置)表示は廃止。残数は 0 を下限にしてマイナスにしない(spec-makeup-stock.md §4)。
+    const balance = Math.max(0, remainingOriginDates.length - overAssignedRegularLessons - manualIndependentPlannedMakeups)
+    const negativeReason = null
 
     return {
       key,
