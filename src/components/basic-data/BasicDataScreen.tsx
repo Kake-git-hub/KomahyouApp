@@ -36,10 +36,8 @@ import { AppMenu } from '../navigation/AppMenu'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
-  managers: ManagerRow[]
   teachers: TeacherRow[]
   students: StudentRow[]
-  onUpdateManagers: Dispatch<SetStateAction<ManagerRow[]>>
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
@@ -68,7 +66,7 @@ type TableControl = {
 
 type RosterView = 'active' | 'withdrawn'
 
-type BasicDataTab = 'managers' | 'teachers' | 'students' | 'constraints' | 'classroomData'
+type BasicDataTab = 'teachers' | 'students' | 'constraints' | 'classroomData'
 type RowEditScope = 'manager' | 'teacher' | 'student'
 export type BasicDataBundle = {
   managers: ManagerRow[]
@@ -953,12 +951,11 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, managers, teachers, students, onUpdateManagers, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
 
 
-  const [managerDraft, setManagerDraft] = useState({ name: '', email: '' })
   const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[], availableSlots: [] as TeacherAvailableSlot[] })
   const [teacherEditorModalState, setTeacherEditorModalState] = useState<TeacherEditorModalState | null>(null)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
@@ -984,7 +981,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   const [teacherRosterView, setTeacherRosterView] = useState<RosterView>('active')
   const [studentRosterView, setStudentRosterView] = useState<RosterView>('active')
   const [tableControls, setTableControls] = useState<Record<BasicDataTab, TableControl>>({
-    managers: createDefaultTableControl(),
     teachers: createDefaultTableControl(),
     students: createDefaultTableControl(),
     constraints: createDefaultTableControl(),
@@ -1066,10 +1062,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
 
     setEditingRows((current) => ({ ...current, [key]: nextIsEditing }))
   }
-  const updateManager = (id: string, patch: Partial<ManagerRow>) => {
-    onUpdateManagers((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
-  }
-
   const updateTeacher = (id: string, patch: Partial<TeacherRow>) => {
     if (isRowEditing('teacher', id)) {
       setTeacherDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }))
@@ -1140,13 +1132,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
         }
   })()
 
-  const addManager = () => {
-    if (!managerDraft.name.trim()) return
-    onUpdateManagers((current) => [...current, { id: createNextManagedId('manager', current.map((row) => row.id)), name: managerDraft.name.trim(), email: managerDraft.email.trim() }])
-    setManagerDraft({ name: '', email: '' })
-    setStatusMessage('マネージャーを追加しました。')
-  }
-
   const addTeacher = () => {
     if (!teacherDraft.name.trim()) return
     onUpdateTeachers((current) => [
@@ -1185,15 +1170,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
     setStatusMessage('生徒を追加しました。')
   }
 
-  const removeManager = (id: string) => {
-    if (!window.confirm('このマネージャーを削除します。よろしいですか。')) {
-      setStatusMessage('マネージャーの削除をキャンセルしました。')
-      return
-    }
-    onUpdateManagers((current) => current.filter((row) => row.id !== id))
-    setStatusMessage('マネージャーを削除しました。')
-  }
-
   const removeTeacher = (id: string) => {
     if (!window.confirm('この講師を削除します。よろしいですか。')) {
       setStatusMessage('講師の削除をキャンセルしました。')
@@ -1212,58 +1188,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
     setStatusMessage('生徒を削除しました。')
   }
 
-  const renderManagers = () => {
-    const filteredManagers = applyFrozenRowOrder(filterAndSortRows(
-      managers,
-      tableControls.managers,
-      (row) => [row.name, row.email],
-      { name: (row) => row.name, email: (row) => row.email },
-    ), frozenRowOrders.manager)
-
-    return (
-    <>
-      <section className="basic-data-section-card">
-        <div className="basic-data-card-head">
-          <h3>マネージャー登録</h3>
-        </div>
-        <div className="basic-data-form-row">
-          <input value={managerDraft.name} onChange={(event) => setManagerDraft((current) => ({ ...current, name: event.target.value }))} placeholder="マネージャー名" />
-          <input value={managerDraft.email} onChange={(event) => setManagerDraft((current) => ({ ...current, email: event.target.value }))} placeholder="メールアドレス" type="email" />
-          <button className="primary-button" type="button" onClick={addManager}>追加</button>
-        </div>
-      </section>
-      <section className="basic-data-section-card">
-        <TableControls
-          filterValue={tableControls.managers.filterText}
-          sortKey={tableControls.managers.sortKey}
-          direction={tableControls.managers.direction}
-          filterPlaceholder="マネージャー名・メールで絞り込み"
-          sortOptions={[{ value: 'name', label: '名前' }, { value: 'email', label: 'メール' }]}
-          onFilterChange={(value) => updateTableControl('managers', { filterText: value })}
-          onSortKeyChange={(value) => updateTableControl('managers', { sortKey: value })}
-          onDirectionChange={(value) => updateTableControl('managers', { direction: value })}
-        />
-        <table className="basic-data-table" data-testid="basic-data-managers-table">
-          <thead><tr><th>名前</th><th>メール</th><th>操作</th></tr></thead>
-          <tbody>
-            {filteredManagers.length === 0 ? <tr><td colSpan={3} className="basic-data-empty-row">登録済みマネージャーはありません。</td></tr> : filteredManagers.map((row) => (
-              <tr key={row.id}>
-                <td><input value={row.name} onChange={(event) => updateManager(row.id, { name: event.target.value })} disabled={!isRowEditing('manager', row.id)} /></td>
-                <td><input value={row.email} onChange={(event) => updateManager(row.id, { email: event.target.value })} type="email" disabled={!isRowEditing('manager', row.id)} /></td>
-                <td>
-                  <div className="basic-data-row-actions">
-                    <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('manager', row.id, filteredManagers.map((entry) => entry.id))}>{isRowEditing('manager', row.id) ? '編集終了' : '編集'}</button>
-                    <button className="secondary-button slim" type="button" onClick={() => removeManager(row.id)}>削除</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-    </>
-  )
-  }
 
   const renderTeachers = () => {
     const visibleTeachers = teacherRosterView === 'active' ? activeTeacherRows : withdrawnTeacherRows
@@ -1585,7 +1509,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
   const tabItems: Array<{ key: BasicDataTab; label: string }> = [
     { key: 'students', label: '生徒' },
     { key: 'teachers', label: '講師' },
-    { key: 'managers', label: 'マネージャー' },
     { key: 'classroomData', label: '教室データ' },
   ]
 
@@ -1665,7 +1588,6 @@ export function BasicDataScreen({ classroomSettings, managers, teachers, student
           <div className="basic-data-content">
             {activeTab === 'students' ? renderStudents() : null}
             {activeTab === 'teachers' ? renderTeachers() : null}
-            {activeTab === 'managers' ? renderManagers() : null}
             {activeTab === 'classroomData' ? renderClassroomData() : null}
           </div>
         </section>
