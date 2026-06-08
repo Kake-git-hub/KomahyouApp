@@ -18,7 +18,7 @@ export const OCC_RANGE_END = '2026-06-30'
 const OCC_SCHOOL_YEAR = 2026
 
 function student(id: string, name: string, birthDate: string, overrides: Partial<StudentRow> = {}): StudentRow {
-  return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate, isHidden: false, ...overrides }
+  return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate, ...overrides }
 }
 
 function regular(overrides: Partial<RegularLessonRow>): RegularLessonRow {

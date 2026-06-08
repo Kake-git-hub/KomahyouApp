@@ -1654,7 +1654,7 @@ export function buildTeacherSelectionOptions(params: {
     : teachers.find((teacher) => getTeacherDisplayName(teacher) === targetDesk.teacher || teacher.name === targetDesk.teacher)
   const visibleTeachers = teachers.filter((teacher) => {
     const status = resolveTeacherRosterStatus(teacher, referenceDate)
-    return status !== '非表示' && status !== '退塾'
+    return status !== '退塾'
   })
   const mergedTeachers = currentTeacher && !visibleTeachers.some((teacher) => teacher.id === currentTeacher.id)
     ? [...visibleTeachers, currentTeacher]
@@ -1669,9 +1669,9 @@ export function buildTeacherSelectionOptions(params: {
 export function buildBoardStudentSelectionOptions(students: StudentRow[], cellDateKey: string, managementReferenceDate = cellDateKey) {
   return students
     .filter((student) => {
-      if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, cellDateKey)) return false
-      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, managementReferenceDate)
-      return status !== '退塾' && status !== '非表示'
+      if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, cellDateKey)) return false
+      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, managementReferenceDate)
+      return status !== '退塾'
     })
     .slice()
     .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, cellDateKey))
@@ -1685,8 +1685,8 @@ export function buildBoardStudentSelectionOptions(students: StudentRow[], cellDa
 export function buildTemplateStudentSelectionOptions(students: StudentRow[], templateReferenceDate: string) {
   return students
     .filter((student) => {
-      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, templateReferenceDate)
-      return status !== '退塾' && status !== '非表示'
+      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, templateReferenceDate)
+      return status !== '退塾'
     })
     .slice()
     .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, templateReferenceDate))
@@ -1739,13 +1739,13 @@ function buildManagedRegularLessonsRange(params: {
     const student1ActiveDateKeys = student1
       ? scheduledDateKeys.filter((dateKey) => (
         isRegularLessonParticipantActiveOnDate(row, dateKey)
-        && isActiveOnDate(student1.entryDate, student1.withdrawDate, student1.isHidden, dateKey)
+        && isActiveOnDate(student1.entryDate, student1.withdrawDate, student1.birthDate, dateKey)
       ))
       : []
     const student2ActiveDateKeys = student2 && row.subject2
       ? scheduledDateKeys.filter((dateKey) => (
         isRegularLessonParticipantActiveOnDate(row, dateKey)
-        && isActiveOnDate(student2.entryDate, student2.withdrawDate, student2.isHidden, dateKey)
+        && isActiveOnDate(student2.entryDate, student2.withdrawDate, student2.birthDate, dateKey)
       ))
       : []
 
@@ -4320,7 +4320,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
         const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
         if (!cell.isOpenDay) continue
-        if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.isHidden, cell.dateKey)) continue
+        if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.birthDate, cell.dateKey)) continue
         if (findDuplicateStudentInCell(cell, params.studentKey)) continue
 
         const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
@@ -4747,7 +4747,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const addableStudents = useMemo(() => {
     if (!emptyMenuContext) return []
     return students
-      .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, emptyMenuContext.cell.dateKey))
+      .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, emptyMenuContext.cell.dateKey))
       .map((student) => ({
         id: student.id,
         displayName: formatStudentSelectionLabel(student),
@@ -5803,7 +5803,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         for (const participant of participants) {
           const student = studentByIdLocal.get(participant.studentId)
           if (!student) continue
-          if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)) continue
+          if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)) continue
           const occurrenceKey = `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`
           nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, occurrenceKey)
         }
@@ -6057,7 +6057,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       for (const participant of participants) {
         const student = studentByIdLocal.get(participant.studentId)
         if (!student) continue
-        if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)) continue
+        if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)) continue
         const occurrenceKey = `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`
         nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, occurrenceKey)
       }

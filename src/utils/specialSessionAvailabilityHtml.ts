@@ -62,8 +62,8 @@ function normalizeManagedDate(value: string) {
   return trimmed
 }
 
-function isActiveDuringSession(entryDate: string, withdrawDate: string, isHidden: boolean, sessionStart: string, sessionEnd: string) {
-  if (isHidden) return false
+// 講習期間に在籍しているか(生徒/講師共通・日付ベース)。手動の非表示(isHidden)は廃止。
+function isActiveDuringSession(entryDate: string, withdrawDate: string, sessionStart: string, sessionEnd: string) {
   const normalizedEntry = normalizeManagedDate(entryDate)
   const normalizedWithdraw = normalizeManagedDate(withdrawDate)
   if (normalizedEntry && normalizedEntry > sessionEnd) return false
@@ -97,7 +97,7 @@ function buildPayload(params: OpenSpecialSessionAvailabilityHtmlParams): PopupPa
     },
     periodBands: [{ label: session.label, startDate: session.startDate, endDate: session.endDate }],
     teachers: teachers
-      .filter((teacher) => isActiveDuringSession(teacher.entryDate, teacher.withdrawDate, teacher.isHidden, session.startDate, session.endDate))
+      .filter((teacher) => isActiveDuringSession(teacher.entryDate, teacher.withdrawDate, session.startDate, session.endDate))
       .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
       .map((teacher) => ({
         id: teacher.id,
@@ -106,7 +106,7 @@ function buildPayload(params: OpenSpecialSessionAvailabilityHtmlParams): PopupPa
         input: session.teacherInputs[teacher.id] ?? null,
       })),
     students: students
-      .filter((student) => isActiveDuringSession(student.entryDate, student.withdrawDate, student.isHidden, session.startDate, session.endDate))
+      .filter((student) => isActiveDuringSession(student.entryDate, student.withdrawDate, session.startDate, session.endDate))
       .sort((left, right) => getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja'))
       .map((student) => ({
         id: student.id,

@@ -181,7 +181,6 @@ export function listAutoAssignTargetGrades(students: StudentRow[], referenceDate
   const gradeSet = new Set<AutoAssignTargetGrade>()
 
   for (const student of students) {
-    if (student.isHidden) continue
     const grade = resolveStudentGradeLabel(student.birthDate, referenceDate)
     if (grade) gradeSet.add(grade)
   }

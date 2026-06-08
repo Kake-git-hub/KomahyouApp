@@ -20,11 +20,11 @@ import type { SlotCell, StudentEntry } from '../types'
 export const MAKEUP_TODAY = new Date('2026-04-30T00:00:00')
 
 function student(id: string, name: string, birthDate: string, overrides: Partial<StudentRow> = {}): StudentRow {
-  return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate, isHidden: false, ...overrides }
+  return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate, ...overrides }
 }
 
 function teacher(id: string, name: string): TeacherRow {
-  return { id, name, email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', isHidden: false, subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高3' }], availableSlots: [], memo: '' }
+  return { id, name, email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高3' }], availableSlots: [], memo: '' }
 }
 
 function regular(overrides: Partial<RegularLessonRow>): RegularLessonRow {

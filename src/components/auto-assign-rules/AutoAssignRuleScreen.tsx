@@ -344,7 +344,7 @@ export function AutoAssignRuleScreen({
   const referenceDate = getReferenceDateKey(new Date())
 
   const visibleStudents = useMemo(() => students
-    .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, referenceDate))
+    .filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, referenceDate))
     .slice()
     .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, referenceDate)),
   [referenceDate, students])

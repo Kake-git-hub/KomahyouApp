@@ -11,7 +11,6 @@ function student(overrides: Partial<StudentRow>): StudentRow {
     entryDate: overrides.entryDate ?? '',
     withdrawDate: overrides.withdrawDate ?? '',
     birthDate: overrides.birthDate ?? '',
-    isHidden: overrides.isHidden ?? false,
   }
 }
 
@@ -28,7 +27,7 @@ describe('billing utilities', () => {
       student({ entryDate: '2026-05-01' }),
       student({ entryDate: '2026-05-16' }),
       student({ withdrawDate: '2026-05-14' }),
-      student({ isHidden: true }),
+      student({ birthDate: '2005-04-02' }), // 高3卒業済み → 非在籍（旧 isHidden 廃止の代替検証）
       student({ withdrawDate: '2026-05-15' }),
     ], '2026-05')).toBe(2)
   })

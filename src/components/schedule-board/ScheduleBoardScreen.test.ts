@@ -324,7 +324,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         displayName: '高橋',
         birthDate: '2008-04-02',
         withdrawDate: '',
-        isHidden: false,
       },
       {
         ...studentBase,
@@ -333,7 +332,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         displayName: '青木',
         birthDate: '2012-04-02',
         withdrawDate: '',
-        isHidden: false,
       },
       {
         ...studentBase,
@@ -342,16 +340,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         displayName: '伊藤',
         birthDate: '2015-04-02',
         withdrawDate: '',
-        isHidden: false,
-      },
-      {
-        ...studentBase,
-        id: 'student-hidden',
-        name: '非表示 生徒',
-        displayName: '非表示',
-        birthDate: '2014-04-02',
-        withdrawDate: '',
-        isHidden: true,
       },
       {
         ...studentBase,
@@ -360,7 +348,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         displayName: '退塾',
         birthDate: '2013-04-02',
         withdrawDate: '2026-03-31',
-        isHidden: false,
       },
     ]
 
@@ -380,7 +367,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         displayName: '在籍',
         birthDate: '2012-04-02',
         withdrawDate: '',
-        isHidden: false,
       },
       {
         ...studentBase,
@@ -389,7 +375,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
         displayName: '退塾',
         birthDate: '2013-04-02',
         withdrawDate: '2026-03-31',
-        isHidden: false,
       },
     ]
 
@@ -1137,7 +1122,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
       displayName: 'Ochiai',
       entryDate: '2026-04-01',
       withdrawDate: '未定',
-      isHidden: false,
     }]
     const students = [{
       ...initialStudents[0]!,
@@ -1146,7 +1130,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
       displayName: 'Inoue',
       entryDate: '2026-04-01',
       withdrawDate: '未定',
-      isHidden: false,
     }]
     const regularLessons = [{
       id: 'regular-ochiai-inoue',
@@ -3526,7 +3509,7 @@ describe('buildTeacherSelectionOptions', () => {
     })
 
     expect(options.map((option) => option.name)).toContain('田中講師')
-    // hidden teachers must be excluded in template mode
+    // 退塾日を過ぎた講師(吉田=休職を退塾日で代用)は候補から除外される
     expect(options.map((option) => option.name)).not.toContain('吉田講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')
   })

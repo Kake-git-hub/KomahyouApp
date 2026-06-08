@@ -102,7 +102,7 @@ function countSnapshotRows(snapshot: AppSnapshotPayload) {
 }
 
 function countActiveStudents(snapshot: AppSnapshotPayload, referenceDate: string) {
-  return snapshot.students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)).length
+  return snapshot.students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, referenceDate)).length
 }
 
 function formatContractStatusLabel(status: WorkspaceClassroom['contractStatus']) {

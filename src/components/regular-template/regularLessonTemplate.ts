@@ -224,8 +224,8 @@ export function filterTemplateParticipantsForReferenceDate(params: {
   const visibleStudentIds = new Set(
     students
       .filter((student) => {
-        const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, referenceDate)
-        return status !== '退塾' && status !== '非表示'
+        const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, referenceDate)
+        return status !== '退塾'
       })
       .map((student) => student.id),
   )

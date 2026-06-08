@@ -135,7 +135,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
 
   const referenceDate = new Date().toISOString().slice(0, 10)
-  const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, referenceDate)).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
+  const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.birthDate, referenceDate)).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
   const selectedDevelopmentCopyClassroomId = developmentClassroomCopySources.some((classroom) => classroom.id === developmentCopyClassroomId)
     ? developmentCopyClassroomId
     : (developmentClassroomCopySources[0]?.id ?? '')

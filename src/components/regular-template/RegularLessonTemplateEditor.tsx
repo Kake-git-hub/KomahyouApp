@@ -104,8 +104,8 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
   const visibleStudents = useMemo(
     () => students
       .filter((student) => {
-        const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, templateReferenceDate)
-        return status !== '退塾' && status !== '非表示'
+        const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, templateReferenceDate)
+        return status !== '退塾'
       })
       .slice()
       .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, templateReferenceDate)),
