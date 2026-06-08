@@ -119,9 +119,11 @@ function BoardToolbarComponent({
     setSavePressed(false)
   }
   const isSavingInProgress = savePressed || Boolean(isBoardSaving) || Boolean(isBoardSaveDisabled)
-  // 保存待ちのデータがある限り押せるようにする（「保存」表示なのに押せない状態を防ぐ）。
-  const isSaveButtonDisabled = isSavingInProgress || !hasPendingSave
+  // 常時クリック可能(グレーアウトしない／常に緑)。保存中だけ無効化して二重実行を防ぐ。
+  // 未保存が無いとき(=「最新データ」表示)は押しても no-op。spec-save-restore.md §1。
+  const isSaveButtonDisabled = isSavingInProgress
   const handleSaveBoardClick = () => {
+    if (!hasPendingSave) return
     setSavePressed(true)
     // スピナーの描画を先に確定させてから保存処理を走らせる（同期的な重い処理で
     // 「保存中…」表示が遅れる/飛ぶのを防ぐ）。
@@ -249,7 +251,7 @@ function BoardToolbarComponent({
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
               <button
-                className={`primary-button slim${hasPendingSave || isSavingInProgress ? '' : ' is-clean'}`}
+                className="primary-button slim"
                 type="button"
                 onClick={handleSaveBoardClick}
                 disabled={isSaveButtonDisabled}
