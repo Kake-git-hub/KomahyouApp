@@ -304,10 +304,6 @@ function isDeveloperCloudBackupSupported() {
   return typeof getDeveloperCloudBackupRuntimeWindow().showDirectoryPicker === 'function'
 }
 
-function serializeAnalysisExport(payload: unknown) {
-  return JSON.stringify(payload, null, 2)
-}
-
 function isDeveloperCloudBackupDirectoryHandle(value: unknown): value is DeveloperCloudBackupDirectoryHandle {
   if (!value || typeof value !== 'object') return false
   const record = value as Record<string, unknown>
@@ -500,46 +496,6 @@ function buildDeveloperRestoreModalState(currentSnapshot: WorkspaceSnapshot, res
       existsInCurrent: currentClassroomById.has(classroom.id),
       selected: true,
     })),
-  }
-}
-
-function buildWorkspaceAnalysisExport(snapshot: WorkspaceSnapshot) {
-  return {
-    exportedAt: snapshot.savedAt,
-    schemaVersion: snapshot.schemaVersion,
-    classroomCount: snapshot.classrooms.length,
-    userCount: snapshot.users.length,
-    classrooms: snapshot.classrooms.map((classroom) => {
-      const managerUser = snapshot.users.find((user) => user.id === classroom.managerUserId) ?? null
-      const payload = classroom.data
-      return {
-        classroomId: classroom.id,
-        classroomName: classroom.name,
-        contractStatus: classroom.contractStatus,
-        contractStartDate: classroom.contractStartDate,
-        contractEndDate: classroom.contractEndDate,
-        isTemporarilySuspended: Boolean(classroom.isTemporarilySuspended),
-        temporarySuspensionReason: classroom.temporarySuspensionReason ?? '',
-        managerUser: managerUser
-          ? {
-            id: managerUser.id,
-            name: managerUser.name,
-            email: managerUser.email,
-          }
-          : null,
-        counts: {
-          managers: payload.managers.length,
-          teachers: payload.teachers.length,
-          students: payload.students.length,
-          regularLessons: payload.regularLessons.length,
-          groupLessons: payload.groupLessons.length,
-          specialSessions: payload.specialSessions.length,
-          autoAssignRules: payload.autoAssignRules.length,
-          pairConstraints: payload.pairConstraints.length,
-        },
-        data: payload,
-      }
-    }),
   }
 }
 
@@ -4103,14 +4059,6 @@ function AuthenticatedApp() {
     setPersistenceMessage('開発者バックアップを書き出しました。')
   }, [buildWorkspaceSnapshot])
 
-  const exportAnalysisData = useCallback(() => {
-    const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    const analysisPayload = buildWorkspaceAnalysisExport(snapshot)
-    downloadTextFile(formatBackupFileName(snapshot.savedAt, 'AI分析用データ'), serializeAnalysisExport(analysisPayload), 'application/json')
-    setLastSavedAt(snapshot.savedAt)
-    setPersistenceMessage('AI分析用データを書き出しました。')
-  }, [buildWorkspaceSnapshot])
-
   const importWorkspaceBackup = useCallback(async (file: File, _password: string) => {
     try {
       const text = await file.text()
@@ -4629,7 +4577,7 @@ function AuthenticatedApp() {
               </div>
             </form>
             <div className="workspace-auth-actions">
-              <button data-testid="firebase-password-reset" className="menu-link-button" type="button" onClick={() => void submitPasswordReset()}>パスワードを忘れた方はこちら</button>
+              <button data-testid="firebase-password-reset" className="menu-link-button" type="button" onClick={() => void submitPasswordReset()}>パスワードリセットまたはパスワード変更</button>
             </div>
             {remoteAuthMessage ? <div data-testid="firebase-auth-message" className="workspace-auth-note workspace-auth-note-error">{remoteAuthMessage}</div> : null}
           </div>
@@ -4745,7 +4693,6 @@ function AuthenticatedApp() {
         onUpdateClassroom={updateClassroom}
         onReplaceClassroomManagerUid={replaceClassroomManagerUid}
         onExportWorkspaceBackup={exportWorkspaceBackup}
-        onExportAnalysisData={exportAnalysisData}
         onImportWorkspaceBackup={importWorkspaceBackup}
         onRestoreAutoBackup={() => {}}
         onLoadStudentHistory={loadStudentHistory}
