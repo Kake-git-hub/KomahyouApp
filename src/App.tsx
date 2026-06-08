@@ -45,10 +45,14 @@ const PENDING_WORKSPACE_SNAPSHOT_WRITE_INTERVAL_MS = 5000
 const SAVE_FAILURE_GUIDANCE_MESSAGE = [
   '保存に失敗しました。',
   '',
+  'まず、インターネットに接続されているかご確認ください。',
+  '通信が不安定な場合は、接続が回復してからもう一度「保存」をお試しください。',
+  '',
   'データ保護のため、バックアップJSONを自動でダウンロードしました。',
-  'お手数ですが次の手順で復元してください。',
-  '  1. 一度ログアウトし、再ログインする',
-  '  2. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
+  '接続が回復しても保存できない場合は、次の手順で復元してください。',
+  '  1. インターネット接続を確認する',
+  '  2. 一度ログアウトし、再ログインする',
+  '  3. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
 ].join('\n')
 
 function createRemoteSaveId(savedAt: string, classroomId: string) {
@@ -4785,10 +4789,8 @@ function AuthenticatedApp() {
     return renderWithSubmissionAcknowledgement(
       <BasicDataScreen
         classroomSettings={classroomSettings}
-        managers={managers}
         teachers={teachers}
         students={students}
-        onUpdateManagers={setManagers}
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
         onUpdateClassroomSettings={setClassroomSettings}
