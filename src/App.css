@@ -1612,24 +1612,13 @@
   padding: 0 10px;
 }
 
-.lesson-type-badge.lesson-card-regular {
-  background: #dff4df;
-  color: #2c6e3f;
-}
-
-.lesson-type-badge.lesson-card-makeup {
-  background: #fff1c8;
-  color: #8d6400;
-}
-
-.lesson-type-badge.lesson-card-substitute {
-  background: #ffe0e8;
-  color: #a12d57;
-}
-
+/* 色分け撤廃(spec-board-regular-placement/⑨): 種類別バッジ色を廃止し中立色に統一(ラベル文字で区別)。 */
+.lesson-type-badge.lesson-card-regular,
+.lesson-type-badge.lesson-card-makeup,
+.lesson-type-badge.lesson-card-substitute,
 .lesson-type-badge.lesson-card-special {
-  background: #dce8ff;
-  color: #3967a8;
+  background: #eef0f3;
+  color: #333;
 }
 
 .sa-inline-warning {
@@ -2097,24 +2086,17 @@ tr.sa-slot-last th {
   background: transparent;
 }
 
-.sa-student-detail-prefix.prefix-lesson-regular {
-  color: #2f8a2f;
-}
-
-.sa-student-detail-prefix.prefix-lesson-makeup {
-  color: #d0a000;
-}
-
-.sa-student-detail-prefix.prefix-lesson-special {
-  color: #ba4d1b;
+/* 色分け撤廃(spec): 種類別の色は廃止しラベル表記(通)/振)/講)/増))で区別する。
+   体験(体)は注意系の赤フラグとして残す。 */
+.sa-student-detail-prefix.prefix-lesson-regular,
+.sa-student-detail-prefix.prefix-lesson-makeup,
+.sa-student-detail-prefix.prefix-lesson-special,
+.sa-student-detail-prefix.prefix-lesson-extra {
+  color: inherit;
 }
 
 .sa-student-detail-prefix.prefix-lesson-trial {
   color: #e00000;
-}
-
-.sa-student-detail-prefix.prefix-lesson-extra {
-  color: #1f6feb;
 }
 
 .sa-student.sa-student-trial .sa-student-name,
@@ -2131,16 +2113,11 @@ tr.sa-slot-last th {
   color: #f09090;
 }
 
-.sa-student-star.star-lesson-regular {
-  color: #2f8a2f;
-}
-
-.sa-student-star.star-lesson-makeup {
-  color: #d0a000;
-}
-
+/* 色分け撤廃(spec): 種類別スター色を中立化(通常/振替/代行)。外部講師フラグは注意系として残す。 */
+.sa-student-star.star-lesson-regular,
+.sa-student-star.star-lesson-makeup,
 .sa-student-star.star-teacher-substitute {
-  color: #c84f8b;
+  color: inherit;
 }
 
 .sa-student-star.star-teacher-outside {
