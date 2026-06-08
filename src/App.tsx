@@ -3828,12 +3828,13 @@ function AuthenticatedApp() {
     if (dataSignature === cleanSignatureRef.current) return
 
     // 自動保存は1編集ごとに workspace 全体を IndexedDB へ直列化(structuredClone)するため、
-    // 出席を連続入力する巨大教室では編集ピークの一因になっていた。debounce を 2 秒に延ばして
+    // 出席を連続入力する巨大教室では編集ピークの一因になっていた。debounce を 5 秒に延ばして
     // 連続入力中の保存をまとめる。ただし保存されない時間が延びすぎないよう、前回保存から
-    // 最大 15 秒(maxWait)で必ず保存する。タブ切替/最小化/クローズ時は別途 visibilitychange/
+    // 最大 20 秒(maxWait)で必ず保存する。タブ切替/最小化/クローズ時は別途 visibilitychange/
     // beforeunload で flush されるため、通常の離脱でデータは失われない(クラッシュ時の未保存幅のみ拡大)。
-    const AUTOSAVE_DEBOUNCE_MS = 2000
-    const AUTOSAVE_MAX_WAIT_MS = 15000
+    // (spec-save-restore.md §1: デバウンス5秒 / 最大20秒)
+    const AUTOSAVE_DEBOUNCE_MS = 5000
+    const AUTOSAVE_MAX_WAIT_MS = 20000
     const elapsedSinceLastSave = Date.now() - autosaveLastStartedAtRef.current
     const autosaveDelay = Math.max(0, Math.min(AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS - elapsedSinceLastSave))
 

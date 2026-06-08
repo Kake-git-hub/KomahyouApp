@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import packageJson from '../package.json'
 import { startMemoryDiagnostics } from './utils/memoryDiagnostics'
+import { OfflineGate } from './components/OfflineGate'
 
 // ?memlog=1 のときだけメモリ診断ログを開始する（通常は何もしない）。
 startMemoryDiagnostics()
@@ -75,6 +76,7 @@ if (submissionToken) {
     createRoot(document.getElementById('root')!).render(
       <StrictMode>
         <App />
+        <OfflineGate />
         <div className="app-version-badge">v{packageJson.version}</div>
       </StrictMode>,
     )
