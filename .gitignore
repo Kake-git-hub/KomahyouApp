@@ -24,6 +24,9 @@ firebase-debug.log*
 playwright-report
 test-results
 
+# Local agent / editor config
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
