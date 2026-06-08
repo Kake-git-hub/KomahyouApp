@@ -3,24 +3,6 @@ import * as xlsx from 'xlsx'
 import { createTemplateBundle, mergeImportedBundle, parseImportedBundle } from './BasicDataScreen'
 
 describe('BasicDataScreen parseImportedBundle', () => {
-  it('parses imported teacher available slots', () => {
-    const workbook = xlsx.utils.book_new()
-
-    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
-      { 名前: '田中講師', 表示名: '田中講師', メール: '', 入塾日: '2024-04-01', 退塾日: '', 表示: '表示', 担当科目: '数:高3', 出勤可能コマ: '月4限, 木2限, 日5限', メモ: '' },
-    ]), '講師')
-
-    const parsed = parseImportedBundle(xlsx, workbook, createTemplateBundle())
-
-    expect(parsed.teachers[0]).toMatchObject({
-      availableSlots: [
-        { dayOfWeek: 1, slotNumber: 4 },
-        { dayOfWeek: 4, slotNumber: 2 },
-        { dayOfWeek: 0, slotNumber: 5 },
-      ],
-    })
-  })
-
   it('assigns sequential ids to imported rows without id columns', () => {
     const workbook = xlsx.utils.book_new()
 
@@ -83,7 +65,6 @@ describe('BasicDataScreen parseImportedBundle', () => {
     expect(merged.teachers.find((row) => row.id === targetTeacher?.id)).toEqual(expect.objectContaining({
       displayName: '田中先生',
       email: 'tanaka-updated@example.com',
-      memo: '差分更新',
     }))
     expect(merged.teachers.find((row) => row.id === untouchedTeacher?.id)).toEqual(untouchedTeacher)
     expect(merged.students.find((row) => row.id === targetStudent?.id)).toEqual(expect.objectContaining({
@@ -130,7 +111,6 @@ describe('BasicDataScreen parseImportedBundle', () => {
 
     expect(merged.teachers.find((row) => row.id === targetTeacher?.id)).toEqual(expect.objectContaining({
       email: 'tanaka-name-match@example.com',
-      memo: '名前照合',
     }))
     expect(merged.students.find((row) => row.id === targetStudent?.id)).toEqual(expect.objectContaining({
       email: 'aoki-name-match@example.com',

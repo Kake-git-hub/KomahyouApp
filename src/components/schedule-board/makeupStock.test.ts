@@ -26,7 +26,6 @@ function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
     entryDate: '2025-04-01',
     withdrawDate: '未定',
     subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
-    memo: '',
     ...overrides,
   }
 }

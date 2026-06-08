@@ -1,20 +1,13 @@
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
-  buildTeacherAvailableSlotLabel,
   compareStudentsByCurrentGradeThenName,
   deriveManagedDisplayName,
   type GradeCeiling,
   type ManagerRow,
-  normalizeTeacherAvailableSlots,
-  parseTeacherAvailableSlots,
   resolveManagementRosterStatusLabel,
   resolveCurrentStudentGradeLabel,
-  serializeTeacherAvailableSlots,
   type StudentRow,
-  teacherAvailabilityDayOptions,
-  teacherAvailabilitySlotNumbers,
-  type TeacherAvailableSlot,
   type TeacherRow,
   type TeacherSubjectCapability,
   formatManagedDateValue,
@@ -380,9 +373,6 @@ function formatSummaryValue(value: string, fallback = '未設定') {
   return normalizeText(value) || fallback
 }
 
-function formatTeacherAvailabilitySummary(slots: TeacherAvailableSlot[] | undefined) {
-  return serializeTeacherAvailableSlots(slots) || '未設定'
-}
 
 function formatManagedDateButtonLabel(value: string, emptyLabel: string, hint?: string) {
   const normalizedValue = normalizeText(value)
@@ -478,8 +468,6 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     入塾日: row.entryDate,
     退塾日: normalizeDateString(row.withdrawDate),
     担当科目: serializeSubjectCapabilities(row.subjectCapabilities),
-    出勤可能コマ: serializeTeacherAvailableSlots(row.availableSlots),
-    メモ: row.memo,
   })), ['入塾日', '退塾日']), '講師')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.students.map((row) => ({
@@ -521,7 +509,6 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '各ID列', 説明: '現データ出力に含まれる ID 列は差分取り込みの照合に使います。差分更新時は削除せずそのまま残してください。新規行は空欄でも取り込めます。' },
     { 項目: '講師.担当科目', 説明: '英:高3, 数:中 のように 科目:上限学年 をカンマ区切りで記入します。' },
-    { 項目: '講師.出勤可能コマ', 説明: '月1限, 木3限 のように曜日と時限をカンマ区切りで記入します。通常授業がなくてもコマ表へ講師だけ表示します。' },
     { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式に加えて Excel の日付セルも取り込めます。空欄なら即時在籍として扱います。' },
     { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または Excel の日付セルで入力できます。空欄と 未定 はどちらも日付未設定として扱います。' },
     { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。学年/在籍列はアプリ側で自動計算します。' },
@@ -595,8 +582,6 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           entryDate: normalizeDateString(row['入塾日'], xlsx),
           withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
           subjectCapabilities: parseSubjectCapabilities(row['担当科目']),
-          availableSlots: parseTeacherAvailableSlots(row['出勤可能コマ']),
-          memo: normalizeText(row['メモ']),
         }))
         .filter((row) => row.name)
     : fallback.teachers
@@ -792,74 +777,8 @@ function SubjectCapabilityEditor({ capabilities, onChange, testIdPrefix, disable
   )
 }
 
-type TeacherAvailabilityEditorProps = {
-  slots: TeacherAvailableSlot[]
-  onChange: (next: TeacherAvailableSlot[]) => void
-  testIdPrefix?: string
-  disabled?: boolean
-}
-
-function TeacherAvailabilityEditor({ slots, onChange, testIdPrefix, disabled = false }: TeacherAvailabilityEditorProps) {
-  const normalizedSlots = normalizeTeacherAvailableSlots(slots)
-
-  const toggleSlot = (dayOfWeek: number, slotNumber: number) => {
-    const exists = normalizedSlots.some((slot) => slot.dayOfWeek === dayOfWeek && slot.slotNumber === slotNumber)
-    if (exists) {
-      onChange(normalizedSlots.filter((slot) => !(slot.dayOfWeek === dayOfWeek && slot.slotNumber === slotNumber)))
-      return
-    }
-
-    onChange(normalizeTeacherAvailableSlots([...normalizedSlots, { dayOfWeek, slotNumber }]))
-  }
-
-  return (
-    <div className="basic-data-inline-stack">
-      <div className="basic-data-capability-list" data-testid={testIdPrefix ? `${testIdPrefix}-available-slots` : undefined}>
-        {normalizedSlots.length === 0 ? <span className="basic-data-muted-inline">未設定</span> : normalizedSlots.map((slot) => (
-          <span key={`${slot.dayOfWeek}_${slot.slotNumber}`} className="status-chip secondary basic-data-capability-item">
-            {buildTeacherAvailableSlotLabel(slot)}
-            <button
-              className="basic-data-capability-remove"
-              type="button"
-              onClick={() => toggleSlot(slot.dayOfWeek, slot.slotNumber)}
-              disabled={disabled}
-            >
-              ×
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="basic-data-availability-grid">
-        {teacherAvailabilityDayOptions.map((day) => (
-          <div key={day.value} className="basic-data-availability-row">
-            <span className="basic-data-availability-day">{day.label}</span>
-            <div className="basic-data-chip-row">
-              {teacherAvailabilitySlotNumbers.map((slotNumber) => {
-                const isActive = normalizedSlots.some((slot) => slot.dayOfWeek === day.value && slot.slotNumber === slotNumber)
-                return (
-                  <button
-                    key={`${day.value}_${slotNumber}`}
-                    type="button"
-                    className={`basic-data-chip${isActive ? ' active' : ''}`}
-                    onClick={() => toggleSlot(day.value, slotNumber)}
-                    disabled={disabled}
-                    data-testid={testIdPrefix ? `${testIdPrefix}-available-slot-${day.value}-${slotNumber}` : undefined}
-                  >
-                    {slotNumber}限
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-      <p className="basic-data-subcopy">選んだ曜日と時限は、通常授業がなくても講師だけコマ表へ表示します。</p>
-    </div>
-  )
-}
-
 type TeacherEditorModalState = {
-  editor: 'capabilities' | 'availability'
+  editor: 'capabilities'
   target: 'draft' | 'row'
   rowId?: string
 }
@@ -952,7 +871,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const [statusMessage, setStatusMessage] = useState('')
 
 
-  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', subjectCapabilities: [] as TeacherSubjectCapability[], availableSlots: [] as TeacherAvailableSlot[] })
+  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', subjectCapabilities: [] as TeacherSubjectCapability[] })
   const [teacherEditorModalState, setTeacherEditorModalState] = useState<TeacherEditorModalState | null>(null)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
@@ -1074,58 +993,34 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     if (!teacherEditorModalState) return null
 
     if (teacherEditorModalState.target === 'draft') {
-      return teacherEditorModalState.editor === 'capabilities'
-        ? {
-            title: '講師の担当科目',
-            summaryLabel: '科目',
-            editor: (
-              <SubjectCapabilityEditor
-                capabilities={teacherDraft.subjectCapabilities}
-                onChange={(next) => setTeacherDraft((current) => ({ ...current, subjectCapabilities: next }))}
-                testIdPrefix="basic-data-teacher-draft"
-              />
-            ),
-          }
-        : {
-            title: '講師の出勤可能コマ',
-            summaryLabel: '出勤可',
-            editor: (
-              <TeacherAvailabilityEditor
-                slots={teacherDraft.availableSlots}
-                onChange={(next) => setTeacherDraft((current) => ({ ...current, availableSlots: normalizeTeacherAvailableSlots(next) }))}
-                testIdPrefix="basic-data-teacher-draft"
-              />
-            ),
-          }
+      return {
+        title: '講師の担当科目',
+        summaryLabel: '科目',
+        editor: (
+          <SubjectCapabilityEditor
+            capabilities={teacherDraft.subjectCapabilities}
+            onChange={(next) => setTeacherDraft((current) => ({ ...current, subjectCapabilities: next }))}
+            testIdPrefix="basic-data-teacher-draft"
+          />
+        ),
+      }
     }
 
     const baseTeacher = teachers.find((row) => row.id === teacherEditorModalState.rowId)
     if (!baseTeacher) return null
     const targetTeacher = { ...baseTeacher, ...teacherDrafts[baseTeacher.id] }
 
-    return teacherEditorModalState.editor === 'capabilities'
-      ? {
-          title: `${getTeacherDisplayName(targetTeacher)} の担当科目`,
-          summaryLabel: '科目',
-          editor: (
-            <SubjectCapabilityEditor
-              capabilities={targetTeacher.subjectCapabilities}
-              onChange={(next) => updateTeacher(targetTeacher.id, { subjectCapabilities: next })}
-              testIdPrefix={`basic-data-teacher-${targetTeacher.id}`}
-            />
-          ),
-        }
-      : {
-          title: `${getTeacherDisplayName(targetTeacher)} の出勤可能コマ`,
-          summaryLabel: '出勤可',
-          editor: (
-            <TeacherAvailabilityEditor
-              slots={targetTeacher.availableSlots ?? []}
-              onChange={(next) => updateTeacher(targetTeacher.id, { availableSlots: normalizeTeacherAvailableSlots(next) })}
-              testIdPrefix={`basic-data-teacher-${targetTeacher.id}`}
-            />
-          ),
-        }
+    return {
+      title: `${getTeacherDisplayName(targetTeacher)} の担当科目`,
+      summaryLabel: '科目',
+      editor: (
+        <SubjectCapabilityEditor
+          capabilities={targetTeacher.subjectCapabilities}
+          onChange={(next) => updateTeacher(targetTeacher.id, { subjectCapabilities: next })}
+          testIdPrefix={`basic-data-teacher-${targetTeacher.id}`}
+        />
+      ),
+    }
   })()
 
   const addTeacher = () => {
@@ -1140,11 +1035,9 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
         entryDate: teacherDraft.entryDate,
         withdrawDate: teacherDraft.withdrawDate.trim() || '未定',
         subjectCapabilities: teacherDraft.subjectCapabilities,
-        availableSlots: normalizeTeacherAvailableSlots(teacherDraft.availableSlots),
-        memo: teacherDraft.memo.trim(),
       },
     ])
-    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', subjectCapabilities: [], availableSlots: [] })
+    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', subjectCapabilities: [] })
     setTeacherEditorModalState((current) => current?.target === 'draft' ? null : current)
     setStatusMessage('講師を追加しました。')
   }
@@ -1188,14 +1081,13 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     const filteredTeachers = filterAndSortRows(
       visibleTeachers,
       tableControls.teachers,
-      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities), formatTeacherAvailabilitySummary(row.availableSlots), row.memo],
+      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities)],
       {
         name: (row) => getTeacherDisplayName(row),
         entryDate: (row) => row.entryDate,
         withdrawDate: (row) => formatManagedDateValue(row.withdrawDate),
         status: (row) => resolveTeacherStatusLabel(row),
         subjects: (row) => formatSubjectCapabilitySummary(row.subjectCapabilities),
-        availability: (row) => formatTeacherAvailabilitySummary(row.availableSlots),
       },
     )
     const orderedTeachers = applyFrozenRowOrder(filteredTeachers, frozenRowOrders.teacher)
@@ -1226,17 +1118,6 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                 <strong>{formatSubjectCapabilitySummary(teacherDraft.subjectCapabilities)}</strong>
               </button>
             </div>
-            <div className="basic-data-inline-editor-slot basic-data-inline-editor-slot-teacher">
-              <button
-                className="basic-data-inline-summary basic-data-inline-summary-button"
-                type="button"
-                onClick={() => setTeacherEditorModalState({ target: 'draft', editor: 'availability' })}
-                data-testid="basic-data-teacher-draft-availability-summary"
-              >
-                <span className="basic-data-inline-summary-label">出勤可</span>
-                <strong>{formatTeacherAvailabilitySummary(teacherDraft.availableSlots)}</strong>
-              </button>
-            </div>
             <label className="basic-data-inline-field basic-data-inline-field-medium">
               <span>メール</span>
               <input value={teacherDraft.email} onChange={(event) => setTeacherDraft((current) => ({ ...current, email: event.target.value }))} placeholder="メールアドレス" type="email" data-testid="basic-data-teacher-draft-email" />
@@ -1248,10 +1129,6 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
             <label className="basic-data-inline-field basic-data-inline-field-short">
               <span>退塾日</span>
               <DateAssistInput value={teacherDraft.withdrawDate} emptyLabel="退塾日を選択" hint="未定の場合未入力" onChange={(value) => setTeacherDraft((current) => ({ ...current, withdrawDate: value }))} testIdPrefix="basic-data-teacher-draft-withdraw-date" />
-            </label>
-            <label className="basic-data-inline-field basic-data-inline-field-short">
-              <span>メモ</span>
-              <input value={teacherDraft.memo} onChange={(event) => setTeacherDraft((current) => ({ ...current, memo: event.target.value }))} placeholder="メモ" data-testid="basic-data-teacher-draft-memo" />
             </label>
             <button className="primary-button" type="button" onClick={addTeacher} data-testid="basic-data-add-teacher-button">追加</button>
           </div>
@@ -1274,7 +1151,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
             </div>
           </div>
           <table className="basic-data-table" data-testid="basic-data-teachers-table">
-            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>メモ</th><th>操作</th></tr></thead>
+            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>状態</th><th>科目</th><th>操作</th></tr></thead>
             <tbody>
               {orderedTeachers.map((originalRow) => {
                 const draft = teacherDrafts[originalRow.id]
@@ -1320,11 +1197,6 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                           </button>
                         )
                       : <span className="basic-data-cell-summary" data-testid={`basic-data-teacher-capabilities-${row.id}`}>{formatSubjectCapabilitySummary(row.subjectCapabilities)}</span>}
-                  </td>
-                  <td>
-                    {isRowEditing('teacher', row.id)
-                      ? <input value={row.memo} onChange={(event) => updateTeacher(row.id, { memo: event.target.value })} />
-                      : <span className="basic-data-cell-summary">{formatSummaryValue(row.memo)}</span>}
                   </td>
                   <td>
                     <div className="basic-data-row-actions">

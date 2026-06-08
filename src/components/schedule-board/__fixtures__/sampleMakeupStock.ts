@@ -24,7 +24,7 @@ function student(id: string, name: string, birthDate: string, overrides: Partial
 }
 
 function teacher(id: string, name: string): TeacherRow {
-  return { id, name, email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高3' }], availableSlots: [], memo: '' }
+  return { id, name, email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高3' }] }
 }
 
 function regular(overrides: Partial<RegularLessonRow>): RegularLessonRow {

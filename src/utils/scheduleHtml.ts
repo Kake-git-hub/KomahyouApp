@@ -40,7 +40,6 @@ type SerializedTeacher = {
   fullName?: string
   entryDate: string
   withdrawDate: string
-  memo: string
   subjects: string[]
   submissionToken?: string
   qrSvg?: string
@@ -740,7 +739,6 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
         fullName: teacher.name,
         entryDate: teacher.entryDate,
         withdrawDate: teacher.withdrawDate,
-        memo: teacher.memo,
         subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
         submissionToken,
         qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
@@ -817,7 +815,6 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
         fullName: teacher.name,
         entryDate: teacher.entryDate,
         withdrawDate: teacher.withdrawDate,
-        memo: teacher.memo,
         subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
         submissionToken,
         qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),

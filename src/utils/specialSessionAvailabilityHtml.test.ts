@@ -24,9 +24,7 @@ function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
     email: 'teacher@example.com',
     entryDate: '2025-04-01',
     withdrawDate: '未定',
-    memo: '',
     subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
-    availableSlots: [],
     ...overrides,
   }
 }
