@@ -38,20 +38,6 @@ function toDateKey(date: Date) {
   return `${year}-${month}-${day}`
 }
 
-export function capRegularLessonDatesPerMonth(dateKeys: string[], monthlyLimit = 4) {
-  const monthCounts = new Map<string, number>()
-
-  return Array.from(new Set(dateKeys))
-    .sort((left, right) => left.localeCompare(right))
-    .filter((dateKey) => {
-      const monthKey = dateKey.slice(0, 7)
-      const currentCount = monthCounts.get(monthKey) ?? 0
-      if (currentCount >= monthlyLimit) return false
-      monthCounts.set(monthKey, currentCount + 1)
-      return true
-    })
-}
-
 export function packRegularLessonSlotNumbers<T extends Pick<RegularLessonRow, 'schoolYear' | 'dayOfWeek' | 'slotNumber'>>(rows: T[]) {
   const slotMapByGroup = new Map<string, Map<number, number>>()
 
