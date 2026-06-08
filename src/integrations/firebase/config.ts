@@ -53,6 +53,7 @@ export function isFirebaseBackendEnabled() {
 }
 
 export function isFirebaseAdminFunctionsEnabled() {
-  const config = getFirebaseBackendConfig()
-  return config.enabled && config.adminFunctionsEnabled
+  // Spark廃止: Firebase運用は常に Functions 有効(Blaze)前提とし、教室追加/削除・管理者発行/メール変更は
+  // すべてアプリ内(Functions)で完結する。adminFunctionsEnabled フラグによる手動運用分岐は撤廃。
+  return getFirebaseBackendConfig().enabled
 }
