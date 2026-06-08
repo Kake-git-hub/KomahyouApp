@@ -24,7 +24,6 @@ export const importedMasterData = {
         "maxGrade": "小"
       }
     ],
-    "memo": ""
   },
   {
     "id": "01a1f3ea",
@@ -46,7 +45,6 @@ export const importedMasterData = {
         "maxGrade": "高1"
       }
     ],
-    "memo": ""
   },
   {
     "id": "c5286e0f",
@@ -64,7 +62,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "6949c534",
@@ -90,7 +87,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "47a888a9",
@@ -116,7 +112,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "7c8f4166",
@@ -138,7 +133,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "7a966d0d",
@@ -160,7 +154,6 @@ export const importedMasterData = {
         "maxGrade": "高2"
       }
     ],
-    "memo": ""
   },
   {
     "id": "50c0bb23",
@@ -182,7 +175,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "595c8c5c",
@@ -204,7 +196,6 @@ export const importedMasterData = {
         "maxGrade": "高3"
       }
     ],
-    "memo": ""
   },
   {
     "id": "56d79637",
@@ -234,7 +225,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "af07ea65",
@@ -256,7 +246,6 @@ export const importedMasterData = {
         "maxGrade": "高2"
       }
     ],
-    "memo": ""
   },
   {
     "id": "f20678c5",
@@ -286,7 +275,6 @@ export const importedMasterData = {
         "maxGrade": "高3"
       }
     ],
-    "memo": ""
   },
   {
     "id": "6e1b347d",
@@ -308,7 +296,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "431d6982",
@@ -326,7 +313,6 @@ export const importedMasterData = {
         "maxGrade": "高3"
       }
     ],
-    "memo": ""
   },
   {
     "id": "b303a4c6",
@@ -356,7 +342,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "901154b7",
@@ -386,7 +371,6 @@ export const importedMasterData = {
         "maxGrade": "高1"
       }
     ],
-    "memo": ""
   },
   {
     "id": "2d76ee7e",
@@ -416,7 +400,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "5f7cc091",
@@ -430,7 +413,6 @@ export const importedMasterData = {
         "maxGrade": "中"
       }
     ],
-    "memo": ""
   },
   {
     "id": "5ac91303",
@@ -452,7 +434,6 @@ export const importedMasterData = {
         "maxGrade": "高1"
       }
     ],
-    "memo": ""
   }
 ],
   students: [

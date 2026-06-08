@@ -169,7 +169,6 @@ describe('buildSubmissionAcknowledgementEntries', () => {
         entryDate: '2026-04-01',
         withdrawDate: '未定',
         subjectCapabilities: [],
-        memo: '',
       }],
     })
 

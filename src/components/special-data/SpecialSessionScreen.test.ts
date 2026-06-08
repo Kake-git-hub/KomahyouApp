@@ -24,7 +24,6 @@ const teachers: TeacherRow[] = [
     entryDate: '2024-04-01',
     withdrawDate: '未定',
     subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
-    memo: '',
   },
 ]
 
