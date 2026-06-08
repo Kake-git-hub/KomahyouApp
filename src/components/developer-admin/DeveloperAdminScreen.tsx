@@ -6,8 +6,6 @@ import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../.
 type DeveloperAdminScreenProps = {
   currentUser: WorkspaceUser
   authMode: 'local' | 'firebase'
-  accountProvisioningLocked: boolean
-  managerEmailLocked: boolean
   firebaseProjectId: string
   persistenceMessage: string
   developerCloudBackupEnabled: boolean
@@ -155,7 +153,7 @@ function buildFirebaseConsoleUrl(projectId: string, path: string) {
   return `https://console.firebase.google.com/project/${encodeURIComponent(normalizedProjectId)}${path}`
 }
 
-export function DeveloperAdminScreen({ currentUser, authMode, accountProvisioningLocked, managerEmailLocked, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, serverAutoBackupDiagnostics, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
+export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId, persistenceMessage, developerCloudBackupEnabled, developerCloudBackupFolderName, developerCloudBackupStatus, onConnectDeveloperCloudBackupFolder, onDisconnectDeveloperCloudBackupFolder, classrooms, users, actingClassroomId, onAddClassroom, blazeFreeTierEstimate, serverAutoBackupSummaries, serverAutoBackupLoading, serverAutoBackupDiagnostics, onLoadServerAutoBackupSummaries, onTriggerServerAutoBackup, onRestoreServerAutoBackup, bulkTemporarySuspensionReason, onBulkTemporarySuspensionReasonChange, areAllContractedClassroomsTemporarilySuspended, onToggleContractedClassroomsTemporarySuspension, onUpdateClassroom, onReplaceClassroomManagerUid, onExportWorkspaceBackup, onImportWorkspaceBackup, onLoadStudentHistory, studentHistoryState, onCloseStudentHistory, restoreModalState, onToggleRestoreClassroom, onSelectAllRestoreClassrooms, onClearAllRestoreClassrooms, onConfirmRestoreSelection, onCancelRestoreSelection, onDeleteClassroom, onOpenClassroom, onLogout }: DeveloperAdminScreenProps) {
   const workspaceBackupImportRef = useRef<HTMLInputElement | null>(null)
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [serverBackupListExpanded, setServerBackupListExpanded] = useState(false)
@@ -170,10 +168,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
     contractEndDate: '',
   }))
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
-  const sparkManualAdminMode = authMode === 'firebase' && accountProvisioningLocked
-  const firebaseSummary = accountProvisioningLocked || managerEmailLocked
-    ? 'Firebase Hosting / Auth / Firestore で運用します。教室追加はこの画面から実行でき、既存教室の管理者 UID 差し替えもここで行えます。旧 Authentication ユーザー削除と管理者メール変更は Firebase Console で手動確認が必要です。'
-    : 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が処理し、管理者 UID 差し替え時は旧 Authentication ユーザーも自動削除します。教室追加で UID を指定した場合は、その既存 Auth アカウントと既存パスワードをそのまま使います。'
+  const firebaseSummary = 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が処理し、管理者 UID 差し替え時は旧 Authentication ユーザーも自動削除します。教室追加で UID を指定した場合は、その既存 Auth アカウントと既存パスワードをそのまま使います。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
   const todayDateKey = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const todayLabel = useMemo(() => {
@@ -268,7 +263,6 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
               <button className="primary-button" type="button" onClick={handleAddClassroom}>教室を追加</button>
             </div>
           </div>
-          {sparkManualAdminMode ? <div className="toolbar-status">教室削除と管理者メール変更は Firebase Console で実施してください。</div> : null}
 
           <div className="basic-data-row-actions" style={{ marginBottom: 12 }}>
             <a className="secondary-button slim developer-guide-link-button" href="/billing">生徒数・請求一覧を表示</a>
@@ -404,7 +398,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, accountProvisionin
                     </label>
                     <label className="basic-data-inline-field">
                       <span>管理者メール</span>
-                      <input type="email" value={manager?.email ?? ''} onChange={(event) => onUpdateClassroom(classroom.id, { managerEmail: event.target.value })} disabled={managerEmailLocked} />
+                      <input type="email" value={manager?.email ?? ''} onChange={(event) => onUpdateClassroom(classroom.id, { managerEmail: event.target.value })} />
                     </label>
                   </div>
 

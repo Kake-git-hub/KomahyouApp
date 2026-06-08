@@ -2303,10 +2303,6 @@ function AuthenticatedApp() {
     if (!targetClassroom) return
     const currentManager = workspaceUsers.find((user) => user.id === targetClassroom.managerUserId)
     if (!currentManager) return
-    if (isRemoteBackendEnabled && !isRemoteAdminAutomationEnabled && typeof updates.managerEmail === 'string' && updates.managerEmail !== currentManager.email) {
-      setPersistenceMessage('Spark 構成では管理者メールをアプリから変更できません。Firebase Auth と Firestore members を Console 側で更新してください。')
-      return
-    }
 
     const nextClassroom: WorkspaceClassroom = {
       ...targetClassroom,
@@ -4649,8 +4645,6 @@ function AuthenticatedApp() {
       <DeveloperAdminScreen
         currentUser={currentUser}
         authMode={isRemoteBackendEnabled ? 'firebase' : 'local'}
-        accountProvisioningLocked={isRemoteBackendEnabled && !isRemoteAdminAutomationEnabled}
-        managerEmailLocked={isRemoteBackendEnabled && !isRemoteAdminAutomationEnabled}
         firebaseProjectId={firebaseBackendConfig.projectId}
         persistenceMessage={persistenceMessage}
         developerCloudBackupEnabled={developerCloudBackupEnabled}
