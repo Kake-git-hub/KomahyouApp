@@ -389,7 +389,7 @@ describe('makeupStock', () => {
     expect(entries).toEqual([])
   })
 
-  it('goes negative when regular and makeup assignments exceed the shortened lesson quota', () => {
+  it('マイナス残廃止: 希望回数を超えて配置してもマイナスにならず残0で一覧から除外される', () => {
     const student = createStudent()
     const teacher = createTeacher()
     const regularLesson = createRegularLesson({
@@ -466,16 +466,8 @@ describe('makeupStock', () => {
       today: new Date('2026-03-31T00:00:00'),
     })
 
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
-      key: 'student-1__数',
-      balance: -1,
-      assignedRegularLessons: 2,
-      assignedMakeupLessons: 2,
-      totalLessonCount: 3,
-      overAssignedRegularLessons: 1,
-      negativeReason: '残数がマイナスです。希望回数を 1 件上回って配置しています。',
-    })
+    // マイナス残廃止: 残数は0下限。残0は一覧から除外されるため空になる(spec-makeup-stock.md §4)。
+    expect(entries).toHaveLength(0)
   })
 
   it('consumes manual-adjustment stock when a makeup is placed for a student without regular lessons', () => {

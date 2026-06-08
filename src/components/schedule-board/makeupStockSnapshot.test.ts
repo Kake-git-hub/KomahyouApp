@@ -71,10 +71,25 @@ describe('振替ストックゴールデンスナップショット (buildMakeup
     expect(e?.remainingOriginDates).toEqual(['2026-04-14']) // 4/7 は消化済み、4/14 が残る
   })
 
-  it('マイナス残: 短縮された希望回数を通常+振替が上回ると残数マイナス＋理由が付く', () => {
+  it('マイナス残廃止: 希望回数を超えて配置してもマイナスにならず、残0として一覧から除外される', () => {
     const e = byKey('s_minus__数')
-    expect(e?.balance).toBeLessThan(0)
-    expect(e?.overAssignedRegularLessons).toBeGreaterThan(0)
-    expect(e?.negativeReason).toBeTruthy()
+    expect(e).toBeUndefined()
+  })
+
+  it('休日の即時計上(A): 未来の通常授業日(2026-05-04 月)を休日にしてもその時点で振替に計上される', () => {
+    const settingsWithFutureHoliday = { ...sampleMakeupClassroomSettings, holidayDates: ['2026-04-06', '2026-05-04'] }
+    const withFuture = buildMakeupStockEntries({
+      students: sampleMakeupStudents,
+      teachers: sampleMakeupTeachers,
+      regularLessons: sampleMakeupRegularLessons,
+      classroomSettings: settingsWithFutureHoliday,
+      weeks: sampleMakeupWeeks,
+      manualAdjustments: sampleMakeupManualAdjustments,
+      resolveStudentKey: resolveSampleStudentKey,
+      today: MAKEUP_TODAY,
+    })
+    const e = withFuture.find((x) => x.key === 's_short__数')
+    expect(e?.balance).toBe(2) // 04-06(過去) + 05-04(未来) を即時に両方計上
+    expect(e?.remainingOriginDates).toEqual(['2026-04-06', '2026-05-04'])
   })
 })
