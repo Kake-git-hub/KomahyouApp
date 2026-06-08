@@ -444,7 +444,7 @@ export function computeAutomaticShortageOrigins(
       for (const { year, monthIndex } of monthRange) {
         const scheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
           .filter((dateKey) => dateKey >= stockPeriod.startDate && dateKey <= periodEndKey)
-          .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
+          .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey))
         if (scheduledDates.length === 0) continue
 
         const pastScheduledDates = scheduledDates.filter((dateKey) => dateKey <= todayKey)
@@ -502,7 +502,7 @@ function computeScheduleConflictOrigins(
           const student = studentById.get(entry.studentId)
           const candidateDateKeys = student
             ? monthDateKeys.filter((dateKey) => (
-                isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
+                isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)
                 && isRegularParticipantScheduledOnDate(row, dateKey)
               ))
             : []
@@ -635,7 +635,7 @@ function computeOccupiedSlotOrigins(params: {
         const candidateParticipantDateKeys = student
           ? monthlyCandidateDateKeys.filter((dateKey) => (
               isRegularParticipantScheduledOnDate(row, dateKey)
-              && isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey)
+              && isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)
             ))
           : []
         const contractedDateKeys = candidateParticipantDateKeys

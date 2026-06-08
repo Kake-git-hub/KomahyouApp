@@ -72,7 +72,7 @@ export function formatYen(value: number) {
 
 export function countActiveStudentsForBilling(students: StudentRow[], monthKey: string) {
   const snapshotDate = getBillingSnapshotDate(monthKey)
-  return students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, snapshotDate)).length
+  return students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, snapshotDate)).length
 }
 
 export function buildInvoiceNumber(classroomId: string, monthKey: string) {

@@ -15,7 +15,7 @@ import type { StudentRow } from '../../basic-data/basicDataModel'
 import type { SpecialSessionRow, SpecialSessionStudentInput } from '../../special-data/specialSessionModel'
 
 function student(id: string, name: string): StudentRow {
-  return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2011-06-10', isHidden: false }
+  return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2011-06-10' }
 }
 
 function studentInput(overrides: Partial<SpecialSessionStudentInput>): SpecialSessionStudentInput {

@@ -160,7 +160,6 @@ describe('buildSubmissionAcknowledgementEntries', () => {
         entryDate: '2026-04-01',
         withdrawDate: '未定',
         birthDate: '2012-05-01',
-        isHidden: false,
       }],
       teachers: [{
         id: 'teacher-1',
@@ -169,7 +168,6 @@ describe('buildSubmissionAcknowledgementEntries', () => {
         email: '',
         entryDate: '2026-04-01',
         withdrawDate: '未定',
-        isHidden: false,
         subjectCapabilities: [],
         memo: '',
       }],

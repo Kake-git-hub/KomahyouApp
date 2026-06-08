@@ -14,21 +14,33 @@ export function resolveEnrollmentYearFromBirthDateParts(birthYear: number, birth
   return birthMonth < 4 ? birthYear + 6 : birthYear + 7
 }
 
-export function resolveGradeLabelFromBirthDate(birthDate?: string, referenceDate: string | Date = new Date()): GradeLabel | '' {
-  if (!birthDate) return ''
+// 学年番号(小1=1 … 高3=12、13以上=高3卒業後)を返す。生年月日が無効なら null。
+export function resolveGradeNumberFromBirthDate(birthDate?: string, referenceDate: string | Date = new Date()): number | null {
+  if (!birthDate) return null
 
   const [yearText, monthText, dayText] = birthDate.split('-')
   const birthYear = Number(yearText)
   const birthMonth = Number(monthText)
   const birthDay = Number(dayText)
-  if ([birthYear, birthMonth, birthDay].some((value) => Number.isNaN(value))) return ''
+  if ([birthYear, birthMonth, birthDay].some((value) => Number.isNaN(value))) return null
 
   const date = toDate(referenceDate)
-  if (Number.isNaN(date.getTime())) return ''
+  if (Number.isNaN(date.getTime())) return null
 
   const schoolYear = date >= new Date(date.getFullYear(), 3, 1) ? date.getFullYear() : date.getFullYear() - 1
   const enrollmentYear = resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
-  const gradeNumber = schoolYear - enrollmentYear + 1
+  return schoolYear - enrollmentYear + 1
+}
+
+// 高3卒業判定(spec-basic-data.md): 高3(=12)の学年度が終わると翌4/1から学年番号が13以上になり、卒業＝非在籍として扱う。
+export function hasGraduatedHighSchool(birthDate?: string, referenceDate: string | Date = new Date()): boolean {
+  const gradeNumber = resolveGradeNumberFromBirthDate(birthDate, referenceDate)
+  return gradeNumber !== null && gradeNumber >= 13
+}
+
+export function resolveGradeLabelFromBirthDate(birthDate?: string, referenceDate: string | Date = new Date()): GradeLabel | '' {
+  const gradeNumber = resolveGradeNumberFromBirthDate(birthDate, referenceDate)
+  if (gradeNumber === null) return ''
 
   if (gradeNumber <= 1) return '小1'
   if (gradeNumber === 2) return '小2'

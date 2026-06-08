@@ -13,7 +13,6 @@ const students: StudentRow[] = [
     entryDate: '2024-04-01',
     withdrawDate: '未定',
     birthDate: '2010-05-14',
-    isHidden: false,
   },
 ]
 
@@ -24,7 +23,6 @@ const teachers: TeacherRow[] = [
     email: 'tanaka@example.com',
     entryDate: '2024-04-01',
     withdrawDate: '未定',
-    isHidden: false,
     subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
     memo: '',
   },

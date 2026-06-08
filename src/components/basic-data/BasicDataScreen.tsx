@@ -477,7 +477,6 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     メール: row.email,
     入塾日: row.entryDate,
     退塾日: normalizeDateString(row.withdrawDate),
-    表示: row.isHidden ? '非表示' : '表示',
     担当科目: serializeSubjectCapabilities(row.subjectCapabilities),
     出勤可能コマ: serializeTeacherAvailableSlots(row.availableSlots),
     メモ: row.memo,
@@ -491,7 +490,6 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     入塾日: row.entryDate,
     退塾日: normalizeDateString(row.withdrawDate),
     生年月日: row.birthDate,
-    表示: row.isHidden ? '非表示' : '表示',
   })), ['入塾日', '退塾日', '生年月日']), '生徒')
 
   const template = bundle.classroomSettings.regularLessonTemplate
@@ -596,7 +594,6 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           email: normalizeText(row['メール']),
           entryDate: normalizeDateString(row['入塾日'], xlsx),
           withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
-          isHidden: normalizeText(row['表示']) === '非表示',
           subjectCapabilities: parseSubjectCapabilities(row['担当科目']),
           availableSlots: parseTeacherAvailableSlots(row['出勤可能コマ']),
           memo: normalizeText(row['メモ']),
@@ -614,7 +611,6 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           entryDate: normalizeDateString(row['入塾日'], xlsx),
           withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
           birthDate: normalizeDateString(row['生年月日'], xlsx),
-          isHidden: normalizeText(row['表示']) === '非表示',
         }))
         .filter((row) => row.name)
     : fallback.students
@@ -956,7 +952,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const [statusMessage, setStatusMessage] = useState('')
 
 
-  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', isHidden: false, subjectCapabilities: [] as TeacherSubjectCapability[], availableSlots: [] as TeacherAvailableSlot[] })
+  const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', memo: '', subjectCapabilities: [] as TeacherSubjectCapability[], availableSlots: [] as TeacherAvailableSlot[] })
   const [teacherEditorModalState, setTeacherEditorModalState] = useState<TeacherEditorModalState | null>(null)
   const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
@@ -990,14 +986,14 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const todayReferenceDate = useMemo(() => getReferenceDateKey(new Date()), [])
   const activeStudentRows = useMemo(
     () => students.filter((student) => {
-      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, todayReferenceDate)
+      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, todayReferenceDate)
       return status === '在籍'
     }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const withdrawnStudentRows = useMemo(
     () => students.filter((student) => {
-      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.isHidden, todayReferenceDate)
+      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, todayReferenceDate)
       return status !== '在籍'
     }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
@@ -1143,13 +1139,12 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
         email: teacherDraft.email.trim(),
         entryDate: teacherDraft.entryDate,
         withdrawDate: teacherDraft.withdrawDate.trim() || '未定',
-        isHidden: teacherDraft.isHidden,
         subjectCapabilities: teacherDraft.subjectCapabilities,
         availableSlots: normalizeTeacherAvailableSlots(teacherDraft.availableSlots),
         memo: teacherDraft.memo.trim(),
       },
     ])
-    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', isHidden: false, subjectCapabilities: [], availableSlots: [] })
+    setTeacherDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '未定', memo: '', subjectCapabilities: [], availableSlots: [] })
     setTeacherEditorModalState((current) => current?.target === 'draft' ? null : current)
     setStatusMessage('講師を追加しました。')
   }
@@ -1164,7 +1159,6 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
       entryDate: studentDraft.entryDate,
       withdrawDate: studentDraft.withdrawDate.trim(),
       birthDate: studentDraft.birthDate,
-      isHidden: false,
     }])
     setStudentDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
     setStatusMessage('生徒を追加しました。')
@@ -1451,7 +1445,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudent(row.id, { birthDate: value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.birthDate)}</span>}
                   </td>
-                  <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{studentRosterView === 'active' ? resolveStudentStatusLabel(row) : resolveManagementRosterStatusLabel(resolveScheduledStatus(row.entryDate, row.withdrawDate, row.isHidden, todayReferenceDate))}</span></td>
+                  <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{studentRosterView === 'active' ? resolveStudentStatusLabel(row) : resolveManagementRosterStatusLabel(resolveScheduledStatus(row.entryDate, row.withdrawDate, row.birthDate, todayReferenceDate))}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
                       <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>

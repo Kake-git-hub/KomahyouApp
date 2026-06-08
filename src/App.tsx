@@ -2841,8 +2841,8 @@ function AuthenticatedApp() {
     if (overlapping.length !== 1) return
 
     const session = overlapping[0]
-    const activeStudents = students.filter((s) => !s.isHidden && s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
-    const activeTeachers = teachers.filter((t) => !t.isHidden && t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
+    const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
+    const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
     const allStudentsHaveTokens = activeStudents.every((s) => session.studentInputs[s.id]?.submissionToken)
     const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)
@@ -4169,7 +4169,7 @@ function AuthenticatedApp() {
     for (let d = new Date(startDate); d <= today; d.setMonth(d.getMonth() + 1)) {
       const dateKey = d.toISOString().slice(0, 7)
       const refDate = `${dateKey}-01`
-      const count = studentList.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.isHidden, refDate)).length
+      const count = studentList.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.birthDate, refDate)).length
       entries.push({ dateKey, count })
     }
     setStudentHistoryState({ classroomName: classroom.name, entries, loading: false })

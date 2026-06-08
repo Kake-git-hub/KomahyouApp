@@ -10,7 +10,6 @@ function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
     entryDate: '2024-04-01',
     withdrawDate: '未定',
     birthDate: '2013-05-01',
-    isHidden: false,
     ...overrides,
   }
 }
@@ -23,7 +22,6 @@ function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
     email: 'teacher@example.com',
     entryDate: '2024-04-01',
     withdrawDate: '未定',
-    isHidden: false,
     subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
     memo: '',
     ...overrides,
@@ -65,14 +63,11 @@ describe('basicDataModel student labels and sorting', () => {
 
   it('treats upcoming teachers as 入塾前 and hides them from active management views until entry', () => {
     const upcomingTeacher = createTeacher({ entryDate: '2026-05-01' })
-    const hiddenTeacher = createTeacher({ id: 'teacher-2', isHidden: true })
 
     expect(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21')).toBe('入塾前')
     expect(isTeacherVisibleInManagement(upcomingTeacher, '2026-04-21')).toBe(false)
-    expect(isTeacherVisibleInManagement(hiddenTeacher, '2026-04-21')).toBe(false)
     expect(resolveManagementRosterStatusLabel(resolveTeacherRosterStatus(upcomingTeacher, '2026-04-21'))).toBe('非在籍')
     expect(resolveManagementRosterStatusLabel('退塾')).toBe('非在籍')
-    expect(resolveManagementRosterStatusLabel('非表示')).toBe('非表示')
   })
 
   it('treats future-entry students as 入塾前 while keeping active students with empty or 未定 withdrawDate enrolled', () => {
@@ -85,11 +80,13 @@ describe('basicDataModel student labels and sorting', () => {
     expect(resolveCurrentStudentGradeLabel(pastEntryEmptyWithdraw, '2026-04-22')).not.toBe('退塾')
   })
 
-  it('clamps students aged 18 or older to 高3 instead of returning 退塾', () => {
-    const adult = createStudent({ birthDate: '2006-05-01' })
+  it('高3卒業後(翌4/1以降)は退塾(非在籍)として扱う / 在籍中の高3は高3表示', () => {
+    const current3rd = createStudent({ birthDate: '2008-05-01' }) // 2026年度は高3(在籍中)
+    const graduated = createStudent({ birthDate: '2006-05-01' }) // 高3卒業済み
     const withdrawnAdult = createStudent({ id: 'student-w', birthDate: '2006-05-01', withdrawDate: '2025-03-31' })
 
-    expect(resolveCurrentStudentGradeLabel(adult, '2026-04-22')).toBe('高3')
+    expect(resolveCurrentStudentGradeLabel(current3rd, '2026-04-22')).toBe('高3')
+    expect(resolveCurrentStudentGradeLabel(graduated, '2026-04-22')).toBe('退塾')
     expect(resolveCurrentStudentGradeLabel(withdrawnAdult, '2026-04-22')).toBe('退塾')
   })
 })

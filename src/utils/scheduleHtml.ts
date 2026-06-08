@@ -29,7 +29,6 @@ type SerializedStudent = {
   birthDate: string
   entryDate: string
   withdrawDate: string
-  isHidden: boolean
   submissionToken?: string
   qrSvg?: string
   submissionSubmitted?: boolean
@@ -41,7 +40,6 @@ type SerializedTeacher = {
   fullName?: string
   entryDate: string
   withdrawDate: string
-  isHidden: boolean
   memo: string
   subjects: string[]
   submissionToken?: string
@@ -404,7 +402,7 @@ export function buildExpectedRegularOccurrences(params: {
 
       for (const { year, monthIndex } of iterateMonthsInRange(periodStart, periodEnd)) {
         const monthScheduledDates = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
-          .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.isHidden, dateKey))
+          .filter((dateKey) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey))
 
         for (const dateKey of monthScheduledDates) {
           if (dateKey < periodStart || dateKey > periodEnd) continue
@@ -709,13 +707,11 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
             const highMatch = gradeLabel.match(/^高(\d+)$/)
             if (highMatch) return 200 + Number(highMatch[1])
             if (gradeLabel === '退塾') return 901
-            if (gradeLabel === '非表示') return 902
             return 999
           })(),
           birthDate: student.birthDate,
           entryDate: student.entryDate,
           withdrawDate: student.withdrawDate,
-          isHidden: student.isHidden,
           submissionToken,
           qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
           submissionSubmitted: Boolean(studentInput?.countSubmitted),
@@ -744,7 +740,6 @@ function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePay
         fullName: teacher.name,
         entryDate: teacher.entryDate,
         withdrawDate: teacher.withdrawDate,
-        isHidden: teacher.isHidden,
         memo: teacher.memo,
         subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
         submissionToken,
@@ -803,13 +798,11 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
             const highMatch = gradeLabel.match(/^高(\d+)$/)
             if (highMatch) return 200 + Number(highMatch[1])
             if (gradeLabel === '退塾') return 901
-            if (gradeLabel === '非表示') return 902
             return 999
           })(),
           birthDate: student.birthDate,
           entryDate: student.entryDate,
           withdrawDate: student.withdrawDate,
-          isHidden: student.isHidden,
           submissionToken,
           qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
           submissionSubmitted: Boolean(studentInput?.countSubmitted),
@@ -824,7 +817,6 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
         fullName: teacher.name,
         entryDate: teacher.entryDate,
         withdrawDate: teacher.withdrawDate,
-        isHidden: teacher.isHidden,
         memo: teacher.memo,
         subjects: teacher.subjectCapabilities.map((capability) => `${capability.subject}${capability.maxGrade}`),
         submissionToken,
@@ -2442,7 +2434,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function isVisibleInRange(item, startDate, endDate) {
         var today = new Date().toISOString().slice(0, 10);
         if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate < today) return false;
-        return !item.isHidden && item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate >= startDate);
+        return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate >= startDate);
       }
 
       function getGradeLabel(birthDate, referenceDate) {

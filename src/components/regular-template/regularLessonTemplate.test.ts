@@ -9,7 +9,6 @@ function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
     email: 'teacher@example.com',
     entryDate: '2024-04-01',
     withdrawDate: '未定',
-    isHidden: false,
     subjectCapabilities: [],
     availableSlots: [],
     memo: '',
@@ -26,7 +25,6 @@ function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
     entryDate: '2024-04-01',
     withdrawDate: '未定',
     birthDate: '2013-05-01',
-    isHidden: false,
     ...overrides,
   }
 }

@@ -30,7 +30,6 @@ export const sampleTeachers: TeacherRow[] = [
     email: 'tanaka@example.com',
     entryDate: '2024-04-01',
     withdrawDate: '未定',
-    isHidden: false,
     subjectCapabilities: [{ subject: '数', maxGrade: '高3' }, { subject: '英', maxGrade: '高3' }],
     availableSlots: [],
     memo: '',
@@ -41,7 +40,6 @@ export const sampleTeachers: TeacherRow[] = [
     email: 'sato@example.com',
     entryDate: '2024-04-01',
     withdrawDate: '未定',
-    isHidden: false,
     subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '数', maxGrade: '高3' }],
     availableSlots: [],
     memo: '',
@@ -50,13 +48,13 @@ export const sampleTeachers: TeacherRow[] = [
 
 export const sampleStudents: StudentRow[] = [
   // フル稼働(月初から在籍)
-  { id: 's_full', name: '青木 太郎', displayName: '青木太郎', email: 'aoki@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2010-05-14', isHidden: false },
+  { id: 's_full', name: '青木 太郎', displayName: '青木太郎', email: 'aoki@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2010-05-14' },
   // 月途中開始(通常授業 row.startDate で 6/15 から)
-  { id: 's_mid', name: '伊藤 花', displayName: '伊藤花', email: 'ito@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2011-06-10', isHidden: false },
+  { id: 's_mid', name: '伊藤 花', displayName: '伊藤花', email: 'ito@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2011-06-10' },
   // 月途中退塾(6/15 で退塾 → それ以降は配置されない)
-  { id: 's_out', name: '上田 陽介', displayName: '上田陽介', email: 'ueda@example.com', entryDate: '2024-04-01', withdrawDate: '2026-06-15', birthDate: '2009-07-22', isHidden: false },
+  { id: 's_out', name: '上田 陽介', displayName: '上田陽介', email: 'ueda@example.com', entryDate: '2024-04-01', withdrawDate: '2026-06-15', birthDate: '2009-07-22' },
   // ペア授業の相手
-  { id: 's_pair', name: '岡本 美咲', displayName: '岡本美咲', email: 'okamoto@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2008-09-18', isHidden: false },
+  { id: 's_pair', name: '岡本 美咲', displayName: '岡本美咲', email: 'okamoto@example.com', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2008-09-18' },
 ]
 
 function blankRegularLesson(): RegularLessonRow {
