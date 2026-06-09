@@ -55,3 +55,21 @@
    室長が登録（確定）するまでは再提出可、確定後は不可。
 3. 提出ページに**授業時間 90/60/45 の選択を追加**（科目ごと、デフォルト90分）。
 4. 既提出リンクは提出者に「**すでに提出済みです**」画面を明示。無効リンク文言に「**管理者にお問い合わせください**」を追記。
+
+## 実装状況（2026-06-09・Phase 5 ⑦）
+
+- **TODO3 ✅ コード実装（全層・未デプロイ）**：提出に授業時間 90/60/45 を追加（科目ごと・希望数>0の科目に表示・既定90）。追加方式 `subjectDurations`（45/60のみ保持、90は未保持＝既定）。
+  - Cloud Functions `functions/src/index.ts`：型・`sanitizeSubjectDurations`・GET応答・POST保存・スナップショット studentInputs 書き込み。**要デプロイ**（`firebase deploy --only functions`）。
+  - client `lectureSubmission.ts`：`LectureSubmissionDoc`/`SubmissionChangeEntry`/subscribe/reset/初期化に追加。
+  - `SubmissionPage.tsx`：state・読込・**科目ごと90/60/45セレクタ**＋CSS・送信payload。
+  - `App.tsx`：提出取り込み5経路に `subjectDurations` を反映/保全（in-app再構築経路で消失しないよう既存値を保持）。`App.test.ts` 修正。
+  - **盤面/日程表への授業時間「表示」反映は ⑨（授業時間反映）で対応**（本TODOは提出capture＋保存まで）。手動追加講習の時間表示は⑤で実装済。
+- **TODO1（別タブ経路廃止→日程表一本化）⏳**：⑨と一体で対応。
+- **TODO2 ✅ 実装（未デプロイ）**：「ロック解除」モデルを撤去し「登録削除で再提出」へ統一。
+  - 日程表の登録トグル `countSubmitted` ON＝登録確定→提出ロック(`markLectureSubmissionDocAsSubmitted`)、OFF＝登録解除→**リセット**(`resetLectureSubmissionDoc`：提出内容クリア＋pending、配布情報は維持)。`App.tsx` 学生/講師の両 count-save 経路。
+  - `unlockLectureSubmissionDoc`（ロック解除・データ保持）は**削除**。
+  - 「登録確定後は再提出不可」＝ doc が submitted の間は POST 409（既存）。解除後は pending で再提出可。
+- **TODO4 ✅ 実装（未デプロイ）**：
+  - 既提出リンクを開く→「**すでに提出済みです**」専用見出し（`loadedAsSubmitted`で「提出完了」と出し分け）。POST 409 時も同画面。
+  - 無効リンク文言を「このリンクは無効です。**管理者にお問い合わせください**。」へ。提出完了の案内も「管理者にお問い合わせください」に統一。
+  - 残（任意）：「すでに提出済み」かどうかの厳密判定は GET status 依存（ロード時 submitted を以て判定）。

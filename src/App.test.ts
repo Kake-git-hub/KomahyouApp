@@ -129,6 +129,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       personId: 'student-1',
       unavailableSlots: [],
       subjectSlots: { 数: 2 },
+      subjectDurations: {},
       regularOnly: false,
     }, {
       token: 'teacher-token',
@@ -137,6 +138,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       personId: 'teacher-1',
       unavailableSlots: [],
       subjectSlots: {},
+      subjectDurations: {},
       regularOnly: false,
     }]
 

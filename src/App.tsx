@@ -19,7 +19,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -3196,6 +3196,7 @@ function AuthenticatedApp() {
                 unavailableSlots,
                 regularBreakSlots: session.studentInputs[message.personId]?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
+                subjectDurations: regularOnly ? {} : (session.studentInputs[message.personId]?.subjectDurations ?? {}),
                 regularOnly,
                 countSubmitted: Boolean(session.studentInputs[message.personId]?.countSubmitted),
                 submissionToken: session.studentInputs[message.personId]?.submissionToken,
@@ -3227,6 +3228,7 @@ function AuthenticatedApp() {
                 unavailableSlots,
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: previousInput?.subjectSlots ?? {},
+                subjectDurations: previousInput?.subjectDurations ?? {},
                 regularOnly: Boolean(previousInput?.regularOnly),
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
@@ -3270,6 +3272,7 @@ function AuthenticatedApp() {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
+                subjectDurations: regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
@@ -3293,8 +3296,9 @@ function AuthenticatedApp() {
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const studentToken = targetSession?.studentInputs[message.personId]?.submissionToken
         if (studentToken) {
+          // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
-          else unlockLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
+          else resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -3363,8 +3367,9 @@ function AuthenticatedApp() {
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
         if (teacherToken) {
+          // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
-          else unlockLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
+          else resetLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -3427,6 +3432,7 @@ function AuthenticatedApp() {
               unavailableSlots: entry.unavailableSlots,
               regularBreakSlots: entry.regularBreakSlots,
               subjectSlots: entry.regularOnly ? {} : entry.subjectSlots,
+              subjectDurations: entry.regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
               regularOnly: entry.regularOnly,
               countSubmitted: entry.countSubmitted,
               submissionToken: previousInput?.submissionToken,
@@ -3579,6 +3585,7 @@ function AuthenticatedApp() {
                     unavailableSlots: entry.unavailableSlots,
                     regularBreakSlots: existing?.regularBreakSlots ?? [],
                     subjectSlots: entry.subjectSlots,
+                    subjectDurations: entry.regularOnly ? {} : entry.subjectDurations,
                     regularOnly: entry.regularOnly,
                     countSubmitted: true,
                     updatedAt: now,

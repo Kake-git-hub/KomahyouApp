@@ -14,6 +14,7 @@ type SubmissionData = {
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
+  subjectDurations: Record<string, number>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
 }
@@ -87,8 +88,12 @@ export default function SubmissionPage({ token }: { token: string }) {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  // リンクを開いた時点で既に提出済みだった場合（=今回の提出ではない）。「すでに提出済みです」を出し分ける。
+  const [loadedAsSubmitted, setLoadedAsSubmitted] = useState(false)
   const [selectedSlots, setSelectedSlots] = useState<Set<string>>(new Set())
   const [subjectSlots, setSubjectSlots] = useState<Record<string, number>>({})
+  // 科目ごとの授業時間(分)。90(既定)は保持せず、60/45 のみ保持する。
+  const [subjectDurations, setSubjectDurations] = useState<Record<string, number>>({})
   const [regularOnly, setRegularOnly] = useState(false)
 
   const selectedSlotsRef = useRef<Set<string>>(new Set())
@@ -110,7 +115,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`)
         if (!response.ok) {
           if (response.status === 404) {
-            setError('このリンクは無効です。QRコードを再度確認してください。')
+            setError('このリンクは無効です。管理者にお問い合わせください。')
           } else {
             setError('データの読み込みに失敗しました。')
           }
@@ -120,9 +125,11 @@ export default function SubmissionPage({ token }: { token: string }) {
         setData(result)
         if (result.status === 'submitted') {
           setSubmitted(true)
+          setLoadedAsSubmitted(true)
         }
         setSelectedSlots(new Set(result.unavailableSlots ?? []))
         setSubjectSlots(result.subjectSlots ?? {})
+        setSubjectDurations(result.subjectDurations ?? {})
         setRegularOnly(result.regularOnly ?? false)
       } catch {
         setError('通信エラーが発生しました。インターネット接続を確認してください。')
@@ -186,7 +193,26 @@ export default function SubmissionPage({ token }: { token: string }) {
   }, [openDates])
 
   const handleSubjectChange = useCallback((subject: string, value: number) => {
-    setSubjectSlots((prev) => ({ ...prev, [subject]: Math.max(0, value) }))
+    const nextValue = Math.max(0, value)
+    setSubjectSlots((prev) => ({ ...prev, [subject]: nextValue }))
+    // 希望数が0になったら授業時間の保持も解除（既定90へ戻す）。
+    if (nextValue <= 0) {
+      setSubjectDurations((prev) => {
+        if (!(subject in prev)) return prev
+        const next = { ...prev }
+        delete next[subject]
+        return next
+      })
+    }
+  }, [])
+
+  const handleDurationChange = useCallback((subject: string, minutes: number) => {
+    setSubjectDurations((prev) => {
+      const next = { ...prev }
+      if (minutes === 60 || minutes === 45) next[subject] = minutes
+      else delete next[subject] // 90(既定)は保持しない
+      return next
+    })
   }, [])
 
   const handleSubmit = useCallback(async () => {
@@ -200,14 +226,15 @@ export default function SubmissionPage({ token }: { token: string }) {
         body: JSON.stringify({
           unavailableSlots: Array.from(selectedSlots),
           subjectSlots,
+          subjectDurations,
           regularOnly,
         }),
       })
       if (!response.ok) {
         const result = await response.json().catch(() => ({}))
         if (response.status === 409) {
-          setError('既に提出済みです。教室側で登録済みの場合は変更できません。')
           setSubmitted(true)
+          setLoadedAsSubmitted(true)
           return
         }
         setError(result.error || '提出に失敗しました。')
@@ -219,7 +246,7 @@ export default function SubmissionPage({ token }: { token: string }) {
     } finally {
       setSubmitting(false)
     }
-  }, [apiBase, token, selectedSlots, subjectSlots, regularOnly, submitting, submitted])
+  }, [apiBase, token, selectedSlots, subjectSlots, subjectDurations, regularOnly, submitting, submitted])
 
   if (loading) {
     return (
@@ -252,11 +279,13 @@ export default function SubmissionPage({ token }: { token: string }) {
       <div className="sub-container">
         <div className="sub-center-box">
           <p className="sub-success-icon">✓</p>
-          <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 8px' }}>提出完了</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 8px' }}>{loadedAsSubmitted ? 'すでに提出済みです' : '提出完了'}</h2>
           <p style={{ fontSize: 14, color: '#333' }}>
-            {data.personName}さんの{data.sessionLabel}の希望を受け付けました。
+            {loadedAsSubmitted
+              ? `${data.personName}さんの${data.sessionLabel}の希望はすでに提出済みです。`
+              : `${data.personName}さんの${data.sessionLabel}の希望を受け付けました。`}
           </p>
-          <p className="sub-muted" style={{ marginTop: 8 }}>変更が必要な場合は教室にお問い合わせください。</p>
+          <p className="sub-muted" style={{ marginTop: 8 }}>変更が必要な場合は管理者にお問い合わせください。</p>
         </div>
         <style>{baseStyles}</style>
       </div>
@@ -363,33 +392,49 @@ export default function SubmissionPage({ token }: { token: string }) {
             <span className="sub-muted">合計: <strong>{totalSubjectCount}</strong>コマ</span>
           </div>
           <div className="sub-subject-list">
-            {data.availableSubjects.map((subject) => (
-              <div key={subject} className="sub-subject-row">
-                <span className="sub-subject-label">{subject}</span>
-                <div className="sub-subject-ctrl">
-                  <button
-                    type="button"
-                    className="sub-counter-btn"
-                    onClick={() => handleSubjectChange(subject, (subjectSlots[subject] ?? 0) - 1)}
-                    disabled={(subjectSlots[subject] ?? 0) <= 0}
-                  >−</button>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min="0"
-                    max="999"
-                    className="sub-counter-input"
-                    value={subjectSlots[subject] ?? 0}
-                    onChange={(e) => handleSubjectChange(subject, parseInt(e.target.value, 10) || 0)}
-                  />
-                  <button
-                    type="button"
-                    className="sub-counter-btn"
-                    onClick={() => handleSubjectChange(subject, (subjectSlots[subject] ?? 0) + 1)}
-                  >+</button>
+            {data.availableSubjects.map((subject) => {
+              const subjectCount = subjectSlots[subject] ?? 0
+              const selectedDuration = subjectDurations[subject] === 60 ? 60 : subjectDurations[subject] === 45 ? 45 : 90
+              return (
+                <div key={subject} className="sub-subject-row">
+                  <span className="sub-subject-label">{subject}</span>
+                  <div className="sub-subject-ctrl">
+                    <button
+                      type="button"
+                      className="sub-counter-btn"
+                      onClick={() => handleSubjectChange(subject, subjectCount - 1)}
+                      disabled={subjectCount <= 0}
+                    >−</button>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      max="999"
+                      className="sub-counter-input"
+                      value={subjectCount}
+                      onChange={(e) => handleSubjectChange(subject, parseInt(e.target.value, 10) || 0)}
+                    />
+                    <button
+                      type="button"
+                      className="sub-counter-btn"
+                      onClick={() => handleSubjectChange(subject, subjectCount + 1)}
+                    >+</button>
+                  </div>
+                  {subjectCount > 0 && (
+                    <div className="sub-duration-ctrl" role="group" aria-label={`${subject}の授業時間`}>
+                      {[90, 60, 45].map((minutes) => (
+                        <button
+                          key={minutes}
+                          type="button"
+                          className={`sub-duration-btn${selectedDuration === minutes ? ' sub-duration-active' : ''}`}
+                          onClick={() => handleDurationChange(subject, minutes)}
+                        >{minutes}分</button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
           <label className="sub-checkbox-row">
             <input
@@ -470,7 +515,10 @@ const baseStyles = `
 
   /* Subject */
   .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; }
-  .sub-subject-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 2px; border-bottom: 1px solid #eee; }
+  .sub-subject-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 6px 2px; border-bottom: 1px solid #eee; }
+  .sub-duration-ctrl { flex-basis: 100%; display: flex; gap: 6px; justify-content: flex-end; }
+  .sub-duration-btn { min-width: 52px; height: 32px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 13px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+  .sub-duration-active { background: #111; color: #fff; border-color: #111; }
   .sub-subject-label { font-size: 15px; font-weight: 600; min-width: 36px; }
   .sub-subject-ctrl { display: flex; align-items: center; gap: 6px; }
   .sub-counter-btn { width: 36px; height: 36px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; }
