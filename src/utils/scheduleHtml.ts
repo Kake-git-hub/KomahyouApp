@@ -4151,36 +4151,45 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return subjects.map((label) => '<tr><td>' + escapeHtml(label) + '</td><td></td></tr>').join('');
       }
 
+      function applyEmptyFormatBranding(sheetHtml) {
+        var nextHtml = sheetHtml;
+        var schoolValue = readSharedValueForEmptyFormat('school-info');
+        var titleValue = readSharedValueForEmptyFormat('sheet-title') || '授業日程表';
+        var logoValue = readStoredLogoForEmptyFormat();
+        var schoolAnchor = ' data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等"></textarea>';
+        var schoolReplacement = ' data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等">' + escapeHtml(schoolValue) + '</textarea>';
+        nextHtml = nextHtml.replace(schoolAnchor, schoolReplacement);
+        var titleAnchor = 'data-shared-input="sheet-title" value=""';
+        var titleReplacement = 'data-shared-input="sheet-title" value="' + escapeHtml(titleValue) + '"';
+        nextHtml = nextHtml.replace(titleAnchor, titleReplacement);
+        if (logoValue) {
+          var logoAnchor = '<span class="logo-placeholder">ロゴ欄</span>';
+          var logoReplacement = '<img class="logo-image" src="' + logoValue + '" alt="logo" />';
+          nextHtml = nextHtml.replace(logoAnchor, logoReplacement);
+        }
+        return nextHtml;
+      }
+
       function openEmptyFormatPrintWindow() {
-        let startDate = (startInput && startInput.value) || appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
-        let endDate = (endInput && endInput.value) || appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
+        var startDate = (startInput && startInput.value) || appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
+        var endDate = (endInput && endInput.value) || appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
         if (startDate > endDate) {
-          const previous = startDate;
+          var previous = startDate;
           startDate = endDate;
           endDate = previous;
         }
-        const result = buildStudentSheetHtml(startDate, endDate, appliedPersonId, 0, true);
+        var result = buildStudentSheetHtml(startDate, endDate, appliedPersonId, 0, true);
         if (!result.html) {
           window.alert('空フォーマットを作成できる生徒が見つかりません。');
           return;
         }
-        const styleHtml = Array.from(document.querySelectorAll('style')).map((element) => element.outerHTML).join('');
-        const branding = {
-          logo: readStoredLogoForEmptyFormat(),
-          school: readSharedValueForEmptyFormat('school-info'),
-          title: readSharedValueForEmptyFormat('sheet-title') || '授業日程表',
-        };
-        const printWindow = window.open('', 'schedule-empty-format-' + Date.now());
+        var sheetHtml = applyEmptyFormatBranding(result.html);
+        var styleHtml = Array.from(document.querySelectorAll('style')).map((element) => element.outerHTML).join('');
+        var printWindow = window.open('', 'schedule-empty-format-' + Date.now());
         if (!printWindow) return;
-        const bootstrapScript = '<scr' + 'ipt>(function(){'
-          + 'var d=' + JSON.stringify(branding).replace(/</g, '\\u003c') + ';'
-          + 'try{document.querySelectorAll("textarea.school-input").forEach(function(el){el.value=d.school;});}catch(e){}'
-          + 'try{document.querySelectorAll("input.title-input").forEach(function(el){el.value=d.title;});}catch(e){}'
-          + 'try{if(d.logo){document.querySelectorAll(\'[data-shared-image="logo"]\').forEach(function(el){el.innerHTML=\'<img class="logo-image" src="\'+d.logo+\'" alt="logo" />\';});}}catch(e){}'
-          + 'window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});'
-          + '})();</scr' + 'ipt>';
+        var printScript = '<scr' + 'ipt>window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});</scr' + 'ipt>';
         printWindow.document.open();
-        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + result.html + bootstrapScript + '</body></html>');
+        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + sheetHtml + printScript + '</body></html>');
         printWindow.document.close();
       }
 

@@ -660,6 +660,49 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('emits a syntactically valid inline client script (guards template-literal escaping bugs)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    // Extract every inline <script> block without a src/type attribute (the client logic),
+    // and confirm each parses as valid JS. A template-literal escaping bug (e.g. a stray \\'
+    // that collapses to ') would break parsing here, catching the runtime "blank page" failure.
+    const scriptBlocks = Array.from(
+      html.matchAll(/<script>([\s\S]*?)<\/script>/g),
+      (match) => match[1],
+    )
+    expect(scriptBlocks.length).toBeGreaterThan(0)
+    for (const block of scriptBlocks) {
+      expect(() => new Function(block)).not.toThrow()
+    }
+
+    vi.unstubAllGlobals()
+  })
+
   it('opens print-all schedules into the prepared named popup window', () => {
     const write = vi.fn()
     const popup = {
