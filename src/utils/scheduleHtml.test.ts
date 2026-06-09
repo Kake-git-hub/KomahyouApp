@@ -637,8 +637,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const studentHtml = write.mock.calls[0]?.[0] as string
     expect(studentHtml).toContain('id="schedule-empty-format-button"')
     expect(studentHtml).toContain('空フォーマット印刷')
-    expect(studentHtml).toContain('function buildEmptyFormatSheetHtml')
-    expect(studentHtml).toContain('openEmptyFormatPrintWindow()')
+    expect(studentHtml).toContain('function openEmptyFormatPrintWindow')
+    expect(studentHtml).toContain('buildStudentSheetHtml(startDate, endDate, appliedPersonId, 0, true)')
+    expect(studentHtml).toContain('function toEmptyCountRows')
 
     write.mockClear()
     openTeacherScheduleHtml({
