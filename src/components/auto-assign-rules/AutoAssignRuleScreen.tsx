@@ -2,9 +2,11 @@ import { useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getTeacherDisplayName, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import {
+  autoAssignPeriodOptions,
   autoAssignRuleDefinitions,
   createAutoAssignTargetId,
   listAutoAssignTargetGrades,
+  resolveForbiddenPeriods,
   resolveStudentGradeLabel,
   type AutoAssignRuleKey,
   type AutoAssignRuleRow,
@@ -221,6 +223,7 @@ export function buildAutoAssignWorkbook(
     ルールキー: rule.key,
     ルール名: rule.label,
     分類: forcedRuleKeys.has(rule.key) ? '制約事項' : '優先事項',
+    禁止時限: rule.key === 'forbidFirstPeriod' ? resolveForbiddenPeriods(rule).join(',') : '',
     対象: serializeAutoAssignTargets(rule.targets, studentNameById),
     対象外: serializeAutoAssignTargets(rule.excludeTargets, studentNameById),
   }))), 'ルール')
@@ -267,6 +270,10 @@ export function parseAutoAssignWorkbook(
           const definition = autoAssignRuleDefinitions.find((entry) => entry.key === key)
           if (!definition) return null
 
+          const forbiddenPeriods = key === 'forbidFirstPeriod'
+            ? resolveForbiddenPeriods({ forbiddenPeriods: normalizeText(row['禁止時限']).split(/[,、\s]+/).map((value) => Number(value)).filter((value) => Number.isFinite(value)) })
+            : undefined
+
           return {
             order: Number(row['並び順']) || index + 1,
             rule: {
@@ -274,6 +281,7 @@ export function parseAutoAssignWorkbook(
               targets: parseAutoAssignTargets(row['対象'], studentIdByName),
               excludeTargets: parseAutoAssignTargets(row['対象外'], studentIdByName),
               priorityScore: 3,
+              ...(forbiddenPeriods ? { forbiddenPeriods } : {}),
               includeStudentIds: [],
               excludeStudentIds: [],
               updatedAt: timestamp,
@@ -564,6 +572,18 @@ export function AutoAssignRuleScreen({
     updateRules((current) => current.map((rule) => rule.key === ruleKey ? { ...rule, excludeTargets: [] } : rule), '対象外をクリアしました。')
   }
 
+  // ⑧TODO3: 指定時限禁止の禁止時限トグル。最低1つは残す（空にしない）。
+  const toggleForbiddenPeriod = (ruleKey: AutoAssignRuleKey, period: number) => {
+    updateRules((current) => current.map((rule) => {
+      if (rule.key !== ruleKey) return rule
+      const currentPeriods = resolveForbiddenPeriods(rule)
+      const nextPeriods = currentPeriods.includes(period)
+        ? currentPeriods.filter((value) => value !== period)
+        : [...currentPeriods, period].sort((left, right) => left - right)
+      return { ...rule, forbiddenPeriods: nextPeriods.length > 0 ? nextPeriods : currentPeriods }
+    }), '指定時限禁止の時限を更新しました。')
+  }
+
   const moveRuleGroup = (groupKey: RuleGroupKey, direction: 'up' | 'down') => {
     const currentIndex = orderedRuleGroups.findIndex((group) => group.key === groupKey)
     const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
@@ -703,6 +723,23 @@ export function AutoAssignRuleScreen({
         </div>
       ) : null}
       {!options?.hideDescription ? <p className="auto-assign-rule-description">{rule.description}</p> : null}
+      {rule.key === 'forbidFirstPeriod' ? (
+        <div className="auto-assign-rule-period-toggles" data-testid="auto-assign-forbidden-periods">
+          <span className="auto-assign-rule-summary-segment">禁止する時限:</span>
+          {autoAssignPeriodOptions.map((period) => {
+            const active = resolveForbiddenPeriods(rule).includes(period)
+            return (
+              <button
+                key={period}
+                type="button"
+                className={`student-type-button compact${active ? ' active' : ''}`}
+                onClick={() => toggleForbiddenPeriod(rule.key, period)}
+                data-testid={`auto-assign-forbidden-period-${period}`}
+              >{period}限</button>
+            )
+          })}
+        </div>
+      ) : null}
       <div className="auto-assign-rule-summary" data-testid={`auto-assign-rule-summary-${rule.key}`}>
         <span className="auto-assign-rule-summary-segment" data-testid={`auto-assign-rule-targets-${rule.key}`} title={rule.targets.map((target) => describeTargetTooltip(target)).join('\n\n')}>
           ＋対象: {summarizeTargets(rule.targets, 'なし')}

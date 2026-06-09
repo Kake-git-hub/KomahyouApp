@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
+import { resolveForbiddenPeriods } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
@@ -3911,7 +3912,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const labelByRuleKey: Partial<Record<AutoAssignRuleKey, string>> = {
       subjectCapableTeachersOnly: '科目対応講師',
       regularTeachersOnly: '通常担当講師',
-      forbidFirstPeriod: '1限回避',
+      forbidFirstPeriod: '指定時限回避',
     }
     const labelByGroupKey: Record<LectureConstraintGroupKey, string> = {
       'day-spacing': '登校日集約/分散',
@@ -4339,6 +4340,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       for (const cell of week) {
         const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
         const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
+        const forbiddenPeriods = resolveForbiddenPeriods(autoAssignRuleByKey.get('forbidFirstPeriod'))
         const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
         const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
         if (!cell.isOpenDay) continue
@@ -4386,7 +4388,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
             if (!matchedItem) continue
 
-            const firstPeriodPreferred = !forbidFirstPeriod || cell.slotNumber !== 1
+            const firstPeriodPreferred = !forbidFirstPeriod || !forbiddenPeriods.includes(cell.slotNumber)
             const subjectCapablePreferred = !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate)
             const regularTeacherPreferred = !regularTeachersOnly || regularTeacherIds.has(teacher.id)
             const scoreParts: AutoAssignScorePart[] = [
@@ -4847,8 +4849,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           }
 
           if (managedStudent) {
-            if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && cell.slotNumber === 1) {
-              addWarning([currentLocationKey], '制約事項: 1限禁止', true, true)
+            if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && resolveForbiddenPeriods(autoAssignRuleByKey.get('forbidFirstPeriod')).includes(cell.slotNumber)) {
+              addWarning([currentLocationKey], '制約事項: 指定時限禁止', true, true)
             }
 
             const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)

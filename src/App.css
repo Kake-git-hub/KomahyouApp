@@ -2757,6 +2757,14 @@ tr.sa-slot-last th {
   gap: 8px;
 }
 
+.auto-assign-rule-period-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+}
+
 .auto-assign-rule-summary {
   display: -webkit-box;
   overflow: hidden;

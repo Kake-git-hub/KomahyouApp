@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import { resolveReferenceSchoolYear, resolveStudentGradeLabel } from './autoAssignRuleModel'
+import { resolveForbiddenPeriods, resolveReferenceSchoolYear, resolveStudentGradeLabel } from './autoAssignRuleModel'
+
+// spec-auto-assign-rules ⑧TODO3: 指定時限禁止。未設定=[1]、1〜5のみ・昇順ユニーク。
+describe('resolveForbiddenPeriods', () => {
+  it('defaults to [1] when unset/empty (旧1限禁止)', () => {
+    expect(resolveForbiddenPeriods(undefined)).toEqual([1])
+    expect(resolveForbiddenPeriods({ forbiddenPeriods: [] })).toEqual([1])
+    expect(resolveForbiddenPeriods({ forbiddenPeriods: undefined })).toEqual([1])
+  })
+
+  it('normalizes to sorted unique 1-5 and drops out-of-range', () => {
+    expect(resolveForbiddenPeriods({ forbiddenPeriods: [3, 1, 3] })).toEqual([1, 3])
+    expect(resolveForbiddenPeriods({ forbiddenPeriods: [5, 2, 9, 0] })).toEqual([2, 5])
+    expect(resolveForbiddenPeriods({ forbiddenPeriods: [7, 8] })).toEqual([1])
+  })
+})
 
 describe('autoAssignRuleModel grade resolution', () => {
   it('switches school year on April 1', () => {

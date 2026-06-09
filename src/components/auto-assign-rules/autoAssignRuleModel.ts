@@ -48,7 +48,22 @@ export type AutoAssignRuleRow = {
   priorityScore: number
   includeStudentIds?: string[]
   excludeStudentIds?: string[]
+  // spec-auto-assign-rules ⑧TODO3: 指定時限禁止（forbidFirstPeriod を一般化）。禁止する時限(1〜5)。
+  // 未設定は [1]（旧「1限禁止」）として扱う。
+  forbiddenPeriods?: number[]
   updatedAt: string
+}
+
+// 自動割振で扱う時限の範囲（1〜5限）。
+export const autoAssignPeriodOptions = [1, 2, 3, 4, 5] as const
+
+// 指定時限禁止の禁止時限を解決。未設定/空は既定 [1]（旧1限禁止）。1〜5のみ・昇順ユニーク。
+export function resolveForbiddenPeriods(rule: Pick<AutoAssignRuleRow, 'forbiddenPeriods'> | null | undefined): number[] {
+  const raw = rule?.forbiddenPeriods
+  if (!Array.isArray(raw) || raw.length === 0) return [1]
+  const normalized = Array.from(new Set(raw.filter((period) => autoAssignPeriodOptions.includes(period as (typeof autoAssignPeriodOptions)[number]))))
+    .sort((left, right) => left - right)
+  return normalized.length > 0 ? normalized : [1]
 }
 
 export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'label' | 'description'>> = [
@@ -124,8 +139,8 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
   },
   {
     key: 'forbidFirstPeriod',
-    label: '1限禁止',
-    description: '対象者を1 限に配置しないよう制限します。',
+    label: '指定時限禁止',
+    description: '対象者を、指定した時限（既定は1限）に配置しないよう制限します。',
   },
 ]
 
