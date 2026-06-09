@@ -113,7 +113,9 @@
 - **Phase 5**：
   - **⑤講習ストック ✅ ほぼ完了（未コミット/未デプロイ）**：TODO1(削除で希望数−1)・TODO4(授業時間モデル+手動追加の時間選択)実装。TODO3(コマ表編集)は**廃止**（編集=削除+手動追加）。手動追加は希望数に含めず講習回数(actual)に計上(既存)。残：日付一括「生徒を空にする」の希望数一括−1は保留。詳細 `docs/spec-lecture-stock.md` 実装状況。
   - **⑦提出**：**TODO3(提出に授業時間90/60/45)＝コード全層実装✅（要 functions deploy）／TODO2(登録削除で再提出モデル・unlock撤去)✅／TODO4(「すでに提出済みです」・無効リンク文言)✅**（いずれも未コミット/未デプロイ）。残＝TODO1(別タブ廃止・⑨一体)。詳細 `docs/spec-special-session-submission.md` 実装状況。
-  - **⑨日程表**：精査の結果 TODO1(最新表示)/2(actualのみ)/3(色撤廃)/6(QR全教室)/7(planned=テンプレ由来)は**既存充足**。**TODO4(授業時間反映)✅ 実装**（日程表セルに分表示＋盤面session講習に noteSuffix 付与）。残＝⑦TODO1(コマ表→別タブ欠席不可入力経路の廃止)のみ。詳細 `docs/spec-schedule-pdf.md` 実装状況。
+  - **⑨日程表**：精査の結果 TODO1(最新表示)/2(actualのみ)/3(色撤廃)/6(QR全教室)/7(planned=テンプレ由来)は**既存充足**。**TODO4(授業時間反映)✅ 実装**（日程表セルに分表示＋盤面session講習に noteSuffix 付与）。詳細 `docs/spec-schedule-pdf.md` 実装状況。
+  - **⑦TODO1=⑨TODO5（別タブ欠席不可入力経路の廃止）✅ 実装**：死蔵 `specialSessionAvailabilityHtml.ts`(+test) 削除、App.tsx の sync/メッセージhandler/runtime fields 撤去、SpecialSessionScreen 文言更新。登録は日程表＋QRに一本化。
+  - **→ Phase 5（⑤⑦⑨）はコード実装完了。残るはデプロイ（特に⑦の `firebase deploy --only functions`）と本番反映。**
 - **Phase 6**：②クラウド一本化本体／⑧自動割振スライダー化・区分許可リスト。
 - 手順・対象ファイルは `docs/spec-implementation-plan.md`。
 

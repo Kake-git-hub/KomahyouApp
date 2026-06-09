@@ -64,7 +64,11 @@
   - `SubmissionPage.tsx`：state・読込・**科目ごと90/60/45セレクタ**＋CSS・送信payload。
   - `App.tsx`：提出取り込み5経路に `subjectDurations` を反映/保全（in-app再構築経路で消失しないよう既存値を保持）。`App.test.ts` 修正。
   - **盤面/日程表への授業時間「表示」反映は ⑨（授業時間反映）で対応**（本TODOは提出capture＋保存まで）。手動追加講習の時間表示は⑤で実装済。
-- **TODO1（別タブ経路廃止→日程表一本化）⏳**：⑨と一体で対応。
+- **TODO1（別タブ経路廃止→日程表一本化）✅ 実装（未デプロイ）**：コマ表の講習期間帯クリック→別タブ欠席不可入力経路を撤去。
+  - 既に「開く」呼出は無く死蔵化していた `specialSessionAvailabilityHtml.ts`（生成器）＋テストを削除。
+  - `App.tsx` から `syncSpecialSessionPopup`・関連 effect・`special-session-availability-save`/`-save-students` メッセージ handler・runtime window フィールドを撤去。
+  - `SpecialSessionScreen` の案内文を「登録は日程表（生徒/講師）とQRから」に変更。
+  - 登録は日程表（`schedule-*` メッセージ）＋QR提出（Functions）に一本化。
 - **TODO2 ✅ 実装（未デプロイ）**：「ロック解除」モデルを撤去し「登録削除で再提出」へ統一。
   - 日程表の登録トグル `countSubmitted` ON＝登録確定→提出ロック(`markLectureSubmissionDocAsSubmitted`)、OFF＝登録解除→**リセット**(`resetLectureSubmissionDoc`：提出内容クリア＋pending、配布情報は維持)。`App.tsx` 学生/講師の両 count-save 経路。
   - `unlockLectureSubmissionDoc`（ロック解除・データ保持）は**削除**。

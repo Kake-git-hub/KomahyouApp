@@ -91,7 +91,7 @@
   - 日程表セル：`formatScheduleMinutesSuffix(noteSuffix)`（60/45のみ付与・90=無し）を生徒/講師セルの科目表示へ追加（例 `算60`）。`scheduleHtml.ts` `renderStudentCellCard`/`renderTeacherCellCard`。
   - 盤面：ストック由来(session)講習の配置時に提出授業時間を `noteSuffix` として付与（`resolveSessionLectureNoteSuffix`＝`resolveLectureSubjectDuration`）。手動/自動の両配置経路。盤面表示は既存 `displaySubjectWithNote` で反映。
   - ※提出側の授業時間取込は ⑦TODO3（functions等・要デプロイ）。デプロイ前は subjectDurations 空＝全90表示。
-- **TODO5（登録一本化）**：QR は全教室表示済（TODO6）。コマ表の別タブ欠席不可入力経路の廃止（⑦TODO1）は⏳。
+- **TODO5（登録一本化）✅**：QR は全教室表示済（TODO6）。コマ表→別タブ欠席不可入力経路の廃止（⑦TODO1）も実装済（`specialSessionAvailabilityHtml.ts` 削除・App.tsx の sync/handler 撤去）。登録は日程表UI＋QRに一本化。
 - **TODO6（QR全教室）✅ 既存充足**：`shouldShowScheduleQr()` は常に true（per-person は提出トークン有無で制御）。旧テスト教室2限定は撤廃済。
 - **TODO7（planned=テンプレ由来）✅ 既存充足見込み**：`plannedCells` は呼び出し側（テンプレ一本化後の通常授業）から供給。Phase 3 整合。
 - **残**：⑦TODO1（別タブ欠席不可入力経路の廃止）。
