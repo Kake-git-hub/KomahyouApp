@@ -3632,9 +3632,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
           '</div>';
         }
+        const emptyFormat = options && options.emptyFormat;
+        const commonNoteValue = emptyFormat ? '' : getScheduleNoteValue(commonKey);
+        const individualNoteValue = emptyFormat ? '' : getScheduleNoteValue(individualKey);
         return '<div class="bottom-grid">' +
-          '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '">' + escapeHtml(getScheduleNoteValue(commonKey)) + '</textarea></div></div>' +
-          '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(getScheduleNoteValue(individualKey)) + '</textarea></div></div>' +
+          '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '">' + escapeHtml(commonNoteValue) + '</textarea></div></div>' +
+          '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(individualNoteValue) + '</textarea></div></div>' +
           absenceSectionHtml +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
           '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
@@ -4010,7 +4013,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return next;
       }
 
-      function buildStudentSheetHtml(startDate, endDate, studentId, indexOverride) {
+      function buildStudentSheetHtml(startDate, endDate, studentId, indexOverride, emptyFormat) {
         const filteredCells = filterCells(startDate, endDate);
         const dateHeaders = buildDateHeaders(startDate, endDate);
         const slotNumbers = getSlotNumbers();
@@ -4024,7 +4027,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const students = getVisibleStudents(startDate, endDate);
         const student = students.find((entry) => entry.id === studentId) || students[0] || null;
         if (!student) return { html: null, student: null };
-        const showQr = shouldShowScheduleQr();
+        const showQr = emptyFormat ? false : shouldShowScheduleQr();
         const studentIndex = typeof indexOverride === 'number' ? indexOverride : Math.max(0, students.findIndex((entry) => entry.id === student.id));
         const entries = getStudentAssignmentKeys(student).flatMap((key) => assignmentMap.get(key) || []);
         const keyMap = groupScheduleEntriesBySlot(entries);
@@ -4061,8 +4064,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
           const cellsHtml = dateHeaders.map((dateHeader) => {
             const cell = cellMap.get(dateHeader.dateKey + '_' + slotNumber);
-            const assignments = keyMap.get(dateHeader.dateKey + '_' + slotNumber) || [];
             const slotKey = dateHeader.dateKey + '_' + slotNumber;
+            if (emptyFormat) {
+              const emptyClasses = ['slot-cell'];
+              if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) emptyClasses.push('is-holiday');
+              return '<td class="' + emptyClasses.join(' ') + '"><div class="slot-cell-content"><div class="slot-static"></div></div></td>';
+            }
+            const assignments = keyMap.get(dateHeader.dateKey + '_' + slotNumber) || [];
             const isEditable = getEditableSpecialSessionsForStudent(student.id, dateHeader.dateKey).length > 0 && dateHeader.isOpenDay && (!cell || cell.isOpenDay);
             const classes = ['slot-cell'];
             if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
@@ -4082,15 +4090,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const title = assignments.length ? assignments.map((assignment) => [assignment.lesson.subject, lessonTypeLabels[assignment.lesson.lessonType] || assignment.lesson.lessonType, assignment.teacher].filter(Boolean).join(' / ')).join(' | ') : '';
             return '<td class="' + classes.join(' ') + '" data-role="student-slot-cell" data-student-id="' + student.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('student', student.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="student-schedule-cell-' + student.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderStudentSlotContent(student.id, slotKey, content, title, !isEditable) + '</div></td>';
           }).join('');
-          return '<tr>' + renderStudentTimeHeaderCell(student.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
+          const timeHeaderCell = emptyFormat ? renderTimeHeaderCell(timeLabel, slotNumber) : renderStudentTimeHeaderCell(student.id, timeLabel, slotNumber, dateHeaders, cellMap);
+          return '<tr>' + timeHeaderCell + cellsHtml + '</tr>';
         }).join('');
-        const absenceRows = toMakeupRows(absenceNotes, 7);
-        const makeupRows = toMakeupRows(makeupNotes, 7);
-        const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
+        const absenceRows = emptyFormat ? toMakeupRows([], 7) : toMakeupRows(absenceNotes, 7);
+        const makeupRows = emptyFormat ? toMakeupRows([], 7) : toMakeupRows(makeupNotes, 7);
+        const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => emptyFormat ? renderStaticPeriodBandCell(segment) : renderStudentPeriodBandCell(student.id, segment)).join('') + '</tr>' : '';
         const qrHtml = buildScheduleQrHtml(student, showQr);
-        const dateHeaderHtml = dateHeaders.map((header) => renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
+        const dateHeaderHtml = dateHeaders.map((header) => emptyFormat ? renderStaticDateHeaderCell(header) : renderStudentDateHeaderCell(student.id, header, slotNumbers, cellMap)).join('');
         var gradeCommonKey = 'student-common-grade-' + (student.currentGradeLabel || '未設定');
-        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', formatStudentHeaderName(student, startDate), studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, toCountRows(visibleRegularCounts, visiblePlannedRegularCounts), toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, getVisibleSubjectsForStudent(student, startDate), {hideZeroZero: true}), regularCountWarningHtml, lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id }) + '</section>';
+        var headerNameLabel = emptyFormat ? '' : formatStudentHeaderName(student, startDate);
+        var allSubjectsForCounts = getVisibleSubjectsForStudent(student, startDate);
+        var regularCountRows = emptyFormat ? toEmptyCountRows(allSubjectsForCounts) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
+        var lectureCountRows = emptyFormat ? toEmptyCountRows(allSubjectsForCounts) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
+        var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat });
+        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + bottomSectionHtml + '</section>';
         return { html: html, student: student };
       }
 
@@ -4113,67 +4127,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
       }
 
-      function buildEmptyFormatHeaderHtml() {
-        const logoSrc = (() => {
-          const storage = getSharedStorage();
-          try {
-            return storage ? (storage.getItem(sharedGlobalStoragePrefix + 'logo') || '') : '';
-          } catch (error) {
-            return '';
-          }
-        })();
-        const schoolInfo = readSharedValueForEmptyFormat('school-info');
-        const sheetTitle = readSharedValueForEmptyFormat('sheet-title') || '授業日程表';
-        const logoInner = logoSrc
-          ? '<img class="logo-image" src="' + logoSrc + '" alt="logo" />'
-          : '<span class="logo-placeholder">ロゴ欄</span>';
-        return '<div class="sheet-top">'
-          + '<div class="logo-box" data-shared-image="logo">' + logoInner + '</div>'
-          + '<div class="school-box"><textarea class="school-input" rows="2" placeholder="校舎名&#10;TEL等">' + escapeHtml(schoolInfo) + '</textarea></div>'
-          + '<div class="title-box"><input class="title-input" value="' + escapeHtml(sheetTitle) + '" placeholder="授業日程表" /></div>'
-          + '<div class="meta-box"><div class="meta-info"><div class="meta-row"><span class="meta-label">期間:</span> </div><div class="meta-row person-meta-row"><span><span class="meta-label">生徒名:</span> </span></div></div></div>'
-          + '</div>';
+      function readStoredLogoForEmptyFormat() {
+        const storage = getSharedStorage();
+        try {
+          return storage ? (storage.getItem(sharedGlobalStoragePrefix + 'logo') || '') : '';
+        } catch (error) {
+          return '';
+        }
       }
 
-      function buildEmptyFormatSheetHtml(startDate, endDate) {
-        const filteredCells = filterCells(startDate, endDate);
-        const dateHeaders = buildDateHeaders(startDate, endDate);
-        const slotNumbers = getSlotNumbers();
-        const cellMap = buildCellMap(filteredCells);
-        const periodSegments = buildPeriodSegments(dateHeaders);
-        const cornerYearHtml = makeCornerYearHtml(dateHeaders);
-        const monthHeaderHtml = makeMonthHeaderHtml(dateHeaders);
-        const weekdayHeaderHtml = makeWeekdayHeaderHtml(dateHeaders);
-        const tableDensityClass = getTableDensityClass(dateHeaders);
-        const rows = slotNumbers.map((slotNumber) => {
-          const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';
-          const cellsHtml = dateHeaders.map((dateHeader) => {
-            const cell = cellMap.get(dateHeader.dateKey + '_' + slotNumber);
-            const classes = ['slot-cell'];
-            if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
-            return '<td class="' + classes.join(' ') + '"><div class="slot-cell-content"><div class="slot-static"></div></div></td>';
-          }).join('');
-          return '<tr>' + renderTimeHeaderCell(timeLabel, slotNumber) + cellsHtml + '</tr>';
-        }).join('');
-        const dateHeaderHtml = dateHeaders.map((header) => {
-          const headerClass = !header.isOpenDay ? 'holiday-col' : '';
-          return '<th class="' + headerClass + '"><span class="date-label">' + Number(header.dateKey.split('-')[2]) + '</span></th>';
-        }).join('');
-        const periodRowHtml = periodSegments.length
-          ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => {
-              if (segment.type === 'gap') return '<th class="period-gap" colspan="' + segment.colSpan + '"></th>';
-              return '<th class="period-band" colspan="' + segment.colSpan + '"><span class="period-pill">' + renderPeriodPill(segment) + '</span></th>';
-            }).join('') + '</tr>'
-          : '';
-        return '<section class="sheet" data-role="empty-format-sheet">'
-          + buildEmptyFormatHeaderHtml()
-          + '<table class="schedule-table ' + tableDensityClass + '"><thead>'
-          + periodRowHtml
-          + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr>'
-          + '<tr class="date-row">' + dateHeaderHtml + '</tr>'
-          + '<tr class="weekday-row">' + weekdayHeaderHtml + '</tr>'
-          + '</thead><tbody>' + rows + '</tbody></table>'
-          + '</section>';
+      function renderStaticPeriodBandCell(segment) {
+        if (segment.type === 'gap') return '<th class="period-gap" colspan="' + segment.colSpan + '"></th>';
+        return '<th class="period-band" colspan="' + segment.colSpan + '"><span class="period-pill">' + renderPeriodPill(segment) + '</span></th>';
+      }
+
+      function renderStaticDateHeaderCell(dateHeader) {
+        const headerClass = !dateHeader.isOpenDay ? 'holiday-col' : '';
+        return '<th class="' + headerClass + '"><span class="date-label">' + Number(dateHeader.dateKey.split('-')[2]) + '</span></th>';
+      }
+
+      function toEmptyCountRows(subjects) {
+        if (!subjects || !subjects.length) return '<tr><td></td><td></td></tr>';
+        return subjects.map((label) => '<tr><td>' + escapeHtml(label) + '</td><td></td></tr>').join('');
       }
 
       function openEmptyFormatPrintWindow() {
@@ -4184,13 +4159,28 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           startDate = endDate;
           endDate = previous;
         }
-        const sheetHtml = buildEmptyFormatSheetHtml(startDate, endDate);
+        const result = buildStudentSheetHtml(startDate, endDate, appliedPersonId, 0, true);
+        if (!result.html) {
+          window.alert('空フォーマットを作成できる生徒が見つかりません。');
+          return;
+        }
         const styleHtml = Array.from(document.querySelectorAll('style')).map((element) => element.outerHTML).join('');
+        const branding = {
+          logo: readStoredLogoForEmptyFormat(),
+          school: readSharedValueForEmptyFormat('school-info'),
+          title: readSharedValueForEmptyFormat('sheet-title') || '授業日程表',
+        };
         const printWindow = window.open('', 'schedule-empty-format-' + Date.now());
         if (!printWindow) return;
-        const printScript = '<scr' + 'ipt>window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});</scr' + 'ipt>';
+        const bootstrapScript = '<scr' + 'ipt>(function(){'
+          + 'var d=' + JSON.stringify(branding).replace(/</g, '\\u003c') + ';'
+          + 'try{document.querySelectorAll("textarea.school-input").forEach(function(el){el.value=d.school;});}catch(e){}'
+          + 'try{document.querySelectorAll("input.title-input").forEach(function(el){el.value=d.title;});}catch(e){}'
+          + 'try{if(d.logo){document.querySelectorAll(\'[data-shared-image="logo"]\').forEach(function(el){el.innerHTML=\'<img class="logo-image" src="\'+d.logo+\'" alt="logo" />\';});}}catch(e){}'
+          + 'window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});'
+          + '})();</scr' + 'ipt>';
         printWindow.document.open();
-        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + sheetHtml + printScript + '</body></html>');
+        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + result.html + bootstrapScript + '</body></html>');
         printWindow.document.close();
       }
 
