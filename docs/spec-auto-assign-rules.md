@@ -93,4 +93,14 @@
 | 4 groupLessons 整理 | 種データを空 or 型ごと撤去 | （UI無し） | スナップショット配管 | **撤去の深さは要オーナー判断**（§G） |
 | 5 ペア制約2区分 | `PairConstraintRow.category:'priority'|'constraint'`（既定 constraint、移行で補完） | A/B選択UIに区分トグル | ペア制約の enforcement を hard/soft 分岐 | 既定=制約で現挙動維持 |
 
+## 実装状況（2026-06-09・Phase 6 ⑧ 着手・phase6-auto-assign ブランチ）
+
+- **TODO5（ペア制約2区分）✅ 実装（未デプロイ）**：
+  - `pairConstraint.ts`：`category?:'priority'|'constraint'`（optional・後方互換）＋ `resolvePairConstraintCategory`（未設定=constraint）。
+  - `ScheduleBoardScreen.tsx`：`resolvePairConstraintSeverity`（none/priority/constraint・複数一致は強い方）。制約=赤の「制約: 組み合わせ不可」、優先=非赤の「優先: 組み合わせ回避」。自動割振スコアは両方とも回避方向（`isPairConstraintBlocked` は severity!=='none'）。
+  - `AutoAssignRuleScreen.tsx`：追加フォーム＋一覧に「区分」トグル、Excel入出力に「区分」列。
+  - テスト：`pairConstraint.test.ts`（既定=制約/優先の解決）。
+- **TODO4（groupLessons 整理）✅ 実装（未デプロイ）**：`initialGroupLessons` のサンプル種データを空配列に（型・スナップショット配管は維持＝オーナー判断）。
+- **残（未着手）**：TODO1（区分許可リスト）/ TODO2・3（時限スライダー）。いずれも割振スコアリング・新データモデルに波及するため別増分。
+
 > いずれもアルゴリズム層（ScheduleBoardScreen の複雑な割振）に波及。増分ごとに開発用教室で検証、ゴールデンスナップショット更新の可能性。`autoAssignRuleModel.test.ts` に区分/許可リストの検証を追加。

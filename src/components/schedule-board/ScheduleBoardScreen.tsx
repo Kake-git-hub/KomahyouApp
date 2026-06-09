@@ -17,6 +17,7 @@ import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEnt
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
+import { resolvePairConstraintCategory } from '../../types/pairConstraint'
 import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
@@ -4042,22 +4043,29 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return teacherIds
   }
 
-  const isPairConstraintBlocked = (teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null) => {
+  // spec-auto-assign-rules §E / ⑧TODO5: ペア制約は 優先/制約 の2区分。
+  // 制約(既定)=赤の制約警告、優先=なるべく回避(スコアのみ)。複数一致時は強い方(制約)を採用。
+  const resolvePairConstraintSeverity = (teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null): 'none' | 'priority' | 'constraint' => {
     const otherStudentId = otherStudent?.managedStudentId ?? (otherStudent ? managedStudentByRegisteredName.get(otherStudent.name)?.id : undefined)
-    return pairConstraints.some((constraint) => {
-      if (constraint.type !== 'incompatible') return false
+    let severity: 'none' | 'priority' | 'constraint' = 'none'
+    for (const constraint of pairConstraints) {
+      if (constraint.type !== 'incompatible') continue
       const left = `${constraint.personAType}:${constraint.personAId}`
       const right = `${constraint.personBType}:${constraint.personBId}`
 
-      if ((left === `teacher:${teacherId}` && right === `student:${primaryStudentId}`) || (right === `teacher:${teacherId}` && left === `student:${primaryStudentId}`)) {
-        return true
-      }
+      const matchesTeacherStudent = (left === `teacher:${teacherId}` && right === `student:${primaryStudentId}`) || (right === `teacher:${teacherId}` && left === `student:${primaryStudentId}`)
+      const matchesStudentStudent = Boolean(otherStudentId) && ((left === `student:${primaryStudentId}` && right === `student:${otherStudentId}`) || (right === `student:${primaryStudentId}` && left === `student:${otherStudentId}`))
+      if (!matchesTeacherStudent && !matchesStudentStudent) continue
 
-      if (!otherStudentId) return false
-      return (left === `student:${primaryStudentId}` && right === `student:${otherStudentId}`)
-        || (right === `student:${primaryStudentId}` && left === `student:${otherStudentId}`)
-    })
+      if (resolvePairConstraintCategory(constraint) === 'constraint') return 'constraint'
+      severity = 'priority'
+    }
+    return severity
   }
+
+  const isPairConstraintBlocked = (teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null) => (
+    resolvePairConstraintSeverity(teacherId, primaryStudentId, otherStudent) !== 'none'
+  )
 
   const resolveSpecialSessionById = (sessionId?: string) => {
     if (!sessionId) return null
@@ -4891,8 +4899,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               addWarning([currentLocationKey], '絶対事項: 出席可能コマのみ', true, true)
             }
 
-            if (teacher && isPairConstraintBlocked(teacher.id, managedStudent.id, pairedStudent)) {
-              addWarning([currentLocationKey], '制約: 組み合わせ不可', true, true)
+            if (teacher) {
+              const pairSeverity = resolvePairConstraintSeverity(teacher.id, managedStudent.id, pairedStudent)
+              if (pairSeverity === 'constraint') {
+                addWarning([currentLocationKey], '制約: 組み合わせ不可', true, true)
+              } else if (pairSeverity === 'priority') {
+                addWarning([currentLocationKey], '優先: 組み合わせ回避', true, false)
+              }
             }
           }
 

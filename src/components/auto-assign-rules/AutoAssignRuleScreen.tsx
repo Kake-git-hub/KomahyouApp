@@ -11,7 +11,7 @@ import {
   type AutoAssignTarget,
   type AutoAssignTargetGrade,
 } from './autoAssignRuleModel'
-import { createPairConstraintId, type PairConstraintRow } from '../../types/pairConstraint'
+import { createPairConstraintId, resolvePairConstraintCategory, type PairConstraintCategory, type PairConstraintRow } from '../../types/pairConstraint'
 
 type AutoAssignRuleScreenProps = {
   rules: AutoAssignRuleRow[]
@@ -103,6 +103,7 @@ function createEmptyPairConstraintDraft(): PairConstraintRow {
     personBType: 'student',
     personBId: '',
     type: 'incompatible',
+    category: 'constraint',
   }
 }
 
@@ -230,6 +231,7 @@ export function buildAutoAssignWorkbook(
     人物B種別: row.personBType === 'teacher' ? '講師' : '生徒',
     人物B: row.personBType === 'teacher' ? teacherNameById[row.personBId] ?? '' : studentNameById[row.personBId] ?? '',
     種別: '組み合わせ不可',
+    区分: resolvePairConstraintCategory(row) === 'priority' ? '優先事項' : '制約事項',
   }))), 'ペア制約')
 
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
@@ -314,6 +316,7 @@ export function parseAutoAssignWorkbook(
             personBType,
             personBId: personBType === 'teacher' ? teacherIdByName.get(normalizeText(row['人物B'])) ?? '' : studentIdByName.get(normalizeText(row['人物B'])) ?? '',
             type: 'incompatible' as const,
+            category: (normalizeText(row['区分']) === '優先事項' ? 'priority' : 'constraint') as PairConstraintCategory,
           }
         })
         .filter((row) => row.personAId && row.personBId)
@@ -748,6 +751,10 @@ export function AutoAssignRuleScreen({
           <option value="">人物Bを選択</option>
           {(pairConstraintDraft.personBType === 'teacher' ? visibleTeachers : visibleStudents).map((person) => <option key={person.id} value={person.id}>{pairConstraintDraft.personBType === 'teacher' ? teacherNameById[person.id] : studentNameById[person.id]}</option>)}
         </select>
+        <select value={pairConstraintDraft.category ?? 'constraint'} onChange={(event) => setPairConstraintDraft((current) => ({ ...current, category: event.target.value as PairConstraintCategory }))} data-testid="auto-assign-pair-draft-category">
+          <option value="constraint">制約事項</option>
+          <option value="priority">優先事項</option>
+        </select>
         <button className="primary-button" type="button" onClick={addPairConstraint} data-testid="auto-assign-pair-save-button">保存</button>
       </div>
       <table className="basic-data-table" data-testid="auto-assign-pair-constraints-table">
@@ -757,6 +764,7 @@ export function AutoAssignRuleScreen({
             <th></th>
             <th>人物B</th>
             <th>種別</th>
+            <th>区分</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -790,13 +798,19 @@ export function AutoAssignRuleScreen({
               </td>
               <td><span className="status-chip secondary">組み合わせ不可</span></td>
               <td>
+                <select value={resolvePairConstraintCategory(row)} onChange={(event) => updatePairConstraint(row.id, { category: event.target.value as PairConstraintCategory })} data-testid={`auto-assign-pair-category-${row.id}`}>
+                  <option value="constraint">制約事項</option>
+                  <option value="priority">優先事項</option>
+                </select>
+              </td>
+              <td>
                 <div className="basic-data-row-actions">
                   <button className="secondary-button slim" type="button" onClick={() => removePairConstraint(row.id)} data-testid={`auto-assign-pair-remove-${row.id}`}>削除</button>
                 </div>
               </td>
             </tr>
           ))}
-          {pairConstraints.length === 0 ? <tr><td colSpan={5} className="basic-data-empty-row">ペア制約はまだありません。</td></tr> : null}
+          {pairConstraints.length === 0 ? <tr><td colSpan={6} className="basic-data-empty-row">ペア制約はまだありません。</td></tr> : null}
         </tbody>
       </table>
       <div className="auto-assign-pair-list" data-testid="auto-assign-pair-summary-list">
