@@ -4,6 +4,7 @@ import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
+import { resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { BoardGrid } from './BoardGrid'
@@ -466,6 +467,9 @@ function formatWeekScheduleTitle(cells: Array<{ dateKey: string }>) {
 // 上限を設けないと「出席/欠席/振替を埋めていく」操作のたびに履歴がメモリへ線形蓄積し動作が重くなる。
 // 10 手分あれば実運用の「戻す」には十分。超過分は古い側から破棄する。
 export const MAX_HISTORY_DEPTH = 10
+
+// spec-template-behavior Q16: 通常授業テンプレ履歴(世代交代の世代)は最新3件まで保管する。
+export const REGULAR_LESSON_TEMPLATE_HISTORY_LIMIT = 3
 
 export function appendHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
   if (stack.length >= MAX_HISTORY_DEPTH) {
@@ -945,6 +949,15 @@ function buildLectureStockKey(studentKey: string, subject: string, sessionId?: s
 
 function buildLectureStockScopeKey(studentKey: string, sessionId?: string) {
   return `${studentKey}__${sessionId ?? '-'}`
+}
+
+// spec-lecture-stock §6 / spec-schedule-pdf §D: ストック由来(session)講習の配置時、提出された授業時間を
+// 盤面コマの noteSuffix('60'/'45'/'') として持たせ、日程表にも反映できるようにする。未設定=90='' 。
+function resolveSessionLectureNoteSuffix(specialSessions: SpecialSessionRow[], sessionId: string | undefined, studentId: string | undefined, subject: string): string {
+  if (!sessionId || !studentId) return ''
+  const session = specialSessions.find((entry) => entry.id === sessionId)
+  const minutes = resolveLectureSubjectDuration(session?.studentInputs[studentId], subject)
+  return minutes === 60 ? '60' : minutes === 45 ? '45' : ''
 }
 
 function buildDatePriorityScore(dateKey: string) {
@@ -2916,12 +2929,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       students,
     })
 
-    // テンプレート履歴を更新: effectiveStartDate >= 新テンプレの開始日を除去し、新テンプレを追加
+    // テンプレート履歴を更新: effectiveStartDate >= 新テンプレの開始日を除去し、新テンプレを追加。
+    // spec-template-behavior Q16: 履歴は最新3件まで保管（古い側を破棄）。
     const prevHistory = classroomSettings.regularLessonTemplateHistory ?? []
     const nextHistory = [
       ...prevHistory.filter((h) => h.effectiveStartDate < template.effectiveStartDate),
       template,
-    ]
+    ].slice(-REGULAR_LESSON_TEMPLATE_HISTORY_LIMIT)
 
     // 初回テンプレ保存時、テンプレ適用前の通常授業データを保存（予定回数計算用）
     const preTemplateRegularLessons = prevHistory.length === 0
@@ -5115,6 +5129,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })),
     }))
 
+  // spec-template-behavior Q4: 定休日(closedWeekdays)には講師・生徒を配置させない(混乱防止)。
+  // テンプレ盤面セルの cellId は `template_{dayOfWeek}_{slot}` 形式で曜日を持つ。
+  const isTemplateClosedDayCell = (cellId: string) => {
+    const dayOfWeek = Number(cellId.replace('template_', '').split('_')[0])
+    return (classroomSettings.closedWeekdays ?? []).includes(dayOfWeek)
+  }
+
   const templateMenuStudent = useMemo(() => {
     if (!isTemplateMode || !studentMenu) return null
     const targetCell = templateCells.find((c) => c.id === studentMenu.cellId)
@@ -5145,6 +5166,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
+    // Q4: 定休日には新規配置・移動とも不可。
+    if (isTemplateClosedDayCell(cellId)) {
+      setStatusMessage('定休日のため、講師・生徒を配置できません。')
+      return
+    }
+
     if (selectedStudentId) {
       handleTemplateMoveStudent(cellId, deskIndex, studentIndex)
       return
@@ -5165,6 +5192,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleTemplateMoveStudent = (targetCellId: string, targetDeskIndex: number, targetStudentIndex: number) => {
     if (!selectedStudentId) return
+
+    // Q4: 定休日への移動・入れ替えは不可。
+    if (isTemplateClosedDayCell(targetCellId)) {
+      setStatusMessage('定休日のため、講師・生徒を配置できません。')
+      return
+    }
 
     const next = cloneTemplateCells(templateCells)
 
@@ -5330,6 +5363,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleTemplateConfirmAdd = () => {
     if (!studentMenu || !templateAddDraft) return
+    // Q4: 定休日には生徒を配置できない。
+    if (isTemplateClosedDayCell(studentMenu.cellId)) {
+      setStatusMessage('定休日のため、講師・生徒を配置できません。')
+      return
+    }
     const managedStudent = students.find((s) => s.id === templateAddDraft.studentId)
     if (!managedStudent) {
       setStatusMessage('追加対象の生徒が見つかりませんでした。')
@@ -5372,6 +5410,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleTemplateSelectDesk = (cellId: string, deskIndex: number, x: number, y: number) => {
     setStudentMenu(null)
+    // Q4: 定休日には講師を配置できない。
+    if (isTemplateClosedDayCell(cellId)) {
+      setTeacherMenu(null)
+      setStatusMessage('定休日のため、講師・生徒を配置できません。')
+      return
+    }
     const targetCell = templateCells.find((c) => c.id === cellId)
     const targetDesk = targetCell?.desks[deskIndex]
     if (!targetCell || !targetDesk) return
@@ -6218,6 +6262,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       subject: placementEntry.subject,
       lessonType: 'special',
       teacherType: 'normal',
+      noteSuffix: resolveSessionLectureNoteSuffix(specialSessions, placementEntry.sessionId, selectedLectureStockEntry.studentId ?? undefined, placementEntry.subject),
       specialSessionId: placementEntry.sessionId,
       specialStockSource: placementEntry.source,
     }
@@ -6343,6 +6388,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         subject: candidate.matchedItem.subject,
         lessonType: 'special',
         teacherType: 'normal',
+        noteSuffix: resolveSessionLectureNoteSuffix(specialSessions, candidate.matchedItem.sessionId, managedStudent.id, candidate.matchedItem.subject),
         specialSessionId: candidate.matchedItem.sessionId,
         specialStockSource: candidate.matchedItem.source,
       }
@@ -6791,7 +6837,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       subject: addExistingStudentDraft.subject,
       lessonType: addExistingStudentDraft.lessonType,
       teacherType: 'normal',
-      noteSuffix: addExistingStudentDraft.lessonType === 'regular' || addExistingStudentDraft.lessonType === 'extra'
+      noteSuffix: addExistingStudentDraft.lessonType === 'regular' || addExistingStudentDraft.lessonType === 'extra' || addExistingStudentDraft.lessonType === 'special'
         ? normalizeRegularLessonNote(addExistingStudentDraft.noteSuffix)
         : undefined,
       manualAdded: true,
@@ -7492,11 +7538,38 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${resolveBoardStudentDisplayName(statusEntry.name)} の${getStudentStatusActionLabel(statusEntry.status)}を解除しました。`)
   }
 
+  // spec-lecture-stock §4 / TODO1: 講習コマの「削除」「空にする」でストック由来(session)は希望数 −1。
+  // subjectSlots は session×student×subject の希望回数。studentId 単位で1件減らす。
+  const decrementSpecialSessionSubjectCount = (sessionId: string | undefined, studentId: string | undefined, subject: string) => {
+    if (!sessionId || !studentId) return
+    onUpdateSpecialSessions((prev) => prev.map((session) => {
+      if (session.id !== sessionId) return session
+      const input = session.studentInputs[studentId]
+      if (!input) return session
+      const current = input.subjectSlots[subject] ?? 0
+      if (current <= 0) return session
+      const nextSubjectSlots = { ...input.subjectSlots }
+      const nextCount = current - 1
+      if (nextCount <= 0) delete nextSubjectSlots[subject]
+      else nextSubjectSlots[subject] = nextCount
+      const nowIso = new Date().toISOString()
+      return {
+        ...session,
+        studentInputs: { ...session.studentInputs, [studentId]: { ...input, subjectSlots: nextSubjectSlots, updatedAt: nowIso } },
+        updatedAt: nowIso,
+      }
+    }))
+  }
+
   const handleDeleteStudent = () => {
     if (!studentMenu || !menuStudent) return
 
     const studentDisplayName = resolveBoardStudentDisplayName(menuStudent.student.name)
-    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します。\n削除した授業は振替の対象になりません。\nよろしいですか。`)
+    const isSessionLecture = menuStudent.student.lessonType === 'special' && menuStudent.student.specialStockSource === 'session'
+    const confirmBody = isSessionLecture
+      ? '削除すると講習の希望数が1減ります（未消化ストックには戻りません）。'
+      : '削除した授業は振替の対象になりません。'
+    const confirmed = window.confirm(`${studentDisplayName} のこの授業を削除します。\n${confirmBody}\nよろしいですか。`)
     if (!confirmed) {
       setStatusMessage('授業の削除をキャンセルしました。')
       return
@@ -7516,6 +7589,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       : suppressedRegularLessonOccurrences
     const nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
+    let nextManualLectureStockCounts = manualLectureStockCounts
     let statusSuffix = '振替対象にはしません。'
 
     if (menuStudent.student.lessonType === 'regular') {
@@ -7530,7 +7604,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     if (menuStudent.student.lessonType === 'special') {
-      statusSuffix = '講習の予定を削除しました。'
+      if (menuStudent.student.specialStockSource === 'session') {
+        // ストック由来の講習削除: 希望数 −1。配置時に消費した分(-1)を打ち消して残数会計を保つ
+        // （削除は「戻す」ではないため、希望数自体を1減らして純減させる）。
+        const lectureStudentKey = managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${resolveBoardStudentDisplayName(menuStudent.student.name)}`
+        const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
+        nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)
+        decrementSpecialSessionSubjectCount(menuStudent.student.specialSessionId, menuStudent.student.managedStudentId, menuStudent.student.subject)
+        statusSuffix = '講習の希望数を1減らしました。'
+      } else {
+        // 手動追加の講習: 希望数に含まれないため変更なし。ストックへも戻さない。
+        statusSuffix = '講習の予定を削除しました。'
+      }
     }
 
     commitWeeks(
@@ -7543,7 +7628,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualMakeupAdjustments,
       nextSuppressedMakeupOrigins,
       fallbackMakeupStudents,
-      manualLectureStockCounts,
+      nextManualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
@@ -8577,7 +8662,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                       </select>
                     </div>
                   ) : null}
-                  {addExistingStudentDraft?.lessonType === 'regular' || addExistingStudentDraft?.lessonType === 'extra' ? (
+                  {addExistingStudentDraft?.lessonType === 'regular' || addExistingStudentDraft?.lessonType === 'extra' || addExistingStudentDraft?.lessonType === 'special' ? (
                     <div className="student-menu-section">
                       <span className="student-menu-label">授業時間</span>
                       <div className="student-menu-type-grid student-menu-type-grid-time">

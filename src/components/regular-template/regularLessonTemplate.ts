@@ -216,9 +216,11 @@ export function filterTemplateParticipantsForReferenceDate(params: {
   const { template, deskCount, teachers, students, referenceDate: overrideDate } = params
   const normalizedTemplate = normalizeRegularLessonTemplate(template, deskCount)
   const referenceDate = overrideDate || normalizedTemplate.effectiveStartDate
+  // spec-template-behavior Q14: テンプレ対象は「入会前＋在籍」(退塾のみ除外)。
+  // 入会前の講師も先行配置できるようにする。
   const visibleTeacherIds = new Set(
     teachers
-      .filter((teacher) => resolveTeacherRosterStatus(teacher, referenceDate) === '在籍')
+      .filter((teacher) => resolveTeacherRosterStatus(teacher, referenceDate) !== '退塾')
       .map((teacher) => teacher.id),
   )
   const visibleStudentIds = new Set(
@@ -257,55 +259,53 @@ export function buildRegularLessonsFromTemplate(params: {
   template: RegularLessonTemplate | null | undefined
   teachers: TeacherRow[]
   students: StudentRow[]
-  maxSchoolYear?: number
 }) {
-  const { template, teachers: _teachers, students, maxSchoolYear = 2031 } = params
+  const { template, teachers: _teachers, students } = params
   if (!template || !hasRegularLessonTemplateAssignments(template)) return []
 
   const normalizedTemplate = normalizeRegularLessonTemplate(template, Math.max(...template.cells.map((cell) => cell.desks.length), 1))
   const studentById = new Map(students.map((student) => [student.id, student]))
   const effectiveStartDate = normalizedTemplate.effectiveStartDate
-  const effectiveSchoolYear = resolveOperationalSchoolYear(parseDateKey(effectiveStartDate))
   const rows: RegularLessonRow[] = []
 
-  for (let schoolYear = effectiveSchoolYear; schoolYear <= maxSchoolYear; schoolYear += 1) {
-    const schoolYearRange = resolveSchoolYearDateRange(schoolYear)
-    if (schoolYearRange.endDate < effectiveStartDate) continue
-    const sharedStartDate = effectiveStartDate > schoolYearRange.startDate ? effectiveStartDate : schoolYearRange.startDate
-    const sharedEndDate = schoolYearRange.endDate
+  // spec-template-behavior Q11: 反映日からその年度末(3/31)までの「単年度のみ」生成する。
+  // 年度替わりでは必ずテンプレを作り直す運用のため、複数年の一括生成・上限年度は設けない。
+  const schoolYear = resolveOperationalSchoolYear(parseDateKey(effectiveStartDate))
+  const schoolYearRange = resolveSchoolYearDateRange(schoolYear)
+  const sharedStartDate = effectiveStartDate > schoolYearRange.startDate ? effectiveStartDate : schoolYearRange.startDate
+  const sharedEndDate = schoolYearRange.endDate
 
-    for (const cell of normalizedTemplate.cells) {
-      for (const desk of cell.desks) {
-        const student1 = normalizeTemplateStudent(desk.students[0])
-        const student2 = normalizeTemplateStudent(desk.students[1])
-        if (!desk.teacherId && !student1 && !student2) continue
+  for (const cell of normalizedTemplate.cells) {
+    for (const desk of cell.desks) {
+      const student1 = normalizeTemplateStudent(desk.students[0])
+      const student2 = normalizeTemplateStudent(desk.students[1])
+      if (!desk.teacherId && !student1 && !student2) continue
 
-        const student1Row = student1 ? studentById.get(student1.studentId) : null
-        const student2Row = student2 ? studentById.get(student2.studentId) : null
-        const referenceDate = sharedStartDate
+      const student1Row = student1 ? studentById.get(student1.studentId) : null
+      const student2Row = student2 ? studentById.get(student2.studentId) : null
+      const referenceDate = sharedStartDate
 
-        rows.push({
-          id: `template_${schoolYear}_${cell.dayOfWeek}_${cell.slotNumber}_${desk.deskIndex}`,
-          schoolYear,
-          teacherId: desk.teacherId,
-          student1Id: student1?.studentId ?? '',
-          subject1: student1 ? resolveDisplayedSubjectForBirthDate(student1.subject, student1Row?.birthDate, referenceDate) : '',
-          student1Note: normalizeRegularLessonNote(student1?.note),
-          startDate: sharedStartDate,
-          endDate: sharedEndDate,
-          student2Id: student2?.studentId ?? '',
-          subject2: student2 ? resolveDisplayedSubjectForBirthDate(student2.subject, student2Row?.birthDate, referenceDate) : '',
-          student2Note: normalizeRegularLessonNote(student2?.note),
-          student2StartDate: sharedStartDate,
-          student2EndDate: sharedEndDate,
-          nextStudent1Id: '',
-          nextSubject1: '',
-          nextStudent2Id: '',
-          nextSubject2: '',
-          dayOfWeek: cell.dayOfWeek,
-          slotNumber: cell.slotNumber,
-        })
-      }
+      rows.push({
+        id: `template_${schoolYear}_${cell.dayOfWeek}_${cell.slotNumber}_${desk.deskIndex}`,
+        schoolYear,
+        teacherId: desk.teacherId,
+        student1Id: student1?.studentId ?? '',
+        subject1: student1 ? resolveDisplayedSubjectForBirthDate(student1.subject, student1Row?.birthDate, referenceDate) : '',
+        student1Note: normalizeRegularLessonNote(student1?.note),
+        startDate: sharedStartDate,
+        endDate: sharedEndDate,
+        student2Id: student2?.studentId ?? '',
+        subject2: student2 ? resolveDisplayedSubjectForBirthDate(student2.subject, student2Row?.birthDate, referenceDate) : '',
+        student2Note: normalizeRegularLessonNote(student2?.note),
+        student2StartDate: sharedStartDate,
+        student2EndDate: sharedEndDate,
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: cell.dayOfWeek,
+        slotNumber: cell.slotNumber,
+      })
     }
   }
 
