@@ -101,6 +101,9 @@
   - `AutoAssignRuleScreen.tsx`：追加フォーム＋一覧に「区分」トグル、Excel入出力に「区分」列。
   - テスト：`pairConstraint.test.ts`（既定=制約/優先の解決）。
 - **TODO4（groupLessons 整理）✅ 実装（未デプロイ）**：`initialGroupLessons` のサンプル種データを空配列に（型・スナップショット配管は維持＝オーナー判断）。
-- **残（未着手）**：TODO1（区分許可リスト）/ TODO2・3（時限スライダー）。いずれも割振スコアリング・新データモデルに波及するため別増分。
+- **TODO3（指定時限禁止スライダー）✅ 実装（未デプロイ）**：`forbidFirstPeriod` を一般化。`forbiddenPeriods?:number[]`＋`resolveForbiddenPeriods`（未設定=[1]）。ルールカードに1〜5限トグル、割振スコア／警告を forbiddenPeriods で判定、Excel「禁止時限」列、ラベル「指定時限禁止」。テスト追加。
+- **残（未着手）**：
+  - **TODO2（時限優先スライダー）**：preferLateAfternoon/Second/Fifth の3ルール統合。`periodPriorityOrder` 等の順序データ＋並べ替えUI＋スコアリング。UIが重め＋冗長ルールの非表示判断で TODO1 と一部重複。
+  - **TODO1（区分許可リスト）**：全ルールに category＋allowedCategories を導入し forcedRuleKeys 置換。ルールのグルーピング表示の再構成を伴い最も波及大。
 
 > いずれもアルゴリズム層（ScheduleBoardScreen の複雑な割振）に波及。増分ごとに開発用教室で検証、ゴールデンスナップショット更新の可能性。`autoAssignRuleModel.test.ts` に区分/許可リストの検証を追加。
