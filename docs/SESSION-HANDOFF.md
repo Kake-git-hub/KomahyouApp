@@ -1,25 +1,28 @@
-# セッション引き継ぎ資料（2026-06-09 時点）
+# セッション引き継ぎ資料（2026-06-10 時点）
 
 新しいチャットはまずこのファイルを読む。プロジェクト「コマ表アプリ」の**全体見直し→段階的実装**を継続中。
 
 ---
 
-## 0. いま何をしているか（最重要・即時タスク）
+## 0. いま何をしているか（最重要・即時タスク）※2026-06-10 更新
 
-**Phase 5（⑤講習ストック/⑦提出/⑨日程表）＋テンプレ挙動デルタ＝完了・2026-06-09 にデプロイ（v1.5.291）。** 本番＝main 同期（PR #23 マージ済）。
-→ **次は Phase 6**（②クラウド一本化本体／⑧自動割振スライダー化・区分許可リスト）。**着手前に必ず現状精査**（Phase 3/4/5 同様、核心が既に実装済みの可能性大）。②は保存アーキテクチャに触れる最高リスク領域（`memory/komahyou-save-architecture.md` 参照）。
+**本番＝v1.5.291（main 同期）。Phase 0〜5 ＋ テンプレ挙動デルタ まで本番反映済み。**
+いまは **Phase 6（最終フェーズ）** を実装中。
 
-（履歴）Phase 4（振替 A/B/C）完了・2026-06-09 デプロイ（v1.5.290）。
+### Phase 6 の状態
+- **⑧ 自動割振ルール**：ブランチ `phase6-auto-assign`（**push済・未マージ・未デプロイ**, main の5コミット先）に下記を実装。build・typecheck・test:unit(272) グリーン。
+  - ✅ **TODO5 ペア制約2区分**（`category` 既定=制約／優先。`pairConstraint.ts`＋`resolvePairConstraintSeverity`＋UI区分トグル＋Excel）
+  - ✅ **TODO4 groupLessons 種データ空**（`initialGroupLessons=[]`。型/配管は維持＝オーナー判断）
+  - ✅ **TODO3 指定時限禁止スライダー**（`forbidFirstPeriod`一般化→`forbiddenPeriods`既定[1]。1〜5限トグルUI＋スコア/警告＋Excel）
+  - ⏳ **TODO2 時限優先スライダー**（preferLateAfternoon/Second/Fifth 3ルール統合＋並べ替えUI＋スコア書換）
+  - ⏳ **TODO1 区分許可リスト**（全ルールへ category＋allowedCategories、`forcedRuleKeys`置換、ルール表示のグルーピング再構成。最も波及大）
+  - ※ TODO2/TODO1 は相互依存・最重量。一体設計推奨。詳細＝`docs/spec-auto-assign-rules.md` 実装状況。
+- **② クラウド一本化（保存・復元）本体**：**未着手・最高リスク**（保存アーキ＝クロス汚染事故領域）。残＝二段階保存廃止/復元UI整理/開発用コピー室長開放。多くは Phase0/2 で実装済（5s/20s・常時緑・オフラインブロック・JSON復元）。詳細＝`docs/spec-save-restore.md`。
 
-→ **再開時の次タスク候補**：
-1. **テンプレ挙動の仕様＝確定済み（2026-06-09 正本化）＋実装デルタ完了（2026-06-09・未デプロイ）**：`docs/spec-template-behavior.md` 参照。Q1-Q20 の 5件のデルタを実装済（build/test:unit 266件グリーン・**未コミット/未デプロイ**）：
-   - **Q4** ✅ 定休日に講師・生徒を配置不可。**稼働中は ScheduleBoardScreen のオンボード template モード**が本体（`RegularLessonTemplateEditor.tsx` は死蔵）。両方にブロック追加。
-   - **Q11** ✅ `maxSchoolYear=2031` 多年度ループを撤廃 → 反映日〜当年度末(3/31)の単年度のみ生成。
-   - **Q14** ✅ 精査で**オンボード配置ロスターは既に入会前を許可済**。`filterTemplateParticipantsForReferenceDate` 講師フィルタのみ `!=='退塾'` に統一。
-   - **Q16** ✅ `regularLessonTemplateHistory` を `.slice(-3)`。
-   - **Q17** ✅ 変更不要（UI からは `overwrite=true` のみ呼ばれ既に1本。内部引数は保持）。
-   - → **次**：コミット/PR → 開発用教室で動作確認 → version 上げてデプロイ。`RegularLessonTemplateEditor.tsx` 死蔵の整理は別途検討。
-2. Phase 5（⑤講習ストック／⑦提出／⑨日程表）・Phase 6（②クラウド一本化本体／⑧自動割振）。
+### 次セッションの最初の判断
+1. **⑧ の `phase6-auto-assign` を PR→マージ→デプロイ**して本番反映するか（TODO5/4/3 を先に出す）、
+2. それとも **⑧ TODO2/TODO1 を同ブランチで続け**てから一括で出すか。
+3. ② に着手するなら**現状精査を最優先**（既存充足を見極めてから・開発用教室でのみ書込検証）。
 
 ### このセッションの完了事項（2026-06-09）
 - **Phase 4-B 欠席登録UI＝実装済みと精査確認**（PR #16）。下記詳細参照。
