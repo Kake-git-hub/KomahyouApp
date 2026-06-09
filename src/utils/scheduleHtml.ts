@@ -4101,8 +4101,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var gradeCommonKey = 'student-common-grade-' + (student.currentGradeLabel || '未設定');
         var headerNameLabel = emptyFormat ? '' : formatStudentHeaderName(student, startDate);
         var allSubjectsForCounts = getVisibleSubjectsForStudent(student, startDate);
-        var regularCountRows = emptyFormat ? toEmptyCountRows(allSubjectsForCounts) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
-        var lectureCountRows = emptyFormat ? toEmptyCountRows(allSubjectsForCounts) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
+        var emptyFormatSubjects = ['英', '算/数', '国', '理', '社'];
+        var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
+        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
         var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat });
         var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + bottomSectionHtml + '</section>';
         return { html: html, student: student };
