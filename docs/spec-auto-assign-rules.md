@@ -72,3 +72,25 @@
 4. **グループ授業（`groupLessons`/班）を整理**（編集UIは元々無し。種データを空に or フィールドごと撤去）。
    ※ `origin: 'group-conflict'`（ルール相互排他）は別機能なので**残す**。
 5. ペア制約の区分を 優先/制約 の2区分へ（既定＝制約事項）。
+
+## 現状精査（2026-06-09・Phase 6 ⑧ 着手前）
+
+- **区分は未モデル化**：`AutoAssignRuleRow` に category フィールド無し。区分は `AutoAssignRuleScreen.tsx` の
+  `forcedRuleKeys = {forbidFirstPeriod, regularTeachersOnly, subjectCapableTeachersOnly}`（ハードコードSet）で
+  「制約事項」、残りを「優先事項」として描画。絶対事項はアプリ固定テキスト（既存コマ不変／出席可能コマのみ）。
+  - 注意: spec C では「同日コマ数上限(maxOne/Two/Three)」は制約事項に選べる想定だが、現状は優先事項(soft)のみ。
+- **時限ルールは4つの個別キー**：`preferLateAfternoon`/`preferSecondPeriod`/`preferFifthPeriod`（優先順位グループ orderKey=preferLateAfternoon に統合済の表示）＋ `forbidFirstPeriod`。スライダー用の範囲/順序データモデルは無し。
+- **ペア制約 `PairConstraintRow`**：`{personA/B, type:'incompatible'}` のみ。category 無し（現状は常にハード）。
+- **割振アルゴリズム本体**は `ScheduleBoardScreen.tsx`（`lectureConstraintGroupDefinitions` ほか）。区分・スライダーの判定はここが参照する。
+
+### 実装計画（増分・各層）
+
+| TODO | モデル | UI(AutoAssignRuleScreen) | アルゴリズム(ScheduleBoardScreen) | 備考/要確認 |
+|---|---|---|---|---|
+| 1 区分許可リスト | `category:'priority'|'constraint'` を AutoAssignRuleRow に追加＋ルール別 `allowedCategories` メタ＋既定値。sanitize/移行で既定補完 | 各ルールに区分トグル（許可リスト内のみ）。絶対事項は固定表示 | `forcedRuleKeys` ハードコードを `rule.category==='constraint'` 判定へ置換 | 許可リスト割当（どのルールが制約可か）を最終確認 |
+| 2 時限優先スライダー | 時限優先の範囲/順序を表す新データ（例 `timePreferenceOrder:number[]`）。旧3キーは「対象なし運用」or 1キーへ集約 | 1〜5限のスライダー/並べ替えUI | スコアリングを新データで算出 | 旧3ルールの後方互換（既存データ移行）を確認 |
+| 3 指定時限禁止スライダー | `forbidFirstPeriod` を `forbiddenPeriods:number[]` 一般化 | 1〜5限トグル/スライダー | フィルタを forbiddenPeriods で判定 | 既存「1限禁止」を [1] に移行 |
+| 4 groupLessons 整理 | 種データを空 or 型ごと撤去 | （UI無し） | スナップショット配管 | **撤去の深さは要オーナー判断**（§G） |
+| 5 ペア制約2区分 | `PairConstraintRow.category:'priority'|'constraint'`（既定 constraint、移行で補完） | A/B選択UIに区分トグル | ペア制約の enforcement を hard/soft 分岐 | 既定=制約で現挙動維持 |
+
+> いずれもアルゴリズム層（ScheduleBoardScreen の複雑な割振）に波及。増分ごとに開発用教室で検証、ゴールデンスナップショット更新の可能性。`autoAssignRuleModel.test.ts` に区分/許可リストの検証を追加。
