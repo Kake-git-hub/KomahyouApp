@@ -2865,13 +2865,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return Object.fromEntries(Object.entries(countMap || {}).filter(([label]) => visibleSubjects.includes(label)));
       }
 
+      // 授業時間(分)サフィックス。60/45 のみ付与し、90(既定)は付けない。spec-schedule-pdf §D。
+      function formatScheduleMinutesSuffix(noteSuffix) {
+        var v = String(noteSuffix == null ? '' : noteSuffix).trim();
+        return (v === '60' || v === '45') ? v : '';
+      }
+
       function renderStudentCellCard(entry) {
+        var subjectWithMinutes = entry.subject + formatScheduleMinutesSuffix(entry.noteSuffix);
         if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended') {
           var statusLabel = entry.status === 'attended' ? '出席' : entry.status === 'absent-no-makeup' ? '振無休' : '休';
           var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';
-          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml([statusLabel, linkedDestinationLabel].filter(Boolean).join(' ')) + '</div><div class="lesson-sub">' + escapeHtml([entry.subject, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
+          return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml([statusLabel, linkedDestinationLabel].filter(Boolean).join(' ')) + '</div><div class="lesson-sub">' + escapeHtml([subjectWithMinutes, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
-        return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(entry.subject) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
+        return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(subjectWithMinutes) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
       }
 
       function renderStudentCellCards(entries) {
@@ -3500,7 +3507,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function renderTeacherCellCard(students, statuses) {
         const people = [...(students || []), ...(statuses || [])];
         const cardClass = 'lesson-card lesson-card-teacher ' + (people.length > 2 ? 'is-multi' : people.length > 1 ? 'is-pair' : 'is-single');
-        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person' + getTeacherLessonPersonDensityClass(student) + '"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
+        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person' + getTeacherLessonPersonDensityClass(student) + '"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject + formatScheduleMinutesSuffix(student.noteSuffix), formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
       }
 
       function makeCornerYearHtml(dateHeaders) {
