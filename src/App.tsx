@@ -19,13 +19,12 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, unlockLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
-import { syncSpecialSessionAvailabilityHtml } from './utils/specialSessionAvailabilityHtml'
 import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
@@ -134,8 +133,6 @@ export function buildSubmissionAcknowledgementEntries(
 type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
   __lessonScheduleStudentWindow?: Window | null
   __lessonScheduleTeacherWindow?: Window | null
-  __lessonScheduleSpecialSessionWindow?: Window | null
-  __lessonScheduleSpecialSessionId?: string
   __lessonScheduleBoardWeeks?: SlotCell[][]
 }
 
@@ -3083,42 +3080,6 @@ function AuthenticatedApp() {
     })
   }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
 
-  const syncSpecialSessionPopup = useCallback(() => {
-    const runtimeWindow = getSchedulePopupRuntimeWindow()
-    const popupWindow = runtimeWindow.__lessonScheduleSpecialSessionWindow
-    const sessionId = runtimeWindow.__lessonScheduleSpecialSessionId
-    if (!popupWindow || popupWindow.closed || !sessionId) return
-
-    const session = specialSessions.find((row) => row.id === sessionId)
-    if (!session) return
-
-    syncSpecialSessionAvailabilityHtml({
-      session,
-      allSessions: specialSessions,
-      classroomSettings,
-      teachers,
-      students,
-      scheduleCells: buildScheduleCellsForRange({
-        range: {
-          startDate: session.startDate,
-          endDate: session.endDate,
-          periodValue: '',
-        },
-        fallbackStartDate: session.startDate,
-        fallbackEndDate: session.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons: displayRegularLessons,
-        boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-        suppressedRegularLessonOccurrences: boardStateRef.current?.suppressedRegularLessonOccurrences ?? [],
-      }),
-      boardWeeks: runtimeWindow.__lessonScheduleBoardWeeks ?? [],
-      targetWindow: popupWindow,
-    })
-    // boardState は依存に入れず boardStateRef 経由で読む(出席等の編集ごとの再同期を避けて identity を安定化)。
-  }, [boardStateRef, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
-
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
       const message = event.data
@@ -3148,66 +3109,6 @@ function AuthenticatedApp() {
         return
       }
 
-      if (message.type === 'special-session-availability-save') {
-        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
-        if (message.personType !== 'teacher' && message.personType !== 'student') return
-        const unavailableSlotCandidates = message.unavailableSlots
-        if (!Array.isArray(unavailableSlotCandidates) || unavailableSlotCandidates.some((value: unknown) => typeof value !== 'string')) return
-        const regularOnly = message.personType === 'student' ? Boolean(message.regularOnly) : false
-        const subjectSlotCandidates = message.personType === 'student' && message.subjectSlots && typeof message.subjectSlots === 'object'
-          ? message.subjectSlots as Record<string, unknown>
-          : {}
-        const subjectSlots = Object.entries(subjectSlotCandidates).reduce<Record<string, number>>((accumulator, [subject, value]) => {
-          const normalizedValue = typeof value === 'number' ? value : Number(value)
-          if (!Number.isFinite(normalizedValue)) return accumulator
-
-          const count = Math.max(0, Math.trunc(normalizedValue))
-          if (count > 0) accumulator[subject] = count
-          return accumulator
-        }, {})
-
-        const updatedAt = new Date().toISOString()
-        const unavailableSlots = Array.from(new Set(unavailableSlotCandidates as string[])).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true }))
-
-        setSpecialSessions((current) => current.map((session) => {
-          if (session.id !== message.sessionId) return session
-
-          if (message.personType === 'teacher') {
-            return {
-              ...session,
-              teacherInputs: {
-                ...session.teacherInputs,
-                [message.personId]: {
-                  unavailableSlots,
-                  countSubmitted: Boolean(session.teacherInputs[message.personId]?.countSubmitted),
-                  submissionToken: session.teacherInputs[message.personId]?.submissionToken,
-                  updatedAt,
-                },
-              },
-              updatedAt,
-            }
-          }
-
-          return {
-            ...session,
-            studentInputs: {
-              ...session.studentInputs,
-              [message.personId]: {
-                unavailableSlots,
-                regularBreakSlots: session.studentInputs[message.personId]?.regularBreakSlots ?? [],
-                subjectSlots: regularOnly ? {} : subjectSlots,
-                regularOnly,
-                countSubmitted: Boolean(session.studentInputs[message.personId]?.countSubmitted),
-                submissionToken: session.studentInputs[message.personId]?.submissionToken,
-                updatedAt,
-              },
-            },
-            updatedAt,
-          }
-        }))
-        return
-      }
-
       if (message.type === 'schedule-student-unavailable-save') {
         if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
         if (!Array.isArray(message.unavailableSlots) || message.unavailableSlots.some((value: unknown) => typeof value !== 'string')) return
@@ -3227,6 +3128,7 @@ function AuthenticatedApp() {
                 unavailableSlots,
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: previousInput?.subjectSlots ?? {},
+                subjectDurations: previousInput?.subjectDurations ?? {},
                 regularOnly: Boolean(previousInput?.regularOnly),
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
@@ -3270,6 +3172,7 @@ function AuthenticatedApp() {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
+                subjectDurations: regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
@@ -3293,8 +3196,9 @@ function AuthenticatedApp() {
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const studentToken = targetSession?.studentInputs[message.personId]?.submissionToken
         if (studentToken) {
+          // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
-          else unlockLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
+          else resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
         }
         return
       }
@@ -3363,83 +3267,10 @@ function AuthenticatedApp() {
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
         if (teacherToken) {
+          // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
-          else unlockLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
+          else resetLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
         }
-        return
-      }
-
-      if (message.type === 'special-session-availability-save-students') {
-        if (typeof message.sessionId !== 'string') return
-        if (!Array.isArray(message.entries)) return
-
-        const normalizedEntries = message.entries.flatMap((entry: unknown) => {
-          if (!entry || typeof entry !== 'object') return []
-
-          const rawEntry = entry as {
-            personId?: unknown
-            unavailableSlots?: unknown
-            regularBreakSlots?: unknown
-            subjectSlots?: unknown
-            regularOnly?: unknown
-            countSubmitted?: unknown
-          }
-
-          const personId = typeof rawEntry.personId === 'string' ? rawEntry.personId : ''
-          if (!personId) return []
-
-          const unavailableSlots = Array.isArray(rawEntry.unavailableSlots)
-            ? rawEntry.unavailableSlots.filter((value: unknown): value is string => typeof value === 'string')
-            : []
-          const regularBreakSlots = Array.isArray(rawEntry.regularBreakSlots)
-            ? rawEntry.regularBreakSlots.filter((value: unknown): value is string => typeof value === 'string')
-            : []
-          const rawSubjectSlots = rawEntry.subjectSlots && typeof rawEntry.subjectSlots === 'object'
-            ? rawEntry.subjectSlots as Record<string, unknown>
-            : {}
-          const subjectSlots = Object.entries(rawSubjectSlots).reduce<Record<string, number>>((accumulator, [subject, value]) => {
-            const normalizedValue = typeof value === 'number' ? value : Number(value)
-            if (!Number.isFinite(normalizedValue)) return accumulator
-
-            const count = Math.max(0, Math.trunc(normalizedValue))
-            if (count > 0) accumulator[subject] = count
-            return accumulator
-          }, {})
-
-          return [{
-            personId,
-            unavailableSlots: Array.from(new Set<string>(unavailableSlots)).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true })),
-            regularBreakSlots: Array.from(new Set<string>(regularBreakSlots)).sort((left, right) => left.localeCompare(right, 'ja', { numeric: true })),
-            regularOnly: Boolean(rawEntry.regularOnly),
-            countSubmitted: Boolean(rawEntry.countSubmitted),
-            subjectSlots,
-          }]
-        })
-
-        const updatedAt = new Date().toISOString()
-        setSpecialSessions((current) => current.map((session) => {
-          if (session.id !== message.sessionId) return session
-
-          const nextStudentInputs = { ...session.studentInputs }
-          for (const entry of normalizedEntries) {
-            const previousInput = session.studentInputs[entry.personId]
-            nextStudentInputs[entry.personId] = {
-              unavailableSlots: entry.unavailableSlots,
-              regularBreakSlots: entry.regularBreakSlots,
-              subjectSlots: entry.regularOnly ? {} : entry.subjectSlots,
-              regularOnly: entry.regularOnly,
-              countSubmitted: entry.countSubmitted,
-              submissionToken: previousInput?.submissionToken,
-              updatedAt,
-            }
-          }
-
-          return {
-            ...session,
-            studentInputs: nextStudentInputs,
-            updatedAt,
-          }
-        }))
         return
       }
 
@@ -3476,10 +3307,6 @@ function AuthenticatedApp() {
   }, [actingClassroomId, ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
-    syncSpecialSessionPopup()
-  }, [syncSpecialSessionPopup])
-
-  useEffect(() => {
     const timerId = window.setTimeout(() => syncStudentSchedulePopup(), 400)
     return () => window.clearTimeout(timerId)
   }, [syncStudentSchedulePopup])
@@ -3492,8 +3319,6 @@ function AuthenticatedApp() {
   useEffect(() => {
     // 範囲・講習・コールバック変更時の再同期もデバウンスして、popup の全日程再生成の連発を防ぐ。
     const timerId = window.setTimeout(() => {
-      syncSpecialSessionPopup()
-
       const syncSchedulePopupForRange = (viewType: 'student' | 'teacher') => {
         const range = buildNormalizedScheduleRange(
           viewType,
@@ -3515,7 +3340,7 @@ function AuthenticatedApp() {
       syncSchedulePopupForRange('teacher')
     }, 400)
     return () => window.clearTimeout(timerId)
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, specialSessions, studentScheduleRange, teacherScheduleRange, syncSpecialSessionPopup, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, specialSessions, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     if (typeof window === 'undefined' || !boardState) return
@@ -3579,6 +3404,7 @@ function AuthenticatedApp() {
                     unavailableSlots: entry.unavailableSlots,
                     regularBreakSlots: existing?.regularBreakSlots ?? [],
                     subjectSlots: entry.subjectSlots,
+                    subjectDurations: entry.regularOnly ? {} : entry.subjectDurations,
                     regularOnly: entry.regularOnly,
                     countSubmitted: true,
                     updatedAt: now,

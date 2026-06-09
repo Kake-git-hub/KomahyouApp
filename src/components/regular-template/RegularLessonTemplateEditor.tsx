@@ -94,9 +94,10 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
     [classroomSettings.deskCount, normalizedTemplate, students, teachers],
   )
   const templateReferenceDate = filteredTemplate.effectiveStartDate || toDateKey(new Date())
+  // spec-template-behavior Q14: 入会前＋在籍を対象(退塾のみ除外)。講師も入会前を先行配置可。
   const visibleTeachers = useMemo(
     () => teachers
-      .filter((teacher) => resolveTeacherRosterStatus(teacher, templateReferenceDate) === '在籍')
+      .filter((teacher) => resolveTeacherRosterStatus(teacher, templateReferenceDate) !== '退塾')
       .slice()
       .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja')),
     [teachers, templateReferenceDate],
@@ -119,6 +120,9 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
 
   const selectedCell = cellByKey.get(buildCellKey(selectedDesk.dayOfWeek, selectedDesk.slotNumber)) ?? filteredTemplate.cells[0]
   const selectedDeskDraft = selectedCell?.desks[selectedDesk.deskIndex - 1] ?? selectedCell?.desks[0] ?? null
+
+  // spec-template-behavior Q4: 定休日(closedWeekdays)には講師・生徒を配置させない(混乱防止)。
+  const isClosedSelectedDay = (classroomSettings.closedWeekdays ?? []).includes(selectedDesk.dayOfWeek)
 
   const teacherSelectOptions = useMemo(() => {
     if (!selectedCell) return visibleTeachers
@@ -311,6 +315,11 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
               <h3>選択中のコマ</h3>
               <p>{dayLabelByValue[selectedDesk.dayOfWeek]}曜 {selectedDesk.slotNumber}限 / {selectedDesk.deskIndex}机</p>
             </div>
+            {isClosedSelectedDay ? (
+              <div className="detail-note" data-testid="regular-template-closed-day-notice" style={{ color: '#c0392b' }}>
+                {dayLabelByValue[selectedDesk.dayOfWeek]}曜は定休日のため、講師・生徒を配置できません。
+              </div>
+            ) : null}
             {selectedDeskDraft ? (
               <div className="regular-template-editor-fields">
                 <label className="basic-data-inline-field basic-data-inline-field-short">
@@ -327,6 +336,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                   <select
                     data-testid="regular-template-teacher-select"
                     value={selectedDeskDraft.teacherId}
+                    disabled={isClosedSelectedDay}
                     onChange={(event) => updateDesk((desk) => ({ ...desk, teacherId: event.target.value }))}
                   >
                     <option value="">講師未設定</option>
@@ -344,6 +354,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                         <select
                           data-testid={`regular-template-student-select-${studentIndex + 1}`}
                           value={draftStudent?.studentId ?? ''}
+                          disabled={isClosedSelectedDay}
                           onChange={(event) => updateDesk((desk) => {
                             const nextStudents = [...desk.students] as RegularLessonTemplateDesk['students']
                             nextStudents[studentIndex] = event.target.value
@@ -365,7 +376,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                         <select
                           data-testid={`regular-template-subject-select-${studentIndex + 1}`}
                           value={draftStudent?.subject ?? allStudentSubjectOptions[0]}
-                          disabled={!draftStudent?.studentId}
+                          disabled={!draftStudent?.studentId || isClosedSelectedDay}
                           onChange={(event) => updateDesk((desk) => {
                             const nextStudents = [...desk.students] as RegularLessonTemplateDesk['students']
                             if (!nextStudents[studentIndex]) return desk
@@ -384,7 +395,7 @@ export function RegularLessonTemplateEditor({ open, classroomSettings, teachers,
                         <select
                           data-testid={`regular-template-note-input-${studentIndex + 1}`}
                           value={draftStudent?.note === '60' ? '60' : draftStudent?.note === '45' ? '45' : ''}
-                          disabled={!draftStudent?.studentId}
+                          disabled={!draftStudent?.studentId || isClosedSelectedDay}
                           onChange={(event) => updateDesk((desk) => {
                             const nextStudents = [...desk.students] as RegularLessonTemplateDesk['students']
                             if (!nextStudents[studentIndex]) return desk

@@ -1970,6 +1970,8 @@ type LectureSubmissionDoc = {
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
+  // 科目ごとの授業時間(分)。未設定=90分扱い。後方互換のため optional。
+  subjectDurations?: Record<string, number>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   submittedAt: string | null
@@ -1996,6 +1998,18 @@ function sanitizeSubjectSlots(value: unknown): Record<string, number> {
   const result: Record<string, number> = {}
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
     if (typeof key === 'string' && key.length <= 10 && typeof val === 'number' && Number.isInteger(val) && val >= 0 && val <= 999) {
+      result[key] = val
+    }
+  }
+  return result
+}
+
+// 授業時間(分)は 45/60/90 のみ許容。90(既定)や不正値は保存しない(=未設定として90扱い)。
+function sanitizeSubjectDurations(value: unknown): Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result: Record<string, number> = {}
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof key === 'string' && key.length <= 10 && (val === 45 || val === 60)) {
       result[key] = val
     }
   }
@@ -2048,6 +2062,7 @@ export const lectureSubmissionApi = onRequest({
       status: data.status ?? 'pending',
       unavailableSlots: data.unavailableSlots ?? [],
       subjectSlots: data.subjectSlots ?? {},
+      subjectDurations: data.subjectDurations ?? {},
       regularOnly: data.regularOnly ?? false,
       occupiedSlots: data.occupiedSlots ?? {},
     })
@@ -2070,6 +2085,7 @@ export const lectureSubmissionApi = onRequest({
     const body = typeof req.body === 'object' && req.body !== null ? req.body : {}
     const unavailableSlots = sanitizeUnavailableSlots(body.unavailableSlots)
     const subjectSlots = data.personType === 'student' ? sanitizeSubjectSlots(body.subjectSlots) : {}
+    const subjectDurations = data.personType === 'student' ? sanitizeSubjectDurations(body.subjectDurations) : {}
     const regularOnly = data.personType === 'student' ? Boolean(body.regularOnly) : false
     const now = new Date().toISOString()
 
@@ -2077,6 +2093,7 @@ export const lectureSubmissionApi = onRequest({
       status: 'submitted',
       unavailableSlots,
       subjectSlots,
+      subjectDurations,
       regularOnly,
       submittedAt: now,
     })
@@ -2107,7 +2124,7 @@ export const lectureSubmissionApi = onRequest({
         inputs[data.personId] = {
           ...existingInput,
           unavailableSlots,
-          ...(data.personType === 'student' ? { subjectSlots, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
+          ...(data.personType === 'student' ? { subjectSlots, subjectDurations, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
           countSubmitted: true,
           submissionToken: token,
           updatedAt: now,

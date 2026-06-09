@@ -742,7 +742,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
           <div className="basic-data-header">
             <div>
               <h2>講習設定</h2>
-              <p className="basic-data-subcopy">ここでは講習名と講習期間だけを管理します。欠席不可入力はコマ表の講習期間帯をクリックして別タブで行います。</p>
+              <p className="basic-data-subcopy">ここでは講習名と講習期間だけを管理します。欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います。</p>
             </div>
           </div>
 

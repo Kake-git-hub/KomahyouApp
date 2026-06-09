@@ -30,6 +30,8 @@ export type LectureSubmissionDoc = {
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
+  // 科目ごとの授業時間(分)。未設定=90分扱い。後方互換のため optional。
+  subjectDurations?: Record<string, number>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   submittedAt: string | null
@@ -115,6 +117,7 @@ export async function ensureSubmissionTokens(
         status: 'pending',
         unavailableSlots: [],
         subjectSlots: {},
+        subjectDurations: {},
         regularOnly: false,
         occupiedSlots: student.occupiedSlots ?? {},
         submittedAt: null,
@@ -143,6 +146,10 @@ export async function writeSubmissionDocs(newTokens: Array<{ token: string; doc:
   }
 }
 
+/**
+ * 登録削除（spec §E / TODO2）: 提出内容をクリアして pending に戻し、同じQRで再提出可能にする。
+ * occupiedSlots / availableSubjects / slotNumbers 等の配布情報は維持する。
+ */
 export async function resetLectureSubmissionDoc(token: string) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
@@ -156,6 +163,7 @@ export async function resetLectureSubmissionDoc(token: string) {
     status: 'pending',
     unavailableSlots: [],
     subjectSlots: {},
+    subjectDurations: {},
     regularOnly: false,
     submittedAt: null,
   })
@@ -177,25 +185,6 @@ export async function markLectureSubmissionDocAsSubmitted(token: string) {
     ...data,
     status: 'submitted',
     submittedAt: new Date().toISOString(),
-  })
-}
-
-/** Unlock a submission doc so the phone user can re-edit and re-submit (preserves existing data) */
-export async function unlockLectureSubmissionDoc(token: string) {
-  const db = getFirebaseFirestoreInstance()
-  if (!db || !token) return
-
-  const docRef = doc(db, 'lectureSubmissions', token)
-  const existing = await getDoc(docRef)
-  if (!existing.exists()) return
-
-  const data = existing.data()
-  if (data.status === 'pending') return
-
-  await setDoc(docRef, {
-    ...data,
-    status: 'pending',
-    submittedAt: null,
   })
 }
 
@@ -235,6 +224,7 @@ export type SubmissionChangeEntry = {
   personId: string
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
+  subjectDurations: Record<string, number>
   regularOnly: boolean
 }
 
@@ -263,6 +253,7 @@ export function subscribeLectureSubmissions(
           personId: data.personId,
           unavailableSlots: data.unavailableSlots ?? [],
           subjectSlots: data.subjectSlots ?? {},
+          subjectDurations: data.subjectDurations ?? {},
           regularOnly: data.regularOnly ?? false,
         })
       }

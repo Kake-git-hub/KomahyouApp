@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
-import { filterTemplateParticipantsForReferenceDate, type RegularLessonTemplate } from './regularLessonTemplate'
+import { buildRegularLessonsFromTemplate, filterTemplateParticipantsForReferenceDate, type RegularLessonTemplate } from './regularLessonTemplate'
 
 function createTeacher(overrides: Partial<TeacherRow> = {}): TeacherRow {
   return {
@@ -84,6 +84,25 @@ describe('filterTemplateParticipantsForReferenceDate', () => {
     expect(filtered.cells[0]?.desks[1]?.teacherId).toBe('')
   })
 
+  // spec-template-behavior Q14: 入会前の講師もテンプレに先行配置できる（退塾のみ除外）。
+  it('keeps teachers who are pre-entry at the template effective start date', () => {
+    const template = createTemplate()
+    template.cells[0]!.desks[1] = {
+      deskIndex: 2,
+      teacherId: 'teacher-pre-entry',
+      students: [null, null],
+    }
+
+    const filtered = filterTemplateParticipantsForReferenceDate({
+      template,
+      deskCount: 2,
+      teachers: [createTeacher({ id: 'teacher-pre-entry', entryDate: '2026-05-01' })],
+      students: [],
+    })
+
+    expect(filtered.cells[0]?.desks[1]?.teacherId).toBe('teacher-pre-entry')
+  })
+
   it('keeps students who are pre-entry at the template effective start date', () => {
     const template = createTemplate()
     template.cells[0]!.desks[1] = {
@@ -100,5 +119,21 @@ describe('filterTemplateParticipantsForReferenceDate', () => {
     })
 
     expect(filtered.cells[0]?.desks[1]?.students[0]).toEqual({ studentId: 'student-pre-entry', subject: '英', note: '' })
+  })
+})
+
+// spec-template-behavior Q11: 反映日からその年度末(3/31)までの「単年度のみ」生成する。
+describe('buildRegularLessonsFromTemplate single-year generation', () => {
+  it('generates lessons only for the effective school year (no multi-year expansion)', () => {
+    const lessons = buildRegularLessonsFromTemplate({
+      template: createTemplate(), // effectiveStartDate '2026-04-20'
+      teachers: [createTeacher({ id: 'teacher-active' })],
+      students: [createStudent({ id: 'student-active' })],
+    })
+
+    expect(lessons.length).toBeGreaterThan(0)
+    expect(new Set(lessons.map((row) => row.schoolYear))).toEqual(new Set([2026]))
+    // 当年度内: 反映日(4/20) 〜 年度末(3/31)
+    expect(lessons.every((row) => row.startDate === '2026-04-20' && row.endDate === '2027-03-31')).toBe(true)
   })
 })
