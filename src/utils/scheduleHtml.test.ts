@@ -607,6 +607,58 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('exposes the empty-format print button and builder only in the student view', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const studentHtml = write.mock.calls[0]?.[0] as string
+    expect(studentHtml).toContain('id="schedule-empty-format-button"')
+    expect(studentHtml).toContain('空フォーマット印刷')
+    expect(studentHtml).toContain('function buildEmptyFormatSheetHtml')
+    expect(studentHtml).toContain('openEmptyFormatPrintWindow()')
+
+    write.mockClear()
+    openTeacherScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      teachers: [],
+      students: [],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const teacherHtml = write.mock.calls[0]?.[0] as string
+    expect(teacherHtml).not.toContain('id="schedule-empty-format-button"')
+
+    vi.unstubAllGlobals()
+  })
+
   it('opens print-all schedules into the prepared named popup window', () => {
     const write = vi.fn()
     const popup = {
