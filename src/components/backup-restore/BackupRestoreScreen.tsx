@@ -6,9 +6,9 @@ import { AppMenu } from '../navigation/AppMenu'
 import type { ClassroomSettings, InitialSetupMakeupStockRow, InitialSetupLectureStockRow } from '../../types/appState'
 import type { SubjectLabel } from '../schedule-board/types'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
-import type { AutoBackupSummary } from '../../data/appSnapshotRepository'
-import type { ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 
+// spec-save-restore §4: 教室画面の復元は「JSONバックアップを読み込む」一本。
+// rollback／サーバーバックアップ／ローカル自動バックアップの復元UIは削除済み（サーバー復元は開発者画面のみ）。
 type BackupRestoreScreenProps = {
   onBackToBoard: () => void
   onOpenBasicData: () => void
@@ -17,18 +17,8 @@ type BackupRestoreScreenProps = {
   onLogout: () => void
   persistenceMessage: string
   lastSavedAt: string
-  classroomName: string
-  autoBackupSummaries: AutoBackupSummary[]
   onExportBackup: () => void
   onImportBackup: (file: File) => void
-  onRestoreAutoBackup: (backupDateKey: string) => void
-  onRefreshAutoBackupSummaries: () => void
-  showServerBackups: boolean
-  serverAutoBackupSummaries: ServerAutoBackupSummary[]
-  serverAutoBackupLoading: boolean
-  onLoadServerAutoBackupSummaries: () => void
-  onRestoreClassroomFromServerAutoBackup: (backupDateKey: string) => void
-  onRestoreLatestClassroomRollback: () => void
   classroomSettings: ClassroomSettings
   students: StudentRow[]
   specialSessions: SpecialSessionRow[]
@@ -74,7 +64,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, classroomName, autoBackupSummaries, onExportBackup, onImportBackup, onRestoreAutoBackup, onRefreshAutoBackupSummaries, showServerBackups, serverAutoBackupSummaries, serverAutoBackupLoading, onLoadServerAutoBackupSummaries, onRestoreClassroomFromServerAutoBackup, onRestoreLatestClassroomRollback, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, isDevelopmentClassroom = false, developmentClassroomCopySources = [], onCopyClassroomDataToDevelopmentClassroom }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, isDevelopmentClassroom = false, developmentClassroomCopySources = [], onCopyClassroomDataToDevelopmentClassroom }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -91,45 +81,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const [lectureDraftSessionId, setLectureDraftSessionId] = useState('')
   const [lectureDraftCount, setLectureDraftCount] = useState(1)
 
-  const [serverBackupModalOpen, setServerBackupModalOpen] = useState(false)
-  const [confirmingBackupKey, setConfirmingBackupKey] = useState<string | null>(null)
-  const [localBackupModalOpen, setLocalBackupModalOpen] = useState(false)
-  const [confirmingLocalBackupKey, setConfirmingLocalBackupKey] = useState<string | null>(null)
   const [developmentCopyClassroomId, setDevelopmentCopyClassroomId] = useState('')
-
-  const handleOpenLocalBackupModal = () => {
-    setLocalBackupModalOpen(true)
-    onRefreshAutoBackupSummaries()
-  }
-
-  const closeLocalBackupModal = () => {
-    setLocalBackupModalOpen(false)
-    setConfirmingLocalBackupKey(null)
-  }
-
-  const handleConfirmLocalRestore = () => {
-    if (!confirmingLocalBackupKey) return
-    onRestoreAutoBackup(confirmingLocalBackupKey)
-    setLocalBackupModalOpen(false)
-    setConfirmingLocalBackupKey(null)
-  }
-
-  const handleOpenServerBackupModal = () => {
-    setServerBackupModalOpen(true)
-    onLoadServerAutoBackupSummaries()
-  }
-
-  const closeServerBackupModal = () => {
-    setServerBackupModalOpen(false)
-    setConfirmingBackupKey(null)
-  }
-
-  const handleConfirmRestore = () => {
-    if (!confirmingBackupKey) return
-    onRestoreClassroomFromServerAutoBackup(confirmingBackupKey)
-    setServerBackupModalOpen(false)
-    setConfirmingBackupKey(null)
-  }
 
   const makeupStockRows = classroomSettings.initialSetupMakeupStocks ?? []
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
@@ -306,40 +258,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             ) : null}
           </div>
 
-          {showServerBackups ? (
-            <section className="basic-data-section-card" data-testid="latest-classroom-rollback-panel">
-              <div className="basic-data-card-head">
-                <h3>直前の Firebase 保存前へ戻す</h3>
-                <p>この教室の直前 1 件だけを圧縮保持しています。保存容量は教室数ぶんで頭打ちのままです。</p>
-              </div>
-              <div className="basic-data-row-actions">
-                <button className="secondary-button slim" type="button" onClick={onRestoreLatestClassroomRollback} data-testid="restore-latest-classroom-rollback-button">直前の状態へ戻す</button>
-              </div>
-            </section>
-          ) : null}
-
-          {showServerBackups ? (
-            <section className="basic-data-section-card" data-testid="server-backup-panel">
-              <div className="basic-data-card-head">
-                <h3>サーバーバックアップから復元</h3>
-                <p>Firebase サーバーに保存された自動バックアップから、この教室のデータだけを復元します。直近 3 日間は毎時、さらに日次 14 日分を保持します。他の教室には影響しません。</p>
-              </div>
-              <div className="basic-data-row-actions">
-                <button className="secondary-button slim" type="button" onClick={handleOpenServerBackupModal}>サーバーバックアップ一覧を開く</button>
-              </div>
-            </section>
-          ) : null}
-
-          <section className="basic-data-section-card" data-testid="local-backup-panel">
-            <div className="basic-data-card-head">
-              <h3>ローカル自動バックアップから復元</h3>
-              <p>テンプレート上書き保存時に自動保存されたバックアップから復元します（日単位で最大14日間保持）。</p>
-            </div>
-            <div className="basic-data-row-actions">
-              <button className="secondary-button slim" type="button" onClick={handleOpenLocalBackupModal}>ローカルバックアップ一覧を開く</button>
-            </div>
-          </section>
-
           <section className="basic-data-section-card" data-testid="initial-setup-panel">
             <div className="basic-data-card-head">
               <h3>初期設定フロー</h3>
@@ -514,103 +432,6 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
         </section>
       </main>
 
-      {serverBackupModalOpen && showServerBackups ? (
-        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) closeServerBackupModal() }}>
-          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="サーバーバックアップ復元モーダル">
-            <div className="auto-assign-modal-title">サーバーバックアップから復元</div>
-            <div className="detail-note">対象教室: <strong>{classroomName}</strong>　この教室のみ復元されます。他の教室には影響しません。</div>
-            {confirmingBackupKey ? (
-              <>
-                <div className="developer-restore-modal-list">
-                  <div className="backup-restore-auto-backup-row">
-                    <div className="backup-restore-auto-backup-meta">
-                      <strong>{confirmingBackupKey}</strong>
-                      <span className="basic-data-subcopy">を選択中</span>
-                    </div>
-                  </div>
-                  <p className="detail-note" style={{ marginTop: 8 }}>この教室の現在のデータはバックアップ時点の内容で上書きされます。この操作は元に戻せません。</p>
-                </div>
-                <div className="auto-assign-modal-actions">
-                  <button className="primary-button" type="button" onClick={handleConfirmRestore}>この教室を復元する</button>
-                  <button className="secondary-button slim" type="button" onClick={() => setConfirmingBackupKey(null)}>戻る</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="basic-data-row-actions">
-                  <button className="secondary-button slim" type="button" onClick={onLoadServerAutoBackupSummaries} disabled={serverAutoBackupLoading}>{serverAutoBackupLoading ? '読み込み中…' : '一覧を更新'}</button>
-                </div>
-                <div className="developer-restore-modal-list">
-                  {serverAutoBackupSummaries.length === 0 && !serverAutoBackupLoading ? (
-                    <span className="basic-data-muted-inline">バックアップはありません。</span>
-                  ) : null}
-                  {serverAutoBackupSummaries.map((summary) => (
-                    <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                      <div className="backup-restore-auto-backup-meta">
-                        <strong>{summary.displayLabel}</strong>
-                        <span className="basic-data-subcopy">元データ日時: {formatSavedAt(summary.sourceSavedAt)}</span>
-                      </div>
-                      <button className="secondary-button slim" type="button" onClick={() => setConfirmingBackupKey(summary.backupDateKey)}>この時点から復元</button>
-                    </div>
-                  ))}
-                </div>
-                <div className="auto-assign-modal-actions">
-                  <button className="secondary-button slim" type="button" onClick={closeServerBackupModal}>閉じる</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
-
-      {localBackupModalOpen ? (
-        <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) closeLocalBackupModal() }}>
-          <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="ローカルバックアップ復元モーダル">
-            <div className="auto-assign-modal-title">ローカル自動バックアップから復元</div>
-            <div className="detail-note">対象教室: <strong>{classroomName}</strong>　この教室のみ復元されます。他の教室には影響しません。</div>
-            {confirmingLocalBackupKey ? (
-              <>
-                <div className="developer-restore-modal-list">
-                  <div className="backup-restore-auto-backup-row">
-                    <div className="backup-restore-auto-backup-meta">
-                      <strong>{confirmingLocalBackupKey}</strong>
-                      <span className="basic-data-subcopy">を選択中</span>
-                    </div>
-                  </div>
-                  <p className="detail-note" style={{ marginTop: 8 }}>この教室の現在のデータはバックアップ時点の内容で上書きされます。この操作は元に戻せません。</p>
-                </div>
-                <div className="auto-assign-modal-actions">
-                  <button className="primary-button" type="button" onClick={handleConfirmLocalRestore}>この教室を復元する</button>
-                  <button className="secondary-button slim" type="button" onClick={() => setConfirmingLocalBackupKey(null)}>戻る</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="basic-data-row-actions">
-                  <button className="secondary-button slim" type="button" onClick={onRefreshAutoBackupSummaries}>一覧を更新</button>
-                </div>
-                <div className="developer-restore-modal-list">
-                  {autoBackupSummaries.length === 0 ? (
-                    <span className="basic-data-muted-inline">ローカルバックアップはありません。テンプレートの上書き保存時に自動保存されます。</span>
-                  ) : null}
-                  {autoBackupSummaries.map((summary) => (
-                    <div key={summary.backupDateKey} className="backup-restore-auto-backup-row">
-                      <div className="backup-restore-auto-backup-meta">
-                        <strong>{summary.backupDateKey}</strong>
-                        <span className="basic-data-subcopy">保存日時: {formatSavedAt(summary.savedAt)}</span>
-                      </div>
-                      <button className="secondary-button slim" type="button" onClick={() => setConfirmingLocalBackupKey(summary.backupDateKey)}>この時点から復元</button>
-                    </div>
-                  ))}
-                </div>
-                <div className="auto-assign-modal-actions">
-                  <button className="secondary-button slim" type="button" onClick={closeLocalBackupModal}>閉じる</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : null}
     </div>
   )
 }
