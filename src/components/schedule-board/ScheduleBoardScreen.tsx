@@ -327,12 +327,13 @@ function buildForcedConstraintScoreParts(params: {
     {
       label: '絶対事項合計',
       value: forcedScores.reduce((total, score) => total + score, 0),
-      detail: '1限回避・科目対応・通常担当講師の合計',
+      detail: '指定時限回避・科目対応・通常担当講師の合計',
     },
     {
-      label: '1限回避',
+      // ⑧: デバッグレポート集計ラベル(autoAssignDebugLabelOrder)と一致させる（旧「1限回避」）。
+      label: '指定時限回避',
       value: forcedScores[0] ?? 0,
-      detail: !params.firstPeriodRuleApplied ? '対象ルールなし' : params.firstPeriodPreferred ? '満たす' : '1限のため不利',
+      detail: !params.firstPeriodRuleApplied ? '対象ルールなし' : params.firstPeriodPreferred ? '満たす' : '指定時限のため不利',
       applicable: params.firstPeriodRuleApplied,
       satisfied: params.firstPeriodRuleApplied ? params.firstPeriodPreferred : false,
     },
@@ -4804,6 +4805,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         warningMap.set(locationKey, current)
       }
     }
+    // ⑧TODO1: ルール違反の警告。区分=制約のときだけ「制約違反」扱い＋生徒名ハイライト。
+    // 区分=優先のときは情報表示のみ（ハイライトせず・制約違反プレフィックスも付けない）。
+    const addRuleWarning = (locationKeys: string[], ruleKey: AutoAssignRuleKey, baseLabel: string) => {
+      const isConstraint = resolveRuleCategory(autoAssignRuleByKey.get(ruleKey)) === 'constraint'
+      addWarning(locationKeys, `${isConstraint ? '制約事項' : '優先事項'}: ${baseLabel}`, isConstraint, isConstraint)
+    }
 
     for (const cell of cells) {
       for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
@@ -4831,31 +4838,31 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           }
 
           if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
-            // ⑧TODO1: 区分（制約事項／優先事項）に応じてラベルを切り替える。
-            addWarning([currentLocationKey], `${resolveRuleCategory(autoAssignRuleByKey.get('subjectCapableTeachersOnly')) === 'constraint' ? '制約事項' : '優先事項'}: 科目対応講師のみ`, true, true)
+            addRuleWarning([currentLocationKey], 'subjectCapableTeachersOnly', '科目対応講師のみ')
           }
 
           if (managedStudent) {
             if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && resolveForbiddenPeriods(autoAssignRuleByKey.get('forbidFirstPeriod')).includes(cell.slotNumber)) {
-              addWarning([currentLocationKey], `${resolveRuleCategory(autoAssignRuleByKey.get('forbidFirstPeriod')) === 'constraint' ? '制約事項' : '優先事項'}: 指定時限禁止`, true, true)
+              addRuleWarning([currentLocationKey], 'forbidFirstPeriod', '指定時限禁止')
             }
 
             const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
             const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
             if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
-              addWarning([currentLocationKey], `${resolveRuleCategory(autoAssignRuleByKey.get('regularTeachersOnly')) === 'constraint' ? '制約事項' : '優先事項'}: 通常講師のみ`, true, true)
+              addRuleWarning([currentLocationKey], 'regularTeachersOnly', '通常講師のみ')
             }
 
             const twoStudentsRuleApplied = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('preferTwoStudentsPerTeacher'), managedStudent.id, studentGradeOnDate)
             if (twoStudentsRuleApplied && !pairedStudent) {
-              addWarning([currentLocationKey], '制約: 講師1人に生徒2人配置', true)
+              addRuleWarning([currentLocationKey], 'preferTwoStudentsPerTeacher', '講師1人に生徒2人配置')
             }
 
             const comparableStudentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
             const sameDayOccurrences = collectStudentOccurrencesOnDate(normalizedWeeks, comparableStudentKey, cell.dateKey)
             const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate)
-            if (lessonLimit !== null && sameDayOccurrences.length > lessonLimit) {
-              addWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), `制約: 同日${lessonLimit}コマ上限`, true)
+            const lessonLimitRuleKey = (['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'] as const).find((ruleKey) => isAutoAssignRuleApplicable(autoAssignRuleByKey.get(ruleKey), managedStudent.id, studentGradeOnDate))
+            if (lessonLimit !== null && lessonLimitRuleKey && sameDayOccurrences.length > lessonLimit) {
+              addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonLimitRuleKey, `同日${lessonLimit}コマ上限`)
             }
 
             const lessonPatternRule = lectureConstraintGroups
@@ -4869,17 +4876,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               const occurrencesAdjacentToRegularLesson = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && other.lessonType === 'regular' && Math.abs(entry.slotNumber - other.slotNumber) === 1))
 
               if (lessonPatternRule.key === 'allowTwoConsecutiveLessons' && occurrencesWithAdjacentLesson.length === 0) {
-                addWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), '制約: 2コマ連続', true)
+                addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '2コマ連続')
               }
               if (lessonPatternRule.key === 'requireBreakBetweenLessons') {
                 if (occurrencesWithAdjacentLesson.length > 0) {
-                  addWarning(occurrencesWithAdjacentLesson.map((entry) => entry.occurrenceKey), '制約: 一コマ空け', true)
+                  addRuleWarning(occurrencesWithAdjacentLesson.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '一コマ空け')
                 } else if (occurrencesWithOneSlotBreak.length === 0) {
-                  addWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), '制約: 一コマ空け', true)
+                  addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '一コマ空け')
                 }
               }
               if (lessonPatternRule.key === 'connectRegularLessons' && occurrencesAdjacentToRegularLesson.length === 0) {
-                addWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), '制約: 通常連結2コマ', true)
+                addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '通常連結2コマ')
               }
             }
 
@@ -4891,9 +4898,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             if (teacher) {
               const pairSeverity = resolvePairConstraintSeverity(teacher.id, managedStudent.id, pairedStudent)
               if (pairSeverity === 'constraint') {
-                addWarning([currentLocationKey], '制約: 組み合わせ不可', true, true)
+                addWarning([currentLocationKey], '制約事項: 組み合わせ不可', true, true)
               } else if (pairSeverity === 'priority') {
-                addWarning([currentLocationKey], '優先: 組み合わせ回避', true, false)
+                addWarning([currentLocationKey], '優先事項: 組み合わせ回避', false, false)
               }
             }
           }
