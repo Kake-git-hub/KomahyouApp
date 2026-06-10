@@ -14,6 +14,8 @@ export type AutoAssignRuleKey =
   | 'subjectCapableTeachersOnly'
   | 'regularTeachersOnly'
   | 'preferLateAfternoon'
+  // ⑧TODO2 で「時限優先」1ルール(preferLateAfternoon + periodPriorityOrder)へ統合済。
+  // 旧スナップショット互換のため型は残すが、定義/UI/アルゴリズムでは使わない（対象なし運用）。
   | 'preferSecondPeriod'
   | 'preferFifthPeriod'
   | 'forbidFirstPeriod'
@@ -32,6 +34,43 @@ export type AutoAssignTargetGrade =
   | '高2'
   | '高3'
 
+// spec-auto-assign-rules ⑧TODO1: 区分（優先事項／制約事項）。絶対事項はアプリ固定で別枠。
+export type AutoAssignRuleCategory = 'priority' | 'constraint'
+
+// 制約事項にも選べるルール（ハードとして効きうる）。それ以外は優先事項のみ。
+const constraintCapableRuleKeys = new Set<AutoAssignRuleKey>([
+  'maxOneLesson',
+  'maxTwoLessons',
+  'maxThreeLessons',
+  'subjectCapableTeachersOnly',
+  'regularTeachersOnly',
+  'forbidFirstPeriod',
+])
+// 既定で制約事項として扱うルール（現状の forcedRuleKeys を踏襲）。
+const defaultConstraintRuleKeys = new Set<AutoAssignRuleKey>([
+  'subjectCapableTeachersOnly',
+  'regularTeachersOnly',
+  'forbidFirstPeriod',
+])
+
+// ルールごとに選べる区分（許可リスト）。成立しない組合せ（優先専用ルールを制約に）を作れないようにする。
+export function getAllowedRuleCategories(key: AutoAssignRuleKey): AutoAssignRuleCategory[] {
+  return constraintCapableRuleKeys.has(key) ? ['constraint', 'priority'] : ['priority']
+}
+
+// ルールの既定区分。
+export function getDefaultRuleCategory(key: AutoAssignRuleKey): AutoAssignRuleCategory {
+  return defaultConstraintRuleKeys.has(key) ? 'constraint' : 'priority'
+}
+
+// ルールの区分を解決。未設定/許可外は既定区分に丸める。
+export function resolveRuleCategory(rule: Pick<AutoAssignRuleRow, 'key' | 'category'> | null | undefined): AutoAssignRuleCategory {
+  if (!rule) return 'priority'
+  const allowed = getAllowedRuleCategories(rule.key)
+  if (rule.category && allowed.includes(rule.category)) return rule.category
+  return getDefaultRuleCategory(rule.key)
+}
+
 export type AutoAssignTargetOrigin = 'manual' | 'group-conflict'
 
 export type AutoAssignTarget =
@@ -46,9 +85,48 @@ export type AutoAssignRuleRow = {
   targets: AutoAssignTarget[]
   excludeTargets: AutoAssignTarget[]
   priorityScore: number
+  // spec-auto-assign-rules ⑧TODO1: 区分（優先事項／制約事項）。未設定は getDefaultRuleCategory で補完。
+  category?: AutoAssignRuleCategory
   includeStudentIds?: string[]
   excludeStudentIds?: string[]
+  // spec-auto-assign-rules ⑧TODO3: 指定時限禁止（forbidFirstPeriod を一般化）。禁止する時限(1〜5)。
+  // 未設定は [1]（旧「1限禁止」）として扱う。
+  forbiddenPeriods?: number[]
+  // spec-auto-assign-rules ⑧TODO2: 時限優先（preferLateAfternoon を一般化）。優先する時限の並び順。
+  // index0 が最優先。未設定は [5,4,3,2,1]（旧「3,4,5限優先」）として扱う。
+  periodPriorityOrder?: number[]
   updatedAt: string
+}
+
+// 自動割振で扱う時限の範囲（1〜5限）。
+export const autoAssignPeriodOptions = [1, 2, 3, 4, 5] as const
+
+// 指定時限禁止の禁止時限を解決。未設定/空は既定 [1]（旧1限禁止）。1〜5のみ・昇順ユニーク。
+export function resolveForbiddenPeriods(rule: Pick<AutoAssignRuleRow, 'forbiddenPeriods'> | null | undefined): number[] {
+  const raw = rule?.forbiddenPeriods
+  if (!Array.isArray(raw) || raw.length === 0) return [1]
+  const normalized = Array.from(new Set(raw.filter((period) => autoAssignPeriodOptions.includes(period as (typeof autoAssignPeriodOptions)[number]))))
+    .sort((left, right) => left - right)
+  return normalized.length > 0 ? normalized : [1]
+}
+
+// 時限優先のスライダー順を解決。index0 が最優先。未設定/不正は既定 [5,4,3,2,1]（旧「3,4,5限優先」）。
+// 与えられた並びを尊重しつつ、欠けている時限を既定順で末尾に補い、常に 1〜5 の全時限を含む並びに正規化する。
+export function resolvePeriodPriorityOrder(rule: Pick<AutoAssignRuleRow, 'periodPriorityOrder'> | null | undefined): number[] {
+  const fallback = [5, 4, 3, 2, 1]
+  const raw = rule?.periodPriorityOrder
+  const ordered: number[] = []
+  if (Array.isArray(raw)) {
+    for (const period of raw) {
+      if (autoAssignPeriodOptions.includes(period as (typeof autoAssignPeriodOptions)[number]) && !ordered.includes(period)) {
+        ordered.push(period)
+      }
+    }
+  }
+  for (const period of fallback) {
+    if (!ordered.includes(period)) ordered.push(period)
+  }
+  return ordered
 }
 
 export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'label' | 'description'>> = [
@@ -109,23 +187,13 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
   },
   {
     key: 'preferLateAfternoon',
-    label: '3,4,5限優先',
-    description: '3 限から 5 限を先に使う優先順です。',
-  },
-  {
-    key: 'preferSecondPeriod',
-    label: '2限寄り(2＞3＞4＞5限の優先順位)',
-    description: '2 限から順に近いコマを優先します。',
-  },
-  {
-    key: 'preferFifthPeriod',
-    label: '5限寄り(5＞4＞3＞2限の優先順位)',
-    description: '5 限から順に近いコマを優先します。',
+    label: '時限優先',
+    description: '優先する時限の順番を 1〜5 限で並べ替えて、上にある時限から先に使うよう優先します。',
   },
   {
     key: 'forbidFirstPeriod',
-    label: '1限禁止',
-    description: '対象者を1 限に配置しないよう制限します。',
+    label: '指定時限禁止',
+    description: '対象者を、指定した時限（既定は1限）に配置しないよう制限します。',
   },
 ]
 
@@ -136,6 +204,7 @@ export const initialAutoAssignRules: AutoAssignRuleRow[] = autoAssignRuleDefinit
   targets: [],
   excludeTargets: [],
   priorityScore: 3,
+  category: getDefaultRuleCategory(definition.key),
   includeStudentIds: [],
   excludeStudentIds: [],
   updatedAt: '',

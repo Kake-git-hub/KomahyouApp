@@ -22,7 +22,6 @@ import {
 } from './basicDataModel'
 import {
   normalizeRegularLessonNote,
-  resolveOperationalSchoolYear,
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { AppMenu } from '../navigation/AppMenu'
@@ -150,12 +149,9 @@ const dayOptions = [
 ]
 
 export const initialManagers: ManagerRow[] = []
-export const initialGroupLessons: GroupLessonRow[] = [
-  { id: 'g001', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't002', subject: '英', studentIds: ['s002', 's003'], dayOfWeek: 3, slotLabel: '2限' },
-  { id: 'g002', schoolYear: resolveOperationalSchoolYear(new Date()) - 1, teacherId: 't001', subject: '算', studentIds: ['s001'], dayOfWeek: 1, slotLabel: '1限' },
-  { id: 'g003', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't004', subject: '国', studentIds: ['s013', 's025'], dayOfWeek: 5, slotLabel: '3限' },
-  { id: 'g004', schoolYear: resolveOperationalSchoolYear(new Date()), teacherId: 't006', subject: '理', studentIds: ['s014', 's026'], dayOfWeek: 4, slotLabel: '4限' },
-]
+// spec-auto-assign-rules §G / ⑧TODO4: グループ授業(班)は編集UIが無く画面不可視。
+// サンプル種データは空にする（型・スナップショット配管は残す＝2026-06-09 オーナー判断）。
+export const initialGroupLessons: GroupLessonRow[] = []
 
 type ManagedIdKind = 'manager' | 'teacher' | 'student' | 'regular' | 'group'
 
