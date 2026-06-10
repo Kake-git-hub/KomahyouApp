@@ -2247,6 +2247,11 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
         .filter((desk) => desk.lesson && isManagedLesson(desk.lesson))
         .map((desk) => [desk.lesson!.id, desk]),
     )
+    // テンプレ(管理セル)に存在する生徒の同一性キー集合。盤面の通常授業がテンプレに一切無い場合の保持判定に使う。
+    const managedStudentKeysInCell = new Set<string>()
+    originalManagedCell.desks.forEach((managedDesk) => managedDesk.lesson?.studentSlots.forEach((managedStudent) => {
+      if (managedStudent) managedStudentKeysInCell.add(managedStudent.managedStudentId ?? managedStudent.name)
+    }))
     const preservedLessonIds = new Set<string>()
 
     // Pre-compute which managed lesson IDs have direct ID matches from board desks
@@ -2318,7 +2323,19 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
 
         const originalSameLessonWasSuppressed = originalManagedDesksByLessonId.has(lesson.id)
         const sameDeskManagedLesson = managedCell.desks[deskIndex]?.lesson
-        if (!originalSameLessonWasSuppressed && (!sameDeskManagedLesson || !isManagedLesson(sameDeskManagedLesson))) {
+        const sameDeskManagedLessonIsManaged = Boolean(sameDeskManagedLesson && isManagedLesson(sameDeskManagedLesson))
+        // 同deskIndex を占める管理授業が「別の盤面デスクで lessonId 一致により消費される」場合、
+        // それはこの盤面デスクの後継(再割当)ではなく、たまたま同indexに来た無関係なテンプレ授業。
+        // このとき、盤面の通常生徒がテンプレに一切存在しない＝テンプレ未反映の盤面通常授業なので保持する。
+        // 日程表=盤面の個人別ビューのため。これを欠くと夏期講習期間の井上陽斗の金曜英語のように、
+        // テンプレに無い通常授業が同indexの別テンプレ授業と衝突して脱落し、生徒日程表でカウントされない。
+        // ※ 通常授業の生徒が「別生徒へ再割当」されたケース(後継テンプレが同indexを占める)は従来どおり旧生徒を落とす。
+        const sameDeskManagedLessonConsumedElsewhere = sameDeskManagedLessonIsManaged && idMatchedManagedIds.has(sameDeskManagedLesson!.id)
+        const hasRegularStudentMissingFromManagedCell = lesson.studentSlots.some((boardStudent) =>
+          boardStudent && boardStudent.lessonType === 'regular' && !boardStudent.manualAdded
+          && !isReturnedToOriginalDate(boardStudent, cell.dateKey)
+          && !managedStudentKeysInCell.has(boardStudent.managedStudentId ?? boardStudent.name))
+        if (!originalSameLessonWasSuppressed && (!sameDeskManagedLessonIsManaged || (sameDeskManagedLessonConsumedElsewhere && hasRegularStudentMissingFromManagedCell))) {
           preservedLessonIds.add(lesson.id)
           return {
             ...desk,
