@@ -335,7 +335,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
                           {summary.googleDriveBackupStatus ? <span className="basic-data-subcopy">Google Drive: {formatGoogleDriveBackupStatus(summary.googleDriveBackupStatus)}{summary.googleDriveBackupFileName ? ` (${summary.googleDriveBackupFileName})` : ''}</span> : null}
                           {summary.googleDriveBackupErrorHint ? <span className="basic-data-subcopy">対応: {summary.googleDriveBackupErrorHint}</span> : null}
                         </div>
-                        <button className="secondary-button slim" type="button" onClick={() => { console.log('RESTORE CLICKED:', summary.backupDateKey); onRestoreServerAutoBackup(summary.backupDateKey) }} disabled={serverAutoBackupLoading}>この時点へ復元</button>
+                        <button className="secondary-button slim" type="button" onClick={() => onRestoreServerAutoBackup(summary.backupDateKey)} disabled={serverAutoBackupLoading}>この時点へ復元</button>
                       </div>
                     ))}
                   </div>

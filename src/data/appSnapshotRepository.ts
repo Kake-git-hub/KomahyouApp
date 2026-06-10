@@ -716,8 +716,41 @@ export function serializeWorkspaceSnapshot(snapshot: WorkspaceSnapshot) {
   return JSON.stringify(snapshot, null, 2)
 }
 
+// サーバー自動バックアップ等には、新フィールド追加前に保存された教室データが混ざりうる。
+// 例: groupLessons / pairConstraints / autoAssignRules を持たない旧 classroomSnapshot。
+// これらを欠くと厳格な isWorkspaceSnapshot が false を返し、ワークスペース全体の復元が
+// 「開発者バックアップ形式が不正です。」で落ちてしまう（教室1つの欠落で全教室が復元不能）。
+// 検証前に欠落配列を [] で補完して許容する（後段の sanitize と同等の補完。値が配列以外なら厳格判定に委ねる）。
+const REQUIRED_PAYLOAD_ARRAY_FIELDS = [
+  'managers', 'teachers', 'students', 'regularLessons',
+  'groupLessons', 'specialSessions', 'autoAssignRules', 'pairConstraints',
+] as const
+
+function backfillClassroomPayloadShape(data: unknown): unknown {
+  if (!isRecord(data)) return data
+  const next: Record<string, unknown> = { ...data }
+  if (typeof next.screen !== 'string') next.screen = 'board'
+  if (!('classroomSettings' in next)) next.classroomSettings = {}
+  for (const field of REQUIRED_PAYLOAD_ARRAY_FIELDS) {
+    if (!(field in next)) next[field] = []
+  }
+  return next
+}
+
+function backfillWorkspaceSnapshotShape(parsed: unknown): unknown {
+  if (!isRecord(parsed) || !Array.isArray(parsed.classrooms)) return parsed
+  return {
+    ...parsed,
+    classrooms: parsed.classrooms.map((classroom) => (
+      isRecord(classroom)
+        ? { ...classroom, data: backfillClassroomPayloadShape(classroom.data) }
+        : classroom
+    )),
+  }
+}
+
 export function parseWorkspaceSnapshot(serializedSnapshot: string) {
-  const parsed = JSON.parse(serializedSnapshot)
+  const parsed = backfillWorkspaceSnapshotShape(JSON.parse(serializedSnapshot))
   if (!isWorkspaceSnapshot(parsed)) throw new Error('開発者バックアップ形式が不正です。')
 
   return {
