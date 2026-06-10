@@ -470,6 +470,87 @@ describe('makeupStock', () => {
     expect(entries).toHaveLength(0)
   })
 
+  it('回帰防止: 全通常授業を配置済みでも振替1コマ置いて残が2件減らない(3→2)', () => {
+    // バグ: 通常授業を全て配置済み(assignedRegular == totalLessonCount)の生徒が
+    // 繰越/手動の未消化振替を3件持つとき、1コマ置くと overAssignedRegularLessons の
+    // 減算が remainingOriginDates の消化と二重にかかり、残が 3→1 になっていた。
+    // 正しくは消化1件のみで 3→2(spec-makeup-stock.md §4 / §★3-C)。
+    const student = createStudent()
+    const teacher = createTeacher()
+    // 期間を1コマ(2026-03-02 の月曜)だけに絞り totalLessonCount=1 にする
+    const regularLesson = createRegularLesson({
+      dayOfWeek: 1,
+      slotNumber: 1,
+      startDate: '2026-03-02',
+      endDate: '2026-03-02',
+    })
+    const weeks = [[
+      // 通常授業を1コマ配置(assignedRegularCount=1=totalLessonCount)
+      createCell({
+        id: 'regular-cell',
+        dateKey: '2026-03-02',
+        dayLabel: '月',
+        dateLabel: '3/2',
+        slotNumber: 1,
+        slotLabel: '1限',
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'managed_regular-1_2026-03-02',
+            studentSlots: [createStudentEntry({ id: 'regular-entry', lessonType: 'regular' }), null],
+          },
+        }],
+      }),
+      // 振替を1コマ配置(繰越3件のうち 03-05 を消化)
+      createCell({
+        id: 'makeup-cell',
+        dateKey: '2026-03-05',
+        dayLabel: '木',
+        dateLabel: '3/5',
+        slotNumber: 2,
+        slotLabel: '2限',
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'makeup-lesson',
+            studentSlots: [createStudentEntry({
+              id: 'makeup-entry',
+              lessonType: 'makeup',
+              makeupSourceDate: '2026-03-05',
+              makeupSourceLabel: '3/5(木)',
+            }), null],
+          },
+        }],
+      }),
+    ]]
+
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      // 繰越(手動)の未消化振替3件
+      manualAdjustments: {
+        'student-1__数': [
+          { dateKey: '2026-03-05' },
+          { dateKey: '2026-03-06' },
+          { dateKey: '2026-03-09' },
+        ],
+      },
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: new Date('2026-03-31T00:00:00'),
+    })
+
+    const match = entries.find((e) => e.key === 'student-1__数')
+    expect(match).toBeDefined()
+    // 消化1件のみ→残2件。overAssigned 減算が残っていると 1 になり失敗する。
+    expect(match!.balance).toBe(2)
+    expect(match!.remainingOriginDates).toEqual(['2026-03-06', '2026-03-09'])
+  })
+
   it('consumes manual-adjustment stock when a makeup is placed for a student without regular lessons', () => {
     const student = createStudent({ id: 'orphan-student', name: '古賀 爽太', displayName: '古賀爽太' })
     const teacher = createTeacher()

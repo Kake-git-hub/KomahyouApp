@@ -775,8 +775,13 @@ export function buildMakeupStockEntries(params: {
       manualOriginReasonLabels,
     }))
     const manualIndependentPlannedMakeups = isManualEntry ? Math.max(0, plannedCount - allOriginDates.length) : 0
-    // マイナス残(過剰配置)表示は廃止。残数は 0 を下限にしてマイナスにしない(spec-makeup-stock.md §4)。
-    const balance = Math.max(0, remainingOriginDates.length - overAssignedRegularLessons - manualIndependentPlannedMakeups)
+    // マイナス残(過剰配置)表示は廃止。残数は consumeOriginDates が消化済みを除いた remainingOriginDates に一本化する。
+    // overAssignedRegularLessons の減算は撤去(spec-makeup-stock.md §4 / §★3-C)。
+    // 撤去理由(回帰防止): 振替を1コマ置くと plannedCount が増え、全通常授業を配置済みの生徒では
+    //   assignedRegularCount + plannedCount > totalLessonCount となり overAssigned が +1 される。
+    //   remainingOriginDates は既に1件消化されているため、この減算が重なると残が2件減って見える
+    //   (3→1)バグになっていた。consumeOriginDates による消化だけで残数を表す。
+    const balance = Math.max(0, remainingOriginDates.length - manualIndependentPlannedMakeups)
     const negativeReason = null
 
     return {
