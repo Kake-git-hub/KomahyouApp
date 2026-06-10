@@ -381,7 +381,14 @@ function sanitizeClassroomPayload(payload: AppSnapshotPayload): AppSnapshotPaylo
 }
 
 export function buildDevelopmentClassroomCopyPayload(sourcePayload: AppSnapshotPayload): AppSnapshotPayload {
-  const sanitizedSource = sanitizeClassroomPayload(sourcePayload)
+  // 【本番データ混入防止・最優先】他教室→開発用教室コピーでは、コピー先(開発用)とコピー元(他教室)が
+  // students / teachers / regularLessons / regularLessonTemplate などのネスト配列・オブジェクト参照を
+  // 共有してはならない。共有していると、コピー後に開発用教室を編集した際にコピー元(他教室)のメモリ上
+  // データまで書き換わり、全教室保存経路で他教室の Firestore に開発用データが混入する。
+  // sanitizeClassroomPayload は浅いコピー(配列参照をそのまま保持)のため、コピー元を必ずディープクローン
+  // してから加工し、両教室が一切の参照を共有しないようにする。
+  const isolatedSource = cloneInitialValue(sourcePayload)
+  const sanitizedSource = sanitizeClassroomPayload(isolatedSource)
 
   return sanitizeClassroomPayload({
     ...sanitizedSource,

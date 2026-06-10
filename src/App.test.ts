@@ -451,6 +451,45 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
     expect(sourcePayload.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBe('student-token')
     expect(sourcePayload.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBe('teacher-token')
   })
+
+  // 【本番データ混入防止・回帰防止】コピー先(開発用)とコピー元(他教室)が参照を共有してはならない。
+  // 共有していると、コピー後に開発用教室を編集するとコピー元(他教室)のデータが書き換わり、
+  // 全教室保存で他教室の Firestore に開発用データが混入する(実際に発生した事故)。
+  it('コピー先と元が一切の参照を共有しない(他教室データ混入防止)', () => {
+    const sourcePayload: AppSnapshotPayload = {
+      screen: 'board',
+      classroomSettings: {
+        closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 14,
+        regularLessonTemplate: { version: 1, effectiveStartDate: '2026-04-01', savedAt: '', cells: [{ dayOfWeek: 1, slotNumber: 1, desks: [] }] } as never,
+      },
+      managers: [],
+      teachers: [{ id: 't1', name: '田中', email: '', entryDate: '', withdrawDate: '未定', subjectCapabilities: [] } as never],
+      students: [{ id: 's1', name: '生徒', displayName: '生徒', email: '', entryDate: '', withdrawDate: '未定', birthDate: '' } as never],
+      regularLessons: [{ id: 'r1' } as never],
+      groupLessons: [],
+      specialSessions: [],
+      autoAssignRules: [],
+      pairConstraints: [],
+      boardState: null,
+    }
+
+    const copied = buildDevelopmentClassroomCopyPayload(sourcePayload)
+
+    // 配列・要素・テンプレが別参照であること
+    expect(copied.students).not.toBe(sourcePayload.students)
+    expect(copied.teachers).not.toBe(sourcePayload.teachers)
+    expect(copied.regularLessons).not.toBe(sourcePayload.regularLessons)
+    expect(copied.students[0]).not.toBe(sourcePayload.students[0])
+    expect(copied.classroomSettings.regularLessonTemplate).not.toBe(sourcePayload.classroomSettings.regularLessonTemplate)
+
+    // コピー先を編集してもコピー元は不変であること
+    ;(copied.students[0] as { name: string }).name = 'DEV-EDIT'
+    copied.students.push({ id: 'sX' } as never)
+    ;(copied.regularLessons[0] as { id: string }).id = 'DEV'
+    expect((sourcePayload.students[0] as { name: string }).name).toBe('生徒')
+    expect(sourcePayload.students).toHaveLength(1)
+    expect((sourcePayload.regularLessons[0] as { id: string }).id).toBe('r1')
+  })
 })
 
 describe('buildWorkspaceNavigationSnapshot', () => {
