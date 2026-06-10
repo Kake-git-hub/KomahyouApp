@@ -3980,11 +3980,8 @@ function AuthenticatedApp() {
     setServerAutoBackupLoading(true)
     setPersistenceMessage('サーバーバックアップをダウンロードしています…')
     try {
-      console.log('[restoreServerAutoBackup] downloading backup:', backupDateKey)
       const snapshotJson = await downloadFirebaseServerAutoBackup(backupDateKey)
-      console.log('[restoreServerAutoBackup] downloaded, json length:', snapshotJson.length)
       const snapshot = parseWorkspaceSnapshot(snapshotJson)
-      console.log('[restoreServerAutoBackup] parsed snapshot, classrooms:', snapshot.classrooms.length)
       openDeveloperRestoreModal(
         snapshot,
         `サーバーバックアップ (${summary?.displayLabel ?? backupDateKey})`,

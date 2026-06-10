@@ -433,20 +433,39 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
   })
 }
 
+// 本番のワークスペースバックアップ JSON は数十 MB に達する(教室分のフルスナップショット)。
+// Firebase callable のレスポンス上限(約10MB)を超えると `internal` で失敗するため、
+// サーバーは gzip+base64 で圧縮して返す(44MB→約2.4MB)。ここで元の JSON 文字列へ復元する。
+async function gunzipBase64ToString(base64: string): Promise<string> {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  if (typeof DecompressionStream === 'function') {
+    const decompressedStream = new Response(new Blob([bytes])).body?.pipeThrough(new DecompressionStream('gzip'))
+    if (!decompressedStream) throw new Error('サーバーバックアップの展開に失敗しました。')
+    return await new Response(decompressedStream).text()
+  }
+  throw new Error('このブラウザは圧縮バックアップの展開に対応していません。最新のブラウザでお試しください。')
+}
+
 export async function downloadFirebaseServerAutoBackup(backupDateKey: string): Promise<string> {
-  console.log('[downloadFirebaseServerAutoBackup] start, backupDateKey:', backupDateKey)
   await ensureFirebaseAuthenticatedUser()
-  console.log('[downloadFirebaseServerAutoBackup] auth OK')
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson: string }>(functions, 'downloadServerAutoBackup', { timeout: 120_000 })
-  console.log('[downloadFirebaseServerAutoBackup] calling Cloud Function...')
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string }, { snapshotJson?: string; snapshotGzipBase64?: string }>(functions, 'downloadServerAutoBackup', { timeout: 120_000 })
   const result = await callable({
     workspaceKey: config.workspaceKey,
     backupDateKey,
   })
-  console.log('[downloadFirebaseServerAutoBackup] Cloud Function returned, data length:', result.data.snapshotJson?.length ?? 'undefined')
-  return result.data.snapshotJson
+  if (typeof result.data.snapshotGzipBase64 === 'string' && result.data.snapshotGzipBase64) {
+    return await gunzipBase64ToString(result.data.snapshotGzipBase64)
+  }
+  if (typeof result.data.snapshotJson === 'string') {
+    return result.data.snapshotJson
+  }
+  throw new Error('サーバーバックアップの応答が不正です。')
 }
 
 export async function triggerFirebaseServerAutoBackup(): Promise<TriggerServerAutoBackupResult> {

@@ -1680,8 +1680,11 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
   await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-workspace-${backupDateKey}`)
 
   const [content] = await file.download()
-  logger.info(`downloadServerAutoBackup: downloaded ${content.length} bytes from ${storagePath}`)
-  return { snapshotJson: content.toString('utf-8') }
+  // ワークスペースバックアップは数十 MB に達する。Firebase callable のレスポンス上限(約10MB)を
+  // 超えると `internal` で失敗するため、gzip+base64 で圧縮して返す(クライアントが展開する)。
+  const compressed = gzipSync(content)
+  logger.info(`downloadServerAutoBackup: downloaded ${content.length} bytes, compressed to ${compressed.length} bytes from ${storagePath}`)
+  return { snapshotGzipBase64: compressed.toString('base64') }
 })
 
 export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
