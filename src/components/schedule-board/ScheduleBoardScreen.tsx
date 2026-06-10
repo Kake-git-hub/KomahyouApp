@@ -1874,7 +1874,16 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
       || student.name === managedStudent.name
     )
     if (isSameManagedStudent) {
-      nextLesson.studentSlots[slotIndex] = { ...managedStudent, ...student }
+      // 盤面の通常生徒スロットが managedStudentId 等を欠く場合、テンプレ(managed)側の同一性を補完する。
+      // これを欠くと spread で managedStudentId が undefined 上書きされ、生徒日程表で本人に紐づかず
+      // 通常授業がカウントされない(同一生徒が複数の通常授業を持つと顕在化)。回帰防止: 6793374。
+      nextLesson.studentSlots[slotIndex] = {
+        ...managedStudent,
+        ...student,
+        id: student.id || managedStudent.id,
+        managedStudentId: student.managedStudentId ?? managedStudent.managedStudentId,
+        birthDate: student.birthDate ?? managedStudent.birthDate,
+      }
       return
     }
 
