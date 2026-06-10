@@ -2765,6 +2765,63 @@ tr.sa-slot-last th {
   margin: 6px 0;
 }
 
+/* ⑧TODO1: 区分（優先/制約）切替 */
+.auto-assign-rule-category-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 12px;
+  color: #36506d;
+}
+
+.auto-assign-rule-category-row select {
+  font-size: 12px;
+}
+
+/* ⑧TODO2: 時限優先の並べ替え */
+.auto-assign-rule-period-order {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.auto-assign-period-order-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auto-assign-period-order-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.auto-assign-period-order-rank {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #e2ebf5;
+  color: #36506d;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.auto-assign-period-order-label {
+  min-width: 36px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #243b57;
+}
+
 .auto-assign-rule-summary {
   display: -webkit-box;
   overflow: hidden;

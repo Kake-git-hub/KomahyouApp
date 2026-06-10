@@ -5,9 +5,13 @@ import {
   autoAssignPeriodOptions,
   autoAssignRuleDefinitions,
   createAutoAssignTargetId,
+  getAllowedRuleCategories,
   listAutoAssignTargetGrades,
   resolveForbiddenPeriods,
+  resolvePeriodPriorityOrder,
+  resolveRuleCategory,
   resolveStudentGradeLabel,
+  type AutoAssignRuleCategory,
   type AutoAssignRuleKey,
   type AutoAssignRuleRow,
   type AutoAssignTarget,
@@ -31,10 +35,10 @@ type AutoAssignRuleScreenProps = {
 
 type TargetDraftType = 'all' | 'grade' | 'students'
 type SelectionModalMode = 'target' | 'exclude'
-type RuleGroupKey = 'day-spacing' | 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference'
+type RuleGroupKey = 'day-spacing' | 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference' | 'subject-capable' | 'regular-teachers' | 'forbid-period'
 type XlsxModule = typeof import('xlsx')
 
-const forcedRuleKeys = new Set<AutoAssignRuleKey>(['forbidFirstPeriod', 'regularTeachersOnly', 'subjectCapableTeachersOnly'])
+// ⑧TODO1: 区分は rule.category で解決（resolveRuleCategory）。制約事項=section/警告/Excel の区分表示に使う。
 const singleTargetRuleKeys = new Set<AutoAssignRuleKey>(['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'])
 const fixedAbsoluteConstraints = [
   {
@@ -91,9 +95,31 @@ const ruleGroupDefinitions: Array<{
   {
     key: 'time-preference',
     label: '時限優先',
-    description: '3,4,5限優先 / 2限寄り / 5限寄りをひとかたまりとして優先順位を付けます。',
+    description: '優先する時限の順番を 1〜5 限で並べ替えて優先順位を付けます。',
     orderKey: 'preferLateAfternoon',
-    ruleKeys: ['preferLateAfternoon', 'preferSecondPeriod', 'preferFifthPeriod'],
+    ruleKeys: ['preferLateAfternoon'],
+  },
+  // ⑧TODO1: 制約可ルールを優先事項へ切り替えたとき、優先事項セクションに表示する受け皿（既定は制約事項のため非表示）。
+  {
+    key: 'subject-capable',
+    label: '科目対応講師のみ',
+    description: '講師の科目担当に収まる生徒だけを配置候補にします。',
+    orderKey: 'subjectCapableTeachersOnly',
+    ruleKeys: ['subjectCapableTeachersOnly'],
+  },
+  {
+    key: 'regular-teachers',
+    label: '通常講師のみ',
+    description: '割振りを通常授業で担当している講師だけに制限します。',
+    orderKey: 'regularTeachersOnly',
+    ruleKeys: ['regularTeachersOnly'],
+  },
+  {
+    key: 'forbid-period',
+    label: '指定時限禁止',
+    description: '対象者を、指定した時限に配置しないよう制限します。',
+    orderKey: 'forbidFirstPeriod',
+    ruleKeys: ['forbidFirstPeriod'],
   },
 ]
 
@@ -218,12 +244,14 @@ export function buildAutoAssignWorkbook(
 ) {
   const workbook = xlsx.utils.book_new()
 
-  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, rules.map((rule, index) => ({
+  const knownRuleKeys = new Set(autoAssignRuleDefinitions.map((definition) => definition.key))
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, rules.filter((rule) => knownRuleKeys.has(rule.key)).map((rule, index) => ({
     並び順: index + 1,
     ルールキー: rule.key,
     ルール名: rule.label,
-    分類: forcedRuleKeys.has(rule.key) ? '制約事項' : '優先事項',
+    分類: resolveRuleCategory(rule) === 'constraint' ? '制約事項' : '優先事項',
     禁止時限: rule.key === 'forbidFirstPeriod' ? resolveForbiddenPeriods(rule).join(',') : '',
+    優先時限順: rule.key === 'preferLateAfternoon' ? resolvePeriodPriorityOrder(rule).join(',') : '',
     対象: serializeAutoAssignTargets(rule.targets, studentNameById),
     対象外: serializeAutoAssignTargets(rule.excludeTargets, studentNameById),
   }))), 'ルール')
@@ -240,6 +268,9 @@ export function buildAutoAssignWorkbook(
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '対象/対象外', 説明: 'all または grade:中1 または students:青木太郎,伊藤花 を | 区切りで並べます。' },
     { 項目: 'ルールキー', 説明: 'current 出力のルールキーをそのまま使ってください。未知のキーは取り込みません。' },
+    { 項目: '分類', 説明: '制約事項 / 優先事項 を入力します。コマ数上限・指定時限禁止・科目対応講師のみ・通常講師のみ だけ制約事項にできます。他は優先事項に丸めます。' },
+    { 項目: '禁止時限', 説明: '指定時限禁止ルールの禁止する時限を 1〜5 のカンマ区切りで入力します（例 1,2）。' },
+    { 項目: '優先時限順', 説明: '時限優先ルールの優先順を 1〜5 で並べます（例 5,4,3,2,1）。先頭ほど優先します。' },
     { 項目: 'ペア制約', 説明: '人物A/B は種別に応じて講師名または生徒名で入力します。' },
     { 項目: '固定の絶対事項', 説明: '既存コマは変更しない / 出席可能コマのみ はアプリ固定のため Excel では編集しません。' },
   ]), '説明')
@@ -273,6 +304,11 @@ export function parseAutoAssignWorkbook(
           const forbiddenPeriods = key === 'forbidFirstPeriod'
             ? resolveForbiddenPeriods({ forbiddenPeriods: normalizeText(row['禁止時限']).split(/[,、\s]+/).map((value) => Number(value)).filter((value) => Number.isFinite(value)) })
             : undefined
+          const periodPriorityOrder = key === 'preferLateAfternoon'
+            ? resolvePeriodPriorityOrder({ periodPriorityOrder: normalizeText(row['優先時限順']).split(/[,、\s＞>]+/).map((value) => Number(value)).filter((value) => Number.isFinite(value)) })
+            : undefined
+          const requestedCategory: AutoAssignRuleCategory = normalizeText(row['分類']) === '制約事項' ? 'constraint' : 'priority'
+          const category = resolveRuleCategory({ key, category: requestedCategory })
 
           return {
             order: Number(row['並び順']) || index + 1,
@@ -281,7 +317,9 @@ export function parseAutoAssignWorkbook(
               targets: parseAutoAssignTargets(row['対象'], studentIdByName),
               excludeTargets: parseAutoAssignTargets(row['対象外'], studentIdByName),
               priorityScore: 3,
+              category,
               ...(forbiddenPeriods ? { forbiddenPeriods } : {}),
+              ...(periodPriorityOrder ? { periodPriorityOrder } : {}),
               includeStudentIds: [],
               excludeStudentIds: [],
               updatedAt: timestamp,
@@ -370,15 +408,17 @@ export function AutoAssignRuleScreen({
   const studentGradeById = useMemo(() => Object.fromEntries(visibleStudents.map((student) => [student.id, resolveStudentGradeLabel(student.birthDate, referenceDate)])), [referenceDate, visibleStudents])
   const gradeOptions = useMemo(() => listAutoAssignTargetGrades(visibleStudents, referenceDate), [referenceDate, visibleStudents])
   const normalizedRules = useMemo(() => rules.map(normalizeRule), [rules])
-  const forcedRules = useMemo(() => normalizedRules.filter((rule) => forcedRuleKeys.has(rule.key)), [normalizedRules])
+  const forcedRules = useMemo(() => normalizedRules.filter((rule) => resolveRuleCategory(rule) === 'constraint'), [normalizedRules])
+  // ⑧TODO1: 優先事項グループは区分=優先のルールだけを表示し、全て制約事項へ移ったグループは隠す。
   const orderedRuleGroups = useMemo(() => ruleGroupDefinitions
     .map((group) => ({
       ...group,
       rules: group.ruleKeys
         .map((ruleKey) => normalizedRules.find((rule) => rule.key === ruleKey))
-        .filter((rule): rule is AutoAssignRuleRow => Boolean(rule)),
+        .filter((rule): rule is AutoAssignRuleRow => Boolean(rule) && resolveRuleCategory(rule) === 'priority'),
       firstIndex: normalizedRules.findIndex((rule) => rule.key === group.orderKey),
     }))
+    .filter((group) => group.rules.length > 0)
     .sort((left, right) => left.firstIndex - right.firstIndex),
   [normalizedRules])
 
@@ -584,6 +624,27 @@ export function AutoAssignRuleScreen({
     }), '指定時限禁止の時限を更新しました。')
   }
 
+  // ⑧TODO1: ルールの区分（優先事項／制約事項）を切り替える。許可リスト外は無視。
+  const setRuleCategory = (ruleKey: AutoAssignRuleKey, category: AutoAssignRuleCategory) => {
+    if (!getAllowedRuleCategories(ruleKey).includes(category)) return
+    updateRules((current) => current.map((rule) => rule.key === ruleKey ? { ...rule, category } : rule),
+      category === 'constraint' ? '区分を制約事項に変更しました。' : '区分を優先事項に変更しました。')
+  }
+
+  // ⑧TODO2: 時限優先スライダー。優先順を1つずつ上下に入れ替える。
+  const movePeriodPriority = (ruleKey: AutoAssignRuleKey, period: number, direction: 'up' | 'down') => {
+    updateRules((current) => current.map((rule) => {
+      if (rule.key !== ruleKey) return rule
+      const order = resolvePeriodPriorityOrder(rule)
+      const currentIndex = order.indexOf(period)
+      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
+      if (currentIndex < 0 || targetIndex < 0 || targetIndex >= order.length) return rule
+      const nextOrder = [...order]
+      ;[nextOrder[currentIndex], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[currentIndex]]
+      return { ...rule, periodPriorityOrder: nextOrder }
+    }), '時限優先の順番を更新しました。')
+  }
+
   const moveRuleGroup = (groupKey: RuleGroupKey, direction: 'up' | 'down') => {
     const currentIndex = orderedRuleGroups.findIndex((group) => group.key === groupKey)
     const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
@@ -594,15 +655,18 @@ export function AutoAssignRuleScreen({
 
     updateRules((current) => {
       const byRuleKey = new Map(current.map((rule) => [rule.key, rule]))
-      const nextForcedRules = current.filter((rule) => forcedRuleKeys.has(rule.key))
+      const nextForcedRules = current.filter((rule) => resolveRuleCategory(rule) === 'constraint')
+      const forcedKeySet = new Set(nextForcedRules.map((rule) => rule.key))
       const nextGroupedRules = nextGroupOrder.flatMap((currentGroupKey) => {
         const groupDefinition = ruleGroupDefinitions.find((group) => group.key === currentGroupKey)
         if (!groupDefinition) return []
         return groupDefinition.ruleKeys
           .map((ruleKey) => byRuleKey.get(ruleKey))
-          .filter((rule): rule is AutoAssignRuleRow => Boolean(rule))
+          .filter((rule): rule is AutoAssignRuleRow => rule !== undefined && !forcedKeySet.has(rule.key))
       })
-      return [...nextForcedRules, ...nextGroupedRules]
+      const capturedKeys = new Set<AutoAssignRuleKey>([...forcedKeySet, ...nextGroupedRules.map((rule) => rule.key)])
+      const leftoverRules = current.filter((rule) => !capturedKeys.has(rule.key))
+      return [...nextForcedRules, ...nextGroupedRules, ...leftoverRules]
     }, direction === 'up' ? '制約グループの優先順位を上げました。' : '制約グループの優先順位を下げました。')
   }
 
@@ -723,6 +787,19 @@ export function AutoAssignRuleScreen({
         </div>
       ) : null}
       {!options?.hideDescription ? <p className="auto-assign-rule-description">{rule.description}</p> : null}
+      {getAllowedRuleCategories(rule.key).length > 1 ? (
+        <div className="auto-assign-rule-category-row" data-testid={`auto-assign-rule-category-row-${rule.key}`}>
+          <span className="auto-assign-rule-summary-segment">区分:</span>
+          <select
+            value={resolveRuleCategory(rule)}
+            onChange={(event) => setRuleCategory(rule.key, event.target.value as AutoAssignRuleCategory)}
+            data-testid={`auto-assign-rule-category-select-${rule.key}`}
+          >
+            <option value="constraint">制約事項</option>
+            <option value="priority">優先事項</option>
+          </select>
+        </div>
+      ) : null}
       {rule.key === 'forbidFirstPeriod' ? (
         <div className="auto-assign-rule-period-toggles" data-testid="auto-assign-forbidden-periods">
           <span className="auto-assign-rule-summary-segment">禁止する時限:</span>
@@ -738,6 +815,33 @@ export function AutoAssignRuleScreen({
               >{period}限</button>
             )
           })}
+        </div>
+      ) : null}
+      {rule.key === 'preferLateAfternoon' ? (
+        <div className="auto-assign-rule-period-order" data-testid="auto-assign-period-priority-order">
+          <span className="auto-assign-rule-summary-segment">優先する時限の順番:</span>
+          <ol className="auto-assign-period-order-list">
+            {resolvePeriodPriorityOrder(rule).map((period, index, order) => (
+              <li key={period} className="auto-assign-period-order-item" data-testid={`auto-assign-period-order-item-${period}`}>
+                <span className="auto-assign-period-order-rank">{index + 1}</span>
+                <span className="auto-assign-period-order-label">{period}限</span>
+                <button
+                  type="button"
+                  className="secondary-button slim"
+                  onClick={() => movePeriodPriority(rule.key, period, 'up')}
+                  disabled={index === 0}
+                  data-testid={`auto-assign-period-order-up-${period}`}
+                >上へ</button>
+                <button
+                  type="button"
+                  className="secondary-button slim"
+                  onClick={() => movePeriodPriority(rule.key, period, 'down')}
+                  disabled={index === order.length - 1}
+                  data-testid={`auto-assign-period-order-down-${period}`}
+                >下へ</button>
+              </li>
+            ))}
+          </ol>
         </div>
       ) : null}
       <div className="auto-assign-rule-summary" data-testid={`auto-assign-rule-summary-${rule.key}`}>

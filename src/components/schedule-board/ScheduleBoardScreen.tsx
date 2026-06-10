@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
-import { resolveForbiddenPeriods } from '../auto-assign-rules/autoAssignRuleModel'
+import { resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
@@ -262,7 +262,7 @@ const lectureConstraintGroupDefinitions: Array<{ key: LectureConstraintGroupKey;
   { key: 'lesson-limit', orderKey: 'maxOneLesson', ruleKeys: ['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'] },
   { key: 'lesson-pattern', orderKey: 'allowTwoConsecutiveLessons', ruleKeys: ['allowTwoConsecutiveLessons', 'requireBreakBetweenLessons', 'connectRegularLessons'] },
   { key: 'day-spacing', orderKey: 'preferDateConcentration', ruleKeys: ['preferDateConcentration', 'preferNextDayOrLater'] },
-  { key: 'time-preference', orderKey: 'preferLateAfternoon', ruleKeys: ['preferLateAfternoon', 'preferSecondPeriod', 'preferFifthPeriod'] },
+  { key: 'time-preference', orderKey: 'preferLateAfternoon', ruleKeys: ['preferLateAfternoon'] },
 ]
 const gradeCeilingOrder: Record<GradeCeiling, number> = { 小: 1, 中: 2, 高1: 3, 高2: 4, 高3: 5 }
 
@@ -4220,31 +4220,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           })
           continue
         }
-        if (applicableRule.key === 'preferLateAfternoon') {
-          scoreParts.push({
-            label: '時限希望',
-            value: ({ 5: 5, 4: 4, 3: 3, 2: 2, 1: 0 } as Record<number, number>)[params.cell.slotNumber] ?? 0,
-            detail: '遅い時限を優先',
-            applicable: true,
-            satisfied: params.cell.slotNumber >= 3,
-          })
-        } else if (applicableRule.key === 'preferSecondPeriod') {
-          scoreParts.push({
-            label: '時限希望',
-            value: ({ 2: 5, 3: 4, 4: 3, 5: 2, 1: 0 } as Record<number, number>)[params.cell.slotNumber] ?? 0,
-            detail: '2限寄りを優先',
-            applicable: true,
-            satisfied: params.cell.slotNumber === 2,
-          })
-        } else {
-          scoreParts.push({
-            label: '時限希望',
-            value: ({ 5: 5, 4: 4, 3: 3, 2: 2, 1: 0 } as Record<number, number>)[params.cell.slotNumber] ?? 0,
-            detail: '5限寄りを優先',
-            applicable: true,
-            satisfied: params.cell.slotNumber === 5,
-          })
-        }
+        // ⑧TODO2: 時限優先スライダー。優先順 index0 を最高得点とし、順位が下がるほど減点する。
+        const periodOrder = resolvePeriodPriorityOrder(applicableRule)
+        const rankIndex = periodOrder.indexOf(params.cell.slotNumber)
+        const effectiveRank = rankIndex < 0 ? periodOrder.length : rankIndex
+        scoreParts.push({
+          label: '時限希望',
+          value: periodOrder.length - effectiveRank,
+          detail: `優先する時限の順番 ${periodOrder.map((period) => `${period}限`).join('＞')}`,
+          applicable: true,
+          satisfied: effectiveRank < 3,
+        })
         continue
       }
 
@@ -4845,18 +4831,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           }
 
           if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
-            addWarning([currentLocationKey], '制約事項: 科目対応講師のみ', true, true)
+            // ⑧TODO1: 区分（制約事項／優先事項）に応じてラベルを切り替える。
+            addWarning([currentLocationKey], `${resolveRuleCategory(autoAssignRuleByKey.get('subjectCapableTeachersOnly')) === 'constraint' ? '制約事項' : '優先事項'}: 科目対応講師のみ`, true, true)
           }
 
           if (managedStudent) {
             if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && resolveForbiddenPeriods(autoAssignRuleByKey.get('forbidFirstPeriod')).includes(cell.slotNumber)) {
-              addWarning([currentLocationKey], '制約事項: 指定時限禁止', true, true)
+              addWarning([currentLocationKey], `${resolveRuleCategory(autoAssignRuleByKey.get('forbidFirstPeriod')) === 'constraint' ? '制約事項' : '優先事項'}: 指定時限禁止`, true, true)
             }
 
             const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
             const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
             if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
-              addWarning([currentLocationKey], '制約事項: 通常講師のみ', true, true)
+              addWarning([currentLocationKey], `${resolveRuleCategory(autoAssignRuleByKey.get('regularTeachersOnly')) === 'constraint' ? '制約事項' : '優先事項'}: 通常講師のみ`, true, true)
             }
 
             const twoStudentsRuleApplied = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('preferTwoStudentsPerTeacher'), managedStudent.id, studentGradeOnDate)
