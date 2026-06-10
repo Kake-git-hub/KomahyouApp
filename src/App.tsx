@@ -15,14 +15,14 @@ import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdmi
 import { BillingAutomationScreen } from './components/billing/BillingAutomationScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, downloadLatestFirebaseClassroomRollback, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceAutoBackupSummaries, loadWorkspaceAutoBackupSnapshot, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
@@ -1184,7 +1184,6 @@ function AuthenticatedApp() {
   const lastPendingWorkspaceSnapshotWriteAtRef = useRef(0)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
-  const [localAutoBackupSummaries, setLocalAutoBackupSummaries] = useState<{ backupDateKey: string; savedAt: string }[]>([])
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
   const [workspaceUsers, setWorkspaceUsers, workspaceUsersRef] = useLatestState<WorkspaceUser[]>([])
   const [workspaceClassrooms, setWorkspaceClassrooms, workspaceClassroomsRef] = useLatestState<WorkspaceClassroom[]>([])
@@ -3803,50 +3802,14 @@ function AuthenticatedApp() {
     setScreen('backup-restore')
   }, [classroomSettings.initialSetupCompletedAt, hasHydratedSnapshot, screen])
 
+  // spec-save-restore §4: ローカル自動バックアップの「復元UI」は廃止（復元はJSONバックアップ一本）。
+  // テンプレート上書き前のローカル退避(書き込み側)は安全網として維持する（②二段階保存廃止の際に再判断）。
   const savePreTemplateSaveBackup = useCallback(async () => {
     saveUndoSnapshot('テンプレート上書き保存')
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    const result = await saveDailyWorkspaceAutoBackup(snapshot)
-    setLocalAutoBackupSummaries(result.summaries)
+    await saveDailyWorkspaceAutoBackup(snapshot)
     setPersistenceMessage('テンプレート上書き前のバックアップを保存しました。')
   }, [buildWorkspaceSnapshot, saveUndoSnapshot])
-
-  const refreshLocalAutoBackupSummaries = useCallback(async () => {
-    const summaries = await loadWorkspaceAutoBackupSummaries()
-    setLocalAutoBackupSummaries(summaries)
-  }, [])
-
-  const restoreLocalAutoBackup = useCallback(async (backupDateKey: string) => {
-    const snapshot = await loadWorkspaceAutoBackupSnapshot(backupDateKey)
-    if (!snapshot) {
-      setPersistenceMessage('指定された日付のバックアップが見つかりませんでした。')
-      return
-    }
-    // actingClassroomId に該当する教室データを抽出して復元
-    const classroomEntry = actingClassroomId
-      ? snapshot.classrooms?.find((c) => c.id === actingClassroomId)
-      : snapshot.classrooms?.[0]
-    if (!classroomEntry?.data) {
-      setPersistenceMessage('バックアップにこの教室のデータが含まれていませんでした。')
-      return
-    }
-    saveUndoSnapshot('ローカルバックアップ復元')
-    applyClassroomPayloadToState(classroomEntry.data, {
-      setScreen: (value) => setScreen(value),
-      setManagers,
-      setTeachers,
-      setStudents,
-      setRegularLessons,
-      setGroupLessons,
-      setSpecialSessions,
-      setAutoAssignRules,
-      setPairConstraints,
-      setClassroomSettings,
-      setBoardState,
-      setBoardMountKey,
-    })
-    setPersistenceMessage(`ローカルバックアップ (${backupDateKey}) からこの教室を復元しました。`)
-  }, [actingClassroomId, saveUndoSnapshot])
 
   // 手動バックアップは「開いている1教室分の完全スナップショット(テンプレ・設定・盤面・ストックを含む)」を
   // AppSnapshot 形式で書き出す。読み込み(importBackup)は AppSnapshot を優先的に完全復元するため、
@@ -4030,75 +3993,8 @@ function AuthenticatedApp() {
     }
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, openDeveloperRestoreModal, serverAutoBackupSummaries])
 
-  const restoreClassroomFromServerAutoBackup = useCallback(async (backupDateKey: string) => {
-    if (!isRemoteBackendEnabled || !actingClassroomId) return
-    setPersistenceMessage('サーバーバックアップから教室データをダウンロードしています…')
-    try {
-      const result = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, actingClassroomId)
-
-      saveUndoSnapshot('サーバーバックアップ復元')
-
-      const updatedClassrooms = workspaceClassrooms.map((classroom) =>
-        classroom.id === actingClassroomId
-          ? { ...classroom, data: result.data }
-          : classroom,
-      )
-      setWorkspaceClassrooms(updatedClassrooms)
-      applyClassroomPayloadToState(result.data, {
-        setScreen: (value) => setScreen(value),
-        setManagers,
-        setTeachers,
-        setStudents,
-        setRegularLessons,
-        setGroupLessons,
-        setSpecialSessions,
-        setAutoAssignRules,
-        setPairConstraints,
-        setClassroomSettings,
-        setBoardState,
-        setBoardMountKey,
-      })
-      setPersistenceMessage(`サーバーバックアップ (${backupDateKey}) からこの教室を復元しました。`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'サーバーバックアップからの教室復元に失敗しました。'
-      setPersistenceMessage(message)
-    }
-  }, [actingClassroomId, isRemoteBackendEnabled, saveUndoSnapshot, workspaceClassrooms])
-
-  const restoreLatestClassroomRollback = useCallback(async () => {
-    if (!isRemoteBackendEnabled || !actingClassroomId) return
-    setPersistenceMessage('直前の Firebase 保存前データをダウンロードしています…')
-    try {
-      const result = await downloadLatestFirebaseClassroomRollback(actingClassroomId)
-
-      saveUndoSnapshot('直前 Firebase 保存前復元')
-
-      const updatedClassrooms = workspaceClassrooms.map((classroom) =>
-        classroom.id === actingClassroomId
-          ? { ...classroom, data: result.data }
-          : classroom,
-      )
-      setWorkspaceClassrooms(updatedClassrooms)
-      applyClassroomPayloadToState(result.data, {
-        setScreen: (value) => setScreen(value),
-        setManagers,
-        setTeachers,
-        setStudents,
-        setRegularLessons,
-        setGroupLessons,
-        setSpecialSessions,
-        setAutoAssignRules,
-        setPairConstraints,
-        setClassroomSettings,
-        setBoardState,
-        setBoardMountKey,
-      })
-      setPersistenceMessage(`直前の Firebase 保存前状態 (${result.sourceSavedAt || result.capturedAt}) からこの教室を復元しました。`)
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '直前の Firebase 保存前データの復元に失敗しました。'
-      setPersistenceMessage(message)
-    }
-  }, [actingClassroomId, isRemoteBackendEnabled, saveUndoSnapshot, workspaceClassrooms])
+  // spec-save-restore §4: 教室画面の「サーバーバックアップ復元」「直前のFirebase保存前へ戻す」は廃止。
+  // サーバー復元は開発者画面(restoreServerAutoBackup→openDeveloperRestoreModal)のみ。rollbackはUndoで代替。
 
   const copyClassroomDataToDevelopmentClassroom = useCallback((sourceClassroomId: string) => {
     if (!actingClassroomId || !isActingDevelopmentClassroom) {
@@ -4615,18 +4511,8 @@ function AuthenticatedApp() {
         onLogout={logout}
         persistenceMessage={persistenceMessage}
         lastSavedAt={lastSavedAt}
-        classroomName={actingClassroom?.name ?? '教室'}
-        autoBackupSummaries={localAutoBackupSummaries}
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
-        onRestoreAutoBackup={(backupDateKey) => void restoreLocalAutoBackup(backupDateKey)}
-        onRefreshAutoBackupSummaries={() => void refreshLocalAutoBackupSummaries()}
-        showServerBackups={isRemoteBackendEnabled}
-        serverAutoBackupSummaries={serverAutoBackupSummaries}
-        serverAutoBackupLoading={serverAutoBackupLoading}
-        onLoadServerAutoBackupSummaries={() => void loadServerAutoBackupSummaries()}
-        onRestoreClassroomFromServerAutoBackup={(backupDateKey) => void restoreClassroomFromServerAutoBackup(backupDateKey)}
-        onRestoreLatestClassroomRollback={() => void restoreLatestClassroomRollback()}
         classroomSettings={classroomSettings}
         students={students}
         specialSessions={specialSessions}

@@ -72,3 +72,27 @@
 7. 復元 3 種（rollback／サーバー／ローカル自動）を教室画面から**削除**。サーバー復元は開発者画面へ。
 8. JSON 書き出しを**教室フルスナップショット**化（テンプレ含む完全復元）。
 9. 開発用教室コピーを**室長アカウントにも開放**。
+
+## 現状精査（2026-06-10・Phase 6 ② 着手時）
+
+| # | 項目 | 状態 | 根拠 |
+|---|------|------|------|
+| 1 | デバウンス 5s/20s | ✅ 済 | `App.tsx` `AUTOSAVE_DEBOUNCE_MS=5000` / `AUTOSAVE_MAX_WAIT_MS=20000` |
+| 2 | 二段階保存廃止 | ❌ 未 | `saveWorkspaceSnapshot`(IndexedDB+localStorage)が自動保存・離脱flush・手動保存・教室切替等 約8箇所で稼働中。pending-remoteマーカー機構（クラッシュ復旧・再ログイン時のローカル→リモート同期）がローカル書込に依存 |
+| 3 | 保存ボタン常時緑 | ✅ 済 | `BoardToolbar` 常時表示・「保存/最新データ」表示 |
+| 4 | 離脱時ダイアログ | ✅ 済(同等) | `beforeunload` で未保存時にブラウザ標準の離脱確認＋`visibilitychange` でFirebase自動同期。「手動保存の強制」ではないが二重安全網は充足 |
+| 5 | 保存失敗 JSON自動DL | ✅ 済 | 失敗時バックアップ自動DL＋再ログイン手順ダイアログ |
+| 6 | オフラインブロック | ✅ 済 | `OfflineGate.tsx` |
+| 7 | 復元3種の削除/移動 | ✅ **実装（2026-06-10）** | 下記「実装状況」 |
+| 8 | JSONフルスナップショット | ✅ 済 | `exportBackup`=AppSnapshot完全形式（Phase 0） |
+| 9 | 開発用コピー室長開放 | △ UIのみ | パネルは `isDevelopmentClassroom` で室長にも表示されるが、コピー元一覧が `workspaceClassrooms`（メモリ）依存。**室長は自教室しかロードされないためコピー元が常に空＝実体未開放**。真の開放はサーバー側コピー（Cloud Function 例: `copyClassroomDataToDevelopmentClassroom` のサーバー版）が必要（室長への他教室読取権限付与は不可） |
+
+## 実装状況（2026-06-10・Phase 6 ②）
+
+- **TODO7（復元UI整理）✅ 実装（未デプロイ）**：
+  - `BackupRestoreScreen.tsx`：教室画面から「直前のFirebase保存前へ戻す」「サーバーバックアップから復元」「ローカル自動バックアップから復元」の3パネル＋2モーダルを削除。復元は**JSONバックアップ読み込み一本**。開発用教室コピー・初期設定フローは維持。
+  - `App.tsx`：`restoreClassroomFromServerAutoBackup`／`restoreLatestClassroomRollback`／`restoreLocalAutoBackup`／`refreshLocalAutoBackupSummaries`／`localAutoBackupSummaries` を削除（教室画面専用だった）。開発者画面のサーバー復元（`onRestoreServerAutoBackup`→教室選択モーダル）は既設のまま＝spec「サーバー復元は開発者画面へ」充足。
+  - テンプレート上書き前のローカル退避（`savePreTemplateSaveBackup` の書き込み側）は安全網として維持（TODO2 実施時に再判断）。
+- **残（要オーナー確認のうえ実施）**：
+  - **TODO2（二段階保存廃止）**：最重量・最高リスク。設計上の論点＝(a) ローカルモード（`VITE_EXTERNAL_BACKEND_MODE=local`）はローカル保存が正本なので廃止対象外（firebaseモード限定の廃止）。(b) pending-remoteマーカー（クラッシュ時のローカル→リモート復旧）を廃止すると、クラッシュ時の保護は「自動保存5s＋離脱確認＋保存失敗JSON DL」のみになる（spec の想定どおりだが挙動変更）。(c) 起動時ハイドレーションのローカルフォールバック撤去＝オフライン起動は OfflineGate でブロックされる前提に揃える。
+  - **TODO9（室長コピー開放）**：サーバー側コピーの Cloud Function 新設＋functions デプロイが必要。対象は開発用教室への書込のみ（既存 `CLAUDE.md` の保護ルールと整合）。
