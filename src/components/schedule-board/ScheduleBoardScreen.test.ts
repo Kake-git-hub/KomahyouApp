@@ -1195,6 +1195,85 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(actualDesk?.teacherAssignmentTeacherId).toBe('teacher-ochiai')
   })
 
+  // 回帰防止(6793374 / commit 2dce7b4 で巻き戻り再発): 盤面の通常生徒スロットが managedStudentId を
+  // 欠いても、マージで管理データ(テンプレ)側の生徒IDを保持する。これを欠くと生徒日程表で本人に紐づかず
+  // 通常授業がカウントされない(同一生徒が複数の通常授業を持つと顕在化。実例: 井上陽斗の金曜英語)。
+  it('盤面の通常生徒が managedStudentId を欠いても管理データの生徒IDを保持する', () => {
+    const teachers = [{
+      ...initialTeachers[0]!,
+      id: 'teacher-ochiai',
+      name: 'Ochiai Taro',
+      displayName: 'Ochiai',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+    }]
+    const students = [{
+      ...initialStudents[0]!,
+      id: 'student-inoue',
+      name: 'Inoue Hana',
+      displayName: 'Inoue',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+    }]
+    const regularLessons = [{
+      id: 'regular-ochiai-inoue',
+      schoolYear: 2026,
+      teacherId: 'teacher-ochiai',
+      student1Id: 'student-inoue',
+      subject1: '英',
+      startDate: '2026-04-01',
+      endDate: '未定',
+      student2Id: '',
+      subject2: '',
+      student2StartDate: '',
+      student2EndDate: '',
+      nextStudent1Id: '',
+      nextSubject1: '',
+      nextStudent2Id: '',
+      nextSubject2: '',
+      dayOfWeek: 5,
+      slotNumber: 5,
+    }]
+    const rangeParams = {
+      range: { startDate: '2026-07-01', endDate: '2026-07-31', periodValue: '' },
+      fallbackStartDate: '2026-07-01',
+      fallbackEndDate: '2026-07-31',
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      suppressedRegularLessonOccurrences: [],
+    }
+
+    const planned = buildManagedScheduleCellsForRange({ ...rangeParams, boardWeeks: [] })
+    const plannedTarget = planned.find((cell) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)
+    expect(plannedTarget?.desks.some((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 'student-inoue'))).toBe(true)
+
+    // 盤面側は managedStudentId を失い、名前のみで残っている状態を再現する。
+    const legacyBoardWeek = planned.map((cell) => cell.id === plannedTarget?.id
+      ? {
+          ...cell,
+          desks: cell.desks.map((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 'student-inoue')
+            ? {
+                ...desk,
+                lesson: {
+                  ...desk.lesson!,
+                  studentSlots: desk.lesson!.studentSlots.map((student) => student?.managedStudentId === 'student-inoue'
+                    ? { ...student, managedStudentId: undefined }
+                    : student) as [StudentEntry | null, StudentEntry | null],
+                },
+              }
+            : desk),
+        }
+      : cell)
+
+    const actual = buildScheduleCellsForRange({ ...rangeParams, boardWeeks: [legacyBoardWeek] })
+    const actualTarget = actual.find((cell) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)
+    const actualStudent = actualTarget?.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).find((student) => student?.subject === '英')
+
+    expect(actualStudent?.managedStudentId).toBe('student-inoue')
+  })
+
   it('keeps all remaining weekly student placements when a regular lesson ends mid-month with fewer than four active weeks left', () => {
     const cells = buildManagedScheduleCellsForRange({
       range: {
