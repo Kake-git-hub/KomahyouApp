@@ -297,8 +297,10 @@ function isAutoAssignRuleApplicable(rule: AutoAssignRuleRow | undefined, student
   return rule.targets.some((target) => matchesAutoAssignTarget(target, studentId, studentGrade))
 }
 
-function isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel) {
-  return isAutoAssignRuleApplicable(autoAssignRuleByKey.get('subjectCapableTeachersOnly'), studentId, studentGrade)
+// 性能最適化(挙動不変): isApplicable は isAutoAssignRuleApplicable と同値のメモ化版を注入するための引数。
+// 既定値は従来の直接呼び出しで、判定結果は注入有無で変わらない。
+function isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
+  return isApplicable(autoAssignRuleByKey.get('subjectCapableTeachersOnly'), studentId, studentGrade)
 }
 
 function compareScoreVectors(left: number[], right: number[]) {
@@ -458,6 +460,18 @@ function resolveSchoolGradeLabel(birthDate: string, today = new Date()): GradeLa
 function parseDateKey(dateKey: string) {
   const [year, month, day] = dateKey.split('-').map(Number)
   return new Date(year, (month || 1) - 1, day || 1)
+}
+
+// 性能最適化(挙動不変): resolveSchoolGradeLabel は (birthDate, dateKey) の純関数のため結果をメモ化する。
+// 警告再計算・自動割振で生徒×日付ごとに繰り返し呼ばれるホットパス用。
+const schoolGradeLabelCacheByBirthDateAndDateKey = new Map<string, GradeLabel>()
+function resolveSchoolGradeLabelForDateKey(birthDate: string, dateKey: string): GradeLabel {
+  const cacheKey = `${birthDate}|${dateKey}`
+  const cached = schoolGradeLabelCacheByBirthDateAndDateKey.get(cacheKey)
+  if (cached) return cached
+  const result = resolveSchoolGradeLabel(birthDate, parseDateKey(dateKey))
+  schoolGradeLabelCacheByBirthDateAndDateKey.set(cacheKey, result)
+  return result
 }
 
 function formatWeekScheduleTitle(cells: Array<{ dateKey: string }>) {
@@ -1414,6 +1428,40 @@ function getStockStudentKeyFromEntryKey(entryKey: string) {
 function resolveStockComparableStudentKey(student: StudentEntry, managedStudentByAnyName: Map<string, StudentRow>, resolveBoardStudentDisplayName: (name: string) => string) {
   const managedId = student.managedStudentId ?? managedStudentByAnyName.get(student.name)?.id
   return managedId ?? `name:${resolveBoardStudentDisplayName(student.name)}`
+}
+
+// 性能最適化(挙動不変): 盤面警告の「同日コマ」収集を生徒スロット毎の全盤面走査から、
+// 全盤面1パスで構築する (生徒キー→日付→出現一覧) インデックス参照へ置き換えるためのビルダー。
+// 走査順(週→セル→デスク→スロット)を従来の collectStudentOccurrencesOnDate と同一に保つため、
+// 各 (生徒キー, 日付) の配列内容・並び順は従来の都度走査の結果と完全一致する。
+export function buildStudentOccurrencesByDateIndex(
+  sourceWeeks: SlotCell[][],
+  managedStudentByAnyName: Map<string, StudentRow>,
+  resolveBoardStudentDisplayName: (name: string) => string,
+) {
+  const index = new Map<string, Map<string, Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType }>>>()
+  for (const week of sourceWeeks) {
+    for (const cell of week) {
+      for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+        const desk = cell.desks[deskIndex]
+        for (let studentIndex = 0; studentIndex < (desk.lesson?.studentSlots.length ?? 0); studentIndex += 1) {
+          const student = desk.lesson?.studentSlots[studentIndex]
+          if (!student) continue
+          const studentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
+          const byDate = index.get(studentKey) ?? new Map<string, Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType }>>()
+          const occurrences = byDate.get(cell.dateKey) ?? []
+          occurrences.push({
+            occurrenceKey: buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex),
+            slotNumber: cell.slotNumber,
+            lessonType: student.lessonType,
+          })
+          byDate.set(cell.dateKey, occurrences)
+          index.set(studentKey, byDate)
+        }
+      }
+    }
+  }
+  return index
 }
 
 export function findDuplicateStudentInCellByKey(
@@ -2821,7 +2869,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [weeks, setWeeks] = useState<SlotCell[][]>(() => initialBoardSnapshot.weeks)
   const normalizedWeeks = useMemo(() => applyClassroomAvailability(weeks, classroomSettings), [classroomSettings, weeks])
   const [weekIndex, setWeekIndex] = useState(initialBoardSnapshot.weekIndex)
-  const cells = normalizedWeeks[weekIndex] ?? []
+  // 性能最適化(挙動不変): `?? []` が範囲外時に毎レンダー新配列を返すと cells 依存の useMemo 群が全て無効化されるため、
+  // 参照を安定化する（値は従来と同一）。
+  const cells = useMemo(() => normalizedWeeks[weekIndex] ?? [], [normalizedWeeks, weekIndex])
   const [selectedCellId, setSelectedCellId] = useState(initialBoardSnapshot.selectedCellId)
   const [selectedDeskIndex, setSelectedDeskIndex] = useState(initialBoardSnapshot.selectedDeskIndex)
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
@@ -3605,6 +3655,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     [students],
   )
 
+  // 性能最適化(挙動不変): 警告再計算ループ内の students.find(id一致) を O(1) 参照にする。
+  // .find と同じ「最初の一致」を返すため、重複IDがあっても先勝ちで登録する。
+  const managedStudentById = useMemo(() => {
+    const byId = new Map<string, StudentRow>()
+    for (const student of students) {
+      if (!byId.has(student.id)) byId.set(student.id, student)
+    }
+    return byId
+  }, [students])
+
   const managedStudentByAnyName = useMemo(() => {
     const entries = students.flatMap((student) => {
       const displayName = getStudentDisplayName(student)
@@ -3934,6 +3994,23 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     [lectureStockEntries, selectedLectureStockKey],
   )
   const autoAssignRuleByKey = useMemo(() => new Map(autoAssignRules.map((rule) => [rule.key, rule])), [autoAssignRules])
+
+  // 性能最適化(挙動不変): isAutoAssignRuleApplicable は (ルール, 生徒ID, 学齢) の純関数で、
+  // 「全員」ターゲット等はセルに依らず同結果のため、ルール変更まで (ruleKey|studentId|grade) でメモ化する。
+  // 多ルール×全員の教室で警告再計算・自動割振がセル×ルール×生徒の繰り返し評価になるのを防ぐ。
+  const autoAssignRuleApplicabilityCache = useMemo(() => {
+    void autoAssignRuleByKey // ルール変更時にキャッシュを破棄するための無効化キー
+    return new Map<string, boolean>()
+  }, [autoAssignRuleByKey])
+  const isRuleApplicableCached = useCallback((rule: AutoAssignRuleRow | undefined, studentId: string, studentGrade: GradeLabel) => {
+    if (!rule) return false
+    const cacheKey = `${rule.key}|${studentId}|${studentGrade}`
+    const cached = autoAssignRuleApplicabilityCache.get(cacheKey)
+    if (cached !== undefined) return cached
+    const result = isAutoAssignRuleApplicable(rule, studentId, studentGrade)
+    autoAssignRuleApplicabilityCache.set(cacheKey, result)
+    return result
+  }, [autoAssignRuleApplicabilityCache])
   const lectureConstraintGroups = useMemo(() => resolveLectureConstraintGroupOrder(autoAssignRules), [autoAssignRules])
   const autoAssignDebugLabelOrder = useMemo(() => {
     const labelByRuleKey: Partial<Record<AutoAssignRuleKey, string>> = {
@@ -3981,17 +4058,33 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return byId
   }, [specialSessions])
 
-  const resolveManagedTeacherForDesk = (desk: DeskCell, dateKey: string) => {
-    if (desk.teacherAssignmentTeacherId) {
-      const matchedTeacher = teachers.find((teacher) => teacher.id === desk.teacherAssignmentTeacherId)
-      if (matchedTeacher && resolveTeacherRosterStatus(matchedTeacher, dateKey) === '在籍') return matchedTeacher
+  // 性能最適化(挙動不変): 解決結果は (teacherAssignmentTeacherId, デスク講師名, dateKey, teachers) のみで決まるため、
+  // teachers が変わるまでキャッシュする。useCallback 化により警告 useMemo の deps が毎レンダーで無効化されるのも防ぐ。
+  const managedTeacherForDeskCache = useMemo(() => {
+    void teachers // 講師データ変更時にキャッシュを破棄するための無効化キー
+    return new Map<string, TeacherRow | null>()
+  }, [teachers])
+  const resolveManagedTeacherForDesk = useCallback((desk: DeskCell, dateKey: string) => {
+    const cacheKey = `${desk.teacherAssignmentTeacherId ?? ''}|${desk.teacher}|${dateKey}`
+    const cached = managedTeacherForDeskCache.get(cacheKey)
+    if (cached !== undefined) return cached
+
+    const resolve = () => {
+      if (desk.teacherAssignmentTeacherId) {
+        const matchedTeacher = teachers.find((teacher) => teacher.id === desk.teacherAssignmentTeacherId)
+        if (matchedTeacher && resolveTeacherRosterStatus(matchedTeacher, dateKey) === '在籍') return matchedTeacher
+      }
+
+      return teachers.find((teacher) => (
+        resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
+        && (teacher.name === desk.teacher || getTeacherDisplayName(teacher) === desk.teacher)
+      )) ?? null
     }
 
-    return teachers.find((teacher) => (
-      resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
-      && (teacher.name === desk.teacher || getTeacherDisplayName(teacher) === desk.teacher)
-    )) ?? null
-  }
+    const resolved = resolve()
+    managedTeacherForDeskCache.set(cacheKey, resolved)
+    return resolved
+  }, [managedTeacherForDeskCache, teachers])
 
   const collectStudentLessonsOnDate = (sourceWeeks: SlotCell[][], studentKey: string, dateKey: string) => {
     const lessons: Array<{ slotNumber: number; lessonType: LessonType }> = []
@@ -4013,29 +4106,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return lessons
   }
 
-  const collectStudentOccurrencesOnDate = (sourceWeeks: SlotCell[][], studentKey: string, dateKey: string) => {
-    const lessons: Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType }> = []
-    for (const week of sourceWeeks) {
-      for (const cell of week) {
-        if (cell.dateKey !== dateKey) continue
-        for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
-          const desk = cell.desks[deskIndex]
-          for (let studentIndex = 0; studentIndex < (desk.lesson?.studentSlots.length ?? 0); studentIndex += 1) {
-            const student = desk.lesson?.studentSlots[studentIndex]
-            if (!student) continue
-            const currentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
-            if (currentKey !== studentKey) continue
-            lessons.push({
-              occurrenceKey: buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex),
-              slotNumber: cell.slotNumber,
-              lessonType: student.lessonType,
-            })
-          }
-        }
-      }
-    }
-    return lessons
-  }
+  // 性能最適化(挙動不変): 旧 collectStudentOccurrencesOnDate(生徒スロット毎の全盤面走査)は
+  // buildStudentOccurrencesByDateIndex(全盤面1パスのインデックス)に置き換え済み。
 
   const collectStudentAssignedDateKeys = (sourceWeeks: SlotCell[][], studentKey: string) => {
     const dateKeys = new Set<string>()
@@ -4056,24 +4128,46 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return Array.from(dateKeys).sort()
   }
 
-  const resolveRegularTeacherIdsForStudentOnDate = (studentId: string, dateKey: string) => {
+  // 性能最適化(挙動不変): 全 regularLessons の線形走査を (schoolYear_dayOfWeek) インデックス参照に置き換え、
+  // 結果 Set を (studentId|dateKey) でメモ化する（regularLessons 変更で破棄）。
+  // インデックスは元配列の並び順を保つため、走査順・Set 内容とも従来と同一。返した Set は呼び出し側で .has 参照のみ。
+  const regularLessonsBySchoolYearAndDay = useMemo(() => {
+    const index = new Map<string, RegularLessonRow[]>()
+    for (const lesson of regularLessons) {
+      const indexKey = `${lesson.schoolYear}_${lesson.dayOfWeek}`
+      const current = index.get(indexKey)
+      if (current) current.push(lesson)
+      else index.set(indexKey, [lesson])
+    }
+    return index
+  }, [regularLessons])
+  const regularTeacherIdsByStudentDateCache = useMemo(() => {
+    void regularLessons // 通常授業データ変更時にキャッシュを破棄するための無効化キー
+    return new Map<string, Set<string>>()
+  }, [regularLessons])
+  const resolveRegularTeacherIdsForStudentOnDate = useCallback((studentId: string, dateKey: string) => {
+    const cacheKey = `${studentId}|${dateKey}`
+    const cached = regularTeacherIdsByStudentDateCache.get(cacheKey)
+    if (cached) return cached
+
     const lessonDate = parseDateKey(dateKey)
     const schoolYear = resolveOperationalSchoolYear(lessonDate)
     const dayOfWeek = lessonDate.getDay()
     const teacherIds = new Set<string>()
 
-    for (const lesson of regularLessons) {
-      if (lesson.schoolYear !== schoolYear || lesson.dayOfWeek !== dayOfWeek) continue
+    for (const lesson of regularLessonsBySchoolYearAndDay.get(`${schoolYear}_${dayOfWeek}`) ?? []) {
       if (lesson.student1Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, dateKey)) teacherIds.add(lesson.teacherId)
       if (lesson.student2Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, dateKey)) teacherIds.add(lesson.teacherId)
     }
 
+    regularTeacherIdsByStudentDateCache.set(cacheKey, teacherIds)
     return teacherIds
-  }
+  }, [regularLessonsBySchoolYearAndDay, regularTeacherIdsByStudentDateCache])
 
   // spec-auto-assign-rules §E / ⑧TODO5: ペア制約は 優先/制約 の2区分。
   // 制約(既定)=赤の制約警告、優先=なるべく回避(スコアのみ)。複数一致時は強い方(制約)を採用。
-  const resolvePairConstraintSeverity = (teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null): 'none' | 'priority' | 'constraint' => {
+  // 性能最適化(挙動不変): useCallback 化で警告 useMemo の deps が毎レンダーで無効化されるのを防ぐ（判定ロジックは不変）。
+  const resolvePairConstraintSeverity = useCallback((teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null): 'none' | 'priority' | 'constraint' => {
     const otherStudentId = otherStudent?.managedStudentId ?? (otherStudent ? managedStudentByRegisteredName.get(otherStudent.name)?.id : undefined)
     let severity: 'none' | 'priority' | 'constraint' = 'none'
     for (const constraint of pairConstraints) {
@@ -4089,16 +4183,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       severity = 'priority'
     }
     return severity
-  }
+  }, [managedStudentByRegisteredName, pairConstraints])
 
-  const isPairConstraintBlocked = (teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null) => (
+  const isPairConstraintBlocked = useCallback((teacherId: string, primaryStudentId: string, otherStudent: StudentEntry | null) => (
     resolvePairConstraintSeverity(teacherId, primaryStudentId, otherStudent) !== 'none'
-  )
+  ), [resolvePairConstraintSeverity])
 
-  const resolveSpecialSessionById = (sessionId?: string) => {
+  const resolveSpecialSessionById = useCallback((sessionId?: string) => {
     if (!sessionId) return null
     return specialSessions.find((session) => session.id === sessionId) ?? null
-  }
+  }, [specialSessions])
 
   const buildLecturePendingItems = (entry: GroupedLectureStockEntry) => {
     return lecturePendingItemsByEntryKey.get(entry.key)?.pendingItems.map((item) => ({ ...item })) ?? []
@@ -4129,7 +4223,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     for (const group of lectureConstraintGroups) {
       const applicableRule = group.ruleKeys
         .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
-        .find((rule) => isAutoAssignRuleApplicable(rule, params.studentId, params.studentGradeOnDate))
+        .find((rule) => isRuleApplicableCached(rule, params.studentId, params.studentGradeOnDate))
 
       if (group.key === 'lesson-limit') {
         scoreParts.push({
@@ -4348,21 +4442,32 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     let bestCandidate: LectureAutoAssignCandidate | null = null
     const evaluatedCandidates: LectureAutoAssignCandidate[] = []
 
+    // 性能最適化(挙動不変): sourceWeeks は1回の探索中に変化しないため、セル非依存の集計（割振済日付・禁止時限ルール）は
+    // 探索前に1回、日付のみに依存する集計（同日既存授業）は日付ごとに1回だけ計算して使い回す。
+    // 各セルで都度計算していた従来と同一の値になる（評価候補・スコアは不変）。
+    const assignedDateKeys = collectStudentAssignedDateKeys(params.sourceWeeks, params.studentKey)
+    const existingLessonsByDateKey = new Map<string, Array<{ slotNumber: number; lessonType: LessonType }>>()
+    const forbidFirstPeriodRule = autoAssignRuleByKey.get('forbidFirstPeriod')
+    const forbiddenPeriods = resolveForbiddenPeriods(forbidFirstPeriodRule)
+
     for (let nextWeekIndex = 0; nextWeekIndex < params.sourceWeeks.length; nextWeekIndex += 1) {
       const week = params.sourceWeeks[nextWeekIndex]
       for (const cell of week) {
-        const studentGradeOnDate = resolveSchoolGradeLabel(params.managedStudent.birthDate, parseDateKey(cell.dateKey))
-        const forbidFirstPeriod = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), params.managedStudent.id, studentGradeOnDate)
-        const forbiddenPeriods = resolveForbiddenPeriods(autoAssignRuleByKey.get('forbidFirstPeriod'))
-        const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
-        const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
         if (!cell.isOpenDay) continue
         if (!isActiveOnDate(params.managedStudent.entryDate, params.managedStudent.withdrawDate, params.managedStudent.birthDate, cell.dateKey)) continue
         if (findDuplicateStudentInCell(cell, params.studentKey)) continue
 
-        const existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
-        const assignedDateKeys = collectStudentAssignedDateKeys(params.sourceWeeks, params.studentKey)
-        const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate)
+        const studentGradeOnDate = resolveSchoolGradeLabelForDateKey(params.managedStudent.birthDate, cell.dateKey)
+        const forbidFirstPeriod = isRuleApplicableCached(forbidFirstPeriodRule, params.managedStudent.id, studentGradeOnDate)
+        const subjectCapableTeachersOnly = isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate, isRuleApplicableCached)
+        const regularTeachersOnly = isRuleApplicableCached(autoAssignRuleByKey.get('regularTeachersOnly'), params.managedStudent.id, studentGradeOnDate)
+
+        let existingLessons = existingLessonsByDateKey.get(cell.dateKey)
+        if (!existingLessons) {
+          existingLessons = collectStudentLessonsOnDate(params.sourceWeeks, params.studentKey, cell.dateKey)
+          existingLessonsByDateKey.set(cell.dateKey, existingLessons)
+        }
+        const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate, isRuleApplicableCached)
         const lessonLimitSatisfied = lessonLimit === null || existingLessons.length < lessonLimit
 
         const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
@@ -4819,6 +4924,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
   }, [emptyMenuContext, specialSessions])
 
+  // 性能最適化(挙動不変): 生徒スロット毎に全盤面を走査していた collectStudentOccurrencesOnDate を、
+  // 全盤面1パスのインデックス構築＋O(1)参照に置き換える（配列内容・並び順は従来と同一）。
+  const studentOccurrencesIndex = useMemo(
+    () => buildStudentOccurrencesByDateIndex(normalizedWeeks, managedStudentByAnyName, resolveBoardStudentDisplayName),
+    [managedStudentByAnyName, normalizedWeeks, resolveBoardStudentDisplayName],
+  )
+
   const boardStudentWarningsByLocation = useMemo(() => {
     const warningMap = new Map<string, { reasons: Set<string>; hasConstraintReason: boolean; shouldHighlight: boolean }>()
     const addWarning = (locationKeys: string[], reason: string, hasConstraintReason: boolean, shouldHighlight = hasConstraintReason) => {
@@ -4838,6 +4950,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       addWarning(locationKeys, `${isConstraint ? '制約事項' : '優先事項'}: ${baseLabel}`, isConstraint, isConstraint)
     }
 
+    // 性能最適化(挙動不変): 禁止時限ルールはセル・生徒に依らないためループ外で1回だけ解決する。
+    const forbidFirstPeriodRule = autoAssignRuleByKey.get('forbidFirstPeriod')
+    const forbiddenPeriods = resolveForbiddenPeriods(forbidFirstPeriodRule)
+
     for (const cell of cells) {
       for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
         const desk = cell.desks[deskIndex]
@@ -4850,10 +4966,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           if (student.manualAdded) addWarning([currentLocationKey], '手動追加', false, true)
 
           const managedStudent = student.managedStudentId
-            ? students.find((entry) => entry.id === student.managedStudentId) ?? managedStudentByRegisteredName.get(student.name) ?? null
+            ? managedStudentById.get(student.managedStudentId) ?? managedStudentByRegisteredName.get(student.name) ?? null
             : managedStudentByRegisteredName.get(student.name) ?? null
           const studentGradeOnDate: GradeLabel = student.birthDate
-            ? resolveSchoolGradeLabel(student.birthDate, parseDateKey(cell.dateKey))
+            ? resolveSchoolGradeLabelForDateKey(student.birthDate, cell.dateKey)
             : student.grade
           const teacher = resolveManagedTeacherForDesk(desk, cell.dateKey)
           const pairedStudent = desk.lesson?.studentSlots[studentIndex === 0 ? 1 : 0] ?? null
@@ -4863,30 +4979,30 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             addWarning([currentLocationKey], 'データ不整合: 講師データ不一致', true, true)
           }
 
-          if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
+          if (teacher && managedStudent && isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate, isRuleApplicableCached) && !canTeacherHandleStudentSubject(teacher, student.subject, studentGradeOnDate)) {
             addRuleWarning([currentLocationKey], 'subjectCapableTeachersOnly', '科目対応講師のみ')
           }
 
           if (managedStudent) {
-            if (isAutoAssignRuleApplicable(autoAssignRuleByKey.get('forbidFirstPeriod'), managedStudent.id, studentGradeOnDate) && resolveForbiddenPeriods(autoAssignRuleByKey.get('forbidFirstPeriod')).includes(cell.slotNumber)) {
+            if (isRuleApplicableCached(forbidFirstPeriodRule, managedStudent.id, studentGradeOnDate) && forbiddenPeriods.includes(cell.slotNumber)) {
               addRuleWarning([currentLocationKey], 'forbidFirstPeriod', '指定時限禁止')
             }
 
-            const regularTeachersOnly = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
+            const regularTeachersOnly = isRuleApplicableCached(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
             const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
             if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
               addRuleWarning([currentLocationKey], 'regularTeachersOnly', '通常講師のみ')
             }
 
-            const twoStudentsRuleApplied = isAutoAssignRuleApplicable(autoAssignRuleByKey.get('preferTwoStudentsPerTeacher'), managedStudent.id, studentGradeOnDate)
+            const twoStudentsRuleApplied = isRuleApplicableCached(autoAssignRuleByKey.get('preferTwoStudentsPerTeacher'), managedStudent.id, studentGradeOnDate)
             if (twoStudentsRuleApplied && !pairedStudent) {
               addRuleWarning([currentLocationKey], 'preferTwoStudentsPerTeacher', '講師1人に生徒2人配置')
             }
 
             const comparableStudentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
-            const sameDayOccurrences = collectStudentOccurrencesOnDate(normalizedWeeks, comparableStudentKey, cell.dateKey)
-            const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate)
-            const lessonLimitRuleKey = (['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'] as const).find((ruleKey) => isAutoAssignRuleApplicable(autoAssignRuleByKey.get(ruleKey), managedStudent.id, studentGradeOnDate))
+            const sameDayOccurrences = studentOccurrencesIndex.get(comparableStudentKey)?.get(cell.dateKey) ?? []
+            const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, managedStudent.id, studentGradeOnDate, isRuleApplicableCached)
+            const lessonLimitRuleKey = (['maxOneLesson', 'maxTwoLessons', 'maxThreeLessons'] as const).find((ruleKey) => isRuleApplicableCached(autoAssignRuleByKey.get(ruleKey), managedStudent.id, studentGradeOnDate))
             if (lessonLimit !== null && lessonLimitRuleKey && sameDayOccurrences.length > lessonLimit) {
               addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonLimitRuleKey, `同日${lessonLimit}コマ上限`)
             }
@@ -4895,7 +5011,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               .find((group) => group.key === 'lesson-pattern')
               ?.ruleKeys
               .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
-              .find((rule) => isAutoAssignRuleApplicable(rule, managedStudent.id, studentGradeOnDate))
+              .find((rule) => isRuleApplicableCached(rule, managedStudent.id, studentGradeOnDate))
             if (lessonPatternRule && sameDayOccurrences.length >= 2) {
               const occurrencesWithAdjacentLesson = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && Math.abs(entry.slotNumber - other.slotNumber) === 1))
               const occurrencesWithOneSlotBreak = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && Math.abs(entry.slotNumber - other.slotNumber) === 2))
@@ -4946,7 +5062,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const text = value.hasConstraintReason ? ['制約違反', ...reasons].join('\n') : reasons.join('\n')
       return [locationKey, { text, highlight: value.shouldHighlight }] as const
     }))
-  }, [autoAssignRuleByKey, cells, isPairConstraintBlocked, lectureConstraintGroups, managedStudentByAnyName, managedStudentByRegisteredName, normalizedWeeks, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, studentUnavailableSlotsById, students])
+  }, [autoAssignRuleByKey, cells, isRuleApplicableCached, lectureConstraintGroups, managedStudentByAnyName, managedStudentById, managedStudentByRegisteredName, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, resolvePairConstraintSeverity, resolveRegularTeacherIdsForStudentOnDate, resolveSpecialSessionById, studentOccurrencesIndex, studentUnavailableSlotsById])
 
   const isTeacherWithdrawnOnDate = useCallback((teacherId: string | undefined, teacherName: string, dateKey: string) => {
     if (!teacherName) return false
@@ -8893,10 +9009,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   )
 }
 
-function resolveApplicableLessonLimit(ruleMap: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel) {
+// 性能最適化(挙動不変): isApplicable は isAutoAssignRuleApplicable と同値のメモ化版を注入するための引数。
+function resolveApplicableLessonLimit(ruleMap: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
   const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
     .map((ruleKey) => ruleMap.get(ruleKey))
-    .find((rule) => isAutoAssignRuleApplicable(rule, studentId, studentGrade))
+    .find((rule) => isApplicable(rule, studentId, studentGrade))
 
   if (lessonLimitRule?.key === 'maxOneLesson') return 1
   if (lessonLimitRule?.key === 'maxTwoLessons') return 2

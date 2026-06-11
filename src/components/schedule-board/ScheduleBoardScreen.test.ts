@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -3621,5 +3621,141 @@ describe('buildTeacherSelectionOptions', () => {
     // 退塾日を過ぎた講師(吉田=休職を退塾日で代用)は候補から除外される
     expect(options.map((option) => option.name)).not.toContain('吉田講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')
+  })
+})
+
+// 性能最適化の回帰防止: 盤面警告の「同日コマ」収集は、旧実装(生徒スロット毎に全盤面走査する
+// collectStudentOccurrencesOnDate)から buildStudentOccurrencesByDateIndex(全盤面1パス)へ置き換えた。
+// インデックスの内容・並び順が旧実装の都度走査と完全一致することを担保する（一致しなければ警告表示が変わる）。
+describe('buildStudentOccurrencesByDateIndex', () => {
+  const createOccurrenceCell = (id: string, dateKey: string, slotNumber: number, desks: DeskCell[]): SlotCell => ({
+    id,
+    dateKey,
+    dayLabel: '火',
+    dateLabel: dateKey.slice(5).replace('-', '/'),
+    slotLabel: `${slotNumber}限`,
+    slotNumber,
+    timeLabel: '16:20-17:50',
+    isOpenDay: true,
+    desks,
+  })
+
+  const createOccurrenceStudent = (id: string, name: string, managedStudentId: string | undefined, lessonType: StudentEntry['lessonType']): StudentEntry => ({
+    id,
+    name,
+    managedStudentId,
+    grade: '中3',
+    subject: '数',
+    lessonType,
+    teacherType: 'normal',
+  })
+
+  // 旧 collectStudentOccurrencesOnDate と同じ走査(週→セル→デスク→スロット)・同じ生徒キー解決のリファレンス実装。
+  const collectOccurrencesLegacy = (
+    sourceWeeks: SlotCell[][],
+    studentKey: string,
+    dateKey: string,
+    managedStudentByAnyName: Map<string, StudentRow>,
+    resolveDisplayName: (name: string) => string,
+  ) => {
+    const lessons: Array<{ occurrenceKey: string; slotNumber: number; lessonType: StudentEntry['lessonType'] }> = []
+    for (const week of sourceWeeks) {
+      for (const cell of week) {
+        if (cell.dateKey !== dateKey) continue
+        for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+          const desk = cell.desks[deskIndex]
+          for (let studentIndex = 0; studentIndex < (desk.lesson?.studentSlots.length ?? 0); studentIndex += 1) {
+            const student = desk.lesson?.studentSlots[studentIndex]
+            if (!student) continue
+            const managedId = student.managedStudentId ?? managedStudentByAnyName.get(student.name)?.id
+            const currentKey = managedId ?? `name:${resolveDisplayName(student.name)}`
+            if (currentKey !== studentKey) continue
+            lessons.push({
+              occurrenceKey: `${cell.id}__${deskIndex}__${studentIndex}`,
+              slotNumber: cell.slotNumber,
+              lessonType: student.lessonType,
+            })
+          }
+        }
+      }
+    }
+    return lessons
+  }
+
+  const buildOccurrenceWeeks = (): SlotCell[][] => {
+    const studentA1 = createOccurrenceStudent('board-a1', 'A生徒', 'stu-a', 'regular')
+    const studentA2 = createOccurrenceStudent('board-a2', 'A生徒', 'stu-a', 'special')
+    const studentA3 = createOccurrenceStudent('board-a3', 'A生徒', 'stu-a', 'makeup')
+    const studentB = createOccurrenceStudent('board-b1', 'B生徒', undefined, 'regular')
+    const studentC = createOccurrenceStudent('board-c1', 'C生徒', undefined, 'extra')
+
+    return [
+      [
+        // 同日で後のセルの方が時限が小さい並びにして、「時限順ではなく走査順」を検証する
+        createOccurrenceCell('2026-04-07_3', '2026-04-07', 3, [
+          { id: 'd1', teacher: 'T1', lesson: { id: 'l1', studentSlots: [studentA1, studentB] } },
+        ]),
+        createOccurrenceCell('2026-04-07_2', '2026-04-07', 2, [
+          { id: 'd2', teacher: '' },
+          { id: 'd3', teacher: 'T2', lesson: { id: 'l2', studentSlots: [null, studentA2] } },
+        ]),
+        createOccurrenceCell('2026-04-08_1', '2026-04-08', 1, [
+          { id: 'd4', teacher: 'T3', lesson: { id: 'l3', studentSlots: [studentC, null] } },
+        ]),
+      ],
+      [
+        createOccurrenceCell('2026-04-14_2', '2026-04-14', 2, [
+          { id: 'd5', teacher: 'T1', lesson: { id: 'l4', studentSlots: [studentA3, null] } },
+        ]),
+      ],
+    ]
+  }
+
+  const managedStudentByAnyName = new Map<string, StudentRow>([
+    ['B生徒', { id: 'stu-b', name: 'B生徒' } as StudentRow],
+  ])
+  const resolveDisplayName = (name: string) => (name === 'C生徒' ? 'C表示名' : name)
+
+  it('インデックスの (生徒キー, 日付) ごとの内容・並び順が旧実装の都度走査と完全一致する', () => {
+    const weeks = buildOccurrenceWeeks()
+    const index = buildStudentOccurrencesByDateIndex(weeks, managedStudentByAnyName, resolveDisplayName)
+
+    const allDateKeys = ['2026-04-07', '2026-04-08', '2026-04-14']
+    const allStudentKeys = ['stu-a', 'stu-b', 'name:C表示名', 'stu-unknown']
+    for (const studentKey of allStudentKeys) {
+      for (const dateKey of allDateKeys) {
+        const fromIndex = index.get(studentKey)?.get(dateKey) ?? []
+        const fromLegacy = collectOccurrencesLegacy(weeks, studentKey, dateKey, managedStudentByAnyName, resolveDisplayName)
+        expect(fromIndex).toEqual(fromLegacy)
+      }
+    }
+  })
+
+  it('同日の出現はセルの走査順で並び、managedStudentId 欠落時は登録名経由で同一生徒に束ねる', () => {
+    const weeks = buildOccurrenceWeeks()
+    const index = buildStudentOccurrencesByDateIndex(weeks, managedStudentByAnyName, resolveDisplayName)
+
+    // A生徒: 同日2コマ(3限セル→2限セルの走査順)＋別日・別週
+    expect(index.get('stu-a')?.get('2026-04-07')).toEqual([
+      { occurrenceKey: '2026-04-07_3__0__0', slotNumber: 3, lessonType: 'regular' },
+      { occurrenceKey: '2026-04-07_2__1__1', slotNumber: 2, lessonType: 'special' },
+    ])
+    expect(index.get('stu-a')?.get('2026-04-14')).toEqual([
+      { occurrenceKey: '2026-04-14_2__0__0', slotNumber: 2, lessonType: 'makeup' },
+    ])
+
+    // B生徒: managedStudentId なしでも登録名から stu-b に解決される
+    expect(index.get('stu-b')?.get('2026-04-07')).toEqual([
+      { occurrenceKey: '2026-04-07_3__0__1', slotNumber: 3, lessonType: 'regular' },
+    ])
+
+    // C生徒: 未連携生徒は表示名キーで束ねる
+    expect(index.get('name:C表示名')?.get('2026-04-08')).toEqual([
+      { occurrenceKey: '2026-04-08_1__0__0', slotNumber: 1, lessonType: 'extra' },
+    ])
+
+    // 配置総数 = インデックス内の出現総数（取りこぼし・重複がない）
+    const totalIndexed = Array.from(index.values()).flatMap((byDate) => Array.from(byDate.values())).reduce((total, occurrences) => total + occurrences.length, 0)
+    expect(totalIndexed).toBe(5)
   })
 })
