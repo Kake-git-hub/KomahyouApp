@@ -1687,6 +1687,69 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
   return { snapshotGzipBase64: compressed.toString('base64') }
 })
 
+// 開発用教室の判定(クライアント src/utils/developmentClassroom.ts と同じ規則)。
+// 本番の開発用教室は id=v8OZ7zH8vONNHjjYVcR1・name=「開発用教室」なので name 判定が要。
+function isDevelopmentClassroomIdentity(id: string | null | undefined, name: string | null | undefined) {
+  const normalizedId = (id ?? '').trim().toLowerCase()
+  const normalizedName = (name ?? '').trim()
+  return normalizedId === 'development'
+    || normalizedId === 'dev'
+    || normalizedId.includes('development')
+    || normalizedId.startsWith('dev_')
+    || normalizedName === '開発用教室'
+    || normalizedName.includes('開発用教室')
+}
+
+// 「他教室のバックアップを開発用教室へ読み込む(Feature B)」のアクセス判定。
+// 許可: 開発者、または【開発用教室の室長】(開発用教室はサンドボックスのため任意教室を読み込める)。
+async function resolveDevelopmentBackupAccess(authUid: string | undefined, workspaceKey: string) {
+  if (!authUid) throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
+  const memberSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(authUid).get()
+  if (!memberSnapshot.exists) throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
+  const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc
+  if (member.role === 'developer') return { member, isDeveloper: true as const }
+  const assignedId = typeof member.assignedClassroomId === 'string' ? member.assignedClassroomId.trim() : ''
+  if (assignedId) {
+    const classroomSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(assignedId).get()
+    const name = (classroomSnapshot.data() as FirebaseClassroomDoc | undefined)?.name ?? ''
+    if (isDevelopmentClassroomIdentity(assignedId, name)) return { member, isDeveloper: false as const, developmentClassroomId: assignedId }
+  }
+  throw new HttpsError('permission-denied', 'この操作には開発者または開発用教室の権限が必要です。')
+}
+
+// Feature B のピッカー用: 利用可能なバックアップ一覧と、読み込み元として選べる教室(id+名前)を返す。
+// 開発用教室の室長でも直接 Firestore を読まずに済むよう、サーバー(admin権限)でまとめて返す。
+export const listDevelopmentClassroomBackupSources = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  await resolveDevelopmentBackupAccess(request.auth?.uid, workspaceKey)
+
+  const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
+  const [summariesSnapshot, classroomsSnapshot] = await Promise.all([
+    workspaceRef.collection('workspaceAutoBackupSummaries').orderBy('savedAt', 'desc').limit(200).get(),
+    workspaceRef.collection('classrooms').get(),
+  ])
+
+  const backups = summariesSnapshot.docs.map((entry) => {
+    const data = entry.data() as WorkspaceAutoBackupSummaryDoc
+    return {
+      backupDateKey: String(data.backupDateKey ?? entry.id),
+      backupKind: data.backupKind === 'hourly' ? 'hourly' : 'daily',
+      displayLabel: String(data.displayLabel ?? data.backupDateKey ?? entry.id),
+      savedAt: String(data.savedAt ?? ''),
+      sourceSavedAt: String(data.sourceSavedAt ?? ''),
+    }
+  })
+
+  // 読み込み元候補は開発用教室自身を除いた全教室。
+  const classrooms = classroomsSnapshot.docs
+    .map((entry) => ({ id: entry.id, name: (entry.data() as FirebaseClassroomDoc).name ?? entry.id }))
+    .filter((classroom) => !isDevelopmentClassroomIdentity(classroom.id, classroom.name))
+    .sort((left, right) => left.name.localeCompare(right.name, 'ja'))
+
+  return { backups, classrooms }
+})
+
 export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
@@ -1703,8 +1766,15 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
     throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
   }
 
+  // 許可: 開発者 / 自分の担当教室 / 開発用教室の室長(任意教室を開発用へ読み込むため)。
   const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc | undefined
-  if (member?.role !== 'developer' && member?.assignedClassroomId !== classroomId) {
+  let allowed = member?.role === 'developer' || member?.assignedClassroomId === classroomId
+  if (!allowed && typeof member?.assignedClassroomId === 'string' && member.assignedClassroomId) {
+    const ownClassroomSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(member.assignedClassroomId).get()
+    const ownName = (ownClassroomSnapshot.data() as FirebaseClassroomDoc | undefined)?.name ?? ''
+    if (isDevelopmentClassroomIdentity(member.assignedClassroomId, ownName)) allowed = true
+  }
+  if (!allowed) {
     throw new HttpsError('permission-denied', 'この教室のバックアップにアクセスする権限がありません。')
   }
 
@@ -1723,8 +1793,6 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
     throw new HttpsError('not-found', '指定したサーバーバックアップが見つかりません。')
   }
 
-  await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-classroom-${classroomId}-${backupDateKey}`)
-
   const [content] = await file.download()
   const snapshot = JSON.parse(content.toString('utf-8')) as WorkspaceSnapshot
   const classroom = snapshot.classrooms?.find((c) => c.id === classroomId)
@@ -1732,11 +1800,13 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
     throw new HttpsError('not-found', 'バックアップ内に該当教室のデータが見つかりません。')
   }
 
+  // 1教室分でも数MBになりうるため、callable の応答上限(約10MB)対策で gzip+base64 で返す。
+  const dataGzipBase64 = gzipSync(Buffer.from(JSON.stringify(classroom.data), 'utf8')).toString('base64')
   return {
     classroomId: classroom.id,
     classroomName: classroom.name,
     savedAt: snapshot.savedAt,
-    data: classroom.data,
+    dataGzipBase64,
   }
 })
 

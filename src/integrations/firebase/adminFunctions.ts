@@ -503,17 +503,58 @@ export type ClassroomLatestRollback = {
   data: AppSnapshotPayload
 }
 
+export type DevelopmentBackupSource = {
+  backupDateKey: string
+  backupKind: 'daily' | 'hourly'
+  displayLabel: string
+  savedAt: string
+  sourceSavedAt: string
+}
+
+export type DevelopmentClassroomBackupSources = {
+  backups: DevelopmentBackupSource[]
+  classrooms: Array<{ id: string; name: string }>
+}
+
+// Feature B: 開発用教室へ読み込める「他教室 × バックアップ時点」の候補を取得する。
+// 開発者でも開発用教室の室長でも呼べる(サーバー側で権限判定)。
+export async function listDevelopmentClassroomBackupSources(): Promise<DevelopmentClassroomBackupSources> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string }, DevelopmentClassroomBackupSources>(functions, 'listDevelopmentClassroomBackupSources', { timeout: 120_000 })
+  const result = await callable({ workspaceKey: config.workspaceKey })
+  return {
+    backups: Array.isArray(result.data.backups) ? result.data.backups : [],
+    classrooms: Array.isArray(result.data.classrooms) ? result.data.classrooms : [],
+  }
+}
+
 export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKey: string, classroomId: string): Promise<ClassroomFromServerAutoBackup> {
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; classroomId: string }, ClassroomFromServerAutoBackup>(functions, 'downloadClassroomFromServerAutoBackup', { timeout: 120_000 })
+  const callable = httpsCallable<{ workspaceKey: string; backupDateKey: string; classroomId: string }, { classroomId: string; classroomName: string; savedAt: string; dataGzipBase64?: string; data?: AppSnapshotPayload }>(functions, 'downloadClassroomFromServerAutoBackup', { timeout: 120_000 })
   const result = await callable({
     workspaceKey: config.workspaceKey,
     backupDateKey,
     classroomId,
   })
-  return result.data
+  // 1教室分でも数MBになりうるため、サーバーは gzip+base64 で返す。ここで AppSnapshotPayload へ復元する。
+  let data: AppSnapshotPayload
+  if (typeof result.data.dataGzipBase64 === 'string' && result.data.dataGzipBase64) {
+    data = JSON.parse(await gunzipBase64ToString(result.data.dataGzipBase64)) as AppSnapshotPayload
+  } else if (result.data.data) {
+    data = result.data.data
+  } else {
+    throw new Error('教室バックアップの応答が不正です。')
+  }
+  return {
+    classroomId: result.data.classroomId,
+    classroomName: result.data.classroomName,
+    savedAt: result.data.savedAt,
+    data,
+  }
 }
 
 export async function downloadLatestFirebaseClassroomRollback(classroomId: string): Promise<ClassroomLatestRollback> {

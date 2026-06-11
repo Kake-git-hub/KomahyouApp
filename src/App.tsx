@@ -15,7 +15,7 @@ import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdmi
 import { BillingAutomationScreen } from './components/billing/BillingAutomationScreen'
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadFirebaseServerAutoBackup, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -1239,14 +1239,10 @@ function AuthenticatedApp() {
     () => isFeatureEnabledForClassroom('manualFirebaseSaveStability', actingClassroom),
     [actingClassroom],
   )
-  const developmentClassroomCopySources = useMemo(() => workspaceClassrooms
-    .filter((classroom) => classroom.id !== actingClassroomId)
-    .map((classroom) => ({
-      id: classroom.id,
-      name: classroom.name || '名称未設定の教室',
-    }))
-    .sort((left, right) => left.name.localeCompare(right.name, 'ja')),
-  [actingClassroomId, workspaceClassrooms])
+  // Feature B: 開発用教室へ「他教室 × バックアップ時点」を読み込むための候補(サーバー由来)。
+  // 旧「他教室コピー」(in-memory 参照)を廃止し、Storage の確定データのみを取り込む方式に置換。
+  const [developmentBackupSources, setDevelopmentBackupSources] = useState<DevelopmentClassroomBackupSources>({ backups: [], classrooms: [] })
+  const [developmentBackupLoading, setDevelopmentBackupLoading] = useState(false)
   const displayRegularLessons = useMemo(() => {
     const templateRows = buildRegularLessonsFromTemplate({
       template: classroomSettings.regularLessonTemplate,
@@ -4047,62 +4043,98 @@ function AuthenticatedApp() {
   // spec-save-restore §4: 教室画面の「サーバーバックアップ復元」「直前のFirebase保存前へ戻す」は廃止。
   // サーバー復元は開発者画面(restoreServerAutoBackup→openDeveloperRestoreModal)のみ。rollbackはUndoで代替。
 
-  const copyClassroomDataToDevelopmentClassroom = useCallback((sourceClassroomId: string) => {
+  // Feature B: 読み込み元(他教室)× バックアップ時点の候補をサーバーから取得する。
+  // in-memory の他教室参照を一切使わないため、開発用教室の室長アカウントでも機能する。
+  const loadDevelopmentBackupSources = useCallback(async () => {
+    if (!isActingDevelopmentClassroom) {
+      setPersistenceMessage('この操作は開発用教室でのみ実行できます。')
+      return
+    }
+    if (!isRemoteBackendEnabled) {
+      setPersistenceMessage('Firebase が無効です。接続設定を確認してください。')
+      return
+    }
+    setDevelopmentBackupLoading(true)
+    setPersistenceMessage('読み込み可能な教室とバックアップ時点を取得しています…')
+    try {
+      const sources = await listDevelopmentClassroomBackupSources()
+      setDevelopmentBackupSources(sources)
+      setPersistenceMessage(`読み込み候補を取得しました(教室${sources.classrooms.length}件 / バックアップ${sources.backups.length}件)。`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '読み込み候補の取得に失敗しました。'
+      setPersistenceMessage(`取得エラー: ${message}`)
+    } finally {
+      setDevelopmentBackupLoading(false)
+    }
+  }, [isActingDevelopmentClassroom, isRemoteBackendEnabled])
+
+  // Feature B: 選んだ教室の「選んだバックアップ時点」のデータを開発用教室へ読み込む。
+  // サーバーから確定データを取得→ディープクローン(共有トークン除去)→【開発用教室のみ】へ書き込む。
+  // 他教室には一切書き込まないため、データ混入が構造的に発生しない。
+  const loadClassroomBackupIntoDevelopment = useCallback(async (backupDateKey: string, sourceClassroomId: string) => {
     if (!actingClassroomId || !isActingDevelopmentClassroom) {
       setPersistenceMessage('この操作は開発用教室でのみ実行できます。')
       return
     }
-
-    const sourceClassroom = workspaceClassroomsRef.current.find((classroom) => classroom.id === sourceClassroomId)
-    if (!sourceClassroom) {
-      setPersistenceMessage('コピー元の教室が見つかりません。')
+    if (!backupDateKey || !sourceClassroomId) {
+      setPersistenceMessage('読み込み元の教室とバックアップ時点を選択してください。')
+      return
+    }
+    if (sourceClassroomId === actingClassroomId) {
+      setPersistenceMessage('開発用教室自身は読み込み元にできません。')
       return
     }
 
-    if (sourceClassroom.id === actingClassroomId) {
-      setPersistenceMessage('開発用教室自身はコピー元にできません。')
-      return
-    }
+    setDevelopmentBackupLoading(true)
+    setPersistenceMessage('選択した教室のバックアップを取得しています…')
+    try {
+      const source = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, sourceClassroomId)
+      const sourceStudentCount = source.data?.students?.length ?? 0
+      const sourceTeacherCount = source.data?.teachers?.length ?? 0
+      const sourceTemplateCells = source.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0
+      const backupLabel = developmentBackupSources.backups.find((backup) => backup.backupDateKey === backupDateKey)?.displayLabel ?? backupDateKey
+      const confirmed = window.confirm([
+        `「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータを開発用教室へ読み込みます。`,
+        `読み込み元の規模: 生徒${sourceStudentCount}名 / 講師${sourceTeacherCount}名 / テンプレ${sourceTemplateCells}コマ`,
+        'この人数・コマ数が想定と違う場合は、教室や時点の取り違えの可能性があるので中止してください。',
+        '共有用トークン類は開発用教室向けに自動で外します。',
+        '現在の開発用教室データは上書きされます。続行しますか?',
+      ].join('\n'))
+      if (!confirmed) {
+        setPersistenceMessage('バックアップの読み込みをキャンセルしました。')
+        return
+      }
 
-    // データ混同の早期検知: コピー元の実データ規模を明示し、取り違え(例: 「日大前」なのに人数が
-    // 想定と違う)に気づけるようにする。スロット汚染を盲目的にコピーするのを防ぐ安全確認。
-    const sourceStudentCount = sourceClassroom.data?.students?.length ?? 0
-    const sourceTeacherCount = sourceClassroom.data?.teachers?.length ?? 0
-    const sourceTemplateCells = sourceClassroom.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0
-    const confirmed = window.confirm([
-      `「${sourceClassroom.name || sourceClassroom.id}」の現在データを開発用教室へコピーします。`,
-      `コピー元の規模: 生徒${sourceStudentCount}名 / 講師${sourceTeacherCount}名 / テンプレ${sourceTemplateCells}コマ`,
-      'この人数・コマ数が想定と違う場合は、データ取り違えの可能性があるので中止してください。',
-      '共有用トークン類は開発用教室向けに再発行されるよう自動で外します。',
-      '現在の開発用教室データは上書きされます。続行しますか?',
-    ].join('\n'))
-    if (!confirmed) {
-      setPersistenceMessage('他教室データのコピーをキャンセルしました。')
-      return
+      // buildDevelopmentClassroomCopyPayload はディープクローン+共有トークン除去を行う(参照共有なし)。
+      const loadedPayload = buildDevelopmentClassroomCopyPayload(source.data)
+      saveUndoSnapshot(`他教室バックアップ読込 (${source.classroomName || sourceClassroomId})`)
+      // 書き込みは【開発用教室(acting)のみ】。他教室の workspaceClassrooms スロットは触らない。
+      setWorkspaceClassrooms((current) => current.map((classroom) =>
+        classroom.id === actingClassroomId
+          ? { ...classroom, data: loadedPayload }
+          : classroom))
+      applyClassroomPayloadToState(loadedPayload, {
+        setScreen: (value) => setScreen(value),
+        setManagers,
+        setTeachers,
+        setStudents,
+        setRegularLessons,
+        setGroupLessons,
+        setSpecialSessions,
+        setAutoAssignRules,
+        setPairConstraints,
+        setClassroomSettings,
+        setBoardState,
+        setBoardMountKey,
+      })
+      setPersistenceMessage(`「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータを開発用教室へ読み込みました。保存してください。`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'バックアップの読み込みに失敗しました。'
+      setPersistenceMessage(`読み込みエラー: ${message}`)
+    } finally {
+      setDevelopmentBackupLoading(false)
     }
-
-    const copiedPayload = buildDevelopmentClassroomCopyPayload(sourceClassroom.data)
-    saveUndoSnapshot(`他教室コピー (${sourceClassroom.name || sourceClassroom.id})`)
-    setWorkspaceClassrooms((current) => current.map((classroom) =>
-      classroom.id === actingClassroomId
-        ? { ...classroom, data: copiedPayload }
-        : classroom))
-    applyClassroomPayloadToState(copiedPayload, {
-      setScreen: (value) => setScreen(value),
-      setManagers,
-      setTeachers,
-      setStudents,
-      setRegularLessons,
-      setGroupLessons,
-      setSpecialSessions,
-      setAutoAssignRules,
-      setPairConstraints,
-      setClassroomSettings,
-      setBoardState,
-      setBoardMountKey,
-    })
-    setPersistenceMessage(`「${sourceClassroom.name || sourceClassroom.id}」の現在データを開発用教室へコピーしました。`)
-  }, [actingClassroomId, isActingDevelopmentClassroom, saveUndoSnapshot, setWorkspaceClassrooms, workspaceClassroomsRef])
+  }, [actingClassroomId, developmentBackupSources, isActingDevelopmentClassroom, saveUndoSnapshot, setWorkspaceClassrooms])
 
   const exportBasicDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -4590,8 +4622,10 @@ function AuthenticatedApp() {
         onRestoreUndoSnapshot={restoreUndoSnapshot}
         onDismissUndoSnapshot={dismissUndoSnapshot}
         isDevelopmentClassroom={isActingDevelopmentClassroom}
-        developmentClassroomCopySources={developmentClassroomCopySources}
-        onCopyClassroomDataToDevelopmentClassroom={copyClassroomDataToDevelopmentClassroom}
+        developmentBackupSources={developmentBackupSources}
+        developmentBackupLoading={developmentBackupLoading}
+        onLoadDevelopmentBackupSources={() => void loadDevelopmentBackupSources()}
+        onLoadClassroomBackupIntoDevelopment={(backupDateKey, sourceClassroomId) => void loadClassroomBackupIntoDevelopment(backupDateKey, sourceClassroomId)}
       />
     )
   }
