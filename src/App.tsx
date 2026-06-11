@@ -434,6 +434,26 @@ function sanitizeWorkspaceSnapshot(snapshot: WorkspaceSnapshot): WorkspaceSnapsh
   }
 }
 
+// 【本番データ混入防止・最優先】Firebase 同期で書き込む教室を決める。
+// かつては targetClassroomIds 未指定だと【全教室】を書いていたが、これが混入の増幅器だった
+// (メモリ/ローカルに古い・混入した他教室データがあると、それを全教室へ永続化して他教室を破壊する)。
+// 対象未指定でも全教室は書かず、操作中の教室のみに限定する。複数教室を書く正当な操作(復元など)は
+// 呼び出し側が対象IDを明示する。acting 不明なら何も書かない(安全側に倒す)。
+export function resolveWorkspaceSyncTargetClassrooms(
+  classrooms: WorkspaceClassroom[],
+  targetClassroomIds: string[] | undefined,
+  actingClassroomId: string | null,
+): WorkspaceClassroom[] {
+  if (targetClassroomIds && targetClassroomIds.length > 0) {
+    const idSet = new Set(targetClassroomIds)
+    return classrooms.filter((classroom) => idSet.has(classroom.id))
+  }
+  if (actingClassroomId) {
+    return classrooms.filter((classroom) => classroom.id === actingClassroomId)
+  }
+  return []
+}
+
 function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, restoreByClassroomId: Map<string, boolean>) {
   const currentClassroomById = new Map(currentSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
   const restoringClassroomById = new Map(restoringSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
@@ -1663,9 +1683,11 @@ function AuthenticatedApp() {
 
       let failed = false
       try {
-        const targetClassrooms = nextItem.targetClassroomIds && nextItem.targetClassroomIds.length > 0
-          ? nextItem.snapshot.classrooms.filter((classroom) => nextItem.targetClassroomIds?.includes(classroom.id))
-          : nextItem.snapshot.classrooms
+        const targetClassrooms = resolveWorkspaceSyncTargetClassrooms(
+          nextItem.snapshot.classrooms,
+          nextItem.targetClassroomIds,
+          nextItem.snapshot.actingClassroomId,
+        )
         if (targetClassrooms.length === 0) throw new Error('保存対象の教室データが見つかりません。')
         const startProgress = { percent: 20, label: 'Cloud Functions 経由で保存準備中' }
         if (isRemoteSyncVisibleRef.current) {
@@ -2642,7 +2664,23 @@ function AuthenticatedApp() {
     saveUndoSnapshot('開発者バックアップ復元')
     applyWorkspaceSnapshot(mergeResult.snapshot, `選択した教室だけ${developerRestoreModalState.sourceLabel}から復元しました。`)
     setDeveloperRestoreModalState(null)
-  }, [applyWorkspaceSnapshot, developerRestoreModalState, saveUndoSnapshot])
+
+    // 復元した教室は acting 教室とは限らない(例: 開発用を開いたまま日大前だけ復元)。
+    // 全教室書き込みフォールバックを廃止したため、復元した教室IDを明示的に対象指定して
+    // Firebase へ保存する(選択した教室「だけ」を確実に永続化し、他教室は一切触らない)。
+    if (isRemoteBackendEnabled && remoteSessionUserId) {
+      const restoredClassroomIds = Array.from(restoreByClassroomId.entries())
+        .filter(([, selected]) => selected)
+        .map(([classroomId]) => classroomId)
+        .filter((classroomId) => mergeResult.snapshot.classrooms.some((classroom) => classroom.id === classroomId))
+      if (restoredClassroomIds.length > 0) {
+        queueFirebaseWorkspaceSync(mergeResult.snapshot, true, true, restoredClassroomIds, {
+          onSuccess: () => setPersistenceMessage(`選択した教室(${restoredClassroomIds.length}件)を復元し、Firebase へ保存しました。`),
+          onFailure: (error) => setPersistenceMessage(`復元しましたが Firebase 保存に失敗しました。${error instanceof Error ? error.message : ''}`),
+        })
+      }
+    }
+  }, [applyWorkspaceSnapshot, developerRestoreModalState, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId, saveUndoSnapshot])
 
   const loginAsUser = useCallback((userId: string) => {
     syncCurrentClassroomData(actingClassroomId)

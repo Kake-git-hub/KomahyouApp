@@ -1,7 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
-import type { AppSnapshotPayload, WorkspaceSnapshot } from './types/appState'
+import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+
+describe('resolveWorkspaceSyncTargetClassrooms (本番データ混入防止)', () => {
+  const cls = (id: string): WorkspaceClassroom => ({
+    id, name: id, contractStatus: 'active', contractStartDate: '', contractEndDate: '',
+    managerUserId: '', data: {} as never,
+  })
+  const all = [cls('dev'), cls('a'), cls('b')]
+
+  it('対象ID指定時はそのID群だけを書く', () => {
+    expect(resolveWorkspaceSyncTargetClassrooms(all, ['a'], 'dev').map((c) => c.id)).toEqual(['a'])
+    expect(resolveWorkspaceSyncTargetClassrooms(all, ['a', 'b'], 'dev').map((c) => c.id)).toEqual(['a', 'b'])
+  })
+
+  it('対象未指定でも【全教室】は書かず、操作中の教室のみに限定する(混入の増幅器を塞ぐ)', () => {
+    expect(resolveWorkspaceSyncTargetClassrooms(all, undefined, 'dev').map((c) => c.id)).toEqual(['dev'])
+    expect(resolveWorkspaceSyncTargetClassrooms(all, [], 'dev').map((c) => c.id)).toEqual(['dev'])
+  })
+
+  it('対象未指定かつ操作中教室不明なら何も書かない(安全側)', () => {
+    expect(resolveWorkspaceSyncTargetClassrooms(all, undefined, null)).toEqual([])
+  })
+})
 
 describe('sanitizeClassroomSettings', () => {
   it('preserves saved holiday dates when a classroom snapshot is loaded again', () => {
