@@ -1961,6 +1961,10 @@ function AuthenticatedApp() {
     })
     const previousUserId = currentUserIdRef.current
     const currentScreen = screenRef.current
+    // 【本番データ混入防止】新しいワークスペースを読み込む(ログイン/アカウント切替/復元)際は、
+    // 前セッションの「直前に戻す(undo)」スナップショットを必ず破棄する。
+    // これが残ると別教室の画面で undo バナーが出て、押すと前教室データを現在の教室へ書き込む。
+    setUndoSnapshot(null)
     setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
     setWorkspaceClassrooms(trimmedClassrooms)
     setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
@@ -2738,6 +2742,11 @@ function AuthenticatedApp() {
     syncCurrentClassroomData(actingClassroomId)
     const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence()
     setSubmissionAcknowledgements([])
+    // 【本番データ混入防止】アカウント切替で前セッションの「直前に戻す(undo)」が残ると、
+    // 別教室にログインした画面にバナーが出て、押すと前教室のデータを現在の教室へ書き込んでしまう。
+    // ログアウト時に必ず undo を破棄する(在庫の取り違えを断つ)。
+    setUndoSnapshot(null)
+    setDeveloperRestoreModalState(null)
 
     if (shouldReturnDeveloperOnLogout(screenRef.current, currentUser?.role)) {
       setScreen('developer')
@@ -4055,8 +4064,15 @@ function AuthenticatedApp() {
       return
     }
 
+    // データ混同の早期検知: コピー元の実データ規模を明示し、取り違え(例: 「日大前」なのに人数が
+    // 想定と違う)に気づけるようにする。スロット汚染を盲目的にコピーするのを防ぐ安全確認。
+    const sourceStudentCount = sourceClassroom.data?.students?.length ?? 0
+    const sourceTeacherCount = sourceClassroom.data?.teachers?.length ?? 0
+    const sourceTemplateCells = sourceClassroom.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0
     const confirmed = window.confirm([
       `「${sourceClassroom.name || sourceClassroom.id}」の現在データを開発用教室へコピーします。`,
+      `コピー元の規模: 生徒${sourceStudentCount}名 / 講師${sourceTeacherCount}名 / テンプレ${sourceTemplateCells}コマ`,
+      'この人数・コマ数が想定と違う場合は、データ取り違えの可能性があるので中止してください。',
       '共有用トークン類は開発用教室向けに再発行されるよう自動で外します。',
       '現在の開発用教室データは上書きされます。続行しますか?',
     ].join('\n'))
