@@ -8454,15 +8454,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     </select>
                   </div>
                   <div className="student-menu-section">
-                    <label className="student-menu-label" htmlFor="template-edit-note-input">注記</label>
-                    <input
-                      id="template-edit-note-input"
-                      className="student-menu-input"
-                      value={templateEditDraft.note}
-                      maxLength={4}
-                      onChange={(e) => setTemplateEditDraft((d) => d ? { ...d, note: e.target.value.slice(0, 4) } : d)}
-                      data-testid="template-edit-note-input"
-                    />
+                    <span className="student-menu-label">授業時間</span>
+                    <div className="student-menu-type-grid student-menu-type-grid-time">
+                      {[
+                        { value: '', label: '90分' },
+                        { value: '60', label: '60分' },
+                        { value: '45', label: '45分' },
+                      ].map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={`student-type-button compact${normalizeRegularLessonNote(templateEditDraft.note) === option.value ? ' active' : ''}`}
+                          onClick={() => setTemplateEditDraft((d) => d ? { ...d, note: option.value } : d)}
+                          data-testid={`template-edit-lesson-minutes-${option.value || '90'}`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </>
               ) : studentMenu.mode === 'add' && templateAddDraft ? (
@@ -8499,15 +8508,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     </select>
                   </div>
                   <div className="student-menu-section">
-                    <label className="student-menu-label" htmlFor="template-add-note-input">注記</label>
-                    <input
-                      id="template-add-note-input"
-                      className="student-menu-input"
-                      value={templateAddDraft.note}
-                      maxLength={4}
-                      onChange={(e) => setTemplateAddDraft((d) => d ? { ...d, note: e.target.value.slice(0, 4) } : d)}
-                      data-testid="template-add-note-input"
-                    />
+                    <span className="student-menu-label">授業時間</span>
+                    <div className="student-menu-type-grid student-menu-type-grid-time">
+                      {[
+                        { value: '', label: '90分' },
+                        { value: '60', label: '60分' },
+                        { value: '45', label: '45分' },
+                      ].map((option) => (
+                        <button
+                          key={option.label}
+                          type="button"
+                          className={`student-type-button compact${normalizeRegularLessonNote(templateAddDraft.note) === option.value ? ' active' : ''}`}
+                          onClick={() => setTemplateAddDraft((d) => d ? { ...d, note: option.value } : d)}
+                          data-testid={`template-add-lesson-minutes-${option.value || '90'}`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </>
               ) : null}
