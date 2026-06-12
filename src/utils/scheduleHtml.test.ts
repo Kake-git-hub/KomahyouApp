@@ -751,6 +751,46 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('embeds the group-class salary category and teacher group helpers in the teacher schedule', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [createManualScheduleCell()],
+      plannedCells: [],
+      teachers: [createTeacher({ id: 'teacher-1', name: '田中講師', displayName: '田中' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      groupClassEntries: {
+        '2026-03-24_1': { dateKey: '2026-03-24', band: 1, subject: '集団社会', teacherName: '田中講師', absentStudentIds: [], addedStudentIds: ['student-1'] },
+      },
+      specialSessions: [],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('集団社会')
+    // 専用カテゴリ「集団」と講師の集団ヘルパが埋め込まれていること。
+    expect(html).toContain('集団 (1コマ)')
+    expect(html).toContain('buildTeacherGroupRowsHtml')
+    expect(html).toContain('getTeacherGroupEntriesInRange')
+    expect(html).toContain('getGroupPresentCount')
+
+    vi.unstubAllGlobals()
+  })
+
   it('opens print-all schedules into the prepared named popup window', () => {
     const write = vi.fn()
     const popup = {

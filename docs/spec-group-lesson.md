@@ -136,5 +136,9 @@
   - `ScheduleBoardScreen.tsx`：5つの schedule HTML 呼び出しに `groupClassEntries` を渡す。
   - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **336 通過**（埋め込みスクリプト構文検証38件＋集団シリアライズ/ヘルパ存在テスト追加）。
   - **Phase 4 残**：室長が日程表から集団参加を設定する経路は未実装（open-questions Q2）。現行夏期講習で「登録後=参加者のみ」を使うには室長設定経路 or QR再発行が必要。
-- **Phase 5 — 講師日程表＋給与**：集団行表示・専用カテゴリ「集団」1コマ集計（出席1名以上）・交通費日数に集団実施日加算。
+- **Phase 5 — 講師日程表＋給与 ✅ 実装（未コミット）**：集団行表示・専用カテゴリ「集団」1コマ集計（出席1名以上）・交通費日数に集団実施日加算。
+  - `scheduleHtml.ts` 埋め込みJS：`teacherMatchesGroupEntry`（担当一致＝entry.teacherName と teacher.name/fullName 照合）・`getTeacherGroupEntriesInRange`・`getGroupPresentCount`（名簿=参加 or 手動追加−欠席）・`buildTeacherGroupRowsHtml`（未実施はグレー）。
+  - `buildTeacherSalaryData(entries, teacher, startDate, endDate)`：カテゴリ G を追加。担当集団コマで出席1名以上=実施1コマ、交通費(attendanceDays)にも加算。`renderSalarySection` に「集団 (1コマ)」行（count≥1で表示・単価1種・既存 recalcSalary が自動合算）。
+  - `buildTeacherSheetHtml`：集団2行を tbody 先頭へ。salary 呼び出しに teacher＋range を渡す。
+  - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **337 通過**（給与カテゴリ/講師ヘルパ存在テスト追加・構文検証含む）。
 - **Phase 6 — 結合検証→反映**：開発用教室 `v8OZ7zH8vONNHjjYVcR1` でE2E確認 → 本番3教室の個別データ不変を確認 → 全教室反映。
