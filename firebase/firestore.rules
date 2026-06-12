@@ -58,30 +58,40 @@ service cloud.firestore {
         allow write: if isDeveloper(workspaceKey);
       }
 
+      // A3: 教室スナップショット/設定の保存は Cloud Function(saveClassroomSnapshot)へ一本化済み。
+      // 通常保存は Admin SDK でルールを迂回するため、クライアント直書き(create/update)は
+      // 「保存の裏口」(版数照合・空データ拒否・読み戻し検証を素通り)になる。
+      // マネージャーは直書きしない(CF経由)ので、直書きは開発者のみに限定する。
+      // 読み取りは従来通り(教室アクセス権)に保つ。delete は従来通り開発者のみ。
       match /classroomSnapshots/{classroomId} {
         allow read: if canAccessClassroom(workspaceKey, classroomId);
-        allow create, update: if canAccessClassroom(workspaceKey, classroomId);
+        // 開発者の教室作成(provisionFirebaseWorkspaceClassroomWithExistingUid)で初期スナップショットを直書きする。
+        allow create, update: if isDeveloper(workspaceKey);
         allow delete: if isDeveloper(workspaceKey);
 
+        // chunks/parts/boardWeeks は旧「分割保存」の名残。現在クライアントから書く経路は無い。
+        // 古い分割データの読み取りだけ残し、書き込みは開発者のみに閉じる。
         match /chunks/{chunkId} {
           allow read: if canAccessClassroom(workspaceKey, classroomId);
-          allow create, update, delete: if canAccessClassroom(workspaceKey, classroomId);
+          allow create, update, delete: if isDeveloper(workspaceKey);
         }
 
         match /parts/{partId} {
           allow read: if canAccessClassroom(workspaceKey, classroomId);
-          allow create, update, delete: if canAccessClassroom(workspaceKey, classroomId);
+          allow create, update, delete: if isDeveloper(workspaceKey);
         }
 
         match /boardWeeks/{weekId} {
           allow read: if canAccessClassroom(workspaceKey, classroomId);
-          allow create, update, delete: if canAccessClassroom(workspaceKey, classroomId);
+          allow create, update, delete: if isDeveloper(workspaceKey);
         }
       }
 
+      // classroomSettings は現在クライアントから書く経路が無い(読み取りのみの旧フォールバック)。
+      // 念のため読み取りは残し、書き込みは開発者のみに閉じる。
       match /classroomSettings/{classroomId} {
         allow read: if canAccessClassroom(workspaceKey, classroomId);
-        allow create, update: if canAccessClassroom(workspaceKey, classroomId);
+        allow create, update: if isDeveloper(workspaceKey);
         allow delete: if isDeveloper(workspaceKey);
       }
 
