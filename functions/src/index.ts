@@ -1930,6 +1930,49 @@ export const createWorkspaceServerHourlyBackups = onSchedule({
   await runWorkspaceServerAutoBackup('hourly')
 })
 
+// A4: 保存ごとに増える saveAttempts(冪等保存の重複防止記録)を定期的に掃除する。
+// saveAttempts は保存リクエストの再送(ネットワーク再試行)を見分けるための一時記録で、
+// 数十日後の saveId が再送されることはないため、保持期間を過ぎたものは削除して無限増加を防ぐ。
+// 削除対象は classroomSnapshots/{id}/saveAttempts のみ。スナップショット本体・バックアップ・
+// 版数(version はメインdoc)には一切触れない。
+const SAVE_ATTEMPT_RETENTION_DAYS = Math.max(7, Math.trunc(Number(process.env.SAVE_ATTEMPT_RETENTION_DAYS)) || 30)
+const SAVE_ATTEMPT_CLEANUP_SCHEDULE = process.env.SAVE_ATTEMPT_CLEANUP_SCHEDULE ?? '30 3 * * *'
+const SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT = 300
+
+async function runSaveAttemptCleanup() {
+  const cutoffIso = new Date(Date.now() - SAVE_ATTEMPT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
+  const workspacesSnapshot = await firestore.collection('workspaces').get()
+  let deletedTotal = 0
+
+  for (const workspaceDoc of workspacesSnapshot.docs) {
+    const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
+    for (const snapshotDoc of snapshotsSnapshot.docs) {
+      // createdAt は ISO 文字列。辞書順=時系列順なので文字列比較で「保持期間より古い」を抽出できる。
+      const oldAttempts = await snapshotDoc.ref.collection('saveAttempts')
+        .where('createdAt', '<', cutoffIso)
+        .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
+        .get()
+      if (oldAttempts.empty) continue
+      const batch = firestore.batch()
+      oldAttempts.docs.forEach((doc) => batch.delete(doc.ref))
+      await batch.commit()
+      deletedTotal += oldAttempts.size
+    }
+  }
+
+  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS})`)
+  return { deleted: deletedTotal, cutoffIso, retentionDays: SAVE_ATTEMPT_RETENTION_DAYS }
+}
+
+export const cleanupOldSaveAttempts = onSchedule({
+  schedule: SAVE_ATTEMPT_CLEANUP_SCHEDULE,
+  timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
+  timeoutSeconds: 300,
+  memory: '512MiB',
+}, async () => {
+  await runSaveAttemptCleanup()
+})
+
 export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '1GiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
