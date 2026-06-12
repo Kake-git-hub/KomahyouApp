@@ -91,7 +91,7 @@
 - アプリ自体は `https://komahyouapp-prod.web.app/` を直接開いて運用します
 - `firebase/firestore.rules` を適用し、`.env` に `VITE_FIREBASE_API_KEY` / `VITE_FIREBASE_AUTH_DOMAIN` / `VITE_FIREBASE_PROJECT_ID` / `VITE_FIREBASE_APP_ID` / `VITE_FIREBASE_WORKSPACE_KEY` を設定すると有効化されます
 - `VITE_FIREBASE_ENABLE_FUNCTIONS=true` は Blaze へ移行する場合のみ使ってください
-- Gmail API で請求書PDF付き下書きを作成する場合は、Google Cloud で OAuth クライアントを作成し、`.env` に `VITE_GOOGLE_OAUTH_CLIENT_ID` を設定してください。スコープは `https://www.googleapis.com/auth/gmail.compose` を使用します
+- 請求メールは OAuth 不要です。請求画面の「メール作成」で請求書PDFがダウンロードされ、宛先・件名・本文を入力済みの Gmail 作成画面が新しいタブで開きます。ダウンロードしたPDFを添付して送信してください
 - サーバー側の自動バックアップを使う場合は Cloud Storage も有効化し、`npm run deploy:firebase:with-functions` で Functions を含めてデプロイしてください
 - Google Drive サーバー同期も使う場合は、Drive API を有効化したうえで `functions/.env` に必要な値を設定し、同じく `npm run deploy:firebase:with-functions` で反映してください
 - `/KomahyouApp/...` 転送経路は互換性のため残していますが、現運用では本番 Hosting のルート URL を使います

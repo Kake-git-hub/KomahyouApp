@@ -76,7 +76,7 @@
 	- After stock calculation or PDF changes, also run `npm run test:unit`.
 	- Every deploy-capable change must bump `package.json` version (patch level) before building.
 	- `/billing` is the separate invoice automation support URL. Access is limited in the UI and Firestore rules to Firebase developer users with `dai.in.the.mood@gmail.com` or `bkkdmzn@gmail.com`; Firestore billing docs live under `workspaces/{workspaceKey}/billingMonths/{YYYY-MM}/classrooms/{classroomId}`.
-	- Billing snapshots use active students at the selected month’s 15th 0:00 point, with payment due at the end of the following month. Gmail draft creation requires `VITE_GOOGLE_OAUTH_CLIENT_ID` and the Gmail `gmail.compose` scope.
+	- Billing snapshots use active students at the selected month’s 15th 0:00 point, with payment due at the end of the following month. Amounts are tax-exclusive `billedAmount` + 10% `taxAmount` (rounded) = tax-inclusive `billedAmountWithTax`. Invoice mail uses no OAuth: the "メール作成" button downloads the invoice PDF and opens a prefilled Gmail compose tab (`integrations/gmail/compose.ts`); the user attaches the PDF manually.
 
 - [x] Maintain regression coverage
 	Current expected regression baseline: `tests/schedule-board.spec.ts` remains the E2E reference suite, but only run it when the user explicitly asks for Playwright verification.

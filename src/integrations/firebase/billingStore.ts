@@ -14,6 +14,8 @@ export type BillingClassroomRecord = {
   unitPrice: number
   calculatedAmount: number
   billedAmount: number
+  taxAmount: number
+  billedAmountWithTax: number
   invoiceNumber: string
   memo: string
   draftId?: string
@@ -45,6 +47,8 @@ function toBillingClassroomRecord(row: BillingInvoiceRow, updatedAt: string, upd
     unitPrice: row.unitPrice,
     calculatedAmount: row.calculatedAmount,
     billedAmount: row.billedAmount,
+    taxAmount: row.taxAmount,
+    billedAmountWithTax: row.billedAmountWithTax,
     invoiceNumber: row.invoiceNumber,
     memo: row.memo,
     updatedAt,
@@ -97,16 +101,17 @@ export async function saveFirebaseBillingRows(rows: BillingInvoiceRow[]) {
 export async function markFirebaseBillingDraftCreated(params: {
   monthKey: string
   classroomId: string
-  draftId: string
+  draftId?: string
 }) {
   const user = await ensureFirebaseAuthenticatedUser()
   const updatedAt = new Date().toISOString()
   const monthRef = getBillingMonthRef(params.monthKey)
   const classroomRef = doc(collection(monthRef, 'classrooms'), params.classroomId)
-  await setDoc(classroomRef, {
+  await setDoc(classroomRef, sanitizeForFirestore({
+    // OAuth 廃止後の手動メール作成では Gmail 下書きIDが無いため draftId は任意。
     draftId: params.draftId,
     draftCreatedAt: updatedAt,
     updatedAt,
     updatedBy: user.uid,
-  }, { merge: true })
+  }), { merge: true })
 }

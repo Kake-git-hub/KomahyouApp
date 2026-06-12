@@ -45,12 +45,28 @@ describe('billing utilities', () => {
       unitPrice: 300,
       calculatedAmount: 3600,
       billedAmount: 3600,
+      taxAmount: 360,
+      billedAmountWithTax: 3960,
     })
     expect(calculateBillingAmounts(12.8, 300.9, 1000.4)).toEqual({
       studentCount: 12,
       unitPrice: 300,
       calculatedAmount: 3600,
       billedAmount: 1000,
+      taxAmount: 100,
+      billedAmountWithTax: 1100,
+    })
+  })
+
+  it('rounds the 10% consumption tax on the billed (tax-exclusive) amount', () => {
+    // 7人 × 333円 = 2331円(税抜)、消費税 233.1 → 四捨五入で 233円、税込 2564円。
+    expect(calculateBillingAmounts(7, 333)).toEqual({
+      studentCount: 7,
+      unitPrice: 333,
+      calculatedAmount: 2331,
+      billedAmount: 2331,
+      taxAmount: 233,
+      billedAmountWithTax: 2564,
     })
   })
 

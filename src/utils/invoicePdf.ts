@@ -80,11 +80,15 @@ export function buildInvoiceHtml(row: BillingInvoiceRow, issuerInfo: Partial<Inv
       ${optionalLine('振込先', issuer.bankAccount)}
     </div>
   </div>
-  <div class="billing-invoice-summary"><span>ご請求金額</span><strong>${escapeHtmlText(formatYen(row.billedAmount))}</strong></div>
+  <div class="billing-invoice-summary"><span>ご請求金額（税込）</span><strong>${escapeHtmlText(formatYen(row.billedAmountWithTax))}</strong></div>
   <table class="billing-invoice-table">
-    <thead><tr><th>項目</th><th>生徒数</th><th>単価</th><th>合計金額</th><th>請求金額</th></tr></thead>
+    <thead><tr><th>項目</th><th>生徒数</th><th>単価</th><th>合計金額</th><th>請求金額（税抜）</th></tr></thead>
     <tbody><tr><td>${escapeHtmlText(formatBillingMonthLabel(row.monthKey))} 生徒数利用料</td><td>${row.studentCount.toLocaleString('ja-JP')}人</td><td>${escapeHtmlText(formatYen(row.unitPrice))}</td><td>${escapeHtmlText(formatYen(row.calculatedAmount))}</td><td>${escapeHtmlText(formatYen(row.billedAmount))}</td></tr></tbody>
-    <tfoot><tr><td colspan="4">合計</td><td>${escapeHtmlText(formatYen(row.billedAmount))}</td></tr></tfoot>
+    <tfoot>
+      <tr><td colspan="4">小計（税抜）</td><td>${escapeHtmlText(formatYen(row.billedAmount))}</td></tr>
+      <tr><td colspan="4">消費税（10%）</td><td>${escapeHtmlText(formatYen(row.taxAmount))}</td></tr>
+      <tr><td colspan="4">合計（税込）</td><td>${escapeHtmlText(formatYen(row.billedAmountWithTax))}</td></tr>
+    </tfoot>
   </table>
   <div class="billing-invoice-note">${escapeHtmlText([issuer.notes, row.memo].filter((entry) => entry.trim()).join('\n'))}</div>
 </div>`

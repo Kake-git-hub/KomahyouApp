@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailComposeAccessToken } from '../../integrations/gmail/drafts'
+import { downloadBlob, openGmailCompose } from '../../integrations/gmail/compose'
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, type BillingInvoiceRow, type BillingMonthKey } from '../../utils/billing'
@@ -76,6 +76,8 @@ function buildBillingRows(params: {
       unitPrice: amounts.unitPrice,
       calculatedAmount: amounts.calculatedAmount,
       billedAmount: amounts.billedAmount,
+      taxAmount: amounts.taxAmount,
+      billedAmountWithTax: amounts.billedAmountWithTax,
       invoiceNumber: record?.invoiceNumber || buildInvoiceNumber(classroom.id, params.monthKey),
       memo: record?.memo ?? '',
       draftId: record?.draftId,
@@ -92,8 +94,10 @@ function buildDraftBody(row: BillingInvoiceRow) {
     '',
     `生徒数: ${row.studentCount.toLocaleString('ja-JP')}人`,
     `単価: ${formatYen(row.unitPrice)}`,
-    `合計金額: ${formatYen(row.calculatedAmount)}`,
-    `請求金額: ${formatYen(row.billedAmount)}`,
+    `合計金額（税抜）: ${formatYen(row.calculatedAmount)}`,
+    `請求金額（税抜）: ${formatYen(row.billedAmount)}`,
+    `消費税（10%）: ${formatYen(row.taxAmount)}`,
+    `請求金額（税込）: ${formatYen(row.billedAmountWithTax)}`,
     `支払期限: ${formatJapaneseDate(getBillingDueDate(row.monthKey))}`,
     '',
     'ご確認のほど、よろしくお願いいたします。',
@@ -124,7 +128,9 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     studentCount: summary.studentCount + row.studentCount,
     calculatedAmount: summary.calculatedAmount + row.calculatedAmount,
     billedAmount: summary.billedAmount + row.billedAmount,
-  }), { studentCount: 0, calculatedAmount: 0, billedAmount: 0 }), [rows])
+    taxAmount: summary.taxAmount + row.taxAmount,
+    billedAmountWithTax: summary.billedAmountWithTax + row.billedAmountWithTax,
+  }), { studentCount: 0, calculatedAmount: 0, billedAmount: 0, taxAmount: 0, billedAmountWithTax: 0 }), [rows])
 
   useEffect(() => {
     if (!canUseBilling) return
@@ -179,6 +185,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
         unitPrice: amounts.unitPrice,
         calculatedAmount: amounts.calculatedAmount,
         billedAmount: amounts.billedAmount,
+        taxAmount: amounts.taxAmount,
+        billedAmountWithTax: amounts.billedAmountWithTax,
       }
     }))
   }
@@ -215,53 +223,55 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     }
   }
 
-  const createDraftForRow = async (row: BillingRowDraft, accessToken?: string) => {
-    if (!row.managerEmail.trim()) throw new Error(`${row.classroomName} の管理者メールが未設定です。`)
-    const token = accessToken ?? await requestGmailComposeAccessToken()
-    const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
-    const result = await createGmailDraftWithPdf({
-      accessToken: token,
-      to: row.managerEmail,
-      subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
-      bodyText: buildDraftBody(row),
-      pdfBlob,
-      pdfFileName: buildInvoicePdfFileName(row),
-    })
-    if (authMode === 'firebase') {
-      await markFirebaseBillingDraftCreated({ monthKey: row.monthKey, classroomId: row.classroomId, draftId: result.id })
-    }
+  // OAuth を使わない方式: 請求書PDFをダウンロードし、宛先・件名・本文を入れた Gmail 作成画面を開く。
+  // PDF はユーザーが作成画面に手動で添付して送信する。
+  const markRowPrepared = async (row: BillingRowDraft) => {
     const draftCreatedAt = new Date().toISOString()
-    setRows((currentRows) => currentRows.map((entry) => entry.classroomId === row.classroomId ? { ...entry, draftId: result.id, draftCreatedAt } : entry))
-    return result.id
+    if (authMode === 'firebase') {
+      await markFirebaseBillingDraftCreated({ monthKey: row.monthKey, classroomId: row.classroomId })
+    }
+    setRows((currentRows) => currentRows.map((entry) => entry.classroomId === row.classroomId ? { ...entry, draftCreatedAt } : entry))
   }
 
-  const handleCreateDraft = async (row: BillingRowDraft) => {
+  const handlePrepareMail = async (row: BillingRowDraft) => {
+    if (!row.managerEmail.trim()) {
+      setStatusMessage(`${row.classroomName} の管理者メールが未設定です。`)
+      return
+    }
     setDraftingClassroomId(row.classroomId)
-    setStatusMessage(`${row.classroomName} の Gmail 下書きを作成しています。`)
+    setStatusMessage(`${row.classroomName} の請求書PDFを準備しています。`)
     try {
-      await createDraftForRow(row)
-      setStatusMessage(`${row.classroomName} の Gmail 下書きを作成しました。Gmail で内容確認後に送信してください。`)
+      const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
+      downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
+      openGmailCompose({
+        to: row.managerEmail,
+        subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
+        body: buildDraftBody(row),
+      })
+      await markRowPrepared(row)
+      setStatusMessage(`${row.classroomName} の請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Gmail 下書き作成に失敗しました。')
+      setStatusMessage(error instanceof Error ? error.message : 'メール作成の準備に失敗しました。')
     } finally {
       setDraftingClassroomId(null)
     }
   }
 
-  const handleCreateAllDrafts = async () => {
+  const handleDownloadAllPdfs = async () => {
     setIsCreatingAllDrafts(true)
-    setStatusMessage('Gmail 下書きを一括作成しています。')
+    setStatusMessage('全教室の請求書PDFをダウンロードしています。')
     try {
-      const token = await requestGmailComposeAccessToken()
-      let createdCount = 0
+      let preparedCount = 0
       for (const row of rows) {
-        await createDraftForRow(row, token)
-        createdCount += 1
-        setStatusMessage(`Gmail 下書きを作成中です (${createdCount}/${rows.length})。`)
+        const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
+        downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
+        await markRowPrepared(row)
+        preparedCount += 1
+        setStatusMessage(`請求書PDFをダウンロード中です (${preparedCount}/${rows.length})。`)
       }
-      setStatusMessage(`${createdCount}件の Gmail 下書きを作成しました。Gmail で内容確認後に送信してください。`)
+      setStatusMessage(`${preparedCount}件の請求書PDFをダウンロードしました。各行の「メール作成」で教室ごとに送信してください。`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : 'Gmail 下書きの一括作成に失敗しました。')
+      setStatusMessage(error instanceof Error ? error.message : '請求書PDFの一括ダウンロードに失敗しました。')
     } finally {
       setIsCreatingAllDrafts(false)
     }
@@ -316,10 +326,10 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                 <input type="month" value={monthKey} onChange={(event) => setMonthKey(normalizeBillingMonthKey(event.target.value, monthKey))} />
               </label>
               <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
-              <button className="primary-button" type="button" onClick={() => void handleCreateAllDrafts()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0 || !isGmailDraftCreationConfigured()}>{isCreatingAllDrafts ? '下書き作成中...' : '全教室の請求書を送信'}</button>
+              <button className="primary-button" type="button" onClick={() => void handleDownloadAllPdfs()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? 'ダウンロード中...' : '全教室のPDFをダウンロード'}</button>
             </div>
           </div>
-          {!isGmailDraftCreationConfigured() ? <div className="workspace-auth-note workspace-auth-note-error">Gmail 下書き作成には `VITE_GOOGLE_OAUTH_CLIENT_ID` の設定が必要です。</div> : null}
+          <div className="workspace-auth-note">各行の「メール作成」で請求書PDFをダウンロードし、宛先・件名・本文を入力済みの Gmail 作成画面が開きます。ダウンロードしたPDFを添付して送信してください。</div>
         </section>
 
         <section className="board-panel board-panel-unified billing-issuer-panel">
@@ -343,8 +353,10 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
           <div className="developer-summary-grid billing-summary-grid">
             <div className="developer-summary-card"><span>教室数</span><strong>{rows.length}</strong></div>
             <div className="developer-summary-card"><span>在籍生徒数</span><strong>{totals.studentCount}</strong></div>
-            <div className="developer-summary-card"><span>合計金額</span><strong>{formatYen(totals.calculatedAmount)}</strong></div>
-            <div className="developer-summary-card"><span>請求金額</span><strong>{formatYen(totals.billedAmount)}</strong></div>
+            <div className="developer-summary-card"><span>合計金額（税抜）</span><strong>{formatYen(totals.calculatedAmount)}</strong></div>
+            <div className="developer-summary-card"><span>請求金額（税抜）</span><strong>{formatYen(totals.billedAmount)}</strong></div>
+            <div className="developer-summary-card"><span>消費税（10%）</span><strong>{formatYen(totals.taxAmount)}</strong></div>
+            <div className="developer-summary-card"><span>請求金額（税込）</span><strong>{formatYen(totals.billedAmountWithTax)}</strong></div>
           </div>
 
           <div className="billing-table-scroll">
@@ -355,8 +367,10 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   <th>送信先</th>
                   <th>生徒数</th>
                   <th>単価</th>
-                  <th>合計金額</th>
-                  <th>請求金額</th>
+                  <th>合計金額（税抜）</th>
+                  <th>請求金額（税抜）</th>
+                  <th>消費税（10%）</th>
+                  <th>請求金額（税込）</th>
                   <th>備考</th>
                   <th>下書き</th>
                   <th>操作</th>
@@ -371,13 +385,15 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                     <td className="numeric-cell"><input className="billing-number-input" type="number" min={0} value={row.unitPrice} onChange={(event) => updateRow(row.classroomId, { unitPrice: Number(event.target.value) })} onBlur={() => void saveRow(row)} />円</td>
                     <td className="numeric-cell">{formatYen(row.calculatedAmount)}</td>
                     <td className="numeric-cell"><input className="billing-number-input" type="number" min={0} value={row.billedAmount} onChange={(event) => updateRow(row.classroomId, { billedAmount: Number(event.target.value) })} onBlur={() => void saveRow(row)} />円</td>
+                    <td className="numeric-cell">{formatYen(row.taxAmount)}</td>
+                    <td className="numeric-cell"><strong>{formatYen(row.billedAmountWithTax)}</strong></td>
                     <td><input className="billing-note-input" value={row.memo} onChange={(event) => updateRow(row.classroomId, { memo: event.target.value })} onBlur={() => void saveRow(row)} /></td>
-                    <td>{row.draftId ? <span className="status-chip secondary">作成済 {formatDraftCreatedAt(row.draftCreatedAt)}</span> : <span className="status-chip warning">未作成</span>}</td>
+                    <td>{row.draftCreatedAt ? <span className="status-chip secondary">準備済 {formatDraftCreatedAt(row.draftCreatedAt)}</span> : <span className="status-chip warning">未作成</span>}</td>
                     <td>
                       <div className="basic-data-row-actions billing-row-actions">
                         <button className="secondary-button slim" type="button" onClick={() => updateRow(row.classroomId, { billedAmount: row.calculatedAmount })}>合計を反映</button>
                         <button className="secondary-button slim" type="button" onClick={() => void saveRow(row)} disabled={isSaving}>保存</button>
-                        <button className="primary-button slim" type="button" onClick={() => void handleCreateDraft(row)} disabled={draftingClassroomId === row.classroomId || isCreatingAllDrafts || !isGmailDraftCreationConfigured()}>{draftingClassroomId === row.classroomId ? '作成中...' : '請求書を送信'}</button>
+                        <button className="primary-button slim" type="button" onClick={() => void handlePrepareMail(row)} disabled={draftingClassroomId === row.classroomId || isCreatingAllDrafts}>{draftingClassroomId === row.classroomId ? '準備中...' : 'メール作成'}</button>
                       </div>
                     </td>
                   </tr>
@@ -390,6 +406,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   <td></td>
                   <td className="numeric-cell">{formatYen(totals.calculatedAmount)}</td>
                   <td className="numeric-cell">{formatYen(totals.billedAmount)}</td>
+                  <td className="numeric-cell">{formatYen(totals.taxAmount)}</td>
+                  <td className="numeric-cell"><strong>{formatYen(totals.billedAmountWithTax)}</strong></td>
                   <td colSpan={3}></td>
                 </tr>
               </tfoot>

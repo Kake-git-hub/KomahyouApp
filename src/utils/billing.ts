@@ -16,6 +16,8 @@ export type BillingInvoiceRow = {
   unitPrice: number
   calculatedAmount: number
   billedAmount: number
+  taxAmount: number
+  billedAmountWithTax: number
   invoiceNumber: string
   memo: string
 }
@@ -65,6 +67,8 @@ export function formatBillingMonthLabel(monthKey: string) {
   return `${Number(year)}年${Number(month)}月分`
 }
 
+export const TAX_RATE = 0.1
+
 export function formatYen(value: number) {
   const normalizedValue = Number.isFinite(value) ? Math.round(value) : 0
   return `${normalizedValue.toLocaleString('ja-JP')}円`
@@ -85,11 +89,15 @@ export function calculateBillingAmounts(studentCount: number, unitPrice: number,
   const normalizedUnitPrice = Math.max(0, Math.trunc(Number.isFinite(unitPrice) ? unitPrice : 0))
   const calculatedAmount = normalizedStudentCount * normalizedUnitPrice
   const normalizedBilledAmount = Math.max(0, Math.trunc(Number.isFinite(billedAmount ?? NaN) ? Number(billedAmount) : calculatedAmount))
+  const taxAmount = Math.round(normalizedBilledAmount * TAX_RATE)
+  const billedAmountWithTax = normalizedBilledAmount + taxAmount
 
   return {
     studentCount: normalizedStudentCount,
     unitPrice: normalizedUnitPrice,
     calculatedAmount,
     billedAmount: normalizedBilledAmount,
+    taxAmount,
+    billedAmountWithTax,
   }
 }
