@@ -131,5 +131,5 @@ export async function createInvoicePdfBlob(row: BillingInvoiceRow, issuerInfo?: 
 }
 
 export function buildInvoicePdfFileName(row: BillingInvoiceRow) {
-  return `請求書_${row.monthKey}_${row.classroomName || row.classroomId}.pdf`.replace(/[\\/:*?"<>|]/g, '_')
+  return `コマ表アプリ請求書_${row.monthKey}_${row.classroomName || row.classroomId}.pdf`.replace(/[\\/:*?"<>|]/g, '_')
 }

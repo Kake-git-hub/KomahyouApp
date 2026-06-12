@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailComposeAccessToken } from '../../integrations/gmail/drafts'
-import { downloadBlob, openGmailCompose } from '../../integrations/gmail/compose'
+import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integrations/gmail/compose'
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, type BillingInvoiceRow, type BillingMonthKey } from '../../utils/billing'
@@ -87,21 +87,27 @@ function buildBillingRows(params: {
   })
 }
 
-function buildDraftBody(row: BillingInvoiceRow) {
+function buildMailSubject(row: BillingInvoiceRow) {
+  return `コマ表アプリ ${formatBillingMonthLabel(row.monthKey)} 請求書`
+}
+
+function buildDraftBody(row: BillingInvoiceRow, issuer: InvoiceIssuerInfo) {
+  const signatureSeparator = '------------------------------------------'
   return [
-    `${row.classroomName} 御中`,
+    `${row.classroomName} 様`,
+    'いつも大変お世話になっております。',
     '',
-    `${formatBillingMonthLabel(row.monthKey)}の請求書を添付いたします。`,
+    `コマ表アプリ ${formatBillingMonthLabel(row.monthKey)}の請求書を添付いたします。`,
     '',
-    `生徒数: ${row.studentCount.toLocaleString('ja-JP')}人`,
-    `単価: ${formatYen(row.unitPrice)}`,
-    `合計金額（税抜）: ${formatYen(row.calculatedAmount)}`,
-    `請求金額（税抜）: ${formatYen(row.billedAmount)}`,
-    `消費税（10%）: ${formatYen(row.taxAmount)}`,
     `請求金額（税込）: ${formatYen(row.billedAmountWithTax)}`,
     `支払期限: ${formatJapaneseDate(getBillingDueDate(row.monthKey))}`,
+    `振込先: ${issuer.bankAccount}`,
     '',
     'ご確認のほど、よろしくお願いいたします。',
+    signatureSeparator,
+    issuer.name,
+    issuer.phone,
+    signatureSeparator,
   ].join('\n')
 }
 
@@ -235,18 +241,19 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     setRows((currentRows) => currentRows.map((entry) => entry.classroomId === row.classroomId ? { ...entry, draftId: draftId ?? entry.draftId, draftCreatedAt } : entry))
   }
 
-  // OAuth設定時: PDF添付済みのGmail下書きを作成する。
+  // OAuth設定時: PDF添付済みのGmail下書きを作成し、Gmailで開くためのメッセージIDを返す。
   const createOAuthDraft = async (row: BillingRowDraft, accessToken: string) => {
     const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
     const result = await createGmailDraftWithPdf({
       accessToken,
       to: row.managerEmail,
-      subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
-      bodyText: buildDraftBody(row),
+      subject: buildMailSubject(row),
+      bodyText: buildDraftBody(row, issuerInfo),
       pdfBlob,
       pdfFileName: buildInvoicePdfFileName(row),
     })
     await markRowPrepared(row, result.id)
+    return result.message?.id
   }
 
   // OAuth未設定時: PDFをダウンロードしつつ Gmail 作成画面を開く。
@@ -255,8 +262,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
     openGmailCompose({
       to: row.managerEmail,
-      subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
-      body: buildDraftBody(row),
+      subject: buildMailSubject(row),
+      body: buildDraftBody(row, issuerInfo),
     })
     await markRowPrepared(row)
   }
@@ -272,8 +279,9 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     try {
       if (usesOAuth) {
         const token = await requestGmailComposeAccessToken()
-        await createOAuthDraft(row, token)
-        setStatusMessage(`${row.classroomName} の Gmail 下書き（PDF添付済み）を作成しました。Gmail で内容確認後に送信してください。`)
+        const messageId = await createOAuthDraft(row, token)
+        if (messageId) openGmailDraft(messageId)
+        setStatusMessage(`${row.classroomName} の Gmail 下書き（PDF添付済み）を作成し、Gmail で開きました。内容を確認して送信してください。`)
       } else {
         await downloadAndCompose(row)
         setStatusMessage(`${row.classroomName} の請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`)

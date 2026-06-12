@@ -10,7 +10,7 @@ type GoogleIdentityServices = {
       initTokenClient: (options: {
         client_id: string
         scope: string
-        callback: (response: { access_token?: string; error?: string; error_description?: string }) => void
+        callback: (response: { access_token?: string; expires_in?: number; error?: string; error_description?: string }) => void
       }) => GoogleTokenClient
     }
   }
@@ -54,10 +54,18 @@ export function isGmailDraftCreationConfigured() {
   return Boolean(readGoogleOAuthClientId())
 }
 
+// セッション中はアクセストークンをメモリにキャッシュし、有効期限内なら再取得しない。
+// 期限切れ後の再取得も prompt:'' なので（初回同意済みなら）ポップアップは出ない。
+let cachedAccessToken: { token: string; expiresAt: number } | null = null
+
 export async function requestGmailComposeAccessToken() {
   const clientId = readGoogleOAuthClientId()
   if (!clientId) {
     throw new Error('Gmail 下書き作成には VITE_GOOGLE_OAUTH_CLIENT_ID の設定が必要です。')
+  }
+
+  if (cachedAccessToken && Date.now() < cachedAccessToken.expiresAt) {
+    return cachedAccessToken.token
   }
 
   await loadGoogleIdentityServices()
@@ -70,13 +78,17 @@ export async function requestGmailComposeAccessToken() {
       scope: GMAIL_COMPOSE_SCOPE,
       callback: (response) => {
         if (response.access_token) {
+          const ttlMs = (response.expires_in ?? 3600) * 1000
+          // 期限の60秒手前で失効扱いにして、使用中に切れないようにする。
+          cachedAccessToken = { token: response.access_token, expiresAt: Date.now() + ttlMs - 60_000 }
           resolve(response.access_token)
           return
         }
         reject(new Error(response.error_description || response.error || 'Gmail のアクセス許可を取得できませんでした。'))
       },
     })
-    tokenClient.requestAccessToken({ prompt: 'consent' })
+    // prompt:'' → 初回のみ同意画面を表示し、以降は同意済みなら無表示でトークンを再取得する。
+    tokenClient.requestAccessToken({ prompt: '' })
   })
 }
 

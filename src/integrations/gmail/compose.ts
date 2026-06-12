@@ -21,6 +21,14 @@ export function openGmailCompose(params: { to: string; subject: string; body: st
   }
 }
 
+// OAuthで作成した下書きを Gmail で開く（compose ポップアップ表示ですぐ送信できる）。
+// messageId は Gmail API の下書き作成レスポンスの message.id（16進のメッセージID）。
+export function openGmailDraft(messageId: string) {
+  const url = `https://mail.google.com/mail/u/0/#drafts?compose=${encodeURIComponent(messageId)}`
+  // ポップアップブロック時も下書き自体は作成済みのため、失敗しても致命的ではない。
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 export function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob)
   try {
