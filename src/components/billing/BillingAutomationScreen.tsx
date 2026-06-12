@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailComposeAccessToken } from '../../integrations/gmail/drafts'
 import { downloadBlob, openGmailCompose } from '../../integrations/gmail/compose'
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
@@ -223,14 +224,41 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     }
   }
 
-  // OAuth を使わない方式: 請求書PDFをダウンロードし、宛先・件名・本文を入れた Gmail 作成画面を開く。
-  // PDF はユーザーが作成画面に手動で添付して送信する。
-  const markRowPrepared = async (row: BillingRowDraft) => {
+  // ハイブリッド方式:
+  // - VITE_GOOGLE_OAUTH_CLIENT_ID 設定済み → Gmail API で「PDF添付済みの下書き」を作成（自動添付）。
+  // - 未設定 → 請求書PDFをダウンロードし、宛先・件名・本文入りの Gmail 作成画面を開く（PDFは手動添付）。
+  const markRowPrepared = async (row: BillingRowDraft, draftId?: string) => {
     const draftCreatedAt = new Date().toISOString()
     if (authMode === 'firebase') {
-      await markFirebaseBillingDraftCreated({ monthKey: row.monthKey, classroomId: row.classroomId })
+      await markFirebaseBillingDraftCreated({ monthKey: row.monthKey, classroomId: row.classroomId, draftId })
     }
-    setRows((currentRows) => currentRows.map((entry) => entry.classroomId === row.classroomId ? { ...entry, draftCreatedAt } : entry))
+    setRows((currentRows) => currentRows.map((entry) => entry.classroomId === row.classroomId ? { ...entry, draftId: draftId ?? entry.draftId, draftCreatedAt } : entry))
+  }
+
+  // OAuth設定時: PDF添付済みのGmail下書きを作成する。
+  const createOAuthDraft = async (row: BillingRowDraft, accessToken: string) => {
+    const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
+    const result = await createGmailDraftWithPdf({
+      accessToken,
+      to: row.managerEmail,
+      subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
+      bodyText: buildDraftBody(row),
+      pdfBlob,
+      pdfFileName: buildInvoicePdfFileName(row),
+    })
+    await markRowPrepared(row, result.id)
+  }
+
+  // OAuth未設定時: PDFをダウンロードしつつ Gmail 作成画面を開く。
+  const downloadAndCompose = async (row: BillingRowDraft) => {
+    const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
+    downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
+    openGmailCompose({
+      to: row.managerEmail,
+      subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
+      body: buildDraftBody(row),
+    })
+    await markRowPrepared(row)
   }
 
   const handlePrepareMail = async (row: BillingRowDraft) => {
@@ -238,18 +266,18 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
       setStatusMessage(`${row.classroomName} の管理者メールが未設定です。`)
       return
     }
+    const usesOAuth = isGmailDraftCreationConfigured()
     setDraftingClassroomId(row.classroomId)
-    setStatusMessage(`${row.classroomName} の請求書PDFを準備しています。`)
+    setStatusMessage(usesOAuth ? `${row.classroomName} の Gmail 下書きを作成しています。` : `${row.classroomName} の請求書PDFを準備しています。`)
     try {
-      const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
-      downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
-      openGmailCompose({
-        to: row.managerEmail,
-        subject: `${formatBillingMonthLabel(row.monthKey)} 請求書`,
-        body: buildDraftBody(row),
-      })
-      await markRowPrepared(row)
-      setStatusMessage(`${row.classroomName} の請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`)
+      if (usesOAuth) {
+        const token = await requestGmailComposeAccessToken()
+        await createOAuthDraft(row, token)
+        setStatusMessage(`${row.classroomName} の Gmail 下書き（PDF添付済み）を作成しました。Gmail で内容確認後に送信してください。`)
+      } else {
+        await downloadAndCompose(row)
+        setStatusMessage(`${row.classroomName} の請求書PDFをダウンロードし、Gmail 作成画面を開きました。ダウンロードしたPDFを添付して送信してください。`)
+      }
     } catch (error) {
       setStatusMessage(error instanceof Error ? error.message : 'メール作成の準備に失敗しました。')
     } finally {
@@ -257,21 +285,31 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     }
   }
 
-  const handleDownloadAllPdfs = async () => {
+  const handlePrepareAll = async () => {
+    const usesOAuth = isGmailDraftCreationConfigured()
     setIsCreatingAllDrafts(true)
-    setStatusMessage('全教室の請求書PDFをダウンロードしています。')
+    setStatusMessage(usesOAuth ? 'Gmail 下書きを一括作成しています。' : '全教室の請求書PDFをダウンロードしています。')
     try {
+      // OAuth時はトークンを1回だけ取得して全件で使い回す。
+      const token = usesOAuth ? await requestGmailComposeAccessToken() : ''
       let preparedCount = 0
       for (const row of rows) {
-        const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
-        downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
-        await markRowPrepared(row)
+        if (usesOAuth) {
+          if (!row.managerEmail.trim()) continue // 宛先未設定はAPIがエラーになるためスキップ。
+          await createOAuthDraft(row, token)
+        } else {
+          const pdfBlob = await createInvoicePdfBlob(row, issuerInfo)
+          downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
+          await markRowPrepared(row)
+        }
         preparedCount += 1
-        setStatusMessage(`請求書PDFをダウンロード中です (${preparedCount}/${rows.length})。`)
+        setStatusMessage(usesOAuth ? `Gmail 下書きを作成中です (${preparedCount}/${rows.length})。` : `請求書PDFをダウンロード中です (${preparedCount}/${rows.length})。`)
       }
-      setStatusMessage(`${preparedCount}件の請求書PDFをダウンロードしました。各行の「メール作成」で教室ごとに送信してください。`)
+      setStatusMessage(usesOAuth
+        ? `${preparedCount}件の Gmail 下書き（PDF添付済み）を作成しました。Gmail で内容確認後に送信してください。`
+        : `${preparedCount}件の請求書PDFをダウンロードしました。各行の「メール作成」で教室ごとに送信してください。`)
     } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : '請求書PDFの一括ダウンロードに失敗しました。')
+      setStatusMessage(error instanceof Error ? error.message : 'メール作成の準備に失敗しました。')
     } finally {
       setIsCreatingAllDrafts(false)
     }
@@ -326,10 +364,12 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                 <input type="month" value={monthKey} onChange={(event) => setMonthKey(normalizeBillingMonthKey(event.target.value, monthKey))} />
               </label>
               <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
-              <button className="primary-button" type="button" onClick={() => void handleDownloadAllPdfs()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? 'ダウンロード中...' : '全教室のPDFをダウンロード'}</button>
+              <button className="primary-button" type="button" onClick={() => void handlePrepareAll()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? (isGmailDraftCreationConfigured() ? '下書き作成中...' : 'ダウンロード中...') : (isGmailDraftCreationConfigured() ? '全教室の下書きを作成' : '全教室のPDFをダウンロード')}</button>
             </div>
           </div>
-          <div className="workspace-auth-note">各行の「メール作成」で請求書PDFをダウンロードし、宛先・件名・本文を入力済みの Gmail 作成画面が開きます。ダウンロードしたPDFを添付して送信してください。</div>
+          <div className="workspace-auth-note">{isGmailDraftCreationConfigured()
+            ? '各行の「メール作成」で、請求書PDFを添付済みの Gmail 下書きを作成します。Gmail で内容を確認して送信してください。'
+            : '各行の「メール作成」で請求書PDFをダウンロードし、宛先・件名・本文を入力済みの Gmail 作成画面が開きます。ダウンロードしたPDFを添付して送信してください。（.env に VITE_GOOGLE_OAUTH_CLIENT_ID を設定すると、PDF添付済みの下書きを自動生成できます）'}</div>
         </section>
 
         <section className="board-panel board-panel-unified billing-issuer-panel">
