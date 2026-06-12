@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
-import { BackupRestoreScreen } from './components/backup-restore/BackupRestoreScreen'
-import { BoardShareScreen } from './components/board-share/BoardShareScreen'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
@@ -11,8 +9,12 @@ import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLes
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { initialSpecialSessions, removedDefaultSpecialSessionIds, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
-import { DeveloperAdminScreen } from './components/developer-admin/DeveloperAdminScreen'
-import { BillingAutomationScreen } from './components/billing/BillingAutomationScreen'
+// C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
+// 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
+const BackupRestoreScreen = lazy(() => import('./components/backup-restore/BackupRestoreScreen').then((m) => ({ default: m.BackupRestoreScreen })))
+const BoardShareScreen = lazy(() => import('./components/board-share/BoardShareScreen').then((m) => ({ default: m.BoardShareScreen })))
+const DeveloperAdminScreen = lazy(() => import('./components/developer-admin/DeveloperAdminScreen').then((m) => ({ default: m.DeveloperAdminScreen })))
+const BillingAutomationScreen = lazy(() => import('./components/billing/BillingAutomationScreen').then((m) => ({ default: m.BillingAutomationScreen })))
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
 import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
@@ -53,6 +55,18 @@ const SAVE_FAILURE_GUIDANCE_MESSAGE = [
   '  2. 一度ログアウトし、再ログインする',
   '  3. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
 ].join('\n')
+
+// C1: 遅延読み込み画面のロード中に出す軽量フォールバック。
+function ScreenLoadingFallback() {
+  return (
+    <div className="workspace-auth-shell">
+      <div className="workspace-auth-card">
+        <h2>読み込み中</h2>
+        <p>画面を準備しています。</p>
+      </div>
+    </div>
+  )
+}
 
 // A1: サーバーが版数衝突(別端末が先に更新)を表す HttpsError メッセージに付ける安定マーカー。
 // functions/src/optimisticVersion.ts の STALE_SNAPSHOT_ERROR_MARKER と一致させること。
@@ -1326,11 +1340,14 @@ function AuthenticatedApp() {
       </div>
     ) : null
 
-    if (submissionAcknowledgements.length === 0 && !staleConflictBanner) return <>{content}</>
+    // C1: 遅延読み込み画面(配布/開発者/請求/バックアップ復元)の解決待ちを Suspense で受ける。
+    const suspendedContent = <Suspense fallback={<ScreenLoadingFallback />}>{content}</Suspense>
+
+    if (submissionAcknowledgements.length === 0 && !staleConflictBanner) return <>{suspendedContent}</>
 
     return (
       <>
-        {content}
+        {suspendedContent}
         {staleConflictBanner}
         {submissionAcknowledgements.length > 0 && (
         <div className="submission-acknowledgement-overlay" role="presentation">
@@ -4793,7 +4810,14 @@ function AuthenticatedApp() {
 
 function App() {
   const boardShareToken = getBoardShareTokenFromUrl()
-  if (boardShareToken) return <BoardShareScreen token={boardShareToken} />
+  // C1: BoardShareScreen は遅延読み込みのため Suspense で受ける。
+  if (boardShareToken) {
+    return (
+      <Suspense fallback={<ScreenLoadingFallback />}>
+        <BoardShareScreen token={boardShareToken} />
+      </Suspense>
+    )
+  }
   return <AuthenticatedApp />
 }
 
