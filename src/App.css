@@ -315,6 +315,8 @@
   color: #142f4a;
   touch-action: manipulation;
   overflow: hidden;
+  /* コマ表(scheduleHtml)と同じフォントに統一して見やすくする */
+  font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif;
 }
 
 .board-share-message {

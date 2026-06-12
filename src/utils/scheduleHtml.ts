@@ -2808,7 +2808,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const count = Number(countMap && countMap[label] ? countMap[label] : 0);
           const desiredCount = Number(desiredCountMap && desiredCountMap[label] ? desiredCountMap[label] : count);
           if (hideZeroZero && count === 0 && desiredCount === 0) return [];
-          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + '(' + desiredCount + ')</td></tr>'];
+          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + '<span class="print-only-hidden">(' + desiredCount + ')</span></td></tr>'];
         });
         return rows.length > 0 ? rows.join('') : '<tr><td>予定なし</td><td>0</td></tr>';
       }
@@ -3636,7 +3636,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return '<div class="bottom-grid bottom-grid-teacher">' +
             salarySectionHtml +
             '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
-            '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
+            '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
           '</div>';
         }
         const emptyFormat = options && options.emptyFormat;
@@ -3647,7 +3647,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(individualNoteValue) + '</textarea></div></div>' +
           absenceSectionHtml +
           '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
-          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数(希望数)</div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数(希望数)</div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
+          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
         '</div>';
       }
 
