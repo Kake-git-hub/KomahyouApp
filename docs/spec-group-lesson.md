@@ -141,4 +141,9 @@
   - `buildTeacherSalaryData(entries, teacher, startDate, endDate)`：カテゴリ G を追加。担当集団コマで出席1名以上=実施1コマ、交通費(attendanceDays)にも加算。`renderSalarySection` に「集団 (1コマ)」行（count≥1で表示・単価1種・既存 recalcSalary が自動合算）。
   - `buildTeacherSheetHtml`：集団2行を tbody 先頭へ。salary 呼び出しに teacher＋range を渡す。
   - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **337 通過**（給与カテゴリ/講師ヘルパ存在テスト追加・構文検証含む）。
-- **Phase 6 — 結合検証→反映**：開発用教室 `v8OZ7zH8vONNHjjYVcR1` でE2E確認 → 本番3教室の個別データ不変を確認 → 全教室反映。
+- **Phase 6 — 結合検証→反映（オーナー実施・Claudeはデプロイ/本番書込み不可）**：
+  1. **デプロイ**：Cloud Functions の提出サニタイザ変更（Phase 3）を反映するため `firebase deploy --only functions` が必要（未デプロイでも在宅保存経路は汎用サニタイズで保持されるが、生徒QRの集団参加取込はデプロイ後に有効）。Hosting は `npm run deploy`。
+  2. **開発用教室 `v8OZ7zH8vONNHjjYVcR1` でE2E**：特別講習を作成→盤面に集団行が出る→科目/講師入力→出席者モーダルで出欠＋PDF→中3提出ページに集団参加→生徒/講師日程表に集団行・回数・給与が出る。
+  3. **本番3教室の個別データ不変を確認**（読み取り専用での照合）。集団は optional フィールドの追加のみ・個別 `DeskLesson` 非干渉。
+  4. 問題なければ全教室へ反映。
+  - **移行**：既存の夏期講習提出は集団欄なし＝不参加・提出状況不変。現行夏期講習で参加者を設定するには open-questions Q2 の判断が必要。
