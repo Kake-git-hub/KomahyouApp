@@ -130,6 +130,11 @@
   - `functions/src/index.ts`：`sanitizeGroupClassParticipation`（allowed＝中3の集団科目のみ・true のみ保存）。GET/POST/スナップショット studentInputs に反映。Functions ビルド通過。
   - 検証：app `tsc -b` クリーン、Functions `build` 成功、`vitest` 全 **335 通過**（App.test 修正含む）、`vite build` 成功。
   - **移行**：既存提出ドキュメントは `availableGroupClassSubjects` を持たない→提出ページに集団欄が出ず、`groupClassParticipation` 未設定＝不参加。既存 studentInputs も未設定＝不参加で**提出状況不変**。現行の夏期講習の中3を参加にする経路（室長が日程表で設定）は Phase 4 で追加。
-- **Phase 4 — 生徒日程表＋回数欄**：未登録=全員表示／登録後=参加者のみ＋出欠反映。講習回数表に集理/集社（表示期間内：希望=盤面コマ数 / actual=出席数）。
+- **Phase 4 — 生徒日程表＋回数欄 ✅ 実装（未コミット）**：未登録=全員表示／登録後=参加者のみ＋出欠反映。講習回数表に集理/集社（表示期間内：希望=盤面コマ数 / actual=出席数）。
+  - `scheduleHtml.ts`：`SchedulePayload.groupClassEntries`＋`SerializedStudentSpecialSessionInput.groupClassParticipation` をシリアライズ。埋め込みJSに集団ヘルパ（`getGroupClassEntry`/`getGroupSessionInputForStudent`/`isGroupRegistered`/`isGroupParticipant`/`isInGroupRoster`/`isGroupAbsent`/`buildStudentGroupRowsHtml`/`injectGroupClassCounts`）。
+  - `buildStudentSheetHtml`：中3に集団2行を `<tbody>` 先頭へ差し込み。`visibleLectureCounts`/`visibleDesiredLectureCounts` に集理/集社を注入（→ 既存の講習回数警告も集団の欠席を拾う）。集団行/欠席のCSS追加。
+  - `ScheduleBoardScreen.tsx`：5つの schedule HTML 呼び出しに `groupClassEntries` を渡す。
+  - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **336 通過**（埋め込みスクリプト構文検証38件＋集団シリアライズ/ヘルパ存在テスト追加）。
+  - **Phase 4 残**：室長が日程表から集団参加を設定する経路は未実装（open-questions Q2）。現行夏期講習で「登録後=参加者のみ」を使うには室長設定経路 or QR再発行が必要。
 - **Phase 5 — 講師日程表＋給与**：集団行表示・専用カテゴリ「集団」1コマ集計（出席1名以上）・交通費日数に集団実施日加算。
 - **Phase 6 — 結合検証→反映**：開発用教室 `v8OZ7zH8vONNHjjYVcR1` でE2E確認 → 本番3教室の個別データ不変を確認 → 全教室反映。

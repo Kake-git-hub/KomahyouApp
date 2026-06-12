@@ -703,6 +703,54 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('serializes group-class entries and participation into the student schedule payload', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      plannedCells: [],
+      students: [createStudent({ id: 'student-1', displayName: '山田', birthDate: '2011-05-01' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      groupClassEntries: {
+        '2026-03-24_1': { dateKey: '2026-03-24', band: 1, subject: '集団理科', teacherName: '田中講師', absentStudentIds: [], addedStudentIds: [] },
+      },
+      specialSessions: [{
+        id: 'session-1', label: '春期講習', startDate: '2026-03-20', endDate: '2026-03-31',
+        teacherInputs: {},
+        studentInputs: {
+          'student-1': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: {}, groupClassParticipation: { 集団理科: true }, regularOnly: false, countSubmitted: true, updatedAt: '2026-03-01T00:00:00.000Z' },
+        },
+        createdAt: '2026-03-01T00:00:00.000Z', updatedAt: '2026-03-01T00:00:00.000Z',
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // 集団授業の盤面割当と参加情報が DATA に載っていること(クライアントJSが描画に使う)。
+    expect(html).toContain('集団理科')
+    expect(html).toContain('groupClassParticipation')
+    expect(html).toContain('"2026-03-24_1"')
+    // 集団行・回数の描画ヘルパが埋め込まれていること。
+    expect(html).toContain('buildStudentGroupRowsHtml')
+    expect(html).toContain('injectGroupClassCounts')
+
+    vi.unstubAllGlobals()
+  })
+
   it('opens print-all schedules into the prepared named popup window', () => {
     const write = vi.fn()
     const popup = {

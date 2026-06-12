@@ -4685,6 +4685,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         classroomStorageKey,
         periodBands: specialSessions,
         specialSessions,
+        groupClassEntries,
       })
     }
     window.addEventListener('message', handleOpenAllSchedule)
@@ -4835,6 +4836,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: studentScheduleWindowRef.current,
@@ -4864,6 +4866,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: teacherScheduleWindowRef.current,
@@ -7360,6 +7363,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       targetWindow: studentScheduleWindowRef.current,
     })
     if (!nextWindow) return
@@ -7421,6 +7425,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       targetWindow: teacherScheduleWindowRef.current,
     })
     if (!nextWindow) return
