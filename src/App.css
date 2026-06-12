@@ -1900,6 +1900,58 @@ tr.sa-slot-last th {
   border-bottom-width: 3px !important;
 }
 
+/* spec-group-lesson §A: 集団授業の行（1限の上・特別講習を含む週のみ） */
+tr.sa-group-row {
+  background: #fff7ec;
+}
+
+tr.sa-group-row td {
+  height: 40px;
+}
+
+.sa-group-time-cell {
+  background: #ffedd5;
+}
+
+.sa-group-subject {
+  text-align: center;
+  vertical-align: middle;
+  font-weight: 700;
+  font-size: 15px;
+  color: #7c3a00;
+}
+
+.sa-group-subject-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.sa-group-subject-empty {
+  background: #fffdf8;
+}
+
+.sa-group-subject-empty .sa-group-subject-inner::before {
+  content: '＋ 科目を選択';
+  color: #c79a63;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.sa-group-teacher {
+  vertical-align: middle;
+}
+
+.sa-group-empty {
+  background: #fbf6ef;
+  cursor: default;
+}
+
+.group-class-menu-popover {
+  min-width: 200px;
+}
+
 .sa-teacher,
 .sa-student {
   cursor: pointer;

@@ -1,4 +1,5 @@
 import { memo, useLayoutEffect, useMemo, useRef } from 'react'
+import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, resolveGroupClassDayFlags, type GroupClassBand, type GroupClassEntryMap } from './groupClass'
 import { buildLinkedLessonDestinationMap, formatShortDateLabel } from './lessonLinks'
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoLineHeight, getMemoTextStyle } from './memoText'
@@ -174,12 +175,17 @@ type BoardGridProps = {
   highlightedHolidayDate: string | null
   yearLabel: string
   specialPeriods: Array<{ id: string; label: string; startDate: string; endDate: string }>
+  // spec-group-lesson §A: 集団授業（特別講習を含む週のみ・期間内開校日だけ）。
+  groupClassEntries?: GroupClassEntryMap
   resolveStudentDisplayName: (name: string) => string
   resolveStudentGradeLabel: (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => string
   resolveDisplayedLessonType: (name: string, subject: string, lessonType: LessonType | null, dateKey: string, slotNumber: number) => LessonType | null
   onDayHeaderClick: (dateKey: string, x: number, y: number) => void
   onTeacherClick: (cellId: string, deskIndex: number, x: number, y: number) => void
   onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, statusKind: StudentStatusKind | null, x: number, y: number) => void
+  // spec-group-lesson §A: 集団行のセル操作。空の科目セル→科目ピッカー、科目入り→メニュー(出席者一覧/削除)、講師セル→講師ピッカー。
+  onGroupSubjectClick?: (dateKey: string, band: GroupClassBand, hasSubject: boolean, x: number, y: number) => void
+  onGroupTeacherClick?: (dateKey: string, band: GroupClassBand, hasEntry: boolean, x: number, y: number) => void
 }
 
 function BoardGridComponent({
@@ -190,12 +196,15 @@ function BoardGridComponent({
   highlightedHolidayDate,
   yearLabel,
   specialPeriods,
+  groupClassEntries,
   resolveStudentDisplayName,
   resolveStudentGradeLabel,
   resolveDisplayedLessonType,
   onDayHeaderClick,
   onTeacherClick,
   onStudentClick,
+  onGroupSubjectClick,
+  onGroupTeacherClick,
 }: BoardGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null)
   const linkedLessonDestinationByStatusId = useMemo(
@@ -444,6 +453,11 @@ function BoardGridComponent({
     })
   }
 
+  // spec-group-lesson §A: この週で特別講習期間に入る日（列インデックス）の集合。
+  // 集団2行はこの集合が空でないときだけ描画し、対象日かつ開校日のセルだけ操作可能にする。
+  const { showGroupClassRows, specialDayIndexSet } = resolveGroupClassDayFlags(days, specialPeriods)
+  const resolvedGroupClassEntries = groupClassEntries ?? {}
+
   return (
     <div ref={gridRef} className="slot-adjust-grid" role="grid" aria-label="週次のコマ調整テーブル" data-testid="slot-adjust-grid">
       <table>
@@ -487,6 +501,45 @@ function BoardGridComponent({
             </tr>
           </thead>
           <tbody>
+            {showGroupClassRows ? groupClassBands.map((band) => (
+              <tr key={`group_${band}`} className="sa-group-row" data-testid={`board-group-row-${band}`}>
+                <td className="sa-time-cell sa-group-time-cell">
+                  <div className="sa-time-cell-inner">
+                    <div className="sa-time-slot">集団</div>
+                    <div className="sa-time-range">{groupClassBandTimeLabels[band]}</div>
+                  </div>
+                </td>
+                {days.flatMap((day, dayIndex) => {
+                  const baseKey = `group_${band}_${day.dateKey}`
+                  const isSpecialDay = specialDayIndexSet.has(dayIndex) && day.isOpenDay
+                  if (!isSpecialDay) {
+                    return [<td key={`${baseKey}_empty`} colSpan={4} className="sa-group-empty sa-inactive" />]
+                  }
+                  const entry = resolvedGroupClassEntries[groupClassEntryKey(day.dateKey, band)]
+                  const hasSubject = Boolean(entry?.subject)
+                  return [
+                    <td key={`${baseKey}_seat`} className="sa-seat-number sa-day-group-start sa-group-seat" />,
+                    <td
+                      key={`${baseKey}_teacher`}
+                      className="sa-teacher sa-group-teacher"
+                      onClick={(event) => onGroupTeacherClick?.(day.dateKey, band, hasSubject, event.clientX, event.clientY)}
+                      data-testid={`group-teacher-cell-${day.dateKey}-${band}`}
+                    >
+                      <div className="sa-teacher-name">{entry?.teacherName ?? ''}</div>
+                    </td>,
+                    <td
+                      key={`${baseKey}_subject`}
+                      colSpan={2}
+                      className={`sa-student sa-group-subject sa-day-group-end${hasSubject ? '' : ' sa-group-subject-empty'}`}
+                      onClick={(event) => onGroupSubjectClick?.(day.dateKey, band, hasSubject, event.clientX, event.clientY)}
+                      data-testid={`group-subject-cell-${day.dateKey}-${band}`}
+                    >
+                      <div className="sa-group-subject-inner">{entry?.subject ?? ''}</div>
+                    </td>,
+                  ]
+                })}
+              </tr>
+            )) : null}
             {slotNumbers.flatMap((slotNumber) => {
               const slotTemplate = slotTemplateByNumber.get(slotNumber)
               if (!slotTemplate) return []

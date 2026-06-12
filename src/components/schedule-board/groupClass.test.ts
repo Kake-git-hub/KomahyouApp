@@ -5,6 +5,7 @@ import {
   isGroupClassBand,
   isGroupClassSubject,
   normalizeGroupClassEntryMap,
+  resolveGroupClassDayFlags,
   type GroupClassEntryMap,
 } from './groupClass'
 
@@ -87,6 +88,48 @@ describe('normalizeGroupClassEntryMap', () => {
     }
     const roundTripped = normalizeGroupClassEntryMap(JSON.parse(JSON.stringify(original)))
     expect(roundTripped).toEqual(original)
+  })
+})
+
+describe('resolveGroupClassDayFlags', () => {
+  const week = [
+    { dateKey: '2026-07-20' }, // 月
+    { dateKey: '2026-07-21' }, // 火
+    { dateKey: '2026-07-22' }, // 水
+    { dateKey: '2026-07-23' }, // 木
+    { dateKey: '2026-07-24' }, // 金
+    { dateKey: '2026-07-25' }, // 土
+    { dateKey: '2026-07-26' }, // 日
+  ]
+
+  it('does not show group rows when no special period overlaps the week', () => {
+    const { showGroupClassRows, specialDayIndexSet } = resolveGroupClassDayFlags(week, [])
+    expect(showGroupClassRows).toBe(false)
+    expect(specialDayIndexSet.size).toBe(0)
+  })
+
+  it('marks only the days inside the special period', () => {
+    const { showGroupClassRows, specialDayIndexSet } = resolveGroupClassDayFlags(week, [
+      { startDate: '2026-07-21', endDate: '2026-07-23' },
+    ])
+    expect(showGroupClassRows).toBe(true)
+    expect([...specialDayIndexSet].sort((a, b) => a - b)).toEqual([1, 2, 3])
+  })
+
+  it('unions overlapping / multiple periods within the week', () => {
+    const { specialDayIndexSet } = resolveGroupClassDayFlags(week, [
+      { startDate: '2026-07-20', endDate: '2026-07-20' },
+      { startDate: '2026-07-24', endDate: '2026-07-31' },
+    ])
+    expect([...specialDayIndexSet].sort((a, b) => a - b)).toEqual([0, 4, 5, 6])
+  })
+
+  it('shows rows when a period covers the whole visible week', () => {
+    const { showGroupClassRows, specialDayIndexSet } = resolveGroupClassDayFlags(week, [
+      { startDate: '2026-07-01', endDate: '2026-08-31' },
+    ])
+    expect(showGroupClassRows).toBe(true)
+    expect(specialDayIndexSet.size).toBe(7)
   })
 })
 

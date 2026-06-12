@@ -85,6 +85,21 @@ export function normalizeGroupClassEntryMap(value: unknown): GroupClassEntryMap 
   return result
 }
 
+// spec-group-lesson §A: その週で集団行を出すか／どの日（列インデックス）を対象にするかを判定する純粋関数。
+// 特別講習期間に入る日を対象とし、1日でもあれば集団2行を描画する。
+// （開校日かどうかは描画側で AND する。期間内でも休校日は操作不可セルにするため。）
+export function resolveGroupClassDayFlags(
+  days: Array<{ dateKey: string }>,
+  specialPeriods: Array<{ startDate: string; endDate: string }>,
+): { showGroupClassRows: boolean; specialDayIndexSet: Set<number> } {
+  const specialDayIndexSet = new Set<number>()
+  days.forEach((day, index) => {
+    const inPeriod = specialPeriods.some((period) => day.dateKey >= period.startDate && day.dateKey <= period.endDate)
+    if (inPeriod) specialDayIndexSet.add(index)
+  })
+  return { showGroupClassRows: specialDayIndexSet.size > 0, specialDayIndexSet }
+}
+
 // publish / 履歴用のディープコピー。参照共有による取り違えを防ぐ。
 export function cloneGroupClassEntryMap(value: GroupClassEntryMap | null | undefined): GroupClassEntryMap {
   if (!value) return {}

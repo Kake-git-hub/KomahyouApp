@@ -109,7 +109,13 @@
   - `App.tsx`：`buildBoardDataForSignature` に `groupClassEntries`（集団変更を未保存検知）＋ studentInput 明示再構築2経路で `groupClassParticipation` 保全。
   - 検証：`tsc -b` クリーン、`vitest` 全 **325 通過**（既存スナップショット無傷＝個別非干渉）、新規/変更ファイルの eslint クリーン。
   - **Phase 0 残（後続フェーズで対応）**：undo/redo 履歴(`createHistoryEntry`)への集団取り込み（編集UI登場の Phase 1）／QR提出 Cloud Function の studentInputs サニタイザに `groupClassParticipation` 追加（Phase 3。在宅保存は汎用 `sanitizeForFirestore` で既に保持）。
-- **Phase 1 — 盤面描画**：集団2行（期間内開校日のみ）・科目ピッカー・担当講師セル・クリックメニュー（出席者一覧/削除）・科目変更で出欠クリア。`BoardGrid.tsx` / `ScheduleBoardScreen.tsx`。
+- **Phase 1 — 盤面描画 ✅ 実装（未コミット）**：集団2行（特別講習を含む週・期間内開校日のみ）・科目ピッカー・担当講師セル・クリックメニュー（出席者一覧/削除）・科目変更で出欠クリア。
+  - `groupClass.ts`：`resolveGroupClassDayFlags`（週内のどの日に集団行を出すかの純粋判定）＋テスト。
+  - `BoardGrid.tsx`：`tbody` 先頭に集団2行を描画（時限セル「集団 10:00-11:00 / 11:10-12:10」・席空・講師セル・科目結合セル）。`onGroupSubjectClick`/`onGroupTeacherClick` プロップ。
+  - `ScheduleBoardScreen.tsx`：`GroupClassMenuState`（subject-pick / subject-actions / teacher）＋ハンドラ（commit/科目選択/講師選択/削除/出席者一覧を開く）。`setGroupClassEntries` の変更は effect(3244) で publish。科目変更時は出欠クリア。専用ハンドラで個別と分離。
+  - `App.css`：集団行のスタイル。
+  - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **329 通過**、プレビュー起動でコンソールエラーなし（盤面到達は認証要のため未確認＝本番ログイン/書込みは規約上回避）。
+  - **Phase 1 残**：出席者モーダル本体＋PDF は Phase 2（現状は最小モーダル＝ヘッダ表示＋閉じる）。undo/redo への集団取り込みは未対応（group 変更は publish/保存はされるが Ctrl+Z 非対応）→ Phase 2 で対応検討。
 - **Phase 2 — 出席者モーダル＋PDF**：名簿（参加提出者＋手動追加）・default出席・欠席トグル・キャンセル・PDF（ヘッダ＋出欠＋集計）。
 - **Phase 3 — 希望提出**：中3のみ集団(理科)/集団(社会)の参加/不参加（既定不参加）。`SubmissionPage.tsx` ＋ 室長日程表登録UI ＋ `App.tsx` 取込5経路で保全。**移行（既存提出＝不参加・提出状況不変）**のテスト。
 - **Phase 4 — 生徒日程表＋回数欄**：未登録=全員表示／登録後=参加者のみ＋出欠反映。講習回数表に集理/集社（表示期間内：希望=盤面コマ数 / actual=出席数）。
