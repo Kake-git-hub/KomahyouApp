@@ -1952,6 +1952,87 @@ tr.sa-group-row td {
   min-width: 200px;
 }
 
+/* spec-group-lesson §B: 出席者モーダル */
+.group-attendance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 10px 0;
+}
+
+.group-attendance-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-attendance-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.group-attendance-toggle:hover {
+  background: #f5f8ff;
+}
+
+.group-attendance-row.is-absent .group-attendance-toggle {
+  background: #fdecec;
+  border-color: #e6a0a0;
+}
+
+.group-attendance-name {
+  font-weight: 600;
+}
+
+.group-attendance-status.present {
+  color: #1a7f37;
+  font-weight: 700;
+}
+
+.group-attendance-status.absent {
+  color: #b00020;
+  font-weight: 700;
+}
+
+.group-attendance-remove {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: #777;
+  line-height: 1;
+}
+
+.group-attendance-remove:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.group-attendance-summary {
+  font-weight: 700;
+  margin: 6px 0 10px;
+}
+
+.group-attendance-empty {
+  color: #777;
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+}
+
 .sa-teacher,
 .sa-student {
   cursor: pointer;

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
-import { resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
+import { resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
+import { GroupAttendanceModal } from './GroupAttendanceModal'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { BoardGrid } from './BoardGrid'
@@ -5703,6 +5704,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setGroupClassMenu(null)
   }
 
+  // spec-group-lesson §B: 出欠の唯一の入力点。欠席者と手動追加を盤面の集団エントリへ保存する。
+  const handleSaveGroupAttendance = (absentStudentIds: string[], addedStudentIds: string[]) => {
+    if (!groupAttendanceTarget) return
+    const { dateKey, band } = groupAttendanceTarget
+    commitGroupClassEntry(dateKey, band, (existing) => (existing ? { ...existing, absentStudentIds, addedStudentIds } : existing))
+    setGroupAttendanceTarget(null)
+    setStatusMessage('集団授業の出席状況を保存しました。')
+  }
+
   const handleTemplateSaveRequest = () => {
     const template = convertTemplateCellsToTemplate({
       cells: templateCells,
@@ -8620,20 +8630,41 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           {groupAttendanceTarget ? (() => {
             const target = groupAttendanceTarget
             const entry = groupClassEntries[groupClassEntryKey(target.dateKey, target.band)]
+            if (!entry) return null
+            const subject = entry.subject
+            const studentById = new Map(students.map((student) => [student.id, student]))
+            // 名簿の初期メンバー = その科目に「参加」提出した中3（被覆する特別講習から）。
+            const coveringSession = specialSessions.find((session) => target.dateKey >= session.startDate && target.dateKey <= session.endDate) ?? null
+            const participantRows = coveringSession
+              ? Object.entries(coveringSession.studentInputs)
+                .filter(([, input]) => resolveGroupClassParticipation(input, subject))
+                .map(([studentId]) => studentById.get(studentId))
+                .filter((student): student is StudentRow => Boolean(student))
+                .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, target.dateKey))
+                .map((student) => ({ id: student.id, name: getStudentDisplayName(student) }))
+              : []
+            // 手動追加の候補 = その日に在籍する中3全員。
+            const grade9Candidates = students
+              .filter((student) => resolveCurrentStudentGradeLabel(student, target.dateKey) === '中3')
+              .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, target.dateKey))
+              .map((student) => ({ id: student.id, name: getStudentDisplayName(student) }))
+            const dateCell = cells.find((cell) => cell.dateKey === target.dateKey)
+            const dateLabel = dateCell ? `${target.dateKey}（${dateCell.dayLabel}）` : target.dateKey
             return (
-              <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setGroupAttendanceTarget(null) }}>
-                <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="group-attendance-modal" style={{ minWidth: 320 }}>
-                  <div className="auto-assign-modal-title">出席者一覧</div>
-                  <div className="student-menu-meta">{`${target.dateKey} / 集団 ${groupClassBandTimeLabels[target.band]}`}</div>
-                  <div className="student-menu-meta">{`${entry?.subject ?? ''}${entry?.teacherName ? ` / ${entry.teacherName}` : ''}`}</div>
-                  <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
-                    出席登録（デフォルト出席・欠席者をクリック）とPDF印刷は次の更新（Phase 2）で対応します。
-                  </div>
-                  <div className="student-menu-section student-menu-actions">
-                    <button type="button" className="secondary-button" onClick={() => setGroupAttendanceTarget(null)} data-testid="group-attendance-close">閉じる</button>
-                  </div>
-                </div>
-              </div>
+              <GroupAttendanceModal
+                key={`${target.dateKey}_${target.band}`}
+                dateLabel={dateLabel}
+                bandTimeLabel={groupClassBandTimeLabels[target.band]}
+                subject={subject}
+                teacherName={entry.teacherName}
+                schoolName={classroomSettings.scheduleHeader?.schoolName}
+                participants={participantRows}
+                grade9Candidates={grade9Candidates}
+                initialAbsentIds={entry.absentStudentIds}
+                initialAddedIds={entry.addedStudentIds}
+                onSave={handleSaveGroupAttendance}
+                onCancel={() => setGroupAttendanceTarget(null)}
+              />
             )
           })() : null}
           {templateImportDateOptions ? (

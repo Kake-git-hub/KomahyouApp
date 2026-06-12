@@ -116,7 +116,13 @@
   - `App.css`：集団行のスタイル。
   - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **329 通過**、プレビュー起動でコンソールエラーなし（盤面到達は認証要のため未確認＝本番ログイン/書込みは規約上回避）。
   - **Phase 1 残**：出席者モーダル本体＋PDF は Phase 2（現状は最小モーダル＝ヘッダ表示＋閉じる）。undo/redo への集団取り込みは未対応（group 変更は publish/保存はされるが Ctrl+Z 非対応）→ Phase 2 で対応検討。
-- **Phase 2 — 出席者モーダル＋PDF**：名簿（参加提出者＋手動追加）・default出席・欠席トグル・キャンセル・PDF（ヘッダ＋出欠＋集計）。
+- **Phase 2 — 出席者モーダル＋PDF ✅ 実装（未コミット）**：名簿（参加提出者＋手動追加）・default出席・欠席トグル・キャンセル・PDF（ヘッダ＋出欠＋集計）。
+  - 新規 `groupAttendanceHtml.ts`：`buildGroupAttendanceHtml`（印刷用HTML・教室/日付/時間帯/科目/講師＋出欠一覧＋人数集計）＋ `openGroupAttendancePrint`（別窓印刷）。テスト6件（内容・集計・空・HTMLエスケープ）。
+  - 新規 `GroupAttendanceModal.tsx`：ローカル状態で出欠編集（既定出席・欠席トグル）・中3手動追加（在籍中3から）・保存/キャンセル・PDF印刷。出欠の唯一の入力点。
+  - `ScheduleBoardScreen.tsx`：最小モーダルを本モーダルへ差し替え。名簿初期＝被覆する特別講習で `resolveGroupClassParticipation` が true の中3、手動追加候補＝在籍中3（`resolveCurrentStudentGradeLabel`）。保存は `commitGroupClassEntry` で absent/added を集団エントリへ。
+  - `App.css`：モーダルのスタイル。
+  - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **335 通過**、新規 lint クリーン。モーダル本体は認証の先のため live 未確認（PDFはユニットテストで担保）。
+  - **Phase 2 残**：undo/redo への集団取り込みは引き続き未対応（保存は反映されるが Ctrl+Z 非対応）。
 - **Phase 3 — 希望提出**：中3のみ集団(理科)/集団(社会)の参加/不参加（既定不参加）。`SubmissionPage.tsx` ＋ 室長日程表登録UI ＋ `App.tsx` 取込5経路で保全。**移行（既存提出＝不参加・提出状況不変）**のテスト。
 - **Phase 4 — 生徒日程表＋回数欄**：未登録=全員表示／登録後=参加者のみ＋出欠反映。講習回数表に集理/集社（表示期間内：希望=盤面コマ数 / actual=出席数）。
 - **Phase 5 — 講師日程表＋給与**：集団行表示・専用カテゴリ「集団」1コマ集計（出席1名以上）・交通費日数に集団実施日加算。
