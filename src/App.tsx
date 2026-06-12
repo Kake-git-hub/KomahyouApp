@@ -54,6 +54,27 @@ const SAVE_FAILURE_GUIDANCE_MESSAGE = [
   '  3. 「バックアップを読み込む」から、ダウンロードフォルダの最新バックアップを選ぶ',
 ].join('\n')
 
+// A1: サーバーが版数衝突(別端末が先に更新)を表す HttpsError メッセージに付ける安定マーカー。
+// functions/src/optimisticVersion.ts の STALE_SNAPSHOT_ERROR_MARKER と一致させること。
+const STALE_SNAPSHOT_ERROR_MARKER = 'STALE_SNAPSHOT'
+
+function isStaleSnapshotConflictError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? '')
+  return message.includes(STALE_SNAPSHOT_ERROR_MARKER)
+}
+
+const STALE_SNAPSHOT_GUIDANCE_MESSAGE = [
+  '別の端末でこの教室のデータが更新されました。',
+  '',
+  'このタブの変更は、最新データを上書きしないようクラウド保存を止めています。',
+  'お手数ですが、次の手順でご対応ください。',
+  '  1. データ保護のため、このタブの内容をバックアップJSONに書き出しました(ダウンロードフォルダ)',
+  '  2. 画面を再読み込みして、最新のデータを取得してください',
+  '  3. 必要な変更が最新データに無ければ、再度入力して保存してください',
+  '',
+  '※ コマ表は「1教室=1端末」での編集を前提にしています。複数の端末・タブで同時に開かないでください。',
+].join('\n')
+
 function createRemoteSaveId(savedAt: string, classroomId: string) {
   const uniqueId = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
   return `${savedAt}_${classroomId}_${uniqueId}`.replace(/[^A-Za-z0-9_-]+/g, '-')
@@ -1189,6 +1210,10 @@ function AuthenticatedApp() {
   // 直近のローカル自動保存(IndexedDB書込)を開始した時刻。連続編集中の保存間隔を制御する。
   const autosaveLastStartedAtRef = useRef(0)
   const downloadedFirebaseFailureBackupKeysRef = useRef<Set<string>>(new Set())
+  // A1: 別端末が先に更新していて(版数衝突=STALE)クラウド保存が拒否された状態。
+  // セットされると、同じ古いベースでの再送ループを止め、ユーザーに再読み込みを促す。
+  const remoteStaleConflictRef = useRef(false)
+  const [hasRemoteStaleConflict, setHasRemoteStaleConflict] = useState(false)
   isSavingNowRef.current = isSavingNow
   isRemoteSyncPendingRef.current = isRemoteSyncPending
   isRemoteSyncVisibleRef.current = isRemoteSyncVisible
@@ -1283,11 +1308,31 @@ function AuthenticatedApp() {
     setSubmissionAcknowledgements([])
   }, [])
   const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode) => {
-    if (submissionAcknowledgements.length === 0) return <>{content}</>
+    // A1: 版数衝突(別端末が先に更新)で停止中は、全画面共通の警告バナーで再読み込みを促す。
+    const staleConflictBanner = hasRemoteStaleConflict ? (
+      <div className="remote-stale-conflict-banner" role="alert" data-testid="remote-stale-conflict-banner">
+        <span className="remote-stale-conflict-banner-text">
+          別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しています。
+          このタブの内容はバックアップJSONに書き出し済みです。最新データを取得するため、画面を再読み込みしてください。
+        </span>
+        <button
+          type="button"
+          className="primary-button"
+          onClick={() => window.location.reload()}
+          data-testid="remote-stale-conflict-reload"
+        >
+          再読み込み
+        </button>
+      </div>
+    ) : null
+
+    if (submissionAcknowledgements.length === 0 && !staleConflictBanner) return <>{content}</>
 
     return (
       <>
         {content}
+        {staleConflictBanner}
+        {submissionAcknowledgements.length > 0 && (
         <div className="submission-acknowledgement-overlay" role="presentation">
           <div
             className="submission-acknowledgement-modal"
@@ -1332,9 +1377,10 @@ function AuthenticatedApp() {
             </div>
           </div>
         </div>
+        )}
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
@@ -1634,6 +1680,9 @@ function AuthenticatedApp() {
     onFailure?: (error: unknown) => void
   }) => {
     if (!isRemoteBackendEnabled || !remoteSessionUserId) return false
+    // A1: 版数衝突で停止中は、再読み込みまでクラウド同期を再開しない(古いベースでの上書き再試行を断つ)。
+    // ローカル保存(IndexedDB)は別経路で継続するため、編集内容はブラウザ内には残る。
+    if (remoteStaleConflictRef.current) return false
 
     try {
       markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
@@ -1766,6 +1815,32 @@ function AuthenticatedApp() {
         }
       } catch (error) {
         failed = true
+        // A1: 版数衝突(別端末が先に更新)は通常の同期失敗と分けて扱う。
+        // 同じ古いベースで再送し続けても必ず失敗するため、再送ループを止めて再読み込みを促す。
+        if (isStaleSnapshotConflictError(error)) {
+          // このタブのデータを保全するためバックアップJSONを書き出す(スナップショット単位で重複DL抑止)。
+          const downloadedStaleBackup = downloadFirebaseFailureBackup(nextItem.snapshot)
+          // 以後の自動同期を止める(再読み込みまで)。キューも空にして即時の再送を断つ。
+          queuedRemoteSnapshotRef.current = null
+          updateRemoteSyncPending(false)
+          updateRemoteSyncVisible(false)
+          setRemoteSyncProgress(null)
+          clearRemoteSyncProgressTimer()
+          const alreadyFlagged = remoteStaleConflictRef.current
+          remoteStaleConflictRef.current = true
+          setHasRemoteStaleConflict(true)
+          setPersistenceMessage(downloadedStaleBackup
+            ? '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。このタブの内容をバックアップJSONに書き出したので、画面を再読み込みしてください。'
+            : '別の端末でこの教室のデータが更新されました。最新を上書きしないようクラウド保存を停止しました。画面を再読み込みしてください。')
+          // 初回だけダイアログで手順を明示する(連続編集での多重ダイアログを防ぐ)。
+          if (!alreadyFlagged) {
+            window.alert(STALE_SNAPSHOT_GUIDANCE_MESSAGE)
+          }
+          nextItem.onFailure?.(error)
+          remoteSaveInFlightRef.current = false
+          clearRemoteSyncSlowTimer()
+          return
+        }
         updateRemoteSyncPending(Boolean(queuedRemoteSnapshotRef.current))
         if (isRemoteSyncVisibleRef.current) {
           setRemoteSyncProgress(null)
@@ -2048,6 +2123,9 @@ function AuthenticatedApp() {
     }
 
     applyWorkspaceSnapshot(mergedSnapshot, usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : successMessage)
+    // A1: ワークスペースを読み直したら最新の版数をレジストリに取り込んだので、版数衝突の停止を解除する。
+    remoteStaleConflictRef.current = false
+    setHasRemoteStaleConflict(false)
     if (usedPendingLocalSnapshot) {
       // ログイン直後の自動復元はユーザー操作ではないため、保存ボタンの「保存中」表示や
       // 進捗バーは出さず、メッセージのみで静かに同期する。

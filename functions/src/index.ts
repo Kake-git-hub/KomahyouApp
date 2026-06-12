@@ -10,6 +10,7 @@ import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-fu
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
+import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 
 initializeApp()
 
@@ -133,6 +134,8 @@ type FirebaseClassroomSnapshotDoc = {
   dataByteLength?: number
   updatedBy?: string
   updatedAt?: string
+  // A1: 楽観ロック用の単調増加版数。保存ごとに +1。旧データには無いので optional。
+  version?: number
 }
 
 type WorkspaceUser = {
@@ -928,12 +931,14 @@ function createStoredSnapshotDoc(params: {
   updatedBy: string
   updatedAt?: string
   schemaVersion?: number
+  version?: number
 }): FirebaseClassroomSnapshotDoc {
   const sanitizedPayload = sanitizeForFirestore(params.payload) as FirebaseAppSnapshotPayload
   const json = JSON.stringify(sanitizedPayload)
   const dataByteLength = Buffer.byteLength(json, 'utf8')
   const updatedAt = typeof params.updatedAt === 'string' ? params.updatedAt : params.savedAt
   const schemaVersion = typeof params.schemaVersion === 'number' ? params.schemaVersion : 1
+  const versionField = typeof params.version === 'number' ? { version: params.version } : {}
 
   if (dataByteLength <= FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT) {
     return {
@@ -942,6 +947,7 @@ function createStoredSnapshotDoc(params: {
       data: sanitizedPayload,
       updatedBy: params.updatedBy,
       updatedAt,
+      ...versionField,
     }
   }
 
@@ -953,6 +959,7 @@ function createStoredSnapshotDoc(params: {
     dataByteLength,
     updatedBy: params.updatedBy,
     updatedAt,
+    ...versionField,
   }
 }
 
@@ -976,6 +983,7 @@ function buildSaveAttemptPayload(params: {
   verifiedAt?: string
   readbackHash?: string
   errorMessage?: string
+  snapshotVersion?: number
 }) {
   return {
     classroomId: params.classroomId,
@@ -993,6 +1001,8 @@ function buildSaveAttemptPayload(params: {
     ...(params.verifiedAt ? { verifiedAt: params.verifiedAt } : {}),
     ...(typeof params.readbackHash === 'string' ? { readbackHash: params.readbackHash } : {}),
     ...(params.errorMessage ? { errorMessage: params.errorMessage } : {}),
+    // A1: 冪等リプレイ時にクライアントへ現在の版数を返すため保持する。
+    ...(typeof params.snapshotVersion === 'number' ? { snapshotVersion: params.snapshotVersion } : {}),
   }
 }
 
@@ -1503,6 +1513,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const saveId = readString(rawData.saveId, 'saveId')
   const payload = readPayloadObject(rawData.payload, 'payload')
   const sanitizedPayload = sanitizeForFirestore(payload)
+  // A1: クライアントが「読み込んだ時点の版数」。旧クライアントは送らない(undefined)。
+  const incomingBaseVersion = typeof rawData.baseVersion === 'number' ? rawData.baseVersion : undefined
 
   if (options?.developmentOnly && classroomId !== DEVELOPMENT_CLASSROOM_ID) {
     throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
@@ -1517,7 +1529,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
 
   const existingAttemptSnapshot = await saveAttemptRef.get()
   if (existingAttemptSnapshot.exists) {
-    const existingAttempt = existingAttemptSnapshot.data() as { payloadHash?: string; verified?: boolean; savedAt?: string; writeMode?: string; dataByteLength?: number } | undefined
+    const existingAttempt = existingAttemptSnapshot.data() as { payloadHash?: string; verified?: boolean; savedAt?: string; writeMode?: string; dataByteLength?: number; snapshotVersion?: number } | undefined
     if (existingAttempt?.payloadHash !== payloadHash) {
       throw new HttpsError('already-exists', '同じ saveId で異なる保存内容が送信されました。')
     }
@@ -1531,19 +1543,38 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
         idempotentReplay: true,
         writeMode: existingAttempt.writeMode || 'cloud-function-verified-replay',
         dataByteLength: existingAttempt.dataByteLength ?? 0,
+        // A1: リプレイでもクライアントが版数を追従できるよう返す(無ければ undefined)。
+        version: typeof existingAttempt.snapshotVersion === 'number' ? existingAttempt.snapshotVersion : undefined,
       }
     }
   }
+  // exists だが未verified = 同一saveIdの再試行(冪等リプレイ)。版数照合をスキップする。
+  const isReplay = existingAttemptSnapshot.exists
 
   const classroomSnapshot = await classroomRef.get()
   if (!classroomSnapshot.exists) {
     throw new HttpsError('not-found', '対象の教室が見つかりません。')
   }
   const previousSnapshot = await snapshotRef.get()
+  const previousSnapshotData = previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null
   await assertNoSnapshotDataLoss({
-    previousSnapshot: previousSnapshot.exists ? previousSnapshot.data() as FirebaseClassroomSnapshotDoc : null,
+    previousSnapshot: previousSnapshotData,
     nextPayload: sanitizedPayload,
   })
+
+  // A1: 楽観ロック。別端末が先に更新していれば(版数不一致)古いベースなので拒否する。
+  const versionDecision = resolveOptimisticVersionDecision({
+    incomingBaseVersion,
+    previousVersion: previousSnapshotData?.version,
+    isReplay,
+  })
+  if (!versionDecision.ok) {
+    throw new HttpsError(
+      'failed-precondition',
+      `${STALE_SNAPSHOT_ERROR_MARKER}:別の端末でこの教室のデータが更新されています(サーバー版数=${versionDecision.previousVersion}/送信版数=${versionDecision.incomingBaseVersion})。最新を読み込むため、画面を再読み込みしてください。`,
+    )
+  }
+  const nextVersion = versionDecision.nextVersion
 
   const snapshotDoc = createStoredSnapshotDoc({
     payload: sanitizedPayload,
@@ -1551,6 +1582,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     updatedBy: memberRef.id,
     updatedAt: savedAt,
     schemaVersion: 1,
+    version: nextVersion,
   })
   const writeMode = snapshotDoc.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING ? 'cloud-function-compressed' : 'cloud-function-inline'
   const dataByteLength = snapshotDoc.dataByteLength ?? Buffer.byteLength(JSON.stringify(snapshotDoc.data ?? {}), 'utf8')
@@ -1565,6 +1597,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     snapshotEncoding: getStoredSnapshotEncoding(snapshotDoc),
     updatedBy: memberRef.id,
     createdAt: saveAttemptCreatedAt,
+    snapshotVersion: nextVersion,
   }
   await saveAttemptRef.set(buildSaveAttemptPayload({
     ...saveAttemptBase,
@@ -1605,6 +1638,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     idempotentReplay: false,
     writeMode,
     dataByteLength,
+    version: nextVersion,
   }
 }
 
@@ -2214,6 +2248,10 @@ export const lectureSubmissionApi = onRequest({
           updatedBy: typeof snapshotData?.updatedBy === 'string' ? snapshotData.updatedBy : '',
           updatedAt: now,
           schemaVersion: typeof snapshotData?.schemaVersion === 'number' ? snapshotData.schemaVersion : 1,
+          // A1: QR提出のサーバー側マージは楽観ロックの版数を据え置く(+1しない)。
+          // 版数を変えると、提出のたびに管理者側の保存が STALE 誤判定でブロックされてしまう。
+          // (提出内容は管理者側の onSnapshot 購読でローカルにも反映されるため、版数据え置きで整合する)
+          version: typeof snapshotData?.version === 'number' ? snapshotData.version : undefined,
         }))
       })
     } catch {

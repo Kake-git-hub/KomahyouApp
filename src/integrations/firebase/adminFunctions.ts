@@ -4,6 +4,7 @@ import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/ap
 import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
+import { getClassroomSnapshotVersion, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
 
 export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
 
@@ -100,6 +101,8 @@ type SaveClassroomSnapshotRequest = {
   savedAt: string
   saveId: string
   payload: AppSnapshotPayload
+  // A1: このタブが読み込んだ時点の版数。サーバーが現在版数と照合し、古ければ拒否する。
+  baseVersion?: number
 }
 
 export type SaveClassroomSnapshotOptions = {
@@ -320,7 +323,7 @@ export function resolveSaveClassroomSnapshotCallableName(options?: SaveClassroom
 }
 
 export async function saveClassroomSnapshotViaFunction(
-  input: Omit<SaveClassroomSnapshotRequest, 'workspaceKey'>,
+  input: Omit<SaveClassroomSnapshotRequest, 'workspaceKey' | 'baseVersion'>,
   options?: SaveClassroomSnapshotOptions,
 ): Promise<{
   classroomId: string
@@ -331,6 +334,7 @@ export async function saveClassroomSnapshotViaFunction(
   idempotentReplay: boolean
   writeMode: string
   dataByteLength: number
+  version?: number
 }> {
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
@@ -344,12 +348,20 @@ export async function saveClassroomSnapshotViaFunction(
     idempotentReplay: boolean
     writeMode: string
     dataByteLength: number
+    version?: number
   }>(functions, resolveSaveClassroomSnapshotCallableName(options), { timeout: 120_000 })
+  // A1: このタブが把握している版数を baseVersion として送る(未読込なら undefined=照合スキップ)。
+  const baseVersion = getClassroomSnapshotVersion(input.classroomId)
   const result = await callable({
     workspaceKey: config.workspaceKey,
     ...input,
+    ...(typeof baseVersion === 'number' ? { baseVersion } : {}),
     payload: sanitizeForFirestore(input.payload),
   })
+  // 保存成功で返ってきた新版数をレジストリへ反映し、次の保存の baseVersion にする。
+  if (typeof result.data.version === 'number') {
+    setClassroomSnapshotVersion(input.classroomId, result.data.version)
+  }
   return result.data
 }
 

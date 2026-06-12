@@ -3,6 +3,7 @@ import { WORKSPACE_SNAPSHOT_SCHEMA_VERSION, type AppSnapshotPayload, type Classr
 import type { SlotCell } from '../../components/schedule-board/types'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
+import { clearClassroomSnapshotVersions, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
 
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 const FIREBASE_CHUNKED_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64-chunked'
@@ -65,6 +66,8 @@ type FirebaseClassroomSnapshotDoc = {
   compressedByteLength?: number
   updatedBy: string
   updatedAt: string
+  // A1: 楽観ロック用の版数。保存ごとに +1。旧データには無いので optional。
+  version?: number
 }
 
 type FirebaseClassroomSnapshotChunkDoc = {
@@ -638,6 +641,13 @@ export async function loadFirebaseWorkspaceSnapshot(params: {
       return [entry.id, data]
     }),
   )
+
+  // A1: 各教室の現在の版数をレジストリへ記録する。版数フィールドが無い旧データは 0 とみなす。
+  // 先に clear することで、別アカウント/別教室の古い版数が残らないようにする。
+  clearClassroomSnapshotVersions()
+  snapshotByClassroomId.forEach((data, classroomId) => {
+    setClassroomSnapshotVersion(classroomId, typeof data.version === 'number' ? data.version : 0)
+  })
 
   const settingsDocSnapshots = membership.role === 'developer'
     ? await getDocs(getClassroomSettingsCollection(firestore))

@@ -213,6 +213,37 @@
   background: rgba(18, 36, 58, 0.62);
 }
 
+/* A1: 別端末で更新された(版数衝突)際の、再読み込みを促す全画面共通バナー */
+.remote-stale-conflict-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 260;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 18px;
+  background: #b3261e;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.5;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+
+.remote-stale-conflict-banner-text {
+  max-width: 880px;
+}
+
+.remote-stale-conflict-banner .primary-button {
+  flex: none;
+  background: #fff;
+  color: #b3261e;
+  font-weight: 700;
+}
+
 .submission-acknowledgement-modal {
   width: min(520px, 100%);
   display: grid;
