@@ -942,6 +942,23 @@ export function resolveRemoteWorkspaceSnapshot(
   }
 }
 
+// A2: タブが「隠れた」瞬間(別タブ/別アプリへ切替・最小化)に workspace をクラウド同期すべきか。
+// 旧実装は無条件に丸ごと送信していたため、朝開いたまま放置したタブを夕方ちょっと触っただけで
+// 古いデータが送信され、別端末で行った最新の編集を上書きする事故が起きえた。
+// 未変更(hasUnsavedChanges=false)なら送信しない。handleBeforeUnload と同じ未変更判定に揃える。
+export function shouldSyncWorkspaceOnVisibilityHidden(params: {
+  isHidden: boolean
+  hasWorkspaceData: boolean
+  isRemoteBackendEnabled: boolean
+  remoteSessionUserId: string | null
+  hasUnsavedChanges: boolean
+}): boolean {
+  if (!params.isHidden) return false
+  if (!params.hasWorkspaceData) return false
+  if (!params.isRemoteBackendEnabled || !params.remoteSessionUserId) return false
+  return params.hasUnsavedChanges
+}
+
 function getBoardShareTokenFromUrl() {
   const queryToken = new URLSearchParams(window.location.search).get('boardShare')?.trim()
   if (queryToken) return queryToken
@@ -3796,9 +3813,16 @@ function AuthenticatedApp() {
     // Save to Firebase when tab becomes hidden (tab switch, minimize, close)
     // This covers the case where the user closes the browser without logging out
     const handleVisibilityChange = () => {
-      if (document.visibilityState !== 'hidden') return
-      if (workspaceUsers.length === 0 || workspaceClassrooms.length === 0) return
-      if (!isRemoteBackendEnabled || !remoteSessionUserId) return
+      // A2: 無変更なら何も送らない。放置タブ(古いデータ)が visibilitychange を契機に
+      // 最新データを丸ごと上書きする事故を防ぐ。実変更の上書きブロックは A1(サーバー側)で担保。
+      const shouldSync = shouldSyncWorkspaceOnVisibilityHidden({
+        isHidden: document.visibilityState === 'hidden',
+        hasWorkspaceData: workspaceUsers.length > 0 && workspaceClassrooms.length > 0,
+        isRemoteBackendEnabled,
+        remoteSessionUserId,
+        hasUnsavedChanges: buildCurrentDataSignature() !== cleanSignatureRef.current,
+      })
+      if (!shouldSync || !remoteSessionUserId) return
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
       markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
       void saveWorkspaceSnapshot(snapshot).catch(() => {})

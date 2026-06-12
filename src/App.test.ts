@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, type ClassroomSettings } from './App'
+import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
@@ -528,5 +528,36 @@ describe('buildWorkspaceNavigationSnapshot', () => {
     expect(result.actingClassroomId).toBe('development')
     expect(result.savedAt).toBe('2026-05-26T10:00:05.000Z')
     expect(result.classrooms.find((classroom) => classroom.id === 'development')?.data.screen).toBe('backup-restore')
+  })
+})
+
+describe('shouldSyncWorkspaceOnVisibilityHidden (A2: 放置タブの上書き防止)', () => {
+  const base = {
+    isHidden: true,
+    hasWorkspaceData: true,
+    isRemoteBackendEnabled: true,
+    remoteSessionUserId: 'user-1',
+    hasUnsavedChanges: true,
+  }
+
+  it('未変更ならタブを隠してもクラウド同期しない(放置タブ上書きの主因を断つ)', () => {
+    expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, hasUnsavedChanges: false })).toBe(false)
+  })
+
+  it('未保存変更があり、隠れた・データあり・ログイン済みなら同期する', () => {
+    expect(shouldSyncWorkspaceOnVisibilityHidden(base)).toBe(true)
+  })
+
+  it('まだ隠れていない(可視)なら同期しない', () => {
+    expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, isHidden: false })).toBe(false)
+  })
+
+  it('ワークスペース未読込なら同期しない', () => {
+    expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, hasWorkspaceData: false })).toBe(false)
+  })
+
+  it('リモート未ログインなら同期しない', () => {
+    expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, remoteSessionUserId: null })).toBe(false)
+    expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, isRemoteBackendEnabled: false })).toBe(false)
   })
 })
