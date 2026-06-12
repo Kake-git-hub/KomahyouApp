@@ -6,6 +6,7 @@ import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell, StudentEntry } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { buildLinkedLessonDestinationMap } from '../components/schedule-board/lessonLinks'
+import { normalizeGroupClassEntryMap, type GroupClassEntryMap } from '../components/schedule-board/groupClass'
 import { generateQrSvg } from './qrcode'
 import { buildSubmissionUrl } from './scheduleQrConfig'
 import { resolveDisplayedSubjectForGrade } from './studentGradeSubject'
@@ -100,6 +101,8 @@ type SerializedCell = {
 type SerializedStudentSpecialSessionInput = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
+  // spec-group-lesson §C/§E: 集団授業の参加(科目→true)。登録後の生徒日程表の出し分けと回数(集理/集社)に使う。
+  groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string
@@ -160,6 +163,8 @@ type SchedulePayload = {
   highlightedTeacherId?: string
   countAdjustments: SerializedScheduleCountAdjustment[]
   specialSessions: SerializedSpecialSession[]
+  // spec-group-lesson §A/§E: 盤面の集団授業割当(key=`${dateKey}_${band}`)。生徒/講師日程表の集団行・回数・給与に使う。
+  groupClassEntries: GroupClassEntryMap
   classroomStorageKey: string
   showSubmittedQr?: boolean
 }
@@ -175,6 +180,8 @@ type OpenScheduleHtmlParams = {
   classroomSettings: Pick<ClassroomSettings, 'closedWeekdays' | 'holidayDates' | 'forceOpenDates' | 'scheduleNotes'>
   periodBands?: Pick<SpecialSessionRow, 'id' | 'label' | 'startDate' | 'endDate'>[]
   specialSessions?: SpecialSessionRow[]
+  // spec-group-lesson §A: 盤面の集団授業割当。生徒/講師日程表へ集団行・回数・給与として反映する。
+  groupClassEntries?: GroupClassEntryMap
   classroomStorageKey?: string
   targetWindow?: Window | null
   lazyQrLoading?: boolean
@@ -519,11 +526,13 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         subjectSlots: input.subjectSlots && typeof input.subjectSlots === 'object' ? { ...input.subjectSlots } : {},
+        groupClassParticipation: input.groupClassParticipation && typeof input.groupClassParticipation === 'object' ? { ...input.groupClassParticipation } : {},
         regularOnly: Boolean(input.regularOnly),
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
       }])),
     })),
+    groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
     classroomStorageKey: params.classroomStorageKey || 'default',
   }
 }
@@ -1496,6 +1505,34 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .slot-cell.is-unavailable {
         background: #d1d6dc;
+      }
+
+      /* spec-group-lesson §E: 集団授業の行(中3・1限の上) */
+      .group-class-row .group-slot-cell {
+        height: 40px;
+        background: #fff7ec;
+        text-align: center;
+        vertical-align: middle;
+      }
+
+      .group-class-row .group-slot-cell.is-holiday {
+        background: #eef0f3;
+      }
+
+      .group-slot-label {
+        font-weight: 700;
+        font-size: 12px;
+        color: #7c3a00;
+      }
+
+      .group-slot-absent {
+        color: #b00020;
+        text-decoration: line-through;
+      }
+
+      .group-slot-empty {
+        color: #9aa0a6;
+        font-weight: 600;
       }
 
       .slot-cell.is-moving-highlight {
@@ -2926,6 +2963,159 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return unavailableSlots;
       }
 
+      // spec-group-lesson §A/§D/§E: 集団授業(中3)の表示・回数ヘルパ。
+      var groupClassBandTimes = { '1': '10:00-11:00', '2': '11:10-12:10' };
+      function groupClassDisplayLabel(subject) {
+        if (subject === '集団理科') return '集団(理科)';
+        if (subject === '集団社会') return '集団(社会)';
+        return subject;
+      }
+      function groupClassShortLabel(subject) {
+        if (subject === '集団理科') return '集理';
+        if (subject === '集団社会') return '集社';
+        return subject;
+      }
+      function getGroupClassEntry(dateKey, band) {
+        var entries = DATA.groupClassEntries && typeof DATA.groupClassEntries === 'object' ? DATA.groupClassEntries : {};
+        var entry = entries[dateKey + '_' + band];
+        return entry && entry.subject ? entry : null;
+      }
+      function getGroupClassEntriesInRange(startDate, endDate) {
+        var entries = DATA.groupClassEntries && typeof DATA.groupClassEntries === 'object' ? DATA.groupClassEntries : {};
+        var list = [];
+        Object.keys(entries).forEach(function(key) {
+          var entry = entries[key];
+          if (!entry || !entry.subject) return;
+          if (entry.dateKey < startDate || entry.dateKey > endDate) return;
+          list.push(entry);
+        });
+        return list;
+      }
+      function getGroupSessionInputForStudent(studentId, dateKey) {
+        var sessions = getSpecialSessionsForDate(dateKey);
+        for (var i = 0; i < sessions.length; i++) {
+          var inputs = sessions[i].studentInputs;
+          var input = inputs && typeof inputs === 'object' ? inputs[studentId] : null;
+          if (input) return input;
+        }
+        return null;
+      }
+      function isGroupRegistered(input) {
+        return Boolean(input && input.countSubmitted);
+      }
+      function isGroupParticipant(input, subject) {
+        return Boolean(input && input.groupClassParticipation && input.groupClassParticipation[subject] === true);
+      }
+      function isInGroupRoster(entry, studentId) {
+        var input = getGroupSessionInputForStudent(studentId, entry.dateKey);
+        if (isGroupParticipant(input, entry.subject)) return true;
+        return Array.isArray(entry.addedStudentIds) && entry.addedStudentIds.indexOf(studentId) >= 0;
+      }
+      function isGroupAbsent(entry, studentId) {
+        return Array.isArray(entry.absentStudentIds) && entry.absentStudentIds.indexOf(studentId) >= 0;
+      }
+      // 中3生徒の集団行(2バンド)を組み立てる。未登録=中3全員に科目表示、登録後=参加者のみ表示+出欠反映。
+      function buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders) {
+        if (!student || student.currentGradeLabel !== '中3') return '';
+        if (getGroupClassEntriesInRange(startDate, endDate).length === 0) return '';
+        var bands = ['1', '2'];
+        var rowsHtml = '';
+        bands.forEach(function(band) {
+          var cellsHtml = dateHeaders.map(function(dateHeader) {
+            var entry = getGroupClassEntry(dateHeader.dateKey, band);
+            var classes = ['slot-cell', 'group-slot-cell'];
+            if (!dateHeader.isOpenDay) classes.push('is-holiday');
+            var inner = '';
+            if (entry) {
+              var input = getGroupSessionInputForStudent(student.id, dateHeader.dateKey);
+              var show = isGroupRegistered(input) ? isInGroupRoster(entry, student.id) : true;
+              if (show) {
+                var label = groupClassDisplayLabel(entry.subject);
+                if (isGroupRegistered(input) && isGroupAbsent(entry, student.id)) {
+                  inner = '<span class="group-slot-label group-slot-absent">' + escapeHtml(label) + '（欠）</span>';
+                } else {
+                  inner = '<span class="group-slot-label">' + escapeHtml(label) + '</span>';
+                }
+              }
+            }
+            return '<td class="' + classes.join(' ') + '"><div class="slot-cell-content">' + inner + '</div></td>';
+          }).join('');
+          var bt = String(groupClassBandTimes[band] || '').split('-');
+          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-separator">〜</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div><div class="time-slot">集団</div></div></th>';
+          rowsHtml += '<tr class="group-class-row">' + timeHeader + cellsHtml + '</tr>';
+        });
+        return rowsHtml;
+      }
+      // 中3生徒の集団回数(集理/集社)を講習回数表へ注入。希望=範囲内の該当コマ数、実績=出席数。
+      function injectGroupClassCounts(student, startDate, endDate, actualCounts, desiredCounts) {
+        if (!student || student.currentGradeLabel !== '中3') return;
+        getGroupClassEntriesInRange(startDate, endDate).forEach(function(entry) {
+          if (!isInGroupRoster(entry, student.id)) return;
+          var label = groupClassShortLabel(entry.subject);
+          desiredCounts[label] = (desiredCounts[label] || 0) + 1;
+          if (!isGroupAbsent(entry, student.id)) actualCounts[label] = (actualCounts[label] || 0) + 1;
+        });
+      }
+
+      // spec-group-lesson §F: 講師の集団授業(担当一致・出席1名以上で実施)。
+      function teacherMatchesGroupEntry(entry, teacher) {
+        var name = entry && entry.teacherName ? entry.teacherName : '';
+        if (!name || !teacher) return false;
+        var key = normalizeTeacherAssignmentName(name);
+        return teacher.name === name || teacher.fullName === name
+          || normalizeTeacherAssignmentName(teacher.name) === key
+          || normalizeTeacherAssignmentName(teacher.fullName) === key;
+      }
+      function getTeacherGroupEntriesInRange(teacher, startDate, endDate) {
+        return getGroupClassEntriesInRange(startDate, endDate).filter(function(entry) {
+          return teacherMatchesGroupEntry(entry, teacher);
+        });
+      }
+      // 出席者数(名簿=参加 or 手動追加、欠席を除く)。1名以上で実施扱い。
+      function getGroupPresentCount(entry) {
+        var roster = {};
+        getSpecialSessionsForDate(entry.dateKey).forEach(function(session) {
+          var inputs = session.studentInputs && typeof session.studentInputs === 'object' ? session.studentInputs : {};
+          Object.keys(inputs).forEach(function(sid) {
+            if (isGroupParticipant(inputs[sid], entry.subject)) roster[sid] = true;
+          });
+        });
+        (Array.isArray(entry.addedStudentIds) ? entry.addedStudentIds : []).forEach(function(sid) { roster[sid] = true; });
+        var absent = {};
+        (Array.isArray(entry.absentStudentIds) ? entry.absentStudentIds : []).forEach(function(sid) { absent[sid] = true; });
+        var present = 0;
+        Object.keys(roster).forEach(function(sid) { if (!absent[sid]) present += 1; });
+        return present;
+      }
+      // 講師の集団行(2バンド)。担当する集団コマに 集団(理科)/集団(社会) を表示(未実施はグレー)。
+      function buildTeacherGroupRowsHtml(teacher, startDate, endDate, dateHeaders) {
+        if (!teacher) return '';
+        if (getTeacherGroupEntriesInRange(teacher, startDate, endDate).length === 0) return '';
+        var bands = ['1', '2'];
+        var rowsHtml = '';
+        bands.forEach(function(band) {
+          var cellsHtml = dateHeaders.map(function(dateHeader) {
+            var entry = getGroupClassEntry(dateHeader.dateKey, band);
+            var classes = ['slot-cell', 'group-slot-cell'];
+            if (!dateHeader.isOpenDay) classes.push('is-holiday');
+            var inner = '';
+            if (entry && teacherMatchesGroupEntry(entry, teacher)) {
+              var label = groupClassDisplayLabel(entry.subject);
+              if (getGroupPresentCount(entry) >= 1) {
+                inner = '<span class="group-slot-label">' + escapeHtml(label) + '</span>';
+              } else {
+                inner = '<span class="group-slot-label group-slot-empty">' + escapeHtml(label) + '（未実施）</span>';
+              }
+            }
+            return '<td class="' + classes.join(' ') + '"><div class="slot-cell-content">' + inner + '</div></td>';
+          }).join('');
+          var bt = String(groupClassBandTimes[band] || '').split('-');
+          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-separator">〜</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div><div class="time-slot">集団</div></div></th>';
+          rowsHtml += '<tr class="group-class-row">' + timeHeader + cellsHtml + '</tr>';
+        });
+        return rowsHtml;
+      }
+
       function buildDesiredLectureCountMap(student, startDate, endDate) {
         const countMap = {};
         (DATA.specialSessions || []).forEach((session) => {
@@ -3113,12 +3303,51 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
                 subjectSlots: regularOnly ? {} : normalizeSubjectSlots(subjectSlots),
+                // spec-group-lesson §C: 室長の登録操作で集団参加を消さない(明示保全)。
+                groupClassParticipation: currentInput.groupClassParticipation || {},
                 regularOnly: Boolean(regularOnly),
                 countSubmitted: Boolean(countSubmitted),
               },
             },
           };
         });
+      }
+
+      // spec-group-lesson §C: 室長が日程表モーダルから集団参加/不参加を設定する(登録状態・既存データは維持)。
+      function updateStudentGroupParticipationLocally(sessionId, personId, groupClassParticipation) {
+        DATA.specialSessions = (DATA.specialSessions || []).map(function(session) {
+          if (session.id !== sessionId) return session;
+          var currentInput = (session.studentInputs && session.studentInputs[personId]) || defaultStudentSessionInput();
+          var nextInputs = {};
+          Object.keys(session.studentInputs || {}).forEach(function(k) { nextInputs[k] = session.studentInputs[k]; });
+          nextInputs[personId] = Object.assign({}, currentInput, { groupClassParticipation: groupClassParticipation });
+          return Object.assign({}, session, { studentInputs: nextInputs });
+        });
+      }
+      function persistStudentGroupParticipation(sessionId, personId, groupClassParticipation) {
+        try {
+          if (!window.opener || window.opener.closed) return;
+          window.opener.postMessage({
+            type: 'schedule-student-group-save',
+            sessionId: sessionId,
+            personId: personId,
+            groupClassParticipation: groupClassParticipation,
+          }, '*');
+        } catch (e) {}
+      }
+      function submitStudentGroupParticipation() {
+        if (!activeCountDialog || !activeCountDialog.studentId || !activeCountDialog.sessionId) return;
+        var participation = {};
+        document.querySelectorAll('[data-role="student-count-group-input"]').forEach(function(element) {
+          if (!(element instanceof HTMLInputElement)) return;
+          var subject = element.getAttribute('data-subject') || '';
+          if (subject && element.checked) participation[subject] = true;
+        });
+        updateStudentGroupParticipationLocally(activeCountDialog.sessionId, activeCountDialog.studentId, participation);
+        persistStudentGroupParticipation(activeCountDialog.sessionId, activeCountDialog.studentId, participation);
+        activeCountDialog = null;
+        syncPayloadFingerprint();
+        render();
       }
 
       function updateTeacherUnavailableSlotsLocally(sessionId, personId, unavailableSlots) {
@@ -3533,7 +3762,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return grade === '高1' || grade === '高2' || grade === '高3';
       }
 
-      function buildTeacherSalaryData(entries, teacherId) {
+      function buildTeacherSalaryData(entries, teacher, startDate, endDate) {
+        var teacherId = teacher && teacher.id ? teacher.id : '';
         // 1名: A90/A60/A45 (中以下), C90/C60/C45 (高以上)
         // 2名: B(中以下) と D(高以上) は 2 人の授業時間ペアごとに集計
         //   ペアキーは "90-90" / "90-60" / "90-45" / "60-60" / "60-45" / "45-45"
@@ -3555,6 +3785,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           C90: 0, C60: 0, C45: 0,
           'B90-90': 0, 'B90-60': 0, 'B90-45': 0, 'B60-60': 0, 'B60-45': 0, 'B45-45': 0,
           'D90-90': 0, 'D90-60': 0, 'D90-45': 0, 'D60-60': 0, 'D60-45': 0, 'D45-45': 0,
+          G: 0,
         };
         var attendanceDates = {};
         (entries || []).forEach(function(entry) {
@@ -3578,6 +3809,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           }
           attendanceDates[entry.dateKey] = true;
         });
+        // spec-group-lesson §F: 担当する集団コマで出席1名以上=実施1コマ。専用カテゴリ G。交通費日数にも加算。
+        getTeacherGroupEntriesInRange(teacher, startDate, endDate).forEach(function(entry) {
+          if (getGroupPresentCount(entry) >= 1) {
+            counts.G = (counts.G || 0) + 1;
+            attendanceDates[entry.dateKey] = true;
+          }
+        });
         return {
           counts: counts,
           attendanceDays: Object.keys(attendanceDates).length,
@@ -3600,6 +3838,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         pairs.forEach(function(p) { lessonDefs.push({ cat: 'B' + p, label: 'B ' + p + ' (2名/中学以下/' + p.replace('-', '+') + '分)' }); });
         ['90', '60', '45'].forEach(function(m) { lessonDefs.push({ cat: 'C' + m, label: 'C' + m + ' (1名/高校以上/' + m + '分)' }); });
         pairs.forEach(function(p) { lessonDefs.push({ cat: 'D' + p, label: 'D ' + p + ' (2名/高校以上/' + p.replace('-', '+') + '分)' }); });
+        // spec-group-lesson §F: 集団授業の専用カテゴリ(1コマ単位・単価1種)。
+        lessonDefs.push({ cat: 'G', label: '集団 (1コマ)' });
         var visible = lessonDefs.filter(function(d) { return (counts[d.cat] || 0) >= 1; });
         var lessonRowsHtml = visible.map(function(d) { return lessonRow(d.cat, d.label); }).join('');
         var scrollable = visible.length >= 5;
@@ -3761,7 +4001,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const regularOnlyRow = input.countSubmitted
           ? '<tr><td>通常のみ</td><td>' + escapeHtml(input.regularOnly ? 'あり' : 'なし') + '</td></tr>'
           : '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr>';
-        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + regularOnlyRow + '</tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
+        // spec-group-lesson §C: 中3のみ集団参加トグル。登録状態でも編集可(既存データを保持したまま参加を切替)。
+        var groupRow = '';
+        if (student.currentGradeLabel === '中3') {
+          var gp = input.groupClassParticipation || {};
+          var groupChecks = ['集団理科', '集団社会'].map(function(subject) {
+            return '<label class="count-modal-check"><input type="checkbox" data-role="student-count-group-input" data-subject="' + subject + '" data-testid="student-schedule-group-' + subject + '"' + (gp[subject] === true ? ' checked' : '') + '>' + subject + '</label>';
+          }).join(' ');
+          groupRow = '<tr><td>集団授業</td><td>' + groupChecks + ' <button type="button" class="secondary" data-role="save-student-group-participation" data-testid="student-schedule-group-save">集団参加を保存</button></td></tr>';
+        }
+        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + regularOnlyRow + groupRow + '</tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
       }
 
       function renderTeacherRegisterModal() {
@@ -4061,6 +4310,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments);
         const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate);
         const visibleDesiredLectureCounts = applyCountAdjustments(normalizeCountMapSubjects(desiredLectureCounts, student, startDate), lectureCountAdjustments);
+        // spec-group-lesson §D: 中3参加者のみ 集理/集社 を講習回数表に注入(表示期間内・希望=コマ数/実績=出席数)。
+        injectGroupClassCounts(student, startDate, endDate, visibleLectureCounts, visibleDesiredLectureCounts);
         const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
           ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
           : '';
@@ -4112,7 +4363,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
         var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
         var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat });
-        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + bottomSectionHtml + '</section>';
+        // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットでは出さない。
+        var groupRowsHtml = emptyFormat ? '' : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
+        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + bottomSectionHtml + '</section>';
         return { html: html, student: student };
       }
 
@@ -4255,11 +4508,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
         }).join('');
         const makeupRows = toMakeupRows(makeupNotes, 7);
-        const salaryData = buildTeacherSalaryData(entries, teacher.id);
+        const salaryData = buildTeacherSalaryData(entries, teacher, startDate, endDate);
+        // spec-group-lesson §F: 講師の集団行(担当する集団コマ)を1限の上へ差し込む。
+        var groupRowsHtml = buildTeacherGroupRowsHtml(teacher, startDate, endDate, dateHeaders);
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
         const qrHtml = buildScheduleQrHtml(teacher, showQr);
         const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-        var html = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
+        var html = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
         return { html: html, teacher: teacher };
       }
 
@@ -4626,6 +4881,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return;
         }
 
+        if (role === 'save-student-group-participation') {
+          submitStudentGroupParticipation();
+          return;
+        }
+
         if (role === 'toggle-student-unavailable-date') {
           const section = target.closest('[data-role="student-sheet"]');
           const studentId = target.getAttribute('data-student-id') || '';
@@ -4928,7 +5188,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       pagesElement.addEventListener('click', (event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
-        const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
+        const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="save-student-group-participation"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
         if (toggleTarget.getAttribute('data-role') === 'student-count-modal-backdrop' && toggleTarget !== target) return;
         if (toggleTarget.getAttribute('data-role') === 'teacher-register-modal-backdrop' && toggleTarget !== target) return;

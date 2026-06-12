@@ -1900,6 +1900,139 @@ tr.sa-slot-last th {
   border-bottom-width: 3px !important;
 }
 
+/* spec-group-lesson §A: 集団授業の行（1限の上・特別講習を含む週のみ） */
+tr.sa-group-row {
+  background: #fff7ec;
+}
+
+tr.sa-group-row td {
+  height: 40px;
+}
+
+.sa-group-time-cell {
+  background: #ffedd5;
+}
+
+.sa-group-subject {
+  text-align: center;
+  vertical-align: middle;
+  font-weight: 700;
+  font-size: 15px;
+  color: #7c3a00;
+}
+
+.sa-group-subject-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+}
+
+.sa-group-subject-empty {
+  background: #fffdf8;
+}
+
+.sa-group-subject-empty .sa-group-subject-inner::before {
+  content: '＋ 科目を選択';
+  color: #c79a63;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.sa-group-teacher {
+  vertical-align: middle;
+}
+
+.sa-group-empty {
+  background: #fbf6ef;
+  cursor: default;
+}
+
+.group-class-menu-popover {
+  min-width: 200px;
+}
+
+/* spec-group-lesson §B: 出席者モーダル */
+.group-attendance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 10px 0;
+}
+
+.group-attendance-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.group-attendance-toggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.group-attendance-toggle:hover {
+  background: #f5f8ff;
+}
+
+.group-attendance-row.is-absent .group-attendance-toggle {
+  background: #fdecec;
+  border-color: #e6a0a0;
+}
+
+.group-attendance-name {
+  font-weight: 600;
+}
+
+.group-attendance-status.present {
+  color: #1a7f37;
+  font-weight: 700;
+}
+
+.group-attendance-status.absent {
+  color: #b00020;
+  font-weight: 700;
+}
+
+.group-attendance-remove {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d4d4d4;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: #777;
+  line-height: 1;
+}
+
+.group-attendance-remove:hover {
+  background: #f0f0f0;
+  color: #333;
+}
+
+.group-attendance-summary {
+  font-weight: 700;
+  margin: 6px 0 10px;
+}
+
+.group-attendance-empty {
+  color: #777;
+  padding: 12px;
+  text-align: center;
+  font-size: 13px;
+}
+
 .sa-teacher,
 .sa-student {
   cursor: pointer;

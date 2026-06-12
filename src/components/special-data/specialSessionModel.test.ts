@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialSpecialSessions, removedDefaultSpecialSessionIds, resolveLectureSubjectDuration } from './specialSessionModel'
+import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveGroupClassParticipation, resolveLectureSubjectDuration } from './specialSessionModel'
 
 describe('specialSessionModel', () => {
   it('starts with no default special sessions', () => {
@@ -32,5 +32,24 @@ describe('resolveLectureSubjectDuration', () => {
   it('rounds invalid values to 90', () => {
     expect(resolveLectureSubjectDuration({ subjectDurations: { 数: 30 } }, '数')).toBe(90)
     expect(resolveLectureSubjectDuration({ subjectDurations: { 数: 0 } }, '数')).toBe(90)
+  })
+})
+
+// spec-group-lesson §C: 集団授業の参加可否。未設定=不参加(既定)、明示 true のみ参加。
+describe('resolveGroupClassParticipation', () => {
+  it('exposes the two group submission subjects', () => {
+    expect(groupClassSubmissionSubjects).toEqual(['集団理科', '集団社会'])
+  })
+
+  it('defaults to 不参加 (false) when unset', () => {
+    expect(resolveGroupClassParticipation(undefined, '集団理科')).toBe(false)
+    expect(resolveGroupClassParticipation({ groupClassParticipation: undefined }, '集団理科')).toBe(false)
+    expect(resolveGroupClassParticipation({ groupClassParticipation: {} }, '集団理科')).toBe(false)
+  })
+
+  it('returns 参加 (true) only when explicitly true', () => {
+    expect(resolveGroupClassParticipation({ groupClassParticipation: { 集団理科: true } }, '集団理科')).toBe(true)
+    expect(resolveGroupClassParticipation({ groupClassParticipation: { 集団理科: true } }, '集団社会')).toBe(false)
+    expect(resolveGroupClassParticipation({ groupClassParticipation: { 集団社会: false } }, '集団社会')).toBe(false)
   })
 })

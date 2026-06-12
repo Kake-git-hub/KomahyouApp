@@ -34,6 +34,11 @@ export type LectureSubmissionDoc = {
   subjectSlots: Record<string, number>
   // 科目ごとの授業時間(分)。未設定=90分扱い。後方互換のため optional。
   subjectDurations?: Record<string, number>
+  // spec-group-lesson §C: 集団授業の希望提出。
+  // availableGroupClassSubjects=この生徒が選べる集団科目(中3のみ非空)。空/未設定=提出ページに集団欄を出さない。
+  // groupClassParticipation=科目→参加(true)。未設定/false=不参加(既定)。後方互換のため optional。
+  availableGroupClassSubjects?: string[]
+  groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   submittedAt: string | null
@@ -42,7 +47,7 @@ export type LectureSubmissionDoc = {
 
 export async function ensureSubmissionTokens(
   session: SpecialSessionRow,
-  students: Array<{ id: string; name: string; availableSubjects: string[]; occupiedSlots?: Record<string, string> }>,
+  students: Array<{ id: string; name: string; availableSubjects: string[]; availableGroupClassSubjects?: string[]; occupiedSlots?: Record<string, string> }>,
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; holidayDates?: string[]; forceOpenDates: string[] },
   slotNumbers: number[],
@@ -116,12 +121,14 @@ export async function ensureSubmissionTokens(
         holidayDates: [...(classroomSettings.holidayDates ?? [])],
         forceOpenDates: [...classroomSettings.forceOpenDates],
         availableSubjects: [...student.availableSubjects],
+        availableGroupClassSubjects: [...(student.availableGroupClassSubjects ?? [])],
         slotCount: slotNumbers.length,
         slotNumbers: [...slotNumbers],
         status: 'pending',
         unavailableSlots: [],
         subjectSlots: {},
         subjectDurations: {},
+        groupClassParticipation: {},
         regularOnly: false,
         occupiedSlots: student.occupiedSlots ?? {},
         submittedAt: null,
@@ -168,9 +175,32 @@ export async function resetLectureSubmissionDoc(token: string) {
     unavailableSlots: [],
     subjectSlots: {},
     subjectDurations: {},
+    groupClassParticipation: {},
     regularOnly: false,
     submittedAt: null,
   })
+}
+
+/**
+ * spec-group-lesson §C: 既に配布済みのQR(集団欄なしで作られた古いトークン)でも中3が集団参加を選べるよう、
+ * 未提出(pending)ドキュメントの availableGroupClassSubjects を後埋めする。
+ * 提出済み(submitted)は再提出不可なので触らない。既に同値なら書き込まない(冪等)。
+ */
+export async function updateSubmissionGroupClassEligibility(token: string, availableGroupClassSubjects: string[]) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !token) return
+
+  const docRef = doc(db, 'lectureSubmissions', token)
+  const existing = await getDoc(docRef)
+  if (!existing.exists()) return
+  const data = existing.data() as LectureSubmissionDoc
+  if (data.status === 'submitted') return
+  const current = Array.isArray(data.availableGroupClassSubjects) ? data.availableGroupClassSubjects : []
+  const isSame = current.length === availableGroupClassSubjects.length
+    && current.every((value, index) => value === availableGroupClassSubjects[index])
+  if (isSame) return
+
+  await setDoc(docRef, { ...data, availableGroupClassSubjects: [...availableGroupClassSubjects] })
 }
 
 /** Mark a submission doc as submitted (lock from phone editing) without changing the submitted data */
@@ -231,6 +261,7 @@ export type SubmissionChangeEntry = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   subjectDurations: Record<string, number>
+  groupClassParticipation: Record<string, boolean>
   regularOnly: boolean
 }
 
@@ -265,6 +296,7 @@ export function subscribeLectureSubmissions(
           unavailableSlots: data.unavailableSlots ?? [],
           subjectSlots: data.subjectSlots ?? {},
           subjectDurations: data.subjectDurations ?? {},
+          groupClassParticipation: data.groupClassParticipation ?? {},
           regularOnly: data.regularOnly ?? false,
         })
       }

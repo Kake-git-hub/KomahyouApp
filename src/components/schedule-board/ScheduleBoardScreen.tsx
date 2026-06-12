@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
-import { resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
+import { resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
+import { GroupAttendanceModal } from './GroupAttendanceModal'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
 import { buildLectureStockEntries } from './lectureStock'
+import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -77,6 +79,16 @@ type TeacherMenuState = {
   x: number
   y: number
   selectedTeacherName: string
+}
+
+// spec-group-lesson §A/§B: 集団授業セルのクリックメニュー。
+// subject-pick=空セルの科目選択、subject-actions=科目入りセルの「出席者一覧/削除」、teacher=講師選択。
+type GroupClassMenuState = {
+  kind: 'subject-pick' | 'subject-actions' | 'teacher'
+  dateKey: string
+  band: GroupClassBand
+  x: number
+  y: number
 }
 
 type TemplateSaveConfirmState = {
@@ -1298,6 +1310,8 @@ function createInitialBoardSnapshot(params: {
     isMakeupStockOpen: params.initialBoardState?.isMakeupStockOpen ?? false,
     studentScheduleRange: params.initialBoardState?.studentScheduleRange ?? null,
     teacherScheduleRange: params.initialBoardState?.teacherScheduleRange ?? null,
+    // spec-group-lesson §A/§G: 集団授業の割当/出欠を復元（防御的に正規化、未設定=空）。
+    groupClassEntries: normalizeGroupClassEntryMap(params.initialBoardState?.groupClassEntries),
   }
 }
 
@@ -2896,6 +2910,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [manualLectureStockCounts, setManualLectureStockCounts] = useState<LectureStockCountMap>(initialBoardSnapshot.manualLectureStockCounts)
   const [manualLectureStockOrigins, setManualLectureStockOrigins] = useState<Record<string, ManualLectureStockOrigin[]>>(initialBoardSnapshot.manualLectureStockOrigins)
   const [fallbackLectureStockStudents, setFallbackLectureStockStudents] = useState<Record<string, { displayName: string; subject?: string }>>(initialBoardSnapshot.fallbackLectureStockStudents)
+  // spec-group-lesson §A/§G: 集団授業の盤面割当/出欠。個別授業(weeks)とは独立に保持し、
+  // 全 publish 経路で再送出して保存往復で消えないようにする。変更は effect(3244)経由で publish される。
+  const [groupClassEntries, setGroupClassEntries] = useState<GroupClassEntryMap>(initialBoardSnapshot.groupClassEntries ?? {})
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
@@ -2922,6 +2939,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const boardInteractionTokenRef = useRef(createInteractionLockToken('board'))
   const [interactionLockOwner, setInteractionLockOwner] = useState<InteractionSurface | null>(() => parseInteractionLockOwner(typeof window === 'undefined' ? null : window.localStorage.getItem(interactionLockStorageKey)))
   const [teacherMenu, setTeacherMenu] = useState<TeacherMenuState | null>(null)
+  // spec-group-lesson §A/§B: 集団授業セルのメニューと出席者モーダル対象（モーダル本体は Phase 2）。
+  const [groupClassMenu, setGroupClassMenu] = useState<GroupClassMenuState | null>(null)
+  const [groupAttendanceTarget, setGroupAttendanceTarget] = useState<{ dateKey: string; band: GroupClassBand } | null>(null)
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
@@ -3215,6 +3235,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         manualLectureStockCounts: { ...nextManualLectureStockCounts },
         manualLectureStockOrigins: cloneManualLectureStockOrigins(nextManualLectureStockOrigins),
         fallbackLectureStockStudents: { ...nextFallbackLectureStockStudents },
+        groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
         isLectureStockOpen,
         isMakeupStockOpen,
         studentScheduleRange,
@@ -3254,6 +3275,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockCounts: { ...manualLectureStockCounts },
       manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
       fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
+      groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
       isLectureStockOpen,
       isMakeupStockOpen,
       studentScheduleRange,
@@ -3262,6 +3284,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [
     fallbackLectureStockStudents,
     fallbackMakeupStudents,
+    groupClassEntries,
     isLectureStockOpen,
     isMakeupStockOpen,
     manualLectureStockOrigins,
@@ -4662,6 +4685,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         classroomStorageKey,
         periodBands: specialSessions,
         specialSessions,
+        groupClassEntries,
       })
     }
     window.addEventListener('message', handleOpenAllSchedule)
@@ -4812,6 +4836,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: studentScheduleWindowRef.current,
@@ -4841,6 +4866,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: teacherScheduleWindowRef.current,
@@ -5617,6 +5643,79 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage('講師を削除しました。')
   }
 
+  // spec-group-lesson §A: 集団授業セルの操作。setGroupClassEntries の変更は effect(3244) 経由で publish され、
+  // buildBoardDataForSignature に含まれるため未保存として検知される。個別授業(weeks)には一切触れない。
+  const commitGroupClassEntry = (
+    dateKey: string,
+    band: GroupClassBand,
+    updater: (existing: GroupClassEntry | null) => GroupClassEntry | null,
+  ) => {
+    const key = groupClassEntryKey(dateKey, band)
+    setGroupClassEntries((current) => {
+      const next = cloneGroupClassEntryMap(current)
+      const updated = updater(next[key] ?? null)
+      if (updated) next[key] = updated
+      else delete next[key]
+      return next
+    })
+  }
+
+  const handleGroupSubjectCellClick = (dateKey: string, band: GroupClassBand, hasSubject: boolean, x: number, y: number) => {
+    setStudentMenu(null)
+    setTeacherMenu(null)
+    setGroupClassMenu({ kind: hasSubject ? 'subject-actions' : 'subject-pick', dateKey, band, x, y })
+  }
+
+  const handleGroupTeacherCellClick = (dateKey: string, band: GroupClassBand, hasEntry: boolean, x: number, y: number) => {
+    setStudentMenu(null)
+    setTeacherMenu(null)
+    // 科目未設定（entry なし）なら先に科目を選ばせる（GroupClassEntry は subject 必須のため）。
+    setGroupClassMenu({ kind: hasEntry ? 'teacher' : 'subject-pick', dateKey, band, x, y })
+  }
+
+  const handlePickGroupSubject = (subject: GroupClassSubject) => {
+    if (!groupClassMenu) return
+    const { dateKey, band } = groupClassMenu
+    commitGroupClassEntry(dateKey, band, (existing) => {
+      // 科目変更時はそのセルの出欠をクリア（理科の欠席が社会名簿に残らないように）。講師は維持。
+      if (existing && existing.subject === subject) return existing
+      return { dateKey, band, subject, teacherName: existing?.teacherName, absentStudentIds: [], addedStudentIds: [] }
+    })
+    setGroupClassMenu(null)
+    setStatusMessage(`集団授業を ${subject}（${groupClassBandTimeLabels[band]}）に設定しました。`)
+  }
+
+  const handlePickGroupTeacher = (teacherName: string) => {
+    if (!groupClassMenu) return
+    const { dateKey, band } = groupClassMenu
+    commitGroupClassEntry(dateKey, band, (existing) => (existing ? { ...existing, teacherName: teacherName || undefined } : existing))
+    setGroupClassMenu(null)
+    setStatusMessage(`集団授業の担当講師を ${teacherName || '未設定'} に変更しました。`)
+  }
+
+  const handleDeleteGroupClassEntry = () => {
+    if (!groupClassMenu) return
+    const { dateKey, band } = groupClassMenu
+    commitGroupClassEntry(dateKey, band, () => null)
+    setGroupClassMenu(null)
+    setStatusMessage('集団授業を削除しました。')
+  }
+
+  const handleOpenGroupAttendance = () => {
+    if (!groupClassMenu) return
+    setGroupAttendanceTarget({ dateKey: groupClassMenu.dateKey, band: groupClassMenu.band })
+    setGroupClassMenu(null)
+  }
+
+  // spec-group-lesson §B: 出欠の唯一の入力点。欠席者と手動追加を盤面の集団エントリへ保存する。
+  const handleSaveGroupAttendance = (absentStudentIds: string[], addedStudentIds: string[]) => {
+    if (!groupAttendanceTarget) return
+    const { dateKey, band } = groupAttendanceTarget
+    commitGroupClassEntry(dateKey, band, (existing) => (existing ? { ...existing, absentStudentIds, addedStudentIds } : existing))
+    setGroupAttendanceTarget(null)
+    setStatusMessage('集団授業の出席状況を保存しました。')
+  }
+
   const handleTemplateSaveRequest = () => {
     const template = convertTemplateCellsToTemplate({
       cells: templateCells,
@@ -5852,6 +5951,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockCounts: { ...nextManualLectureStockCounts },
       manualLectureStockOrigins: cloneManualLectureStockOrigins(nextManualLectureStockOrigins),
       fallbackLectureStockStudents: { ...nextFallbackLectureStockStudents },
+      groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
       isLectureStockOpen,
       isMakeupStockOpen,
       studentScheduleRange,
@@ -7263,6 +7363,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       targetWindow: studentScheduleWindowRef.current,
     })
     if (!nextWindow) return
@@ -7324,6 +7425,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomStorageKey,
       periodBands: specialSessions,
       specialSessions,
+      groupClassEntries,
       targetWindow: teacherScheduleWindowRef.current,
     })
     if (!nextWindow) return
@@ -8045,6 +8147,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const stableTemplateGradeLabel = useStableCallback((_name: string, fallbackGrade: string, _dateKey: string, birthDate?: string) => (birthDate ? resolveSchoolGradeLabel(birthDate, new Date()) : fallbackGrade))
   const stableTemplateLessonType = useStableCallback((_name: string, _subject: string, lessonType: LessonType | null) => lessonType)
   const stableNoopDayHeaderClick = useStableCallback(() => {})
+  const stableHandleGroupSubjectClick = useStableCallback(handleGroupSubjectCellClick)
+  const stableHandleGroupTeacherClick = useStableCallback(handleGroupTeacherCellClick)
   const normalizedWeeksFlat = useMemo(() => normalizedWeeks.flat(), [normalizedWeeks])
 
   // BoardToolbar を memo 化するため、渡す関数 props を参照安定化する（挙動は不変）。
@@ -8327,12 +8431,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             highlightedHolidayDate={isTemplateMode ? null : selectedHolidayDate}
             yearLabel={isTemplateMode ? '' : yearLabel}
             specialPeriods={isTemplateMode ? EMPTY_SPECIAL_PERIODS : visibleSpecialSessions}
+            groupClassEntries={groupClassEntries}
             resolveStudentDisplayName={resolveBoardStudentDisplayName}
             resolveStudentGradeLabel={isTemplateMode ? stableTemplateGradeLabel : stableResolveStudentGradeLabel}
             resolveDisplayedLessonType={isTemplateMode ? stableTemplateLessonType : stableResolveDisplayedLessonType}
             onDayHeaderClick={isTemplateMode ? stableNoopDayHeaderClick : stableHandleDayHeaderClick}
             onTeacherClick={isTemplateMode ? stableHandleTemplateSelectDesk : stableHandleSelectDesk}
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
+            onGroupSubjectClick={stableHandleGroupSubjectClick}
+            onGroupTeacherClick={stableHandleGroupTeacherClick}
           />
           {dayHeaderMenu ? (
             <div className="day-header-menu-backdrop" onClick={() => setDayHeaderMenu(null)}>
@@ -8479,6 +8586,92 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               </div>
             </div>
           ) : null}
+          {groupClassMenu ? (
+            <div className="day-header-menu-backdrop" onClick={() => setGroupClassMenu(null)}>
+              <div
+                className="student-menu-popover group-class-menu-popover"
+                style={{ left: Math.max(12, groupClassMenu.x - 20), top: Math.max(24, groupClassMenu.y + 8) }}
+                onClick={(event) => event.stopPropagation()}
+                data-testid="group-class-menu"
+              >
+                <div className="student-menu-head">
+                  <strong>{`集団授業 ${groupClassBandTimeLabels[groupClassMenu.band]}`}</strong>
+                  <button type="button" className="student-menu-close" onClick={() => setGroupClassMenu(null)}>x</button>
+                </div>
+                <div className="student-menu-meta">{groupClassMenu.dateKey}</div>
+                {groupClassMenu.kind === 'subject-pick' ? (
+                  <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {groupClassSubjects.map((subject) => (
+                      <button key={subject} type="button" className="primary-button" onClick={() => handlePickGroupSubject(subject)} data-testid={`group-subject-option-${subject}`}>{subject}</button>
+                    ))}
+                  </div>
+                ) : null}
+                {groupClassMenu.kind === 'subject-actions' ? (
+                  <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <button type="button" className="primary-button" onClick={handleOpenGroupAttendance} data-testid="group-attendance-open">出席者一覧</button>
+                    <button type="button" className="menu-link-button danger" onClick={handleDeleteGroupClassEntry} data-testid="group-entry-delete">削除</button>
+                  </div>
+                ) : null}
+                {groupClassMenu.kind === 'teacher' ? (
+                  <div className="student-menu-section">
+                    <label className="student-menu-label" htmlFor="group-teacher-select">担当講師</label>
+                    <select
+                      id="group-teacher-select"
+                      className="student-menu-select"
+                      value={groupClassEntries[groupClassEntryKey(groupClassMenu.dateKey, groupClassMenu.band)]?.teacherName ?? ''}
+                      onChange={(event) => handlePickGroupTeacher(event.target.value)}
+                      data-testid="group-teacher-select"
+                    >
+                      <option value="">未設定</option>
+                      {teachers.map((teacher) => (
+                        <option key={teacher.id} value={teacher.name}>{teacher.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {groupAttendanceTarget ? (() => {
+            const target = groupAttendanceTarget
+            const entry = groupClassEntries[groupClassEntryKey(target.dateKey, target.band)]
+            if (!entry) return null
+            const subject = entry.subject
+            const studentById = new Map(students.map((student) => [student.id, student]))
+            // 名簿の初期メンバー = その科目に「参加」提出した中3（被覆する特別講習から）。
+            const coveringSession = specialSessions.find((session) => target.dateKey >= session.startDate && target.dateKey <= session.endDate) ?? null
+            const participantRows = coveringSession
+              ? Object.entries(coveringSession.studentInputs)
+                .filter(([, input]) => resolveGroupClassParticipation(input, subject))
+                .map(([studentId]) => studentById.get(studentId))
+                .filter((student): student is StudentRow => Boolean(student))
+                .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, target.dateKey))
+                .map((student) => ({ id: student.id, name: getStudentDisplayName(student) }))
+              : []
+            // 手動追加の候補 = その日に在籍する中3全員。
+            const grade9Candidates = students
+              .filter((student) => resolveCurrentStudentGradeLabel(student, target.dateKey) === '中3')
+              .sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, target.dateKey))
+              .map((student) => ({ id: student.id, name: getStudentDisplayName(student) }))
+            const dateCell = cells.find((cell) => cell.dateKey === target.dateKey)
+            const dateLabel = dateCell ? `${target.dateKey}（${dateCell.dayLabel}）` : target.dateKey
+            return (
+              <GroupAttendanceModal
+                key={`${target.dateKey}_${target.band}`}
+                dateLabel={dateLabel}
+                bandTimeLabel={groupClassBandTimeLabels[target.band]}
+                subject={subject}
+                teacherName={entry.teacherName}
+                schoolName={classroomSettings.scheduleHeader?.schoolName}
+                participants={participantRows}
+                grade9Candidates={grade9Candidates}
+                initialAbsentIds={entry.absentStudentIds}
+                initialAddedIds={entry.addedStudentIds}
+                onSave={handleSaveGroupAttendance}
+                onCancel={() => setGroupAttendanceTarget(null)}
+              />
+            )
+          })() : null}
           {templateImportDateOptions ? (
             <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplateImportDateOptions(null) }}>
               <div className="auto-assign-modal" role="dialog" aria-modal="true" style={{ minWidth: 260 }}>

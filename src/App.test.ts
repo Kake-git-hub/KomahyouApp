@@ -152,6 +152,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       unavailableSlots: [],
       subjectSlots: { 数: 2 },
       subjectDurations: {},
+      groupClassParticipation: {},
       regularOnly: false,
     }, {
       token: 'teacher-token',
@@ -161,6 +162,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       unavailableSlots: [],
       subjectSlots: {},
       subjectDurations: {},
+      groupClassParticipation: {},
       regularOnly: false,
     }]
 

@@ -7,7 +7,7 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { initialSpecialSessions, removedDefaultSpecialSessionIds, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
@@ -21,7 +21,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -1123,6 +1123,9 @@ function buildBoardDataForSignature(boardState: PersistedBoardState | null | und
     manualLectureStockCounts: boardState.manualLectureStockCounts,
     manualLectureStockOrigins: boardState.manualLectureStockOrigins,
     fallbackLectureStockStudents: boardState.fallbackLectureStockStudents,
+    // spec-group-lesson §G: 集団授業の変更を未保存(ダーティ)として検知させる。
+    // 含めないと集団の科目/講師/出欠を変えても保存対象と認識されない回帰になる。
+    groupClassEntries: boardState.groupClassEntries,
   }
 }
 
@@ -3062,6 +3065,8 @@ function AuthenticatedApp() {
       id: s.id,
       name: getStudentDisplayName(s),
       availableSubjects: getSelectableStudentSubjectsForGrade(resolveCurrentStudentGradeLabel(s, referenceDate)),
+      // spec-group-lesson §C: 集団授業の希望提出は中3のみ表示。学年は講習開始日基準で判定。
+      availableGroupClassSubjects: resolveCurrentStudentGradeLabel(s, referenceDate) === '中3' ? [...groupClassSubmissionSubjects] : [],
       occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
     }))
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
@@ -3080,9 +3085,14 @@ function AuthenticatedApp() {
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
-      const token = updatedSession.studentInputs[s.id]?.submissionToken
+      const studentInput = updatedSession.studentInputs[s.id]
+      const token = studentInput?.submissionToken
       if (token && !newTokenSet.has(token)) {
         existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates })
+        // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
+        if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
+          void updateSubmissionGroupClassEligibility(token, [...groupClassSubmissionSubjects]).catch(() => { /* non-fatal */ })
+        }
       }
     }
     for (const t of activeTeachers) {
@@ -3291,6 +3301,8 @@ function AuthenticatedApp() {
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: previousInput?.subjectSlots ?? {},
                 subjectDurations: previousInput?.subjectDurations ?? {},
+                // spec-group-lesson §C: 明示再構築のため集団参加を保全（spread していないので消えるのを防ぐ）。
+                groupClassParticipation: previousInput?.groupClassParticipation ?? {},
                 regularOnly: Boolean(previousInput?.regularOnly),
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
@@ -3335,6 +3347,8 @@ function AuthenticatedApp() {
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 subjectDurations: regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
+                // spec-group-lesson §C: 集団参加は講習回数とは独立。regularOnly でも保全（消さない）。
+                groupClassParticipation: previousInput?.groupClassParticipation ?? {},
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
@@ -3362,6 +3376,32 @@ function AuthenticatedApp() {
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
           else resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
         }
+        return
+      }
+
+      if (message.type === 'schedule-student-group-save') {
+        // spec-group-lesson §C: 室長が日程表モーダルから集団参加を設定。既存の提出/登録データと提出状況は維持する。
+        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
+        const rawParticipation = message.groupClassParticipation && typeof message.groupClassParticipation === 'object'
+          ? message.groupClassParticipation as Record<string, unknown>
+          : {}
+        const groupClassParticipation: Record<string, boolean> = {}
+        for (const subject of groupClassSubmissionSubjects) {
+          if (rawParticipation[subject] === true) groupClassParticipation[subject] = true
+        }
+        const updatedAt = new Date().toISOString()
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+          const previousInput = session.studentInputs[message.personId]
+          const nextInput = previousInput
+            ? { ...previousInput, groupClassParticipation, updatedAt }
+            : { unavailableSlots: [], regularBreakSlots: [], subjectSlots: {}, groupClassParticipation, regularOnly: false, countSubmitted: false, updatedAt }
+          return {
+            ...session,
+            studentInputs: { ...session.studentInputs, [message.personId]: nextInput },
+            updatedAt,
+          }
+        }))
         return
       }
 
@@ -3567,6 +3607,8 @@ function AuthenticatedApp() {
                     regularBreakSlots: existing?.regularBreakSlots ?? [],
                     subjectSlots: entry.subjectSlots,
                     subjectDurations: entry.regularOnly ? {} : entry.subjectDurations,
+                    // spec-group-lesson §C: 提出された集団参加を反映(講習回数とは独立・既存は維持)。
+                    groupClassParticipation: entry.groupClassParticipation ?? existing?.groupClassParticipation ?? {},
                     regularOnly: entry.regularOnly,
                     countSubmitted: true,
                     updatedAt: now,
