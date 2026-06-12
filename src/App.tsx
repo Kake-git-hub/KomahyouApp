@@ -1123,6 +1123,9 @@ function buildBoardDataForSignature(boardState: PersistedBoardState | null | und
     manualLectureStockCounts: boardState.manualLectureStockCounts,
     manualLectureStockOrigins: boardState.manualLectureStockOrigins,
     fallbackLectureStockStudents: boardState.fallbackLectureStockStudents,
+    // spec-group-lesson §G: 集団授業の変更を未保存(ダーティ)として検知させる。
+    // 含めないと集団の科目/講師/出欠を変えても保存対象と認識されない回帰になる。
+    groupClassEntries: boardState.groupClassEntries,
   }
 }
 
@@ -3291,6 +3294,8 @@ function AuthenticatedApp() {
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: previousInput?.subjectSlots ?? {},
                 subjectDurations: previousInput?.subjectDurations ?? {},
+                // spec-group-lesson §C: 明示再構築のため集団参加を保全（spread していないので消えるのを防ぐ）。
+                groupClassParticipation: previousInput?.groupClassParticipation ?? {},
                 regularOnly: Boolean(previousInput?.regularOnly),
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
@@ -3335,6 +3340,8 @@ function AuthenticatedApp() {
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 subjectDurations: regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
+                // spec-group-lesson §C: 集団参加は講習回数とは独立。regularOnly でも保全（消さない）。
+                groupClassParticipation: previousInput?.groupClassParticipation ?? {},
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,

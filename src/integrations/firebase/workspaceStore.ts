@@ -204,6 +204,9 @@ type FirebaseClassroomBoardStockDoc = Pick<FirebasePersistedBoardState,
   | 'manualLectureStockCounts'
   | 'manualLectureStockOrigins'
   | 'fallbackLectureStockStudents'
+  // spec-group-lesson §G: 集団授業の割当/出欠。分割読込(boardUi && boardStock)経路でも
+  // 復元されるよう Pick に含める（含めないと往復で消える）。
+  | 'groupClassEntries'
 > & {
   savedAt: string
   splitSetId: string

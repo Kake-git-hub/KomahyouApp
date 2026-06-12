@@ -12,6 +12,7 @@ import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
 import { buildLectureStockEntries } from './lectureStock'
+import { cloneGroupClassEntryMap, normalizeGroupClassEntryMap, type GroupClassEntryMap } from './groupClass'
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -1298,6 +1299,8 @@ function createInitialBoardSnapshot(params: {
     isMakeupStockOpen: params.initialBoardState?.isMakeupStockOpen ?? false,
     studentScheduleRange: params.initialBoardState?.studentScheduleRange ?? null,
     teacherScheduleRange: params.initialBoardState?.teacherScheduleRange ?? null,
+    // spec-group-lesson §A/§G: 集団授業の割当/出欠を復元（防御的に正規化、未設定=空）。
+    groupClassEntries: normalizeGroupClassEntryMap(params.initialBoardState?.groupClassEntries),
   }
 }
 
@@ -2896,6 +2899,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [manualLectureStockCounts, setManualLectureStockCounts] = useState<LectureStockCountMap>(initialBoardSnapshot.manualLectureStockCounts)
   const [manualLectureStockOrigins, setManualLectureStockOrigins] = useState<Record<string, ManualLectureStockOrigin[]>>(initialBoardSnapshot.manualLectureStockOrigins)
   const [fallbackLectureStockStudents, setFallbackLectureStockStudents] = useState<Record<string, { displayName: string; subject?: string }>>(initialBoardSnapshot.fallbackLectureStockStudents)
+  // spec-group-lesson §A/§G: 集団授業の盤面割当/出欠。個別授業(weeks)とは独立に保持し、
+  // 全 publish 経路で再送出して保存往復で消えないようにする（Phase 0 はパススルー、編集UIは Phase 1 でセッター追加）。
+  const [groupClassEntries] = useState<GroupClassEntryMap>(initialBoardSnapshot.groupClassEntries ?? {})
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
@@ -3215,6 +3221,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         manualLectureStockCounts: { ...nextManualLectureStockCounts },
         manualLectureStockOrigins: cloneManualLectureStockOrigins(nextManualLectureStockOrigins),
         fallbackLectureStockStudents: { ...nextFallbackLectureStockStudents },
+        groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
         isLectureStockOpen,
         isMakeupStockOpen,
         studentScheduleRange,
@@ -3254,6 +3261,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockCounts: { ...manualLectureStockCounts },
       manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
       fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
+      groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
       isLectureStockOpen,
       isMakeupStockOpen,
       studentScheduleRange,
@@ -3262,6 +3270,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [
     fallbackLectureStockStudents,
     fallbackMakeupStudents,
+    groupClassEntries,
     isLectureStockOpen,
     isMakeupStockOpen,
     manualLectureStockOrigins,
@@ -5852,6 +5861,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockCounts: { ...nextManualLectureStockCounts },
       manualLectureStockOrigins: cloneManualLectureStockOrigins(nextManualLectureStockOrigins),
       fallbackLectureStockStudents: { ...nextFallbackLectureStockStudents },
+      groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
       isLectureStockOpen,
       isMakeupStockOpen,
       studentScheduleRange,
