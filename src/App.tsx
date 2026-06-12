@@ -2964,18 +2964,19 @@ function AuthenticatedApp() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[] }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[] }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
+    const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
       const token = updatedSession.studentInputs[s.id]?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates })
       }
     }
     for (const t of activeTeachers) {
       const token = updatedSession.teacherInputs[t.id]?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers })
+        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates })
       }
     }
     if (existingTokenEntries.length > 0) {
@@ -3409,7 +3410,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (!isRemoteBackendEnabled || !actingClassroomId) return
 
-    const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries) => {
+    const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries, isInitial) => {
       bumpMemCounter('submission-snapshot')
       // Skip entries whose tokens were recently reset to avoid race condition
       const activeEntries = entries.filter((e) => !recentlyResetSubmissionTokensRef.current.has(e.token))
@@ -3481,18 +3482,22 @@ function AuthenticatedApp() {
         }
       }
 
-      const nextAcknowledgements = buildSubmissionAcknowledgementEntries(newlyAppliedEntries, {
-        specialSessions: specialSessionsRef.current,
-        students: studentsRef.current,
-        teachers: teachersRef.current,
-        classroomName: actingClassroom?.name,
-      })
-      if (nextAcknowledgements.length > 0) {
-        setSubmissionAcknowledgements((current) => {
-          const existingIds = new Set(current.map((entry) => entry.id))
-          const freshEntries = nextAcknowledgements.filter((entry) => !existingIds.has(entry.id))
-          return freshEntries.length > 0 ? [...current, ...freshEntries] : current
+      // 購読直後の初回スナップショットは「既存の提出済み」を一括配信するだけなので、
+      // 起動/教室切替の直後に過去の提出を「新着QR提出通知」として出さない(データ反映は上で実施済み)。
+      if (!isInitial) {
+        const nextAcknowledgements = buildSubmissionAcknowledgementEntries(newlyAppliedEntries, {
+          specialSessions: specialSessionsRef.current,
+          students: studentsRef.current,
+          teachers: teachersRef.current,
+          classroomName: actingClassroom?.name,
         })
+        if (nextAcknowledgements.length > 0) {
+          setSubmissionAcknowledgements((current) => {
+            const existingIds = new Set(current.map((entry) => entry.id))
+            const freshEntries = nextAcknowledgements.filter((entry) => !existingIds.has(entry.id))
+            return freshEntries.length > 0 ? [...current, ...freshEntries] : current
+          })
+        }
       }
     })
 

@@ -2036,6 +2036,8 @@ type LectureSubmissionDoc = {
   sessionStartDate: string
   sessionEndDate: string
   closedWeekdays: number[]
+  // コマ表側で個別に休日設定した日付(YYYY-MM-DD)。定休日(closedWeekdays)と合わせて提出不可にする。
+  holidayDates?: string[]
   forceOpenDates: string[]
   availableSubjects: string[]
   slotCount: number
@@ -2128,6 +2130,7 @@ export const lectureSubmissionApi = onRequest({
       sessionStartDate: data.sessionStartDate ?? '',
       sessionEndDate: data.sessionEndDate ?? '',
       closedWeekdays: data.closedWeekdays ?? [],
+      holidayDates: data.holidayDates ?? [],
       forceOpenDates: data.forceOpenDates ?? [],
       availableSubjects: data.availableSubjects ?? [],
       slotCount: data.slotCount ?? 7,

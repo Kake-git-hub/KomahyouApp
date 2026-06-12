@@ -7,6 +7,8 @@ type SubmissionData = {
   sessionStartDate: string
   sessionEndDate: string
   closedWeekdays: number[]
+  // コマ表側で個別に休日設定した日付(YYYY-MM-DD)。定休日と合わせて提出不可(休校日)にする。
+  holidayDates?: string[]
   forceOpenDates: string[]
   availableSubjects: string[]
   slotCount: number
@@ -19,7 +21,7 @@ type SubmissionData = {
   occupiedSlots: Record<string, string>
 }
 
-type DateSlot = {
+export type DateSlot = {
   dateKey: string
   label: string
   dayOfWeek: number
@@ -54,9 +56,10 @@ function normalizeSlotNumbers(slotNumbers: number[] | undefined, slotCount: numb
     .sort((left, right) => left - right)
 }
 
-function buildAvailableDates(startDate: string, endDate: string, closedWeekdays: number[], forceOpenDates: string[], slotNumbers: number[]): DateSlot[] {
+export function buildAvailableDates(startDate: string, endDate: string, closedWeekdays: number[], forceOpenDates: string[], holidayDates: string[], slotNumbers: number[]): DateSlot[] {
   const dates: DateSlot[] = []
   const forceOpenSet = new Set(forceOpenDates)
+  const holidaySet = new Set(holidayDates)
   const current = new Date(startDate + 'T00:00:00')
   const end = new Date(endDate + 'T00:00:00')
 
@@ -67,7 +70,8 @@ function buildAvailableDates(startDate: string, endDate: string, closedWeekdays:
     const dateKey = `${year}-${month}-${day}`
     const dayOfWeek = current.getDay()
 
-    const isClosed = closedWeekdays.includes(dayOfWeek) && !forceOpenSet.has(dateKey)
+    // 定休日(曜日) または コマ表で個別設定した休日 はいずれも「休校日」として提出不可にする。
+    const isClosed = (closedWeekdays.includes(dayOfWeek) && !forceOpenSet.has(dateKey)) || holidaySet.has(dateKey)
     const displayMonth = current.getMonth() + 1
     const displayDay = current.getDate()
     dates.push({
@@ -147,6 +151,7 @@ export default function SubmissionPage({ token }: { token: string }) {
       data.sessionEndDate,
       data.closedWeekdays,
       data.forceOpenDates,
+      data.holidayDates ?? [],
       normalizeSlotNumbers(data.slotNumbers, data.slotCount),
     )
   }, [data])
@@ -274,19 +279,114 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   if (!data) return null
 
+  // 提出後／既提出リンク: 提出した内容を「閲覧専用(編集不可)」で表示する。
   if (submitted) {
+    const isStudentView = data.personType === 'student'
+    const viewOccupiedSlots = data.occupiedSlots ?? {}
+    const viewMaxSlot = availableDates.length > 0 ? Math.max(...availableDates.map((d) => d.slots.length)) : 5
+    const viewUnavailableCount = selectedSlots.size
+    const viewSubjectTotal = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
+    const submittedSubjects = data.availableSubjects.filter((subject) => (subjectSlots[subject] ?? 0) > 0)
     return (
       <div className="sub-container">
-        <div className="sub-center-box">
-          <p className="sub-success-icon">✓</p>
-          <h2 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 8px' }}>{loadedAsSubmitted ? 'すでに提出済みです' : '提出完了'}</h2>
-          <p style={{ fontSize: 14, color: '#333' }}>
-            {loadedAsSubmitted
-              ? `${data.personName}さんの${data.sessionLabel}の希望はすでに提出済みです。`
-              : `${data.personName}さんの${data.sessionLabel}の希望を受け付けました。`}
-          </p>
-          <p className="sub-muted" style={{ marginTop: 8 }}>変更が必要な場合は管理者にお問い合わせください。</p>
+        <header className="sub-header">
+          <div className="sub-header-title">{data.sessionLabel}</div>
+          <div className="sub-header-name">{data.personName}</div>
+          <div className="sub-muted" style={{ fontSize: 12 }}>
+            {data.sessionStartDate.replace(/-/g, '/')} 〜 {data.sessionEndDate.replace(/-/g, '/')}
+          </div>
+        </header>
+
+        <div className="sub-submitted-banner">
+          <span className="sub-submitted-check">✓</span>
+          <div className="sub-submitted-text">
+            <div className="sub-submitted-title">{loadedAsSubmitted ? 'すでに提出済みです' : '提出が完了しました'}</div>
+            <div className="sub-submitted-sub">以下の内容で提出されています（閲覧のみ・編集はできません）</div>
+          </div>
         </div>
+
+        <section className="sub-section">
+          <div className="sub-section-head">
+            <span className="sub-section-title">出席不可コマ</span>
+            <span className="sub-muted">不可: <strong>{viewUnavailableCount}</strong>コマ</span>
+          </div>
+          <div className="sub-table-wrap">
+            <table className="sub-slot-table sub-slot-table-readonly">
+              <thead>
+                <tr>
+                  <th className="sub-th-date">日付</th>
+                  {Array.from({ length: viewMaxSlot }, (_, i) => (
+                    <th key={i} className="sub-th-slot">{i + 1}限</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {availableDates.map((dateSlot) => {
+                  const isSunday = dateSlot.dayOfWeek === 0
+                  const isSaturday = dateSlot.dayOfWeek === 6
+                  if (dateSlot.isClosed) {
+                    return (
+                      <tr key={dateSlot.dateKey} className={`sub-row-closed${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
+                        <td className="sub-td-date">{dateSlot.label}</td>
+                        <td className="sub-td-slot sub-slot-closed sub-slot-closed-merged" colSpan={viewMaxSlot}>休校日</td>
+                      </tr>
+                    )
+                  }
+                  return (
+                    <tr key={dateSlot.dateKey} className={`${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
+                      <td className="sub-td-date">{dateSlot.label}</td>
+                      {dateSlot.slots.map((slot) => {
+                        const slotKey = `${dateSlot.dateKey}_${slot}`
+                        const isSelected = selectedSlots.has(slotKey)
+                        const occupied = viewOccupiedSlots[slotKey]
+                        return (
+                          <td key={slot} className={`sub-td-slot${isSelected ? ' sub-slot-x' : ''}${occupied && !isSelected ? ' sub-slot-occ' : ''}`}>
+                            {isSelected
+                              ? (occupied ? <><span className="sub-x-mark">✕</span><span className="sub-x-label">{occupied}</span></> : '✕')
+                              : (occupied || '')}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {isStudentView && (
+          <section className="sub-section">
+            <div className="sub-section-head">
+              <span className="sub-section-title">希望科目数</span>
+              <span className="sub-muted">合計: <strong>{viewSubjectTotal}</strong>コマ</span>
+            </div>
+            {submittedSubjects.length > 0 ? (
+              <div className="sub-subject-list">
+                {submittedSubjects.map((subject) => {
+                  const count = subjectSlots[subject] ?? 0
+                  const minutes = subjectDurations[subject] === 60 ? 60 : subjectDurations[subject] === 45 ? 45 : 90
+                  return (
+                    <div key={subject} className="sub-subject-row sub-subject-row-readonly">
+                      <span className="sub-subject-label">{subject}</span>
+                      <span className="sub-subject-readonly-value">{count}コマ<span className="sub-readonly-minutes">/ {minutes}分</span></span>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="sub-muted" style={{ padding: '6px 4px' }}>希望科目はありません。</p>
+            )}
+            {regularOnly && (
+              <p className="sub-muted" style={{ padding: '6px 4px', color: '#555' }}>※ 通常授業のみ（講習なし）で提出</p>
+            )}
+          </section>
+        )}
+
+        <section className="sub-section sub-submit-section">
+          <p className="sub-muted" style={{ textAlign: 'center', fontSize: 12 }}>変更が必要な場合は教室にお問い合わせください。</p>
+        </section>
+
         <style>{baseStyles}</style>
       </div>
     )
@@ -343,9 +443,7 @@ export default function SubmissionPage({ token }: { token: string }) {
                   return (
                     <tr key={dateSlot.dateKey} className={`sub-row-closed${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
                       <td className="sub-td-date">{dateSlot.label}</td>
-                      {dateSlot.slots.map((slot) => (
-                        <td key={slot} className="sub-td-slot sub-slot-closed" />
-                      ))}
+                      <td className="sub-td-slot sub-slot-closed sub-slot-closed-merged" colSpan={maxSlot}>休校日</td>
                     </tr>
                   )
                 }
@@ -533,6 +631,26 @@ const baseStyles = `
   .sub-summary { display: flex; gap: 12px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
   .sub-submit-btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
   .sub-disabled { opacity: .5; cursor: not-allowed; }
+
+  /* 休校日: 1〜5限を結合したグレーセル */
+  .sub-slot-closed-merged { background: #ebebeb !important; color: #888; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-align: center; }
+
+  /* 提出済み(閲覧専用)バナー */
+  .sub-submitted-banner { display: flex; align-items: center; gap: 12px; background: #e8f5e8; border-bottom: 1px solid #cfe6cf; padding: 14px 14px; }
+  .sub-submitted-check { flex: none; width: 40px; height: 40px; line-height: 40px; text-align: center; border-radius: 50%; background: #2a7e2a; color: #fff; font-size: 22px; font-weight: 700; }
+  .sub-submitted-text { min-width: 0; }
+  .sub-submitted-title { font-size: 16px; font-weight: 700; color: #1f5d1f; }
+  .sub-submitted-sub { font-size: 12px; color: #3a6b3a; margin-top: 2px; line-height: 1.4; }
+
+  /* 閲覧専用テーブル(操作不可) */
+  .sub-slot-table-readonly .sub-th-slot,
+  .sub-slot-table-readonly .sub-td-slot,
+  .sub-slot-table-readonly .sub-td-date { cursor: default; }
+
+  /* 希望科目数(閲覧専用) */
+  .sub-subject-row-readonly { justify-content: space-between; }
+  .sub-subject-readonly-value { font-size: 15px; font-weight: 700; color: #222; }
+  .sub-readonly-minutes { font-size: 12px; font-weight: 600; color: #777; margin-left: 6px; }
 
   @media (max-width: 360px) {
     .sub-th-date { width: 52px; font-size: 9px; padding: 4px 0; }

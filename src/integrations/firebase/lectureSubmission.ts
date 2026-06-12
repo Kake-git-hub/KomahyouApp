@@ -23,6 +23,8 @@ export type LectureSubmissionDoc = {
   sessionStartDate: string
   sessionEndDate: string
   closedWeekdays: number[]
+  // コマ表側で個別に休日設定した日付(YYYY-MM-DD)。定休日と合わせて提出不可にする。後方互換のため optional。
+  holidayDates?: string[]
   forceOpenDates: string[]
   availableSubjects: string[]
   slotCount: number
@@ -42,7 +44,7 @@ export async function ensureSubmissionTokens(
   session: SpecialSessionRow,
   students: Array<{ id: string; name: string; availableSubjects: string[]; occupiedSlots?: Record<string, string> }>,
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
-  classroomSettings: { closedWeekdays: number[]; forceOpenDates: string[] },
+  classroomSettings: { closedWeekdays: number[]; holidayDates?: string[]; forceOpenDates: string[] },
   slotNumbers: number[],
 ): Promise<{ updatedSession: SpecialSessionRow; newTokens: Array<{ token: string; doc: LectureSubmissionDoc }> }> {
   const config = getFirebaseBackendConfig()
@@ -74,6 +76,7 @@ export async function ensureSubmissionTokens(
         sessionStartDate: session.startDate,
         sessionEndDate: session.endDate,
         closedWeekdays: [...classroomSettings.closedWeekdays],
+        holidayDates: [...(classroomSettings.holidayDates ?? [])],
         forceOpenDates: [...classroomSettings.forceOpenDates],
         availableSubjects: [],
         slotCount: slotNumbers.length,
@@ -110,6 +113,7 @@ export async function ensureSubmissionTokens(
         sessionStartDate: session.startDate,
         sessionEndDate: session.endDate,
         closedWeekdays: [...classroomSettings.closedWeekdays],
+        holidayDates: [...(classroomSettings.holidayDates ?? [])],
         forceOpenDates: [...classroomSettings.forceOpenDates],
         availableSubjects: [...student.availableSubjects],
         slotCount: slotNumbers.length,
@@ -198,7 +202,7 @@ export async function deleteLectureSubmissionDoc(token: string) {
 
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[] }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[] }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -212,6 +216,8 @@ export async function updateSubmissionOccupiedSlots(
     await setDoc(docRef, {
       ...data,
       occupiedSlots: entry.occupiedSlots,
+      // 既発行トークンにも最新の休日設定を反映する(後から休日を設定/解除した場合に提出側へ伝播)。
+      ...(entry.holidayDates ? { holidayDates: [...entry.holidayDates] } : {}),
       ...(entry.slotNumbers ? { slotNumbers: [...entry.slotNumbers], slotCount: entry.slotNumbers.length } : {}),
     })
   }
@@ -230,7 +236,9 @@ export type SubmissionChangeEntry = {
 
 export function subscribeLectureSubmissions(
   classroomId: string,
-  onSubmitted: (entries: SubmissionChangeEntry[]) => void,
+  // isInitial=true は購読直後の初回スナップショット(=既存の提出済みドキュメントの一括配信)。
+  // 起動直後に過去の提出を「新着」として通知してしまうのを呼び出し側で抑止できるようにする。
+  onSubmitted: (entries: SubmissionChangeEntry[], isInitial: boolean) => void,
 ): () => void {
   const db = getFirebaseFirestoreInstance()
   if (!db || !classroomId) return () => {}
@@ -241,7 +249,10 @@ export function subscribeLectureSubmissions(
     where('status', '==', 'submitted'),
   )
 
+  let isInitialSnapshot = true
   const unsubscribe = onSnapshot(q, (snapshot) => {
+    const isInitial = isInitialSnapshot
+    isInitialSnapshot = false
     const entries: SubmissionChangeEntry[] = []
     for (const change of snapshot.docChanges()) {
       if (change.type === 'added' || change.type === 'modified') {
@@ -258,7 +269,7 @@ export function subscribeLectureSubmissions(
         })
       }
     }
-    if (entries.length > 0) onSubmitted(entries)
+    if (entries.length > 0) onSubmitted(entries, isInitial)
   })
 
   return unsubscribe
