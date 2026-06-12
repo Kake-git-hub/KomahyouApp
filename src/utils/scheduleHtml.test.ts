@@ -747,6 +747,10 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     // 集団行・回数の描画ヘルパが埋め込まれていること。
     expect(html).toContain('buildStudentGroupRowsHtml')
     expect(html).toContain('injectGroupClassCounts')
+    // 室長が日程表モーダルから集団参加を設定する経路が埋め込まれていること。
+    expect(html).toContain('save-student-group-participation')
+    expect(html).toContain('schedule-student-group-save')
+    expect(html).toContain('submitStudentGroupParticipation')
 
     vi.unstubAllGlobals()
   })

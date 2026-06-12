@@ -181,6 +181,28 @@ export async function resetLectureSubmissionDoc(token: string) {
   })
 }
 
+/**
+ * spec-group-lesson §C: 既に配布済みのQR(集団欄なしで作られた古いトークン)でも中3が集団参加を選べるよう、
+ * 未提出(pending)ドキュメントの availableGroupClassSubjects を後埋めする。
+ * 提出済み(submitted)は再提出不可なので触らない。既に同値なら書き込まない(冪等)。
+ */
+export async function updateSubmissionGroupClassEligibility(token: string, availableGroupClassSubjects: string[]) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !token) return
+
+  const docRef = doc(db, 'lectureSubmissions', token)
+  const existing = await getDoc(docRef)
+  if (!existing.exists()) return
+  const data = existing.data() as LectureSubmissionDoc
+  if (data.status === 'submitted') return
+  const current = Array.isArray(data.availableGroupClassSubjects) ? data.availableGroupClassSubjects : []
+  const isSame = current.length === availableGroupClassSubjects.length
+    && current.every((value, index) => value === availableGroupClassSubjects[index])
+  if (isSame) return
+
+  await setDoc(docRef, { ...data, availableGroupClassSubjects: [...availableGroupClassSubjects] })
+}
+
 /** Mark a submission doc as submitted (lock from phone editing) without changing the submitted data */
 export async function markLectureSubmissionDocAsSubmitted(token: string) {
   const db = getFirebaseFirestoreInstance()

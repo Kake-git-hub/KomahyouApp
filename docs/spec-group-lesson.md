@@ -141,6 +141,13 @@
   - `buildTeacherSalaryData(entries, teacher, startDate, endDate)`：カテゴリ G を追加。担当集団コマで出席1名以上=実施1コマ、交通費(attendanceDays)にも加算。`renderSalarySection` に「集団 (1コマ)」行（count≥1で表示・単価1種・既存 recalcSalary が自動合算）。
   - `buildTeacherSheetHtml`：集団2行を tbody 先頭へ。salary 呼び出しに teacher＋range を渡す。
   - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **337 通過**（給与カテゴリ/講師ヘルパ存在テスト追加・構文検証含む）。
+- **Phase 7 — 室長参加設定＋既存QR対応 ✅ 実装（オーナー回答 Q1 反映・未デプロイ）**：
+  - **日程表モーダル（室長）**：`scheduleHtml.ts` の希望科目数モーダルに中3のみ集団参加トグル＋「集団参加を保存」ボタン。**登録済みでも編集可**（既存データ・登録状態を維持したまま参加を切替）。`schedule-student-group-save` メッセージ／`updateStudentCountLocally` で集団参加を明示保全。
+  - **App.tsx**：`schedule-student-group-save` ハンドラ（`{...previousInput, groupClassParticipation}` で既存・提出状況を維持）。
+  - **既存QR対応**：`lectureSubmission.ts` `updateSubmissionGroupClassEligibility`（未提出ドキュメントへ集団科目を後埋め・冪等・提出済みは触らない）。App.tsx のトークン同期で未提出中3に後埋め→**配布済みQRのままでも生徒が集団を選べる**。
+  - 検証：app `tsc -b` クリーン、Functions `build` 成功、`vitest` 全 **337 通過**（埋め込みスクリプト構文検証含む）、`vite build` 成功。
+  - **移行**：提出済み(登録済み)生徒は室長モーダルから集団参加を設定でき、既存の提出データ・提出状況は維持。
+
 - **Phase 6 — 結合検証→反映（オーナー実施・Claudeはデプロイ/本番書込み不可）**：
   1. **デプロイ**：Cloud Functions の提出サニタイザ変更（Phase 3）を反映するため `firebase deploy --only functions` が必要（未デプロイでも在宅保存経路は汎用サニタイズで保持されるが、生徒QRの集団参加取込はデプロイ後に有効）。Hosting は `npm run deploy`。
   2. **開発用教室 `v8OZ7zH8vONNHjjYVcR1` でE2E**：特別講習を作成→盤面に集団行が出る→科目/講師入力→出席者モーダルで出欠＋PDF→中3提出ページに集団参加→生徒/講師日程表に集団行・回数・給与が出る。

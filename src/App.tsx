@@ -21,7 +21,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -3085,9 +3085,14 @@ function AuthenticatedApp() {
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
-      const token = updatedSession.studentInputs[s.id]?.submissionToken
+      const studentInput = updatedSession.studentInputs[s.id]
+      const token = studentInput?.submissionToken
       if (token && !newTokenSet.has(token)) {
         existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates })
+        // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
+        if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
+          void updateSubmissionGroupClassEligibility(token, [...groupClassSubmissionSubjects]).catch(() => { /* non-fatal */ })
+        }
       }
     }
     for (const t of activeTeachers) {
@@ -3371,6 +3376,32 @@ function AuthenticatedApp() {
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
           else resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
         }
+        return
+      }
+
+      if (message.type === 'schedule-student-group-save') {
+        // spec-group-lesson §C: 室長が日程表モーダルから集団参加を設定。既存の提出/登録データと提出状況は維持する。
+        if (typeof message.sessionId !== 'string' || typeof message.personId !== 'string') return
+        const rawParticipation = message.groupClassParticipation && typeof message.groupClassParticipation === 'object'
+          ? message.groupClassParticipation as Record<string, unknown>
+          : {}
+        const groupClassParticipation: Record<string, boolean> = {}
+        for (const subject of groupClassSubmissionSubjects) {
+          if (rawParticipation[subject] === true) groupClassParticipation[subject] = true
+        }
+        const updatedAt = new Date().toISOString()
+        setSpecialSessions((current) => current.map((session) => {
+          if (session.id !== message.sessionId) return session
+          const previousInput = session.studentInputs[message.personId]
+          const nextInput = previousInput
+            ? { ...previousInput, groupClassParticipation, updatedAt }
+            : { unavailableSlots: [], regularBreakSlots: [], subjectSlots: {}, groupClassParticipation, regularOnly: false, countSubmitted: false, updatedAt }
+          return {
+            ...session,
+            studentInputs: { ...session.studentInputs, [message.personId]: nextInput },
+            updatedAt,
+          }
+        }))
         return
       }
 
