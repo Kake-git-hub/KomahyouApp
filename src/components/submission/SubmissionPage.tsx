@@ -17,6 +17,9 @@ type SubmissionData = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   subjectDurations: Record<string, number>
+  // spec-group-lesson §C: 集団授業(中3のみ)。availableGroupClassSubjects が非空なら参加/不参加欄を表示。
+  availableGroupClassSubjects?: string[]
+  groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
 }
@@ -98,6 +101,8 @@ export default function SubmissionPage({ token }: { token: string }) {
   const [subjectSlots, setSubjectSlots] = useState<Record<string, number>>({})
   // 科目ごとの授業時間(分)。90(既定)は保持せず、60/45 のみ保持する。
   const [subjectDurations, setSubjectDurations] = useState<Record<string, number>>({})
+  // spec-group-lesson §C: 集団授業の参加/不参加。未設定/false=不参加(既定)。
+  const [groupClassParticipation, setGroupClassParticipation] = useState<Record<string, boolean>>({})
   const [regularOnly, setRegularOnly] = useState(false)
 
   const selectedSlotsRef = useRef<Set<string>>(new Set())
@@ -134,6 +139,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         setSelectedSlots(new Set(result.unavailableSlots ?? []))
         setSubjectSlots(result.subjectSlots ?? {})
         setSubjectDurations(result.subjectDurations ?? {})
+        setGroupClassParticipation(result.groupClassParticipation ?? {})
         setRegularOnly(result.regularOnly ?? false)
       } catch {
         setError('通信エラーが発生しました。インターネット接続を確認してください。')
@@ -232,6 +238,7 @@ export default function SubmissionPage({ token }: { token: string }) {
           unavailableSlots: Array.from(selectedSlots),
           subjectSlots,
           subjectDurations,
+          groupClassParticipation,
           regularOnly,
         }),
       })
@@ -251,7 +258,7 @@ export default function SubmissionPage({ token }: { token: string }) {
     } finally {
       setSubmitting(false)
     }
-  }, [apiBase, token, selectedSlots, subjectSlots, subjectDurations, regularOnly, submitting, submitted])
+  }, [apiBase, token, selectedSlots, subjectSlots, subjectDurations, groupClassParticipation, regularOnly, submitting, submitted])
 
   if (loading) {
     return (
@@ -543,6 +550,37 @@ export default function SubmissionPage({ token }: { token: string }) {
             />
             <span>通常授業のみ（講習なし）</span>
           </label>
+        </section>
+      )}
+
+      {isStudent && (data.availableGroupClassSubjects?.length ?? 0) > 0 && (
+        <section className="sub-section">
+          <div className="sub-section-head">
+            <span className="sub-section-title">集団授業（中3）</span>
+          </div>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 12 }}>参加する科目を選んでください（既定は不参加）。</p>
+          <div className="sub-subject-list">
+            {data.availableGroupClassSubjects!.map((subject) => {
+              const participate = groupClassParticipation[subject] === true
+              return (
+                <div key={subject} className="sub-subject-row">
+                  <span className="sub-subject-label">{subject}</span>
+                  <div className="sub-duration-ctrl" role="group" aria-label={`${subject}の参加可否`}>
+                    <button
+                      type="button"
+                      className={`sub-duration-btn${participate ? ' sub-duration-active' : ''}`}
+                      onClick={() => setGroupClassParticipation((current) => ({ ...current, [subject]: true }))}
+                    >参加</button>
+                    <button
+                      type="button"
+                      className={`sub-duration-btn${participate ? '' : ' sub-duration-active'}`}
+                      onClick={() => setGroupClassParticipation((current) => ({ ...current, [subject]: false }))}
+                    >不参加</button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </section>
       )}
 

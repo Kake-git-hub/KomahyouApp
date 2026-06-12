@@ -34,6 +34,11 @@ export type LectureSubmissionDoc = {
   subjectSlots: Record<string, number>
   // 科目ごとの授業時間(分)。未設定=90分扱い。後方互換のため optional。
   subjectDurations?: Record<string, number>
+  // spec-group-lesson §C: 集団授業の希望提出。
+  // availableGroupClassSubjects=この生徒が選べる集団科目(中3のみ非空)。空/未設定=提出ページに集団欄を出さない。
+  // groupClassParticipation=科目→参加(true)。未設定/false=不参加(既定)。後方互換のため optional。
+  availableGroupClassSubjects?: string[]
+  groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   submittedAt: string | null
@@ -42,7 +47,7 @@ export type LectureSubmissionDoc = {
 
 export async function ensureSubmissionTokens(
   session: SpecialSessionRow,
-  students: Array<{ id: string; name: string; availableSubjects: string[]; occupiedSlots?: Record<string, string> }>,
+  students: Array<{ id: string; name: string; availableSubjects: string[]; availableGroupClassSubjects?: string[]; occupiedSlots?: Record<string, string> }>,
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; holidayDates?: string[]; forceOpenDates: string[] },
   slotNumbers: number[],
@@ -116,12 +121,14 @@ export async function ensureSubmissionTokens(
         holidayDates: [...(classroomSettings.holidayDates ?? [])],
         forceOpenDates: [...classroomSettings.forceOpenDates],
         availableSubjects: [...student.availableSubjects],
+        availableGroupClassSubjects: [...(student.availableGroupClassSubjects ?? [])],
         slotCount: slotNumbers.length,
         slotNumbers: [...slotNumbers],
         status: 'pending',
         unavailableSlots: [],
         subjectSlots: {},
         subjectDurations: {},
+        groupClassParticipation: {},
         regularOnly: false,
         occupiedSlots: student.occupiedSlots ?? {},
         submittedAt: null,
@@ -168,6 +175,7 @@ export async function resetLectureSubmissionDoc(token: string) {
     unavailableSlots: [],
     subjectSlots: {},
     subjectDurations: {},
+    groupClassParticipation: {},
     regularOnly: false,
     submittedAt: null,
   })
@@ -231,6 +239,7 @@ export type SubmissionChangeEntry = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   subjectDurations: Record<string, number>
+  groupClassParticipation: Record<string, boolean>
   regularOnly: boolean
 }
 
@@ -265,6 +274,7 @@ export function subscribeLectureSubmissions(
           unavailableSlots: data.unavailableSlots ?? [],
           subjectSlots: data.subjectSlots ?? {},
           subjectDurations: data.subjectDurations ?? {},
+          groupClassParticipation: data.groupClassParticipation ?? {},
           regularOnly: data.regularOnly ?? false,
         })
       }

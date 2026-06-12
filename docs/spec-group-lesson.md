@@ -123,7 +123,13 @@
   - `App.css`：モーダルのスタイル。
   - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **335 通過**、新規 lint クリーン。モーダル本体は認証の先のため live 未確認（PDFはユニットテストで担保）。
   - **Phase 2 残**：undo/redo への集団取り込みは引き続き未対応（保存は反映されるが Ctrl+Z 非対応）。
-- **Phase 3 — 希望提出**：中3のみ集団(理科)/集団(社会)の参加/不参加（既定不参加）。`SubmissionPage.tsx` ＋ 室長日程表登録UI ＋ `App.tsx` 取込5経路で保全。**移行（既存提出＝不参加・提出状況不変）**のテスト。
+- **Phase 3 — 希望提出 ✅ 実装（未コミット）**：中3のみ集団(理科)/集団(社会)の参加/不参加（既定不参加）。subjectDurations の全レイヤーにならって移植。
+  - `lectureSubmission.ts`：`LectureSubmissionDoc` に `availableGroupClassSubjects?`（中3のみ非空）/`groupClassParticipation?`。トークン生成・リセット・`SubmissionChangeEntry`・購読に反映。
+  - `App.tsx`：トークン生成元で `availableGroupClassSubjects`（講習開始日基準で中3判定）を付与。購読反映パスで `groupClassParticipation` を反映。
+  - `SubmissionPage.tsx`：中3（availableGroupClassSubjects 非空）に「集団授業（中3）」セクション＝科目ごと参加/不参加（既定不参加）。state/load/payload に追加。
+  - `functions/src/index.ts`：`sanitizeGroupClassParticipation`（allowed＝中3の集団科目のみ・true のみ保存）。GET/POST/スナップショット studentInputs に反映。Functions ビルド通過。
+  - 検証：app `tsc -b` クリーン、Functions `build` 成功、`vitest` 全 **335 通過**（App.test 修正含む）、`vite build` 成功。
+  - **移行**：既存提出ドキュメントは `availableGroupClassSubjects` を持たない→提出ページに集団欄が出ず、`groupClassParticipation` 未設定＝不参加。既存 studentInputs も未設定＝不参加で**提出状況不変**。現行の夏期講習の中3を参加にする経路（室長が日程表で設定）は Phase 4 で追加。
 - **Phase 4 — 生徒日程表＋回数欄**：未登録=全員表示／登録後=参加者のみ＋出欠反映。講習回数表に集理/集社（表示期間内：希望=盤面コマ数 / actual=出席数）。
 - **Phase 5 — 講師日程表＋給与**：集団行表示・専用カテゴリ「集団」1コマ集計（出席1名以上）・交通費日数に集団実施日加算。
 - **Phase 6 — 結合検証→反映**：開発用教室 `v8OZ7zH8vONNHjjYVcR1` でE2E確認 → 本番3教室の個別データ不変を確認 → 全教室反映。
