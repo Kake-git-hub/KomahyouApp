@@ -1,5 +1,6 @@
 import { doc, getDoc, onSnapshot, setDoc, type Unsubscribe } from 'firebase/firestore'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from '../../components/schedule-board/types'
+import { normalizeGroupClassEntryMap, type GroupClassEntryMap } from '../../components/schedule-board/groupClass'
 import { getFirebaseFirestoreInstance } from './client'
 import { sanitizeForFirestore } from './firestoreSanitize'
 
@@ -32,6 +33,8 @@ export type BoardSharePayload = {
   classroomName: string
   sharedAt: string
   cells: BoardShareCell[]
+  // spec-group-lesson §A: 集団授業の割当(共有画面に集団行を表示するため)。後方互換のため optional。
+  groupClassEntries?: GroupClassEntryMap
 }
 
 export type BoardSharePayloadInput = Omit<BoardSharePayload, 'cells'> & {
@@ -52,6 +55,7 @@ type StoredBoardShareDoc = {
   cells?: BoardShareCell[]
   cellsEncoding?: typeof BOARD_SHARE_GZIP_ENCODING
   compressedCells?: string
+  groupClassEntries?: GroupClassEntryMap
 }
 
 type CompressionStreamConstructor = new (format: 'gzip') => TransformStream
@@ -107,6 +111,7 @@ async function hydrateBoardShareDoc(data: StoredBoardShareDoc | null | undefined
     classroomId: data.classroomId,
     classroomName: data.classroomName,
     sharedAt: data.sharedAt,
+    groupClassEntries: normalizeGroupClassEntryMap(data.groupClassEntries),
   }
   if (data.cellsEncoding === BOARD_SHARE_GZIP_ENCODING && typeof data.compressedCells === 'string') {
     const json = await gunzipBase64ToText(data.compressedCells)
@@ -169,6 +174,7 @@ export async function publishBoardShare(payload: BoardSharePayloadInput) {
     classroomId: compacted.classroomId,
     classroomName: compacted.classroomName,
     sharedAt: compacted.sharedAt,
+    groupClassEntries: normalizeGroupClassEntryMap(compacted.groupClassEntries),
   }
   // 圧縮して Firestore 1MiB 上限を回避する。CompressionStream 非対応環境では従来どおり
   // 非圧縮で保存（小さい盤面はそのまま通る）。

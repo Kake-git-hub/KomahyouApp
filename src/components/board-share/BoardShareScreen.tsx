@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { loadBoardShare, subscribeBoardShare, type BoardShareCell, type BoardSharePayload, type BoardShareStatusEntry, type BoardShareStudentEntry } from '../../integrations/firebase/boardShare'
 import { lessonTypeLabels, teacherTypeLabels } from '../schedule-board/mockData'
+import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, type GroupClassEntry } from '../schedule-board/groupClass'
 import { buildLinkedLessonDestinationMap, formatShortDateLabel } from '../schedule-board/lessonLinks'
 import type { LessonType, StudentStatusKind, TeacherType } from '../schedule-board/types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
@@ -162,6 +163,13 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
   const slotOptions = useMemo(() => Array.from(new Set(sortedCells.map((cell) => cell.slotNumber))).sort((left, right) => left - right), [sortedCells])
   const linkedLessonDestinationByStatusId = useMemo(() => buildLinkedLessonDestinationMap(sortedCells), [sortedCells])
   const currentCell = sortedCells.find((cell) => cell.dateKey === selectedDateKey && cell.slotNumber === selectedSlotNumber) ?? null
+  // spec-group-lesson §A: 選択日の集団授業(2バンド)。デスク一覧の上に表示する。
+  const groupEntriesForDate = useMemo<GroupClassEntry[]>(() => {
+    const map = payload?.groupClassEntries ?? {}
+    return groupClassBands
+      .map((band) => map[groupClassEntryKey(selectedDateKey, band)])
+      .filter((entry): entry is GroupClassEntry => Boolean(entry && entry.subject))
+  }, [payload, selectedDateKey])
 
   useEffect(() => {
     if (!selectedDateKey || !selectedSlotNumber) return
@@ -204,6 +212,17 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
   return (
     <div className="board-share-shell">
       <main className="board-share-main" aria-label="配布用盤面">
+        {groupEntriesForDate.length > 0 ? (
+          <div className="board-share-group-list" aria-label="集団授業">
+            {groupEntriesForDate.map((entry) => (
+              <div className="board-share-group" key={`${entry.dateKey}_${entry.band}`}>
+                <span className="board-share-group-time">集団 {groupClassBandTimeLabels[entry.band]}</span>
+                <span className="board-share-group-subject">{entry.subject}</span>
+                {entry.teacherName ? <span className="board-share-group-teacher">{entry.teacherName}</span> : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
         {currentCell ? (
           <div className="board-share-desk-list" style={{ '--board-share-desk-count': currentCell.desks.length } as React.CSSProperties}>
             {currentCell.desks.map((desk, deskIndex) => {

@@ -387,13 +387,54 @@
   min-height: 0;
   overflow: hidden;
   padding: 2px 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* spec-group-lesson §A: 共有画面の集団授業バナー(選択日の2バンド) */
+.board-share-group-list {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.board-share-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 7px;
+  border: 1px solid #e3b877;
+  border-radius: 5px;
+  background: #fff7ec;
+}
+
+.board-share-group-time {
+  font-size: 11px;
+  font-weight: 800;
+  color: #7c3a00;
+  white-space: nowrap;
+}
+
+.board-share-group-subject {
+  font-size: 15px;
+  font-weight: 800;
+  color: #7c3a00;
+}
+
+.board-share-group-teacher {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: #244564;
 }
 
 .board-share-desk-list {
   display: grid;
   grid-template-rows: repeat(var(--board-share-desk-count, 14), minmax(0, 1fr));
   gap: 2px;
-  height: 100%;
+  flex: 1;
   min-height: 0;
 }
 

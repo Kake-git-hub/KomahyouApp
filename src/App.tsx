@@ -2208,6 +2208,7 @@ function AuthenticatedApp() {
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
       cells: selectBoardShareCells(boardState.weeks),
+      groupClassEntries: boardState.groupClassEntries ?? {},
     })
     try {
       await copyTextToClipboard(url)
@@ -2225,6 +2226,8 @@ function AuthenticatedApp() {
       setClassroomSettings((currentSettings) => currentSettings.boardShareToken ? currentSettings : { ...currentSettings, boardShareToken: token })
     }
     const sharedCells = selectBoardShareCells(nextBoardState.weeks)
+    // spec-group-lesson §A: 集団授業の割当も共有画面に出すため publish に含める。
+    const sharedGroupClassEntries = nextBoardState.groupClassEntries ?? {}
     // 共有対象セルを compact 化した内容で署名を作り、前回公開と同一なら publish をスキップ。
     // （出席などの連続編集で同一内容を何度も setDoc しないようにする。）
     const compactedCells = compactBoardSharePayload({
@@ -2235,7 +2238,8 @@ function AuthenticatedApp() {
       sharedAt: '',
       cells: sharedCells,
     }).cells
-    const signature = `${token}|${actingClassroom.name}|${JSON.stringify(compactedCells)}`
+    // 集団の変更だけでも再公開されるよう署名に含める。
+    const signature = `${token}|${actingClassroom.name}|${JSON.stringify(compactedCells)}|${JSON.stringify(sharedGroupClassEntries)}`
     if (signature === lastPublishedBoardShareSignatureRef.current) return
 
     // 公開中に新たな変更が来たら最新内容だけを保留し、完了後に1回だけ追い公開する
@@ -2253,6 +2257,7 @@ function AuthenticatedApp() {
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
       cells: sharedCells,
+      groupClassEntries: sharedGroupClassEntries,
     })
       .then(() => {
         lastPublishedBoardShareSignatureRef.current = signature

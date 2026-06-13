@@ -609,7 +609,7 @@ const baseStyles = `
   #root { height: auto !important; min-height: 100% !important; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; max-width: 520px; margin: 0 auto; overflow: hidden; background: #fff; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
