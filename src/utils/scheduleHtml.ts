@@ -1445,9 +1445,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: grid;
         align-items: center;
         justify-items: center;
-        gap: 3px;
-        padding: 4px 2px;
-        min-height: 62px;
+        gap: 2px;
+        padding: 2px 2px;
+        min-height: 0;
       }
 
       .time-range {
@@ -2629,11 +2629,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function renderTimeHeaderCell(timeLabel, slotNumber, actionHtml) {
+        // spec-group-lesson レイアウト調整: 縦幅確保のため「～」と「N限」を省き、開始/終了時間だけを表示する。
         const range = splitTimeLabel(timeLabel);
         const rangeHtml = range.end
-          ? '<div class="time-range"><span class="time-part">' + escapeHtml(range.start) + '</span><span class="time-separator">〜</span><span class="time-part">' + escapeHtml(range.end) + '</span></div>'
+          ? '<div class="time-range"><span class="time-part">' + escapeHtml(range.start) + '</span><span class="time-part">' + escapeHtml(range.end) + '</span></div>'
           : '<div class="time-range"><span class="time-part">' + escapeHtml(range.start) + '</span></div>';
-        const contentHtml = '<div class="time-box">' + rangeHtml + '<div class="time-slot">' + slotNumber + '限</div></div>';
+        const contentHtml = '<div class="time-box">' + rangeHtml + '</div>';
         return '<th class="time-col">' + (actionHtml ? actionHtml.replace('__CONTENT__', contentHtml) : contentHtml) + '</th>';
       }
 
@@ -3030,7 +3031,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               var input = getGroupSessionInputForStudent(student.id, dateHeader.dateKey);
               var show = isGroupRegistered(input) ? isInGroupRoster(entry, student.id) : true;
               if (show) {
-                var label = groupClassDisplayLabel(entry.subject);
+                var label = groupClassShortLabel(entry.subject);
                 if (isGroupRegistered(input) && isGroupAbsent(entry, student.id)) {
                   inner = '<span class="group-slot-label group-slot-absent">' + escapeHtml(label) + '（欠）</span>';
                 } else {
@@ -3041,7 +3042,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             return '<td class="' + classes.join(' ') + '"><div class="slot-cell-content">' + inner + '</div></td>';
           }).join('');
           var bt = String(groupClassBandTimes[band] || '').split('-');
-          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-separator">〜</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div><div class="time-slot">集団</div></div></th>';
+          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-slot">集団</div><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div></div></th>';
           rowsHtml += '<tr class="group-class-row">' + timeHeader + cellsHtml + '</tr>';
         });
         return rowsHtml;
@@ -3100,7 +3101,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (!dateHeader.isOpenDay) classes.push('is-holiday');
             var inner = '';
             if (entry && teacherMatchesGroupEntry(entry, teacher)) {
-              var label = groupClassDisplayLabel(entry.subject);
+              var label = groupClassShortLabel(entry.subject);
               if (getGroupPresentCount(entry) >= 1) {
                 inner = '<span class="group-slot-label">' + escapeHtml(label) + '</span>';
               } else {
@@ -3110,7 +3111,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             return '<td class="' + classes.join(' ') + '"><div class="slot-cell-content">' + inner + '</div></td>';
           }).join('');
           var bt = String(groupClassBandTimes[band] || '').split('-');
-          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-separator">〜</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div><div class="time-slot">集団</div></div></th>';
+          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-slot">集団</div><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div></div></th>';
           rowsHtml += '<tr class="group-class-row">' + timeHeader + cellsHtml + '</tr>';
         });
         return rowsHtml;

@@ -8623,9 +8623,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                       data-testid="group-teacher-select"
                     >
                       <option value="">未設定</option>
-                      {teachers.map((teacher) => (
-                        <option key={teacher.id} value={teacher.name}>{teacher.name}</option>
-                      ))}
+                      {teachers.map((teacher) => {
+                        const teacherDisplayName = getTeacherDisplayName(teacher)
+                        return <option key={teacher.id} value={teacherDisplayName}>{teacherDisplayName}</option>
+                      })}
                     </select>
                   </div>
                 ) : null}
