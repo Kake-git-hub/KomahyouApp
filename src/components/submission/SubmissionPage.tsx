@@ -564,14 +564,14 @@ export default function SubmissionPage({ token }: { token: string }) {
               const participate = groupClassParticipation[subject] === true
               return (
                 <label key={subject} className="sub-group-row">
+                  <span className="sub-subject-label">{subject}</span>
+                  <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
                   <input
                     type="checkbox"
                     className="sub-group-check"
                     checked={participate}
                     onChange={(e) => setGroupClassParticipation((current) => ({ ...current, [subject]: e.target.checked }))}
                   />
-                  <span className="sub-subject-label">{subject}</span>
-                  <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
                 </label>
               )
             })}
@@ -609,7 +609,7 @@ const baseStyles = `
   #root { height: auto !important; min-height: 100% !important; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; max-width: 520px; margin: 0 auto; overflow: hidden; background: #fff; }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 13px; color: #666; }
@@ -628,8 +628,8 @@ const baseStyles = `
 
   /* Slot table — fit viewport width */
   .sub-table-wrap { overflow: hidden; width: 100%; }
-  /* 列は内容に合わせた最小幅・中央寄せ。文字は読みやすい大きさに。 */
-  .sub-slot-table { border-collapse: collapse; width: auto; max-width: 100%; margin: 0 auto; table-layout: auto; font-size: 14px; }
+  /* テーブルは画面幅いっぱいにフィット。文字は読みやすい大きさに。 */
+  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: auto; font-size: 15px; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
   .sub-th-date { padding: 6px 8px; background: #f0f0f0; font-weight: 700; font-size: 13px; white-space: nowrap; }
   .sub-th-slot { padding: 7px 10px; background: #f0f0f0; font-weight: 700; font-size: 15px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }

@@ -2277,8 +2277,13 @@ function AuthenticatedApp() {
   publishBoardStateSnapshotRef.current = publishBoardStateSnapshot
 
   const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState, meta: { userInitiated: boolean } = { userInitiated: true }) => {
+    // spec-group-lesson §A/§G: 集団授業の変更は受動 effect(userInitiated:false)経由で届く。
+    // それをクリーン化すると未保存なのに保存済み扱いになり、講師日程共有(既存トークン)も更新されない。
+    // 集団エントリの変化を検知し、実ユーザー変更と同様に扱う(dirty 維持＋共有を既存URLへ再公開)。
+    const previousBoardState = boardStateRef.current
+    const groupClassChanged = JSON.stringify(previousBoardState?.groupClassEntries ?? {}) !== JSON.stringify(nextBoardState.groupClassEntries ?? {})
     setBoardState(nextBoardState)
-    if (!meta.userInitiated) {
+    if (!meta.userInitiated && !groupClassChanged) {
       markStateLoadedClean()
       return
     }
@@ -2288,7 +2293,7 @@ function AuthenticatedApp() {
       boardShareStateChangePublishTimerRef.current = null
       publishBoardStateSnapshot(nextBoardState)
     }, 250)
-  }, [markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
+  }, [boardStateRef, markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
 
   useEffect(() => {
     if (screen !== 'developer') return
