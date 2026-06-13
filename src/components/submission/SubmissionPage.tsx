@@ -648,16 +648,16 @@ const baseStyles = `
   /* Slot table — fit viewport width */
   .sub-table-wrap { overflow: hidden; width: 100%; }
   /* テーブルは画面幅いっぱいにフィット。文字は読みやすい大きさに。 */
-  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: auto; font-size: 15px; }
+  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 16px; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
-  .sub-th-date { padding: 8px 8px; background: #f0f0f0; font-weight: 700; font-size: 15px; white-space: nowrap; }
-  .sub-th-slot { padding: 10px 10px; background: #f0f0f0; font-weight: 700; font-size: 17px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-date { padding: 9px 8px; font-weight: 700; font-size: 16px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-slot { padding: 4px 6px; min-width: 50px; height: 56px; cursor: pointer; user-select: none; font-size: 18px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-th-date { width: 74px; padding: 8px 2px; background: #f0f0f0; font-weight: 700; font-size: 17px; white-space: nowrap; }
+  .sub-th-slot { padding: 12px 2px; background: #f0f0f0; font-weight: 700; font-size: 21px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-date { padding: 10px 2px; font-weight: 700; font-size: 17px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-slot { padding: 4px 4px; height: 56px; cursor: pointer; user-select: none; font-size: 21px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
-  .sub-x-mark { display: block; font-size: 22px; line-height: 1; }
-  .sub-x-label { display: block; font-size: 12px; line-height: 1.05; margin-top: 2px; }
-  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 15px; font-weight: 700; }
+  .sub-x-mark { display: block; font-size: 27px; line-height: 1; }
+  .sub-x-label { display: block; font-size: 13px; line-height: 1.05; margin-top: 2px; }
+  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 19px; font-weight: 700; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
   .sub-row-sun .sub-td-date { color: #d00; }
   .sub-row-sat .sub-td-date { color: #00c; }
@@ -712,12 +712,12 @@ const baseStyles = `
   .sub-readonly-minutes { font-size: 12px; font-weight: 600; color: #777; margin-left: 6px; }
 
   @media (max-width: 360px) {
-    .sub-th-date, .sub-td-date { font-size: 12px; padding: 6px 5px; }
-    .sub-th-slot { font-size: 13px; padding: 6px 6px; }
-    .sub-td-slot { height: 42px; min-width: 40px; font-size: 14px; }
-    .sub-x-mark { font-size: 16px; }
-    .sub-x-label { font-size: 10px; }
-    .sub-slot-occ { font-size: 11px; }
+    .sub-th-date, .sub-td-date { width: 66px; font-size: 15px; padding: 8px 2px; }
+    .sub-th-slot { font-size: 18px; padding: 9px 2px; }
+    .sub-td-slot { height: 50px; font-size: 18px; }
+    .sub-x-mark { font-size: 24px; }
+    .sub-x-label { font-size: 12px; }
+    .sub-slot-occ { font-size: 16px; }
     .sub-section { padding: 6px; }
   }
 `
