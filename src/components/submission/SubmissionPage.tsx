@@ -558,26 +558,21 @@ export default function SubmissionPage({ token }: { token: string }) {
           <div className="sub-section-head">
             <span className="sub-section-title">集団授業（中3）</span>
           </div>
-          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 12 }}>参加する科目を選んでください（既定は不参加）。</p>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 12 }}>参加する科目に<strong>チェック</strong>を入れてください（既定は不参加）。</p>
           <div className="sub-subject-list">
             {data.availableGroupClassSubjects!.map((subject) => {
               const participate = groupClassParticipation[subject] === true
               return (
-                <div key={subject} className="sub-subject-row">
+                <label key={subject} className="sub-group-row">
+                  <input
+                    type="checkbox"
+                    className="sub-group-check"
+                    checked={participate}
+                    onChange={(e) => setGroupClassParticipation((current) => ({ ...current, [subject]: e.target.checked }))}
+                  />
                   <span className="sub-subject-label">{subject}</span>
-                  <div className="sub-duration-ctrl" role="group" aria-label={`${subject}の参加可否`}>
-                    <button
-                      type="button"
-                      className={`sub-duration-btn${participate ? ' sub-duration-active' : ''}`}
-                      onClick={() => setGroupClassParticipation((current) => ({ ...current, [subject]: true }))}
-                    >参加</button>
-                    <button
-                      type="button"
-                      className={`sub-duration-btn${participate ? '' : ' sub-duration-active'}`}
-                      onClick={() => setGroupClassParticipation((current) => ({ ...current, [subject]: false }))}
-                    >不参加</button>
-                  </div>
-                </div>
+                  <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
+                </label>
               )
             })}
           </div>
@@ -633,16 +628,17 @@ const baseStyles = `
 
   /* Slot table — fit viewport width */
   .sub-table-wrap { overflow: hidden; width: 100%; }
-  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 12px; }
+  /* 列は内容に合わせた最小幅・中央寄せ。文字は読みやすい大きさに。 */
+  .sub-slot-table { border-collapse: collapse; width: auto; max-width: 100%; margin: 0 auto; table-layout: auto; font-size: 14px; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
-  .sub-th-date { width: 64px; padding: 5px 1px; background: #f0f0f0; font-weight: 600; font-size: 10px; }
-  .sub-th-slot { padding: 5px 0; background: #f0f0f0; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-date { padding: 6px 1px; font-weight: 600; font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-slot { padding: 2px 1px; min-width: 0; height: 40px; cursor: pointer; user-select: none; font-size: 11px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-th-date { padding: 6px 8px; background: #f0f0f0; font-weight: 700; font-size: 13px; white-space: nowrap; }
+  .sub-th-slot { padding: 7px 10px; background: #f0f0f0; font-weight: 700; font-size: 15px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-date { padding: 7px 8px; font-weight: 700; font-size: 14px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-slot { padding: 4px 6px; min-width: 46px; height: 46px; cursor: pointer; user-select: none; font-size: 16px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
-  .sub-x-mark { display: block; font-size: 14px; line-height: 1; }
-  .sub-x-label { display: block; font-size: 8px; line-height: 1; margin-top: 1px; }
-  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 10px; font-weight: 600; }
+  .sub-x-mark { display: block; font-size: 18px; line-height: 1; }
+  .sub-x-label { display: block; font-size: 11px; line-height: 1.05; margin-top: 2px; }
+  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 13px; font-weight: 700; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
   .sub-row-sun .sub-td-date { color: #d00; }
   .sub-row-sat .sub-td-date { color: #00c; }
@@ -663,6 +659,12 @@ const baseStyles = `
   .sub-counter-input::-webkit-inner-spin-button, .sub-counter-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
   .sub-checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 4px; font-size: 14px; cursor: pointer; }
   .sub-checkbox { width: 18px; height: 18px; accent-color: #333; }
+  /* 集団授業: 参加チェックボックス */
+  .sub-group-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sub-group-check { width: 28px; height: 28px; accent-color: #111; flex: none; }
+  .sub-group-row .sub-subject-label { font-size: 16px; flex: 1; }
+  .sub-group-state { font-size: 14px; font-weight: 700; color: #999; min-width: 48px; text-align: right; }
+  .sub-group-state.is-on { color: #111; }
 
   /* Submit */
   .sub-submit-section { padding: 12px; }
@@ -691,12 +693,12 @@ const baseStyles = `
   .sub-readonly-minutes { font-size: 12px; font-weight: 600; color: #777; margin-left: 6px; }
 
   @media (max-width: 360px) {
-    .sub-th-date { width: 52px; font-size: 9px; padding: 4px 0; }
-    .sub-td-date { font-size: 10px; padding: 5px 0; }
-    .sub-th-slot { font-size: 10px; }
-    .sub-td-slot { height: 38px; font-size: 10px; }
-    .sub-x-label { font-size: 7px; }
-    .sub-slot-occ { font-size: 9px; }
+    .sub-th-date, .sub-td-date { font-size: 12px; padding: 6px 5px; }
+    .sub-th-slot { font-size: 13px; padding: 6px 6px; }
+    .sub-td-slot { height: 42px; min-width: 40px; font-size: 14px; }
+    .sub-x-mark { font-size: 16px; }
+    .sub-x-label { font-size: 10px; }
+    .sub-slot-occ { font-size: 11px; }
     .sub-section { padding: 6px; }
   }
 `
