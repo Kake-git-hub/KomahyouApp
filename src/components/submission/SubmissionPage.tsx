@@ -390,6 +390,25 @@ export default function SubmissionPage({ token }: { token: string }) {
           </section>
         )}
 
+        {isStudentView && (data.availableGroupClassSubjects?.length ?? 0) > 0 && (
+          <section className="sub-section">
+            <div className="sub-section-head">
+              <span className="sub-section-title">集団授業（中3）</span>
+            </div>
+            <div className="sub-subject-list">
+              {data.availableGroupClassSubjects!.map((subject) => {
+                const participate = groupClassParticipation[subject] === true
+                return (
+                  <div key={subject} className="sub-group-row">
+                    <span className="sub-subject-label">{subject}</span>
+                    <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
         <section className="sub-section sub-submit-section">
           <p className="sub-muted" style={{ textAlign: 'center', fontSize: 12 }}>変更が必要な場合は教室にお問い合わせください。</p>
         </section>
@@ -624,21 +643,21 @@ const baseStyles = `
 
   .sub-section { background: #fff; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 8px; margin: 8px 0; }
   .sub-section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; padding: 0 4px; }
-  .sub-section-title { font-size: 15px; font-weight: 700; }
+  .sub-section-title { font-size: 18px; font-weight: 700; }
 
   /* Slot table — fit viewport width */
   .sub-table-wrap { overflow: hidden; width: 100%; }
   /* テーブルは画面幅いっぱいにフィット。文字は読みやすい大きさに。 */
   .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: auto; font-size: 15px; }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
-  .sub-th-date { padding: 6px 8px; background: #f0f0f0; font-weight: 700; font-size: 13px; white-space: nowrap; }
-  .sub-th-slot { padding: 7px 10px; background: #f0f0f0; font-weight: 700; font-size: 15px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-date { padding: 7px 8px; font-weight: 700; font-size: 14px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-slot { padding: 4px 6px; min-width: 46px; height: 46px; cursor: pointer; user-select: none; font-size: 16px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-th-date { padding: 8px 8px; background: #f0f0f0; font-weight: 700; font-size: 15px; white-space: nowrap; }
+  .sub-th-slot { padding: 10px 10px; background: #f0f0f0; font-weight: 700; font-size: 17px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-date { padding: 9px 8px; font-weight: 700; font-size: 16px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-td-slot { padding: 4px 6px; min-width: 50px; height: 56px; cursor: pointer; user-select: none; font-size: 18px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
-  .sub-x-mark { display: block; font-size: 18px; line-height: 1; }
-  .sub-x-label { display: block; font-size: 11px; line-height: 1.05; margin-top: 2px; }
-  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 13px; font-weight: 700; }
+  .sub-x-mark { display: block; font-size: 22px; line-height: 1; }
+  .sub-x-label { display: block; font-size: 12px; line-height: 1.05; margin-top: 2px; }
+  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 15px; font-weight: 700; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
   .sub-row-sun .sub-td-date { color: #d00; }
   .sub-row-sat .sub-td-date { color: #00c; }
@@ -649,27 +668,27 @@ const baseStyles = `
   .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; }
   .sub-subject-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 6px 2px; border-bottom: 1px solid #eee; }
   .sub-duration-ctrl { flex-basis: 100%; display: flex; gap: 6px; justify-content: flex-end; }
-  .sub-duration-btn { min-width: 52px; height: 32px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 13px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
+  .sub-duration-btn { min-width: 62px; height: 42px; border-radius: 7px; border: 1px solid #ccc; background: #f8f8f8; font-size: 16px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
   .sub-duration-active { background: #111; color: #fff; border-color: #111; }
-  .sub-subject-label { font-size: 15px; font-weight: 600; min-width: 36px; }
-  .sub-subject-ctrl { display: flex; align-items: center; gap: 6px; }
-  .sub-counter-btn { width: 36px; height: 36px; border-radius: 6px; border: 1px solid #ccc; background: #f8f8f8; font-size: 18px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; }
+  .sub-subject-label { font-size: 18px; font-weight: 700; min-width: 36px; }
+  .sub-subject-ctrl { display: flex; align-items: center; gap: 8px; }
+  .sub-counter-btn { width: 46px; height: 46px; border-radius: 7px; border: 1px solid #ccc; background: #f8f8f8; font-size: 24px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; }
   .sub-counter-btn:disabled { opacity: .3; }
-  .sub-counter-input { width: 48px; height: 36px; text-align: center; font-size: 16px; font-weight: 600; border: 1px solid #ccc; border-radius: 6px; -moz-appearance: textfield; }
+  .sub-counter-input { width: 60px; height: 46px; text-align: center; font-size: 22px; font-weight: 700; border: 1px solid #ccc; border-radius: 7px; -moz-appearance: textfield; }
   .sub-counter-input::-webkit-inner-spin-button, .sub-counter-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .sub-checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 4px; font-size: 14px; cursor: pointer; }
-  .sub-checkbox { width: 18px; height: 18px; accent-color: #333; }
+  .sub-checkbox-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px 4px; font-size: 16px; cursor: pointer; }
+  .sub-checkbox { width: 26px; height: 26px; accent-color: #333; }
   /* 集団授業: 参加チェックボックス */
-  .sub-group-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .sub-group-check { width: 28px; height: 28px; accent-color: #111; flex: none; }
-  .sub-group-row .sub-subject-label { font-size: 16px; flex: 1; }
-  .sub-group-state { font-size: 14px; font-weight: 700; color: #999; min-width: 48px; text-align: right; }
+  .sub-group-row { display: flex; align-items: center; gap: 12px; padding: 14px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sub-group-check { width: 36px; height: 36px; accent-color: #111; flex: none; }
+  .sub-group-row .sub-subject-label { font-size: 19px; flex: 1; }
+  .sub-group-state { font-size: 16px; font-weight: 700; color: #999; min-width: 52px; text-align: right; }
   .sub-group-state.is-on { color: #111; }
 
   /* Submit */
   .sub-submit-section { padding: 12px; }
   .sub-summary { display: flex; gap: 12px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
-  .sub-submit-btn { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 16px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+  .sub-submit-btn { display: block; width: 100%; padding: 18px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 19px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
   .sub-disabled { opacity: .5; cursor: not-allowed; }
 
   /* 休校日: 1〜5限を結合したグレーセル */
