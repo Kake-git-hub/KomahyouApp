@@ -2949,6 +2949,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const prevUnsubmittedSessionStudentKeysRef = useRef<Set<string>>(new Set())
   const committedBoardChangeVersionRef = useRef(0)
   const lastSyncedCommittedBoardChangeVersionRef = useRef(0)
+  // spec-group-lesson §A/§G: 集団授業の「ユーザー編集」フラグ。これが立っている受動 publish だけを
+  // userInitiated:true(=保存/共有再公開する)として扱う。教室切替・ロードでは絶対に立たないので
+  // クロス汚染(他教室データの誤書込み)を起こさない。集団のミューテーションでのみ true にする。
+  const groupClassUserEditPendingRef = useRef(false)
 
   useEffect(() => {
     classroomSettingsRef.current = classroomSettings
@@ -3257,6 +3261,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   useEffect(() => {
     if (!onBoardStateChange) return
+    // 集団授業のユーザー編集フラグはどの分岐でも必ず消費する(教室切替などへ漏らさない)。
+    const isGroupClassUserEdit = groupClassUserEditPendingRef.current
+    groupClassUserEditPendingRef.current = false
     if (lastSyncedCommittedBoardChangeVersionRef.current !== committedBoardChangeVersionRef.current) {
       lastSyncedCommittedBoardChangeVersionRef.current = committedBoardChangeVersionRef.current
       return
@@ -3280,7 +3287,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       isMakeupStockOpen,
       studentScheduleRange,
       teacherScheduleRange,
-    }, { userInitiated: false })
+      // 集団のユーザー編集のときだけ userInitiated:true(=保存/共有再公開)。それ以外(ロード/教室切替/
+      // 受動再計算)は false のまま＝一切書き込まない(クロス汚染防止)。
+    }, { userInitiated: isGroupClassUserEdit })
   }, [
     fallbackLectureStockStudents,
     fallbackMakeupStudents,
@@ -5643,14 +5652,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage('講師を削除しました。')
   }
 
-  // spec-group-lesson §A: 集団授業セルの操作。setGroupClassEntries の変更は effect(3244) 経由で publish され、
-  // buildBoardDataForSignature に含まれるため未保存として検知される。個別授業(weeks)には一切触れない。
+  // spec-group-lesson §A: 集団授業セルの操作。これはユーザー編集なので、次の publish を
+  // userInitiated:true(=未保存検知＋共有の自動再公開)として扱うフラグを立てる。
+  // 教室切替/ロード(userInitiated:false)では絶対にここを通らないためクロス汚染しない。個別授業(weeks)には一切触れない。
   const commitGroupClassEntry = (
     dateKey: string,
     band: GroupClassBand,
     updater: (existing: GroupClassEntry | null) => GroupClassEntry | null,
   ) => {
     const key = groupClassEntryKey(dateKey, band)
+    groupClassUserEditPendingRef.current = true
     setGroupClassEntries((current) => {
       const next = cloneGroupClassEntryMap(current)
       const updated = updater(next[key] ?? null)
