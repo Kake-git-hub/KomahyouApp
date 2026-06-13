@@ -2277,13 +2277,12 @@ function AuthenticatedApp() {
   publishBoardStateSnapshotRef.current = publishBoardStateSnapshot
 
   const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState, meta: { userInitiated: boolean } = { userInitiated: true }) => {
-    // spec-group-lesson §A/§G: 集団授業の変更は受動 effect(userInitiated:false)経由で届く。
-    // それをクリーン化すると未保存なのに保存済み扱いになり、講師日程共有(既存トークン)も更新されない。
-    // 集団エントリの変化を検知し、実ユーザー変更と同様に扱う(dirty 維持＋共有を既存URLへ再公開)。
-    const previousBoardState = boardStateRef.current
-    const groupClassChanged = JSON.stringify(previousBoardState?.groupClassEntries ?? {}) !== JSON.stringify(nextBoardState.groupClassEntries ?? {})
+    // ★クロス教室汚染防止（厳守）: userInitiated:false（教室切替・ロード・受動同期）では
+    // 一切の書き込み/リモート同期を起こさない。ここで writePendingWorkspaceSnapshotForRemoteSync
+    // を呼ぶと、acting教室とメモリ上データが食い違う切替直後の窓で他教室データを書き込み得る
+    // （2026-06-06 / 2026-06-13 のクロス汚染パターン）。集団授業の変更も例外にしない。
     setBoardState(nextBoardState)
-    if (!meta.userInitiated && !groupClassChanged) {
+    if (!meta.userInitiated) {
       markStateLoadedClean()
       return
     }
@@ -2293,7 +2292,7 @@ function AuthenticatedApp() {
       boardShareStateChangePublishTimerRef.current = null
       publishBoardStateSnapshot(nextBoardState)
     }, 250)
-  }, [boardStateRef, markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
+  }, [markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
 
   useEffect(() => {
     if (screen !== 'developer') return
