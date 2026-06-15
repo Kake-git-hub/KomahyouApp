@@ -3371,6 +3371,37 @@ tr.sa-group-row td {
   font-size: 12px;
 }
 
+/* 未消化(講習・振替)の生徒クリック後モーダル(stock-action-modal)の文字を従来の倍サイズに拡大。
+   .auto-assign-modal はテンプレ取込/上書き確認でも使うため data-testid で対象を限定する。 */
+.auto-assign-modal[data-testid="stock-action-modal"] .auto-assign-modal-title {
+  font-size: 30px;
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .student-menu-help-text {
+  font-size: 24px;
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .stock-origin-item {
+  font-size: 26px;
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .stock-origin-meta {
+  font-size: 24px;
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .stock-origin-delete {
+  width: 52px;
+  font-size: 26px;
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .makeup-stock-empty {
+  font-size: 28px;
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .secondary-button.slim {
+  font-size: 26px;
+}
+
 .regular-template-modal {
   max-width: min(1180px, calc(100vw - 32px));
   gap: 16px;
