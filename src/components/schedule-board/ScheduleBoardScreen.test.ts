@@ -4,7 +4,7 @@ import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -3757,5 +3757,64 @@ describe('buildStudentOccurrencesByDateIndex', () => {
     // 配置総数 = インデックス内の出現総数（取りこぼし・重複がない）
     const totalIndexed = Array.from(index.values()).flatMap((byDate) => Array.from(byDate.values())).reduce((total, occurrences) => total + occurrences.length, 0)
     expect(totalIndexed).toBe(5)
+  })
+})
+
+// 回帰防止(2026-06-15): 「通常講師のみ」制約違反が、通常授業通りの配置(lessonType==='regular')でも誤検知される不具合。
+// 原因: 盤面に孤立保持された旧通常授業スロットの講師が、ライブ regularLessons から算出する許可講師集合と食い違う。
+// 修正なし(regular を除外しない)だと「通常授業スロットは違反にしない」テストが落ち、修正ありで通る。
+describe('shouldWarnRegularTeachersOnly', () => {
+  it('通常授業スロットは許可講師集合に無い講師でも違反にしない(回帰防止: 孤立保持された旧通常授業の誤検知)', () => {
+    expect(shouldWarnRegularTeachersOnly({
+      ruleApplicable: true,
+      lessonType: 'regular',
+      teacherId: 'teacher-old',
+      regularTeacherIds: new Set(['teacher-new']),
+    })).toBe(false)
+  })
+
+  it('通常授業スロットは許可講師集合が空でも違反にしない(基本データ削除/変更で孤立した通常授業)', () => {
+    expect(shouldWarnRegularTeachersOnly({
+      ruleApplicable: true,
+      lessonType: 'regular',
+      teacherId: 'teacher-old',
+      regularTeacherIds: new Set<string>(),
+    })).toBe(false)
+  })
+
+  it('在庫(振替)配置は通常講師でない講師なら従来どおり違反にする', () => {
+    expect(shouldWarnRegularTeachersOnly({
+      ruleApplicable: true,
+      lessonType: 'makeup',
+      teacherId: 'teacher-x',
+      regularTeacherIds: new Set(['teacher-a', 'teacher-b']),
+    })).toBe(true)
+  })
+
+  it('在庫配置でも通常講師なら違反にしない', () => {
+    expect(shouldWarnRegularTeachersOnly({
+      ruleApplicable: true,
+      lessonType: 'makeup',
+      teacherId: 'teacher-a',
+      regularTeacherIds: new Set(['teacher-a', 'teacher-b']),
+    })).toBe(false)
+  })
+
+  it('在庫配置で講師未割当(teacherId=null)なら違反にする', () => {
+    expect(shouldWarnRegularTeachersOnly({
+      ruleApplicable: true,
+      lessonType: 'makeup',
+      teacherId: null,
+      regularTeacherIds: new Set(['teacher-a']),
+    })).toBe(true)
+  })
+
+  it('ルール非適用なら常に違反にしない', () => {
+    expect(shouldWarnRegularTeachersOnly({
+      ruleApplicable: false,
+      lessonType: 'makeup',
+      teacherId: null,
+      regularTeacherIds: new Set<string>(),
+    })).toBe(false)
   })
 })

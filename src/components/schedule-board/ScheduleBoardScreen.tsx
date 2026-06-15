@@ -1775,6 +1775,24 @@ export function buildTemplateStudentSelectionOptions(students: StudentRow[], tem
     }))
 }
 
+// spec-auto-assign-rules ⑧/「通常講師のみ」: このルールは在庫(振替・講習)の“割振り”を通常講師に限定するもので、
+// 通常授業スロット(lessonType==='regular')そのものには適用しない。
+// 通常授業は定義上その生徒の通常講師であり、基本データ側の通常授業を編集(講師変更/コマ・曜日変更/分割・統合/削除)した後、
+// 盤面に“孤立保持”された旧通常授業スロット(旧講師名のまま; merge 保持パス L2361-2422 参照)が、
+// ライブ regularLessons から都度算出する regularTeacherIds と食い違い、通常授業通りなのに違反になる回帰があった(2026-06-15 修正)。
+// 巻き戻し禁止: regular スロットを除外しても在庫配置(makeup/lecture/special)の本来の警告は失われない。
+export function shouldWarnRegularTeachersOnly(params: {
+  ruleApplicable: boolean
+  lessonType: LessonType
+  teacherId: string | null
+  regularTeacherIds: Set<string>
+}): boolean {
+  if (!params.ruleApplicable) return false
+  if (params.lessonType === 'regular') return false
+  if (!params.teacherId) return true
+  return !params.regularTeacherIds.has(params.teacherId)
+}
+
 function buildManagedRegularLessonsRange(params: {
   startDate: string
   endDate: string
@@ -5027,7 +5045,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
             const regularTeachersOnly = isRuleApplicableCached(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
             const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
-            if (regularTeachersOnly && (!teacher || !regularTeacherIds.has(teacher.id))) {
+            if (shouldWarnRegularTeachersOnly({ ruleApplicable: regularTeachersOnly, lessonType: student.lessonType, teacherId: teacher?.id ?? null, regularTeacherIds })) {
               addRuleWarning([currentLocationKey], 'regularTeachersOnly', '通常講師のみ')
             }
 
