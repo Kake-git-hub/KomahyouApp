@@ -6464,10 +6464,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       targetDate: targetCell.dateKey,
     })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
-    const remainingBalance = selectedMakeupStockEntry.balance - 1
-    // 配置完了後: その生徒に未消化が残っていれば生徒選択モーダルを再表示し、無ければ閉じる。
+    // 配置完了後: 残数にかかわらず生徒選択モーダルは閉じる。
     setStockPanelsRestoreState(null)
-    setIsMakeupStockOpen(remainingBalance > 0)
+    setIsMakeupStockOpen(false)
     setSelectedMakeupStockRawKey(null)
     setSelectedMakeupStockKey(null)
     setStatusMessage(`${selectedMakeupStockEntry.displayName} の振替を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
@@ -6559,10 +6558,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
-    const remainingLectureCount = selectedLectureStockEntry.requestedCount - 1
-    // 配置完了後: その生徒に未消化が残っていれば生徒選択モーダルを再表示し、無ければ閉じる。
+    // 配置完了後: 残数にかかわらず生徒選択モーダルは閉じる。
     setStockPanelsRestoreState(null)
-    setIsLectureStockOpen(remainingLectureCount > 0)
+    setIsLectureStockOpen(false)
     setSelectedLectureStockKey(null)
     setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }

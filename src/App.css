@@ -3202,7 +3202,7 @@ tr.sa-group-row td {
   background: #fff;
   border-radius: 20px;
   padding: 20px;
-  max-width: 560px;
+  max-width: 720px;
   width: 100%;
   display: grid;
   gap: 12px;
@@ -3210,6 +3210,21 @@ tr.sa-group-row td {
   max-height: 90vh;
   overflow: hidden;
   pointer-events: auto;
+  /* 未消化講習・振替の生徒選択と一覧の文字を従来の倍サイズに拡大 */
+  font-size: 2em;
+}
+
+/* モーダル内の小さめ指定フォントも倍に揃える */
+.stock-select-modal .lecture-stock-session {
+  font-size: 24px;
+}
+
+.stock-select-modal .makeup-stock-empty {
+  font-size: 28px;
+}
+
+.stock-select-modal .status-chip {
+  font-size: 22px;
 }
 
 .stock-select-search {

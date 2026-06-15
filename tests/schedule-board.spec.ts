@@ -2273,11 +2273,12 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(firstTarget.cellTestId).click()
     const firstTargetName = page.getByTestId(firstTarget.cellTestId.replace('student-cell-', 'student-name-'))
     await expect(firstTargetName).toHaveText('青木太郎')
-    // 1件配置すると残数が残るため生徒選択モーダルが再表示される
-    await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
+    // 1件配置すると残数にかかわらず生徒選択モーダルは閉じる
+    await expect(page.getByTestId('lecture-stock-panel')).not.toBeVisible()
 
     const secondPlacementTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', firstTarget.slotId)
-    // 再表示されたモーダルから残りの講習を選び直して2件目を配置する
+    // モーダルを開き直して残りの講習を選び直し2件目を配置する
+    await ensureLectureStockPanelVisible(page)
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
     await page.getByTestId('stock-origin-item-0').click()
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
@@ -3560,7 +3561,7 @@ test.describe('コマ調整表', () => {
   })
 
 
-  test('振替作業中に振替ストックは閉じず連続操作できる', async ({ page }) => {
+  test('振替を1件配置すると振替ストックは閉じ開き直せば連続操作できる', async ({ page }) => {
     const currentWeekStart = getWeekStart(new Date())
     const mondayDates = getMonthWeekdayDates(currentWeekStart.getFullYear(), currentWeekStart.getMonth(), 1).filter((dateKey) => dateKey <= toDateKey(new Date()))
     const [firstHoliday, secondHoliday] = mondayDates
@@ -3589,9 +3590,11 @@ test.describe('コマ調整表', () => {
 
     await targetCell.click()
 
-    // まだ残数があるため生徒選択モーダルが再表示され、続けて操作できる
-    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
+    // 1件配置すると残数にかかわらず生徒選択モーダルは閉じる
+    await expect(page.getByTestId('makeup-stock-panel')).not.toBeVisible()
     await expect(page.getByTestId('makeup-stock-chip')).not.toContainText('振替移動中')
+    // 残数があれば開き直したときに同じ生徒が一覧へ残っている
+    await ensureMakeupStockPanelVisible(page)
     await expect(page.getByTestId('makeup-stock-entry-s001__-')).toBeVisible()
   })
 
