@@ -1,6 +1,6 @@
 import { initializeApp, deleteApp, getApp, getApps } from 'firebase/app'
 import { EmailAuthProvider, connectAuthEmulator, getAuth, createUserWithEmailAndPassword, onAuthStateChanged, reauthenticateWithCredential, sendPasswordResetEmail as firebaseSendPasswordResetEmail, signInWithEmailAndPassword, signOut, type User } from 'firebase/auth'
-import { connectFirestoreEmulator, getFirestore } from 'firebase/firestore'
+import { connectFirestoreEmulator, getFirestore, initializeFirestore, type Firestore } from 'firebase/firestore'
 import { getFunctions } from 'firebase/functions'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled } from './config'
 
@@ -38,15 +38,28 @@ export function getFirebaseAuthInstance() {
   return auth
 }
 
+let firestoreInstance: Firestore | null = null
+
 export function getFirebaseFirestoreInstance() {
   const app = getFirebaseApp()
   if (!app) return null
-  const db = getFirestore(app)
-  if (shouldUseEmulators() && !emulatorConnected.firestore) {
-    connectFirestoreEmulator(db, '127.0.0.1', 8080)
-    emulatorConnected.firestore = true
+  if (!firestoreInstance) {
+    // 企業プロキシ/ファイアウォール環境では WebChannel ストリームが切断され
+    // 「INTERNAL ASSERTION FAILED: Unexpected state」でリスナーが全停止する。
+    // autoDetectLongPolling を有効にし、必要な環境だけ long-polling へ自動フォールバックさせる
+    // (通常環境は従来通り WebChannel のまま)。initializeFirestore は1度だけ呼べるため
+    // 既に初期化済み(HMR等)なら getFirestore にフォールバックする。
+    try {
+      firestoreInstance = initializeFirestore(app, { experimentalAutoDetectLongPolling: true })
+    } catch {
+      firestoreInstance = getFirestore(app)
+    }
+    if (shouldUseEmulators() && !emulatorConnected.firestore) {
+      connectFirestoreEmulator(firestoreInstance, '127.0.0.1', 8080)
+      emulatorConnected.firestore = true
+    }
   }
-  return db
+  return firestoreInstance
 }
 
 export function getFirebaseFunctionsInstance() {
