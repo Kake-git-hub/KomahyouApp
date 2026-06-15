@@ -2910,7 +2910,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return subjectDefinitions.filter((subject) => {
           if (subject === '算' || subject === '数') return subject === preferredMathSubject;
           if (subject === '算国') return preferredMathSubject === '算';
-          if (subject === '理') return !prefersHighSchoolScience || legacySubjects.includes('理');
+          // 理は学年を問わず常に表示。高校生は理に加えて生・物・化も表示する。
+          if (subject === '理') return true;
           if (subject === '生' || subject === '物' || subject === '化') return prefersHighSchoolScience || legacySubjects.includes(subject);
           return true;
         });
