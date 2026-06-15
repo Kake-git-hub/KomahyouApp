@@ -703,6 +703,44 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('includes A3-portrait paging plumbing for overflowing salary tables (teacher view)', () => {
+    // 給与計算の行が多くA4横で見切れる講師ページを A3 縦へ自動切替するための CSS / @page / 計測関数が
+    // 生成HTMLに含まれていること。実測ベースの切替なので文字列の存在で配線を担保する(回帰防止)。
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      teachers: [createTeacher()],
+      students: [],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('@page sheetA3')
+    expect(html).toContain('size: A3 portrait')
+    expect(html).toContain('.sheet.is-a3-portrait')
+    expect(html).toContain('function applySalaryOverflowPaging')
+    // スクロール枠に隠れている給与行があるときだけ A3 にする計測ロジック。
+    expect(html).toContain("classList.add('is-a3-portrait')")
+
+    vi.unstubAllGlobals()
+  })
+
   it('serializes group-class entries and participation into the student schedule payload', () => {
     const write = vi.fn()
     const popup = {

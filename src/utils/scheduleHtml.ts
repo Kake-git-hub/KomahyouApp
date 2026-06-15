@@ -1941,6 +1941,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: #fafafa;
       }
 
+      /* 給与計算の行が多くA4横では見切れる講師ページは A3 縦へ自動切替して全行を表示する。
+         A3縦は幅がA4横と同じ(297mm)なので週グリッドの横レイアウトは保ったまま縦だけ伸ばせる。 */
+      .sheet.is-a3-portrait {
+        aspect-ratio: 297 / 420;
+      }
+      .sheet.is-a3-portrait .salary-scroll {
+        max-height: none;
+        overflow: visible;
+      }
+
       .check-line {
         display: flex;
         gap: 6px;
@@ -2097,6 +2107,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           overflow: hidden;
           page-break-after: always;
         }
+        /* 給与計算が見切れる講師ページのみ A3 縦で出力する(他ページはA4横のまま)。 */
+        .sheet.is-a3-portrait {
+          width: 281mm;
+          height: 404mm;
+          aspect-ratio: 297 / 420;
+          page: sheetA3;
+        }
         .teacher-lesson-person {
           gap: 1px;
           padding: 1px 0;
@@ -2129,6 +2146,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       @page {
         size: A4 landscape;
+        margin: 8mm;
+      }
+
+      /* 給与計算が多い講師ページ用(.sheet.is-a3-portrait が参照)。 */
+      @page sheetA3 {
+        size: A3 portrait;
         margin: 8mm;
       }
     </style>
@@ -4519,6 +4542,23 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return { html: html, teacher: teacher };
       }
 
+      // 給与計算の行がスクロール枠(印刷で見切れる範囲)に収まらない講師ページを A3 縦へ切替える。
+      // 計測ベースなので「行が増えすぎて見切れる場合だけ」自動でA3になる(通常はA4横のまま)。
+      function applySalaryOverflowPaging() {
+        if (!pagesElement) return;
+        var sheets = pagesElement.querySelectorAll('.sheet[data-role="teacher-sheet"]');
+        for (var i = 0; i < sheets.length; i++) {
+          var sheet = sheets[i];
+          sheet.classList.remove('is-a3-portrait');
+          var scroll = sheet.querySelector('.salary-scroll');
+          if (!scroll) continue;
+          // スクロール領域に隠れている行があれば(=印刷で見切れる)A3縦にして全行を出す。
+          if (scroll.scrollHeight - scroll.clientHeight > 2) {
+            sheet.classList.add('is-a3-portrait');
+          }
+        }
+      }
+
       function renderTeacherPages(startDate, endDate, teacherId) {
         const result = buildTeacherSheetHtml(startDate, endDate, teacherId);
         if (!result.html) {
@@ -4526,6 +4566,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return null;
         }
         pagesElement.innerHTML = result.html;
+        applySalaryOverflowPaging();
         return result.teacher;
       }
 
@@ -4550,6 +4591,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return;
         }
         pagesElement.innerHTML = allHtml;
+        applySalaryOverflowPaging();
       }
 
       function applyIncomingPayload(nextPayload) {
