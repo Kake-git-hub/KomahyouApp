@@ -41,13 +41,16 @@ export type LectureSubmissionDoc = {
   groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
+  // spec-group-lesson §E: 中3の集団授業コマ(盤面に組まれた集団理科/集団社会)を提出ページの集団列に表示する。
+  // key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。中3のみ非空。後方互換のため optional。
+  groupClassSlots?: Record<string, string>
   submittedAt: string | null
   createdAt: string
 }
 
 export async function ensureSubmissionTokens(
   session: SpecialSessionRow,
-  students: Array<{ id: string; name: string; availableSubjects: string[]; availableGroupClassSubjects?: string[]; occupiedSlots?: Record<string, string> }>,
+  students: Array<{ id: string; name: string; availableSubjects: string[]; availableGroupClassSubjects?: string[]; occupiedSlots?: Record<string, string>; groupClassSlots?: Record<string, string> }>,
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; holidayDates?: string[]; forceOpenDates: string[] },
   slotNumbers: number[],
@@ -131,6 +134,7 @@ export async function ensureSubmissionTokens(
         groupClassParticipation: {},
         regularOnly: false,
         occupiedSlots: student.occupiedSlots ?? {},
+        groupClassSlots: { ...(student.groupClassSlots ?? {}) },
         submittedAt: null,
         createdAt: updatedAt,
       },
@@ -232,7 +236,7 @@ export async function deleteLectureSubmissionDoc(token: string) {
 
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[] }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string> }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -249,6 +253,8 @@ export async function updateSubmissionOccupiedSlots(
       // 既発行トークンにも最新の休日設定を反映する(後から休日を設定/解除した場合に提出側へ伝播)。
       ...(entry.holidayDates ? { holidayDates: [...entry.holidayDates] } : {}),
       ...(entry.slotNumbers ? { slotNumbers: [...entry.slotNumbers], slotCount: entry.slotNumbers.length } : {}),
+      // spec-group-lesson §E: 既発行QRにも最新の集団授業コマ(集理/集社)を反映する。
+      ...(entry.groupClassSlots ? { groupClassSlots: { ...entry.groupClassSlots } } : {}),
     })
   }
 }

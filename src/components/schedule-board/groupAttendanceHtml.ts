@@ -24,19 +24,41 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
+// A4縦1枚に最大50名を収めるため、26名以上は2列に分割する（1列あたり最大25名）。
+// 通し番号は分割をまたいで連続させる。
+const ATTENDEES_PER_COLUMN = 25
+
+function buildAttendeeRow(attendee: GroupAttendancePrintAttendee, displayIndex: number): string {
+  const statusLabel = attendee.present ? '出席' : '欠席'
+  const statusClass = attendee.present ? 'present' : 'absent'
+  return `<tr><td class="num">${displayIndex}</td><td class="name">${escapeHtml(attendee.name)}</td><td class="status ${statusClass}">${statusLabel}</td></tr>`
+}
+
+function buildRosterTable(rowsHtml: string): string {
+  return `<table>
+<thead><tr><th class="num">#</th><th>氏名</th><th class="status">出欠</th></tr></thead>
+<tbody>${rowsHtml}</tbody>
+</table>`
+}
+
 export function buildGroupAttendanceHtml(params: GroupAttendancePrintParams): string {
   const presentCount = params.attendees.filter((attendee) => attendee.present).length
   const absentCount = params.attendees.length - presentCount
 
-  const rowsHtml = params.attendees.length > 0
-    ? params.attendees
-      .map((attendee, index) => {
-        const statusLabel = attendee.present ? '出席' : '欠席'
-        const statusClass = attendee.present ? 'present' : 'absent'
-        return `<tr><td class="num">${index + 1}</td><td class="name">${escapeHtml(attendee.name)}</td><td class="status ${statusClass}">${statusLabel}</td></tr>`
-      })
-      .join('')
-    : '<tr><td class="empty" colspan="3">出席者がいません</td></tr>'
+  // 出席者を最大25名ずつの列に分割（最大50名=2列でA4縦1枚に収める）。
+  const columnCount = Math.max(1, Math.ceil(params.attendees.length / ATTENDEES_PER_COLUMN))
+  const perColumn = Math.ceil(params.attendees.length / columnCount)
+
+  const rosterHtml = params.attendees.length > 0
+    ? Array.from({ length: columnCount }, (_, columnIndex) => {
+        const start = columnIndex * perColumn
+        const slice = params.attendees.slice(start, start + perColumn)
+        const rowsHtml = slice
+          .map((attendee, sliceIndex) => buildAttendeeRow(attendee, start + sliceIndex + 1))
+          .join('')
+        return `<div class="roster-col">${buildRosterTable(rowsHtml)}</div>`
+      }).join('')
+    : `<div class="roster-col">${buildRosterTable('<tr><td class="empty" colspan="3">出席者がいません</td></tr>')}</div>`
 
   const headerRows = [
     params.schoolName ? `<div><span class="label">教室</span>${escapeHtml(params.schoolName)}</div>` : '',
@@ -53,20 +75,25 @@ export function buildGroupAttendanceHtml(params: GroupAttendancePrintParams): st
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>出席者一覧 ${escapeHtml(params.subject)} ${escapeHtml(params.dateLabel)}</title>
 <style>
+  /* A4縦1枚に最大50名（2列×25名）を収める印刷レイアウト。 */
+  @page { size: A4 portrait; margin: 12mm; }
   * { box-sizing: border-box; }
-  body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif; color: #111; margin: 24px; }
-  h1 { font-size: 20px; margin: 0 0 12px; }
-  .meta { display: flex; flex-wrap: wrap; gap: 4px 24px; margin-bottom: 16px; font-size: 14px; }
+  body { font-family: -apple-system, "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif; color: #111; margin: 16px; }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 2px 24px; margin-bottom: 12px; font-size: 13px; }
   .meta .label { display: inline-block; min-width: 64px; color: #555; margin-right: 8px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { border: 1px solid #999; padding: 6px 10px; text-align: left; }
+  /* 出席者一覧は最大2列を横並びにする（25名超で2列）。 */
+  .roster { display: flex; gap: 12px; align-items: flex-start; }
+  .roster-col { flex: 1 1 0; min-width: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #999; padding: 2px 8px; text-align: left; }
   th { background: #f2f2f2; }
-  td.num { width: 48px; text-align: center; }
-  td.status { width: 80px; text-align: center; font-weight: 700; }
+  td.num, th.num { width: 36px; text-align: center; }
+  td.status, th.status { width: 56px; text-align: center; font-weight: 700; }
   td.status.absent { color: #b00020; }
   td.empty { text-align: center; color: #777; }
-  .summary { margin-top: 16px; font-size: 14px; font-weight: 700; }
-  .print-button { margin-bottom: 16px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
+  .summary { margin-top: 12px; font-size: 13px; font-weight: 700; }
+  .print-button { margin-bottom: 12px; padding: 8px 16px; font-size: 14px; cursor: pointer; }
   @media print { .print-button { display: none; } body { margin: 0; } }
 </style>
 </head>
@@ -74,10 +101,7 @@ export function buildGroupAttendanceHtml(params: GroupAttendancePrintParams): st
 <button class="print-button" onclick="window.print()">印刷</button>
 <h1>集団授業 出席者一覧</h1>
 <div class="meta">${headerRows}</div>
-<table>
-<thead><tr><th class="num">#</th><th>氏名</th><th class="status">出欠</th></tr></thead>
-<tbody>${rowsHtml}</tbody>
-</table>
+<div class="roster">${rosterHtml}</div>
 <div class="summary">出席 ${presentCount} 名 / 欠席 ${absentCount} 名（合計 ${params.attendees.length} 名）</div>
 </body>
 </html>`

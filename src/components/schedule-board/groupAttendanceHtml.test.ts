@@ -65,6 +65,24 @@ describe('buildGroupAttendanceHtml', () => {
     expect(html).toContain('集団社会')
   })
 
+  it('keeps a single roster column for 25 or fewer attendees', () => {
+    const attendees = Array.from({ length: 25 }, (_, i) => ({ name: `生徒${i + 1}`, present: true }))
+    const html = buildGroupAttendanceHtml({ ...base, attendees })
+    expect(html.match(/class="roster-col"/g) ?? []).toHaveLength(1)
+  })
+
+  it('splits 26-50 attendees into two roster columns with continuous numbering (A4 portrait fit)', () => {
+    const attendees = Array.from({ length: 50 }, (_, i) => ({ name: `生徒${i + 1}`, present: i % 2 === 0 }))
+    const html = buildGroupAttendanceHtml({ ...base, attendees })
+    // 2列に分割される（最大25名/列）。
+    expect(html.match(/class="roster-col"/g) ?? []).toHaveLength(2)
+    // 通し番号は列をまたいで連続（1〜50）。
+    expect(html).toContain('>1</td>')
+    expect(html).toContain('>26</td>')
+    expect(html).toContain('>50</td>')
+    expect(html).toContain('出席 25 名 / 欠席 25 名（合計 50 名）')
+  })
+
   it('escapes HTML in names to avoid markup injection', () => {
     const html = buildGroupAttendanceHtml({
       ...base,

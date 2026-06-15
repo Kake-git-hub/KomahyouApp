@@ -3069,15 +3069,29 @@ function AuthenticatedApp() {
       }
     }
 
+    // spec-group-lesson §E: 提出ページの集団列(1限の左)に出す、盤面の集団授業コマ(集理/集社)を抽出。
+    // key=`${dateKey}_${band}`、value=科目。講習期間内のみ。中3生徒の提出ドキュメントへ載せる。
+    const sessionGroupClassSlots: Record<string, string> = {}
+    for (const entry of Object.values(latestBoardStateForTokens?.groupClassEntries ?? {})) {
+      if (!entry || !entry.subject) continue
+      if (entry.dateKey < session.startDate || entry.dateKey > session.endDate) continue
+      sessionGroupClassSlots[`${entry.dateKey}_${entry.band}`] = entry.subject
+    }
+
     const referenceDate = session.startDate
-    const studentsWithSubjects = activeStudents.map((s) => ({
-      id: s.id,
-      name: getStudentDisplayName(s),
-      availableSubjects: getSelectableStudentSubjectsForGrade(resolveCurrentStudentGradeLabel(s, referenceDate)),
-      // spec-group-lesson §C: 集団授業の希望提出は中3のみ表示。学年は講習開始日基準で判定。
-      availableGroupClassSubjects: resolveCurrentStudentGradeLabel(s, referenceDate) === '中3' ? [...groupClassSubmissionSubjects] : [],
-      occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
-    }))
+    const studentsWithSubjects = activeStudents.map((s) => {
+      const isThirdGrade = resolveCurrentStudentGradeLabel(s, referenceDate) === '中3'
+      return {
+        id: s.id,
+        name: getStudentDisplayName(s),
+        availableSubjects: getSelectableStudentSubjectsForGrade(resolveCurrentStudentGradeLabel(s, referenceDate)),
+        // spec-group-lesson §C: 集団授業の希望提出は中3のみ表示。学年は講習開始日基準で判定。
+        availableGroupClassSubjects: isThirdGrade ? [...groupClassSubmissionSubjects] : [],
+        occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
+        // spec-group-lesson §E: 集団列は中3のみ。生徒日程表と同じく盤面の集団コマをそのまま反映する。
+        groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {},
+      }
+    })
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
 
     const { updatedSession, newTokens } = allStudentsHaveTokens && allTeachersHaveTokens
@@ -3090,14 +3104,15 @@ function AuthenticatedApp() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[] }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string> }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
       const studentInput = updatedSession.studentInputs[s.id]
       const token = studentInput?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates })
+        const isThirdGrade = resolveCurrentStudentGradeLabel(s, referenceDate) === '中3'
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {} })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
           void updateSubmissionGroupClassEligibility(token, [...groupClassSubmissionSubjects]).catch(() => { /* non-fatal */ })

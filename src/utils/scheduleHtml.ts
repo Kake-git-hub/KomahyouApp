@@ -1498,7 +1498,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       .slot-cell {
-        height: 62px;
+        /* 講習回数表に集理/集社の2行が増えたぶん、時限の行高を少し詰めて
+           A4横シート(overflow:hidden)の下端で集社が見切れないようにする。 */
+        height: 53px;
         vertical-align: top;
         background: #fff;
       }

@@ -2130,6 +2130,8 @@ type LectureSubmissionDoc = {
   groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
+  // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`、value=科目。後方互換のため optional。
+  groupClassSlots?: Record<string, string>
   submittedAt: string | null
   createdAt: string
 }
@@ -2236,6 +2238,7 @@ export const lectureSubmissionApi = onRequest({
       groupClassParticipation: data.groupClassParticipation ?? {},
       regularOnly: data.regularOnly ?? false,
       occupiedSlots: data.occupiedSlots ?? {},
+      groupClassSlots: data.groupClassSlots ?? {},
     })
     return
   }

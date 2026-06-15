@@ -22,6 +22,8 @@ type SubmissionData = {
   groupClassParticipation?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
+  // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。
+  groupClassSlots?: Record<string, string>
 }
 
 export type DateSlot = {
@@ -33,6 +35,16 @@ export type DateSlot = {
 }
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
+
+// spec-group-lesson §E: 集団授業の2バンド(1=10:00-11:00 / 2=11:10-12:10)。提出ページでは1限の左に2列出す。
+const GROUP_CLASS_BANDS = [1, 2] as const
+
+// 生徒日程表と同じ短縮表記。集団理科→集理 / 集団社会→集社。
+function groupClassShortLabel(subject: string): string {
+  if (subject === '集団理科') return '集理'
+  if (subject === '集団社会') return '集社'
+  return subject
+}
 
 function getSubmissionApiBaseUrl() {
   if (typeof window === 'undefined') return ''
@@ -302,6 +314,27 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   if (!data) return null
 
+  // spec-group-lesson §E: 1限の左に集団授業(集理/集社)の2列を出す。中3かつ盤面に集団コマがある場合のみ。
+  // 出欠選択の対象ではなく、生徒日程表と同じく盤面の集団コマを案内表示する読み取り専用列。
+  const groupClassSlots = data.groupClassSlots ?? {}
+  const showGroupCols = data.personType === 'student'
+    && (data.availableGroupClassSubjects?.length ?? 0) > 0
+    && Object.keys(groupClassSlots).length > 0
+  const groupColCount = showGroupCols ? GROUP_CLASS_BANDS.length : 0
+  const renderGroupHeaderCells = () => showGroupCols
+    ? GROUP_CLASS_BANDS.map((band) => <th key={`gh${band}`} className="sub-th-slot sub-th-group">集</th>)
+    : null
+  const renderGroupBodyCells = (dateKey: string) => showGroupCols
+    ? GROUP_CLASS_BANDS.map((band) => {
+        const subject = groupClassSlots[`${dateKey}_${band}`]
+        return (
+          <td key={`gb${band}`} className={`sub-td-slot sub-td-group${subject ? ' sub-slot-group-on' : ''}`}>
+            {subject ? groupClassShortLabel(subject) : ''}
+          </td>
+        )
+      })
+    : null
+
   // 提出後／既提出リンク: 提出した内容を「閲覧専用(編集不可)」で表示する。
   if (submitted) {
     const isStudentView = data.personType === 'student'
@@ -334,10 +367,11 @@ export default function SubmissionPage({ token }: { token: string }) {
             <span className="sub-muted">不可: <strong>{viewUnavailableCount}</strong>コマ</span>
           </div>
           <div className="sub-table-wrap">
-            <table className="sub-slot-table sub-slot-table-readonly" style={{ ['--slot-n' as string]: viewMaxSlot } as CSSProperties}>
+            <table className="sub-slot-table sub-slot-table-readonly" style={{ ['--slot-n' as string]: viewMaxSlot + groupColCount } as CSSProperties}>
               <thead>
                 <tr>
                   <th className="sub-th-date">日付</th>
+                  {renderGroupHeaderCells()}
                   {Array.from({ length: viewMaxSlot }, (_, i) => (
                     <th key={i} className="sub-th-slot">{i + 1}限</th>
                   ))}
@@ -351,13 +385,14 @@ export default function SubmissionPage({ token }: { token: string }) {
                     return (
                       <tr key={dateSlot.dateKey} className={`sub-row-closed${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
                         <td className="sub-td-date">{dateSlot.label}</td>
-                        <td className="sub-td-slot sub-slot-closed sub-slot-closed-merged" colSpan={viewMaxSlot}>休校日</td>
+                        <td className="sub-td-slot sub-slot-closed sub-slot-closed-merged" colSpan={viewMaxSlot + groupColCount}>休校日</td>
                       </tr>
                     )
                   }
                   return (
                     <tr key={dateSlot.dateKey} className={`${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
                       <td className="sub-td-date">{dateSlot.label}</td>
+                      {renderGroupBodyCells(dateSlot.dateKey)}
                       {dateSlot.slots.map((slot) => {
                         const slotKey = `${dateSlot.dateKey}_${slot}`
                         const isSelected = selectedSlots.has(slotKey)
@@ -473,10 +508,11 @@ export default function SubmissionPage({ token }: { token: string }) {
         </p>
 
         <div className="sub-table-wrap">
-          <table className="sub-slot-table" style={{ ['--slot-n' as string]: maxSlot } as CSSProperties}>
+          <table className="sub-slot-table" style={{ ['--slot-n' as string]: maxSlot + groupColCount } as CSSProperties}>
             <thead>
               <tr>
                 <th className="sub-th-date">日付</th>
+                {renderGroupHeaderCells()}
                 {Array.from({ length: maxSlot }, (_, i) => (
                   <th key={i} className="sub-th-slot" onClick={() => toggleAllSlotsForColumn(i + 1, occupiedSlots)}>{i + 1}限</th>
                 ))}
@@ -491,7 +527,7 @@ export default function SubmissionPage({ token }: { token: string }) {
                   return (
                     <tr key={dateSlot.dateKey} className={`sub-row-closed${isSunday ? ' sub-row-sun' : ''}${isSaturday ? ' sub-row-sat' : ''}`}>
                       <td className="sub-td-date">{dateSlot.label}</td>
-                      <td className="sub-td-slot sub-slot-closed sub-slot-closed-merged" colSpan={maxSlot}>休校日</td>
+                      <td className="sub-td-slot sub-slot-closed sub-slot-closed-merged" colSpan={maxSlot + groupColCount}>休校日</td>
                     </tr>
                   )
                 }
@@ -506,6 +542,7 @@ export default function SubmissionPage({ token }: { token: string }) {
                     >
                       {dateSlot.label}
                     </td>
+                    {renderGroupBodyCells(dateSlot.dateKey)}
                     {dateSlot.slots.map((slot) => {
                       const slotKey = `${dateSlot.dateKey}_${slot}`
                       const isSelected = selectedSlots.has(slotKey)
@@ -648,9 +685,12 @@ export default function SubmissionPage({ token }: { token: string }) {
 const baseStyles = `
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body, #root { min-width: 0 !important; width: 100% !important; max-width: 100% !important; overflow-x: hidden !important; }
-  html { font-size: 14px; -webkit-text-size-adjust: 100%; height: 100%; }
+  /* 共通の index.css は PC アプリ向けに html/body/#root へ min-width:1280px と #root{padding:20px} を当てている。
+     提出ページ(スマホ)では幅と余白を打ち消さないと、iOS の狭い表示幅で内容が右にはみ出して
+     折り返し＝「拡大されたように」見える。padding も明示的に 0 に上書きする。 */
+  html { font-size: 14px; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; height: 100%; }
   body { margin: 0; font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif; color: #111; background: #f5f5f5; height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; }
-  #root { height: auto !important; min-height: 100% !important; }
+  #root { height: auto !important; min-height: 100% !important; padding: 0 !important; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; }
@@ -660,8 +700,10 @@ const baseStyles = `
   .sub-success-icon { font-size: 48px; color: #2a7e2a; background: #e8f5e8; border-radius: 50%; width: 72px; height: 72px; line-height: 72px; text-align: center; margin-bottom: 12px; }
 
   .sub-header { background: #fff; border-bottom: 1px solid #ddd; padding: 20px 12px; text-align: center; }
-  .sub-header-title { font-size: 42px; font-weight: 700; margin-bottom: 8px; line-height: 1.2; }
-  .sub-header-name { font-size: 34px; font-weight: 600; color: #333; margin-bottom: 8px; }
+  /* 幅の狭い端末(iPhone 等)でも 1 行に収まるよう、px の上限を保ったまま vw で頭打ちにする。
+     基準幅 ~420px 以上は従来の px のまま(Android の表示を変えない)、それより狭い端末だけ縮む。 */
+  .sub-header-title { font-size: min(42px, 10vw); font-weight: 700; margin-bottom: 8px; line-height: 1.2; }
+  .sub-header-name { font-size: min(34px, 8vw); font-weight: 600; color: #333; margin-bottom: 8px; }
 
   .sub-inline-error { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #fee; color: #c00; font-size: 13px; }
   .sub-dismiss { background: none; border: none; color: #c00; font-size: 16px; cursor: pointer; padding: 0 4px; }
@@ -688,15 +730,20 @@ const baseStyles = `
   .sub-x-mark { display: block; font-size: calc(var(--u) * 0.5); line-height: 1; }
   .sub-x-label { display: block; font-size: calc(var(--u) * 0.25); line-height: 1.05; margin-top: 1px; }
   .sub-slot-occ { background: #e8f0ff; color: #336; font-size: calc(var(--u) * 0.344); font-weight: 700; }
+  /* spec-group-lesson §E: 1限の左の集団授業列(集理/集社)。生徒日程表と同じ淡橙＋茶字。読み取り専用。 */
+  .sub-th-group { background: #fbecd6; color: #7c3a00; font-size: calc(var(--u) * 0.4); }
+  .sub-td-group { background: #fff7ec; cursor: default; font-size: calc(var(--u) * 0.34); font-weight: 700; color: #7c3a00; }
+  .sub-td-group.sub-slot-group-on { background: #fff2dd; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
   .sub-row-sun .sub-td-date { color: #d00; }
   .sub-row-sat .sub-td-date { color: #00c; }
   .sub-row-closed .sub-td-date { color: #999; cursor: default; }
   .sub-slot-closed { background: #f0f0f0 !important; cursor: default; }
 
-  /* 希望科目数/集団授業の枠は文字・ボタンを2倍に拡大(sub-section-lg) */
-  .sub-section-lg .sub-section-title { font-size: 42px; }
-  .sub-section-lg .sub-section-head .sub-muted { font-size: 30px; }
+  /* 希望科目数/集団授業の枠は文字・ボタンを2倍に拡大(sub-section-lg)。
+     見出し+右肩の集計が狭い端末で折り返さないよう px 上限つき vw で頭打ちにする。 */
+  .sub-section-lg .sub-section-title { font-size: min(42px, 10vw); }
+  .sub-section-lg .sub-section-head .sub-muted { font-size: min(30px, 7vw); }
 
   /* Subject — 授業時間(プルダウン)→回数 を、並び順そのままで幅の中央に寄せる。 */
   .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 6px; }
