@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useMemo, useRef } from 'react'
 import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, resolveGroupClassDayFlags, type GroupClassBand, type GroupClassEntryMap } from './groupClass'
-import { buildLinkedLessonDestinationMap, formatShortDateLabel } from './lessonLinks'
+import { buildLinkedLessonDestinationMap, resolveVisibleSlotDateLabel } from './lessonLinks'
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
 import { getMemoLineHeight, getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, TeacherType } from './types'
@@ -273,10 +273,14 @@ function BoardGridComponent({
         ? `${resolveStudentDisplayName(statusEntry.name)}(${statusLabel}`
         : (memoLabel ?? '')
     const linkedDestination = statusEntry ? linkedLessonDestinationByStatusId.get(statusEntry.id) : null
-    const makeupSourceDateLabel = effectiveName && resolvedLessonType === 'makeup' ? formatShortDateLabel(effectiveMakeupSourceDate) : ''
-    const moveDestinationDateLabel = statusEntry?.status === 'moved' ? formatShortDateLabel(statusEntry.moveDestinationDateKey) : ''
-    const linkedDestinationDateLabel = statusEntry ? formatShortDateLabel(linkedDestination?.dateKey) : ''
-    const visibleDateLabel = makeupSourceDateLabel || moveDestinationDateLabel || linkedDestinationDateLabel
+    const visibleDateLabel = resolveVisibleSlotDateLabel({
+      hasStudent: Boolean(studentName),
+      hasContent: Boolean(effectiveName),
+      resolvedLessonType,
+      effectiveMakeupSourceDate,
+      statusEntry,
+      linkedDestinationDateKey: linkedDestination?.dateKey,
+    })
     const displayGrade = effectiveName ? resolveStudentGradeLabel(effectiveName, effectiveGrade, cell.dateKey, effectiveBirthDate) : ''
     const displaySubject = resolveDisplayedSubjectForGrade(effectiveSubject, displayGrade || effectiveGrade)
     const displaySubjectWithNote = `${displaySubject}${effectiveNoteSuffix}`

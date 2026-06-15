@@ -1,4 +1,4 @@
-import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import type { LessonType, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 
 export type LinkedLessonDestination = {
   dateKey: string
@@ -129,4 +129,25 @@ export function formatShortDateLabel(dateKey?: string) {
   const [, month = '', day = ''] = dateKey.split('-')
   if (!month || !day) return ''
   return `${Number(month)}/${Number(day)}`
+}
+
+// スロットに表示する「移)日付」ラベルを解決する。
+// 回帰防止: 実在の生徒が入っているスロット(hasStudent)では、滞留したステータス由来の
+// 移動日付(moved / リンク先)を表示してはいけない。前の生徒の移動ステータスが残っていても、
+// 上書きした新しい生徒が他人の移動日付を引き継がず、本人の makeupSourceDate のみを表示する。
+export function resolveVisibleSlotDateLabel(params: {
+  /** studentSlots に実在の生徒が入っているか (studentName が真) */
+  hasStudent: boolean
+  /** 生徒名 or ステータス名のどちらかがあるか (effectiveName が真) */
+  hasContent: boolean
+  resolvedLessonType: LessonType | null
+  effectiveMakeupSourceDate?: string
+  statusEntry?: Pick<StudentStatusEntry, 'status' | 'moveDestinationDateKey'> | null
+  linkedDestinationDateKey?: string
+}) {
+  const { hasStudent, hasContent, resolvedLessonType, effectiveMakeupSourceDate, statusEntry, linkedDestinationDateKey } = params
+  const makeupSourceDateLabel = hasContent && resolvedLessonType === 'makeup' ? formatShortDateLabel(effectiveMakeupSourceDate) : ''
+  const moveDestinationDateLabel = !hasStudent && statusEntry?.status === 'moved' ? formatShortDateLabel(statusEntry.moveDestinationDateKey) : ''
+  const linkedDestinationDateLabel = !hasStudent && statusEntry ? formatShortDateLabel(linkedDestinationDateKey) : ''
+  return makeupSourceDateLabel || moveDestinationDateLabel || linkedDestinationDateLabel
 }

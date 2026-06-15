@@ -6900,6 +6900,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       }
     }
 
+    // 回帰防止: 移動先スロットに前の生徒の「移動元表示(moved)」など滞留した
+    // ステータス(移)日付)が残っていると、上書きしたはずの新しい生徒がその移動日付を
+    // 引き継いで表示されてしまう(BoardGrid の effectiveMakeupSourceDate / moveDestinationDateKey
+    // フォールバック経路)。実際に生徒を置いたスロットの滞留ステータスは必ず消す。
+    setDeskStudentStatus(targetDesk, studentIndex, null)
+
     // If swap: convert the swap student to makeup and place at source position
     if (swapStudent) {
       const convertedSwapStudent = prepareStudentForMove(swapStudent, targetCell.dateKey, targetCell.slotNumber, sourceDateKey)
@@ -6916,6 +6922,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             ? [convertedSwapStudent, null]
             : [null, convertedSwapStudent]
         }
+        // 回帰防止: 入れ替え先(=元スロット)に滞留したステータスも消し、移動日付の引き継ぎを防ぐ。
+        setDeskStudentStatus(sourceDesk, sourceSlotIndex, null)
       }
     }
 
