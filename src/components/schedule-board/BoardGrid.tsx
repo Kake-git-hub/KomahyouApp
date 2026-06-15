@@ -227,7 +227,10 @@ function BoardGridComponent({
       window.cancelAnimationFrame(frameId)
       window.removeEventListener('resize', handleResize)
     }
-  }, [cells, linkResolutionCells])
+    // groupClassEntries も依存に含める。集団講師/科目の選択は cells を変えず
+    // groupClassEntries だけ更新するため、これが無いと選択直後に講師名の
+    // 自動フォントフィットが走らず小さいまま表示される(リロード/週切替で初めて補正)。
+  }, [cells, linkResolutionCells, groupClassEntries])
 
   const renderStudentCell = (
     cell: SlotCell,
