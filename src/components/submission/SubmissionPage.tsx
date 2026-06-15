@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 
 type SubmissionData = {
   personName: string
@@ -299,7 +299,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         <header className="sub-header">
           <div className="sub-header-title">{data.sessionLabel}</div>
           <div className="sub-header-name">{data.personName}</div>
-          <div className="sub-muted" style={{ fontSize: 12 }}>
+          <div className="sub-muted" style={{ fontSize: 22 }}>
             {data.sessionStartDate.replace(/-/g, '/')} 〜 {data.sessionEndDate.replace(/-/g, '/')}
           </div>
         </header>
@@ -312,13 +312,13 @@ export default function SubmissionPage({ token }: { token: string }) {
           </div>
         </div>
 
-        <section className="sub-section">
+        <section className="sub-section sub-section-lg">
           <div className="sub-section-head">
             <span className="sub-section-title">出席不可コマ</span>
             <span className="sub-muted">不可: <strong>{viewUnavailableCount}</strong>コマ</span>
           </div>
           <div className="sub-table-wrap">
-            <table className="sub-slot-table sub-slot-table-readonly">
+            <table className="sub-slot-table sub-slot-table-readonly" style={{ ['--slot-n' as string]: viewMaxSlot } as CSSProperties}>
               <thead>
                 <tr>
                   <th className="sub-th-date">日付</th>
@@ -363,7 +363,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         </section>
 
         {isStudentView && (
-          <section className="sub-section">
+          <section className="sub-section sub-section-lg">
             <div className="sub-section-head">
               <span className="sub-section-title">希望科目数</span>
               <span className="sub-muted">合計: <strong>{viewSubjectTotal}</strong>コマ</span>
@@ -391,7 +391,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         )}
 
         {isStudentView && (data.availableGroupClassSubjects?.length ?? 0) > 0 && (
-          <section className="sub-section">
+          <section className="sub-section sub-section-lg">
             <div className="sub-section-head">
               <span className="sub-section-title">集団授業（中3）</span>
             </div>
@@ -423,13 +423,19 @@ export default function SubmissionPage({ token }: { token: string }) {
   const totalSubjectCount = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
   const occupiedSlots = data.occupiedSlots ?? {}
   const maxSlot = availableDates.length > 0 ? Math.max(...availableDates.map((d) => d.slots.length)) : 5
+  // 集団希望ラベル: 参加(true)の集団科目を短縮表示(「集団理科」→「理」)。中3など対象生徒のみ表示。
+  const hasGroupClass = (data.availableGroupClassSubjects?.length ?? 0) > 0
+  const groupWishLabel = hasGroupClass
+    ? ((data.availableGroupClassSubjects ?? []).filter((s) => groupClassParticipation[s] === true)
+        .map((s) => s.replace(/^集団/, '').charAt(0)).join('、') || 'なし')
+    : ''
 
   return (
     <div className="sub-container">
       <header className="sub-header">
         <div className="sub-header-title">{data.sessionLabel}</div>
         <div className="sub-header-name">{data.personName}</div>
-        <div className="sub-muted" style={{ fontSize: 12 }}>
+        <div className="sub-muted" style={{ fontSize: 22 }}>
           {data.sessionStartDate.replace(/-/g, '/')} 〜 {data.sessionEndDate.replace(/-/g, '/')}
         </div>
       </header>
@@ -441,17 +447,17 @@ export default function SubmissionPage({ token }: { token: string }) {
         </div>
       )}
 
-      <section className="sub-section">
+      <section className="sub-section sub-section-lg">
         <div className="sub-section-head">
           <span className="sub-section-title">出席不可コマ</span>
           <span className="sub-muted">不可: <strong>{totalUnavailable}</strong>コマ</span>
         </div>
-        <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 11, lineHeight: 1.4 }}>
+        <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 26, lineHeight: 1.45 }}>
           出席できないコマをタップしてください。日付をタップすると終日不可になります。
         </p>
 
         <div className="sub-table-wrap">
-          <table className="sub-slot-table">
+          <table className="sub-slot-table" style={{ ['--slot-n' as string]: maxSlot } as CSSProperties}>
             <thead>
               <tr>
                 <th className="sub-th-date">日付</th>
@@ -510,7 +516,7 @@ export default function SubmissionPage({ token }: { token: string }) {
       </section>
 
       {isStudent && (
-        <section className="sub-section">
+        <section className="sub-section sub-section-lg">
           <div className="sub-section-head">
             <span className="sub-section-title">希望科目数</span>
             <span className="sub-muted">合計: <strong>{totalSubjectCount}</strong>コマ</span>
@@ -522,6 +528,20 @@ export default function SubmissionPage({ token }: { token: string }) {
               return (
                 <div key={subject} className="sub-subject-row">
                   <span className="sub-subject-label">{subject}</span>
+                  <div className="sub-duration-slot">
+                    {subjectCount > 0 && (
+                      <select
+                        className="sub-duration-select"
+                        aria-label={`${subject}の授業時間`}
+                        value={selectedDuration}
+                        onChange={(e) => handleDurationChange(subject, parseInt(e.target.value, 10))}
+                      >
+                        <option value={90}>90分</option>
+                        <option value={60}>60分</option>
+                        <option value={45}>45分</option>
+                      </select>
+                    )}
+                  </div>
                   <div className="sub-subject-ctrl">
                     <button
                       type="button"
@@ -544,18 +564,6 @@ export default function SubmissionPage({ token }: { token: string }) {
                       onClick={() => handleSubjectChange(subject, subjectCount + 1)}
                     >+</button>
                   </div>
-                  {subjectCount > 0 && (
-                    <div className="sub-duration-ctrl" role="group" aria-label={`${subject}の授業時間`}>
-                      {[90, 60, 45].map((minutes) => (
-                        <button
-                          key={minutes}
-                          type="button"
-                          className={`sub-duration-btn${selectedDuration === minutes ? ' sub-duration-active' : ''}`}
-                          onClick={() => handleDurationChange(subject, minutes)}
-                        >{minutes}分</button>
-                      ))}
-                    </div>
-                  )}
                 </div>
               )
             })}
@@ -573,24 +581,24 @@ export default function SubmissionPage({ token }: { token: string }) {
       )}
 
       {isStudent && (data.availableGroupClassSubjects?.length ?? 0) > 0 && (
-        <section className="sub-section">
+        <section className="sub-section sub-section-lg">
           <div className="sub-section-head">
             <span className="sub-section-title">集団授業（中3）</span>
           </div>
-          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 12 }}>参加する科目に<strong>チェック</strong>を入れてください（既定は不参加）。</p>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>参加する科目に<strong>チェック</strong>を入れてください（未チェックは不参加）。</p>
           <div className="sub-subject-list">
             {data.availableGroupClassSubjects!.map((subject) => {
               const participate = groupClassParticipation[subject] === true
               return (
                 <label key={subject} className="sub-group-row">
                   <span className="sub-subject-label">{subject}</span>
-                  <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
                   <input
                     type="checkbox"
                     className="sub-group-check"
                     checked={participate}
                     onChange={(e) => setGroupClassParticipation((current) => ({ ...current, [subject]: e.target.checked }))}
                   />
+                  <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
                 </label>
               )
             })}
@@ -599,11 +607,6 @@ export default function SubmissionPage({ token }: { token: string }) {
       )}
 
       <section className="sub-section sub-submit-section">
-        <div className="sub-summary">
-          <span>不可: <strong>{totalUnavailable}</strong>コマ</span>
-          {isStudent && <span>科目計: <strong>{totalSubjectCount}</strong>コマ</span>}
-          {isStudent && regularOnly && <span style={{ color: '#888' }}>通常のみ</span>}
-        </div>
         <button
           type="button"
           className={`sub-submit-btn${submitting ? ' sub-disabled' : ''}`}
@@ -612,7 +615,13 @@ export default function SubmissionPage({ token }: { token: string }) {
         >
           {submitting ? '送信中...' : '提出する'}
         </button>
-        <p className="sub-muted" style={{ textAlign: 'center', marginTop: 6, fontSize: 11 }}>※ 提出後に変更が必要な場合は教室にお問い合わせください</p>
+        <div className="sub-summary">
+          <span>参加不可コマ: <strong>{totalUnavailable}</strong>コマ</span>
+          {isStudent && <span>希望科目計: <strong>{totalSubjectCount}</strong>コマ</span>}
+          {isStudent && hasGroupClass && <span>集団希望: <strong>{groupWishLabel}</strong></span>}
+          {isStudent && regularOnly && <span style={{ color: '#888' }}>通常のみ</span>}
+        </div>
+        <p className="sub-muted" style={{ textAlign: 'center', marginTop: 6, fontSize: 13 }}>※ 提出後に変更が必要な場合は教室にお問い合わせください</p>
       </section>
 
       <style>{baseStyles}</style>
@@ -631,68 +640,77 @@ const baseStyles = `
   .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
-  .sub-muted { font-size: 13px; color: #666; }
+  .sub-muted { font-size: 15px; color: #666; }
   .sub-success-icon { font-size: 48px; color: #2a7e2a; background: #e8f5e8; border-radius: 50%; width: 72px; height: 72px; line-height: 72px; text-align: center; margin-bottom: 12px; }
 
-  .sub-header { background: #fff; border-bottom: 1px solid #ddd; padding: 16px 12px; text-align: center; }
-  .sub-header-title { font-size: 17px; font-weight: 700; margin-bottom: 2px; }
-  .sub-header-name { font-size: 15px; font-weight: 600; color: #333; margin-bottom: 2px; }
+  .sub-header { background: #fff; border-bottom: 1px solid #ddd; padding: 20px 12px; text-align: center; }
+  .sub-header-title { font-size: 42px; font-weight: 700; margin-bottom: 8px; line-height: 1.2; }
+  .sub-header-name { font-size: 34px; font-weight: 600; color: #333; margin-bottom: 8px; }
 
   .sub-inline-error { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #fee; color: #c00; font-size: 13px; }
   .sub-dismiss { background: none; border: none; color: #c00; font-size: 16px; cursor: pointer; padding: 0 4px; }
 
   .sub-section { background: #fff; border-top: 1px solid #ddd; border-bottom: 1px solid #ddd; padding: 8px; margin: 8px 0; }
   .sub-section-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 4px; padding: 0 4px; }
-  .sub-section-title { font-size: 18px; font-weight: 700; }
+  .sub-section-title { font-size: 21px; font-weight: 700; }
 
-  /* Slot table — fit viewport width */
+  /* Slot table — 日付列:コマ列=2.375:1 / 正方形マス という現状のレイアウト比を保ったまま、
+     画面横幅いっぱいになるよう拡大する。--u はコマ1マスの一辺(=列幅=行高)で画面幅から算出。
+     --slot-n は実際のコマ数(JSXから注入。既定5)。全寸法・文字を --u 比で指定し比率を厳守。 */
   .sub-table-wrap { overflow: hidden; width: 100%; }
-  /* テーブルは画面幅いっぱいにフィット。文字は読みやすい大きさに。 */
-  .sub-slot-table { border-collapse: collapse; width: 100%; table-layout: fixed; font-size: 16px; }
+  .sub-slot-table {
+    border-collapse: collapse; width: auto; margin: 0 auto; table-layout: fixed;
+    --u: calc((100vw - 26px) / (var(--slot-n, 5) + 2.375));
+  }
   .sub-slot-table th, .sub-slot-table td { border: 1px solid #ccc; text-align: center; padding: 0; }
-  .sub-th-date { width: 74px; padding: 8px 2px; background: #f0f0f0; font-weight: 700; font-size: 17px; white-space: nowrap; }
-  .sub-th-slot { padding: 12px 2px; background: #f0f0f0; font-weight: 700; font-size: 21px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-date { padding: 10px 2px; font-weight: 700; font-size: 17px; cursor: pointer; user-select: none; white-space: nowrap; background: #fff; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
-  .sub-td-slot { padding: 4px 4px; height: 56px; cursor: pointer; user-select: none; font-size: 21px; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-th-date, .sub-td-date { width: calc(var(--u) * 2.375); font-weight: 700; font-size: calc(var(--u) * 0.469); white-space: nowrap; }
+  .sub-th-date { background: #f0f0f0; }
+  .sub-td-date { background: #fff; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-th-slot, .sub-td-slot { width: var(--u); height: var(--u); padding: 0; cursor: pointer; user-select: none; font-size: calc(var(--u) * 0.4375); -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  .sub-th-slot { background: #f0f0f0; font-weight: 700; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
-  .sub-x-mark { display: block; font-size: 27px; line-height: 1; }
-  .sub-x-label { display: block; font-size: 13px; line-height: 1.05; margin-top: 2px; }
-  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: 19px; font-weight: 700; }
+  .sub-x-mark { display: block; font-size: calc(var(--u) * 0.5); line-height: 1; }
+  .sub-x-label { display: block; font-size: calc(var(--u) * 0.25); line-height: 1.05; margin-top: 1px; }
+  .sub-slot-occ { background: #e8f0ff; color: #336; font-size: calc(var(--u) * 0.344); font-weight: 700; }
   .sub-row-all .sub-td-date { background: #fff0f0; }
   .sub-row-sun .sub-td-date { color: #d00; }
   .sub-row-sat .sub-td-date { color: #00c; }
   .sub-row-closed .sub-td-date { color: #999; cursor: default; }
   .sub-slot-closed { background: #f0f0f0 !important; cursor: default; }
 
-  /* Subject */
-  .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; }
-  .sub-subject-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 6px 2px; border-bottom: 1px solid #eee; }
-  .sub-duration-ctrl { flex-basis: 100%; display: flex; gap: 6px; justify-content: flex-end; }
-  .sub-duration-btn { min-width: 62px; height: 42px; border-radius: 7px; border: 1px solid #ccc; background: #f8f8f8; font-size: 16px; font-weight: 600; cursor: pointer; touch-action: manipulation; }
-  .sub-duration-active { background: #111; color: #fff; border-color: #111; }
-  .sub-subject-label { font-size: 18px; font-weight: 700; min-width: 36px; }
-  .sub-subject-ctrl { display: flex; align-items: center; gap: 8px; }
-  .sub-counter-btn { width: 46px; height: 46px; border-radius: 7px; border: 1px solid #ccc; background: #f8f8f8; font-size: 24px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; }
+  /* 希望科目数/集団授業の枠は文字・ボタンを2倍に拡大(sub-section-lg) */
+  .sub-section-lg .sub-section-title { font-size: 42px; }
+  .sub-section-lg .sub-section-head .sub-muted { font-size: 30px; }
+
+  /* Subject — 授業時間(プルダウン)→回数 を、並び順そのままで幅の中央に寄せる。 */
+  .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 6px; }
+  .sub-subject-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 8px 4px; border-bottom: 1px solid #eee; }
+  .sub-subject-label { font-size: 40px; font-weight: 700; min-width: 60px; flex: none; }
+  /* 授業時間プルダウン(回数0のときは枠だけ確保して回数の位置を揃える) */
+  .sub-duration-slot { flex: none; width: 200px; }
+  .sub-duration-select { width: 100%; height: 84px; border: 1px solid #ccc; border-radius: 14px; background: #f8f8f8; font-size: 32px; font-weight: 600; padding: 0 12px; touch-action: manipulation; }
+  .sub-subject-ctrl { display: flex; align-items: center; gap: 12px; flex: none; }
+  .sub-counter-btn { width: 84px; height: 84px; border-radius: 14px; border: 1px solid #ccc; background: #f8f8f8; font-size: 48px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; flex: none; }
   .sub-counter-btn:disabled { opacity: .3; }
-  .sub-counter-input { width: 60px; height: 46px; text-align: center; font-size: 22px; font-weight: 700; border: 1px solid #ccc; border-radius: 7px; -moz-appearance: textfield; }
+  .sub-counter-input { width: 80px; height: 84px; text-align: center; font-size: 44px; font-weight: 700; border: 1px solid #ccc; border-radius: 14px; -moz-appearance: textfield; flex: none; }
   .sub-counter-input::-webkit-inner-spin-button, .sub-counter-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .sub-checkbox-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px 4px; font-size: 16px; cursor: pointer; }
-  .sub-checkbox { width: 26px; height: 26px; accent-color: #333; }
-  /* 集団授業: 参加チェックボックス */
-  .sub-group-row { display: flex; align-items: center; gap: 12px; padding: 14px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .sub-group-check { width: 36px; height: 36px; accent-color: #111; flex: none; }
-  .sub-group-row .sub-subject-label { font-size: 19px; flex: 1; }
-  .sub-group-state { font-size: 16px; font-weight: 700; color: #999; min-width: 52px; text-align: right; }
+  .sub-checkbox-row { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 12px; padding: 16px 6px; font-size: 36px; cursor: pointer; }
+  .sub-checkbox { width: 56px; height: 56px; accent-color: #333; flex: none; }
+  /* 集団授業: チェックボックスと参加/不参加テキストを、並び順そのままで幅の中央に寄せる */
+  .sub-group-row { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 14px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sub-group-check { width: 76px; height: 76px; accent-color: #111; flex: none; }
+  .sub-group-row .sub-subject-label { font-size: 40px; flex: none; }
+  .sub-group-state { font-size: 34px; font-weight: 700; color: #999; min-width: 104px; text-align: right; }
   .sub-group-state.is-on { color: #111; }
 
   /* Submit */
   .sub-submit-section { padding: 12px; }
-  .sub-summary { display: flex; gap: 12px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 13px; }
-  .sub-submit-btn { display: block; width: 100%; padding: 18px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 19px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+  .sub-summary { display: flex; gap: 16px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 18px 16px; margin: 14px 0; font-size: 30px; }
+  .sub-submit-btn { display: block; width: 100%; padding: 18px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 63px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
   .sub-disabled { opacity: .5; cursor: not-allowed; }
 
-  /* 休校日: 1〜5限を結合したグレーセル */
-  .sub-slot-closed-merged { background: #ebebeb !important; color: #888; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-align: center; }
+  /* 休校日: 1〜5限を結合したグレーセル(マス比に合わせて拡大) */
+  .sub-slot-closed-merged { background: #ebebeb !important; color: #888; font-size: calc(var(--u) * 0.5625); font-weight: 700; letter-spacing: 2px; text-align: center; }
 
   /* 提出済み(閲覧専用)バナー */
   .sub-submitted-banner { display: flex; align-items: center; gap: 12px; background: #e8f5e8; border-bottom: 1px solid #cfe6cf; padding: 14px 14px; }
@@ -710,14 +728,4 @@ const baseStyles = `
   .sub-subject-row-readonly { justify-content: space-between; }
   .sub-subject-readonly-value { font-size: 15px; font-weight: 700; color: #222; }
   .sub-readonly-minutes { font-size: 12px; font-weight: 600; color: #777; margin-left: 6px; }
-
-  @media (max-width: 360px) {
-    .sub-th-date, .sub-td-date { width: 66px; font-size: 15px; padding: 8px 2px; }
-    .sub-th-slot { font-size: 18px; padding: 9px 2px; }
-    .sub-td-slot { height: 50px; font-size: 18px; }
-    .sub-x-mark { font-size: 24px; }
-    .sub-x-label { font-size: 12px; }
-    .sub-slot-occ { font-size: 16px; }
-    .sub-section { padding: 6px; }
-  }
 `
