@@ -118,11 +118,20 @@ export default function SubmissionPage({ token }: { token: string }) {
     }
   }, [])
 
-  // 提出完了/既提出の閲覧画面に切り替わったら、画面トップへスクロールする。
+  // 提出完了/既提出の閲覧画面へ切り替わったら画面先頭へ戻す。
+  // このページは body がスクロール領域(overflow-y:auto)なので window だけでなく
+  // body/documentElement も明示的に 0 にし、描画確定後(rAF)にも再度トップへ寄せる。
   useEffect(() => {
     if (!submitted) return
-    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
-    if (document.scrollingElement) document.scrollingElement.scrollTop = 0
+    const toTop = () => {
+      window.scrollTo(0, 0)
+      if (document.scrollingElement) document.scrollingElement.scrollTop = 0
+      document.documentElement.scrollTop = 0
+      document.body.scrollTop = 0
+    }
+    toTop()
+    const raf = requestAnimationFrame(toTop)
+    return () => cancelAnimationFrame(raf)
   }, [submitted])
 
   useEffect(() => {
@@ -306,7 +315,7 @@ export default function SubmissionPage({ token }: { token: string }) {
         <header className="sub-header">
           <div className="sub-header-title">{data.sessionLabel}</div>
           <div className="sub-header-name">{data.personName}</div>
-          <div className="sub-muted" style={{ fontSize: 'calc(var(--ku) * 0.44)' }}>
+          <div className="sub-muted" style={{ fontSize: 22 }}>
             {data.sessionStartDate.replace(/-/g, '/')} 〜 {data.sessionEndDate.replace(/-/g, '/')}
           </div>
         </header>
@@ -442,7 +451,7 @@ export default function SubmissionPage({ token }: { token: string }) {
       <header className="sub-header">
         <div className="sub-header-title">{data.sessionLabel}</div>
         <div className="sub-header-name">{data.personName}</div>
-        <div className="sub-muted" style={{ fontSize: 'calc(var(--ku) * 0.44)' }}>
+        <div className="sub-muted" style={{ fontSize: 22 }}>
           {data.sessionStartDate.replace(/-/g, '/')} 〜 {data.sessionEndDate.replace(/-/g, '/')}
         </div>
       </header>
@@ -459,7 +468,7 @@ export default function SubmissionPage({ token }: { token: string }) {
           <span className="sub-section-title">出席不可コマ</span>
           <span className="sub-muted">不可: <strong>{totalUnavailable}</strong>コマ</span>
         </div>
-        <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 'calc(var(--ku) * 0.52)', lineHeight: 1.45 }}>
+        <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 26, lineHeight: 1.45 }}>
           出席できないコマをタップしてください。日付をタップすると終日不可になります。
         </p>
 
@@ -592,7 +601,7 @@ export default function SubmissionPage({ token }: { token: string }) {
           <div className="sub-section-head">
             <span className="sub-section-title">集団授業（中3）</span>
           </div>
-          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 'calc(var(--ku) * 0.56)' }}>参加する科目に<strong>チェック</strong>を入れてください（未チェックは不参加）。</p>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>参加する科目に<strong>チェック</strong>を入れてください（未チェックは不参加）。</p>
           <div className="sub-subject-list">
             {data.availableGroupClassSubjects!.map((subject) => {
               const participate = groupClassParticipation[subject] === true
@@ -644,18 +653,15 @@ const baseStyles = `
   #root { height: auto !important; min-height: 100% !important; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* --ku は画面幅に比例する基準単位(=コマ表5列時の1マス幅と同じスケール)。
-     見出し/ラベル/ボタン等を px ではなく --ku 比で指定することで、iOS/Android や
-     画面幅・表示ズームの違いに依らず、コマ表と同じ比率で統一表示する。 */
-  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; --ku: calc((100vw - 26px) / 7.375); }
+  .sub-container { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom, 0); width: 100%; overflow: hidden; }
   .sub-center-box { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60dvh; padding: 24px; text-align: center; }
   .sub-spinner { width: 36px; height: 36px; border: 3px solid #ddd; border-top-color: #333; border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px; }
   .sub-muted { font-size: 15px; color: #666; }
   .sub-success-icon { font-size: 48px; color: #2a7e2a; background: #e8f5e8; border-radius: 50%; width: 72px; height: 72px; line-height: 72px; text-align: center; margin-bottom: 12px; }
 
   .sub-header { background: #fff; border-bottom: 1px solid #ddd; padding: 20px 12px; text-align: center; }
-  .sub-header-title { font-size: calc(var(--ku) * 0.84); font-weight: 700; margin-bottom: 8px; line-height: 1.2; }
-  .sub-header-name { font-size: calc(var(--ku) * 0.68); font-weight: 600; color: #333; margin-bottom: 8px; }
+  .sub-header-title { font-size: 42px; font-weight: 700; margin-bottom: 8px; line-height: 1.2; }
+  .sub-header-name { font-size: 34px; font-weight: 600; color: #333; margin-bottom: 8px; }
 
   .sub-inline-error { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: #fee; color: #c00; font-size: 13px; }
   .sub-dismiss { background: none; border: none; color: #c00; font-size: 16px; cursor: pointer; padding: 0 4px; }
@@ -688,46 +694,46 @@ const baseStyles = `
   .sub-row-closed .sub-td-date { color: #999; cursor: default; }
   .sub-slot-closed { background: #f0f0f0 !important; cursor: default; }
 
-  /* 希望科目数/集団授業/出席不可コマの枠の見出しを拡大(sub-section-lg)。--ku 比で統一。 */
-  .sub-section-lg .sub-section-title { font-size: calc(var(--ku) * 0.84); }
-  .sub-section-lg .sub-section-head .sub-muted { font-size: calc(var(--ku) * 0.60); }
+  /* 希望科目数/集団授業の枠は文字・ボタンを2倍に拡大(sub-section-lg) */
+  .sub-section-lg .sub-section-title { font-size: 42px; }
+  .sub-section-lg .sub-section-head .sub-muted { font-size: 30px; }
 
   /* Subject — 授業時間(プルダウン)→回数 を、並び順そのままで幅の中央に寄せる。 */
   .sub-subject-list { display: flex; flex-direction: column; gap: 6px; padding: 0 6px; }
-  .sub-subject-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: calc(var(--ku) * 0.24); padding: 8px 4px; border-bottom: 1px solid #eee; }
-  .sub-subject-label { font-size: calc(var(--ku) * 0.80); font-weight: 700; min-width: calc(var(--ku) * 1.2); flex: none; }
+  .sub-subject-row { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 8px 4px; border-bottom: 1px solid #eee; }
+  .sub-subject-label { font-size: 40px; font-weight: 700; min-width: 60px; flex: none; }
   /* 授業時間プルダウン(回数0のときは枠だけ確保して回数の位置を揃える) */
-  .sub-duration-slot { flex: none; width: calc(var(--ku) * 4); }
-  .sub-duration-select { width: 100%; height: calc(var(--ku) * 1.68); border: 1px solid #ccc; border-radius: calc(var(--ku) * 0.28); background: #f8f8f8; font-size: calc(var(--ku) * 0.64); font-weight: 600; padding: 0 calc(var(--ku) * 0.24); touch-action: manipulation; }
-  .sub-subject-ctrl { display: flex; align-items: center; gap: calc(var(--ku) * 0.24); flex: none; }
-  .sub-counter-btn { width: calc(var(--ku) * 1.68); height: calc(var(--ku) * 1.68); border-radius: calc(var(--ku) * 0.28); border: 1px solid #ccc; background: #f8f8f8; font-size: calc(var(--ku) * 0.96); font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; flex: none; }
+  .sub-duration-slot { flex: none; width: 200px; }
+  .sub-duration-select { width: 100%; height: 84px; border: 1px solid #ccc; border-radius: 14px; background: #f8f8f8; font-size: 32px; font-weight: 600; padding: 0 12px; touch-action: manipulation; }
+  .sub-subject-ctrl { display: flex; align-items: center; gap: 12px; flex: none; }
+  .sub-counter-btn { width: 84px; height: 84px; border-radius: 14px; border: 1px solid #ccc; background: #f8f8f8; font-size: 48px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; touch-action: manipulation; flex: none; }
   .sub-counter-btn:disabled { opacity: .3; }
-  .sub-counter-input { width: calc(var(--ku) * 1.6); height: calc(var(--ku) * 1.68); text-align: center; font-size: calc(var(--ku) * 0.88); font-weight: 700; border: 1px solid #ccc; border-radius: calc(var(--ku) * 0.28); -moz-appearance: textfield; flex: none; }
+  .sub-counter-input { width: 80px; height: 84px; text-align: center; font-size: 44px; font-weight: 700; border: 1px solid #ccc; border-radius: 14px; -moz-appearance: textfield; flex: none; }
   .sub-counter-input::-webkit-inner-spin-button, .sub-counter-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-  .sub-checkbox-row { display: flex; align-items: center; justify-content: center; gap: calc(var(--ku) * 0.32); margin-top: 12px; padding: calc(var(--ku) * 0.32) 6px; font-size: calc(var(--ku) * 0.72); cursor: pointer; }
-  .sub-checkbox { width: calc(var(--ku) * 1.12); height: calc(var(--ku) * 1.12); accent-color: #333; flex: none; }
+  .sub-checkbox-row { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 12px; padding: 16px 6px; font-size: 36px; cursor: pointer; }
+  .sub-checkbox { width: 56px; height: 56px; accent-color: #333; flex: none; }
   /* 集団授業: チェックボックスと参加/不参加テキストを、並び順そのままで幅の中央に寄せる */
-  .sub-group-row { display: flex; align-items: center; justify-content: center; gap: calc(var(--ku) * 0.32); padding: 14px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-  .sub-group-check { width: calc(var(--ku) * 1.52); height: calc(var(--ku) * 1.52); accent-color: #111; flex: none; }
-  .sub-group-row .sub-subject-label { font-size: calc(var(--ku) * 0.80); flex: none; }
-  .sub-group-state { font-size: calc(var(--ku) * 0.68); font-weight: 700; color: #999; min-width: calc(var(--ku) * 2.08); text-align: right; }
+  .sub-group-row { display: flex; align-items: center; justify-content: center; gap: 16px; padding: 14px 4px; border-bottom: 1px solid #eee; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .sub-group-check { width: 76px; height: 76px; accent-color: #111; flex: none; }
+  .sub-group-row .sub-subject-label { font-size: 40px; flex: none; }
+  .sub-group-state { font-size: 34px; font-weight: 700; color: #999; min-width: 104px; text-align: right; }
   .sub-group-state.is-on { color: #111; }
 
   /* Submit */
   .sub-submit-section { padding: 12px; }
-  .sub-summary { display: flex; gap: calc(var(--ku) * 0.32); flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: calc(var(--ku) * 0.36) calc(var(--ku) * 0.32); margin: 14px 0; font-size: calc(var(--ku) * 0.60); }
-  .sub-submit-btn { display: block; width: 100%; padding: calc(var(--ku) * 0.36); border: none; border-radius: 8px; background: #111; color: #fff; font-size: calc(var(--ku) * 1.26); font-weight: 700; cursor: pointer; touch-action: manipulation; }
+  .sub-summary { display: flex; gap: 16px; flex-wrap: wrap; background: #f8f8f8; border-radius: 6px; padding: 18px 16px; margin: 14px 0; font-size: 30px; }
+  .sub-submit-btn { display: block; width: 100%; padding: 18px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 63px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
   .sub-disabled { opacity: .5; cursor: not-allowed; }
 
   /* 休校日: 1〜5限を結合したグレーセル(マス比に合わせて拡大) */
   .sub-slot-closed-merged { background: #ebebeb !important; color: #888; font-size: calc(var(--u) * 0.5625); font-weight: 700; letter-spacing: 2px; text-align: center; }
 
-  /* 提出済み(閲覧専用)バナー。緑の「提出しました」は集団授業の見出しサイズに合わせ拡大。 */
-  .sub-submitted-banner { display: flex; align-items: center; gap: calc(var(--ku) * 0.24); background: #e8f5e8; border-bottom: 1px solid #cfe6cf; padding: calc(var(--ku) * 0.28) 14px; }
-  .sub-submitted-check { flex: none; width: calc(var(--ku) * 1.3); height: calc(var(--ku) * 1.3); line-height: calc(var(--ku) * 1.3); text-align: center; border-radius: 50%; background: #2a7e2a; color: #fff; font-size: calc(var(--ku) * 0.7); font-weight: 700; }
+  /* 提出済み(閲覧専用)バナー */
+  .sub-submitted-banner { display: flex; align-items: center; gap: 12px; background: #e8f5e8; border-bottom: 1px solid #cfe6cf; padding: 14px 14px; }
+  .sub-submitted-check { flex: none; width: 52px; height: 52px; line-height: 52px; text-align: center; border-radius: 50%; background: #2a7e2a; color: #fff; font-size: 30px; font-weight: 700; }
   .sub-submitted-text { min-width: 0; }
-  .sub-submitted-title { font-size: calc(var(--ku) * 0.84); font-weight: 700; color: #1f5d1f; line-height: 1.2; }
-  .sub-submitted-sub { font-size: calc(var(--ku) * 0.34); color: #3a6b3a; margin-top: 4px; line-height: 1.4; }
+  .sub-submitted-title { font-size: 42px; font-weight: 700; color: #1f5d1f; line-height: 1.2; }
+  .sub-submitted-sub { font-size: 15px; color: #3a6b3a; margin-top: 4px; line-height: 1.4; }
 
   /* 閲覧専用テーブル(操作不可) */
   .sub-slot-table-readonly .sub-th-slot,
