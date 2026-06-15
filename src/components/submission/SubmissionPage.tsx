@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { IOS_VIEWPORT_WIDTH, IOS_ZOOM, isIOS as detectIOS, buildSubmissionViewportContent } from './iosViewport'
 
 type SubmissionData = {
   personName: string
@@ -35,6 +36,33 @@ export type DateSlot = {
 }
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土']
+
+// iOS 表示倍率の補正値・判定は ./iosViewport に集約(main.tsx の初回ペイント前適用と共有)。
+
+// 実機デバッグ用のダミーデータ(#/submit-debug)。実際のレイアウトを一通り確認できるよう、
+// 通常コマ/休校日/既存予定/科目/集団授業(中3)を含めてある。
+const DEBUG_DUMMY_DATA: SubmissionData = {
+  personName: '山田 太郎',
+  personType: 'student',
+  sessionLabel: '春期講習 出欠・希望調査',
+  sessionStartDate: '2026-03-25',
+  sessionEndDate: '2026-04-05',
+  closedWeekdays: [0],
+  holidayDates: ['2026-03-30'],
+  forceOpenDates: [],
+  availableSubjects: ['英語', '数学', '国語', '理科', '社会'],
+  slotCount: 5,
+  slotNumbers: [1, 2, 3, 4, 5],
+  status: 'pending',
+  unavailableSlots: [],
+  subjectSlots: { 英語: 2, 数学: 3 },
+  subjectDurations: { 数学: 60 },
+  availableGroupClassSubjects: ['集団理科', '集団社会'],
+  groupClassParticipation: { 集団理科: true },
+  regularOnly: false,
+  occupiedSlots: { '2026-03-26_3': '英', '2026-03-27_1': '数', '2026-04-01_2': '国' },
+  groupClassSlots: { '2026-03-28_1': '集団理科', '2026-04-04_2': '集団社会' },
+}
 
 // spec-group-lesson §E: 集団授業の2バンド(1=10:00-11:00 / 2=11:10-12:10)。提出ページでは1限の左に2列出す。
 const GROUP_CLASS_BANDS = [1, 2] as const
@@ -101,7 +129,7 @@ export function buildAvailableDates(startDate: string, endDate: string, closedWe
   return dates
 }
 
-export default function SubmissionPage({ token }: { token: string }) {
+export default function SubmissionPage({ token, debug = false }: { token: string; debug?: boolean }) {
   const [data, setData] = useState<SubmissionData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -122,13 +150,25 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   const apiBase = useMemo(() => getSubmissionApiBaseUrl(), [])
 
-  // Lock viewport scale for mobile
+  const isIOS = useMemo(() => detectIOS(), [])
+
+  // デバッグ時はパネルでライブ調整する初期値(本番定数から開始)。
+  const [debugViewportWidth, setDebugViewportWidth] = useState<number | null>(IOS_VIEWPORT_WIDTH)
+  const [debugZoom, setDebugZoom] = useState<number>(IOS_ZOOM)
+
+  // 実際に適用する補正値: デバッグ時はパネル値、本番は iOS のときだけ定数を使う。
+  const viewportWidthOverride = debug ? debugViewportWidth : (isIOS ? IOS_VIEWPORT_WIDTH : null)
+  const zoomOverride = debug ? debugZoom : (isIOS ? IOS_ZOOM : 1)
+  const containerStyle = zoomOverride !== 1 ? ({ zoom: zoomOverride } as CSSProperties) : undefined
+
+  // Lock viewport scale for mobile.
+  // 本番(iOS)の初回幅は main.tsx が初回ペイント前に同期適用済み。この effect は
+  // デバッグ画面でのライブ調整と、念のための再適用を担う。
   useEffect(() => {
     const meta = document.querySelector('meta[name="viewport"]')
-    if (meta) {
-      meta.setAttribute('content', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover')
-    }
-  }, [])
+    if (!meta) return
+    meta.setAttribute('content', buildSubmissionViewportContent(viewportWidthOverride))
+  }, [viewportWidthOverride])
 
   // 提出完了/既提出の閲覧画面へ切り替わったら画面先頭へ戻す。
   // このページは body がスクロール領域(overflow-y:auto)なので window だけでなく
@@ -147,6 +187,18 @@ export default function SubmissionPage({ token }: { token: string }) {
   }, [submitted])
 
   useEffect(() => {
+    // デバッグ画面(#/submit-debug)はネットワークを使わずダミーデータで描画する。
+    if (debug) {
+      const dummy = DEBUG_DUMMY_DATA
+      setData(dummy)
+      setSelectedSlots(new Set(dummy.unavailableSlots ?? []))
+      setSubjectSlots(dummy.subjectSlots ?? {})
+      setSubjectDurations(dummy.subjectDurations ?? {})
+      setGroupClassParticipation(dummy.groupClassParticipation ?? {})
+      setRegularOnly(dummy.regularOnly ?? false)
+      setLoading(false)
+      return
+    }
     async function loadData() {
       try {
         const response = await fetch(`${apiBase}/${encodeURIComponent(token)}`)
@@ -176,7 +228,7 @@ export default function SubmissionPage({ token }: { token: string }) {
       }
     }
     loadData()
-  }, [apiBase, token])
+  }, [apiBase, token, debug])
 
   const availableDates = useMemo(() => {
     if (!data) return []
@@ -314,6 +366,53 @@ export default function SubmissionPage({ token }: { token: string }) {
 
   if (!data) return null
 
+  // 実機デバッグ用パネル(#/submit-debug のときだけ表示)。
+  // 拡縮中の補正値を画面外(zoom 非適用)に固定表示し、値をコピーできるようにする。
+  // ここで求めた値を上部の IOS_VIEWPORT_WIDTH / IOS_ZOOM に反映すると本番 iOS に適用される。
+  const readout = `IOS_VIEWPORT_WIDTH = ${debugViewportWidth === null ? 'null' : Math.round(debugViewportWidth)} / IOS_ZOOM = ${debugZoom.toFixed(2)}`
+  const debugPanel = debug ? (
+    <div className="sub-dbg">
+      <div className="sub-dbg-head">iOS 表示調整（デバッグ）</div>
+      <div className="sub-dbg-readout">{readout}</div>
+      <div className="sub-dbg-info">
+        innerWidth={typeof window !== 'undefined' ? window.innerWidth : '-'} / dpr={typeof window !== 'undefined' ? window.devicePixelRatio : '-'} / screen={typeof window !== 'undefined' ? window.screen?.width : '-'}
+      </div>
+
+      <div className="sub-dbg-row">
+        <span className="sub-dbg-label">幅(width)</span>
+        <input
+          type="range" min={300} max={520} step={1}
+          value={debugViewportWidth ?? 393}
+          onChange={(e) => setDebugViewportWidth(parseInt(e.target.value, 10))}
+        />
+        <span className="sub-dbg-val">{debugViewportWidth === null ? '無補正' : Math.round(debugViewportWidth)}</span>
+      </div>
+      <div className="sub-dbg-presets">
+        <button type="button" onClick={() => setDebugViewportWidth(null)}>無補正</button>
+        <button type="button" onClick={() => setDebugViewportWidth(360)}>360</button>
+        <button type="button" onClick={() => setDebugViewportWidth(393)}>393</button>
+        <button type="button" onClick={() => setDebugViewportWidth(412)}>412</button>
+      </div>
+
+      <div className="sub-dbg-row">
+        <span className="sub-dbg-label">zoom</span>
+        <input
+          type="range" min={0.7} max={1.3} step={0.01}
+          value={debugZoom}
+          onChange={(e) => setDebugZoom(parseFloat(e.target.value))}
+        />
+        <span className="sub-dbg-val">{debugZoom.toFixed(2)}</span>
+      </div>
+      <div className="sub-dbg-presets">
+        <button type="button" onClick={() => setDebugZoom(1)}>zoom=1</button>
+        <button
+          type="button"
+          onClick={() => { if (navigator.clipboard) navigator.clipboard.writeText(readout).catch(() => {}) }}
+        >値をコピー</button>
+      </div>
+    </div>
+  ) : null
+
   // spec-group-lesson §E: 1限の左に集団授業(集理/集社)の2列を出す。中3かつ盤面に集団コマがある場合のみ。
   // 出欠選択の対象ではなく、生徒日程表と同じく盤面の集団コマを案内表示する読み取り専用列。
   const groupClassSlots = data.groupClassSlots ?? {}
@@ -344,7 +443,8 @@ export default function SubmissionPage({ token }: { token: string }) {
     const viewSubjectTotal = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
     const submittedSubjects = data.availableSubjects.filter((subject) => (subjectSlots[subject] ?? 0) > 0)
     return (
-      <div className="sub-container">
+      <>
+      <div className="sub-container" style={containerStyle}>
         <header className="sub-header">
           <div className="sub-header-title">{data.sessionLabel}</div>
           <div className="sub-header-name">{data.personName}</div>
@@ -466,6 +566,8 @@ export default function SubmissionPage({ token }: { token: string }) {
 
         <style>{baseStyles}</style>
       </div>
+      {debugPanel}
+      </>
     )
   }
 
@@ -482,7 +584,8 @@ export default function SubmissionPage({ token }: { token: string }) {
     : ''
 
   return (
-    <div className="sub-container">
+    <>
+    <div className="sub-container" style={containerStyle}>
       <header className="sub-header">
         <div className="sub-header-title">{data.sessionLabel}</div>
         <div className="sub-header-name">{data.personName}</div>
@@ -679,6 +782,8 @@ export default function SubmissionPage({ token }: { token: string }) {
 
       <style>{baseStyles}</style>
     </div>
+    {debugPanel}
+    </>
   )
 }
 
@@ -791,4 +896,20 @@ const baseStyles = `
   .sub-subject-row-readonly { justify-content: space-between; }
   .sub-subject-readonly-value { font-size: 15px; font-weight: 700; color: #222; }
   .sub-readonly-minutes { font-size: 12px; font-weight: 600; color: #777; margin-left: 6px; }
+
+  /* 実機デバッグパネル(#/submit-debug のみ)。zoom 非適用にするため .sub-container の外側に置く。 */
+  .sub-dbg { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 99999;
+    background: rgba(17,17,17,.92); color: #fff; border-radius: 10px; padding: 10px 12px;
+    font-size: 13px; line-height: 1.3; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+  .sub-dbg-head { font-weight: 700; font-size: 13px; margin-bottom: 4px; color: #9fd; }
+  .sub-dbg-readout { font-family: monospace; font-size: 13px; background: #000; color: #6f6;
+    padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; word-break: break-all; }
+  .sub-dbg-info { font-size: 11px; color: #bbb; margin-bottom: 8px; }
+  .sub-dbg-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .sub-dbg-label { flex: none; width: 64px; font-size: 12px; }
+  .sub-dbg-row input[type=range] { flex: 1; min-width: 0; }
+  .sub-dbg-val { flex: none; width: 56px; text-align: right; font-family: monospace; font-size: 13px; }
+  .sub-dbg-presets { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 2px; }
+  .sub-dbg-presets button { background: #333; color: #fff; border: 1px solid #555;
+    border-radius: 6px; padding: 6px 10px; font-size: 12px; }
 `

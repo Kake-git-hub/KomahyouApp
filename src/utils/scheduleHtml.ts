@@ -2220,7 +2220,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const lessonTypeLabels = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習', trial: '体験' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-      const subjectDefinitions = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社'];
+      // 通常回数・講習回数表の表示順。算国は国の直後に置き、集理/集社は末尾。
+      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社'];
+      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '集理', '集社'];
       let activeCountDialog = null;
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = buildPayloadFingerprint(DATA);
@@ -2865,7 +2867,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ...(forcedLabels || []),
           ...Object.keys(countMap || {}),
           ...Object.keys(desiredCountMap || {}),
-        ])).sort((left, right) => left.localeCompare(right, 'ja'));
+        ])).sort((left, right) => {
+          const li = SUBJECT_SORT_ORDER.indexOf(left);
+          const ri = SUBJECT_SORT_ORDER.indexOf(right);
+          if (li !== -1 && ri !== -1) return li - ri;
+          if (li !== -1) return -1;
+          if (ri !== -1) return 1;
+          return left.localeCompare(right, 'ja');
+        });
         if (!mergedLabels.length) return '<tr><td>予定なし</td><td>0</td></tr>';
         const rows = mergedLabels.flatMap((label) => {
           const count = Number(countMap && countMap[label] ? countMap[label] : 0);

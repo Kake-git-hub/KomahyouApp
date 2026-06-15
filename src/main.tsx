@@ -25,6 +25,8 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   }
 }
 
+import { applyIOSSubmissionViewport } from './components/submission/iosViewport'
+
 const SubmissionPage = lazy(() => import('./components/submission/SubmissionPage'))
 const BoardShareScreen = lazy(() => import('./components/board-share/BoardShareScreen').then((module) => ({ default: module.BoardShareScreen })))
 
@@ -51,10 +53,28 @@ function extractBoardShareToken() {
   return null
 }
 
+// 実機デバッグ用: iOS 表示倍率の調整画面。ダミーデータで提出ページを描画する。
+function isSubmissionDebug() {
+  return window.location.hash === '#/submit-debug' || window.location.pathname === '/submit-debug'
+}
+
 const submissionToken = extractSubmissionToken()
 const boardShareToken = extractBoardShareToken()
 
-if (submissionToken) {
+if (isSubmissionDebug()) {
+  // iOS は初回ペイント前に viewport 幅を確定させる(描画後の変更だと再フィットせず見切れる)。
+  applyIOSSubmissionViewport()
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>
+        <SubmissionPage token="__debug__" debug />
+      </Suspense>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </StrictMode>,
+  )
+} else if (submissionToken) {
+  // iOS は初回ペイント前に viewport 幅を確定させる(描画後の変更だと再フィットせず見切れる)。
+  applyIOSSubmissionViewport()
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>
