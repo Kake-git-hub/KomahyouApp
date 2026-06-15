@@ -3348,7 +3348,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
-      function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted) {
+      function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation) {
         DATA.specialSessions = (DATA.specialSessions || []).map((session) => {
           if (session.id !== sessionId) return session;
           const currentInput = session.studentInputs?.[personId] || defaultStudentSessionInput();
@@ -3359,51 +3359,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
                 subjectSlots: regularOnly ? {} : normalizeSubjectSlots(subjectSlots),
-                // spec-group-lesson §C: 室長の登録操作で集団参加を消さない(明示保全)。
-                groupClassParticipation: currentInput.groupClassParticipation || {},
+                // spec-group-lesson §C: 登録時は渡された集団参加を採用、未指定(登録解除等)は既存を保全して消さない。
+                groupClassParticipation: groupClassParticipation !== undefined ? (groupClassParticipation || {}) : (currentInput.groupClassParticipation || {}),
                 regularOnly: Boolean(regularOnly),
                 countSubmitted: Boolean(countSubmitted),
               },
             },
           };
         });
-      }
-
-      // spec-group-lesson §C: 室長が日程表モーダルから集団参加/不参加を設定する(登録状態・既存データは維持)。
-      function updateStudentGroupParticipationLocally(sessionId, personId, groupClassParticipation) {
-        DATA.specialSessions = (DATA.specialSessions || []).map(function(session) {
-          if (session.id !== sessionId) return session;
-          var currentInput = (session.studentInputs && session.studentInputs[personId]) || defaultStudentSessionInput();
-          var nextInputs = {};
-          Object.keys(session.studentInputs || {}).forEach(function(k) { nextInputs[k] = session.studentInputs[k]; });
-          nextInputs[personId] = Object.assign({}, currentInput, { groupClassParticipation: groupClassParticipation });
-          return Object.assign({}, session, { studentInputs: nextInputs });
-        });
-      }
-      function persistStudentGroupParticipation(sessionId, personId, groupClassParticipation) {
-        try {
-          if (!window.opener || window.opener.closed) return;
-          window.opener.postMessage({
-            type: 'schedule-student-group-save',
-            sessionId: sessionId,
-            personId: personId,
-            groupClassParticipation: groupClassParticipation,
-          }, '*');
-        } catch (e) {}
-      }
-      function submitStudentGroupParticipation() {
-        if (!activeCountDialog || !activeCountDialog.studentId || !activeCountDialog.sessionId) return;
-        var participation = {};
-        document.querySelectorAll('[data-role="student-count-group-input"]').forEach(function(element) {
-          if (!(element instanceof HTMLInputElement)) return;
-          var subject = element.getAttribute('data-subject') || '';
-          if (subject && element.checked) participation[subject] = true;
-        });
-        updateStudentGroupParticipationLocally(activeCountDialog.sessionId, activeCountDialog.studentId, participation);
-        persistStudentGroupParticipation(activeCountDialog.sessionId, activeCountDialog.studentId, participation);
-        activeCountDialog = null;
-        syncPayloadFingerprint();
-        render();
       }
 
       function updateTeacherUnavailableSlotsLocally(sessionId, personId, unavailableSlots) {
@@ -3452,17 +3415,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         } catch {}
       }
 
-      function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted) {
+      function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation) {
         try {
           if (!window.opener || window.opener.closed) return;
-          window.opener.postMessage({
+          const message = {
             type: 'schedule-student-count-save',
             sessionId,
             personId,
             subjectSlots: regularOnly ? {} : normalizeSubjectSlots(subjectSlots),
             regularOnly: Boolean(regularOnly),
             countSubmitted: Boolean(countSubmitted),
-          }, '*');
+          };
+          // spec-group-lesson §C: 集団参加は登録時のみ明示送信(未指定時は既存保全)。
+          if (groupClassParticipation !== undefined) message.groupClassParticipation = groupClassParticipation || {};
+          window.opener.postMessage(message, '*');
         } catch {}
       }
 
@@ -4057,14 +4023,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const regularOnlyRow = input.countSubmitted
           ? '<tr><td>通常のみ</td><td>' + escapeHtml(input.regularOnly ? 'あり' : 'なし') + '</td></tr>'
           : '<tr><td>通常のみ</td><td><label class="count-modal-check"><input type="checkbox" data-role="student-count-regular-only" data-testid="student-schedule-count-regular-only"' + (input.regularOnly ? ' checked' : '') + '>通常のみ</label></td></tr>';
-        // spec-group-lesson §C: 中3のみ集団参加トグル。登録状態でも編集可(既存データを保持したまま参加を切替)。
+        // spec-group-lesson §C: 中3のみ集団参加トグル。登録時に「登録」ボタンで集団参加もまとめて保存する(専用ボタンは廃止)。
+        // 室長は後から生徒日程表で追加しない運用のため、登録後は読み取り専用表示にする。
         var groupRow = '';
         if (student.currentGradeLabel === '中3') {
           var gp = input.groupClassParticipation || {};
-          var groupChecks = ['集団理科', '集団社会'].map(function(subject) {
-            return '<label class="count-modal-check"><input type="checkbox" data-role="student-count-group-input" data-subject="' + subject + '" data-testid="student-schedule-group-' + subject + '"' + (gp[subject] === true ? ' checked' : '') + '>' + subject + '</label>';
-          }).join(' ');
-          groupRow = '<tr><td>集団授業</td><td>' + groupChecks + ' <button type="button" class="secondary" data-role="save-student-group-participation" data-testid="student-schedule-group-save">集団参加を保存</button></td></tr>';
+          if (input.countSubmitted) {
+            var participatingGroups = ['集団理科', '集団社会'].filter(function(subject) { return gp[subject] === true; });
+            groupRow = '<tr><td>集団授業</td><td>' + escapeHtml(participatingGroups.length ? participatingGroups.join(' ') : 'なし') + '</td></tr>';
+          } else {
+            var groupChecks = ['集団理科', '集団社会'].map(function(subject) {
+              return '<label class="count-modal-check"><input type="checkbox" data-role="student-count-group-input" data-subject="' + subject + '" data-testid="student-schedule-group-' + subject + '"' + (gp[subject] === true ? ' checked' : '') + '>' + subject + '</label>';
+            }).join(' ');
+            groupRow = '<tr><td>集団授業</td><td>' + groupChecks + '</td></tr>';
+          }
         }
         return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + regularOnlyRow + groupRow + '</tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
       }
@@ -4135,8 +4107,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return;
         }
 
-        updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true);
-        persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true);
+        // spec-group-lesson §C: 中3の集団参加チェックも「登録」ボタンでまとめて保存する。
+        var groupParticipation = {};
+        document.querySelectorAll('[data-role="student-count-group-input"]').forEach(function(element) {
+          if (!(element instanceof HTMLInputElement)) return;
+          var subject = element.getAttribute('data-subject') || '';
+          if (subject && element.checked) groupParticipation[subject] = true;
+        });
+
+        updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation);
+        persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation);
         activeCountDialog = null;
         syncPayloadFingerprint();
         render();
@@ -4959,11 +4939,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return;
         }
 
-        if (role === 'save-student-group-participation') {
-          submitStudentGroupParticipation();
-          return;
-        }
-
         if (role === 'toggle-student-unavailable-date') {
           const section = target.closest('[data-role="student-sheet"]');
           const studentId = target.getAttribute('data-student-id') || '';
@@ -5266,7 +5241,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       pagesElement.addEventListener('click', (event) => {
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
-        const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="save-student-group-participation"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
+        const toggleTarget = target.closest('[data-role="open-student-count-modal"], [data-role="close-student-count-modal"], [data-role="submit-student-count-modal"], [data-role="unsubmit-student-count-modal"], [data-role="student-count-modal-backdrop"], [data-role="open-teacher-register-modal"], [data-role="close-teacher-register-modal"], [data-role="submit-teacher-register-modal"], [data-role="unsubmit-teacher-register-modal"], [data-role="teacher-register-modal-backdrop"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
         if (toggleTarget.getAttribute('data-role') === 'student-count-modal-backdrop' && toggleTarget !== target) return;
         if (toggleTarget.getAttribute('data-role') === 'teacher-register-modal-backdrop' && toggleTarget !== target) return;

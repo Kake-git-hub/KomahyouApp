@@ -789,10 +789,11 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     // 集団行・回数の描画ヘルパが埋め込まれていること。
     expect(html).toContain('buildStudentGroupRowsHtml')
     expect(html).toContain('injectGroupClassCounts')
-    // 室長が日程表モーダルから集団参加を設定する経路が埋め込まれていること。
-    expect(html).toContain('save-student-group-participation')
-    expect(html).toContain('schedule-student-group-save')
-    expect(html).toContain('submitStudentGroupParticipation')
+    // 集団参加は「登録」ボタンでまとめて保存する。専用「集団参加を保存」ボタンは廃止。
+    expect(html).toContain('student-count-group-input')
+    expect(html).not.toContain('save-student-group-participation')
+    expect(html).not.toContain('schedule-student-group-save')
+    expect(html).not.toContain('submitStudentGroupParticipation')
 
     vi.unstubAllGlobals()
   })

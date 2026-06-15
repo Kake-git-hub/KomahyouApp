@@ -142,8 +142,7 @@
   - `buildTeacherSheetHtml`：集団2行を tbody 先頭へ。salary 呼び出しに teacher＋range を渡す。
   - 検証：`tsc -b` クリーン、`vite build` 成功、`vitest` 全 **337 通過**（給与カテゴリ/講師ヘルパ存在テスト追加・構文検証含む）。
 - **Phase 7 — 室長参加設定＋既存QR対応 ✅ 実装（オーナー回答 Q1 反映・未デプロイ）**：
-  - **日程表モーダル（室長）**：`scheduleHtml.ts` の希望科目数モーダルに中3のみ集団参加トグル＋「集団参加を保存」ボタン。**登録済みでも編集可**（既存データ・登録状態を維持したまま参加を切替）。`schedule-student-group-save` メッセージ／`updateStudentCountLocally` で集団参加を明示保全。
-  - **App.tsx**：`schedule-student-group-save` ハンドラ（`{...previousInput, groupClassParticipation}` で既存・提出状況を維持）。
+  - **日程表モーダル（室長）**：`scheduleHtml.ts` の希望科目数モーダルに中3のみ集団参加トグル。**集団参加は「登録」ボタンで希望科目数とまとめて保存する**（2026-06-16 オーナー方針：提出データが正で後から生徒日程表で追加しない運用のため、専用「集団参加を保存」ボタン／`schedule-student-group-save` 経路は廃止）。`submitStudentCountModal` がチェック状態を収集し `updateStudentCountLocally`/`persistStudentCount` の第6引数 `groupClassParticipation` で保存。**登録後は読み取り専用表示**（参加科目をテキスト表示）。`updateStudentCountLocally` は group 引数未指定（登録解除等）の場合は既存 `groupClassParticipation` を保全して消さない。
   - **既存QR対応**：`lectureSubmission.ts` `updateSubmissionGroupClassEligibility`（未提出ドキュメントへ集団科目を後埋め・冪等・提出済みは触らない）。App.tsx のトークン同期で未提出中3に後埋め→**配布済みQRのままでも生徒が集団を選べる**。
   - 検証：app `tsc -b` クリーン、Functions `build` 成功、`vitest` 全 **337 通過**（埋め込みスクリプト構文検証含む）、`vite build` 成功。
   - **移行**：提出済み(登録済み)生徒は室長モーダルから集団参加を設定でき、既存の提出データ・提出状況は維持。
