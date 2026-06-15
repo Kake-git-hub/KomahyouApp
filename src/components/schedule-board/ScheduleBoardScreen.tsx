@@ -2934,6 +2934,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.teacherScheduleRange)
   const [stockActionModal, setStockActionModal] = useState<StockActionModalState | null>(null)
   const [stockPanelsRestoreState, setStockPanelsRestoreState] = useState<StockPanelsRestoreState | null>(null)
+  // 生徒選択モーダルの表示名検索クエリ（未消化講習・未消化振替で共用）
+  const [stockStudentSearch, setStockStudentSearch] = useState('')
   const [autoAssignDebugReport, setAutoAssignDebugReport] = useState<AutoAssignDebugReport | null>(null)
   const [scheduleSyncTrigger, setScheduleSyncTrigger] = useState(0)
   const boardInteractionTokenRef = useRef(createInteractionLockToken('board'))
@@ -6463,13 +6465,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
     const remainingBalance = selectedMakeupStockEntry.balance - 1
-    if (stockPanelsRestoreState && remainingBalance <= 0) {
-      setIsLectureStockOpen(stockPanelsRestoreState.lecture)
-      setIsMakeupStockOpen(stockPanelsRestoreState.makeup)
-      setStockPanelsRestoreState(null)
-    } else if (!stockPanelsRestoreState) {
-      setIsMakeupStockOpen(true)
-    }
+    // 配置完了後: その生徒に未消化が残っていれば生徒選択モーダルを再表示し、無ければ閉じる。
+    setStockPanelsRestoreState(null)
+    setIsMakeupStockOpen(remainingBalance > 0)
     setSelectedMakeupStockRawKey(null)
     setSelectedMakeupStockKey(null)
     setStatusMessage(`${selectedMakeupStockEntry.displayName} の振替を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
@@ -6561,16 +6559,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
-    if (stockPanelsRestoreState && selectedLectureStockEntry.requestedCount <= 1) {
-      setIsLectureStockOpen(stockPanelsRestoreState.lecture)
-      setIsMakeupStockOpen(stockPanelsRestoreState.makeup)
-      setStockPanelsRestoreState(null)
-    } else if (!stockPanelsRestoreState) {
-      setIsLectureStockOpen(true)
-    }
-    if (selectedLectureStockEntry.requestedCount <= 1) {
-      setSelectedLectureStockKey(null)
-    }
+    const remainingLectureCount = selectedLectureStockEntry.requestedCount - 1
+    // 配置完了後: その生徒に未消化が残っていれば生徒選択モーダルを再表示し、無ければ閉じる。
+    setStockPanelsRestoreState(null)
+    setIsLectureStockOpen(remainingLectureCount > 0)
+    setSelectedLectureStockKey(null)
     setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
@@ -7941,8 +7934,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     setIsMakeupStockOpen((current) => !current)
     if (!isMakeupStockOpen) {
+      setIsLectureStockOpen(false)
       setSelectedStudentId(null)
       setSelectedLectureStockKey(null)
+      setStockStudentSearch('')
       setStatusMessage('未消化振替一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
     }
   }
@@ -7959,8 +7954,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     setIsLectureStockOpen((current) => !current)
     if (!isLectureStockOpen) {
+      setIsMakeupStockOpen(false)
       setSelectedStudentId(null)
       setSelectedMakeupStockKey(null)
+      setStockStudentSearch('')
       setStatusMessage('未消化講習一覧を開きました。生徒を選ぶと空欄セルへ配置できます。')
     }
   }
@@ -8321,7 +8318,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                             className="stock-origin-item stock-origin-item-main"
                             disabled={activeStockAutoAssignKey !== null}
                             onClick={() => {
-                              handleSelectLectureStockEntry(lectureEntry)
+                              handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}
@@ -8411,7 +8408,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                             type="button"
                             className="stock-origin-item stock-origin-item-main"
                             onClick={() => {
-                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey })
+                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, hidePanelsDuringPlacement: true })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}
@@ -8489,22 +8486,36 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             </div>
           ) : null}
           </div>
-          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && (isLectureStockOpen || isMakeupStockOpen || autoAssignDebugReport) ? (
-            <div className="stock-floating-modals">
-              {isLectureStockOpen ? (
-                <section className="lecture-stock-panel stock-floating-panel" data-testid="lecture-stock-panel">
-                  <div className="makeup-stock-panel-head">
-                    <div className="stock-floating-panel-title">
-                      <strong>未消化講習</strong>
-                      <span className="basic-data-muted-inline">生徒・講習期間ごとの未消化講習数です。</span>
-                      <span className="basic-data-muted-inline">自動割振は各講習期間内の空きコマだけに配置します。</span>
-                    </div>
-                    <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsLectureStockOpen(false)} data-testid="lecture-stock-close-button">閉じる</button>
+          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && isLectureStockOpen ? (
+            <div className="stock-select-modal-overlay">
+              <div className="stock-select-modal" role="dialog" aria-modal="true" data-testid="lecture-stock-panel">
+                <div className="makeup-stock-panel-head">
+                  <div className="stock-floating-panel-title">
+                    <strong>未消化講習</strong>
+                    <span className="basic-data-muted-inline">生徒を選ぶと未消化一覧を表示します。表示名で検索できます。</span>
                   </div>
-                  <div className="makeup-stock-list">
-                    {lectureStockEntries.length === 0 ? (
-                      <div className="makeup-stock-empty">現在の未消化講習はありません。</div>
-                    ) : lectureStockEntries.map((entry) => (
+                  <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsLectureStockOpen(false)} data-testid="lecture-stock-close-button">閉じる</button>
+                </div>
+                <input
+                  type="text"
+                  className="stock-select-search"
+                  placeholder="表示名で検索"
+                  value={stockStudentSearch}
+                  onChange={(event) => setStockStudentSearch(event.target.value)}
+                  autoFocus
+                  data-testid="lecture-stock-search"
+                />
+                <div className="stock-select-list">
+                  {(() => {
+                    const query = stockStudentSearch.trim().toLowerCase()
+                    if (lectureStockEntries.length === 0) {
+                      return <div className="makeup-stock-empty">現在の未消化講習はありません。</div>
+                    }
+                    const filtered = query ? lectureStockEntries.filter((entry) => entry.displayName.toLowerCase().includes(query)) : lectureStockEntries
+                    if (filtered.length === 0) {
+                      return <div className="makeup-stock-empty">「{stockStudentSearch}」に一致する生徒はいません。</div>
+                    }
+                    return filtered.map((entry) => (
                       <button
                         key={entry.key}
                         type="button"
@@ -8517,30 +8528,47 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                         {entry.sessionLabel ? <span className="lecture-stock-session">{entry.sessionLabel}</span> : null}
                         <span className="status-chip">+{entry.requestedCount}</span>
                       </button>
-                    ))}
+                    ))
+                  })()}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && isMakeupStockOpen ? (
+            <div className="stock-select-modal-overlay">
+              <div className="stock-select-modal" role="dialog" aria-modal="true" data-testid="makeup-stock-panel">
+                <div className="makeup-stock-panel-head">
+                  <div className="stock-floating-panel-title">
+                    <strong>未消化振替</strong>
+                    <span className="basic-data-muted-inline">残数のある生徒を選ぶと未消化一覧を表示します。表示名で検索できます。</span>
                   </div>
-                </section>
-              ) : null}
-              {isMakeupStockOpen ? (
-                <section className="makeup-stock-panel stock-floating-panel" data-testid="makeup-stock-panel">
-                  <div className="makeup-stock-panel-head">
-                    <div className="stock-floating-panel-title">
-                      <strong>未消化振替</strong>
-                      <span className="basic-data-muted-inline">残数のある生徒を選ぶとコマ表へ配置できます。</span>
-                    </div>
-                    <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsMakeupStockOpen(false)} data-testid="makeup-stock-close-button">閉じる</button>
-                  </div>
-                  <div className="makeup-stock-list">
-                    {makeupStockEntries.length === 0 ? (
-                      <div className="makeup-stock-empty">現在の未消化振替はありません。</div>
-                    ) : makeupStockEntries.map((entry) => (
+                  <button className="secondary-button slim stock-floating-close" type="button" onClick={() => setIsMakeupStockOpen(false)} data-testid="makeup-stock-close-button">閉じる</button>
+                </div>
+                <input
+                  type="text"
+                  className="stock-select-search"
+                  placeholder="表示名で検索"
+                  value={stockStudentSearch}
+                  onChange={(event) => setStockStudentSearch(event.target.value)}
+                  autoFocus
+                  data-testid="makeup-stock-search"
+                />
+                <div className="stock-select-list">
+                  {(() => {
+                    const query = stockStudentSearch.trim().toLowerCase()
+                    if (makeupStockEntries.length === 0) {
+                      return <div className="makeup-stock-empty">現在の未消化振替はありません。</div>
+                    }
+                    const filtered = query ? makeupStockEntries.filter((entry) => entry.displayName.toLowerCase().includes(query)) : makeupStockEntries
+                    if (filtered.length === 0) {
+                      return <div className="makeup-stock-empty">「{stockStudentSearch}」に一致する生徒はいません。</div>
+                    }
+                    return filtered.map((entry) => (
                       <button
                         key={entry.key}
                         type="button"
                         className={`makeup-stock-row${selectedMakeupStockKey === entry.key ? ' active' : ''}${entry.balance < 0 ? ' is-negative' : ''}`}
-                        onClick={() => {
-                          setStockActionModal({ type: 'makeup', entryKey: entry.key })
-                        }}
+                        onClick={() => setStockActionModal({ type: 'makeup', entryKey: entry.key })}
                         disabled={entry.balance <= 0}
                         title={entry.title}
                         data-testid={`makeup-stock-entry-${entry.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`}
@@ -8548,26 +8576,28 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                         <span className="makeup-stock-name">{entry.displayName}</span>
                         <span className={`status-chip ${entry.balance < 0 ? 'secondary' : ''}`}>{entry.balance > 0 ? `+${entry.balance}` : entry.balance}</span>
                       </button>
-                    ))}
+                    ))
+                  })()}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && autoAssignDebugReport ? (
+            <div className="stock-floating-modals">
+              <section className="stock-floating-panel auto-assign-debug-panel" data-testid="auto-assign-debug-panel">
+                <div className="makeup-stock-panel-head">
+                  <div className="stock-floating-panel-title">
+                    <strong>{autoAssignDebugReport.title}</strong>
+                    <span className="basic-data-muted-inline">直近の自動割振について、各ルールをどの程度満たせたかを集計表示します。</span>
                   </div>
-                </section>
-              ) : null}
-              {autoAssignDebugReport ? (
-                <section className="stock-floating-panel auto-assign-debug-panel" data-testid="auto-assign-debug-panel">
-                  <div className="makeup-stock-panel-head">
-                    <div className="stock-floating-panel-title">
-                      <strong>{autoAssignDebugReport.title}</strong>
-                      <span className="basic-data-muted-inline">直近の自動割振について、各ルールをどの程度満たせたかを集計表示します。</span>
-                    </div>
-                    <div className="auto-assign-debug-actions">
-                      <button className="secondary-button slim" type="button" onClick={copyAutoAssignDebugReport} data-testid="auto-assign-debug-copy">コピー</button>
-                      <button className="secondary-button slim" type="button" onClick={() => setAutoAssignDebugReport(null)} data-testid="auto-assign-debug-close">閉じる</button>
-                    </div>
+                  <div className="auto-assign-debug-actions">
+                    <button className="secondary-button slim" type="button" onClick={copyAutoAssignDebugReport} data-testid="auto-assign-debug-copy">コピー</button>
+                    <button className="secondary-button slim" type="button" onClick={() => setAutoAssignDebugReport(null)} data-testid="auto-assign-debug-close">閉じる</button>
                   </div>
-                  <div className="status-banner">{autoAssignDebugReport.summary}</div>
-                  <pre className="debug-preview auto-assign-debug-preview">{autoAssignDebugReport.details}</pre>
-                </section>
-              ) : null}
+                </div>
+                <div className="status-banner">{autoAssignDebugReport.summary}</div>
+                <pre className="debug-preview auto-assign-debug-preview">{autoAssignDebugReport.details}</pre>
+              </section>
             </div>
           ) : null}
           {teacherMenu && teacherMenuContext ? (

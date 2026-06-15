@@ -3181,6 +3181,68 @@ tr.sa-group-row td {
   padding: 16px;
 }
 
+/* 未消化講習・未消化振替の生徒選択モーダル（中央配置）。
+   未消化一覧モーダル(.auto-assign-modal-overlay z-index:50)より下に置き、
+   生徒クリックで開く一覧が上に重なるようにする。
+   背景はクリックを透過させ(pointer-events:none)、コマ表の操作・週移動を妨げない。
+   閉じるのは「閉じる」ボタンで行う。 */
+.stock-select-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 40, 70, 0.18);
+  z-index: 46;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  pointer-events: none;
+}
+
+.stock-select-modal {
+  background: #fff;
+  border-radius: 20px;
+  padding: 20px;
+  max-width: 560px;
+  width: 100%;
+  display: grid;
+  gap: 12px;
+  box-shadow: 0 20px 48px rgba(16, 40, 70, 0.28);
+  max-height: 90vh;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.stock-select-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid #d7e2f1;
+  border-radius: 12px;
+  font: inherit;
+  color: #294967;
+}
+
+.stock-select-search:focus {
+  outline: none;
+  border-color: #bdd3f7;
+  box-shadow: 0 0 0 3px rgba(189, 211, 247, 0.4);
+}
+
+.stock-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+  max-height: 60vh;
+  padding: 2px;
+}
+
+.stock-select-list .makeup-stock-row,
+.stock-select-list .lecture-stock-row {
+  width: 100%;
+  justify-content: space-between;
+}
+
 .auto-assign-modal {
   background: #fff;
   border-radius: 20px;

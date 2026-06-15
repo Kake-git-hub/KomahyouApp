@@ -2223,7 +2223,9 @@ test.describe('コマ調整表', () => {
     await expect(sourceName).toHaveText('青木太郎')
     await expect(sourcePrefix).toHaveAttribute('aria-label', '通常')
 
-    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
+    // 青木太郎の未消化振替が0件になったため、生徒選択モーダルは自動で閉じる
+    await expect(page.getByTestId('makeup-stock-panel')).not.toBeVisible()
+    await ensureMakeupStockPanelVisible(page)
     await expect(page.getByTestId('makeup-stock-panel')).not.toContainText('青木太郎')
   })
 
@@ -2259,7 +2261,6 @@ test.describe('コマ調整表', () => {
     expect(initialLectureTitle).toContain('残数: +2')
     expect(initialLectureTitle).toContain('数: +1')
     expect(initialLectureTitle).toContain('英: +1')
-    const initialLectureCount = extractSignedCount(await lectureEntry.textContent())
     await lectureEntry.click()
     await page.getByTestId('stock-origin-item-0').click()
 
@@ -2272,11 +2273,13 @@ test.describe('コマ調整表', () => {
     await page.getByTestId(firstTarget.cellTestId).click()
     const firstTargetName = page.getByTestId(firstTarget.cellTestId.replace('student-cell-', 'student-name-'))
     await expect(firstTargetName).toHaveText('青木太郎')
+    // 1件配置すると残数が残るため生徒選択モーダルが再表示される
     await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
-    await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
-    await expect(page.getByTestId('move-preview')).toContainText('未消化講習の配置先を選択中')
 
     const secondPlacementTarget = await findEmptyStudentCellWithTeacher(page, specialWeekStart, '青木太郎', firstTarget.slotId)
+    // 再表示されたモーダルから残りの講習を選び直して2件目を配置する
+    await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
+    await page.getByTestId('stock-origin-item-0').click()
     await expect(page.getByTestId('move-preview')).toContainText('青木太郎')
     await expect(page.getByTestId('move-preview')).toContainText('未消化講習の配置先を選択中')
     const secondPreviewText = (await page.getByTestId('move-preview').textContent()) ?? ''
@@ -2678,7 +2681,8 @@ test.describe('コマ調整表', () => {
 
     const beforeReassignCount = await countStudentOccurrencesInSessionWeeks()
     await moveBoardToWeek(page, currentWeekStart)
-    await expect(page.getByTestId('lecture-stock-panel')).toBeVisible()
+    // 直前の配置で残数0となり生徒選択モーダルは閉じているため、再度開いてから選び直す
+    await ensureLectureStockPanelVisible(page)
     await page.locator('[data-testid^="lecture-stock-entry-"]').filter({ hasText: '青木太郎' }).first().click()
     await page.getByTestId('stock-action-modal-auto').click()
     await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? を自動割振しました。1コマ配置しました。/)
@@ -2909,7 +2913,8 @@ test.describe('コマ調整表', () => {
     await expect(page.getByTestId('center-status-banner')).toContainText('同コマにすでに青木太郎が組まれているため振替不可です。')
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替移動中')
     await expect(page.getByTestId('cancel-selection-button')).toBeVisible()
-    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
+    // 配置先クリック待ちのため生徒選択モーダルは隠れたまま（チップとキャンセルで移動中状態を維持）
+    await expect(page.getByTestId('makeup-stock-panel')).not.toBeVisible()
 
     await validTarget.click()
     await expect(page.getByTestId('toolbar-status')).toContainText(/青木太郎(?: \([^)]*\))? の振替を/)
@@ -3578,11 +3583,13 @@ test.describe('コマ調整表', () => {
     await openStockActionModal(page, 'makeup-stock-entry-s001__-')
     await page.getByTestId('stock-origin-item-0').click()
 
-    await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
+    // 未消化を選ぶと配置先クリックのため生徒選択モーダルは一時的に隠れる（振替移動中状態は維持）
+    await expect(page.getByTestId('makeup-stock-panel')).not.toBeVisible()
     await expect(page.getByTestId('makeup-stock-chip')).toContainText('振替移動中')
 
     await targetCell.click()
 
+    // まだ残数があるため生徒選択モーダルが再表示され、続けて操作できる
     await expect(page.getByTestId('makeup-stock-panel')).toBeVisible()
     await expect(page.getByTestId('makeup-stock-chip')).not.toContainText('振替移動中')
     await expect(page.getByTestId('makeup-stock-entry-s001__-')).toBeVisible()
