@@ -31,8 +31,10 @@ service cloud.firestore {
         && (
           get(memberDoc(workspaceKey)).data.email == 'dai.in.the.mood@gmail.com'
           || get(memberDoc(workspaceKey)).data.email == 'bkkdmzn@gmail.com'
+          || get(memberDoc(workspaceKey)).data.email == 'd.ishikawa@agc-akasaka.com'
           || request.auth.token.email == 'dai.in.the.mood@gmail.com'
           || request.auth.token.email == 'bkkdmzn@gmail.com'
+          || request.auth.token.email == 'd.ishikawa@agc-akasaka.com'
         );
     }
 

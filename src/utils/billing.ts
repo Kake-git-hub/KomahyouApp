@@ -1,6 +1,6 @@
 import { isActiveOnDate, type StudentRow } from '../components/basic-data/basicDataModel'
 
-export const BILLING_ALLOWED_EMAILS = ['dai.in.the.mood@gmail.com', 'bkkdmzn@gmail.com'] as const
+export const BILLING_ALLOWED_EMAILS = ['dai.in.the.mood@gmail.com', 'bkkdmzn@gmail.com', 'd.ishikawa@agc-akasaka.com'] as const
 
 export type BillingAllowedEmail = typeof BILLING_ALLOWED_EMAILS[number]
 

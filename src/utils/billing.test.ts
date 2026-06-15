@@ -18,6 +18,7 @@ describe('billing utilities', () => {
   it('limits billing access to the allowed developer emails', () => {
     expect(isBillingAllowedEmail('dai.in.the.mood@gmail.com')).toBe(true)
     expect(isBillingAllowedEmail(' BKKDMZN@gmail.com ')).toBe(true)
+    expect(isBillingAllowedEmail('d.ishikawa@agc-akasaka.com')).toBe(true)
     expect(isBillingAllowedEmail('manager@example.com')).toBe(false)
   })
 
