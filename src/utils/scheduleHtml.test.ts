@@ -640,6 +640,10 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(studentHtml).toContain('function openEmptyFormatPrintWindow')
     expect(studentHtml).toContain('buildStudentSheetHtml(startDate, endDate, appliedPersonId, 0, true)')
     expect(studentHtml).toContain('function toEmptyCountRows')
+    // spec-group-lesson §E: 空フォーマットは中3想定で集団行を反映し、講習回数に 集理/集社 を追加する。
+    expect(studentHtml).toContain('function buildEmptyFormatGroupRowsHtml')
+    expect(studentHtml).toContain("emptyFormatSubjects.concat(['集理', '集社'])")
+    expect(studentHtml).toContain('emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders)')
 
     write.mockClear()
     openTeacherScheduleHtml({

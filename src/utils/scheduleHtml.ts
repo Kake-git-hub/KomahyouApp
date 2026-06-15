@@ -3070,6 +3070,26 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
         return rowsHtml;
       }
+      // spec-group-lesson §E: 空フォーマットの集団行(中3想定)。生徒非依存で、盤面に組まれた
+      // 集団コマの科目(集理/集社)をそのまま反映する(出欠・名簿は判定しない静的表示)。
+      function buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) {
+        if (getGroupClassEntriesInRange(startDate, endDate).length === 0) return '';
+        var bands = ['1', '2'];
+        var rowsHtml = '';
+        bands.forEach(function(band) {
+          var cellsHtml = dateHeaders.map(function(dateHeader) {
+            var entry = getGroupClassEntry(dateHeader.dateKey, band);
+            var classes = ['slot-cell', 'group-slot-cell'];
+            if (!dateHeader.isOpenDay) classes.push('is-holiday');
+            var inner = entry ? '<span class="group-slot-label">' + escapeHtml(groupClassShortLabel(entry.subject)) + '</span>' : '';
+            return '<td class="' + classes.join(' ') + '"><div class="slot-cell-content">' + inner + '</div></td>';
+          }).join('');
+          var bt = String(groupClassBandTimes[band] || '').split('-');
+          var timeHeader = '<th class="time-col"><div class="time-box"><div class="time-slot">集団</div><div class="time-range"><span class="time-part">' + escapeHtml(bt[0] || '') + '</span><span class="time-part">' + escapeHtml(bt[1] || '') + '</span></div></div></th>';
+          rowsHtml += '<tr class="group-class-row">' + timeHeader + cellsHtml + '</tr>';
+        });
+        return rowsHtml;
+      }
       // 中3生徒の集団回数(集理/集社)を講習回数表へ注入。希望=範囲内の該当コマ数、実績=出席数。
       function injectGroupClassCounts(student, startDate, endDate, actualCounts, desiredCounts) {
         if (!student || student.currentGradeLabel !== '中3') return;
@@ -4384,11 +4404,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var headerNameLabel = emptyFormat ? '' : formatStudentHeaderName(student, startDate);
         var allSubjectsForCounts = getVisibleSubjectsForStudent(student, startDate);
         var emptyFormatSubjects = ['英', '算/数', '国', '理', '社'];
+        // spec-group-lesson §E: 空フォーマットは中3想定。期間内に集団コマがあれば講習回数に 集理/集社 を追加する。
+        var emptyFormatHasGroup = getGroupClassEntriesInRange(startDate, endDate).length > 0;
+        var emptyFormatLectureSubjects = (emptyFormat && emptyFormatHasGroup) ? emptyFormatSubjects.concat(['集理', '集社']) : emptyFormatSubjects;
         var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
-        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
+        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
         var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat });
-        // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットでは出さない。
-        var groupRowsHtml = emptyFormat ? '' : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
+        // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットは中3想定で盤面の集団コマを反映する。
+        var groupRowsHtml = emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
         var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + bottomSectionHtml + '</section>';
         return { html: html, student: student };
       }
