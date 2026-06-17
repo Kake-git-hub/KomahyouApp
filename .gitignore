@@ -24,8 +24,9 @@ firebase-debug.log*
 playwright-report
 test-results
 
-# Local agent / editor config
-.claude/
+# Claude Code config: keep skills/settings in the repo, ignore only machine-local overrides
+.claude/settings.local.json
+.claude/projects/
 
 # Editor directories and files
 .vscode/*

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(curl:*firestore.googleapis.com*documents*5w5OMueETerSKrSf14HC*)",
+      "Bash(curl:*firestore.googleapis.com*documents*KzFnOQoTFLsCxwUp1tvh*)",
+      "Bash(curl:*firestore.googleapis.com*documents*6xnnbSTbwgGrBLy0EJKb*)",
+      "Bash(curl:*firestore.googleapis.com*documents*members*)",
+      "Bash(firebase*firestore:delete*)",
+      "Bash(firebase*firestore:set*)",
+      "Bash(gcloud*firestore*documents*patch*)",
+      "Bash(gcloud*firestore*documents*create*)",
+      "Bash(gcloud*firestore*documents*delete*)"
+    ]
+  }
+}
