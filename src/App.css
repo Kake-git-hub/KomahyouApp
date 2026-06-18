@@ -3379,6 +3379,20 @@ tr.sa-group-row td {
 
 .auto-assign-modal[data-testid="stock-action-modal"] .student-menu-help-text {
   font-size: 24px;
+  /* 説明文だけは横に伸びすぎないよう従来どおり折り返させる(下のモーダル幅 max-content の主役にしない) */
+  max-width: 480px;
+}
+
+/* 文字倍化(765982d)後、講習名・講習期間がモーダル幅560px固定のままで折り返していた。
+   各セルを1行表示にし、モーダル幅を内容に合わせて自動調整する。 */
+.auto-assign-modal[data-testid="stock-action-modal"] {
+  width: max-content;
+  max-width: calc(100vw - 24px);
+}
+
+.auto-assign-modal[data-testid="stock-action-modal"] .stock-origin-subject,
+.auto-assign-modal[data-testid="stock-action-modal"] .stock-origin-meta {
+  white-space: nowrap;
 }
 
 .auto-assign-modal[data-testid="stock-action-modal"] .stock-origin-item {
