@@ -4060,7 +4060,9 @@ function AuthenticatedApp() {
 
     const classroomName = actingClassroom?.name?.trim()
     if (screen === 'developer') {
-      document.title = classroomName ? `${classroomName} | 開発者画面 | コマ表アプリ` : '開発者画面 | コマ表アプリ'
+      // 開発者画面は開発者専用で特定の校舎に紐づかないため、タブ名に校舎名は出さない。
+      // (acting 教室名を出すと、前に開いていた教室名が残って混乱を招く)
+      document.title = '開発者画面 | コマ表アプリ'
       return
     }
 
