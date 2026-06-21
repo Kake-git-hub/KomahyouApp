@@ -38,9 +38,26 @@ export function normalizeBillingMonthKey(value: string, fallback: BillingMonthKe
   return fallback
 }
 
-export function getBillingSnapshotDate(monthKey: string) {
+export const DEFAULT_BILLING_SNAPSHOT_DAY = 15
+
+// 集計基準日。既定は毎月15日だが、任意の日を指定できる（月末を超える指定はその月の末日にクランプ）。
+export function getBillingSnapshotDate(monthKey: string, day: number = DEFAULT_BILLING_SNAPSHOT_DAY) {
   const normalizedMonthKey = normalizeBillingMonthKey(monthKey)
-  return `${normalizedMonthKey}-15`
+  const [yearText, monthText] = normalizedMonthKey.split('-')
+  const year = Number(yearText)
+  const monthIndex = Number(monthText) - 1
+  const lastDayOfMonth = new Date(year, monthIndex + 1, 0).getDate()
+  const requestedDay = Number.isFinite(day) ? Math.trunc(day) : DEFAULT_BILLING_SNAPSHOT_DAY
+  const clampedDay = Math.min(Math.max(1, requestedDay), lastDayOfMonth)
+  return `${normalizedMonthKey}-${String(clampedDay).padStart(2, '0')}`
+}
+
+// 集計日に選べる日付の範囲（対象月の初日〜末日）。<input type="date"> の min/max 用。
+export function getBillingMonthDateRange(monthKey: string) {
+  return {
+    min: getBillingSnapshotDate(monthKey, 1),
+    max: getBillingSnapshotDate(monthKey, 31),
+  }
 }
 
 export function getBillingDueDate(monthKey: string) {
@@ -74,8 +91,8 @@ export function formatYen(value: number) {
   return `${normalizedValue.toLocaleString('ja-JP')}円`
 }
 
-export function countActiveStudentsForBilling(students: StudentRow[], monthKey: string) {
-  const snapshotDate = getBillingSnapshotDate(monthKey)
+export function countActiveStudentsForBilling(students: StudentRow[], monthKey: string, snapshotDateOverride?: string) {
+  const snapshotDate = snapshotDateOverride ?? getBillingSnapshotDate(monthKey)
   return students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, snapshotDate)).length
 }
 
