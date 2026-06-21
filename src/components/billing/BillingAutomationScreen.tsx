@@ -60,12 +60,15 @@ function buildBillingRows(params: {
   const recordByClassroomId = new Map(params.records.map((record) => [record.classroomId, record]))
   const managerById = new Map(params.users.map((user) => [user.id, user]))
   const snapshotDate = params.snapshotDate
+  // 既定の15日を表示しているかどうか。既定時は従来どおり保存済みレコードの確定人数を尊重し、
+  // ユーザーが集計日を別の日に変更したときだけ、その日付で在籍数を再計算する。
+  const isCustomSnapshotDate = snapshotDate !== getBillingSnapshotDate(params.monthKey)
 
   return params.classrooms.map((classroom): BillingRowDraft => {
     const record = recordByClassroomId.get(classroom.id)
     const manager = managerById.get(classroom.managerUserId)
-    // 集計日が保存済みレコードと異なる場合は、選択中の集計日で在籍数を再計算する。
-    const studentCount = record && record.snapshotDate === snapshotDate
+    // 既定(15日): 確定済み人数を優先（従来挙動）。集計日を変更したとき: 選択日で再計算。
+    const studentCount = !isCustomSnapshotDate && record
       ? record.studentCount
       : countActiveStudentsForBilling(classroom.data.students, params.monthKey, snapshotDate)
     const unitPrice = record?.unitPrice ?? classroom.studentUnitPrice ?? DEFAULT_STUDENT_UNIT_PRICE
@@ -76,7 +79,7 @@ function buildBillingRows(params: {
       classroomName: classroom.name || record?.classroomName || '名称未設定の教室',
       managerEmail: manager?.email || record?.managerEmail || '',
       monthKey: params.monthKey,
-      snapshotDate,
+      snapshotDate: isCustomSnapshotDate ? snapshotDate : (record?.snapshotDate || snapshotDate),
       studentCount: amounts.studentCount,
       unitPrice: amounts.unitPrice,
       calculatedAmount: amounts.calculatedAmount,
