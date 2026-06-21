@@ -3,7 +3,7 @@ import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailCo
 import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integrations/gmail/compose'
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, type BillingInvoiceRow, type BillingMonthKey } from '../../utils/billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, type BillingInvoiceRow, type BillingMonthKey } from '../../utils/billing'
 import { buildInvoicePdfFileName, createInvoicePdfBlob, type InvoiceIssuerInfo } from '../../utils/invoicePdf'
 
 type BillingAutomationScreenProps = {
@@ -60,17 +60,13 @@ function buildBillingRows(params: {
   const recordByClassroomId = new Map(params.records.map((record) => [record.classroomId, record]))
   const managerById = new Map(params.users.map((user) => [user.id, user]))
   const snapshotDate = params.snapshotDate
-  // 既定の15日を表示しているかどうか。既定時は従来どおり保存済みレコードの確定人数を尊重し、
-  // ユーザーが集計日を別の日に変更したときだけ、その日付で在籍数を再計算する。
-  const isCustomSnapshotDate = snapshotDate !== getBillingSnapshotDate(params.monthKey)
 
   return params.classrooms.map((classroom): BillingRowDraft => {
     const record = recordByClassroomId.get(classroom.id)
     const manager = managerById.get(classroom.managerUserId)
-    // 既定(15日): 確定済み人数を優先（従来挙動）。集計日を変更したとき: 選択日で再計算。
-    const studentCount = !isCustomSnapshotDate && record
-      ? record.studentCount
-      : countActiveStudentsForBilling(classroom.data.students, params.monthKey, snapshotDate)
+    // 在籍数は常に選択中の集計日でライブ計算する（各教室の名簿と一致させるため）。
+    // 保存済みレコードの確定人数は表示には使わない（古い値で食い違う回帰を避ける）。
+    const studentCount = countActiveStudentsForBilling(classroom.data.students, params.monthKey, snapshotDate)
     const unitPrice = record?.unitPrice ?? classroom.studentUnitPrice ?? DEFAULT_STUDENT_UNIT_PRICE
     const amounts = calculateBillingAmounts(studentCount, unitPrice, record?.billedAmount)
 
@@ -79,7 +75,7 @@ function buildBillingRows(params: {
       classroomName: classroom.name || record?.classroomName || '名称未設定の教室',
       managerEmail: manager?.email || record?.managerEmail || '',
       monthKey: params.monthKey,
-      snapshotDate: isCustomSnapshotDate ? snapshotDate : (record?.snapshotDate || snapshotDate),
+      snapshotDate,
       studentCount: amounts.studentCount,
       unitPrice: amounts.unitPrice,
       calculatedAmount: amounts.calculatedAmount,
@@ -126,8 +122,7 @@ function formatDraftCreatedAt(value: string | undefined) {
 }
 
 export function BillingAutomationScreen({ currentUser, authMode, classrooms, users, onBackToDeveloper, onLogout }: BillingAutomationScreenProps) {
-  const [monthKey, setMonthKey] = useState<BillingMonthKey>(() => getCurrentBillingMonthKey())
-  // 集計基準日。既定は対象月の15日。月を変更すると15日に戻す。
+  // 集計基準日（単一のカレンダーで選択）。請求月はこの日付から導出する。既定は当月15日。
   const [snapshotDate, setSnapshotDate] = useState<string>(() => getBillingSnapshotDate(getCurrentBillingMonthKey()))
   const [rows, setRows] = useState<BillingRowDraft[]>([])
   const [issuerInfo, setIssuerInfo] = useState<InvoiceIssuerInfo>(() => loadStoredIssuerInfo())
@@ -138,15 +133,9 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   const [isCreatingAllDrafts, setIsCreatingAllDrafts] = useState(false)
 
   const canUseBilling = isBillingAllowedEmail(currentUser.email) && currentUser.role === 'developer'
+  // 請求月は集計日の年月から導出する（請求月ピッカーは集計日カレンダーに統合）。
+  const monthKey = normalizeBillingMonthKey(snapshotDate.slice(0, 7))
   const dueDate = getBillingDueDate(monthKey)
-  const snapshotDateRange = getBillingMonthDateRange(monthKey)
-
-  // 対象月を変えたら集計日を既定の15日（その月の15日）に戻す。
-  const handleMonthChange = (value: string) => {
-    const nextMonthKey = normalizeBillingMonthKey(value, monthKey)
-    setMonthKey(nextMonthKey)
-    setSnapshotDate(getBillingSnapshotDate(nextMonthKey))
-  }
 
   const handleSnapshotDateChange = (value: string) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return
@@ -389,12 +378,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
             </div>
             <div className="basic-data-row-actions developer-actions-right">
               <label className="basic-data-inline-field billing-month-field">
-                <span>請求月</span>
-                <input type="month" value={monthKey} onChange={(event) => handleMonthChange(event.target.value)} />
-              </label>
-              <label className="basic-data-inline-field billing-month-field">
-                <span>集計日</span>
-                <input type="date" value={snapshotDate} min={snapshotDateRange.min} max={snapshotDateRange.max} onChange={(event) => handleSnapshotDateChange(event.target.value)} />
+                <span>集計日（請求月）</span>
+                <input type="date" value={snapshotDate} onChange={(event) => handleSnapshotDateChange(event.target.value)} />
               </label>
               <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
               <button className="primary-button" type="button" onClick={() => void handlePrepareAll()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? (isGmailDraftCreationConfigured() ? '下書き作成中...' : 'ダウンロード中...') : (isGmailDraftCreationConfigured() ? '全教室の下書きを作成' : '全教室のPDFをダウンロード')}</button>

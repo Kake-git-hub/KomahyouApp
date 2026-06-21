@@ -56,11 +56,19 @@ function runCommand(command, args) {
 function main() {
   const args = parseArgs(process.argv.slice(2))
   const withFunctions = args['with-functions'] === 'true'
+  const skipBump = args['no-bump'] === 'true'
   const projectId = args.project?.trim() || readDefaultProjectId() || 'komahyouapp-prod'
+  const bumpScriptPath = resolve('tools', 'bump-version.mjs')
   const verifyScriptPath = resolve('tools', 'verify-firebase-hosting.mjs')
   const retentionScriptPath = resolve('tools', 'firebase-hosting-retention.mjs')
   const npmCommand = resolveCommand('npm')
   const npxCommand = resolveCommand('npx')
+
+  // デプロイのたびにバージョンを上げる（--no-bump で抑止可能）。build より前に実行して
+  // dist/version.json へ反映させる。
+  if (!skipBump) {
+    runCommand(process.execPath, [bumpScriptPath])
+  }
 
   runCommand(npmCommand, ['run', 'build:firebase'])
   if (withFunctions) {
