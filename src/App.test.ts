@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
@@ -22,6 +22,28 @@ describe('resolveWorkspaceSyncTargetClassrooms (本番データ混入防止)', (
 
   it('対象未指定かつ操作中教室不明なら何も書かない(安全側)', () => {
     expect(resolveWorkspaceSyncTargetClassrooms(all, undefined, null)).toEqual([])
+  })
+})
+
+describe('shouldInjectEditingStateIntoClassroom (本番データ混入防止・2026-06-21 回帰防止)', () => {
+  it('acting かつ編集stateの出所が acting と一致する教室にだけ編集 state を反映する', () => {
+    expect(shouldInjectEditingStateIntoClassroom('A', 'A', 'A')).toBe(true)
+  })
+
+  it('編集 state の出所が acting と違う場合は書き込まない(別教室の名簿で上書き汚染を防ぐ)', () => {
+    // 例: 開発者画面着地で acting=日大前(A) のまま、編集 state は前に開いた別教室(B)の名簿。
+    // この状態で A へ書くと A が B のデータで汚染される。→ 反映しない。
+    expect(shouldInjectEditingStateIntoClassroom('A', 'A', 'B')).toBe(false)
+  })
+
+  it('対象教室が acting でなければ反映しない', () => {
+    expect(shouldInjectEditingStateIntoClassroom('B', 'A', 'A')).toBe(false)
+  })
+
+  it('acting 不明 / 出所不明なら反映しない(安全側)', () => {
+    expect(shouldInjectEditingStateIntoClassroom('A', null, 'A')).toBe(false)
+    expect(shouldInjectEditingStateIntoClassroom('A', 'A', null)).toBe(false)
+    expect(shouldInjectEditingStateIntoClassroom('A', null, null)).toBe(false)
   })
 })
 

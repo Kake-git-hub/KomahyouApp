@@ -489,6 +489,21 @@ export function resolveWorkspaceSyncTargetClassrooms(
   return []
 }
 
+// 【本番データ混入防止・2026-06-21 インシデント回帰防止】
+// 編集中の state(students 等)は「読み込んだ教室(loadedEditingClassroomId)」のものである。
+// これを別教室のドキュメントへ書き込むと、ある教室が別教室のデータで上書きされる混入が起きる。
+// したがって編集 state を教室へ反映してよいのは、対象教室が現在の acting であり、かつ
+// その acting が「編集 state を読み込んだ教室」と一致するときに限る。
+export function shouldInjectEditingStateIntoClassroom(
+  classroomId: string,
+  actingClassroomId: string | null,
+  loadedEditingClassroomId: string | null,
+): boolean {
+  if (!actingClassroomId) return false
+  if (classroomId !== actingClassroomId) return false
+  return loadedEditingClassroomId === actingClassroomId
+}
+
 function buildWorkspaceSnapshotMergeFromSelection(currentSnapshot: WorkspaceSnapshot, restoringSnapshot: WorkspaceSnapshot, restoreByClassroomId: Map<string, boolean>) {
   const currentClassroomById = new Map(currentSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
   const restoringClassroomById = new Map(restoringSnapshot.classrooms.map((classroom) => [classroom.id, normalizeWorkspaceClassroom(classroom)]))
@@ -1281,6 +1296,9 @@ function AuthenticatedApp() {
   const [developerRestoreModalState, setDeveloperRestoreModalState] = useState<DeveloperRestoreModalState | null>(null)
   const [currentUserId, setCurrentUserId, currentUserIdRef] = useLatestState('')
   const [actingClassroomId, setActingClassroomId, actingClassroomIdRef] = useLatestState<string | null>(null)
+  // 編集中 state(students 等)が「どの教室から読み込まれたか」を保持する。actingClassroomId と
+  // これが一致するときだけ、編集 state を教室文書へ書き込んでよい(本番データ混入防止の不変条件)。
+  const loadedEditingClassroomIdRef = useRef<string | null>(null)
   const [bulkTemporarySuspensionReason, setBulkTemporarySuspensionReason] = useState('')
   const [hasCheckedRemoteSession, setHasCheckedRemoteSession] = useState(!isRemoteBackendEnabled)
   const [remoteSessionUserId, setRemoteSessionUserId] = useState<string | null>(null)
@@ -1426,7 +1444,8 @@ function AuthenticatedApp() {
       actingClassroomId,
       users: latestWorkspaceUsers,
       classrooms: latestWorkspaceClassrooms.map((classroom) => {
-        if (classroom.id !== actingClassroomId) return classroom
+        // 編集 state はその教室から読み込んだものでなければ書き込まない(本番データ混入防止)。
+        if (!shouldInjectEditingStateIntoClassroom(classroom.id, actingClassroomId, loadedEditingClassroomIdRef.current)) return classroom
         return {
           ...classroom,
           data: buildClassroomSnapshotPayload({
@@ -1930,11 +1949,15 @@ function AuthenticatedApp() {
     setBoardState(sanitizedSnapshot.boardState)
     setLastSavedAt(sanitizedSnapshot.savedAt)
     setPersistenceMessage(successMessage)
+    // ローカル単一教室の読込。編集 state の出所を現在の acting に合わせる。
+    loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
     markStateLoadedClean(buildClassroomDataSignature(sanitizedSnapshot))
-  }, [buildClassroomDataSignature, markStateLoadedClean])
+  }, [actingClassroomIdRef, buildClassroomDataSignature, markStateLoadedClean])
 
   const syncCurrentClassroomData = useCallback((targetClassroomId: string | null) => {
     if (!targetClassroomId) return
+    // 編集 state がその教室から読み込まれたものでないなら、その教室へ書き戻さない(本番データ混入防止)。
+    if (loadedEditingClassroomIdRef.current !== targetClassroomId) return
     const latestScreen = screenRef.current
     const latestManagers = managersRef.current
     const latestTeachers = teachersRef.current
@@ -2011,10 +2034,12 @@ function AuthenticatedApp() {
       setBoardState,
       setBoardMountKey,
     })
+    // undo は現在開いている教室の編集 state を戻す操作なので、出所は acting のまま。
+    loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
     markStateLoadedClean()
     setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
     setUndoSnapshot(null)
-  }, [markStateLoadedClean, undoSnapshot])
+  }, [actingClassroomIdRef, markStateLoadedClean, undoSnapshot])
 
   const dismissUndoSnapshot = useCallback(() => {
     setUndoSnapshot(null)
@@ -2048,6 +2073,8 @@ function AuthenticatedApp() {
       setBoardState,
       setBoardMountKey,
     })
+    // 編集 state はこの教室から読み込んだ、と記録する(本番データ混入防止の不変条件)。
+    loadedEditingClassroomIdRef.current = classroomId
     const navigationSnapshot = buildWorkspaceNavigationSnapshot({
       snapshot: buildWorkspaceSnapshot(new Date().toISOString()),
       classroomId,
@@ -2096,7 +2123,13 @@ function AuthenticatedApp() {
       nextUserId: sanitizedWorkspaceSnapshot.currentUserId,
     })
 
-    if (targetClassroom && nextScreen !== 'developer') {
+    // 【本番データ混入防止・2026-06-21 インシデント】開発者画面で着地する場合でも、
+    // actingClassroomId に対応する教室の編集 state(students 等)を必ず読み込む。
+    // 以前は開発者画面のとき編集 state を読み込まず、前に開いていた別教室の名簿が
+    // 残ったまま actingClassroomId だけ別教室に向き、自動保存がその別教室の文書へ
+    // 前教室の名簿を書き込んで上書き汚染していた(日大前校が緑が丘/開発用データで上書き)。
+    // 編集 state は常に actingClassroomId と一致させ、不変条件「編集 state は acting の教室のもの」を守る。
+    if (targetClassroom) {
       applyClassroomPayloadToState(targetClassroom.data, {
         setScreen: () => setScreen(nextScreen),
         setManagers,
@@ -2111,8 +2144,10 @@ function AuthenticatedApp() {
         setBoardState,
         setBoardMountKey,
       })
+      loadedEditingClassroomIdRef.current = targetClassroom.id
     } else {
       setScreen(nextScreen)
+      loadedEditingClassroomIdRef.current = null
     }
     markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data))
   // currentUserIdRef is stable (ref object), so no need to include currentUserId in deps.
@@ -4317,6 +4352,8 @@ function AuthenticatedApp() {
         setBoardState,
         setBoardMountKey,
       })
+      // 読み込み先は開発用教室(acting)のみ。編集 state の出所も acting に一致させる。
+      loadedEditingClassroomIdRef.current = actingClassroomId
       setPersistenceMessage(`「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータを開発用教室へ読み込みました。保存してください。`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'バックアップの読み込みに失敗しました。'
@@ -4399,6 +4436,8 @@ function AuthenticatedApp() {
         students: initialImportedBundle.students,
         regularLessons: initialBoardRegularLessons,
       }))
+      // 取り込み先は現在開いている教室の編集 state。出所を acting に明示する。
+      loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
       setPersistenceMessage('基本データを初期取り込みしました。特別講習、ルール、盤面、開始時点ストックは初期化しました。')
     } catch {
       setPersistenceMessage('基本データの Excel 初期取り込みに失敗しました。シート名と列名を確認してください。')
@@ -4442,6 +4481,8 @@ function AuthenticatedApp() {
           regularLessons: mergedBoardRegularLessons,
         }))
       }
+      // 取り込み先は現在開いている教室の編集 state。出所を acting に明示する。
+      loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
       if (!hasAnyExistingSetupData()) {
         setPersistenceMessage('基本データを Excel から取り込みました。初期盤面を生成しました。')
       } else {
@@ -4450,7 +4491,7 @@ function AuthenticatedApp() {
     } catch {
       setPersistenceMessage('基本データの Excel 差分取り込みに失敗しました。シート名と列名を確認してください。')
     }
-  }, [boardState, classroomSettings, hasAnyExistingSetupData, managers, students, teachers])
+  }, [actingClassroomIdRef, boardState, classroomSettings, hasAnyExistingSetupData, managers, students, teachers])
 
   const exportSpecialDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
