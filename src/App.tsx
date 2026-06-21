@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
-import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
+import { autoAssignRuleDefinitions, initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
@@ -407,11 +407,25 @@ function sanitizeSpecialSessions(sessions: AppSnapshotPayload['specialSessions']
   return sessions.filter((session) => !removedDefaultSpecialSessionIdSet.has(session.id))
 }
 
+// 自動割振ルールの label / description は定義(autoAssignRuleDefinitions)を正本とし、読込時に同期する。
+// 旧教室データに残る古いラベル(例: 旧「1限禁止」→現「指定時限禁止」)を表示・Excel出力で最新名へ揃える。
+// key 以外(対象/区分/禁止時限など)は保存値を尊重し、表示用の label/description だけ定義から補完する。
+function sanitizeAutoAssignRules(rules: AppSnapshotPayload['autoAssignRules']): AppSnapshotPayload['autoAssignRules'] {
+  if (!Array.isArray(rules)) return rules
+  return rules.map((rule) => {
+    const definition = autoAssignRuleDefinitions.find((entry) => entry.key === rule.key)
+    if (!definition) return rule
+    if (rule.label === definition.label && rule.description === definition.description) return rule
+    return { ...rule, label: definition.label, description: definition.description }
+  })
+}
+
 function sanitizeClassroomPayload(payload: AppSnapshotPayload): AppSnapshotPayload {
   return {
     ...payload,
     classroomSettings: sanitizeClassroomSettings(payload.classroomSettings),
     specialSessions: sanitizeSpecialSessions(payload.specialSessions),
+    autoAssignRules: sanitizeAutoAssignRules(payload.autoAssignRules),
   }
 }
 

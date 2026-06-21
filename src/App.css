@@ -3181,6 +3181,81 @@ tr.sa-group-row td {
   padding: 16px;
 }
 
+/* 講習自動割振結果モーダル（画面中央表示）。自動割振後にルール対応率を表示し、
+   割り振れなかった場合のみ割り当て不可コマ数の注意を出す。 */
+.auto-assign-result-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 40, 70, 0.45);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.auto-assign-result-modal {
+  background: #fff;
+  border-radius: 16px;
+  padding: 20px 22px;
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+  box-shadow: 0 20px 48px rgba(16, 40, 70, 0.28);
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.auto-assign-result-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auto-assign-result-modal-title {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #142f4a;
+}
+
+.auto-assign-result-section-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #244564;
+  margin-bottom: 6px;
+}
+
+.auto-assign-result-compliance {
+  margin: 0;
+  padding-left: 1.2em;
+  display: grid;
+  gap: 4px;
+  font-size: 0.95rem;
+  color: #1f3552;
+}
+
+.auto-assign-result-unassigned {
+  border: 1px solid #e6b4b4;
+  background: #fdf1f1;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.auto-assign-result-unassigned-count {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #b42318;
+}
+
+.auto-assign-result-unassigned-note {
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: #7a2b22;
+}
+
 /* 未消化講習・未消化振替の生徒選択モーダル（中央配置）。
    未消化一覧モーダル(.auto-assign-modal-overlay z-index:50)より下に置き、
    生徒クリックで開く一覧が上に重なるようにする。

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { initialStudents, initialTeachers, type StudentRow } from '../basic-data/basicDataModel'
-import { createInitialRegularLessons } from '../basic-data/regularLessonModel'
+import { createInitialRegularLessons, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -3816,5 +3816,39 @@ describe('shouldWarnRegularTeachersOnly', () => {
       teacherId: null,
       regularTeacherIds: new Set<string>(),
     })).toBe(false)
+  })
+})
+
+// 回帰防止(2026-06-21): 「通常講師のみ」がその曜日の担当だけを見ていたため、講習が通常授業と別曜日だと空集合になり機能しない不具合。
+// 修正で曜日を問わず その生徒の通常授業担当講師を集めるようにした(spec-auto-assign-rules ⑧/オーナー確認: 曜日問わず)。
+describe('collectStudentRegularTeacherIds (通常講師のみ: 曜日問わず)', () => {
+  const makeLesson = (overrides: Partial<RegularLessonRow>): RegularLessonRow => ({
+    id: 'r', schoolYear: 2026, teacherId: 't', student1Id: '', subject1: '', startDate: '', endDate: '',
+    student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '',
+    nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 1, slotNumber: 1,
+    ...overrides,
+  })
+
+  it('別曜日の通常授業担当講師も対象になる(本不具合の修正点)', () => {
+    // 月曜の通常授業(teacher-mon)を持つ生徒について、土曜の講習日キーで問い合わせても担当講師が返る。
+    const lessons = [makeLesson({ id: 'r1', teacherId: 'teacher-mon', student1Id: 'stu-1', dayOfWeek: 1 })]
+    expect(collectStudentRegularTeacherIds(lessons, 'stu-1', '2026-08-15')).toEqual(new Set(['teacher-mon']))
+  })
+
+  it('複数曜日・student2側も含めて担当講師を集約する', () => {
+    const lessons = [
+      makeLesson({ id: 'r1', teacherId: 'teacher-mon', student1Id: 'stu-1', dayOfWeek: 1 }),
+      makeLesson({ id: 'r2', teacherId: 'teacher-wed', student1Id: 'other', student2Id: 'stu-1', dayOfWeek: 3 }),
+      makeLesson({ id: 'r3', teacherId: 'teacher-fri', student1Id: 'unrelated', dayOfWeek: 5 }),
+    ]
+    expect(collectStudentRegularTeacherIds(lessons, 'stu-1', '2026-08-15')).toEqual(new Set(['teacher-mon', 'teacher-wed']))
+  })
+
+  it('在籍期間外の通常授業は担当講師に含めない', () => {
+    const lessons = [makeLesson({ id: 'r1', teacherId: 'teacher-late', student1Id: 'stu-1', dayOfWeek: 1, startDate: '2026-09-01' })]
+    // 開始前の日付では対象外。
+    expect(collectStudentRegularTeacherIds(lessons, 'stu-1', '2026-08-15')).toEqual(new Set<string>())
+    // 開始後の日付では対象。
+    expect(collectStudentRegularTeacherIds(lessons, 'stu-1', '2026-09-10')).toEqual(new Set(['teacher-late']))
   })
 })
