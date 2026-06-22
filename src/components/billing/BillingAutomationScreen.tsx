@@ -22,6 +22,14 @@ type BillingRowDraft = BillingInvoiceRow & {
 
 const DEFAULT_STUDENT_UNIT_PRICE = 300
 const ISSUER_STORAGE_KEY = 'billingInvoiceIssuerInfo:v1'
+// 請求メールに自動で追加する CC 宛先（運営控え用）。
+const BILLING_CC_ADDRESS = 'bkkdmzn@gmail.com'
+
+// 請求日 = メール作成日。今日の日付キー(YYYY-MM-DD)を返す。
+function getInvoiceDateKey() {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+}
 
 function loadStoredIssuerInfo(): InvoiceIssuerInfo {
   const fallback: InvoiceIssuerInfo = {
@@ -94,7 +102,7 @@ function buildMailSubject(row: BillingInvoiceRow) {
   return `コマ表アプリ ${formatBillingMonthLabel(row.monthKey)} 請求書`
 }
 
-function buildDraftBody(row: BillingInvoiceRow, issuer: InvoiceIssuerInfo) {
+export function buildDraftBody(row: BillingInvoiceRow, issuer: InvoiceIssuerInfo, invoiceDateKey: string) {
   const signatureSeparator = '------------------------------------------'
   return [
     `${row.classroomName} 様`,
@@ -102,6 +110,7 @@ function buildDraftBody(row: BillingInvoiceRow, issuer: InvoiceIssuerInfo) {
     '',
     `コマ表アプリ ${formatBillingMonthLabel(row.monthKey)}の請求書を添付いたします。`,
     '',
+    `請求日：${formatJapaneseDate(invoiceDateKey)}`,
     `請求金額（税込）: ${formatYen(row.billedAmountWithTax)}`,
     `支払期限: ${formatJapaneseDate(getBillingDueDate(row.monthKey))}`,
     `振込先: ${issuer.bankAccount}`,
@@ -257,8 +266,9 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     const result = await createGmailDraftWithPdf({
       accessToken,
       to: row.managerEmail,
+      cc: BILLING_CC_ADDRESS,
       subject: buildMailSubject(row),
-      bodyText: buildDraftBody(row, issuerInfo),
+      bodyText: buildDraftBody(row, issuerInfo, getInvoiceDateKey()),
       pdfBlob,
       pdfFileName: buildInvoicePdfFileName(row),
     })
@@ -272,8 +282,9 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     downloadBlob(pdfBlob, buildInvoicePdfFileName(row))
     openGmailCompose({
       to: row.managerEmail,
+      cc: BILLING_CC_ADDRESS,
       subject: buildMailSubject(row),
-      body: buildDraftBody(row, issuerInfo),
+      body: buildDraftBody(row, issuerInfo, getInvoiceDateKey()),
     })
     await markRowPrepared(row)
   }

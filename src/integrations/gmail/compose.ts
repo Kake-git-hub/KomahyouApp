@@ -2,7 +2,7 @@
 // 請求書PDFはブラウザのダウンロードで保存し、Gmail の作成画面（宛先・件名・本文を事前入力）を
 // 新しいタブで開く。PDF はユーザーが作成画面に手動で添付する運用。
 
-export function buildGmailComposeUrl(params: { to: string; subject: string; body: string }) {
+export function buildGmailComposeUrl(params: { to: string; subject: string; body: string; cc?: string }) {
   const search = new URLSearchParams({
     view: 'cm',
     fs: '1',
@@ -10,10 +10,11 @@ export function buildGmailComposeUrl(params: { to: string; subject: string; body
     su: params.subject,
     body: params.body,
   })
+  if (params.cc) search.set('cc', params.cc)
   return `https://mail.google.com/mail/?${search.toString()}`
 }
 
-export function openGmailCompose(params: { to: string; subject: string; body: string }) {
+export function openGmailCompose(params: { to: string; subject: string; body: string; cc?: string }) {
   const url = buildGmailComposeUrl(params)
   const opened = window.open(url, '_blank', 'noopener,noreferrer')
   if (!opened) {
