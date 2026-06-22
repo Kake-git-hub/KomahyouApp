@@ -3561,19 +3561,26 @@ function AuthenticatedApp() {
       }
 
       // 「最新表示」ボタン由来。範囲を保存しつつ、state 反映を待たずに nextRange で即 force 同期する
-      // (これが popup を更新する唯一の能動パス)。QR トークンも範囲分を確保してから同期。
+      // (これが popup を更新する唯一の能動パス)。
+      // 重要(回帰修正 2026-06-22): 盤面内容(講習の自動割振結果など)は QR トークンに依存しないため、
+      // 先に同期して即反映する。以前は ensureScheduleSubmissionTokens(Firebase往復)の完了を待ってから
+      // 同期していたため、本番(Firebaseモード)では講習の自動割振直後に「最新表示」を押しても、トークン確保の
+      // 往復が終わるまで(あるいは失敗時に)盤面変更が popup に反映されない不具合があった。
+      // トークンは QR 画像の更新にのみ必要なので、確保できたら再同期して QR を差し替える。
       if (message.viewType === 'student') {
         setStudentScheduleRange(nextRange)
+        syncStudentSchedulePopup(true, nextRange)
         const range = buildNormalizedScheduleRange('student', nextRange, actingClassroomId)
         void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
           .then(() => { syncStudentSchedulePopup(true, nextRange) })
-          .catch(() => { syncStudentSchedulePopup(true, nextRange) })
+          .catch(() => { /* 初回同期済みのためトークン確保失敗は無視 */ })
       } else {
         setTeacherScheduleRange(nextRange)
+        syncTeacherSchedulePopup(true, nextRange)
         const range = buildNormalizedScheduleRange('teacher', nextRange, actingClassroomId)
         void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
           .then(() => { syncTeacherSchedulePopup(true, nextRange) })
-          .catch(() => { syncTeacherSchedulePopup(true, nextRange) })
+          .catch(() => { /* 初回同期済みのためトークン確保失敗は無視 */ })
       }
     }
 
