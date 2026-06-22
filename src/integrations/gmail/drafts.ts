@@ -118,6 +118,7 @@ function encodeHeader(value: string) {
 export async function createGmailDraftWithPdf(params: {
   accessToken: string
   to: string
+  cc?: string
   subject: string
   bodyText: string
   pdfBlob: Blob
@@ -127,6 +128,7 @@ export async function createGmailDraftWithPdf(params: {
   const pdfBase64 = arrayBufferToBase64(await params.pdfBlob.arrayBuffer())
   const message = [
     `To: ${params.to}`,
+    ...(params.cc ? [`Cc: ${params.cc}`] : []),
     `Subject: ${encodeHeader(params.subject)}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
