@@ -61,7 +61,7 @@ const autoAssignRuleDefinitions = [
   ['preferLateAfternoon', '3,4,5限優先', '3 限から 5 限を先に使う優先順です。'],
   ['preferSecondPeriod', '2限寄り(2＞3＞4＞5限の優先順位)', '2 限から順に近いコマを優先します。'],
   ['preferFifthPeriod', '5限寄り(5＞4＞3＞2限の優先順位)', '5 限から順に近いコマを優先します。'],
-  ['forbidFirstPeriod', '1限禁止', '対象者を1 限に配置しないよう制限します。'],
+  ['forbidFirstPeriod', '指定時限禁止', '対象者を、指定した時限（既定は1限）に配置しないよう制限します。'],
 ]
 
 function createDefaultAutoAssignRules() {

@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
-import { initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
+import { autoAssignRuleDefinitions, initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
@@ -407,11 +407,25 @@ function sanitizeSpecialSessions(sessions: AppSnapshotPayload['specialSessions']
   return sessions.filter((session) => !removedDefaultSpecialSessionIdSet.has(session.id))
 }
 
+// 自動割振ルールの label / description は定義(autoAssignRuleDefinitions)を正本とし、読込時に同期する。
+// 旧教室データに残る古いラベル(例: 旧「1限禁止」→現「指定時限禁止」)を表示・Excel出力で最新名へ揃える。
+// key 以外(対象/区分/禁止時限など)は保存値を尊重し、表示用の label/description だけ定義から補完する。
+function sanitizeAutoAssignRules(rules: AppSnapshotPayload['autoAssignRules']): AppSnapshotPayload['autoAssignRules'] {
+  if (!Array.isArray(rules)) return rules
+  return rules.map((rule) => {
+    const definition = autoAssignRuleDefinitions.find((entry) => entry.key === rule.key)
+    if (!definition) return rule
+    if (rule.label === definition.label && rule.description === definition.description) return rule
+    return { ...rule, label: definition.label, description: definition.description }
+  })
+}
+
 function sanitizeClassroomPayload(payload: AppSnapshotPayload): AppSnapshotPayload {
   return {
     ...payload,
     classroomSettings: sanitizeClassroomSettings(payload.classroomSettings),
     specialSessions: sanitizeSpecialSessions(payload.specialSessions),
+    autoAssignRules: sanitizeAutoAssignRules(payload.autoAssignRules),
   }
 }
 
@@ -3547,19 +3561,26 @@ function AuthenticatedApp() {
       }
 
       // 「最新表示」ボタン由来。範囲を保存しつつ、state 反映を待たずに nextRange で即 force 同期する
-      // (これが popup を更新する唯一の能動パス)。QR トークンも範囲分を確保してから同期。
+      // (これが popup を更新する唯一の能動パス)。
+      // 重要(回帰修正 2026-06-22): 盤面内容(講習の自動割振結果など)は QR トークンに依存しないため、
+      // 先に同期して即反映する。以前は ensureScheduleSubmissionTokens(Firebase往復)の完了を待ってから
+      // 同期していたため、本番(Firebaseモード)では講習の自動割振直後に「最新表示」を押しても、トークン確保の
+      // 往復が終わるまで(あるいは失敗時に)盤面変更が popup に反映されない不具合があった。
+      // トークンは QR 画像の更新にのみ必要なので、確保できたら再同期して QR を差し替える。
       if (message.viewType === 'student') {
         setStudentScheduleRange(nextRange)
+        syncStudentSchedulePopup(true, nextRange)
         const range = buildNormalizedScheduleRange('student', nextRange, actingClassroomId)
         void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
           .then(() => { syncStudentSchedulePopup(true, nextRange) })
-          .catch(() => { syncStudentSchedulePopup(true, nextRange) })
+          .catch(() => { /* 初回同期済みのためトークン確保失敗は無視 */ })
       } else {
         setTeacherScheduleRange(nextRange)
+        syncTeacherSchedulePopup(true, nextRange)
         const range = buildNormalizedScheduleRange('teacher', nextRange, actingClassroomId)
         void ensureScheduleSubmissionTokens(range.startDate, range.endDate)
           .then(() => { syncTeacherSchedulePopup(true, nextRange) })
-          .catch(() => { syncTeacherSchedulePopup(true, nextRange) })
+          .catch(() => { /* 初回同期済みのためトークン確保失敗は無視 */ })
       }
     }
 

@@ -102,6 +102,10 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
   const [message, setMessage] = useState('配布用盤面を読み込んでいます。')
   const [selectedDateKey, setSelectedDateKey] = useState(initialSelection?.dateKey ?? '')
   const [selectedSlotNumber, setSelectedSlotNumber] = useState(initialSelection?.slotNumber ?? 1)
+  // iOS Safari は 100dvh → flex → grid(repeat,minmax(0,1fr)) のネストで初回レイアウトを誤り、
+  // 一部のデスクが見切れる(初回だけ一部が見えない)ことがある。日付/コマ変更で直るのと同じく、
+  // 初回ペイント後に一度だけデスク一覧を再マウントして再レイアウトを促す(nonce を key に使う)。
+  const [layoutNonce, setLayoutNonce] = useState(0)
 
   const applyPayload = (nextPayload: BoardSharePayload) => {
     setPayload(nextPayload)
@@ -176,6 +180,17 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
     writeStoredSelection(token, { dateKey: selectedDateKey, slotNumber: selectedSlotNumber })
   }, [selectedDateKey, selectedSlotNumber, token])
 
+  // 初回にデスク一覧が描画できたら、次フレームで一度だけ再マウントして iOS の初回レイアウト崩れを補正する。
+  // layoutNonce 自体をガードにして StrictMode(dev)の二重実行でも確実に1回発火させる(本番は単発)。
+  useEffect(() => {
+    if (layoutNonce > 0) return
+    if (!payload || !selectedDateKey) return
+    const frameId = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => setLayoutNonce(1))
+    })
+    return () => window.cancelAnimationFrame(frameId)
+  }, [payload, selectedDateKey, layoutNonce])
+
   const moveDate = (offset: number) => {
     if (dateOptions.length === 0) return
     const currentIndex = Math.max(0, dateOptions.findIndex((cell) => cell.dateKey === selectedDateKey))
@@ -224,7 +239,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
           </div>
         ) : null}
         {currentCell ? (
-          <div className="board-share-desk-list" style={{ '--board-share-desk-count': currentCell.desks.length } as React.CSSProperties}>
+          <div key={`board-share-desk-list-${layoutNonce}`} className="board-share-desk-list" style={{ '--board-share-desk-count': currentCell.desks.length } as React.CSSProperties}>
             {currentCell.desks.map((desk, deskIndex) => {
               const firstStudent = desk.lesson?.studentSlots[0] ?? null
               const secondStudent = desk.lesson?.studentSlots[1] ?? null

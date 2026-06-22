@@ -244,8 +244,10 @@ type LectureAutoAssignCandidateSearchResult = {
 
 type AutoAssignDebugReport = {
   title: string
-  summary: string
-  details: string
+  // ルール対応率の各行（例: "科目対応講師: 100% (3/3)"）
+  complianceLines: string[]
+  // 割り振れなかったコマ数（0 のときは「割り当て不可」メッセージを出さない）
+  unassignedCount: number
 }
 
 type LectureConstraintGroupKey = 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'day-spacing' | 'time-preference'
@@ -810,6 +812,18 @@ export function applyClassroomAvailability(weeks: SlotCell[][], classroomSetting
     weekAvailabilityCache.set(week, { token, result })
     return result
   })
+}
+
+// 「通常講師のみ」ルール用: 与えた通常授業(年度で絞り込み済を想定)から、その生徒の担当講師IDを曜日問わず集める。
+// spec-auto-assign-rules ⑧「通常講師のみ＝その生徒の通常授業担当講師だけに制限」。曜日で絞らないため、
+// 講習が通常授業と別曜日でも その生徒の通常授業担当講師なら対象になる(旧:曜日限定で別曜日だと空集合→無効化していた回帰の修正)。
+export function collectStudentRegularTeacherIds(lessons: RegularLessonRow[], studentId: string, dateKey: string): Set<string> {
+  const teacherIds = new Set<string>()
+  for (const lesson of lessons) {
+    if (lesson.student1Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, dateKey)) teacherIds.add(lesson.teacherId)
+    if (lesson.student2Id === studentId && isRegularLessonParticipantActiveOnDate(lesson, dateKey)) teacherIds.add(lesson.teacherId)
+  }
+  return teacherIds
 }
 
 function areStringArraysEqual(left: string[], right: string[]) {
@@ -4193,6 +4207,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     return index
   }, [regularLessons])
+  // 「通常講師のみ」ルール用: 曜日を問わずその年度の全通常授業を学年度キーで引けるインデックス。
+  const regularLessonsBySchoolYear = useMemo(() => {
+    const index = new Map<number, RegularLessonRow[]>()
+    for (const lesson of regularLessons) {
+      const current = index.get(lesson.schoolYear)
+      if (current) current.push(lesson)
+      else index.set(lesson.schoolYear, [lesson])
+    }
+    return index
+  }, [regularLessons])
   const regularTeacherIdsByStudentDateCache = useMemo(() => {
     void regularLessons // 通常授業データ変更時にキャッシュを破棄するための無効化キー
     return new Map<string, Set<string>>()
@@ -4215,6 +4239,26 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     regularTeacherIdsByStudentDateCache.set(cacheKey, teacherIds)
     return teacherIds
   }, [regularLessonsBySchoolYearAndDay, regularTeacherIdsByStudentDateCache])
+
+  // 「通常講師のみ」ルール用: その生徒の通常授業担当講師を曜日問わず(その年度全体で)解決する。
+  // spec-auto-assign-rules ⑧「通常講師のみ＝その生徒の通常授業担当講師だけに制限」。講習が通常授業と別曜日でも、
+  // その生徒を通常授業で担当している講師なら満たすものとして扱う(曜日限定だと別曜日の講習で機能しない回帰の修正)。
+  // 連続性スコア「通常担当講師との連続性」は従来どおり曜日別 resolveRegularTeacherIdsForStudentOnDate を使う(別目的)。
+  const regularTeacherIdsAnyDayByStudentYearCache = useMemo(() => {
+    void regularLessons
+    return new Map<string, Set<string>>()
+  }, [regularLessons])
+  const resolveRegularTeacherIdsForStudentAnyDay = useCallback((studentId: string, dateKey: string) => {
+    const schoolYear = resolveOperationalSchoolYear(parseDateKey(dateKey))
+    const cacheKey = `${studentId}|${schoolYear}|${dateKey}`
+    const cached = regularTeacherIdsAnyDayByStudentYearCache.get(cacheKey)
+    if (cached) return cached
+
+    const teacherIds = collectStudentRegularTeacherIds(regularLessonsBySchoolYear.get(schoolYear) ?? [], studentId, dateKey)
+
+    regularTeacherIdsAnyDayByStudentYearCache.set(cacheKey, teacherIds)
+    return teacherIds
+  }, [regularLessonsBySchoolYear, regularTeacherIdsAnyDayByStudentYearCache])
 
   // spec-auto-assign-rules §E / ⑧TODO5: ペア制約は 優先/制約 の2区分。
   // 制約(既定)=赤の制約警告、優先=なるべく回避(スコアのみ)。複数一致時は強い方(制約)を採用。
@@ -4428,13 +4472,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     entryLabel: string
     mode: 'lecture' | 'makeup'
     placementCandidates: Array<LectureAutoAssignCandidate | MakeupAutoAssignCandidate>
-    evaluatedCandidateCount: number
     remainingCount: number
   }): AutoAssignDebugReport => {
-    const placedByDate = new Map<string, number>()
     const satisfactionByLabel = new Map<string, { satisfied: number; applicable: number }>()
     params.placementCandidates.forEach((candidate) => {
-      placedByDate.set(candidate.cell.dateKey, (placedByDate.get(candidate.cell.dateKey) ?? 0) + 1)
       candidate.scoreParts.forEach((part) => {
         if (part.applicable !== true || part.satisfied === undefined) return
         const current = satisfactionByLabel.get(part.label) ?? { satisfied: 0, applicable: 0 }
@@ -4443,11 +4484,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         satisfactionByLabel.set(part.label, current)
       })
     })
-    const summary = `${params.entryLabel} を ${params.placementCandidates.length} コマ配置し、候補を合計 ${params.evaluatedCandidateCount} 件比較しました。${params.remainingCount > 0 ? ` ${params.remainingCount} コマは未配置です。` : ''}`
-    const placementSummary = Array.from(placedByDate.entries())
-      .sort((left, right) => left[0].localeCompare(right[0]))
-      .map(([dateKey, count]) => `${dateKey}: ${count}コマ`)
-    const debugLines = autoAssignDebugLabelOrder
+    const complianceLines = autoAssignDebugLabelOrder
       .map((label) => {
         const current = satisfactionByLabel.get(label)
         if (!current || current.applicable === 0) return null
@@ -4457,32 +4494,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       .filter((line): line is string => Boolean(line))
 
     return {
-      title: `${params.mode === 'lecture' ? '講習' : '振替'}自動割振デバッグ`,
-      summary,
-      details: [
-        'ルール対応率',
-        ...debugLines,
-        '',
-        '配置日内訳',
-        ...(placementSummary.length > 0 ? placementSummary : ['なし']),
-        '',
-        `比較候補数: ${params.evaluatedCandidateCount}`,
-      ].join('\n'),
+      title: `${params.mode === 'lecture' ? '講習' : '振替'}自動割振結果`,
+      complianceLines,
+      unassignedCount: Math.max(0, params.remainingCount),
     }
   }, [autoAssignDebugLabelOrder])
-
-  const copyAutoAssignDebugReport = useCallback(async () => {
-    if (!autoAssignDebugReport || typeof navigator === 'undefined' || !navigator.clipboard) {
-      setStatusMessage('自動割振デバッグをコピーできませんでした。')
-      return
-    }
-    try {
-      await navigator.clipboard.writeText(`${autoAssignDebugReport.title}\n${autoAssignDebugReport.summary}\n\n${autoAssignDebugReport.details}`)
-      setStatusMessage('自動割振デバッグをクリップボードへコピーしました。')
-    } catch {
-      setStatusMessage('自動割振デバッグのコピーに失敗しました。')
-    }
-  }, [autoAssignDebugReport])
 
   const findBestLectureAutoAssignCandidate = (params: {
     sourceWeeks: SlotCell[][]
@@ -4522,7 +4538,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate, isRuleApplicableCached)
         const lessonLimitSatisfied = lessonLimit === null || existingLessons.length < lessonLimit
 
-        const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(params.managedStudent.id, cell.dateKey)
+        // 「通常講師のみ」ルール判定は曜日問わずその生徒の通常授業担当講師で判定する(連続性スコアとは別)。
+        const ruleRegularTeacherIds = resolveRegularTeacherIdsForStudentAnyDay(params.managedStudent.id, cell.dateKey)
         const slotKey = `${cell.dateKey}_${cell.slotNumber}`
 
         for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
@@ -4560,7 +4577,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
             const firstPeriodPreferred = !forbidFirstPeriod || !forbiddenPeriods.includes(cell.slotNumber)
             const subjectCapablePreferred = !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate)
-            const regularTeacherPreferred = !regularTeachersOnly || regularTeacherIds.has(teacher.id)
+            const regularTeacherPreferred = !regularTeachersOnly || ruleRegularTeacherIds.has(teacher.id)
             const scoreParts: AutoAssignScorePart[] = [
               {
                 label: '未消化講習由来',
@@ -5044,7 +5061,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             }
 
             const regularTeachersOnly = isRuleApplicableCached(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
-            const regularTeacherIds = resolveRegularTeacherIdsForStudentOnDate(managedStudent.id, cell.dateKey)
+            // 「通常講師のみ」違反判定も曜日問わずその生徒の通常授業担当講師で判定する。
+            const regularTeacherIds = resolveRegularTeacherIdsForStudentAnyDay(managedStudent.id, cell.dateKey)
             if (shouldWarnRegularTeachersOnly({ ruleApplicable: regularTeachersOnly, lessonType: student.lessonType, teacherId: teacher?.id ?? null, regularTeacherIds })) {
               addRuleWarning([currentLocationKey], 'regularTeachersOnly', '通常講師のみ')
             }
@@ -5117,7 +5135,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const text = value.hasConstraintReason ? ['制約違反', ...reasons].join('\n') : reasons.join('\n')
       return [locationKey, { text, highlight: value.shouldHighlight }] as const
     }))
-  }, [autoAssignRuleByKey, cells, isRuleApplicableCached, lectureConstraintGroups, managedStudentByAnyName, managedStudentById, managedStudentByRegisteredName, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, resolvePairConstraintSeverity, resolveRegularTeacherIdsForStudentOnDate, resolveSpecialSessionById, studentOccurrencesIndex, studentUnavailableSlotsById])
+  }, [autoAssignRuleByKey, cells, isRuleApplicableCached, lectureConstraintGroups, managedStudentByAnyName, managedStudentById, managedStudentByRegisteredName, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, resolvePairConstraintSeverity, resolveRegularTeacherIdsForStudentAnyDay, resolveSpecialSessionById, studentOccurrencesIndex, studentUnavailableSlotsById])
 
   const isTeacherWithdrawnOnDate = useCallback((teacherId: string | undefined, teacherName: string, dateKey: string) => {
     if (!teacherName) return false
@@ -6627,7 +6645,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const remainingItems = [...pendingItems]
     const placedItems: Array<{ dateLabel: string; slotLabel: string; deskLabel: string }> = []
     const placementCandidates: LectureAutoAssignCandidate[] = []
-    let evaluatedCandidateCount = 0
     const studentKey = entry.studentId
 
     while (remainingItems.length > 0) {
@@ -6638,7 +6655,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         studentKey,
       })
       const candidate = candidateSearch.bestCandidate
-      evaluatedCandidateCount += candidateSearch.evaluatedCandidateCount
       if (!candidate) break
 
       const targetCell = nextWeeks[candidate.weekIndex]?.find((cell) => cell.id === candidate.cell.id)
@@ -6693,9 +6709,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     if (placedItems.length === 0) {
       setAutoAssignDebugReport({
-        title: '講習自動割振デバッグ',
-        summary: `${entry.displayName} は条件に合う空きコマが見つからず、自動割振できませんでした。`,
-        details: `候補比較件数: ${evaluatedCandidateCount}`,
+        title: '講習自動割振結果',
+        complianceLines: [],
+        unassignedCount: remainingItems.length,
       })
       setStatusMessage(`${entry.displayName} は条件に合う空きコマが見つからず、自動割振できませんでした。`)
       return
@@ -6719,7 +6735,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       entryLabel: entry.displayName,
       mode: 'lecture',
       placementCandidates,
-      evaluatedCandidateCount,
       remainingCount: remainingItems.length,
     }))
     setIsLectureStockOpen(true)
@@ -8598,21 +8613,34 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               </div>
             </div>
           ) : null}
-          {!isTemplateMode && !studentMenu && !teacherMenu && !selectedStudentId && autoAssignDebugReport ? (
-            <div className="stock-floating-modals">
-              <section className="stock-floating-panel auto-assign-debug-panel" data-testid="auto-assign-debug-panel">
-                <div className="makeup-stock-panel-head">
-                  <div className="stock-floating-panel-title">
-                    <strong>{autoAssignDebugReport.title}</strong>
-                    <span className="basic-data-muted-inline">直近の自動割振について、各ルールをどの程度満たせたかを集計表示します。</span>
-                  </div>
-                  <div className="auto-assign-debug-actions">
-                    <button className="secondary-button slim" type="button" onClick={copyAutoAssignDebugReport} data-testid="auto-assign-debug-copy">コピー</button>
-                    <button className="secondary-button slim" type="button" onClick={() => setAutoAssignDebugReport(null)} data-testid="auto-assign-debug-close">閉じる</button>
-                  </div>
+          {!isTemplateMode && autoAssignDebugReport ? (
+            <div
+              className="auto-assign-result-modal-overlay"
+              data-testid="auto-assign-debug-overlay"
+              onClick={(event) => { if (event.target === event.currentTarget) setAutoAssignDebugReport(null) }}
+              role="presentation"
+            >
+              <section className="auto-assign-result-modal" data-testid="auto-assign-debug-panel" role="dialog" aria-modal="true" aria-label={autoAssignDebugReport.title}>
+                <div className="auto-assign-result-modal-head">
+                  <strong className="auto-assign-result-modal-title">{autoAssignDebugReport.title}</strong>
+                  <button className="secondary-button slim" type="button" onClick={() => setAutoAssignDebugReport(null)} data-testid="auto-assign-debug-close">閉じる</button>
                 </div>
-                <div className="status-banner">{autoAssignDebugReport.summary}</div>
-                <pre className="debug-preview auto-assign-debug-preview">{autoAssignDebugReport.details}</pre>
+                <div className="auto-assign-result-section">
+                  <div className="auto-assign-result-section-title">ルール対応率</div>
+                  {autoAssignDebugReport.complianceLines.length > 0 ? (
+                    <ul className="auto-assign-result-compliance" data-testid="auto-assign-debug-compliance">
+                      {autoAssignDebugReport.complianceLines.map((line) => <li key={line}>{line}</li>)}
+                    </ul>
+                  ) : (
+                    <div className="basic-data-muted-inline">対象ルールはありません。</div>
+                  )}
+                </div>
+                {autoAssignDebugReport.unassignedCount > 0 ? (
+                  <div className="auto-assign-result-unassigned" data-testid="auto-assign-debug-unassigned">
+                    <div className="auto-assign-result-unassigned-count">割り当て不可コマ数：{autoAssignDebugReport.unassignedCount}コマ</div>
+                    <div className="auto-assign-result-unassigned-note">(割り振れるコマがありませんでした。手動で講習期間外に割り振るなどしてください。)</div>
+                  </div>
+                ) : null}
               </section>
             </div>
           ) : null}
