@@ -826,6 +826,41 @@ export function collectStudentRegularTeacherIds(lessons: RegularLessonRow[], stu
   return teacherIds
 }
 
+// 「通常講師のみ」ルール用(回帰修正 2026-06-22): その生徒の通常授業担当講師を「実際の盤面」から特定する。
+// 自動割振が探索する盤面(persisted/テンプレ反映済)は、基本データの通常授業を編集した後でも盤面に保持された
+// 構成＝ユーザーが見ている『テンプレでの組み合わせ』を反映する。ライブ regularLessons 配列だけで判定すると
+// 盤面と食い違い、別曜日の講習がその生徒の通常講師に割り振られない(スコア加点されない)不具合があった。
+// 盤面の通常授業スロット(lessonType==='regular')でその生徒が座っているデスクの担当講師IDを集める。
+// 生徒の同定・講師IDの解決は呼び出し側の関数を注入し、自動割振の他処理と同一の判定にする。
+export function collectStudentRegularTeacherIdsFromWeeks(
+  weeks: SlotCell[][],
+  studentKey: string,
+  resolveStudentKey: (student: StudentEntry) => string,
+  resolveDeskTeacherId: (desk: DeskCell, dateKey: string) => string | null,
+): Set<string> {
+  const teacherIds = new Set<string>()
+  for (const week of weeks) {
+    for (const cell of week) {
+      for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+        const desk = cell.desks[deskIndex]
+        const studentSlots = desk.lesson?.studentSlots ?? []
+        let matched = false
+        for (let studentIndex = 0; studentIndex < studentSlots.length; studentIndex += 1) {
+          const student = studentSlots[studentIndex]
+          if (!student || student.lessonType !== 'regular') continue
+          if (resolveStudentKey(student) !== studentKey) continue
+          matched = true
+          break
+        }
+        if (!matched) continue
+        const teacherId = resolveDeskTeacherId(desk, cell.dateKey)
+        if (teacherId) teacherIds.add(teacherId)
+      }
+    }
+  }
+  return teacherIds
+}
+
 function areStringArraysEqual(left: string[], right: string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
@@ -4260,6 +4295,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return teacherIds
   }, [regularLessonsBySchoolYear, regularTeacherIdsAnyDayByStudentYearCache])
 
+  // 「通常講師のみ」ルール用: 盤面(persisted/テンプレ反映済)の通常授業からその生徒の担当講師を集める。
+  // ライブ regularLessons 配列だけだと基本データ編集後に盤面と食い違うため、盤面側も併用して取りこぼしを防ぐ。
+  const collectBoardRegularTeacherIdsForStudent = useCallback((weeks: SlotCell[][], studentKey: string) => collectStudentRegularTeacherIdsFromWeeks(
+    weeks,
+    studentKey,
+    (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName),
+    (desk, dateKey) => resolveManagedTeacherForDesk(desk, dateKey)?.id ?? null,
+  ), [managedStudentByAnyName, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk])
+
   // spec-auto-assign-rules §E / ⑧TODO5: ペア制約は 優先/制約 の2区分。
   // 制約(既定)=赤の制約警告、優先=なるべく回避(スコアのみ)。複数一致時は強い方(制約)を採用。
   // 性能最適化(挙動不変): useCallback 化で警告 useMemo の deps が毎レンダーで無効化されるのを防ぐ（判定ロジックは不変）。
@@ -4517,6 +4561,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const existingLessonsByDateKey = new Map<string, Array<{ slotNumber: number; lessonType: LessonType }>>()
     const forbidFirstPeriodRule = autoAssignRuleByKey.get('forbidFirstPeriod')
     const forbiddenPeriods = resolveForbiddenPeriods(forbidFirstPeriodRule)
+    // 「通常講師のみ」ルール用: 盤面の通常授業から見たその生徒の担当講師(探索中は不変なので1回だけ集計)。
+    const boardRegularTeacherIds = collectBoardRegularTeacherIdsForStudent(params.sourceWeeks, params.studentKey)
 
     for (let nextWeekIndex = 0; nextWeekIndex < params.sourceWeeks.length; nextWeekIndex += 1) {
       const week = params.sourceWeeks[nextWeekIndex]
@@ -4539,7 +4585,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         const lessonLimitSatisfied = lessonLimit === null || existingLessons.length < lessonLimit
 
         // 「通常講師のみ」ルール判定は曜日問わずその生徒の通常授業担当講師で判定する(連続性スコアとは別)。
-        const ruleRegularTeacherIds = resolveRegularTeacherIdsForStudentAnyDay(params.managedStudent.id, cell.dateKey)
+        // ライブ regularLessons 配列(any-day)と 実際の盤面(board) の両方の担当講師を合わせて取りこぼしを防ぐ。
+        const arrayRegularTeacherIds = resolveRegularTeacherIdsForStudentAnyDay(params.managedStudent.id, cell.dateKey)
+        const ruleRegularTeacherIds = boardRegularTeacherIds.size === 0
+          ? arrayRegularTeacherIds
+          : new Set<string>([...arrayRegularTeacherIds, ...boardRegularTeacherIds])
         const slotKey = `${cell.dateKey}_${cell.slotNumber}`
 
         for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
@@ -5026,6 +5076,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const forbidFirstPeriodRule = autoAssignRuleByKey.get('forbidFirstPeriod')
     const forbiddenPeriods = resolveForbiddenPeriods(forbidFirstPeriodRule)
 
+    // 「通常講師のみ」用: 実際の盤面の通常授業からその生徒の担当講師を集めたマップ。
+    // ライブ regularLessons 配列が基本データ編集後に盤面と食い違っても、盤面側の担当講師で補完して誤検知を防ぐ。
+    const boardRegularTeacherIdsByStudentKey = new Map<string, Set<string>>()
+    for (const cell of cells) {
+      for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
+        const desk = cell.desks[deskIndex]
+        const deskTeacher = resolveManagedTeacherForDesk(desk, cell.dateKey)
+        if (!deskTeacher) continue
+        for (let studentIndex = 0; studentIndex < (desk.lesson?.studentSlots.length ?? 0); studentIndex += 1) {
+          const regularStudent = desk.lesson?.studentSlots[studentIndex]
+          if (!regularStudent || regularStudent.lessonType !== 'regular') continue
+          const key = resolveStockComparableStudentKey(regularStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
+          const existing = boardRegularTeacherIdsByStudentKey.get(key)
+          if (existing) existing.add(deskTeacher.id)
+          else boardRegularTeacherIdsByStudentKey.set(key, new Set<string>([deskTeacher.id]))
+        }
+      }
+    }
+
     for (const cell of cells) {
       for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
         const desk = cell.desks[deskIndex]
@@ -5061,8 +5130,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             }
 
             const regularTeachersOnly = isRuleApplicableCached(autoAssignRuleByKey.get('regularTeachersOnly'), managedStudent.id, studentGradeOnDate)
-            // 「通常講師のみ」違反判定も曜日問わずその生徒の通常授業担当講師で判定する。
-            const regularTeacherIds = resolveRegularTeacherIdsForStudentAnyDay(managedStudent.id, cell.dateKey)
+            // 「通常講師のみ」違反判定は、ライブ配列(any-day)と 実際の盤面 の両方の担当講師で判定し、配置側(自動割振)と一致させる。
+            const arrayRegularTeacherIds = resolveRegularTeacherIdsForStudentAnyDay(managedStudent.id, cell.dateKey)
+            const boardRegularTeacherIds = boardRegularTeacherIdsByStudentKey.get(resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName))
+            const regularTeacherIds = boardRegularTeacherIds && boardRegularTeacherIds.size > 0
+              ? new Set<string>([...arrayRegularTeacherIds, ...boardRegularTeacherIds])
+              : arrayRegularTeacherIds
             if (shouldWarnRegularTeachersOnly({ ruleApplicable: regularTeachersOnly, lessonType: student.lessonType, teacherId: teacher?.id ?? null, regularTeacherIds })) {
               addRuleWarning([currentLocationKey], 'regularTeachersOnly', '通常講師のみ')
             }

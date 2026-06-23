@@ -4,7 +4,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -3850,5 +3850,32 @@ describe('collectStudentRegularTeacherIds (通常講師のみ: 曜日問わず)'
     expect(collectStudentRegularTeacherIds(lessons, 'stu-1', '2026-08-15')).toEqual(new Set<string>())
     // 開始後の日付では対象。
     expect(collectStudentRegularTeacherIds(lessons, 'stu-1', '2026-09-10')).toEqual(new Set(['teacher-late']))
+  })
+})
+
+// 回帰防止(2026-06-22): 基本データ編集で regularLessons 配列が盤面と食い違うと、ライブ配列由来の通常講師判定が
+// 空になり、別曜日の講習がその生徒の通常講師に割り振られない不具合。盤面(persisted/テンプレ)の通常授業から
+// 担当講師を集めることで、ユーザーが見ている『テンプレでの組み合わせ』に一致させる。
+describe('collectStudentRegularTeacherIdsFromWeeks (盤面から通常講師を特定)', () => {
+  const resolveStudentKey = (student: StudentEntry) => student.managedStudentId ?? student.id
+  const resolveDeskTeacherId = (desk: { teacher: string }) => (desk.teacher.trim() ? `id:${desk.teacher.trim()}` : null)
+  const makeWeeks = (desks: SlotCell['desks']): SlotCell[][] => [[
+    { id: '2026-08-15_2', dateKey: '2026-08-15', dayLabel: '土', dateLabel: '8/15', slotLabel: '2限', slotNumber: 2, timeLabel: '', isOpenDay: true, desks },
+  ]]
+
+  it('盤面の通常授業スロットからその生徒のデスク担当講師を集める', () => {
+    const weeks = makeWeeks([
+      { id: 'd1', teacher: 'X先生', lesson: { id: 'l1', studentSlots: [createStudentEntry('stu-1', '対象生徒', '数'), null] } },
+      { id: 'd2', teacher: 'Z先生', lesson: { id: 'l2', studentSlots: [createStudentEntry('other', '別生徒', '数'), null] } },
+    ])
+    expect(collectStudentRegularTeacherIdsFromWeeks(weeks, 'stu-1', resolveStudentKey, resolveDeskTeacherId)).toEqual(new Set(['id:X先生']))
+  })
+
+  it('通常授業以外(講習など lessonType!==regular)のスロットは担当講師に含めない', () => {
+    const specialEntry = { ...createStudentEntry('stu-1', '対象生徒', '数'), lessonType: 'special' as const }
+    const weeks = makeWeeks([
+      { id: 'd1', teacher: 'Y先生', lesson: { id: 'l1', studentSlots: [specialEntry, null] } },
+    ])
+    expect(collectStudentRegularTeacherIdsFromWeeks(weeks, 'stu-1', resolveStudentKey, resolveDeskTeacherId)).toEqual(new Set<string>())
   })
 })
