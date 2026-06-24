@@ -47,6 +47,24 @@ export function resolveGroupClassParticipation(
   return input?.groupClassParticipation?.[subject] === true
 }
 
+// spec-group-lesson §C / Phase 7（2026-06-16）: 生徒日程表の「登録」で集団参加チェックをまとめて保存する。
+// 室長の登録メッセージ（schedule-student-count-save）が運ぶ groupClassParticipation を反映するためのヘルパ。
+//   raw === undefined（unsubmit 等で集団情報を送らないケース）→ 既存値を保全（消さない）。
+//   raw が指定された場合 → 既知の集団科目だけを true で抽出して採用（空オブジェクト＝全不参加も尊重）。
+// これを反映しないと生徒日程表での集団登録が出席者一覧に出ない回帰になる（QR提出は別経路で反映されるため気付きにくい）。
+export function resolveSavedGroupClassParticipation(
+  raw: unknown,
+  previous: Record<string, boolean> | null | undefined,
+): Record<string, boolean> {
+  if (raw === undefined) return previous ?? {}
+  const source = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const result: Record<string, boolean> = {}
+  for (const subject of groupClassSubmissionSubjects) {
+    if (source[subject] === true) result[subject] = true
+  }
+  return result
+}
+
 export type SpecialSessionRow = {
   id: string
   label: string
