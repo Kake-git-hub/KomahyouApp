@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveGroupClassParticipation, resolveLectureSubjectDuration } from './specialSessionModel'
+import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveGroupClassParticipation, resolveLectureSubjectDuration, resolveSavedGroupClassParticipation } from './specialSessionModel'
 
 describe('specialSessionModel', () => {
   it('starts with no default special sessions', () => {
@@ -51,5 +51,33 @@ describe('resolveGroupClassParticipation', () => {
     expect(resolveGroupClassParticipation({ groupClassParticipation: { 集団理科: true } }, '集団理科')).toBe(true)
     expect(resolveGroupClassParticipation({ groupClassParticipation: { 集団理科: true } }, '集団社会')).toBe(false)
     expect(resolveGroupClassParticipation({ groupClassParticipation: { 集団社会: false } }, '集団社会')).toBe(false)
+  })
+})
+
+// 回帰防止: 生徒日程表の「登録」で送られた集団参加(schedule-student-count-save の groupClassParticipation)を
+// 反映しないと出席者一覧に出ない不具合(Phase 7 で QR 以外の登録経路が取りこぼしていた)を固定する。
+describe('resolveSavedGroupClassParticipation (生徒日程表での集団登録の反映)', () => {
+  it('登録メッセージの集団参加を採用する（出席者一覧に反映される）', () => {
+    expect(resolveSavedGroupClassParticipation({ 集団理科: true }, undefined)).toEqual({ 集団理科: true })
+    expect(resolveSavedGroupClassParticipation({ 集団理科: true, 集団社会: true }, {})).toEqual({ 集団理科: true, 集団社会: true })
+  })
+
+  it('既知の集団科目だけを true で抽出する（未知科目や true 以外は捨てる）', () => {
+    expect(resolveSavedGroupClassParticipation({ 集団理科: true, 数: true, 集団社会: false }, undefined)).toEqual({ 集団理科: true })
+    expect(resolveSavedGroupClassParticipation({ 集団社会: 'true' }, undefined)).toEqual({})
+  })
+
+  it('明示的な空オブジェクト＝全不参加を尊重し、既存値を消す', () => {
+    expect(resolveSavedGroupClassParticipation({}, { 集団理科: true })).toEqual({})
+  })
+
+  it('未指定（undefined）のときは既存値を保全して消さない（unsubmit 等）', () => {
+    expect(resolveSavedGroupClassParticipation(undefined, { 集団理科: true })).toEqual({ 集団理科: true })
+    expect(resolveSavedGroupClassParticipation(undefined, undefined)).toEqual({})
+  })
+
+  it('object でない不正値は安全側で空にする', () => {
+    expect(resolveSavedGroupClassParticipation(null, { 集団社会: true })).toEqual({})
+    expect(resolveSavedGroupClassParticipation('集団理科', undefined)).toEqual({})
   })
 })

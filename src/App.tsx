@@ -7,7 +7,7 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
@@ -3420,8 +3420,9 @@ function AuthenticatedApp() {
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 subjectDurations: regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
-                // spec-group-lesson §C: 集団参加は講習回数とは独立。regularOnly でも保全（消さない）。
-                groupClassParticipation: previousInput?.groupClassParticipation ?? {},
+                // spec-group-lesson §C / Phase 7: 集団参加は講習回数とは独立。「登録」ボタンで送られた値を反映し、
+                // 未送信（unsubmit等）では既存を保全して消さない。反映漏れは出席者一覧に出ない回帰になる。
+                groupClassParticipation: resolveSavedGroupClassParticipation(message.groupClassParticipation, previousInput?.groupClassParticipation),
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
