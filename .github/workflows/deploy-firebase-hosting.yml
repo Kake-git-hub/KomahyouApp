@@ -47,6 +47,35 @@ jobs:
       - name: Bump patch version
         run: node tools/bump-version.mjs
 
+      # フロントの Firebase 接続設定はビルド時に VITE_FIREBASE_* から焼き込まれる。
+      # 手元の .env.local は CI に無いため、Secret から復元する。未設定/不足のまま
+      # ビルドすると "local モード"(Firebase 非接続)のアプリが本番に出てしまうため、
+      # 必須値が無ければここで fail-closed させ、本番には一切デプロイしない。
+      - name: Write frontend build env from secret
+        run: |
+          printf '%s\n' "$FIREBASE_WEB_ENV" > .env.production.local
+          node -e '
+            const fs = require("fs");
+            const txt = fs.existsSync(".env.production.local") ? fs.readFileSync(".env.production.local", "utf8") : "";
+            const env = Object.fromEntries(
+              txt.split(/\r?\n/).filter((l) => l && !l.startsWith("#")).map((l) => {
+                const i = l.indexOf("=");
+                return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
+              }),
+            );
+            const required = ["VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_FIREBASE_WORKSPACE_KEY"];
+            const missing = required.filter((k) => !env[k]);
+            if ((env.VITE_EXTERNAL_BACKEND_MODE || "").toLowerCase() === "local") {
+              throw new Error("VITE_EXTERNAL_BACKEND_MODE=local では本番が Firebase に接続しません。GitHub secret FIREBASE_WEB_ENV を修正してください。");
+            }
+            if (missing.length) {
+              throw new Error("Firebase 設定が不足しています: " + missing.join(", ") + "（GitHub secret FIREBASE_WEB_ENV を確認）");
+            }
+            console.log("frontend env OK: firebase project=" + env.VITE_FIREBASE_PROJECT_ID);
+          '
+        env:
+          FIREBASE_WEB_ENV: ${{ secrets.FIREBASE_WEB_ENV }}
+
       - name: Build app
         # Firebase Hosting はルート(/)配信。FIREBASE_DEPLOY=1 で vite の base を '/' に固定する
         # (未設定だと GitHub Actions 上では GitHub Pages 用 base /<repo>/ になり本番が真っ白になる)。
