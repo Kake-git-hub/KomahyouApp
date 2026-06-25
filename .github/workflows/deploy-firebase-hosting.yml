@@ -97,7 +97,21 @@ jobs:
       # 注: プレビューチャンネル方式は firebase-tools の channel:deploy が成功時も 409/400 を
       # 返す不安定挙動のため不採用(run #3〜#5 で確認)。
       - name: Deploy to Firebase Hosting (live)
-        run: npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting --non-interactive
+        run: |
+          set +e
+          npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # 配信内容が現行ライブと同一だと firebase は 400 "is the current active version" を返す。
+            # これは「既に同じ内容が本番公開済み」= 実質成功なので、その場合は成功として続行する。
+            if grep -q "is the current active version" "$RUNNER_TEMP/deploy.log"; then
+              echo "現行ライブと同一内容のため新規リリースはスキップされました(既に本番反映済み)。成功として続行します。"
+            else
+              echo "本番デプロイに失敗しました。"
+              exit "$code"
+            fi
+          fi
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
 
