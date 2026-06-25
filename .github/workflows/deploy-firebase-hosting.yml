@@ -97,10 +97,22 @@ jobs:
       - name: Deploy to preview channel
         id: preview
         run: |
+          set +e
           npx --yes firebase-tools hosting:channel:deploy "verify-${GITHUB_RUN_ID}" \
-            --project komahyouapp-prod --expires 2h --json --non-interactive > "$RUNNER_TEMP/channel.json"
-          cat "$RUNNER_TEMP/channel.json"
-          CHANNEL_URL="$(node -e "const j=require('$RUNNER_TEMP/channel.json'); const sites=j.result||{}; const first=Object.values(sites)[0]||{}; if(!first.url){throw new Error('no channel url')} process.stdout.write(first.url)")"
+            --project komahyouapp-prod --expires 2h --json --non-interactive \
+            > "$RUNNER_TEMP/channel.json" 2> "$RUNNER_TEMP/channel.err"
+          code=$?
+          echo "firebase exit code: $code"
+          echo "----- channel stdout (json) -----"
+          cat "$RUNNER_TEMP/channel.json" || true
+          echo "----- channel stderr -----"
+          cat "$RUNNER_TEMP/channel.err" || true
+          echo "---------------------------------"
+          if [ "$code" -ne 0 ]; then
+            echo "プレビューチャンネルのデプロイに失敗しました(上の stderr/json を確認)。本番には触れていません。"
+            exit "$code"
+          fi
+          CHANNEL_URL="$(node -e "const j=require('$RUNNER_TEMP/channel.json'); const sites=j.result||{}; const first=Object.values(sites)[0]||{}; if(!first.url){throw new Error('no channel url in json')} process.stdout.write(first.url)")"
           echo "channel_url=$CHANNEL_URL" >> "$GITHUB_OUTPUT"
           echo "Preview channel: $CHANNEL_URL"
         env:
