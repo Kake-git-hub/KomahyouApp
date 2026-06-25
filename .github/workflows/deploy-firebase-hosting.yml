@@ -98,15 +98,26 @@ jobs:
         id: preview
         run: |
           set +e
-          npx --yes firebase-tools hosting:channel:deploy "verify-${GITHUB_RUN_ID}" \
-            --project komahyouapp-prod --expires 2h --json --non-interactive \
-            > "$RUNNER_TEMP/channel.json" 2> "$RUNNER_TEMP/channel.err"
-          code=$?
+          deploy_channel() {
+            npx --yes firebase-tools hosting:channel:deploy "verify-${GITHUB_RUN_ID}" \
+              --project komahyouapp-prod --expires 2h --json --non-interactive \
+              > "$RUNNER_TEMP/channel.json" 2> "$RUNNER_TEMP/channel.err"
+          }
+          # firebase-tools がチャンネル作成を内部で二重実行し 409(already exists) になることがある。
+          # その場合チャンネル自体は作成済みなので、リトライすると "更新" パスになり成功し URL が返る。
+          code=0
+          for attempt in 1 2 3; do
+            deploy_channel
+            code=$?
+            if [ "$code" -eq 0 ]; then break; fi
+            echo "channel deploy 試行 ${attempt} 失敗 (code=$code)。内容:"
+            cat "$RUNNER_TEMP/channel.json" 2>/dev/null || true
+            cat "$RUNNER_TEMP/channel.err" 2>/dev/null || true
+            sleep 5
+          done
           echo "firebase exit code: $code"
-          echo "----- channel stdout (json) -----"
-          cat "$RUNNER_TEMP/channel.json" || true
-          echo "----- channel stderr -----"
-          cat "$RUNNER_TEMP/channel.err" || true
+          echo "----- channel stdout (json) -----"; cat "$RUNNER_TEMP/channel.json" || true
+          echo "----- channel stderr -----"; cat "$RUNNER_TEMP/channel.err" || true
           echo "---------------------------------"
           if [ "$code" -ne 0 ]; then
             echo "プレビューチャンネルのデプロイに失敗しました(上の stderr/json を確認)。本番には触れていません。"
