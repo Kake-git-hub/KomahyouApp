@@ -1445,6 +1445,38 @@ function formatSignedStockCount(count: number) {
   return count > 0 ? `+${count}` : String(count)
 }
 
+/**
+ * 未消化振替一覧から配置する際に割り当てる「振替元」を決める。
+ * ユーザーが一覧で選んだ振替元日付(selectedOriginDate)が placementEntry の
+ * remainingOriginDates に含まれていればその日付・ラベル・理由を返す。
+ * 選択日付が無い/見つからない場合のみ最古(nextOriginDate)へフォールバックする。
+ *
+ * 回帰防止: 以前は配置時に常に nextOriginDate(= remainingOriginDates[0] = 最古)を
+ *   使っており、選んだ振替元日付ではなく一番古い振替が割り当てられる不具合があった。
+ */
+export function resolveSelectedMakeupOrigin(
+  placementEntry: Pick<MakeupStockEntry, 'remainingOriginDates' | 'remainingOriginLabels' | 'remainingOriginReasonLabels' | 'nextOriginDate' | 'nextOriginLabel' | 'nextOriginReasonLabel'>,
+  selectedOriginDate: string | null,
+) {
+  const selectedOriginIndex = selectedOriginDate
+    ? placementEntry.remainingOriginDates.indexOf(selectedOriginDate)
+    : -1
+
+  if (selectedOriginIndex >= 0) {
+    return {
+      originDate: placementEntry.remainingOriginDates[selectedOriginIndex] ?? null,
+      originLabel: placementEntry.remainingOriginLabels[selectedOriginIndex] ?? null,
+      originReasonLabel: placementEntry.remainingOriginReasonLabels[selectedOriginIndex] ?? null,
+    }
+  }
+
+  return {
+    originDate: placementEntry.nextOriginDate,
+    originLabel: placementEntry.nextOriginLabel,
+    originReasonLabel: placementEntry.nextOriginReasonLabel,
+  }
+}
+
 function buildGroupedMakeupStockTitle(entries: MakeupStockEntry[], balance: number) {
   const lines = [`残数: ${formatSignedStockCount(balance)}`]
 
@@ -2958,6 +2990,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
   const [selectedMakeupStockKey, setSelectedMakeupStockKey] = useState<string | null>(null)
   const [selectedMakeupStockRawKey, setSelectedMakeupStockRawKey] = useState<string | null>(null)
+  // 未消化振替一覧で「選んだ振替元日付」を保持する。配置時に最古(nextOriginDate)へ
+  // 自動で巻き戻らないよう、選択した日付をそのまま割り当てるためのガード。
+  const [selectedMakeupStockOriginDate, setSelectedMakeupStockOriginDate] = useState<string | null>(null)
   const [selectedLectureStockKey, setSelectedLectureStockKey] = useState<string | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
   const [dayHeaderMenu, setDayHeaderMenu] = useState<{ dateKey: string; x: number; y: number } | null>(null)
@@ -6539,6 +6574,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
+    // ユーザーが未消化振替一覧で選んだ振替元日付を割り当てる(最古へ巻き戻さない)。
+    const { originDate: resolvedOriginDate, originLabel: resolvedOriginLabel, originReasonLabel: resolvedOriginReasonLabel } =
+      resolveSelectedMakeupOrigin(placementEntry, selectedMakeupStockOriginDate)
+
     const managedStudent = placementEntry.studentId ? students.find((student) => student.id === placementEntry.studentId) : null
     const studentName = managedStudent ? getStudentDisplayName(managedStudent) : selectedMakeupStockEntry.displayName
     const studentGrade = managedStudent?.birthDate ? resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey)) : '中1'
@@ -6548,8 +6587,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       managedStudentId: managedStudent?.id,
       grade: studentGrade,
       birthDate: managedStudent?.birthDate,
-      makeupSourceDate: placementEntry.nextOriginDate ?? undefined,
-      makeupSourceLabel: placementEntry.nextOriginLabel ?? undefined,
+      makeupSourceDate: resolvedOriginDate ?? undefined,
+      makeupSourceLabel: resolvedOriginLabel ?? undefined,
       subject: placementEntry.subject as SubjectLabel,
       lessonType: 'makeup',
       teacherType: 'normal',
@@ -6558,8 +6597,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!targetDesk.lesson) {
       targetDesk.lesson = {
         id: `${cellId}_desk_${deskIndex + 1}_${nextStudent.lessonType}`,
-        note: nextStudent.lessonType === 'makeup' && placementEntry.nextOriginLabel
-          ? `元の通常授業: ${placementEntry.nextOriginLabel}${placementEntry.nextOriginReasonLabel ? `（${placementEntry.nextOriginReasonLabel}）` : ''}`
+        note: nextStudent.lessonType === 'makeup' && resolvedOriginLabel
+          ? `元の通常授業: ${resolvedOriginLabel}${resolvedOriginReasonLabel ? `（${resolvedOriginReasonLabel}）` : ''}`
           : undefined,
         studentSlots: [null, null],
       }
@@ -6570,6 +6609,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       placedStudent: { name: nextStudent.name, managedStudentId: nextStudent.managedStudentId, subject: nextStudent.subject, lessonType: nextStudent.lessonType, makeupSourceDate: nextStudent.makeupSourceDate },
       stockEntry: { key: selectedMakeupStockEntry.key, balance: selectedMakeupStockEntry.balance, studentId: selectedMakeupStockEntry.studentId },
       placementEntry: { key: placementEntry.key, studentId: placementEntry.studentId, nextOriginDate: placementEntry.nextOriginDate },
+      selectedOriginDate: selectedMakeupStockOriginDate,
+      resolvedOriginDate,
       targetDate: targetCell.dateKey,
     })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
@@ -6577,6 +6618,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStockPanelsRestoreState(null)
     setIsMakeupStockOpen(false)
     setSelectedMakeupStockRawKey(null)
+    setSelectedMakeupStockOriginDate(null)
     setSelectedMakeupStockKey(null)
     setStatusMessage(`${selectedMakeupStockEntry.displayName} の振替を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
@@ -8088,7 +8130,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${entry.displayName} の未消化講習を選択しました。空欄セルを左クリックしてください。`)
   }
 
-  const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: { hidePanelsDuringPlacement?: boolean; rawKey?: string }) => {
+  const handleSelectMakeupStockEntry = (entry: GroupedMakeupStockEntry, options?: { hidePanelsDuringPlacement?: boolean; rawKey?: string; originDate?: string }) => {
     if (entry.balance <= 0) {
       setStatusMessage(`${entry.displayName} は先取り済みのため、残数が発生するまで選択できません。`)
       return
@@ -8098,6 +8140,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedLectureStockKey(null)
     setSelectedMakeupStockKey(entry.key)
     setSelectedMakeupStockRawKey(options?.rawKey ?? null)
+    setSelectedMakeupStockOriginDate(options?.originDate ?? null)
     if (options?.hidePanelsDuringPlacement) {
       setStockPanelsRestoreState({ lecture: isLectureStockOpen, makeup: isMakeupStockOpen })
       setIsLectureStockOpen(false)
@@ -8512,7 +8555,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                             type="button"
                             className="stock-origin-item stock-origin-item-main"
                             onClick={() => {
-                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, hidePanelsDuringPlacement: true })
+                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, originDate: item.date, hidePanelsDuringPlacement: true })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}
