@@ -5,7 +5,8 @@ name: Deploy to Firebase Hosting
 # GitHub のランナー上で実行するため、スマホからでも main にマージするだけで反映できる。
 #
 # 必要な設定（リポジトリ Settings → Secrets and variables → Actions → New repository secret）:
-#   FIREBASE_SERVICE_ACCOUNT … Firebase コンソールで発行したサービスアカウントの JSON 全文
+#   RE_FIREBASE_SERVICE_ACCOUNT … Firebase コンソールで発行したサービスアカウントの JSON 全文
+#   FIREBASE_WEB_ENV            … フロントの .env.local の中身(VITE_FIREBASE_* など)全文
 #
 # デプロイのたびに package.json の patch バージョンを1つ上げてコミットを main に戻す。
 # この戻しコミットは GITHUB_TOKEN による push なのでワークフローを再発火させず無限ループしない。
@@ -87,7 +88,7 @@ jobs:
         run: |
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
 
       # 本番を真っ白にしないための安全策(fail-closed):
       # 1) まずプレビューチャンネルへデプロイし、そのURLに対して資産実体まで検証する。
