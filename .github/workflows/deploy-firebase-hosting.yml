@@ -56,7 +56,26 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
-      - name: Deploy to Firebase Hosting
+      # 本番を真っ白にしないための安全策(fail-closed):
+      # 1) まずプレビューチャンネルへデプロイし、そのURLに対して資産実体まで検証する。
+      #    ビルドが壊れている(チャンク欠落で HTML が返る等)とここで失敗し、本番には一切触れない。
+      # 2) 検証に通った場合のみ本番(live)へ昇格デプロイし、本番URLも同じ強度で再検証する。
+      - name: Deploy to preview channel
+        id: preview
+        run: |
+          npx --yes firebase-tools hosting:channel:deploy "verify-${GITHUB_RUN_ID}" \
+            --project komahyouapp-prod --expires 2h --json --non-interactive > "$RUNNER_TEMP/channel.json"
+          cat "$RUNNER_TEMP/channel.json"
+          CHANNEL_URL="$(node -e "const j=require('$RUNNER_TEMP/channel.json'); const sites=j.result||{}; const first=Object.values(sites)[0]||{}; if(!first.url){throw new Error('no channel url')} process.stdout.write(first.url)")"
+          echo "channel_url=$CHANNEL_URL" >> "$GITHUB_OUTPUT"
+          echo "Preview channel: $CHANNEL_URL"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+
+      - name: Verify preview channel (blocks bad builds before live)
+        run: node tools/verify-firebase-hosting.mjs --site "${{ steps.preview.outputs.channel_url }}" --retries 20 --retryDelayMs 3000
+
+      - name: Promote to live (only if preview verified)
         run: npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting --non-interactive
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json

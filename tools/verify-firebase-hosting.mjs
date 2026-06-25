@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 function parseArgs(argv) {
@@ -56,6 +56,45 @@ async function fetchText(url) {
   }
 }
 
+// ビルド済み dist/assets の全 JS/CSS チャンク名を集める。
+// index.html から参照されない動的 import チャンク(App など)も含めて配信実体を検証するため。
+function listLocalAssetFiles(distDir) {
+  try {
+    return readdirSync(resolve(distDir, 'assets'))
+      .filter((name) => name.endsWith('.js') || name.endsWith('.css'))
+      .map((name) => `/assets/${name}`)
+  } catch {
+    return []
+  }
+}
+
+function expectedContentTypeFor(assetPath) {
+  if (assetPath.endsWith('.js')) return /javascript/i
+  if (assetPath.endsWith('.css')) return /text\/css/i
+  return null
+}
+
+// 個々のチャンクが「実ファイルとして」配信されているかを確認する。
+// 欠落していると Firebase の "**"→/index.html リライトが HTML(200) を返し、
+// ブラウザが JS として実行できず画面が真っ白になる。content-type が
+// HTML にすり替わっていないかまで検証することで、その壊れた配信を検知する。
+async function verifyAssetServed(url, assetPath) {
+  let response
+  try {
+    response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } })
+  } catch (error) {
+    throw new Error(`Asset fetch failed for ${assetPath}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!response.ok) {
+    throw new Error(`Asset ${assetPath} returned HTTP ${response.status} (expected 200). The release may be incomplete.`)
+  }
+  const contentType = response.headers.get('content-type') ?? ''
+  const expected = expectedContentTypeFor(assetPath)
+  if (expected && !expected.test(contentType)) {
+    throw new Error(`Asset ${assetPath} served wrong content-type "${contentType}". Likely missing file falling through to the SPA index.html rewrite (would render a blank page).`)
+  }
+}
+
 async function verifyOnce({ siteUrl, distDir }) {
   const localIndexHtml = readFileSync(resolve(distDir, 'index.html'), 'utf8')
   const assetPaths = extractAssetPaths(localIndexHtml)
@@ -78,8 +117,21 @@ async function verifyOnce({ siteUrl, distDir }) {
     throw new Error(`Live index cache-control is still stale-friendly: ${liveIndex.cacheControl || '(none)'}`)
   }
 
+  // ビルド済み全 JS/CSS チャンクが実体として配信されているか確認する(動的 import の App 等も含む)。
+  // ここで欠落/HTML すり替わりを検知できれば、真っ白になる壊れたデプロイを本番公開前に止められる。
+  const assetFiles = listLocalAssetFiles(distDir)
+  if (assetFiles.length === 0) {
+    throw new Error('Local dist/assets contains no JS/CSS files to verify.')
+  }
+  const base = siteUrl.replace(/\/$/, '')
+  const cacheBuster = Date.now()
+  for (const assetPath of assetFiles) {
+    await verifyAssetServed(`${base}${assetPath}?deployCheck=${cacheBuster}`, assetPath)
+  }
+
   return {
     assetPaths,
+    verifiedAssetFiles: assetFiles.length,
     cacheControl: liveIndex.cacheControl,
     lastModified: liveIndex.lastModified,
   }
@@ -97,7 +149,7 @@ async function main() {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
       const result = await verifyOnce({ siteUrl, distDir })
-      console.log(`Firebase Hosting live verification passed: site=${siteUrl} cache-control=${result.cacheControl} last-modified=${result.lastModified} assets=${result.assetPaths.length}`)
+      console.log(`Firebase Hosting live verification passed: site=${siteUrl} cache-control=${result.cacheControl} last-modified=${result.lastModified} indexAssets=${result.assetPaths.length} verifiedChunks=${result.verifiedAssetFiles}`)
       return
     } catch (error) {
       lastError = error
