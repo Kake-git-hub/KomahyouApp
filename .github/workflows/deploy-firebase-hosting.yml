@@ -1,0 +1,78 @@
+name: Deploy to Firebase Hosting
+
+# main への push で本番(komahyouapp-prod)の Firebase Hosting に自動デプロイする。
+# ローカルの `npm run deploy:firebase` と同じ流れ（bump → build → deploy → ライブ検証）を
+# GitHub のランナー上で実行するため、スマホからでも main にマージするだけで反映できる。
+#
+# 必要な設定（リポジトリ Settings → Secrets and variables → Actions → New repository secret）:
+#   FIREBASE_SERVICE_ACCOUNT … Firebase コンソールで発行したサービスアカウントの JSON 全文
+#
+# デプロイのたびに package.json の patch バージョンを1つ上げてコミットを main に戻す。
+# この戻しコミットは GITHUB_TOKEN による push なのでワークフローを再発火させず無限ループしない。
+#
+# 注意: Firestore ルールは安全のためこの自動デプロイの対象外（hosting のみ）。
+# ルール変更を反映したいときは別途 `firebase deploy --only firestore` を実行すること。
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: firebase-hosting-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bump patch version
+        run: node tools/bump-version.mjs
+
+      - name: Build app
+        run: npm run build
+
+      - name: Write Firebase service account credentials
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy to Firebase Hosting
+        run: npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting --non-interactive
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+
+      - name: Verify live deployment
+        run: node tools/verify-firebase-hosting.mjs --project komahyouapp-prod --retries 20 --retryDelayMs 3000
+
+      - name: Commit version bump back to main
+        run: |
+          if git diff --quiet -- package.json; then
+            echo "package.json に変更がないためコミットをスキップします。"
+            exit 0
+          fi
+          NEXT_VERSION="$(node -p "require('./package.json').version")"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore(release): v${NEXT_VERSION} デプロイに伴うバージョン更新"
+          git push origin HEAD:main
