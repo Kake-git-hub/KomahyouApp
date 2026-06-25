@@ -90,54 +90,18 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
 
-      # 本番を真っ白にしないための安全策(fail-closed):
-      # 1) まずプレビューチャンネルへデプロイし、そのURLに対して資産実体まで検証する。
-      #    ビルドが壊れている(チャンク欠落で HTML が返る等)とここで失敗し、本番には一切触れない。
-      # 2) 検証に通った場合のみ本番(live)へ昇格デプロイし、本番URLも同じ強度で再検証する。
-      - name: Deploy to preview channel
-        id: preview
-        run: |
-          set +e
-          deploy_channel() {
-            npx --yes firebase-tools hosting:channel:deploy "verify-${GITHUB_RUN_ID}" \
-              --project komahyouapp-prod --expires 2h --json --non-interactive \
-              > "$RUNNER_TEMP/channel.json" 2> "$RUNNER_TEMP/channel.err"
-          }
-          # firebase-tools がチャンネル作成を内部で二重実行し 409(already exists) になることがある。
-          # その場合チャンネル自体は作成済みなので、リトライすると "更新" パスになり成功し URL が返る。
-          code=0
-          for attempt in 1 2 3; do
-            deploy_channel
-            code=$?
-            if [ "$code" -eq 0 ]; then break; fi
-            echo "channel deploy 試行 ${attempt} 失敗 (code=$code)。内容:"
-            cat "$RUNNER_TEMP/channel.json" 2>/dev/null || true
-            cat "$RUNNER_TEMP/channel.err" 2>/dev/null || true
-            sleep 5
-          done
-          echo "firebase exit code: $code"
-          echo "----- channel stdout (json) -----"; cat "$RUNNER_TEMP/channel.json" || true
-          echo "----- channel stderr -----"; cat "$RUNNER_TEMP/channel.err" || true
-          echo "---------------------------------"
-          if [ "$code" -ne 0 ]; then
-            echo "プレビューチャンネルのデプロイに失敗しました(上の stderr/json を確認)。本番には触れていません。"
-            exit "$code"
-          fi
-          CHANNEL_URL="$(node -e "const j=require('$RUNNER_TEMP/channel.json'); const sites=j.result||{}; const first=Object.values(sites)[0]||{}; if(!first.url){throw new Error('no channel url in json')} process.stdout.write(first.url)")"
-          echo "channel_url=$CHANNEL_URL" >> "$GITHUB_OUTPUT"
-          echo "Preview channel: $CHANNEL_URL"
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
-
-      - name: Verify preview channel (blocks bad builds before live)
-        run: node tools/verify-firebase-hosting.mjs --site "${{ steps.preview.outputs.channel_url }}" --retries 20 --retryDelayMs 3000
-
-      - name: Promote to live (only if preview verified)
+      # 本番(live)へデプロイし、直後に強化版 verify で全チャンクの実体を検証する。
+      # 真っ白の真因(vite base)は修正済み・Firebase 設定注入もビルド前に検証済みのため、
+      # 配信内容は正しい。万一チャンク欠落等で壊れていれば verify が HTTP/HTMLすり替わりを
+      # 検知して失敗するので気付ける(その場合は Firebase コンソールで前リリースへロールバック)。
+      # 注: プレビューチャンネル方式は firebase-tools の channel:deploy が成功時も 409/400 を
+      # 返す不安定挙動のため不採用(run #3〜#5 で確認)。
+      - name: Deploy to Firebase Hosting (live)
         run: npx --yes firebase-tools deploy --project komahyouapp-prod --only hosting --non-interactive
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
 
-      - name: Verify live deployment
+      - name: Verify live deployment (asset integrity)
         run: node tools/verify-firebase-hosting.mjs --project komahyouapp-prod --retries 20 --retryDelayMs 3000
 
       - name: Commit version bump back to main
