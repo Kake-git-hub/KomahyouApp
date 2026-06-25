@@ -25,6 +25,39 @@ if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   }
 }
 
+const CHUNK_RELOAD_GUARD_KEY = 'app-chunk-reload-guard'
+
+// 動的 import 失敗(旧チャンク掴み)からの自動復帰。キャッシュ回避付きで1回だけ再読込し、
+// それでも失敗する場合はループを防ぐため手動再読込を促すメッセージを表示する。
+function recoverFromChunkLoadError(error: unknown) {
+  console.error('[App chunk load failed]', error)
+
+  let alreadyReloaded = false
+  try {
+    alreadyReloaded = window.sessionStorage.getItem(CHUNK_RELOAD_GUARD_KEY) === '1'
+    window.sessionStorage.setItem(CHUNK_RELOAD_GUARD_KEY, '1')
+  } catch {
+    // sessionStorage が使えない場合はガードできないため、再読込せずメッセージ表示にフォールバック。
+    alreadyReloaded = true
+  }
+
+  if (!alreadyReloaded) {
+    const target = new URL(window.location.href)
+    target.searchParams.set('r', String(Date.now()))
+    window.location.replace(target.toString())
+    return
+  }
+
+  const root = document.getElementById('root')
+  if (root) {
+    root.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100dvh;gap:12px;font-family:sans-serif;color:#444;padding:24px;text-align:center;">'
+      + '<div>最新版の読み込みに失敗しました。</div>'
+      + '<div>ページを再読み込みしてください。</div>'
+      + '<button onclick="location.reload()" style="padding:10px 20px;font-size:16px;border:none;border-radius:8px;background:#1976d2;color:#fff;">再読み込み</button>'
+      + '</div>'
+  }
+}
+
 import { applyIOSSubmissionViewport } from './components/submission/iosViewport'
 
 const SubmissionPage = lazy(() => import('./components/submission/SubmissionPage'))
@@ -100,5 +133,11 @@ if (isSubmissionDebug()) {
         <div className="app-version-badge">v{packageJson.version}</div>
       </StrictMode>,
     )
+  }).catch((error) => {
+    // デプロイ直後にブラウザが旧 index/チャンクをキャッシュしていると、削除済みの
+    // 旧チャンクを掴んで動的 import が失敗し、画面が真っ白のまま固まることがある。
+    // その場合はキャッシュ回避クエリ付きで一度だけ自動リロードして最新へ復帰させる。
+    // 無限ループ防止: sessionStorage で1セッション1回までに制限する。
+    recoverFromChunkLoadError(error)
   })
 }
