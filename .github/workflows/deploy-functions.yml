@@ -1,0 +1,66 @@
+name: Deploy Cloud Functions
+
+# Cloud Functions(lectureSubmissionApi 等)を本番(komahyouapp-prod)へデプロイする。
+# 既存の deploy-firebase-hosting.yml はホスティングのみ対象で functions を出さないため、
+# functions 用のデプロイをここに分離する。GitHub のランナー上で実行するので、
+# ローカルの Firebase 認証は不要(リポジトリ secret の RE_FIREBASE_SERVICE_ACCOUNT を使う)。
+#
+# 必要な設定(リポジトリ Settings → Secrets and variables → Actions):
+#   RE_FIREBASE_SERVICE_ACCOUNT … サービスアカウント JSON 全文(ホスティングと共用)
+#   ※ このサービスアカウントには Cloud Functions のデプロイ権限が必要:
+#     Cloud Functions Admin / Service Account User / (初回は Cloud Build Editor・Artifact Registry 関連)。
+#     権限不足の場合はこのワークフローが失敗するので、GCP コンソールでロールを付与すること。
+#
+# トリガー:
+#   - 手動(workflow_dispatch): Actions タブから「Run workflow」で実行。
+#   - main への push で functions/** が変わったとき: マージで自動デプロイ。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'functions/**'
+      - '.github/workflows/deploy-functions.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-functions-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-functions:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Install functions dependencies
+        run: npm --prefix functions ci
+
+      - name: Build functions
+        run: npm --prefix functions run build
+
+      - name: Write Firebase service account credentials
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy Cloud Functions (live)
+        run: |
+          npx --yes firebase-tools deploy --project komahyouapp-prod --only functions --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
