@@ -3419,6 +3419,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             },
           };
         });
+        // オプション欄(開発用教室): 右列の✓は DATA.students[].optionChecks から描画される
+        // (buildStudentPayload が表示中セッションの studentInput.optionChecks を載せる)。
+        // セッション入力だけ更新しても render() は生徒オブジェクトの古い値を読むため反映されない。
+        // 登録ダイアログで渡されたチェックを生徒にもミラーして即時反映する(未指定=保全)。
+        if (optionChecks !== undefined) {
+          var optionCheckTargetStudent = (DATA.students || []).find(function(s) { return s.id === personId; });
+          if (optionCheckTargetStudent) optionCheckTargetStudent.optionChecks = optionChecks || {};
+        }
       }
 
       function updateTeacherUnavailableSlotsLocally(sessionId, personId, unavailableSlots) {
