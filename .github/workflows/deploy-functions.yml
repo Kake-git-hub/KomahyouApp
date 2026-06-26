@@ -13,16 +13,29 @@ name: Deploy Cloud Functions
 #
 # トリガー:
 #   - 手動(workflow_dispatch): Actions タブから「Run workflow」で実行。
-#   - main への push で functions/** が変わったとき: マージで自動デプロイ。
+#     入力 only で対象を指定できる(既定 functions:lectureSubmissionApi)。
+#   - main への push で functions/** が変わったとき: マージで自動デプロイ(全 functions)。
+#     ※ ワークフロー自身の変更では発火させない(本番デプロイの誤発火防止)。
+#
+# 重要(409 対策): functions のソースバンドルは全関数で共有のため、index.ts を変えると
+# firebase は全関数(~15個)を一斉 update しようとし、Cloud Functions v2 が
+# 「HTTP 409 unable to queue the operation」を多発させる。firebase-tools はこれを
+# 警告のまま exit 0 で返すため、対象関数が未更新でも CI が緑(誤成功)になる。
+# 対策: ①既定では対象を絞って 1 関数ずつデプロイ(同時オペレーションを増やさない)、
+#       ②「Deploy complete!」未出力や 409 残存は失敗扱いにし、③リトライで取りこぼしを埋める。
 
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: 'firebase --only 対象(例: functions:lectureSubmissionApi / 全部なら functions)'
+        required: false
+        default: 'functions:lectureSubmissionApi'
   push:
     branches:
       - main
     paths:
       - 'functions/**'
-      - '.github/workflows/deploy-functions.yml'
 
 permissions:
   contents: read
@@ -59,11 +72,31 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
 
       - name: Deploy Cloud Functions (live)
-        # firebase の終了コードをそのままステップの成否にする(以前は `| tee` が exit code を
-        # マスクして失敗を success と誤報告していた)。ログは tee + pipefail で保存する。
+        # 409「unable to queue the operation」対策のリトライ＋完了検証。
+        # 成功条件: firebase exit 0 かつ「Deploy complete!」出力あり かつ 409 残存なし。
+        # この3条件を満たすまで最大4回リトライし、満たせなければ失敗にする(誤成功を防ぐ)。
         run: |
-          set -o pipefail
-          npx --yes firebase-tools deploy --project komahyouapp-prod --only functions --non-interactive \
-            2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
+          ONLY_TARGET="${{ github.event.inputs.only }}"
+          if [ -z "$ONLY_TARGET" ]; then ONLY_TARGET="functions"; fi
+          LOG="$RUNNER_TEMP/deploy-functions.log"
+          attempt=1
+          max=4
+          while [ "$attempt" -le "$max" ]; do
+            echo "=== functions deploy attempt $attempt/$max (--only $ONLY_TARGET) ==="
+            set +e
+            npx --yes firebase-tools deploy --project komahyouapp-prod --only "$ONLY_TARGET" --non-interactive \
+              2>&1 | tee "$LOG"
+            code=${PIPESTATUS[0]}
+            set -e
+            if [ "$code" -eq 0 ] && grep -q "Deploy complete!" "$LOG" && ! grep -q "unable to queue the operation" "$LOG"; then
+              echo "デプロイ成功(exit0 / Deploy complete! 確認 / 409なし)。"
+              exit 0
+            fi
+            echo "未完了(exit=$code・Deploy complete!未確認 もしくは 409残存)。30秒後にリトライします。"
+            attempt=$((attempt + 1))
+            sleep 30
+          done
+          echo "規定回数($max)デプロイを試みましたが完了条件を満たしませんでした。失敗扱いにします。"
+          exit 1
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
