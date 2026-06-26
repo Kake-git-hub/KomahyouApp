@@ -59,7 +59,10 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
 
       - name: Deploy Cloud Functions (live)
+        # firebase の終了コードをそのままステップの成否にする(以前は `| tee` が exit code を
+        # マスクして失敗を success と誤報告していた)。ログは tee + pipefail で保存する。
         run: |
+          set -o pipefail
           npx --yes firebase-tools deploy --project komahyouapp-prod --only functions --non-interactive \
             2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
         env:
