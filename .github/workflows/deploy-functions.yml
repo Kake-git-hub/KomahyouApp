@@ -72,13 +72,42 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
 
       - name: Deploy Cloud Functions (live)
-        # 409「unable to queue the operation」対策のリトライ＋完了検証。
-        # 成功条件: firebase exit 0 かつ「Deploy complete!」出力あり かつ 409 残存なし。
-        # この3条件を満たすまで最大4回リトライし、満たせなければ失敗にする(誤成功を防ぐ)。
+        # 409「unable to queue the operation」対策のリトライ＋“実更新”検証。
+        # firebase-tools は 409 を警告のまま exit 0 で返すため「Deploy complete!」の有無だけでは
+        # 誤成功/誤失敗の両方が起きる(実際: 先行オペレーションが完了して関数は更新されたのに
+        # 後続 PATCH が 409→Deploy complete! 未出力で誤失敗、という事例あり)。
+        # そこで判定を二段にする:
+        #   A) firebase exit0 かつ Deploy complete! かつ 409残存なし → 成功
+        #   B) 上記が出なくても、対象関数(functions:NAME 指定時)の updateTime が deploy 前から
+        #      進み state=ACTIVE なら“実更新済み”として成功(409の取りこぼし救済)
+        # どちらも満たさなければ最大4回リトライ、それでも駄目なら失敗(誤成功を防ぐ)。
         run: |
           ONLY_TARGET="${{ github.event.inputs.only }}"
           if [ -z "$ONLY_TARGET" ]; then ONLY_TARGET="functions"; fi
           LOG="$RUNNER_TEMP/deploy-functions.log"
+
+          # 実更新検証用: functions:NAME 形式のときだけ対象関数名を取り出す。
+          VERIFY_FUNC=""
+          case "$ONLY_TARGET" in functions:*) VERIFY_FUNC="${ONLY_TARGET#functions:}" ;; esac
+
+          describe_update_time() {
+            command -v gcloud >/dev/null 2>&1 || { echo ""; return; }
+            gcloud functions describe "$1" --gen2 --region=asia-northeast1 \
+              --project=komahyouapp-prod --format='value(updateTime)' 2>/dev/null || echo ""
+          }
+          describe_state() {
+            command -v gcloud >/dev/null 2>&1 || { echo ""; return; }
+            gcloud functions describe "$1" --gen2 --region=asia-northeast1 \
+              --project=komahyouapp-prod --format='value(state)' 2>/dev/null || echo ""
+          }
+
+          BEFORE_UPDATE=""
+          if [ -n "$VERIFY_FUNC" ] && command -v gcloud >/dev/null 2>&1; then
+            gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" >/dev/null 2>&1 || true
+            BEFORE_UPDATE="$(describe_update_time "$VERIFY_FUNC")"
+            echo "deploy前 $VERIFY_FUNC updateTime=$BEFORE_UPDATE"
+          fi
+
           attempt=1
           max=4
           while [ "$attempt" -le "$max" ]; do
@@ -88,11 +117,26 @@ jobs:
               2>&1 | tee "$LOG"
             code=${PIPESTATUS[0]}
             set -e
+
+            # 判定A: firebase が明示完了。
             if [ "$code" -eq 0 ] && grep -q "Deploy complete!" "$LOG" && ! grep -q "unable to queue the operation" "$LOG"; then
               echo "デプロイ成功(exit0 / Deploy complete! 確認 / 409なし)。"
               exit 0
             fi
-            echo "未完了(exit=$code・Deploy complete!未確認 もしくは 409残存)。30秒後にリトライします。"
+
+            # 判定B: 409等で完了表示が出なくても、対象関数の updateTime が進み ACTIVE なら実更新成功。
+            if [ -n "$VERIFY_FUNC" ] && command -v gcloud >/dev/null 2>&1; then
+              sleep 20
+              AFTER_STATE="$(describe_state "$VERIFY_FUNC")"
+              AFTER_UPDATE="$(describe_update_time "$VERIFY_FUNC")"
+              echo "deploy後 $VERIFY_FUNC state=$AFTER_STATE updateTime=$AFTER_UPDATE"
+              if [ "$AFTER_STATE" = "ACTIVE" ] && [ -n "$AFTER_UPDATE" ] && [ "$AFTER_UPDATE" != "$BEFORE_UPDATE" ]; then
+                echo "実更新を確認(updateTime 進行 & state=ACTIVE)。成功とみなします。"
+                exit 0
+              fi
+            fi
+
+            echo "未完了(exit=$code・Deploy complete!未確認/409残存・実更新未確認)。30秒後にリトライします。"
             attempt=$((attempt + 1))
             sleep 30
           done
