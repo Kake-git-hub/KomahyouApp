@@ -137,3 +137,131 @@ npm run deploy:firebase:with-functions
 - オプション文言の専用管理UI（現状は生徒日程表の左列に直接入力）。
 - スマホだけで関数デプロイしたい場合: `workflow_dispatch` の手動トリガー Actions を追加すれば
   GitHubモバイルから関数デプロイ可能（要・サービスアカウントへの関数デプロイ権限）。
+
+---
+
+# 別案件：未消化振替の自動割り当て（アーキテクチャ設計／未実装）
+
+> このセクションは**オプション欄とは独立した次の新機能**の設計メモ。PCで関数デプロイを終えた後に着手する想定。
+> 実装前にこの設計を確認し、下記「回帰ガード」を必ず踏むこと。
+
+## A. 何を作るか（確定仕様）
+
+未消化講習の自動割り当て時に、**選択式（チェックボックス）で未消化振替も同時に自動割り当て**する。
+
+- 未消化振替も、**未消化講習と同じ自動割り当て規則・条件**で割り振る。
+- 順序：**先に未消化講習を割り振り**、**次に未消化振替を「振るい順」から割り振る**。
+- 割り振り切れなかった分は、**講習と同様に未消化のままストックに残して完了**する（エラーにしない）。
+
+## B. 現状の把握（既存コードの要点）
+
+すべて `src/components/schedule-board/ScheduleBoardScreen.tsx`（巨大ファイル）に集中している。
+
+### B-1. 未消化講習の自動割り当て（既存・流用元）
+- 入口: `handleAutoAssignLectureStockEntry(entry)`（≈ L6724）。
+  生徒1人分の未消化講習を、空きが無くなるまで貪欲ループで配置する。残りはストックに残す。
+- 候補探索: `findBestLectureAutoAssignCandidate({ sourceWeeks, pendingItems, managedStudent, studentKey })`（≈ L4585）。
+  **ここで自動割り当て規則をすべて適用**している（科目対応講師のみ / 通常講師のみ / 同日コマ数上限 /
+  指定時限禁止・時限優先 / ペア制約 / 生徒の出席不可コマ / 同コマ重複 / 在籍日・開校日）。
+  共通スコアは `buildCommonAutoAssignScoreParts` / `buildForcedConstraintScoreParts`（≈ L330〜）。
+- 配置: ループ内で `lessonType: 'special'`・`makeupSourceDate`(=講習元) を立て、
+  `manualLectureStockCounts`/`manualLectureStockOrigins` を減算 → 最後に `commitWeeks(...)`（≈ L6840）。
+- UIトリガー: StockActionModal（type `'lecture'`）の「自動割振」ボタン（≈ L8497）→
+  `runStockAutoAssign(key, () => handleAutoAssignLectureStockEntry(entry))`。
+
+### B-2. 未消化振替（振替ストック）
+- モデル: `makeupStock.ts` の `MakeupStockEntry`。`balance`（割り振るべき振替数）と
+  `remainingOriginDates`/`remainingOriginLabels`/`remainingOriginReasonLabels`（**振替元の一覧＝振るい順**。
+  **日付昇順＝古い順がそのまま振るい順**）、`nextOriginDate` を持つ。**科目ごと**のエントリ。
+- グルーピング: `makeupStockEntries`（≈ L3890）が生徒単位に集約（`balance` は科目合算）。
+  生徒の科目別 raw は `rawMakeupStockEntries`。
+- **重要**: 振替の `balance` は**盤面から都度再計算**される（明示カウンタを持たない）。
+  盤面に振替授業を1コマ置けば `assignedMakeupLessons` が増え、再計算で `balance` が1減る。
+- 手動配置: `confirmMakeupPlacement` 相当（≈ L6582）。`lessonType: 'makeup'`、
+  `makeupSourceDate/Label` を `resolveSelectedMakeupOrigin` で決め、note「元の通常授業: …（理由）」を付ける。
+  配置は `normalizeLessonPlacement(...)` を通す（**この正規化を必ず踏襲する**）。
+- UIトリガー: StockActionModal（type `'makeup'`、≈ L8529）は**手動配置のみ**で自動割振ボタンが無い。
+
+### B-3. 既に用意済みの足場（流用できる）
+- 型 `MakeupAutoAssignPendingItem`（subject / makeupSourceDate / makeupSourceLabel / makeupSourceReasonLabel）
+  と `MakeupAutoAssignCandidate` が**定義済み**（≈ L221〜238）。
+- `buildAutoAssignDebugReport`（≈ L4553）は `Array<LectureAutoAssignCandidate | MakeupAutoAssignCandidate>`
+  を**既に受け取れる**。`commitWeeks` は振替系引数（`manualMakeupAdjustments` 等）も受け取れる。
+
+## C. 設計（推奨アプローチ）
+
+### C-1. 候補探索は「共通化」して規則のドリフトを防ぐ（回帰防止の肝）
+`findBestLectureAutoAssignCandidate` の**セル×机×生徒スロットごとの規則評価**（L4607〜の二重ループ内、
+forbidFirstPeriod / subjectCapableTeachersOnly / regularTeachersOnly / lessonLimit / pairConstraint /
+studentUnavailable / duplicate / isOpenDay / isActiveOnDate）を、**講習・振替で共有する内部ヘルパ**に
+切り出す。差分は以下の3点だけをパラメータ化する（`kind: 'lecture' | 'makeup'`）：
+
+1. **matchedItem の絞り込み**
+   - 講習: `isDateWithinRange(cell.dateKey, item.startDate, item.endDate)`（講習期間）＋ `item.unavailableSlots`。
+   - 振替: **期間枠なし**（盤面の開校日全体が対象。手動配置と同じく追加の日付下限は設けない）。
+     `item.unavailableSlots` は無し。生徒の出席不可コマ・同コマ重複は**共通で適用**。
+2. **スコア差分**（共通スコアは流用）
+   - 講習: 「未消化講習由来(session優先)」＋「講習終了日優先」。
+   - 振替: 上記2つの代わりに「**振替元の振るい順優先**（古い origin ほど高得点）」を入れる。
+     例: `99999999 - Number(originDateKey.replace(/-/g,''))`（講習終了日優先と同じ作り）。
+3. **配置時の差分**
+   - 講習: `lessonType:'special'` ＋ `manualLectureStockCounts/Origins` 減算。
+   - 振替: `lessonType:'makeup'` ＋ `makeupSourceDate/Label` 設定＋note付与。**カウンタ減算は不要**
+     （`balance` は盤面から再計算）。ただし **origin を振るい順に1つずつ消費**し、同じ origin を二重割当しない。
+
+> 代替案：共通化せず `findBestMakeupAutoAssignCandidate` を別関数で複製。実装は速いが、**規則ロジックが
+> 二重管理になりドリフト＝回帰の温床**（CLAUDE.md 回帰防止ルール）。**共通化を推奨**。
+> どうしても複製する場合は、両関数が同一規則であることを保証するテストを必ず置く。
+
+### C-2. 振替の pending items（振るい順）の作り方
+対象生徒の `rawMakeupStockEntries`（`balance > 0`）から、科目ごとに `balance` 個の
+`MakeupAutoAssignPendingItem` を生成。各 item の origin は `remainingOriginDates[i]` を**昇順（振るい順）**で
+割り当てる。配置で1つ置くたびに、その origin を「消費済み」にして次の item は次の origin を使う
+（手動の `resolveSelectedMakeupOrigin` と整合させる）。
+
+### C-3. 結合フロー（選択式ON時）
+`handleAutoAssignLectureStockEntry` を拡張、または新規 `handleAutoAssignStockEntry(entry, { includeMakeup })`：
+
+1. **講習を配置**（既存ループそのまま）→ `nextWeeks` 更新。
+2. `includeMakeup` のとき、**同じ生徒**の振替 pending items を振るい順で構築。
+3. **同じ `nextWeeks` 上で**振替配置ループを回す（講習が埋めた後の空きに振替が入る＝指定順序を満たす）。
+   候補探索は C-1 の共通ヘルパを `kind:'makeup'` で使用。残りはストックに残す。
+4. `commitWeeks(...)` を**1回**で確定（講習ストック減算＋振替系引数の両方を渡す）。
+5. レポートは講習・振替を合算（`buildAutoAssignDebugReport` は union 対応済み）。
+   ステータス例：「講習Xコマ・振替Yコマ配置。講習A・振替Bは候補不足でストックに残しました。」
+
+### C-4. UI（選択式）
+StockActionModal（type `'lecture'`、≈ L8497 付近）に
+**チェックボックス「未消化振替も同時に自動割り当てする」**を追加し、その値を結合フローへ渡す。
+- 状態は `useState`（既定OFF）。必要なら盤面設定/ローカルへ記憶。
+- 「未消化振替のみ」を単独自動割振したい要望が出たら、makeup モーダル（L8529）にも自動割振ボタンを足せる
+  （結合フローの振替パートを単独実行）。**今回の仕様は講習トリガー時の選択式が主**。
+
+## D. 触るファイル / 追加物
+
+- `src/components/schedule-board/ScheduleBoardScreen.tsx`
+  - 候補探索の規則評価を内部ヘルパへ抽出（C-1）。**できれば `autoAssignCandidate.ts` 等へ切り出し**て
+    単体テスト可能にする（巨大ファイル＆ホットパスなので分離の価値大）。
+  - 振替 pending builder（C-2）、結合ハンドラ（C-3）、モーダルのチェックボックス（C-4）。
+- テスト（必須・回帰防止）
+  - **ゴールデン**：抽出前後で**講習自動割振の結果が不変**であること（既存の `makeupStockSnapshot.test.ts` /
+    `makeupStock.test.ts` の作法に倣い、代表盤面で配置結果スナップショット）。
+  - 振替自動割振の新規テスト：振るい順で消費されること／規則（科目対応・コマ数上限・時限禁止・ペア）を
+    講習と同条件で満たすこと／balance を超えて置かないこと／置けない分が残ること。
+
+## E. 注意・落とし穴（CLAUDE.md 回帰防止に直結）
+
+- **`{ ...a, ...b }` で生徒同一性フィールドを潰さない**（過去の `mergeManagedDeskLesson` 回帰／commit
+  `6793374`→`2dce7b4`）。振替配置は手動の `normalizeLessonPlacement` と origin/note 付与を**完全踏襲**する。
+- 振替の `balance` は盤面再計算ベース。**明示カウンタを足し引きしない**。二重配置防止は「origin 消費」で行う。
+- 講習を**先**に置いてから振替を置く（同一 `nextWeeks`）こと。順序を逆にすると指定仕様に反する。
+- 「割り振り切れない＝残す」。**例外やロールバックにしない**。部分成功で `commit` し、残数を報告。
+- これは盤面（コマ表）操作であり**開発用教室で検証**してから本番運用へ（本番データ保護ルール）。
+- 巨大ホットパスのため、抽出時に**スコア計算順序・配列順を変えない**（候補同点比較 `compareAutoAssignCandidateOrder`
+  が順序依存）。スナップショットで担保する。
+
+## F. 未確定（実装前にオーナー確認したい点）
+
+- 既定で選択式チェックは ON / OFF どちらにするか。
+- 振替の配置対象期間：盤面表示範囲全体でよいか（手動と同じ）／講習期間に限定するか。
+- 同点時の講習 vs 振替の優先（基本は「講習先・振替後」で順序確定だが、空き競合時の細かな優先を明示するか）。
