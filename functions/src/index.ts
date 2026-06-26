@@ -2128,6 +2128,10 @@ type LectureSubmissionDoc = {
   // groupClassParticipation=科目→参加(true)。未設定/false=不参加(既定)。後方互換のため optional。
   availableGroupClassSubjects?: string[]
   groupClassParticipation?: Record<string, boolean>
+  // 生徒日程表のオプション欄(開発用教室)。optionLabels=学年共通のオプション文言(行0..4。空文字は提出ページに出さない)。
+  // optionChecks=提出されたチェック状態(キー=行番号'0'..'4' -> true)。後方互換のため optional。
+  optionLabels?: string[]
+  optionChecks?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`、value=科目。後方互換のため optional。
@@ -2186,6 +2190,22 @@ function sanitizeGroupClassParticipation(value: unknown, allowed: string[]): Rec
   return result
 }
 
+// オプション欄(開発用教室): optionLabels の非空行(行番号'0'..'4')のみ true(チェック)を保存。
+// 空ラベルの行や未チェックは保存しない(未チェックが既定)。
+function sanitizeOptionChecks(value: unknown, optionLabels: string[]): Record<string, boolean> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const allowSet = new Set(
+    optionLabels
+      .map((label, index) => (typeof label === 'string' && label.trim() ? String(index) : ''))
+      .filter((key) => key !== ''),
+  )
+  const result: Record<string, boolean> = {}
+  for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    if (allowSet.has(key) && val === true) result[key] = true
+  }
+  return result
+}
+
 function sanitizeSlotNumbers(value: unknown, fallbackCount: number) {
   const source = Array.isArray(value) && value.length > 0
     ? value
@@ -2236,6 +2256,8 @@ export const lectureSubmissionApi = onRequest({
       subjectDurations: data.subjectDurations ?? {},
       availableGroupClassSubjects: data.availableGroupClassSubjects ?? [],
       groupClassParticipation: data.groupClassParticipation ?? {},
+      optionLabels: data.optionLabels ?? [],
+      optionChecks: data.optionChecks ?? {},
       regularOnly: data.regularOnly ?? false,
       occupiedSlots: data.occupiedSlots ?? {},
       groupClassSlots: data.groupClassSlots ?? {},
@@ -2263,6 +2285,9 @@ export const lectureSubmissionApi = onRequest({
     const groupClassParticipation = data.personType === 'student'
       ? sanitizeGroupClassParticipation(body.groupClassParticipation, data.availableGroupClassSubjects ?? [])
       : {}
+    const optionChecks = data.personType === 'student'
+      ? sanitizeOptionChecks(body.optionChecks, data.optionLabels ?? [])
+      : {}
     const regularOnly = data.personType === 'student' ? Boolean(body.regularOnly) : false
     const now = new Date().toISOString()
 
@@ -2272,6 +2297,7 @@ export const lectureSubmissionApi = onRequest({
       subjectSlots,
       subjectDurations,
       groupClassParticipation,
+      optionChecks,
       regularOnly,
       submittedAt: now,
     })
@@ -2302,7 +2328,7 @@ export const lectureSubmissionApi = onRequest({
         inputs[data.personId] = {
           ...existingInput,
           unavailableSlots,
-          ...(data.personType === 'student' ? { subjectSlots, subjectDurations, groupClassParticipation, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
+          ...(data.personType === 'student' ? { subjectSlots, subjectDurations, groupClassParticipation, optionChecks, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
           countSubmitted: true,
           submissionToken: token,
           updatedAt: now,

@@ -666,6 +666,58 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(disabledHtml).toContain('"optionFieldEnabled":false')
   })
 
+  it('carries QR-submitted optionChecks from the overlapping session into the serialized student', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openAllScheduleHtml({
+      viewType: 'all-student',
+      cells: [],
+      plannedCells: [],
+      students: [createStudent({ id: 'student-1', birthDate: '2012-05-01' })],
+      teachers: [],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], scheduleNotes: {} },
+      specialSessions: [{
+        id: 'session-1', label: '春期講習', startDate: '2026-03-24', endDate: '2026-04-05',
+        teacherInputs: {},
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: [], regularBreakSlots: [], subjectSlots: {},
+            optionChecks: { '0': true, '2': true },
+            regularOnly: false, countSubmitted: true, updatedAt: '2026-03-20T00:00:00Z',
+          },
+        },
+        createdAt: '2026-03-20T00:00:00Z',
+        updatedAt: '2026-03-20T00:00:00Z',
+      }],
+      classroomStorageKey: 'classroom_dev',
+      optionFieldEnabled: true,
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // 提出済みセッションの optionChecks が直列化された生徒(DATA)に載り、右列の✓描画に使われる。
+    expect(html).toContain('"optionChecks":{"0":true,"2":true}')
+    // renderOptionSection は checks[i] が true の行にチェックを表示する。
+    expect(html).toContain("var checked = !!checks && checks[i] === true")
+    expect(html).toContain("(checked ? '✓' : '')")
+
+    vi.unstubAllGlobals()
+  })
+
   it('exposes the empty-format print button and builder only in the student view', () => {
     const write = vi.fn()
     const popup = {

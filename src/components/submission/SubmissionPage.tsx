@@ -21,6 +21,10 @@ type SubmissionData = {
   // spec-group-lesson §C: 集団授業(中3のみ)。availableGroupClassSubjects が非空なら参加/不参加欄を表示。
   availableGroupClassSubjects?: string[]
   groupClassParticipation?: Record<string, boolean>
+  // 生徒日程表のオプション欄(開発用教室)。optionLabels=学年共通のオプション文言(行0..4。空文字は表示しない)。
+  // optionChecks=提出されたチェック状態(キー=行番号'0'..'4' -> true)。未設定=未チェック(既定)。後方互換のため optional。
+  optionLabels?: string[]
+  optionChecks?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   // spec-group-lesson §E: 中3の集団授業コマ。key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。
@@ -59,6 +63,8 @@ const DEBUG_DUMMY_DATA: SubmissionData = {
   subjectDurations: { 数学: 60 },
   availableGroupClassSubjects: ['集団理科', '集団社会'],
   groupClassParticipation: { 集団理科: true },
+  optionLabels: ['英検対策希望', '定期テスト前補習', '夏期講習案内', '', ''],
+  optionChecks: { '0': true },
   regularOnly: false,
   occupiedSlots: { '2026-03-26_3': '英', '2026-03-27_1': '数', '2026-04-01_2': '国' },
   groupClassSlots: { '2026-03-28_1': '集団理科', '2026-04-04_2': '集団社会' },
@@ -72,6 +78,13 @@ function groupClassShortLabel(subject: string): string {
   if (subject === '集団理科') return '集理'
   if (subject === '集団社会') return '集社'
   return subject
+}
+
+// オプション欄(開発用教室): 行番号を保持したまま、文言が入っている行のみ提出ページに出す。
+function buildOptionItems(optionLabels: string[] | undefined): Array<{ index: number; label: string }> {
+  return (optionLabels ?? [])
+    .map((label, index) => ({ index, label: String(label ?? '').trim() }))
+    .filter((item) => item.label !== '')
 }
 
 function getSubmissionApiBaseUrl() {
@@ -143,6 +156,8 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   const [subjectDurations, setSubjectDurations] = useState<Record<string, number>>({})
   // spec-group-lesson §C: 集団授業の参加/不参加。未設定/false=不参加(既定)。
   const [groupClassParticipation, setGroupClassParticipation] = useState<Record<string, boolean>>({})
+  // オプション欄(開発用教室): チェック状態。キー=行番号('0'..'4') -> true。未設定=未チェック(既定)。
+  const [optionChecks, setOptionChecks] = useState<Record<string, boolean>>({})
   const [regularOnly, setRegularOnly] = useState(false)
 
   const selectedSlotsRef = useRef<Set<string>>(new Set())
@@ -195,6 +210,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
       setSubjectSlots(dummy.subjectSlots ?? {})
       setSubjectDurations(dummy.subjectDurations ?? {})
       setGroupClassParticipation(dummy.groupClassParticipation ?? {})
+      setOptionChecks(dummy.optionChecks ?? {})
       setRegularOnly(dummy.regularOnly ?? false)
       setLoading(false)
       return
@@ -220,6 +236,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
         setSubjectSlots(result.subjectSlots ?? {})
         setSubjectDurations(result.subjectDurations ?? {})
         setGroupClassParticipation(result.groupClassParticipation ?? {})
+        setOptionChecks(result.optionChecks ?? {})
         setRegularOnly(result.regularOnly ?? false)
       } catch {
         setError('通信エラーが発生しました。インターネット接続を確認してください。')
@@ -319,6 +336,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           subjectSlots,
           subjectDurations,
           groupClassParticipation,
+          optionChecks,
           regularOnly,
         }),
       })
@@ -338,7 +356,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
     } finally {
       setSubmitting(false)
     }
-  }, [apiBase, token, selectedSlots, subjectSlots, subjectDurations, groupClassParticipation, regularOnly, submitting, submitted])
+  }, [apiBase, token, selectedSlots, subjectSlots, subjectDurations, groupClassParticipation, optionChecks, regularOnly, submitting, submitted])
 
   if (loading) {
     return (
@@ -442,6 +460,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
     const viewUnavailableCount = selectedSlots.size
     const viewSubjectTotal = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
     const submittedSubjects = data.availableSubjects.filter((subject) => (subjectSlots[subject] ?? 0) > 0)
+    const viewOptionItems = buildOptionItems(data.optionLabels)
     return (
       <>
       <div className="sub-container" style={containerStyle}>
@@ -560,6 +579,25 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           </section>
         )}
 
+        {isStudentView && viewOptionItems.length > 0 && (
+          <section className="sub-section sub-section-lg">
+            <div className="sub-section-head">
+              <span className="sub-section-title">オプション</span>
+            </div>
+            <div className="sub-subject-list">
+              {viewOptionItems.map((item) => {
+                const checked = optionChecks[String(item.index)] === true
+                return (
+                  <div key={item.index} className="sub-group-row">
+                    <span className="sub-subject-label">{item.label}</span>
+                    <span className={`sub-group-state${checked ? ' is-on' : ''}`}>{checked ? 'あり' : 'なし'}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
         <section className="sub-section sub-submit-section">
           <p className="sub-muted" style={{ textAlign: 'center', fontSize: 12 }}>変更が必要な場合は教室にお問い合わせください。</p>
         </section>
@@ -572,6 +610,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   }
 
   const isStudent = data.personType === 'student'
+  const optionItems = buildOptionItems(data.optionLabels)
   const totalUnavailable = selectedSlots.size
   const totalSubjectCount = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
   const occupiedSlots = data.occupiedSlots ?? {}
@@ -755,6 +794,32 @@ export default function SubmissionPage({ token, debug = false }: { token: string
                     onChange={(e) => setGroupClassParticipation((current) => ({ ...current, [subject]: e.target.checked }))}
                   />
                   <span className={`sub-group-state${participate ? ' is-on' : ''}`}>{participate ? '参加' : '不参加'}</span>
+                </label>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {isStudent && optionItems.length > 0 && (
+        <section className="sub-section sub-section-lg">
+          <div className="sub-section-head">
+            <span className="sub-section-title">オプション</span>
+          </div>
+          <p className="sub-muted" style={{ margin: '0 0 8px', fontSize: 28 }}>希望する項目に<strong>チェック</strong>を入れてください（未チェックはなし）。</p>
+          <div className="sub-subject-list">
+            {optionItems.map((item) => {
+              const checked = optionChecks[String(item.index)] === true
+              return (
+                <label key={item.index} className="sub-group-row">
+                  <span className="sub-subject-label">{item.label}</span>
+                  <input
+                    type="checkbox"
+                    className="sub-group-check"
+                    checked={checked}
+                    onChange={(e) => setOptionChecks((current) => ({ ...current, [String(item.index)]: e.target.checked }))}
+                  />
+                  <span className={`sub-group-state${checked ? ' is-on' : ''}`}>{checked ? 'あり' : 'なし'}</span>
                 </label>
               )
             })}

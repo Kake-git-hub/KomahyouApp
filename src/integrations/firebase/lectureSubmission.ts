@@ -39,6 +39,10 @@ export type LectureSubmissionDoc = {
   // groupClassParticipation=科目→参加(true)。未設定/false=不参加(既定)。後方互換のため optional。
   availableGroupClassSubjects?: string[]
   groupClassParticipation?: Record<string, boolean>
+  // 生徒日程表のオプション欄(開発用教室)。optionLabels=学年共通のオプション文言(行0..4。空文字は提出ページに出さない)。
+  // optionChecks=提出されたチェック状態(キー=行番号'0'..'4' -> true)。未設定/false=未チェック(既定)。後方互換のため optional。
+  optionLabels?: string[]
+  optionChecks?: Record<string, boolean>
   regularOnly: boolean
   occupiedSlots: Record<string, string>
   // spec-group-lesson §E: 中3の集団授業コマ(盤面に組まれた集団理科/集団社会)を提出ページの集団列に表示する。
@@ -50,7 +54,7 @@ export type LectureSubmissionDoc = {
 
 export async function ensureSubmissionTokens(
   session: SpecialSessionRow,
-  students: Array<{ id: string; name: string; availableSubjects: string[]; availableGroupClassSubjects?: string[]; occupiedSlots?: Record<string, string>; groupClassSlots?: Record<string, string> }>,
+  students: Array<{ id: string; name: string; availableSubjects: string[]; availableGroupClassSubjects?: string[]; occupiedSlots?: Record<string, string>; groupClassSlots?: Record<string, string>; optionLabels?: string[] }>,
   teachers: Array<{ id: string; name: string; occupiedSlots?: Record<string, string> }>,
   classroomSettings: { closedWeekdays: number[]; holidayDates?: string[]; forceOpenDates: string[] },
   slotNumbers: number[],
@@ -132,6 +136,8 @@ export async function ensureSubmissionTokens(
         subjectSlots: {},
         subjectDurations: {},
         groupClassParticipation: {},
+        optionLabels: [...(student.optionLabels ?? [])],
+        optionChecks: {},
         regularOnly: false,
         occupiedSlots: student.occupiedSlots ?? {},
         groupClassSlots: { ...(student.groupClassSlots ?? {}) },
@@ -180,6 +186,7 @@ export async function resetLectureSubmissionDoc(token: string) {
     subjectSlots: {},
     subjectDurations: {},
     groupClassParticipation: {},
+    optionChecks: {},
     regularOnly: false,
     submittedAt: null,
   })
@@ -236,7 +243,7 @@ export async function deleteLectureSubmissionDoc(token: string) {
 
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string> }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[] }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -255,6 +262,8 @@ export async function updateSubmissionOccupiedSlots(
       ...(entry.slotNumbers ? { slotNumbers: [...entry.slotNumbers], slotCount: entry.slotNumbers.length } : {}),
       // spec-group-lesson §E: 既発行QRにも最新の集団授業コマ(集理/集社)を反映する。
       ...(entry.groupClassSlots ? { groupClassSlots: { ...entry.groupClassSlots } } : {}),
+      // オプション欄(開発用教室): 既発行QRにも最新のオプション文言(学年共通)を反映する。
+      ...(entry.optionLabels ? { optionLabels: [...entry.optionLabels] } : {}),
     })
   }
 }
@@ -268,6 +277,7 @@ export type SubmissionChangeEntry = {
   subjectSlots: Record<string, number>
   subjectDurations: Record<string, number>
   groupClassParticipation: Record<string, boolean>
+  optionChecks: Record<string, boolean>
   regularOnly: boolean
 }
 
@@ -303,6 +313,7 @@ export function subscribeLectureSubmissions(
           subjectSlots: data.subjectSlots ?? {},
           subjectDurations: data.subjectDurations ?? {},
           groupClassParticipation: data.groupClassParticipation ?? {},
+          optionChecks: data.optionChecks ?? {},
           regularOnly: data.regularOnly ?? false,
         })
       }

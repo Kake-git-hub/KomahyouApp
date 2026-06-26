@@ -16,6 +16,9 @@ export type SpecialSessionStudentInput = {
   // 回数ではなく参加可否。未設定=不参加。既存提出データとの後方互換のため optional。
   // 講習ストック/振替には影響させず、回数表(集理/集社)にのみ反映する。
   groupClassParticipation?: Record<string, boolean>
+  // 生徒日程表のオプション欄(開発用教室)。QRで提出されたチェック状態。
+  // キー=行番号('0'..'4') -> true=チェック。未設定/false=未チェック(既定)。後方互換のため optional。
+  optionChecks?: Record<string, boolean>
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string

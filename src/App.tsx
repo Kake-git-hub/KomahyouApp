@@ -3128,17 +3128,27 @@ function AuthenticatedApp() {
     }
 
     const referenceDate = session.startDate
+    // オプション欄(開発用教室のみ): 学年共通のオプション文言(行0..4)を QR 提出ドキュメントへ載せる。
+    // キーは生徒日程表と同じ scheduleNotes 形式(student:student-option-grade-{学年}-{行})。
+    const optionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', actingClassroom)
+    const resolveStudentOptionLabels = (gradeLabel: string): string[] => {
+      if (!optionFieldEnabled) return []
+      const notes = classroomSettings.scheduleNotes ?? {}
+      return Array.from({ length: 5 }, (_, i) => String(notes[`student:student-option-grade-${gradeLabel}-${i}`] ?? '').trim())
+    }
     const studentsWithSubjects = activeStudents.map((s) => {
-      const isThirdGrade = resolveCurrentStudentGradeLabel(s, referenceDate) === '中3'
+      const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
+      const isThirdGrade = gradeLabel === '中3'
       return {
         id: s.id,
         name: getStudentDisplayName(s),
-        availableSubjects: getSelectableStudentSubjectsForGrade(resolveCurrentStudentGradeLabel(s, referenceDate)),
+        availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel),
         // spec-group-lesson §C: 集団授業の希望提出は中3のみ表示。学年は講習開始日基準で判定。
         availableGroupClassSubjects: isThirdGrade ? [...groupClassSubmissionSubjects] : [],
         occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
         // spec-group-lesson §E: 集団列は中3のみ。生徒日程表と同じく盤面の集団コマをそのまま反映する。
         groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {},
+        optionLabels: resolveStudentOptionLabels(gradeLabel),
       }
     })
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
@@ -3153,15 +3163,16 @@ function AuthenticatedApp() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string> }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[] }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
       const studentInput = updatedSession.studentInputs[s.id]
       const token = studentInput?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        const isThirdGrade = resolveCurrentStudentGradeLabel(s, referenceDate) === '中3'
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {} })
+        const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
+        const isThirdGrade = gradeLabel === '中3'
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(gradeLabel) })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
           void updateSubmissionGroupClassEligibility(token, [...groupClassSubmissionSubjects]).catch(() => { /* non-fatal */ })
@@ -3690,6 +3701,8 @@ function AuthenticatedApp() {
                     subjectDurations: entry.regularOnly ? {} : entry.subjectDurations,
                     // spec-group-lesson §C: 提出された集団参加を反映(講習回数とは独立・既存は維持)。
                     groupClassParticipation: entry.groupClassParticipation ?? existing?.groupClassParticipation ?? {},
+                    // オプション欄(開発用教室): 提出されたチェック状態を反映(既存は維持)。
+                    optionChecks: entry.optionChecks ?? existing?.optionChecks ?? {},
                     regularOnly: entry.regularOnly,
                     countSubmitted: true,
                     updatedAt: now,

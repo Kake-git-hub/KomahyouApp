@@ -33,6 +33,8 @@ type SerializedStudent = {
   submissionToken?: string
   qrSvg?: string
   submissionSubmitted?: boolean
+  // オプション欄(開発用教室): QR提出のチェック状態。キー=行番号('0'..'4') -> true。
+  optionChecks?: Record<string, boolean>
 }
 
 type SerializedTeacher = {
@@ -103,6 +105,8 @@ type SerializedStudentSpecialSessionInput = {
   subjectSlots: Record<string, number>
   // spec-group-lesson §C/§E: 集団授業の参加(科目→true)。登録後の生徒日程表の出し分けと回数(集理/集社)に使う。
   groupClassParticipation?: Record<string, boolean>
+  // オプション欄(開発用教室): QR提出のチェック状態。キー=行番号('0'..'4') -> true。
+  optionChecks?: Record<string, boolean>
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string
@@ -531,6 +535,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         subjectSlots: input.subjectSlots && typeof input.subjectSlots === 'object' ? { ...input.subjectSlots } : {},
         groupClassParticipation: input.groupClassParticipation && typeof input.groupClassParticipation === 'object' ? { ...input.groupClassParticipation } : {},
+        optionChecks: input.optionChecks && typeof input.optionChecks === 'object' ? { ...input.optionChecks } : {},
         regularOnly: Boolean(input.regularOnly),
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
@@ -728,6 +733,7 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
           submissionToken,
           qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
           submissionSubmitted: Boolean(studentInput?.countSubmitted),
+          optionChecks: studentInput?.optionChecks && typeof studentInput.optionChecks === 'object' ? { ...studentInput.optionChecks } : undefined,
         }
       }),
     teachers: [],
@@ -818,6 +824,7 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
           submissionToken,
           qrSvg: params.lazyQrLoading ? undefined : buildSubmissionQrSvg(submissionToken),
           submissionSubmitted: Boolean(studentInput?.countSubmitted),
+          optionChecks: studentInput?.optionChecks && typeof studentInput.optionChecks === 'object' ? { ...studentInput.optionChecks } : undefined,
         }
       }),
     teachers: params.teachers.map((teacher) => {
@@ -3981,7 +3988,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var value = emptyFormat ? '' : getScheduleNoteValue(noteKey);
           var inputAttr = emptyFormat ? '' : ' data-note-key="' + escapeHtml(noteKey) + '"';
           var inputClass = emptyFormat ? 'option-input' : 'option-input memo-input';
-          var checked = Array.isArray(checks) && checks[i] === true;
+          // checks は行番号(0..4)キーのレコード(QR提出)または配列。どちらでも i 番目を判定。
+          var checked = !!checks && checks[i] === true;
           rows += '<tr>' +
             '<td><input type="text" class="' + inputClass + '"' + inputAttr + ' value="' + escapeHtml(value) + '" /></td>' +
             '<td class="option-check-cell">' + (checked ? '✓' : '') + '</td>' +
@@ -4479,7 +4487,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var emptyFormatLectureSubjects = (emptyFormat && emptyFormatHasGroup) ? emptyFormatSubjects.concat(['集理', '集社']) : emptyFormatSubjects;
         var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
         var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
-        var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat, optionGradeLabel: (student.currentGradeLabel || '未設定'), optionChecks: undefined });
+        var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat, optionGradeLabel: (student.currentGradeLabel || '未設定'), optionChecks: (emptyFormat ? undefined : student.optionChecks) });
         // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットは中3想定で盤面の集団コマを反映する。
         var groupRowsHtml = emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
         var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + bottomSectionHtml + '</section>';

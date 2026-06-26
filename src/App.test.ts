@@ -175,6 +175,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       subjectSlots: { 数: 2 },
       subjectDurations: {},
       groupClassParticipation: {},
+      optionChecks: {},
       regularOnly: false,
     }, {
       token: 'teacher-token',
@@ -185,6 +186,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       subjectSlots: {},
       subjectDurations: {},
       groupClassParticipation: {},
+      optionChecks: {},
       regularOnly: false,
     }]
 
