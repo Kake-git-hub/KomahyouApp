@@ -274,3 +274,97 @@ StockActionModal（type `'lecture'`、≈ L8497 付近）に
    （同一 `nextWeeks` を順に処理＝順序保証。C-3 を参照）。
 
 > これで設計は確定。未確定点なし。実装はこのセクションと C 章に従う。
+
+---
+
+# 【最新・2026-06-26 追記】本番デプロイ状況と残課題（次セッションはここから）
+
+オプション欄(第1・第2フェーズ)を本番デプロイ済み。さらに登録ダイアログ反映・学年基準修正も
+デプロイ済みだが、**QR にオプション欄が出ない不具合が未解決**。次セッションはまず下記「残課題①」を潰す。
+
+## G. デプロイ状況（本番 komahyouapp-prod・すべて main 反映済み）
+
+- **フロント(ホスティング)**: 自動CI(`deploy-firebase-hosting.yml`、main push で発火)で複数回デプロイ済み。
+  現在 v1.5.324 以降。休み欄削除・オプション欄(2列5行)・QR画面のオプション欄・登録ダイアログのオプション行・
+  学年基準修正まで反映。
+- **Cloud Functions `lectureSubmissionApi`**: 専用CI(`deploy-functions.yml`、手動 workflow_dispatch / functions 変更で発火)で
+  デプロイ実行し **firebase exit 0(成功)**。ただし**「Deploy complete!」「lectureSubmissionApi: Successful update operation」
+  の明示行をログ末尾で確認できていない**(ログが 409 警告の後で切れていた)。⇒ 関数が本当に新コードを返すかは未確認(残課題①参照)。
+- **スマホ運用**: `CLAUDE.md`「スマホからのデプロイ手順」に集約。GitHub アプリの Actions→Run workflow で関数も出せる。
+- **一度きりのIAM/API設定(実施済み)**: CIサービスアカウント `firebase-adminsdk-fbsvc@komahyouapp-prod.iam.gserviceaccount.com` に
+  **サービスアカウントユーザー** + **Cloud Functions 管理者** ロール付与、**Cloud Billing API** 有効化。詳細は CLAUDE.md。
+
+## H. 残課題①：QR にオプション欄が出ない（最優先・未解決）
+
+### 症状(オーナー報告 2026-06-26)
+- 生徒日程表の**登録ダイアログにはオプション欄が出る**(= `DATA.optionFieldEnabled=true`、文言は
+  `scheduleNotes` に保存済み、今日基準の学年で正しく読めている)。
+- しかし**スマホのQR提出ページにはオプション欄が出ない**。
+- 検証用トークン例: `https://komahyouapp-prod.web.app/s/2a3f95be735d42b4b813715ecae8d241`
+
+### 既に入れた修正(効かなかった可能性)
+- App の `resolveStudentOptionLabels` を **「今日基準の学年」(`getReferenceDateKey(new Date())`)** で読むよう統一済み
+  (`src/App.tsx`)。以前は講習開始日基準で読み、登録ダイアログ(今日基準)と学年が食い違うと空になる不具合があった。
+  → 同一学年度で試している場合はこの修正は no-op で、別原因が残っている。
+
+### 切り分け手順(次セッションが最初にやること)
+**本番関数を読み取り専用GETで叩いて、ドキュメント内容と関数の返り値を確認する**(GETは読み取りのみ・本番データ保護ルールOK)。
+> ⚠️ 注意: 当セッションのサンドボックスは**プロキシが `komahyouapp-prod.web.app` / `*.cloudfunctions.net` を 403 で遮断**しており
+> curl できなかった。次セッションはネットワーク許可のある環境か、オーナーに以下を実行してもらう:
+```bash
+curl -sS "https://komahyouapp-prod.web.app/api/submission/2a3f95be735d42b4b813715ecae8d241" | python3 -m json.tool
+# 確認点:
+#  - "optionLabels" が ['英検対策希望', ...] のように非空で入っているか？
+#      入っていない(空配列/欠落) → 書き込み側の問題(下記 仮説A)
+#  - "optionLabels" は入っているのに提出ページに出ない → 関数の返却 or フロントの問題(仮説B/C)
+```
+
+### 仮説(優先順)
+- **仮説A: ドキュメントの `optionLabels` が空。** 書き込みは App `ensureScheduleSubmissionTokens`→
+  新規は `ensureSubmissionTokens`(doc作成時)、既存トークンは `updateSubmissionOccupiedSlots`(盤面同期時に後埋め)。
+  occupiedSlots はQRに反映されている=この経路は走っているはず。なら optionLabels も同じ setDoc で入るはず
+  (`src/integrations/firebase/lectureSubmission.ts` L139, L266)。**学年キー不一致**または**修正デプロイ前の古いトークンで未再同期**が疑い。
+  → オーナーに「管理画面をハードリロード→生徒日程表を開き直し→数秒待つ(後埋め)→新しいQRで確認」を依頼して再現確認。
+- **仮説B: 関数 `lectureSubmissionApi` が新コードでない。** G項のとおり deploy 成功(exit0)だが明示完了行が未確認。
+  → `deploy-functions.yml` を Run workflow で再実行し、**ログ全体に「✔ functions[lectureSubmissionApi(asia-northeast1)]: Successful update operation」**
+  と **「✔ Deploy complete!」** が出ることを確認(pipefail 修正済みなので緑=信頼可。ただし末尾ログを必ず読む)。
+  関数コードは正しい(`functions/src/index.ts` L2259 で `optionLabels` を GET 返却)。
+- **仮説C: 端末キャッシュ。** 管理画面/スマホとも Ctrl+Shift+R。index.html は no-store だが念のため。
+
+### 関連コード
+- 書き込み: `src/App.tsx` `ensureScheduleSubmissionTokens`(L3055付近)/ `resolveStudentOptionLabels`。
+- doc保存: `src/integrations/firebase/lectureSubmission.ts`(`ensureSubmissionTokens` L139 / `updateSubmissionOccupiedSlots` L266)。
+- 関数: `functions/src/index.ts`(GET返却 L2259 / POST保存 L2288 / studentInputsマージ L2331)。
+- 表示: `src/components/submission/SubmissionPage.tsx`(`buildOptionItems` / `optionItems` で `data.optionLabels` の非空行のみ表示)。
+
+## I. 残課題②：登録ダイアログでチェック→保存しても日程表(右列✓)に反映されない（未解決）
+
+### 症状
+登録(count)ダイアログのオプション行にチェックして「登録」しても、生徒日程表オプション欄の**右列✓が更新されない**。
+
+### 診断(コードからの推定・要再現)
+- 右列は `renderOptionSection(..., student.optionChecks)` で描画。`student` は **`DATA.students` の直列化済み生徒**で、
+  `optionChecks` は**ペイロード生成時**(`buildStudentPayload`/`buildAllPayload`、`src/utils/scheduleHtml.ts`)に
+  重なるセッションの `studentInput.optionChecks` から設定される。
+- 登録ダイアログ保存は popup の `updateStudentCountLocally`(`src/utils/scheduleHtml.ts`)が
+  **`DATA.specialSessions[].studentInputs[id].optionChecks` のみ**を更新し、**`DATA.students[id].optionChecks` は更新しない**。
+  そのため popup ローカル再描画では右列が変わらない。
+- 反映は「保存メッセージ `schedule-student-count-save` → App が `studentInputs[id].optionChecks` を更新(`src/App.tsx` のハンドラ)→
+  `syncStudentScheduleHtml` がペイロード再生成 → popup の `DATA.students` 更新 → 再描画」という**往復に依存**する。
+  この往復のどこかで optionChecks が伝播していない可能性が高い。
+- **次セッションの確認**: (1) App ハンドラが本当に `optionChecks` を保存しているか(`schedule-student-count-save` 分岐)。
+  (2) `buildStudentPayload` が再同期時に最新セッションの `optionChecks` を直列化しているか。
+  (3) 表示生徒IDとセッションIDの突合(`findOverlappingSession`・`managedStudentId` vs `id`)。
+  **暫定対策案**: `updateStudentCountLocally` で `DATA.students[id].optionChecks` も同時更新して即時反映させる、
+  または保存往復後の再同期を確実化する。
+
+### 関連コード
+- ダイアログ描画/保存: `src/utils/scheduleHtml.ts` `renderStudentCountDialog`(optionRow)/ `submitStudentCountModal`(optionChecks収集)/
+  `updateStudentCountLocally` / `persistStudentCount`。
+- App 反映: `src/App.tsx` `schedule-student-count-save` ハンドラ(optionChecks保存)/ `schedule-student-unavailable-save`(保全)。
+- 直列化: `src/utils/scheduleHtml.ts` `buildStudentPayload`/`buildAllPayload`(`optionChecks: studentInput?.optionChecks`)。
+
+## J. ブランチ状況
+- 直近の修正(学年基準・登録ダイアログ・CLAUDE.md)は `fix/option-qr-grade-and-docs` で作業し **main にFFマージ済み(本番反映済み)**。
+- 第1・第2フェーズ実装は `claude/koma-schedule-options-field-0hia1q`(これも main 反映済み)。
+- 次セッションは **main から最新を pull** して着手すること(ローカル main が遅れている場合あり)。
