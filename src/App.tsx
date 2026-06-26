@@ -4,7 +4,7 @@ import { validateImportedBasicDataBundle } from './components/basic-data/basicDa
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { autoAssignRuleDefinitions, initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
-import { deriveManagedDisplayName, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
@@ -3130,11 +3130,16 @@ function AuthenticatedApp() {
     const referenceDate = session.startDate
     // オプション欄(開発用教室のみ): 学年共通のオプション文言(行0..4)を QR 提出ドキュメントへ載せる。
     // キーは生徒日程表と同じ scheduleNotes 形式(student:student-option-grade-{学年}-{行})。
+    // 重要: 生徒日程表のオプション欄は「今日基準の学年」(currentGradeLabel)でキーを作って保存する。
+    //   ここで講習開始日基準の学年で読むと学年が食い違い空文字になり、QR にオプションが出ない不具合になる。
+    //   そのため読み取りも生徒日程表と同じ「今日基準の学年」で行う。
+    const optionReferenceDate = getReferenceDateKey(new Date())
     const optionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', actingClassroom)
-    const resolveStudentOptionLabels = (gradeLabel: string): string[] => {
+    const resolveStudentOptionLabels = (student: StudentRow): string[] => {
       if (!optionFieldEnabled) return []
+      const optionGradeLabel = resolveCurrentStudentGradeLabel(student, optionReferenceDate)
       const notes = classroomSettings.scheduleNotes ?? {}
-      return Array.from({ length: 5 }, (_, i) => String(notes[`student:student-option-grade-${gradeLabel}-${i}`] ?? '').trim())
+      return Array.from({ length: 5 }, (_, i) => String(notes[`student:student-option-grade-${optionGradeLabel}-${i}`] ?? '').trim())
     }
     const studentsWithSubjects = activeStudents.map((s) => {
       const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
@@ -3148,7 +3153,7 @@ function AuthenticatedApp() {
         occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
         // spec-group-lesson §E: 集団列は中3のみ。生徒日程表と同じく盤面の集団コマをそのまま反映する。
         groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {},
-        optionLabels: resolveStudentOptionLabels(gradeLabel),
+        optionLabels: resolveStudentOptionLabels(s),
       }
     })
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
@@ -3172,7 +3177,7 @@ function AuthenticatedApp() {
       if (token && !newTokenSet.has(token)) {
         const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
         const isThirdGrade = gradeLabel === '中3'
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(gradeLabel) })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s) })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
           void updateSubmissionGroupClassEligibility(token, [...groupClassSubmissionSubjects]).catch(() => { /* non-fatal */ })
