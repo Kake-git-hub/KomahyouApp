@@ -33,6 +33,7 @@ import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
+import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import './App.css'
@@ -3680,6 +3681,10 @@ function AuthenticatedApp() {
 
       const newlyAppliedEntries: typeof activeEntries = []
 
+      // 登録済み生徒に対する保護者所有フィールド(optionChecks/groupClassParticipation)の反映が
+      // あったか。newlyAppliedEntries とは別管理にし、これがあれば state を更新する(下の return 参照)。
+      let reflectedParentFields = false
+
       setSpecialSessions((current) => {
         let updated = current
         for (const entry of activeEntries) {
@@ -3705,7 +3710,23 @@ function AuthenticatedApp() {
               }
             } else {
               const existing = session.studentInputs[entry.personId]
-              if (existing?.countSubmitted) return session
+              if (existing?.countSubmitted) {
+                // 登録済みでも、保護者がQRで決める optionChecks / groupClassParticipation は
+                // 常に最新の提出値を反映する(回数・配置は再実行しない)。反映しないと室長ローカルが
+                // 古いまま手動保存され、Cloud Function がスナップショットへ統合した正しい提出値を
+                // 上書きして消す(QRチェックが日程表に出ない不具合の本体)。変化が無ければ据え置き。
+                const reflected = reflectParentOwnedSubmissionFields(existing, entry)
+                if (!reflected) return session
+                reflectedParentFields = true
+                return {
+                  ...session,
+                  studentInputs: {
+                    ...session.studentInputs,
+                    [entry.personId]: { ...existing, ...reflected, updatedAt: now },
+                  },
+                  updatedAt: now,
+                }
+              }
               newlyAppliedEntries.push(entry)
               return {
                 ...session,
@@ -3731,8 +3752,8 @@ function AuthenticatedApp() {
             }
           })
         }
-        // 新規反映が無ければ参照を維持し、不要な再描画・配列確保を避ける。
-        return newlyAppliedEntries.length > 0 ? updated : current
+        // 新規反映(登録)または保護者所有フィールドの反映が無ければ参照を維持し、不要な再描画を避ける。
+        return newlyAppliedEntries.length > 0 || reflectedParentFields ? updated : current
       })
 
       // Trigger board placement for newly submitted teachers (same as schedule-teacher-count-save handler)
