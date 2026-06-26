@@ -3392,6 +3392,8 @@ function AuthenticatedApp() {
                 subjectDurations: previousInput?.subjectDurations ?? {},
                 // spec-group-lesson §C: 明示再構築のため集団参加を保全（spread していないので消えるのを防ぐ）。
                 groupClassParticipation: previousInput?.groupClassParticipation ?? {},
+                // オプション欄(開発用教室): 明示再構築のためオプションチェックも保全（QR提出値を消さない）。
+                optionChecks: previousInput?.optionChecks ?? {},
                 regularOnly: Boolean(previousInput?.regularOnly),
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
@@ -3439,6 +3441,17 @@ function AuthenticatedApp() {
                 // spec-group-lesson §C / Phase 7: 集団参加は講習回数とは独立。「登録」ボタンで送られた値を反映し、
                 // 未送信（unsubmit等）では既存を保全して消さない。反映漏れは出席者一覧に出ない回帰になる。
                 groupClassParticipation: resolveSavedGroupClassParticipation(message.groupClassParticipation, previousInput?.groupClassParticipation),
+                // オプション欄(開発用教室): 登録で送られたチェックを反映、未送信は既存を保全(QR提出値を消さない)。
+                optionChecks: (() => {
+                  const raw = message.optionChecks
+                  if (raw === undefined) return previousInput?.optionChecks ?? {}
+                  if (!raw || typeof raw !== 'object') return {}
+                  const result: Record<string, boolean> = {}
+                  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+                    if (value === true) result[key] = true
+                  }
+                  return result
+                })(),
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,

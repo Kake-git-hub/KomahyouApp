@@ -3398,7 +3398,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
-      function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation) {
+      function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks) {
         DATA.specialSessions = (DATA.specialSessions || []).map((session) => {
           if (session.id !== sessionId) return session;
           const currentInput = session.studentInputs?.[personId] || defaultStudentSessionInput();
@@ -3411,6 +3411,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
                 subjectSlots: regularOnly ? {} : normalizeSubjectSlots(subjectSlots),
                 // spec-group-lesson §C: 登録時は渡された集団参加を採用、未指定(登録解除等)は既存を保全して消さない。
                 groupClassParticipation: groupClassParticipation !== undefined ? (groupClassParticipation || {}) : (currentInput.groupClassParticipation || {}),
+                // オプション欄(開発用教室): 登録時は渡されたチェックを採用、未指定は既存を保全(QR提出値を消さない)。
+                optionChecks: optionChecks !== undefined ? (optionChecks || {}) : (currentInput.optionChecks || {}),
                 regularOnly: Boolean(regularOnly),
                 countSubmitted: Boolean(countSubmitted),
               },
@@ -3465,7 +3467,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         } catch {}
       }
 
-      function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation) {
+      function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks) {
         try {
           if (!window.opener || window.opener.closed) return;
           const message = {
@@ -3478,6 +3480,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           };
           // spec-group-lesson §C: 集団参加は登録時のみ明示送信(未指定時は既存保全)。
           if (groupClassParticipation !== undefined) message.groupClassParticipation = groupClassParticipation || {};
+          // オプション欄(開発用教室): チェックも登録時のみ明示送信(未指定時は既存保全)。
+          if (optionChecks !== undefined) message.optionChecks = optionChecks || {};
           window.opener.postMessage(message, '*');
         } catch {}
       }
@@ -4124,7 +4128,30 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             groupRow = '<tr><td>集団授業</td><td>' + groupChecks + '</td></tr>';
           }
         }
-        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + regularOnlyRow + groupRow + '</tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
+        // オプション欄(開発用教室): 学年共通のオプション文言(空でない行)を登録ダイアログにも反映する。
+        // 未登録時はチェックボックス(登録ボタンでまとめて保存)、登録済みは あり/なし の読み取り表示。
+        var optionRow = '';
+        if (DATA.optionFieldEnabled) {
+          var optGrade = student.currentGradeLabel || '未設定';
+          var optItems = [];
+          for (var oi = 0; oi < 5; oi++) {
+            var optLabel = String(getScheduleNoteValue('student-option-grade-' + optGrade + '-' + oi) || '').trim();
+            if (optLabel) optItems.push({ index: oi, label: optLabel });
+          }
+          if (optItems.length) {
+            var oc = input.optionChecks || {};
+            if (input.countSubmitted) {
+              var checkedOptionLabels = optItems.filter(function(it) { return oc[it.index] === true; }).map(function(it) { return it.label; });
+              optionRow = '<tr><td>オプション</td><td>' + escapeHtml(checkedOptionLabels.length ? checkedOptionLabels.join(' / ') : 'なし') + '</td></tr>';
+            } else {
+              var optionChecksHtml = optItems.map(function(it) {
+                return '<label class="count-modal-check"><input type="checkbox" data-role="student-count-option-input" data-index="' + it.index + '"' + (oc[it.index] === true ? ' checked' : '') + '>' + escapeHtml(it.label) + '</label>';
+              }).join(' ');
+              optionRow = '<tr><td>オプション</td><td>' + optionChecksHtml + '</td></tr>';
+            }
+          }
+        }
+        return '<div class="count-modal-backdrop" data-role="student-count-modal-backdrop"><div class="count-modal" role="dialog" aria-modal="true" data-testid="student-schedule-count-modal"><div class="count-modal-head"><div class="count-modal-title">' + escapeHtml(formatStudentHeaderName(student, startInput.value || DATA.defaultStartDate || DATA.availableStartDate)) + '</div><div class="count-modal-subtitle">' + escapeHtml(session.label + ' (' + formatMonthDay(session.startDate) + ' - ' + formatMonthDay(session.endDate) + ')') + '</div><div class="count-modal-note">日程表の出席不可コマと講習での希望科目数を登録します。</div>' + unregisterNote + '</div><div class="count-modal-body"><table class="count-modal-table"><tbody>' + rowsHtml + regularOnlyRow + groupRow + optionRow + '</tbody></table></div><div class="count-modal-actions"><button type="button" class="secondary" data-role="close-student-count-modal" data-testid="student-schedule-count-cancel">キャンセル</button>' + actionHtml + '</div></div></div>';
       }
 
       function renderTeacherRegisterModal() {
@@ -4200,9 +4227,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var subject = element.getAttribute('data-subject') || '';
           if (subject && element.checked) groupParticipation[subject] = true;
         });
+        // オプション欄(開発用教室): 登録ダイアログのチェックをまとめて保存する。行番号(0..4)キー。
+        var optionChecks = {};
+        document.querySelectorAll('[data-role="student-count-option-input"]').forEach(function(element) {
+          if (!(element instanceof HTMLInputElement)) return;
+          var idx = element.getAttribute('data-index') || '';
+          if (idx !== '' && element.checked) optionChecks[idx] = true;
+        });
 
-        updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation);
-        persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation);
+        updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation, optionChecks);
+        persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation, optionChecks);
         activeCountDialog = null;
         syncPayloadFingerprint();
         render();
