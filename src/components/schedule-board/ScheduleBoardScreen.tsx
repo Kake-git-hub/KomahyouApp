@@ -25,6 +25,7 @@ import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
+import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -2970,6 +2971,8 @@ function autoAssignTeacherToSpecialSession(params: {
 export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
+  // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
+  const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
@@ -4814,6 +4817,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
         classroomSettings,
         classroomStorageKey,
+        optionFieldEnabled: studentScheduleOptionFieldEnabled,
         periodBands: specialSessions,
         specialSessions,
         groupClassEntries,
@@ -4965,6 +4969,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: studentScheduleTitle,
       classroomSettings,
       classroomStorageKey,
+      optionFieldEnabled: studentScheduleOptionFieldEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -7519,6 +7524,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: formatWeeklyScheduleTitle(storedRange.startDate, storedRange.endDate),
       classroomSettings,
       classroomStorageKey,
+      optionFieldEnabled: studentScheduleOptionFieldEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,

@@ -167,6 +167,8 @@ type SchedulePayload = {
   groupClassEntries: GroupClassEntryMap
   classroomStorageKey: string
   showSubmittedQr?: boolean
+  // 生徒日程表のオプション欄(休み欄を置き換え/振替を左詰め)を有効化する。開発用教室のみ。
+  optionFieldEnabled?: boolean
 }
 
 type OpenScheduleHtmlParams = {
@@ -186,6 +188,8 @@ type OpenScheduleHtmlParams = {
   targetWindow?: Window | null
   lazyQrLoading?: boolean
   showSubmittedQr?: boolean
+  // 生徒日程表のオプション欄を有効化する(開発用教室のみ)。
+  optionFieldEnabled?: boolean
 }
 
 type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
@@ -534,6 +538,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     })),
     groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
     classroomStorageKey: params.classroomStorageKey || 'default',
+    optionFieldEnabled: Boolean(params.optionFieldEnabled),
   }
 }
 
@@ -1865,6 +1870,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         grid-template-columns: minmax(0, 1.5fr) 206px 246px;
       }
 
+      /* オプション欄あり: 休み欄(168px)を削除し、振替授業を左へ、空いた所にオプション欄を置く。 */
+      .bottom-grid.bottom-grid-option {
+        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) 206px 190px 246px;
+      }
+
       .box-panel {
         border: 1.5px solid var(--line);
         background: #ffffff;
@@ -1977,6 +1987,39 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .count-table {
         border-bottom: 1.5px solid var(--line);
+      }
+
+      /* オプション欄(2列5行)。左列=学年共通テキスト入力、右列=チェック1文字分。 */
+      .option-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        border: 1.5px solid var(--line);
+        border-top: 0;
+      }
+      .option-table col.option-col-check { width: 20px; }
+      .option-table td {
+        border: 1px solid var(--line);
+        padding: 0;
+        height: 24px;
+        vertical-align: middle;
+      }
+      .option-input {
+        width: 100%;
+        min-height: 22px;
+        height: 24px;
+        border: 0;
+        padding: 2px 5px;
+        font: inherit;
+        font-size: 11px;
+        box-sizing: border-box;
+        background: transparent;
+      }
+      .option-check-cell {
+        text-align: center;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1;
       }
 
       .count-table th,
@@ -3904,13 +3947,48 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const emptyFormat = options && options.emptyFormat;
         const commonNoteValue = emptyFormat ? '' : getScheduleNoteValue(commonKey);
         const individualNoteValue = emptyFormat ? '' : getScheduleNoteValue(individualKey);
+        const commonSectionHtml = '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '">' + escapeHtml(commonNoteValue) + '</textarea></div></div>';
+        const individualSectionHtml = '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(individualNoteValue) + '</textarea></div></div>';
+        const makeupSectionHtml = '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>';
+        const countStackHtml = '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>';
+        // オプション欄(開発用教室のみ): 休み欄を削除し、振替授業を左へ詰め、空いた所にオプション欄(2列5行)を置く。
+        // 左列=学年共通のテキスト入力(scheduleNotes と同じ仕組み)、右列=QR提出のチェック状態(往復処理は次フェーズ。既定は未チェック)。
+        if (DATA.optionFieldEnabled) {
+          return '<div class="bottom-grid bottom-grid-option">' +
+            commonSectionHtml +
+            individualSectionHtml +
+            makeupSectionHtml +
+            renderOptionSection(options && options.optionGradeLabel, options && options.optionChecks, emptyFormat) +
+            countStackHtml +
+          '</div>';
+        }
         return '<div class="bottom-grid">' +
-          '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '">' + escapeHtml(commonNoteValue) + '</textarea></div></div>' +
-          '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(individualNoteValue) + '</textarea></div></div>' +
+          commonSectionHtml +
+          individualSectionHtml +
           absenceSectionHtml +
-          '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
-          '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>' +
+          makeupSectionHtml +
+          countStackHtml +
         '</div>';
+      }
+
+      // オプション欄(2列5行)を生成する。左列=学年共通テキスト入力、右列=チェック(1文字分)。
+      // gradeLabel ごとに共通の note キー(student-option-grade-{学年}-{行})で保存する。
+      function renderOptionSection(gradeLabel, checks, emptyFormat) {
+        var grade = gradeLabel || '未設定';
+        var rows = '';
+        for (var i = 0; i < 5; i++) {
+          var noteKey = 'student-option-grade-' + grade + '-' + i;
+          var value = emptyFormat ? '' : getScheduleNoteValue(noteKey);
+          var inputAttr = emptyFormat ? '' : ' data-note-key="' + escapeHtml(noteKey) + '"';
+          var inputClass = emptyFormat ? 'option-input' : 'option-input memo-input';
+          var checked = Array.isArray(checks) && checks[i] === true;
+          rows += '<tr>' +
+            '<td><input type="text" class="' + inputClass + '"' + inputAttr + ' value="' + escapeHtml(value) + '" /></td>' +
+            '<td class="option-check-cell">' + (checked ? '✓' : '') + '</td>' +
+            '</tr>';
+        }
+        return '<div class="box-stack"><div class="box-table-title">オプション</div>' +
+          '<table class="option-table"><colgroup><col class="option-col-label"/><col class="option-col-check"/></colgroup><tbody>' + rows + '</tbody></table></div>';
       }
 
       function formatCompactDateSlot(dateKey, slotNumber) {
@@ -4401,7 +4479,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var emptyFormatLectureSubjects = (emptyFormat && emptyFormatHasGroup) ? emptyFormatSubjects.concat(['集理', '集社']) : emptyFormatSubjects;
         var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
         var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
-        var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat });
+        var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat, optionGradeLabel: (student.currentGradeLabel || '未設定'), optionChecks: undefined });
         // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットは中3想定で盤面の集団コマを反映する。
         var groupRowsHtml = emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
         var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + bottomSectionHtml + '</section>';

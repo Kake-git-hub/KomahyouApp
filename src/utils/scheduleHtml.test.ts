@@ -607,6 +607,65 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders the option field (option-only layout) only when optionFieldEnabled is set', () => {
+    const renderStudentSchedule = (optionFieldEnabled: boolean) => {
+      const write = vi.fn()
+      const popup = {
+        closed: false,
+        document: { open() {}, write, close() {} },
+        focus() {},
+        postMessage() {},
+      } as unknown as Window
+      vi.stubGlobal('window', {
+        open: () => popup,
+        setTimeout: (callback: () => void) => {
+          callback()
+          return 0
+        },
+      })
+
+      openAllScheduleHtml({
+        viewType: 'all-student',
+        cells: [],
+        plannedCells: [],
+        students: [createStudent({ id: 'student-1', birthDate: '2012-05-01' })],
+        teachers: [],
+        regularLessons: [],
+        defaultStartDate: '2026-03-24',
+        defaultEndDate: '2026-03-24',
+        titleLabel: 'テスト',
+        classroomSettings: {
+          closedWeekdays: [0],
+          holidayDates: [],
+          forceOpenDates: [],
+          scheduleNotes: {},
+        },
+        classroomStorageKey: 'classroom_dev',
+        optionFieldEnabled,
+        targetWindow: popup,
+      })
+
+      const html = write.mock.calls[0]?.[0] as string
+      vi.unstubAllGlobals()
+      return html
+    }
+
+    // 機能の生成ソースは常に存在する(分岐は DATA.optionFieldEnabled で実行時に切り替わる)。
+    const enabledHtml = renderStudentSchedule(true)
+    expect(enabledHtml).toContain('"optionFieldEnabled":true')
+    expect(enabledHtml).toContain('if (DATA.optionFieldEnabled)')
+    expect(enabledHtml).toContain('bottom-grid-option')
+    expect(enabledHtml).toContain('function renderOptionSection(')
+    // 学年共通キー(student-option-grade-{学年}-{行})で左列テキストを保存する。
+    expect(enabledHtml).toContain("'student-option-grade-' + grade + '-' + i")
+    // オプション欄あり分岐では休み欄(absenceSectionHtml)を出さず振替を左詰めする。
+    expect(enabledHtml).toContain('makeupSectionHtml +\n            renderOptionSection(')
+
+    // 既定(他教室)はフラグ false。休み欄を維持する従来レイアウト。
+    const disabledHtml = renderStudentSchedule(false)
+    expect(disabledHtml).toContain('"optionFieldEnabled":false')
+  })
+
   it('exposes the empty-format print button and builder only in the student view', () => {
     const write = vi.fn()
     const popup = {
