@@ -1877,9 +1877,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         grid-template-columns: minmax(0, 1.5fr) 206px 246px;
       }
 
-      /* オプション欄あり: 休み欄(168px)を削除し、振替授業を左へ、空いた所にオプション欄を置く。 */
+      /* オプション欄あり: 休み欄(168px)を削除し、振替授業を左へ、空いた所にオプション欄を置く。
+         振替授業欄は従来比4/5(206→165px)に狭め、空いた分は可変幅の連絡事項2列が吸収して広がる。 */
       .bottom-grid.bottom-grid-option {
-        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) 206px 190px 246px;
+        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) 165px 190px 246px;
+      }
+
+      /* オプション欄あり: 連絡事項(共通/個別)のテキストは周囲より2px小さく表示する。 */
+      .bottom-grid.bottom-grid-option .box-textarea {
+        font-size: calc(1em - 2px);
       }
 
       .box-panel {
