@@ -47,12 +47,35 @@ describe('reflectParentOwnedSubmissionFields', () => {
     expect(result).toBeNull()
   })
 
-  it('保護者がチェックを外した提出({}）は反映してクリアする', () => {
+  it('空の提出({})は既存を消さない(union・回帰防止 2026-06-27 本番データ消失)', () => {
+    // この経路は countSubmitted=true(=提出ロック済み)の生徒にだけ走るため、保護者が QR で
+    // 参加/オプションを「外す」ことは起こり得ない。空 doc(室長が v1.5.335 以前に登録した中3の
+    // 提出ドキュメントは空のまま)が届いても、室長が決めた既存値を上書き消失してはいけない。
     const result = reflectParentOwnedSubmissionFields(
       { optionChecks: { '0': true } },
       { optionChecks: {} },
     )
+    // 既存を保全=変化なし=null。
+    expect(result).toBeNull()
+  })
+
+  it('空 doc は登録済みの集団参加を消さない(緑が丘5名/日大前2名 消失の再現防止)', () => {
+    // 実害の再現: 既存ローカルは集団理科/集団社会に参加(室長が日程表で登録)、提出ドキュメントは空 {}。
+    // 旧実装は entry({}) で既存を上書きし、起動直後の初回スナップショット反映で集団参加を一括消失させた。
+    const result = reflectParentOwnedSubmissionFields(
+      { optionChecks: {}, groupClassParticipation: { 集団理科: true, 集団社会: true } },
+      { optionChecks: {}, groupClassParticipation: {} },
+    )
+    expect(result).toBeNull()
+  })
+
+  it('既存に entry の新規 true を足す(union・既存は維持)', () => {
+    // 室長が集団理科を登録済み、保護者が QR で集団社会を追加 → 両方残す(どちらも消さない)。
+    const result = reflectParentOwnedSubmissionFields(
+      { groupClassParticipation: { 集団理科: true } },
+      { groupClassParticipation: { 集団社会: true } },
+    )
     expect(result).not.toBeNull()
-    expect(result?.optionChecks).toEqual({})
+    expect(result?.groupClassParticipation).toEqual({ 集団理科: true, 集団社会: true })
   })
 })
