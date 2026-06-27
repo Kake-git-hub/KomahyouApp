@@ -18,6 +18,17 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.335 (2026-06-27)
+
+- fix(集団授業): 生徒日程表で室長が手動で集団参加をチェックして登録しても「最新表示」/再読込で
+  集団参加が消える回帰を修正。原因は登録時に提出ドキュメント(lectureSubmissions)へ集団参加/オプションを
+  書き戻しておらず、doc が空のまま購読の反映(doc→ローカル: reflectParentOwnedSubmissionFields)が
+  室長の手動設定を空で上書きしていたため(登録解除→登録の経路では doc が空に戻るため特に再発)。
+  `markLectureSubmissionDocAsSubmitted` に集団参加/オプションの書き戻しを追加し、生徒 count-save 経路で
+  最新ローカル値を渡すよう変更。回帰防止テストを追加
+  (src/integrations/firebase/lectureSubmission.ts・src/App.tsx・lectureSubmission.test.ts)。
+  ※既に登録済みで集団参加が消えてしまった中3は、一度「登録解除」してから集団をチェックして再登録すると恒久反映される。
+
 ## v1.5.334 (2026-06-27)
 
 - feat(生徒日程表): オプション欄機能(休み欄を削除し振替を左詰め＋2列5行のオプション欄/QR提出のチェック

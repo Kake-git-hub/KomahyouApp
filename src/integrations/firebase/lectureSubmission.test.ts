@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { subscribeLectureSubmissions, updateSubmissionOccupiedSlots, type SubmissionChangeEntry } from './lectureSubmission'
+import { markLectureSubmissionDocAsSubmitted, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, type SubmissionChangeEntry } from './lectureSubmission'
 
 const existingData = vi.fn()
 const setDoc = vi.fn()
@@ -99,6 +99,59 @@ describe('updateSubmissionOccupiedSlots', () => {
 
     const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(writtenDoc.holidayDates).toEqual(['2026-08-10']) // 既存値(spread)が維持される
+  })
+})
+
+// spec-group-lesson §C 回帰防止: 室長が生徒日程表の「登録」で決めた集団参加/オプションを
+// 提出ドキュメントへ書き戻す。書き戻さないと doc が空のままになり、購読の反映(doc→ローカル)が
+// 室長の手動設定を空で上書きして消す(生徒日程表で集団に入れても最新表示/再読込で消える回帰)。
+describe('markLectureSubmissionDocAsSubmitted (室長登録の集団参加を doc へ書き戻す)', () => {
+  beforeEach(() => {
+    existingData.mockReset()
+    setDoc.mockReset()
+  })
+
+  it('集団参加/オプションを提出ドキュメントに書き戻してロックする', async () => {
+    existingData.mockReturnValue({
+      status: 'pending',
+      groupClassParticipation: {},
+      optionChecks: {},
+      availableGroupClassSubjects: ['集団理科', '集団社会'],
+    })
+
+    await markLectureSubmissionDocAsSubmitted('student-token', {
+      groupClassParticipation: { 集団理科: true },
+      optionChecks: { '0': true },
+    })
+
+    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(writtenDoc.status).toBe('submitted')
+    expect(writtenDoc.submittedAt).toEqual(expect.any(String))
+    expect(writtenDoc.groupClassParticipation).toEqual({ 集団理科: true })
+    expect(writtenDoc.optionChecks).toEqual({ '0': true })
+  })
+
+  it('フィールド未指定なら既存値を保全する(講師経路など後方互換)', async () => {
+    existingData.mockReturnValue({
+      status: 'pending',
+      groupClassParticipation: { 集団社会: true },
+      optionChecks: { '1': true },
+    })
+
+    await markLectureSubmissionDocAsSubmitted('teacher-token')
+
+    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(writtenDoc.status).toBe('submitted')
+    expect(writtenDoc.groupClassParticipation).toEqual({ 集団社会: true })
+    expect(writtenDoc.optionChecks).toEqual({ '1': true })
+  })
+
+  it('既に提出済みなら何も書き込まない(再提出ロック)', async () => {
+    existingData.mockReturnValue({ status: 'submitted', groupClassParticipation: {} })
+
+    await markLectureSubmissionDocAsSubmitted('student-token', { groupClassParticipation: { 集団理科: true } })
+
+    expect(setDoc).not.toHaveBeenCalled()
   })
 })
 
