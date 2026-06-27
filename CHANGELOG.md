@@ -18,6 +18,14 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.334 (2026-06-27)
+
+- feat(生徒日程表): オプション欄機能(休み欄を削除し振替を左詰め＋2列5行のオプション欄/QR提出のチェック
+  往復)を開発用教室限定から全教室へ公開。featureRollout の studentScheduleOptionField を
+  development-only → all-classrooms に変更し、回帰防止テストを追加(オーナー指示 2026-06-27 /
+  src/utils/featureRollout.ts)
+  ※「未消化振替も同時に自動割り当て」は v1.5.331 で既に全教室公開済みのため追加変更なし。
+
 ## v1.5.333 (2026-06-27)
 
 - style(QR提出ページ): Android の表示補正をオーナー指示で iOS と同じ 幅520+zoom0.7 に変更。ただし

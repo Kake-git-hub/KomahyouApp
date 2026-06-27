@@ -21,9 +21,10 @@ export const featureRolloutRegistry = {
     description: 'QR submission behavior in schedule popups (show submitted state and submitted QR).',
   },
   // 生徒日程表: 休み欄を削除し振替授業欄を左に詰め、空いたスペースにオプション欄(2列5行)を追加する。
-  // 左列=学年共通のテキスト入力、右列=QR提出のチェック状態(往復処理は次フェーズ)。まず開発用教室のみ。
+  // 左列=学年共通のテキスト入力、右列=QR提出のチェック状態。開発用教室で検証後、全教室へ展開済み
+  // (オーナー指示 2026-06-27)。
   studentScheduleOptionField: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Student schedule: remove absence box, shift makeup left, add 2-col x 5-row option field.',
   },
 } as const satisfies Record<string, FeatureRolloutDefinition>
