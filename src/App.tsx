@@ -3474,11 +3474,21 @@ function AuthenticatedApp() {
         }
 
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
-        const studentToken = targetSession?.studentInputs[message.personId]?.submissionToken
+        const targetInput = targetSession?.studentInputs[message.personId]
+        const studentToken = targetInput?.submissionToken
         if (studentToken) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
-          if (countSubmitted) markLectureSubmissionDocAsSubmitted(studentToken).catch(() => { /* non-fatal */ })
-          else resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
+          // spec-group-lesson §C 回帰修正: 室長が日程表で決めた集団参加/オプションを提出ドキュメントにも書き戻す。
+          // doc を更新しないと購読の反映(doc→ローカル)が空で上書きし、生徒日程表での集団参加登録が
+          // 「最新表示」/再読込で消える(submissionReflection.ts と対になる修正)。
+          if (countSubmitted) {
+            markLectureSubmissionDocAsSubmitted(studentToken, {
+              groupClassParticipation: targetInput?.groupClassParticipation ?? {},
+              optionChecks: targetInput?.optionChecks ?? {},
+            }).catch(() => { /* non-fatal */ })
+          } else {
+            resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
+          }
         }
         return
       }

@@ -214,8 +214,21 @@ export async function updateSubmissionGroupClassEligibility(token: string, avail
   await setDoc(docRef, { ...data, availableGroupClassSubjects: [...availableGroupClassSubjects] })
 }
 
-/** Mark a submission doc as submitted (lock from phone editing) without changing the submitted data */
-export async function markLectureSubmissionDocAsSubmitted(token: string) {
+/**
+ * Mark a submission doc as submitted (lock from phone editing).
+ *
+ * 室長が生徒日程表の「登録」ボタンで決めた保護者所有フィールド(集団参加 groupClassParticipation /
+ * オプション optionChecks)を渡された場合は、ロックと同時に提出ドキュメントへ書き戻す。
+ * これを書き戻さないと doc 側が古い(空)ままになり、購読の反映(doc→ローカル)
+ * (reflectParentOwnedSubmissionFields)が室長の手動設定を空で上書きして消す。
+ * 実害: 生徒日程表で中3を集団に参加登録しても「最新表示」/再読込で集団参加が消える回帰
+ * (登録解除→登録の経路では resetLectureSubmissionDoc が doc の集団参加を空に戻すため特に再発しやすい)。
+ * 渡されないフィールドは従来どおり既存値を保全する(講師経路など)。
+ */
+export async function markLectureSubmissionDocAsSubmitted(
+  token: string,
+  parentOwnedFields?: { groupClassParticipation?: Record<string, boolean>; optionChecks?: Record<string, boolean> },
+) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
 
@@ -228,6 +241,12 @@ export async function markLectureSubmissionDocAsSubmitted(token: string) {
 
   await setDoc(docRef, {
     ...data,
+    ...(parentOwnedFields?.groupClassParticipation !== undefined
+      ? { groupClassParticipation: { ...parentOwnedFields.groupClassParticipation } }
+      : {}),
+    ...(parentOwnedFields?.optionChecks !== undefined
+      ? { optionChecks: { ...parentOwnedFields.optionChecks } }
+      : {}),
     status: 'submitted',
     submittedAt: new Date().toISOString(),
   })
