@@ -9,13 +9,12 @@
 export const IOS_VIEWPORT_WIDTH: number | null = 520
 export const IOS_ZOOM = 0.7
 
-// Android(Chrome)用の補正。iOS と同じく「レイアウトビューポート幅を画面より広く取って一様に縮小」
-// する方式(固定px化の撤回 c4563f6 を踏襲し、vw単位は使わない)。device-width のままだとボタン等の
-// 固定pxが大きすぎる指摘への対応。既定値は実機(#/submit-debug)で微調整して確定する。
-//   - ANDROID_VIEWPORT_WIDTH を device 幅より広く取ると、表は 100vw のまま幅いっぱいを保ちつつ
-//     固定px(ボタン/文字)が相対的に縮む。null = 無補正(device-width)。
-export const ANDROID_VIEWPORT_WIDTH: number | null = 480
-export const ANDROID_ZOOM = 1
+// Android(Chrome)用の補正。オーナー指示(2026-06-27)で iOS と同じ 幅520 + zoom0.7 を採用。
+// ただし「出席不可コマの表は現状の全幅のまま」という要望のため、SubmissionPage 側で Android のときだけ
+// 表(.sub-table-wrap)に逆ズーム(1/zoom)を当てて全幅へ戻す(見出し/ボタン等の固定pxだけが 0.7 で縮む)。
+// 固定px化の撤回 c4563f6 を踏襲し vw単位は使わない。値は実機(#/submit-debug)で微調整可能。
+export const ANDROID_VIEWPORT_WIDTH: number | null = 520
+export const ANDROID_ZOOM = 0.7
 
 export function isIOS(): boolean {
   if (typeof navigator === 'undefined') return false

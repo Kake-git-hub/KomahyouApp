@@ -179,6 +179,12 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   const viewportWidthOverride = debug ? debugViewportWidth : platformViewportWidth
   const zoomOverride = debug ? debugZoom : platformZoom
   const containerStyle = zoomOverride !== 1 ? ({ zoom: zoomOverride } as CSSProperties) : undefined
+  // Android のみ: コンテナ全体を zoom 0.7 で縮めつつ、出席不可コマの表だけは逆ズーム(1/zoom)で
+  // 打ち消して現状の全幅に戻す(オーナー要望: 表は現状の幅・それ以外は 520+0.7)。
+  // iOS は表も 0.7 のまま(従来どおり)なので逆ズームしない。
+  const tableWrapStyle = (isAndroid && zoomOverride !== 1)
+    ? ({ zoom: 1 / zoomOverride } as CSSProperties)
+    : undefined
 
   // Lock viewport scale for mobile.
   // 本番(iOS)の初回幅は main.tsx が初回ペイント前に同期適用済み。この effect は
@@ -493,7 +499,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
             <span className="sub-section-title">出席不可コマ</span>
             <span className="sub-muted">不可: <strong>{viewUnavailableCount}</strong>コマ</span>
           </div>
-          <div className="sub-table-wrap">
+          <div className="sub-table-wrap" style={tableWrapStyle}>
             <table className="sub-slot-table sub-slot-table-readonly" style={{ ['--slot-n' as string]: viewMaxSlot + groupColCount } as CSSProperties}>
               <thead>
                 <tr>
@@ -657,7 +663,7 @@ export default function SubmissionPage({ token, debug = false }: { token: string
           出席できないコマをタップしてください。日付をタップすると終日不可になります。
         </p>
 
-        <div className="sub-table-wrap">
+        <div className="sub-table-wrap" style={tableWrapStyle}>
           <table className="sub-slot-table" style={{ ['--slot-n' as string]: maxSlot + groupColCount } as CSSProperties}>
             <thead>
               <tr>
