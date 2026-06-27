@@ -3370,6 +3370,19 @@ tr.sa-group-row td {
   flex-wrap: wrap;
 }
 
+.auto-assign-include-makeup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.auto-assign-include-makeup input {
+  cursor: pointer;
+}
+
 .stock-origin-list {
   display: flex;
   flex-direction: column;
