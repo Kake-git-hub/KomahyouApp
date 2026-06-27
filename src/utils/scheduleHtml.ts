@@ -4022,18 +4022,31 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return (date.getMonth() + 1) + '/' + date.getDate() + '(' + dayLabels[date.getDay()] + ')' + slotNumber + '限';
       }
 
+      // 振替欄(生徒/講師日程表)用: 枠に収まるよう年(2026/)と曜日(水)を省き、月日と限だけにする。
+      function compactMakeupDateSlot(dateKey, slotNumber) {
+        const date = new Date(dateKey + 'T00:00:00');
+        return (date.getMonth() + 1) + '/' + date.getDate() + ' ' + slotNumber + '限';
+      }
+
+      // 振替元ラベルは '2026/4/1(水) 1限' 等。年と曜日を落とし '4/1 1限' に詰める。
+      // 注意: この関数はテンプレートリテラル内の埋め込みスクリプト。正規表現のバックスラッシュは
+      // テンプレート展開で1段消えるため、出力で \\d 等を残すには必ず二重に書く(\\\\d)。
       function compactMakeupSourceLabel(label) {
-        return String(label || '').replace(/\s+/g, '');
+        return String(label || '')
+          .replace(/^\\s*\\d{4}\\//, '')
+          .replace(/\\s*\\([^)]*\\)\\s*/g, ' ')
+          .replace(/\\s+/g, ' ')
+          .trim();
       }
 
       function formatMakeupNote(subject, sourceLabel, targetDateKey, targetSlotNumber) {
         if (!sourceLabel) return '';
-        return [subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
+        return [subject, compactMakeupSourceLabel(sourceLabel), '→', compactMakeupDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
       }
 
       function formatTeacherMakeupNote(studentName, subject, sourceLabel, targetDateKey, targetSlotNumber) {
         if (!sourceLabel) return '';
-        return [studentName, subject, compactMakeupSourceLabel(sourceLabel), '→', formatCompactDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
+        return [studentName, subject, compactMakeupSourceLabel(sourceLabel), '→', compactMakeupDateSlot(targetDateKey, targetSlotNumber)].filter(Boolean).join(' ');
       }
 
       function formatAbsenceNote(dateKey, slotNumber, teacherName, subject, lessonType, status) {

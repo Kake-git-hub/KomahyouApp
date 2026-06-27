@@ -2075,6 +2075,49 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain("var rank2 = hasHigh ? 'D' : 'B';")
     vi.unstubAllGlobals()
   })
+
+  // 回帰防止: 振替欄(生徒日程表)は枠に収まらないため、年(2026/)と曜日(水)を省いて
+  // 月日+限だけに詰める(compactMakeupSourceLabel)。埋め込みスクリプトはテンプレートリテラルなので
+  // 正規表現のバックスラッシュが1段消える罠がある。出荷後の実体を new Function で評価して挙動を固定する。
+  it('compacts makeup-source label to month/day+slot (strips year and weekday) in the shipped script', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [],
+      regularLessons: [],
+      defaultStartDate: '2026-04-01',
+      defaultEndDate: '2026-04-08',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function compactMakeupSourceLabel\(label\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const compact = new Function('label', match![1]) as (label: string) => string
+    expect(compact('2026/4/1(水) 1限')).toBe('4/1 1限')
+    expect(compact('5/16(土) 1限')).toBe('5/16 1限')
+    expect(compact('3/5(木)')).toBe('3/5')
+    expect(compact('4/6 4限')).toBe('4/6 4限')
+
+    // 振替先の日付スロットも曜日を出さない(compactMakeupDateSlot)。
+    expect(html).toContain("return (date.getMonth() + 1) + '/' + date.getDate() + ' ' + slotNumber + '限';")
+    vi.unstubAllGlobals()
+  })
 })
 
 describe('buildCombinedRegularLessonsFromHistory', () => {

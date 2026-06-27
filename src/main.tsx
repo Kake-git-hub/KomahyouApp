@@ -58,7 +58,7 @@ function recoverFromChunkLoadError(error: unknown) {
   }
 }
 
-import { applyIOSSubmissionViewport } from './components/submission/iosViewport'
+import { applySubmissionViewport } from './components/submission/iosViewport'
 
 const SubmissionPage = lazy(() => import('./components/submission/SubmissionPage'))
 const BoardShareScreen = lazy(() => import('./components/board-share/BoardShareScreen').then((module) => ({ default: module.BoardShareScreen })))
@@ -95,8 +95,8 @@ const submissionToken = extractSubmissionToken()
 const boardShareToken = extractBoardShareToken()
 
 if (isSubmissionDebug()) {
-  // iOS は初回ペイント前に viewport 幅を確定させる(描画後の変更だと再フィットせず見切れる)。
-  applyIOSSubmissionViewport()
+  // iOS/Android とも初回ペイント前に viewport 幅を確定させる(描画後の変更だと再フィットせず見切れる)。
+  applySubmissionViewport()
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>
@@ -106,8 +106,8 @@ if (isSubmissionDebug()) {
     </StrictMode>,
   )
 } else if (submissionToken) {
-  // iOS は初回ペイント前に viewport 幅を確定させる(描画後の変更だと再フィットせず見切れる)。
-  applyIOSSubmissionViewport()
+  // iOS/Android とも初回ペイント前に viewport 幅を確定させる(描画後の変更だと再フィットせず見切れる)。
+  applySubmissionViewport()
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>

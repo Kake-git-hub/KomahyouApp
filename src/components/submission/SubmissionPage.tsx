@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { IOS_VIEWPORT_WIDTH, IOS_ZOOM, isIOS as detectIOS, buildSubmissionViewportContent } from './iosViewport'
+import { IOS_VIEWPORT_WIDTH, IOS_ZOOM, ANDROID_VIEWPORT_WIDTH, ANDROID_ZOOM, isIOS as detectIOS, isAndroid as detectAndroid, buildSubmissionViewportContent } from './iosViewport'
 
 type SubmissionData = {
   personName: string
@@ -166,14 +166,18 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   const apiBase = useMemo(() => getSubmissionApiBaseUrl(), [])
 
   const isIOS = useMemo(() => detectIOS(), [])
+  const isAndroid = useMemo(() => detectAndroid(), [])
+  // 検出プラットフォームの確定補正値(本番で実際に使う値)。iOS / Android / その他(無補正)。
+  const platformViewportWidth = isIOS ? IOS_VIEWPORT_WIDTH : isAndroid ? ANDROID_VIEWPORT_WIDTH : null
+  const platformZoom = isIOS ? IOS_ZOOM : isAndroid ? ANDROID_ZOOM : 1
 
-  // デバッグ時はパネルでライブ調整する初期値(本番定数から開始)。
-  const [debugViewportWidth, setDebugViewportWidth] = useState<number | null>(IOS_VIEWPORT_WIDTH)
-  const [debugZoom, setDebugZoom] = useState<number>(IOS_ZOOM)
+  // デバッグ時はパネルでライブ調整する初期値(検出プラットフォームの確定値から開始)。
+  const [debugViewportWidth, setDebugViewportWidth] = useState<number | null>(platformViewportWidth)
+  const [debugZoom, setDebugZoom] = useState<number>(platformZoom)
 
-  // 実際に適用する補正値: デバッグ時はパネル値、本番は iOS のときだけ定数を使う。
-  const viewportWidthOverride = debug ? debugViewportWidth : (isIOS ? IOS_VIEWPORT_WIDTH : null)
-  const zoomOverride = debug ? debugZoom : (isIOS ? IOS_ZOOM : 1)
+  // 実際に適用する補正値: デバッグ時はパネル値、本番は検出プラットフォームの確定値。
+  const viewportWidthOverride = debug ? debugViewportWidth : platformViewportWidth
+  const zoomOverride = debug ? debugZoom : platformZoom
   const containerStyle = zoomOverride !== 1 ? ({ zoom: zoomOverride } as CSSProperties) : undefined
 
   // Lock viewport scale for mobile.
@@ -387,10 +391,14 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   // 実機デバッグ用パネル(#/submit-debug のときだけ表示)。
   // 拡縮中の補正値を画面外(zoom 非適用)に固定表示し、値をコピーできるようにする。
   // ここで求めた値を上部の IOS_VIEWPORT_WIDTH / IOS_ZOOM に反映すると本番 iOS に適用される。
-  const readout = `IOS_VIEWPORT_WIDTH = ${debugViewportWidth === null ? 'null' : Math.round(debugViewportWidth)} / IOS_ZOOM = ${debugZoom.toFixed(2)}`
+  // 検出プラットフォームに応じて、調整値をどの定数へ反映すべきかを示す(iosViewport.ts)。
+  const debugPlatform = isIOS ? 'iOS' : isAndroid ? 'Android' : 'その他'
+  const widthConstName = isAndroid ? 'ANDROID_VIEWPORT_WIDTH' : 'IOS_VIEWPORT_WIDTH'
+  const zoomConstName = isAndroid ? 'ANDROID_ZOOM' : 'IOS_ZOOM'
+  const readout = `${widthConstName} = ${debugViewportWidth === null ? 'null' : Math.round(debugViewportWidth)} / ${zoomConstName} = ${debugZoom.toFixed(2)}`
   const debugPanel = debug ? (
     <div className="sub-dbg">
-      <div className="sub-dbg-head">iOS 表示調整（デバッグ）</div>
+      <div className="sub-dbg-head">表示調整（デバッグ・{debugPlatform}）</div>
       <div className="sub-dbg-readout">{readout}</div>
       <div className="sub-dbg-info">
         innerWidth={typeof window !== 'undefined' ? window.innerWidth : '-'} / dpr={typeof window !== 'undefined' ? window.devicePixelRatio : '-'} / screen={typeof window !== 'undefined' ? window.screen?.width : '-'}
@@ -819,7 +827,6 @@ export default function SubmissionPage({ token, debug = false }: { token: string
                     checked={checked}
                     onChange={(e) => setOptionChecks((current) => ({ ...current, [String(item.index)]: e.target.checked }))}
                   />
-                  <span className={`sub-group-state${checked ? ' is-on' : ''}`}>{checked ? 'あり' : 'なし'}</span>
                 </label>
               )
             })}
