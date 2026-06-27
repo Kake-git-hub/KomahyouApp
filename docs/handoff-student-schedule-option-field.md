@@ -140,10 +140,22 @@ npm run deploy:firebase:with-functions
 
 ---
 
-# 別案件：未消化振替の自動割り当て（アーキテクチャ設計／未実装）
+# 別案件：未消化振替の自動割り当て（✅ 実装済み 2026-06-27）
 
-> このセクションは**オプション欄とは独立した次の新機能**の設計メモ。PCで関数デプロイを終えた後に着手する想定。
-> 実装前にこの設計を確認し、下記「回帰ガード」を必ず踏むこと。
+> **実装完了（2026-06-27・ブランチ `feat/auto-assign-makeup-with-lecture`）。** 以下は設計の正本として残置。
+> 実装の要点：
+> - 共有コア `findBestAutoAssignCandidate<TItem>`（ScheduleBoardScreen.tsx）に講習・振替の規則評価を統一。
+>   差分は selectMatchedItem / buildLeadingScoreParts / buildTrailingScoreParts の3コールバックのみ。
+>   `findBestLectureAutoAssignCandidate` は同コアへ委譲し**講習スコアは従来と完全一致**（leading=未消化講習由来 /
+>   trailing=講習終了日優先 の順序を保持）。`findBestMakeupAutoAssignCandidate` は session 期間内のみ・末尾=振るい順優先。
+> - `handleAutoAssignLectureStockEntry(entry, { includeMakeup })`：講習ループ完了後、同一 nextWeeks 上で振替ループ→
+>   `commitWeeks` を1回。振替配置は `normalizeLessonPlacement`＋origin/note を手動配置と完全踏襲。
+> - pending items 展開は純関数 `buildMakeupAutoAssignPendingItems`（export・単体テスト済み。balance厳守・振るい順）。
+> - UI：講習モーダルにチェックボックス（既定OFF・`includeMakeupInAutoAssign`）。文言「未消化振替も同時に自動割り当てする」。
+> - 非includeMakeup経路のステータス文言は従来完全踏襲（e2e が検証）。
+> - **未検証**：開発用教室での実機動作確認は未実施（本番データ保護のためオーナー確認推奨）。
+
+> 以下は**当初の設計メモ（実装の根拠）。** 回帰ガードは引き続き有効。
 
 ## A. 何を作るか（確定仕様）
 
