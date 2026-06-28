@@ -7486,6 +7486,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       state.armed = true
+      // 掴んだ瞬間に、長押し中に始まっていた文字選択を消す(以降は CSS の user-select:none で発生しない)。
+      window.getSelection?.()?.removeAllRanges()
       setSelectedStudentId(sourceStudentId) // これで pointerPreviewLabel/CursorFollowPreview が出る。
       setIsDragMoveActive(true)
     }, DRAG_LONG_PRESS_MS)

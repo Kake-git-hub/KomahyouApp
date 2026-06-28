@@ -2144,6 +2144,13 @@ tr.sa-group-row td {
   box-shadow: inset 0 0 0 1px #0f5fd0;
 }
 
+/* 長押しD&D移動中:他の生徒名の上を通っても文字選択(青いハイライト)にならないようにする。 */
+.slot-adjust-grid-dragging,
+.slot-adjust-grid-dragging * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 /* 長押しD&D移動中:カーソル下の生徒セルを純CSS(:hover)で強調する。
    React 状態を毎フレーム更新せず再描画を増やさないための実装。 */
 .slot-adjust-grid-dragging .sa-student:hover:not(.sa-inactive) {

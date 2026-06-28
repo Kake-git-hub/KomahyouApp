@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.340 (2026-06-28)
+
+- fix(盤面): 長押しD&D移動中に他の生徒名の上を通ると文字選択(青いハイライト)になり見えづらかった不具合を修正。ドラッグ中の盤面に user-select:none を適用し、掴んだ瞬間に既存の選択を removeAllRanges でクリアするようにした(src/App.css・src/components/schedule-board/ScheduleBoardScreen.tsx)
+
 ## v1.5.339 (2026-06-28)
 
 - fix(盤面): 長押しD&Dで生徒を離しても配置されず、再クリックが必要だった不具合を修正。原因はドロップ
