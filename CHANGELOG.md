@@ -17,6 +17,9 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+
+## v1.5.342 (2026-06-28)
+
 - fix(盤面): 自動割振ルール「指定時限禁止」の制約違反で、固定の通常授業まで生徒名が赤文字になっていた不具合を修正。「通常講師のみ」と同様、通常授業(lessonType==='regular')は割振り対象でないため違反扱いしない。判定を純粋関数 shouldWarnForbiddenPeriod に切り出し回帰防止テストを追加(src/components/schedule-board/ScheduleBoardScreen.tsx・ScheduleBoardScreen.test.ts)
 - fix(生徒日程表): 講習自動割振の後、開いていた生徒日程表タブで「最新表示」を押しても割り振った講習が反映されない(タブを閉じて開き直すと反映される)不具合に対処。「最新表示」は popup→opener の postMessage 往復に依存して取りこぼし/競合が起きうるため、自動割振の確定後に board→popup 方向で日程表popupを1回だけ能動再同期するトリガを追加(往復に依存せず盤面内容と揃える。popup 未表示時は no-op / src/components/schedule-board/ScheduleBoardScreen.tsx)
 
