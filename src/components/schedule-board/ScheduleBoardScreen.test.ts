@@ -4,7 +4,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -3815,6 +3815,47 @@ describe('shouldWarnRegularTeachersOnly', () => {
       lessonType: 'makeup',
       teacherId: null,
       regularTeacherIds: new Set<string>(),
+    })).toBe(false)
+  })
+})
+
+// 回帰防止(2026-06-28): 「指定時限禁止」制約違反が、通常授業(lessonType==='regular')でも赤文字になっていた不具合。
+// 「通常講師のみ」と同じく、固定の通常授業は割振り対象でないため違反扱いしない。
+// 修正なし(regular を除外しない)だと「通常授業は違反にしない」テストが落ち、修正ありで通る。
+describe('shouldWarnForbiddenPeriod', () => {
+  it('通常授業は指定時限と重なっても違反にしない(赤文字にしない)', () => {
+    expect(shouldWarnForbiddenPeriod({
+      ruleApplicable: true,
+      lessonType: 'regular',
+      slotNumber: 1,
+      forbiddenPeriods: [1],
+    })).toBe(false)
+  })
+
+  it('在庫(講習)が指定時限に重なれば従来どおり違反にする', () => {
+    expect(shouldWarnForbiddenPeriod({
+      ruleApplicable: true,
+      lessonType: 'special',
+      slotNumber: 1,
+      forbiddenPeriods: [1],
+    })).toBe(true)
+  })
+
+  it('在庫(振替)でも指定時限でなければ違反にしない', () => {
+    expect(shouldWarnForbiddenPeriod({
+      ruleApplicable: true,
+      lessonType: 'makeup',
+      slotNumber: 2,
+      forbiddenPeriods: [1],
+    })).toBe(false)
+  })
+
+  it('ルール非適用なら常に違反にしない', () => {
+    expect(shouldWarnForbiddenPeriod({
+      ruleApplicable: false,
+      lessonType: 'special',
+      slotNumber: 1,
+      forbiddenPeriods: [1],
     })).toBe(false)
   })
 })
