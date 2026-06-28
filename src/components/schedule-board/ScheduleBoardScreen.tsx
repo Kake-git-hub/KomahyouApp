@@ -1892,6 +1892,21 @@ export function shouldWarnRegularTeachersOnly(params: {
   return !params.regularTeacherIds.has(params.teacherId)
 }
 
+// spec-auto-assign-rules ⑧/「指定時限禁止」: このルールは在庫(振替・講習)の“割振り”を指定時限から外すためのもので、
+// 固定の通常授業スロット(lessonType==='regular')そのものには適用しない(=赤文字にしない)。
+// 「通常講師のみ」(shouldWarnRegularTeachersOnly)が通常授業を除外するのと同じ扱い。通常授業はコマ表テンプレで
+// 既に時限が確定しており、禁止時限と重なっても割振り対象ではないため違反扱いしない(2026-06-28 修正)。
+export function shouldWarnForbiddenPeriod(params: {
+  ruleApplicable: boolean
+  lessonType: LessonType
+  slotNumber: number
+  forbiddenPeriods: number[]
+}): boolean {
+  if (!params.ruleApplicable) return false
+  if (params.lessonType === 'regular') return false
+  return params.forbiddenPeriods.includes(params.slotNumber)
+}
+
 function buildManagedRegularLessonsRange(params: {
   startDate: string
   endDate: string
@@ -5278,7 +5293,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           }
 
           if (managedStudent) {
-            if (isRuleApplicableCached(forbidFirstPeriodRule, managedStudent.id, studentGradeOnDate) && forbiddenPeriods.includes(cell.slotNumber)) {
+            // 通常講師のみ(shouldWarnRegularTeachersOnly)と同様、通常授業は指定時限禁止の対象外(赤文字にしない)。
+            // この禁止ルールは在庫(振替・講習)の割振りを対象にするものであり、固定の通常授業は違反扱いしない。
+            if (shouldWarnForbiddenPeriod({
+              ruleApplicable: isRuleApplicableCached(forbidFirstPeriodRule, managedStudent.id, studentGradeOnDate),
+              lessonType: student.lessonType,
+              slotNumber: cell.slotNumber,
+              forbiddenPeriods,
+            })) {
               addRuleWarning([currentLocationKey], 'forbidFirstPeriod', '指定時限禁止')
             }
 
@@ -7031,6 +7053,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
+    // 開いている日程表popupを能動的に1回だけ再同期する(回帰修正 2026-06-28)。
+    // 通常編集ごとの自動再生成はメモリスパイク回避のため停止しており(scheduleSyncTrigger 依存)、
+    // 日程表popupは「開いた時」「最新表示ボタン」でしか更新されない。しかし「最新表示」は
+    // popup→opener への postMessage 往復に依存するため、講習自動割振後に popup タブへ移って
+    // 最新表示を押しても割り振った講習が反映されないことがあった(往復の取りこぼし/競合)。
+    // 自動割振は明示的かつ低頻度の操作なので、ここで board→popup 方向(board が popup ハンドルを直接保持)で
+    // 1回だけ同期トリガを進め、往復に依存せず確実に盤面内容と揃える。popup 未表示時は同期effectが no-op。
+    setScheduleSyncTrigger((prev) => prev + 1)
     // レポートは講習・振替の候補を合算(共通ラベルのみ集計され種別固有ラベルは applicable 未指定で無視される)。
     setAutoAssignDebugReport(buildAutoAssignDebugReport({
       entryLabel: entry.displayName,
