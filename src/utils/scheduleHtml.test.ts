@@ -852,6 +852,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('wires the per-subject lesson-time (授業時間) selector into the lecture registration dialog (student view)', () => {
+    // 講習の登録ダイアログから QR と同じように科目ごとの授業時間(90/60/45分)を選べる配線が
+    // 生成HTMLに含まれていること。実DOMの描画は popup 実行時なので、配線文字列の存在で回帰防止する。
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    // 60/45 のみ保持する正規化、登録ダイアログのプルダウン描画、提出時の収集・送信の配線。
+    expect(html).toContain('function normalizeSubjectDurations')
+    expect(html).toContain('data-role="student-count-subject-duration"')
+    expect(html).toContain('subjectDurations')
+    // 通常のみ ON でプルダウンも無効化する配線。
+    expect(html).toContain('[data-role="student-count-subject-duration"]')
+
+    vi.unstubAllGlobals()
+  })
+
   it('includes A3-portrait paging plumbing for overflowing salary tables (teacher view)', () => {
     // 給与計算の行が多くA4横で見切れる講師ページを A3 縦へ自動切替するための CSS / @page / 計測関数が
     // 生成HTMLに含まれていること。実測ベースの切替なので文字列の存在で配線を担保する(回帰防止)。
