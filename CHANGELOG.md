@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.343 (2026-06-29)
+
+- feat(生徒日程表): 講習の登録ダイアログでも、QRと同じように科目ごとの授業時間(90/60/45分)を選択できるようにした。各科目の希望数の隣に授業時間プルダウンを追加(90=既定、60/45のみ保持)。登録すると subjectDurations として保存され、回数表/講習ストックの授業時間表示(60/45サフィックス)に反映。登録済みは「2 (60分)」のように読み取り表示。通常のみONでプルダウンも無効化。既存のQR提出値は未送信時に保全(消さない)。回帰防止: schedule-student-count-save ハンドラが従来 subjectDurations をメッセージから反映せず既存保全のみだった点を修正し、配線文字列の存在テストを追加(src/utils/scheduleHtml.ts・src/App.tsx・scheduleHtml.test.ts)
+
 ## v1.5.342 (2026-06-28)
 
 - fix(盤面): 自動割振ルール「指定時限禁止」の制約違反で、固定の通常授業まで生徒名が赤文字になっていた不具合を修正。「通常講師のみ」と同様、通常授業(lessonType==='regular')は割振り対象でないため違反扱いしない。判定を純粋関数 shouldWarnForbiddenPeriod に切り出し回帰防止テストを追加(src/components/schedule-board/ScheduleBoardScreen.tsx・ScheduleBoardScreen.test.ts)

@@ -3438,7 +3438,19 @@ function AuthenticatedApp() {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
-                subjectDurations: regularOnly ? {} : (previousInput?.subjectDurations ?? {}),
+                // 科目ごとの授業時間(分): 登録ダイアログ(生徒日程表)で送られた値を反映。QRと同じく 60/45 のみ採用、
+                // 未送信(unsubmit等)は既存を保全して消さない(QR提出値を消さない)。regularOnly は空。
+                subjectDurations: regularOnly ? {} : (() => {
+                  const raw = message.subjectDurations
+                  if (raw === undefined) return previousInput?.subjectDurations ?? {}
+                  if (!raw || typeof raw !== 'object') return {}
+                  const result: Record<string, number> = {}
+                  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+                    const minutes = typeof value === 'number' ? value : Number(value)
+                    if (minutes === 60 || minutes === 45) result[key] = minutes
+                  }
+                  return result
+                })(),
                 // spec-group-lesson §C / Phase 7: 集団参加は講習回数とは独立。「登録」ボタンで送られた値を反映し、
                 // 未送信（unsubmit等）では既存を保全して消さない。反映漏れは出席者一覧に出ない回帰になる。
                 groupClassParticipation: resolveSavedGroupClassParticipation(message.groupClassParticipation, previousInput?.groupClassParticipation),

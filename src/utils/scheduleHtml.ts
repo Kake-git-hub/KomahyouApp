@@ -1406,6 +1406,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font: inherit;
       }
 
+      .count-modal-duration {
+        margin-right: 8px;
+        padding: 6px 8px;
+        border: 1px solid #888888;
+        font: inherit;
+        vertical-align: middle;
+      }
+
       .count-modal-check {
         display: inline-flex;
         align-items: center;
@@ -2594,7 +2602,19 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function defaultStudentSessionInput() {
-        return { unavailableSlots: [], subjectSlots: {}, regularOnly: false, countSubmitted: false };
+        return { unavailableSlots: [], subjectSlots: {}, subjectDurations: {}, regularOnly: false, countSubmitted: false };
+      }
+
+      // 科目ごとの授業時間(分)。QR提出と同じく 60/45 のみ保持し、90(既定)や不正値は落とす。
+      // spec-lecture-stock §6 / resolveLectureSubjectDuration と整合。
+      function normalizeSubjectDurations(map) {
+        var next = {};
+        if (!map || typeof map !== 'object') return next;
+        Object.keys(map).forEach(function(subject) {
+          var v = Number(map[subject]);
+          if (v === 60 || v === 45) next[subject] = v;
+        });
+        return next;
       }
 
       function defaultTeacherSessionInput() {
@@ -2613,6 +2633,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ...(current || {}),
           unavailableSlots: sortSlotKeys(current && Array.isArray(current.unavailableSlots) ? current.unavailableSlots : []),
           subjectSlots: normalizeSubjectSlots(current && current.subjectSlots ? current.subjectSlots : {}),
+          subjectDurations: normalizeSubjectDurations(current && current.subjectDurations ? current.subjectDurations : {}),
           regularOnly: Boolean(current && current.regularOnly),
           countSubmitted: Boolean(current && current.countSubmitted),
         };
@@ -3404,7 +3425,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
-      function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks) {
+      function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks, subjectDurations) {
         DATA.specialSessions = (DATA.specialSessions || []).map((session) => {
           if (session.id !== sessionId) return session;
           const currentInput = session.studentInputs?.[personId] || defaultStudentSessionInput();
@@ -3415,6 +3436,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
                 subjectSlots: regularOnly ? {} : normalizeSubjectSlots(subjectSlots),
+                // 科目ごとの授業時間(分)。登録時は渡された値を採用、未指定は既存を保全(QR提出値を消さない)。regularOnly は空。
+                subjectDurations: regularOnly ? {} : (subjectDurations !== undefined ? normalizeSubjectDurations(subjectDurations) : normalizeSubjectDurations(currentInput.subjectDurations)),
                 // spec-group-lesson §C: 登録時は渡された集団参加を採用、未指定(登録解除等)は既存を保全して消さない。
                 groupClassParticipation: groupClassParticipation !== undefined ? (groupClassParticipation || {}) : (currentInput.groupClassParticipation || {}),
                 // オプション欄(開発用教室): 登録時は渡されたチェックを採用、未指定は既存を保全(QR提出値を消さない)。
@@ -3481,7 +3504,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         } catch {}
       }
 
-      function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks) {
+      function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks, subjectDurations) {
         try {
           if (!window.opener || window.opener.closed) return;
           const message = {
@@ -3496,6 +3519,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           if (groupClassParticipation !== undefined) message.groupClassParticipation = groupClassParticipation || {};
           // オプション欄(開発用教室): チェックも登録時のみ明示送信(未指定時は既存保全)。
           if (optionChecks !== undefined) message.optionChecks = optionChecks || {};
+          // 科目ごとの授業時間(分): 登録時のみ明示送信(未指定時は opener 側で既存保全)。
+          if (subjectDurations !== undefined) message.subjectDurations = normalizeSubjectDurations(subjectDurations);
           window.opener.postMessage(message, '*');
         } catch {}
       }
@@ -4128,9 +4153,24 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const input = getStudentSessionInput(student.id, session.id);
         const normalizedSubjectSlots = normalizeCountMapSubjects(input.subjectSlots, student, referenceDate);
         const visibleSubjects = getVisibleSubjectsForStudent(student, referenceDate, Object.keys(normalizedSubjectSlots));
+        // 科目ごとの授業時間(分)。QRと同じく既定90、60/45を選択可。input.subjectDurations は 60/45 のみ保持。
+        const subjectDurations = normalizeSubjectDurations(input.subjectDurations);
+        const resolveSubjectDuration = function(subject) {
+          var v = subjectDurations[subject];
+          return (v === 60 || v === 45) ? v : 90;
+        };
+        const renderDurationSelect = function(subject) {
+          var selected = resolveSubjectDuration(subject);
+          var opt = function(min) { return '<option value="' + min + '"' + (selected === min ? ' selected' : '') + '>' + min + '分</option>'; };
+          return '<select class="count-modal-duration" data-role="student-count-subject-duration" data-subject="' + subject + '" data-testid="student-schedule-count-duration-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + ' aria-label="' + escapeHtml(subject) + 'の授業時間">' + opt(90) + opt(60) + opt(45) + '</select>';
+        };
         const rowsHtml = input.countSubmitted
-          ? visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td>' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '</td></tr>').join('')
-          : visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td><input type="number" min="0" step="1" value="' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
+          ? visibleSubjects.map((subject) => {
+              var dur = resolveSubjectDuration(subject);
+              var durSuffix = dur === 90 ? '' : ' (' + dur + '分)';
+              return '<tr><td>' + escapeHtml(subject) + '</td><td>' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0)) + durSuffix) + '</td></tr>';
+            }).join('')
+          : visibleSubjects.map((subject) => '<tr><td>' + escapeHtml(subject) + '</td><td>' + renderDurationSelect(subject) + '<input type="number" min="0" step="1" value="' + escapeHtml(String(Number(normalizedSubjectSlots[subject] || 0))) + '" data-role="student-count-subject-input" data-subject="' + subject + '" data-testid="student-schedule-count-subject-' + subject + '"' + (input.regularOnly ? ' disabled' : '') + '></td></tr>').join('');
         const actionHtml = input.countSubmitted
           ? '<button type="button" data-role="unsubmit-student-count-modal" data-testid="student-schedule-count-unregister">登録解除</button>'
           : '<button type="button" data-role="submit-student-count-modal" data-testid="student-schedule-count-register">登録</button>';
@@ -4261,9 +4301,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var idx = element.getAttribute('data-index') || '';
           if (idx !== '' && element.checked) optionChecks[idx] = true;
         });
+        // 科目ごとの授業時間(分)。QRと同じく 60/45 のみ保持(90=既定は落とす)。回数0でも保持はせず、希望ありの科目のみ。
+        var subjectDurations = {};
+        document.querySelectorAll('[data-role="student-count-subject-duration"]').forEach(function(element) {
+          if (!(element instanceof HTMLSelectElement)) return;
+          var subject = element.getAttribute('data-subject') || '';
+          if (!subject) return;
+          var minutes = Number(element.value);
+          if ((minutes === 60 || minutes === 45) && Number(subjectSlots[subject] || 0) > 0) subjectDurations[subject] = minutes;
+        });
 
-        updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation, optionChecks);
-        persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation, optionChecks);
+        updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation, optionChecks, subjectDurations);
+        persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, subjectSlots, regularOnly, true, groupParticipation, optionChecks, subjectDurations);
         activeCountDialog = null;
         syncPayloadFingerprint();
         render();
@@ -5404,6 +5453,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (target.getAttribute('data-role') !== 'student-count-regular-only') return;
         document.querySelectorAll('[data-role="student-count-subject-input"]').forEach((element) => {
           if (element instanceof HTMLInputElement) element.disabled = Boolean(target.checked);
+        });
+        // 通常のみON時は授業時間プルダウンも無効化(回数入力と同じ扱い)。
+        document.querySelectorAll('[data-role="student-count-subject-duration"]').forEach((element) => {
+          if (element instanceof HTMLSelectElement) element.disabled = Boolean(target.checked);
         });
       });
       window.addEventListener('beforeunload', () => {
