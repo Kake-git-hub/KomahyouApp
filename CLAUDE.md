@@ -4,6 +4,8 @@
 
 このリポジトリでコードを**編集・追加・修正・リファクタリング**する前に、スキル
 `.claude/skills/solo-git-workflow/SKILL.md`（一人開発向け Git 運用＋回帰防止）の手順に従うこと。
+**本番へマージ／デプロイする前**は `.claude/skills/safe-release/SKILL.md`（staging 実機検証→本番→
+ライブ検証→ロールバック、リリース前チェックリスト）にも従うこと。
 ユーザーが明示的に Git や回帰に触れていなくても、編集を始める前にこのスキルの判断フロー
 （壊れたら困る変更はブランチを切る／変更前にベースラインを取る／変更後に既存機能の回帰を確認／
 コミット前に `git diff`）を踏むこと。下記の回帰防止ルール・本番データ保護ルールと併せて守る。
@@ -113,4 +115,8 @@ GCP コンソール（プロジェクト `komahyouapp-prod`）で以下を付与
 - `workspaceKey` = `main`（本番）/ `.env.local` の `VITE_FIREBASE_WORKSPACE_KEY` で設定
 - 復元・コピーは `actingClassroomId`（現在開いている教室）に書き込む。**開いている教室の確認なしに復元操作をしてはいけない**。
 - バックアップ: 毎時（直近3日）・日次（14日）。Storage パス `workspace-auto-backups/main/hourly/{key}.json`
+- **staging 環境**: 本番と分離した検証用プロジェクト `komahyouapp-staging`（`komahyouapp-staging.web.app`）。
+  **書き込み自由**で実機検証に使う。CI は `.github/workflows/deploy-staging.yml`（手動実行）。
+  未整備なら `docs/runbooks/staging-setup.md`（オーナーがクラウド側を設定）。functions は
+  `STORAGE_BUCKET` を staging に向けないと本番バケットを触る点に注意（runbook 手順6）。
 - 詳細: `memory/komahyou-save-architecture.md` および `memory/komahyou-classroom-restore-cross-contamination.md` 参照

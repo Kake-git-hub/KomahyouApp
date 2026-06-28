@@ -17,6 +17,8 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- chore(運用基盤): 専用 staging 環境の足回りを追加。本番(komahyouapp-prod)と分離した検証用プロジェクト komahyouapp-staging 向けに、手動デプロイ CI(.github/workflows/deploy-staging.yml)・.firebaserc の staging エイリアス・オーナー作業手順書(docs/runbooks/staging-setup.md)を整備。functions が STORAGE_BUCKET 未設定だと本番バケットを参照するクロス汚染を CI で防止(STAGING_STORAGE_BUCKET を注入)。
+- docs(運用基盤): 安全リリース手順スキル(.claude/skills/safe-release)とリリース前チェックリスト(docs/runbooks/release-checklist.md)を追加。staging 実機検証→本番→ライブ検証→ロールバックの流れを制度化。CLAUDE.md から両者を参照。
 
 ## v1.5.343 (2026-06-29)
 

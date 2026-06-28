@@ -1,12 +1,20 @@
 {
   "projects": {
-    "default": "komahyouapp-prod"
+    "default": "komahyouapp-prod",
+    "staging": "komahyouapp-staging"
   },
   "targets": {
     "komahyouapp-prod": {
       "hosting": {
         "default": [
           "komahyouapp-prod"
+        ]
+      }
+    },
+    "komahyouapp-staging": {
+      "hosting": {
+        "default": [
+          "komahyouapp-staging"
         ]
       }
     }
