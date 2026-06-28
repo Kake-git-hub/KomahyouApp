@@ -17,6 +17,17 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+
+## v1.5.339 (2026-06-28)
+
+- fix(盤面): 長押しD&Dで生徒を離しても配置されず、再クリックが必要だった不具合を修正。原因はドロップ
+  (mouseup)が mousedown 時点の古い executeMoveStudent クロージャ(selectedStudentId=null)を呼んでいたため。
+  executeMoveStudent に掴んでいる生徒IDを明示で渡せるようにし、ドロップは安定ラッパ経由で最新クロージャを
+  実行するよう変更。離した瞬間に配置が確定する。配置できないコマ(メモ/出席済み/重複等)へ離した場合は選択を
+  解除してキャンセル扱いにする(再クリックで配置を残さない / src/components/schedule-board/ScheduleBoardScreen.tsx)
+
+## v1.5.338 (2026-06-28)
+
 - feat: 生徒名の長押しD&D移動を全教室へ展開(featureRollout の studentDragAndDropMove を development-only → all-classrooms。オーナー指示 2026-06-28・回帰テスト更新 / src/utils/featureRollout.ts)
 - style: 長押しD&D移動中の画面周囲の青枠を点滅(パルス)させず、移動中ずっと一定で表示し続けるよう変更(src/App.css)
 

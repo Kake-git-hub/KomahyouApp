@@ -7118,12 +7118,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除しました。`)
   }
 
-  const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number) => {
+  const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number, sourceStudentIdOverride?: string | null) => {
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
     setStudentMenu(null)
 
-    if (!selectedStudentId) {
+    // 長押しD&D は確定時に「掴んでいる生徒ID」を明示で渡す。state(selectedStudentId)は更新が
+    // 非同期のため、ドロップ時に旧クロージャ経由で null と判定され配置されない不具合があった。
+    const movingStudentId = sourceStudentIdOverride ?? selectedStudentId
+    if (!movingStudentId) {
       setStatusMessage('移動する生徒はメニューの「移動」から選択してください。')
       return
     }
@@ -7162,7 +7165,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         if (sourceFound) break
         for (const desk of cell.desks) {
           if (!desk.lesson) continue
-          const currentIndex = desk.lesson.studentSlots.findIndex((student) => student?.id === selectedStudentId)
+          const currentIndex = desk.lesson.studentSlots.findIndex((student) => student?.id === movingStudentId)
           if (currentIndex < 0) continue
 
           movedStudent = desk.lesson.studentSlots[currentIndex]
@@ -7299,6 +7302,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell?.dateLabel} ${targetCell?.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`)
     }
   }
+
+  // 長押しD&D のドロップ確定で呼ぶ安定参照。呼び出し時に常に最新の executeMoveStudent
+  // (最新の weeks/cells を参照)を実行する。mousedown 時点の古いクロージャ(配置されない不具合)を回避する。
+  const stableExecuteMoveStudent = useStableCallback(executeMoveStudent)
 
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
     // 長押しD&Dで移動を確定した直後の click は無視する(掴んだセルでメニューが開くのを防ぐ)。
@@ -7453,7 +7460,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       // 実移動は既存処理を再利用(入れ替え/メモ/出席済み/重複/同位置などのブロックを踏襲)。
-      executeMoveStudent(targetCellId, targetDeskIndex, targetStudentIndex)
+      // 掴んでいる生徒IDを明示で渡し、最新クロージャ経由で実行する(ドロップで確実に配置)。
+      stableExecuteMoveStudent(targetCellId, targetDeskIndex, targetStudentIndex, sourceStudentId)
+      // D&D は「離した瞬間に確定 or キャンセル」。配置できないコマ(メモ/出席済み/重複等)に離した
+      // 場合 executeMoveStudent はブロックして選択を残すが、D&D ではそのままキャンセル扱いにするため
+      // 必ず選択を解除する(再クリックでの配置を残さない)。
+      setSelectedStudentId(null)
     }
 
     function handleWindowKeyDown(event: KeyboardEvent) {
