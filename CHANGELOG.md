@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.341 (2026-06-28)
+
+- feat(盤面): 長押しD&D移動中、盤面の端付近(上下左右)へポインタを寄せると盤面が自動スクロールするようにした(画面に表示されていない画面外のコマへも移動できる)。requestAnimationFrame で掴んでいる間だけ回し、端からの距離に応じて速度を可変(外側へ出るほど速い・上限あり)。state を毎フレーム更新せず scrollLeft/scrollTop を直接操作(再描画を増やさない / src/components/schedule-board/ScheduleBoardScreen.tsx)
+
 ## v1.5.340 (2026-06-28)
 
 - fix(盤面): 長押しD&D移動中に他の生徒名の上を通ると文字選択(青いハイライト)になり見えづらかった不具合を修正。ドラッグ中の盤面に user-select:none を適用し、掴んだ瞬間に既存の選択を removeAllRanges でクリアするようにした(src/App.css・src/components/schedule-board/ScheduleBoardScreen.tsx)

@@ -7403,11 +7403,47 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     const DRAG_LONG_PRESS_MS = 250
     const PRE_ARM_CANCEL_PX = 8
+    // ドラッグ中に盤面の端付近(=外側へ向かったとき)へ来たら、その方向へ盤面を自動スクロールする。
+    const AUTO_SCROLL_EDGE_PX = 60   // 端からこの距離以内で発動
+    const AUTO_SCROLL_MAX_SPEED = 22 // 1フレームあたりの最大スクロール量(px)
+
+    // 最新のポインタ位置(オートスクロール用)。state にせず ref 同等の素の object で持ち、
+    // mousemove で更新する(再描画を起こさない)。
+    const lastPointer = { x: clientX, y: clientY }
+    let autoScrollRafId: number | null = null
+
+    // 端からの距離 dist(端の外側なら負)に応じたスクロール速度。外に出るほど速く(上限あり)。
+    function edgeScrollSpeed(dist: number) {
+      if (dist >= AUTO_SCROLL_EDGE_PX) return 0
+      const ratio = Math.min(1, (AUTO_SCROLL_EDGE_PX - dist) / AUTO_SCROLL_EDGE_PX)
+      return ratio * AUTO_SCROLL_MAX_SPEED
+    }
+
+    function autoScrollStep() {
+      // 掴んでいる間だけ動く。容器は毎フレーム取り直す(週切替などでノードが変わっても追従)。
+      const grid = document.querySelector<HTMLElement>('.slot-adjust-grid')
+      if (grid) {
+        const rect = grid.getBoundingClientRect()
+        let dx = 0
+        let dy = 0
+        if (lastPointer.x < rect.left + AUTO_SCROLL_EDGE_PX) dx = -edgeScrollSpeed(lastPointer.x - rect.left)
+        else if (lastPointer.x > rect.right - AUTO_SCROLL_EDGE_PX) dx = edgeScrollSpeed(rect.right - lastPointer.x)
+        if (lastPointer.y < rect.top + AUTO_SCROLL_EDGE_PX) dy = -edgeScrollSpeed(lastPointer.y - rect.top)
+        else if (lastPointer.y > rect.bottom - AUTO_SCROLL_EDGE_PX) dy = edgeScrollSpeed(rect.bottom - lastPointer.y)
+        if (dx !== 0) grid.scrollLeft += dx
+        if (dy !== 0) grid.scrollTop += dy
+      }
+      autoScrollRafId = window.requestAnimationFrame(autoScrollStep)
+    }
 
     function cleanup() {
       window.removeEventListener('mousemove', handleWindowMouseMove)
       window.removeEventListener('mouseup', handleWindowMouseUp)
       window.removeEventListener('keydown', handleWindowKeyDown)
+      if (autoScrollRafId !== null) {
+        window.cancelAnimationFrame(autoScrollRafId)
+        autoScrollRafId = null
+      }
     }
 
     function cancel(clearSelection: boolean) {
@@ -7423,6 +7459,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     function handleWindowMouseMove(event: MouseEvent) {
+      // オートスクロール用に最新ポインタ位置を常に更新する(armed 後も)。
+      lastPointer.x = event.clientX
+      lastPointer.y = event.clientY
       const state = dragMoveRef.current
       if (!state || state.armed) return // 掴んだ後の追従は CursorFollowPreview が担当する(ここでは何もしない)。
       // 長押し成立前に大きく動いたら「ドラッグ操作ではない」とみなして取りやめる(誤発火防止)。
@@ -7490,6 +7529,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       window.getSelection?.()?.removeAllRanges()
       setSelectedStudentId(sourceStudentId) // これで pointerPreviewLabel/CursorFollowPreview が出る。
       setIsDragMoveActive(true)
+      // 端へ寄ると盤面が自動スクロールする(画面外のコマへも移動できる)。掴んだ間だけ rAF で回す。
+      if (autoScrollRafId === null) autoScrollRafId = window.requestAnimationFrame(autoScrollStep)
     }, DRAG_LONG_PRESS_MS)
 
     window.addEventListener('mousemove', handleWindowMouseMove)
