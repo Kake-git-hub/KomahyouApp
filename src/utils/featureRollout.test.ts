@@ -21,4 +21,11 @@ describe('featureRollout', () => {
     expect(isFeatureEnabledForClassroom('studentScheduleOptionField', { id: 'development', name: '開発用教室' })).toBe(true)
     expect(isFeatureEnabledForClassroom('studentScheduleOptionField', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
   })
+
+  it('limits long-press drag-and-drop move to the development classroom only', () => {
+    // 生徒名の長押しD&D移動はまず開発用教室のみ。全教室昇格はオーナー判断まで development-only を維持する。
+    expect(featureRolloutRegistry.studentDragAndDropMove.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+  })
 })

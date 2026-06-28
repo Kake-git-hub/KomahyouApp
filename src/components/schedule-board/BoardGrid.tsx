@@ -183,6 +183,10 @@ type BoardGridProps = {
   onDayHeaderClick: (dateKey: string, x: number, y: number) => void
   onTeacherClick: (cellId: string, deskIndex: number, x: number, y: number) => void
   onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, statusKind: StudentStatusKind | null, x: number, y: number) => void
+  // 長押しD&D移動(ライブ盤面のみ・開発用教室限定)。有効時のみハンドラを渡す。毎フレーム処理は親側の
+  // window リスナと純CSS(:hover)で行い、ここでは mousedown の起点通知だけを担う(再描画を増やさない)。
+  dragMoveActive?: boolean
+  onStudentMouseDown?: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, isAttended: boolean, button: number, x: number, y: number) => void
   // spec-group-lesson §A: 集団行のセル操作。空の科目セル→科目ピッカー、科目入り→メニュー(出席者一覧/削除)、講師セル→講師ピッカー。
   onGroupSubjectClick?: (dateKey: string, band: GroupClassBand, hasSubject: boolean, x: number, y: number) => void
   onGroupTeacherClick?: (dateKey: string, band: GroupClassBand, hasEntry: boolean, x: number, y: number) => void
@@ -203,6 +207,8 @@ function BoardGridComponent({
   onDayHeaderClick,
   onTeacherClick,
   onStudentClick,
+  dragMoveActive,
+  onStudentMouseDown,
   onGroupSubjectClick,
   onGroupTeacherClick,
 }: BoardGridProps) {
@@ -316,6 +322,10 @@ function BoardGridComponent({
         key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
         className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${isTrial ? ' sa-student-trial' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
         onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, statusEntry?.status ?? null, event.clientX, event.clientY)}
+        onMouseDown={onStudentMouseDown ? (event) => onStudentMouseDown(cell.id, deskIndex, studentIndex, Boolean(studentName), statusEntry?.status === 'attended', event.button, event.clientX, event.clientY) : undefined}
+        data-cell-id={cell.id}
+        data-desk-index={deskIndex}
+        data-student-index={studentIndex}
         data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
       >
         <div className="sa-student-inner">
@@ -466,7 +476,7 @@ function BoardGridComponent({
   const resolvedGroupClassEntries = groupClassEntries ?? {}
 
   return (
-    <div ref={gridRef} className="slot-adjust-grid" role="grid" aria-label="週次のコマ調整テーブル" data-testid="slot-adjust-grid">
+    <div ref={gridRef} className={`slot-adjust-grid${dragMoveActive ? ' slot-adjust-grid-dragging' : ''}`} role="grid" aria-label="週次のコマ調整テーブル" data-testid="slot-adjust-grid">
       <table>
           <thead>
             {specialPeriodSegments.length > 0 ? (

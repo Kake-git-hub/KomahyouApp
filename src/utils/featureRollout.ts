@@ -27,6 +27,13 @@ export const featureRolloutRegistry = {
     scope: 'all-classrooms',
     description: 'Student schedule: remove absence box, shift makeup left, add 2-col x 5-row option field.',
   },
+  // 生徒名を長押し(約250ms)してから掴み、別の机コマへドラッグ&ドロップで移動できる。ライブ盤面の
+  // 机ベース生徒(通常/振替/講習)のみ。実移動は既存 executeMoveStudent を再利用(入れ替え/各種ブロック踏襲)。
+  // まず開発用教室で検証してから全教室へ昇格する。
+  studentDragAndDropMove: {
+    scope: 'development-only',
+    description: 'Long-press drag-and-drop move of a student name between desks on the live board.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

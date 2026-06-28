@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- feat: ライブ盤面で生徒名を長押し(約250ms)してから別の机コマへドラッグ&ドロップで移動できる機能を追加(PC マウス専用・開発用教室限定で先行有効)。実移動は既存 executeMoveStudent を再利用し入れ替え/メモ/出席済み/重複/同位置などのブロックを踏襲。移動中は画面周囲に色枠を表示、移動先は純CSS :hover で強調(毎フレーム再描画を増やさない設計)。出席済み生徒はドラッグ不可、Esc/盤面外ドロップでキャンセル(src/components/schedule-board/BoardGrid.tsx, ScheduleBoardScreen.tsx, src/App.css, src/utils/featureRollout.ts)
 
 ## v1.5.336 (2026-06-27)
 

@@ -2990,6 +2990,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
+  // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
+  const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
@@ -3008,6 +3010,27 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [selectedCellId, setSelectedCellId] = useState(initialBoardSnapshot.selectedCellId)
   const [selectedDeskIndex, setSelectedDeskIndex] = useState(initialBoardSnapshot.selectedDeskIndex)
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null)
+  // 長押しD&D移動の「掴んでいる」状態(画面周囲の色枠/盤面ハイライトの切替に使う)。開始・終了で
+  // 1回だけ更新し、毎フレーム再描画は起こさない(追従プレビューは CursorFollowPreview に隔離済み)。
+  const [isDragMoveActive, setIsDragMoveActive] = useState(false)
+  // mousedown→長押し判定→ドラッグ中の一時状態。state にすると mousemove で再描画が走るため ref に保持する。
+  const dragMoveRef = useRef<{
+    timer: number | null
+    armed: boolean
+    startX: number
+    startY: number
+    cleanup: (() => void) | null
+  } | null>(null)
+  // 長押しドラッグで移動を確定した直後に発火する click が生徒メニューを開かないよう抑止するフラグ。
+  const suppressNextStudentClickRef = useRef(false)
+  // アンマウント時に進行中ドラッグの window リスナ/タイマーを確実に解放する(リーク防止)。
+  useEffect(() => () => {
+    const state = dragMoveRef.current
+    if (!state) return
+    if (state.timer !== null) window.clearTimeout(state.timer)
+    state.cleanup?.()
+    dragMoveRef.current = null
+  }, [])
   const [selectedMakeupStockKey, setSelectedMakeupStockKey] = useState<string | null>(null)
   const [selectedMakeupStockRawKey, setSelectedMakeupStockRawKey] = useState<string | null>(null)
   // 未消化振替一覧で「選んだ振替元日付」を保持する。配置時に最古(nextOriginDate)へ
@@ -7278,6 +7301,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
+    // 長押しD&Dで移動を確定した直後の click は無視する(掴んだセルでメニューが開くのを防ぐ)。
+    if (suppressNextStudentClickRef.current) {
+      suppressNextStudentClickRef.current = false
+      return
+    }
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
     setTeacherMenu(null)
@@ -7335,6 +7363,132 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     executeMoveStudent(cellId, deskIndex, studentIndex)
+  }
+
+  // 生徒名の長押しD&D移動(ライブ盤面・開発用教室限定)。長押し(約250ms)で「掴む」状態にして
+  // selectedStudentId を立て、mouseup でドロップ先セルへ executeMoveStudent を呼ぶ。実移動ロジックは
+  // 既存メニュー移動と完全に共有する(回帰防止)。毎フレーム処理は持たず(追従は CursorFollowPreview、
+  // 移動先ハイライトは純CSS :hover)、状態更新は開始/終了/確定の数回だけに抑える(性能配慮)。
+  const handleStudentMouseDown = (
+    cellId: string,
+    deskIndex: number,
+    studentIndex: number,
+    hasStudent: boolean,
+    isAttended: boolean,
+    button: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    // 左ボタンのみ・機能ON(開発用教室)・生徒がいるセルだけがドラッグ起点になり得る。
+    if (!studentDragMoveEnabled || button !== 0 || !hasStudent) return
+
+    // 進行中のドラッグがあれば後始末してから始める。
+    if (dragMoveRef.current) {
+      if (dragMoveRef.current.timer !== null) window.clearTimeout(dragMoveRef.current.timer)
+      dragMoveRef.current.cleanup?.()
+      dragMoveRef.current = null
+    }
+
+    // 起点の生徒IDを自分の state から解決する(executeMoveStudent は selectedStudentId を参照する)。
+    const sourceCell = cells.find((cell) => cell.id === cellId)
+    const sourceStudentId = sourceCell?.desks[deskIndex]?.lesson?.studentSlots[studentIndex]?.id ?? null
+    if (!sourceStudentId) return
+
+    const DRAG_LONG_PRESS_MS = 250
+    const PRE_ARM_CANCEL_PX = 8
+
+    function cleanup() {
+      window.removeEventListener('mousemove', handleWindowMouseMove)
+      window.removeEventListener('mouseup', handleWindowMouseUp)
+      window.removeEventListener('keydown', handleWindowKeyDown)
+    }
+
+    function cancel(clearSelection: boolean) {
+      const state = dragMoveRef.current
+      if (!state) return
+      if (state.timer !== null) window.clearTimeout(state.timer)
+      cleanup()
+      dragMoveRef.current = null
+      if (clearSelection) {
+        setSelectedStudentId(null)
+        setIsDragMoveActive(false)
+      }
+    }
+
+    function handleWindowMouseMove(event: MouseEvent) {
+      const state = dragMoveRef.current
+      if (!state || state.armed) return // 掴んだ後の追従は CursorFollowPreview が担当する(ここでは何もしない)。
+      // 長押し成立前に大きく動いたら「ドラッグ操作ではない」とみなして取りやめる(誤発火防止)。
+      if (Math.abs(event.clientX - state.startX) > PRE_ARM_CANCEL_PX || Math.abs(event.clientY - state.startY) > PRE_ARM_CANCEL_PX) {
+        cancel(false)
+      }
+    }
+
+    function handleWindowMouseUp(event: MouseEvent) {
+      const state = dragMoveRef.current
+      if (!state) return
+      const wasArmed = state.armed
+      cancel(false) // タイマー/リスナを解除(選択はここでは消さない)。
+      if (!wasArmed) return // 長押し未成立 = ただのクリック。通常の onClick(メニュー)に委ねる。
+
+      // ドロップ確定後に発火する click は無視させる(掴んだセルでメニューが開くのを防ぐ)。
+      suppressNextStudentClickRef.current = true
+      window.setTimeout(() => { suppressNextStudentClickRef.current = false }, 0)
+
+      const dropTarget = document.elementFromPoint(event.clientX, event.clientY)
+      const dropCell = dropTarget?.closest<HTMLElement>('.sa-student[data-cell-id]') ?? null
+      if (!dropCell) {
+        // 盤面外/対象外にドロップ = キャンセル。
+        setSelectedStudentId(null)
+        setIsDragMoveActive(false)
+        setStatusMessage('移動をキャンセルしました。')
+        return
+      }
+      const targetCellId = dropCell.dataset.cellId ?? ''
+      const targetDeskIndex = Number(dropCell.dataset.deskIndex)
+      const targetStudentIndex = Number(dropCell.dataset.studentIndex)
+      setIsDragMoveActive(false)
+      if (!targetCellId || Number.isNaN(targetDeskIndex) || Number.isNaN(targetStudentIndex)) {
+        setSelectedStudentId(null)
+        return
+      }
+      // 実移動は既存処理を再利用(入れ替え/メモ/出席済み/重複/同位置などのブロックを踏襲)。
+      executeMoveStudent(targetCellId, targetDeskIndex, targetStudentIndex)
+    }
+
+    function handleWindowKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      const wasArmed = dragMoveRef.current?.armed ?? false
+      cancel(true)
+      if (wasArmed) setStatusMessage('移動をキャンセルしました。')
+    }
+
+    const timer = window.setTimeout(() => {
+      const state = dragMoveRef.current
+      if (!state) return
+      state.timer = null
+      if (isAttended) {
+        // 出席済みの生徒は掴めない(出席状態の不用意な移動を防ぐ)。
+        cancel(false)
+        setStatusMessage('出席済みの生徒は移動できません。出席を解除してから操作してください。')
+        return
+      }
+      state.armed = true
+      setSelectedStudentId(sourceStudentId) // これで pointerPreviewLabel/CursorFollowPreview が出る。
+      setIsDragMoveActive(true)
+    }, DRAG_LONG_PRESS_MS)
+
+    window.addEventListener('mousemove', handleWindowMouseMove)
+    window.addEventListener('mouseup', handleWindowMouseUp)
+    window.addEventListener('keydown', handleWindowKeyDown)
+
+    dragMoveRef.current = {
+      timer,
+      armed: false,
+      startX: clientX,
+      startY: clientY,
+      cleanup,
+    }
   }
 
   const handleStartMove = () => {
@@ -8475,6 +8629,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // useStableCallback は identity を固定しつつ常に最新のクロージャを呼ぶため挙動は変わらない。
   const stableHandleSelectDesk = useStableCallback(handleSelectDesk)
   const stableHandleStudentClick = useStableCallback(handleStudentClick)
+  const stableHandleStudentMouseDown = useStableCallback(handleStudentMouseDown)
   const stableHandleDayHeaderClick = useStableCallback(handleDayHeaderClick)
   const stableHandleTemplateSelectDesk = useStableCallback(handleTemplateSelectDesk)
   const stableHandleTemplateStudentClick = useStableCallback(handleTemplateStudentClick)
@@ -8546,6 +8701,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         </div>
       ) : null}
       {pointerPreviewLabel ? <CursorFollowPreview label={pointerPreviewLabel} /> : null}
+      {isDragMoveActive ? <div className="drag-move-screen-frame" aria-hidden="true" data-testid="drag-move-screen-frame" /> : null}
       <main className={`page-main page-main-board-only${isTemplateMode ? ' template-mode-active' : ''}`} onPointerDownCapture={acquireBoardInteraction}>
         <section className="board-panel board-panel-unified">
           {isBoardInteractionLocked && !isTemplateMode ? <div className="interaction-lock-banner" data-testid="board-interaction-lock-banner">{boardInteractionLockMessage}</div> : null}
@@ -8787,6 +8943,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onDayHeaderClick={isTemplateMode ? stableNoopDayHeaderClick : stableHandleDayHeaderClick}
             onTeacherClick={isTemplateMode ? stableHandleTemplateSelectDesk : stableHandleSelectDesk}
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
+            dragMoveActive={isDragMoveActive}
+            onStudentMouseDown={isTemplateMode ? undefined : stableHandleStudentMouseDown}
             onGroupSubjectClick={stableHandleGroupSubjectClick}
             onGroupTeacherClick={stableHandleGroupTeacherClick}
           />

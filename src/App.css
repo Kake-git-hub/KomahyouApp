@@ -2144,6 +2144,39 @@ tr.sa-group-row td {
   box-shadow: inset 0 0 0 1px #0f5fd0;
 }
 
+/* 長押しD&D移動中:カーソル下の生徒セルを純CSS(:hover)で強調する。
+   React 状態を毎フレーム更新せず再描画を増やさないための実装。 */
+.slot-adjust-grid-dragging .sa-student:hover:not(.sa-inactive) {
+  background: #e3f0ff;
+  box-shadow: inset 0 0 0 2px #1a73e8;
+  cursor: grabbing;
+}
+
+.slot-adjust-grid-dragging .sa-student {
+  cursor: grabbing;
+}
+
+/* 長押しD&D移動中:画面周囲に色枠を出して「移動中」を明示する。
+   開始/終了で1回だけ表示切替し、pointer-events:none で elementFromPoint(ドロップ判定)を妨げない。 */
+.drag-move-screen-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  border: 4px solid #1a73e8;
+  box-shadow: inset 0 0 22px rgba(26, 115, 232, 0.45);
+  animation: drag-move-frame-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes drag-move-frame-pulse {
+  0%, 100% { border-color: #1a73e8; box-shadow: inset 0 0 18px rgba(26, 115, 232, 0.35); }
+  50% { border-color: #5b9bff; box-shadow: inset 0 0 28px rgba(26, 115, 232, 0.55); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drag-move-screen-frame { animation: none; }
+}
+
 .sa-student-picked .sa-student-name,
 .sa-student-picked .sa-student-origin-date,
 .sa-student-picked .sa-student-detail,
