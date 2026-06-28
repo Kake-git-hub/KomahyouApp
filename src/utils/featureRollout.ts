@@ -29,9 +29,9 @@ export const featureRolloutRegistry = {
   },
   // 生徒名を長押し(約250ms)してから掴み、別の机コマへドラッグ&ドロップで移動できる。ライブ盤面の
   // 机ベース生徒(通常/振替/講習)のみ。実移動は既存 executeMoveStudent を再利用(入れ替え/各種ブロック踏襲)。
-  // まず開発用教室で検証してから全教室へ昇格する。
+  // 開発用教室で先行後、オーナー指示で全教室へ展開(2026-06-28)。回帰で development-only へ戻さない。
   studentDragAndDropMove: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Long-press drag-and-drop move of a student name between desks on the live board.',
   },
 } as const satisfies Record<string, FeatureRolloutDefinition>

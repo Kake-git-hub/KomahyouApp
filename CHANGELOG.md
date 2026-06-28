@@ -17,6 +17,8 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- feat: 生徒名の長押しD&D移動を全教室へ展開(featureRollout の studentDragAndDropMove を development-only → all-classrooms。オーナー指示 2026-06-28・回帰テスト更新 / src/utils/featureRollout.ts)
+- style: 長押しD&D移動中の画面周囲の青枠を点滅(パルス)させず、移動中ずっと一定で表示し続けるよう変更(src/App.css)
 
 ## v1.5.337 (2026-06-28)
 
