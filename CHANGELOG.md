@@ -20,7 +20,7 @@
 - chore(運用基盤): 保守運営の役割エージェント3体(.claude/agents/ の triage / dev-fix / regression-reviewer)を追加。曖昧な報告の整理→修正→回帰検査を分担。
 - chore(運用基盤): スキルを追加(regression-guard=回帰防止の実務版 / bug-triage=報告のIssue一本化 / staging-environment=検証環境の使い方)。CLAUDE.md に体制の節を追加。
 - chore(運用基盤): GitHub Issue テンプレ(.github/ISSUE_TEMPLATE/ bug_report・feature_request・config)とラベル体系(type/severity/area/status 計15個)を整備。
-- chore(CI): テストゲート .github/workflows/ci-tests.yml を追加。ブランチ push ごとに unit(vitest)・e2e(Playwright local/Firebaseエミュレータ)・build を実行。lint は既存負債が多いため当面 continue-on-error の参考表示。
+- chore(CI): テストゲート .github/workflows/ci-tests.yml を追加。push/PR ごとに必須ゲートとして unit(vitest 402件)＋build を実行(約1分・決定的)。lint は既存負債96件のため continue-on-error の参考表示。Playwright e2e(local/Firebaseエミュレータ)は現状 headless CI で18件不安定・18分かかるため workflow_dispatch の手動実行のみに分離(安定化したら push トリガに昇格)。emulator は firebase-tools 要件に合わせ Java21。
 
 ## v1.5.343 (2026-06-29)
 
