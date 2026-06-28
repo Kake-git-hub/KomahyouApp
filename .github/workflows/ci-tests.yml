@@ -1,0 +1,80 @@
+name: CI Tests
+
+# 回帰防止のテストゲート。ブランチに push した時点で lint / 単体 / e2e / build を回し、
+# main にマージ（= 本番デプロイ）する前に緑かどうかを見えるようにする。
+# 本番デプロイ（deploy-firebase-hosting.yml）とは独立。Firebase 認証情報は使わない
+# （e2e はローカルモード / デモプロジェクトのエミュレータで動くため secret 不要）。
+#
+# 任意: より強く守りたい場合は GitHub の Settings → Branches で main にブランチ保護を掛け、
+# 本ワークフローを必須チェックにすると、緑でないと main にマージできなくなる。
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Lint + Unit + Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # lint は既存コードに未解消の指摘が多数あるため、当面は「参考表示（非ブロッキング）」にする。
+      # 緑/赤ゲートを揺るがさず、徐々に負債を減らす方針。新規コードは指摘を増やさないこと。
+      - name: Lint (non-blocking)
+        run: npm run lint
+        continue-on-error: true
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+      - name: Build
+        run: npm run build
+        env:
+          FIREBASE_DEPLOY: '1'
+
+  e2e:
+    name: E2E (local mode)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Playwright e2e
+        run: npm run test:e2e
+
+  e2e-firebase:
+    name: E2E (Firebase emulator)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Firestore エミュレータの実行に Java が必要。
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      # demo-* プロジェクトは実認証なしでエミュレータが動く。auth/firestore を立てた中で e2e を実行。
+      - name: Playwright e2e on emulator
+        run: npx --yes firebase-tools emulators:exec --only auth,firestore --project demo-komahyou "npm run test:e2e:firebase"
