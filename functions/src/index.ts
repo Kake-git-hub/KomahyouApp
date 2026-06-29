@@ -48,41 +48,6 @@ const GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN = (process.env.GOOGLE_DRIVE_OAUTH_REFRESH
 
 type ClassroomContractStatus = 'active' | 'suspended'
 
-type ClassroomProvisionPayload = {
-  workspaceKey: string
-  classroomName: string
-  managerName: string
-  managerEmail: string
-  managerPassword?: string
-  contractStartDate: string
-  contractEndDate?: string
-  initialPayload: Record<string, unknown>
-}
-
-type ClassroomUpdatePayload = {
-  workspaceKey: string
-  classroomId: string
-  classroomName: string
-  managerName: string
-  managerEmail: string
-  contractStatus: ClassroomContractStatus
-  contractStartDate: string
-  contractEndDate?: string
-}
-
-type ClassroomDeletePayload = {
-  workspaceKey: string
-  classroomId: string
-}
-
-type ClassroomReassignManagerPayload = {
-  workspaceKey: string
-  classroomId: string
-  managerName: string
-  managerEmail: string
-  managerUserId: string
-}
-
 type WorkspaceUserRole = 'developer' | 'manager'
 
 type FirebaseWorkspaceMemberDoc = {

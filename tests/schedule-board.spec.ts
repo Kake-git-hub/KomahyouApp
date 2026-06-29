@@ -172,7 +172,7 @@ async function setHiddenDateInput(page: Parameters<typeof test>[0]['page'], test
   }, value)
 }
 
-async function setNumberInput(page: Parameters<typeof test>[0]['page'], testId: string, value: number) {
+async function _setNumberInput(page: Parameters<typeof test>[0]['page'], testId: string, value: number) {
   await page.getByTestId(testId).evaluate((element, nextValue) => {
     const input = element as HTMLInputElement
     input.value = String(nextValue)
@@ -288,7 +288,7 @@ async function closeStockActionModalIfVisible(page: Parameters<typeof test>[0]['
   })
 }
 
-async function findFirstEmptyStudentCellTestId(page: Parameters<typeof test>[0]['page'], slotId: string) {
+async function _findFirstEmptyStudentCellTestId(page: Parameters<typeof test>[0]['page'], slotId: string) {
   for (let deskIndex = 0; deskIndex < 14; deskIndex += 1) {
     for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
       const nameLocator = page.getByTestId(`student-name-${slotId}-${deskIndex}-${studentIndex}`)
@@ -598,7 +598,7 @@ function resolveOperationalSchoolYear(today = new Date()) {
   return today >= getSchoolYearStart(today.getFullYear()) ? today.getFullYear() : today.getFullYear() - 1
 }
 
-function getStableWeekStart(today = new Date(), requiredFutureDays = 0) {
+function _getStableWeekStart(today = new Date(), requiredFutureDays = 0) {
   const currentWeekStart = getWeekStart(today)
   const currentSchoolYear = resolveOperationalSchoolYear(today)
   const schoolYearEnd = new Date(getSchoolYearStart(currentSchoolYear + 1))
@@ -1272,7 +1272,7 @@ test.describe('コマ調整表', () => {
     const mondayDates = getMonthWeekdayDates(today.getFullYear(), today.getMonth(), 1).filter((dateKey) => dateKey <= toDateKey(today))
     const [firstHoliday, secondHoliday] = mondayDates
     const currentWeekStart = getWeekStart(today)
-    const slotId = `${toDateKey(currentWeekStart)}_1`
+    const _slotId = `${toDateKey(currentWeekStart)}_1`
     const targetDateKey = toDateKey(addDays(currentWeekStart, 1))
     const targetCell = page.getByTestId(`student-cell-${targetDateKey}_1-5-0`)
     const targetName = page.getByTestId(`student-name-${targetDateKey}_1-5-0`)
@@ -2879,7 +2879,7 @@ test.describe('コマ調整表', () => {
     const mondayDates = getMonthWeekdayDates(today.getFullYear(), today.getMonth(), 1).filter((dateKey) => dateKey <= toDateKey(today))
     const [firstHoliday, secondHoliday] = mondayDates
     const currentWeekStart = getWeekStart(today)
-    const currentMondayKey = toDateKey(currentWeekStart)
+    const _currentMondayKey = toDateKey(currentWeekStart)
     const targetDateKey = toDateKey(addDays(currentWeekStart, 1))
     const blockerCell = page.getByTestId(`student-cell-${targetDateKey}_1-6-0`)
     const duplicateTarget = page.getByTestId(`student-cell-${targetDateKey}_1-5-0`)
@@ -3090,7 +3090,7 @@ test.describe('コマ調整表', () => {
 
     if (!targetMonthTuesdays) throw new Error('5回ある火曜の月が見つかりません')
 
-    const weeks = targetMonthTuesdays.slice(1, 5).map((dateKey, index) => [{
+    const weeks = targetMonthTuesdays.slice(1, 5).map((dateKey, _index) => [{
       id: `${dateKey}_5`,
       dateKey,
       dayLabel: '火',

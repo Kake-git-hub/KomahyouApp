@@ -1883,7 +1883,7 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
   // 「日程表=盤面の個人別ビュー」のため、テンプレ未反映の盤面通常授業は保持する。
   it('盤面の通常授業がテンプレに無く同indexで別テンプレ授業と衝突しても保持する', () => {
     const mkLesson = (id: string, students: Array<StudentEntry | null>) => ({ id, note: '管理データ反映', studentSlots: students as [StudentEntry | null, StudentEntry | null] })
-    const mkCell = (cellId: string, desks: any[]) => ({ id: cellId, dateKey: '2026-08-07', dayLabel: '', dateLabel: '', slotLabel: '5限', slotNumber: 5, isOpenDay: true, desks }) as unknown as SlotCell
+    const mkCell = (cellId: string, desks: unknown[]) => ({ id: cellId, dateKey: '2026-08-07', dayLabel: '', dateLabel: '', slotLabel: '5限', slotNumber: 5, isOpenDay: true, desks }) as unknown as SlotCell
     const s001 = createStudentEntry('s001', '生徒一', '数')
     const s002 = createStudentEntry('s002', '生徒二', '英') // テンプレに無い盤面通常授業
     const s003 = createStudentEntry('s003', '生徒三', '国')

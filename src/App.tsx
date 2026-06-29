@@ -103,6 +103,8 @@ function isTransientFirebaseSyncError(error: unknown) {
 function useLatestState<T>(initialValue: T | (() => T)) {
   const [state, setState] = useState<T>(() => (typeof initialValue === 'function' ? (initialValue as () => T)() : initialValue))
   const ref = useRef(state)
+  // 最新 state を ref に同期する定番パターン(コールバックから最新値を読むため)。意図的。
+  // eslint-disable-next-line react-hooks/refs
   ref.current = state
 
   const setLatestState = useCallback((nextValue: SetStateAction<T>) => {

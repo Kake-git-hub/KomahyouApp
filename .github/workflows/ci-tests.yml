@@ -36,11 +36,10 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # lint は既存コードに未解消の指摘が多数あるため、当面は「参考表示（非ブロッキング）」にする。
-      # 緑/赤ゲートを揺るがさず、徐々に負債を減らす方針。新規コードは指摘を増やさないこと。
-      - name: Lint (non-blocking)
+      # lint 負債を解消済み(errors=0・warnings は許容)。以後はブロッキングにして再発を防ぐ。
+      # 新規コードは error を増やさないこと(warning の exhaustive-deps/react-refresh は許容)。
+      - name: Lint
         run: npm run lint
-        continue-on-error: true
       - name: Unit tests (vitest)
         run: npm run test:unit
       - name: Build

@@ -1,3 +1,8 @@
+/* eslint-disable no-useless-escape */
+// このファイルは埋め込み実行スクリプト(クライアントJS)をテンプレートリテラル内の文字列として生成する。
+// 文字列中の正規表現エスケープ(\s, \" 等)は出力コードのために意図的であり、no-useless-escape の
+// 自動修正で外すと埋め込みスクリプトが壊れて実行時に全停止する(memory: komahyou-schedulehtml-embedded-script)。
+// そのためこのルールはファイル単位で無効化する。エスケープは絶対に変更しない。
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'

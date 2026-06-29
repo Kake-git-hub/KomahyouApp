@@ -874,8 +874,11 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const [frozenRowOrders, setFrozenRowOrders] = useState<Partial<Record<RowEditScope, string[]>>>({})
   const [teacherDrafts, setTeacherDrafts] = useState<Record<string, Partial<TeacherRow>>>({})
   const teacherDraftsRef = useRef(teacherDrafts)
+  // 最新値を ref に同期する定番パターン(アンマウント時の cleanup から最新ドラフトを読むため)。意図的。
+  // eslint-disable-next-line react-hooks/refs
   teacherDraftsRef.current = teacherDrafts
   const onUpdateTeachersRef = useRef(onUpdateTeachers)
+  // eslint-disable-next-line react-hooks/refs
   onUpdateTeachersRef.current = onUpdateTeachers
 
   useEffect(() => {
