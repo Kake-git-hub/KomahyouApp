@@ -1,0 +1,56 @@
+name: Staging Seed (test data)
+
+# staging(komahyouapp-staging)の教室に検証用データ(講師40・生徒150・通常授業)を投入する。
+# functions/scripts/staging-seed-data.mjs を変更してコミットすると走る。
+# スクリプト側で projectId が komahyouapp-staging 以外なら中断(本番保護)。
+
+on:
+  push:
+    branches:
+      - feat/staging-environment-setup
+    paths:
+      - functions/scripts/staging-seed-data.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-seed
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    env:
+      STAGING_PROJECT_ID: komahyouapp-staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Guard required secret
+        run: |
+          if [ -z "$SA" ]; then
+            echo "STAGING_FIREBASE_SERVICE_ACCOUNT が未登録です。"
+            exit 1
+          fi
+        env:
+          SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install functions dependencies (firebase-admin)
+        run: npm --prefix functions ci
+
+      - name: Write staging service account credentials
+        run: printf '%s' "$SA" > "$RUNNER_TEMP/staging-sa.json"
+        env:
+          SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Seed test data (staging only)
+        run: node functions/scripts/staging-seed-data.mjs --config functions/scripts/staging-bootstrap.config.json
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
+          STAGING_PROJECT_ID: komahyouapp-staging
