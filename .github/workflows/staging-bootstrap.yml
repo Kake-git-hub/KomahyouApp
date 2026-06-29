@@ -1,0 +1,58 @@
+name: Staging Bootstrap (first classroom)
+
+# staging(komahyouapp-staging)に最初の「管理者ユーザー＋教室」を1回だけ作るための補助ワークフロー。
+# functions/scripts/staging-bootstrap.config.json をコミット(変更)したときだけ走る。
+# 事前に Firebase コンソールで Auth ユーザー(Email/Password)を作り、その UID を config に入れておく。
+# スクリプト側で projectId が komahyouapp-staging 以外なら中断する(本番保護)。
+
+on:
+  push:
+    branches:
+      - feat/staging-environment-setup
+    paths:
+      - functions/scripts/staging-bootstrap.config.json
+      - functions/scripts/staging-bootstrap-first-classroom.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-bootstrap
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    env:
+      STAGING_PROJECT_ID: komahyouapp-staging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - name: Guard required secret
+        run: |
+          if [ -z "$SA" ]; then
+            echo "STAGING_FIREBASE_SERVICE_ACCOUNT が未登録です。"
+            exit 1
+          fi
+        env:
+          SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install functions dependencies (firebase-admin)
+        run: npm --prefix functions ci
+
+      - name: Write staging service account credentials
+        run: printf '%s' "$SA" > "$RUNNER_TEMP/staging-sa.json"
+        env:
+          SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Bootstrap first classroom (staging only)
+        run: node functions/scripts/staging-bootstrap-first-classroom.mjs --config functions/scripts/staging-bootstrap.config.json
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
+          STAGING_PROJECT_ID: komahyouapp-staging
