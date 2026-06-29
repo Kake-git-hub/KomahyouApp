@@ -112,14 +112,15 @@ async function main() {
   const cfg = loadConfig(args.config || 'functions/scripts/staging-bootstrap.config.json')
   const nowIso = new Date().toISOString()
 
-  initializeApp({ credential: applicationDefault(), projectId })
-  const db = getFirestore()
+  const app = initializeApp({ credential: applicationDefault(), projectId })
 
   // SA の実プロジェクトが staging であることも二重チェック（ADC の取り違え防止）。
-  const saProjectId = db.app.options.projectId || projectId
+  const saProjectId = app.options.projectId || projectId
   if (saProjectId !== ALLOWED_PROJECT_ID) {
     throw new Error(`SA のプロジェクトが "${saProjectId}" です。staging 以外への書き込みを中断しました。`)
   }
+
+  const db = getFirestore(app)
 
   const base = db.collection('workspaces').doc(cfg.workspaceKey)
   const membersRef = base.collection('members').doc(cfg.managerUid)
