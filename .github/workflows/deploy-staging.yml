@@ -128,19 +128,25 @@ jobs:
         env:
           STAGING_SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
 
-      # staging は安全なので hosting に加えて firestore/storage ルールと functions も反映し、
-      # 本番そっくりの挙動にする。
-      - name: Deploy to Staging
+      # hosting と functions を別ステップに分ける。functions のデプロイ失敗(gen2 の 409 等)が
+      # hosting の release を巻き込んで止めると「Site Not Found」になるため、hosting を先に
+      # 独立して release・検証し、functions は後段の独立ステップにする。
+      - name: Deploy hosting + rules to Staging
         run: |
           set -o pipefail
-          TARGETS="hosting,firestore,storage"
-          if [ "$DEPLOY_FN" = "true" ]; then
-            TARGETS="$TARGETS,functions"
-          fi
-          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only "$TARGETS" --non-interactive \
-            2>&1 | tee "$RUNNER_TEMP/deploy-staging.log"
+          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only hosting,firestore,storage --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy-hosting.log"
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
 
       - name: Verify staging deployment (asset integrity)
         run: node tools/verify-firebase-hosting.mjs --project "$STAGING_PROJECT_ID" --retries 20 --retryDelayMs 3000
+
+      - name: Deploy functions to Staging
+        if: ${{ env.DEPLOY_FN == 'true' }}
+        run: |
+          set -o pipefail
+          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only functions --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
