@@ -18,7 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
-- fix(コマ表): 生徒を移動して移動元の机が0人(レッスン無し)になっても講師名を保持するようにした。executeMoveStudent で空になった移動元机を manualTeacher 扱いに固定し、commit 後の managed 再マージ(mergeManagedWeek の自動割当講師クリア分岐, ScheduleBoardScreen.tsx 2467行付近)で講師名が消えないようにする。入れ替え(swap)は移動元に相手生徒が入り対象外。回帰防止テスト追加(ScheduleBoardScreen.test.ts)。
+## v1.5.349 (2026-06-29)
+
+- fix(コマ表): 生徒を移動して移動元の机が0人(レッスン無し)になっても講師名を保持するようにした。executeMoveStudent で空になった移動元机を manualTeacher 扱いに固定し、commit 後の managed 再マージ(mergeManagedWeek の自動割当講師クリア分岐, ScheduleBoardScreen.tsx 2467行付近)で講師名が消えないようにする。入れ替え(swap)は移動元に相手生徒が入り対象外。回帰防止テスト追加(ScheduleBoardScreen.test.ts)。staging(隔離開発環境テスト教室)で同日・別机/別日の移動を実機確認し、移動元の講師(斎藤/山崎)が残ることを確認済み。
 
 ## v1.5.348 (2026-06-29)
 
