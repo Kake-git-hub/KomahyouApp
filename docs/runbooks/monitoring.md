@@ -38,6 +38,27 @@
   - **UptimeRobot（無料）** などで `https://komahyouapp-prod.web.app/version.json` を5分間隔監視＋メール/LINE通知。
   - 関数のエラー率は **GCP Cloud Monitoring** のアラート（`cloudfunctions` の error count）で設定可能（コンソール作業）。
 
+## UptimeRobot で5分間隔の外部監視を足す（推奨・オーナー作業 ~10分）
+
+GitHub スケジュールより**速く・確実に**気づけるよう、無料の外部監視を併用する。
+
+1. [uptimerobot.com](https://uptimerobot.com/) で無料アカウント作成（メール登録）。
+2. **「+ New monitor」** を作成：
+   - Monitor Type: **HTTP(s)**
+   - Friendly Name: `KomahyouApp prod`
+   - URL: `https://komahyouapp-prod.web.app/version.json`
+   - Monitoring interval: **5 minutes**（無料枠）
+3. （任意・推奨）**キーワード監視**にするとより確実：
+   - Monitor Type: **Keyword** / Keyword: `version` / URL は同上。
+   - → ページが 200 でも中身が壊れた（version が無い）場合も検知できる。
+4. **アラート連絡先（Alert Contacts）**を設定：
+   - メール（既定）。スマホ通知が欲しければ UptimeRobot アプリ、または
+   - Webhook で LINE Notify 等に飛ばすことも可能（任意）。
+5. 作成後、**わざと検知させるテスト**は不要（本番を止められないため）。代わりに staging URL で1つ作ってテストしてもよい。
+
+> これで「GitHub Actions の外形監視（15分・Issue自動起票）」＋「UptimeRobot（5分・即通知）」の二段構えになる。
+> どちらかが落ちても他方が拾う。
+
 ## 将来の拡張候補（未実装）
 - 保存失敗（saveAttempts の verification-failed 急増）の検知。
 - 主要導線の合成シナリオ監視（ログイン→保存）。Firebase Auth が絡むためトークン運用の設計が必要。
