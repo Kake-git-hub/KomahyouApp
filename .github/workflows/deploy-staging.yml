@@ -161,3 +161,22 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
+
+      # gen2 functions は Cloud Run サービス。本番は invoker:'public'(公開呼び出し・認証は関数内で検証)。
+      # 初回デプロイで公開 invoker が当たらないと callable/HTTP 関数が 403 になり保存やQRが失敗する。
+      # ここで allUsers に run.invoker を明示付与して本番と同じ公開状態にする(staging のみ)。
+      - name: Allow public invoke on function services
+        if: ${{ env.DEPLOY_FN == 'true' }}
+        run: |
+          set -e
+          gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS"
+          gcloud config set project "$STAGING_PROJECT_ID" --quiet
+          svcs=$(gcloud run services list --region=asia-northeast1 --format='value(metadata.name)')
+          for svc in $svcs; do
+            echo "granting allUsers run.invoker to $svc"
+            gcloud run services add-iam-policy-binding "$svc" \
+              --region=asia-northeast1 --member=allUsers --role=roles/run.invoker --quiet \
+              || echo "WARN: $svc への付与に失敗(組織ポリシー等の可能性)"
+          done
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
