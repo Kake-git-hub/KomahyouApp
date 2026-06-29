@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- test(rules): E2E廃止の代替・層2。Firestore セキュリティルールの分離テストを追加(`firebase/rules/firestore.rules.test.ts`・13件・`npm run test:rules` でエミュレータ実行)。教室アクセス分離(担当外教室は読めない)/保存の裏口防止(マネージャーは classroomSnapshots 直書き不可=CF経由のみ)/members 権限保護/billing限定を検証。毎push の `test:unit` には含めず(エミュレータ不要のまま)。`@firebase/rules-unit-testing` 導入。
+
+## v1.5.350 (2026-06-29)
+
 - refactor(test): E2E廃止方針に伴い、生徒移動ロジックを純粋関数 `computeStudentMove` へ挙動不変で抽出(executeMoveStudent は委譲)。盤面移動のE2Eシナリオ(基本移動/講師保持/同日・別日移動/同コマ重複ブロック/同一位置/滞留ステータス除去/入れ替え)をユニット化(+7)。全410テスト＋build 緑。方針と移植マップは docs/test-strategy.md。
 
 ## v1.5.349 (2026-06-29)
