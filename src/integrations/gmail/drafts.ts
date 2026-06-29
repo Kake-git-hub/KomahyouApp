@@ -111,6 +111,8 @@ function encodeMimeMessage(value: string) {
 }
 
 function encodeHeader(value: string) {
+  // ASCII 範囲(制御文字含む)判定で \x00 は意図的。値が非ASCIIなら MIME エンコードする。
+  // eslint-disable-next-line no-control-regex
   if (/^[\x00-\x7F]*$/.test(value)) return value
   return `=?UTF-8?B?${btoa(unescape(encodeURIComponent(value)))}?=`
 }

@@ -7673,8 +7673,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     targetDesk.lesson.studentSlots[studentMenu.studentIndex] = nextStudent
 
-    let nextManualLectureStockCounts = manualLectureStockCounts
-    let nextManualLectureStockOrigins = manualLectureStockOrigins
+    const nextManualLectureStockCounts = manualLectureStockCounts
+    const nextManualLectureStockOrigins = manualLectureStockOrigins
 
     if (addExistingStudentDraft.lessonType === 'special') {
       const session = specialSessions.find((entry) => entry.id === addExistingStudentDraft.specialSessionId)
