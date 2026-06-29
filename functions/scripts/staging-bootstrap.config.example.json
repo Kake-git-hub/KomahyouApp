@@ -1,0 +1,10 @@
+{
+  "workspaceKey": "main",
+  "classroomId": "staging_test_classroom",
+  "classroomName": "staging テスト教室",
+  "managerUid": "<Firebase Auth で作った管理者ユーザーの UID をここに>",
+  "managerName": "テスト管理者",
+  "managerEmail": "<管理者のメールアドレス>",
+  "contractStartDate": "2026-06-29",
+  "contractEndDate": ""
+}

@@ -18,6 +18,21 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.344 (2026-06-29) — 保守運営の体制づくり(アプリ挙動の変更なし・運用基盤のみ)
+
+### Phase 1: 役割・課題管理・テストゲート
+- chore(運用基盤): 役割エージェント3体(.claude/agents/ の triage / dev-fix / regression-reviewer)を追加。曖昧な報告の整理→修正→回帰検査を分担。
+- chore(運用基盤): スキルを追加(regression-guard=回帰防止の実務版 / bug-triage=報告のIssue一本化 / staging-environment=検証環境の使い方)。CLAUDE.md に体制の節を追加。
+- chore(運用基盤): GitHub Issue テンプレ(.github/ISSUE_TEMPLATE/ bug_report・feature_request・config)とラベル体系(type/severity/area/status 計15個)を整備。
+- chore(CI): テストゲート .github/workflows/ci-tests.yml を追加。push/PR ごとに必須ゲートとして unit(vitest 402件)＋build を実行(約1分・決定的)。lint は既存負債96件のため continue-on-error の参考表示。Playwright e2e(local/Firebaseエミュレータ)は headless CI で18件不安定・18分かかるため workflow_dispatch の手動のみに分離(安定化は Issue #35)。emulator は firebase-tools 要件で Java21。
+
+### Phase 2: 専用 staging 環境(komahyouapp-staging)
+- chore(運用基盤): 本番(komahyouapp-prod)と分離した検証用 Firebase プロジェクト komahyouapp-staging を導入。書き込み自由な実機検証環境。.firebaserc に staging エイリアス、オーナー作業手順書 docs/runbooks/staging-setup.md。
+- chore(staging): 手動デプロイ CI .github/workflows/deploy-staging.yml。hosting と functions を別ステップに分離(gen2 の 409 が hosting release を巻き込む「Site Not Found」回避)、hosting の「is the current active version」400 を本番同様 benign 成功扱い、functions に STORAGE_BUCKET 注入(本番バケットへのクロス汚染防止)、Java21、gen2 functions に allUsers→run.invoker 付与(本番同等の公開呼び出し=保存/QR の 403 解消・認証は関数内で検証)。
+- chore(staging): 検証用の教室ブートストラップ/シード(講師40・生徒150・通常授業240)スクリプト+CI(.github/workflows/staging-bootstrap.yml・staging-seed.yml、functions/scripts/、projectId!=staging なら中断の本番保護)。
+- chore(CI): deploy-functions.yml の paths に !functions/scripts/** を追加(staging 専用スクリプトで本番 functions が誤って再デプロイされないように)。
+- docs(運用基盤): safe-release スキル(.claude/skills/safe-release)とリリース前チェックリスト(docs/runbooks/release-checklist.md)を追加。staging 実機検証→本番→ライブ検証→ロールバックの流れを制度化。CLAUDE.md から参照。
+
 ## v1.5.343 (2026-06-29)
 
 - feat(生徒日程表): 講習の登録ダイアログでも、QRと同じように科目ごとの授業時間(90/60/45分)を選択できるようにした。各科目の希望数の隣に授業時間プルダウンを追加(90=既定、60/45のみ保持)。登録すると subjectDurations として保存され、回数表/講習ストックの授業時間表示(60/45サフィックス)に反映。登録済みは「2 (60分)」のように読み取り表示。通常のみONでプルダウンも無効化。既存のQR提出値は未送信時に保全(消さない)。回帰防止: schedule-student-count-save ハンドラが従来 subjectDurations をメッセージから反映せず既存保全のみだった点を修正し、配線文字列の存在テストを追加(src/utils/scheduleHtml.ts・src/App.tsx・scheduleHtml.test.ts)

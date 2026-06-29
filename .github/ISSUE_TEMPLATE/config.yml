@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 緊急（データ消失・全停止）
+    url: https://github.com/Kake-git-hub/KomahyouApp/issues/new?labels=type:bug,severity:s1,status:triage&template=bug_report.yml
+    about: データが消えた・保存できない・全く使えない場合はこちら（最優先で対応します）

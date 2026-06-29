@@ -1,0 +1,37 @@
+name: 要望・改善
+description: 新しい機能や改善のお願い
+title: "[要望] "
+labels: ["type:feature", "status:triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 困っていること・やりたいこと
+      description: どんな場面で・何に困っているか
+      placeholder: 例）講習の集計を毎回手で数えていて時間がかかる
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: こうなったら嬉しい（案）
+      description: 解決イメージがあれば。無くてもOK
+    validations:
+      required: false
+  - type: input
+    id: classroom
+    attributes:
+      label: 教室 / 対象
+      placeholder: 例）全教室 / 日大前校だけ
+    validations:
+      required: false
+  - type: dropdown
+    id: importance
+    attributes:
+      label: 重要度（主観でOK）
+      options:
+        - "高: これが無いと運用が回らない"
+        - "中: あると助かる"
+        - "低: いつかでいい"
+    validations:
+      required: false

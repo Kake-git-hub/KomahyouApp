@@ -1,0 +1,69 @@
+name: バグ報告
+description: 不具合を報告する（動かない・表示がおかしい・データが消えた等）
+title: "[バグ] "
+labels: ["type:bug", "status:triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        できる範囲で構いません。分からない欄は空でも大丈夫です。
+        **データが消えた・他教室のデータが出る**などは緊急です。最優先で見ます。
+  - type: input
+    id: classroom
+    attributes:
+      label: 教室
+      description: どの教室で起きましたか（教室名が分かれば）
+      placeholder: 例）スクールIE 日大前校
+    validations:
+      required: false
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 何が起きたか（実際の挙動）
+      description: 起きたことをそのまま書いてください
+      placeholder: 例）手動保存ボタンを押して再読込したら、入れた生徒が消えていた
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待していた挙動
+      placeholder: 例）保存した内容がそのまま残っているはず
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 分かる範囲で番号付きで。分からなければ空でOK
+      placeholder: |
+        1. 〇〇画面を開く
+        2. △△を操作する
+        3. □□が起きる
+    validations:
+      required: false
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 深刻度（主観でOK）
+      options:
+        - "s1: データが消えた/保存できない/全く使えない"
+        - "s2: 一部の機能や操作が壊れている"
+        - "s3: 軽微・見た目・改善要望に近い"
+        - "わからない"
+    validations:
+      required: false
+  - type: input
+    id: when
+    attributes:
+      label: 発生日時・端末
+      placeholder: 例）6/29 20時頃 / iPhone Safari
+    validations:
+      required: false
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: スクリーンショット・補足
+      description: 画像はこの欄にドラッグ&ドロップで添付できます
+    validations:
+      required: false

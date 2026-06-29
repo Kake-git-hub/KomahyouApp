@@ -22,6 +22,8 @@ on:
       - main
     paths:
       - 'functions/**'
+      # staging 専用スクリプト(本番 functions には含まれない)は本番 functions デプロイを発火させない。
+      - '!functions/scripts/**'
       - '.github/workflows/deploy-functions.yml'
 
 permissions:
