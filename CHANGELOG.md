@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- refactor(test): E2E廃止の前提整備(層1残り)。盤面の警告評価を純粋関数へ挙動不変で抽出しユニット化(+15)。科目対応外(`canTeacherHandleStudentSubject` を export・35) / 一コマ空け等の授業パターン(`resolveLessonPatternWarnings`・36,37) / 講習絶対制約(`isLectureOutsideSessionPeriod`・55, `isStudentUnavailableAtSlot`・56)。これでE2Eが唯一カバーしていた警告表示もユニットで担保。全425テスト＋build 緑。
+
+## v1.5.351 (2026-06-29)
+
 - test(rules): E2E廃止の代替・層2。Firestore セキュリティルールの分離テストを追加(`firebase/rules/firestore.rules.test.ts`・13件・`npm run test:rules` でエミュレータ実行)。教室アクセス分離(担当外教室は読めない)/保存の裏口防止(マネージャーは classroomSnapshots 直書き不可=CF経由のみ)/members 権限保護/billing限定を検証。毎push の `test:unit` には含めず(エミュレータ不要のまま)。`@firebase/rules-unit-testing` 導入。
 
 ## v1.5.350 (2026-06-29)

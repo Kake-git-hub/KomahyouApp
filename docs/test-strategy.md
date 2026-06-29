@@ -42,7 +42,7 @@
 - [移] 41 / 42 出席にすると薄字、画面遷移後も維持（status の永続）
 
 ### B. 既にユニットで担保済み → E2E削除でOK（重複）
-- [済] 警告: 35 科目対応外赤 / 36,37 一コマ空け / 55,56 講習の絶対制約 → `shouldWarnForbiddenPeriod` `shouldWarnRegularTeachersOnly` ほか（要：科目対応外・一コマ空けの個別関数の有無を最終確認）
+- [済] 警告: 35 科目対応外赤 / 36,37 一コマ空け / 55,56 講習の絶対制約 → **インライン判定を純粋関数へ抽出してユニット化済み**（`canTeacherHandleStudentSubject`=35 / `resolveLessonPatternWarnings`=36,37 / `isLectureOutsideSessionPeriod`=55 / `isStudentUnavailableAtSlot`=56）＋ 既存 `shouldWarnForbiddenPeriod` `shouldWarnRegularTeachersOnly`
 - [済] 振替/講習ストック: 21,32,39,43〜62,72 → `makeupStock.test.ts`(1244行) / `lectureStockSnapshot` / `resolveSelectedMakeupOrigin` / `buildMakeupAutoAssignPendingItems`
 - [済] 日程導出: 48〜52,67〜69,73 → `buildScheduleCellsForRange マージ` / `buildStudentOccurrencesByDateIndex`
 - [済] 基本データ CRUD: `basic-data-management.spec.ts` 全 → `basicDataModel` / `BasicDataScreen` / `basicDataImportValidation`
@@ -78,5 +78,5 @@
   - 検証内容: 教室アクセス分離(担当外教室は読めない=クロス汚染の入口を塞ぐ) / 保存の裏口防止(マネージャーは classroomSnapshots を直書きできない=CF経由のみ) / members 権限台帳の保護(他人の member doc 不可・権限昇格不可) / billing は billing開発者のみ。
   - 通常 `test:unit`(src/functions のみ)には含めない＝**毎push CI はエミュレータ不要のまま**。リリース前 or 手動で `test:rules`。
   - 範囲外(2a): 保存→復元の往復・QR提出のフル統合は未自動化。保存/復元の純粋ロジックは既存ユニット、実往復は staging DOM 確認で担保。
-- [ ] B/C 最終確認
-- [ ] E2E 削除＋ドキュメント更新
+- [x] B/C 最終確認 **（完了）**: B群は既存ユニットで担保、唯一の隙間だった「盤面の警告評価(35/36/37/55/56)」も純粋関数へ抽出してユニット化(+15)。C群は破棄でOK。**全E2E挙動の移植が完了**。
+- [ ] E2E 削除＋ドキュメント更新 **（次の最終ステップ）**: `tests/`・`playwright.config.ts`・`playwright.firebase.config.ts`・`@playwright/test`・`test:e2e*` スクリプト・`ci-tests.yml` の e2e ジョブ2つを削除。`CLAUDE.md`/`safe-release`スキル/`release-checklist.md` の「e2e を回す」記述を新方針へ差し替え。
