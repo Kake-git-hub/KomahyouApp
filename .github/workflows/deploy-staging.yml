@@ -133,9 +133,20 @@ jobs:
       # 独立して release・検証し、functions は後段の独立ステップにする。
       - name: Deploy hosting + rules to Staging
         run: |
-          set -o pipefail
+          set +e
           npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only hosting,firestore,storage --non-interactive \
             2>&1 | tee "$RUNNER_TEMP/deploy-hosting.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # 配信内容が現行ライブと同一だと firebase は 400 "is the current active version" を返す。
+            # これは「既に同じ内容が公開済み」= 実質成功なので成功として続行する(本番 workflow と同じ扱い)。
+            if grep -q "is the current active version" "$RUNNER_TEMP/deploy-hosting.log"; then
+              echo "現行ライブと同一内容のため新規リリースはスキップされました(既に staging 反映済み)。成功として続行します。"
+            else
+              echo "staging hosting デプロイに失敗しました。"
+              exit "$code"
+            fi
+          fi
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json
 
