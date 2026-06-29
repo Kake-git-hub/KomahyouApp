@@ -20,6 +20,12 @@ on:
         description: 'Cloud Functions も staging にデプロイする'
         type: boolean
         default: true
+  # 【一時的】staging ブランチへの push で自動デプロイ。workflow_dispatch は main に無いと
+  # 起動できない GitHub 仕様の回避のため、main を汚さず staging を検証する目的で付けている。
+  # main へ統合する前に、この push トリガは外して workflow_dispatch のみに戻すこと。
+  push:
+    branches:
+      - feat/staging-environment-setup
 
 permissions:
   contents: read
@@ -34,6 +40,9 @@ env:
 jobs:
   deploy-staging:
     runs-on: ubuntu-latest
+    env:
+      # workflow_dispatch のときは入力値、push 起動のときは常に functions も含める。
+      DEPLOY_FN: ${{ github.event_name != 'workflow_dispatch' || inputs.deploy_functions }}
 
     steps:
       - name: Checkout
@@ -99,13 +108,13 @@ jobs:
           FIREBASE_DEPLOY: '1'
 
       - name: Build functions
-        if: ${{ inputs.deploy_functions }}
+        if: ${{ env.DEPLOY_FN == 'true' }}
         run: npm --prefix functions ci && npm --prefix functions run build
 
       # functions を staging バケットに向ける。firebase-tools は functions/.env.<projectId> を
       # 自動で読み込むので、ここに STORAGE_BUCKET を書いておけば runtime env に焼き込まれる。
       - name: Write functions env for staging
-        if: ${{ inputs.deploy_functions }}
+        if: ${{ env.DEPLOY_FN == 'true' }}
         run: |
           BUCKET="${STAGING_STORAGE_BUCKET:-${STAGING_PROJECT_ID}.firebasestorage.app}"
           printf 'STORAGE_BUCKET=%s\n' "$BUCKET" > "functions/.env.${STAGING_PROJECT_ID}"
@@ -125,7 +134,7 @@ jobs:
         run: |
           set -o pipefail
           TARGETS="hosting,firestore,storage"
-          if [ "${{ inputs.deploy_functions }}" = "true" ]; then
+          if [ "$DEPLOY_FN" = "true" ]; then
             TARGETS="$TARGETS,functions"
           fi
           npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only "$TARGETS" --non-interactive \
