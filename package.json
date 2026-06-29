@@ -18,6 +18,7 @@
     "deploy:firebase:with-functions": "node tools/deploy-firebase.mjs --with-functions",
     "emulators:firebase": "npm run build && npx firebase-tools emulators:start --only auth,firestore,hosting",
     "test:unit": "vitest run",
+    "test:rules": "npx --yes firebase-tools emulators:exec --only firestore --project demo-komahyou-rules \"vitest run --config vitest.rules.config.ts\"",
     "test:e2e": "playwright test",
     "test:e2e:firebase": "playwright test --config playwright.firebase.config.ts"
   },
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@playwright/test": "^1.58.2",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",

@@ -73,6 +73,10 @@
   - [x] `executeMoveStudent` の移動ロジックを純粋関数 `computeStudentMove` へ挙動不変で抽出（executeMoveStudent は委譲）。staging で同日移動(講師保持)・入れ替えを実機スモーク確認。
   - [x] A群移植（`computeStudentMove`の7テスト）: 基本移動 / 講師保持(manual固定) / 同日移動は通常のまま移動済みを残さない / 別日移動は移動済み＋移動先日付を残す / 同コマ重複ブロック(70,71) / 同一位置取りやめ / 滞留ステータス除去(34) / 入れ替え(swap)
   - [x] 残A群は**既存ユニットで担保済み**（新規不要）: 増コマ同日→通常にならない(27)=`prepareStudentForMove`「keeps extra lessons as extra」 / 振替を元日へ戻すと通常(28,51)=`normalizeLessonPlacement`「same-day return as regular」 / undo/redo(17)=`appendHistoryEntry`スタックテスト / 出席の永続(41,42)=`packSortCellDesks` と managed merge が `attended`/`statusSlots` を保持するテスト
-- [ ] 層2: エミュレータ統合テスト
+- [x] 層2: Firestore セキュリティルールの分離テスト **（完了・2b スコープ）**
+  - `firebase/rules/firestore.rules.test.ts`(13件)を `@firebase/rules-unit-testing` ＋ Firestore エミュレータで実行。コマンド `npm run test:rules`(firestore エミュレータ起動下)。
+  - 検証内容: 教室アクセス分離(担当外教室は読めない=クロス汚染の入口を塞ぐ) / 保存の裏口防止(マネージャーは classroomSnapshots を直書きできない=CF経由のみ) / members 権限台帳の保護(他人の member doc 不可・権限昇格不可) / billing は billing開発者のみ。
+  - 通常 `test:unit`(src/functions のみ)には含めない＝**毎push CI はエミュレータ不要のまま**。リリース前 or 手動で `test:rules`。
+  - 範囲外(2a): 保存→復元の往復・QR提出のフル統合は未自動化。保存/復元の純粋ロジックは既存ユニット、実往復は staging DOM 確認で担保。
 - [ ] B/C 最終確認
 - [ ] E2E 削除＋ドキュメント更新
