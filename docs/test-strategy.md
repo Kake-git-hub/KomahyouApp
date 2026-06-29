@@ -79,4 +79,12 @@
   - 通常 `test:unit`(src/functions のみ)には含めない＝**毎push CI はエミュレータ不要のまま**。リリース前 or 手動で `test:rules`。
   - 範囲外(2a): 保存→復元の往復・QR提出のフル統合は未自動化。保存/復元の純粋ロジックは既存ユニット、実往復は staging DOM 確認で担保。
 - [x] B/C 最終確認 **（完了）**: B群は既存ユニットで担保、唯一の隙間だった「盤面の警告評価(35/36/37/55/56)」も純粋関数へ抽出してユニット化(+15)。C群は破棄でOK。**全E2E挙動の移植が完了**。
-- [ ] E2E 削除＋ドキュメント更新 **（次の最終ステップ）**: `tests/`・`playwright.config.ts`・`playwright.firebase.config.ts`・`@playwright/test`・`test:e2e*` スクリプト・`ci-tests.yml` の e2e ジョブ2つを削除。`CLAUDE.md`/`safe-release`スキル/`release-checklist.md` の「e2e を回す」記述を新方針へ差し替え。
+- [x] E2E 削除＋ドキュメント更新 **（完了）**: `tests/`・`playwright.config.ts`・`playwright.firebase.config.ts`・`playwright.live-save-debug.config.ts`・`@playwright/test`・`test:e2e*` スクリプトを削除。`ci-tests.yml` は e2e ジョブ2つを削除し、代わりに手動の `rules` ジョブを追加。`CLAUDE.md`/`.claude/agents/dev-fix.md`/`safe-release`スキル/`release-checklist.md`/`.vscode/tasks.json` を新方針へ差し替え。
+
+## 完了サマリ（2026-06-29）
+
+Playwright E2E（9 spec・約148ケース）を廃止し、全挙動をユニット（純粋関数）へ移植完了。
+- **層1**: 移動ロジック `computeStudentMove` 抽出＋盤面移動/警告評価をユニット化（+22）。
+- **層2**: Firestore ルールの教室分離テスト 13件（`npm run test:rules`・エミュレータ）。
+- 現状の自動テスト: ユニット **425件**（毎push・約1分）＋ ルール13件（手動）。E2E 由来の重複・flaky・陳腐化を解消。
+- 実環境の通し動作は staging 実機確認（Claude の DOM 駆動チェック）で担保。

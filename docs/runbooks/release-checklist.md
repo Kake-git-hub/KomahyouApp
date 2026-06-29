@@ -11,10 +11,10 @@
 ## 2. 自動テスト（緑であること）
 - [ ] `npm run lint`
 - [ ] `npm run test:unit`
-- [ ] `npm run test:e2e`
-- [ ] `npm run test:e2e:firebase`（保存系を触ったとき）
+- [ ] `npm run test:rules`（保存/権限/教室分離を触ったとき・要 Java + エミュレータ）
 - [ ] `npm run build`
 - [ ] バグ修正なら回帰防止テストを追加（修正なしで落ち・ありで通る）
+- ※Playwright E2E は廃止（2026-06-29）。UI操作の回帰はユニット、実環境の通し動作は staging 実機確認で担保（`docs/test-strategy.md`）。
 
 ## 3. staging 実機確認（`komahyouapp-staging.web.app`）
 - [ ] 「Deploy to Staging」ワークフローが緑

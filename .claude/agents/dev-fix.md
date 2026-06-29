@@ -23,7 +23,7 @@ model: opus
    近くの「回帰防止」「fix」コメントは意図的ガード。消さない・薄めない。
 3. **最小限の修正**: 「単純化」で `{ ...a, ...b }` にしてフィールド補完を消さない。挙動が変わる。
 4. **回帰防止テストを追加**: 修正なしで落ち・修正ありで通ることを確認。ゴールデンスナップショット頼みにしない。
-5. **検証**: `npm run lint` / `npm run test:unit` / 関係すれば `npm run test:e2e(:firebase)` / `npm run build`。
+5. **検証**: `npm run lint` / `npm run test:unit` / `npm run build`（保存/権限/教室分離を触れば `npm run test:rules`）。※E2E は廃止しユニットへ移植済み（`docs/test-strategy.md`）。
 6. **記録**: `CHANGELOG.md` の `## 未リリース` に「何を・なぜ」を1行。`package.json` は手動で触らない。
 7. **diff 通読**: 意図しない変更が無いか。
 

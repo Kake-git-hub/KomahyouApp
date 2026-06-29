@@ -2,12 +2,14 @@ name: CI Tests
 
 # 回帰防止のテストゲート。
 #
-# 【必須ゲート】push / PR ごとに `unit`(lint 非ブロッキング + 単体 + build) を回す。
-#   約1分・決定的（402 件の単体テスト）。これが緑かどうかで main マージ可否を判断する。
-# 【e2e は手動のみ】Playwright の e2e(local / Firebase エミュレータ)は workflow_dispatch のときだけ走る。
-#   理由: 現状 e2e フルスイートは headless CI で 18 件が環境差(ポップアップ/休日/振替の타이밍)で
-#   不安定 + 18 分かかり、毎 push の必須ゲートには不向き。安定化できたら push トリガに昇格する。
-#   それまでは safe-release のリリース前チェックでローカル `npm run test:e2e` を回して担保する。
+# 【必須ゲート】push / PR ごとに `unit`(lint + 単体 + build) を回す。約1分・決定的。
+#   これが緑かどうかで main マージ可否を判断する。
+# 【Playwright E2E は廃止】2026-06-29 に E2E を廃止し、全シナリオをユニット(純粋関数)へ移植した。
+#   方針と移植マップは docs/test-strategy.md。UI操作の回帰はユニットが、実環境の通し動作は
+#   staging の手動確認が担保する。
+# 【ルール分離テストは手動】Firestore セキュリティルールの分離検証(`npm run test:rules`)は
+#   エミュレータ(+Java)が要るため workflow_dispatch のときだけ走る。安定・約数秒なので
+#   リリース前 or 必要時に手動で回す(安定化後は push トリガへ昇格してよい)。
 # 本番デプロイ（deploy-firebase-hosting.yml）とは独立。Firebase 認証情報は使わない。
 #
 # 任意: GitHub Settings → Branches で main を保護し `unit` を必須チェックにすると、
@@ -47,9 +49,9 @@ jobs:
         env:
           FIREBASE_DEPLOY: '1'
 
-  e2e:
-    name: E2E (local mode)
-    # 手動実行(workflow_dispatch)時のみ。push/PR では走らせない（18分・要安定化のため）。
+  rules:
+    name: Firestore rules isolation
+    # 手動実行(workflow_dispatch)時のみ。エミュレータ(+Java)が要るため push/PR の必須ゲートには含めない。
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -58,32 +60,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-      - name: Playwright e2e
-        run: npm run test:e2e
-
-  e2e-firebase:
-    name: E2E (Firebase emulator)
-    # 手動実行(workflow_dispatch)時のみ。
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      # Firestore エミュレータの実行に Java が必要。
-      # firebase-tools のエミュレータは Java 21+ を要求する。
+      # Firestore エミュレータの実行に Java 21+ が必要。
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - run: npm ci
-      - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
-      # demo-* プロジェクトは実認証なしでエミュレータが動く。auth/firestore を立てた中で e2e を実行。
-      - name: Playwright e2e on emulator
-        run: npx --yes firebase-tools emulators:exec --only auth,firestore --project demo-komahyou "npm run test:e2e:firebase"
+      - name: Firestore rules tests (emulator)
+        run: npm run test:rules
