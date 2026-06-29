@@ -145,6 +145,10 @@ async function main() {
   }
   const snapshotDoc = createInitialSnapshot(nowIso, cfg.managerUid)
 
+  // 親 workspace ドキュメント本体(workspaces/main)が無いとアプリが
+  // 「対象 workspace が Firestore に見つかりません」で止まる。プロビジョニングと同じ形で作る。
+  await base.set({ name: cfg.workspaceKey, schemaVersion: 1, updatedAt: nowIso }, { merge: true })
+
   // 既存スナップショットを誤って初期化しないよう、既にあれば snapshot はスキップ。
   const existingSnapshot = await snapshotRef.get()
   await membersRef.set(membersDoc, { merge: true })
@@ -156,6 +160,7 @@ async function main() {
   }
 
   console.log('staging ブートストラップ完了:')
+  console.log(`  workspace:         workspaces/${cfg.workspaceKey}`)
   console.log(`  members:           workspaces/${cfg.workspaceKey}/members/${cfg.managerUid}`)
   console.log(`  classrooms:        workspaces/${cfg.workspaceKey}/classrooms/${cfg.classroomId}`)
   console.log(`  classroomSnapshots:workspaces/${cfg.workspaceKey}/classroomSnapshots/${cfg.classroomId}`)
