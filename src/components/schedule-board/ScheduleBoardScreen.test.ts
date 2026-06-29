@@ -4,7 +4,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly } from './ScheduleBoardScreen'
+import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -4071,5 +4071,142 @@ describe('buildMakeupAutoAssignPendingItems (未消化振替の自動割振 pend
     expect(items[0]?.makeupSourceDate).toBe('2026-05-01')
     // 2件目は remainingOriginDates[1] が無いので nextOriginDate へフォールバック。
     expect(items[1]?.makeupSourceDate).toBe('2026-05-01')
+  })
+})
+
+// E2E(schedule-board.spec.ts)の盤面移動シナリオをユニットへ移植。
+// move 本体は computeStudentMove に挙動不変で抽出済み(executeMoveStudent は委譲)。
+describe('computeStudentMove (盤面移動の純粋ロジック・E2Eからの移植)', () => {
+  type Slots = [StudentEntry | null, StudentEntry | null]
+  const mkStudent = (id: string, name: string, extra: Partial<StudentEntry> = {}): StudentEntry => ({
+    id, name, managedStudentId: id, grade: '中3', subject: '数', lessonType: 'regular', teacherType: 'normal', ...extra,
+  })
+  const mkLesson = (id: string, slots: Slots) => ({ id, studentSlots: slots })
+  const mkCell = (id: string, dateKey: string, slotNumber: number, desks: unknown[]) =>
+    ({ id, dateKey, dayLabel: '', dateLabel: dateKey, slotLabel: `${slotNumber}限`, slotNumber, timeLabel: '', isOpenDay: true, desks }) as unknown as SlotCell
+  const baseParams = (weeks: SlotCell[][]) => ({
+    weeks, weekIndex: 0, cells: weeks[0],
+    suppressedRegularLessonOccurrences: [] as string[],
+    managedStudentByAnyName: new Map(),
+    resolveBoardStudentDisplayName: (n: string) => n,
+  })
+  const deskById = (weeks: SlotCell[][], cellId: string, deskId: string) =>
+    weeks.flat().find((c) => c.id === cellId)!.desks.find((d) => d.id === deskId)!
+
+  it('生徒を空き机へ移動でき、移動元の机が0人でも講師名を保持する(manual固定)', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('managed_a', [mkStudent('s1', '一郎'), null]) },
+        { id: 'd1', teacher: '', manualTeacher: false, lesson: undefined },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
+    const d1 = deskById(r.nextWeeks, 'C1', 'd1')
+    expect(d0.lesson).toBeUndefined()
+    expect(d0.teacher).toBe('田中')
+    expect(d0.manualTeacher).toBe(true) // v1.5.349: 0人でも講師保持
+    expect(d1.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
+    // 入力は破壊しない(クローンする)
+    expect(weeks[0][0].desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
+  })
+
+  it('通常授業を同日移動すると通常のまま、移動元に「移動済み(移)」ヒントを残さない', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('managed_a', [mkStudent('s1', '一郎'), null]) },
+        { id: 'd1', teacher: '', manualTeacher: false, lesson: undefined },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
+    const d1 = deskById(r.nextWeeks, 'C1', 'd1')
+    expect(d1.lesson?.studentSlots[0]?.lessonType).toBe('regular')
+    expect(d0.statusSlots?.[0] ?? null).toBeNull() // 同日なので移動済みステータスは付かない
+  })
+
+  it('別日へ移動すると移動元に「移動済み(移)」と移動先日付を残す', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('managed_a', [mkStudent('s1', '一郎'), null]) },
+      ]),
+      mkCell('C2', '2026-03-24', 1, [
+        { id: 'e0', teacher: '', manualTeacher: false, lesson: undefined },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C2', deskIndex: 0, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
+    const e0 = deskById(r.nextWeeks, 'C2', 'e0')
+    expect(d0.teacher).toBe('田中') // 別日でも講師保持
+    expect(d0.statusSlots?.[0]?.status).toBe('moved')
+    expect(d0.statusSlots?.[0]?.moveDestinationDateKey).toBe('2026-03-24')
+    expect(e0.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
+  })
+
+  it('同コマに同一生徒が既にいる移動先はブロックして状態を維持する', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('a', '太郎', { managedStudentId: 'mX' }), null]) },
+      ]),
+      mkCell('C2', '2026-03-24', 1, [
+        { id: 'e0', teacher: '佐藤', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('b', '太郎', { managedStudentId: 'mX' }), null]) },
+        { id: 'e1', teacher: '', manualTeacher: false, lesson: undefined },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 'a', cellId: 'C2', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('blocked')
+    if (r.status !== 'blocked') return
+    expect(r.message).toContain('移動不可')
+    expect(r.message).toContain('太郎')
+  })
+
+  it('同じ位置をクリックした移動は取りやめる', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]) },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 0, studentIndex: 0 })
+    expect(r.status).toBe('cancelled')
+    if (r.status !== 'cancelled') return
+    expect(r.message).toContain('同じ位置')
+  })
+
+  it('移動先スロットに残った滞留ステータスを消し、前の移動日付を引き継がない', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]) },
+        { id: 'd1', teacher: '', manualTeacher: false, lesson: undefined, statusSlots: [{ name: '前の子', status: 'moved', moveDestinationDateKey: '2026-04-01' }, null] },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d1 = deskById(r.nextWeeks, 'C1', 'd1')
+    expect(d1.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
+    expect(d1.statusSlots?.[0] ?? null).toBeNull() // 滞留ステータスは消える
+  })
+
+  it('生徒のいる机へ移動すると入れ替えになり、相手生徒が移動元へ入る', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]) },
+        { id: 'd1', teacher: '佐藤', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('s2', '二郎'), null]) },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    expect(r.message).toContain('入れ替えました')
+    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
+    const d1 = deskById(r.nextWeeks, 'C1', 'd1')
+    expect(d1.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
+    expect(d0.lesson?.studentSlots[0]?.managedStudentId).toBe('s2')
   })
 })

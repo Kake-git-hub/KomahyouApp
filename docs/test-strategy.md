@@ -69,7 +69,10 @@
 ## 現在地
 
 - [x] 方針確定・移植マップ作成（本ファイル）
-- [ ] 層1: 盤面操作 reducer 抽出＋A群移植
+- [~] 層1: 盤面操作 reducer 抽出＋A群移植 **（進行中）**
+  - [x] `executeMoveStudent` の移動ロジックを純粋関数 `computeStudentMove` へ挙動不変で抽出（executeMoveStudent は委譲）。全410テスト＋build 緑。
+  - [x] A群移植（`computeStudentMove`の7テスト）: 基本移動 / 講師保持(manual固定) / 同日移動は通常のまま移動済みを残さない / 別日移動は移動済み＋移動先日付を残す / 同コマ重複ブロック(70,71) / 同一位置取りやめ / 滞留ステータス除去(34) / 入れ替え(swap)
+  - [ ] 残A群: undo/redo(17)・出席の永続(41,42)・増コマ同日移動(27)・振替を元日へ戻すと通常(28,51)。undo/redoとstatus永続は component 寄りなので `commitWeeks`/履歴の薄い抽出 or App.test 側で検討。
 - [ ] 層2: エミュレータ統合テスト
 - [ ] B/C 最終確認
 - [ ] E2E 削除＋ドキュメント更新
