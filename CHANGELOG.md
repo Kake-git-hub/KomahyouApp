@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- docs: 修正・新機能後の人間による実機確認テスト手順書を追加(docs/runbooks/manual-test-procedure.md・release-checklist から参照)
 
 - chore(test): Playwright E2E を廃止(全挙動をユニットへ移植完了)。`tests/`・playwright 各 config・`@playwright/test`・`test:e2e*` スクリプトを削除。`ci-tests.yml` は e2e ジョブ2つを削除し手動 `rules` ジョブを追加。CLAUDE.md/dev-fix/safe-release/release-checklist/.vscode を新方針へ更新。lint の未使用 import(rules テストの expect)も修正。自動テストは ユニット425件(毎push)＋ルール13件(手動)。方針は docs/test-strategy.md。
 - refactor(test): E2E廃止の前提整備(層1残り)。盤面の警告評価を純粋関数へ挙動不変で抽出しユニット化(+15)。科目対応外(`canTeacherHandleStudentSubject` を export・35) / 一コマ空け等の授業パターン(`resolveLessonPatternWarnings`・36,37) / 講習絶対制約(`isLectureOutsideSessionPeriod`・55, `isStudentUnavailableAtSlot`・56)。これでE2Eが唯一カバーしていた警告表示もユニットで担保。全425テスト＋build 緑。

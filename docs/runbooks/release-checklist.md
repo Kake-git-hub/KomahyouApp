@@ -17,6 +17,7 @@
 - ※Playwright E2E は廃止（2026-06-29）。UI操作の回帰はユニット、実環境の通し動作は staging 実機確認で担保（`docs/test-strategy.md`）。
 
 ## 3. staging 実機確認（`komahyouapp-staging.web.app`）
+> 詳細な実機テスト手順書 → [`manual-test-procedure.md`](./manual-test-procedure.md)（共通スモーク＋変更箇所別チェック）。
 - [ ] 「Deploy to Staging」ワークフローが緑
 - [ ] ハードリロード（Ctrl+Shift+R）して開いた
 - [ ] **変更箇所**が期待どおり動く
