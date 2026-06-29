@@ -304,7 +304,7 @@ function resolveGradeCeiling(grade: GradeLabel): GradeCeiling {
   return grade as GradeCeiling
 }
 
-function canTeacherHandleStudentSubject(teacher: TeacherRow, subject: SubjectLabel, grade: GradeLabel) {
+export function canTeacherHandleStudentSubject(teacher: TeacherRow, subject: SubjectLabel, grade: GradeLabel) {
   const studentGradeCeiling = resolveGradeCeiling(grade)
   return teacher.subjectCapabilities.some((capability) => (
     (
@@ -331,8 +331,49 @@ function isAutoAssignRuleApplicable(rule: AutoAssignRuleRow | undefined, student
 
 // 性能最適化(挙動不変): isApplicable は isAutoAssignRuleApplicable と同値のメモ化版を注入するための引数。
 // 既定値は従来の直接呼び出しで、判定結果は注入有無で変わらない。
-function isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
+export function isSubjectCapabilityConstraintApplicable(autoAssignRuleByKey: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
   return isApplicable(autoAssignRuleByKey.get('subjectCapableTeachersOnly'), studentId, studentGrade)
+}
+
+// 講習(special)が講習期間外のコマに置かれているか(絶対制約「講習期間内割振」の違反判定)。
+export function isLectureOutsideSessionPeriod(dateKey: string, session: { startDate: string; endDate: string } | null | undefined): boolean {
+  if (!session) return false
+  return dateKey < session.startDate || dateKey > session.endDate
+}
+
+// 生徒の出席不可コマに授業が置かれているか(絶対制約「出席可能コマのみ」の違反判定)。slotKey = `${dateKey}_${slotNumber}`。
+export function isStudentUnavailableAtSlot(unavailableSlots: Set<string> | null | undefined, slotKey: string): boolean {
+  return Boolean(unavailableSlots?.has(slotKey))
+}
+
+export type LessonPatternRuleKey = 'allowTwoConsecutiveLessons' | 'requireBreakBetweenLessons' | 'connectRegularLessons'
+export type LessonPatternOccurrence = { occurrenceKey: string; slotNumber: number; lessonType: LessonType }
+
+// 授業パターン系ルール(2コマ連続 / 一コマ空け / 通常連結)の違反占有コマを算出する純粋関数。
+// executeMoveStudent 同様、巨大な警告 useMemo のインライン判定を挙動不変で切り出してテスト可能にする。
+// 戻り値 = 警告対象 occurrenceKey の配列(空=違反なし)。同日2コマ未満は常に空(回帰: 一コマだけなら一コマ空け違反を出さない)。
+export function resolveLessonPatternWarnings(sameDayOccurrences: LessonPatternOccurrence[], ruleKey: LessonPatternRuleKey): string[] {
+  if (sameDayOccurrences.length < 2) return []
+
+  const occurrencesWithAdjacentLesson = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && Math.abs(entry.slotNumber - other.slotNumber) === 1))
+  const occurrencesWithOneSlotBreak = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && Math.abs(entry.slotNumber - other.slotNumber) === 2))
+  const occurrencesAdjacentToRegularLesson = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && other.lessonType === 'regular' && Math.abs(entry.slotNumber - other.slotNumber) === 1))
+
+  if (ruleKey === 'allowTwoConsecutiveLessons' && occurrencesWithAdjacentLesson.length === 0) {
+    return sameDayOccurrences.map((entry) => entry.occurrenceKey)
+  }
+  if (ruleKey === 'requireBreakBetweenLessons') {
+    if (occurrencesWithAdjacentLesson.length > 0) {
+      return occurrencesWithAdjacentLesson.map((entry) => entry.occurrenceKey)
+    }
+    if (occurrencesWithOneSlotBreak.length === 0) {
+      return sameDayOccurrences.map((entry) => entry.occurrenceKey)
+    }
+  }
+  if (ruleKey === 'connectRegularLessons' && occurrencesAdjacentToRegularLesson.length === 0) {
+    return sameDayOccurrences.map((entry) => entry.occurrenceKey)
+  }
+  return []
 }
 
 function compareScoreVectors(left: number[], right: number[]) {
@@ -5543,27 +5584,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               .map((ruleKey) => autoAssignRuleByKey.get(ruleKey))
               .find((rule) => isRuleApplicableCached(rule, managedStudent.id, studentGradeOnDate))
             if (lessonPatternRule && sameDayOccurrences.length >= 2) {
-              const occurrencesWithAdjacentLesson = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && Math.abs(entry.slotNumber - other.slotNumber) === 1))
-              const occurrencesWithOneSlotBreak = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && Math.abs(entry.slotNumber - other.slotNumber) === 2))
-              const occurrencesAdjacentToRegularLesson = sameDayOccurrences.filter((entry) => sameDayOccurrences.some((other) => entry.occurrenceKey !== other.occurrenceKey && other.lessonType === 'regular' && Math.abs(entry.slotNumber - other.slotNumber) === 1))
-
-              if (lessonPatternRule.key === 'allowTwoConsecutiveLessons' && occurrencesWithAdjacentLesson.length === 0) {
-                addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '2コマ連続')
-              }
-              if (lessonPatternRule.key === 'requireBreakBetweenLessons') {
-                if (occurrencesWithAdjacentLesson.length > 0) {
-                  addRuleWarning(occurrencesWithAdjacentLesson.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '一コマ空け')
-                } else if (occurrencesWithOneSlotBreak.length === 0) {
-                  addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '一コマ空け')
-                }
-              }
-              if (lessonPatternRule.key === 'connectRegularLessons' && occurrencesAdjacentToRegularLesson.length === 0) {
-                addRuleWarning(sameDayOccurrences.map((entry) => entry.occurrenceKey), lessonPatternRule.key, '通常連結2コマ')
+              // 授業パターン違反の占有コマ算出は純粋関数 resolveLessonPatternWarnings へ集約(挙動不変)。
+              const patternRuleKey = lessonPatternRule.key as LessonPatternRuleKey
+              const warnKeys = resolveLessonPatternWarnings(sameDayOccurrences, patternRuleKey)
+              if (warnKeys.length > 0) {
+                const patternLabel = patternRuleKey === 'allowTwoConsecutiveLessons'
+                  ? '2コマ連続'
+                  : patternRuleKey === 'connectRegularLessons'
+                    ? '通常連結2コマ'
+                    : '一コマ空け'
+                addRuleWarning(warnKeys, lessonPatternRule.key, patternLabel)
               }
             }
 
             const unavailableSlots = studentUnavailableSlotsById.get(managedStudent.id)
-            if (unavailableSlots?.has(slotKey)) {
+            if (isStudentUnavailableAtSlot(unavailableSlots, slotKey)) {
               addWarning([currentLocationKey], '絶対事項: 出席可能コマのみ', true, true)
             }
 
@@ -5579,7 +5614,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
           if (student.lessonType === 'special') {
             const session = resolveSpecialSessionById(student.specialSessionId)
-            if (session && (cell.dateKey < session.startDate || cell.dateKey > session.endDate)) {
+            if (isLectureOutsideSessionPeriod(cell.dateKey, session)) {
               addWarning([currentLocationKey], '絶対事項: 講習期間内割振', true, true)
             }
           }
