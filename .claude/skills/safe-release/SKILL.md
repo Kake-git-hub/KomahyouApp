@@ -64,6 +64,9 @@ npm run build              # tsc -b + vite build が通ること
 
 ## ロールバック手順（壊れたとき）
 
+> 詳細な実行手順は **`docs/runbooks/rollback.md`**（症状別 A/B/C・データ復元の注意）。
+> 障害の自動検知と対応フローは **`docs/runbooks/monitoring.md`**（外形監視→incident Issue）。以下は要点。
+
 ### A. フロント（Hosting）の巻き戻し
 1. Firebase コンソール → Hosting → リリース履歴 → **直前の正常リリースへロールバック**。
 2. 緊急で手が空かないときは、`git revert` して main にマージすれば CI が前状態を再デプロイする。

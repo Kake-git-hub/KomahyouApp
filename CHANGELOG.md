@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.345 (2026-06-29) — Phase3/4: ロールバック手順＋外形監視(アプリ挙動の変更なし)
+
+- docs(運用基盤/Phase3): ロールバック手順書 docs/runbooks/rollback.md(症状別 A=Hosting/B=Functions/C=データ復元・クロス汚染注意)を追加。リリースチェックリストを PR テンプレ(.github/PULL_REQUEST_TEMPLATE.md)に組み込み運用開始。safe-release スキル・CLAUDE.md から参照。
+- chore(運用基盤/Phase4): 外形監視を追加。tools/uptime-check.mjs ＋ .github/workflows/uptime-check.yml(15分ごと＋手動)が本番の index/version.json/QR API を確認し、異常時は incident:uptime ラベルの Issue を自動起票(復旧で自動クローズ)＋ワークフロー赤で通知。手順 docs/runbooks/monitoring.md(GitHub スケジュールの限界と UptimeRobot/Cloud Monitoring 併用の推奨も記載)。
+
 ## v1.5.344 (2026-06-29) — 保守運営の体制づくり(アプリ挙動の変更なし・運用基盤のみ)
 
 ### Phase 1: 役割・課題管理・テストゲート
