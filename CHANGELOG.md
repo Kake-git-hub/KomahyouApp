@@ -19,6 +19,7 @@
 -->
 - chore(運用基盤): 専用 staging 環境の足回りを追加。本番(komahyouapp-prod)と分離した検証用プロジェクト komahyouapp-staging 向けに、手動デプロイ CI(.github/workflows/deploy-staging.yml)・.firebaserc の staging エイリアス・オーナー作業手順書(docs/runbooks/staging-setup.md)を整備。functions が STORAGE_BUCKET 未設定だと本番バケットを参照するクロス汚染を CI で防止(STAGING_STORAGE_BUCKET を注入)。
 - docs(運用基盤): 安全リリース手順スキル(.claude/skills/safe-release)とリリース前チェックリスト(docs/runbooks/release-checklist.md)を追加。staging 実機検証→本番→ライブ検証→ロールバックの流れを制度化。CLAUDE.md から両者を参照。
+- chore(staging): 初回構築で判明した事象に合わせ deploy-staging.yml を堅牢化。hosting と functions を別ステップに分離(gen2 Functions の 409 が hosting の release を巻き込み「Site Not Found」になるのを回避)、hosting の「is the current active version」400 を本番 workflow 同様に benign 成功扱い、emulator/CI の Java を21に。runbook の SA ロールを Owner(または Project IAM 管理者)必須に修正(編集者だけでは gen2 初回の IAM ポリシー書換に失敗)。※push トリガは検証用の暫定で main 統合前に外す。
 
 ## v1.5.343 (2026-06-29)
 

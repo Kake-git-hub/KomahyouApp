@@ -63,10 +63,14 @@ Cloud Functions（gen2）は Blaze プランでないとデプロイできない
 1. [GCP コンソール](https://console.cloud.google.com/) でプロジェクト `komahyouapp-staging` を選択。
 2. IAM と管理 → サービス アカウント → 新規作成（例: `ci-deployer`）。
 3. 以下のロールを付与（本番 SA と同等。CLAUDE.md「一度きりの前提セットアップ」参照）：
-   - **Firebase Admin**（`roles/firebase.admin`）… Hosting / Firestore / Storage ルールのデプロイ
-   - **Cloud Functions 管理者**（`roles/cloudfunctions.admin`）
-   - **サービス アカウント ユーザー**（`roles/iam.serviceAccountUser`）… 実行 SA を ActAs
-   - （初回 functions デプロイで不足が出たら）**Cloud Build 編集者** / **Artifact Registry 管理者**
+   - **オーナー**（`Owner`）を付与するのが確実（staging は捨てて良いサンドボックスなので可）。
+     - 理由: gen2 Functions の初回デプロイで firebase が**プロジェクトの IAM ポリシーを書き換える**
+       （pubsub/compute サービスエージェントへロール付与）。これには「編集者」では不足で、
+       `Owner` か `プロジェクト IAM 管理者`（`roles/resourcemanager.projectIamAdmin`）が要る。
+       2026-06-29 の初回構築で「編集者」だけだと "We failed to modify the IAM policy" で失敗した。
+   - Owner を避けたい場合の最小構成: **編集者** + **Firebase Admin** + **サービス アカウント ユーザー**
+     + **プロジェクト IAM 管理者**（IAM 書き換えに必須）。
+   - ⚠️ IAM 付与は**反映に数分かかる**。付与直後にデプロイすると伝播前で失敗することがある（数分待つ）。
 4. **Cloud Billing API**（`cloudbilling.googleapis.com`）を有効化。
 5. この SA の **JSON 鍵**を発行してダウンロード（全文を手順7で登録）。
 
