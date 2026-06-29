@@ -1,0 +1,91 @@
+name: Uptime Check
+
+# 本番(komahyouapp-prod)の外形監視。スケジュール実行で主要エンドポイントを確認し、
+# 異常なら GitHub Issue を自動起票(復旧で自動クローズ)＋ワークフローを赤にする。
+# 詳細・対応手順: docs/runbooks/monitoring.md
+#
+# 注意(GitHub スケジュールの制約):
+#   - schedule はデフォルトブランチ(main)でのみ動く。間隔は遅延・スキップされることがある(厳密監視には不向き)。
+#   - より厳密にしたい場合は外部の無料サービス(UptimeRobot 等)併用を推奨(monitoring.md 参照)。
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      monitor_staging:
+        description: 'staging も監視する'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: uptime-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run uptime check
+        id: check
+        # pipe で step 自体は失敗させず、ok/report は GITHUB_OUTPUT 経由で受け取る。
+        run: node tools/uptime-check.mjs | tee "$RUNNER_TEMP/report.txt"
+        env:
+          MONITOR_STAGING: ${{ inputs.monitor_staging && '1' || '' }}
+
+      - name: Build issue body
+        if: steps.check.outputs.ok == 'false'
+        run: |
+          {
+            echo "外形監視が本番の異常を検知しました(自動)。"
+            echo ""
+            echo '```'
+            cat "$RUNNER_TEMP/report.txt"
+            echo '```'
+            echo ""
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo ""
+            echo "対応手順: docs/runbooks/monitoring.md / ロールバックは docs/runbooks/rollback.md"
+          } > "$RUNNER_TEMP/issue-body.md"
+
+      - name: Open or update incident issue
+        if: steps.check.outputs.ok == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          existing=$(gh issue list --label incident:uptime --state open --json number -q '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "既存 incident #$existing に追記します。"
+            gh issue comment "$existing" --body-file "$RUNNER_TEMP/issue-body.md"
+          else
+            echo "新規 incident を起票します。"
+            gh issue create --title "🚨 [監視] 本番の外形監視に失敗" \
+              --label "incident:uptime,severity:s1,type:bug" \
+              --body-file "$RUNNER_TEMP/issue-body.md"
+          fi
+
+      - name: Resolve incident issue (recovered)
+        if: steps.check.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for n in $(gh issue list --label incident:uptime --state open --json number -q '.[].number'); do
+            echo "復旧を確認: incident #$n をクローズします。"
+            gh issue comment "$n" --body "✅ 外形監視が復旧を確認したため自動クローズします (run $GITHUB_RUN_ID)。"
+            gh issue close "$n"
+          done
+
+      - name: Fail job if unhealthy
+        if: steps.check.outputs.ok == 'false'
+        run: |
+          echo "本番の外形監視に失敗しました。incident issue を確認してください。"
+          exit 1
