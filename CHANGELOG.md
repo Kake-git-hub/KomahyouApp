@@ -17,9 +17,21 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
-- chore(運用基盤): 専用 staging 環境の足回りを追加。本番(komahyouapp-prod)と分離した検証用プロジェクト komahyouapp-staging 向けに、手動デプロイ CI(.github/workflows/deploy-staging.yml)・.firebaserc の staging エイリアス・オーナー作業手順書(docs/runbooks/staging-setup.md)を整備。functions が STORAGE_BUCKET 未設定だと本番バケットを参照するクロス汚染を CI で防止(STAGING_STORAGE_BUCKET を注入)。
-- docs(運用基盤): 安全リリース手順スキル(.claude/skills/safe-release)とリリース前チェックリスト(docs/runbooks/release-checklist.md)を追加。staging 実機検証→本番→ライブ検証→ロールバックの流れを制度化。CLAUDE.md から両者を参照。
-- chore(staging): 初回構築で判明した事象に合わせ deploy-staging.yml を堅牢化。hosting と functions を別ステップに分離(gen2 Functions の 409 が hosting の release を巻き込み「Site Not Found」になるのを回避)、hosting の「is the current active version」400 を本番 workflow 同様に benign 成功扱い、emulator/CI の Java を21に。runbook の SA ロールを Owner(または Project IAM 管理者)必須に修正(編集者だけでは gen2 初回の IAM ポリシー書換に失敗)。※push トリガは検証用の暫定で main 統合前に外す。
+
+## v1.5.344 (2026-06-29) — 保守運営の体制づくり(アプリ挙動の変更なし・運用基盤のみ)
+
+### Phase 1: 役割・課題管理・テストゲート
+- chore(運用基盤): 役割エージェント3体(.claude/agents/ の triage / dev-fix / regression-reviewer)を追加。曖昧な報告の整理→修正→回帰検査を分担。
+- chore(運用基盤): スキルを追加(regression-guard=回帰防止の実務版 / bug-triage=報告のIssue一本化 / staging-environment=検証環境の使い方)。CLAUDE.md に体制の節を追加。
+- chore(運用基盤): GitHub Issue テンプレ(.github/ISSUE_TEMPLATE/ bug_report・feature_request・config)とラベル体系(type/severity/area/status 計15個)を整備。
+- chore(CI): テストゲート .github/workflows/ci-tests.yml を追加。push/PR ごとに必須ゲートとして unit(vitest 402件)＋build を実行(約1分・決定的)。lint は既存負債96件のため continue-on-error の参考表示。Playwright e2e(local/Firebaseエミュレータ)は headless CI で18件不安定・18分かかるため workflow_dispatch の手動のみに分離(安定化は Issue #35)。emulator は firebase-tools 要件で Java21。
+
+### Phase 2: 専用 staging 環境(komahyouapp-staging)
+- chore(運用基盤): 本番(komahyouapp-prod)と分離した検証用 Firebase プロジェクト komahyouapp-staging を導入。書き込み自由な実機検証環境。.firebaserc に staging エイリアス、オーナー作業手順書 docs/runbooks/staging-setup.md。
+- chore(staging): 手動デプロイ CI .github/workflows/deploy-staging.yml。hosting と functions を別ステップに分離(gen2 の 409 が hosting release を巻き込む「Site Not Found」回避)、hosting の「is the current active version」400 を本番同様 benign 成功扱い、functions に STORAGE_BUCKET 注入(本番バケットへのクロス汚染防止)、Java21、gen2 functions に allUsers→run.invoker 付与(本番同等の公開呼び出し=保存/QR の 403 解消・認証は関数内で検証)。
+- chore(staging): 検証用の教室ブートストラップ/シード(講師40・生徒150・通常授業240)スクリプト+CI(.github/workflows/staging-bootstrap.yml・staging-seed.yml、functions/scripts/、projectId!=staging なら中断の本番保護)。
+- chore(CI): deploy-functions.yml の paths に !functions/scripts/** を追加(staging 専用スクリプトで本番 functions が誤って再デプロイされないように)。
+- docs(運用基盤): safe-release スキル(.claude/skills/safe-release)とリリース前チェックリスト(docs/runbooks/release-checklist.md)を追加。staging 実機検証→本番→ライブ検証→ロールバックの流れを制度化。CLAUDE.md から参照。
 
 ## v1.5.343 (2026-06-29)
 
