@@ -3000,6 +3000,215 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
+// 生徒移動で新規に作るレッスン(移動先が空き机のとき)。executeMoveStudent のローカル cloneLesson と同一仕様。
+function buildMovedLesson(lesson: DeskLesson, student: StudentEntry): DeskLesson {
+  return {
+    id: `moved_${student.id}_${Date.now().toString(36)}`,
+    warning: lesson.warning,
+    note: lesson.note === '管理データ反映' ? undefined : lesson.note,
+    studentSlots: [student, null],
+  }
+}
+
+export type ComputeStudentMoveResult =
+  // 検証で弾いた(選択は維持): メモ/出席済み/同コマ重複
+  | { status: 'blocked'; message: string }
+  // 取りやめ(選択は解除): 生徒未発見/同一位置/移動先机なし
+  | { status: 'cancelled'; message: string }
+  // 移動成立: commitWeeks 用の weeks と抑止リストを返す
+  | { status: 'moved'; message: string; nextWeeks: SlotCell[][]; nextSuppressedRegularLessonOccurrences: string[] }
+
+// 生徒移動の純粋ロジック(weeks 変換・status 遷移・通常授業抑止・メッセージ生成)。
+// React 状態に触れず、結果だけを返す。副作用(commitWeeks/setStatusMessage/setSelectedStudentId)は呼び出し側。
+// ※ executeMoveStudent から挙動不変で抽出(テスト容易化)。回帰防止のため分岐・順序は元と1:1。
+export function computeStudentMove(params: {
+  weeks: SlotCell[][]
+  weekIndex: number
+  cells: SlotCell[]
+  movingStudentId: string
+  cellId: string
+  deskIndex: number
+  studentIndex: number
+  suppressedRegularLessonOccurrences: string[]
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveBoardStudentDisplayName: (name: string) => string
+}): ComputeStudentMoveResult {
+  const {
+    weeks, weekIndex, cells, movingStudentId, cellId, deskIndex, studentIndex,
+    suppressedRegularLessonOccurrences, managedStudentByAnyName, resolveBoardStudentDisplayName,
+  } = params
+
+  const targetCellBeforeMove = cells.find((cell) => cell.id === cellId)
+  const targetDeskBeforeMove = targetCellBeforeMove?.desks[deskIndex]
+  const targetLessonBeforeMove = targetDeskBeforeMove?.lesson
+  const targetStudentBeforeMove = targetLessonBeforeMove?.studentSlots[studentIndex] ?? null
+
+  if (targetDeskBeforeMove && hasMemoInStudentSlot(targetDeskBeforeMove, studentIndex) && !targetStudentBeforeMove) {
+    return { status: 'blocked', message: 'クリックした移動先にはメモがあります。メモを削除してから配置してください。' }
+  }
+
+  const targetStatusBeforeMove = targetDeskBeforeMove?.statusSlots?.[studentIndex] ?? null
+  if (targetStudentBeforeMove && targetStatusBeforeMove?.status === 'attended') {
+    return { status: 'blocked', message: '出席済みの生徒とは入れ替えできません。出席を解除してから操作してください。' }
+  }
+
+  let movedStudent: StudentEntry | null = null
+  let sourceLessonSnapshot: DeskLesson | null = null
+  let sourceCellId = ''
+  let sourceDeskId = ''
+  let sourceSlotIndex = -1
+  let sourceDateKey = ''
+  let sourceSlotNumber = 0
+
+  const nextWeeks = cloneWeeks(weeks)
+  const nextCells = nextWeeks[weekIndex]
+
+  let sourceFound = false
+  for (const week of nextWeeks) {
+    if (sourceFound) break
+    for (const cell of week) {
+      if (sourceFound) break
+      for (const desk of cell.desks) {
+        if (!desk.lesson) continue
+        const currentIndex = desk.lesson.studentSlots.findIndex((student) => student?.id === movingStudentId)
+        if (currentIndex < 0) continue
+
+        movedStudent = desk.lesson.studentSlots[currentIndex]
+        sourceLessonSnapshot = {
+          ...desk.lesson,
+          studentSlots: desk.lesson.studentSlots.map((student) => (student ? { ...student } : null)) as [StudentEntry | null, StudentEntry | null],
+        }
+        sourceCellId = cell.id
+        sourceDeskId = desk.id
+        sourceSlotIndex = currentIndex
+        sourceDateKey = cell.dateKey
+        sourceSlotNumber = cell.slotNumber
+        desk.lesson.studentSlots[currentIndex] = null
+        if (!desk.lesson.studentSlots[0] && !desk.lesson.studentSlots[1]) {
+          desk.lesson = undefined
+        }
+        sourceFound = true
+        break
+      }
+    }
+  }
+
+  if (!movedStudent || !sourceLessonSnapshot) {
+    return { status: 'cancelled', message: '選択中の生徒が見つかりませんでした。' }
+  }
+
+  if (sourceCellId === cellId && sourceDeskId === targetDeskBeforeMove?.id && sourceSlotIndex === studentIndex) {
+    return { status: 'cancelled', message: '同じ位置をクリックしたため、移動は行いませんでした。' }
+  }
+
+  const targetCell = nextCells.find((cell) => cell.id === cellId)
+  const targetDesk = targetCell?.desks[deskIndex]
+  if (!targetCell || !targetDesk) {
+    return { status: 'cancelled', message: '移動先の机が見つかりませんでした。' }
+  }
+
+  const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(movedStudent, sourceDateKey, sourceSlotNumber)
+
+  const movedStatusStudent = { ...movedStudent }
+  movedStudent = prepareStudentForMove(movedStudent, sourceDateKey, sourceSlotNumber, targetCell.dateKey)
+
+  // Check for duplicates (exclude both source and target students from check)
+  const comparableStudentKey = resolveStockComparableStudentKey(movedStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
+  const duplicateStudent = findDuplicateStudentInCellByKey(
+    targetCell,
+    comparableStudentKey,
+    (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName),
+    movedStudent.id,
+  )
+  if (duplicateStudent && duplicateStudent.id !== targetStudentBeforeMove?.id) {
+    return { status: 'blocked', message: `同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動不可です。` }
+  }
+
+  // Get the target student (for swap)
+  const swapStudent = targetDesk.lesson?.studentSlots[studentIndex] ?? null
+
+  const targetLesson = targetDesk.lesson
+  if (targetLesson) {
+    targetLesson.studentSlots[studentIndex] = movedStudent
+  } else {
+    targetDesk.lesson = buildMovedLesson(sourceLessonSnapshot, movedStudent)
+    if (movedStudent.lessonType === 'regular') {
+      targetDesk.lesson.note = undefined
+    }
+    if (studentIndex === 1) {
+      targetDesk.lesson.studentSlots = [null, movedStudent]
+    }
+  }
+
+  // 回帰防止: 移動先スロットに前の生徒の滞留ステータス(移)日付)が残ると新しい生徒が引き継いで表示されるため必ず消す。
+  setDeskStudentStatus(targetDesk, studentIndex, null)
+
+  // If swap: convert the swap student to makeup and place at source position
+  if (swapStudent) {
+    const convertedSwapStudent = prepareStudentForMove(swapStudent, targetCell.dateKey, targetCell.slotNumber, sourceDateKey)
+
+    const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
+    const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
+    if (sourceDesk) {
+      if (sourceDesk.lesson) {
+        sourceDesk.lesson.studentSlots[sourceSlotIndex] = convertedSwapStudent
+      } else {
+        sourceDesk.lesson = buildMovedLesson(sourceLessonSnapshot, convertedSwapStudent)
+        sourceDesk.lesson.studentSlots = sourceSlotIndex === 0
+          ? [convertedSwapStudent, null]
+          : [null, convertedSwapStudent]
+      }
+      // 回帰防止: 入れ替え先(=元スロット)に滞留したステータスも消し、移動日付の引き継ぎを防ぐ。
+      setDeskStudentStatus(sourceDesk, sourceSlotIndex, null)
+    }
+  }
+
+  if (!swapStudent && sourceDateKey !== targetCell.dateKey && movedStatusStudent.lessonType === 'regular') {
+    const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
+    const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
+    if (sourceCell && sourceDesk) {
+      const movedStatusEntry = buildStudentStatusEntry(
+        movedStatusStudent,
+        sourceCell,
+        { ...sourceDesk, lesson: sourceLessonSnapshot },
+        'moved',
+      )
+      setDeskStudentStatus(sourceDesk, sourceSlotIndex, {
+        ...movedStatusEntry,
+        moveDestinationDateKey: targetCell.dateKey,
+        moveDestinationSlotNumber: targetCell.slotNumber,
+      })
+    }
+  }
+
+  // 仕様(v1.5.349): 生徒を移動して移動元の机が0人(レッスン無し)になっても講師名を保持する。
+  // managed 再マージ(mergeManagedWeek 2467行付近)が非manualの自動割当講師を消すため、空き机を manual 扱いに固定する。
+  // ※入れ替え(swap)では移動元に相手生徒が入り lesson が残るため、この分岐には入らない。
+  const emptiedSourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
+  const emptiedSourceDesk = emptiedSourceCell?.desks.find((d) => d.id === sourceDeskId)
+  if (emptiedSourceDesk && !emptiedSourceDesk.lesson && emptiedSourceDesk.teacher.trim() && !emptiedSourceDesk.manualTeacher) {
+    emptiedSourceDesk.manualTeacher = true
+  }
+
+  // Suppress managed occurrences for both moved and swapped students
+  let nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
+    ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
+    : [...suppressedRegularLessonOccurrences]
+
+  if (swapStudent) {
+    const swapSuppressedKey = resolveSuppressedRegularLessonOccurrenceKey(swapStudent, targetCell.dateKey ?? '', targetCell.slotNumber ?? 0)
+    if (swapSuppressedKey) {
+      nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, swapSuppressedKey)
+    }
+  }
+
+  const message = swapStudent
+    ? `${resolveBoardStudentDisplayName(movedStudent.name)} と ${resolveBoardStudentDisplayName(swapStudent.name)} を入れ替えました。`
+    : `${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`
+
+  return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences }
+}
+
 export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
@@ -6144,13 +6353,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
   }
 
-  const cloneLesson = (lesson: DeskLesson, student: StudentEntry): DeskLesson => ({
-    id: `moved_${student.id}_${Date.now().toString(36)}`,
-    warning: lesson.warning,
-    note: lesson.note === '管理データ反映' ? undefined : lesson.note,
-    studentSlots: [student, null],
-  })
-
   const createStudentId = (cellId: string, deskIndex: number, studentIndex: number) => {
     const stamp = Date.now().toString(36)
     return `${cellId}_${deskIndex}_${studentIndex}_${stamp}`
@@ -7161,187 +7363,36 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    const targetCellBeforeMove = cells.find((cell) => cell.id === cellId)
-    const targetDeskBeforeMove = targetCellBeforeMove?.desks[deskIndex]
-    const targetLessonBeforeMove = targetDeskBeforeMove?.lesson
-    const targetStudentBeforeMove = targetLessonBeforeMove?.studentSlots[studentIndex] ?? null
+    // 移動の純粋ロジックは computeStudentMove に集約(テスト容易化・挙動不変)。
+    // ここでは結果に応じて React 状態(commit/メッセージ/選択解除)を反映するだけ。
+    const result = computeStudentMove({
+      weeks,
+      weekIndex,
+      cells,
+      movingStudentId,
+      cellId,
+      deskIndex,
+      studentIndex,
+      suppressedRegularLessonOccurrences,
+      managedStudentByAnyName,
+      resolveBoardStudentDisplayName,
+    })
 
-    if (targetDeskBeforeMove && hasMemoInStudentSlot(targetDeskBeforeMove, studentIndex) && !targetStudentBeforeMove) {
-      setStatusMessage('クリックした移動先にはメモがあります。メモを削除してから配置してください。')
+    if (result.status === 'blocked') {
+      // メモ/出席済み/同コマ重複: 選択は維持して再操作できるようにする。
+      setStatusMessage(result.message)
       return
     }
-
-    const targetStatusBeforeMove = targetDeskBeforeMove?.statusSlots?.[studentIndex] ?? null
-    if (targetStudentBeforeMove && targetStatusBeforeMove?.status === 'attended') {
-      setStatusMessage('出席済みの生徒とは入れ替えできません。出席を解除してから操作してください。')
-      return
-    }
-
-    let movedStudent: StudentEntry | null = null
-    let sourceLessonSnapshot: DeskLesson | null = null
-    let sourceCellId = ''
-    let sourceDeskId = ''
-    let sourceSlotIndex = -1
-    let sourceDateKey = ''
-    let sourceSlotNumber = 0
-
-    const nextWeeks = cloneWeeks(weeks)
-    const nextCells = nextWeeks[weekIndex]
-
-    let sourceFound = false
-    for (const week of nextWeeks) {
-      if (sourceFound) break
-      for (const cell of week) {
-        if (sourceFound) break
-        for (const desk of cell.desks) {
-          if (!desk.lesson) continue
-          const currentIndex = desk.lesson.studentSlots.findIndex((student) => student?.id === movingStudentId)
-          if (currentIndex < 0) continue
-
-          movedStudent = desk.lesson.studentSlots[currentIndex]
-          sourceLessonSnapshot = {
-            ...desk.lesson,
-            studentSlots: desk.lesson.studentSlots.map((student) => (student ? { ...student } : null)) as [StudentEntry | null, StudentEntry | null],
-          }
-          sourceCellId = cell.id
-          sourceDeskId = desk.id
-          sourceSlotIndex = currentIndex
-          sourceDateKey = cell.dateKey
-          sourceSlotNumber = cell.slotNumber
-          desk.lesson.studentSlots[currentIndex] = null
-          if (!desk.lesson.studentSlots[0] && !desk.lesson.studentSlots[1]) {
-            desk.lesson = undefined
-          }
-          sourceFound = true
-          break
-        }
-      }
-    }
-
-    if (!movedStudent || !sourceLessonSnapshot) {
+    if (result.status === 'cancelled') {
+      // 生徒未発見/同一位置/移動先机なし: 選択を解除する。
       setSelectedStudentId(null)
-      setStatusMessage('選択中の生徒が見つかりませんでした。')
+      setStatusMessage(result.message)
       return
     }
 
-    if (sourceCellId === cellId && sourceDeskId === targetDeskBeforeMove?.id && sourceSlotIndex === studentIndex) {
-      setSelectedStudentId(null)
-      setStatusMessage('同じ位置をクリックしたため、移動は行いませんでした。')
-      return
-    }
-
-    const targetCell = nextCells.find((cell) => cell.id === cellId)
-    const targetDesk = targetCell?.desks[deskIndex]
-    if (!targetDesk) {
-      setSelectedStudentId(null)
-      setStatusMessage('移動先の机が見つかりませんでした。')
-      return
-    }
-
-    const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(movedStudent, sourceDateKey, sourceSlotNumber)
-
-    const movedStatusStudent = { ...movedStudent }
-    movedStudent = prepareStudentForMove(movedStudent, sourceDateKey, sourceSlotNumber, targetCell.dateKey)
-
-    // Check for duplicates (exclude both source and target students from check)
-    const comparableStudentKey = resolveStockComparableStudentKey(movedStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
-    const duplicateStudent = targetCell ? findDuplicateStudentInCell(targetCell, comparableStudentKey, movedStudent.id) : null
-    if (duplicateStudent && duplicateStudent.id !== targetStudentBeforeMove?.id) {
-      setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動不可です。`)
-      return
-    }
-
-    // Get the target student (for swap)
-    const swapStudent = targetDesk.lesson?.studentSlots[studentIndex] ?? null
-
-    const targetLesson = targetDesk.lesson
-    if (targetLesson) {
-      targetLesson.studentSlots[studentIndex] = movedStudent
-    } else {
-      targetDesk.lesson = cloneLesson(sourceLessonSnapshot, movedStudent)
-      if (movedStudent.lessonType === 'regular') {
-        targetDesk.lesson.note = undefined
-      }
-      if (studentIndex === 1) {
-        targetDesk.lesson.studentSlots = [null, movedStudent]
-      }
-    }
-
-    // 回帰防止: 移動先スロットに前の生徒の「移動元表示(moved)」など滞留した
-    // ステータス(移)日付)が残っていると、上書きしたはずの新しい生徒がその移動日付を
-    // 引き継いで表示されてしまう(BoardGrid の effectiveMakeupSourceDate / moveDestinationDateKey
-    // フォールバック経路)。実際に生徒を置いたスロットの滞留ステータスは必ず消す。
-    setDeskStudentStatus(targetDesk, studentIndex, null)
-
-    // If swap: convert the swap student to makeup and place at source position
-    if (swapStudent) {
-      const convertedSwapStudent = prepareStudentForMove(swapStudent, targetCell.dateKey, targetCell.slotNumber, sourceDateKey)
-
-      // Find source desk in nextWeeks (it may have been cleared)
-      const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
-      const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
-      if (sourceDesk) {
-        if (sourceDesk.lesson) {
-          sourceDesk.lesson.studentSlots[sourceSlotIndex] = convertedSwapStudent
-        } else {
-          sourceDesk.lesson = cloneLesson(sourceLessonSnapshot, convertedSwapStudent)
-          sourceDesk.lesson.studentSlots = sourceSlotIndex === 0
-            ? [convertedSwapStudent, null]
-            : [null, convertedSwapStudent]
-        }
-        // 回帰防止: 入れ替え先(=元スロット)に滞留したステータスも消し、移動日付の引き継ぎを防ぐ。
-        setDeskStudentStatus(sourceDesk, sourceSlotIndex, null)
-      }
-    }
-
-    if (!swapStudent && sourceDateKey !== targetCell.dateKey && movedStatusStudent.lessonType === 'regular') {
-      const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
-      const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
-      if (sourceCell && sourceDesk) {
-        const movedStatusEntry = buildStudentStatusEntry(
-          movedStatusStudent,
-          sourceCell,
-          { ...sourceDesk, lesson: sourceLessonSnapshot },
-          'moved',
-        )
-        setDeskStudentStatus(sourceDesk, sourceSlotIndex, {
-          ...movedStatusEntry,
-          moveDestinationDateKey: targetCell.dateKey,
-          moveDestinationSlotNumber: targetCell.slotNumber,
-        })
-      }
-    }
-
-    // 仕様: 生徒を移動して移動元の机が0人(レッスン無し)になっても、その机の講師名は保持する。
-    // commit 後の managed 再マージ(mergeManagedWeek)は、レッスンも「移動済み」等の記録ステータスも
-    // 無く manualTeacher でない机の自動割当講師を消去する(2467行付近)。講師の居る空き机を manual 扱いに
-    // 固定し、0人になった移動元の講師名が消えないようにする(回帰防止: 同日内移動・振替/講習移動で消える)。
-    // ※入れ替え(swap)では移動元に相手生徒が入り lesson が残るため、この分岐には入らない。
-    const emptiedSourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
-    const emptiedSourceDesk = emptiedSourceCell?.desks.find((d) => d.id === sourceDeskId)
-    if (emptiedSourceDesk && !emptiedSourceDesk.lesson && emptiedSourceDesk.teacher.trim() && !emptiedSourceDesk.manualTeacher) {
-      emptiedSourceDesk.manualTeacher = true
-    }
-
-    // Suppress managed occurrences for both moved and swapped students
-    let nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
-      ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
-      : [...suppressedRegularLessonOccurrences]
-
-    if (swapStudent) {
-      const swapSuppressedKey = resolveSuppressedRegularLessonOccurrenceKey(swapStudent, targetCell?.dateKey ?? '', targetCell?.slotNumber ?? 0)
-      if (swapSuppressedKey) {
-        nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, swapSuppressedKey)
-      }
-    }
-
-    commitWeeks(nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, nextSuppressedRegularLessonOccurrences)
+    commitWeeks(result.nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, result.nextSuppressedRegularLessonOccurrences)
     setSelectedStudentId(null)
-    if (swapStudent) {
-      setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} と ${resolveBoardStudentDisplayName(swapStudent.name)} を入れ替えました。`)
-    } else {
-      setStatusMessage(`${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell?.dateLabel} ${targetCell?.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`)
-    }
+    setStatusMessage(result.message)
   }
 
   // 長押しD&D のドロップ確定で呼ぶ安定参照。呼び出し時に常に最新の executeMoveStudent
