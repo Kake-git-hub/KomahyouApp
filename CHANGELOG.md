@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.347 (2026-06-29)
+
+- docs(監視): docs/runbooks/monitoring.md に UptimeRobot による5分間隔の外部監視セットアップ手順(オーナー作業)を追記。GitHub Actions の15分外形監視と二段構えにする。
+- docs(e2e): e2e #35 の調査結果を Issue に記録。失敗は emulator e2e は解消済みで local e2e のみ、根因は(1)削除済み機能(休み欄 v1.5.334)を検証する stale テスト群と(2)headless クリーン状態での前提崩れ。安易に緩めず現行仕様に合わせた更新が必要(別タスク)。
 ## v1.5.346 (2026-06-29) — lint 負債解消(挙動中立)
 
 - chore(lint): lint エラー96→0(挙動中立)。eslint.config.js で react-refresh/only-export-components を warn 化(開発時専用・実行時影響なし)、no-unused-vars に `^_` 無視を追加(既存の意図的未使用規約を尊重)。地雷の scheduleHtml.ts は no-useless-escape をファイル単位 disable(埋め込みスクリプトのエスケープは意図的・memory 参照で変更厳禁)、gmail/drafts.ts の no-control-regex は意図的 disable。App.tsx/BasicDataScreen.tsx の react-hooks/refs は「最新値を ref に同期」する定番イディオムのため個別 disable。ScheduleBoardScreen.tsx の prefer-const×2、functions の未使用型4件(コンパイル出力不変)、テストの未使用識別子(`_`化)/any→unknown を整理。CI(ci-tests.yml)の lint をブロッキング化し再発防止。unit402/前後build/functions build 緑。
