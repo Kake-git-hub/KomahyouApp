@@ -7312,6 +7312,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       }
     }
 
+    // 仕様: 生徒を移動して移動元の机が0人(レッスン無し)になっても、その机の講師名は保持する。
+    // commit 後の managed 再マージ(mergeManagedWeek)は、レッスンも「移動済み」等の記録ステータスも
+    // 無く manualTeacher でない机の自動割当講師を消去する(2467行付近)。講師の居る空き机を manual 扱いに
+    // 固定し、0人になった移動元の講師名が消えないようにする(回帰防止: 同日内移動・振替/講習移動で消える)。
+    // ※入れ替え(swap)では移動元に相手生徒が入り lesson が残るため、この分岐には入らない。
+    const emptiedSourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
+    const emptiedSourceDesk = emptiedSourceCell?.desks.find((d) => d.id === sourceDeskId)
+    if (emptiedSourceDesk && !emptiedSourceDesk.lesson && emptiedSourceDesk.teacher.trim() && !emptiedSourceDesk.manualTeacher) {
+      emptiedSourceDesk.manualTeacher = true
+    }
+
     // Suppress managed occurrences for both moved and swapped students
     let nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
