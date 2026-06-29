@@ -6,12 +6,6 @@ name: Staging Bootstrap (first classroom)
 # スクリプト側で projectId が komahyouapp-staging 以外なら中断する(本番保護)。
 
 on:
-  push:
-    branches:
-      - feat/staging-environment-setup
-    paths:
-      - functions/scripts/staging-bootstrap.config.json
-      - functions/scripts/staging-bootstrap-first-classroom.mjs
   workflow_dispatch:
 
 permissions:

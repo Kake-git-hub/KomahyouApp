@@ -5,11 +5,6 @@ name: Staging Seed (test data)
 # スクリプト側で projectId が komahyouapp-staging 以外なら中断(本番保護)。
 
 on:
-  push:
-    branches:
-      - feat/staging-environment-setup
-    paths:
-      - functions/scripts/staging-seed-data.mjs
   workflow_dispatch:
 
 permissions:
