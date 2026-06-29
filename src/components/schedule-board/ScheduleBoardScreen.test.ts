@@ -1908,6 +1908,30 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     expect(placedIds).toContain('s003')
   })
 
+  // 回帰防止: 生徒を移動して移動元の机が0人(レッスン無し)になっても講師名を保持する。
+  // executeMoveStudent は空になった移動元机を manualTeacher 扱いに固定する。これにより
+  // managed 再マージ(overlay)が自動割当講師を消す分岐(2467行付近)を回避し、講師名が残る。
+  // ここでは再マージ側の前提(manualTeacher の机は講師が消えない／非manualかつ記録ステータス無しでは消える)を固定する。
+  it('keeps the teacher on an emptied source desk pinned as manualTeacher after the managed lesson is suppressed', () => {
+    const mkLesson = (id: string, students: Array<StudentEntry | null>) => ({ id, note: '管理データ反映', studentSlots: students as [StudentEntry | null, StudentEntry | null] })
+    const mkCell = (cellId: string, desks: unknown[]) => ({ id: cellId, dateKey: '2026-08-07', dayLabel: '', dateLabel: '', slotLabel: '5限', slotNumber: 5, isOpenDay: true, desks }) as unknown as SlotCell
+    const s001 = createStudentEntry('s001', '生徒一', '数')
+
+    const managedCell = mkCell('C1', [
+      { id: 'd0', teacher: 'TA', lesson: mkLesson('managed_a', [s001, null]) },
+    ])
+    // 盤面: s001 を別コマへ移動した直後の移動元机。lesson は undefined、講師 TA を manualTeacher で固定済み。
+    const boardCell = mkCell('C1', [
+      { id: 'd0', teacher: 'TA', manualTeacher: true, lesson: undefined },
+    ])
+
+    const suppressKey = `s001__数__2026-08-07__5`
+    const [merged] = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [suppressKey])
+    const teacherDesk = (merged.desks || []).find((d) => d.teacher === 'TA')
+    expect(teacherDesk).toBeDefined()
+    expect(teacherDesk?.lesson).toBeUndefined()
+  })
+
   it('preserves a makeup student in a desk whose managed lesson is fully suppressed', () => {
     // Board has managed lesson with [regular-s001, makeup-s002]
     // Suppress regular-s001 → managed lesson becomes [null, null] → removed from managed
