@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.357 (2026-06-30)
+
+- fix: 講師がQRで提出した出席可否が「開いても反映されない/リロードしても戻らない/講師日程表から登録し直さないと出ない」不具合を修正(v1.5.356 の取りこぼし修正とは別の根本原因)。真因は保存タイミングの非対称: `countSubmitted`(提出反映フラグ=specialSessions)は手動保存なしでも workspace 自動同期で永続化される一方、盤面への講師配置(weeks)は手動保存のみ。よって手動保存前にリロードすると配置だけ揮発し、以後は取り込みの `countSubmitted` ガード(App.tsx onSubmitted 3742)でスキップされ二度と自動配置されずスタックしていた。対策として起動(マウント=教室ロード/リロード毎に boardMountKey で再マウント)時に「提出済みなのに盤面に居ない講師」を自己修復する純関数 `reconcileSubmittedTeacherPlacements` を追加(未配置の講師だけ冪等に配置・既に一部でも schedule-registration 配置済みの講師は触らず室長の手動調整/部分削除を尊重)。回帰防止テスト3件追加(未配置→配置/配置済みは不変/未提出は対象外)。あわせて自動配置はスロットごと独立で、満席の4限が空きの1限をスキップさせない挙動も確認済み。src/components/schedule-board/ScheduleBoardScreen.tsx。
+
 ## v1.5.356 (2026-06-30)
 
 - fix: 講師がQRで出席不可コマを提出しても出席可能コマに名前が追加されない不具合を修正。原因は QR一括取り込み(`subscribeLectureSubmissions` onSubmitted)で講師ごとに `setTeacherAutoAssignRequest` をループ発行していたが、リクエストが単一 `useState` のため同一スナップショットで複数講師が届くと最後の1人ぶんしか盤面配置されなかった(室長が起動/リロードした初回スナップショットで複数講師の提出が一括到着する経路で再発しやすい)。`TeacherAutoAssignRequest` を `items[]` 化し全講師を1リクエストにまとめ、受け手 `ScheduleBoardScreen` の `applyTeacherAutoAssignRequest`(新規・純関数)で全件を weeks へ畳み込む。回帰防止テスト追加(`buildTeacherAutoAssignItems`=全講師ぶん生成 / `applyTeacherAutoAssignRequest`=2講師とも配置)。src/App.tsx・src/components/schedule-board/ScheduleBoardScreen.tsx。

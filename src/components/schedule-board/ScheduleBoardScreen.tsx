@@ -3101,6 +3101,72 @@ export function applyTeacherAutoAssignRequest(params: {
   return { nextWeeks: workingWeeks, weekIndexOffset, hasChanges, messages }
 }
 
+// 起動(マウント)時の自己修復: 「提出済み(countSubmitted=true)なのに盤面の出席可能コマに居ない講師」を
+// 検出して自動配置し直す。
+// ⚠️ 回帰防止(2026-06-30): countSubmitted と盤面配置は保存タイミングが非対称
+// (countSubmitted=specialSessions は workspace 自動同期で永続化 / 盤面 weeks は手動保存のみ)。
+// このため取り込み時に配置できても手動保存前にリロードすると配置だけ揮発し、以後は取り込みの
+// countSubmitted ガード(App.tsx onSubmitted)でスキップされ二度と自動配置されず「提出したのに
+// 出席可能コマに名前が出ない」状態でスタックした。countSubmitted=true は「盤面に居るべき」を意味する
+// ので、未配置の講師だけを起動毎に冪等に配置し直す(リロードでも自己修復)。
+// 既に一部でも schedule-registration で配置済みの講師は触らない(室長の手動調整・部分削除を尊重)。
+// 全コマから外したい場合は登録解除(countSubmitted=false)で対応する設計と整合する。
+export function reconcileSubmittedTeacherPlacements(params: {
+  weeks: SlotCell[][]
+  specialSessions: SpecialSessionRow[]
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  classroomSettings: ClassroomSettings
+}): { nextWeeks: SlotCell[][]; weekIndexOffset: number; hasChanges: boolean; placedCount: number } {
+  let workingWeeks = params.weeks
+  let weekIndexOffset = 0
+  let hasChanges = false
+  let placedCount = 0
+
+  for (const session of params.specialSessions) {
+    // この講習期間に既に schedule-registration で配置済みの講師ID(=盤面に居る講師)を集める。
+    const placedTeacherIds = new Set<string>()
+    for (const week of workingWeeks) {
+      for (const cell of week) {
+        if (cell.dateKey < session.startDate || cell.dateKey > session.endDate) continue
+        for (const desk of cell.desks) {
+          if (desk.teacherAssignmentSource === 'schedule-registration'
+            && desk.teacherAssignmentSessionId === session.id
+            && desk.teacherAssignmentTeacherId) {
+            placedTeacherIds.add(desk.teacherAssignmentTeacherId)
+          }
+        }
+      }
+    }
+
+    for (const [teacherId, input] of Object.entries(session.teacherInputs)) {
+      if (!input?.countSubmitted) continue
+      if (placedTeacherIds.has(teacherId)) continue
+      const teacher = params.teachers.find((entry) => entry.id === teacherId)
+      if (!teacher) continue
+
+      const result = autoAssignTeacherToSpecialSession({
+        weeks: workingWeeks,
+        session,
+        teacher,
+        classroomSettings: params.classroomSettings,
+        teachers: params.teachers,
+        students: params.students,
+        regularLessons: params.regularLessons,
+      })
+      if (result.hasChanges) {
+        workingWeeks = result.nextWeeks
+        weekIndexOffset += result.weekIndexOffset
+        hasChanges = true
+      }
+      if (result.assignedCellCount > 0) placedCount += 1
+    }
+  }
+
+  return { nextWeeks: workingWeeks, weekIndexOffset, hasChanges, placedCount }
+}
+
 // 生徒移動で新規に作るレッスン(移動先が空き机のとき)。executeMoveStudent のローカル cloneLesson と同一仕様。
 function buildMovedLesson(lesson: DeskLesson, student: StudentEntry): DeskLesson {
   return {
@@ -3419,6 +3485,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [undoStack, setUndoStack] = useState<HistoryEntry[]>([])
   const [redoStack, setRedoStack] = useState<HistoryEntry[]>([])
   const processedTeacherAutoAssignRequestIdRef = useRef<number | null>(null)
+  // マウント(=教室ロード/リロード毎)で1回だけ、提出済み未配置の講師を自己修復するためのガード。
+  const didReconcileSubmittedTeachersRef = useRef(false)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
   const prevUnsubmittedSessionStudentKeysRef = useRef<Set<string>>(new Set())
   const committedBoardChangeVersionRef = useRef(0)
@@ -3848,6 +3916,36 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage(result.messages[result.messages.length - 1])
     }
   }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
+
+  // 起動時の自己修復(2026-06-30): 提出済み(countSubmitted=true)なのに盤面に居ない講師を配置し直す。
+  // 盤面は boardMountKey で教室ロード/リロード毎に再マウントされ、その時 specialSessions と weeks は
+  // 確定値で揃う。マウントで1回だけ走らせる(ref ガード)。specialSessions 未ロード(空)の間は待つ。
+  // 取り込みの countSubmitted ガードでスキップされて配置漏れした講師を、リロードでも確実に復旧する。
+  useEffect(() => {
+    if (didReconcileSubmittedTeachersRef.current) return
+    if (specialSessions.length === 0) return
+    didReconcileSubmittedTeachersRef.current = true
+
+    const result = reconcileSubmittedTeacherPlacements({
+      weeks,
+      specialSessions,
+      teachers,
+      students,
+      regularLessons,
+      classroomSettings,
+    })
+    if (result.hasChanges) {
+      commitWeeks(
+        result.nextWeeks,
+        weekIndex + result.weekIndexOffset,
+        selectedCellId,
+        selectedDeskIndex,
+      )
+      if (result.placedCount > 0) {
+        setStatusMessage(`提出済みで未配置だった講師 ${result.placedCount} 名を出席可能コマへ自動配置しました。保存してください。`)
+      }
+    }
+  }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teachers, weekIndex, weeks])
 
   useEffect(() => {
     if (!studentScheduleRequest) return
