@@ -17,7 +17,7 @@ import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, 
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
-import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignRequest } from '../../App'
+import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
@@ -3041,6 +3041,66 @@ function autoAssignTeacherToSpecialSession(params: {
   }
 }
 
+// QR一括提出/手動登録の自動配置を、items 全件ぶん weeks に畳み込んで適用する純関数。
+// ⚠️ 回帰防止(2026-06-30): 複数講師が同一バッチで届いても全員が出席可能コマへ配置されるよう、
+// items を順に処理し workingWeeks を引き継ぐ(最後の1人だけにしない)。挙動・メッセージは
+// 従来の単一リクエスト処理と1:1(items が1件なら従来と完全に同じ結果)。
+export function applyTeacherAutoAssignRequest(params: {
+  weeks: SlotCell[][]
+  items: TeacherAutoAssignItem[]
+  specialSessions: SpecialSessionRow[]
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  classroomSettings: ClassroomSettings
+}): { nextWeeks: SlotCell[][]; weekIndexOffset: number; hasChanges: boolean; messages: string[] } {
+  let workingWeeks = params.weeks
+  let weekIndexOffset = 0
+  let hasChanges = false
+  const messages: string[] = []
+
+  for (const item of params.items) {
+    const session = params.specialSessions.find((entry) => entry.id === item.sessionId)
+    const teacher = params.teachers.find((entry) => entry.id === item.teacherId)
+    if (!session || !teacher) continue
+
+    if (item.mode === 'unassign') {
+      const result = removeAutoAssignedTeacherFromSpecialSession({ weeks: workingWeeks, session, teacher })
+      if (!result.hasChanges) {
+        messages.push(`${session.label} で ${result.teacherName} の日程表登録由来は見つかりませんでした。`)
+        continue
+      }
+      workingWeeks = result.nextWeeks
+      hasChanges = true
+      messages.push(`${session.label} で ${result.teacherName} の日程表登録由来を ${result.clearedCellCount} コマ解除しました。`)
+      continue
+    }
+
+    const result = autoAssignTeacherToSpecialSession({
+      weeks: workingWeeks,
+      session,
+      teacher,
+      classroomSettings: params.classroomSettings,
+      teachers: params.teachers,
+      students: params.students,
+      regularLessons: params.regularLessons,
+    })
+    if (!result.hasChanges) {
+      messages.push(`${session.label} で ${result.teacherName} の自動登録対象はありませんでした。`)
+      continue
+    }
+    workingWeeks = result.nextWeeks
+    weekIndexOffset += result.weekIndexOffset
+    hasChanges = true
+    messages.push(
+      `${session.label} で ${result.teacherName} を ${result.assignedCellCount} コマ自動登録しました。`
+      + (result.skippedFullCellCount > 0 ? ` ${result.skippedFullCellCount} コマは空き机がないためスキップしました。` : ''),
+    )
+  }
+
+  return { nextWeeks: workingWeeks, weekIndexOffset, hasChanges, messages }
+}
+
 // 生徒移動で新規に作るレッスン(移動先が空き机のとき)。executeMoveStudent のローカル cloneLesson と同一仕様。
 function buildMovedLesson(lesson: DeskLesson, student: StudentEntry): DeskLesson {
   return {
@@ -3766,57 +3826,27 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (processedTeacherAutoAssignRequestIdRef.current === teacherAutoAssignRequest.requestId) return
     processedTeacherAutoAssignRequestIdRef.current = teacherAutoAssignRequest.requestId
 
-    const session = specialSessions.find((entry) => entry.id === teacherAutoAssignRequest.sessionId)
-    const teacher = teachers.find((entry) => entry.id === teacherAutoAssignRequest.teacherId)
-    if (!session || !teacher) return
-
-    if (teacherAutoAssignRequest.mode === 'unassign') {
-      const result = removeAutoAssignedTeacherFromSpecialSession({
-        weeks,
-        session,
-        teacher,
-      })
-
-      if (!result.hasChanges) {
-        setStatusMessage(`${session.label} で ${result.teacherName} の日程表登録由来は見つかりませんでした。`)
-        return
-      }
-
-      commitWeeks(
-        result.nextWeeks,
-        weekIndex,
-        selectedCellId,
-        selectedDeskIndex,
-      )
-      setStatusMessage(`${session.label} で ${result.teacherName} の日程表登録由来を ${result.clearedCellCount} コマ解除しました。`)
-      return
-    }
-
-    const result = autoAssignTeacherToSpecialSession({
+    const result = applyTeacherAutoAssignRequest({
       weeks,
-      session,
-      teacher,
-      classroomSettings,
+      items: teacherAutoAssignRequest.items,
+      specialSessions,
       teachers,
       students,
       regularLessons,
+      classroomSettings,
     })
 
-    if (!result.hasChanges) {
-      setStatusMessage(`${session.label} で ${result.teacherName} の自動登録対象はありませんでした。`)
-      return
+    if (result.hasChanges) {
+      commitWeeks(
+        result.nextWeeks,
+        weekIndex + result.weekIndexOffset,
+        selectedCellId,
+        selectedDeskIndex,
+      )
     }
-
-    commitWeeks(
-      result.nextWeeks,
-      weekIndex + result.weekIndexOffset,
-      selectedCellId,
-      selectedDeskIndex,
-    )
-    setStatusMessage(
-      `${session.label} で ${result.teacherName} を ${result.assignedCellCount} コマ自動登録しました。`
-      + (result.skippedFullCellCount > 0 ? ` ${result.skippedFullCellCount} コマは空き机がないためスキップしました。` : ''),
-    )
+    if (result.messages.length > 0) {
+      setStatusMessage(result.messages[result.messages.length - 1])
+    }
   }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
 
   useEffect(() => {

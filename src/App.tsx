@@ -118,11 +118,31 @@ function useLatestState<T>(initialValue: T | (() => T)) {
   return [state, setLatestState, ref] as const
 }
 
-export type TeacherAutoAssignRequest = {
-  requestId: number
+export type TeacherAutoAssignItem = {
   sessionId: string
   teacherId: string
   mode: 'assign' | 'unassign'
+}
+
+export type TeacherAutoAssignRequest = {
+  requestId: number
+  // 1リクエストで複数講師ぶんを運ぶ。QR提出の一括取り込みで反映した講師全員を1リクエストにまとめ、
+  // 受け手(ScheduleBoardScreen)が全件を盤面へ畳み込む。
+  items: TeacherAutoAssignItem[]
+}
+
+// QR提出の一括取り込みで反映した講師全員ぶんの自動配置アイテムを作る。
+// ⚠️ 回帰防止(2026-06-30): 以前は newlyAppliedEntries を for ループで1人ずつ
+// setTeacherAutoAssignRequest していたが、リクエストは単一の useState のため、同一 Firestore
+// スナップショットで複数講師の提出が届く(室長が起動/リロードした初回スナップショット等)と
+// 最後の1人ぶんしか盤面配置されず、残りの講師が「出席不可を提出したのに出席可能コマに名前が
+// 追加されない」不具合になっていた。全員を1リクエストの items にまとめて取りこぼしを無くす。
+export function buildTeacherAutoAssignItems(
+  entries: Array<{ personType: 'student' | 'teacher'; sessionId: string; personId: string }>,
+): TeacherAutoAssignItem[] {
+  return entries
+    .filter((entry) => entry.personType === 'teacher')
+    .map((entry) => ({ sessionId: entry.sessionId, teacherId: entry.personId, mode: 'assign' as const }))
 }
 
 export type StudentScheduleRequest = {
@@ -3589,9 +3609,11 @@ function AuthenticatedApp() {
         teacherAutoAssignRequestIdRef.current += 1
         setTeacherAutoAssignRequest({
           requestId: teacherAutoAssignRequestIdRef.current,
-          sessionId: message.sessionId,
-          teacherId: message.personId,
-          mode: countSubmitted ? 'assign' : 'unassign',
+          items: [{
+            sessionId: message.sessionId,
+            teacherId: message.personId,
+            mode: countSubmitted ? 'assign' : 'unassign',
+          }],
         })
 
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
@@ -3781,16 +3803,15 @@ function AuthenticatedApp() {
       })
 
       // Trigger board placement for newly submitted teachers (same as schedule-teacher-count-save handler)
-      for (const entry of newlyAppliedEntries) {
-        if (entry.personType === 'teacher') {
-          teacherAutoAssignRequestIdRef.current += 1
-          setTeacherAutoAssignRequest({
-            requestId: teacherAutoAssignRequestIdRef.current,
-            sessionId: entry.sessionId,
-            teacherId: entry.personId,
-            mode: 'assign',
-          })
-        }
+      // ⚠️ 回帰防止(2026-06-30): 反映した講師全員を1リクエストの items にまとめる。1人ずつ
+      // setTeacherAutoAssignRequest を呼ぶと単一 state が上書きされ最後の1人しか配置されない。
+      const teacherAutoAssignItems = buildTeacherAutoAssignItems(newlyAppliedEntries)
+      if (teacherAutoAssignItems.length > 0) {
+        teacherAutoAssignRequestIdRef.current += 1
+        setTeacherAutoAssignRequest({
+          requestId: teacherAutoAssignRequestIdRef.current,
+          items: teacherAutoAssignItems,
+        })
       }
 
       // 購読直後の初回スナップショットは「既存の提出済み」を一括配信するだけなので、

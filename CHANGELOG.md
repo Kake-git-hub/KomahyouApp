@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix: 講師がQRで出席不可コマを提出しても出席可能コマに名前が追加されない不具合を修正。原因は QR一括取り込み(`subscribeLectureSubmissions` onSubmitted)で講師ごとに `setTeacherAutoAssignRequest` をループ発行していたが、リクエストが単一 `useState` のため同一スナップショットで複数講師が届くと最後の1人ぶんしか盤面配置されなかった(室長が起動/リロードした初回スナップショットで複数講師の提出が一括到着する経路で再発しやすい)。`TeacherAutoAssignRequest` を `items[]` 化し全講師を1リクエストにまとめ、受け手 `ScheduleBoardScreen` の `applyTeacherAutoAssignRequest`(新規・純関数)で全件を weeks へ畳み込む。回帰防止テスト追加(`buildTeacherAutoAssignItems`=全講師ぶん生成 / `applyTeacherAutoAssignRequest`=2講師とも配置)。src/App.tsx・src/components/schedule-board/ScheduleBoardScreen.tsx。
+
 - chore(test): Playwright E2E を廃止(全挙動をユニットへ移植完了)。`tests/`・playwright 各 config・`@playwright/test`・`test:e2e*` スクリプトを削除。`ci-tests.yml` は e2e ジョブ2つを削除し手動 `rules` ジョブを追加。CLAUDE.md/dev-fix/safe-release/release-checklist/.vscode を新方針へ更新。lint の未使用 import(rules テストの expect)も修正。自動テストは ユニット425件(毎push)＋ルール13件(手動)。方針は docs/test-strategy.md。
 - refactor(test): E2E廃止の前提整備(層1残り)。盤面の警告評価を純粋関数へ挙動不変で抽出しユニット化(+15)。科目対応外(`canTeacherHandleStudentSubject` を export・35) / 一コマ空け等の授業パターン(`resolveLessonPatternWarnings`・36,37) / 講習絶対制約(`isLectureOutsideSessionPeriod`・55, `isStudentUnavailableAtSlot`・56)。これでE2Eが唯一カバーしていた警告表示もユニットで担保。全425テスト＋build 緑。
 
