@@ -923,6 +923,57 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('function applySalaryOverflowPaging')
     // スクロール枠に隠れている給与行があるときだけ A3 にする計測ロジック。
     expect(html).toContain("classList.add('is-a3-portrait')")
+    // 給与だけでなく、週グリッドが縦に長くシート本体が見切れる場合も A3 にするため
+    // シート全体のはみ出し量(scrollHeight-clientHeight)も計測する(回帰防止)。
+    expect(html).toContain('function shouldTeacherSheetUseA3')
+    expect(html).toContain('sheet.scrollHeight - sheet.clientHeight')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止: A3 縦への切替判定は「給与スクロールに隠れた行」だけでなく
+  // 「シート本体が用紙からはみ出して下が見切れる(週グリッドが長い講師)」でも発火する。
+  // 出荷後の実体を new Function で評価して挙動を固定する。
+  it('switches a teacher sheet to A3 when either the salary scroll or the whole sheet overflows', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [],
+      plannedCells: [],
+      teachers: [createTeacher()],
+      students: [],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function shouldTeacherSheetUseA3\(salaryHidden, sheetOverflow\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const shouldUseA3 = new Function('salaryHidden', 'sheetOverflow', match![1]) as (
+      salaryHidden: number,
+      sheetOverflow: number,
+    ) => boolean
+    // どちらも収まっていれば A4 横のまま。
+    expect(shouldUseA3(0, 0)).toBe(false)
+    expect(shouldUseA3(2, 4)).toBe(false)
+    // 給与スクロールに隠れた行があれば A3。
+    expect(shouldUseA3(20, 0)).toBe(true)
+    // 給与は収まるが週グリッドでシート本体が見切れる場合も A3(今回の修正で対応)。
+    expect(shouldUseA3(0, 40)).toBe(true)
 
     vi.unstubAllGlobals()
   })

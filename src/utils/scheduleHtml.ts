@@ -4758,8 +4758,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return { html: html, teacher: teacher };
       }
 
-      // 給与計算の行がスクロール枠(印刷で見切れる範囲)に収まらない講師ページを A3 縦へ切替える。
-      // 計測ベースなので「行が増えすぎて見切れる場合だけ」自動でA3になる(通常はA4横のまま)。
+      // 講師ページが A4 横(297×210)に収まらないとき A3 縦へ切替えるべきか判定する純粋関数。
+      // salaryHidden = 給与スクロール枠に隠れている行の高さ(px)、
+      // sheetOverflow = シート本体(.sheet は overflow:hidden + A4横のアスペクト比固定)から
+      //                 はみ出して下が見切れている高さ(px)。どちらかが有意に超えたら A3 にする。
+      // 計測ベースなので「行/コマが増えすぎて見切れる場合だけ」自動でA3になる(通常はA4横のまま)。
+      function shouldTeacherSheetUseA3(salaryHidden, sheetOverflow) {
+        return salaryHidden > 2 || sheetOverflow > 4;
+      }
+
+      // 給与計算の行や週グリッドが用紙(印刷で見切れる範囲)に収まらない講師ページを A3 縦へ切替える。
       function applySalaryOverflowPaging() {
         if (!pagesElement) return;
         var sheets = pagesElement.querySelectorAll('.sheet[data-role="teacher-sheet"]');
@@ -4767,9 +4775,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var sheet = sheets[i];
           sheet.classList.remove('is-a3-portrait');
           var scroll = sheet.querySelector('.salary-scroll');
-          if (!scroll) continue;
-          // スクロール領域に隠れている行があれば(=印刷で見切れる)A3縦にして全行を出す。
-          if (scroll.scrollHeight - scroll.clientHeight > 2) {
+          // 給与スクロール枠に隠れている行の高さ(給与計算が多い講師ページ)。
+          var salaryHidden = scroll ? scroll.scrollHeight - scroll.clientHeight : 0;
+          // シート本体からはみ出して下が見切れている高さ(週グリッドが縦に長い講師ページ)。
+          var sheetOverflow = sheet.scrollHeight - sheet.clientHeight;
+          if (shouldTeacherSheetUseA3(salaryHidden, sheetOverflow)) {
             sheet.classList.add('is-a3-portrait');
           }
         }
