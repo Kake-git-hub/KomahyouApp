@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
@@ -585,5 +585,38 @@ describe('shouldSyncWorkspaceOnVisibilityHidden (A2: 放置タブの上書き防
   it('リモート未ログインなら同期しない', () => {
     expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, remoteSessionUserId: null })).toBe(false)
     expect(shouldSyncWorkspaceOnVisibilityHidden({ ...base, isRemoteBackendEnabled: false })).toBe(false)
+  })
+})
+
+describe('buildTeacherAutoAssignItems (QR一括提出で講師全員を配置・2026-06-30 回帰防止)', () => {
+  const entry = (personType: 'student' | 'teacher', sessionId: string, personId: string) => ({ personType, sessionId, personId })
+
+  it('同一バッチで複数講師が届いても全員ぶんの assign アイテムを作る(最後の1人に取りこぼさない)', () => {
+    // 不具合の本体: 以前は1人ずつ setTeacherAutoAssignRequest で単一stateを上書きし、最後の講師しか
+    // 盤面配置されなかった。全件を items にまとめることで取りこぼさない。
+    const items = buildTeacherAutoAssignItems([
+      entry('teacher', 's1', 't1'),
+      entry('teacher', 's1', 't2'),
+      entry('teacher', 's1', 't3'),
+    ])
+    expect(items).toEqual([
+      { sessionId: 's1', teacherId: 't1', mode: 'assign' },
+      { sessionId: 's1', teacherId: 't2', mode: 'assign' },
+      { sessionId: 's1', teacherId: 't3', mode: 'assign' },
+    ])
+  })
+
+  it('生徒の提出は対象外(講師ぶんだけを assign で返す)', () => {
+    const items = buildTeacherAutoAssignItems([
+      entry('student', 's1', 'stu1'),
+      entry('teacher', 's1', 't1'),
+      entry('student', 's2', 'stu2'),
+    ])
+    expect(items).toEqual([{ sessionId: 's1', teacherId: 't1', mode: 'assign' }])
+  })
+
+  it('講師が居なければ空配列(リクエストを発行しない)', () => {
+    expect(buildTeacherAutoAssignItems([entry('student', 's1', 'stu1')])).toEqual([])
+    expect(buildTeacherAutoAssignItems([])).toEqual([])
   })
 })

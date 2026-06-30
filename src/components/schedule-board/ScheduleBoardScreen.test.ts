@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { initialStudents, initialTeachers, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getTeacherDisplayName, initialStudents, initialTeachers, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { createInitialRegularLessons, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, type LessonPatternOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, type LessonPatternOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 
@@ -4278,5 +4279,83 @@ describe('盤面の警告評価(E2E移植: 科目対応外/一コマ空け/講�
     it('通常連結2コマ: 通常授業に隣接しなければ違反', () => {
       expect(resolveLessonPatternWarnings([occ('a', 1, 'makeup'), occ('b', 5, 'makeup')], 'connectRegularLessons').sort()).toEqual(['a', 'b'])
     })
+  })
+})
+
+describe('applyTeacherAutoAssignRequest (QR一括提出で講師全員を出席可能コマへ配置・2026-06-30 回帰防止)', () => {
+  // 在籍(entry/withdraw 未設定)の最小講師。出席可能コマへ自動配置される。
+  const teacherA = { id: 't1', name: '講師A', entryDate: '', withdrawDate: '' } as TeacherRow
+  const teacherB = { id: 't2', name: '講師B', entryDate: '', withdrawDate: '' } as TeacherRow
+
+  // 期間=2026-06-01(月)〜06-02(火)、各日 slot1 のセル(机2)。日曜は closedWeekdays:[0] で除外。
+  function makeSession(): SpecialSessionRow {
+    return {
+      id: 'sess1',
+      label: '夏期講習',
+      startDate: '2026-06-01',
+      endDate: '2026-06-02',
+      // 講師Aは1日目を出席不可、講師Bは全コマ出席可能。
+      teacherInputs: {
+        t1: { unavailableSlots: ['2026-06-01_1'], countSubmitted: true, updatedAt: '' },
+        t2: { unavailableSlots: [], countSubmitted: true, updatedAt: '' },
+      },
+      studentInputs: {},
+      createdAt: '',
+      updatedAt: '',
+    }
+  }
+
+  function makeWeeks() {
+    return [[makeBoardCell('2026-06-01', 1), makeBoardCell('2026-06-02', 1)]]
+  }
+
+  function teacherNamesOnBoard(weeks: ReturnType<typeof makeWeeks>) {
+    const map: Record<string, string[]> = {}
+    for (const week of weeks) {
+      for (const cell of week) {
+        map[cell.dateKey] = cell.desks.map((desk) => desk.teacher).filter((name) => name.trim())
+      }
+    }
+    return map
+  }
+
+  it('同一リクエストの2講師ぶんを両方とも盤面へ配置する(最後の1人で取りこぼさない)', () => {
+    const result = applyTeacherAutoAssignRequest({
+      weeks: makeWeeks(),
+      items: [
+        { sessionId: 'sess1', teacherId: 't1', mode: 'assign' },
+        { sessionId: 'sess1', teacherId: 't2', mode: 'assign' },
+      ],
+      specialSessions: [makeSession()],
+      teachers: [teacherA, teacherB],
+      students: [],
+      regularLessons: [],
+      classroomSettings,
+    })
+
+    expect(result.hasChanges).toBe(true)
+    const board = teacherNamesOnBoard(result.nextWeeks)
+    const nameA = getTeacherDisplayName(teacherA)
+    const nameB = getTeacherDisplayName(teacherB)
+    // 1日目: 講師Aは出席不可なので未配置、講師Bは配置される。
+    expect(board['2026-06-01']).toEqual([nameB])
+    // 2日目: 両講師とも出席可能なので両方配置される(=最後の講師だけにならない)。
+    expect(board['2026-06-02'].sort()).toEqual([nameA, nameB].sort())
+  })
+
+  it('items が1件なら従来どおり当該講師のみ配置(後方互換)', () => {
+    const result = applyTeacherAutoAssignRequest({
+      weeks: makeWeeks(),
+      items: [{ sessionId: 'sess1', teacherId: 't2', mode: 'assign' }],
+      specialSessions: [makeSession()],
+      teachers: [teacherA, teacherB],
+      students: [],
+      regularLessons: [],
+      classroomSettings,
+    })
+    const board = teacherNamesOnBoard(result.nextWeeks)
+    const nameB = getTeacherDisplayName(teacherB)
+    expect(board['2026-06-01']).toEqual([nameB])
+    expect(board['2026-06-02']).toEqual([nameB])
   })
 })
