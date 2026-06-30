@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.359 (2026-06-30)
+
+- feat: コマ表盤面・テンプレの講師名選択肢から、同じコマ(同セル)の他机に既に割り振られている講師を除外(オーナー要望 2026-06-30)。1人の講師が同コマで複数の机を担当することはできないため、選択肢に出さないことで二重配置を未然に防ぐ。編集中の机自身の講師(currentTeacher)は除外しない。`buildTeacherSelectionOptions` 内で同セルの他机の `teacherAssignmentTeacherId`/`teacher`(名)を集めて除外集合を作り、id 一致・表示名一致の双方で判定。盤面/テンプレ両モードの3呼び出し元すべてに共通適用(src/components/schedule-board/ScheduleBoardScreen.tsx)。回帰防止テスト: 他机講師の除外/現在机の講師は残す/id一致での除外/テンプレモードでの除外、の4件に更新・追加。
+
 ## v1.5.358 (2026-06-30)
 
 - fix: 講師日程表で授業コマ(週グリッド)が縦に長く、画面/印刷で下部が見切れてスクロールしないと全体が見えない講師ページを A3 縦へ自動切替するよう修正。従来の A3 自動切替は給与計算スクロール枠(`.salary-scroll`)のはみ出しだけを検知しており、グリッド自体が長くてシート本体(`.sheet` は overflow:hidden + A4横アスペクト比固定)からはみ出すケースを拾えていなかった。`applySalaryOverflowPaging` でシート全体のはみ出し量 `sheet.scrollHeight - sheet.clientHeight` も計測し、判定を純関数 `shouldTeacherSheetUseA3(salaryHidden, sheetOverflow)` に切り出し(給与 >2px か シート >4px で A3)。A3縦は幅がA4横と同じ297mmなので週グリッドの横レイアウトは保ったまま縦に伸ばして全コマ+給与を1ページに収める。回帰防止テストとして出荷スクリプトから純関数を `new Function` 抽出し挙動を固定(src/utils/scheduleHtml.ts)。

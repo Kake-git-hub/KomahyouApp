@@ -1878,7 +1878,27 @@ export function buildTeacherSelectionOptions(params: {
     ? [...visibleTeachers, currentTeacher]
     : visibleTeachers
 
+  // 同コマ(同セル)の他の机に既に割り振られている講師は選択肢から除外する。
+  // 1人の講師が同じコマで複数の机を担当することはできないため(オーナー要望 2026-06-30)。
+  // 編集中の机(deskIndex)自身の講師は除外しない(= currentTeacher は常に残す)。
+  const assignedTeacherIds = new Set<string>()
+  const assignedTeacherNames = new Set<string>()
+  cell.desks.forEach((desk, index) => {
+    if (index === deskIndex) return
+    if (desk.teacherAssignmentTeacherId) assignedTeacherIds.add(desk.teacherAssignmentTeacherId)
+    const name = desk.teacher?.trim()
+    if (name) assignedTeacherNames.add(name)
+  })
+  const isAssignedElsewhere = (teacher: TeacherRow) => {
+    if (currentTeacher && teacher.id === currentTeacher.id) return false
+    if (assignedTeacherIds.has(teacher.id)) return true
+    if (assignedTeacherNames.has(getTeacherDisplayName(teacher))) return true
+    if (teacher.name && assignedTeacherNames.has(teacher.name)) return true
+    return false
+  }
+
   return mergedTeachers
+    .filter((teacher) => !isAssignedElsewhere(teacher))
     .slice()
     .sort((left, right) => getTeacherDisplayName(left).localeCompare(getTeacherDisplayName(right), 'ja'))
     .map((teacher) => ({ id: teacher.id, name: getTeacherDisplayName(teacher) }))

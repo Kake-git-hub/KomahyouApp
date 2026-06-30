@@ -3562,7 +3562,10 @@ describe('テンプレ移動 → 上書き反映 regression', () => {
 })
 
 describe('buildTeacherSelectionOptions', () => {
-  it('通常コマ表では同じコマの他机にいる講師も候補に残す', () => {
+  // 仕様(オーナー要望 2026-06-30): 同コマ(同セル)の他机に既に割り振られている講師は
+  // 選択肢から除外する。1人の講師は同じコマで複数の机を担当できないため。
+  // 編集中の机自身の講師(currentTeacher)は除外しない。
+  it('通常コマ表では同じコマの他机にいる講師を候補から除外する', () => {
     const cell: SlotCell = {
       id: '2026-04-07_2',
       dateKey: '2026-04-07',
@@ -3586,12 +3589,13 @@ describe('buildTeacherSelectionOptions', () => {
       isTemplateMode: false,
     })
 
-    expect(options.map((option) => option.name)).toContain('田中講師')
-    expect(options.map((option) => option.name)).toContain('佐藤講師')
+    // 同コマの他机にいる田中・佐藤は除外、空いている鈴木は残る
+    expect(options.map((option) => option.name)).not.toContain('田中講師')
+    expect(options.map((option) => option.name)).not.toContain('佐藤講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')
   })
 
-  it('通常コマ表では現在の机に設定済みの講師も候補に残す', () => {
+  it('通常コマ表では現在の机に設定済みの講師は除外しない(他机の講師のみ除外)', () => {
     const cell: SlotCell = {
       id: '2026-04-07_2',
       dateKey: '2026-04-07',
@@ -3614,11 +3618,40 @@ describe('buildTeacherSelectionOptions', () => {
       isTemplateMode: false,
     })
 
+    // deskIndex:0 自身の講師(田中)は残し、他机の佐藤は除外する
     expect(options.map((option) => option.name)).toContain('田中講師')
-    expect(options.map((option) => option.name)).toContain('佐藤講師')
+    expect(options.map((option) => option.name)).not.toContain('佐藤講師')
   })
 
-  it('テンプレモードでも同じコマの他机にいる講師を候補に残す', () => {
+  it('teacherAssignmentTeacherId で割り振られた他机の講師も id 一致で除外する', () => {
+    const cell: SlotCell = {
+      id: '2026-04-07_2',
+      dateKey: '2026-04-07',
+      dayLabel: '火',
+      dateLabel: '4/7',
+      slotLabel: '2限',
+      slotNumber: 2,
+      timeLabel: '14:40-16:10',
+      isOpenDay: true,
+      desks: [
+        { id: 'desk-1', teacher: '' },
+        // 表示名が変わっても id で同定できるよう、teacher(名)は古い値・id は最新
+        { id: 'desk-2', teacher: '旧表示名', teacherAssignmentTeacherId: 't001' },
+      ],
+    }
+
+    const options = buildTeacherSelectionOptions({
+      teachers: initialTeachers,
+      cell,
+      deskIndex: 0,
+      isTemplateMode: false,
+    })
+
+    expect(options.map((option) => option.id)).not.toContain('t001')
+    expect(options.map((option) => option.name)).not.toContain('田中講師')
+  })
+
+  it('テンプレモードでも同じコマの他机にいる講師を候補から除外する', () => {
     const cell: SlotCell = {
       id: 'template_1_2',
       dateKey: 'template_1',
@@ -3642,7 +3675,8 @@ describe('buildTeacherSelectionOptions', () => {
       templateReferenceDate: '2026-04-17',
     })
 
-    expect(options.map((option) => option.name)).toContain('田中講師')
+    // 同コマの他机にいる田中は除外
+    expect(options.map((option) => option.name)).not.toContain('田中講師')
     // 退塾日を過ぎた講師(吉田=休職を退塾日で代用)は候補から除外される
     expect(options.map((option) => option.name)).not.toContain('吉田講師')
     expect(options.map((option) => option.name)).toContain('鈴木講師')
