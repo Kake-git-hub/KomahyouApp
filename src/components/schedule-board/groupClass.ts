@@ -100,6 +100,24 @@ export function resolveGroupClassDayFlags(
   return { showGroupClassRows: specialDayIndexSet.size > 0, specialDayIndexSet }
 }
 
+// spec-group-lesson §C: その講習期間（startDate..endDate）に盤面登録された集団科目を canonical 順で返す。
+// 集団参加の選択肢（生徒日程表の登録ダイアログ / QR 提出ページ）は、この結果が空でない科目だけ出す。
+// 集団を設定しない講習では空配列になり、集団欄を出さない。
+export function resolveRegisteredGroupClassSubjects(
+  entries: GroupClassEntryMap | null | undefined,
+  startDate: string,
+  endDate: string,
+): GroupClassSubject[] {
+  if (!entries) return []
+  const present = new Set<GroupClassSubject>()
+  for (const entry of Object.values(entries)) {
+    if (!entry || !isGroupClassSubject(entry.subject)) continue
+    if (entry.dateKey < startDate || entry.dateKey > endDate) continue
+    present.add(entry.subject)
+  }
+  return groupClassSubjects.filter((subject) => present.has(subject))
+}
+
 // publish / 履歴用のディープコピー。参照共有による取り違えを防ぐ。
 export function cloneGroupClassEntryMap(value: GroupClassEntryMap | null | undefined): GroupClassEntryMap {
   if (!value) return {}

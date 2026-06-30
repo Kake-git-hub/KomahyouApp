@@ -3109,6 +3109,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
         return list;
       }
+      // spec-group-lesson §C: その講習期間に少なくとも1回盤面登録された集団科目だけを返す(集理/集社の順を保つ)。
+      // 集団を設定しない講習では空配列。登録ダイアログの集団欄の出し分けに使う。
+      function getGroupClassSubjectsInRange(startDate, endDate) {
+        var present = {};
+        getGroupClassEntriesInRange(startDate, endDate).forEach(function(entry) {
+          if (entry && entry.subject) present[entry.subject] = true;
+        });
+        return ['集団理科', '集団社会'].filter(function(subject) { return present[subject] === true; });
+      }
       function getGroupSessionInputForStudent(studentId, dateKey) {
         var sessions = getSpecialSessionsForDate(dateKey);
         for (var i = 0; i < sessions.length; i++) {
@@ -4188,13 +4197,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // spec-group-lesson §C: 中3のみ集団参加トグル。登録時に「登録」ボタンで集団参加もまとめて保存する(専用ボタンは廃止)。
         // 室長は後から生徒日程表で追加しない運用のため、登録後は読み取り専用表示にする。
         var groupRow = '';
-        if (student.currentGradeLabel === '中3') {
+        // spec-group-lesson §C: 集団欄は「その講習に盤面登録された集団科目」がある中3にだけ出す。
+        // 集団を設定しない講習では availableGroupSubjects が空になり、行ごと非表示。
+        var availableGroupSubjects = getGroupClassSubjectsInRange(session.startDate, session.endDate);
+        if (student.currentGradeLabel === '中3' && availableGroupSubjects.length) {
           var gp = input.groupClassParticipation || {};
           if (input.countSubmitted) {
-            var participatingGroups = ['集団理科', '集団社会'].filter(function(subject) { return gp[subject] === true; });
+            var participatingGroups = availableGroupSubjects.filter(function(subject) { return gp[subject] === true; });
             groupRow = '<tr><td>集団授業</td><td>' + escapeHtml(participatingGroups.length ? participatingGroups.join(' ') : 'なし') + '</td></tr>';
           } else {
-            var groupChecks = ['集団理科', '集団社会'].map(function(subject) {
+            var groupChecks = availableGroupSubjects.map(function(subject) {
               return '<label class="count-modal-check"><input type="checkbox" data-role="student-count-group-input" data-subject="' + subject + '" data-testid="student-schedule-group-' + subject + '"' + (gp[subject] === true ? ' checked' : '') + '>' + subject + '</label>';
             }).join(' ');
             groupRow = '<tr><td>集団授業</td><td>' + groupChecks + '</td></tr>';

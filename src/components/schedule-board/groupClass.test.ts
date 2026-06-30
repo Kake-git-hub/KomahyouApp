@@ -6,6 +6,7 @@ import {
   isGroupClassSubject,
   normalizeGroupClassEntryMap,
   resolveGroupClassDayFlags,
+  resolveRegisteredGroupClassSubjects,
   type GroupClassEntryMap,
 } from './groupClass'
 
@@ -130,6 +131,55 @@ describe('resolveGroupClassDayFlags', () => {
     ])
     expect(showGroupClassRows).toBe(true)
     expect(specialDayIndexSet.size).toBe(7)
+  })
+})
+
+describe('resolveRegisteredGroupClassSubjects', () => {
+  const session = { startDate: '2026-07-21', endDate: '2026-07-25' }
+
+  it('returns an empty list when no group entries are registered (集団未設定の講習)', () => {
+    expect(resolveRegisteredGroupClassSubjects({}, session.startDate, session.endDate)).toEqual([])
+    expect(resolveRegisteredGroupClassSubjects(null, session.startDate, session.endDate)).toEqual([])
+    expect(resolveRegisteredGroupClassSubjects(undefined, session.startDate, session.endDate)).toEqual([])
+  })
+
+  it('returns only the subjects actually placed on the board within the period', () => {
+    const entries: GroupClassEntryMap = {
+      '2026-07-22_1': { dateKey: '2026-07-22', band: 1, subject: '集団理科', absentStudentIds: [], addedStudentIds: [] },
+    }
+    expect(resolveRegisteredGroupClassSubjects(entries, session.startDate, session.endDate)).toEqual(['集団理科'])
+  })
+
+  it('keeps canonical order (集団理科, 集団社会) regardless of insertion order', () => {
+    const entries: GroupClassEntryMap = {
+      '2026-07-23_2': { dateKey: '2026-07-23', band: 2, subject: '集団社会', absentStudentIds: [], addedStudentIds: [] },
+      '2026-07-22_1': { dateKey: '2026-07-22', band: 1, subject: '集団理科', absentStudentIds: [], addedStudentIds: [] },
+    }
+    expect(resolveRegisteredGroupClassSubjects(entries, session.startDate, session.endDate)).toEqual(['集団理科', '集団社会'])
+  })
+
+  it('deduplicates a subject registered on multiple days/bands', () => {
+    const entries: GroupClassEntryMap = {
+      '2026-07-22_1': { dateKey: '2026-07-22', band: 1, subject: '集団理科', absentStudentIds: [], addedStudentIds: [] },
+      '2026-07-24_2': { dateKey: '2026-07-24', band: 2, subject: '集団理科', absentStudentIds: [], addedStudentIds: [] },
+    }
+    expect(resolveRegisteredGroupClassSubjects(entries, session.startDate, session.endDate)).toEqual(['集団理科'])
+  })
+
+  it('ignores entries that fall outside the session period', () => {
+    const entries: GroupClassEntryMap = {
+      before: { dateKey: '2026-07-20', band: 1, subject: '集団理科', absentStudentIds: [], addedStudentIds: [] },
+      after: { dateKey: '2026-07-26', band: 1, subject: '集団社会', absentStudentIds: [], addedStudentIds: [] },
+    }
+    expect(resolveRegisteredGroupClassSubjects(entries, session.startDate, session.endDate)).toEqual([])
+  })
+
+  it('includes entries on the period boundary dates', () => {
+    const entries: GroupClassEntryMap = {
+      start: { dateKey: '2026-07-21', band: 1, subject: '集団理科', absentStudentIds: [], addedStudentIds: [] },
+      end: { dateKey: '2026-07-25', band: 2, subject: '集団社会', absentStudentIds: [], addedStudentIds: [] },
+    }
+    expect(resolveRegisteredGroupClassSubjects(entries, session.startDate, session.endDate)).toEqual(['集団理科', '集団社会'])
   })
 })
 
