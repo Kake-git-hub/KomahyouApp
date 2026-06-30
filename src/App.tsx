@@ -36,6 +36,7 @@ import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
+import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
 import './App.css'
 
 export type ClassroomSettings = SharedClassroomSettings
@@ -3149,6 +3150,13 @@ function AuthenticatedApp() {
       if (entry.dateKey < session.startDate || entry.dateKey > session.endDate) continue
       sessionGroupClassSlots[`${entry.dateKey}_${entry.band}`] = entry.subject
     }
+    // spec-group-lesson §C: 集団参加の選択肢は「その講習に少なくとも1回盤面登録された集団科目」だけ出す。
+    // 集団を設定しない講習では空配列になり、QR提出ページの集団欄を出さない(中3でも)。
+    const sessionGroupClassSubjects = resolveRegisteredGroupClassSubjects(
+      latestBoardStateForTokens?.groupClassEntries,
+      session.startDate,
+      session.endDate,
+    )
 
     const referenceDate = session.startDate
     // オプション欄(開発用教室のみ): 学年共通のオプション文言(行0..4)を QR 提出ドキュメントへ載せる。
@@ -3172,7 +3180,7 @@ function AuthenticatedApp() {
         name: getStudentDisplayName(s),
         availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel),
         // spec-group-lesson §C: 集団授業の希望提出は中3のみ表示。学年は講習開始日基準で判定。
-        availableGroupClassSubjects: isThirdGrade ? [...groupClassSubmissionSubjects] : [],
+        availableGroupClassSubjects: isThirdGrade ? [...sessionGroupClassSubjects] : [],
         occupiedSlots: studentOccupiedMap.get(s.id) ?? {},
         // spec-group-lesson §E: 集団列は中3のみ。生徒日程表と同じく盤面の集団コマをそのまま反映する。
         groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {},
@@ -3202,8 +3210,9 @@ function AuthenticatedApp() {
         const isThirdGrade = gradeLabel === '中3'
         existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s) })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
+        // 盤面に登録された集団科目のみ。空(集団未設定の講習)なら集団欄を出さないよう [] で後埋めする。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
-          void updateSubmissionGroupClassEligibility(token, [...groupClassSubmissionSubjects]).catch(() => { /* non-fatal */ })
+          void updateSubmissionGroupClassEligibility(token, [...sessionGroupClassSubjects]).catch(() => { /* non-fatal */ })
         }
       }
     }
