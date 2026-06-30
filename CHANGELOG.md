@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.358 (2026-06-30)
+
+- fix: 講師日程表で授業コマ(週グリッド)が縦に長く、画面/印刷で下部が見切れてスクロールしないと全体が見えない講師ページを A3 縦へ自動切替するよう修正。従来の A3 自動切替は給与計算スクロール枠(`.salary-scroll`)のはみ出しだけを検知しており、グリッド自体が長くてシート本体(`.sheet` は overflow:hidden + A4横アスペクト比固定)からはみ出すケースを拾えていなかった。`applySalaryOverflowPaging` でシート全体のはみ出し量 `sheet.scrollHeight - sheet.clientHeight` も計測し、判定を純関数 `shouldTeacherSheetUseA3(salaryHidden, sheetOverflow)` に切り出し(給与 >2px か シート >4px で A3)。A3縦は幅がA4横と同じ297mmなので週グリッドの横レイアウトは保ったまま縦に伸ばして全コマ+給与を1ページに収める。回帰防止テストとして出荷スクリプトから純関数を `new Function` 抽出し挙動を固定(src/utils/scheduleHtml.ts)。
+
 ## v1.5.357 (2026-06-30)
 
 - fix: 講師がQRで提出した出席可否が「開いても反映されない/リロードしても戻らない/講師日程表から登録し直さないと出ない」不具合を修正(v1.5.356 の取りこぼし修正とは別の根本原因)。真因は保存タイミングの非対称: `countSubmitted`(提出反映フラグ=specialSessions)は手動保存なしでも workspace 自動同期で永続化される一方、盤面への講師配置(weeks)は手動保存のみ。よって手動保存前にリロードすると配置だけ揮発し、以後は取り込みの `countSubmitted` ガード(App.tsx onSubmitted 3742)でスキップされ二度と自動配置されずスタックしていた。対策として起動(マウント=教室ロード/リロード毎に boardMountKey で再マウント)時に「提出済みなのに盤面に居ない講師」を自己修復する純関数 `reconcileSubmittedTeacherPlacements` を追加(未配置の講師だけ冪等に配置・既に一部でも schedule-registration 配置済みの講師は触らず室長の手動調整/部分削除を尊重)。回帰防止テスト3件追加(未配置→配置/配置済みは不変/未提出は対象外)。あわせて自動配置はスロットごと独立で、満席の4限が空きの1限をスキップさせない挙動も確認済み。src/components/schedule-board/ScheduleBoardScreen.tsx。
