@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.361
+
+- style: 生徒名の赤文字ハイライトを「出席不可コマに配置された生徒」のみに限定(制約違反/講師なし/手動追加等の他警告はセル背景=黄とツールチップのみで示し名前は赤くしない・講師名は従来から出席不可のみで変更なし・ツールチップは不変)。名前の赤文字判定を純関数 `shouldHighlightStudentName` に集約し回帰テスト追加(src/components/schedule-board/BoardGrid.tsx・ScheduleBoardScreen.tsx・types.ts)
+
 ## v1.5.360 (2026-06-30)
 
 - feat: 生徒日程表の登録ダイアログと QR 提出画面の「集団授業(集団理科/集団社会)」の選択肢を、その講習の期間内に**少なくとも1回その集団科目がコマ表(盤面)に登録されているときだけ**表示するよう変更(オーナー要望 2026-06-30)。集団授業を設定しない講習では集団欄を一切出さない(中3でも)。盤面の集団科目を canonical 順で抽出する純関数 `resolveRegisteredGroupClassSubjects` を新設(src/components/schedule-board/groupClass.ts)。App.tsx は QR 提出ドキュメントの `availableGroupClassSubjects`(新規発行・既配布の後埋め)をこの結果に限定。生徒日程表は scheduleHtml 埋め込みJSに `getGroupClassSubjectsInRange` を追加し登録ダイアログの集団欄を出し分け。既提出データ・提出状況は不変。回帰防止テスト6件追加(groupClass.test.ts: 未登録=空/盤面登録科目のみ/canonical順/重複排除/期間外除外/境界日含む)。

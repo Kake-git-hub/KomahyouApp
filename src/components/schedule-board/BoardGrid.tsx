@@ -7,6 +7,16 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
+// 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」だけに限定する。
+// 制約違反・講師なし・手動追加などの他の警告はセル背景(黄=sa-warning)とツールチップで示し、名前は赤くしない
+// (オーナー指示 2026-07-02)。回帰防止: ここを warningHighlight や missingTeacherWarning に戻すと赤文字が広がる。
+export function shouldHighlightStudentName(params: {
+  warning: string | undefined
+  warningUnavailableHighlight: boolean | undefined
+}): boolean {
+  return Boolean(params.warningUnavailableHighlight && params.warning)
+}
+
 function getStudentStatusLabel(status: StudentStatusKind) {
   if (status === 'attended') return '出'
   if (status === 'absent-no-makeup') return '振無休'
@@ -255,6 +265,7 @@ function BoardGridComponent({
     teacherType: TeacherType,
     studentWarning: string | undefined,
     warningHighlight: boolean | undefined,
+    warningUnavailableHighlight: boolean | undefined,
     lessonNote: string | undefined,
     isPicked: boolean,
     statusEntry: StudentStatusEntry | null = null,
@@ -294,6 +305,8 @@ function BoardGridComponent({
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const isTrial = resolvedLessonType === 'trial'
     const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
+    // セル背景(黄)は従来どおり全警告で出すが、名前の赤文字は出席不可コマ配置のみに限定する。
+    const hasNameWarning = shouldHighlightStudentName({ warning: studentWarning, warningUnavailableHighlight })
     const hasMemo = !studentName && Boolean(memoLabel)
     const hasStatus = !studentName && Boolean(statusEntry) && !hasMemo
     const memoText = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(0, 2).join('\n') : ''
@@ -342,7 +355,7 @@ function BoardGridComponent({
             <>
               <span className="sa-student-name-row">
                 <span
-                  className={`sa-student-name${hasWarning ? ' sa-student-name-warning' : ''}${hasStatus ? ' sa-student-name-absence' : ''}`}
+                  className={`sa-student-name${hasNameWarning ? ' sa-student-name-warning' : ''}${hasStatus ? ' sa-student-name-absence' : ''}`}
                   data-testid={`student-name-${cell.id}-${deskIndex}-${studentIndex}`}
                   title={hoverText}
                 >
@@ -638,6 +651,7 @@ function BoardGridComponent({
                           firstStudent?.teacherType ?? 'normal',
                           firstStudent?.warning,
                           firstStudent?.warningHighlight,
+                          firstStudent?.warningUnavailableHighlight,
                           lesson?.note,
                           firstSelected,
                           firstStatus,
@@ -659,6 +673,7 @@ function BoardGridComponent({
                           secondStudent?.teacherType ?? 'normal',
                           secondStudent?.warning,
                           secondStudent?.warningHighlight,
+                          secondStudent?.warningUnavailableHighlight,
                           lesson?.note,
                           secondSelected,
                           secondStatus,

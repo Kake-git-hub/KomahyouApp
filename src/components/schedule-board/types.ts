@@ -36,6 +36,9 @@ export type StudentEntry = {
   manualAdded?: boolean
   warning?: string
   warningHighlight?: boolean
+  // 出席不可コマに配置された生徒か。生徒名の赤文字ハイライトはこのフラグのみで判定する
+  // (他の警告はセル背景=黄とツールチップで示し、名前は赤くしない。オーナー指示 2026-07-02)。
+  warningUnavailableHighlight?: boolean
   subject: SubjectLabel
   lessonType: LessonType
   teacherType: TeacherType

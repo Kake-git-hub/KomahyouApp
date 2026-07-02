@@ -8,6 +8,7 @@ import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './typ
 import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, type LessonPatternOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
+import { shouldHighlightStudentName } from './BoardGrid'
 
 const classroomSettings: ClassroomSettings = {
   closedWeekdays: [0],
@@ -4488,5 +4489,23 @@ describe('reconcileSubmittedTeacherPlacements (起動時に提出済み未配置
     })
     expect(result.hasChanges).toBe(false)
     expect(result.placedCount).toBe(0)
+  })
+})
+
+describe('shouldHighlightStudentName', () => {
+  // 赤文字ハイライトは「出席不可コマに配置された生徒」のみ(オーナー指示 2026-07-02)。
+  it('出席不可コマ配置(warningUnavailableHighlight=true)のときだけ赤文字にする', () => {
+    expect(shouldHighlightStudentName({ warning: '制約違反\n絶対事項: 出席可能コマのみ', warningUnavailableHighlight: true })).toBe(true)
+  })
+
+  it('制約違反など他の警告(unavailableHighlight=false)では赤文字にしない', () => {
+    // 過去は warningHighlight/hasWarning で赤くしていた。ここを true に戻すと赤文字が広がる回帰。
+    expect(shouldHighlightStudentName({ warning: '制約違反\n制約事項: 組み合わせ不可', warningUnavailableHighlight: false })).toBe(false)
+    expect(shouldHighlightStudentName({ warning: '講師なし', warningUnavailableHighlight: undefined })).toBe(false)
+  })
+
+  it('警告文が無ければ(フラグが立っていても)赤文字にしない', () => {
+    expect(shouldHighlightStudentName({ warning: undefined, warningUnavailableHighlight: true })).toBe(false)
+    expect(shouldHighlightStudentName({ warning: '', warningUnavailableHighlight: true })).toBe(false)
   })
 })
