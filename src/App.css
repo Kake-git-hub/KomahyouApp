@@ -2186,9 +2186,8 @@ tr.sa-group-row td {
   color: #fff;
 }
 
-.sa-warning {
-  background: #fff7e7;
-}
+/* 警告時のセル背景色付けはオーナー指示(2026-07-02)で全条件廃止。警告は名前の赤文字(出席不可コマ配置のみ)
+   とツールチップで示す。sa-warning クラスは付与され続けるが視覚効果は持たせない。 */
 
 .sa-inactive {
   background: #f7f9fc;
@@ -2360,10 +2359,6 @@ tr.sa-group-row td {
 
 .sa-student-star.star-teacher-outside {
   color: #7d61cf;
-}
-
-.sa-warning .sa-student-detail {
-  color: #101820;
 }
 
 .student-menu-popover {

@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.362
+
+- style: 警告時のセル黄色背景(`.sa-warning`)を全条件で廃止。警告は名前の赤文字(出席不可コマ配置のみ)とツールチップで示す。背景を支えていた `.sa-warning .sa-student-detail` の文字色調整も併せて削除(見た目のみ・ロジック/クラス付与は不変・src/App.css)
+
 ## v1.5.361
 
 - style: 生徒名の赤文字ハイライトを「出席不可コマに配置された生徒」のみに限定(制約違反/講師なし/手動追加等の他警告はセル背景=黄とツールチップのみで示し名前は赤くしない・講師名は従来から出席不可のみで変更なし・ツールチップは不変)。名前の赤文字判定を純関数 `shouldHighlightStudentName` に集約し回帰テスト追加(src/components/schedule-board/BoardGrid.tsx・ScheduleBoardScreen.tsx・types.ts)
