@@ -5621,6 +5621,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const boardStudentWarningsByLocation = useMemo(() => {
     const warningMap = new Map<string, { reasons: Set<string>; hasConstraintReason: boolean; shouldHighlight: boolean }>()
+    // 生徒名の赤文字ハイライト対象(=出席不可コマに配置された生徒)のロケーションキー。
+    // 制約違反等の他警告は shouldHighlight(セル背景=黄)止まりで、名前は赤くしない(オーナー指示 2026-07-02)。
+    const unavailablePlacementKeys = new Set<string>()
     const addWarning = (locationKeys: string[], reason: string, hasConstraintReason: boolean, shouldHighlight = hasConstraintReason) => {
       if (!reason) return
       for (const locationKey of locationKeys) {
@@ -5748,6 +5751,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             const unavailableSlots = studentUnavailableSlotsById.get(managedStudent.id)
             if (isStudentUnavailableAtSlot(unavailableSlots, slotKey)) {
               addWarning([currentLocationKey], '絶対事項: 出席可能コマのみ', true, true)
+              unavailablePlacementKeys.add(currentLocationKey)
             }
 
             if (teacher) {
@@ -5773,7 +5777,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return new Map(Array.from(warningMap.entries()).map(([locationKey, value]) => {
       const reasons = Array.from(value.reasons)
       const text = value.hasConstraintReason ? ['制約違反', ...reasons].join('\n') : reasons.join('\n')
-      return [locationKey, { text, highlight: value.shouldHighlight }] as const
+      return [locationKey, { text, highlight: value.shouldHighlight, unavailableHighlight: unavailablePlacementKeys.has(locationKey) }] as const
     }))
   }, [autoAssignRuleByKey, cells, isRuleApplicableCached, lectureConstraintGroups, managedStudentByAnyName, managedStudentById, managedStudentByRegisteredName, resolveBoardStudentDisplayName, resolveManagedTeacherForDesk, resolvePairConstraintSeverity, resolveRegularTeacherIdsForStudentAnyDay, resolveSpecialSessionById, studentOccurrencesIndex, studentUnavailableSlotsById])
 
@@ -5824,6 +5828,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                       ...student,
                       warning: warningEntry?.text,
                       warningHighlight: warningEntry?.highlight,
+                      warningUnavailableHighlight: warningEntry?.unavailableHighlight,
                     }
                 }) as [StudentEntry | null, StudentEntry | null],
               }

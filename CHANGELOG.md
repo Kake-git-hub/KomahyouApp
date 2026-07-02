@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- style: 生徒名の赤文字ハイライトを「出席不可コマに配置された生徒」のみに限定(制約違反/講師なし/手動追加等の他警告はセル背景=黄とツールチップのみで示し名前は赤くしない・講師名は従来から出席不可のみで変更なし・ツールチップは不変)。名前の赤文字判定を純関数 `shouldHighlightStudentName` に集約し回帰テスト追加(src/components/schedule-board/BoardGrid.tsx・ScheduleBoardScreen.tsx・types.ts)
 
 ## v1.5.360 (2026-06-30)
 
