@@ -2246,6 +2246,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         ${viewType === 'student' ? '<button type="button" id="schedule-empty-format-button" class="secondary">空フォーマット印刷</button>' : ''}
+        ${viewType === 'student' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
         <button type="button" id="schedule-show-all-button" class="secondary">印刷用全員表示</button>
       </div>
       <div class="toolbar-field toolbar-field--search">
@@ -5283,6 +5284,82 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         };
       }
 
+      // 講習集計結果: 表示期間に重なる講習期間(specialSession)を返す。空なら講習なし。
+      function getOverlappingSpecialSessions(startDate, endDate) {
+        return (DATA.specialSessions || []).filter(function(session) {
+          return session && typeof session.startDate === 'string' && typeof session.endDate === 'string'
+            && session.startDate <= endDate && session.endDate >= startDate;
+        });
+      }
+
+      // 講習の登録状況を判定する純関数。countSubmitted=登録、regularOnly=通常のみ(注記)。
+      // (scheduleHtml.test.ts が new Function で抽出して3状態を固定する)
+      function resolveLectureRegistrationStatus(input) {
+        var registered = Boolean(input && input.countSubmitted);
+        var regularOnly = Boolean(input && input.regularOnly);
+        if (!registered) return { label: '未登録', kind: 'unregistered' };
+        if (regularOnly) return { label: '登録（通常のみ）', kind: 'regular-only' };
+        return { label: '登録', kind: 'registered' };
+      }
+
+      // 表示期間の講習について、全生徒の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
+      function buildLectureSummaryHtml(startDate, endDate) {
+        var sessions = getOverlappingSpecialSessions(startDate, endDate);
+        var students = getVisibleStudents(startDate, endDate);
+        var statusClassMap = { unregistered: 'lecture-summary-unregistered', 'regular-only': 'lecture-summary-regular-only', registered: 'lecture-summary-registered' };
+        var sectionsHtml = sessions.map(function(session) {
+          var inputs = session && session.studentInputs && typeof session.studentInputs === 'object' ? session.studentInputs : {};
+          var counts = { registered: 0, 'regular-only': 0, unregistered: 0 };
+          var rowsHtml = students.map(function(student, index) {
+            var status = resolveLectureRegistrationStatus(inputs[student.id]);
+            counts[status.kind] += 1;
+            return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
+              + '<td class="lecture-summary-name">' + escapeHtml(formatStudentHeaderName(student, startDate)) + '</td>'
+              + '<td class="' + statusClassMap[status.kind] + '">' + escapeHtml(status.label) + '</td></tr>';
+          }).join('');
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="3" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
+          var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
+          var summaryLine = '登録 ' + counts.registered + '人 / 通常のみ ' + counts['regular-only'] + '人 / 未登録 ' + counts.unregistered + '人（全 ' + students.length + '人）';
+          return '<section class="lecture-summary-section">'
+            + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
+            + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th></tr></thead>'
+            + '<tbody>' + rowsHtml + '</tbody></table></section>';
+        }).join('');
+        if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
+        var title = '講習集計結果';
+        var style = 'body{font-family:sans-serif;margin:24px;color:#1f2933;}'
+          + 'h1{font-size:20px;margin:0 0 4px;}'
+          + '.lecture-summary-subtitle{color:#52606d;font-size:13px;margin:0 0 20px;}'
+          + '.lecture-summary-section{margin-bottom:28px;}'
+          + '.lecture-summary-section h2{font-size:16px;margin:0 0 6px;border-bottom:2px solid #cbd2d9;padding-bottom:4px;}'
+          + '.lecture-summary-range{font-size:12px;color:#52606d;font-weight:normal;margin-left:10px;}'
+          + '.lecture-summary-count{font-size:13px;color:#52606d;margin:0 0 10px;}'
+          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:520px;}'
+          + '.lecture-summary-table th,.lecture-summary-table td{border:1px solid #cbd2d9;padding:6px 10px;text-align:left;font-size:14px;}'
+          + '.lecture-summary-table th{background:#f5f7fa;}'
+          + '.lecture-summary-index{width:44px;text-align:right;color:#7b8794;}'
+          + '.lecture-summary-name{white-space:nowrap;}'
+          + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
+          + '.lecture-summary-regular-only{color:#b45309;font-weight:bold;}'
+          + '.lecture-summary-unregistered{color:#9aa5b1;}'
+          + '.lecture-summary-empty{color:#7b8794;}'
+          + '.lecture-summary-print{margin:0 0 20px;}'
+          + '@media print{.lecture-summary-print{display:none;}}';
+        var printButton = '<div class="lecture-summary-print"><button type="button" onclick="window.print()">印刷</button></div>';
+        return '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>' + escapeHtml(title) + '</title>'
+          + '<style>' + style + '</style></head><body>'
+          + '<h1>' + escapeHtml(title) + '</h1>'
+          + '<p class="lecture-summary-subtitle">' + escapeHtml('表示期間: ' + formatRangeLabel(startDate, endDate)) + '</p>'
+          + printButton + sectionsHtml + '</body></html>';
+      }
+
+      function updateLectureSummaryButtonVisibility(startDate, endDate) {
+        var button = document.getElementById('schedule-lecture-summary-button');
+        if (!button) return;
+        button.style.display = getOverlappingSpecialSessions(startDate, endDate).length > 0 ? '' : 'none';
+      }
+
       function render() {
         let startDate = appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
         let endDate = appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
@@ -5336,6 +5413,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         bindSharedInputs();
         if (window.__scheduleReadStoredLogo) syncLogo(window.__scheduleReadStoredLogo());
         syncScheduleQrVisibility();
+        updateLectureSummaryButtonVisibility(startDate, endDate);
       }
 
       function setRangeAndRender(nextStartDate, nextEndDate, nextPeriodValue, nextPersonId) {
@@ -5416,6 +5494,27 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               endDate: currentEndDate,
               targetWindowName: targetWindowName,
             }, '*');
+          }
+        });
+      }
+
+      const lectureSummaryButton = document.getElementById('schedule-lecture-summary-button');
+      if (lectureSummaryButton) {
+        lectureSummaryButton.addEventListener('click', function() {
+          var currentStartDate = (startInput && startInput.value) || appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
+          var currentEndDate = (endInput && endInput.value) || appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
+          if (currentStartDate > currentEndDate) {
+            var swap = currentStartDate;
+            currentStartDate = currentEndDate;
+            currentEndDate = swap;
+          }
+          if (getOverlappingSpecialSessions(currentStartDate, currentEndDate).length === 0) return;
+          var summaryHtml = buildLectureSummaryHtml(currentStartDate, currentEndDate);
+          var summaryWindow = window.open('', 'lecture-summary-' + Date.now());
+          if (summaryWindow) {
+            summaryWindow.document.open();
+            summaryWindow.document.write(summaryHtml);
+            summaryWindow.document.close();
           }
         });
       }
