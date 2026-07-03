@@ -278,7 +278,11 @@ describe('makeupStock', () => {
     })
   })
 
-  it('reports occupied slots as remaining stock with the occupied-slot reason', () => {
+  // 空きコマ不足(occupiedSlotOrigins)経路は廃止(オーナー指示 2026-07-03)。
+  // テンプレ毎週強制適用が前提で、開講日にコマが埋まっていても振替(未消化)を自動生成しない。
+  // 過去にこの偽originが大量発生→一括削除される際に本物の休講日振替(例: 白川 数 7/20)まで
+  // 巻き込まれて消える事故が起きたため、経路ごと廃止した。休講日(自動)/同時間帯重複/手動 のみが未消化源。
+  it('does not generate makeup stock from an occupied open-day slot (空きコマ不足 origin 廃止)', () => {
     const student = createStudent()
     const teacher = createTeacher()
     const regularLesson = createRegularLesson()
@@ -295,19 +299,10 @@ describe('makeupStock', () => {
       today: new Date('2025-04-20T00:00:00'),
     })
 
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
-      key: 'student-1__数',
-      autoShortage: 1,
-      balance: 1,
-      nextOriginDate: '2025-04-07',
-      nextOriginReasonLabel: '空きコマ不足',
-      remainingOriginDates: ['2025-04-07'],
-      remainingOriginReasonLabels: ['空きコマ不足'],
-    })
+    expect(entries).toHaveLength(0)
   })
 
-  it('creates stock for an occupied fifth weekly occurrence when all weekly occurrences are expected', () => {
+  it('does not generate stock for an occupied fifth weekly occurrence (空きコマ不足 origin 廃止)', () => {
     const student = createStudent()
     const teacher = createTeacher()
     const regularLesson = createRegularLesson({
@@ -342,16 +337,7 @@ describe('makeupStock', () => {
       today: new Date('2026-03-31T00:00:00'),
     })
 
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
-      key: 'student-1__数',
-      autoShortage: 1,
-      balance: 1,
-      nextOriginDate: '2026-03-31',
-      nextOriginReasonLabel: '空きコマ不足',
-      remainingOriginDates: ['2026-03-31'],
-      remainingOriginReasonLabels: ['空きコマ不足'],
-    })
+    expect(entries).toHaveLength(0)
   })
 
   it('consumes the origin when a makeup is returned to the original slot as a regular lesson', () => {
@@ -810,9 +796,9 @@ describe('makeupStock', () => {
     expect(entries).toEqual([])
   })
 
-  it('still generates occupied-slot origin when cell is fully occupied by non-managed lessons after template change', () => {
-    // If the cell is fully occupied by NON-managed lessons (user-placed),
-    // the managed regular lesson can't be placed → occupied origin generated.
+  it('does not generate occupied-slot origin even when cell is fully occupied by non-managed lessons (空きコマ不足 origin 廃止)', () => {
+    // 空きコマ不足経路廃止後: 生徒の通常コマが非managedの授業で完全に埋まっていても、
+    // 未消化振替を自動生成しない(手動配置で対応する運用に統一)。
     const student = createStudent({ id: 'nagashima', name: '長嶋', displayName: '長嶋' })
     const teacher = createTeacher()
 
@@ -863,10 +849,9 @@ describe('makeupStock', () => {
       today: new Date('2026-04-10T00:00:00'),
     })
 
-    // Cell occupied by non-managed lesson → occupied origin generated
+    // Cell occupied by non-managed lesson → 空きコマ不足origin は生成されない(廃止)
     const entry = entries.find((e) => e.key === 'nagashima__英')
-    expect(entry).toBeTruthy()
-    expect(entry!.balance).toBeGreaterThan(0)
+    expect(entry).toBeUndefined()
   })
 
   it('does not double-count stock when template overwrites and makeup is already consumed', () => {
@@ -1010,33 +995,6 @@ describe('makeupStock', () => {
     expect(entries[0]).toMatchObject({
       remainingOriginLabels: ['2025/4/7(月) 3限'],
       nextOriginLabel: '2025/4/7(月) 3限',
-    })
-  })
-
-  it('includes slot number in occupied-slot origin labels', () => {
-    const student = createStudent()
-    const teacher = createTeacher()
-    const regularLesson = createRegularLesson({ slotNumber: 2 })
-    const weeks = [[createCell({
-      slotNumber: 2,
-      slotLabel: '2限',
-    })]]
-
-    const entries = buildMakeupStockEntries({
-      students: [student],
-      teachers: [teacher],
-      regularLessons: [regularLesson],
-      classroomSettings: createSettings(),
-      weeks,
-      manualAdjustments: {},
-      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
-      today: new Date('2025-04-20T00:00:00'),
-    })
-
-    expect(entries).toHaveLength(1)
-    expect(entries[0]).toMatchObject({
-      remainingOriginLabels: ['2025/4/7(月) 2限'],
-      nextOriginLabel: '2025/4/7(月) 2限',
     })
   })
 
