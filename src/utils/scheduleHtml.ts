@@ -5328,7 +5328,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }).join('');
         if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
         var title = '講習集計結果';
-        var style = 'body{font-family:sans-serif;margin:24px;color:#1f2933;}'
+        // padding-bottom は最下部がWindowsタスクバー等に隠れないようスクロール余白を確保する(印刷時は0に戻す)。
+        var style = 'body{font-family:sans-serif;margin:24px;padding-bottom:160px;color:#1f2933;}'
           + 'h1{font-size:20px;margin:0 0 4px;}'
           + '.lecture-summary-subtitle{color:#52606d;font-size:13px;margin:0 0 20px;}'
           + '.lecture-summary-section{margin-bottom:28px;}'
@@ -5345,7 +5346,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '.lecture-summary-unregistered{color:#9aa5b1;}'
           + '.lecture-summary-empty{color:#7b8794;}'
           + '.lecture-summary-print{margin:0 0 20px;}'
-          + '@media print{.lecture-summary-print{display:none;}}';
+          + '@media print{.lecture-summary-print{display:none;}body{padding-bottom:0;}}';
         var printButton = '<div class="lecture-summary-print"><button type="button" onclick="window.print()">印刷</button></div>';
         return '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>' + escapeHtml(title) + '</title>'
           + '<style>' + style + '</style></head><body>'
