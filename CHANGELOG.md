@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.367
+
+- chore(一時機能撤去): 7/20休日振替の復帰ボタン(v1.5.366で追加)を撤去。対象4名(緑が丘 白川:数/古賀:英、日大前 劉:数/神:理)の復帰は室長が各教室でクリック→手動保存済みで本番反映を確認(manualMakeupAdjustmentsに7/20あり・suppressedMakeupOriginsから除去済み)。撤去は button/ハンドラ/import/restore720Holiday.ts/restore720Holiday.test.ts の削除のみでデータには非干渉のため7/20は在庫に残り続ける(src/components/schedule-board/ScheduleBoardScreen.tsx・restore720Holiday.ts削除・関連コミット 2edf396)
+
 ## v1.5.366
 
 - docs: リリースチェックリストに「在庫数量(未消化振替/講習)の非退行チェック」§6を追加。ゴールデンスナップショット(makeupStockSnapshot/lectureStockSnapshot)を自動ガードとして明記し、意図的変更時のみ -u 更新+目視レビューするルール、在庫計算を触った版の本番スポットチェック手順、2026-07-03基準値(未消化振替294/未消化講習raw1436)を記録(docs/runbooks/release-checklist.md)
