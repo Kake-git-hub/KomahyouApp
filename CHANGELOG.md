@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- chore: 保守運営体制のブラッシュアップ。spec-curator エージェント新設(思いつき要望→要求仕様の補完・確定役)、モデル割当方針(単純作業=Sonnet最新/判断=Opus最新・モデルID固定禁止)と標準フロー(triage→spec-curator→dev-fix→regression-reviewer→safe-release)を CLAUDE.md に明文化。bug-triage スキルに仕様確定ステップを追記。古い引き継ぎ文書2件(docs/NEXT-SESSION-PROMPT.md, SESSION-HANDOFF.md)へ廃止ヘッダ追加(.claude/agents/spec-curator.md ほか)
+
 ## v1.5.369
 
 - fix: 講習集計結果ページの最下部がWindowsタスクバーに隠れて見えない問題を修正。ポップアップ本文に padding-bottom:160px を追加し、最後の行までスクロールで確実に見えるようにした(印刷時は0に戻す)。回帰防止アサート追加(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
