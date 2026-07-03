@@ -3,6 +3,9 @@ import { isActiveOnDate } from '../basic-data/basicDataModel'
 import type { GoogleDriveBackupDiagnostic, ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 
+// 仕様(spec-save-restore §4): サーバーバックアップ復元は不可逆のため、確認モーダルで必ず警告する(仕様監査 領域2 A3)
+export const RESTORE_MODAL_IRREVERSIBLE_WARNING = '復元すると、選択した教室の現在のデータはバックアップの内容で上書きされ、元に戻せません。'
+
 type DeveloperAdminScreenProps = {
   currentUser: WorkspaceUser
   authMode: 'local' | 'firebase'
@@ -536,6 +539,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
           <div className="auto-assign-modal developer-restore-modal" role="dialog" aria-modal="true" aria-label="教室復元選択モーダル">
             <div className="auto-assign-modal-title">{restoreModalState.sourceLabel}から復元する教室を選択</div>
             {restoreModalState.dataTimestampLabel ? <div className="detail-note">元データ日時: {formatSavedAt(restoreModalState.dataTimestampLabel)}</div> : null}
+            <div className="detail-note"><strong>{RESTORE_MODAL_IRREVERSIBLE_WARNING}</strong></div>
             <div className="developer-restore-modal-actions-top">
               <button className="secondary-button slim" type="button" onClick={onSelectAllRestoreClassrooms}>すべて復元</button>
               <button className="secondary-button slim" type="button" onClick={onClearAllRestoreClassrooms}>すべて現状維持</button>
