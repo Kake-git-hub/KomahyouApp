@@ -1,5 +1,5 @@
 import type { ClassroomSettings } from '../../types/appState'
-import { formatStudentSelectionLabel, isActiveOnDate, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { formatStudentSelectionLabel, isActiveOnDate, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
@@ -159,11 +159,10 @@ function resolveOriginReasonLabel(dateKey: string, params: {
   classroomSettings: ClassroomSettings
   autoOriginDates: string[]
   conflictOriginDates: string[]
-  occupiedOriginDates: string[]
   manualOriginDates: string[]
   manualOriginReasonLabels: Record<string, string>
 }) {
-  const { classroomSettings, autoOriginDates, conflictOriginDates, occupiedOriginDates, manualOriginDates, manualOriginReasonLabels } = params
+  const { classroomSettings, autoOriginDates, conflictOriginDates, manualOriginDates, manualOriginReasonLabels } = params
 
   if (!isDateKey(dateKey)) {
     if (manualOriginDates.includes(dateKey)) return manualOriginReasonLabels[dateKey] ?? '手動調整'
@@ -178,9 +177,6 @@ function resolveOriginReasonLabel(dateKey: string, params: {
   }
   if (conflictOriginDates.includes(dateKey)) {
     return '同時間帯の重複'
-  }
-  if (occupiedOriginDates.includes(dateKey)) {
-    return '空きコマ不足'
   }
   if (manualOriginDates.includes(dateKey)) {
     return manualOriginReasonLabels[dateKey] ?? '手動調整'
@@ -581,115 +577,6 @@ function consumeOriginDates(originDates: string[], usedOriginDates: string[], us
   return remaining
 }
 
-function computeOccupiedSlotOrigins(params: {
-  regularLessons: RegularLessonRow[]
-  students: StudentRow[]
-  teachers: TeacherRow[]
-  classroomSettings: ClassroomSettings
-  weeks: SlotCell[][]
-  resolveStudentKey: (student: StudentEntry) => string
-}) {
-  const { regularLessons, students, teachers, classroomSettings, weeks, resolveStudentKey } = params
-  const studentById = new Map(students.map((student) => [student.id, student]))
-  const teacherById = new Map(teachers.map((teacher) => [teacher.id, teacher]))
-  const weekDateKeys = Array.from(new Set(weeks.flat().map((cell) => cell.dateKey))).sort((left, right) => left.localeCompare(right))
-  const cellByDateSlot = new Map(weeks.flat().map((cell) => [`${cell.dateKey}_${cell.slotNumber}`, cell]))
-  const origins: OriginMap = {}
-  const occupiedSlots: OriginSlotMap = {}
-
-  if (weekDateKeys.length === 0) return { origins, slotNumbers: occupiedSlots }
-
-  const startDateKey = weekDateKeys[0]
-  const endDateKey = weekDateKeys[weekDateKeys.length - 1]
-  const months = iterateMonthsInRange(startDateKey, endDateKey)
-
-  for (const row of regularLessons) {
-    const teacher = teacherById.get(row.teacherId)
-    const stockPeriod = resolveAutomaticStockPeriod(row)
-    const participants = [
-      { studentId: row.student1Id, subject: row.subject1, participantIndex: 1 as const },
-      { studentId: row.student2Id, subject: row.subject2, participantIndex: 2 as const },
-    ].filter((entry) => entry.studentId && entry.subject)
-
-    const participantDateSets = participants.map((participant) => ({
-      ...participant,
-      dateKeys: new Set<string>(),
-    }))
-
-    for (const { year, monthIndex } of months) {
-      const monthlyCandidateDateKeys = getScheduledDatesInMonth(year, monthIndex, row.dayOfWeek)
-        .filter((dateKey) => dateKey >= stockPeriod.startDate && dateKey <= stockPeriod.endDate)
-        .filter((dateKey) => {
-          const date = parseDateKey(dateKey)
-          if (row.schoolYear !== resolveOperationalSchoolYear(date)) return false
-          if (isClosedDate(dateKey, classroomSettings)) return false
-          return !teacher || resolveTeacherRosterStatus(teacher, dateKey) === '在籍'
-        })
-
-      participantDateSets.forEach((participantDateSet) => {
-        const student = studentById.get(participantDateSet.studentId)
-        const candidateParticipantDateKeys = student
-          ? monthlyCandidateDateKeys.filter((dateKey) => (
-              isRegularParticipantScheduledOnDate(row, dateKey)
-              && isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)
-            ))
-          : []
-        const contractedDateKeys = candidateParticipantDateKeys
-          .filter((dateKey) => dateKey >= startDateKey && dateKey <= endDateKey)
-
-        contractedDateKeys.forEach((dateKey) => participantDateSet.dateKeys.add(dateKey))
-      })
-    }
-
-    const scheduledDateKeys = Array.from(new Set(participantDateSets.flatMap((participant) => Array.from(participant.dateKeys)))).sort((left, right) => left.localeCompare(right))
-
-    for (const dateKey of scheduledDateKeys) {
-      const cell = cellByDateSlot.get(`${dateKey}_${row.slotNumber}`)
-      if (!cell) continue
-      if (cell.desks.some((desk) => desk.lesson?.id === `managed_${row.id}_${dateKey}`)) continue
-
-      const activeParticipants = participantDateSets.filter((participant) => participant.dateKeys.has(dateKey))
-      if (activeParticipants.length === 0) continue
-
-      const participantStudentIds = new Set(activeParticipants.map((participant) => participant.studentId))
-
-      // テンプレ上書き後、regularLessons は新テンプレの row ID を持つが、
-      // templateFreezeBeforeDate 以前の盤面には旧テンプレの managed lesson が残る。
-      // 旧 managed lesson に同一生徒が含まれていれば「配置済み」とみなし、
-      // 偽の occupied origin を生成しない。
-      const hasManagedCoverage = cell.desks.some((desk) => {
-        const lesson = desk.lesson
-        if (!lesson || !lesson.id.startsWith('managed_')) return false
-        return lesson.studentSlots.some((s) => {
-          if (!s) return false
-          const sid = resolveStudentKey(s).replace(/^manual:/, '').replace(/^name:/, '')
-          return participantStudentIds.has(sid)
-        })
-      })
-      if (hasManagedCoverage) continue
-
-      const hasStudentConflict = cell.desks.some((desk) => desk.lesson?.studentSlots.some((student) => {
-        if (!student) return false
-        const studentKey = resolveStudentKey(student).replace(/^manual:/, '').replace(/^name:/, '')
-        return participantStudentIds.has(studentKey)
-      }) ?? false)
-      const hasEmptyDesk = cell.desks.some((desk) => !desk.lesson)
-
-      // 同一講師が複数デスクを担当するのは正当な構成のため、
-      // 講師衝突ではなく生徒衝突と空きデスク有無のみで判定する
-      if (!hasStudentConflict && hasEmptyDesk) continue
-
-      for (const participant of activeParticipants) {
-        const occupiedKey = buildMakeupStockKey(participant.studentId, participant.subject)
-        pushOrigin(origins, occupiedKey, dateKey)
-        pushOriginSlot(occupiedSlots, occupiedKey, dateKey, row.slotNumber)
-      }
-    }
-  }
-
-  return { origins, slotNumbers: occupiedSlots }
-}
-
 export function buildMakeupStockEntries(params: {
   students: StudentRow[]
   teachers: TeacherRow[]
@@ -702,13 +589,12 @@ export function buildMakeupStockEntries(params: {
   resolveStudentKey: (student: StudentEntry) => string
   today?: Date
 }) {
-  const { students, teachers, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
+  // teachers はパラメータ型に残す(呼び出し側の互換維持)が、空きコマ不足origin廃止に伴い内部では未使用。
+  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
   const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
   const conflictResult = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
-  const occupiedResult = computeOccupiedSlotOrigins({ regularLessons, students, teachers, classroomSettings, weeks, resolveStudentKey })
   const automaticShortages = automaticShortageResult.origins
   const conflictOrigins = conflictResult.origins
-  const occupiedSlotOrigins = occupiedResult.origins
   const makeupUsage = collectMakeupUsageByKey(weeks, resolveStudentKey)
   const studentById = new Map(students.map((student) => [student.id, student]))
   const managedStudentIds = new Set(students.map((student) => student.id))
@@ -724,7 +610,7 @@ export function buildMakeupStockEntries(params: {
   const totalLessonCounts = countTotalLessonQuotaByKey(regularLessons)
   const eligiblePlannedMakeupKeys = Object.keys(plannedMakeups)
   const trackedAssignedRegularKeys = Object.keys(assignedRegularLessons)
-  const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(occupiedSlotOrigins), ...Object.keys(normalizedManualAdjustments), ...eligiblePlannedMakeupKeys, ...Object.keys(normalizedFallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
+  const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(normalizedManualAdjustments), ...eligiblePlannedMakeupKeys, ...Object.keys(normalizedFallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
 
   const entries = Array.from(allKeys).map((key) => {
     const [studentKey, subject = ''] = key.split('__')
@@ -734,7 +620,6 @@ export function buildMakeupStockEntries(params: {
     const fallback = normalizedFallbackStudents[key]
     const autoOriginDates = automaticShortages[key] ?? []
     const conflictOriginDates = conflictOrigins[key] ?? []
-    const occupiedOriginDates = occupiedSlotOrigins[key] ?? []
     const manualOrigins = normalizedManualAdjustments[key] ?? []
     const manualOriginDates = manualOrigins.map((origin) => origin.dateKey)
     const suppressedOriginDates = (normalizedSuppressedOrigins[key] ?? []).map((origin) => origin.dateKey)
@@ -751,10 +636,9 @@ export function buildMakeupStockEntries(params: {
     const allSlotNumbers: Record<string, number> = {
       ...(automaticShortageResult.slotNumbers[key] ?? {}),
       ...(conflictResult.slotNumbers[key] ?? {}),
-      ...(occupiedResult.slotNumbers[key] ?? {}),
       ...manualSlotNumbers,
     }
-    const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...occupiedOriginDates, ...manualOriginDates]))
+    const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...manualOriginDates]))
       .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
       .sort()
     const usedOriginDates = usedOriginDatesByKey[key] ?? []
@@ -770,7 +654,6 @@ export function buildMakeupStockEntries(params: {
       classroomSettings,
       autoOriginDates,
       conflictOriginDates,
-      occupiedOriginDates,
       manualOriginDates,
       manualOriginReasonLabels,
     }))
@@ -791,7 +674,7 @@ export function buildMakeupStockEntries(params: {
       displayName: student ? formatStudentSelectionLabel(student) : (fallback?.displayName ?? normalizedStudentKey.replace(/^name:/, '')),
       subject: student ? subject : (fallback?.subject ?? subject),
       balance,
-      autoShortage: autoOriginDates.length + conflictOriginDates.length + occupiedOriginDates.length,
+      autoShortage: autoOriginDates.length + conflictOriginDates.length,
       manualAdjustments: manualOriginDates.length,
       plannedMakeups: plannedCount,
       totalLessonCount,
