@@ -17,7 +17,11 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+
+## v1.5.366
+
 - docs: リリースチェックリストに「在庫数量(未消化振替/講習)の非退行チェック」§6を追加。ゴールデンスナップショット(makeupStockSnapshot/lectureStockSnapshot)を自動ガードとして明記し、意図的変更時のみ -u 更新+目視レビューするルール、在庫計算を触った版の本番スポットチェック手順、2026-07-03基準値(未消化振替294/未消化講習raw1436)を記録(docs/runbooks/release-checklist.md)
+- feat(一時機能): 7/20(海の日)の休日振替を対象4名だけ未消化振替へ復帰する一時ボタンを未消化振替パネルに追加。テンプレ凍結で在庫計算(buildMakeupStockEntries)から漏れた7/20を、対象キー(緑が丘 白川:数/古賀:英、日大前 劉:数/神:理)に「手動追加(manualMakeupAdjustments) + 抑制解除(suppressedMakeupOrigins)」の両方を適用して復帰する(片方だけでは+0=両方必須)。対象教室(actingClassroomId)のときのみ表示・冪等。純粋ロジックは新規 restore720Holiday.ts に分離し回帰防止テスト付き(実データで各キー+1・他生徒不変を検証済み)。**室長が各教室で1クリック→手動保存した後、本ボタンは撤去する**(撤去後も保存済みデータに残り7/20は在庫に残り続ける)。buildMakeupStockEntries自体は不変=ゴールデン不変(src/components/schedule-board/restore720Holiday.ts・ScheduleBoardScreen.tsx)
 
 ## v1.5.364
 
