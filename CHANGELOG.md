@@ -18,7 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
-- chore: デッド関数 downloadLatestClassroomRollback(functions/src/index.ts)と、呼び出し0件のクライアント死蔵ラッパー downloadLatestFirebaseClassroomRollback＋型 ClassroomLatestRollback(src/integrations/firebase/adminFunctions.ts)を撤去(仕様監査 領域2 補足の掃除)。書き込み側 mirrorLatestClassroomRollback とヘルパーは手動復旧用に維持。マージで functions 自動デプロイが走り本番から当該関数が消える(オーナー承認済みの場合のみマージ)
+- chore: デッド関数 downloadLatestClassroomRollback(functions/src/index.ts)と、呼び出し0件のクライアント死蔵ラッパー downloadLatestFirebaseClassroomRollback＋型 ClassroomLatestRollback(src/integrations/firebase/adminFunctions.ts)を撤去(仕様監査 領域2 補足の掃除・オーナー承認済み 2026-07-04)。書き込み側 mirrorLatestClassroomRollback とヘルパーは手動復旧用に維持
+- chore(ci): deploy-functions.yml に --force を追加(--non-interactive のみではソースから削除した関数を本番から消せずデプロイが失敗するため。関数削除はオーナー承認済みマージのみ main に入れる運用を注記)
 
 ## v1.5.375 (2026-07-04)
 

@@ -63,9 +63,15 @@ jobs:
       - name: Deploy Cloud Functions (live)
         # firebase の終了コードをそのままステップの成否にする(以前は `| tee` が exit code を
         # マスクして失敗を success と誤報告していた)。ログは tee + pipefail で保存する。
+        #
+        # --force について(2026-07-04): --non-interactive のみだと「ソースから削除された関数」を
+        # 消せずデプロイ自体が失敗する(削除確認プロンプトに答えられないため)。--force で
+        # 「ソースに無い関数は本番からも削除」を自動承認する。＝ main のソースが本番関数の正。
+        # 運用ルール: 関数エクスポートの削除は本番から関数が消える操作なので、
+        # オーナー承認を得たマージのみ main に入れること(仕様監査 領域2 補足の運用)。
         run: |
           set -o pipefail
-          npx --yes firebase-tools deploy --project komahyouapp-prod --only functions --non-interactive \
+          npx --yes firebase-tools deploy --project komahyouapp-prod --only functions --non-interactive --force \
             2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
