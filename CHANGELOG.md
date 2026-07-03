@@ -18,6 +18,12 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.378 (2026-07-04)
+
+- docs: 仕様監査 領域3のオーナー確定(C1: 授業時間はnote転用をデータ辞書明記・C2: 二層正本の相互参照＋B2〜B6要約取込・C3: 死蔵エディタ削除)を正本 spec-board-regular-placement.md(§6・§7新設)と spec-template-behavior.md へ反映(docs/spec-audit-2026-07.md に処置記録)
+- chore: 死蔵コンポーネント RegularLessonTemplateEditor.tsx を削除(import 0件・仕様監査 領域3 C3・オーナー承認済み)。テンプレ編集はオンボード経路(ScheduleBoardScreen templateCells)のみ。copilot-instructions.md の参照も現行仕様(Q14)へ更新
+- docs: CLAUDE.md の CIセットアップ記録に Cloud Scheduler 管理者ロール要件を追記(2026-07-04 functions デプロイでスケジュール関数の cloudscheduler.jobs.update 403 が初出。オーナー付与→再実行が必要)
+
 ## v1.5.377 (2026-07-04)
 
 - chore: デッド関数 downloadLatestClassroomRollback(functions/src/index.ts)と、呼び出し0件のクライアント死蔵ラッパー downloadLatestFirebaseClassroomRollback＋型 ClassroomLatestRollback(src/integrations/firebase/adminFunctions.ts)を撤去(仕様監査 領域2 補足の掃除・オーナー承認済み 2026-07-04)。書き込み側 mirrorLatestClassroomRollback とヘルパーは手動復旧用に維持

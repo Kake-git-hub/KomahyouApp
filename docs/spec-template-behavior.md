@@ -4,6 +4,10 @@
 > テンプレ周りの確定仕様。根拠コードは `src/components/schedule-board/ScheduleBoardScreen.tsx`
 > （`handleSaveRegularLessonTemplate` L2907〜）と `src/components/regular-template/regularLessonTemplate.ts`。
 > 「★実装デルタ」が付いた項目は**確定仕様 ≠ 現状実装**で、実装更新が必要（末尾§実装デルタ一覧に集約）。
+>
+> **本書はコマ表基本配置の上位正本 `docs/spec-board-regular-placement.md` の細部（テンプレ挙動 Q&A）を担う補完文書。**
+> 上位方針（テンプレ一本化・月次上限撤廃・毎週在籍配置・休校ルール・色分け撤廃）は上位正本を参照。
+> 片方だけを編集して齟齬を出さないこと（上位正本 §7 に本書要約を取り込み済み・2026-07-04）。
 
 ## 状態
 - [x] 確定（2026-06-09 オーナー回答 → 正本化）。実装は §実装デルタ一覧（Q4 / Q11 / Q14 / Q16 / Q17）を反映する。
@@ -94,4 +98,4 @@
 | Q16 | 履歴3件上限 | ✅ 実装。`regularLessonTemplateHistory` を `.slice(-3)`（`REGULAR_LESSON_TEMPLATE_HISTORY_LIMIT=3`） | `ScheduleBoardScreen.tsx` `handleSaveRegularLessonTemplate` |
 | Q17 | 保存モード一本化（UI） | ✅ 変更不要。精査の結果**UI から呼ばれるのは `overwrite=true` のみ**（`handleTemplateSaveConfirm`）＝ユーザーには既に1つの「保存」。内部 `overwrite` 引数（盤面再構築の有無）は性能・分岐のため保持 | （現状維持） |
 
-> 死蔵コンポーネント `RegularLessonTemplateEditor.tsx` … 現在どこからも import されていない。整理（削除）の判断は別途。本番3教室は読み取り専用、書込み検証は開発用教室 `v8OZ7zH8vONNHjjYVcR1` のみ。
+> 死蔵コンポーネント `RegularLessonTemplateEditor.tsx` … **削除済み（2026-07-04 オーナー確定・仕様監査 領域3 C3）**。テンプレ編集はオンボード経路（`ScheduleBoardScreen` の `templateCells`）のみ。本番3教室は読み取り専用、書込み検証は開発用教室 `v8OZ7zH8vONNHjjYVcR1` のみ。

@@ -160,6 +160,9 @@ GCP コンソール（プロジェクト `komahyouapp-prod`）で以下を付与
 - ロール **サービス アカウント ユーザー**（`roles/iam.serviceAccountUser`）… 実行SA(`...@appspot`)を ActAs するため
 - ロール **Cloud Functions 管理者**（`roles/cloudfunctions.admin`）
 - API **Cloud Billing API**（`cloudbilling.googleapis.com`）を有効化
+- ロール **Cloud Scheduler 管理者**（`roles/cloudscheduler.admin`）… スケジュール関数（毎時/日次バックアップ・
+  saveAttempts掃除）のジョブ更新に必要。2026-07-04 のデプロイで `cloudscheduler.jobs.update` の 403 が初出。
+  **オーナーが付与するまで functions デプロイは赤になる**（付与後に Actions → Deploy Cloud Functions を再実行）。
 
 ### 注意
 - デプロイ後は各端末で **ハードリロード（Ctrl+Shift+R）** を徹底（旧バンドルのキャッシュ事故防止）。
