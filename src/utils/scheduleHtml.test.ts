@@ -2422,6 +2422,8 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(studentHtml).toContain('function getOverlappingSpecialSessions(startDate, endDate)')
     expect(studentHtml).toContain('function resolveLectureRegistrationStatus(input)')
     expect(studentHtml).toContain('updateLectureSummaryButtonVisibility(startDate, endDate)')
+    // 最下部がWindowsタスクバーに隠れないようスクロール余白を確保する(回帰防止)。
+    expect(studentHtml).toContain('padding-bottom:160px')
 
     write.mockClear()
     openTeacherScheduleHtml({

@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.369
+
+- fix: 講習集計結果ページの最下部がWindowsタスクバーに隠れて見えない問題を修正。ポップアップ本文に padding-bottom:160px を追加し、最後の行までスクロールで確実に見えるようにした(印刷時は0に戻す)。回帰防止アサート追加(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
+
 ## v1.5.368
 
 - feat: 生徒日程表の「印刷用全員表示」の左に「講習集計結果」ボタンを追加。表示期間に講習期間(specialSession)が重なるときだけ表示し、クリックで全生徒の講習登録状況(登録/未登録、登録でも通常のみは「登録（通常のみ）」の注記)を新タブに一覧表示する。判定は studentInputs の countSubmitted=登録・regularOnly=通常のみ。読み取り専用(DATA参照+新タブ生成のみ、Firestore書き込みなし)。埋め込みスクリプト系のため new Function 抽出で状態分類を、生成HTMLの配線有無を回帰テストで担保(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
