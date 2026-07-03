@@ -16,6 +16,8 @@ import { buildLectureStockEntries } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
+// ⚠️【一時機能】7/20休日振替の復帰ボタン。室長クリック後に本import・ハンドラ・ボタンごと撤去する(restore720Holiday.ts参照)。
+import { applyRestore720HolidayMakeup, getRestore720TargetKeys, RESTORE_720_ORIGIN_DATE } from './restore720Holiday'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
@@ -7547,6 +7549,33 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除しました。`)
   }
 
+  // ⚠️【一時機能・室長が1クリックしたら本ハンドラ+ボタンごと撤去する】(2026-07-03)
+  // 対象4名(教室別)の 7/20 休日振替を「手動追加 + 抑制解除」で未消化振替に復帰する。冪等。
+  // 撤去後も保存済みデータに残るため 7/20 は在庫に残り続ける(restore720Holiday.ts / memory 参照)。
+  const restore720TargetKeys = getRestore720TargetKeys(classroomStorageKey)
+  const handleRestore720HolidayMakeup = () => {
+    if (restore720TargetKeys.length === 0) return
+    const { manualAdjustments: nextManualMakeupAdjustments, suppressedMakeupOrigins: nextSuppressedMakeupOrigins } =
+      applyRestore720HolidayMakeup(manualMakeupAdjustments, suppressedMakeupOrigins, restore720TargetKeys, RESTORE_720_ORIGIN_DATE)
+
+    commitWeeks(
+      weeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      nextManualMakeupAdjustments,
+      nextSuppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    )
+
+    setStatusMessage('7/20(海の日)の休日振替を対象生徒の未消化振替へ復帰しました。手動保存してください。')
+  }
+
   const executeMoveStudent = (cellId: string, deskIndex: number, studentIndex: number, sourceStudentIdOverride?: string | null) => {
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
@@ -9390,6 +9419,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   autoFocus
                   data-testid="makeup-stock-search"
                 />
+                {/* ⚠️【一時機能・室長が1クリックしたら本ブロックごと撤去する】7/20休日振替の復帰ボタン */}
+                {restore720TargetKeys.length > 0 ? (
+                  <button
+                    type="button"
+                    className="primary-button slim"
+                    style={{ margin: '6px 0' }}
+                    onClick={handleRestore720HolidayMakeup}
+                    data-testid="restore-720-holiday-button"
+                  >
+                    7/20(海の日)の休日振替を未消化へ復帰（対象{restore720TargetKeys.length}名）
+                  </button>
+                ) : null}
                 <div className="stock-select-list">
                   {(() => {
                     const query = stockStudentSearch.trim().toLowerCase()
