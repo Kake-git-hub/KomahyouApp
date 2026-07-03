@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.377 (2026-07-04)
+
+- chore: デッド関数 downloadLatestClassroomRollback(functions/src/index.ts)と、呼び出し0件のクライアント死蔵ラッパー downloadLatestFirebaseClassroomRollback＋型 ClassroomLatestRollback(src/integrations/firebase/adminFunctions.ts)を撤去(仕様監査 領域2 補足の掃除・オーナー承認済み 2026-07-04)。書き込み側 mirrorLatestClassroomRollback とヘルパーは手動復旧用に維持
+- chore(ci): deploy-functions.yml に --force を追加(--non-interactive のみではソースから削除した関数を本番から消せずデプロイが失敗するため。関数削除はオーナー承認済みマージのみ main に入れる運用を注記)
+
 ## v1.5.376 (2026-07-04)
 
 - docs: 仕様監査 領域3(コマ表の基本配置・テンプレ方式)を実施(docs/spec-audit-2026-07.md)。所見10件(A1/B6/C3)＋一致点12項目。上位正本と細部正本 spec-template-behavior.md の二層関係が未明記(B1)、テンプレ凍結(B2)・overwrite時ストック返却/相殺(B3)が上位正本未定義である点を特定。オーナー確認C1〜C3は確定待ち

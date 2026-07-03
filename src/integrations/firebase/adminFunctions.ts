@@ -508,13 +508,6 @@ export type ClassroomFromServerAutoBackup = {
   data: AppSnapshotPayload
 }
 
-export type ClassroomLatestRollback = {
-  classroomId: string
-  sourceSavedAt: string
-  capturedAt: string
-  data: AppSnapshotPayload
-}
-
 export type DevelopmentBackupSource = {
   backupDateKey: string
   backupKind: 'daily' | 'hourly'
@@ -567,16 +560,4 @@ export async function downloadClassroomFromFirebaseServerAutoBackup(backupDateKe
     savedAt: result.data.savedAt,
     data,
   }
-}
-
-export async function downloadLatestFirebaseClassroomRollback(classroomId: string): Promise<ClassroomLatestRollback> {
-  await ensureFirebaseAuthenticatedUser()
-  const functions = requireFunctions()
-  const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; classroomId: string }, ClassroomLatestRollback>(functions, 'downloadLatestClassroomRollback', { timeout: 120_000 })
-  const result = await callable({
-    workspaceKey: config.workspaceKey,
-    classroomId,
-  })
-  return result.data
 }
