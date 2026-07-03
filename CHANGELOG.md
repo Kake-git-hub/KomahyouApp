@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.371
+
+- docs: 仕様監査（全9領域・オーナー指示2026-07-04）の台帳 docs/spec-audit-2026-07.md を新設し、領域1(教室権限・ログイン・開発者画面)を監査。所見12件(A3/B4/C5)。オーナー確定を正本 spec-classroom-auth.md へ反映(一時停止は全件一括のみ・localは開発専用・contractStatusデータ辞書)。教室追加のアプリ内完結化は Issue #38 起票
+
 ## v1.5.370
 
 - chore: 保守運営体制のブラッシュアップ。spec-curator エージェント新設(思いつき要望→要求仕様の補完・確定役)、モデル割当方針(単純作業=Sonnet最新/判断=Opus最新・モデルID固定禁止)と標準フロー(triage→spec-curator→dev-fix→regression-reviewer→safe-release)を CLAUDE.md に明文化。bug-triage スキルに仕様確定ステップを追記。古い引き継ぎ文書2件(docs/NEXT-SESSION-PROMPT.md, SESSION-HANDOFF.md)へ廃止ヘッダ追加(.claude/agents/spec-curator.md ほか)
