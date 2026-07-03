@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.368
+
+- feat: 生徒日程表の「印刷用全員表示」の左に「講習集計結果」ボタンを追加。表示期間に講習期間(specialSession)が重なるときだけ表示し、クリックで全生徒の講習登録状況(登録/未登録、登録でも通常のみは「登録（通常のみ）」の注記)を新タブに一覧表示する。判定は studentInputs の countSubmitted=登録・regularOnly=通常のみ。読み取り専用(DATA参照+新タブ生成のみ、Firestore書き込みなし)。埋め込みスクリプト系のため new Function 抽出で状態分類を、生成HTMLの配線有無を回帰テストで担保(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
+
 ## v1.5.367
 
 - chore(一時機能撤去): 7/20休日振替の復帰ボタン(v1.5.366で追加)を撤去。対象4名(緑が丘 白川:数/古賀:英、日大前 劉:数/神:理)の復帰は室長が各教室でクリック→手動保存済みで本番反映を確認(manualMakeupAdjustmentsに7/20あり・suppressedMakeupOriginsから除去済み)。撤去は button/ハンドラ/import/restore720Holiday.ts/restore720Holiday.test.ts の削除のみでデータには非干渉のため7/20は在庫に残り続ける(src/components/schedule-board/ScheduleBoardScreen.tsx・restore720Holiday.ts削除・関連コミット 2edf396)
