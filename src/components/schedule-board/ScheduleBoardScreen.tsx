@@ -15,6 +15,7 @@ import { CursorFollowPreview } from './CursorFollowPreview'
 import { buildLectureStockEntries } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
@@ -3448,6 +3449,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 自動で巻き戻らないよう、選択した日付をそのまま割り当てるためのガード。
   const [selectedMakeupStockOriginDate, setSelectedMakeupStockOriginDate] = useState<string | null>(null)
   const [selectedLectureStockKey, setSelectedLectureStockKey] = useState<string | null>(null)
+  // 未消化講習モーダルで選んだ科目(subject + sessionId)。手動配置でこの科目を尊重する。
+  const [selectedLectureStockItemKey, setSelectedLectureStockItemKey] = useState<LecturePlacementSelectionKey | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
   const [dayHeaderMenu, setDayHeaderMenu] = useState<{ dateKey: string; x: number; y: number } | null>(null)
   const [studentMenu, setStudentMenu] = useState<StudentMenuState | null>(null)
@@ -4831,7 +4834,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return lecturePendingItemsByEntryKey.get(entry.key)?.pendingItems.map((item) => ({ ...item })) ?? []
   }
 
-  const selectedLecturePlacementItem = selectedLectureStockEntry ? buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null : null
+  // ユーザーが未消化講習モーダルで選んだ科目(subject + sessionId)を尊重して配置対象を解決する。
+  // 未選択・不一致時は先頭へフォールバック(resolveSelectedLecturePlacementItem 内)。
+  const resolveLecturePlacementItem = (entry: GroupedLectureStockEntry) =>
+    resolveSelectedLecturePlacementItem(buildLecturePendingItems(entry), selectedLectureStockItemKey)
+
+  const selectedLecturePlacementItem = selectedLectureStockEntry ? resolveLecturePlacementItem(selectedLectureStockEntry) : null
 
   const buildCommonAutoAssignScoreParts = (params: {
     studentId: string
@@ -7159,7 +7167,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage('この未消化講習は残数がありません。')
       return
     }
-    const placementEntry = buildLecturePendingItems(selectedLectureStockEntry)[0] ?? null
+    const placementEntry = resolveLecturePlacementItem(selectedLectureStockEntry)
     if (!placementEntry) {
       setStatusMessage('この未消化講習は配置できる科目残数がありません。')
       return
@@ -7243,6 +7251,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStockPanelsRestoreState(null)
     setIsLectureStockOpen(false)
     setSelectedLectureStockKey(null)
+    setSelectedLectureStockItemKey(null)
     setStatusMessage(`${selectedLectureStockEntry.displayName} の講習 ${placementEntry.subject} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} に追加しました。`)
   }
 
@@ -8770,7 +8779,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
   }
 
-  const handleSelectLectureStockEntry = (entry: GroupedLectureStockEntry, options?: { hidePanelsDuringPlacement?: boolean }) => {
+  const handleSelectLectureStockEntry = (entry: GroupedLectureStockEntry, options?: { hidePanelsDuringPlacement?: boolean; item?: LectureStockPendingItem }) => {
     if (entry.requestedCount <= 0) {
       setStatusMessage(`${entry.displayName} の未消化講習は残数がありません。`)
       return
@@ -8779,6 +8788,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
     setSelectedLectureStockKey(entry.key)
+    // モーダルで選んだ科目を記憶し、配置時にこの科目を尊重する(先頭科目の誤配置を防ぐ)。
+    setSelectedLectureStockItemKey(options?.item ? { subject: options.item.subject, sessionId: options.item.sessionId } : null)
     if (options?.hidePanelsDuringPlacement) {
       setStockPanelsRestoreState({ lecture: isLectureStockOpen, makeup: isMakeupStockOpen })
       setIsLectureStockOpen(false)
@@ -9132,7 +9143,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                             className="stock-origin-item stock-origin-item-main"
                             disabled={activeStockAutoAssignKey !== null}
                             onClick={() => {
-                              handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true })
+                              handleSelectLectureStockEntry(lectureEntry, { hidePanelsDuringPlacement: true, item })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}

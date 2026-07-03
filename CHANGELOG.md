@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.364
+
+- fix(未消化講習): モーダルで選んだ科目が無視され、常に先頭科目が配置される不具合を修正(例: 中3で数学を選ぶと英語が置かれる)。振替(makeup)側の rawKey に相当する選択科目の尊重が講習側に無かったのが原因(2026-03-20/06-15 由来の既存バグ・直近デプロイとは無関係)。選択科目(subject+sessionId)を記憶し配置対象を解決する純粋関数 `resolveSelectedLecturePlacementItem` を追加、未選択/不一致は先頭へ安全フォールバック。回帰防止テスト付き(src/components/schedule-board/lectureStockPlacement.ts・ScheduleBoardScreen.tsx)
+
 ## v1.5.363
 
 - refactor: 振替在庫の「空きコマ不足」自動origin(`computeOccupiedSlotOrigins`)を経路ごと廃止(オーナー指示 2026-07-03)。テンプレ毎週強制適用が前提で開講日にコマが埋まっていても未消化を自動生成しない。過去にこの偽originが大量発生→一括削除される際、本物の休講日振替(例: スクールIE緑が丘 白川 数 7/20)まで巻き込まれ消える事故の再発防止。未消化源は「休講日(自動)/同時間帯重複/手動」のみに一本化。占有origin関連テストは新契約(在庫を生成しない)へ反転(src/components/schedule-board/makeupStock.ts・makeupStock.test.ts)
