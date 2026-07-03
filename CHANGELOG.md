@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.376 (2026-07-04)
+
+- docs: 仕様監査 領域3(コマ表の基本配置・テンプレ方式)を実施(docs/spec-audit-2026-07.md)。所見10件(A1/B6/C3)＋一致点12項目。上位正本と細部正本 spec-template-behavior.md の二層関係が未明記(B1)、テンプレ凍結(B2)・overwrite時ストック返却/相殺(B3)が上位正本未定義である点を特定。オーナー確認C1〜C3は確定待ち
+- docs: 領域2補足の訂正(downloadLatestClassroomRollback は「src/ 参照0件」でなく死蔵ラッパーが存在。ブランチ chore/remove-dead-rollback-download で両方撤去・マージはオーナー承認待ち)
+
 ## v1.5.375 (2026-07-04)
 
 - docs: 仕様監査 領域2のオーナー確定(C1: 離脱時は実装を正・C2: transient再試行を例外明文化・C3: 復元警告を実装)を正本 spec-save-restore.md へ反映。B1〜B6(楽観ロック・保存時3層防御・QR反映非対称・全教室書出・平文・Feature B)を明文化し「消してはならない破壊防止ガード」を明記(docs/spec-audit-2026-07.md に処置記録)

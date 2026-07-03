@@ -24,7 +24,7 @@
 |---|------|------|------|
 | 1 | 教室権限・ログイン・開発者画面 | `spec-classroom-auth.md` | 監査済（所見12件：A3/B4/C5・2026-07-04） |
 | 2 | 保存・バックアップ・復元 | `spec-save-restore.md` | 監査済（所見12件：A3/B6/C3・2026-07-04）＋確定反映済（C3実装は主セッション） |
-| 3 | コマ表の基本配置（テンプレ方式） | `spec-board-regular-placement.md` | 未着手 |
+| 3 | コマ表の基本配置（テンプレ方式） | `spec-board-regular-placement.md` | 監査済（所見10件：A1/B6/C3・2026-07-04） |
 | 4 | 振替ストック | `spec-makeup-stock.md` | 未着手 |
 | 5 | 講習・講習ストック | `spec-lecture-stock.md` | 未着手 |
 | 6 | 基本データ画面 | `spec-basic-data.md` | 未着手 |
@@ -202,7 +202,7 @@
 
 - **B1/B2 は「意図的な破壊防止ガード」であり、正本に書かれていないまま将来の保存系リファクタで外されると本番データ破壊に直結する。** 楽観ロック（版数）・空データ上書き拒否・読み戻し検証は、いずれも過去のクロス汚染／偽 dirty 上書き（memory classroom-restore-cross-contamination の第一〜第四の真因）への直接的な防波堤。正本の未定義領域＝回帰の温床という本監査の主目的に最も合致するため、確定時に「消してはならないガード」として明記することを強く推奨。
 - **A1（離脱時の手動保存強制）を正本どおり実装しようとすると、beforeunload でアプリ内モーダルは出せない（ブラウザ制約）ため、実装は不可能に近い。** 正本の記述自体が現実のブラウザ制約と乖離しており、正本側を実装（＝標準離脱確認＋同期）に合わせる方向（C1）が妥当。安易に「未実装 A」として実装タスク化しないこと。
-- 補足（所見外の記録）: Cloud Function `downloadLatestClassroomRollback`（`functions/src/index.ts:1835`）はクライアント（src/）からの参照が 0 件のデッドコード。正本§4「rollback UI は削除（Undo で代替）」どおり UI 撤去済みだが、サーバー側の関数本体が残存。掃除は別途検討（本監査では差分扱いしない）。
+- 補足（所見外の記録）: Cloud Function `downloadLatestClassroomRollback` はデッドコード。正本§4「rollback UI は削除（Undo で代替）」どおり UI 撤去済みだが、サーバー側の関数本体と、クライアント側の死蔵ラッパー `downloadLatestFirebaseClassroomRollback`＋型 `ClassroomLatestRollback`（`adminFunctions.ts`・呼び出し0件）が残存していた（監査時の「src/ 参照0件」は不正確・ラッパー定義はあった＝訂正 2026-07-04）。→ ブランチ `chore/remove-dead-rollback-download` で両方撤去（書き込み側 `mirrorLatestClassroomRollback`＋ヘルパーは手動復旧用に維持）。マージはオーナー承認待ち（functions 自動デプロイで本番から関数が消えるため）。
 
 ### 処置（正本更新・Issue化の記録）— オーナー確定 2026-07-04
 
@@ -224,3 +224,80 @@
   - B5（JSON バックアップは平文・local モードのパスワード prompt は残骸）→ 正本§5-3 として追記。
   - B6（他教室コピー廃止→確定バックアップから開発用教室へ読み込む方式〈Feature B・規模提示 confirm・開発用教室のみ書込〉）
     → 正本§7 を更新。
+
+## 領域3: コマ表の基本配置（テンプレ方式）（2026-07-04）
+
+正本 `spec-board-regular-placement.md`（2026-06-07 確定 To-Be／2026-06-08 Phase 3 検証済み）と現行実装を突き合わせた。
+読み取り監査のみ（コード・正本は未編集、Firestore/本番へは未接続）。file:line は監査時点の値。
+既知事例（memory: template-editing-flow / regular-teachers-only-board-source / move-date-inheritance / student-drag-move）と突き合わせ済み。
+
+**重要な前提（正本の二層構造）**: 本領域の正本 `spec-board-regular-placement.md` は**上位方針**（テンプレ一本化・月次上限撤廃・
+毎週在籍配置・休校ルール・色分け撤廃）を定義し、テンプレ挙動の**細部の正本は別書 `spec-template-behavior.md`（Q1-Q20・
+2026-06-09 確定）** にある（反映日境界・凍結 `templateFreezeBeforeDate`・休日との力関係・overwrite 時のストック返却/相殺・
+単年度生成・履歴3件・入会前配置 等）。実装は両書を根拠に組まれている（コード内コメントが両書の Q番号を参照）。
+**この二層関係が上位正本に明記されていない**ため、後述 B1 で扱う。
+
+**先に「一致している主要点」（差分ではない・記録）**
+- 通常授業の生成元は `buildRegularLessonsFromTemplate`（テンプレ）に一本化（`src/components/regular-template/regularLessonTemplate.ts:258`）。正本§1・実装状況に一致。
+- 月次上限（`capRegularLessonDatesPerMonth`）は撤廃済み（src 全体で 0 件）。実配置 `buildManagedRegularLessonsRange`（`ScheduleBoardScreen.tsx:1972`）に月上限 slice が無く、該当曜日の全日付へ毎週配置（`getScheduledDatesInMonth`）。正本§2・撤廃概念に一致。
+- 在籍期間フィルタ＝入塾/退塾/学齢で毎週判定（`isActiveOnDate`、`ScheduleBoardScreen.tsx:2011-2022`）。正本§2「在籍期間中の週だけ」に一致。
+- 休校ルール＝forceOpenDates 優先 ＞ holidayDates ＞ closedWeekdays（`ScheduleBoardScreen.tsx:1997-2003`）。祝日は特別扱いせず平日配置。正本§3 に一致。
+- 1コマ＝講師1人＋生徒最大2人。講師のみ机（生徒0でも teacher があれば配置）も可（`ScheduleBoardScreen.tsx:2008,2029`）。正本§4 に一致。
+- ペア生徒は別科目・別在籍期間（`student1/2` が各々 subject・active 判定を持つ、`ScheduleBoardScreen.tsx:2011-2027`）。正本§4 に一致。
+- 科目は生徒の生年月日×基準日で自動解決（`resolveDisplayedSubjectForBirthDate`、`regularLessonTemplate.ts:293`）。spec-template-behavior Q13 に一致。
+- `nextStudent*`（年度引き継ぎ）は常に空文字＝死蔵（`regularLessonTemplate.ts:302-305`）。正本§2「引き継ぎ廃止」・実装状況に一致。
+- 旧正本 `regular-lesson-contract-rule.md`（月4回ルール）は先頭に廃止マーク＋新正本への誘導あり（経緯記録として保持）。正本ヘッダーに一致。
+- テンプレ編集の本体はオンボード経路（`ScheduleBoardScreen` の `isTemplateMode`/`templateCells`、保存 `handleSaveRegularLessonTemplate:3588`）。`RegularLessonTemplateEditor.tsx` は import 0件＝死蔵（memory template-editing-flow どおり）。
+- 「通常講師のみ」判定は盤面の通常授業スロットから講師IDを集める `collectStudentRegularTeacherIdsFromWeeks`（`ScheduleBoardScreen.tsx:895`）で配列由来と和集合（memory regular-teachers-only-board-source・v1.5.317 の対処が生存）。
+- 生徒移動先の日付滞留対策（`executeMoveStudent` の statusSlots クリア＋`resolveVisibleSlotDateLabel`）と、生徒同一性補完（`mergeManagedDeskLesson` の回帰防止コメント 6793374、`ScheduleBoardScreen.tsx:2132-2143`）が生存。memory move-date-inheritance / no-regression-rule どおり。
+
+### A: 仕様と実装の相違
+
+**A1: 授業時間 90/60/45（§6）は通常授業では「旧 note フィールドの転用」で実装されており、専用フィールドが無い**
+- 正本の該当箇所: §6「各授業に授業時間 90／60／45 分を持てる（未選択＝90分扱い）」。
+- 実装の該当箇所: 通常授業テンプレの授業時間は**専用フィールドを持たず**、`RegularLessonTemplateStudent.note`（盤面では `noteSuffix`）を転用している（`src/components/basic-data/regularLessonModel.ts:65-72` `normalizeRegularLessonNote`：値を `'' | '60' | '45'` に正規化、`''`＝90分扱い）。講習（special）側は専用 `lectureDurationOptions=[90,60,45]`（`special-data/specialSessionModel.ts:28-29`）を持つのと非対称。型 `types.ts`・`RegularLessonTemplateDesk` に授業時間の名前付きフィールドは無い。
+- 推奨処置: 正本§6 が「専用フィールド」を要求しているのか、「note 転用でよい（データ辞書として明記）」で足りるのかを確定。機能としては満たされている（90/60/45 を保持・表示できる）ため、多くは正本側にデータ辞書（note=授業時間の転用・''=90分）を追記して整合させれば足りる見込み。判断は C1。
+
+### B: 仕様に無い実装挙動（未定義）
+
+**B1（最重要）: 上位正本にテンプレ挙動の細部が無く、別正本 `spec-template-behavior.md` への参照も無い**
+- 正本の該当箇所: 記載なし（§1-§6 は上位方針のみで、反映日境界・凍結・overwrite 時のストック返却等に触れていない）。
+- 実装の該当箇所: 細部は `spec-template-behavior.md`（Q1-Q20）が正本で、実装（`handleSaveRegularLessonTemplate` `ScheduleBoardScreen.tsx:3588`、`buildRegularLessonsFromTemplate`）はそこを根拠にしている。上位正本 `spec-board-regular-placement.md` からこの別正本への相互参照が無いため、上位だけを読むと「テンプレ保存時に何が起きるか」が未定義に見える。
+- 推奨処置: 上位正本に「テンプレ挙動の細部の正本は `spec-template-behavior.md`」と明記し相互リンクする。両書の役割分担（上位＝方針／下位＝Q&A詳細）を固定して、片方だけの編集で齟齬が出ないようにする。
+
+**B2: テンプレ凍結 `templateFreezeBeforeDate`（反映日以前は不変）が上位正本に未定義**
+- 正本の該当箇所: 記載なし（`spec-template-behavior.md` Q1/Q3 にはあるが上位正本には無い）。
+- 実装の該当箇所: 盤面再生成の禁忌ガード（`ScheduleBoardScreen.tsx:1363-1366`・`:3881-3902`：`templateFreezeBeforeDate` 未満の週/セルは managed overlay を完全スキップ＝講師・生徒・出欠・メモを一切変更しない）。保存時に `templateFreezeBeforeDate = effectiveStartDate` を設定（`:3619`）。
+- 推奨処置: 「反映日（`templateFreezeBeforeDate`）より前のコマ表はテンプレ再生成で一切変更しない」を上位正本§2 or §3 に明文化。週トリミング（範囲外の未編集週＝テンプレ再生成で同一だから破棄）の前提でもあり、消してはならないガードである旨を残す。
+
+**B3: overwrite 保存時の「反映日以降クリア＋振替/講習をストックへ返却・相殺」が上位正本に未定義**
+- 正本の該当箇所: §末尾「下流ブロックへの影響」で触れるのみ（振替ストックの再定義は④へ委譲）。overwrite 時に既存配置をどうするかは未定義。
+- 実装の該当箇所: `handleSaveRegularLessonTemplate`（`ScheduleBoardScreen.tsx:3623-` overwrite 分岐）が、反映日以降の配置済み振替/講習を未消化ストックへ返却（Q7）、欠席由来の未消化を相殺（Q8）、手動追加振替は復元しない（Q9）、抑制/回数補正は反映日前のみ保持（Q10）。
+- 推奨処置: `spec-template-behavior.md` Q6-Q10 の内容を上位正本からも参照できるよう明記（B1 の相互リンクで代替可）。特に「テンプレ再保存でストックが返る/相殺される」は室長の体感に直結するため、上位正本にも要約を置くのが望ましい。
+
+**B4: テンプレ生成は「反映日〜当年度末（3/31）の単年度のみ」（複数年一括しない）が上位正本に未定義**
+- 正本の該当箇所: §2「年度替わりもテンプレ編集で管理」とあるが、生成範囲が単年度である点は明記なし。
+- 実装の該当箇所: `buildRegularLessonsFromTemplate`（`regularLessonTemplate.ts:271-276`）が反映日の年度のみ（反映日 or 4/1 の遅い方〜3/31）生成。多年度ループ・上限年度(旧2031)は撤廃済み（spec-template-behavior Q11）。
+- 推奨処置: 上位正本§2 に「テンプレは反映日〜当年度末の単年度のみ生成。年度替わりは新テンプレを作成」を明記。
+
+**B5: テンプレ編集モードの参加者フィルタ＝「入会前＋在籍（退塾のみ除外）」が上位正本の在籍定義と表現差**
+- 正本の該当箇所: §2「各生徒は在籍期間中の週だけ表示（入塾日〜退塾日の範囲内のみ）」。
+- 実装の該当箇所: **配置後の盤面**は §2 どおり在籍週のみ表示（`isActiveOnDate`）だが、**テンプレ編集モードの配置候補**は「入会前も配置可＝退塾のみ除外」（`filterTemplateParticipantsForReferenceDate` `regularLessonTemplate.ts:219-233`、spec-template-behavior Q14）。編集時に未来入会の生徒を先行配置でき、実配置は在籍開始後の週から出る、という二段構え。
+- 推奨処置: 上位正本§2 に「テンプレ編集時は入会前の生徒/講師も先行配置できる（実際の盤面表示は在籍開始週から）」を注記。矛盾ではなく段階の違いだが、未定義だと「入会前が出るのはバグ？」と誤認しうる。
+
+**B6: 定休日セルはテンプレ編集モードで配置不可（配置ブロック）が上位正本に未定義**
+- 正本の該当箇所: §3 は「休校曜日はコマを作らない」だが、テンプレ編集画面での配置可否は未定義。
+- 実装の該当箇所: テンプレ編集モードで `closedWeekdays` のセルは講師・生徒を配置できない（`ScheduleBoardScreen.tsx:6009-6013` `isTemplateClosedDayCell`、spec-template-behavior Q4）。「テンプレ ＜ 定休日」「個別休日 ＜ テンプレ」の非対称も Q4 にあるが上位正本に無い。
+- 推奨処置: 上位正本§3 に「テンプレ編集モードでは定休日セルに配置できない（混乱防止）」「テンプレは holidayDates のみ消し、closedWeekdays/forceOpenDates は消さない」を追記。
+
+### C: オーナー確認事項
+
+- **C1**: 授業時間 90/60/45（§6）を通常授業で「専用フィールド」にするか、現行の「note フィールド転用（''=90/'60'/'45'）」を正としてデータ辞書を正本に明記するかで足りるか（→A1）。機能は満たされているため後者（正本にデータ辞書追記）で足りる見込み。
+- **C2**: 上位正本 `spec-board-regular-placement.md` と細部正本 `spec-template-behavior.md` の二層関係を、上位正本に相互参照として明記してよいか（→B1）。あわせて B2-B6（凍結・overwrite ストック返却/相殺・単年度生成・入会前先行配置・定休日配置ブロック）の要約を上位正本へ取り込むか、リンクに留めるか。
+- **C3**: 死蔵コンポーネント `RegularLessonTemplateEditor.tsx`（import 0件）を将来削除するか、参照用に残すか（本監査では差分扱いせず記録のみ。spec-template-behavior 末尾でも「整理は別途」とされている）。
+
+### 危険と感じた点（記録・確定前）
+
+- **B2（テンプレ凍結）は週トリミング（boardWeekTrim）と結合した重要ガード。** 週トリムは「範囲外の未編集週＝テンプレ再生成で同一だから破棄」を前提に破棄するが、これは「反映日以前は再生成しない（凍結）」「手動編集週は保持」の両ガードが効いていて初めて安全。凍結ガードが将来のリファクタで外れると、反映日以前の確定済みコマ（過去の実績）がテンプレ再生成で書き換わる/消える危険がある。上位正本に未定義のまま放置すると発見が遅れるため、確定時に「消してはならないガード」として明記を強く推奨。
+- **B3（overwrite 時のストック返却/相殺）は室長の実データに直接影響する破壊的操作。** テンプレ再保存で反映日以降の配置済み振替/講習が一括でストックへ戻る/相殺されるため、意図せぬ再保存でコマ表の見た目が大きく変わる。上位正本に要約が無いと「勝手に消えた」と誤認され、復旧のため危険な復元操作（クロス汚染リスク）を誘発しかねない。
+- 補足（所見外の記録）: 正本§6 の授業時間は通常授業では note 転用実装のため、`RegularLessonTemplateStudent.note` を将来「純粋なメモ」に戻すと授業時間が失われる。note＝授業時間である旨を明記しないと、note を別用途に流用する変更で回帰する（A1/C1 と同根）。
