@@ -25,7 +25,7 @@
 | 1 | 教室権限・ログイン・開発者画面 | `spec-classroom-auth.md` | 監査済（所見12件：A3/B4/C5・2026-07-04） |
 | 2 | 保存・バックアップ・復元 | `spec-save-restore.md` | 監査済（所見12件：A3/B6/C3・2026-07-04）＋確定反映済（C3実装は主セッション） |
 | 3 | コマ表の基本配置（テンプレ方式） | `spec-board-regular-placement.md` | 監査済（所見10件：A1/B6/C3・2026-07-04）＋確定反映済（C3削除は主セッション） |
-| 4 | 振替ストック | `spec-makeup-stock.md` | 未着手 |
+| 4 | 振替ストック | `spec-makeup-stock.md` | 監査済（所見15件：A2/B8/C5・2026-07-04） |
 | 5 | 講習・講習ストック | `spec-lecture-stock.md` | 未着手 |
 | 6 | 基本データ画面 | `spec-basic-data.md` | 未着手 |
 | 7 | 特別講習データ・提出ページ | `spec-special-session-submission.md` | 未着手 |
@@ -320,3 +320,98 @@
 - **C3: `RegularLessonTemplateEditor.tsx` は削除で確定** → 上位正本§7-1 に「テンプレ編集の本体はオンボード経路
   （`ScheduleBoardScreen` の `templateCells`）」「モーダル版は死蔵で削除する」を明記済み。**削除の実装は主セッションで対応**
   （import 0件のデッドコンポーネント。受け入れ条件: ビルド・型・全ユニットテストが緑で、テンプレ編集がオンボード経路で従来どおり動作する）。
+
+## 領域4: 振替ストック（2026-07-04）
+
+正本 `spec-makeup-stock.md`（2026-06-07 確定 To-Be／2026-06-08 Phase 4 精査で `autoShortage` の意味を訂正・
+「休日で潰れた通常授業を自動で振替計上する仕組み」として残す方針に反転）と現行実装（main・v1.5.378）を突き合わせた。
+読み取り監査のみ（コード・正本は未編集、Firestore/本番へは未接続）。file:line は監査時点の値。
+既知事故（memory: occupied-origin-and-suppressed-makeup / handoff-restore-720 / auto-assign-makeup-with-lecture /
+lecture-stock-subject-selection / submission-board-persistence-asymmetry）と突き合わせ済み。
+
+**重要な前提（正本の三層構造）**: 振替ストックの正本は本書 `spec-makeup-stock.md`（発生・消化・表示・廃止概念）だが、
+**overwrite 時のストック返却/相殺の細部は `spec-template-behavior.md` Q7-Q10**、**繰越（初期設定の未消化振替）は
+`spec-save-restore.md` §6**、**自動割振での振替同時割当は `spec-auto-assign-rules.md`（memory auto-assign-makeup-with-lecture）**
+にそれぞれ分散している。本書からこれら3書への相互参照が無く（後述 B1）、本書だけを読むと振替のライフサイクルが
+未定義に見える。
+
+**先に「一致している主要点」（差分ではない・記録）**
+- 休日振替の自動計上＝休日/定休日で潰れた通常授業を生徒×科目で未消化計上（理由ラベル `休日振替`/`定休日振替`、`forceOpenDates` 除外）。`computeAutomaticShortageOrigins`（`src/components/schedule-board/makeupStock.ts:408-461`）、理由解決 `resolveOriginReasonLabel`（`:158-188`）。正本§1-A に一致。
+- 即時計上（過去/未来問わず・旧「今日まで」制限撤廃）。`computeAutomaticShortageOrigins` に `todayKey` キャップが無く、`stockPeriod` 全月を走査（`makeupStock.ts:439-455`、コメント「休日設定した時点で即時に振替計上する」）。正本§1-A・実装メモ1（✅）に一致。
+- 集計単位＝生徒×科目（`buildMakeupStockKey(studentKey, subject)`、`makeupStock.ts:338-340`）。正本§1-A・§3 に一致。
+- 欠席登録＝盤面コマの生徒を「休み」で欠席化し振替+1、コマは残して `absent` 表示・席はロックせず操作可。`handleMarkStudentAbsent`（`ScheduleBoardScreen.tsx:8382-8489`：`removeStudentFromDeskLesson`＋`setDeskStudentStatus(absent)`＋`appendMakeupOrigin`）。振替なしの欠席は別ボタン「振無休」`handleMarkStudentAbsentNoMakeup`（`:8491-`、status `absent-no-makeup`）。正本§1-B に一致。
+- 繰越＝初期設定の未消化振替を最初から積む。`buildInitialSetupMakeupAdjustmentsFromSettings`（`ScheduleBoardScreen.tsx:1279-1292`、`classroomSettings.initialSetupMakeupStocks` → `manualMakeupAdjustments` に `reasonLabel:'初期設定'`）、登録UI `BackupRestoreScreen.tsx:334-337`。正本§1-C に一致。
+- 消化＝空きコマへ置くと残−1、盤面から外す（戻す）と残+1。配置 `handleMakeupStockPlacement`（`ScheduleBoardScreen.tsx:7115-7159`）、戻し `handleReturnStudentToStock`（`:8341-8376` `appendMakeupOrigin`）。残数は `consumeOriginDates`（`makeupStock.ts:561-578`）で消化済み origin を除いた `remainingOriginDates.length`。正本§2 に一致。
+- 振替ストックはコマ表操作後も開いたまま維持（`isMakeupStockOpen` を配置で閉じるのは生徒選択モーダルのみ、パネル自体は state で保持）。正本§3 に一致。
+- 同コマへ同じ生徒が既にいると配置/移動を拒否＋選択維持（`findDuplicateStudentInCell`→`ScheduleBoardScreen.tsx:7109-7113` 配置／`:3312` 移動、いずれも `blocked` で選択維持）。正本§3 に一致。
+- マイナス残（過剰配置表示）廃止＝`balance = Math.max(0, ...)` で0下限、`overAssignedRegularLessons` 減算撤去（`makeupStock.ts:661-667` 回帰防止コメント付き）。残0は一覧から除外（`:695`）。正本§4・実装メモ3（✅）に一致。回帰テスト `makeupStock.test.ts:459-538`（3→1 でなく 3→2）で保護。
+- overwrite 保存時のストック返却/相殺（Q7 返却・Q8 相殺・Q9 手動振替は復元しない・Q10 反映日前のみ保持）が実装済み（`ScheduleBoardScreen.tsx:3623-3720`）。`spec-template-behavior.md` Q7-Q10 に一致（本書は「下流④へ委譲」とだけ記す）。
+
+### A: 仕様と実装の相違
+
+**A1（最重要）: テンプレ凍結により、凍結前（過去年度・凍結日前）の休日振替が自動計上されない（正本§1-A の「即時計上」が凍結前には効かない）— 本番4名消失事故の真因**
+- 正本の該当箇所: §1-A「計上タイミングは過去・未来を問わず、休日設定した時点で即時」。§★実装メモ1「旧実装の『今日まで』制限を外し、休日設定した未来日も即時に振替計上」。過去・凍結との関係は未定義。
+- 実装の該当箇所: `computeAutomaticShortageOrigins`（`makeupStock.ts:408-461`）は引数 `regularLessons`（＝凍結後の**現行テンプレ由来 rows のみ**）を走査し、さらに `if (row.schoolYear !== currentSchoolYear) continue`（`:423`）で当年度以外を除外する。テンプレ凍結（`templateFreezeBeforeDate`）で通常授業行の開始日が凍結日（例 2026-08-31）に更新されると、`resolveAutomaticStockPeriod` の `startDate`（`:240-251`）が凍結日以降になり、凍結前の休日（7/20・お盆 8/10 等）は `stockPeriod` 範囲外＝origin 未生成（autoShortage=0）。schedule 表示は `buildCombinedRegularLessonsFromHistory` で凍結前も補うが、makeup 在庫は**履歴合成していない**（memory occupied-origin-and-suppressed-makeup の訂正・handoff-restore-720）。
+- 推奨処置: この非対称は本番事故（7/20 海の日の休日振替が4名分だけ在庫から消失）の直接原因。正本§1-A に「即時計上は**現行テンプレの有効期間内（凍結日以降・当年度）**の休日に限る。テンプレ凍結より前・過去年度の休日振替は自動計上の対象外で、必要なら手動追加で復帰する」を明文化するか、「在庫計算を履歴合成化して凍結前も拾う」かの方針をオーナー確認（→C1）。履歴合成化は全生徒の凍結前振替が大量復活し数量激変（release-checklist §6 ドリフトガードが検出）＝危険なため、現状は「凍結前は対象外・手動復帰」を正とするのが安全側。**この挙動は室長の体感（休みにしたのに振替が出ない）に直結するため未定義のまま放置しない。**
+
+**A2: 正本§4 が撤去を要求した `overAssignedRegularLessons`／`negativeReason` が、型・計算・返却フィールドとして残存（balance には効かせていない）**
+- 正本の該当箇所: §4「`overAssignedRegularLessons` による減算・`negativeReason` を撤去」。§★実装メモ3「`balance` の `overAssignedRegularLessons` 減算と `negativeReason` を撤去」。
+- 実装の該当箇所: `MakeupStockEntry` 型に `overAssignedRegularLessons: number` / `negativeReason: string | null` が残り（`makeupStock.ts:27,35`）、`overAssignedRegularLessons` は `:648-650` で今も計算され `:683` で返る（`negativeReason` は常に `null`・`:668,690`）。撤去されたのは **balance からの減算のみ**（`:667` は `remainingOriginDates.length - manualIndependentPlannedMakeups` で overAssigned を使わない）。フィールド自体は残骸として出力に残る。
+- 推奨処置: 正本§4 の「撤去」は「balance への減算を撤去」の意味だったと解釈できるため、正本§4 に「フィールド `overAssignedRegularLessons`（参考値・balance に影響しない）は残る／`negativeReason` は常に null（後方互換の残骸）」とデータ辞書を追記して整合させる（機能は満たされている）。純粋な残骸として将来撤去するかは軽微。C 扱いにはしない（明白）。→C2 で扱い方針のみ確認。
+
+### B: 仕様に無い実装挙動（未定義）
+
+**B1（最重要）: 抑制 `suppressedMakeupOrigins` という「振替を消す」機構が正本に一切未定義（かつ復帰UIが無い）— 事故の温床の中核**
+- 正本の該当箇所: 記載なし（§2 は「盤面から外すと残+1」までしか定義せず、休日振替そのものを**削除**する経路や、削除の記録先が未定義）。
+- 実装の該当箇所: `suppressedMakeupOrigins`（`boardState`、`src/types/appState.ts:100`）は「未消化振替一覧から削除」`handleDeleteMakeupOriginItem`（`ScheduleBoardScreen.tsx:7521-7548` `appendMakeupOrigin(suppressedMakeupOrigins,...)`）と、通常授業/振替の**盤面削除**`handleDeleteStudent`（`:8673-8686`）で増える。在庫計算は `allOriginDates` から `suppressedOriginDates` を除外して残数を出す（`makeupStock.ts:641-643`）。**抑制を戻す（un-suppress する）UI 経路が存在しない**（`setSuppressedMakeupOrigins` の呼び出しは初期化・overwrite クリア・undo/redo のみ・`grep` で確認）。
+- 推奨処置: 「休日振替や配置済み振替を**削除**すると `suppressedMakeupOrigins` に記録され在庫から消える／削除は元に戻せない（undo 以外に復帰UIが無い）」を正本§2 に明文化。あわせて**復帰UIの欠如を仕様上の既知の制約として明記**するか、復帰UIを追加するかをオーナー確認（→C3）。memory occupied-origin-and-suppressed-makeup の「本物の休講日振替が巻き込まれ消え、戻すUIが無い」本番事故の中核。**未定義のままだと、抑制の意味を知らない将来の変更で誤って在庫が消える／復旧できない。**
+
+**B2: 手動調整 `manualMakeupAdjustments` が「繰越・欠席・盤面戻し」の3経路を1つのマップに混載しており、正本にその区別・記録先が未定義**
+- 正本の該当箇所: 記載なし（§1-B 欠席／§1-C 繰越／§2 戻しはそれぞれ挙動を述べるが、いずれも同一の `manualMakeupAdjustments` マップに積まれる実装は未記載）。
+- 実装の該当箇所: `manualMakeupAdjustments`（`appState.ts:99`）に、初期設定の繰越（`buildInitialSetupMakeupAdjustmentsFromSettings` `reasonLabel:'初期設定'`）、欠席（`handleMarkStudentAbsent:8458-8460` `appendMakeupOrigin`）、盤面からの戻し（`handleReturnStudentToStock:8346-8348`）が全て append される。理由ラベルは origin ごとに任意保持（`ManualMakeupOrigin.reasonLabel`、`makeupStock.ts:9-13`）。区別は `reasonLabel` の有無のみで、消化・相殺時は日付一致で消える。
+- 推奨処置: 正本に「未消化振替の内部表現＝生徒×科目キーに origin（振替元日付）を積む `manualMakeupAdjustments`（繰越・欠席・盤面戻しを混載）と、自動算出の休日/定休日/重複 origin の和集合から `suppressedMakeupOrigins` を差し引いた残数」というデータモデルを明記。ライフサイクル（誰が積み・誰が消すか）を固定しないと、消化・相殺のどれかを触る変更で二重計上/消失が起きる。
+
+**B3: 同時間帯重複（conflict）由来の振替自動計上が正本に未定義**
+- 正本の該当箇所: 記載なし（§1 は A 休日／B 欠席／C 繰越のみ。重複起因は無い）。
+- 実装の該当箇所: `computeScheduleConflictOrigins`（`makeupStock.ts:463-559`）が、同一日・同一時限に同一生徒が複数コマに乗る構成を「同時間帯の重複」として振替 origin 化（理由ラベル `同時間帯の重複`・`:178-180`）。ただし休日振替と違い `todayKey` キャップあり（`:480-481` 過去分のみ）。
+- 推奨処置: 正本§1 に「D. 同時間帯重複振替」を追加（自動・過去分のみ計上・理由ラベル `同時間帯の重複`）。休日振替（過去/未来即時）との計上タイミングの非対称（重複は過去のみ）も明記。
+
+**B4: 集計キーの正規化（`manual:`／`name:` プレフィックス・非管理生徒の fallback）が正本に未定義**
+- 正本の該当箇所: 記載なし（§3「手動追加した生徒は振替ストックにカウントしない」とのみ）。
+- 実装の該当箇所: キーは `studentKey__subject`。`studentKey` は管理生徒=生徒ID、手動追加/未管理=`manual:` または `name:表示名`（`resolveStudentKey`／`resolveBoardStudentStockId`）。`normalizeManagedMakeupStockKeyByIdSet`（`makeupStock.ts:47-56`）が `manual:` を管理IDへ再吸着（生徒が後から管理登録された場合の救済）。非管理生徒の表示名/科目は `fallbackMakeupStudents`（`appState.ts:101`）に保持し、生徒が消えても一覧に名前を出せる。
+- 推奨処置: 正本§3 に「キー＝生徒×科目。管理生徒は生徒ID、未管理は `name:表示名`。未管理生徒の表示情報は `fallbackMakeupStudents` に退避。生徒が後から管理登録されるとキーを再吸着して合算」を明記。「手動追加はカウントしない」は正確には「手動追加の授業（`manualAdded`）を消化/計上に数えない」（`makeupStock.ts:290,350,377` の `manualAdded` スキップ）であり、繰越/欠席で積んだ未管理生徒の残数は出る、という区別も明記。
+
+**B5: 消化アルゴリズム（`consumeOriginDates`：使用済み origin の突き合わせ＋余剰使用は古い順から消す）が正本に未定義**
+- 正本の該当箇所: 記載なし（§2「置くと残−1」とだけ）。
+- 実装の該当箇所: `consumeOriginDates`（`makeupStock.ts:561-578`）は、盤面の振替が持つ `makeupSourceDate`（使用済み origin）を残 origin から除去し、`makeupSourceDate` を持たない配置分は残 origin を古い順に shift して消す。配置時に選んだ振替元日付は `resolveSelectedMakeupOrigin`（`ScheduleBoardScreen.tsx:7115-7117`）で尊重（最古に巻き戻さない・回帰テスト `ScheduleBoardScreen.test.ts:3984-`）。
+- 推奨処置: 正本§2 に「消化は振替元日付単位で突き合わせ（配置した振替が持つ元日付を残から除く）。元日付が無い配置は古い origin から消す。一覧で選んだ元日付を配置に引き継ぐ（最古へ巻き戻さない）」を明記。振替の発生源（休日/欠席/繰越）が表示ラベルに直結するため、消化順は室長の見え方に影響する。
+
+**B6: `initialSetupCompletedAt`（`setupFloorKey`）より前の自動 origin を計上しないガードが正本に未定義**
+- 正本の該当箇所: 記載なし。
+- 実装の該当箇所: `computeAutomaticShortageOrigins`（`makeupStock.ts:418-419,452`）と conflict（`:472-473,543`）が、`classroomSettings.initialSetupCompletedAt` を日付キー化した `setupFloorKey` 未満の休日/重複 origin をスキップ。運用開始前の過去に休日があっても自動振替を積まない（繰越は §1-C の手動登録で入れる想定）。
+- 推奨処置: 正本§1-A/§1-C に「初期設定完了日（`initialSetupCompletedAt`）より前の休日/重複は自動計上せず、運用開始前の残は繰越（初期設定の未消化振替）で登録する」を明記。繰越と自動計上の境界が未定義だと、初期設定日を動かす変更で過去分が大量に増減する。
+
+**B7: 自動割振での「振替同時割当」（講習と共有コア・振るい順）が本書に未定義**
+- 正本の該当箇所: 記載なし（本書は自動割振に触れない）。
+- 実装の該当箇所: `buildMakeupAutoAssignPendingItems`（`ScheduleBoardScreen.tsx:245-262`：balance を上限に古い origin から pending 展開）、共有コア `findBestAutoAssignCandidate`／`handleAutoAssignLectureStockEntry({includeMakeup})`（`:7364-`、既定OFF・memory auto-assign-makeup-with-lecture・v1.5.331 本番反映）。振替の自動割振は講習と同一規則・スコアを共有し、末尾で振るい順（古い振替元優先）を評価。
+- 推奨処置: 本書§2 に「消化は手動配置のほか、講習の自動割振モーダルの『未消化振替も同時に自動割り当てする』（既定OFF）でもできる（規則詳細は `spec-auto-assign-rules.md`）」を注記。balance を超えて生成しない回帰防止（`:244` コメント）は消してはならないガードとして明記。
+
+**B8: 振替と講習は「似て非なる別経路」で片方の修正が他方に自動適用されない構造が、正本に注意書きとして無い**
+- 正本の該当箇所: 記載なし。
+- 実装の該当箇所: 振替＝`makeupStock.ts`／`manualMakeupAdjustments`／`suppressedMakeupOrigins`、講習＝`lectureStock.ts`／`manualLectureStockCounts`／`manualLectureStockOrigins` と、モデル・キー・配置・科目選択がすべて別実装（memory lecture-stock-subject-selection：講習側だけ選択科目を無視する既存バグが振替側に無かった＝非対称の実例）。配置/戻し/欠席/削除の各ハンドラが両者を並べて別々に扱う（`ScheduleBoardScreen.tsx:8382-8489` ほか）。
+- 推奨処置: 正本（本書と `spec-lecture-stock.md` の両方）に「振替と講習は別経路。片方の修正はもう片方に自動適用されない（科目選択・消化・相殺は各々で担保が必要）」を相互注記。回帰の温床として明文化。
+
+### C: オーナー確認事項
+
+- **C1（最重要）**: テンプレ凍結前・過去年度の休日振替を自動計上しない現行（A1）を正とし「凍結前は自動計上の対象外・必要なら手動追加で復帰」を正本§1-A に明文化するか、それとも「在庫計算を履歴合成化して凍結前も拾う」方向に仕様を変えるか（後者は全生徒の凍結前振替が大量復活し数量激変＝release-checklist §6 ドリフトガードが検出する危険な変更。memory occupied-origin-and-suppressed-makeup / handoff-restore-720 で検証済み）。安全側は前者（現行を正とし明文化）。
+- **C2**: 正本§4「`overAssignedRegularLessons`／`negativeReason` を撤去」を「balance への減算を撤去」の意味と確定し、参考フィールドの残存をデータ辞書で明記するか（→A2）。純粋な残骸として将来フィールドごと撤去するかは別途。
+- **C3**: 抑制 `suppressedMakeupOrigins` の**復帰UI 欠如**（B1）を「削除は undo 以外に戻せない仕様」として正本に明記して据え置くか、削除した未消化振替を復帰する UI を追加するか。本番で「本物の休日振替が巻き込まれ消え、戻せなかった」事故（7/20 4名）が起きた領域。
+- **C4**: 自動計上の発生源として **同時間帯重複（B3）／初期設定日フロア（B6）** を正本§1 に正式追加してよいか（現状は実装のみ・正本§1 は A/B/C の3種のみ）。重複は過去分のみ計上（休日は過去/未来即時）の非対称も含めて明記する想定。
+- **C5**: 本書と分散正本（`spec-template-behavior.md` Q7-Q10 のストック返却/相殺・`spec-save-restore.md` §6 の繰越・`spec-auto-assign-rules.md` の振替同時割当）への相互参照（B1/B7/B8）を本書に追記してよいか。あわせて振替×講習の非対称注意書き（B8）を両正本に置くか。
+
+### 危険と感じた点（記録・確定前）
+
+- **A1（凍結前の休日振替が自動計上されない）と B1（抑制に復帰UIが無い）は、実際に本番4名の 7/20 振替を消失させた事故の2つの真因**（テンプレ凍結による origin 未生成＋偽 origin 一括削除の巻き込み抑制）。いずれも正本に未定義のまま放置されており、本監査の主目的（未定義＝バグの温床）に最も合致する。確定時に「凍結前は手動復帰」「抑制削除は元に戻せない（復帰UIの要否を判断）」を明記しないと、同種事故の再発時に室長が復旧のため危険なデータ復元操作（クロス汚染リスク）に走りかねない。
+- **`consumeOriginDates`（B5）／balance の `Math.max(0, ...)` クランプ（A2）／`buildMakeupAutoAssignPendingItems` の balance 上限（B7）は、いずれも「残数を正しく1件ずつ消化する」ための意図的ロジックで、回帰テスト（`makeupStock.test.ts:459-538` の 3→2、`ScheduleBoardScreen.test.ts:3984-` の選択元尊重）で保護されている。** 過去に「振替1コマ置くと残が2件減る（3→1）」過剰減算バグ（overAssigned の二重減算）が実際に起きており（`makeupStock.ts:661-666` の回帰防止コメント）、これを「単純化」で消すと再発する。正本にデータモデル（B2/B5）を明記し、消してはならないガードとして残すことを強く推奨。
+- **overwrite 時の相殺（Q8）と suppressed クリア（D節・`ScheduleBoardScreen.tsx:3712-3718`）は、`effectiveStart` 以降のみを対象に絞ることで凍結前を保護している。** この「反映日境界」が振替ストックでも二重計上/消失を防ぐ要（領域3 B2/B3 の凍結ガードと同根）。境界判定を緩めると、テンプレ再保存で凍結前の確定済み振替が相殺され消える危険がある。
+- 補足（所見外の記録）: `computeAutomaticShortageOrigins` は引数 `teachers` を受け取らないが、`buildMakeupStockEntries` は互換のため `teachers` をパラメータに残す（`makeupStock.ts:592` コメント「空きコマ不足origin廃止に伴い内部では未使用」）。空きコマ不足 origin 経路が廃止された（2026-07-03・memory occupied-origin-and-suppressed-makeup）痕跡。将来 `teachers` 引数を撤去する場合は呼び出し側（`ScheduleBoardScreen.tsx:4331-4341`）とテストの互換に注意。

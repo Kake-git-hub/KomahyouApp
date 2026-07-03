@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- docs: 仕様監査 領域4(振替ストック)を実施・所見15件(A2/B8/C5)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。既知事故(7/20振替消失: 凍結前origin未生成A1＋抑制suppressedMakeupOriginsの復帰UI欠如B1)と突き合わせ済み。C1〜C5はオーナー確定待ち
+
 ## v1.5.378 (2026-07-04)
 
 - docs: 仕様監査 領域3のオーナー確定(C1: 授業時間はnote転用をデータ辞書明記・C2: 二層正本の相互参照＋B2〜B6要約取込・C3: 死蔵エディタ削除)を正本 spec-board-regular-placement.md(§6・§7新設)と spec-template-behavior.md へ反映(docs/spec-audit-2026-07.md に処置記録)
