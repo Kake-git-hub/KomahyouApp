@@ -1832,50 +1832,10 @@ export const mirrorLatestClassroomRollback = onDocumentWritten({
   }
 })
 
-export const downloadLatestClassroomRollback = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
-  const rawData = readPayloadObject(request.data, 'request.data')
-  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
-  const classroomId = readString(rawData.classroomId, 'classroomId')
-
-  if (!request.auth?.uid) {
-    throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
-  }
-
-  const memberRef = firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(request.auth.uid)
-  const memberSnapshot = await memberRef.get()
-  if (!memberSnapshot.exists) {
-    throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
-  }
-
-  const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc | undefined
-  if (member?.role !== 'developer' && member?.assignedClassroomId !== classroomId) {
-    throw new HttpsError('permission-denied', 'この教室の直前保存にアクセスする権限がありません。')
-  }
-
-  const storagePath = buildClassroomLatestRollbackStoragePath(workspaceKey, classroomId)
-  const bucket = storage.bucket(STORAGE_BUCKET)
-  const file = bucket.file(storagePath)
-  const [exists] = await file.exists()
-  if (!exists) {
-    throw new HttpsError('not-found', 'この教室にはまだ直前の Firebase 保存データがありません。')
-  }
-
-  await writeWorkspaceIncidentBackup(workspaceKey, `pre-restore-latest-classroom-${classroomId}`)
-
-  const [content] = await file.download()
-  const rollbackDoc = JSON.parse(content.toString('utf-8')) as ClassroomLatestRollbackStorageDoc
-  const payload = readStoredSnapshotPayload(rollbackDoc.snapshot)
-  if (!payload) {
-    throw new HttpsError('data-loss', '直前保存データの読み込みに失敗しました。')
-  }
-
-  return {
-    classroomId: rollbackDoc.classroomId,
-    sourceSavedAt: rollbackDoc.sourceSavedAt,
-    capturedAt: rollbackDoc.capturedAt,
-    data: payload,
-  }
-})
+// 旧「直前のFirebase保存へ戻す」ダウンロード callable(downloadLatestClassroomRollback)は
+// クライアント参照0件のデッドコードとして撤去済み(2026-07-04・仕様監査 領域2 補足)。
+// 書き込み側 mirrorLatestClassroomRollback とヘルパー(writeLatestClassroomRollback 等)は
+// Storage への直前保存ミラー(手動復旧の最後の砦)として維持する。
 
 export const createWorkspaceServerAutoBackups = onSchedule({
   schedule: WORKSPACE_DAILY_AUTO_BACKUP_SCHEDULE,

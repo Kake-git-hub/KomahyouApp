@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- chore: デッド関数 downloadLatestClassroomRollback(functions/src/index.ts)と、呼び出し0件のクライアント死蔵ラッパー downloadLatestFirebaseClassroomRollback＋型 ClassroomLatestRollback(src/integrations/firebase/adminFunctions.ts)を撤去(仕様監査 領域2 補足の掃除)。書き込み側 mirrorLatestClassroomRollback とヘルパーは手動復旧用に維持。マージで functions 自動デプロイが走り本番から当該関数が消える(オーナー承認済みの場合のみマージ)
+
 ## v1.5.375 (2026-07-04)
 
 - docs: 仕様監査 領域2のオーナー確定(C1: 離脱時は実装を正・C2: transient再試行を例外明文化・C3: 復元警告を実装)を正本 spec-save-restore.md へ反映。B1〜B6(楽観ロック・保存時3層防御・QR反映非対称・全教室書出・平文・Feature B)を明文化し「消してはならない破壊防止ガード」を明記(docs/spec-audit-2026-07.md に処置記録)
