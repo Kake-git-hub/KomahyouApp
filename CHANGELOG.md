@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- test: 講習ストックのゴールデン2件(lectureStockSnapshot/lecturePendingItems)が毎年4/1の年度替わりで自動的に落ちる問題を恒久対応。buildLectureStockEntries に省略可能な referenceDate を追加し(本番呼び出しは無引数のまま挙動不変)、テストは fixture 一元定義の固定基準日 2026-07-01 を渡す。referenceDate 尊重の回帰テスト追加(2028年基準で高2)。既存スナップショットは更新なしで通過=挙動不変を確認
+
 ## v1.5.385 (2026-07-04)
 
 - chore(ci): GitHub Pages への副次デプロイを廃止(deploy-pages.yml 削除・オーナー確定 2026-07-04)。2026-03-17導入の前身デプロイで、Firebase Hosting CI 確立(6/25)以降は未参照の第二入口＋直近2日で約4割が GitHub 側エラーで赤だった。vite.config.ts の base を '/' 固定へ簡素化(6/25本番真っ白障害の発生条件そのものを消滅・経緯コメントは保持)、不活性化した FIREBASE_DEPLOY env を3ワークフローから除去、CI に dist/index.html のルート相対資産アサートを追加(regression-reviewer 検査済み・実ビルドで /KomahyouApp/ 参照0件を確認)
