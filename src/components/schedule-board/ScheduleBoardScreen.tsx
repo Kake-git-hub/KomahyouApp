@@ -12,7 +12,13 @@ import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
-import { buildLectureStockEntries } from './lectureStock'
+import {
+  buildLectureStockEntries,
+  buildLectureStockKey,
+  buildLecturePendingItemsByEntryKey,
+  parseLectureStockKey,
+  type LectureStockPendingItem,
+} from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
 import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
@@ -168,19 +174,6 @@ type GroupedLectureStockEntry = {
   requestedCount: number
   nextPlacementEntry: { subject: SubjectLabel; sessionId?: string } | null
   title?: string
-}
-
-type LectureStockPendingItem = {
-  stockKey: string
-  subject: SubjectLabel
-  source: 'session' | 'manual'
-  sessionId?: string
-  sessionLabel?: string
-  originDateKey?: string
-  originSlotNumber?: number
-  startDate?: string
-  endDate?: string
-  unavailableSlots?: string[]
 }
 
 type TemplateEditDraft = {
@@ -1081,14 +1074,6 @@ export function removeLecturePendingItemFromStockState(params: {
   }
 }
 
-function buildLectureStockKey(studentKey: string, subject: string, sessionId?: string) {
-  return sessionId ? `${studentKey}__${subject}__${sessionId}` : `${studentKey}__${subject}`
-}
-
-function buildLectureStockScopeKey(studentKey: string, sessionId?: string) {
-  return `${studentKey}__${sessionId ?? '-'}`
-}
-
 // spec-lecture-stock §6 / spec-schedule-pdf §D: ストック由来(session)講習の配置時、提出された授業時間を
 // 盤面コマの noteSuffix('60'/'45'/'') として持たせ、日程表にも反映できるようにする。未設定=90='' 。
 function resolveSessionLectureNoteSuffix(specialSessions: SpecialSessionRow[], sessionId: string | undefined, studentId: string | undefined, subject: string): string {
@@ -1232,11 +1217,6 @@ function computeSpecialSessionDateDistance(session: SpecialSessionRow, dateKey: 
   const startTime = parseDateKey(session.startDate).getTime()
   const endTime = parseDateKey(session.endDate).getTime()
   return Math.min(Math.abs(targetTime - startTime), Math.abs(targetTime - endTime))
-}
-
-function parseLectureStockKey(key: string) {
-  const [studentKey = key, subject = '', sessionId] = key.split('__')
-  return { studentKey, subject, sessionId }
 }
 
 function clearLectureStockAdjustmentsForStudentSession(params: {
@@ -4399,120 +4379,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     [makeupStockEntries],
   )
 
-  const lecturePendingItemsByEntryKey = useMemo(() => {
-    const expandedRawItemsByStockKey = new Map<string, Array<{
-      studentKey: string
-      studentId: string
-      displayName: string
-      item: LectureStockPendingItem
-    }>>()
-
-    for (const stockEntry of rawLectureStockEntries) {
-      if (stockEntry.requestedCount <= 0) continue
-      const session = specialSessions.find((currentSession) => currentSession.id === stockEntry.sessionId)
-      const unavailableSlots = session?.studentInputs[stockEntry.studentId]?.unavailableSlots ?? []
-      const stockKey = buildLectureStockKey(stockEntry.studentId, stockEntry.subject, stockEntry.sessionId)
-      const currentItems = expandedRawItemsByStockKey.get(stockKey) ?? []
-      for (let index = 0; index < stockEntry.requestedCount; index += 1) {
-        currentItems.push({
-          studentKey: stockEntry.studentId,
-          studentId: stockEntry.studentId,
-          displayName: stockEntry.displayName,
-          item: {
-            stockKey,
-            subject: stockEntry.subject,
-            source: 'session',
-            sessionId: stockEntry.sessionId,
-            sessionLabel: stockEntry.sessionLabel,
-            startDate: session?.startDate,
-            endDate: session?.endDate,
-            unavailableSlots,
-          },
-        })
-      }
-      expandedRawItemsByStockKey.set(stockKey, currentItems)
-    }
-
-    const scopedItems = new Map<string, Array<{
-      studentKey: string
-      studentId: string | null
-      displayName: string
-      item: LectureStockPendingItem
-    }>>()
-
-    for (const [stockKey, rawItems] of expandedRawItemsByStockKey.entries()) {
-      const adjustment = manualLectureStockCounts[stockKey] ?? 0
-      const consumeCount = adjustment < 0 ? Math.min(rawItems.length, Math.abs(adjustment)) : 0
-      for (const rawItem of rawItems.slice(consumeCount)) {
-        const scopeKey = buildLectureStockScopeKey(rawItem.studentKey, rawItem.item.sessionId)
-        const currentItems = scopedItems.get(scopeKey) ?? []
-        currentItems.push({
-          studentKey: rawItem.studentKey,
-          studentId: rawItem.studentId,
-          displayName: rawItem.displayName,
-          item: rawItem.item,
-        })
-        scopedItems.set(scopeKey, currentItems)
-      }
-    }
-
-    const metadataQueueByKey = new Map<string, ManualLectureStockOrigin[]>(
-      Object.entries(manualLectureStockOrigins).map(([key, origins]) => [key, origins.map((origin) => ({ ...origin }))]),
-    )
-
-    for (const [stockKey, requestedCount] of Object.entries(manualLectureStockCounts)) {
-      if (requestedCount <= 0) continue
-      const { studentKey, subject, sessionId } = parseLectureStockKey(stockKey)
-      const fallback = fallbackLectureStockStudents[stockKey]
-      const fallbackDisplayName = fallback?.displayName ?? studentKey.replace(/^name:/, '')
-      const metadataQueue = metadataQueueByKey.get(stockKey) ?? []
-
-      for (let index = 0; index < requestedCount; index += 1) {
-        const metadata = metadataQueue.shift()
-        const resolvedSessionId = metadata?.sessionId ?? sessionId
-        const session = resolvedSessionId
-          ? specialSessions.find((currentSession) => currentSession.id === resolvedSessionId) ?? null
-          : null
-        const scopeKey = buildLectureStockScopeKey(studentKey, resolvedSessionId)
-        const currentItems = scopedItems.get(scopeKey) ?? []
-        currentItems.push({
-          studentKey,
-          studentId: studentKey.startsWith('name:') ? null : studentKey,
-          displayName: metadata?.displayName ?? fallbackDisplayName,
-          item: {
-            stockKey,
-            subject: (fallback?.subject ?? subject) as SubjectLabel,
-            source: 'manual',
-            sessionId: resolvedSessionId,
-            originDateKey: metadata?.originDateKey,
-            originSlotNumber: metadata?.originSlotNumber,
-            sessionLabel: session?.label,
-            startDate: session?.startDate,
-            endDate: session?.endDate,
-            unavailableSlots: session && !studentKey.startsWith('name:')
-              ? session.studentInputs[studentKey]?.unavailableSlots ?? []
-              : [],
-          },
-        })
-        scopedItems.set(scopeKey, currentItems)
-      }
-    }
-
-    return new Map(Array.from(scopedItems.entries()).map(([entryKey, items]) => {
-      const [firstItem] = items
-      return [
-        entryKey,
-        {
-          studentKey: firstItem?.studentKey ?? entryKey.split('__')[0] ?? entryKey,
-          studentId: firstItem?.studentId ?? null,
-          displayName: firstItem?.displayName ?? entryKey.split('__')[0]?.replace(/^name:/, '') ?? entryKey,
-          sessionId: firstItem?.item.sessionId,
-          sessionLabel: firstItem?.item.sessionLabel,
-          pendingItems: items.map(({ item }) => ({ ...item })),
-        },
-      ]
-    }))
-  }, [fallbackLectureStockStudents, manualLectureStockCounts, manualLectureStockOrigins, rawLectureStockEntries, specialSessions])
+  // 残数計算本体は純関数へ切り出し（spec-lecture-stock データモデル・ゴールデンは lecturePendingItems.test.ts）
+  const lecturePendingItemsByEntryKey = useMemo(() => buildLecturePendingItemsByEntryKey({
+    rawLectureStockEntries,
+    specialSessions,
+    manualLectureStockCounts,
+    manualLectureStockOrigins,
+    fallbackLectureStockStudents,
+  }), [fallbackLectureStockStudents, manualLectureStockCounts, manualLectureStockOrigins, rawLectureStockEntries, specialSessions])
 
   const lectureStockEntries = useMemo<GroupedLectureStockEntry[]>(() => {
     const entries = Array.from(lecturePendingItemsByEntryKey.entries())
