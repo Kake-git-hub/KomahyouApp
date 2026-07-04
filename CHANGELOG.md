@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.392
+
+- fix: 講習提出の登録解除直後に、リセット前の古い購読スナップショットで登録(countSubmitted)が勝手に復活するレースを修正(監査領域7 B4)。無効だったガードを TTL 付き `createRecentlyResetGuard()` に切り出して実効化(src/integrations/firebase/lectureSubmission.ts・src/App.tsx・回帰テスト recentlyResetGuard.test.ts)
+
 ## 1.5.391
 
 - docs+style: 仕様監査領域7(特別講習データ・提出ページ)のオーナー確定を反映。正本 `docs/spec-special-session-submission.md` を実装に合わせ更新(C2=提出は一段階モデル〈提出＝即ロック＝即countSubmitted・再提出可能化は室長の登録解除のみ〉に書換・二段階記述を撤回/C3=オプション欄optionChecksを開発用教室限定機能として正本化+学年解決の今日基準/講習開始日基準の非対称を注記・講習期間の重複禁止をA に明文化/B1集団参加の相互参照とunion反映ガード・B3永続化非対称と起動時reconcile・B5デッドdelete・B6トークン後追い反映・B7 Excel非対称・B8スマホ最適化/submit-debug・B9リセット粒度を明記)。あわせて C1: 講習編集パネルに残っていた廃止済みの死んだ案内文「…別タブで開きます。」を日程表/QR 案内へ統一(src/components/special-data/SpecialSessionScreen.tsx・回帰テスト2件追加・別タブ言及の復活を防止)。表示文言のみでロジック変更なし。監査台帳 docs/spec-audit-2026-07.md にオーナー確定を追記

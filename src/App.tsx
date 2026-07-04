@@ -21,7 +21,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -1232,7 +1232,9 @@ function AuthenticatedApp() {
   const remoteClassroomUpdateTimeoutsRef = useRef<Record<string, number>>({})
   const teacherAutoAssignRequestIdRef = useRef(0)
   const studentScheduleRequestIdRef = useRef(0)
-  const recentlyResetSubmissionTokensRef = useRef<Set<string>>(new Set())
+  // 監査領域7 B4 の是正: 登録解除直後にリセット前の submitted 購読で countSubmitted が復活する
+  // レースを塞ぐガード（消してはならない）。reset 前に token を add し、TTL 経過まで購読反映を無視する。
+  const recentlyResetSubmissionGuardRef = useRef(createRecentlyResetGuard())
   const [screen, setScreen, screenRef] = useLatestState<AppScreen>('board')
   const [managers, setManagers, managersRef] = useLatestState<ManagerRow[]>(() => createInitialManagers())
   const [teachers, setTeachers, teachersRef] = useLatestState(() => createInitialTeachers(useImportedMasterData))
@@ -3531,6 +3533,9 @@ function AuthenticatedApp() {
               optionChecks: targetInput?.optionChecks ?? {},
             }).catch(() => { /* non-fatal */ })
           } else {
+            // B4: reset 前に token をガードへ登録し、リセット前の古い submitted 購読で
+            // countSubmitted が復活するのを防ぐ。TTL(既定2.5秒)後にガードが自動で解除する。
+            recentlyResetSubmissionGuardRef.current.add(studentToken)
             resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
           }
         }
@@ -3732,7 +3737,7 @@ function AuthenticatedApp() {
     const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries, isInitial) => {
       bumpMemCounter('submission-snapshot')
       // Skip entries whose tokens were recently reset to avoid race condition
-      const activeEntries = entries.filter((e) => !recentlyResetSubmissionTokensRef.current.has(e.token))
+      const activeEntries = entries.filter((e) => !recentlyResetSubmissionGuardRef.current.has(e.token))
       if (activeEntries.length === 0) return
 
       const newlyAppliedEntries: typeof activeEntries = []

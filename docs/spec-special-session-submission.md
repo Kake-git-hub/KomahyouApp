@@ -95,6 +95,12 @@
   status は `pending` に戻す。
 - **配布情報は維持**する: 本人名・期間・盤面配置（occupiedSlots）・休日（holidayDates）・限数（slotNumbers）・
   集団科目の選択肢（availableGroupClassSubjects）・オプション文言（optionLabels）。→ **同じ QR で再提出できる。**
+- ★**消してはならないガード（監査 B4・2026-07-04 実効化）**: `resetLectureSubmissionDoc` は `getDoc→setDoc` の
+  非同期2ステップで、書き込み完了前に購読（`onSnapshot`）がリセット前の `status='submitted'` スナップショットを
+  配信しうる。これを反映すると「室長が登録解除した直後に `countSubmitted` が勝手に復活する」レースになる。
+  これを塞ぐため、登録解除時は TTL 付きガード `createRecentlyResetGuard()`（`lectureSubmission.ts`）へ token を
+  `add` し、TTL（既定2.5秒）経過まで購読反映側がその token を無視する（TTL 経過後は再び有効な提出として反映）。
+  このガードを外す/薄めると上記レースが再発する（`recentlyResetGuard.test.ts` が回帰を防ぐ）。
 
 ### E-3. 登録削除の実装方式（監査 B5・オーナー確定 2026-07-04）
 

@@ -168,6 +168,76 @@ export async function writeSubmissionDocs(newTokens: Array<{ token: string; doc:
 }
 
 /**
+ * TTL付きの「最近リセットされた提出トークン」ガード。
+ *
+ * 目的（消してはならないガード・監査領域7 B4 の是正 2026-07-04）:
+ *   室長が日程表の登録トグルを OFF にすると、ローカル state は即座に countSubmitted=false へ
+ *   楽観更新され、直後に resetLectureSubmissionDoc（getDoc→setDoc の非同期2ステップ）で
+ *   Firestore doc を pending に戻す。この書き込みが完了する前に、購読中の onSnapshot が
+ *   「まだ status='submitted' の（リセット前の）」スナップショットを配信すると、反映ロジックは
+ *   「ローカルは未登録なのに submitted が来た＝新規提出」と誤認して countSubmitted を復活させる。
+ *   ＝室長が登録解除した直後に登録が勝手に戻るレース。
+ *
+ * このガードは reset 前に token を add() し、購読反映側は has(token) が true の間その token の
+ * 反映を無視する。ネットワーク遅延・リセット前後に届く古いスナップショットを吸収するため、
+ * add から一定時間（既定2.5秒）後にタイマーで自動 delete する（即時 delete だと取りこぼす）。
+ *
+ * timer はテストから注入できる（set/clear を差し替えて仮想時間で検証する）。
+ */
+export type RecentlyResetGuard = {
+  add(token: string): void
+  has(token: string): boolean
+  /** テスト/クリーンアップ用: 全タイマーを解除して集合を空にする。 */
+  clear(): void
+}
+
+type GuardTimer = {
+  set: (callback: () => void, delayMs: number) => number
+  clear: (id: number) => void
+}
+
+const DEFAULT_RECENTLY_RESET_TTL_MS = 2500
+
+export function createRecentlyResetGuard(
+  ttlMs: number = DEFAULT_RECENTLY_RESET_TTL_MS,
+  timer: GuardTimer = {
+    set: (callback, delayMs) => (typeof window !== 'undefined' ? window.setTimeout(callback, delayMs) : (setTimeout(callback, delayMs) as unknown as number)),
+    clear: (id) => (typeof window !== 'undefined' ? window.clearTimeout(id) : clearTimeout(id as unknown as ReturnType<typeof setTimeout>)),
+  },
+): RecentlyResetGuard {
+  const tokens = new Set<string>()
+  const timers = new Map<string, number>()
+
+  const forget = (token: string) => {
+    tokens.delete(token)
+    const timerId = timers.get(token)
+    if (timerId !== undefined) {
+      timer.clear(timerId)
+      timers.delete(token)
+    }
+  }
+
+  return {
+    add(token: string) {
+      if (!token) return
+      // 既存タイマーがあれば張り直して TTL を延長する（連続解除でも最後の add から ttlMs 保持）。
+      const existing = timers.get(token)
+      if (existing !== undefined) timer.clear(existing)
+      tokens.add(token)
+      timers.set(token, timer.set(() => forget(token), ttlMs))
+    },
+    has(token: string) {
+      return tokens.has(token)
+    },
+    clear() {
+      for (const id of timers.values()) timer.clear(id)
+      timers.clear()
+      tokens.clear()
+    },
+  }
+}
+
+/**
  * 登録削除（spec §E / TODO2）: 提出内容をクリアして pending に戻し、同じQRで再提出可能にする。
  * occupiedSlots / availableSubjects / slotNumbers 等の配布情報は維持する。
  */
