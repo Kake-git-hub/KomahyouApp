@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as xlsx from 'xlsx'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
@@ -173,5 +175,21 @@ describe('findSessionDateRangeConflict', () => {
     })
 
     expect(conflict).toBeNull()
+  })
+})
+
+describe('SpecialSessionScreen 編集パネルの案内文（回帰: 死んだ別タブ導線）', () => {
+  // 別タブ経路は TODO1（v1.5.378 系）で撤去済み。編集パネル内に取り残されていた死んだ案内文
+  // 「…別タブで開きます。」を日程表/QR 案内へ統一した（監査 A1/C1・オーナー確定 2026-07-04）。
+  // 巻き戻り防止のため、ソースに廃止済み文言が復活していないことを検証する。
+  const source = readFileSync(fileURLToPath(new URL('./SpecialSessionScreen.tsx', import.meta.url)), 'utf8')
+
+  it('編集パネルの案内文に廃止済みの「別タブ」導線への言及が含まれない', () => {
+    expect(source).not.toContain('別タブで開きます')
+    expect(source).not.toMatch(/期間帯をクリックすると別タブ/)
+  })
+
+  it('登録経路の案内は日程表（生徒/講師）とQRに統一されている', () => {
+    expect(source).toContain('欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います')
   })
 })
