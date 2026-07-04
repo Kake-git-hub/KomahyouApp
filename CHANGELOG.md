@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.393
+
+- docs: 仕様監査の領域8(自動割振ルール・所見14件 A3/B9/C2)と領域9(日程表・PDF・所見16件 A2/B11/C3)を実施し監査台帳へ追記(docs/spec-audit-2026-07.md・spec-curator読み取り監査・正本/コードは未変更)。全9領域の監査が完了。C確定(領域8: 全ソフト明記/ペア制約の通常授業警告、領域9: plannedCellsデッドpayload/ポップアップ二重同期payload欠落/旧テスト教室2 QR残骸)はオーナー待ち
+
 ## 1.5.392
 
 - fix: 講習提出の登録解除直後に、リセット前の古い購読スナップショットで登録(countSubmitted)が勝手に復活するレースを修正(監査領域7 B4)。無効だったガードを TTL 付き `createRecentlyResetGuard()` に切り出して実効化(src/integrations/firebase/lectureSubmission.ts・src/App.tsx・回帰テスト recentlyResetGuard.test.ts)
