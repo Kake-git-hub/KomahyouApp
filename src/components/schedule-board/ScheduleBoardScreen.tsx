@@ -1979,6 +1979,18 @@ export function shouldWarnForbiddenPeriod(params: {
   return params.forbiddenPeriods.includes(params.slotNumber)
 }
 
+// spec-auto-assign-rules §E「ペア制約」: 警告(制約=赤「組み合わせ不可」/優先=「組み合わせ回避」)も、
+// 指定時限禁止・通常講師のみ・科目分散と同じ原則で、固定の通常授業スロット(lessonType==='regular')は対象外。
+// 通常授業はテンプレ由来の固定配置で割振り対象ではないため違反扱いしない(2026-07-04 監査領域8 A3 オーナー確定)。
+// 自動割振スコア側(isPairConstraintBlocked)は割振り対象(振替・講習)の候補評価にのみ使われるため影響しない。
+export function resolvePairConstraintWarningSeverity(params: {
+  severity: 'none' | 'priority' | 'constraint'
+  lessonType: LessonType
+}): 'none' | 'priority' | 'constraint' {
+  if (params.lessonType === 'regular') return 'none'
+  return params.severity
+}
+
 function buildManagedRegularLessonsRange(params: {
   startDate: string
   endDate: string
@@ -2452,6 +2464,9 @@ function buildBaseManagedScheduleCellsForRange(params: {
   })
 }
 
+// 監査領域9 A1(2026-07-04 確定): 日程表 payload の plannedCells 送出は撤去済みで、本番からの呼び出しは無い。
+// ただしこの関数はテンプレ→通常授業生成＋盤面 overlay の共有基盤(buildBaseManagedScheduleCellsForRange。
+// 本番で使う buildScheduleCellsForRange と同じ)を通す検証面として多数のユニットテストが使うため定義を維持する。
 export function buildManagedScheduleCellsForRange(params: {
   range: ScheduleRangePreference
   fallbackStartDate: string
@@ -5253,17 +5268,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           boardWeeks: scheduleBoardWeeks,
           suppressedRegularLessonOccurrences,
         }),
-        plannedCells: buildManagedScheduleCellsForRange({
-          range,
-          fallbackStartDate: scheduleFallbackStartDate,
-          fallbackEndDate: scheduleFallbackEndDate,
-          classroomSettings,
-          teachers,
-          students,
-          regularLessons,
-          boardWeeks: scheduleBoardWeeks,
-          suppressedRegularLessonOccurrences,
-        }),
         students,
         teachers,
         regularLessons,
@@ -5310,39 +5314,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })
   }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
-  const studentPlannedScheduleCells = useMemo(() => {
-    if (!isStudentScheduleOpen) return []
-    return buildManagedScheduleCellsForRange({
-      range: effectiveStudentScheduleRange,
-      fallbackStartDate: scheduleFallbackStartDate,
-      fallbackEndDate: scheduleFallbackEndDate,
-      classroomSettings,
-      teachers,
-      students,
-      regularLessons,
-      boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
-      suppressedRegularLessonOccurrences,
-    })
-  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
-
   const teacherScheduleCells = useMemo(() => {
     if (!isTeacherScheduleOpen) return []
     return buildScheduleCellsForRange({
-      range: effectiveTeacherScheduleRange,
-      fallbackStartDate: scheduleFallbackStartDate,
-      fallbackEndDate: scheduleFallbackEndDate,
-      classroomSettings,
-      teachers,
-      students,
-      regularLessons,
-      boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
-      suppressedRegularLessonOccurrences,
-    })
-  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
-
-  const teacherPlannedScheduleCells = useMemo(() => {
-    if (!isTeacherScheduleOpen) return []
-    return buildManagedScheduleCellsForRange({
       range: effectiveTeacherScheduleRange,
       fallbackStartDate: scheduleFallbackStartDate,
       fallbackEndDate: scheduleFallbackEndDate,
@@ -5404,7 +5378,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   useEffect(() => {
     syncStudentScheduleHtml({
       cells: studentScheduleCells,
-      plannedCells: studentPlannedScheduleCells,
       students,
       regularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
@@ -5445,7 +5418,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   useEffect(() => {
     syncTeacherScheduleHtml({
       cells: teacherScheduleCells,
-      plannedCells: teacherPlannedScheduleCells,
       teachers,
       students,
       regularLessons,
@@ -5695,7 +5667,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             }
 
             if (teacher) {
-              const pairSeverity = resolvePairConstraintSeverity(teacher.id, managedStudent.id, pairedStudent)
+              // ペア制約の警告は他ソフト制約と同じく通常授業を対象外にする(resolvePairConstraintWarningSeverity)。
+              const pairSeverity = resolvePairConstraintWarningSeverity({
+                severity: resolvePairConstraintSeverity(teacher.id, managedStudent.id, pairedStudent),
+                lessonType: student.lessonType,
+              })
               if (pairSeverity === 'constraint') {
                 addWarning([currentLocationKey], '制約事項: 組み合わせ不可', true, true)
               } else if (pairSeverity === 'priority') {
@@ -8097,17 +8073,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences,
       }),
-      plannedCells: buildManagedScheduleCellsForRange({
-        range: storedRange,
-        fallbackStartDate: scheduleFallbackStartDate,
-        fallbackEndDate: scheduleFallbackEndDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences,
-      }),
       students,
       regularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
@@ -8151,17 +8116,6 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     const nextWindow = openTeacherScheduleHtml({
       cells: buildScheduleCellsForRange({
-        range: storedRange,
-        fallbackStartDate: scheduleFallbackStartDate,
-        fallbackEndDate: scheduleFallbackEndDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences,
-      }),
-      plannedCells: buildManagedScheduleCellsForRange({
         range: storedRange,
         fallbackStartDate: scheduleFallbackStartDate,
         fallbackEndDate: scheduleFallbackEndDate,

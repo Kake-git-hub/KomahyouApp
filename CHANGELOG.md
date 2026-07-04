@@ -18,6 +18,12 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.394
+
+- fix: ペア制約の警告(制約=赤「組み合わせ不可」/優先=「組み合わせ回避」)を他ソフト制約(指定時限禁止・通常講師のみ・科目分散)と同一原則に統一し、通常授業(lessonType='regular')を警告対象外に(監査領域8 A3/C2オーナー確定・純関数 resolvePairConstraintWarningSeverity 新設・回帰テスト5件・自動割振スコア isPairConstraintBlocked は挙動不変)
+- refactor: 日程表payloadの未使用 plannedCells 送出を全経路(scheduleHtml.ts型/serialize・App.tsx sync 2箇所・ScheduleBoardScreen all-view/useMemo/sync/open 7箇所)から撤去(監査領域9 A1/C1オーナー確定・plannedの唯一の根拠は expectedRegularOccurrences・b3279cc以降デッドと履歴で確認・buildManagedScheduleCellsForRange はテスト検証面として維持・回帰テスト追加)
+- docs: 仕様監査領域8/9のオーナー確定を正本反映(spec-auto-assign-rules.md=全ソフト明記/キー名乖離/共有コア・振替同時割当/グループ二重管理/盤面∪配列判定/Excel列仕様/相互排他単位/スコア設計/4点セット等、spec-schedule-pdf.md=planned由来訂正/4.8px/二重同期H-1/印刷出し分け/派生印刷/unionガード/マルチタブ/提出済QR/盤面連動/埋め込みJS制約等)・台帳へ処置記録・Issue #42(App.tsx同期payload欠落)/#43(旧テスト教室2 QR残骸撤去)起票
+
 ## 1.5.393
 
 - docs: 仕様監査の領域8(自動割振ルール・所見14件 A3/B9/C2)と領域9(日程表・PDF・所見16件 A2/B11/C3)を実施し監査台帳へ追記(docs/spec-audit-2026-07.md・spec-curator読み取り監査・正本/コードは未変更)。全9領域の監査が完了。C確定(領域8: 全ソフト明記/ペア制約の通常授業警告、領域9: plannedCellsデッドpayload/ポップアップ二重同期payload欠落/旧テスト教室2 QR残骸)はオーナー待ち
