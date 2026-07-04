@@ -18,13 +18,23 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.387 (2026-07-04)
+
+- docs(changelog): 版ズレ修正(未リリース下に溜めたまま複数回デプロイした監査分を実デプロイ版 v1.5.379〜384 へ振り直し)。以後はマージごとに次版でラベル付けする(ラベル同乗ルール)
+
+## v1.5.386 (2026-07-04)
+
 - test: 講習ストックのゴールデン2件(lectureStockSnapshot/lecturePendingItems)が毎年4/1の年度替わりで自動的に落ちる問題を恒久対応。buildLectureStockEntries に省略可能な referenceDate を追加し(本番呼び出しは無引数のまま挙動不変)、テストは fixture 一元定義の固定基準日 2026-07-01 を渡す。referenceDate 尊重の回帰テスト追加(2028年基準で高2)。既存スナップショットは更新なしで通過=挙動不変を確認
 
 ## v1.5.385 (2026-07-04)
 
 - chore(ci): GitHub Pages への副次デプロイを廃止(deploy-pages.yml 削除・オーナー確定 2026-07-04)。2026-03-17導入の前身デプロイで、Firebase Hosting CI 確立(6/25)以降は未参照の第二入口＋直近2日で約4割が GitHub 側エラーで赤だった。vite.config.ts の base を '/' 固定へ簡素化(6/25本番真っ白障害の発生条件そのものを消滅・経緯コメントは保持)、不活性化した FIREBASE_DEPLOY env を3ワークフローから除去、CI に dist/index.html のルート相対資産アサートを追加(regression-reviewer 検査済み・実ビルドで /KomahyouApp/ 参照0件を確認)
 
+## v1.5.384 (2026-07-04)
+
 - docs: 仕様監査 領域6のオーナー確定(C1: 並び替え/フィルタは生徒・講師タブに限ると補正・C2: managers完全撤去を Issue #41 に起票〈自然消滅方式の移行計画つき〉・C3: Excelシート整理の完了条件を確定)を正本 spec-basic-data.md へ反映。B2〜B6(学年ラベル定義・同一性照合ID→メール→表示名→名前は消してはならない設計・差分取込は削除しない・nextStudent*死蔵・note授業時間転用)を明文化(docs/spec-audit-2026-07.md に処置記録)
+
+## v1.5.383 (2026-07-04)
 
 - docs: 仕様監査 領域6(基本データ画面)を実施・所見11件(A1/B7/C3)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。UI削ぎ落とし方針(マネージャータブ/isHidden/availableSlots廃止等)はUI上実装済みで、差分はmanagers等のデータ配管残骸に集中。同一性照合ID→メール→表示名→名前は消してはならない設計と記録。C1〜C3はオーナー確定待ち
 
@@ -33,9 +43,15 @@
 - docs: 仕様監査 領域5のオーナー確定(C1: 日付メニュー3択に再定義〈空にする=単純クリア確定・振替える新設は Issue #40〉・C2: 残数のデルタ台帳方式を明文化＋reconcileしない・C3: 旧文書 lecture-edit-flow.md に注記)を正本 spec-lecture-stock.md へ反映。B1〜B7(データモデル・消化順・正負デルタ辞書・集計キー・specialStockSource対応表・欠席返却・overwrite返却/相殺)を「消してはならないガード」として明文化(docs/spec-audit-2026-07.md に処置記録)
 - test+refactor: 講習残数計算 lecturePendingItemsByEntryKey を純関数 buildLecturePendingItemsByEntryKey として lectureStock.ts へ切り出し(ロジック不変・キー生成ヘルパ3種と LectureStockPendingItem 型も移設)、残数ゴールデン lecturePendingItems.test.ts を追加(仕様監査 領域5 C2・デルタ適用後の残数が初のユニット保護)
 
+## v1.5.381 (2026-07-04)
+
 - docs: 仕様監査 領域5(講習・講習ストック)を実施・所見13件(A3/B7/C3)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。振替=盤面走査/講習=デルタ台帳の構造非対称が所見の根。科目選択修正(v1.5.364)と自動割振共有コア(v1.5.331)の現存・回帰テスト保護を確認。C1〜C3はオーナー確定待ち
 
+## v1.5.380 (2026-07-04)
+
 - docs: 仕様監査 領域4のオーナー確定(C1: 凍結前・過去年度の休日振替は自動計上対象外＝手動追加で復帰・C2: §4撤去=balance減算撤去と確定しデータ辞書明記・C3: 削除済み未消化振替の復帰UIを Issue #39 に起票・C4: 同時間帯重複§1-D＋初期設定日フロア追加・C5: 分散正本4書と相互参照)を正本 spec-makeup-stock.md へ反映。B2データモデル/B4キー正規化/B5消化アルゴリズム/B7自動割振balance上限を「消してはならないガード」として明文化(docs/spec-audit-2026-07.md に処置記録)
+
+## v1.5.379 (2026-07-04)
 
 - docs: 仕様監査 領域4(振替ストック)を実施・所見15件(A2/B8/C5)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。既知事故(7/20振替消失: 凍結前origin未生成A1＋抑制suppressedMakeupOriginsの復帰UI欠如B1)と突き合わせ済み。C1〜C5はオーナー確定待ち
 
