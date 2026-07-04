@@ -149,7 +149,10 @@ jobs:
         if: ${{ env.DEPLOY_FN == 'true' }}
         run: |
           set -o pipefail
-          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only functions --non-interactive \
+          # --force: staging はソースに完全追従させる。ソースから消えた関数の削除確認(non-interactive だと
+          # abort して赤になる)と Artifact Registry クリーンアップポリシー設定を自動承認する(staging 限定。
+          # 2026-07-04 に downloadLatestClassroomRollback の孤児化とポリシー未設定で連続赤になった対策)。
+          npx --yes firebase-tools deploy --project "$STAGING_PROJECT_ID" --only functions --non-interactive --force \
             2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/staging-sa.json

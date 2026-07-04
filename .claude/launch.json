@@ -14,6 +14,12 @@
       "port": 5173
     },
     {
+      "name": "dev-staging",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--mode", "staging", "--port", "5175"],
+      "port": 5175
+    },
+    {
       "name": "dev-auto",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],

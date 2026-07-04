@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix: staging(komahyouapp-staging)への functions デプロイが2回連続赤に。原因はソースから削除済みの孤児関数(downloadLatestClassroomRollback・gcloudで削除済み)と、Artifact Registry のクリーンアップポリシー未設定を non-interactive モードで確認できず abort していたため。`firebase deploy --only functions` に `--force` を追加し、staging限定でこれらの確認を自動承認するよう修正(.github/workflows/deploy-staging.yml)。あわせて .claude/launch.json に `dev-staging`(vite --mode staging・ポート5175)を追加し、ローカルから staging Firebase へ直接繋いで実機検証できるようにした(認証情報は .env.staging.local・gitignore済み・配信バンドルの公開設定値から生成)
 
 ## v1.5.389 (2026-07-04)
 
