@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.382 (2026-07-04)
+
+- docs: 仕様監査 領域5のオーナー確定(C1: 日付メニュー3択に再定義〈空にする=単純クリア確定・振替える新設は Issue #40〉・C2: 残数のデルタ台帳方式を明文化＋reconcileしない・C3: 旧文書 lecture-edit-flow.md に注記)を正本 spec-lecture-stock.md へ反映。B1〜B7(データモデル・消化順・正負デルタ辞書・集計キー・specialStockSource対応表・欠席返却・overwrite返却/相殺)を「消してはならないガード」として明文化(docs/spec-audit-2026-07.md に処置記録)
+- test+refactor: 講習残数計算 lecturePendingItemsByEntryKey を純関数 buildLecturePendingItemsByEntryKey として lectureStock.ts へ切り出し(ロジック不変・キー生成ヘルパ3種と LectureStockPendingItem 型も移設)、残数ゴールデン lecturePendingItems.test.ts を追加(仕様監査 領域5 C2・デルタ適用後の残数が初のユニット保護)
+
 - docs: 仕様監査 領域5(講習・講習ストック)を実施・所見13件(A3/B7/C3)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。振替=盤面走査/講習=デルタ台帳の構造非対称が所見の根。科目選択修正(v1.5.364)と自動割振共有コア(v1.5.331)の現存・回帰テスト保護を確認。C1〜C3はオーナー確定待ち
 
 - docs: 仕様監査 領域4のオーナー確定(C1: 凍結前・過去年度の休日振替は自動計上対象外＝手動追加で復帰・C2: §4撤去=balance減算撤去と確定しデータ辞書明記・C3: 削除済み未消化振替の復帰UIを Issue #39 に起票・C4: 同時間帯重複§1-D＋初期設定日フロア追加・C5: 分散正本4書と相互参照)を正本 spec-makeup-stock.md へ反映。B2データモデル/B4キー正規化/B5消化アルゴリズム/B7自動割振balance上限を「消してはならないガード」として明文化(docs/spec-audit-2026-07.md に処置記録)

@@ -1,0 +1,8 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`未消化講習の残数ゴールデン (buildLecturePendingItemsByEntryKey) > 代表シナリオ(消費+戻し+繰越の混在)の残数がゴールデンと一致する 1`] = `
+"s_d__sess_summer | 岡本美咲 (中3) | 残2 | 国(session) 国(session)
+s_a__sess_summer | 青木太郎 (中3) | 残4 | 英(session) 英(session) 数(session) 数(session)
+s_a__sess_winter | 青木太郎 (中3) | 残1 | 数(session)
+name:体験 太郎__- | 体験太郎 | 残1 | 理(manual)"
+`;
