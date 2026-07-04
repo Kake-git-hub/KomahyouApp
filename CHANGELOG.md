@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- docs: 仕様監査 領域6(基本データ画面)を実施・所見11件(A1/B7/C3)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。UI削ぎ落とし方針(マネージャータブ/isHidden/availableSlots廃止等)はUI上実装済みで、差分はmanagers等のデータ配管残骸に集中。同一性照合ID→メール→表示名→名前は消してはならない設計と記録。C1〜C3はオーナー確定待ち
+
 ## v1.5.382 (2026-07-04)
 
 - docs: 仕様監査 領域5のオーナー確定(C1: 日付メニュー3択に再定義〈空にする=単純クリア確定・振替える新設は Issue #40〉・C2: 残数のデルタ台帳方式を明文化＋reconcileしない・C3: 旧文書 lecture-edit-flow.md に注記)を正本 spec-lecture-stock.md へ反映。B1〜B7(データモデル・消化順・正負デルタ辞書・集計キー・specialStockSource対応表・欠席返却・overwrite返却/相殺)を「消してはならないガード」として明文化(docs/spec-audit-2026-07.md に処置記録)
