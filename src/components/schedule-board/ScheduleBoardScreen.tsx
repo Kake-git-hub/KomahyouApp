@@ -1991,6 +1991,39 @@ export function resolvePairConstraintWarningSeverity(params: {
   return params.severity
 }
 
+// spec-auto-assign-rules §B/§C/§H/TODO6「制約事項ハードフィルタ」(2026-07-04 B案・オーナー確定):
+// 区分=制約に設定されたルールに違反する候補を、findBestAutoAssignCandidate のスコア計算前に完全除外する。
+// 除外は「そのルールが対象該当(applied) かつ 区分=制約(category) かつ 違反(preferred でない)」のときのみ。
+// 複数制約は AND(どれか1つでも該当・制約・違反なら除外)。制約対象が1件も無ければ true を返さず割振結果は不変(ゴールデン)。
+//
+// ⚠️ 回帰注意(消してはならない前提):
+//  - スコア次元・走査順は変えない。呼び出し側で「これが true なら continue」するだけの純粋関数。
+//  - preferred 変数は呼び出し側の既存ソフト判定(firstPeriodPreferred/subjectCapablePreferred/regularTeacherPreferred/
+//    lessonLimitSatisfied)をそのまま渡す。通常講師のみの判定元は配列+盤面の和集合(v1.5.317・regular-teachers-only-board-source)。
+//  - 『絶対事項合計』ソフト次元(buildForcedConstraintScoreParts)は廃止せず残す(優先時のソフト挙動維持・§H)。
+//  - コマ数上限は maxOne→maxTwo→maxThree の解決順で最初の1ルールだけ採用(resolveApplicableLessonLimitRule)。
+//    そのルールの区分が制約かどうかで判定する(applied=上限が適用され、その適用ルールが制約区分のとき)。
+export function shouldExcludeAutoAssignCandidateByConstraint(params: {
+  forbidFirstPeriodApplied: boolean
+  forbidFirstPeriodConstraint: boolean
+  firstPeriodPreferred: boolean
+  subjectCapableApplied: boolean
+  subjectCapableConstraint: boolean
+  subjectCapablePreferred: boolean
+  regularTeacherApplied: boolean
+  regularTeacherConstraint: boolean
+  regularTeacherPreferred: boolean
+  lessonLimitApplied: boolean
+  lessonLimitConstraint: boolean
+  lessonLimitSatisfied: boolean
+}): boolean {
+  if (params.forbidFirstPeriodApplied && params.forbidFirstPeriodConstraint && !params.firstPeriodPreferred) return true
+  if (params.subjectCapableApplied && params.subjectCapableConstraint && !params.subjectCapablePreferred) return true
+  if (params.regularTeacherApplied && params.regularTeacherConstraint && !params.regularTeacherPreferred) return true
+  if (params.lessonLimitApplied && params.lessonLimitConstraint && !params.lessonLimitSatisfied) return true
+  return false
+}
+
 function buildManagedRegularLessonsRange(params: {
   startDate: string
   endDate: string
@@ -5036,6 +5069,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         }
         const lessonLimit = resolveApplicableLessonLimit(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate, isRuleApplicableCached)
         const lessonLimitSatisfied = lessonLimit === null || existingLessons.length < lessonLimit
+        // spec-auto-assign-rules §B/TODO6「制約事項ハードフィルタ」(2026-07-04 B案・オーナー確定):
+        // 区分=制約に設定された6ルールの違反候補を、スコア計算前に完全除外する準備(セル非依存の集計)。
+        // 対象該当(applied)は上で解決済み。ここでは各ルールの区分が制約かどうかを1回だけ解決する。
+        // コマ数上限は maxOne→maxTwo→maxThree の解決順で最初の1ルールだけを対象にし、その区分を見る。
+        const applicableLessonLimitRule = resolveApplicableLessonLimitRule(autoAssignRuleByKey, params.managedStudent.id, studentGradeOnDate, isRuleApplicableCached)
+        const forbidFirstPeriodConstraint = resolveRuleCategory(forbidFirstPeriodRule) === 'constraint'
+        const subjectCapableConstraint = resolveRuleCategory(autoAssignRuleByKey.get('subjectCapableTeachersOnly')) === 'constraint'
+        const regularTeacherConstraint = resolveRuleCategory(autoAssignRuleByKey.get('regularTeachersOnly')) === 'constraint'
+        const lessonLimitConstraint = resolveRuleCategory(applicableLessonLimitRule) === 'constraint'
 
         // 「通常講師のみ」ルール判定は曜日問わずその生徒の通常授業担当講師で判定する(連続性スコアとは別)。
         // ライブ regularLessons 配列(any-day)と 実際の盤面(board) の両方の担当講師を合わせて取りこぼしを防ぐ。
@@ -5062,6 +5104,29 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             const firstPeriodPreferred = !forbidFirstPeriod || !forbiddenPeriods.includes(cell.slotNumber)
             const subjectCapablePreferred = !subjectCapableTeachersOnly || canTeacherHandleStudentSubject(teacher, matchedItem.subject, studentGradeOnDate)
             const regularTeacherPreferred = !regularTeachersOnly || ruleRegularTeacherIds.has(teacher.id)
+            // spec-auto-assign-rules §B/TODO6「制約事項ハードフィルタ」(2026-07-04 B案・オーナー確定・Issue #44):
+            // 区分=制約かつ対象該当かつ違反の候補は、スコア構築より前に完全除外(continue)する。
+            // 複数制約は AND。全候補が除外されて bestCandidate=null になれば、割振ループの「候補不足でストックに残す」
+            // 経路(if (!candidate) break)で未消化在庫にそのまま残る。制約対象が1件も無ければ1件も除外せず結果は不変(ゴールデン)。
+            // 判定は既存のソフト用 preferred 変数をそのまま再利用する(スコア次元・走査順は不変)。
+            if (
+              shouldExcludeAutoAssignCandidateByConstraint({
+                forbidFirstPeriodApplied: forbidFirstPeriod,
+                forbidFirstPeriodConstraint,
+                firstPeriodPreferred,
+                subjectCapableApplied: subjectCapableTeachersOnly,
+                subjectCapableConstraint,
+                subjectCapablePreferred,
+                regularTeacherApplied: regularTeachersOnly,
+                regularTeacherConstraint,
+                regularTeacherPreferred,
+                lessonLimitApplied: lessonLimit !== null,
+                lessonLimitConstraint,
+                lessonLimitSatisfied,
+              })
+            ) {
+              continue
+            }
             const scoreParts: AutoAssignScorePart[] = [
               ...params.buildLeadingScoreParts(matchedItem),
               ...buildForcedConstraintScoreParts({
@@ -9989,10 +10054,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 }
 
 // 性能最適化(挙動不変): isApplicable は isAutoAssignRuleApplicable と同値のメモ化版を注入するための引数。
-function resolveApplicableLessonLimit(ruleMap: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
-  const lessonLimitRule = lectureConstraintGroupDefinitions[1].ruleKeys
+// spec-auto-assign-rules §C/§H: 同日コマ数上限は maxOne→maxTwo→maxThree の解決順で最初に対象該当した1ルールだけ採る。
+function resolveApplicableLessonLimitRule(ruleMap: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
+  return lectureConstraintGroupDefinitions[1].ruleKeys
     .map((ruleKey) => ruleMap.get(ruleKey))
-    .find((rule) => isApplicable(rule, studentId, studentGrade))
+    .find((rule) => isApplicable(rule, studentId, studentGrade)) ?? null
+}
+
+function resolveApplicableLessonLimit(ruleMap: Map<AutoAssignRuleKey, AutoAssignRuleRow>, studentId: string, studentGrade: GradeLabel, isApplicable: typeof isAutoAssignRuleApplicable = isAutoAssignRuleApplicable) {
+  const lessonLimitRule = resolveApplicableLessonLimitRule(ruleMap, studentId, studentGrade, isApplicable)
 
   if (lessonLimitRule?.key === 'maxOneLesson') return 1
   if (lessonLimitRule?.key === 'maxTwoLessons') return 2
