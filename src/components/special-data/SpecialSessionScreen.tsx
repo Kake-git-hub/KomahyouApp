@@ -849,7 +849,7 @@ export function SpecialSessionScreen({ sessions, students: _students, teachers: 
                                 showRange
                               />
                             </section>
-                            <p className="basic-data-subcopy">欠席不可日の入力は、コマ表に戻ってこの講習の期間帯をクリックすると別タブで開きます。</p>
+                            <p className="basic-data-subcopy">欠席不可コマ・希望科目数の登録は日程表（生徒/講師）とQRから行います。</p>
                           </div>
                         </td>
                       </tr>
