@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getAllowedRuleCategories, getDefaultRuleCategory, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveReferenceSchoolYear, resolveRuleCategory, resolveStudentGradeLabel } from './autoAssignRuleModel'
+import { backfillMissingAutoAssignRules, getAllowedRuleCategories, getDefaultRuleCategory, initialAutoAssignRules, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveReferenceSchoolYear, resolveRuleCategory, resolveStudentGradeLabel } from './autoAssignRuleModel'
 
 // spec-auto-assign-rules ⑧TODO3: 指定時限禁止。未設定=[1]、1〜5のみ・昇順ユニーク。
 describe('resolveForbiddenPeriods', () => {
@@ -61,6 +61,36 @@ describe('auto-assign rule category allow-list', () => {
     expect(resolveRuleCategory({ key: 'preferDateConcentration', category: 'constraint' })).toBe('priority')
     // 設定なしは既定
     expect(resolveRuleCategory({ key: 'forbidFirstPeriod', category: undefined })).toBe('constraint')
+  })
+})
+
+// 科目分散(diversifySubjects): 制約/優先を切替可能・既定は優先事項(対象を設定するまで挙動に影響しない)。
+describe('diversifySubjects rule (科目分散)', () => {
+  it('is defined and allows both constraint and priority (default priority)', () => {
+    expect(initialAutoAssignRules.some((rule) => rule.key === 'diversifySubjects')).toBe(true)
+    expect(getAllowedRuleCategories('diversifySubjects')).toEqual(['constraint', 'priority'])
+    expect(getDefaultRuleCategory('diversifySubjects')).toBe('priority')
+    expect(resolveRuleCategory({ key: 'diversifySubjects', category: 'constraint' })).toBe('constraint')
+    expect(resolveRuleCategory({ key: 'diversifySubjects', category: undefined })).toBe('priority')
+  })
+})
+
+// 新ルール追加より前に保存された教室データにはルール行が無い。読込時に末尾へ補完し、既存行は変えない。
+describe('backfillMissingAutoAssignRules', () => {
+  it('appends missing rules to the end and keeps existing rows/order untouched', () => {
+    const savedRules = initialAutoAssignRules
+      .filter((rule) => rule.key !== 'diversifySubjects')
+      .map((rule) => ({ ...rule, updatedAt: '2026-01-01 00:00' }))
+
+    const backfilled = backfillMissingAutoAssignRules(savedRules)
+    expect(backfilled.slice(0, savedRules.length)).toEqual(savedRules)
+    expect(backfilled[backfilled.length - 1]?.key).toBe('diversifySubjects')
+    expect(backfilled[backfilled.length - 1]?.targets).toEqual([])
+  })
+
+  it('returns the array as-is when nothing is missing', () => {
+    const completeRules = initialAutoAssignRules.map((rule) => ({ ...rule }))
+    expect(backfillMissingAutoAssignRules(completeRules)).toBe(completeRules)
   })
 })
 

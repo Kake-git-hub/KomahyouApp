@@ -19,6 +19,7 @@ export type AutoAssignRuleKey =
   | 'preferSecondPeriod'
   | 'preferFifthPeriod'
   | 'forbidFirstPeriod'
+  | 'diversifySubjects'
 
 export type AutoAssignTargetGrade =
   | '小1'
@@ -45,6 +46,7 @@ const constraintCapableRuleKeys = new Set<AutoAssignRuleKey>([
   'subjectCapableTeachersOnly',
   'regularTeachersOnly',
   'forbidFirstPeriod',
+  'diversifySubjects',
 ])
 // 既定で制約事項として扱うルール（現状の forcedRuleKeys を踏襲）。
 const defaultConstraintRuleKeys = new Set<AutoAssignRuleKey>([
@@ -195,6 +197,11 @@ export const autoAssignRuleDefinitions: Array<Pick<AutoAssignRuleRow, 'key' | 'l
     label: '指定時限禁止',
     description: '対象者を、指定した時限（既定は1限）に配置しないよう制限します。',
   },
+  {
+    key: 'diversifySubjects',
+    label: '科目分散',
+    description: '通常・講習を問わず、同じ日の隣り合うコマが同じ科目にならないよう分散します。',
+  },
 ]
 
 export const autoAssignTargetGradeOrder: AutoAssignTargetGrade[] = ['小1', '小2', '小3', '小4', '小5', '小6', '中1', '中2', '中3', '高1', '高2', '高3']
@@ -209,6 +216,16 @@ export const initialAutoAssignRules: AutoAssignRuleRow[] = autoAssignRuleDefinit
   excludeStudentIds: [],
   updatedAt: '',
 }))
+
+// 新ルール追加(例: 科目分散)より前に保存された教室データには、そのルール行が存在しない。
+// 読込時に不足分を定義から末尾(=優先順位最下位)へ補完し、UI表示・優先順位付け・割振評価の対象にする。
+// 既存行はそのまま維持する(並び順・対象・区分を変えない)。不足がなければ元配列をそのまま返す。
+export function backfillMissingAutoAssignRules(rules: AutoAssignRuleRow[]): AutoAssignRuleRow[] {
+  const existingKeys = new Set(rules.map((rule) => rule.key))
+  const missingRules = initialAutoAssignRules.filter((rule) => !existingKeys.has(rule.key))
+  if (missingRules.length === 0) return rules
+  return [...rules, ...missingRules.map((rule) => ({ ...rule }))]
+}
 
 function getEnrollmentYear(birthYear: number, birthMonth: number) {
   return resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)

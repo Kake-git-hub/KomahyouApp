@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.389 (2026-07-04)
+
+- feat: 自動割振ルールに「科目分散」(diversifySubjects)を新規追加。通常・講習を問わず同日の隣接コマ(±1時限)が同一科目になる候補を不利にし、違反は割振り対象(非通常)コマへ警告表示。区分は制約/優先の切替可(既定=優先事項)・優先順位グループとして上下入替可。旧教室データへは読込時にルール行を末尾補完(backfillMissingAutoAssignRules)。ルール未設定なら割振結果・警告とも不変(autoAssignRuleModel.ts / ScheduleBoardScreen.tsx / AutoAssignRuleScreen.tsx / App.tsx・ユニットテスト12件追加・仕様正本 docs/spec-auto-assign-rules.md 更新)
+
 ## v1.5.388 (2026-07-04)
 
 - fix: 講師日程表で、同コマ内で別講師の机へ移動した生徒が旧講師のページにも二重表示される不具合を修正。moved_* レッスンはマージで机の講師IDが消えるため、基本データ行由来の regularTeacherIds(v1.5.247 導入の旧表示名救済)が旧講師を指し続けていた。盤面移動で配置された生徒(同日移動/元コマへ戻した振替)を regularTeacherIds の帰属から除外(src/utils/scheduleHtml.ts resolveRegularTeacherIds)。回帰テスト2件追加(ペイロード単体+移動操作→マージ→ペイロードの端到端・修正なしで落ちることを確認済み)

@@ -35,7 +35,7 @@ type AutoAssignRuleScreenProps = {
 
 type TargetDraftType = 'all' | 'grade' | 'students'
 type SelectionModalMode = 'target' | 'exclude'
-type RuleGroupKey = 'day-spacing' | 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference' | 'subject-capable' | 'regular-teachers' | 'forbid-period'
+type RuleGroupKey = 'day-spacing' | 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'time-preference' | 'subject-diversity' | 'subject-capable' | 'regular-teachers' | 'forbid-period'
 type XlsxModule = typeof import('xlsx')
 
 // ⑧TODO1: 区分は rule.category で解決（resolveRuleCategory）。制約事項=section/警告/Excel の区分表示に使う。
@@ -98,6 +98,13 @@ const ruleGroupDefinitions: Array<{
     description: '優先する時限の順番を 1〜5 限で並べ替えて優先順位を付けます。',
     orderKey: 'preferLateAfternoon',
     ruleKeys: ['preferLateAfternoon'],
+  },
+  {
+    key: 'subject-diversity',
+    label: '科目分散',
+    description: '通常・講習を問わず、同じ日の隣り合うコマが同じ科目にならないよう分散します。',
+    orderKey: 'diversifySubjects',
+    ruleKeys: ['diversifySubjects'],
   },
   // ⑧TODO1: 制約可ルールを優先事項へ切り替えたとき、優先事項セクションに表示する受け皿（既定は制約事項のため非表示）。
   {
@@ -268,7 +275,7 @@ export function buildAutoAssignWorkbook(
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, [
     { 項目: '対象/対象外', 説明: 'all または grade:中1 または students:青木太郎,伊藤花 を | 区切りで並べます。' },
     { 項目: 'ルールキー', 説明: 'current 出力のルールキーをそのまま使ってください。未知のキーは取り込みません。' },
-    { 項目: '分類', 説明: '制約事項 / 優先事項 を入力します。コマ数上限・指定時限禁止・科目対応講師のみ・通常講師のみ だけ制約事項にできます。他は優先事項に丸めます。' },
+    { 項目: '分類', 説明: '制約事項 / 優先事項 を入力します。コマ数上限・指定時限禁止・科目対応講師のみ・通常講師のみ・科目分散 だけ制約事項にできます。他は優先事項に丸めます。' },
     { 項目: '禁止時限', 説明: '指定時限禁止ルールの禁止する時限を 1〜5 のカンマ区切りで入力します（例 1,2）。' },
     { 項目: '優先時限順', 説明: '時限優先ルールの優先順を 1〜5 で並べます（例 5,4,3,2,1）。先頭ほど優先します。' },
     { 項目: 'ペア制約', 説明: '人物A/B は種別に応じて講師名または生徒名で入力します。' },

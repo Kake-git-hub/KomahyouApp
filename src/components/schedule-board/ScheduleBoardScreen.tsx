@@ -262,7 +262,7 @@ type AutoAssignDebugReport = {
   unassignedCount: number
 }
 
-type LectureConstraintGroupKey = 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'day-spacing' | 'time-preference'
+type LectureConstraintGroupKey = 'two-students' | 'lesson-limit' | 'lesson-pattern' | 'day-spacing' | 'time-preference' | 'subject-diversity'
 type StockActionModalState =
   | { type: 'lecture'; entryKey: string }
   | { type: 'makeup'; entryKey: string }
@@ -289,6 +289,7 @@ const lectureConstraintGroupDefinitions: Array<{ key: LectureConstraintGroupKey;
   { key: 'lesson-pattern', orderKey: 'allowTwoConsecutiveLessons', ruleKeys: ['allowTwoConsecutiveLessons', 'requireBreakBetweenLessons', 'connectRegularLessons'] },
   { key: 'day-spacing', orderKey: 'preferDateConcentration', ruleKeys: ['preferDateConcentration', 'preferNextDayOrLater'] },
   { key: 'time-preference', orderKey: 'preferLateAfternoon', ruleKeys: ['preferLateAfternoon'] },
+  { key: 'subject-diversity', orderKey: 'diversifySubjects', ruleKeys: ['diversifySubjects'] },
 ]
 const gradeCeilingOrder: Record<GradeCeiling, number> = { 小: 1, 中: 2, 高1: 3, 高2: 4, 高3: 5 }
 
@@ -368,6 +369,33 @@ export function resolveLessonPatternWarnings(sameDayOccurrences: LessonPatternOc
     return sameDayOccurrences.map((entry) => entry.occurrenceKey)
   }
   return []
+}
+
+// 科目分散ルール(diversifySubjects): 同日の隣接コマ(±1時限)に同じ科目の授業(通常・講習・振替を問わず)があるか。
+// 自動割振スコアで「隣接同一科目」の候補を不利にするための純粋判定。
+export function hasAdjacentSameSubjectLesson(
+  existingLessons: Array<{ slotNumber: number; subject: SubjectLabel }>,
+  slotNumber: number,
+  subject: SubjectLabel,
+): boolean {
+  return existingLessons.some((lesson) => Math.abs(lesson.slotNumber - slotNumber) === 1 && lesson.subject === subject)
+}
+
+export type SubjectDiversityOccurrence = { occurrenceKey: string; slotNumber: number; lessonType: LessonType; subject: SubjectLabel }
+
+// 科目分散ルールの違反占有コマを算出する純粋関数(盤面警告用)。
+// 隣接(±1時限)に同一科目の授業(通常含む)があるコマのうち、割振り対象(通常授業以外)だけを警告する。
+// 通常授業はコマ表テンプレ由来の固定配置のため違反扱いしない(指定時限禁止・通常講師のみと同じ扱い)。
+export function resolveSubjectDiversityWarnings(sameDayOccurrences: SubjectDiversityOccurrence[]): string[] {
+  if (sameDayOccurrences.length < 2) return []
+  return sameDayOccurrences
+    .filter((entry) => entry.lessonType !== 'regular')
+    .filter((entry) => sameDayOccurrences.some((other) => (
+      other.occurrenceKey !== entry.occurrenceKey
+      && other.subject === entry.subject
+      && Math.abs(other.slotNumber - entry.slotNumber) === 1
+    )))
+    .map((entry) => entry.occurrenceKey)
 }
 
 function compareScoreVectors(left: number[], right: number[]) {
@@ -494,10 +522,11 @@ function getInteractionSurfaceLabel(surface: InteractionSurface) {
 
 function resolveLectureConstraintGroupOrder(rules: AutoAssignRuleRow[]) {
   return lectureConstraintGroupDefinitions
-    .map((group) => ({
-      ...group,
-      orderIndex: rules.findIndex((rule) => rule.key === group.orderKey),
-    }))
+    .map((group) => {
+      const orderIndex = rules.findIndex((rule) => rule.key === group.orderKey)
+      // 新ルール追加(例: 科目分散)より前に保存された rules 配列にキーが無い場合は最下位に置く(-1 だと最上位に化けるため)。
+      return { ...group, orderIndex: orderIndex < 0 ? Number.MAX_SAFE_INTEGER : orderIndex }
+    })
     .sort((left, right) => left.orderIndex - right.orderIndex)
 }
 
@@ -1574,7 +1603,7 @@ export function buildStudentOccurrencesByDateIndex(
   managedStudentByAnyName: Map<string, StudentRow>,
   resolveBoardStudentDisplayName: (name: string) => string,
 ) {
-  const index = new Map<string, Map<string, Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType }>>>()
+  const index = new Map<string, Map<string, Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType; subject: SubjectLabel }>>>()
   for (const week of sourceWeeks) {
     for (const cell of week) {
       for (let deskIndex = 0; deskIndex < cell.desks.length; deskIndex += 1) {
@@ -1583,12 +1612,13 @@ export function buildStudentOccurrencesByDateIndex(
           const student = desk.lesson?.studentSlots[studentIndex]
           if (!student) continue
           const studentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
-          const byDate = index.get(studentKey) ?? new Map<string, Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType }>>()
+          const byDate = index.get(studentKey) ?? new Map<string, Array<{ occurrenceKey: string; slotNumber: number; lessonType: LessonType; subject: SubjectLabel }>>()
           const occurrences = byDate.get(cell.dateKey) ?? []
           occurrences.push({
             occurrenceKey: buildStudentWarningLocationKey(cell.id, deskIndex, studentIndex),
             slotNumber: cell.slotNumber,
             lessonType: student.lessonType,
+            subject: student.subject,
           })
           byDate.set(cell.dateKey, occurrences)
           index.set(studentKey, byDate)
@@ -4495,6 +4525,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       'lesson-limit': '同日授業数上限',
       'lesson-pattern': '授業並び方',
       'time-preference': '時限希望',
+      'subject-diversity': '科目分散',
     }
 
     return [
@@ -4558,7 +4589,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [managedTeacherForDeskCache, teachers])
 
   const collectStudentLessonsOnDate = (sourceWeeks: SlotCell[][], studentKey: string, dateKey: string) => {
-    const lessons: Array<{ slotNumber: number; lessonType: LessonType }> = []
+    const lessons: Array<{ slotNumber: number; lessonType: LessonType; subject: SubjectLabel }> = []
     for (const week of sourceWeeks) {
       for (const cell of week) {
         if (cell.dateKey !== dateKey) continue
@@ -4569,7 +4600,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             if (!student) continue
             const currentKey = resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
             if (currentKey !== studentKey) continue
-            lessons.push({ slotNumber: cell.slotNumber, lessonType: student.lessonType })
+            lessons.push({ slotNumber: cell.slotNumber, lessonType: student.lessonType, subject: student.subject })
           }
         }
       }
@@ -4721,7 +4752,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     cell: SlotCell
     teacher: TeacherRow
     pairedStudent: StudentEntry | null
-    existingLessons: Array<{ slotNumber: number; lessonType: LessonType }>
+    // 科目分散(diversifySubjects)の判定に配置予定の科目(subject)と既存授業の科目を使う。
+    subject: SubjectLabel
+    existingLessons: Array<{ slotNumber: number; lessonType: LessonType; subject: SubjectLabel }>
     assignedDateKeys: string[]
     lessonLimitSatisfied: boolean
     pairConstraintPreferred: boolean
@@ -4845,6 +4878,22 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         continue
       }
 
+      if (group.key === 'subject-diversity') {
+        if (!applicableRule) {
+          scoreParts.push({ label: '科目分散', value: 0, detail: '対象ルールなし', applicable: false, satisfied: false })
+          continue
+        }
+        const adjacentSameSubject = hasAdjacentSameSubjectLesson(params.existingLessons, params.cell.slotNumber, params.subject)
+        scoreParts.push({
+          label: '科目分散',
+          value: adjacentSameSubject ? 0 : 2,
+          detail: adjacentSameSubject ? '隣接コマに同一科目があり不利' : '隣接コマに同一科目なし',
+          applicable: true,
+          satisfied: !adjacentSameSubject,
+        })
+        continue
+      }
+
       if (group.key === 'time-preference') {
         if (!applicableRule) {
           scoreParts.push({
@@ -4947,7 +4996,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 探索前に1回、日付のみに依存する集計（同日既存授業）は日付ごとに1回だけ計算して使い回す。
     // 各セルで都度計算していた従来と同一の値になる（評価候補・スコアは不変）。
     const assignedDateKeys = collectStudentAssignedDateKeys(params.sourceWeeks, params.studentKey)
-    const existingLessonsByDateKey = new Map<string, Array<{ slotNumber: number; lessonType: LessonType }>>()
+    const existingLessonsByDateKey = new Map<string, Array<{ slotNumber: number; lessonType: LessonType; subject: SubjectLabel }>>()
     const forbidFirstPeriodRule = autoAssignRuleByKey.get('forbidFirstPeriod')
     const forbiddenPeriods = resolveForbiddenPeriods(forbidFirstPeriodRule)
     // 「通常講師のみ」ルール用: 盤面の通常授業から見たその生徒の担当講師(探索中は不変なので1回だけ集計)。
@@ -5014,6 +5063,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 cell,
                 teacher,
                 pairedStudent,
+                subject: matchedItem.subject,
                 existingLessons,
                 assignedDateKeys,
                 lessonLimitSatisfied,
@@ -5627,6 +5677,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     ? '通常連結2コマ'
                     : '一コマ空け'
                 addRuleWarning(warnKeys, lessonPatternRule.key, patternLabel)
+              }
+            }
+
+            // 科目分散(diversifySubjects): 隣接コマに同一科目の授業(通常含む)がある割振り対象(非通常)コマへ警告。
+            if (isRuleApplicableCached(autoAssignRuleByKey.get('diversifySubjects'), managedStudent.id, studentGradeOnDate) && sameDayOccurrences.length >= 2) {
+              const subjectDiversityWarnKeys = resolveSubjectDiversityWarnings(sameDayOccurrences)
+              if (subjectDiversityWarnKeys.length > 0) {
+                addRuleWarning(subjectDiversityWarnKeys, 'diversifySubjects', '科目分散')
               }
             }
 
