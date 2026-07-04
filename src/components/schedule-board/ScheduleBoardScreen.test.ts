@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -1330,7 +1330,6 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     openTeacherScheduleHtml({
       cells: actual,
-      plannedCells: [],
       teachers: [teacherOld, teacherNew],
       students: [student],
       regularLessons,
@@ -4075,6 +4074,47 @@ describe('shouldWarnForbiddenPeriod', () => {
       slotNumber: 1,
       forbiddenPeriods: [1],
     })).toBe(false)
+  })
+})
+
+// 回帰防止(2026-07-04 監査領域8 A3 オーナー確定): ペア制約の警告(制約=赤「組み合わせ不可」/優先=「組み合わせ回避」)も、
+// 指定時限禁止・通常講師のみ・科目分散と同じ原則で通常授業(lessonType==='regular')を対象外にする。
+// 修正なし(regular を除外しない)だと「通常授業は警告にしない」テストが落ち、修正ありで通る。
+// 自動割振スコア側(isPairConstraintBlocked)は割振り対象(振替・講習)の候補評価にのみ使われ、この除外の影響を受けない。
+describe('resolvePairConstraintWarningSeverity', () => {
+  it('通常授業はペア制約(制約)に一致しても警告にしない', () => {
+    expect(resolvePairConstraintWarningSeverity({
+      severity: 'constraint',
+      lessonType: 'regular',
+    })).toBe('none')
+  })
+
+  it('通常授業はペア制約(優先)に一致しても警告にしない', () => {
+    expect(resolvePairConstraintWarningSeverity({
+      severity: 'priority',
+      lessonType: 'regular',
+    })).toBe('none')
+  })
+
+  it('在庫(振替)配置は制約一致なら従来どおり赤の制約警告にする', () => {
+    expect(resolvePairConstraintWarningSeverity({
+      severity: 'constraint',
+      lessonType: 'makeup',
+    })).toBe('constraint')
+  })
+
+  it('在庫(講習)配置は優先一致なら従来どおり優先警告にする', () => {
+    expect(resolvePairConstraintWarningSeverity({
+      severity: 'priority',
+      lessonType: 'special',
+    })).toBe('priority')
+  })
+
+  it('一致なし(none)はそのまま警告にしない', () => {
+    expect(resolvePairConstraintWarningSeverity({
+      severity: 'none',
+      lessonType: 'makeup',
+    })).toBe('none')
   })
 })
 

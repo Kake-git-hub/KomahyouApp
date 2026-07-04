@@ -288,7 +288,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [cell],
-      plannedCells: [],
       students: [createStudent({ displayName: '新表示名' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -305,6 +304,46 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
     expect(student?.name).toBe('旧表示名')
     expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-04 監査領域9 A1 オーナー確定): plannedCells は埋め込みJSから一度も読まれないデッド payload
+  // だったため撤去した。planned 通常回数の唯一の根拠は expectedRegularOccurrences(テンプレ由来)。
+  // plannedCells を payload に復活させる変更(=毎同期の無駄な生成/シリアライズと「二重の planned 根拠」の再発)を検知する。
+  it('監査領域9 A1: payload に plannedCells を含めない(planned の唯一の根拠は expectedRegularOccurrences)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect('plannedCells' in payload).toBe(false)
+    expect(Array.isArray(payload.expectedRegularOccurrences)).toBe(true)
 
     vi.unstubAllGlobals()
   })
@@ -332,7 +371,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [cell],
-      plannedCells: [],
       students: [createStudent({ name: '山野 櫂', displayName: '山野　櫂' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -396,7 +434,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           },
         }],
       }],
-      plannedCells: [],
       students: [
         createStudent({ id: 'student-sato-taro', name: '佐藤 太郎', displayName: '佐藤', birthDate: '2012-05-01' }),
         createStudent({ id: 'student-sato-hanako', name: '佐藤 花子', displayName: '佐藤', birthDate: '2012-09-01' }),
@@ -441,7 +478,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -498,7 +534,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -567,7 +602,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     openAllScheduleHtml({
       viewType: 'all-student',
       cells: [],
-      plannedCells: [],
       students: [
         createStudent({ id: 'student-1', birthDate: '2012-05-01' }),
         createStudent({ id: 'student-2', name: '佐藤 花子', displayName: '佐藤', birthDate: '2012-09-01' }),
@@ -627,7 +661,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       openAllScheduleHtml({
         viewType: 'all-student',
         cells: [],
-        plannedCells: [],
         students: [createStudent({ id: 'student-1', birthDate: '2012-05-01' })],
         teachers: [],
         regularLessons: [],
@@ -682,7 +715,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     openAllScheduleHtml({
       viewType: 'all-student',
       cells: [],
-      plannedCells: [],
       students: [createStudent({ id: 'student-1', birthDate: '2012-05-01' })],
       teachers: [],
       regularLessons: [],
@@ -736,7 +768,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ displayName: '山田' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -770,7 +801,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ displayName: '山田' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -793,7 +823,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     write.mockClear()
     openTeacherScheduleHtml({
       cells: [],
-      plannedCells: [],
       teachers: [],
       students: [],
       regularLessons: [],
@@ -827,7 +856,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ displayName: '山田' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -869,7 +897,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ displayName: '山田' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -906,7 +933,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openTeacherScheduleHtml({
       cells: [],
-      plannedCells: [],
       teachers: [createTeacher()],
       students: [],
       regularLessons: [],
@@ -949,7 +975,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openTeacherScheduleHtml({
       cells: [],
-      plannedCells: [],
       teachers: [createTeacher()],
       students: [],
       regularLessons: [],
@@ -993,7 +1018,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [createManualScheduleCell()],
-      plannedCells: [],
       students: [createStudent({ id: 'student-1', displayName: '山田', birthDate: '2011-05-01' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1046,7 +1070,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openTeacherScheduleHtml({
       cells: [createManualScheduleCell()],
-      plannedCells: [],
       teachers: [createTeacher({ id: 'teacher-1', name: '田中講師', displayName: '田中' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1091,7 +1114,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       viewType: 'all-teacher',
       targetWindowName: 'schedule-print-all-all-teacher-123',
       cells: [],
-      plannedCells: [],
       students: [],
       teachers: [],
       regularLessons: [],
@@ -1126,7 +1148,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1164,7 +1185,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
       defaultStartDate: '2026-03-02',
@@ -1241,7 +1261,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     // Range spans both templates: March 2026 (template A) and April 2026 (template B)
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       regularLessonTemplateHistory: [templateA, templateB],
@@ -1288,7 +1307,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [
         createStudent({ id: 'student-3', name: '高橋 花', displayName: '高橋', birthDate: '2009-05-01' }),
         createStudent({ id: 'student-1', name: '青木 太郎', displayName: '青木', birthDate: '2014-05-01' }),
@@ -1327,7 +1345,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1364,7 +1381,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1471,7 +1487,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           ],
         },
       ],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
       defaultStartDate: '2026-04-01',
@@ -1550,7 +1565,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           ],
         },
       ],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [createRegularLesson()],
       defaultStartDate: '2026-04-01',
@@ -1586,7 +1600,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ birthDate: '2012-05-10' })],
       regularLessons: [],
       defaultStartDate: '2026-04-10',
@@ -1620,7 +1633,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1656,7 +1668,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent()],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -1692,7 +1703,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openTeacherScheduleHtml({
       cells: [],
-      plannedCells: [],
       teachers: [createTeacher()],
       defaultStartDate: '2026-03-24',
       defaultEndDate: '2026-03-30',
@@ -1729,7 +1739,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openTeacherScheduleHtml({
       cells: [],
-      plannedCells: [],
       teachers: [
         createTeacher({ id: 'teacher-1', name: '田中講師', displayName: '田中' }),
         createTeacher({ id: 'teacher-2', name: '佐藤講師', displayName: '佐藤' }),
@@ -1801,7 +1810,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           },
         ],
       }],
-      plannedCells: [],
       teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合', displayName: '落合' })],
       defaultStartDate: '2026-07-01',
       defaultEndDate: '2026-07-31',
@@ -1888,7 +1896,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           },
         ],
       }],
-      plannedCells: [],
       teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' })],
       defaultStartDate: '2026-07-01',
       defaultEndDate: '2026-07-31',
@@ -1954,7 +1961,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           },
         }],
       }],
-      plannedCells: [],
       teachers: [createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' })],
       students: [createStudent({ id: 'student-inoue', name: '井上 花子', displayName: '井上' })],
       regularLessons: [{
@@ -2050,7 +2056,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           },
         }],
       }],
-      plannedCells: [],
       teachers: [
         createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' }),
         createTeacher({ id: 'teacher-tanaka', name: '田中 次郎', displayName: '田中' }),
@@ -2139,7 +2144,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           },
         }],
       }],
-      plannedCells: [],
       teachers: [
         createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' }),
         createTeacher({ id: 'teacher-masubuchi', name: '増渕 遼', displayName: '増渕' }),
@@ -2245,7 +2249,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
           ],
         }],
       }],
-      plannedCells: [],
       teachers: [createTeacher()],
       defaultStartDate: '2026-03-24',
       defaultEndDate: '2026-03-30',
@@ -2279,7 +2282,6 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [],
       regularLessons: [],
       defaultStartDate: '2026-04-01',
@@ -2502,7 +2504,6 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ displayName: '山田' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',
@@ -2525,7 +2526,6 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     write.mockClear()
     openTeacherScheduleHtml({
       cells: [],
-      plannedCells: [],
       teachers: [],
       students: [],
       regularLessons: [],
@@ -2556,7 +2556,6 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
 
     openStudentScheduleHtml({
       cells: [],
-      plannedCells: [],
       students: [createStudent({ displayName: '山田' })],
       regularLessons: [],
       defaultStartDate: '2026-03-24',

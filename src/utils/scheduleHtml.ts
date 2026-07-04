@@ -159,7 +159,6 @@ type SchedulePayload = {
   students: SerializedStudent[]
   teachers: SerializedTeacher[]
   cells: SerializedCell[]
-  plannedCells: SerializedCell[]
   scheduleNotes: Record<string, string>
   expectedRegularOccurrences: SerializedExpectedRegularOccurrence[]
   highlightedStudentSlot?: {
@@ -182,7 +181,6 @@ type SchedulePayload = {
 
 type OpenScheduleHtmlParams = {
   cells: SlotCell[]
-  plannedCells: SlotCell[]
   defaultStartDate: string
   defaultEndDate: string
   defaultPeriodValue?: string
@@ -499,8 +497,9 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       })
       .filter(Boolean)
   }
+  // 監査領域9 A1(2026-07-04 確定): plannedCells payload は撤去済み。planned 通常回数の唯一の根拠は
+  // expectedRegularOccurrences(テンプレ由来)で、plannedCells は埋め込みJSから一度も読まれないデッドだった。
   const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds)
-  const serializedPlannedCells = serializeCells(params.plannedCells, resolveLinkedStudentId, resolveRegularTeacherIds)
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -524,7 +523,6 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       endDate: period.endDate,
     })),
     cells: serializedCells,
-    plannedCells: serializedPlannedCells,
     scheduleNotes: { ...(params.classroomSettings.scheduleNotes ?? {}) },
     expectedRegularOccurrences: [],
     highlightedStudentSlot: undefined,

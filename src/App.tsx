@@ -8,7 +8,7 @@ import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, g
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
 const BackupRestoreScreen = lazy(() => import('./components/backup-restore/BackupRestoreScreen').then((m) => ({ default: m.BackupRestoreScreen })))
@@ -3287,17 +3287,6 @@ function AuthenticatedApp() {
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
       }),
-      plannedCells: buildManagedScheduleCellsForRange({
-        range,
-        fallbackStartDate: range.startDate,
-        fallbackEndDate: range.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons: displayRegularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
-      }),
       students,
       regularLessons: displayRegularLessons,
       regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
@@ -3334,17 +3323,6 @@ function AuthenticatedApp() {
 
     syncTeacherScheduleHtml({
       cells: buildScheduleCellsForRange({
-        range,
-        fallbackStartDate: range.startDate,
-        fallbackEndDate: range.endDate,
-        classroomSettings,
-        teachers,
-        students,
-        regularLessons: displayRegularLessons,
-        boardWeeks: scheduleBoardWeeks,
-        suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
-      }),
-      plannedCells: buildManagedScheduleCellsForRange({
         range,
         fallbackStartDate: range.startDate,
         fallbackEndDate: range.endDate,
