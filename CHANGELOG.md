@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.385 (2026-07-04)
+
+- chore(ci): GitHub Pages への副次デプロイを廃止(deploy-pages.yml 削除・オーナー確定 2026-07-04)。2026-03-17導入の前身デプロイで、Firebase Hosting CI 確立(6/25)以降は未参照の第二入口＋直近2日で約4割が GitHub 側エラーで赤だった。vite.config.ts の base を '/' 固定へ簡素化(6/25本番真っ白障害の発生条件そのものを消滅・経緯コメントは保持)、不活性化した FIREBASE_DEPLOY env を3ワークフローから除去、CI に dist/index.html のルート相対資産アサートを追加(regression-reviewer 検査済み・実ビルドで /KomahyouApp/ 参照0件を確認)
+
 - docs: 仕様監査 領域6のオーナー確定(C1: 並び替え/フィルタは生徒・講師タブに限ると補正・C2: managers完全撤去を Issue #41 に起票〈自然消滅方式の移行計画つき〉・C3: Excelシート整理の完了条件を確定)を正本 spec-basic-data.md へ反映。B2〜B6(学年ラベル定義・同一性照合ID→メール→表示名→名前は消してはならない設計・差分取込は削除しない・nextStudent*死蔵・note授業時間転用)を明文化(docs/spec-audit-2026-07.md に処置記録)
 
 - docs: 仕様監査 領域6(基本データ画面)を実施・所見11件(A1/B7/C3)を台帳 docs/spec-audit-2026-07.md へ追記(spec-curator・読み取り監査のみ)。UI削ぎ落とし方針(マネージャータブ/isHidden/availableSlots廃止等)はUI上実装済みで、差分はmanagers等のデータ配管残骸に集中。同一性照合ID→メール→表示名→名前は消してはならない設計と記録。C1〜C3はオーナー確定待ち

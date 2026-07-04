@@ -46,8 +46,12 @@ jobs:
         run: npm run test:unit
       - name: Build
         run: npm run build
-        env:
-          FIREBASE_DEPLOY: '1'
+      - name: Verify build base is root
+        # 2026-06-25 本番真っ白障害の回帰ガード: base がサブパスに戻ると資産が /<repo>/assets/... になる。
+        # デプロイ前(CI)に dist/index.html のルート相対資産を検証する(live 検証 verify-firebase-hosting.mjs の前段)。
+        run: |
+          grep -q 'src="/assets/' dist/index.html
+          ! grep -q '/KomahyouApp/' dist/index.html
 
   rules:
     name: Firestore rules isolation

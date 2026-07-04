@@ -98,8 +98,6 @@ jobs:
 
       - name: Build app
         run: npm run build
-        env:
-          FIREBASE_DEPLOY: '1'
 
       - name: Build functions
         if: ${{ env.DEPLOY_FN == 'true' }}

@@ -78,11 +78,8 @@ jobs:
           FIREBASE_WEB_ENV: ${{ secrets.FIREBASE_WEB_ENV }}
 
       - name: Build app
-        # Firebase Hosting はルート(/)配信。FIREBASE_DEPLOY=1 で vite の base を '/' に固定する
-        # (未設定だと GitHub Actions 上では GitHub Pages 用 base /<repo>/ になり本番が真っ白になる)。
+        # base は vite.config.ts で '/' 固定(GitHub Pages 副次デプロイは 2026-07-04 廃止)。
         run: npm run build
-        env:
-          FIREBASE_DEPLOY: '1'
 
       - name: Write Firebase service account credentials
         run: |
