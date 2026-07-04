@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -4745,5 +4745,151 @@ describe('shouldHighlightStudentName', () => {
   it('警告文が無ければ(フラグが立っていても)赤文字にしない', () => {
     expect(shouldHighlightStudentName({ warning: undefined, warningUnavailableHighlight: true })).toBe(false)
     expect(shouldHighlightStudentName({ warning: '', warningUnavailableHighlight: true })).toBe(false)
+  })
+})
+
+// spec-auto-assign-rules §B/§C/§H/TODO6「制約事項ハードフィルタ」(2026-07-04 B案・オーナー確定・Issue #44):
+// 区分=制約に設定されたルールに違反する候補を、findBestAutoAssignCandidate のスコア計算前に完全除外する。
+// この純粋関数は「そのルールが対象該当(applied) かつ 区分=制約(constraint) かつ 違反(preferred でない)」のときだけ true を返す。
+// 除外が true になった候補は呼び出し側で continue され、全滅すれば bestCandidate=null → 既存の「候補不足でストックに残す」経路で未消化在庫に残る。
+//
+// 回帰防止: フィルタ自体を純粋関数に切り出して「修正なしで落ち・修正ありで通る」を担保する
+// (フィルタ挿入前は全候補がスコア評価に進み『置ける候補が無いから未消化に残す』が起きなかった)。
+describe('shouldExcludeAutoAssignCandidateByConstraint (制約事項ハードフィルタ)', () => {
+  // 全フラグ非該当=1件も除外しない(＝制約対象なしのゴールデン基準)。各テストで必要な次元だけ上書きする。
+  const baseParams = {
+    forbidFirstPeriodApplied: false,
+    forbidFirstPeriodConstraint: false,
+    firstPeriodPreferred: true,
+    subjectCapableApplied: false,
+    subjectCapableConstraint: false,
+    subjectCapablePreferred: true,
+    regularTeacherApplied: false,
+    regularTeacherConstraint: false,
+    regularTeacherPreferred: true,
+    lessonLimitApplied: false,
+    lessonLimitConstraint: false,
+    lessonLimitSatisfied: true,
+  }
+
+  it('(d) 制約対象が1件も無ければ除外しない(ゴールデン維持: 全候補がスコア評価へ進む)', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint(baseParams)).toBe(false)
+  })
+
+  it('(a) forbidFirstPeriod 制約×禁止時限(preferred でない)なら除外→全滅で未消化に残る', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      forbidFirstPeriodApplied: true,
+      forbidFirstPeriodConstraint: true,
+      firstPeriodPreferred: false,
+    })).toBe(true)
+  })
+
+  it('(a) forbidFirstPeriod でも禁止時限でない(preferred)なら除外しない', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      forbidFirstPeriodApplied: true,
+      forbidFirstPeriodConstraint: true,
+      firstPeriodPreferred: true,
+    })).toBe(false)
+  })
+
+  it('(b) regularTeachersOnly 制約×通常担当講師でない(preferred でない)なら除外→講師0人でも全滅で全未消化', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      regularTeacherApplied: true,
+      regularTeacherConstraint: true,
+      regularTeacherPreferred: false,
+    })).toBe(true)
+  })
+
+  it('subjectCapableTeachersOnly 制約×科目非対応(preferred でない)なら除外', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      subjectCapableApplied: true,
+      subjectCapableConstraint: true,
+      subjectCapablePreferred: false,
+    })).toBe(true)
+  })
+
+  it('(e) 優先区分(constraint=false)は違反していても除外しない(従来どおりソフト・スコア減点のみ)', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      forbidFirstPeriodApplied: true,
+      forbidFirstPeriodConstraint: false, // 優先事項
+      firstPeriodPreferred: false, // 違反
+      subjectCapableApplied: true,
+      subjectCapableConstraint: false,
+      subjectCapablePreferred: false,
+      regularTeacherApplied: true,
+      regularTeacherConstraint: false,
+      regularTeacherPreferred: false,
+      lessonLimitApplied: true,
+      lessonLimitConstraint: false,
+      lessonLimitSatisfied: false,
+    })).toBe(false)
+  })
+
+  it('対象非該当(applied=false)は制約でも違反でも除外しない', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      forbidFirstPeriodApplied: false,
+      forbidFirstPeriodConstraint: true,
+      firstPeriodPreferred: false,
+      regularTeacherApplied: false,
+      regularTeacherConstraint: true,
+      regularTeacherPreferred: false,
+    })).toBe(false)
+  })
+
+  it('(c) 複数制約は AND: どれか1つでも該当・制約・違反なら除外(他が満たされていても)', () => {
+    // forbidFirstPeriod は満たすが regularTeachersOnly 制約に違反 → 除外
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      forbidFirstPeriodApplied: true,
+      forbidFirstPeriodConstraint: true,
+      firstPeriodPreferred: true, // OK
+      regularTeacherApplied: true,
+      regularTeacherConstraint: true,
+      regularTeacherPreferred: false, // 違反
+    })).toBe(true)
+  })
+
+  it('(c) 複数制約すべて満たすなら除外しない(全部満たす候補だけが残る)', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      forbidFirstPeriodApplied: true,
+      forbidFirstPeriodConstraint: true,
+      firstPeriodPreferred: true,
+      subjectCapableApplied: true,
+      subjectCapableConstraint: true,
+      subjectCapablePreferred: true,
+      regularTeacherApplied: true,
+      regularTeacherConstraint: true,
+      regularTeacherPreferred: true,
+      lessonLimitApplied: true,
+      lessonLimitConstraint: true,
+      lessonLimitSatisfied: true,
+    })).toBe(false)
+  })
+
+  it('(f) コマ数上限 制約×上限超過(satisfied でない)なら除外', () => {
+    // 呼び出し側で maxOne→maxTwo→maxThree の解決順の最初の1ルールだけを lessonLimitConstraint/Applied に落とす。
+    // ここではその結果(適用され上限超過)を受けて除外することを確認する。
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      lessonLimitApplied: true,
+      lessonLimitConstraint: true,
+      lessonLimitSatisfied: false,
+    })).toBe(true)
+  })
+
+  it('(f) コマ数上限が適用されていても上限内(satisfied)なら除外しない', () => {
+    expect(shouldExcludeAutoAssignCandidateByConstraint({
+      ...baseParams,
+      lessonLimitApplied: true,
+      lessonLimitConstraint: true,
+      lessonLimitSatisfied: true,
+    })).toBe(false)
   })
 })

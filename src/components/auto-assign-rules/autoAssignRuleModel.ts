@@ -35,10 +35,15 @@ export type AutoAssignTargetGrade =
   | '高2'
   | '高3'
 
-// spec-auto-assign-rules ⑧TODO1: 区分（優先事項／制約事項）。絶対事項はアプリ固定で別枠。
+// spec-auto-assign-rules ⑧TODO1/TODO6: 区分（優先事項／制約事項）。区分は2値のまま。
+// 既定の固定「絶対事項」3つ（既存コマ不変／出席可能コマのみ／期間内割振）はユーザールールとは別データの
+// 表示専用ハードコードで、この category とは別枠（§B）。「絶対事項」区分の新設はしない（A案廃案）。
 export type AutoAssignRuleCategory = 'priority' | 'constraint'
 
-// 制約事項にも選べるルール（ハードとして効きうる）。それ以外は優先事項のみ。
+// 制約事項にも選べるルール（ハードフィルタとして意味が成立する6ルール）。それ以外は優先事項のみ。
+// spec-auto-assign-rules §B/TODO6（2026-07-04 B案・オーナー確定）：制約事項はハードフィルタ化した。
+// diversifySubjects（科目分散）はハード化すると隣接コマの科目依存で「置ける候補が無い」が続発し未消化が量産
+// されるため、制約可リストから外し優先のみに戻した（旧データで constraint でも resolveRuleCategory が優先へ丸める）。
 const constraintCapableRuleKeys = new Set<AutoAssignRuleKey>([
   'maxOneLesson',
   'maxTwoLessons',
@@ -46,7 +51,6 @@ const constraintCapableRuleKeys = new Set<AutoAssignRuleKey>([
   'subjectCapableTeachersOnly',
   'regularTeachersOnly',
   'forbidFirstPeriod',
-  'diversifySubjects',
 ])
 // 既定で制約事項として扱うルール（現状の forcedRuleKeys を踏襲）。
 const defaultConstraintRuleKeys = new Set<AutoAssignRuleKey>([

@@ -34,13 +34,19 @@ describe('resolvePeriodPriorityOrder', () => {
   })
 })
 
-// spec-auto-assign-rules ⑧TODO1: 区分許可リスト。制約可=コマ数上限/指定時限禁止/科目対応講師のみ/通常講師のみ。
+// spec-auto-assign-rules ⑧TODO1/TODO6: 区分許可リスト。
+// 制約可＝コマ数上限3種/指定時限禁止/科目対応講師のみ/通常講師のみ の6ルール。
+// ★Issue #44 (2026-07-04 B案): diversifySubjects(科目分散)は制約可リストから外し優先のみに戻した。
 describe('auto-assign rule category allow-list', () => {
-  it('allows constraint only for hard-capable rules; others are priority-only', () => {
+  it('allows constraint only for the 6 hard-capable rules; others are priority-only', () => {
     expect(getAllowedRuleCategories('forbidFirstPeriod')).toEqual(['constraint', 'priority'])
+    expect(getAllowedRuleCategories('maxOneLesson')).toEqual(['constraint', 'priority'])
     expect(getAllowedRuleCategories('maxTwoLessons')).toEqual(['constraint', 'priority'])
+    expect(getAllowedRuleCategories('maxThreeLessons')).toEqual(['constraint', 'priority'])
     expect(getAllowedRuleCategories('subjectCapableTeachersOnly')).toEqual(['constraint', 'priority'])
     expect(getAllowedRuleCategories('regularTeachersOnly')).toEqual(['constraint', 'priority'])
+    // ★Issue #44: 科目分散はもう制約に選べない(優先のみ)。
+    expect(getAllowedRuleCategories('diversifySubjects')).toEqual(['priority'])
     expect(getAllowedRuleCategories('preferDateConcentration')).toEqual(['priority'])
     expect(getAllowedRuleCategories('preferLateAfternoon')).toEqual(['priority'])
     expect(getAllowedRuleCategories('preferTwoStudentsPerTeacher')).toEqual(['priority'])
@@ -64,13 +70,16 @@ describe('auto-assign rule category allow-list', () => {
   })
 })
 
-// 科目分散(diversifySubjects): 制約/優先を切替可能・既定は優先事項(対象を設定するまで挙動に影響しない)。
+// 科目分散(diversifySubjects): ★Issue #44 (2026-07-04 B案) で制約可リストから外し優先のみに戻した。
+// 意図的変更: 以前は 制約/優先 を切替可能だったが、ハードフィルタ化すると隣接コマの科目依存で未消化が
+// 量産されるため優先のみへ。旧データで constraint でも resolveRuleCategory が優先へ丸めて解決する(データは壊れない)。
 describe('diversifySubjects rule (科目分散)', () => {
-  it('is defined and allows both constraint and priority (default priority)', () => {
+  it('is defined and is priority-only (constraint no longer selectable)', () => {
     expect(initialAutoAssignRules.some((rule) => rule.key === 'diversifySubjects')).toBe(true)
-    expect(getAllowedRuleCategories('diversifySubjects')).toEqual(['constraint', 'priority'])
+    expect(getAllowedRuleCategories('diversifySubjects')).toEqual(['priority'])
     expect(getDefaultRuleCategory('diversifySubjects')).toBe('priority')
-    expect(resolveRuleCategory({ key: 'diversifySubjects', category: 'constraint' })).toBe('constraint')
+    // ★Issue #44: 旧データで category:'constraint' が保存されていても許可外なので優先へ丸まる(回帰防止)。
+    expect(resolveRuleCategory({ key: 'diversifySubjects', category: 'constraint' })).toBe('priority')
     expect(resolveRuleCategory({ key: 'diversifySubjects', category: undefined })).toBe('priority')
   })
 })

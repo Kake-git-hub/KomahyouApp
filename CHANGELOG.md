@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- feat: 自動割振の区分「制約事項」をソフト(強い減点+警告)からハードフィルタへ転換(Issue #44・B案・2026-07-04オーナー確定)。findBestAutoAssignCandidate のスコア構築前に純関数 shouldExcludeAutoAssignCandidateByConstraint で違反候補を continue 除外し、置ける候補が無ければ既存の「候補不足でストックに残す」経路で未消化在庫に残す。制約可リストから diversifySubjects(科目分散)を外し優先のみへ(旧データの constraint は resolveRuleCategory が優先へ丸め)。理由=違反状態で埋まるより未消化に残して気づけるほうがよいという運用哲学へ転換(2026-06-11「全ソフト維持」の意図的上書き・仕様書§Bに新旧併記)。制約対象なしは割振結果・スコア・走査順を完全不変に保つ(ゴールデン維持)。通常講師のみの判定元は配列+盤面の和集合を踏襲(v1.5.317)・『絶対事項合計』ソフト次元は存続(§H)。回帰テスト12件+モデル許可リスト縮小テスト更新(autoAssignRuleModel.ts/ScheduleBoardScreen.tsx/AutoAssignRuleScreen.tsx説明シート文言・正本 docs/spec-auto-assign-rules.md 反映)
 
 ## 1.5.394
 
