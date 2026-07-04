@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { backfillMissingAutoAssignRules, getAllowedRuleCategories, getDefaultRuleCategory, initialAutoAssignRules, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveReferenceSchoolYear, resolveRuleCategory, resolveStudentGradeLabel } from './autoAssignRuleModel'
 
@@ -115,5 +117,20 @@ describe('autoAssignRuleModel grade resolution', () => {
     expect(resolveStudentGradeLabel('2013-04-02', '2026-04-01')).toBe('中1')
     expect(resolveStudentGradeLabel('2012-04-01', '2026-04-01')).toBe('中2')
     expect(resolveStudentGradeLabel('2012-04-02', '2026-04-01')).toBe('中2')
+  })
+})
+describe('AutoAssignRuleScreen 画面説明文（回帰: 制約事項ハードフィルタ化 Issue #44）', () => {
+  // B案（2026-07-04 オーナー確定）で制約事項はソフト（守れなければ違反で割り振り）から
+  // ハードフィルタ（守れなければ未消化に残す）へ転換した。画面冒頭の説明文が
+  // 旧ソフト挙動の記述へ巻き戻らないことをソース文字列で検証する。
+  const screenSource = readFileSync(fileURLToPath(new URL('./AutoAssignRuleScreen.tsx', import.meta.url)), 'utf8')
+
+  it('旧ソフト挙動の説明（候補がないときだけ違反で割り振り）が復活していない', () => {
+    expect(screenSource).not.toContain('制約事項を満たす候補がないときだけ優先事項違反で割り振り')
+    expect(screenSource).not.toContain('制約事項をできる限り守ります')
+  })
+
+  it('ハードフィルタ挙動（守れない候補は未消化に残す）を説明している', () => {
+    expect(screenSource).toContain('制約事項を満たす候補が無いコマは無理に割り振らず、未消化（ストック）に残します')
   })
 })
