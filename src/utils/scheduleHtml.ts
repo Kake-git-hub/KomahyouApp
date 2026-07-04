@@ -478,6 +478,11 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     : []
   const resolveRegularTeacherIds = (student: StudentEntry, cell: SlotCell) => {
     if (student.lessonType !== 'regular') return []
+    // 盤面移動でこのコマに配置された生徒(同日移動・元コマへ戻した振替)は、基本データ行の
+    // 担当講師ではなく実際に置かれた机の講師(名前/teacherId)に帰属させる。これを欠くと、
+    // 同コマ内で別講師の机へ移した生徒が基本データ行(曜日・時限が一致し続ける)経由で
+    // 旧講師の講師日程にも二重表示される(2026-07-04 報告)。
+    if (student.sameDayMoveSourceDate === cell.dateKey || student.makeupSourceDate === cell.dateKey) return []
     const studentId = student.managedStudentId ?? resolveLinkedStudentId(student.name)
     if (!studentId || teacherLookupRegularLessons.length === 0) return []
     const lessonDate = parseDateKey(cell.dateKey)

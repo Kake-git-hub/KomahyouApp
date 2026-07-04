@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { getTeacherDisplayName, initialStudents, initialTeachers, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { createInitialRegularLessons, type RegularLessonRow } from '../basic-data/regularLessonModel'
@@ -9,6 +9,7 @@ import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, app
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
+import { openTeacherScheduleHtml } from '../../utils/scheduleHtml'
 
 const classroomSettings: ClassroomSettings = {
   closedWeekdays: [0],
@@ -1195,6 +1196,162 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
 
     expect(actualDesk?.teacher).toBe('Ochiai')
     expect(actualDesk?.teacherAssignmentTeacherId).toBe('teacher-ochiai')
+  })
+
+  // 回帰防止(2026-07-04 報告): 同コマ(同じ日付・時限)内で生徒を別講師の机へ移動すると、
+  // (1) moved_* レッスンは managed でないためマージで机の teacherAssignmentTeacherId が消え、
+  // (2) 生徒は同日移動で regular のまま基本データ行(曜日・時限・生徒・科目)に一致し続けるため、
+  // 講師日程表ペイロードの regularTeacherIds が旧講師IDを指し、旧講師・新講師の両ページに
+  // 同じ生徒が二重表示されていた。移動操作→マージ→ペイロードの全経路で再発を検知する。
+  it('同コマ内で別講師へ移動した生徒が旧講師の講師日程に二重表示されない', () => {
+    const teacherOld = {
+      ...initialTeachers[0]!,
+      id: 'teacher-old',
+      name: 'Yamada Taro',
+      displayName: 'Yamada',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+    }
+    const teacherNew = {
+      ...initialTeachers[0]!,
+      id: 'teacher-new',
+      name: 'Tanaka Jiro',
+      displayName: 'Tanaka',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+    }
+    const student = {
+      ...initialStudents[0]!,
+      id: 'student-sato',
+      name: 'Sato Ken',
+      displayName: 'Sato',
+      entryDate: '2026-04-01',
+      withdrawDate: '未定',
+    }
+    const regularLessons = [
+      {
+        id: 'regular-old-sato',
+        schoolYear: 2026,
+        teacherId: 'teacher-old',
+        student1Id: 'student-sato',
+        subject1: '数',
+        startDate: '2026-04-01',
+        endDate: '未定',
+        student2Id: '',
+        subject2: '',
+        student2StartDate: '',
+        student2EndDate: '',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 5,
+        slotNumber: 5,
+      },
+      {
+        // 新講師はテンプレ上「講師のみ」の机(移動先)
+        id: 'regular-new-teacher-only',
+        schoolYear: 2026,
+        teacherId: 'teacher-new',
+        student1Id: '',
+        subject1: '',
+        startDate: '2026-04-01',
+        endDate: '未定',
+        student2Id: '',
+        subject2: '',
+        student2StartDate: '',
+        student2EndDate: '',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 5,
+        slotNumber: 5,
+      },
+    ]
+    const rangeParams = {
+      range: { startDate: '2026-06-29', endDate: '2026-07-05', periodValue: '' },
+      fallbackStartDate: '2026-06-29',
+      fallbackEndDate: '2026-07-05',
+      classroomSettings,
+      teachers: [teacherOld, teacherNew],
+      students: [student],
+      regularLessons,
+    }
+
+    // テンプレから盤面週を生成し、旧講師の机の生徒を同コマ内の新講師(講師のみ)机へ移動する
+    const boardWeek = buildManagedScheduleCellsForRange({ ...rangeParams, boardWeeks: [], suppressedRegularLessonOccurrences: [] })
+    const targetCell = boardWeek.find((cell) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)!
+    const oldDeskIndex = targetCell.desks.findIndex((desk) => desk.lesson?.studentSlots.some((s) => s?.managedStudentId === 'student-sato'))
+    const newDeskIndex = targetCell.desks.findIndex((desk) => !desk.lesson && desk.teacher === 'Tanaka')
+    expect(oldDeskIndex).toBeGreaterThanOrEqual(0)
+    expect(newDeskIndex).toBeGreaterThanOrEqual(0)
+    const movingEntry = targetCell.desks[oldDeskIndex]!.lesson!.studentSlots.find((s) => s?.managedStudentId === 'student-sato')!
+
+    const moveResult = computeStudentMove({
+      weeks: [boardWeek],
+      weekIndex: 0,
+      cells: boardWeek,
+      movingStudentId: movingEntry.id,
+      cellId: targetCell.id,
+      deskIndex: newDeskIndex,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: new Map([[student.name, student], ['Sato', student]]),
+      resolveBoardStudentDisplayName: (name: string) => name,
+    })
+    expect(moveResult.status).toBe('moved')
+    if (moveResult.status !== 'moved') return
+
+    const actual = buildScheduleCellsForRange({
+      ...rangeParams,
+      boardWeeks: moveResult.nextWeeks,
+      suppressedRegularLessonOccurrences: moveResult.nextSuppressedRegularLessonOccurrences,
+    })
+    const mergedCell = actual.find((cell) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)!
+    const deskWithStudent = mergedCell.desks.find((desk) => desk.lesson?.studentSlots.some((s) => s?.managedStudentId === 'student-sato'))
+    expect(deskWithStudent?.teacher).toBe('Tanaka')
+
+    // 講師日程表ペイロードへ変換し、机の講師帰属を確認する
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: actual,
+      plannedCells: [],
+      teachers: [teacherOld, teacherNew],
+      students: [student],
+      regularLessons,
+      defaultStartDate: '2026-06-29',
+      defaultEndDate: '2026-07-05',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const payloadCell = payload.cells.find((cell: { dateKey: string; slotNumber: number }) => cell.dateKey === '2026-07-03' && cell.slotNumber === 5)
+    const payloadDesk = payloadCell?.desks?.find((desk: { lesson?: { students?: Array<{ name: string }> } }) => desk.lesson?.students?.some((s) => s.name === 'Sato'))
+    // 新講師の机として表示される(名前で Tanaka のページに載る)
+    expect(payloadDesk?.teacher).toBe('Tanaka')
+    // 旧講師IDへの帰属(regularTeacherIds)が無いこと = Yamada のページに二重表示されない
+    expect(payloadDesk?.regularTeacherIds ?? []).not.toContain('teacher-old')
+    vi.unstubAllGlobals()
   })
 
   // 回帰防止(6793374 / commit 2dce7b4 で巻き戻り再発): 盤面の通常生徒スロットが managedStudentId を

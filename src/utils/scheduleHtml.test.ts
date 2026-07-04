@@ -1998,6 +1998,103 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止(2026-07-04 報告): 同コマ内で生徒を別講師の机へ移動すると、moved_* レッスンは
+  // マージで机の teacherAssignmentTeacherId が消えるため、regularTeacherIds(基本データ行の
+  // 旧講師ID)が机に付き、旧講師と新講師の両方の講師日程に同じ生徒が二重表示されていた。
+  // 盤面移動で配置された生徒(sameDayMoveSourceDate / 元日付へ戻した makeupSourceDate が
+  // 当該コマの日付)は regularTeacherIds の帰属から除外し、机の講師名だけで帰属させる。
+  it('does not attribute same-day moved students back to the template teacher via regularTeacherIds', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openTeacherScheduleHtml({
+      cells: [{
+        id: '2026-07-24_5',
+        dateKey: '2026-07-24',
+        dayLabel: '金',
+        dateLabel: '7/24',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:40-21:10',
+        isOpenDay: true,
+        desks: [{
+          // 同コマ内で旧講師(落合)の机から移動してきた生徒が乗る新講師(田中)の机。
+          // moved_* レッスンはマージで teacherAssignmentTeacherId が消えた状態を再現する。
+          id: '2026-07-24_5_desk_2',
+          teacher: '田中',
+          lesson: {
+            id: 'moved_student-inoue_2026-07-24_英_abc123',
+            studentSlots: [{
+              id: 'student-inoue_2026-07-24_英',
+              name: '井上',
+              managedStudentId: 'student-inoue',
+              grade: '中2',
+              subject: '英',
+              lessonType: 'regular',
+              teacherType: 'normal',
+              sameDayMoveSourceDate: '2026-07-24',
+              sameDayMoveSourceLabel: '2026/7/24(金) 5限',
+            }, null],
+          },
+        }],
+      }],
+      plannedCells: [],
+      teachers: [
+        createTeacher({ id: 'teacher-ochiai', name: '落合 優太', displayName: '落合' }),
+        createTeacher({ id: 'teacher-tanaka', name: '田中 次郎', displayName: '田中' }),
+      ],
+      students: [createStudent({ id: 'student-inoue', name: '井上 花子', displayName: '井上' })],
+      regularLessons: [{
+        id: 'regular-ochiai-inoue',
+        schoolYear: 2026,
+        teacherId: 'teacher-ochiai',
+        student1Id: 'student-inoue',
+        subject1: '英',
+        startDate: '2026-04-01',
+        endDate: '未定',
+        student2Id: '',
+        subject2: '',
+        student2StartDate: '',
+        student2EndDate: '',
+        nextStudent1Id: '',
+        nextSubject1: '',
+        nextStudent2Id: '',
+        nextSubject2: '',
+        dayOfWeek: 5,
+        slotNumber: 5,
+      }],
+      defaultStartDate: '2026-07-21',
+      defaultEndDate: '2026-08-28',
+      defaultPersonId: 'teacher-ochiai',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    const desk = payload.cells[0]?.desks?.[0]
+    // 新講師の机の名前では表示され続ける(田中のページには載る)
+    expect(desk).toMatchObject({ teacher: '田中', lesson: { students: [{ name: '井上' }] } })
+    // 旧講師のIDへは帰属させない(落合のページに二重表示しない)
+    expect(desk?.regularTeacherIds).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
   it('prefers the actual assigned teacher over regular teacher ids for teacher schedules', () => {
     const write = vi.fn()
     const popup = {
