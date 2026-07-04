@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildLectureStockEntries, type LectureStockEntry } from './lectureStock'
-import { lectureSpecialSessions, lectureStudents } from './__fixtures__/sampleLectureStock'
+import { lectureSpecialSessions, lectureStockReferenceDate, lectureStudents } from './__fixtures__/sampleLectureStock'
 
 // 講習ストックのゴールデンスナップショット。
 //
@@ -14,6 +14,7 @@ import { lectureSpecialSessions, lectureStudents } from './__fixtures__/sampleLe
 const entries = buildLectureStockEntries({
   specialSessions: lectureSpecialSessions,
   students: lectureStudents,
+  referenceDate: lectureStockReferenceDate,
 })
 
 function digestEntries(list: LectureStockEntry[]): string {
@@ -23,6 +24,18 @@ function digestEntries(list: LectureStockEntry[]): string {
 }
 
 describe('講習ストックゴールデンスナップショット (buildLectureStockEntries)', () => {
+  it('referenceDate を渡すと学年ラベルがその日基準で固定される(年度替わりでゴールデンが揺れない)', () => {
+    // birthDate 2011-06-10(2018年度入学): 2026年度=中3 / 2028年度=高2。
+    // 基準日を固定しない(=今日基準の)ままだと、この差が毎年4/1に両ゴールデンを落とす。
+    const future = buildLectureStockEntries({
+      specialSessions: lectureSpecialSessions,
+      students: lectureStudents,
+      referenceDate: '2028-07-01',
+    })
+    expect(future.find((e) => e.studentId === 's_a')?.displayName).toBe('青木太郎 (高2)')
+    expect(entries.find((e) => e.studentId === 's_a')?.displayName).toBe('青木太郎 (中3)')
+  })
+
   it('代表講習データの集計が固定スナップショットと一致する', () => {
     expect(digestEntries(entries)).toMatchSnapshot()
   })

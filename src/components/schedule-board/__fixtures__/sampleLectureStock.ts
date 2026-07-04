@@ -14,6 +14,11 @@
 import type { StudentRow } from '../../basic-data/basicDataModel'
 import type { SpecialSessionRow, SpecialSessionStudentInput } from '../../special-data/specialSessionModel'
 
+// 学年ラベルの基準日(固定)。formatStudentSelectionLabel の既定は「今日」基準のため、
+// 固定しないとゴールデンの表示名「(中3)」等が毎年4/1の年度替わりで自動的に落ちる。
+// birthDate 2011-06-10 はこの基準日で中3(2018年度入学・学年番号9)。
+export const lectureStockReferenceDate = '2026-07-01'
+
 function student(id: string, name: string): StudentRow {
   return { id, name, displayName: name.replace(/\s/g, ''), email: `${id}@example.com`, entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2011-06-10' }
 }

@@ -16,8 +16,11 @@ export type LectureStockEntry = {
 export function buildLectureStockEntries(params: {
   specialSessions: SpecialSessionRow[]
   students: StudentRow[]
+  // 表示名の学年ラベル基準日(YYYY-MM-DD)。省略時は今日基準(本番挙動)。
+  // テストはゴールデンが年度替わり(毎年4/1)で揺れないよう固定日付を渡す。
+  referenceDate?: string
 }) {
-  const { specialSessions, students } = params
+  const { specialSessions, students, referenceDate } = params
   const studentMap = new Map(students.map((student) => [student.id, student]))
 
   return specialSessions
@@ -26,7 +29,7 @@ export function buildLectureStockEntries(params: {
       if (input.regularOnly) return []
 
       const student = studentMap.get(studentId)
-      const displayName = student ? formatStudentSelectionLabel(student) : studentId
+      const displayName = student ? formatStudentSelectionLabel(student, referenceDate) : studentId
 
       return Object.entries(input.subjectSlots)
         .map(([subject, requestedCount]) => ({

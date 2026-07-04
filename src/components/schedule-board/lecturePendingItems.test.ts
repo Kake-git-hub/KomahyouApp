@@ -5,7 +5,7 @@ import {
   buildLecturePendingItemsByEntryKey,
   type LecturePendingScopedEntry,
 } from './lectureStock'
-import { lectureSpecialSessions, lectureStudents } from './__fixtures__/sampleLectureStock'
+import { lectureSpecialSessions, lectureStockReferenceDate, lectureStudents } from './__fixtures__/sampleLectureStock'
 
 // 未消化講習の残数（デルタ台帳適用後の pending items）のゴールデン。
 //
@@ -27,6 +27,7 @@ import { lectureSpecialSessions, lectureStudents } from './__fixtures__/sampleLe
 const rawLectureStockEntries = buildLectureStockEntries({
   specialSessions: lectureSpecialSessions,
   students: lectureStudents,
+  referenceDate: lectureStockReferenceDate,
 })
 
 function buildPending(params?: {
