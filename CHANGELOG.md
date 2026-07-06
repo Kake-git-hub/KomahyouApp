@@ -17,6 +17,9 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+
+## 1.5.396
+
 - test: A4 配線ガード(regression-reviewer 指摘)。トークン発行の state 反映を薄いラッパー `reflectIssuedSubmissionTokens` に切り出し、「関数型アップデータで setter 実行時点の最新 current へマージする」配線をテストで固定(stale スナップショット丸ごと置換へ戻すと落ちる)。あわせて症状連鎖の端到端テスト(トークン発行反映後も提出済み生徒が未提出除去の対象にならない=割振済み講習が戻らない)を追加。src/App.tsx・src/App.test.ts
 - fix: 講習提出トークンの自動発行反映を「丸ごと置換」から「current(最新)へマージ」へ修正(A4)。生徒日程表popupを開く/最新表示すると ensureScheduleSubmissionTokens が走り、関数開始時点の session スナップショットから updatedSession を作って `await writeSubmissionDocs`(ネットワーク)後に `setSpecialSessions(current => current.map(s => s.id===updatedSession.id ? updatedSession : s))` で対象セッションを丸ごと置換していた。この await 中に別生徒のQR提出反映(subscribeLectureSubmissions → countSubmitted=true)が届くと、古いスナップショットが上書きしてその生徒を未提出へ巻き戻し、未提出配置除去 effect が盤面の割振済み講習を外し講習残数が満数へ戻る経路になり得た。純関数 `applyIssuedSubmissionTokensToSessions` を新設し、新規発行トークンの追加/後埋めだけを current へマージ・既存エントリの countSubmitted/subjectSlots 等は保持するよう変更(回帰テスト4件)。src/App.tsx・src/App.test.ts
 - fix: 未提出配置の自動除去判定 `resolveNewlyUnsubmittedSessionStudents` の基準を「未提出集合」から「提出済み集合」へ厳密化。除去対象を「前回提出済みだった生徒が今回未提出になった=登録解除」だけに限定し、トークン自動発行(ensureSubmissionTokens が countSubmitted:false エントリをセッション途中に新規追加)で現れる『初めから未提出』の生徒を『新たに未提出』と誤判定して除去する経路を原理的に排除。null 番兵(初回/再マウントは基準取り込みのみ)と空ロード据え置きガードは維持。回帰テスト更新(『初めから未提出』は除去しない/登録解除は除去する・旧基準では落ちることを確認)。src/components/schedule-board/ScheduleBoardScreen.tsx・ScheduleBoardScreen.test.ts
