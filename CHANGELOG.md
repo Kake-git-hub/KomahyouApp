@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.398
+
+- docs: 引き継ぎ文書 docs/handoff-qr-submitted-at.md を追加。①本番 lectureSubmissions の submittedAt と問題報告時刻の突き合わせ解析(A4真因説の実データ裏付け・読み取り専用・アクセス制約と欠損注意つき) ②講習集計結果画面へのQR提出時刻表示(実装ポインタ・submittedAt を studentInputs へ搬送する3経路・着手前に spec-curator で確定すべき仕様点)を別セッションで進めるための背景・手順・制約をまとめた
+
 ## 1.5.397
 
 - docs: 登録解除の現状挙動をオーナー確定(2026-07-06)として正本に明文化。「講習だけ外し振替は残す(未消化へ戻さない)非対称は意図的」「希望数(subjectSlots)は in-app 保持・doc はクリアの二層」「ストック調整は台帳クリア方式が正・restoreSessionStock の +1 復元はデッド」「自動除去は提出済み→未提出の実遷移のみ発火」「セッション/生徒削除・期間変更では自動掃除しない」を追記。「空にする」での振替再出現(講習は台帳方式ゆえ再出現しない)の非対称を確定に格上げ。docs/spec-special-session-submission.md(E-2b 新設)・spec-lecture-stock.md(§5-1 新設)・spec-makeup-stock.md(§2)
