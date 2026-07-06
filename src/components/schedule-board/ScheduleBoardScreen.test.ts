@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -5010,5 +5010,209 @@ describe('resolveNewlyUnsubmittedSessionStudents (未提出生徒の講習配置
       previousSubmittedKeys: seed.nextBasisKeys,
     })
     expect(afterAssign.newlyUnsubmitted).toHaveLength(0)
+  })
+})
+
+describe('removeStudentAssignmentsFromSpecialSession (登録解除の確定仕様固定・オーナー確定 2026-07-06)', () => {
+  // ★消してはならない回帰テスト(オーナー確定 2026-07-06)。
+  //   登録解除時の盤面/台帳操作は「現状の挙動が正」とオーナーが確定済み。
+  //   とりわけ「講習(special)だけ盤面から外し、同じ生徒の振替(makeup)は残す」非対称は
+  //   意図的な確定仕様(未消化振替へは戻さない)。将来この挙動を変える修正が入っても、
+  //   この固定を崩す前提が変わっていないことを必ずオーナーに確認すること。テストを黙って緩めない。
+  //   正本: docs/spec-special-session-submission.md(E-2 周辺)/ docs/spec-lecture-stock.md。
+  const student: StudentRow = {
+    id: 'stu-a',
+    name: '青木 太郎',
+    displayName: '青木太郎',
+    email: '',
+    entryDate: '',
+    withdrawDate: '',
+    birthDate: '',
+  }
+  const session: SpecialSessionRow = {
+    id: 'sess1',
+    label: '夏期講習',
+    startDate: '2026-06-01',
+    endDate: '2026-06-02',
+    teacherInputs: {},
+    studentInputs: {},
+    createdAt: '',
+    updatedAt: '',
+  }
+
+  let entrySeq = 0
+  function makeEntry(overrides: Partial<StudentEntry> & Pick<StudentEntry, 'lessonType'>): StudentEntry {
+    entrySeq += 1
+    return {
+      id: `entry-${entrySeq}`,
+      name: '青木太郎',
+      managedStudentId: 'stu-a',
+      grade: '中3',
+      subject: '数',
+      teacherType: 'normal',
+      ...overrides,
+    } as StudentEntry
+  }
+
+  function makeDesk(id: string, slots: [StudentEntry | null, StudentEntry | null]): DeskCell {
+    return {
+      id,
+      teacher: '講師X',
+      lesson: { id: `lesson-${id}`, studentSlots: slots },
+    }
+  }
+
+  function makeCell(dateKey: string, desks: DeskCell[]): SlotCell {
+    return {
+      id: `${dateKey}_1`,
+      dateKey,
+      dayLabel: '',
+      dateLabel: '',
+      slotLabel: '1限',
+      slotNumber: 1,
+      isOpenDay: true,
+      desks,
+    } as SlotCell
+  }
+
+  function collectEntries(weeks: SlotCell[][]): StudentEntry[] {
+    const out: StudentEntry[] = []
+    for (const week of weeks) {
+      for (const cell of week) {
+        for (const desk of cell.desks) {
+          const lesson = desk.lesson
+          if (!lesson) continue
+          for (const slot of lesson.studentSlots) if (slot) out.push(slot)
+        }
+      }
+    }
+    return out
+  }
+
+  const emptyLedgerArgs = {
+    manualLectureStockCounts: {},
+    manualLectureStockOrigins: {},
+    fallbackLectureStockStudents: {},
+  } as const
+
+  it('special の配置は外れ、同じ生徒の makeup 配置は不変(確定1・最重要・非対称は意図的)', () => {
+    // オーナー確定 2026-07-06: 登録解除で special だけ外し、自動割当された makeup は盤面に残す。
+    const special = makeEntry({ lessonType: 'special', specialSessionId: 'sess1', specialStockSource: 'session' })
+    const makeup = makeEntry({ lessonType: 'makeup', makeupSourceDate: '2026-05-01', makeupSourceLabel: '3限' })
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-06-01', [
+        makeDesk('d1', [special, null]),
+        makeDesk('d2', [makeup, null]),
+      ]),
+    ]]
+
+    const result = removeStudentAssignmentsFromSpecialSession({ weeks, session, student, ...emptyLedgerArgs })
+
+    const remaining = collectEntries(result.nextWeeks)
+    // special は外れる。
+    expect(remaining.some((e) => e.lessonType === 'special')).toBe(false)
+    // makeup は不変(未消化振替へ戻さない=確定した非対称)。
+    const makeups = remaining.filter((e) => e.lessonType === 'makeup')
+    expect(makeups).toHaveLength(1)
+    expect(makeups[0].managedStudentId).toBe('stu-a')
+    expect(makeups[0].makeupSourceDate).toBe('2026-05-01')
+    expect(result.clearedCellCount).toBe(1)
+    expect(result.hasChanges).toBe(true)
+    // 入力 weeks は不変(cloneWeeks でディープコピー)。
+    expect(weeks[0][0].desks[0].lesson).toBeTruthy()
+  })
+
+  it('除去は specialSessionId 一致のセッションのみ(別セッションの special は不変)', () => {
+    // オーナー確定 2026-07-06: 登録解除は当該セッションの配置だけを対象にする。
+    const special1 = makeEntry({ lessonType: 'special', specialSessionId: 'sess1', specialStockSource: 'session' })
+    const special2 = makeEntry({ lessonType: 'special', specialSessionId: 'sess2', specialStockSource: 'session' })
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-06-01', [makeDesk('d1', [special1, special2])]),
+    ]]
+
+    const result = removeStudentAssignmentsFromSpecialSession({ weeks, session, student, ...emptyLedgerArgs })
+
+    const remaining = collectEntries(result.nextWeeks)
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].specialSessionId).toBe('sess2')
+  })
+
+  it("手動配置(specialStockSource='manual')の当該セッション special も外れる", () => {
+    // オーナー確定 2026-07-06: セッション紐付きの手動 special も登録解除の対象。
+    const manualSpecial = makeEntry({ lessonType: 'special', specialSessionId: 'sess1', specialStockSource: 'manual' })
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-06-01', [makeDesk('d1', [manualSpecial, null])]),
+    ]]
+
+    const result = removeStudentAssignmentsFromSpecialSession({ weeks, session, student, ...emptyLedgerArgs })
+
+    expect(collectEntries(result.nextWeeks)).toHaveLength(0)
+    expect(result.clearedCellCount).toBe(1)
+  })
+
+  it('台帳はその生徒×セッション分だけクリアされ、他生徒・他セッションのデルタは不変(台帳クリア方式が正)', () => {
+    // オーナー確定 2026-07-06: 除去時のストック調整は「+1戻し」ではなく台帳クリア方式が正
+    //   (removeStudentAssignmentsFromSpecialSession 冒頭の clearLectureStockAdjustmentsForStudentSession)。
+    const special = makeEntry({ lessonType: 'special', specialSessionId: 'sess1', specialStockSource: 'session' })
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-06-01', [makeDesk('d1', [special, null])]),
+    ]]
+    // キー形式: `${studentKey}__${subject}__${sessionId}`(buildLectureStockKey / parseLectureStockKey)。
+    const manualLectureStockCounts = {
+      'stu-a__数__sess1': 2, // この生徒×このセッション → クリアされる
+      'stu-a__数__sess2': 3, // 同一生徒×別セッション → 不変
+      'stu-b__数__sess1': 1, // 別生徒×このセッション → 不変
+    }
+    const manualLectureStockOrigins = {
+      'stu-a__数__sess1': [{ displayName: '青木太郎', sessionId: 'sess1' }],
+      'stu-a__数__sess2': [{ displayName: '青木太郎', sessionId: 'sess2' }],
+      'stu-b__数__sess1': [{ displayName: '別生徒', sessionId: 'sess1' }],
+    }
+    const fallbackLectureStockStudents = {
+      'stu-a__数__sess1': { displayName: '青木太郎', subject: '数' },
+      'stu-a__数__sess2': { displayName: '青木太郎', subject: '数' },
+      'stu-b__数__sess1': { displayName: '別生徒', subject: '数' },
+    }
+
+    const result = removeStudentAssignmentsFromSpecialSession({
+      weeks,
+      session,
+      student,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    })
+
+    // 対象生徒×対象セッションのキーだけ消える。
+    expect(result.nextManualLectureStockCounts).toEqual({
+      'stu-a__数__sess2': 3,
+      'stu-b__数__sess1': 1,
+    })
+    expect(Object.keys(result.nextManualLectureStockOrigins).sort()).toEqual(['stu-a__数__sess2', 'stu-b__数__sess1'])
+    expect(Object.keys(result.nextFallbackLectureStockStudents).sort()).toEqual(['stu-a__数__sess2', 'stu-b__数__sess1'])
+    // 入力マップは不変(非破壊)。
+    expect(manualLectureStockCounts['stu-a__数__sess1']).toBe(2)
+  })
+
+  it('デフォルト経路(restoreSessionStock 未指定)は +1 復元せず台帳をクリアするだけ(デッド分岐に依存しない)', () => {
+    // オーナー確定 2026-07-06: 除去時に台帳へ +1 を積む restoreSessionStock 経路は未使用(デッド)。
+    //   本番で使われるデフォルト経路のみを固定する。restoreSessionStock=true のデッド分岐はテストしない。
+    const special = makeEntry({ lessonType: 'special', specialSessionId: 'sess1', specialStockSource: 'session' })
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-06-01', [makeDesk('d1', [special, null])]),
+    ]]
+
+    const result = removeStudentAssignmentsFromSpecialSession({
+      weeks,
+      session,
+      student,
+      manualLectureStockCounts: { 'stu-a__数__sess1': 1 },
+      manualLectureStockOrigins: {},
+      fallbackLectureStockStudents: {},
+    })
+
+    // +1 されず(=キーが残らず・増えず)、台帳クリア方式でキーが消えるだけ。
+    expect(result.nextManualLectureStockCounts['stu-a__数__sess1']).toBeUndefined()
+    expect(Object.keys(result.nextManualLectureStockCounts)).toHaveLength(0)
   })
 })

@@ -86,6 +86,19 @@
 - 再登録すると、**解除前に配置で消費していた分も戻したうえで、希望数と一致するストックを再計算**。
 - 講師日程表で登録解除すると、**その講師だけ盤面から外す**（生徒の講習予定は残る）。
 
+### 5-1. 登録解除時のストック調整は「台帳クリア方式」が正（オーナー確定 2026-07-06・現状のまま）
+
+- 生徒の登録解除で講習コマを盤面から外す際、ストック復元は**その生徒×セッションのデルタ台帳エントリを
+  一括クリアする方式**が正。実装は `removeStudentAssignmentsFromSpecialSession`（`ScheduleBoardScreen.tsx`）
+  冒頭の `clearLectureStockAdjustmentsForStudentSession` で、`manualLectureStockCounts` /
+  `manualLectureStockOrigins` / `fallbackLectureStockStudents` から当該 `studentKey×sessionId` のキーだけを削除する
+  （他生徒・他セッションのデルタは不変）。
+- ★**「+1 復元」はしない（デッドコード注意）**: 同関数に残る `restoreSessionStock=true` の分岐は、外したコマ 1 件ごとに
+  台帳へ +1 を積む「復元」経路だが、**呼び出し側は常に未指定（＝使わない）でデッド**。除去時は +1 復元ではなく
+  上記の台帳クリアが正。**このデッド分岐のコードは触らない**（将来の撤去候補として保存し、挙動は変えない）。
+- 回帰固定: `ScheduleBoardScreen.test.ts › removeStudentAssignmentsFromSpecialSession`（台帳クリアの範囲・
+  デフォルト経路が +1 しないこと）。振替が登録解除に連動しない非対称は `spec-special-session-submission.md` E-2b を参照。
+
 ## 6. 授業時間（★追加）
 
 - 講習の**希望数提出時にも、通常授業と同じく授業時間 90／60／45分を選択できる**ようにする（提出経路＝⑦）。
