@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.398
+
+- feat: 生徒日程表の講習回数表で、科目名の横に授業時間(60/45分)を併記(例 `英60分`)。90分(既定)は付けない(日程表セルと同ルール)。分数は実配置コマの noteSuffix 由来で、科目内で 60/45 が一意なときのみ併記(混在・不明・90分だけ・未配置は付けない)。オーナー要望。src/utils/scheduleHtml.ts(toCountRows に labelMinutesMap・pickLectureMinutesSuffix 追加、buildStudentSheetHtml で科目別に分数収集)・docs/spec-schedule-pdf.md §E
+- test: 講習回数表の授業時間併記の回帰テストを追加。pickLectureMinutesSuffix(一意=併記/混在・空=なし/60+90=60)と toCountRows(labelMinutesMap ありで `英60分`・なしで素の科目名)を出荷後スクリプトの実体で固定。src/utils/scheduleHtml.test.ts
+
 ## 1.5.397
 
 - docs: 登録解除の現状挙動をオーナー確定(2026-07-06)として正本に明文化。「講習だけ外し振替は残す(未消化へ戻さない)非対称は意図的」「希望数(subjectSlots)は in-app 保持・doc はクリアの二層」「ストック調整は台帳クリア方式が正・restoreSessionStock の +1 復元はデッド」「自動除去は提出済み→未提出の実遷移のみ発火」「セッション/生徒削除・期間変更では自動掃除しない」を追記。「空にする」での振替再出現(講習は台帳方式ゆえ再出現しない)の非対称を確定に格上げ。docs/spec-special-session-submission.md(E-2b 新設)・spec-lecture-stock.md(§5-1 新設)・spec-makeup-stock.md(§2)
