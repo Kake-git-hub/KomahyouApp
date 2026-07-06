@@ -3035,6 +3035,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return unique.length === 1 ? unique[0] : '';
       }
 
+      // 講習回数表に併記する科目→分数を決める。実配置コマの分数(placedListBySubject)を優先し、
+      // 未配置(希望登録のみ)の科目は希望登録の分数(desiredMinutesBySubject)でフォールバックする。
+      function resolveLectureMinutesBySubject(placedListBySubject, desiredMinutesBySubject) {
+        var placed = placedListBySubject || {};
+        var desired = desiredMinutesBySubject || {};
+        var map = {};
+        Array.from(new Set(Object.keys(placed).concat(Object.keys(desired)))).forEach(function(subject) {
+          var placedSuffix = pickLectureMinutesSuffix(placed[subject] || []);
+          if (placedSuffix) map[subject] = placedSuffix;
+          else if (desired[subject]) map[subject] = desired[subject];
+        });
+        return map;
+      }
+
       // 授業時間(分)サフィックス。60/45 のみ付与し、90(既定)は付けない。spec-schedule-pdf §D。
       function formatScheduleMinutesSuffix(noteSuffix) {
         var v = String(noteSuffix == null ? '' : noteSuffix).trim();
@@ -3293,6 +3307,34 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           });
         });
         return countMap;
+      }
+
+      // 希望登録(QR提出)の授業時間(60/45分)を正規化科目ごとに集める。未配置でも回数表に分数を出すため。
+      // 実配置の noteSuffix が無い科目のフォールバック。科目内で分数が一意のときだけ返す(pickLectureMinutesSuffix)。
+      function buildDesiredLectureMinutesMap(student, startDate, endDate) {
+        const listBySubject = {};
+        (DATA.specialSessions || []).forEach((session) => {
+          if (!session || session.endDate < startDate || session.startDate > endDate) return;
+          const input = getStudentSessionInput(student.id, session.id);
+          if (!input.countSubmitted) return;
+          if (input.regularOnly) return;
+          const durations = input.subjectDurations || {};
+          Object.entries(input.subjectSlots || {}).forEach(([subject, value]) => {
+            const normalizedValue = Number.isFinite(Number(value)) ? Math.max(0, Math.trunc(Number(value))) : 0;
+            if (normalizedValue <= 0) return;
+            const minutes = Number(durations[subject]);
+            if (minutes !== 60 && minutes !== 45) return;
+            const normalizedSubject = normalizeSubjectForStudent(subject, student, startDate);
+            if (!listBySubject[normalizedSubject]) listBySubject[normalizedSubject] = [];
+            listBySubject[normalizedSubject].push(String(minutes));
+          });
+        });
+        const map = {};
+        Object.keys(listBySubject).forEach((subject) => {
+          const suffix = pickLectureMinutesSuffix(listBySubject[subject]);
+          if (suffix) map[subject] = suffix;
+        });
+        return map;
       }
 
       function areStudentSlotsUnavailable(studentId, slotKeys) {
@@ -4572,12 +4614,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           }
           else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
         });
-        // 科目内で分数が一意(60のみ/45のみ)のときだけ併記する。混在・不明・90分は付けない。
-        const lectureMinutesBySubject = {};
-        Object.keys(lectureMinutesBySubjectList).forEach((subject) => {
-          const suffix = pickLectureMinutesSuffix(lectureMinutesBySubjectList[subject]);
-          if (suffix) lectureMinutesBySubject[subject] = suffix;
-        });
+        // 科目の授業時間(60/45分)併記。実配置コマの分数を優先し、未配置(希望登録のみ)の科目は
+        // 希望登録(subjectDurations)の分数でフォールバックする。いずれも科目内で一意のときだけ付ける。
+        const desiredLectureMinutes = buildDesiredLectureMinutesMap(student, startDate, endDate);
+        const lectureMinutesBySubject = resolveLectureMinutesBySubject(lectureMinutesBySubjectList, desiredLectureMinutes);
         (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).forEach((entry) => {
           if (entry.linkedStudentId !== student.id) return;
           if (entry.dateKey < startDate || entry.dateKey > endDate) return;

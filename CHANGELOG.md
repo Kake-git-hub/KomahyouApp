@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.399
+
+- feat: 講習回数表の授業時間併記を、希望登録のみで盤面未配置の科目にも表示。実配置コマの noteSuffix を優先し、未配置科目は希望登録(QR提出の subjectDurations)の 60/45分でフォールバック。実配置と食い違う場合は実配置優先。オーナー要望。src/utils/scheduleHtml.ts(buildDesiredLectureMinutesMap・resolveLectureMinutesBySubject 追加)・docs/spec-schedule-pdf.md §E
+- test: 未配置フォールバックの回帰テストを追加。resolveLectureMinutesBySubject(未配置は希望分数/実配置優先/実配置混在は希望へフォールバック/両方なしは併記せず)を出荷後スクリプトの実体で固定。src/utils/scheduleHtml.test.ts
+
 ## 1.5.398
 
 - feat: 生徒日程表の講習回数表で、科目名の横に授業時間(60/45分)を併記(例 `英60分`)。90分(既定)は付けない(日程表セルと同ルール)。分数は実配置コマの noteSuffix 由来で、科目内で 60/45 が一意なときのみ併記(混在・不明・90分だけ・未配置は付けない)。オーナー要望。src/utils/scheduleHtml.ts(toCountRows に labelMinutesMap・pickLectureMinutesSuffix 追加、buildStudentSheetHtml で科目別に分数収集)・docs/spec-schedule-pdf.md §E
