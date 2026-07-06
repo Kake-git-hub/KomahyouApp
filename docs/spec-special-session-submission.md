@@ -102,6 +102,43 @@
   `add` し、TTL（既定2.5秒）経過まで購読反映側がその token を無視する（TTL 経過後は再び有効な提出として反映）。
   このガードを外す/薄めると上記レースが再発する（`recentlyResetGuard.test.ts` が回帰を防ぐ）。
 
+### E-2b. 登録解除の in-app 側の挙動（盤面・希望数・台帳・自動除去）（オーナー確定 2026-07-06・すべて「現状の挙動が正」）
+
+E-2 は QR 提出 doc（`resetLectureSubmissionDoc`）側のクリア粒度を定める。ここでは**アプリ内（盤面・
+講習ストック台帳・自動除去 effect）側**の挙動を確定する。以下はすべて 2026-07-06 にオーナーが
+「現状のまま＝正」と確定した仕様。回帰テスト
+`ScheduleBoardScreen.test.ts › removeStudentAssignmentsFromSpecialSession` が本体ロジックを固定している。
+
+- **① 講習だけ外し、振替は盤面に残す（振替は登録解除に連動しない・確定）**:
+  登録解除（＝提出済み→未提出への実遷移）で盤面から自動除去するのは**講習（`lessonType='special'`）の配置のみ**。
+  同じ生徒に自動割当されていた**振替（`lessonType='makeup'`）は盤面に残し、未消化振替（在庫）へは戻さない**。
+  この非対称は**意図的な確定仕様**（「解除したら講習だけ消えるが振替は手動対応」）。対称化してはならない。
+  実装: `removeStudentAssignmentsFromSpecialSession`（`ScheduleBoardScreen.tsx`）は `lessonType !== 'special'` を
+  除去対象から外す。除去対象は `specialSessionId` 一致のセッション（未設定時は `specialStockSource='session'`＋期間内）に限る。
+  セッション紐付きの**手動配置 special（`specialStockSource='manual'`＋`specialSessionId`）も除去対象**。
+
+- **③ 希望数（`subjectSlots`）は in-app では保持（再登録で復活）**:
+  登録解除しても**アプリ内の希望数は消さない**。再登録すると解除前の希望数がそのまま復活する。
+  QR 提出 doc 側の `subjectSlots` クリアは E-2 のとおり（doc は6フィールドをクリア）。
+  ＝「doc はクリア／in-app は保持」の**二層構造**であり、両者は別物として確定。
+
+- **⑤ ストック調整は「台帳クリア方式」が正（+1戻しはしない）**:
+  講習を盤面から外す際のストック復元は、**その生徒×セッションの台帳エントリを一括クリアする方式**が正
+  （`removeStudentAssignmentsFromSpecialSession` 冒頭の `clearLectureStockAdjustmentsForStudentSession`：
+  `manualLectureStockCounts` / `manualLectureStockOrigins` / `fallbackLectureStockStudents` から
+  当該 `studentKey×sessionId` のキーだけを削除）。他生徒・他セッションのデルタは不変。
+  関数内に残る `restoreSessionStock=true` の「+1 復元」分岐は**未使用（デッドコード）**。
+  除去時は +1 復元をしない＝台帳クリアが正。**このデッド分岐のコードは触らない**（将来の撤去候補として保存）。
+
+- **⑥ 自動除去の発火条件（提出済み→未提出の実遷移のみ）**:
+  盤面からの自動除去は「**同一マウント内で提出済み→未提出の実遷移を観測したときのみ**」発火する
+  （`resolveNewlyUnsubmittedSessionStudents`：基準は**提出済み集合**、`previousSubmittedKeys===null`＝初回/再マウント/
+  セッション未ロードでは除去しない）。**一度も提出していない生徒の配置（繰越 / manual / 手動配置）は自動除去の対象外**。
+  詳細と回帰経緯は `ScheduleBoardScreen.tsx` の当該コメント（2026-07-06 厳密化）を参照。
+
+- **セッション削除・生徒削除・講習期間変更では盤面の講習配置を自動掃除しない（確定）**:
+  これらの操作で盤面上の講習配置は**孤児として残る**（手動で対応する）。自動掃除は実装しない（現状の挙動が正）。
+
 ### E-3. 登録削除の実装方式（監査 B5・オーナー確定 2026-07-04）
 
 - 登録削除は **doc を残して pending に戻す（`resetLectureSubmissionDoc`）方式**で、doc の完全削除は行わない。
