@@ -2658,6 +2658,9 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(studentHtml).toContain('function getOverlappingSpecialSessions(startDate, endDate)')
     expect(studentHtml).toContain('function resolveLectureRegistrationStatus(input)')
     expect(studentHtml).toContain('updateLectureSummaryButtonVisibility(startDate, endDate)')
+    // 講習集計結果に「希望科目（授業時間）」列を追加(希望各科目の授業時間付き数量)。
+    expect(studentHtml).toContain('<th>希望科目（授業時間）</th>')
+    expect(studentHtml).toContain('function formatDesiredSubjectsWithDuration(input, student, referenceDate)')
     // 最下部がWindowsタスクバーに隠れないようスクロール余白を確保する(回帰防止)。
     expect(studentHtml).toContain('padding-bottom:160px')
 
@@ -2717,6 +2720,73 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(resolveStatus({ countSubmitted: true, regularOnly: false })).toEqual({ label: '登録', kind: 'registered' })
     // 提出済みでも通常のみ → 注記つき。
     expect(resolveStatus({ countSubmitted: true, regularOnly: true })).toEqual({ label: '登録（通常のみ）', kind: 'regular-only' })
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止: 講習集計結果の「希望科目（授業時間）」列は、希望各科目の授業時間付き数量を並べる。
+  // 例 '英×1 / 数60分×2'。90分は分数なし、未登録・通常のみ・希望なしは '—'。出荷後スクリプトの実体で固定。
+  it('formats desired subjects with lesson-time and quantity for the lecture summary', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const fmtMatch = html.match(/function formatDesiredSubjectsWithDuration\(input, student, referenceDate\)\s*\{([\s\S]*?)\n {6}\}/)
+    const minMatch = html.match(/function formatScheduleMinutesSuffix\(noteSuffix\)\s*\{([\s\S]*?)\n {6}\}/)
+    const pickMatch = html.match(/function pickLectureMinutesSuffix\(suffixes\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(fmtMatch).toBeTruthy()
+    expect(minMatch).toBeTruthy()
+    expect(pickMatch).toBeTruthy()
+    const formatScheduleMinutesSuffix = new Function('noteSuffix', minMatch![1]) as (v: unknown) => string
+    const pickLectureMinutesSuffix = new Function('suffixes', pickMatch![1]) as (s: string[]) => string
+    // normalizeSubjectForStudent は学年依存(算/数)なので identity で固定してフォーマットのみ検証する。
+    const identity = (subject: string) => subject
+    const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '集理', '集社']
+    const format = new Function(
+      'input', 'student', 'referenceDate',
+      'normalizeSubjectForStudent', 'formatScheduleMinutesSuffix', 'pickLectureMinutesSuffix', 'SUBJECT_SORT_ORDER',
+      fmtMatch![1],
+    ) as (
+      input: unknown,
+      student: unknown,
+      referenceDate: unknown,
+      norm: (s: string) => string,
+      fmtMin: (v: unknown) => string,
+      pick: (s: string[]) => string,
+      order: string[],
+    ) => string
+    const run = (input: unknown) => format(input, {}, '2026-03-24', identity, formatScheduleMinutesSuffix, pickLectureMinutesSuffix, SUBJECT_SORT_ORDER)
+
+    // 授業時間付き数量。SUBJECT_SORT_ORDER 順(英→数)。60分は併記、90分(未指定)は分数なし。
+    expect(run({ countSubmitted: true, subjectSlots: { 数: 2, 英: 1 }, subjectDurations: { 数: 60 } })).toBe('英×1 / 数60分×2')
+    // 45分。
+    expect(run({ countSubmitted: true, subjectSlots: { 英: 1 }, subjectDurations: { 英: 45 } })).toBe('英45分×1')
+    // 90分(=既定・不正値)は分数を付けない。
+    expect(run({ countSubmitted: true, subjectSlots: { 数: 2 }, subjectDurations: { 数: 90 } })).toBe('数×2')
+    // 通常のみ・未登録・希望なしは '—'。
+    expect(run({ countSubmitted: true, regularOnly: true, subjectSlots: { 数: 2 } })).toBe('—')
+    expect(run({ countSubmitted: false, subjectSlots: { 数: 2 } })).toBe('—')
+    expect(run({ countSubmitted: true, subjectSlots: {} })).toBe('—')
 
     vi.unstubAllGlobals()
   })

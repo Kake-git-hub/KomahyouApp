@@ -111,6 +111,7 @@
 2. **空フォーマット印刷**：素の記入用ひな形を印刷する。
    - ⚠️ ここは埋め込みクライアント JS のエスケープ事故（`\'` 崩れ）で**日程表が実行時に全停止**した箇所（2026-06-09・memory schedulehtml-embedded-script）。構文検証テスト `scheduleHtml.test.ts`（`new Function` で構文検証）が回帰防止の番人＝**消してはならない**（後述 L も参照）。
 3. **講習集計結果**：全生徒の登録状況一覧（登録／通常のみ／未登録）。**表示期間に講習が重なるときのみ**表示する。
+   - 各生徒行に **「希望科目（授業時間）」列** を出す＝希望各科目の**授業時間付き数量**（例 `英×1 / 数60分×2`）。90分（既定）は分数を付けない（講習回数表と同ルール＝§E `formatScheduleMinutesSuffix`）。未登録・通常のみ・希望なしは `—`（`formatDesiredSubjectsWithDuration`）。授業時間は payload の `studentInputs.subjectDurations` 由来（§E の payload 必須と同根拠）。2026-07-06 追加（オーナー要望）。
 
 ## J. 日程表QR（★全教室表示）
 
