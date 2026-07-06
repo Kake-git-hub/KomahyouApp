@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.402
+
+- docs: 引き継ぎ文書 docs/handoff-qr-submitted-at.md を追加。①本番 lectureSubmissions の submittedAt と問題報告時刻の突き合わせ解析(A4真因説の実データ裏付け・読み取り専用・アクセス制約と欠損注意つき) ②講習集計結果画面へのQR提出時刻表示(実装ポインタ・submittedAt を studentInputs へ搬送する3経路・着手前に spec-curator で確定すべき仕様点)を別セッションで進めるための背景・手順・制約をまとめた
+
 ## 1.5.401
 
 - feat: 講習集計結果に「希望科目（授業時間）」列を追加。各生徒の希望各科目を授業時間付き数量で表示(例 `英×1 / 数60分×2`)。90分(既定)は分数なし、未登録・通常のみ・希望なしは `—`。授業時間は subjectDurations 由来(講習回数表と同ルール)。オーナー要望。src/utils/scheduleHtml.ts(formatDesiredSubjectsWithDuration 追加・buildLectureSummaryHtml に列追加)・docs/spec-schedule-pdf.md
