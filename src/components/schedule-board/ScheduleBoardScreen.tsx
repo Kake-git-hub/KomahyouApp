@@ -2996,49 +2996,57 @@ function removeStudentAssignmentsFromSpecialSession(params: {
 
 // 「未提出(countSubmitted=false)になった生徒の講習配置を盤面から自動除去する」effect の判定を純関数化。
 // ★消してはならないガード(回帰防止 2026-07-06・講習自動割振の巻き戻し不具合):
-//   - 判定は「提出→未提出へ遷移した(=前回は未提出集合に居なかった)生徒だけ」を除去対象にする。
-//   - previousUnsubmittedKeys === null は「初回評価/再マウント直後で基準未取り込み」を意味し、
-//     このときは除去を一切行わず、現在の未提出集合を基準として返すだけにする。
-//   なぜ必要か: 生徒は未提出でも fallback/manual ストック(lectureStock.ts の manualLectureStockCounts
-//   正デルタ経路)から講習を自動割振できる。基準を空 Set で初期化すると、教室ロード直後の初回評価で
-//   「以前から未提出だった生徒」まで『新たに未提出』と誤判定し、保存済みの割振済み講習を消してしまう
-//   ＝「割り振った講習が(次に開くと)未配置に戻る」不具合。基準取り込みを null 番兵で分離して防ぐ。
+//   - 除去対象は「前回は提出済み(基準集合=previousSubmittedKeys に居た)が、今回未提出になった
+//     ＝登録解除された生徒」だけにする。提出→未提出の実遷移のみを外す(spec の本来の意図)。
+//   - previousSubmittedKeys === null は「初回評価/再マウント直後で基準未取り込み」を意味し、
+//     このときは除去を一切行わず、現在の提出済み集合を基準として返すだけにする。
+//   なぜ「提出済み集合」を基準にするか(2026-07-06 厳密化):
+//     旧実装は「前回の未提出集合に居なかった生徒」を除去対象にしていたため、トークン自動発行
+//     (ensureSubmissionTokens は未提出エントリ countSubmitted:false をセッション途中に新規追加する)で
+//     『初めから未提出』の生徒が現れると『新たに未提出』と誤判定し、removeStudentAssignmentsFromSpecialSession
+//     が(氏名一致など経由で)配置を巻き戻す危険があった。基準を提出済み集合に切り替えると、一度も
+//     提出済みでなかった生徒は決して除去対象にならず、誤除去を原理的に排除できる。
+//   なぜ空 Set 初期化ではなく null 番兵か: 生徒は未提出でも fallback/manual ストックから講習を
+//     自動割振できる。教室ロード直後の初回評価で既存配置を消さないよう、基準取り込み前(null)は除去しない。
 export function resolveNewlyUnsubmittedSessionStudents(params: {
   specialSessions: SpecialSessionRow[]
   students: StudentRow[]
-  previousUnsubmittedKeys: Set<string> | null
+  previousSubmittedKeys: Set<string> | null
 }): {
   newlyUnsubmitted: Array<{ session: SpecialSessionRow; student: StudentRow }>
-  // 呼び出し側の ref に格納する次回基準。null のまま返すこともある(＝基準をまだ進めない)。
+  // 呼び出し側の ref に格納する次回基準(=今回の提出済み集合)。null のまま返すこともある(＝基準をまだ進めない)。
   nextBasisKeys: Set<string> | null
 } {
-  const { specialSessions, students, previousUnsubmittedKeys } = params
+  const { specialSessions, students, previousSubmittedKeys } = params
 
   // specialSessions 未ロード(空)の間は基準を進めない(除去もしない)。教室ロードは非同期で、盤面マウント
-  // 直後に空→充填と遷移しうる。ここで空を基準に取り込むと、次に充填された時点で「以前から未提出だった
-  // 生徒」を『新たに未提出』と誤判定し、保存済みの割振済み講習を消す回帰(2026-07-06)を再発させる。
-  // 基準(previousUnsubmittedKeys)は据え置きで返す(null は null のまま=まだ未取り込み)。
+  // 直後に空→充填と遷移しうる。ここで空を基準に取り込むと、次に充填された時点で誤判定しうる。
+  // 基準(previousSubmittedKeys)は据え置きで返す(null は null のまま=まだ未取り込み)。
   if (specialSessions.length === 0) {
-    return { newlyUnsubmitted: [], nextBasisKeys: previousUnsubmittedKeys }
+    return { newlyUnsubmitted: [], nextBasisKeys: previousSubmittedKeys }
   }
 
-  const currentUnsubmittedKeys = new Set<string>()
-  const pendingUnsubmittedSessionStudents = specialSessions.flatMap((session) => Object.entries(session.studentInputs)
-    .filter(([, input]) => !input.countSubmitted)
-    .map(([studentId]) => {
-      currentUnsubmittedKeys.add(`${session.id}__${studentId}`)
-      return { session, student: students.find((entry) => entry.id === studentId) ?? null }
-    }))
-    .filter((entry): entry is { session: SpecialSessionRow; student: StudentRow } => Boolean(entry.student))
+  const currentSubmittedKeys = new Set<string>()
+  const pendingUnsubmittedSessionStudents: Array<{ session: SpecialSessionRow; student: StudentRow }> = []
+  for (const session of specialSessions) {
+    for (const [studentId, input] of Object.entries(session.studentInputs)) {
+      if (input.countSubmitted) {
+        currentSubmittedKeys.add(`${session.id}__${studentId}`)
+        continue
+      }
+      const student = students.find((entry) => entry.id === studentId) ?? null
+      if (student) pendingUnsubmittedSessionStudents.push({ session, student })
+    }
+  }
 
-  // 基準未取り込み(初回/再マウント)は除去せず、現在の未提出集合を基準として記録するだけ。
-  const newlyUnsubmitted = previousUnsubmittedKeys === null
+  // 基準未取り込み(初回/再マウント)は除去しない。除去対象は「前回は提出済みだった生徒だけ」。
+  const newlyUnsubmitted = previousSubmittedKeys === null
     ? []
     : pendingUnsubmittedSessionStudents.filter(
-        ({ session, student }) => !previousUnsubmittedKeys.has(`${session.id}__${student.id}`),
+        ({ session, student }) => previousSubmittedKeys.has(`${session.id}__${student.id}`),
       )
 
-  return { newlyUnsubmitted, nextBasisKeys: currentUnsubmittedKeys }
+  return { newlyUnsubmitted, nextBasisKeys: currentSubmittedKeys }
 }
 
 export function ensureWeeksCoverDateRange(params: {
@@ -3617,8 +3625,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const didReconcileSubmittedTeachersRef = useRef(false)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
   // null = 基準未取り込み(初回/再マウント直後)。初回は除去せず基準記録のみ行う(resolveNewlyUnsubmittedSessionStudents)。
-  // 空 Set 初期化は「既存の未提出配置=保存済みの割振済み講習」を初回評価で消す回帰(2026-07-06)の原因だった。
-  const prevUnsubmittedSessionStudentKeysRef = useRef<Set<string> | null>(null)
+  // 基準は「提出済み集合」。提出→未提出へ実遷移した生徒だけを除去対象にし、トークン発行等で新規に
+  // 現れた『初めから未提出』の生徒を誤除去しない(2026-07-06 厳密化)。空 Set 初期化は初回評価で
+  // 既存の割振済み講習を消す回帰の原因だったため null 番兵にする。
+  const prevSubmittedSessionStudentKeysRef = useRef<Set<string> | null>(null)
   const committedBoardChangeVersionRef = useRef(0)
   const lastSyncedCommittedBoardChangeVersionRef = useRef(0)
   // spec-group-lesson §A/§G: 集団授業の「ユーザー編集」フラグ。これが立っている受動 publish だけを
@@ -4125,9 +4135,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const { newlyUnsubmitted, nextBasisKeys } = resolveNewlyUnsubmittedSessionStudents({
       specialSessions,
       students,
-      previousUnsubmittedKeys: prevUnsubmittedSessionStudentKeysRef.current,
+      previousSubmittedKeys: prevSubmittedSessionStudentKeysRef.current,
     })
-    prevUnsubmittedSessionStudentKeysRef.current = nextBasisKeys
+    prevSubmittedSessionStudentKeysRef.current = nextBasisKeys
 
     if (newlyUnsubmitted.length === 0) return
 

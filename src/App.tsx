@@ -1010,6 +1010,74 @@ function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
   }
 }
 
+// A4(2026-07-06): 講習提出トークンの自動発行を specialSessions へ反映するときの「マージ」規則。
+// ★消してはならないガード(講習が数分後に未配置へ戻る不具合の是正):
+//   ensureScheduleSubmissionTokens は関数開始時点の session スナップショットから updatedSession を
+//   組み立て、その後 await writeSubmissionDocs(ネットワーク) を挟んでから state へ反映する。旧実装は
+//   setSpecialSessions(current => current.map(s => s.id===updatedSession.id ? updatedSession : s)) と
+//   updatedSession で対象セッションを丸ごと置換していたため、await 中に届いた別生徒のQR提出反映
+//   (subscribeLectureSubmissions → countSubmitted=true / subjectSlots)を古いスナップショットが上書きし、
+//   その生徒が未提出へ巻き戻る → 未提出配置除去 effect(resolveNewlyUnsubmittedSessionStudents)が
+//   盤面の割振済み講習を外し講習残数が満数へ戻る(「割り振ったのに数分後に戻る」の本体)。
+//   よって「新規発行トークンの追加/後埋め」だけを current(最新)へマージし、既存エントリの
+//   countSubmitted / subjectSlots 等は current を保持する(スナップショットで巻き戻さない)。
+export function applyIssuedSubmissionTokensToSessions(
+  currentSessions: SpecialSessionRow[],
+  sessionId: string,
+  issuedTokens: Array<{ personType: 'student' | 'teacher'; personId: string; token: string }>,
+  updatedAt: string,
+): SpecialSessionRow[] {
+  if (issuedTokens.length === 0) return currentSessions
+  return currentSessions.map((session) => {
+    if (session.id !== sessionId) return session
+    const nextStudentInputs = { ...session.studentInputs }
+    const nextTeacherInputs = { ...session.teacherInputs }
+    let changed = false
+    for (const issued of issuedTokens) {
+      if (issued.personType === 'student') {
+        const existing = nextStudentInputs[issued.personId]
+        if (existing) {
+          // 既存エントリはトークンが無いときだけ後埋め。他フィールド(countSubmitted/subjectSlots 等)は
+          // current(最新)を保持し、古いスナップショットで巻き戻さない。
+          if (!existing.submissionToken) {
+            nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token }
+            changed = true
+          }
+        } else {
+          nextStudentInputs[issued.personId] = {
+            unavailableSlots: [],
+            regularBreakSlots: [],
+            subjectSlots: {},
+            regularOnly: false,
+            countSubmitted: false,
+            submissionToken: issued.token,
+            updatedAt,
+          }
+          changed = true
+        }
+      } else {
+        const existing = nextTeacherInputs[issued.personId]
+        if (existing) {
+          if (!existing.submissionToken) {
+            nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token }
+            changed = true
+          }
+        } else {
+          nextTeacherInputs[issued.personId] = {
+            unavailableSlots: [],
+            countSubmitted: false,
+            submissionToken: issued.token,
+            updatedAt,
+          }
+          changed = true
+        }
+      }
+    }
+    if (!changed) return session
+    return { ...session, studentInputs: nextStudentInputs, teacherInputs: nextTeacherInputs, updatedAt }
+  })
+}
+
 export function resolveRemoteWorkspaceSnapshot(
   remoteSnapshot: WorkspaceSnapshot,
   localSnapshot: WorkspaceSnapshot | null,
@@ -3244,7 +3312,14 @@ function AuthenticatedApp() {
 
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
-      setSpecialSessions((current) => current.map((s) => s.id === updatedSession.id ? updatedSession : s))
+      // A4: await 中に届いた別生徒のQR提出反映を巻き戻さないよう、丸ごと置換ではなく current へ
+      // 新規発行トークンだけをマージする(applyIssuedSubmissionTokensToSessions のガード参照)。
+      setSpecialSessions((current) => applyIssuedSubmissionTokensToSessions(
+        current,
+        updatedSession.id,
+        newTokens.map((entry) => ({ personType: entry.doc.personType, personId: entry.doc.personId, token: entry.token })),
+        updatedSession.updatedAt,
+      ))
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state

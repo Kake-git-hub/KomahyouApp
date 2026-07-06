@@ -4894,13 +4894,11 @@ describe('shouldExcludeAutoAssignCandidateByConstraint (制約事項ハードフ
   })
 })
 
-// 回帰防止 2026-07-06: 「講習を自動割振したのに(次に開くと)未配置に戻る」不具合。
-// 未提出(countSubmitted=false)の生徒も fallback/manual ストックから講習を自動割振できるが、
-// 未提出配置の自動除去 effect が基準集合を空 Set で初期化していたため、教室ロード直後の初回評価で
-// 「以前から未提出だった生徒」まで『新たに未提出』と誤判定し、保存済みの割振済み講習を消していた。
-// resolveNewlyUnsubmittedSessionStudents は初回(previousUnsubmittedKeys=null)を基準取り込み専用にし、
-// 提出→未提出の遷移だけを除去対象にする。
-describe('resolveNewlyUnsubmittedSessionStudents (未提出生徒の講習配置 自動除去判定)', () => {
+// 回帰防止 2026-07-06: 「講習を自動割振したのに未配置に戻る」不具合。
+// resolveNewlyUnsubmittedSessionStudents は基準を「提出済み集合(previousSubmittedKeys)」で持ち、
+// 提出→未提出へ実遷移した生徒だけを除去対象にする。初回(null)は基準取り込み専用。
+// トークン自動発行で『初めから未提出』の生徒が新規追加されても、提出済み集合に居ないので誤除去しない。
+describe('resolveNewlyUnsubmittedSessionStudents (未提出生徒の講習配置 自動除去判定・提出済み集合基準)', () => {
   const studentBase = initialStudents[0] as StudentRow
   const makeStudent = (id: string, name: string): StudentRow => ({ ...studentBase, id, name })
 
@@ -4930,92 +4928,86 @@ describe('resolveNewlyUnsubmittedSessionStudents (未提出生徒の講習配置
 
   const students = [makeStudent('stu-a', 'A太郎'), makeStudent('stu-b', 'B次郎')]
 
-  it('初回評価(previousUnsubmittedKeys=null)は既存の未提出生徒を除去対象にしない(基準取り込みのみ)', () => {
-    // 修正前は空 Set 初期化のため、この生徒が『新たに未提出』と誤判定され配置が消えていた。
+  it('初回評価(previousSubmittedKeys=null)は除去しない・基準は提出済み集合を返す', () => {
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true }, 'stu-b': { countSubmitted: false } })
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: null,
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(0)
+    // 基準は提出済み集合(stu-a のみ)。未提出の stu-b は基準に含めない。
+    expect(result.nextBasisKeys?.has('sess1__stu-a')).toBe(true)
+    expect(result.nextBasisKeys?.has('sess1__stu-b')).toBe(false)
+  })
+
+  it('前回提出済みだった生徒が今回未提出になったら除去対象にする(登録解除)', () => {
     const session = makeSession('sess1', { 'stu-a': { countSubmitted: false } })
     const result = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [session],
       students,
-      previousUnsubmittedKeys: null,
-    })
-    expect(result.newlyUnsubmitted).toHaveLength(0)
-    // 基準として現在の未提出集合を返す。
-    expect(result.nextBasisKeys?.has('sess1__stu-a')).toBe(true)
-  })
-
-  it('提出→未提出へ遷移した生徒だけを除去対象にする', () => {
-    const session = makeSession('sess1', { 'stu-a': { countSubmitted: false }, 'stu-b': { countSubmitted: false } })
-    // 前回は stu-a のみ未提出(=基準)。今回 stu-b も未提出へ遷移した。
-    const previousUnsubmittedKeys = new Set(['sess1__stu-a'])
-    const result = resolveNewlyUnsubmittedSessionStudents({
-      specialSessions: [session],
-      students,
-      previousUnsubmittedKeys,
+      previousSubmittedKeys: new Set(['sess1__stu-a']),
     })
     expect(result.newlyUnsubmitted).toHaveLength(1)
-    expect(result.newlyUnsubmitted[0]!.student.id).toBe('stu-b')
+    expect(result.newlyUnsubmitted[0]!.student.id).toBe('stu-a')
   })
 
-  it('前回から継続して未提出の生徒は再除去しない(冪等)', () => {
-    const session = makeSession('sess1', { 'stu-a': { countSubmitted: false } })
+  it('一度も提出済みでない『初めから未提出』の生徒は除去対象にしない(トークン発行の誤除去防止)', () => {
+    // stu-b は前回の提出済み集合に居ない(=一度も提出していない・新規トークン発行等)。
+    // 旧「未提出集合基準」なら『新たに未提出』と誤判定して除去し得たが、提出済み集合基準では除去しない。
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true }, 'stu-b': { countSubmitted: false } })
     const result = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [session],
       students,
-      previousUnsubmittedKeys: new Set(['sess1__stu-a']),
+      previousSubmittedKeys: new Set(['sess1__stu-a']),
     })
     expect(result.newlyUnsubmitted).toHaveLength(0)
   })
 
-  it('提出済み(countSubmitted=true)生徒は基準にも除去対象にも含めない', () => {
+  it('提出済みのまま(継続提出)なら除去しない', () => {
     const session = makeSession('sess1', { 'stu-a': { countSubmitted: true } })
     const result = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [session],
       students,
-      previousUnsubmittedKeys: new Set(),
+      previousSubmittedKeys: new Set(['sess1__stu-a']),
     })
     expect(result.newlyUnsubmitted).toHaveLength(0)
-    expect(result.nextBasisKeys?.size).toBe(0)
+    expect(result.nextBasisKeys?.has('sess1__stu-a')).toBe(true)
   })
 
   it('specialSessions 未ロード(空)は基準を進めない: 既存基準を据え置き除去しない(空→充填の全消し回帰防止)', () => {
-    // ロード直後に空→充填と遷移する非同期経路。空を基準に取り込むと次の充填で既存未提出を
-    // 『新たに未提出』と誤判定し保存済みの割振済み講習を全消しする回帰(2026-07-06)を防ぐ。
-    const previousUnsubmittedKeys = new Set(['sess1__stu-a'])
+    const previousSubmittedKeys = new Set(['sess1__stu-a'])
     const result = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [],
       students,
-      previousUnsubmittedKeys,
+      previousSubmittedKeys,
     })
     expect(result.newlyUnsubmitted).toHaveLength(0)
-    // 空を基準にせず、直前の基準をそのまま据え置く。
-    expect(result.nextBasisKeys).toBe(previousUnsubmittedKeys)
+    expect(result.nextBasisKeys).toBe(previousSubmittedKeys)
   })
 
   it('specialSessions 未ロード(空)かつ初回(null)は基準を null のまま据え置く', () => {
     const result = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [],
       students,
-      previousUnsubmittedKeys: null,
+      previousSubmittedKeys: null,
     })
     expect(result.newlyUnsubmitted).toHaveLength(0)
     expect(result.nextBasisKeys).toBeNull()
   })
 
-  it('基準取り込み後に自動割振した未提出生徒の配置は保持される(実運用シーケンス)', () => {
-    // 1) ロード直後: 初回評価(null)で基準を取り込む(除去なし)。
-    const session = makeSession('sess1', { 'stu-a': { countSubmitted: false } })
+  it('提出済み生徒の講習を自動割振後、再評価しても提出済みのままなら除去されない(実運用シーケンス)', () => {
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true } })
     const seed = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [session],
       students,
-      previousUnsubmittedKeys: null,
+      previousSubmittedKeys: null,
     })
     expect(seed.newlyUnsubmitted).toHaveLength(0)
-    // 2) その後 stu-a の講習を自動割振して盤面が更新され再評価が走っても、
-    //    stu-a は基準に含まれるため『新たに未提出』にならず除去されない。
     const afterAssign = resolveNewlyUnsubmittedSessionStudents({
       specialSessions: [session],
       students,
-      previousUnsubmittedKeys: seed.nextBasisKeys,
+      previousSubmittedKeys: seed.nextBasisKeys,
     })
     expect(afterAssign.newlyUnsubmitted).toHaveLength(0)
   })

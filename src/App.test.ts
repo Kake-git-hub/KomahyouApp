@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
+import type { SpecialSessionRow } from './components/special-data/specialSessionModel'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 
 describe('resolveWorkspaceSyncTargetClassrooms (本番データ混入防止)', () => {
@@ -583,6 +584,90 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
       expect(result.pendingTargetClassroomIds).toEqual(['development'])
       expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
     })
+
+    it('同一端末・自分の保存でも成立: 保存でサーバー版数が進んだ(v11>基準v10)なら、残存した旧マーカーの書き戻しをブロックする', () => {
+      // 単一PCシーケンス: 編集(基準版数v10でマーカー記録)→保存成功(サーバーv11)。もしマーカーが
+      // 何らかの理由で消えず残っていても、版数ゲートで stale と判定してリモート(=保存済み最新)を優先する。
+      // これにより「割振り前のローカルキャッシュが再開時に書き戻されて割振りが消える」経路を、
+      // 別端末に限らず同一端末でも塞ぐことを固定する。
+      const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
+      const localSnapshot = createWorkspaceSnapshot('2026-05-26T10:05:00.000Z', ['2026-08-13'])
+
+      const result = resolveRemoteWorkspaceSnapshot(
+        remoteSnapshot,
+        localSnapshot,
+        {
+          savedAt: localSnapshot.savedAt,
+          authenticatedUserId: 'manager-1',
+          targetClassroomIds: ['classroom-1'],
+          baseClassroomVersions: { 'classroom-1': 10 },
+        },
+        'manager-1',
+        { 'classroom-1': 11 },
+      )
+
+      expect(result.usedPendingLocalSnapshot).toBe(false)
+      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
+    })
+  })
+})
+
+// A4(2026-07-06): 講習提出トークン自動発行の反映は、await(writeSubmissionDocs)を挟むため
+// current(最新)へ「新規発行トークンの追加/後埋め」だけをマージする。丸ごと置換だと await 中に
+// 届いた別生徒のQR提出反映を古いスナップショットが巻き戻し、未提出配置除去 effect が割振済み講習を外す。
+describe('applyIssuedSubmissionTokensToSessions (A4: トークン発行は current へマージ・巻き戻さない)', () => {
+  const makeSession = (studentInputs: SpecialSessionRow['studentInputs']): SpecialSessionRow => ({
+    id: 'sess1',
+    label: '夏期講習',
+    startDate: '2026-07-20',
+    endDate: '2026-08-31',
+    teacherInputs: {},
+    studentInputs,
+    createdAt: '',
+    updatedAt: '',
+  })
+
+  it('await 中に別生徒が提出済みへ変わっても巻き戻さず、新規トークンだけ追加する', () => {
+    const current = [makeSession({
+      'stu-a': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 算数: 3 }, regularOnly: false, countSubmitted: true, updatedAt: '' },
+    })]
+    const result = applyIssuedSubmissionTokensToSessions(current, 'sess1', [
+      { personType: 'student', personId: 'stu-b', token: 'tok-b' },
+    ], '2026-07-06T00:00:00.000Z')
+    const session = result[0]!
+    // stu-a は current のまま(提出済み・subjectSlots 保持)。古いスナップショットで巻き戻さない。
+    expect(session.studentInputs['stu-a']!.countSubmitted).toBe(true)
+    expect(session.studentInputs['stu-a']!.subjectSlots).toEqual({ 算数: 3 })
+    // stu-b は新規未提出エントリ + トークン。
+    expect(session.studentInputs['stu-b']!.countSubmitted).toBe(false)
+    expect(session.studentInputs['stu-b']!.submissionToken).toBe('tok-b')
+  })
+
+  it('既存エントリはトークンが無いときだけ後埋めし、countSubmitted は変えない', () => {
+    const current = [makeSession({
+      'stu-a': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 算数: 3 }, regularOnly: false, countSubmitted: true, updatedAt: '' },
+    })]
+    const result = applyIssuedSubmissionTokensToSessions(current, 'sess1', [
+      { personType: 'student', personId: 'stu-a', token: 'tok-a' },
+    ], '2026-07-06T00:00:00.000Z')
+    expect(result[0]!.studentInputs['stu-a']!.countSubmitted).toBe(true)
+    expect(result[0]!.studentInputs['stu-a']!.submissionToken).toBe('tok-a')
+  })
+
+  it('既にトークンを持つ既存エントリは変更しない(参照維持・上書きしない)', () => {
+    const current = [makeSession({
+      'stu-a': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 算数: 3 }, regularOnly: false, countSubmitted: true, submissionToken: 'orig', updatedAt: '' },
+    })]
+    const result = applyIssuedSubmissionTokensToSessions(current, 'sess1', [
+      { personType: 'student', personId: 'stu-a', token: 'tok-new' },
+    ], '2026-07-06T00:00:00.000Z')
+    expect(result[0]!).toBe(current[0]!)
+    expect(result[0]!.studentInputs['stu-a']!.submissionToken).toBe('orig')
+  })
+
+  it('発行トークンが空なら参照そのまま(no-op)', () => {
+    const current = [makeSession({})]
+    expect(applyIssuedSubmissionTokensToSessions(current, 'sess1', [], 'x')).toBe(current)
   })
 })
 
