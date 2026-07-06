@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.401
+
+- feat: 講習集計結果に「希望科目（授業時間）」列を追加。各生徒の希望各科目を授業時間付き数量で表示(例 `英×1 / 数60分×2`)。90分(既定)は分数なし、未登録・通常のみ・希望なしは `—`。授業時間は subjectDurations 由来(講習回数表と同ルール)。オーナー要望。src/utils/scheduleHtml.ts(formatDesiredSubjectsWithDuration 追加・buildLectureSummaryHtml に列追加)・docs/spec-schedule-pdf.md
+- test: 講習集計結果の授業時間付き数量の回帰テストを追加。formatDesiredSubjectsWithDuration(60/45分併記・90分なし・SUBJECT_SORT_ORDER順・通常のみ/未登録/希望なしは `—`)を出荷後スクリプトの実体で固定。列ヘッダと関数の存在も確認。src/utils/scheduleHtml.test.ts
+
 ## 1.5.400
 
 - fix: 講習回数表に希望登録の授業時間(60/45分)が表示されない不具合を修正。根本原因は payload シリアライズで studentInputs.subjectDurations が欠落していたこと(subjectSlots は載っていたため希望数だけ出て授業時間が消える非対称)。popup の DATA.specialSessions に届かず、未配置の希望科目で分数が一切出なかった。serialize に subjectDurations を追加し、配置済み(noteSuffix由来)・未配置(希望登録由来)の両方で分数が出るようにした。src/utils/scheduleHtml.ts(buildSerializedSchedulePayload・SerializedStudentSpecialSessionInput)・docs/spec-schedule-pdf.md §E

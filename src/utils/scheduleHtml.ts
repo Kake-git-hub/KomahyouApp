@@ -5373,6 +5373,38 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return { label: '登録', kind: 'registered' };
       }
 
+      // 講習集計結果の「希望科目(授業時間)」セル。希望科目ごとに数量と授業時間(60/45分)を並べる。
+      // 例: '数60分×2 / 英×1'。90分(既定)は分数を付けない(講習回数表と同ルール)。
+      // 未登録・通常のみ・希望なしは '—'。科目は SUBJECT_SORT_ORDER 順、算/数 等は生徒学年で正規化。
+      function formatDesiredSubjectsWithDuration(input, student, referenceDate) {
+        if (!input || !input.countSubmitted || input.regularOnly) return '—';
+        var countBySubject = {};
+        var minutesListBySubject = {};
+        var slots = input.subjectSlots && typeof input.subjectSlots === 'object' ? input.subjectSlots : {};
+        var durations = input.subjectDurations && typeof input.subjectDurations === 'object' ? input.subjectDurations : {};
+        Object.keys(slots).forEach(function(subject) {
+          var count = Number(slots[subject]);
+          if (!Number.isFinite(count) || count <= 0) return;
+          var normalizedSubject = normalizeSubjectForStudent(subject, student, referenceDate);
+          countBySubject[normalizedSubject] = (countBySubject[normalizedSubject] || 0) + Math.trunc(count);
+          if (!minutesListBySubject[normalizedSubject]) minutesListBySubject[normalizedSubject] = [];
+          minutesListBySubject[normalizedSubject].push(formatScheduleMinutesSuffix(durations[subject]));
+        });
+        var subjects = Object.keys(countBySubject).sort(function(left, right) {
+          var li = SUBJECT_SORT_ORDER.indexOf(left);
+          var ri = SUBJECT_SORT_ORDER.indexOf(right);
+          if (li !== -1 && ri !== -1) return li - ri;
+          if (li !== -1) return -1;
+          if (ri !== -1) return 1;
+          return left.localeCompare(right, 'ja');
+        });
+        if (!subjects.length) return '—';
+        return subjects.map(function(subject) {
+          var minutesSuffix = pickLectureMinutesSuffix(minutesListBySubject[subject] || []);
+          return subject + (minutesSuffix ? minutesSuffix + '分' : '') + '×' + countBySubject[subject];
+        }).join(' / ');
+      }
+
       // 表示期間の講習について、全生徒の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
       function buildLectureSummaryHtml(startDate, endDate) {
         var sessions = getOverlappingSpecialSessions(startDate, endDate);
@@ -5386,15 +5418,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             counts[status.kind] += 1;
             return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
               + '<td class="lecture-summary-name">' + escapeHtml(formatStudentHeaderName(student, startDate)) + '</td>'
-              + '<td class="' + statusClassMap[status.kind] + '">' + escapeHtml(status.label) + '</td></tr>';
+              + '<td class="' + statusClassMap[status.kind] + '">' + escapeHtml(status.label) + '</td>'
+              + '<td class="lecture-summary-subjects">' + escapeHtml(formatDesiredSubjectsWithDuration(inputs[student.id], student, startDate)) + '</td></tr>';
           }).join('');
-          if (!rowsHtml) rowsHtml = '<tr><td colspan="3" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="4" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
           var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
           var summaryLine = '登録 ' + counts.registered + '人 / 通常のみ ' + counts['regular-only'] + '人 / 未登録 ' + counts.unregistered + '人（全 ' + students.length + '人）';
           return '<section class="lecture-summary-section">'
             + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
             + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
-            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th></tr></thead>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th></tr></thead>'
             + '<tbody>' + rowsHtml + '</tbody></table></section>';
         }).join('');
         if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
@@ -5407,11 +5440,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '.lecture-summary-section h2{font-size:16px;margin:0 0 6px;border-bottom:2px solid #cbd2d9;padding-bottom:4px;}'
           + '.lecture-summary-range{font-size:12px;color:#52606d;font-weight:normal;margin-left:10px;}'
           + '.lecture-summary-count{font-size:13px;color:#52606d;margin:0 0 10px;}'
-          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:520px;}'
+          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:760px;}'
           + '.lecture-summary-table th,.lecture-summary-table td{border:1px solid #cbd2d9;padding:6px 10px;text-align:left;font-size:14px;}'
           + '.lecture-summary-table th{background:#f5f7fa;}'
           + '.lecture-summary-index{width:44px;text-align:right;color:#7b8794;}'
           + '.lecture-summary-name{white-space:nowrap;}'
+          + '.lecture-summary-subjects{color:#1f2933;}'
           + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
           + '.lecture-summary-regular-only{color:#b45309;font-weight:bold;}'
           + '.lecture-summary-unregistered{color:#9aa5b1;}'
