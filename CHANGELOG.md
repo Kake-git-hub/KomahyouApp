@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix: 講習を自動割振したのに(教室を開き直すと)割り振った講習が未配置に戻る不具合を修正。未提出(countSubmitted=false)の生徒も fallback/manual ストック(lectureStock.ts の manualLectureStockCounts 正デルタ経路)から講習を自動割振できるが、「未提出になった生徒の講習配置を盤面から自動除去する」effect が基準集合 `prevUnsubmittedSessionStudentKeysRef` を空 Set で初期化していたため、教室ロード直後の初回評価で『以前から未提出だった生徒』まで「新たに未提出になった」と誤判定し、保存済みの割振済み講習を消していた。判定を純関数 `resolveNewlyUnsubmittedSessionStudents` へ切り出し、初回/再マウント(previousUnsubmittedKeys=null)は除去せず現在の未提出集合を基準として取り込むだけにし、提出→未提出へ実際に遷移した生徒だけを除去対象にした(コメント "Only clean up ... newly unsubmitted (not previously known)" の本来の意図に整合)。あわせて specialSessions 未ロード(空)の間は基準を進めず既存基準を据え置くガードを純関数へ一本化し、非同期ロードの「空→充填」遷移で既存未提出を全消しする再発も塞いだ(nextBasisKeys 番兵)。回帰テスト7件追加(修正前=初回/空充填で既存未提出を誤除去して落ち・修正後=通る)。src/components/schedule-board/ScheduleBoardScreen.tsx・ScheduleBoardScreen.test.ts
 
 ## 1.5.395
 
