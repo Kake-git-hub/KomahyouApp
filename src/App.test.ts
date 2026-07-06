@@ -493,6 +493,96 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
       expect(result.usedPendingLocalSnapshot).toBe(true)
       expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
     })
+
+    // 部分マージ分岐: 対象教室の一部だけが stale のとき、safe な教室のみローカルを書き戻し、
+    // stale な教室はリモート最新を維持する。pendingTargetClassroomIds も safe のみに絞られ、
+    // Firebase への書き戻し(queueFirebaseWorkspaceSync)に stale 教室が渡らないことを固定する。
+    it('複数教室のうち stale な教室だけリモートを維持し、safe な教室のみローカルを書き戻す(部分マージ)', () => {
+      const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'classroom-1')
+      const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'classroom-1')
+      const localClassroom1 = localSnapshot.classrooms.find((classroom) => classroom.id === 'classroom-1')
+      const localDevelopment = localSnapshot.classrooms.find((classroom) => classroom.id === 'development')
+      if (!localClassroom1 || !localDevelopment) throw new Error('test fixture classroom missing')
+      localClassroom1.data.classroomSettings.holidayDates = ['2026-08-13']
+      localDevelopment.data.classroomSettings.holidayDates = ['2026-08-14']
+
+      const result = resolveRemoteWorkspaceSnapshot(
+        remoteSnapshot,
+        localSnapshot,
+        {
+          savedAt: localSnapshot.savedAt,
+          authenticatedUserId: 'developer-1',
+          targetClassroomIds: ['classroom-1', 'development'],
+          baseClassroomVersions: { 'classroom-1': 3, development: 5 },
+        },
+        'developer-1',
+        // classroom-1 は別端末が後保存(5>3)= stale。development は一致(5=5)= safe。
+        { 'classroom-1': 5, development: 5 },
+      )
+
+      expect(result.usedPendingLocalSnapshot).toBe(true)
+      expect(result.pendingTargetClassroomIds).toEqual(['development'])
+      const mergedClassroom1 = result.snapshot.classrooms.find((classroom) => classroom.id === 'classroom-1')
+      const mergedDevelopment = result.snapshot.classrooms.find((classroom) => classroom.id === 'development')
+      // stale な classroom-1 はリモート(空)を維持し、safe な development はローカルを採用する。
+      expect(mergedClassroom1?.data.classroomSettings.holidayDates).toEqual([])
+      expect(mergedDevelopment?.data.classroomSettings.holidayDates).toEqual(['2026-08-14'])
+    })
+
+    // manager 専用パス(別ユーザーのマーカー→担当教室のみ書き戻し)にも版数ゲートが効くことを固定する。
+    // App.test の他ケースは marker.authenticatedUserId===authenticatedUserId のため main パスに流れ、
+    // resolvePendingLocalClassroomSnapshotForAuthenticatedUser 内のゲートを通らない。
+    it('manager 専用パス: 別端末が担当教室を後保存済みならローカルで上書きしない', () => {
+      const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'development')
+      remoteSnapshot.currentUserId = 'manager-2'
+      const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'development')
+      const localDevelopment = localSnapshot.classrooms.find((classroom) => classroom.id === 'development')
+      if (!localDevelopment) throw new Error('test fixture classroom missing')
+      localDevelopment.data.classroomSettings.holidayDates = ['2026-08-13']
+
+      const result = resolveRemoteWorkspaceSnapshot(
+        remoteSnapshot,
+        localSnapshot,
+        {
+          savedAt: localSnapshot.savedAt,
+          authenticatedUserId: 'developer-1',
+          targetClassroomIds: ['development'],
+          baseClassroomVersions: { development: 3 },
+        },
+        'manager-2',
+        // 別端末が後から development を保存 → サーバー版数=5 > 基準版数=3。
+        { development: 5 },
+      )
+
+      expect(result.usedPendingLocalSnapshot).toBe(false)
+      expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.classroomSettings.holidayDates).toEqual([])
+    })
+
+    it('manager 専用パス: 版数が一致していれば従来どおり担当教室のローカルを書き戻す', () => {
+      const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'development')
+      remoteSnapshot.currentUserId = 'manager-2'
+      const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'development')
+      const localDevelopment = localSnapshot.classrooms.find((classroom) => classroom.id === 'development')
+      if (!localDevelopment) throw new Error('test fixture classroom missing')
+      localDevelopment.data.classroomSettings.holidayDates = ['2026-08-13']
+
+      const result = resolveRemoteWorkspaceSnapshot(
+        remoteSnapshot,
+        localSnapshot,
+        {
+          savedAt: localSnapshot.savedAt,
+          authenticatedUserId: 'developer-1',
+          targetClassroomIds: ['development'],
+          baseClassroomVersions: { development: 5 },
+        },
+        'manager-2',
+        { development: 5 },
+      )
+
+      expect(result.usedPendingLocalSnapshot).toBe(true)
+      expect(result.pendingTargetClassroomIds).toEqual(['development'])
+      expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+    })
   })
 })
 
