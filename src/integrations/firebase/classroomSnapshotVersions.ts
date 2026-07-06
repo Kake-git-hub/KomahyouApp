@@ -25,3 +25,13 @@ export function setClassroomSnapshotVersion(classroomId: string, version: number
 export function clearClassroomSnapshotVersions(): void {
   classroomVersions.clear()
 }
+
+// A3(2026-07-06): マーカー記録・stale 書き戻し防止のため、現在把握している全教室の版数を読み出す。
+// 返すのはコピー(呼び出し側が保持しても内部 Map と切り離す)。
+export function getAllClassroomSnapshotVersions(): Record<string, number> {
+  const result: Record<string, number> = {}
+  classroomVersions.forEach((version, classroomId) => {
+    result[classroomId] = version
+  })
+  return result
+}

@@ -24,6 +24,8 @@ import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspace
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
+import { getAllClassroomSnapshotVersions } from './integrations/firebase/classroomSnapshotVersions'
+import { isPendingClassroomWriteBackStale } from './data/pendingSnapshotVersionGuard'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
@@ -972,6 +974,7 @@ function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
   localSnapshot: WorkspaceSnapshot | null,
   marker: PendingRemoteWorkspaceSnapshotMarker | null,
   authenticatedUserId: string,
+  remoteClassroomVersions?: Record<string, number>,
 ) {
   if (!localSnapshot || !marker) return null
   if (marker.savedAt !== localSnapshot.savedAt) return null
@@ -981,6 +984,14 @@ function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
   const authenticatedUser = remoteSnapshot.users.find((user) => user.id === authenticatedUserId) ?? null
   if (authenticatedUser?.role !== 'manager' || !authenticatedUser.assignedClassroomId) return null
   if (!marker.targetClassroomIds?.includes(authenticatedUser.assignedClassroomId)) return null
+
+  // A3(2026-07-06): 別端末が後からこの教室を保存済み(サーバー版数がローカル基準版数より進行)なら、
+  // 古いローカルで上書きせずリモートを優先する(savedAt の壁時計比較だけに頼らない)。
+  if (isPendingClassroomWriteBackStale({
+    classroomId: authenticatedUser.assignedClassroomId,
+    baseClassroomVersions: marker.baseClassroomVersions,
+    remoteClassroomVersions,
+  })) return null
 
   const localAssignedClassroom = localSnapshot.classrooms.find((classroom) => classroom.id === authenticatedUser.assignedClassroomId) ?? null
   if (!localAssignedClassroom) return null
@@ -999,11 +1010,93 @@ function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
   }
 }
 
+// A4(2026-07-06): 講習提出トークンの自動発行を specialSessions へ反映するときの「マージ」規則。
+// ★消してはならないガード(講習が数分後に未配置へ戻る不具合の是正):
+//   ensureScheduleSubmissionTokens は関数開始時点の session スナップショットから updatedSession を
+//   組み立て、その後 await writeSubmissionDocs(ネットワーク) を挟んでから state へ反映する。旧実装は
+//   setSpecialSessions(current => current.map(s => s.id===updatedSession.id ? updatedSession : s)) と
+//   updatedSession で対象セッションを丸ごと置換していたため、await 中に届いた別生徒のQR提出反映
+//   (subscribeLectureSubmissions → countSubmitted=true / subjectSlots)を古いスナップショットが上書きし、
+//   その生徒が未提出へ巻き戻る → 未提出配置除去 effect(resolveNewlyUnsubmittedSessionStudents)が
+//   盤面の割振済み講習を外し講習残数が満数へ戻る(「割り振ったのに数分後に戻る」の本体)。
+//   よって「新規発行トークンの追加/後埋め」だけを current(最新)へマージし、既存エントリの
+//   countSubmitted / subjectSlots 等は current を保持する(スナップショットで巻き戻さない)。
+export function applyIssuedSubmissionTokensToSessions(
+  currentSessions: SpecialSessionRow[],
+  sessionId: string,
+  issuedTokens: Array<{ personType: 'student' | 'teacher'; personId: string; token: string }>,
+  updatedAt: string,
+): SpecialSessionRow[] {
+  if (issuedTokens.length === 0) return currentSessions
+  return currentSessions.map((session) => {
+    if (session.id !== sessionId) return session
+    const nextStudentInputs = { ...session.studentInputs }
+    const nextTeacherInputs = { ...session.teacherInputs }
+    let changed = false
+    for (const issued of issuedTokens) {
+      if (issued.personType === 'student') {
+        const existing = nextStudentInputs[issued.personId]
+        if (existing) {
+          // 既存エントリはトークンが無いときだけ後埋め。他フィールド(countSubmitted/subjectSlots 等)は
+          // current(最新)を保持し、古いスナップショットで巻き戻さない。
+          if (!existing.submissionToken) {
+            nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token }
+            changed = true
+          }
+        } else {
+          nextStudentInputs[issued.personId] = {
+            unavailableSlots: [],
+            regularBreakSlots: [],
+            subjectSlots: {},
+            regularOnly: false,
+            countSubmitted: false,
+            submissionToken: issued.token,
+            updatedAt,
+          }
+          changed = true
+        }
+      } else {
+        const existing = nextTeacherInputs[issued.personId]
+        if (existing) {
+          if (!existing.submissionToken) {
+            nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token }
+            changed = true
+          }
+        } else {
+          nextTeacherInputs[issued.personId] = {
+            unavailableSlots: [],
+            countSubmitted: false,
+            submissionToken: issued.token,
+            updatedAt,
+          }
+          changed = true
+        }
+      }
+    }
+    if (!changed) return session
+    return { ...session, studentInputs: nextStudentInputs, teacherInputs: nextTeacherInputs, updatedAt }
+  })
+}
+
+// A4 配線ガード(2026-07-06): トークン発行の state 反映は、必ず「関数型アップデータで最新の current へ
+// マージ」する。この一段のラッパーを経由させることで、呼び出し側が旧実装(クロージャに捕捉した stale な
+// updatedSession での丸ごと置換)へ戻る回帰をユニットテストで固定できる(App.test.ts)。
+// setSessions には setSpecialSessions(関数型アップデータ受け取り)を渡す。
+export function reflectIssuedSubmissionTokens(
+  setSessions: (updater: (current: SpecialSessionRow[]) => SpecialSessionRow[]) => void,
+  sessionId: string,
+  issuedTokens: Array<{ personType: 'student' | 'teacher'; personId: string; token: string }>,
+  updatedAt: string,
+): void {
+  setSessions((current) => applyIssuedSubmissionTokensToSessions(current, sessionId, issuedTokens, updatedAt))
+}
+
 export function resolveRemoteWorkspaceSnapshot(
   remoteSnapshot: WorkspaceSnapshot,
   localSnapshot: WorkspaceSnapshot | null,
   marker: PendingRemoteWorkspaceSnapshotMarker | null,
   authenticatedUserId: string,
+  remoteClassroomVersions?: Record<string, number>,
 ) {
   const mergedRemote = mergeWorkspaceWithLocalPreferences(remoteSnapshot, localSnapshot)
   const pendingLocalClassroom = resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
@@ -1011,6 +1104,7 @@ export function resolveRemoteWorkspaceSnapshot(
     localSnapshot,
     marker,
     authenticatedUserId,
+    remoteClassroomVersions,
   )
   if (pendingLocalClassroom) {
     return {
@@ -1024,6 +1118,37 @@ export function resolveRemoteWorkspaceSnapshot(
   if (marker.savedAt !== localSnapshot.savedAt) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
   if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
   if (!haveSameWorkspaceIds(localSnapshot, remoteSnapshot)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+
+  // A3(2026-07-06): 教室単位の版数ゲート。savedAt(壁時計・端末間で数分ズレる)で「ローカルが新しい」と
+  // 判定されても、別端末が後からその教室を保存済み(サーバー版数がマーカー基準版数より進行)なら、
+  // その教室はリモートを優先して stale 上書きを防ぐ。サーバーの楽観ロックは書き戻し直前の再読込で
+  // baseVersion が最新へ更新され素通りしてしまうため、ここでクライアント側でも二重に塞ぐ。
+  const effectiveTargetIds = (marker.targetClassroomIds && marker.targetClassroomIds.length > 0)
+    ? marker.targetClassroomIds
+    : (localSnapshot.actingClassroomId ? [localSnapshot.actingClassroomId] : [])
+  const staleTargetIds = effectiveTargetIds.filter((classroomId) => isPendingClassroomWriteBackStale({
+    classroomId,
+    baseClassroomVersions: marker.baseClassroomVersions,
+    remoteClassroomVersions,
+  }))
+  if (staleTargetIds.length > 0) {
+    const safeTargetIds = effectiveTargetIds.filter((classroomId) => !staleTargetIds.includes(classroomId))
+    if (safeTargetIds.length === 0) {
+      // 書き戻し対象が全て stale = 別端末の最新をそのまま採用する(ローカルは破棄)。
+      return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+    }
+    // safe な教室だけローカルを採用し、stale な教室はリモート最新を残す。
+    const mergedClassrooms = mergedRemote.classrooms.map((remoteClassroom) => {
+      if (!safeTargetIds.includes(remoteClassroom.id)) return remoteClassroom
+      return localSnapshot.classrooms.find((classroom) => classroom.id === remoteClassroom.id) ?? remoteClassroom
+    })
+    return {
+      snapshot: { ...localSnapshot, classrooms: mergedClassrooms },
+      usedPendingLocalSnapshot: true,
+      pendingTargetClassroomIds: safeTargetIds,
+    }
+  }
+
   return {
     snapshot: localSnapshot,
     usedPendingLocalSnapshot: true,
@@ -2212,6 +2337,8 @@ function AuthenticatedApp() {
       localWorkspaceSnapshot,
       readPendingRemoteWorkspaceSnapshotMarker(),
       remoteSessionUserId,
+      // A3: loadFirebaseWorkspaceSnapshot 直後のレジストリ=サーバー現在版数。stale 書き戻しの版数ゲートに使う。
+      getAllClassroomSnapshotVersions(),
     )
     const nextActingClassroomId = preferredActingClassroomId ?? actingClassroomId
     if (nextActingClassroomId && mergedSnapshot.classrooms.some((classroom) => classroom.id === nextActingClassroomId)) {
@@ -3198,7 +3325,14 @@ function AuthenticatedApp() {
 
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
-      setSpecialSessions((current) => current.map((s) => s.id === updatedSession.id ? updatedSession : s))
+      // A4: await 中に届いた別生徒のQR提出反映を巻き戻さないよう、丸ごと置換ではなく current へ
+      // 新規発行トークンだけをマージする(reflectIssuedSubmissionTokens=配線ガード経由・テストで固定)。
+      reflectIssuedSubmissionTokens(
+        setSpecialSessions,
+        updatedSession.id,
+        newTokens.map((entry) => ({ personType: entry.doc.personType, personId: entry.doc.personId, token: entry.token })),
+        updatedSession.updatedAt,
+      )
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
@@ -3922,6 +4056,8 @@ function AuthenticatedApp() {
             localWorkspaceSnapshot,
             readPendingRemoteWorkspaceSnapshotMarker(),
             remoteSessionUserId,
+            // A3: 読込直後のレジストリ=サーバー現在版数。stale 書き戻しの版数ゲートに使う。
+            getAllClassroomSnapshotVersions(),
           )
           applyWorkspaceSnapshot(
             resolvedSnapshot,

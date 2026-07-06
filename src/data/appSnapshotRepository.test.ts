@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { parseAppSnapshot, parseWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot } from './appSnapshotRepository'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, serializeAppSnapshot, serializeWorkspaceSnapshot } from './appSnapshotRepository'
+import { clearClassroomSnapshotVersions, setClassroomSnapshotVersion } from '../integrations/firebase/classroomSnapshotVersions'
 import type { AppSnapshot, WorkspaceSnapshot } from '../types/appState'
 
 // Phase 0(②保存)で手動バックアップを「1教室分の完全AppSnapshot」に変更した。
@@ -121,5 +122,75 @@ describe('AppSnapshot形式とWorkspace形式の判別(importBackupのフォー�
     expect(Array.isArray(restored.classrooms[0]?.data.groupLessons)).toBe(true)
     expect(Array.isArray(restored.classrooms[0]?.data.pairConstraints)).toBe(true)
     expect(Array.isArray(restored.classrooms[0]?.data.autoAssignRules)).toBe(true)
+  })
+})
+
+// A3(2026-07-06・多端末 stale 書き戻し防止): pending マーカーの baseClassroomVersions が
+// localStorage への書き込み⇄読み込みで欠落・汚染なく往復し、不正値は読み込み時に除去されることを固定する。
+// この版数が落ちると stale 判定(pendingSnapshotVersionGuard)が働かず、別端末の最新を古いローカルで
+// 上書きする不具合(2026-07-06)が再発する。
+describe('pending マーカーの baseClassroomVersions 往復', () => {
+  const PENDING_KEY = 'komahyouapp:pending-remote-workspace-snapshot'
+
+  function createMemoryLocalStorage() {
+    const store = new Map<string, string>()
+    return {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value) },
+      removeItem: (key: string) => { store.delete(key) },
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    clearClassroomSnapshotVersions()
+  })
+
+  it('mark→read で版数が欠落なく往復する', () => {
+    vi.stubGlobal('window', { localStorage: createMemoryLocalStorage() })
+    clearClassroomSnapshotVersions()
+    setClassroomSnapshotVersion('classroom-1', 7)
+    setClassroomSnapshotVersion('development', 2)
+
+    markPendingRemoteWorkspaceSnapshotSync(buildWorkspaceSnapshot(), 'manager-1', ['classroom-1'])
+    const marker = readPendingRemoteWorkspaceSnapshotMarker()
+
+    expect(marker?.authenticatedUserId).toBe('manager-1')
+    expect(marker?.targetClassroomIds).toEqual(['classroom-1'])
+    expect(marker?.baseClassroomVersions).toEqual({ 'classroom-1': 7, development: 2 })
+  })
+
+  it('読み込み時に不正値(非数値・空ID)を除去し、全滅なら undefined に正規化する', () => {
+    const localStorage = createMemoryLocalStorage()
+    vi.stubGlobal('window', { localStorage })
+
+    localStorage.setItem(PENDING_KEY, JSON.stringify({
+      savedAt: '2026-07-06T00:00:00.000Z',
+      authenticatedUserId: 'manager-1',
+      baseClassroomVersions: { 'classroom-1': 7, '': 3, 'classroom-2': 'broken', 'classroom-3': Number.NaN },
+    }))
+    const marker = readPendingRemoteWorkspaceSnapshotMarker()
+    expect(marker?.baseClassroomVersions).toEqual({ 'classroom-1': 7 })
+
+    localStorage.setItem(PENDING_KEY, JSON.stringify({
+      savedAt: '2026-07-06T00:00:00.000Z',
+      authenticatedUserId: 'manager-1',
+      baseClassroomVersions: { '': 3 },
+    }))
+    expect(readPendingRemoteWorkspaceSnapshotMarker()?.baseClassroomVersions).toBeUndefined()
+  })
+
+  it('旧マーカー(baseClassroomVersions 無し)も従来どおり読める(後方互換)', () => {
+    const localStorage = createMemoryLocalStorage()
+    vi.stubGlobal('window', { localStorage })
+
+    localStorage.setItem(PENDING_KEY, JSON.stringify({
+      savedAt: '2026-07-06T00:00:00.000Z',
+      authenticatedUserId: 'manager-1',
+      targetClassroomIds: ['classroom-1'],
+    }))
+    const marker = readPendingRemoteWorkspaceSnapshotMarker()
+    expect(marker?.savedAt).toBe('2026-07-06T00:00:00.000Z')
+    expect(marker?.baseClassroomVersions).toBeUndefined()
   })
 })

@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -4891,5 +4891,124 @@ describe('shouldExcludeAutoAssignCandidateByConstraint (制約事項ハードフ
       lessonLimitConstraint: true,
       lessonLimitSatisfied: true,
     })).toBe(false)
+  })
+})
+
+// 回帰防止 2026-07-06: 「講習を自動割振したのに未配置に戻る」不具合。
+// resolveNewlyUnsubmittedSessionStudents は基準を「提出済み集合(previousSubmittedKeys)」で持ち、
+// 提出→未提出へ実遷移した生徒だけを除去対象にする。初回(null)は基準取り込み専用。
+// トークン自動発行で『初めから未提出』の生徒が新規追加されても、提出済み集合に居ないので誤除去しない。
+describe('resolveNewlyUnsubmittedSessionStudents (未提出生徒の講習配置 自動除去判定・提出済み集合基準)', () => {
+  const studentBase = initialStudents[0] as StudentRow
+  const makeStudent = (id: string, name: string): StudentRow => ({ ...studentBase, id, name })
+
+  const makeSession = (
+    id: string,
+    inputs: Record<string, { countSubmitted: boolean }>,
+  ): SpecialSessionRow => ({
+    id,
+    label: `${id}講習`,
+    startDate: '2026-07-20',
+    endDate: '2026-08-31',
+    teacherInputs: {},
+    studentInputs: Object.fromEntries(Object.entries(inputs).map(([studentId, { countSubmitted }]) => [
+      studentId,
+      {
+        unavailableSlots: [],
+        regularBreakSlots: [],
+        subjectSlots: {},
+        regularOnly: false,
+        countSubmitted,
+        updatedAt: '',
+      },
+    ])),
+    createdAt: '',
+    updatedAt: '',
+  })
+
+  const students = [makeStudent('stu-a', 'A太郎'), makeStudent('stu-b', 'B次郎')]
+
+  it('初回評価(previousSubmittedKeys=null)は除去しない・基準は提出済み集合を返す', () => {
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true }, 'stu-b': { countSubmitted: false } })
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: null,
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(0)
+    // 基準は提出済み集合(stu-a のみ)。未提出の stu-b は基準に含めない。
+    expect(result.nextBasisKeys?.has('sess1__stu-a')).toBe(true)
+    expect(result.nextBasisKeys?.has('sess1__stu-b')).toBe(false)
+  })
+
+  it('前回提出済みだった生徒が今回未提出になったら除去対象にする(登録解除)', () => {
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: false } })
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: new Set(['sess1__stu-a']),
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(1)
+    expect(result.newlyUnsubmitted[0]!.student.id).toBe('stu-a')
+  })
+
+  it('一度も提出済みでない『初めから未提出』の生徒は除去対象にしない(トークン発行の誤除去防止)', () => {
+    // stu-b は前回の提出済み集合に居ない(=一度も提出していない・新規トークン発行等)。
+    // 旧「未提出集合基準」なら『新たに未提出』と誤判定して除去し得たが、提出済み集合基準では除去しない。
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true }, 'stu-b': { countSubmitted: false } })
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: new Set(['sess1__stu-a']),
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(0)
+  })
+
+  it('提出済みのまま(継続提出)なら除去しない', () => {
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true } })
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: new Set(['sess1__stu-a']),
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(0)
+    expect(result.nextBasisKeys?.has('sess1__stu-a')).toBe(true)
+  })
+
+  it('specialSessions 未ロード(空)は基準を進めない: 既存基準を据え置き除去しない(空→充填の全消し回帰防止)', () => {
+    const previousSubmittedKeys = new Set(['sess1__stu-a'])
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [],
+      students,
+      previousSubmittedKeys,
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(0)
+    expect(result.nextBasisKeys).toBe(previousSubmittedKeys)
+  })
+
+  it('specialSessions 未ロード(空)かつ初回(null)は基準を null のまま据え置く', () => {
+    const result = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [],
+      students,
+      previousSubmittedKeys: null,
+    })
+    expect(result.newlyUnsubmitted).toHaveLength(0)
+    expect(result.nextBasisKeys).toBeNull()
+  })
+
+  it('提出済み生徒の講習を自動割振後、再評価しても提出済みのままなら除去されない(実運用シーケンス)', () => {
+    const session = makeSession('sess1', { 'stu-a': { countSubmitted: true } })
+    const seed = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: null,
+    })
+    expect(seed.newlyUnsubmitted).toHaveLength(0)
+    const afterAssign = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: [session],
+      students,
+      previousSubmittedKeys: seed.nextBasisKeys,
+    })
+    expect(afterAssign.newlyUnsubmitted).toHaveLength(0)
   })
 })
