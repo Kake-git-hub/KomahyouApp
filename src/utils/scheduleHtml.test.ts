@@ -916,6 +916,73 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止: 講習回数表の科目には授業時間(60/45分)を併記する。90分(既定)は付けない。
+  // 科目内で分数が混在・不明のときは誤解を避けて併記しない(pickLectureMinutesSuffix)。
+  // 埋め込みスクリプトの実体を new Function で評価して挙動を固定する。spec-schedule-pdf §D。
+  it('appends the lesson-time suffix (60/45分) to lecture-count subjects, omitting 90/mixed/unknown', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+
+    // pickLectureMinutesSuffix: 一意(60のみ/45のみ)なら返し、混在・空・90分だけは ''。
+    const pickMatch = html.match(/function pickLectureMinutesSuffix\(suffixes\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(pickMatch).toBeTruthy()
+    const pick = new Function('suffixes', pickMatch![1]) as (suffixes: string[]) => string
+    expect(pick(['60', '60'])).toBe('60')
+    expect(pick(['45'])).toBe('45')
+    expect(pick(['60', '45'])).toBe('') // 混在は併記しない
+    expect(pick([''])).toBe('') // 90分/不明(formatScheduleMinutesSuffix が '' を返す)
+    expect(pick([])).toBe('')
+    expect(pick(['60', ''])).toBe('60') // 60分コマがあれば併記(90分が混じっても)
+
+    // toCountRows: labelMinutesMap があれば科目の横に「〜分」を併記、無ければ従来どおり素の科目名。
+    const rowsMatch = html.match(/function toCountRows\(countMap, desiredCountMap, forcedLabels, options\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(rowsMatch).toBeTruthy()
+    const escapeHtml = (value: unknown) => String(value == null ? '' : value)
+    const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '集理', '集社']
+    const toCountRows = new Function(
+      'countMap', 'desiredCountMap', 'forcedLabels', 'options', 'escapeHtml', 'SUBJECT_SORT_ORDER', rowsMatch![1],
+    ) as (
+      countMap: Record<string, number>,
+      desiredCountMap: Record<string, number>,
+      forcedLabels: string[] | null,
+      options: Record<string, unknown>,
+      escapeHtmlFn: (value: unknown) => string,
+      sortOrder: string[],
+    ) => string
+    // 講習表: 英に 60分 を併記。
+    const withMinutes = toCountRows({ 英: 2 }, { 英: 2 }, ['英'], { hideZeroZero: true, labelMinutesMap: { 英: '60' } }, escapeHtml, SUBJECT_SORT_ORDER)
+    expect(withMinutes).toContain('<td>英60分</td>')
+    // 併記マップに無い科目(集団/90分など)は素の科目名のまま。
+    const withoutSuffix = toCountRows({ 数: 1 }, { 数: 1 }, ['数'], { hideZeroZero: true, labelMinutesMap: { 英: '60' } }, escapeHtml, SUBJECT_SORT_ORDER)
+    expect(withoutSuffix).toContain('<td>数</td>')
+    // 通常回数表(labelMinutesMap 未指定)は従来どおり素の科目名。
+    const regular = toCountRows({ 英: 3 }, { 英: 3 }, ['英'], {}, escapeHtml, SUBJECT_SORT_ORDER)
+    expect(regular).toContain('<td>英</td>')
+
+    vi.unstubAllGlobals()
+  })
+
   it('includes A3-portrait paging plumbing for overflowing salary tables (teacher view)', () => {
     // 給与計算の行が多くA4横で見切れる講師ページを A3 縦へ自動切替するための CSS / @page / 計測関数が
     // 生成HTMLに含まれていること。実測ベースの切替なので文字列の存在で配線を担保する(回帰防止)。

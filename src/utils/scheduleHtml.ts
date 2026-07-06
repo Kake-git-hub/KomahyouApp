@@ -2962,11 +2962,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return left.localeCompare(right, 'ja');
         });
         if (!mergedLabels.length) return '<tr><td>予定なし</td><td>0</td></tr>';
+        const labelMinutesMap = (options && options.labelMinutesMap) || null;
         const rows = mergedLabels.flatMap((label) => {
           const count = Number(countMap && countMap[label] ? countMap[label] : 0);
           const desiredCount = Number(desiredCountMap && desiredCountMap[label] ? desiredCountMap[label] : count);
           if (hideZeroZero && count === 0 && desiredCount === 0) return [];
-          return ['<tr><td>' + escapeHtml(label) + '</td><td>' + count + '<span class="print-only-hidden">(' + desiredCount + ')</span></td></tr>'];
+          // 科目の横に授業時間(60/45分)を併記する。90分(既定)や不明・混在は付けない。spec-schedule-pdf §D。
+          const minutesSuffix = labelMinutesMap && labelMinutesMap[label] ? labelMinutesMap[label] : '';
+          const displayLabel = label + (minutesSuffix ? minutesSuffix + '分' : '');
+          return ['<tr><td>' + escapeHtml(displayLabel) + '</td><td>' + count + '<span class="print-only-hidden">(' + desiredCount + ')</span></td></tr>'];
         });
         return rows.length > 0 ? rows.join('') : '<tr><td>予定なし</td><td>0</td></tr>';
       }
@@ -3022,6 +3026,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function filterCountMapToSubjects(countMap, visibleSubjects) {
         return Object.fromEntries(Object.entries(countMap || {}).filter(([label]) => visibleSubjects.includes(label)));
+      }
+
+      // 講習回数表の科目に併記する授業時間サフィックスを決める。渡された分数(60/45のみ)が
+      // 一意なら返し、混在・空・90分だけのときは '' を返す(誤解を招く併記をしない)。spec-schedule-pdf §D。
+      function pickLectureMinutesSuffix(suffixes) {
+        var unique = Array.from(new Set((suffixes || []).filter(function(s) { return s === '60' || s === '45'; })));
+        return unique.length === 1 ? unique[0] : '';
       }
 
       // 授業時間(分)サフィックス。60/45 のみ付与し、90(既定)は付けない。spec-schedule-pdf §D。
@@ -4544,6 +4555,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const subjectCounts = {};
         const plannedRegularCounts = {};
         const lectureCounts = {};
+        // 講習回数表の科目に授業時間(60/45分)を併記するため、正規化済み科目ごとに実配置コマの分数を収集。
+        const lectureMinutesBySubjectList = {};
         const desiredLectureCounts = buildDesiredLectureCountMap(student, startDate, endDate);
         const regularCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'regular');
         const lectureCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'special');
@@ -4551,8 +4564,19 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const makeupNotes = collectStudentMakeupNotes(entries);
         entries.forEach((entry) => {
           if (entry.lesson.status === 'absent') return;
-          if (entry.lesson.lessonType === 'special') lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
+          if (entry.lesson.lessonType === 'special') {
+            lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
+            const normalizedSubject = normalizeSubjectForStudent(entry.lesson.subject, student, startDate);
+            if (!lectureMinutesBySubjectList[normalizedSubject]) lectureMinutesBySubjectList[normalizedSubject] = [];
+            lectureMinutesBySubjectList[normalizedSubject].push(formatScheduleMinutesSuffix(entry.lesson.noteSuffix));
+          }
           else subjectCounts[entry.lesson.subject] = (subjectCounts[entry.lesson.subject] || 0) + 1;
+        });
+        // 科目内で分数が一意(60のみ/45のみ)のときだけ併記する。混在・不明・90分は付けない。
+        const lectureMinutesBySubject = {};
+        Object.keys(lectureMinutesBySubjectList).forEach((subject) => {
+          const suffix = pickLectureMinutesSuffix(lectureMinutesBySubjectList[subject]);
+          if (suffix) lectureMinutesBySubject[subject] = suffix;
         });
         (Array.isArray(DATA.expectedRegularOccurrences) ? DATA.expectedRegularOccurrences : []).forEach((entry) => {
           if (entry.linkedStudentId !== student.id) return;
@@ -4617,7 +4641,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var emptyFormatHasGroup = getGroupClassEntriesInRange(startDate, endDate).length > 0;
         var emptyFormatLectureSubjects = (emptyFormat && emptyFormatHasGroup) ? emptyFormatSubjects.concat(['集理', '集社']) : emptyFormatSubjects;
         var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
-        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true});
+        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true, labelMinutesMap: lectureMinutesBySubject});
         var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat, optionGradeLabel: (student.currentGradeLabel || '未設定'), optionChecks: (emptyFormat ? undefined : student.optionChecks) });
         // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットは中3想定で盤面の集団コマを反映する。
         var groupRowsHtml = emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
