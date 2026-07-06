@@ -24,6 +24,8 @@ import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspace
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
+import { getAllClassroomSnapshotVersions } from './integrations/firebase/classroomSnapshotVersions'
+import { isPendingClassroomWriteBackStale } from './data/pendingSnapshotVersionGuard'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
@@ -972,6 +974,7 @@ function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
   localSnapshot: WorkspaceSnapshot | null,
   marker: PendingRemoteWorkspaceSnapshotMarker | null,
   authenticatedUserId: string,
+  remoteClassroomVersions?: Record<string, number>,
 ) {
   if (!localSnapshot || !marker) return null
   if (marker.savedAt !== localSnapshot.savedAt) return null
@@ -981,6 +984,14 @@ function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
   const authenticatedUser = remoteSnapshot.users.find((user) => user.id === authenticatedUserId) ?? null
   if (authenticatedUser?.role !== 'manager' || !authenticatedUser.assignedClassroomId) return null
   if (!marker.targetClassroomIds?.includes(authenticatedUser.assignedClassroomId)) return null
+
+  // A3(2026-07-06): 別端末が後からこの教室を保存済み(サーバー版数がローカル基準版数より進行)なら、
+  // 古いローカルで上書きせずリモートを優先する(savedAt の壁時計比較だけに頼らない)。
+  if (isPendingClassroomWriteBackStale({
+    classroomId: authenticatedUser.assignedClassroomId,
+    baseClassroomVersions: marker.baseClassroomVersions,
+    remoteClassroomVersions,
+  })) return null
 
   const localAssignedClassroom = localSnapshot.classrooms.find((classroom) => classroom.id === authenticatedUser.assignedClassroomId) ?? null
   if (!localAssignedClassroom) return null
@@ -1004,6 +1015,7 @@ export function resolveRemoteWorkspaceSnapshot(
   localSnapshot: WorkspaceSnapshot | null,
   marker: PendingRemoteWorkspaceSnapshotMarker | null,
   authenticatedUserId: string,
+  remoteClassroomVersions?: Record<string, number>,
 ) {
   const mergedRemote = mergeWorkspaceWithLocalPreferences(remoteSnapshot, localSnapshot)
   const pendingLocalClassroom = resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
@@ -1011,6 +1023,7 @@ export function resolveRemoteWorkspaceSnapshot(
     localSnapshot,
     marker,
     authenticatedUserId,
+    remoteClassroomVersions,
   )
   if (pendingLocalClassroom) {
     return {
@@ -1024,6 +1037,37 @@ export function resolveRemoteWorkspaceSnapshot(
   if (marker.savedAt !== localSnapshot.savedAt) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
   if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
   if (!haveSameWorkspaceIds(localSnapshot, remoteSnapshot)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+
+  // A3(2026-07-06): 教室単位の版数ゲート。savedAt(壁時計・端末間で数分ズレる)で「ローカルが新しい」と
+  // 判定されても、別端末が後からその教室を保存済み(サーバー版数がマーカー基準版数より進行)なら、
+  // その教室はリモートを優先して stale 上書きを防ぐ。サーバーの楽観ロックは書き戻し直前の再読込で
+  // baseVersion が最新へ更新され素通りしてしまうため、ここでクライアント側でも二重に塞ぐ。
+  const effectiveTargetIds = (marker.targetClassroomIds && marker.targetClassroomIds.length > 0)
+    ? marker.targetClassroomIds
+    : (localSnapshot.actingClassroomId ? [localSnapshot.actingClassroomId] : [])
+  const staleTargetIds = effectiveTargetIds.filter((classroomId) => isPendingClassroomWriteBackStale({
+    classroomId,
+    baseClassroomVersions: marker.baseClassroomVersions,
+    remoteClassroomVersions,
+  }))
+  if (staleTargetIds.length > 0) {
+    const safeTargetIds = effectiveTargetIds.filter((classroomId) => !staleTargetIds.includes(classroomId))
+    if (safeTargetIds.length === 0) {
+      // 書き戻し対象が全て stale = 別端末の最新をそのまま採用する(ローカルは破棄)。
+      return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
+    }
+    // safe な教室だけローカルを採用し、stale な教室はリモート最新を残す。
+    const mergedClassrooms = mergedRemote.classrooms.map((remoteClassroom) => {
+      if (!safeTargetIds.includes(remoteClassroom.id)) return remoteClassroom
+      return localSnapshot.classrooms.find((classroom) => classroom.id === remoteClassroom.id) ?? remoteClassroom
+    })
+    return {
+      snapshot: { ...localSnapshot, classrooms: mergedClassrooms },
+      usedPendingLocalSnapshot: true,
+      pendingTargetClassroomIds: safeTargetIds,
+    }
+  }
+
   return {
     snapshot: localSnapshot,
     usedPendingLocalSnapshot: true,
@@ -2212,6 +2256,8 @@ function AuthenticatedApp() {
       localWorkspaceSnapshot,
       readPendingRemoteWorkspaceSnapshotMarker(),
       remoteSessionUserId,
+      // A3: loadFirebaseWorkspaceSnapshot 直後のレジストリ=サーバー現在版数。stale 書き戻しの版数ゲートに使う。
+      getAllClassroomSnapshotVersions(),
     )
     const nextActingClassroomId = preferredActingClassroomId ?? actingClassroomId
     if (nextActingClassroomId && mergedSnapshot.classrooms.some((classroom) => classroom.id === nextActingClassroomId)) {
@@ -3922,6 +3968,8 @@ function AuthenticatedApp() {
             localWorkspaceSnapshot,
             readPendingRemoteWorkspaceSnapshotMarker(),
             remoteSessionUserId,
+            // A3: 読込直後のレジストリ=サーバー現在版数。stale 書き戻しの版数ゲートに使う。
+            getAllClassroomSnapshotVersions(),
           )
           applyWorkspaceSnapshot(
             resolvedSnapshot,

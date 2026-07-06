@@ -1,4 +1,5 @@
 import type { AppSnapshot, WorkspaceSnapshot } from '../types/appState'
+import { getAllClassroomSnapshotVersions } from '../integrations/firebase/classroomSnapshotVersions'
 
 const DB_NAME = 'komahyouapp-storage'
 const STORE_NAME = 'app-snapshots'
@@ -34,6 +35,10 @@ export type PendingRemoteWorkspaceSnapshotMarker = {
   savedAt: string
   authenticatedUserId: string
   targetClassroomIds?: string[]
+  // A3(2026-07-06): マーカー記録時点でこのタブが把握していた教室単位の基準版数。
+  // ログイン時の stale 書き戻し防止(pendingSnapshotVersionGuard)で、サーバー現在版数と突き合わせる。
+  // 旧マーカーには無い(undefined)ので後方互換で optional。
+  baseClassroomVersions?: Record<string, number>
 }
 
 type AutoBackupRecord = AutoBackupSummary & {
@@ -501,12 +506,16 @@ export function markPendingRemoteWorkspaceSnapshotSync(snapshot: WorkspaceSnapsh
   const normalizedTargetClassroomIds = Array.isArray(targetClassroomIds)
     ? Array.from(new Set(targetClassroomIds.filter((classroomId): classroomId is string => typeof classroomId === 'string' && classroomId.trim().length > 0)))
     : undefined
+  // A3: このタブが把握している教室単位の基準版数を記録する。書き戻し時にサーバー現在版数と突き合わせ、
+  // 別端末が後から保存していれば(サーバー版数が進んでいれば)stale として上書きを止めるための材料。
+  const baseClassroomVersions = getAllClassroomSnapshotVersions()
   const marker: PendingRemoteWorkspaceSnapshotMarker = {
     savedAt: snapshot.savedAt,
     authenticatedUserId,
     targetClassroomIds: normalizedTargetClassroomIds && normalizedTargetClassroomIds.length > 0
       ? normalizedTargetClassroomIds
       : undefined,
+    baseClassroomVersions: Object.keys(baseClassroomVersions).length > 0 ? baseClassroomVersions : undefined,
   }
   window.localStorage.setItem(LOCAL_STORAGE_PENDING_REMOTE_WORKSPACE_KEY, JSON.stringify(marker))
 }
@@ -523,11 +532,22 @@ export function readPendingRemoteWorkspaceSnapshotMarker(): PendingRemoteWorkspa
     const targetClassroomIds = Array.isArray(parsed.targetClassroomIds)
       ? Array.from(new Set(parsed.targetClassroomIds.filter((classroomId): classroomId is string => typeof classroomId === 'string' && classroomId.trim().length > 0)))
       : undefined
+    const baseClassroomVersions = isRecord(parsed.baseClassroomVersions)
+      ? Object.entries(parsed.baseClassroomVersions).reduce<Record<string, number>>((accumulator, [classroomId, version]) => {
+          if (typeof classroomId === 'string' && classroomId.trim().length > 0 && typeof version === 'number' && Number.isFinite(version)) {
+            accumulator[classroomId] = version
+          }
+          return accumulator
+        }, {})
+      : undefined
     return {
       savedAt: parsed.savedAt,
       authenticatedUserId: parsed.authenticatedUserId,
       targetClassroomIds: targetClassroomIds && targetClassroomIds.length > 0
         ? targetClassroomIds
+        : undefined,
+      baseClassroomVersions: baseClassroomVersions && Object.keys(baseClassroomVersions).length > 0
+        ? baseClassroomVersions
         : undefined,
     }
   } catch {
