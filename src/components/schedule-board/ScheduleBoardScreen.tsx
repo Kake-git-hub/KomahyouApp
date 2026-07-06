@@ -2881,7 +2881,10 @@ function removeAutoAssignedTeacherFromSpecialSession(params: {
   }
 }
 
-function removeStudentAssignmentsFromSpecialSession(params: {
+// テスト用に export(挙動変更なし・オーナー確定 2026-07-06 の現状仕様固定のため)。
+// この関数の挙動は「登録解除で special の配置だけ外し、makeup は残す」等の確定仕様。
+// ScheduleBoardScreen.test.ts の回帰テストが本体ロジックを固定している。export を外さない。
+export function removeStudentAssignmentsFromSpecialSession(params: {
   weeks: SlotCell[][]
   session: SpecialSessionRow
   student: StudentRow
