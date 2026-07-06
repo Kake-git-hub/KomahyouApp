@@ -50,6 +50,7 @@
 - **講習回数**：左＝actual（配置済み）／右括弧＝特別講習の登録希望数。不一致なら**講習回数表の直下に警告スタンプ**。
   - **科目名に授業時間（60/45分）を併記**（例 `英60分`）。90分（既定）は付けない（日程表セルと同ルール＝§D `formatScheduleMinutesSuffix`）。科目内で 60/45 が一意なときのみ併記し、混在・不明・90分だけの科目には付けない（`pickLectureMinutesSuffix`＝誤解を招く併記をしない）。2026-07-06 実装（オーナー要望）。
   - 分数の由来は **①実配置コマの `noteSuffix` を優先** し、**②未配置（希望登録のみ）の科目は希望登録の `subjectDurations`（QR提出の授業時間）でフォールバック** する（`resolveLectureMinutesBySubject` / `buildDesiredLectureMinutesMap`）。希望だけ登録して盤面未配置の科目にも分数が出る（2026-07-06 追加・オーナー要望）。実配置と希望が食い違う場合は実配置が勝つ。
+  - ⚠️ **payload に `studentInputs.subjectDurations` を必ず載せる**（`buildSerializedSchedulePayload` の studentInputs シリアライズ）。当初これが漏れていて popup の `DATA.specialSessions` に届かず、希望登録の授業時間が**未配置科目で一切表示されない**不具合があった（`subjectSlots` は載っていたため希望数だけ出て授業時間が消える非対称。2026-07-06 修正・回帰テスト `serializes special-session subjectDurations`）。
 - 通常回数の警告は**残す**。次のような**「正しいズレ」**を室長が把握するための印：
   - 休み（欠席）で振替待ちだが、表示期間内にまだ振替配置されていない。
   - 振替しない休みで、希望数より通常回数が少ない。

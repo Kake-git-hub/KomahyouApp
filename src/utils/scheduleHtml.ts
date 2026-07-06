@@ -108,6 +108,8 @@ type SerializedCell = {
 type SerializedStudentSpecialSessionInput = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
+  // spec-schedule-pdf §E: 科目ごとの授業時間(60/45分)。講習回数表の科目名に併記する(未配置の希望科目でも表示)。
+  subjectDurations?: Record<string, number>
   // spec-group-lesson §C/§E: 集団授業の参加(科目→true)。登録後の生徒日程表の出し分けと回数(集理/集社)に使う。
   groupClassParticipation?: Record<string, boolean>
   // オプション欄(開発用教室): QR提出のチェック状態。キー=行番号('0'..'4') -> true。
@@ -542,6 +544,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         subjectSlots: input.subjectSlots && typeof input.subjectSlots === 'object' ? { ...input.subjectSlots } : {},
+        // 講習回数表の授業時間併記(60/45分)に必要。未配置の希望科目でも分数を出すため payload に載せる。
+        subjectDurations: input.subjectDurations && typeof input.subjectDurations === 'object' ? { ...input.subjectDurations } : {},
         groupClassParticipation: input.groupClassParticipation && typeof input.groupClassParticipation === 'object' ? { ...input.groupClassParticipation } : {},
         optionChecks: input.optionChecks && typeof input.optionChecks === 'object' ? { ...input.optionChecks } : {},
         regularOnly: Boolean(input.regularOnly),

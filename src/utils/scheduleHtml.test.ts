@@ -1000,6 +1000,60 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止(根本原因): 講習の希望登録の授業時間(subjectDurations)を payload に載せる。
+  // これが欠けると popup の DATA.specialSessions に届かず、未配置の希望科目に分数が一切出なかった
+  // (subjectSlots は載っていたため希望数だけ表示され、授業時間が消える非対称)。埋め込み DATA(JSON)で固定。
+  it('serializes special-session subjectDurations into the schedule payload', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      specialSessions: [{
+        id: 'session-1',
+        label: '春期講習',
+        startDate: '2026-03-20',
+        endDate: '2026-03-31',
+        teacherInputs: {},
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: [],
+            regularBreakSlots: [],
+            subjectSlots: { 数: 2 },
+            subjectDurations: { 数: 60 },
+            regularOnly: false,
+            countSubmitted: true,
+            updatedAt: '2026-03-01T00:00:00.000Z',
+          },
+        },
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-01T00:00:00.000Z',
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // payload は compact JSON で埋め込まれる(JSON.stringify)。subjectDurations が載っていること。
+    expect(html).toContain('"subjectDurations":{"数":60}')
+
+    vi.unstubAllGlobals()
+  })
+
   it('includes A3-portrait paging plumbing for overflowing salary tables (teacher view)', () => {
     // 給与計算の行が多くA4横で見切れる講師ページを A3 縦へ自動切替するための CSS / @page / 計測関数が
     // 生成HTMLに含まれていること。実測ベースの切替なので文字列の存在で配線を担保する(回帰防止)。
