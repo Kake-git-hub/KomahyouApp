@@ -17,6 +17,9 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+
+## 1.5.397
+
 - docs: 登録解除の現状挙動をオーナー確定(2026-07-06)として正本に明文化。「講習だけ外し振替は残す(未消化へ戻さない)非対称は意図的」「希望数(subjectSlots)は in-app 保持・doc はクリアの二層」「ストック調整は台帳クリア方式が正・restoreSessionStock の +1 復元はデッド」「自動除去は提出済み→未提出の実遷移のみ発火」「セッション/生徒削除・期間変更では自動掃除しない」を追記。「空にする」での振替再出現(講習は台帳方式ゆえ再出現しない)の非対称を確定に格上げ。docs/spec-special-session-submission.md(E-2b 新設)・spec-lecture-stock.md(§5-1 新設)・spec-makeup-stock.md(§2)
 - test: 確定仕様固定の回帰テストを追加。`removeStudentAssignmentsFromSpecialSession` を export(挙動変更なし)し、①special は外れ同一生徒の makeup は不変(最重要) ②specialSessionId 一致セッションのみ除去 ③セッション紐付き手動配置(specialStockSource='manual')も除去 ④台帳はその生徒×セッション分だけクリア(他生徒・他セッションのデルタは不変) ⑤デフォルト経路は +1 復元せず台帳クリアのみ(デッド分岐に依存しない)、を固定。src/components/schedule-board/ScheduleBoardScreen.tsx・ScheduleBoardScreen.test.ts
 
