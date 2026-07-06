@@ -980,6 +980,23 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const regular = toCountRows({ 英: 3 }, { 英: 3 }, ['英'], {}, escapeHtml, SUBJECT_SORT_ORDER)
     expect(regular).toContain('<td>英</td>')
 
+    // resolveLectureMinutesBySubject: 実配置の分数を優先し、未配置(希望登録のみ)は希望の分数でフォールバック。
+    const resolveMatch = html.match(/function resolveLectureMinutesBySubject\(placedListBySubject, desiredMinutesBySubject\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(resolveMatch).toBeTruthy()
+    const resolve = new Function('placedListBySubject', 'desiredMinutesBySubject', 'pickLectureMinutesSuffix', resolveMatch![1]) as (
+      placedListBySubject: Record<string, string[]>,
+      desiredMinutesBySubject: Record<string, string>,
+      pickFn: (suffixes: string[]) => string,
+    ) => Record<string, string>
+    // 未配置(実配置リスト空)でも希望登録の分数を出す。
+    expect(resolve({}, { 英: '60' }, pick)).toEqual({ 英: '60' })
+    // 実配置があればそちらを優先(希望と食い違っても実配置が勝つ)。
+    expect(resolve({ 数: ['45'] }, { 数: '60' }, pick)).toEqual({ 数: '45' })
+    // 実配置が混在で一意でない科目は、希望登録の分数へフォールバック。
+    expect(resolve({ 国: ['60', '45'] }, { 国: '60' }, pick)).toEqual({ 国: '60' })
+    // 実配置も希望も無ければ併記しない。
+    expect(resolve({ 理: ['90'] }, {}, pick)).toEqual({})
+
     vi.unstubAllGlobals()
   })
 
