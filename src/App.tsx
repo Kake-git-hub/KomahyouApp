@@ -1078,6 +1078,19 @@ export function applyIssuedSubmissionTokensToSessions(
   })
 }
 
+// A4 配線ガード(2026-07-06): トークン発行の state 反映は、必ず「関数型アップデータで最新の current へ
+// マージ」する。この一段のラッパーを経由させることで、呼び出し側が旧実装(クロージャに捕捉した stale な
+// updatedSession での丸ごと置換)へ戻る回帰をユニットテストで固定できる(App.test.ts)。
+// setSessions には setSpecialSessions(関数型アップデータ受け取り)を渡す。
+export function reflectIssuedSubmissionTokens(
+  setSessions: (updater: (current: SpecialSessionRow[]) => SpecialSessionRow[]) => void,
+  sessionId: string,
+  issuedTokens: Array<{ personType: 'student' | 'teacher'; personId: string; token: string }>,
+  updatedAt: string,
+): void {
+  setSessions((current) => applyIssuedSubmissionTokensToSessions(current, sessionId, issuedTokens, updatedAt))
+}
+
 export function resolveRemoteWorkspaceSnapshot(
   remoteSnapshot: WorkspaceSnapshot,
   localSnapshot: WorkspaceSnapshot | null,
@@ -3313,13 +3326,13 @@ function AuthenticatedApp() {
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
       // A4: await 中に届いた別生徒のQR提出反映を巻き戻さないよう、丸ごと置換ではなく current へ
-      // 新規発行トークンだけをマージする(applyIssuedSubmissionTokensToSessions のガード参照)。
-      setSpecialSessions((current) => applyIssuedSubmissionTokensToSessions(
-        current,
+      // 新規発行トークンだけをマージする(reflectIssuedSubmissionTokens=配線ガード経由・テストで固定)。
+      reflectIssuedSubmissionTokens(
+        setSpecialSessions,
         updatedSession.id,
         newTokens.map((entry) => ({ personType: entry.doc.personType, personId: entry.doc.personId, token: entry.token })),
         updatedSession.updatedAt,
-      ))
+      )
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state

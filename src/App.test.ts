@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { resolveNewlyUnsubmittedSessionStudents } from './components/schedule-board/ScheduleBoardScreen'
+import { initialStudents, type StudentRow } from './components/basic-data/basicDataModel'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
 import type { SpecialSessionRow } from './components/special-data/specialSessionModel'
 import type { SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
@@ -668,6 +670,59 @@ describe('applyIssuedSubmissionTokensToSessions (A4: トークン発行は curre
   it('発行トークンが空なら参照そのまま(no-op)', () => {
     const current = [makeSession({})]
     expect(applyIssuedSubmissionTokensToSessions(current, 'sess1', [], 'x')).toBe(current)
+  })
+
+  // A4 配線ガード(regression-reviewer 指摘): 呼び出し側が「関数型アップデータで最新 current へマージ」
+  // という形を守ることをテストで固定する。旧実装(クロージャに捕捉した stale スナップショットでの
+  // 丸ごと置換)に戻すと、await 中に届いた提出反映が消えてこのテストが落ちる。
+  it('reflectIssuedSubmissionTokens は関数型アップデータを渡し、setter 実行時点の最新 current にマージする', () => {
+    // ensureScheduleSubmissionTokens 開始時点(スナップショット): stu-a は未提出。
+    // await writeSubmissionDocs 中に stu-a の QR 提出が反映され、setter 実行時点の current では提出済み。
+    const currentAtSetterTime = [makeSession({
+      'stu-a': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 数: 4 }, regularOnly: false, countSubmitted: true, updatedAt: '' },
+    })]
+    let received: ((current: SpecialSessionRow[]) => SpecialSessionRow[]) | null = null
+    reflectIssuedSubmissionTokens(
+      (updater) => { received = updater },
+      'sess1',
+      [{ personType: 'student', personId: 'stu-b', token: 'tok-b' }],
+      '2026-07-06T00:00:00.000Z',
+    )
+    // 関数型アップデータであること(=stale 配列の即値置換ではない)。
+    expect(typeof received).toBe('function')
+    const result = received!(currentAtSetterTime)
+    // await 中に提出済みへ変わった stu-a を保持し、新規発行の stu-b だけ追加される。
+    expect(result[0]!.studentInputs['stu-a']!.countSubmitted).toBe(true)
+    expect(result[0]!.studentInputs['stu-a']!.subjectSlots).toEqual({ 数: 4 })
+    expect(result[0]!.studentInputs['stu-b']!.submissionToken).toBe('tok-b')
+  })
+
+  // 症状連鎖の端到端固定: トークン発行反映(A4マージ)を挟んでも、提出済みで割振済みの生徒が
+  // 「新たに未提出」と誤判定されて配置除去の対象にならないこと(=割り振った講習が数分後に戻らない)。
+  it('トークン発行反映後も提出済み生徒は未提出除去の対象にならない(症状の端到端)', () => {
+    const student = { ...(initialStudents[0] as StudentRow), id: 'stu-a', name: 'A太郎' }
+    const submitted = [makeSession({
+      'stu-a': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 数: 4 }, regularOnly: false, countSubmitted: true, updatedAt: '' },
+    })]
+    // 1) stu-a 提出済みの時点で除去判定が走り、基準(提出済み集合)を取り込む。
+    const seed = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: submitted,
+      students: [student],
+      previousSubmittedKeys: null,
+    })
+    expect(seed.newlyUnsubmitted).toHaveLength(0)
+    // 2) トークン発行反映(A4マージ)が走る(stu-b の新規トークン追加のみ・stu-a は保持)。
+    const afterTokens = applyIssuedSubmissionTokensToSessions(submitted, 'sess1', [
+      { personType: 'student', personId: 'stu-b', token: 'tok-b' },
+    ], '2026-07-06T00:00:00.000Z')
+    // 3) 再判定: stu-a は提出済みのままなので除去対象ゼロ(旧実装=丸ごと置換で未提出へ巻き戻ると、
+    //    基準に居た stu-a が『新たに未提出』となり配置除去=講習巻き戻りが起きていた)。
+    const afterReflect = resolveNewlyUnsubmittedSessionStudents({
+      specialSessions: afterTokens,
+      students: [student],
+      previousSubmittedKeys: seed.nextBasisKeys,
+    })
+    expect(afterReflect.newlyUnsubmitted).toHaveLength(0)
   })
 })
 
