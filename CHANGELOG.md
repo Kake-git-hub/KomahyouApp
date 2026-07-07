@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.406 (2026-07-07)
+
+- fix: 登録解除→再登録→再割振後に画面遷移すると組み直した講習コマが消える回帰を修正(Issue #46)。一過性の unassign リクエスト(`studentScheduleRequest`)が処理後も App state に残り、盤面 `key={boardMountKey}` 再マウントで重複ガード(ローカル ref)が消えて再発火していた。処理後に App 側 state を消費済み(null)にする `consumeStudentScheduleRequest` を導入し、処理判定 `shouldProcessStudentScheduleRequest` を純関数化。セッション/生徒ロード後にのみ消費するよう処理順も整理(未ロード時の取りこぼしも解消)。再マウント再発火の回帰テスト同梱(src/App.tsx, src/components/schedule-board/ScheduleBoardScreen.tsx, ScheduleBoardScreen.test.ts)
+
 ## 1.5.405
 
 - fix: 「保存し忘れ救済」(起動時の未保存ローカル書き戻し)を完全撤去(オーナー決定 2026-07-07)。起動時は常にサーバー最新を正とし、暗黙の書き戻し(7/6障害の主因・A3の残存リスク源)を経路ごと排除。閉じる前の未保存警告・タブ切替時の即時同期・ローカル控え保存は維持(src/App.tsx, src/data/appSnapshotRepository.ts, pendingSnapshotVersionGuard削除, 回帰テスト置換)

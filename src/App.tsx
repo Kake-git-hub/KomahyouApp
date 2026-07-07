@@ -8,7 +8,7 @@ import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, g
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildScheduleCellsForRange, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
 const BackupRestoreScreen = lazy(() => import('./components/backup-restore/BackupRestoreScreen').then((m) => ({ default: m.BackupRestoreScreen })))
@@ -1293,6 +1293,11 @@ function AuthenticatedApp() {
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(null)
   const [teacherAutoAssignRequest, setTeacherAutoAssignRequest] = useState<TeacherAutoAssignRequest | null>(null)
   const [studentScheduleRequest, setStudentScheduleRequest] = useState<StudentScheduleRequest | null>(null)
+  // Issue #46: 盤面が unassign リクエストを処理し終えたら、この一過性 state を消費済み(null)にする。
+  // これをしないと盤面 key 再マウントで古いリクエストが再発火し、組み直した講習コマが消える。
+  const handleStudentScheduleRequestProcessed = useCallback((requestId: number) => {
+    setStudentScheduleRequest((current) => consumeStudentScheduleRequest(current, requestId))
+  }, [])
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
   const [isSavingNow, setIsSavingNow] = useState(false)
@@ -4973,6 +4978,7 @@ function AuthenticatedApp() {
       pairConstraints={pairConstraints}
       teacherAutoAssignRequest={teacherAutoAssignRequest}
       studentScheduleRequest={studentScheduleRequest}
+      onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       initialBoardState={boardState}
       onBoardStateChange={handleBoardStateChange}
       onReplaceRegularLessons={setRegularLessons}

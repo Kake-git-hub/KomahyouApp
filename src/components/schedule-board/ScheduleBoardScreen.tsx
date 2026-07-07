@@ -654,6 +654,8 @@ type ScheduleBoardScreenProps = {
   pairConstraints: PairConstraintRow[]
   teacherAutoAssignRequest?: TeacherAutoAssignRequest | null
   studentScheduleRequest?: StudentScheduleRequest | null
+  // Issue #46: 一過性 unassign を処理し終えたら App 側の state を消費済み(null)にさせる。
+  onStudentScheduleRequestProcessed?: (requestId: number) => void
   initialBoardState?: PersistedBoardState | null
   onBoardStateChange?: (state: PersistedBoardState, meta?: { userInitiated: boolean }) => void
   onReplaceRegularLessons?: Dispatch<SetStateAction<RegularLessonRow[]>>
@@ -2881,6 +2883,34 @@ function removeAutoAssignedTeacherFromSpecialSession(params: {
   }
 }
 
+// --- 登録解除リクエスト(一過性 unassign コマンド)の消費判定 ---------------------------
+// Issue #46 回帰防止: 「登録解除」は App 側の永続 state `studentScheduleRequest` に載る一過性
+// コマンド。盤面は key={boardMountKey} で教室ロード/画面遷移のたびに再マウントされ、その際
+// 重複ガード(processedStudentScheduleRequestIdRef)が null にリセットされる。App state を
+// null 化しないと、古い unassign リクエストが再マウント後に「新規」として再処理され、
+// 再登録・再割振で組み直した講習コマが黙って消える。
+// 対策: (1) 処理可能なリクエストだけ 1 回処理する判定を純関数化し、
+//       (2) 処理したら App 側の state を必ず消費済み(null)にする。
+// この 2 つが揃って初めて「再マウントで再発火しない」が成立する。純関数化してユニットで固定。
+export function shouldProcessStudentScheduleRequest(
+  request: StudentScheduleRequest | null | undefined,
+  processedRequestId: number | null,
+): boolean {
+  if (!request) return false
+  return processedRequestId !== request.requestId
+}
+
+// App 側の studentScheduleRequest を「消費済み」にする。処理した requestId と現在の state の
+// requestId が一致するときだけ null 化する(処理〜クリアの間に新しいリクエストが来ていたら
+// それは消さない = より新しい一過性コマンドを取りこぼさない)。
+export function consumeStudentScheduleRequest(
+  current: StudentScheduleRequest | null,
+  processedRequestId: number,
+): StudentScheduleRequest | null {
+  if (current && current.requestId === processedRequestId) return null
+  return current
+}
+
 // テスト用に export(挙動変更なし・オーナー確定 2026-07-06 の現状仕様固定のため)。
 // この関数の挙動は「登録解除で special の配置だけ外し、makeup は残す」等の確定仕様。
 // ScheduleBoardScreen.test.ts の回帰テストが本体ロジックを固定している。export を外さない。
@@ -3513,7 +3543,7 @@ export function computeStudentMove(params: {
   return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
@@ -4091,13 +4121,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teachers, weekIndex, weeks])
 
   useEffect(() => {
-    if (!studentScheduleRequest) return
-    if (processedStudentScheduleRequestIdRef.current === studentScheduleRequest.requestId) return
-    processedStudentScheduleRequestIdRef.current = studentScheduleRequest.requestId
+    // Issue #46: shouldProcess で「未処理の 1 件」だけを対象にする。
+    if (!shouldProcessStudentScheduleRequest(studentScheduleRequest, processedStudentScheduleRequestIdRef.current)) return
+    const request = studentScheduleRequest!
 
-    const session = specialSessions.find((entry) => entry.id === studentScheduleRequest.sessionId)
-    const student = students.find((entry) => entry.id === studentScheduleRequest.studentId)
+    const session = specialSessions.find((entry) => entry.id === request.sessionId)
+    const student = students.find((entry) => entry.id === request.studentId)
+    // セッション/生徒が未ロードの間は消費せず、同マウント内での再評価(deps 変化)に委ねる。
+    // ここで消費すると、データ到着前に来た unassign を取りこぼす。
     if (!session || !student) return
+
+    // 処理に着手した時点で重複ガードを立て、App 側の一過性 state も消費済み(null)にさせる。
+    // これにより盤面 key 再マウント(processedRef リセット)後も同じリクエストが再発火しない(Issue #46)。
+    processedStudentScheduleRequestIdRef.current = request.requestId
+    onStudentScheduleRequestProcessed?.(request.requestId)
 
     const result = removeStudentAssignmentsFromSpecialSession({
       weeks: normalizedWeeks,
@@ -4128,7 +4165,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       result.nextFallbackLectureStockStudents,
     )
     setStatusMessage(`${session.label} で ${result.studentName} の講習授業を ${result.clearedCellCount} コマ解除しました。`)
-  }, [classroomSettings.forceOpenDates, classroomSettings.holidayDates, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRequest, students, suppressedMakeupOrigins, weekIndex])
+  }, [classroomSettings.forceOpenDates, classroomSettings.holidayDates, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, onStudentScheduleRequestProcessed, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRequest, students, suppressedMakeupOrigins, weekIndex])
 
   useEffect(() => {
     // Only clean up student+session pairs that are newly unsubmitted (not previously known).
