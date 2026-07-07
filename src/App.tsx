@@ -24,9 +24,7 @@ import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspace
 import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
-import { getAllClassroomSnapshotVersions } from './integrations/firebase/classroomSnapshotVersions'
-import { isPendingClassroomWriteBackStale } from './data/pendingSnapshotVersionGuard'
-import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, markPendingRemoteWorkspaceSnapshotSync, parseAppSnapshot, parseWorkspaceSnapshot, readPendingRemoteWorkspaceSnapshotMarker, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
+import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
@@ -960,55 +958,16 @@ function getTimestampMillis(value: string) {
   return Number.isFinite(timestamp) ? timestamp : 0
 }
 
-function haveSameWorkspaceIds(left: WorkspaceSnapshot, right: WorkspaceSnapshot) {
-  const leftUserIds = left.users.map((user) => user.id).sort()
-  const rightUserIds = right.users.map((user) => user.id).sort()
-  const leftClassroomIds = left.classrooms.map((classroom) => classroom.id).sort()
-  const rightClassroomIds = right.classrooms.map((classroom) => classroom.id).sort()
-  return JSON.stringify(leftUserIds) === JSON.stringify(rightUserIds)
-    && JSON.stringify(leftClassroomIds) === JSON.stringify(rightClassroomIds)
-}
-
-function resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
-  remoteSnapshot: WorkspaceSnapshot,
-  localSnapshot: WorkspaceSnapshot | null,
-  marker: PendingRemoteWorkspaceSnapshotMarker | null,
-  authenticatedUserId: string,
-  remoteClassroomVersions?: Record<string, number>,
-) {
-  if (!localSnapshot || !marker) return null
-  if (marker.savedAt !== localSnapshot.savedAt) return null
-  if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return null
-  if (marker.authenticatedUserId === authenticatedUserId) return null
-
-  const authenticatedUser = remoteSnapshot.users.find((user) => user.id === authenticatedUserId) ?? null
-  if (authenticatedUser?.role !== 'manager' || !authenticatedUser.assignedClassroomId) return null
-  if (!marker.targetClassroomIds?.includes(authenticatedUser.assignedClassroomId)) return null
-
-  // A3(2026-07-06): 別端末が後からこの教室を保存済み(サーバー版数がローカル基準版数より進行)なら、
-  // 古いローカルで上書きせずリモートを優先する(savedAt の壁時計比較だけに頼らない)。
-  if (isPendingClassroomWriteBackStale({
-    classroomId: authenticatedUser.assignedClassroomId,
-    baseClassroomVersions: marker.baseClassroomVersions,
-    remoteClassroomVersions,
-  })) return null
-
-  const localAssignedClassroom = localSnapshot.classrooms.find((classroom) => classroom.id === authenticatedUser.assignedClassroomId) ?? null
-  if (!localAssignedClassroom) return null
-  if (!remoteSnapshot.classrooms.some((classroom) => classroom.id === authenticatedUser.assignedClassroomId)) return null
-
-  return {
-    snapshot: {
-      ...remoteSnapshot,
-      savedAt: localSnapshot.savedAt,
-      actingClassroomId: authenticatedUser.assignedClassroomId,
-      classrooms: remoteSnapshot.classrooms.map((classroom) => classroom.id === authenticatedUser.assignedClassroomId
-        ? normalizeWorkspaceClassroom(localAssignedClassroom)
-        : classroom),
-    },
-    pendingTargetClassroomIds: [authenticatedUser.assignedClassroomId],
-  }
-}
+// 「保存し忘れ救済」(起動時の未保存ローカル書き戻し)は 2026-07-07 オーナー決定で完全撤去した。
+// ★復活させてはならない経路(回帰防止):
+//   旧実装は「前回終了時に未保存の変更があった」ことをマーカー(localStorage)に記録し、次回起動時に
+//   ローカル残存データをサーバーより優先採用して黙って書き戻していた。この暗黙の自動補正が
+//   2026-07-06 の本番障害(日大前校・割振済み講習が数分後に古い盤面で上書きされ未消化一覧へ戻る)の
+//   主因となり、A3(a0dba9f・教室版数ゲート)で穴を塞いだ後も、QR提出のサーバー側反映が版数を
+//   進めない等の際どい相互作用が残っていた。守れる価値(自動同期までの数十秒〜数分の作業)に対して
+//   「ユーザーに説明できない暗黙の上書き」のリスクが見合わないため、経路ごと撤去した。
+//   起動時は常にサーバー最新を正とする。救済を再導入する場合は、黙って書き戻すのではなく
+//   必ずユーザーへ明示的に確認するUIにすること。詳細: docs/analysis-qr-submitted-at-2026-07-06.md
 
 // A4(2026-07-06): 講習提出トークンの自動発行を specialSessions へ反映するときの「マージ」規則。
 // ★消してはならないガード(講習が数分後に未配置へ戻る不具合の是正):
@@ -1091,69 +1050,20 @@ export function reflectIssuedSubmissionTokens(
   setSessions((current) => applyIssuedSubmissionTokensToSessions(current, sessionId, issuedTokens, updatedAt))
 }
 
+// 起動/再読込時のワークスペース確定。常にサーバー(リモート)最新を正とし、ローカルからは
+// 画面選択などのUI設定(mergeWorkspaceWithLocalPreferences)だけを引き継ぐ。
+// マーカー引数は「保存し忘れ救済」撤去(2026-07-07)以降は一切参照しない。引数として残しているのは、
+// 回帰テストが「旧実装なら書き戻しが発動した入力」をそのまま与えて『採用されないこと』を
+// 固定できるようにするため(上の撤去コメント参照。黙った書き戻しを復活させないこと)。
 export function resolveRemoteWorkspaceSnapshot(
   remoteSnapshot: WorkspaceSnapshot,
   localSnapshot: WorkspaceSnapshot | null,
-  marker: PendingRemoteWorkspaceSnapshotMarker | null,
-  authenticatedUserId: string,
-  remoteClassroomVersions?: Record<string, number>,
+  _marker?: PendingRemoteWorkspaceSnapshotMarker | null,
+  _authenticatedUserId?: string,
+  _remoteClassroomVersions?: Record<string, number>,
 ) {
   const mergedRemote = mergeWorkspaceWithLocalPreferences(remoteSnapshot, localSnapshot)
-  const pendingLocalClassroom = resolvePendingLocalClassroomSnapshotForAuthenticatedUser(
-    mergedRemote,
-    localSnapshot,
-    marker,
-    authenticatedUserId,
-    remoteClassroomVersions,
-  )
-  if (pendingLocalClassroom) {
-    return {
-      snapshot: pendingLocalClassroom.snapshot,
-      usedPendingLocalSnapshot: true,
-      pendingTargetClassroomIds: pendingLocalClassroom.pendingTargetClassroomIds,
-    }
-  }
-  if (!localSnapshot || !marker) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
-  if (marker.authenticatedUserId !== authenticatedUserId) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
-  if (marker.savedAt !== localSnapshot.savedAt) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
-  if (getTimestampMillis(localSnapshot.savedAt) <= getTimestampMillis(remoteSnapshot.savedAt)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
-  if (!haveSameWorkspaceIds(localSnapshot, remoteSnapshot)) return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
-
-  // A3(2026-07-06): 教室単位の版数ゲート。savedAt(壁時計・端末間で数分ズレる)で「ローカルが新しい」と
-  // 判定されても、別端末が後からその教室を保存済み(サーバー版数がマーカー基準版数より進行)なら、
-  // その教室はリモートを優先して stale 上書きを防ぐ。サーバーの楽観ロックは書き戻し直前の再読込で
-  // baseVersion が最新へ更新され素通りしてしまうため、ここでクライアント側でも二重に塞ぐ。
-  const effectiveTargetIds = (marker.targetClassroomIds && marker.targetClassroomIds.length > 0)
-    ? marker.targetClassroomIds
-    : (localSnapshot.actingClassroomId ? [localSnapshot.actingClassroomId] : [])
-  const staleTargetIds = effectiveTargetIds.filter((classroomId) => isPendingClassroomWriteBackStale({
-    classroomId,
-    baseClassroomVersions: marker.baseClassroomVersions,
-    remoteClassroomVersions,
-  }))
-  if (staleTargetIds.length > 0) {
-    const safeTargetIds = effectiveTargetIds.filter((classroomId) => !staleTargetIds.includes(classroomId))
-    if (safeTargetIds.length === 0) {
-      // 書き戻し対象が全て stale = 別端末の最新をそのまま採用する(ローカルは破棄)。
-      return { snapshot: mergedRemote, usedPendingLocalSnapshot: false, pendingTargetClassroomIds: undefined }
-    }
-    // safe な教室だけローカルを採用し、stale な教室はリモート最新を残す。
-    const mergedClassrooms = mergedRemote.classrooms.map((remoteClassroom) => {
-      if (!safeTargetIds.includes(remoteClassroom.id)) return remoteClassroom
-      return localSnapshot.classrooms.find((classroom) => classroom.id === remoteClassroom.id) ?? remoteClassroom
-    })
-    return {
-      snapshot: { ...localSnapshot, classrooms: mergedClassrooms },
-      usedPendingLocalSnapshot: true,
-      pendingTargetClassroomIds: safeTargetIds,
-    }
-  }
-
-  return {
-    snapshot: localSnapshot,
-    usedPendingLocalSnapshot: true,
-    pendingTargetClassroomIds: marker.targetClassroomIds,
-  }
+  return { snapshot: mergedRemote, usedPendingLocalSnapshot: false as const, pendingTargetClassroomIds: undefined }
 }
 
 // A2: タブが「隠れた」瞬間(別タブ/別アプリへ切替・最小化)に workspace をクラウド同期すべきか。
@@ -1788,6 +1698,8 @@ function AuthenticatedApp() {
     },
   ), [autoAssignRulesRef, boardStateRef, classroomSettingsRef, groupLessonsRef, managersRef, pairConstraintsRef, regularLessonsRef, specialSessionsRef, studentsRef, teachersRef])
 
+  // 編集のたびにローカル(IndexedDB)へ間引き保存する。端末内の控えであり、
+  // 次回起動時にサーバーを上書きする材料にはしない(「保存し忘れ救済」撤去 2026-07-07)。
   const writePendingWorkspaceSnapshotForRemoteSync = useCallback(() => {
     if (!isSnapshotPersistenceRuntimeEnabled()) return null
     if (workspaceUsersRef.current.length === 0 || workspaceClassroomsRef.current.length === 0) return null
@@ -1797,14 +1709,7 @@ function AuthenticatedApp() {
     lastPendingWorkspaceSnapshotWriteAtRef.current = now
 
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    const targetClassroomId = actingClassroomIdRef.current ?? snapshot.actingClassroomId
-    const targetClassroomIds = targetClassroomId && snapshot.classrooms.some((classroom) => classroom.id === targetClassroomId)
-      ? [targetClassroomId]
-      : undefined
     try {
-      if (isRemoteBackendEnabled && remoteSessionUserId) {
-        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
-      }
       void saveWorkspaceSnapshot(snapshot).catch(() => {
         lastPendingWorkspaceSnapshotWriteAtRef.current = 0
       })
@@ -1888,12 +1793,6 @@ function AuthenticatedApp() {
     // A1: 版数衝突で停止中は、再読み込みまでクラウド同期を再開しない(古いベースでの上書き再試行を断つ)。
     // ローカル保存(IndexedDB)は別経路で継続するため、編集内容はブラウザ内には残る。
     if (remoteStaleConflictRef.current) return false
-
-    try {
-      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
-    } catch {
-      // The local snapshot save path still preserves the data for the next login.
-    }
 
     const existingQueuedItem = queuedRemoteSnapshotRef.current
     queuedRemoteSnapshotRef.current = {
@@ -2007,7 +1906,6 @@ function AuthenticatedApp() {
         const markedClean = markCleanIfSnapshotMatchesCurrent(nextItem.snapshot)
         if (!queuedRemoteSnapshotRef.current) {
           const wasRemoteSyncVisible = isRemoteSyncVisibleRef.current
-          clearPendingRemoteWorkspaceSnapshotMarker()
           updateRemoteSyncPending(false)
           updateRemoteSyncVisible(false)
           setRemoteSyncProgress(null)
@@ -2332,53 +2230,25 @@ function AuthenticatedApp() {
       loadWorkspaceSnapshot().catch(() => null),
     ])
 
-    const { snapshot: mergedSnapshot, usedPendingLocalSnapshot, pendingTargetClassroomIds } = resolveRemoteWorkspaceSnapshot(
-      remoteSnapshot,
-      localWorkspaceSnapshot,
-      readPendingRemoteWorkspaceSnapshotMarker(),
-      remoteSessionUserId,
-      // A3: loadFirebaseWorkspaceSnapshot 直後のレジストリ=サーバー現在版数。stale 書き戻しの版数ゲートに使う。
-      getAllClassroomSnapshotVersions(),
-    )
+    // 「保存し忘れ救済」撤去(2026-07-07): 常にサーバー最新を採用する(黙った書き戻しはしない)。
+    const { snapshot: mergedSnapshot } = resolveRemoteWorkspaceSnapshot(remoteSnapshot, localWorkspaceSnapshot)
     const nextActingClassroomId = preferredActingClassroomId ?? actingClassroomId
     if (nextActingClassroomId && mergedSnapshot.classrooms.some((classroom) => classroom.id === nextActingClassroomId)) {
       mergedSnapshot.actingClassroomId = nextActingClassroomId
     }
 
-    applyWorkspaceSnapshot(mergedSnapshot, usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : successMessage)
+    applyWorkspaceSnapshot(mergedSnapshot, successMessage)
     // A1: ワークスペースを読み直したら最新の版数をレジストリに取り込んだので、版数衝突の停止を解除する。
     remoteStaleConflictRef.current = false
     setHasRemoteStaleConflict(false)
-    if (usedPendingLocalSnapshot) {
-      // ログイン直後の自動復元はユーザー操作ではないため、保存ボタンの「保存中」表示や
-      // 進捗バーは出さず、メッセージのみで静かに同期する。
-      queueFirebaseWorkspaceSync(mergedSnapshot, false, false, pendingTargetClassroomIds, {
-        onSuccess: () => {
-          clearPendingRemoteWorkspaceSnapshotMarker()
-          setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
-        },
-        onFailure: (error) => {
-          const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
-          setPersistenceMessage(`前回終了時の未同期データを復元しました。${message}`)
-        },
-      })
-    }
     setRemoteAuthMessage('')
-  }, [actingClassroomId, applyWorkspaceSnapshot, queueFirebaseWorkspaceSync, remoteSessionUserId])
+  }, [actingClassroomId, applyWorkspaceSnapshot, remoteSessionUserId])
 
   const queueCurrentWorkspaceSnapshotPersistence = useCallback(() => {
     if (!isSnapshotPersistenceRuntimeEnabled()) return null
     clearDelayedAutoRemoteSyncTimer()
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
     const targetClassroomIds = getCurrentClassroomSyncTargetIds(snapshot)
-
-    if (isRemoteBackendEnabled && remoteSessionUserId) {
-      try {
-        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, targetClassroomIds)
-      } catch {
-        // The async local save below still preserves the snapshot.
-      }
-    }
 
     void saveWorkspaceSnapshot(snapshot)
       .then(() => {
@@ -3121,13 +2991,6 @@ function AuthenticatedApp() {
     }
 
     const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-    if (isRemoteBackendEnabled && remoteSessionUserId) {
-      try {
-        markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
-      } catch {
-        // The async save path below still attempts IndexedDB/localStorage persistence.
-      }
-    }
 
     // 保存開始時のデータ署名を記録。保存完了時に現在のデータが当時と同じなら（＝保存中に
     // ユーザーが編集していなければ）clean 署名を更新して「最新データ」表示へ切り替える。
@@ -4051,31 +3914,11 @@ function AuthenticatedApp() {
           if (isDeveloperCloudBackupDirectoryHandle(storedDeveloperCloudBackupHandle)) {
             setDeveloperCloudBackupHandle(storedDeveloperCloudBackupHandle)
           }
-          const { snapshot: resolvedSnapshot, usedPendingLocalSnapshot, pendingTargetClassroomIds } = resolveRemoteWorkspaceSnapshot(
-            remoteSnapshot,
-            localWorkspaceSnapshot,
-            readPendingRemoteWorkspaceSnapshotMarker(),
-            remoteSessionUserId,
-            // A3: 読込直後のレジストリ=サーバー現在版数。stale 書き戻しの版数ゲートに使う。
-            getAllClassroomSnapshotVersions(),
-          )
-          applyWorkspaceSnapshot(
-            resolvedSnapshot,
-            usedPendingLocalSnapshot ? '前回終了時の未同期データを復元しました。Firebase へ同期しています…' : 'Firebase から教室ワークスペースを読み込みました。',
-          )
-          if (usedPendingLocalSnapshot) {
-            // ログイン直後の自動復元は静かに同期する（保存ボタンの回転や進捗バーを出さない）。
-            queueFirebaseWorkspaceSync(resolvedSnapshot, false, false, pendingTargetClassroomIds, {
-              onSuccess: () => {
-                clearPendingRemoteWorkspaceSnapshotMarker()
-                setPersistenceMessage('前回終了時の未同期データを復元し、Firebase へ同期しました。')
-              },
-              onFailure: (error) => {
-                const message = error instanceof Error ? error.message : 'Firebase 同期に失敗しました。'
-                setPersistenceMessage(`前回終了時の未同期データを復元しました。${message}`)
-              },
-            })
-          }
+          // 「保存し忘れ救済」撤去(2026-07-07): 常にサーバー最新を採用する(黙った書き戻しはしない)。
+          // 旧機能が localStorage に残したマーカーはもう参照しないため、ここで掃除だけする。
+          clearPendingRemoteWorkspaceSnapshotMarker()
+          const { snapshot: resolvedSnapshot } = resolveRemoteWorkspaceSnapshot(remoteSnapshot, localWorkspaceSnapshot)
+          applyWorkspaceSnapshot(resolvedSnapshot, 'Firebase から教室ワークスペースを読み込みました。')
           setRemoteAuthMessage('')
           setHasHydratedSnapshot(true)
         })
@@ -4239,14 +4082,9 @@ function AuthenticatedApp() {
       }
 
       if (!hasUnsavedLatestChanges) return
+      // 「保存し忘れ救済」撤去(2026-07-07): マーカーは書かない。ローカル保存(下記)は端末内の
+      // 控えとして残すが、次回起動時にサーバーを上書きする材料にはしない(常にサーバー最新を正とする)。
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      if (isRemoteBackendEnabled && remoteSessionUserId) {
-        try {
-          markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
-        } catch {
-          // The synchronous localStorage fallback below still preserves the snapshot.
-        }
-      }
       try {
         writeWorkspaceToLocalStorageSync(snapshot)
       } catch {
@@ -4268,7 +4106,6 @@ function AuthenticatedApp() {
       })
       if (!shouldSync || !remoteSessionUserId) return
       const snapshot = buildWorkspaceSnapshot(new Date().toISOString())
-      markPendingRemoteWorkspaceSnapshotSync(snapshot, remoteSessionUserId, getCurrentClassroomSyncTargetIds(snapshot))
       void saveWorkspaceSnapshot(snapshot).catch(() => {})
       queueFirebaseWorkspaceSync(snapshot, false, false, getCurrentClassroomSyncTargetIds(snapshot))
     }

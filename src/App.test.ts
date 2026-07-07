@@ -344,7 +344,10 @@ function createDeveloperWorkspaceSnapshot(savedAt: string, actingClassroomId: st
 }
 
 describe('resolveRemoteWorkspaceSnapshot', () => {
-  it('restores a newer marked local close snapshot over an older Firebase snapshot', () => {
+  // 「保存し忘れ救済」撤去(2026-07-07 オーナー決定・回帰防止):
+  // 旧実装ならマーカー一致+savedAtローカル勝ちで書き戻しが発動した入力でも、常にサーバー最新を採用する。
+  // 暗黙の書き戻しは 2026-07-06 本番障害(古い盤面が割振済み講習を上書き)の主因。復活させないこと。
+  it('マーカーが揃い savedAt がローカル勝ちでも、ローカルを採用しない(救済撤去・修正前は落ちる)', () => {
     const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
     const localSnapshot = createWorkspaceSnapshot('2026-05-26T10:01:00.000Z', ['2026-08-13'])
 
@@ -355,8 +358,9 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
       'manager-1',
     )
 
-    expect(result.usedPendingLocalSnapshot).toBe(true)
-    expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+    expect(result.usedPendingLocalSnapshot).toBe(false)
+    expect(result.pendingTargetClassroomIds).toBeUndefined()
+    expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
   })
 
   it('keeps Firebase as source of truth when the local snapshot is not marked pending', () => {
@@ -369,7 +373,7 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
     expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
   })
 
-  it('reuses a newer pending local classroom snapshot for the assigned manager classroom', () => {
+  it('manager 専用パス相当の入力(別ユーザーのマーカー+担当教室)でもローカルを採用しない(救済撤去)', () => {
     const remoteSnapshot: WorkspaceSnapshot = {
       schemaVersion: 1,
       savedAt: '2026-05-26T10:00:00.000Z',
@@ -417,10 +421,9 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
       'manager-2',
     )
 
-    expect(result.usedPendingLocalSnapshot).toBe(true)
-    expect(result.pendingTargetClassroomIds).toEqual(['development'])
-    expect(result.snapshot.currentUserId).toBe('manager-2')
-    expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+    expect(result.usedPendingLocalSnapshot).toBe(false)
+    expect(result.pendingTargetClassroomIds).toBeUndefined()
+    expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
   })
 
   it('preserves a recent developer classroom selection across reload', () => {
@@ -434,32 +437,12 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
     expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.screen).toBe('backup-restore')
   })
 
-  // A3(2026-07-06): 多端末 stale 書き戻し防止。savedAt(壁時計)ではローカルが新しく見えても、
-  // 別端末が後からその教室を保存済み(サーバー版数がマーカー基準版数より進行)なら上書きしない。
-  describe('教室単位の版数ゲート (別端末の後保存を stale ローカルで上書きしない)', () => {
-    it('サーバー版数が基準版数より進んでいれば、savedAt がローカル勝ちでもリモートを優先する(修正前は落ちる)', () => {
-      const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
-      const localSnapshot = createWorkspaceSnapshot('2026-05-26T10:01:00.000Z', ['2026-08-13'])
-
-      const result = resolveRemoteWorkspaceSnapshot(
-        remoteSnapshot,
-        localSnapshot,
-        {
-          savedAt: localSnapshot.savedAt,
-          authenticatedUserId: 'manager-1',
-          targetClassroomIds: ['classroom-1'],
-          baseClassroomVersions: { 'classroom-1': 3 },
-        },
-        'manager-1',
-        // 別端末が後から classroom-1 を保存 → サーバー版数=5 > 基準版数=3。
-        { 'classroom-1': 5 },
-      )
-
-      expect(result.usedPendingLocalSnapshot).toBe(false)
-      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
-    })
-
-    it('サーバー版数が基準版数と一致していれば、従来どおりローカルを書き戻す', () => {
+  // 「保存し忘れ救済」撤去(2026-07-07 オーナー決定)の固定。
+  // 旧実装(〜v1.5.40x)では以下の入力で「ローカル書き戻し」が発動していた(A3 版数ゲートの許可ケース)。
+  // 撤去後はいかなるマーカー・版数条件でもローカルを採用せず、常にサーバー最新を正とする。
+  // これらのテストは旧実装では落ちる(=黙った書き戻しが復活したら検知する)。
+  describe('未保存ローカルの書き戻しはいかなる条件でも発動しない(救済撤去 2026-07-07)', () => {
+    it('版数一致(旧実装なら書き戻し許可)でもローカルを採用しない', () => {
       const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
       const localSnapshot = createWorkspaceSnapshot('2026-05-26T10:01:00.000Z', ['2026-08-13'])
 
@@ -476,12 +459,12 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
         { 'classroom-1': 5 },
       )
 
-      expect(result.usedPendingLocalSnapshot).toBe(true)
-      expect(result.pendingTargetClassroomIds).toEqual(['classroom-1'])
-      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+      expect(result.usedPendingLocalSnapshot).toBe(false)
+      expect(result.pendingTargetClassroomIds).toBeUndefined()
+      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
     })
 
-    it('版数情報の無い旧マーカーは従来の savedAt 挙動を維持する(後方互換)', () => {
+    it('版数情報の無い旧マーカー(旧実装なら savedAt 勝ちで書き戻し)でもローカルを採用しない', () => {
       const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
       const localSnapshot = createWorkspaceSnapshot('2026-05-26T10:01:00.000Z', ['2026-08-13'])
 
@@ -493,14 +476,11 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
         { 'classroom-1': 5 },
       )
 
-      expect(result.usedPendingLocalSnapshot).toBe(true)
-      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
+      expect(result.usedPendingLocalSnapshot).toBe(false)
+      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
     })
 
-    // 部分マージ分岐: 対象教室の一部だけが stale のとき、safe な教室のみローカルを書き戻し、
-    // stale な教室はリモート最新を維持する。pendingTargetClassroomIds も safe のみに絞られ、
-    // Firebase への書き戻し(queueFirebaseWorkspaceSync)に stale 教室が渡らないことを固定する。
-    it('複数教室のうち stale な教室だけリモートを維持し、safe な教室のみローカルを書き戻す(部分マージ)', () => {
+    it('複数教室の部分マージ条件(旧実装なら safe 教室だけ書き戻し)でも全教室リモートを維持する', () => {
       const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'classroom-1')
       const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'classroom-1')
       const localClassroom1 = localSnapshot.classrooms.find((classroom) => classroom.id === 'classroom-1')
@@ -519,97 +499,15 @@ describe('resolveRemoteWorkspaceSnapshot', () => {
           baseClassroomVersions: { 'classroom-1': 3, development: 5 },
         },
         'developer-1',
-        // classroom-1 は別端末が後保存(5>3)= stale。development は一致(5=5)= safe。
         { 'classroom-1': 5, development: 5 },
       )
 
-      expect(result.usedPendingLocalSnapshot).toBe(true)
-      expect(result.pendingTargetClassroomIds).toEqual(['development'])
+      expect(result.usedPendingLocalSnapshot).toBe(false)
+      expect(result.pendingTargetClassroomIds).toBeUndefined()
       const mergedClassroom1 = result.snapshot.classrooms.find((classroom) => classroom.id === 'classroom-1')
       const mergedDevelopment = result.snapshot.classrooms.find((classroom) => classroom.id === 'development')
-      // stale な classroom-1 はリモート(空)を維持し、safe な development はローカルを採用する。
       expect(mergedClassroom1?.data.classroomSettings.holidayDates).toEqual([])
-      expect(mergedDevelopment?.data.classroomSettings.holidayDates).toEqual(['2026-08-14'])
-    })
-
-    // manager 専用パス(別ユーザーのマーカー→担当教室のみ書き戻し)にも版数ゲートが効くことを固定する。
-    // App.test の他ケースは marker.authenticatedUserId===authenticatedUserId のため main パスに流れ、
-    // resolvePendingLocalClassroomSnapshotForAuthenticatedUser 内のゲートを通らない。
-    it('manager 専用パス: 別端末が担当教室を後保存済みならローカルで上書きしない', () => {
-      const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'development')
-      remoteSnapshot.currentUserId = 'manager-2'
-      const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'development')
-      const localDevelopment = localSnapshot.classrooms.find((classroom) => classroom.id === 'development')
-      if (!localDevelopment) throw new Error('test fixture classroom missing')
-      localDevelopment.data.classroomSettings.holidayDates = ['2026-08-13']
-
-      const result = resolveRemoteWorkspaceSnapshot(
-        remoteSnapshot,
-        localSnapshot,
-        {
-          savedAt: localSnapshot.savedAt,
-          authenticatedUserId: 'developer-1',
-          targetClassroomIds: ['development'],
-          baseClassroomVersions: { development: 3 },
-        },
-        'manager-2',
-        // 別端末が後から development を保存 → サーバー版数=5 > 基準版数=3。
-        { development: 5 },
-      )
-
-      expect(result.usedPendingLocalSnapshot).toBe(false)
-      expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.classroomSettings.holidayDates).toEqual([])
-    })
-
-    it('manager 専用パス: 版数が一致していれば従来どおり担当教室のローカルを書き戻す', () => {
-      const remoteSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:00:00.000Z', 'development')
-      remoteSnapshot.currentUserId = 'manager-2'
-      const localSnapshot = createDeveloperWorkspaceSnapshot('2026-05-26T10:01:00.000Z', 'development')
-      const localDevelopment = localSnapshot.classrooms.find((classroom) => classroom.id === 'development')
-      if (!localDevelopment) throw new Error('test fixture classroom missing')
-      localDevelopment.data.classroomSettings.holidayDates = ['2026-08-13']
-
-      const result = resolveRemoteWorkspaceSnapshot(
-        remoteSnapshot,
-        localSnapshot,
-        {
-          savedAt: localSnapshot.savedAt,
-          authenticatedUserId: 'developer-1',
-          targetClassroomIds: ['development'],
-          baseClassroomVersions: { development: 5 },
-        },
-        'manager-2',
-        { development: 5 },
-      )
-
-      expect(result.usedPendingLocalSnapshot).toBe(true)
-      expect(result.pendingTargetClassroomIds).toEqual(['development'])
-      expect(result.snapshot.classrooms.find((classroom) => classroom.id === 'development')?.data.classroomSettings.holidayDates).toEqual(['2026-08-13'])
-    })
-
-    it('同一端末・自分の保存でも成立: 保存でサーバー版数が進んだ(v11>基準v10)なら、残存した旧マーカーの書き戻しをブロックする', () => {
-      // 単一PCシーケンス: 編集(基準版数v10でマーカー記録)→保存成功(サーバーv11)。もしマーカーが
-      // 何らかの理由で消えず残っていても、版数ゲートで stale と判定してリモート(=保存済み最新)を優先する。
-      // これにより「割振り前のローカルキャッシュが再開時に書き戻されて割振りが消える」経路を、
-      // 別端末に限らず同一端末でも塞ぐことを固定する。
-      const remoteSnapshot = createWorkspaceSnapshot('2026-05-26T10:00:00.000Z', [])
-      const localSnapshot = createWorkspaceSnapshot('2026-05-26T10:05:00.000Z', ['2026-08-13'])
-
-      const result = resolveRemoteWorkspaceSnapshot(
-        remoteSnapshot,
-        localSnapshot,
-        {
-          savedAt: localSnapshot.savedAt,
-          authenticatedUserId: 'manager-1',
-          targetClassroomIds: ['classroom-1'],
-          baseClassroomVersions: { 'classroom-1': 10 },
-        },
-        'manager-1',
-        { 'classroom-1': 11 },
-      )
-
-      expect(result.usedPendingLocalSnapshot).toBe(false)
-      expect(result.snapshot.classrooms[0].data.classroomSettings.holidayDates).toEqual([])
+      expect(mergedDevelopment?.data.classroomSettings.holidayDates).toEqual([])
     })
   })
 })
