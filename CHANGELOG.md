@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## 1.5.403
+
+- docs: 7/6 講習巻き戻り障害の実データ解析結果を追加(docs/analysis-qr-submitted-at-2026-07-06.md・A4は当該障害の経路ではなく初回評価誤除去/A3が有力・handoffタスク1完了)
+
 ## 1.5.402
 
 - docs: 引き継ぎ文書 docs/handoff-qr-submitted-at.md を追加。①本番 lectureSubmissions の submittedAt と問題報告時刻の突き合わせ解析(A4真因説の実データ裏付け・読み取り専用・アクセス制約と欠損注意つき) ②講習集計結果画面へのQR提出時刻表示(実装ポインタ・submittedAt を studentInputs へ搬送する3経路・着手前に spec-curator で確定すべき仕様点)を別セッションで進めるための背景・手順・制約をまとめた
