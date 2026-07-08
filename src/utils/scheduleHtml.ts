@@ -2227,41 +2227,51 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
       .desk-picker-title { font-size: 16px; font-weight: 800; color: #16385c; margin: 0 0 4px; }
       .desk-picker-note { font-size: 12px; color: #5b6470; margin: 0 0 12px; }
-      .desk-picker-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-        gap: 10px;
+      /* 盤面の1コマを切り取った見た目(App.css の .slot-adjust-grid / sa-* に合わせる)。
+         1行=1机: [机番号][講師][席1][席2]。ダーク1pxの罫線・席番号/講師/生徒セルの寸法を盤面と揃える。 */
+      .desk-picker-board {
+        border-collapse: collapse;
+        margin: 0 auto;
+        background: #fff;
+        table-layout: fixed;
       }
-      .desk-picker-desk {
-        border: 1.5px solid #c3ccd8;
-        border-radius: 8px;
-        padding: 6px;
-        display: grid;
-        gap: 6px;
-      }
-      .desk-picker-desk-teacher { font-size: 12px; font-weight: 700; text-align: center; color: #16385c; }
-      .desk-picker-seat {
-        border: 1px solid #d3dae3;
-        border-radius: 6px;
-        min-height: 34px;
-        padding: 4px 6px;
-        font-size: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+      .desk-picker-board td {
+        border: 1px solid #111111;
+        padding: 2px 4px;
         text-align: center;
-        background: #f6f8fb;
+        height: 38px;
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
-      button.desk-picker-seat {
-        cursor: pointer;
-        color: #1a56c4;
+      .desk-picker-board .dp-seatno {
+        width: 22px;
+        background: #f7f7f7;
+        color: #333333;
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: -0.06em;
+      }
+      .desk-picker-board .dp-teacher {
+        width: 68px;
+        font-size: 10px;
         font-weight: 700;
-        background: #eaf1ff;
-        border-color: #2f6fed;
+        color: #294967;
+        white-space: nowrap;
       }
-      button.desk-picker-seat:hover { background: #d6e5ff; }
-      .desk-picker-seat.is-occupied { color: #33404f; background: #eef1f5; }
-      .desk-picker-seat.is-blocked { color: #9aa0a6; font-style: italic; }
+      .desk-picker-board .dp-student {
+        width: 96px;
+        background: #fff;
+        color: #1f2937;
+        white-space: nowrap;
+      }
+      .desk-picker-board .dp-student.dp-selectable { cursor: pointer; color: #1a56c4; font-weight: 700; }
+      .desk-picker-board .dp-selectable .dp-empty { color: #9aa7b6; font-weight: 700; }
+      .desk-picker-board .dp-selectable:hover { background: #dbe9ff; }
+      .desk-picker-board .dp-selectable:hover .dp-empty { color: #1a56c4; }
+      .desk-picker-board .dp-student.dp-occupied { background: #f3f5f8; color: #33404f; }
+      .desk-picker-board .dp-student.dp-blocked { background: #f6f7f9; color: #9aa0a6; font-style: italic; }
       .desk-picker-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
       .desk-picker-cancel {
         border: 1px solid #c3ccd8;
@@ -3419,28 +3429,35 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         scheduleDeskPickerOverlay = null;
       }
 
-      function renderDeskPickerSeatHtml(deskIndex, seat) {
+      // 盤面の1コマと同じ「1机=1行 [机番号][講師][席1][席2]」の席セル(td)を返す。空席のみ選択可(§C-2)。
+      function renderDeskPickerSeatCellHtml(deskIndex, seat) {
+        if (!seat) return '<td class="dp-student dp-blocked"></td>';
         if (seat.selectable) {
-          return '<button type="button" class="desk-picker-seat" data-role="desk-picker-seat" data-desk-index="' + deskIndex + '" data-student-index="' + seat.studentIndex + '">空き<br>ここに置く</button>';
-        }
-        if (seat.blockedByMemo) {
-          return '<div class="desk-picker-seat is-blocked">メモあり</div>';
+          return '<td class="dp-student dp-selectable" data-role="desk-picker-seat" data-desk-index="' + deskIndex + '" data-student-index="' + seat.studentIndex + '"><span class="dp-empty">空き</span></td>';
         }
         if (seat.occupied) {
-          return '<div class="desk-picker-seat is-occupied">' + escapeHtml(seat.label || '使用中') + '</div>';
+          return '<td class="dp-student dp-occupied">' + escapeHtml(seat.label || '使用中') + '</td>';
         }
-        return '<div class="desk-picker-seat is-blocked">' + escapeHtml(seat.statusLabel || '選択不可') + '</div>';
+        if (seat.blockedByMemo) {
+          return '<td class="dp-student dp-blocked">メモ</td>';
+        }
+        return '<td class="dp-student dp-blocked">' + escapeHtml(seat.statusLabel || '') + '</td>';
       }
 
-      // 移動先コマの全机(コマ表と同じ配置)を出す机選択モーダル。物理的な空き席だけを選べる(§C-2)。
+      // 移動先コマの全机を、盤面の一コマを切り取ったのと同じ表(1机=1行)で出す机選択モーダル。物理的な空き席だけ選べる。
       function openScheduleDeskPicker(source, targetDateKey, targetSlotNumber) {
         var payloadCell = findScheduleCellForMove(targetDateKey, targetSlotNumber);
         if (!payloadCell || !Array.isArray(payloadCell.pickerDesks) || payloadCell.pickerDesks.length === 0) return;
         closeScheduleDeskPicker();
         var desks = payloadCell.pickerDesks;
-        var desksHtml = desks.map(function(desk) {
-          var seatsHtml = (desk.seats || []).map(function(seat) { return renderDeskPickerSeatHtml(desk.deskIndex, seat); }).join('');
-          return '<div class="desk-picker-desk"><div class="desk-picker-desk-teacher">' + escapeHtml(desk.teacher || '講師未設定') + '</div>' + seatsHtml + '</div>';
+        var rowsHtml = desks.map(function(desk) {
+          var seats = desk.seats || [];
+          return '<tr>'
+            + '<td class="dp-seatno">' + (Number(desk.deskIndex) + 1) + '</td>'
+            + '<td class="dp-teacher">' + escapeHtml(desk.teacher || '') + '</td>'
+            + renderDeskPickerSeatCellHtml(desk.deskIndex, seats[0])
+            + renderDeskPickerSeatCellHtml(desk.deskIndex, seats[1])
+            + '</tr>';
         }).join('');
         var dateLabel = escapeHtml((payloadCell.dateLabel || targetDateKey) + '(' + (payloadCell.dayLabel || '') + ') ' + (payloadCell.slotLabel || (targetSlotNumber + '限')));
         var noteText = source.lessonType === 'regular'
@@ -3449,7 +3466,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var overlay = document.createElement('div');
         overlay.className = 'desk-picker-overlay';
         overlay.setAttribute('data-role', 'desk-picker-overlay');
-        overlay.innerHTML = '<div class="desk-picker-modal" role="dialog" aria-modal="true"><div class="desk-picker-title">' + escapeHtml(source.studentName || '') + ' の移動先の机を選ぶ</div><div class="desk-picker-note">' + dateLabel + ' / ' + escapeHtml(noteText) + '</div><div class="desk-picker-grid">' + desksHtml + '</div><div class="desk-picker-actions"><button type="button" class="desk-picker-cancel" data-role="desk-picker-cancel">キャンセル</button></div></div>';
+        overlay.innerHTML = '<div class="desk-picker-modal" role="dialog" aria-modal="true"><div class="desk-picker-title">' + escapeHtml(source.studentName || '') + ' の移動先の机を選ぶ</div><div class="desk-picker-note">' + dateLabel + ' / ' + escapeHtml(noteText) + '</div><table class="desk-picker-board"><tbody>' + rowsHtml + '</tbody></table><div class="desk-picker-actions"><button type="button" class="desk-picker-cancel" data-role="desk-picker-cancel">キャンセル</button></div></div>';
         overlay.addEventListener('click', function(event) {
           var clickTarget = event.target;
           if (!(clickTarget instanceof HTMLElement)) return;
