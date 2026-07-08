@@ -308,6 +308,46 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の
+  // 下端で見切れる不具合を、印刷時だけ count-table の行高を詰めることで解消した。@media print 内で
+  // .count-table の行高が既定(22px)より小さいことを固定する(将来の変更で 22px 等へ戻すと落ちる)。
+  it('印刷時は講習回数/通常回数表の行高を詰める(科目が多い生徒のA4見切れ防止)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // @media print ブロック内の count-table 行高だけを見る(画面表示の 22px と区別)。
+    const printBlock = html.slice(html.indexOf('@media print'))
+    const heightMatch = printBlock.match(/\.count-table th,\s*\.count-table td\s*\{[^}]*height:\s*(\d+)px/)
+    expect(heightMatch).not.toBeNull()
+    expect(Number(heightMatch![1])).toBeLessThanOrEqual(18)
+
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(2026-07-04 監査領域9 A1 オーナー確定): plannedCells は埋め込みJSから一度も読まれないデッド payload
   // だったため撤去した。planned 通常回数の唯一の根拠は expectedRegularOccurrences(テンプレ由来)。
   // plannedCells を payload に復活させる変更(=毎同期の無駄な生成/シリアライズと「二重の planned 根拠」の再発)を検知する。

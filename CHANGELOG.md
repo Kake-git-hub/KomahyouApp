@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.411 (2026-07-08)
+
+- fix: 生徒日程表の印刷で、講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で見切れる不具合を修正。@media print 内で通常回数/講習回数表(.count-table)の行高を 22px→16px・縦paddingを詰めた(画面表示は22pxのまま)。回帰テスト同コミット追加(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
+
 ## v1.5.410 (2026-07-08)
 
 - docs: 対話用日程表のReact化を土台に据える方針転換を確定(オーナー確定 2026-07-08。stagingでは生成HTMLタブを対話用途はReactビューに置換・印刷/PDFのHTML生成は残す)。同一Reactツリー化でリアルタイム同期は自動反映・日程表コマ組みはexecuteMoveStudent直呼びに単純化。ドック⇄ポップアウト(React portal→子ウィンドウ)トグルで両表示をstagingでユーザーが比較。新正本 docs/spec-schedule-interactive-view.md 追加、既存2仕様に§0(方式転換)追記、手順書をReact土台版(Phase0→1→2)に再構成、spec-index更新

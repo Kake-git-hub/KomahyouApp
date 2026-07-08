@@ -2192,6 +2192,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           aspect-ratio: 297 / 420;
           page: sheetA3;
         }
+        /* 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で
+           見切れるのを防ぐため、通常回数・講習回数表の行高を印刷時だけ少し詰める
+           (欄の行高さ縮小・オーナー要望 2026-07-08)。画面表示は 22px のまま。 */
+        .count-table th,
+        .count-table td {
+          height: 16px;
+          padding: 1px 4px;
+          line-height: 1.05;
+        }
         .teacher-lesson-person {
           gap: 1px;
           padding: 1px 0;
