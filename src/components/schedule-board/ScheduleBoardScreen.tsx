@@ -33,7 +33,7 @@ import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, buildStudentPayload, buildTeacherPayload, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { ScheduleView, type ScheduleViewRange } from '../schedule-view/ScheduleView'
 import { ScheduleViewPanel, type ScheduleViewDisplayMode } from '../schedule-view/ScheduleViewPanel'
-import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetDeskIndex, validateScheduleViewMoveTarget, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
+import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
@@ -7914,26 +7914,30 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     // 休校日判定は開校ルール適用後のセルで行う(週を拡張した直後の cell は設定反映前のことがある)。
     const availabilityCell = findScheduleViewTargetCell(applyClassroomAvailability(ensured.weeks, classroomSettings), seat.targetDateKey, seat.targetSlotNumber)?.cell ?? target.cell
-    // 別タブの机選択が見せた机(日程表の overlay 済みセル基準)を、盤面の生セルの実机 index に解決する。
-    // positional な deskIndex は日程表と盤面で食い違うことがあるため、deskId→講師名で解決してから検証する。
-    const resolvedDeskIndex = resolveScheduleViewTargetDeskIndex(availabilityCell, seat)
-    const validation = validateScheduleViewMoveTarget(availabilityCell, resolvedDeskIndex, seat.studentIndex)
-    if (!validation.ok) {
-      return { ok: false, message: validation.reason }
+    if (!availabilityCell.isOpenDay) {
+      return { ok: false, message: '移動先は休校日のため移動できません。' }
+    }
+    // 別タブの机選択が見せた席を、盤面の生セルの実際の机・席に解決する。日程表(overlay 済み)と盤面の生 weeks は
+    // 机だけでなく机内の席の並びも食い違うことがあるため、deskId→講師名で机を、occupantEntryId(入れ替え)/実空き席で
+    // 席を解決する(positional 依存で「空き席なのに埋まっている扱い」になる不具合の根治)。空きも入れ替え対象も無ければ不成立。
+    const resolvedSeat = resolveScheduleViewTargetSeat(availabilityCell, seat)
+    if (!resolvedSeat) {
+      return { ok: false, message: '移動先に空き席が見つかりませんでした。表示が最新か確認してください(「最新表示」で更新できます)。' }
     }
     // source 特定の頑健性(spec §D-2-2): entryId＋生徒id＋日付＋時限で特定。見つからなければ不成立。
     const sourceHit = findScheduleViewMoveSource(ensured.weeks, source)
     if (!sourceHit) {
       return { ok: false, message: '移動元の授業が盤面に見つかりませんでした。表示を確認して再度お試しください。' }
     }
+    // 在席の席を選んだ場合は computeStudentMove が盤面同様に入れ替え(相手を移動元へ振替)する。
     const result = computeStudentMove({
       weeks: ensured.weeks,
       weekIndex: target.weekIndex,
       cells: ensured.weeks[target.weekIndex],
       movingStudentId: source.entryId,
       cellId: target.cell.id,
-      deskIndex: resolvedDeskIndex,
-      studentIndex: seat.studentIndex,
+      deskIndex: resolvedSeat.deskIndex,
+      studentIndex: resolvedSeat.studentIndex,
       suppressedRegularLessonOccurrences,
       managedStudentByAnyName,
       resolveBoardStudentDisplayName,

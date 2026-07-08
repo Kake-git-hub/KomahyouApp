@@ -18,6 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Phase C 席の解決): 別タブのコマ組みで「空き席なのに『すでに生徒がいます』で移動不可」を根治。日程表(overlay 済みセル)と盤面の生 weeks は机内の席(左右=studentSlots)の並びも食い違うことがあり、positional な studentIndex を鵜呑みにすると占有席を指していた。resolveScheduleViewTargetSeat で机は deskId→講師名、席は「入れ替え対象の在席生徒(occupantEntryId)/その机の実際の空き席」で解決してから配置するようにした(旧 resolveScheduleViewTargetDeskIndex を置換)。空きも入れ替え対象も無い場合は理由を出す。回帰テスト4件(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
+- feat(Phase C 入れ替え): 机選択モーダルで在席の生徒を選ぶと**盤面の入れ替えと同じ**挙動で交換できるようにした(オーナー要望)。在席セルをクリック可(橙ホバー・「入替」表示)にし、相手の entryId を送って computeStudentMove の入れ替え(相手を移動元へ振替で入れる)に乗せる。メモ席のみ選択不可。回帰テスト: 入れ替えの通し1件・席セルの入替属性(scheduleViewMove.ts(+test) / scheduleHtml.ts(+test))
+
 - fix(Phase C 移動失敗の原因): 別タブのコマ組みで「本来移動できるはずが移動不可になる」ケースを修正。日程表(overlay 済みセル)と盤面の生 weeks は机の並び/本数が食い違うことがあり、モーダルの positional deskIndex が盤面の別の机(占有/存在せず)を指して弾かれていた。机選択モーダルに机同一性(deskId=盤面 desk.id・講師名)を持たせ、移動確定時に resolveScheduleViewTargetDeskIndex で deskId→講師名→positional の順に実机へ解決してから検証・移動する。回帰テスト3件(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
 - feat(Phase C 移動の結果表示): 盤面→別タブへ移動結果を ack 送信。成功=移動先コマを数秒(約4s)黄色ハイライト(自動同期の再描画をまたいで持続)。失敗=理由を最前面に大きく表示し「日程表に戻る」ボタンで閉じる(盤面は不変)。回帰テスト: 配線マーカー(scheduleHtml.ts(+test) / ScheduleBoardScreen.tsx)
 - style(Phase C 机選択モーダル 2): 説明テキスト(タイトル/注記)を削除し、机列の左に時限列(rowspan)・一番上に日付行を追加して「盤面の一コマをそのまま切り取った」表にした(オーナー要望)。回帰テスト: 席セルの机同一性属性・日付/時限セルの配線(scheduleHtml.ts(+test))

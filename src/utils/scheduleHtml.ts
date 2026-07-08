@@ -2281,6 +2281,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .desk-picker-board .dp-selectable:hover { background: #dbe9ff; }
       .desk-picker-board .dp-selectable:hover .dp-empty { color: #1a56c4; }
       .desk-picker-board .dp-student.dp-occupied { background: #f3f5f8; color: #33404f; }
+      /* 在席=クリックで入れ替え(盤面の入れ替えと同じ)。ホバーで橙・「入替」ヒントを出す。 */
+      .desk-picker-board .dp-student.dp-swap { cursor: pointer; }
+      .desk-picker-board .dp-swap:hover { background: #ffe6c2; }
+      .desk-picker-board .dp-swap-hint { display: block; font-size: 8px; font-weight: 700; color: #a15c00; letter-spacing: 0.06em; }
       .desk-picker-board .dp-student.dp-blocked { background: #f6f7f9; color: #9aa0a6; font-style: italic; }
       .desk-picker-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
       .desk-picker-cancel {
@@ -3486,24 +3490,24 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         scheduleDeskPickerOverlay = null;
       }
 
-      // 盤面の1コマと同じ「1机=1行 [机番号][講師][席1][席2]」の席セル(td)を返す。空席のみ選択可(§C-2)。
-      // 空席セルには机同一性(deskId/講師)も持たせ、移動確定時に positional index ではなく机同一性で解決させる。
+      // 盤面の1コマと同じ「1机=1行 [机番号][講師][席1][席2]」の席セル(td)を返す。
+      // 空席=クリックで配置 / 在席=クリックで入れ替え(盤面の入れ替えと同じ) / メモ=選択不可。
+      // 席セルには机同一性(deskId/講師)を持たせ、在席席には相手の entryId も持たせて、確定時に実机・実席へ解決させる。
       function renderDeskPickerSeatCellHtml(desk, seat) {
         if (!seat) return '<td class="dp-student dp-blocked"></td>';
-        if (seat.selectable) {
-          return '<td class="dp-student dp-selectable" data-role="desk-picker-seat"'
-            + ' data-desk-index="' + desk.deskIndex + '"'
-            + ' data-student-index="' + seat.studentIndex + '"'
-            + ' data-desk-id="' + escapeHtml(desk.deskId || '') + '"'
-            + ' data-desk-teacher="' + escapeHtml(desk.teacher || '') + '"><span class="dp-empty">空き</span></td>';
-        }
+        if (seat.blockedByMemo) return '<td class="dp-student dp-blocked">メモ</td>';
+        var idAttrs = ' data-role="desk-picker-seat"'
+          + ' data-desk-index="' + desk.deskIndex + '"'
+          + ' data-student-index="' + seat.studentIndex + '"'
+          + ' data-desk-id="' + escapeHtml(desk.deskId || '') + '"'
+          + ' data-desk-teacher="' + escapeHtml(desk.teacher || '') + '"';
         if (seat.occupied) {
-          return '<td class="dp-student dp-occupied">' + escapeHtml(seat.label || '使用中') + '</td>';
+          return '<td class="dp-student dp-occupied dp-swap"' + idAttrs
+            + ' data-occupant-entry-id="' + escapeHtml(seat.occupantEntryId || '') + '">'
+            + escapeHtml(seat.label || '使用中') + '<span class="dp-swap-hint">入替</span></td>';
         }
-        if (seat.blockedByMemo) {
-          return '<td class="dp-student dp-blocked">メモ</td>';
-        }
-        return '<td class="dp-student dp-blocked">' + escapeHtml(seat.statusLabel || '') + '</td>';
+        var emptyText = seat.statusLabel ? escapeHtml(seat.statusLabel) : '空き';
+        return '<td class="dp-student dp-selectable"' + idAttrs + '><span class="dp-empty">' + emptyText + '</span></td>';
       }
 
       // 移動先コマを「盤面の一コマをそのまま切り取った」表で出す机選択モーダル。上=日付行・左=時限列・
@@ -3546,6 +3550,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             studentIndex: Number(seatButton.getAttribute('data-student-index')),
             deskId: seatButton.getAttribute('data-desk-id') || undefined,
             deskTeacher: seatButton.getAttribute('data-desk-teacher') || '',
+            occupantEntryId: seatButton.getAttribute('data-occupant-entry-id') || undefined,
           });
           closeScheduleDeskPicker();
         });
