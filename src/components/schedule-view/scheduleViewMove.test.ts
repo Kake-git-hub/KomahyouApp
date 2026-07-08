@@ -1,0 +1,236 @@
+// 日程表コマ組み(spec-student-schedule-dnd)の回帰防止テスト。
+// source 特定の頑健性(§D-2-2)・target の物理的空き検証・机選択モーダルの表示データと、
+// computeStudentMove 経由の移動セマンティクス(通常=振替追加+抑制の両方/講習の科目・分数維持)を固定する。
+import { describe, expect, it } from 'vitest'
+import type { SlotCell, StudentEntry } from '../schedule-board/types'
+import {
+  buildDeskPickerDesks,
+  findScheduleViewMoveSource,
+  findScheduleViewTargetCell,
+  validateScheduleViewMoveTarget,
+} from './scheduleViewMove'
+import { computeStudentMove } from '../schedule-board/ScheduleBoardScreen'
+
+function makeStudentEntry(overrides: Partial<StudentEntry> = {}): StudentEntry {
+  return {
+    id: 'entry-1',
+    name: '山田太',
+    managedStudentId: 'stu-1',
+    grade: '中2',
+    subject: '英',
+    lessonType: 'regular',
+    teacherType: 'normal',
+    ...overrides,
+  }
+}
+
+let cellSeq = 0
+function makeCell(dateKey: string, slotNumber: number, desks: Array<Partial<SlotCell['desks'][number]>>, isOpenDay = true): SlotCell {
+  cellSeq += 1
+  const cellId = `cell-${dateKey}-${slotNumber}-${cellSeq}`
+  return {
+    id: cellId,
+    dateKey,
+    dayLabel: '月',
+    dateLabel: `${Number(dateKey.split('-')[1])}/${Number(dateKey.split('-')[2])}`,
+    slotLabel: `${slotNumber}限`,
+    slotNumber,
+    timeLabel: '16:20-17:50',
+    isOpenDay,
+    desks: desks.map((desk, index) => ({
+      id: `${cellId}_desk_${index + 1}`,
+      teacher: desk.teacher ?? '',
+      ...desk,
+    })),
+  }
+}
+
+function makeLessonDesk(teacher: string, students: [StudentEntry | null, StudentEntry | null]) {
+  return {
+    teacher,
+    lesson: { id: `lesson-${cellSeq}`, studentSlots: students },
+  }
+}
+
+describe('scheduleViewMove: source の特定(§D-2-2)', () => {
+  it('entryId で特定し、同一生徒が同コマに2科目持っていても取り違えない', () => {
+    const englishEntry = makeStudentEntry({ id: 'entry-eng', subject: '英' })
+    const mathEntry = makeStudentEntry({ id: 'entry-math', subject: '数' })
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-07-06', 1, [
+        makeLessonDesk('佐藤', [englishEntry, null]),
+        makeLessonDesk('田中', [mathEntry, null]),
+      ]),
+    ]]
+    const hit = findScheduleViewMoveSource(weeks, {
+      entryId: 'entry-math', studentId: 'stu-1', sourceDateKey: '2026-07-06', sourceSlotNumber: 1,
+      lessonType: 'regular', subject: '数', studentName: '山田太',
+    })
+    expect(hit).not.toBeNull()
+    expect(hit!.deskIndex).toBe(1)
+    expect(hit!.student.subject).toBe('数')
+  })
+
+  it('エントリが見つからない・生徒idが一致しない場合は null(移動不成立)', () => {
+    const weeks: SlotCell[][] = [[
+      makeCell('2026-07-06', 1, [makeLessonDesk('佐藤', [makeStudentEntry(), null])]),
+    ]]
+    expect(findScheduleViewMoveSource(weeks, {
+      entryId: 'missing', studentId: 'stu-1', sourceDateKey: '2026-07-06', sourceSlotNumber: 1,
+      lessonType: 'regular', subject: '英', studentName: '山田太',
+    })).toBeNull()
+    expect(findScheduleViewMoveSource(weeks, {
+      entryId: 'entry-1', studentId: 'other-student', sourceDateKey: '2026-07-06', sourceSlotNumber: 1,
+      lessonType: 'regular', subject: '英', studentName: '山田太',
+    })).toBeNull()
+  })
+})
+
+describe('scheduleViewMove: target の物理的空き検証(ルール・警告は評価しない)', () => {
+  it('休校日・机なし・満席・メモ席は不成立、空席は成立', () => {
+    const holidayCell = makeCell('2026-07-06', 1, [makeLessonDesk('佐藤', [null, null])], false)
+    expect(validateScheduleViewMoveTarget(holidayCell, 0, 0)).toMatchObject({ ok: false })
+
+    const openCell = makeCell('2026-07-07', 1, [
+      makeLessonDesk('佐藤', [makeStudentEntry({ id: 'occupied' }), null]),
+      { teacher: '田中', memoSlots: ['メモ', null] as [string | null, string | null] },
+    ])
+    expect(validateScheduleViewMoveTarget(openCell, 9, 0)).toMatchObject({ ok: false })
+    expect(validateScheduleViewMoveTarget(openCell, 0, 0)).toMatchObject({ ok: false, reason: '移動先の席にはすでに生徒がいます。' })
+    expect(validateScheduleViewMoveTarget(openCell, 1, 0)).toMatchObject({ ok: false, reason: expect.stringContaining('メモ') })
+    expect(validateScheduleViewMoveTarget(openCell, 0, 1)).toEqual({ ok: true })
+  })
+
+  it('findScheduleViewTargetCell は週をまたいで日付×時限のセルを見つける', () => {
+    const weeks: SlotCell[][] = [
+      [makeCell('2026-07-06', 1, [])],
+      [makeCell('2026-07-13', 2, [])],
+    ]
+    expect(findScheduleViewTargetCell(weeks, '2026-07-13', 2)?.weekIndex).toBe(1)
+    expect(findScheduleViewTargetCell(weeks, '2026-07-20', 1)).toBeNull()
+  })
+})
+
+describe('scheduleViewMove: 机選択モーダルの表示データ', () => {
+  it('着席生徒・メモ席・出欠記録つき空席を区別し、空席のみ selectable にする', () => {
+    const cell = makeCell('2026-07-07', 3, [
+      {
+        teacher: '佐藤',
+        lesson: { id: 'lesson-x', studentSlots: [makeStudentEntry({ name: '山田太', subject: '英' }), null] },
+        memoSlots: [null, null] as [string | null, string | null],
+      },
+      {
+        teacher: '田中',
+        memoSlots: [null, 'メモあり'] as [string | null, string | null],
+        statusSlots: [
+          {
+            id: 'st-1', studentId: 'stu-2', sourceManagedLesson: true, name: '鈴木', grade: '中1',
+            subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '田中',
+            dateKey: '2026-07-07', slotNumber: 3, recordedAt: 'r', status: 'absent', sourceLessonId: 'l1',
+          },
+          null,
+        ] as SlotCell['desks'][number]['statusSlots'],
+      },
+    ])
+    const desks = buildDeskPickerDesks(cell)
+    expect(desks[0].seats[0]).toMatchObject({ occupied: true, selectable: false, label: '山田太 英' })
+    expect(desks[0].seats[1]).toMatchObject({ occupied: false, selectable: true })
+    // 欠席記録がある物理的空席: 選択可だが記録を表示する(知らずに上書きしないため)
+    expect(desks[1].seats[0]).toMatchObject({ occupied: false, selectable: true, statusLabel: '休 鈴木' })
+    expect(desks[1].seats[1]).toMatchObject({ occupied: false, selectable: false, blockedByMemo: true })
+  })
+})
+
+describe('scheduleViewMove: computeStudentMove 経由の移動セマンティクス(方式非依存の確定事項)', () => {
+  const emptyManagedMap = new Map()
+  const displayName = (name: string) => name
+
+  it('通常授業の別日移動は「移動先に振替」と「移動元当該日の抑制」の両方が入り、他週の通常は不変', () => {
+    const movingEntry = makeStudentEntry({ id: 'entry-move', subject: '英', lessonType: 'regular', managedStudentId: 'stu-1' })
+    const otherWeekEntry = makeStudentEntry({ id: 'entry-other-week', subject: '英', lessonType: 'regular', managedStudentId: 'stu-1' })
+    const sourceCell = makeCell('2026-07-06', 1, [makeLessonDesk('佐藤', [movingEntry, null])])
+    const targetCell = makeCell('2026-07-08', 2, [makeLessonDesk('田中', [null, null])])
+    const otherWeekCell = makeCell('2026-07-13', 1, [makeLessonDesk('佐藤', [otherWeekEntry, null])])
+    const weeks: SlotCell[][] = [[sourceCell, targetCell], [otherWeekCell]]
+
+    const result = computeStudentMove({
+      weeks,
+      weekIndex: 0,
+      cells: weeks[0],
+      movingStudentId: 'entry-move',
+      cellId: targetCell.id,
+      deskIndex: 0,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: emptyManagedMap,
+      resolveBoardStudentDisplayName: displayName,
+    })
+
+    expect(result.status).toBe('moved')
+    if (result.status !== 'moved') return
+    const movedTarget = result.nextWeeks[0].find((cell) => cell.id === targetCell.id)!.desks[0].lesson!.studentSlots[0]!
+    // 追加: 移動先には「その回だけの振替」として置かれる
+    expect(movedTarget.lessonType).toBe('makeup')
+    expect(movedTarget.makeupSourceDate).toBe('2026-07-06')
+    expect(movedTarget.subject).toBe('英')
+    // 抑制: 移動元当該日の managed occurrence キーが追加される(7/20振替消失事故の教訓: 両方必須)
+    expect(result.nextSuppressedRegularLessonOccurrences).toContain('stu-1__英__2026-07-06__1')
+    // 他週の同一生徒の通常授業は不変
+    const untouched = result.nextWeeks[1].find((cell) => cell.id === otherWeekCell.id)!.desks[0].lesson!.studentSlots[0]!
+    expect(untouched.lessonType).toBe('regular')
+    expect(untouched.id).toBe('entry-other-week')
+  })
+
+  it('講習カードの移動は選択科目(subject)と授業時間(noteSuffix)を維持する(v1.5.364 の回帰なし)', () => {
+    const lectureEntry = makeStudentEntry({ id: 'entry-lecture', subject: '数', lessonType: 'special', noteSuffix: '60' })
+    const sourceCell = makeCell('2026-07-06', 2, [makeLessonDesk('佐藤', [lectureEntry, null])])
+    const targetCell = makeCell('2026-07-09', 4, [makeLessonDesk('田中', [null, null])])
+    const weeks: SlotCell[][] = [[sourceCell, targetCell]]
+
+    const result = computeStudentMove({
+      weeks,
+      weekIndex: 0,
+      cells: weeks[0],
+      movingStudentId: 'entry-lecture',
+      cellId: targetCell.id,
+      deskIndex: 0,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: emptyManagedMap,
+      resolveBoardStudentDisplayName: displayName,
+    })
+
+    expect(result.status).toBe('moved')
+    if (result.status !== 'moved') return
+    const moved = result.nextWeeks[0].find((cell) => cell.id === targetCell.id)!.desks[0].lesson!.studentSlots[0]!
+    expect(moved.lessonType).toBe('special')
+    expect(moved.subject).toBe('数')
+    expect(moved.noteSuffix).toBe('60')
+    // 講習は通常の抑制キー対象外
+    expect(result.nextSuppressedRegularLessonOccurrences).toEqual([])
+  })
+
+  it('入力 weeks を破壊しない(盤面 Undo が1操作で戻れる前提)', () => {
+    const movingEntry = makeStudentEntry({ id: 'entry-immutable' })
+    const sourceCell = makeCell('2026-07-06', 1, [makeLessonDesk('佐藤', [movingEntry, null])])
+    const targetCell = makeCell('2026-07-08', 2, [makeLessonDesk('田中', [null, null])])
+    const weeks: SlotCell[][] = [[sourceCell, targetCell]]
+    const before = JSON.stringify(weeks)
+
+    const result = computeStudentMove({
+      weeks,
+      weekIndex: 0,
+      cells: weeks[0],
+      movingStudentId: 'entry-immutable',
+      cellId: targetCell.id,
+      deskIndex: 0,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: emptyManagedMap,
+      resolveBoardStudentDisplayName: displayName,
+    })
+
+    expect(result.status).toBe('moved')
+    expect(JSON.stringify(weeks)).toBe(before)
+  })
+})

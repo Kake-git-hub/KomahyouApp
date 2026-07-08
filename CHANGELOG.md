@@ -20,6 +20,7 @@
 
 - feat: 対話用日程表のReact化 Phase 0+1(土台＋リアルタイム同期・staging先行)。盤面と同一Reactツリーの `ScheduleView`(ドック⇄ポップアウト切替・spec-schedule-interactive-view)を新設し、staging環境判定(`isStagingEnvironment`/`scheduleInteractiveReactView`・stagingと開発用教室のみ有効)で日程表ボタンの対話用途を差し替え。表示算出は生成HTMLと同じ `buildStudentPayload`/`buildTeacherPayload` を共有し、埋め込みJSの表示ロジックを `scheduleViewData.ts` へ純関数移植(等価性テスト同梱)。行は React.memo＋signature比較で変更行のみ再レンダー(メモリ規律・`bumpMemCounter('schedule-view-row-render')` 等で ?memlog=1 実測可)。絞り込みは即時適用(旧「最新表示」ボタン廃止・Reactビュー内のみ)。印刷/PDF(全員表示・空フォーマット)と旧同期機構(forceゲート/scheduleSyncTrigger)は無変更で温存。本番3教室は従来の生成HTMLタブのまま(オーナーチェック合格まで main へマージしない)。(src/utils/scheduleViewData.ts / src/components/schedule-view/* / featureRollout.ts / ScheduleBoardScreen.tsx / BoardToolbar.tsx)
 - chore: ローカル検証用の launch 設定 `dev-local`(VITE_EXTERNAL_BACKEND_MODE=local・ポート5199)を追加。(.claude/launch.json)
+- feat: 日程表コマ組み Phase 2(spec-student-schedule-dnd・staging先行)。生徒日程表(Reactビュー)の授業カード(通/振/講)を長押し(約250ms)D&D→空きコマへドロップ→机選択モーダル(コマ表と同じ机配置・物理的な空きのみ判定、自動割振ルール/警告は評価も表示もしない)→盤面の computeStudentMove を直接実行。通常授業は「移動先に振替manual追加＋移動元当該日の抑制」の両方(7/20事故の教訓)、講習は選択科目・授業時間維持(v1.5.364回帰なし)、週範囲は ensureWeeksCoverDateRange で自動拡張、source は entryId+生徒id+日付+時限で特定(取り違え防止)、Undoで1操作復元。未保存のローカル変更(手動保存で確定)。集団カード・出欠カードは掴めない。テスト8件同梱(scheduleViewMove.test.ts)。(schedule-view/scheduleViewMove.ts / ScheduleView.tsx / ScheduleSheet.tsx / ScheduleBoardScreen.tsx / scheduleViewData.ts)
 
 ## v1.5.410 (2026-07-08)
 

@@ -3,7 +3,12 @@
 // scheduleViewData の純関数で view model を算出して描画する。同一 React ツリーのため
 // 盤面編集は自動反映(リアルタイム同期は「同じ state で再レンダー」で成立)。
 // 期間・人選択の絞り込みは即時適用(旧「最新表示」ボタンは不要になった)。
-import { useMemo, useState } from 'react'
+//
+// 日程表コマ組み(spec-student-schedule-dnd): 生徒ビューの授業カードを長押し(約250ms・盤面D&Dと
+// 同じ)で掴み、空きコマへドロップ → 机選択モーダル(コマ表と同じ配置) → 盤面の executeMoveStudent を
+// 直接呼ぶ(親から onExecuteMove として受け取る)。自動割振ルール・警告は評価も表示もしない。
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { buildSubmissionQrSvg } from '../../utils/scheduleHtml'
 import type { SchedulePayload, SerializedStudent, SerializedTeacher } from '../../utils/scheduleHtml'
@@ -12,14 +17,19 @@ import {
   buildStudentSheetViewModel,
   buildTeacherSheetViewModel,
   filterPeopleByQuery,
+  formatMonthDay,
   formatStudentHeaderName,
   formatTeacherHeaderName,
   getVisibleStudents,
   getVisibleTeachers,
   resolveDefaultPersonId,
+  scheduleLessonTypeLabels,
 } from '../../utils/scheduleViewData'
-import type { ScheduleViewType } from '../../utils/scheduleViewData'
+import type { ScheduleViewType, StudentCellCardData, StudentGridCellData } from '../../utils/scheduleViewData'
+import type { SlotCell } from '../schedule-board/types'
 import { StudentScheduleSheet, TeacherScheduleSheet } from './ScheduleSheet'
+import { buildDeskPickerDesks } from './scheduleViewMove'
+import type { DeskPickerDesk, ScheduleViewMoveSeat, ScheduleViewMoveSource } from './scheduleViewMove'
 
 export type ScheduleViewRange = {
   startDate: string
@@ -27,6 +37,8 @@ export type ScheduleViewRange = {
   periodValue: string
   personId?: string
 }
+
+export type ScheduleViewMoveResult = { ok: boolean; message: string }
 
 export type ScheduleViewProps = {
   viewType: ScheduleViewType
@@ -36,6 +48,10 @@ export type ScheduleViewProps = {
   onScheduleNoteChange?: (noteKey: string, value: string) => void
   onOpenPrintAll?: () => void
   classroomStorageKey?: string
+  // 日程表コマ組み(生徒ビューのみ)。両方が揃ったときだけD&Dが有効になる。
+  onExecuteMove?: (source: ScheduleViewMoveSource, seat: ScheduleViewMoveSeat) => ScheduleViewMoveResult
+  resolveMoveTargetCell?: (dateKey: string, slotNumber: number) => SlotCell | null
+  resolveStudentDisplayName?: (name: string) => string
 }
 
 function normalizeRangeDates(startDate: string, endDate: string) {
@@ -43,7 +59,19 @@ function normalizeRangeDates(startDate: string, endDate: string) {
   return { startDate, endDate }
 }
 
-export function ScheduleView({ viewType, payload, range, onRangeChange, onScheduleNoteChange, onOpenPrintAll, classroomStorageKey }: ScheduleViewProps) {
+type DeskPickerState = {
+  source: ScheduleViewMoveSource
+  targetDateKey: string
+  targetSlotNumber: number
+  targetLabel: string
+  desks: DeskPickerDesk[]
+}
+
+// 長押し判定(盤面D&D studentDragAndDropMove と同じ約250ms)と、掴み中の移動許容距離。
+const LONG_PRESS_MS = 250
+const PRESS_MOVE_TOLERANCE_PX = 8
+
+export function ScheduleView({ viewType, payload, range, onRangeChange, onScheduleNoteChange, onOpenPrintAll, classroomStorageKey, onExecuteMove, resolveMoveTargetCell, resolveStudentDisplayName }: ScheduleViewProps) {
   const [personSearch, setPersonSearch] = useState('')
 
   const { startDate, endDate } = normalizeRangeDates(
@@ -97,6 +125,151 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     () => (unitKey: string) => `schedule-salary:${storageScope}:teacher:${unitKey}`,
     [storageScope],
   )
+
+  // ===== 日程表コマ組み(D&D) =====
+  const dndEnabled = viewType === 'student' && Boolean(onExecuteMove && resolveMoveTargetCell)
+  const [dragActive, setDragActive] = useState(false)
+  const [deskPicker, setDeskPicker] = useState<DeskPickerState | null>(null)
+  const [moveStatus, setMoveStatus] = useState('')
+  const dragSourceRef = useRef<{ source: ScheduleViewMoveSource; label: string } | null>(null)
+  const dragGhostRef = useRef<HTMLDivElement | null>(null)
+  const pressRef = useRef<{
+    timer: number
+    startX: number
+    startY: number
+    card: StudentCellCardData
+    cell: StudentGridCellData
+    doc: Document
+  } | null>(null)
+  const listenersRef = useRef<{ doc: Document; move: (event: PointerEvent) => void; up: (event: PointerEvent) => void; cancel: () => void } | null>(null)
+
+  const detachDocListeners = useCallback(() => {
+    const attached = listenersRef.current
+    if (!attached) return
+    attached.doc.removeEventListener('pointermove', attached.move)
+    attached.doc.removeEventListener('pointerup', attached.up)
+    attached.doc.removeEventListener('pointercancel', attached.cancel)
+    listenersRef.current = null
+  }, [])
+
+  const clearPress = useCallback(() => {
+    if (pressRef.current) {
+      window.clearTimeout(pressRef.current.timer)
+      pressRef.current = null
+    }
+  }, [])
+
+  const endDrag = useCallback(() => {
+    dragSourceRef.current = null
+    setDragActive(false)
+    detachDocListeners()
+    clearPress()
+  }, [detachDocListeners, clearPress])
+
+  useEffect(() => endDrag, [endDrag])
+
+  const moveGhost = (clientX: number, clientY: number) => {
+    const ghost = dragGhostRef.current
+    if (!ghost) return
+    ghost.style.left = `${clientX + 12}px`
+    ghost.style.top = `${clientY + 12}px`
+  }
+
+  const handleDrop = useCallback((doc: Document, clientX: number, clientY: number) => {
+    const dragging = dragSourceRef.current
+    if (!dragging) return
+    const hit = doc.elementFromPoint(clientX, clientY)
+    const cellElement = hit instanceof Element ? hit.closest('[data-role="schedule-view-student-cell"][data-drop-candidate="true"]') : null
+    if (!(cellElement instanceof HTMLElement)) return
+    const dateKey = cellElement.dataset.dateKey ?? ''
+    const slotNumber = Number(cellElement.dataset.slotNumber ?? '0')
+    if (!dateKey || !slotNumber || !resolveMoveTargetCell) return
+    const boardCell = resolveMoveTargetCell(dateKey, slotNumber)
+    if (!boardCell) {
+      setMoveStatus('移動先のコマ情報を取得できませんでした。')
+      return
+    }
+    if (!boardCell.isOpenDay) {
+      setMoveStatus('移動先は休校日のため移動できません。')
+      return
+    }
+    setDeskPicker({
+      source: dragging.source,
+      targetDateKey: dateKey,
+      targetSlotNumber: slotNumber,
+      targetLabel: `${formatMonthDay(dateKey)} ${slotNumber}限`,
+      desks: buildDeskPickerDesks(boardCell, resolveStudentDisplayName),
+    })
+  }, [resolveMoveTargetCell, resolveStudentDisplayName])
+
+  const handleCardPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, card: StudentCellCardData, cell: StudentGridCellData) => {
+    if (!dndEnabled || !card.entryId) return
+    if (event.button !== 0 && event.pointerType === 'mouse') return
+    const doc = event.currentTarget.ownerDocument
+    clearPress()
+    setMoveStatus('')
+    const startX = event.clientX
+    const startY = event.clientY
+    const timer = window.setTimeout(() => {
+      const pressed = pressRef.current
+      if (!pressed) return
+      pressRef.current = null
+      const source: ScheduleViewMoveSource = {
+        entryId: card.entryId!,
+        studentId: card.studentId,
+        sourceDateKey: cell.dateKey,
+        sourceSlotNumber: cell.slotNumber,
+        lessonType: card.lessonType ?? '',
+        subject: card.subject ?? '',
+        studentName: card.studentName ?? '',
+      }
+      dragSourceRef.current = { source, label: `${resolveStudentDisplayName ? resolveStudentDisplayName(source.studentName) : source.studentName} ${card.main}` }
+      setDragActive(true)
+      moveGhost(startX, startY)
+    }, LONG_PRESS_MS)
+    pressRef.current = { timer, startX, startY, card, cell, doc }
+
+    const handleMove = (moveEvent: PointerEvent) => {
+      const pressed = pressRef.current
+      if (pressed) {
+        // 長押し前に動いたらスクロール等とみなして掴まない(盤面D&Dと同じ感覚)。
+        const distance = Math.hypot(moveEvent.clientX - pressed.startX, moveEvent.clientY - pressed.startY)
+        if (distance > PRESS_MOVE_TOLERANCE_PX) {
+          window.clearTimeout(pressed.timer)
+          pressRef.current = null
+          detachDocListeners()
+        }
+        return
+      }
+      if (dragSourceRef.current) {
+        moveEvent.preventDefault()
+        moveGhost(moveEvent.clientX, moveEvent.clientY)
+      }
+    }
+    const handleUp = (upEvent: PointerEvent) => {
+      const wasDragging = Boolean(dragSourceRef.current)
+      if (wasDragging) handleDrop(doc, upEvent.clientX, upEvent.clientY)
+      endDrag()
+    }
+    const handleCancel = () => endDrag()
+
+    doc.addEventListener('pointermove', handleMove, { passive: false })
+    doc.addEventListener('pointerup', handleUp)
+    doc.addEventListener('pointercancel', handleCancel)
+    listenersRef.current = { doc, move: handleMove, up: handleUp, cancel: handleCancel }
+  }, [dndEnabled, clearPress, detachDocListeners, endDrag, handleDrop, resolveStudentDisplayName])
+
+  const handleSeatSelect = (deskIndex: number, studentIndex: number) => {
+    if (!deskPicker || !onExecuteMove) return
+    const result = onExecuteMove(deskPicker.source, {
+      targetDateKey: deskPicker.targetDateKey,
+      targetSlotNumber: deskPicker.targetSlotNumber,
+      deskIndex,
+      studentIndex,
+    })
+    setDeskPicker(null)
+    setMoveStatus(result.message)
+  }
 
   const personLabel = viewType === 'student' ? '生徒' : '講師'
 
@@ -155,10 +328,21 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
           </select>
         </div>
       </div>
+      {moveStatus ? (
+        <div className="schedule-view-move-status" role="status" aria-live="polite" data-testid="schedule-view-move-status">{moveStatus}</div>
+      ) : null}
+      {dndEnabled && !dragActive && !deskPicker ? (
+        <div className="schedule-view-dnd-hint">授業カードを長押しすると空きコマへ移動できます(日程表コマ組み)</div>
+      ) : null}
       <main className="pages schedule-view-pages">
         {viewType === 'student' ? (
           vm.student ? (
-            <StudentScheduleSheet vm={vm.student} onScheduleNoteChange={onScheduleNoteChange} />
+            <StudentScheduleSheet
+              vm={vm.student}
+              onScheduleNoteChange={onScheduleNoteChange}
+              dragActive={dragActive}
+              onCardPointerDown={dndEnabled ? handleCardPointerDown : undefined}
+            />
           ) : (
             <div className="empty-state">表示できる生徒が見つかりません。</div>
           )
@@ -168,6 +352,46 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
           <div className="empty-state">表示できる講師が見つかりません。</div>
         )}
       </main>
+      {dragActive && dragSourceRef.current ? (
+        <div className="schedule-drag-ghost" ref={dragGhostRef} aria-hidden="true">{dragSourceRef.current.label}</div>
+      ) : null}
+      {deskPicker ? (
+        <div className="schedule-desk-picker-overlay" onClick={(event) => { if (event.target === event.currentTarget) setDeskPicker(null) }}>
+          <div className="schedule-desk-picker" role="dialog" aria-modal="true" aria-label="移動先の席を選択" data-testid="schedule-desk-picker">
+            <div className="schedule-desk-picker-title">{deskPicker.targetLabel} へ移動 — 席を選択</div>
+            <div className="schedule-desk-picker-source">
+              {(resolveStudentDisplayName ? resolveStudentDisplayName(deskPicker.source.studentName) : deskPicker.source.studentName)}
+              {' '}{deskPicker.source.subject}
+              （{scheduleLessonTypeLabels[deskPicker.source.lessonType] || deskPicker.source.lessonType}）
+            </div>
+            {deskPicker.source.lessonType === 'regular' ? (
+              <div className="schedule-desk-picker-note">通常授業は<strong>この回のみの振替</strong>として移動します(基本データ・他の週は変わりません)。</div>
+            ) : null}
+            <div className="schedule-desk-picker-desks">
+              {deskPicker.desks.map((desk) => (
+                <div key={desk.deskIndex} className="schedule-desk-picker-desk">
+                  <div className="schedule-desk-picker-teacher">{desk.teacher || '講師未定'}</div>
+                  {desk.seats.map((seat) => (
+                    <button
+                      key={seat.studentIndex}
+                      type="button"
+                      className={`schedule-desk-picker-seat${seat.selectable ? ' is-selectable' : ' is-blocked'}`}
+                      disabled={!seat.selectable}
+                      onClick={() => handleSeatSelect(desk.deskIndex, seat.studentIndex)}
+                      data-testid={`schedule-desk-picker-seat-${desk.deskIndex}-${seat.studentIndex}`}
+                    >
+                      {seat.occupied ? seat.label : seat.blockedByMemo ? 'メモあり' : seat.statusLabel ? `空席 (${seat.statusLabel})` : '空席'}
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="schedule-desk-picker-actions">
+              <button type="button" onClick={() => setDeskPicker(null)}>キャンセル</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

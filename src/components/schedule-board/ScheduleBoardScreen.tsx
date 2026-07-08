@@ -33,6 +33,7 @@ import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, buildStudentPayload, buildTeacherPayload, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { ScheduleView, type ScheduleViewRange } from '../schedule-view/ScheduleView'
 import { ScheduleViewPanel, type ScheduleViewDisplayMode } from '../schedule-view/ScheduleViewPanel'
+import { findScheduleViewMoveSource, findScheduleViewTargetCell, validateScheduleViewMoveTarget, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
@@ -7766,6 +7767,75 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // (最新の weeks/cells を参照)を実行する。mousedown 時点の古いクロージャ(配置されない不具合)を回避する。
   const stableExecuteMoveStudent = useStableCallback(executeMoveStudent)
 
+  // ==== 日程表コマ組み(spec-student-schedule-dnd・staging 先行) ====
+  // 生徒日程表(React ビュー)のD&D→机選択の確定で呼ばれる。盤面の computeStudentMove を直接使い、
+  // 通常授業は既存の振替メカニズム(移動先に振替 manual 追加＋移動元当該日の抑制の両方)に乗る。
+  // 自動割振ルール・警告は評価しない(物理的な空きのみ)。移動は未保存のローカル変更(手動保存で確定)。
+  const resolveScheduleViewMoveTargetCell = (dateKey: string, slotNumber: number): SlotCell | null => {
+    const found = findScheduleViewTargetCell(normalizedWeeks, dateKey, slotNumber)
+    if (found) return found.cell
+    // 盤面が読み込んでいない週は表示用に拡張して参照する(確定時にも改めて拡張・検証する)。
+    const ensured = ensureWeeksCoverDateRange({ weeks: normalizedWeeks, startDate: dateKey, endDate: dateKey, classroomSettings, teachers, students, regularLessons })
+    return findScheduleViewTargetCell(applyClassroomAvailability(ensured.weeks, classroomSettings), dateKey, slotNumber)?.cell ?? null
+  }
+  const stableResolveScheduleViewMoveTargetCell = useStableCallback(resolveScheduleViewMoveTargetCell)
+
+  const executeScheduleViewMove = (source: ScheduleViewMoveSource, seat: ScheduleViewMoveSeat): { ok: boolean; message: string } => {
+    // 週範囲の自動拡張(spec §D-2-1): 移動元・移動先の両日付を盤面 weeks がカバーするようにする。
+    const rangeStart = source.sourceDateKey < seat.targetDateKey ? source.sourceDateKey : seat.targetDateKey
+    const rangeEnd = source.sourceDateKey > seat.targetDateKey ? source.sourceDateKey : seat.targetDateKey
+    const ensured = ensureWeeksCoverDateRange({ weeks, startDate: rangeStart, endDate: rangeEnd, classroomSettings, teachers, students, regularLessons })
+    const target = findScheduleViewTargetCell(ensured.weeks, seat.targetDateKey, seat.targetSlotNumber)
+    if (!target) {
+      return { ok: false, message: '移動先の日付が運用範囲外のため移動できません。' }
+    }
+    // 休校日判定は開校ルール適用後のセルで行う(週を拡張した直後の cell は設定反映前のことがある)。
+    const availabilityCell = findScheduleViewTargetCell(applyClassroomAvailability(ensured.weeks, classroomSettings), seat.targetDateKey, seat.targetSlotNumber)?.cell ?? target.cell
+    const validation = validateScheduleViewMoveTarget(availabilityCell, seat.deskIndex, seat.studentIndex)
+    if (!validation.ok) {
+      return { ok: false, message: validation.reason }
+    }
+    // source 特定の頑健性(spec §D-2-2): entryId＋生徒id＋日付＋時限で特定。見つからなければ不成立。
+    const sourceHit = findScheduleViewMoveSource(ensured.weeks, source)
+    if (!sourceHit) {
+      return { ok: false, message: '移動元の授業が盤面に見つかりませんでした。表示を確認して再度お試しください。' }
+    }
+    const result = computeStudentMove({
+      weeks: ensured.weeks,
+      weekIndex: target.weekIndex,
+      cells: ensured.weeks[target.weekIndex],
+      movingStudentId: source.entryId,
+      cellId: target.cell.id,
+      deskIndex: seat.deskIndex,
+      studentIndex: seat.studentIndex,
+      suppressedRegularLessonOccurrences,
+      managedStudentByAnyName,
+      resolveBoardStudentDisplayName,
+    })
+    if (result.status !== 'moved') {
+      return { ok: false, message: result.message }
+    }
+    // 表示中の週は動かさない(週が前方に拡張された場合はオフセット分ずらして同じ週を指す)。
+    commitWeeks(
+      result.nextWeeks,
+      weekIndex + ensured.weekIndexOffset,
+      selectedCellId,
+      selectedDeskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      suppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+      result.nextSuppressedRegularLessonOccurrences,
+    )
+    setStatusMessage(`日程表コマ組み: ${result.message}`)
+    return { ok: true, message: `${result.message} 手動保存で確定されます。` }
+  }
+  const stableExecuteScheduleViewMove = useStableCallback(executeScheduleViewMove)
+
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
     // 長押しD&Dで移動を確定した直後の click は無視する(掴んだセルでメニューが開くのを防ぐ)。
     if (suppressNextStudentClickRef.current) {
@@ -10295,6 +10365,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 onScheduleNoteChange={handleStudentScheduleViewNoteChange}
                 onOpenPrintAll={handleOpenPrintAllStudents}
                 classroomStorageKey={classroomStorageKey}
+                onExecuteMove={stableExecuteScheduleViewMove}
+                resolveMoveTargetCell={stableResolveScheduleViewMoveTargetCell}
+                resolveStudentDisplayName={resolveBoardStudentDisplayName}
               />
             </ScheduleViewPanel>
           ) : null}
@@ -10340,6 +10413,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onScheduleNoteChange={handleStudentScheduleViewNoteChange}
             onOpenPrintAll={handleOpenPrintAllStudents}
             classroomStorageKey={classroomStorageKey}
+            onExecuteMove={stableExecuteScheduleViewMove}
+            resolveMoveTargetCell={stableResolveScheduleViewMoveTargetCell}
+            resolveStudentDisplayName={resolveBoardStudentDisplayName}
           />
         </ScheduleViewPanel>
       ) : null}

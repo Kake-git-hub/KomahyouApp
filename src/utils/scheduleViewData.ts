@@ -34,7 +34,18 @@ export type SchedulePeriodSegment =
 export type ScheduleCountRow = { label: string; count: number; desired: number }
 export type ScheduleTimeRange = { start: string; end: string }
 
-export type StudentCellCardData = { main: string; sub: string }
+export type StudentCellCardData = {
+  main: string
+  sub: string
+  // 日程表コマ組み(D&D)用メタデータ。draggable=盤面 studentSlots に実在する授業カード
+  // (通常/振替/講習/増)。出欠ステータス由来のカード・集団カードは掴めない(spec-student-schedule-dnd §C-1)。
+  entryId?: string
+  studentId?: string
+  lessonType?: string
+  subject?: string
+  studentName?: string
+  draggable?: boolean
+}
 export type StudentGridCellData = {
   slotKey: string
   dateKey: string
@@ -565,7 +576,16 @@ export function buildStudentCellCard(entry: SerializedStudentEntry | SerializedS
       sub: [subjectWithMinutes, scheduleLessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / '),
     }
   }
-  return { main: subjectWithMinutes, sub: scheduleLessonTypeLabels[entry.lessonType] || entry.lessonType }
+  return {
+    main: subjectWithMinutes,
+    sub: scheduleLessonTypeLabels[entry.lessonType] || entry.lessonType,
+    entryId: entry.id,
+    studentId: entry.linkedStudentId,
+    lessonType: entry.lessonType,
+    subject: entry.subject,
+    studentName: entry.name,
+    draggable: true,
+  }
 }
 
 function groupScheduleEntriesBySlot<T extends { dateKey: string; slotNumber: number }>(entries: T[]) {

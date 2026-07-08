@@ -125,17 +125,18 @@ describe('scheduleViewData: 生徒シートの表示算出', () => {
     expect(vm).not.toBeNull()
     const row1 = vm!.rows.find((row) => row.slotNumber === 1)!
     const mondayCell = row1.cells.find((cell) => cell.dateKey === '2026-07-06')!
-    expect(mondayCell.cards).toEqual([{ main: '英', sub: '通常' }])
+    expect(mondayCell.cards).toMatchObject([{ main: '英', sub: '通常', entryId: 'entry-1', draggable: true }])
     expect(mondayCell.title).toBe('英 / 通常 / 佐藤')
 
     const row2 = vm!.rows.find((row) => row.slotNumber === 2)!
     const lectureCell = row2.cells.find((cell) => cell.dateKey === '2026-07-07')!
     // 講習は科目に授業時間(60/45)を併記する(90は付けない)
-    expect(lectureCell.cards).toEqual([{ main: '数60', sub: '講習' }])
+    expect(lectureCell.cards).toMatchObject([{ main: '数60', sub: '講習', entryId: 'entry-2', draggable: true }])
 
     const row3 = vm!.rows.find((row) => row.slotNumber === 3)!
     const statusCell = row3.cells.find((cell) => cell.dateKey === '2026-07-08')!
     // 振無休 + 振替先(リンク先)の月日を主表示に出す
+    // 出欠ステータス由来のカードは掴めない(draggable なし・日程表コマ組み §C-1)
     expect(statusCell.cards).toEqual([{ main: '振無休 7月20日', sub: '英 / 通常' }])
   })
 
