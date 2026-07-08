@@ -2826,3 +2826,88 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     vi.unstubAllGlobals()
   })
 })
+
+// 日程表コマ組み(別タブD&D・spec-student-schedule-dnd): 机選択モーダルは移動先コマの「全机(空席含む)」が要るが、
+// serializeCells の desks は空席の机を落とす。scheduleDndEnabled=true のとき開校日コマに pickerDesks を別途載せる。
+describe('日程表コマ組み payload: pickerDesks / scheduleDndEnabled', () => {
+  function createDndTestCell(): SlotCell {
+    return {
+      id: '2026-03-24_3',
+      dateKey: '2026-03-24',
+      dayLabel: '火',
+      dateLabel: '3/24',
+      slotLabel: '3限',
+      slotNumber: 3,
+      timeLabel: '16:20-17:50',
+      isOpenDay: true,
+      desks: [
+        {
+          id: '2026-03-24_3_desk_1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'l1',
+            studentSlots: [
+              { id: 'entry-1', name: '山田', managedStudentId: 'student-1', grade: '中3', subject: '数', lessonType: 'regular', teacherType: 'normal' },
+              null,
+            ],
+          },
+        },
+        // 空席の机(lesson/statuses なし)。serializeCells の desks では落ちるが pickerDesks には残す。
+        { id: '2026-03-24_3_desk_2', teacher: '鈴木講師' },
+      ],
+    }
+  }
+
+  function openDndPayload(extra: Record<string, unknown>) {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    openStudentScheduleHtml({
+      cells: [createDndTestCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      ...extra,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    const match = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    return JSON.parse(match![1])
+  }
+
+  it('scheduleDndEnabled: true で開校日コマに pickerDesks(空席の机も含む)が載る', () => {
+    const payload = openDndPayload({ scheduleDndEnabled: true })
+    expect(payload.scheduleDndEnabled).toBe(true)
+    const cell = payload.cells.find((c: { dateKey: string; slotNumber: number }) => c.dateKey === '2026-03-24' && c.slotNumber === 3)
+    expect(cell.pickerDesks).toBeDefined()
+    // 空席の机(鈴木講師)は desks では落ちるが pickerDesks には残る(机選択モーダルで空席を選べる)。
+    expect(cell.pickerDesks.map((d: { teacher: string }) => d.teacher)).toEqual(['田中講師', '鈴木講師'])
+    // 占有席は選択不可・空席は選択可(§C-2: 物理的な空きのみ判定)。
+    expect(cell.pickerDesks[0].seats[0].occupied).toBe(true)
+    expect(cell.pickerDesks[0].seats[0].selectable).toBe(false)
+    expect(cell.pickerDesks[0].seats[1].selectable).toBe(true)
+    expect(cell.pickerDesks[1].seats[0].selectable).toBe(true)
+    expect(cell.pickerDesks[1].seats[1].selectable).toBe(true)
+    // desks(印刷/表示用)は従来どおり空席の机を落とす(印刷経路は不変)。
+    expect(cell.desks.length).toBe(1)
+  })
+
+  it('scheduleDndEnabled 未指定なら pickerDesks を載せない(本番/印刷のバイト増を避ける)', () => {
+    const payload = openDndPayload({})
+    expect(payload.scheduleDndEnabled).toBe(false)
+    const cell = payload.cells.find((c: { dateKey: string; slotNumber: number }) => c.dateKey === '2026-03-24' && c.slotNumber === 3)
+    expect(cell.pickerDesks).toBeUndefined()
+  })
+})

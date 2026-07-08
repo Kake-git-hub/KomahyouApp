@@ -11,6 +11,7 @@ import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell, StudentEntry } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { buildLinkedLessonDestinationMap } from '../components/schedule-board/lessonLinks'
+import { buildDeskPickerDesks, type DeskPickerDesk } from '../components/schedule-view/scheduleViewMove'
 import { normalizeGroupClassEntryMap, type GroupClassEntryMap } from '../components/schedule-board/groupClass'
 import { generateQrSvg } from './qrcode'
 import { buildSubmissionUrl } from './scheduleQrConfig'
@@ -106,6 +107,10 @@ export type SerializedCell = {
       students: SerializedStudentEntry[]
     }
   }>
+  // 日程表コマ組み(別タブD&D)専用: このコマの全机(空席含む)の席レイアウト。机選択モーダルの表示に使う。
+  // serializeCells の includeDeskPicker=true(=対話用の生徒ペイロード・DnD有効時)のときだけ載る。
+  // 印刷/講師/全員表示のペイロードには載せない(印刷経路のバイト増を避ける)。空席の机を落とす desks とは別に持つ。
+  pickerDesks?: DeskPickerDesk[]
 }
 
 export type SerializedStudentSpecialSessionInput = {
@@ -182,6 +187,9 @@ export type SchedulePayload = {
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄(休み欄を置き換え/振替を左詰め)を有効化する。開発用教室のみ。
   optionFieldEnabled?: boolean
+  // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。埋め込みJSがこのフラグで D&D を起動し、
+  // true のときだけ各コマに pickerDesks(机選択モーダル用の全机レイアウト)が載る。
+  scheduleDndEnabled?: boolean
 }
 
 type OpenScheduleHtmlParams = {
@@ -202,6 +210,8 @@ type OpenScheduleHtmlParams = {
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄を有効化する(開発用教室のみ)。
   optionFieldEnabled?: boolean
+  // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。生徒ペイロードにのみ渡す。
+  scheduleDndEnabled?: boolean
 }
 
 type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
@@ -271,6 +281,7 @@ function serializeCells(
   cells: SlotCell[],
   resolveLinkedStudentId?: (studentName: string) => string | undefined,
   resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell) => string[],
+  options?: { includeDeskPicker?: boolean },
 ): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
 
@@ -288,6 +299,10 @@ function serializeCells(
       slotLabel: cell.slotLabel,
       timeLabel: cell.timeLabel,
       isOpenDay: cell.isOpenDay,
+      // 日程表コマ組み(別タブD&D)専用: 机選択モーダルは移動先コマの「全机(空席含む)」が要るが、
+      // 下の desks は空席の机を落とす(line: !lesson && statuses空 → null)。そこで開校日に限り、盤面の
+      // 全机レイアウト(既存テスト済みの buildDeskPickerDesks)を pickerDesks として別に載せる(印刷経路は不変)。
+      ...(options?.includeDeskPicker && cell.isOpenDay ? { pickerDesks: buildDeskPickerDesks(cell) } : {}),
       desks: cell.desks.map((desk) => {
         const statuses = desk.statusSlots
           ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
@@ -504,7 +519,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
   }
   // 監査領域9 A1(2026-07-04 確定): plannedCells payload は撤去済み。planned 通常回数の唯一の根拠は
   // expectedRegularOccurrences(テンプレ由来)で、plannedCells は埋め込みJSから一度も読まれないデッドだった。
-  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds)
+  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds, { includeDeskPicker: Boolean(params.scheduleDndEnabled) })
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -559,6 +574,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
     classroomStorageKey: params.classroomStorageKey || 'default',
     optionFieldEnabled: Boolean(params.optionFieldEnabled),
+    scheduleDndEnabled: Boolean(params.scheduleDndEnabled),
   }
 }
 

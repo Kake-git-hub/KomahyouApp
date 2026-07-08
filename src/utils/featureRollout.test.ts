@@ -43,4 +43,11 @@ describe('featureRollout', () => {
     expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
     expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
   })
+
+  it('keeps schedule drag-and-drop (日程表コマ組み) staging-first (production classrooms unaffected)', () => {
+    // spec-student-schedule-dnd: 本番3教室ではオーナーチェック合格まで無効。staging/開発用教室でのみ有効。
+    expect(featureRolloutRegistry.studentScheduleDndMove.scope).toBe('staging-environment')
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+  })
 })

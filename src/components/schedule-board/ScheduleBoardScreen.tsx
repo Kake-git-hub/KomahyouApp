@@ -3553,6 +3553,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
+  // 日程表コマ組み(別タブD&D・spec-student-schedule-dnd)は staging/開発用教室のみ先行有効。生徒ペイロードに
+  // scheduleDndEnabled として渡し、埋め込みJSのD&D起動と各コマの pickerDesks(机選択モーダル用)の載せ分けに使う。
+  const scheduleDndMoveEnabled = isFeatureEnabledForClassroom('studentScheduleDndMove', { name: classroomName })
   // 対話用日程表の React ビュー(ドック⇄ポップアウト)は棚上げ(オーナー確定 2026-07-08 再指摘)。
   // 別ウィンドウ(React portal)への pointer 操作が別ブラウザウィンドウで確実に届かず D&D が成立しない・
   // 従来タブと操作感が変わる、という理由で「別タブ(生成HTML)に同期＋コマ組みを実装する」方針へ回帰。
@@ -5583,6 +5586,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings,
       classroomStorageKey,
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      scheduleDndEnabled: scheduleDndMoveEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -5801,6 +5805,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings,
       classroomStorageKey,
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      scheduleDndEnabled: scheduleDndMoveEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -5810,7 +5815,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       generatedStudentScheduleTabRef.current = nextWindow
       nextWindow.focus()
     }
-  }, [effectiveStudentScheduleRange, buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, studentScheduleOptionFieldEnabled, specialSessions, groupClassEntries])
+  }, [effectiveStudentScheduleRange, buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, studentScheduleOptionFieldEnabled, scheduleDndMoveEnabled, specialSessions, groupClassEntries])
 
   const handleOpenEmptyFormat = useCallback(() => {
     openGeneratedStudentScheduleTab()
@@ -8565,6 +8570,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings,
       classroomStorageKey,
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      scheduleDndEnabled: scheduleDndMoveEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,

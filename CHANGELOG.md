@@ -18,6 +18,7 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- feat(Phase C 机レイアウト+ゲート): 日程表コマ組みの机選択モーダル用データとフィーチャーゲート。serializeCells に includeDeskPicker フラグを追加し、有効時は開校日コマに pickerDesks(空席の机も含む全机レイアウト=既存テスト済み buildDeskPickerDesks)を別途載せる(desks は空席の机を落とすので机選択に不足するため。印刷/講師/全員表示のペイロードは不変)。featureRollout に `studentScheduleDndMove`(staging-environment スコープ)を追加、盤面が生徒ペイロードに scheduleDndEnabled として渡す。回帰テスト: pickerDesks の載せ分け2件・featureRollout スコープ1件(scheduleHtml.ts(+test) / featureRollout.ts(+test) / ScheduleBoardScreen.tsx)
 - feat(Phase C 土台): 日程表コマ組み(別タブD&D)の受け側配線。StudentScheduleRequest を discriminated union 化し `mode:'move'`(source/seat)を追加、App.tsx が別タブからの `schedule-student-move-request` を純関数 parseScheduleViewMoveMessage で厳密検証して一過性リクエスト化、盤面が executeScheduleViewMove で実移動する effect を追加(Issue #46 規律: 処理時に消費・weeks 未ロード時は待つ)。埋め込みJSのD&D UI・机選択モーダルは次コミット。回帰テスト: parseScheduleViewMoveMessage 6件(scheduleViewMove.ts(+test) / App.tsx / ScheduleBoardScreen.tsx)
 - refactor: 対話用日程表の方針を「別タブ(生成HTML)に同期＋コマ組みを実装」へ回帰(オーナー確定 2026-07-08)。React ポップアウトは別ブラウザウィンドウへの portal で pointer 操作(D&D の drop)が確実に届かず・従来タブと操作感が変わるため棚上げ。scheduleReactViewEnabled を常時 false に(React ビュー・featureRollout は将来再検討用に温存)、日程表ボタンは従来の生成HTMLタブ(openStudentScheduleHtml/openTeacherScheduleHtml)を開く。(ScheduleBoardScreen.tsx)
 - feat: 別タブ日程表への自動同期(デバウンス約1.5秒)。盤面編集を別タブへ自動反映する。編集ごとの即再生成は 2026-06-05 メモリ障害の温床のため、①デバウンスで連打を1回に集約 ②受信側(埋め込みJS)の buildPayloadFingerprint で等価ペイロードの再描画をスキップ ③表示範囲限定、の3点で防ぐ。ポップアップを開いている間だけ作動。「最新表示(期間・生徒適用)」ボタンは残す。staging で ?memlog=1 の heap 実測を行う。(ScheduleBoardScreen.tsx)

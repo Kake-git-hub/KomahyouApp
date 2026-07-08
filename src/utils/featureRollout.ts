@@ -52,6 +52,13 @@ export const featureRolloutRegistry = {
     scope: 'staging-environment',
     description: 'Interactive schedule view as an in-tree React component (dock/popout) instead of generated HTML tabs.',
   },
+  // 日程表コマ組み(spec-student-schedule-dnd): 生徒日程表(別タブ)の授業カードを長押しD&Dで空きコマへ移し、
+  // 机選択モーダルで席を選んで盤面の executeScheduleViewMove を呼ぶ。自動割振ルール・警告は無関係(物理的な空きのみ)。
+  // staging 先行・オーナーチェック合格まで本番展開しない(2026-07-08 確定)。development-only も有効=ローカル検証可。
+  studentScheduleDndMove: {
+    scope: 'staging-environment',
+    description: 'Drag-and-drop lesson move on the generated-HTML student schedule tab (long-press card -> empty slot -> desk picker -> board move).',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry
