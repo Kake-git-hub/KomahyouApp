@@ -3553,9 +3553,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
-  // 対話用日程表の React ビュー(ドック⇄ポップアウト)。staging 先行(オーナーチェック合格まで本番は
-  // 従来の生成HTMLタブのまま)。有効時は日程表ボタンが React ビューを開き、印刷は従来経路を使う。
-  const scheduleReactViewEnabled = isFeatureEnabledForClassroom('scheduleInteractiveReactView', { name: classroomName })
+  // 対話用日程表の React ビュー(ドック⇄ポップアウト)は棚上げ(オーナー確定 2026-07-08 再指摘)。
+  // 別ウィンドウ(React portal)への pointer 操作が別ブラウザウィンドウで確実に届かず D&D が成立しない・
+  // 従来タブと操作感が変わる、という理由で「別タブ(生成HTML)に同期＋コマ組みを実装する」方針へ回帰。
+  // React ビューのコード・featureRollout(scheduleInteractiveReactView)は将来の再検討用に温存し、
+  // ここで常時無効化する(= 日程表ボタンは従来の生成HTMLタブを開く)。
+  const scheduleReactViewEnabled = false
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
@@ -5617,6 +5620,35 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 生徒側と同様、scheduleSyncTrigger(開いた時/最新表示)でのみ再生成し、編集ごとの自動再生成を停止。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduleSyncTrigger])
+
+  // ==== 別タブ日程表への自動同期(デバウンス・spec-schedule-popup-realtime-sync 大方針6の上書き) ====
+  // 盤面編集を別タブ日程表へ自動反映する。ただし編集ごとに即再生成すると 2026-06-05 のメモリ障害を
+  // 再発する([[komahyou-schedule-popup-sync]])。そこで:
+  //   ①デバウンス(約1.5秒): 連打はまとめて1回だけ同期する。
+  //   ②変化検知: 実送信は上の scheduleSyncTrigger 経由の sync*ScheduleHtml が担い、受信側(埋め込みJS)の
+  //     buildPayloadFingerprint / skipNextEquivalentPayload が等価ペイロードの再描画をスキップする。
+  //   ③表示範囲限定: studentScheduleCells / teacherScheduleCells は表示期間ぶんだけを算出済み。
+  // ポップアップが開いているときだけ作動し、閉じている間は一切走らせない。
+  useEffect(() => {
+    if (!isStudentScheduleOpen && !isTeacherScheduleOpen) return
+    const timer = window.setTimeout(() => {
+      setScheduleSyncTrigger((prev) => prev + 1)
+    }, 1500)
+    return () => window.clearTimeout(timer)
+    // 表示内容に効く盤面データが変わるたびにデバウンスを張り直す(連打は最後の1回に集約)。
+  }, [
+    isStudentScheduleOpen,
+    isTeacherScheduleOpen,
+    studentScheduleCells,
+    teacherScheduleCells,
+    specialSessions,
+    groupClassEntries,
+    scheduleCountAdjustments,
+    movingStudentContext,
+    effectiveStudentScheduleRange,
+    effectiveTeacherScheduleRange,
+    classroomSettings.scheduleNotes,
+  ])
 
   // ==== React 日程表ビュー(staging 先行・spec-schedule-interactive-view) ====
   // 生成HTMLタブと同じ純関数(buildStudentPayload/buildTeacherPayload)で表示データを組み、
