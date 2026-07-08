@@ -45,15 +45,21 @@
 1. **featureRollout キー追加**：`schedulePopupAutoSync`（`scope:'development-only'`、
    description に目的と本手順書への参照を書く）。
 2. **盤面変更リビジョンの導入**（ScheduleBoardScreen）：盤面状態のコミット地点で単調増加する
-   `boardRevisionRef` を導入（`useEffect(() => { revision++ }, [boardState])` で十分。
+   `boardRevisionRef` を導入（`useEffect(() => { revision++ }, [boardState, specialSessions])`
+   で十分。specialSessions も対象＝QR提出の反映を含む・spec §C-1。
    effect 自体は軽量なカウントのみで再生成はしない）。
 3. **デバウンス自動同期 effect の追加**（ScheduleBoardScreen・新設1つ）：
    - 発火条件: feature 有効 && `hasOpenSchedulePopup('student'|'teacher')` && 前回同期時
      リビジョン < 現リビジョン。
-   - 約1.5秒のデバウンス後に、既存の最新表示経路と同じ同期を1回実行
-     （`setScheduleSyncTrigger(t => t+1)` ＋ App 側 force 同期の発火。App 側は
-     `schedule-refresh-request` ハンドラ相当の関数を props/コールバックで呼ぶか、既存の
-     window message を利用。**`if (!force) return` ゲート自体には触らない**）。
+   - 約1.5秒のデバウンス後に、既存の最新表示経路と同じ同期を1回実行する。**経路は次に確定**：
+     Board のデバウンス effect が (a) `setScheduleSyncTrigger(t => t+1)`、
+     (b) `window.postMessage({type:'schedule-refresh-request', viewType}, '*')` を自ウィンドウへ
+     発行する。(b) は App の既存 `handleScheduleRangeMessage`（≈3360）がポップアップからの
+     メッセージと同一に処理し `syncStudentSchedulePopup(true)` 等を呼ぶ——**本番実証済みの
+     ハンドラを新規配線なしで再利用**するため。ただし送信前に教室ガード
+     （spec D-2-1）を通す。**`if (!force) return` ゲート自体には触らない**。
+     （代替案：App から Board へ同期関数をコールバック prop で渡す。プロップ配線が増えるが
+     明示的。どちらでも可だが、選んだ方に一本化し二重発火させない。）
    - 実行後に「同期済みリビジョン」を更新。タイマーは cleanup で必ず破棄。
    - ⚠️ 既存2つの同期 effect（deps `[scheduleSyncTrigger]`）はそのまま使う。deps を増やさない。
 4. **判定の純関数化＋テスト**：`shouldAutoSyncSchedulePopup({featureEnabled, popupOpen,
@@ -63,7 +69,12 @@
 5. **ボタン改名**（scheduleHtml.ts ≈2270）：feature 有効時のみ
    生徒view「期間・生徒名適用」/講師view「期間・講師名適用」、無効時は従来の「最新表示」。
    title 属性の説明文も合わせて更新。ラベル出し分けのユニットテストを追加。
-6. **回帰確認**：`npm run build`＋全ユニット green。特に scheduleHtml の
+6. **バージョンスキュー対策**（spec D-2-2・機能2より先にここで入れる）：ペイロードに
+   `payloadAppVersion: __APP_VERSION__` を同梱。埋め込みJSは生成時バージョンを定数で持ち、
+   受信ペイロードと不一致なら差分適用せず本体へ再オープン要求（新メッセージ
+   `schedule-reopen-request` 等）→ 本体は該当ポップアップの文書全体を再生成する。
+   両側とも未知メッセージ・未知フィールドは黙って無視する防御的ハンドリングにする。
+7. **回帰確認**：`npm run build`＋全ユニット green。特に scheduleHtml の
    `new Function` 構文検証テスト。`git diff` で force ゲート・既存 effect deps に触れていないこと。
 
 ## 3. Phase 2：生徒日程表D&D移動（機能2）
@@ -85,9 +96,10 @@
    `DATA.cells` から机テーブルを描画（講師名・着席生徒・空席。コマ表のコマと同じ見た目）。
    空席のみ選択可、ソフト警告席は警告付きで選択可、キャンセル可。
 4. **移動要求メッセージ**：席確定で
-   `window.opener.postMessage({type:'schedule-student-move-request', studentId,
-   source:{dateKey, slotNumber, entryId, lessonType, subject},
-   target:{dateKey, slotNumber, deskIndex}}, '*')`。
+   `window.opener.postMessage({type:'schedule-student-move-request', classroomStorageKey,
+   payloadAppVersion, studentId, source:{dateKey, slotNumber, entryId, lessonType, subject},
+   target:{dateKey, slotNumber, deskIndex}}, '*')`。送信と同時に既存 interaction-lock で
+   ポップアップの追加操作をロック（結果受信/タイムアウトで解除・spec D-2-2）。
 5. **App側受信 → 一過性リクエスト**（App.tsx）：`handleScheduleRangeMessage` に分岐を追加し、
    `StudentScheduleRequest` を `mode:'move'` へ拡張（requestId 採番・処理済みで
    `consumeStudentScheduleRequest` により null 化）。**Issue #46 のパターンを踏襲**：
@@ -95,7 +107,9 @@
 6. **盤面側・移動実行**（ScheduleBoardScreen）：
    - `mode:'move'` リクエストを受けたら、source（studentId＋dateKey＋slotNumber＋entryId）を
      盤面座標（cellId / deskIndex / studentIndex）へ解決する**純関数**を新設。
+   - `classroomStorageKey` が `actingClassroomId` と不一致の要求は黙って破棄（spec D-2-3）。
    - target セルの実在・空席を**実行時点の盤面で再検証**（ポップアップ情報は古い可能性）。
+     target が盤面の読込週範囲外なら `ensureWeeksCoverDateRange` で拡張してから（spec D-2-1）。
      不成立なら盤面を変えず、結果メッセージをポップアップへ返してトースト表示。
    - 成立なら `executeMoveStudent` を再利用（振替・講習は既存移動と同じ。講習の
      rawKey 科目維持を壊さない）。**通常授業**は盤面D&Dで通常を別日に動かした場合と同じ
@@ -129,7 +143,107 @@
    「回帰で development-only へ戻さない」と明記されているが、これは**安定後**の話。
    導入直後の不具合対応としての一時降格は可）。
 
-## 5. スコープ外（やらないこと）
+## 5. テスト計画（何を・どこに・どう固定するか）
+
+方針は `docs/test-strategy.md`（E2E廃止・ユニットが唯一の自動ゲート）。
+**ロジックは必ず純関数に切り出してからテストする**。以下は最低ライン（実装中に増やすのは可）。
+
+### 機能1（リアルタイム同期）
+
+| テスト対象（純関数化して export） | 固定する挙動 | 置き場所 |
+|---|---|---|
+| `shouldAutoSyncSchedulePopup({featureEnabled, popupOpen, lastSyncedRevision, currentRevision, popupClassroomKey, actingClassroomId})` | 変化なし/popup閉/feature無効/教室不一致→発火しない。変化あり→発火し同期済みリビジョン更新 | `ScheduleBoardScreen.test.ts` |
+| デバウンス動作（fake timers） | 1.5秒以内の連続編集N回→送信1回。cleanup/popup閉でタイマー破棄 | 同上 |
+| ボタンラベル出し分け | feature有効: 生徒「期間・生徒名適用」/講師「期間・講師名適用」、無効: 「最新表示」 | `scheduleHtml` 系テスト |
+| ペイロードの `payloadAppVersion` 同梱とポップアップ側の不一致検知（再オープン要求） | 不一致→差分適用せず再オープン要求。一致→通常適用 | 同上 |
+| 埋め込みJS構文検証（既存 `new Function` テスト） | テンプレ編集後も構文正常 | 既存テストが緑のまま |
+
+### 機能2（D&D移動）
+
+| テスト対象 | 固定する挙動 | 置き場所 |
+|---|---|---|
+| source 解決純関数（popup座標→盤面 cellId/deskIndex/studentIndex） | entryId で特定・同一生徒2科目同コマでも取り違えない・見つからない→null | `ScheduleBoardScreen.test.ts` |
+| target 検証純関数 | 満席/休校日/範囲外→不成立と理由。空席→成立 | 同上 |
+| 通常授業の移動 | 「振替 manual 追加」と「移動元当該日の抑制」が**両方**入る。他週の通常は不変（`computeStudentMove` 系既存テストへ追加） | 同上 |
+| 講習の移動 | 選択科目（rawKey）維持（v1.5.364 の回帰テストを popup 経由でも） | 同上 |
+| `StudentScheduleRequest` の `mode:'move'` 拡張 | 処理後 `consumeStudentScheduleRequest` で null 化・再マウントで再発火しない（Issue #46 型テストに倣う） | 既存の #46 テスト隣 |
+| 週範囲外への移動 | `ensureWeeksCoverDateRange` で拡張して成立 | 同上 |
+| Undo | D&D移動が1操作として戻る | 同上 |
+| 教室ガード | `classroomStorageKey` 不一致の move-request は無視され盤面不変 | `App` 側 or 純関数 |
+| 埋め込みJS構文検証 | D&D/モーダル追加後も `new Function` テスト緑 | 既存 |
+
+**「修正なしで落ち・修正ありで通る」の確認**：新規挙動は「実装前に落ちるテストを先に書く」が
+理想だが、最低限「実装をコメントアウト/フラグ無効にするとテストが落ちる」ことを1度確認する。
+
+## 6. デバッグ手順（開発中・staging 共通）
+
+### 6-1. 基本セットアップ
+
+- `npm run dev`（ポート5173）→ 盤面を開く → 日程表ポップアップを開く。
+- **DevTools は本体ウィンドウとポップアップウィンドウの両方で開く**（ポップアップは別ウィンドウ
+  なので Console/エラーも別。ポップアップ側のエラーは本体の Console には出ない）。
+- ポップアップ側で実行時エラーが出ると**埋め込みJS全体が停止**する（黙って無反応になる）。
+  「反応しない」時はまずポップアップ側 Console を見る。
+
+### 6-2. メモリ・同期回数の計測（`?memlog=1`・既存の診断機構）
+
+- 本体URLに `?memlog=1` を付ける（または localStorage `komahyou:memlog`='1'）。
+  `src/utils/memoryDiagnostics.ts` が **5秒ごとに heap(MB) と各処理の発生回数(delta)** を
+  `[komahyou-memlog]` として Console に出力する。
+- 既存カウンタ：`student-schedule-sync` / `teacher-schedule-sync`（App の force 同期）、
+  `board-render`、`app-render` 等。**実装時に `bumpMemCounter('schedule-auto-sync')` を
+  デバウンス発火点に追加**し、編集回数と自動同期回数の比を数値で確認できるようにする。
+- 判定手順（受け入れ条件 E-1/E-2 の実測）：
+  1. 生徒・講師ポップアップを両方開く → `?memlog=1` で 30 秒放置し baseline heap をメモ。
+  2. 出席クリックを 20 回連続（数秒間隔） → memlog で `schedule-auto-sync` の delta が
+     編集回数より大幅に少ない（デバウンス集約）ことを確認。
+  3. 5 分間編集を続け、heap が**編集のたびに単調増加せず、GC 後 baseline 近傍に戻る**ことを確認。
+     判断に迷ったら DevTools → Memory → ヒープスナップショットを編集前後で取り比較
+     （Detached window / 大量の文字列が増え続けていないか）。
+- 旧障害の再現ベンチ（比較用）：feature フラグを一時的に「デバウンスなし・毎編集同期」にした
+  ローカル改変で同じ操作をすると heap 増加が観察できるはず。対策版との差を確認して戻す。
+
+### 6-3. メッセージのトレース
+
+- 本体 Console で `window.addEventListener('message', e => console.log('[msg]', e.data?.type, e.data))`
+  を一時実行すると popup→本体のメッセージが全部見える（`schedule-student-move-request` の
+  payload 形の確認に使う）。ポップアップ側も同様に `schedule-data-update` の受信を確認できる。
+- ポップアップの操作ロックが解除されず固まった場合の救済：本体から
+  `popup.postMessage({type:'schedule-force-release-interaction'}, '*')`（既存機構）。
+
+### 6-4. staging での必須シナリオ（実機・デプロイ後）
+
+1. 機能1・機能2 の各受け入れ条件（正本 §E）を上から全部。
+2. **バージョンスキュー訓練**：ポップアップを開いたまま staging に再デプロイ → 本体だけ
+   リロード → ポップアップが自己修復（再オープン）し、例外が出ないこと。
+3. **長時間試験**：ポップアップ2枚開いたまま 30 分通常操作し、memlog の heap が安定。
+4. 回線断（DevTools offline）中の盤面編集 → 自動同期はローカル動作なので影響なしを確認。
+
+## 7. 本番エラーゼロ・チェックリスト（リリース判定）
+
+**対象環境**（この教室運用の実態に合わせる）：
+- 本番3教室のスタッフPC = Windows + Chrome/Edge 最新（自動更新）。日程表ポップアップは
+  PC 専用運用（スマホ/タブレットは QR 提出側で、本機能の対象外）。
+- タッチ非対応PCではD&Dはマウス長押し。Pointer Events で実装しマウス/タッチ両対応にする
+  （盤面D&D `studentDragAndDropMove` の実装を踏襲すれば両対応になる）。
+
+リリース前に全部 YES であること：
+
+- [ ] CI（lint / unit / build）緑。`new Function` 構文検証テスト緑。
+- [ ] regression-reviewer の巻き戻し検査済み（§1 の厳禁リスト）。
+- [ ] staging で §6-4 の4シナリオ全部合格（heap 実測値を Issue/CHANGELOG に記録）。
+- [ ] バージョンスキュー対策が入っている（`payloadAppVersion` 同梱＋再オープン要求＋
+      両側の防御的メッセージハンドリング）。**これが無いままメッセージ形を変えるリリースをしない**。
+- [ ] featureRollout が `development-only` である（初回リリース時）。
+- [ ] 本番デプロイ後、開発用教室 `v8OZ7zH8vONNHjjYVcR1` で受け入れ条件のスモーク
+      （同期反映・D&D移動・保存・リロード永続化）。
+- [ ] 昇格（`all-classrooms`）は**単独コミット**で、昇格後にオーナーへ
+      「各教室でハードリロード（Ctrl+Shift+R）」の周知を依頼（旧バンドルキャッシュ事故防止）。
+- [ ] 昇格後 1〜2 営業日は `uptime-check` と教室からの報告を注視。異常時は
+      featureRollout を `development-only` へ戻す1行コミット（最速）または Hosting 巻き戻し
+      （`docs/runbooks/rollback.md` A）。
+
+## 8. スコープ外（やらないこと）
 
 - 多端末間のリアルタイム同期（Firestore onSnapshot 等）— 1教室1端末方針のため対象外。
 - 全体日程・講習ポップアップへの自動同期、講師日程表からのD&D — 将来検討。

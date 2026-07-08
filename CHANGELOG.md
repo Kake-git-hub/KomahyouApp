@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.408 (2026-07-08)
+
+- docs: 日程表同期+D&D仕様のギャップ精査追補(教室切替ガード・バージョンスキュー自己修復・机選択モーダルは物理空きのみ判定・週範囲拡張・操作ロック・Undo)と、手順書へテスト計画/デバッグ手順(?memlog計測手順)/本番エラーゼロチェックリストを追加(spec-*-realtime-sync / spec-student-schedule-dnd / handoff-popup-sync-and-dnd。コード変更なし)
+
 ## v1.5.407 (2026-07-08)
 
 - docs: 日程表リアルタイム同期＋生徒日程表D&D移動の確定仕様と改修手順書を追加(オーナーQ&A 10問で要件確定。docs/spec-schedule-popup-realtime-sync.md / docs/spec-student-schedule-dnd.md / docs/handoff-popup-sync-and-dnd.md。spec-index の大方針6を正式上書き。コード変更なし)
