@@ -5629,8 +5629,30 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   //     buildPayloadFingerprint / skipNextEquivalentPayload が等価ペイロードの再描画をスキップする。
   //   ③表示範囲限定: studentScheduleCells / teacherScheduleCells は表示期間ぶんだけを算出済み。
   // ポップアップが開いているときだけ作動し、閉じている間は一切走らせない。
+  // 反映が終わるまでの数秒はポップアップ側に「同期中」スピナーを最前面表示する(埋め込みJSの
+  // __showScheduleSyncing を即時に呼ぶ→同期ペイロード適用で自動的に消える)。
+  const syncSpinnerArmedRef = useRef(false)
   useEffect(() => {
-    if (!isStudentScheduleOpen && !isTeacherScheduleOpen) return
+    if (!isStudentScheduleOpen && !isTeacherScheduleOpen) {
+      syncSpinnerArmedRef.current = false
+      return
+    }
+    if (syncSpinnerArmedRef.current) {
+      // 実編集による同期。即座にポップアップへ「同期中」を出す(反映まで最前面スピナー)。
+      const showSyncing = (win: Window | null) => {
+        try {
+          const target = win as (Window & { __showScheduleSyncing?: () => void }) | null
+          if (target && !target.closed && typeof target.__showScheduleSyncing === 'function') target.__showScheduleSyncing()
+        } catch {
+          // クロスウィンドウ参照が閉じている等は無視
+        }
+      }
+      if (isStudentScheduleOpen) showSyncing(studentScheduleWindowRef.current)
+      if (isTeacherScheduleOpen) showSyncing(teacherScheduleWindowRef.current)
+    } else {
+      // 初回(ポップアップを開いた直後)は初期表示なのでスピナーを出さない。
+      syncSpinnerArmedRef.current = true
+    }
     const timer = window.setTimeout(() => {
       setScheduleSyncTrigger((prev) => prev + 1)
     }, 1500)

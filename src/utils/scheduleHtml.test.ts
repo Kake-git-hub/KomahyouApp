@@ -308,6 +308,41 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 別タブ日程表の「同期中」スピナー(オーナー指示 2026-07-08)。盤面編集→別タブ反映までの数秒、
+  // 最前面に大きく出す。本体は __showScheduleSyncing() で出し、同期ペイロード適用(flushIncomingPayload)で消す。
+  it('別タブ日程表に同期中スピナー(overlay + __showScheduleSyncing + flushで自動非表示)を含む', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('id="schedule-sync-overlay"')
+    expect(html).toContain('window.__showScheduleSyncing = showScheduleSyncingOverlay')
+    // flushIncomingPayload の末尾で必ず非表示にする(等価ペイロードでも固着しない)
+    expect(html).toContain('hideScheduleSyncingOverlay();')
+
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(2026-07-04 監査領域9 A1 オーナー確定): plannedCells は埋め込みJSから一度も読まれないデッド payload
   // だったため撤去した。planned 通常回数の唯一の根拠は expectedRegularOccurrences(テンプレ由来)。
   // plannedCells を payload に復活させる変更(=毎同期の無駄な生成/シリアライズと「二重の planned 根拠」の再発)を検知する。

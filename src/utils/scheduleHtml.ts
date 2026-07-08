@@ -2129,6 +2129,36 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: rgba(255, 255, 255, 0.86);
       }
 
+      /* 盤面編集→別タブ反映までの数秒間、最前面に大きく出す同期中スピナー(自動同期のフィードバック)。 */
+      .schedule-sync-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: rgba(244, 247, 250, 0.72);
+      }
+      .schedule-sync-overlay[hidden] { display: none; }
+      .schedule-sync-spinner {
+        width: 92px;
+        height: 92px;
+        border: 11px solid #c3d0e0;
+        border-top-color: #1a73e8;
+        border-radius: 50%;
+        animation: schedule-sync-spin 0.9s linear infinite;
+      }
+      .schedule-sync-text {
+        font-size: 24px;
+        font-weight: 800;
+        color: #16385c;
+        letter-spacing: 0.04em;
+        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
+      }
+      @keyframes schedule-sync-spin { to { transform: rotate(360deg); } }
+
       @media print {
         *,
         *::before,
@@ -2275,6 +2305,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
     </div>`}
     <main class="pages" id="schedule-pages"></main>
     <input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />
+    <div id="schedule-sync-overlay" class="schedule-sync-overlay print-only-hidden" hidden><div class="schedule-sync-spinner"></div><div class="schedule-sync-text">コマ表の最新を反映中…</div></div>
     <script id="schedule-data" type="application/json">${serializedPayload}</script>
     <script>
       const VIEW_TYPE = '${viewType}';
@@ -2293,6 +2324,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
       const applyButton = document.getElementById('schedule-apply-button');
+      const scheduleSyncOverlay = document.getElementById('schedule-sync-overlay');
+      // 盤面編集→別タブ反映の間の「同期中」スピナー。本体(盤面)が編集時に __showScheduleSyncing() を呼んで
+      // 出し、同期ペイロード適用(flushIncomingPayload)で自動的に消す。来ないときの固着防止に保険タイマー。
+      let scheduleSyncHideTimer = 0;
+      function showScheduleSyncingOverlay() {
+        if (!scheduleSyncOverlay) return;
+        if (scheduleSyncHideTimer) { window.clearTimeout(scheduleSyncHideTimer); scheduleSyncHideTimer = 0; }
+        scheduleSyncOverlay.hidden = false;
+        scheduleSyncHideTimer = window.setTimeout(hideScheduleSyncingOverlay, 8000);
+      }
+      function hideScheduleSyncingOverlay() {
+        if (scheduleSyncHideTimer) { window.clearTimeout(scheduleSyncHideTimer); scheduleSyncHideTimer = 0; }
+        if (scheduleSyncOverlay) scheduleSyncOverlay.hidden = true;
+      }
+      window.__showScheduleSyncing = showScheduleSyncingOverlay;
       const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'));
       const sharedStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':' + BASE_VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':global:';
@@ -4977,8 +5023,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         incomingPayloadJobId = 0;
         const nextPayload = pendingIncomingPayload;
         pendingIncomingPayload = null;
-        if (!nextPayload) return;
-        applyIncomingPayload(nextPayload);
+        if (nextPayload) applyIncomingPayload(nextPayload);
+        // 反映が終わったら(等価ペイロードで再描画なしでも)同期中スピナーを必ず消す。
+        hideScheduleSyncingOverlay();
       }
 
       function scheduleIncomingPayload(nextPayload) {
