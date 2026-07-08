@@ -382,16 +382,16 @@ describe('scheduleViewData: 共通ヘルパ', () => {
     expect(scheduleRowPropsAreEqual({ row: beforeRow2 }, { row: afterRow2 })).toBe(false)
   })
 
-  it('行メモ化: signature とハンドラ参照が同一ならスキップ、ハンドラ参照が変わると再レンダー', () => {
+  it('行メモ化: signature と dragHandlers 参照が同一ならスキップ、参照が変わると再レンダー', () => {
     // ドラッグ中のドロップ候補ハイライト(青枠)は直接DOM操作なので、行の再レンダーには依存しない
-    // (ドラッグ開始で全行が再レンダーされない=メモリ規律)。
+    // (ドラッグ開始で全行が再レンダーされない=メモリ規律)。dragHandlers は useMemo で安定参照。
     const row = { signature: 'sig' }
-    const handler = () => {}
-    const otherHandler = () => {}
-    expect(scheduleRowPropsAreEqual({ row, onCardPointerDown: handler }, { row, onCardPointerDown: handler })).toBe(true)
-    // ハンドラの参照が変わったら古いクロージャで掴まないよう再レンダーする
-    expect(scheduleRowPropsAreEqual({ row, onCardPointerDown: handler }, { row, onCardPointerDown: otherHandler })).toBe(false)
+    const handlers = {}
+    const otherHandlers = {}
+    expect(scheduleRowPropsAreEqual({ row, dragHandlers: handlers }, { row, dragHandlers: handlers })).toBe(true)
+    // ハンドラ束の参照が変わったら古いクロージャで掴まないよう再レンダーする
+    expect(scheduleRowPropsAreEqual({ row, dragHandlers: handlers }, { row, dragHandlers: otherHandlers })).toBe(false)
     // signature が変われば(表示内容変化)当然再レンダーする
-    expect(scheduleRowPropsAreEqual({ row, onCardPointerDown: handler }, { row: { signature: 'sig2' }, onCardPointerDown: handler })).toBe(false)
+    expect(scheduleRowPropsAreEqual({ row, dragHandlers: handlers }, { row: { signature: 'sig2' }, dragHandlers: handlers })).toBe(false)
   })
 })

@@ -41,16 +41,17 @@ export const SCHEDULE_VIEW_POPOUT_PRINT_CSS = `
     box-shadow: none !important;
     border: 0 !important;
     padding: 0 !important;
-    width: 277mm !important;
-    height: 190mm !important;
-    aspect-ratio: 297 / 210 !important;
+    /* A4横の印刷可能領域(余白3mm)いっぱいに広げる。aspect-ratio 固定を外して用紙幅・高さいっぱいにする。 */
+    width: 291mm !important;
+    height: 204mm !important;
+    aspect-ratio: auto !important;
     overflow: hidden !important;
     page-break-after: always;
   }
   .schedule-react-view .sheet.is-a3-portrait {
-    width: 281mm !important;
-    height: 404mm !important;
-    aspect-ratio: 297 / 420 !important;
+    width: 291mm !important;
+    height: 410mm !important;
+    aspect-ratio: auto !important;
     page: sheetA3;
   }
   .schedule-react-view .holiday-col,
@@ -75,11 +76,11 @@ export const SCHEDULE_VIEW_POPOUT_PRINT_CSS = `
 
 @page {
   size: A4 landscape;
-  margin: 8mm;
+  margin: 3mm;
 }
 
 @page sheetA3 {
   size: A3 portrait;
-  margin: 8mm;
+  margin: 3mm;
 }
 `

@@ -5414,6 +5414,43 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }).weeks
   }, [classroomSettings, normalizedWeeks, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, teachers])
 
+  // 印刷用「全員表示」を実行する。React 日程表ビューのボタンからは直接呼び、旧生成HTMLタブからは
+  // postMessage('open-all-schedule') 経由でも呼べるようにする(後方互換)。
+  const runOpenAllSchedule = useCallback((viewType: 'all-student' | 'all-teacher', startDate: string, endDate: string, targetWindowName?: string) => {
+    const range = { startDate, endDate, periodValue: '' }
+    const scheduleBoardWeeks = buildBoardWeeksForScheduleRange(range)
+    openAllScheduleHtml({
+      viewType,
+      targetWindowName,
+      cells: buildScheduleCellsForRange({
+        range,
+        fallbackStartDate: scheduleFallbackStartDate,
+        fallbackEndDate: scheduleFallbackEndDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences,
+      }),
+      students,
+      teachers,
+      regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
+      scheduleCountAdjustments,
+      defaultStartDate: range.startDate,
+      defaultEndDate: range.endDate,
+      titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
+      classroomSettings,
+      classroomStorageKey,
+      optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      periodBands: specialSessions,
+      specialSessions,
+      groupClassEntries,
+    })
+  }, [buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, studentScheduleOptionFieldEnabled, specialSessions, groupClassEntries])
+
   useEffect(() => {
     const handleOpenAllSchedule = (event: MessageEvent) => {
       const message = event.data
@@ -5422,42 +5459,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const requestedStartDate = typeof message.startDate === 'string' ? message.startDate : scheduleFallbackStartDate
       const requestedEndDate = typeof message.endDate === 'string' ? message.endDate : scheduleFallbackEndDate
       const targetWindowName = typeof message.targetWindowName === 'string' ? message.targetWindowName : undefined
-      const range = { startDate: requestedStartDate, endDate: requestedEndDate, periodValue: '' }
-      const scheduleBoardWeeks = buildBoardWeeksForScheduleRange(range)
-      openAllScheduleHtml({
-        viewType: requestedViewType,
-        targetWindowName,
-        cells: buildScheduleCellsForRange({
-          range,
-          fallbackStartDate: scheduleFallbackStartDate,
-          fallbackEndDate: scheduleFallbackEndDate,
-          classroomSettings,
-          teachers,
-          students,
-          regularLessons,
-          boardWeeks: scheduleBoardWeeks,
-          suppressedRegularLessonOccurrences,
-        }),
-        students,
-        teachers,
-        regularLessons,
-        regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
-        preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
-        scheduleCountAdjustments,
-        defaultStartDate: range.startDate,
-        defaultEndDate: range.endDate,
-        titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
-        classroomSettings,
-        classroomStorageKey,
-        optionFieldEnabled: studentScheduleOptionFieldEnabled,
-        periodBands: specialSessions,
-        specialSessions,
-        groupClassEntries,
-      })
+      runOpenAllSchedule(requestedViewType, requestedStartDate, requestedEndDate, targetWindowName)
     }
     window.addEventListener('message', handleOpenAllSchedule)
     return () => window.removeEventListener('message', handleOpenAllSchedule)
-  }, [buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, specialSessions])
+  }, [runOpenAllSchedule, scheduleFallbackStartDate, scheduleFallbackEndDate])
 
   const effectiveStudentScheduleRange = useMemo(
     () => normalizeScheduleRange(studentScheduleRange ?? { startDate: scheduleFallbackStartDate, endDate: scheduleFallbackEndDate, periodValue: '' }, scheduleFallbackStartDate, scheduleFallbackEndDate),
@@ -5697,14 +5703,68 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     window.postMessage({ type: 'schedule-note-update', viewType: 'student', noteKey, value }, '*')
   }, [])
 
-  // 印刷用全員表示は従来どおり生成HTMLタブ(既存の 'open-all-schedule' ハンドラ)へ委譲する。印刷経路は不変。
+  // 印刷用全員表示は生成HTML(全員ビュー)を直接開く(postMessage 経由をやめ、React ボタンから確実に動くように)。
   const handleOpenPrintAllStudents = useCallback(() => {
-    window.postMessage({ type: 'open-all-schedule', viewType: 'all-student', startDate: effectiveStudentScheduleRange.startDate, endDate: effectiveStudentScheduleRange.endDate }, '*')
-  }, [effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.startDate])
+    runOpenAllSchedule('all-student', effectiveStudentScheduleRange.startDate, effectiveStudentScheduleRange.endDate)
+  }, [runOpenAllSchedule, effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.startDate])
 
   const handleOpenPrintAllTeachers = useCallback(() => {
-    window.postMessage({ type: 'open-all-schedule', viewType: 'all-teacher', startDate: effectiveTeacherScheduleRange.startDate, endDate: effectiveTeacherScheduleRange.endDate }, '*')
-  }, [effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.startDate])
+    runOpenAllSchedule('all-teacher', effectiveTeacherScheduleRange.startDate, effectiveTeacherScheduleRange.endDate)
+  }, [runOpenAllSchedule, effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.startDate])
+
+  // 空フォーマット印刷・講習集計結果は生成HTMLの生徒日程タブ内の機能。React ビューからは、現在の期間・
+  // 生徒に合わせた生成HTMLタブ(従来の生徒日程表)を開いて委譲する(印刷/集計はこの完成済み実装を使う)。
+  // ⚠️ 印刷経路は生成HTMLのまま(temporarily 2経路併存・spec-schedule-interactive-view §F)。
+  const generatedStudentScheduleTabRef = useRef<Window | null>(null)
+  const openGeneratedStudentScheduleTab = useCallback(() => {
+    const storedRange = effectiveStudentScheduleRange
+    const scheduleBoardWeeks = buildBoardWeeksForScheduleRange(storedRange)
+    const nextWindow = openStudentScheduleHtml({
+      cells: buildScheduleCellsForRange({
+        range: storedRange,
+        fallbackStartDate: scheduleFallbackStartDate,
+        fallbackEndDate: scheduleFallbackEndDate,
+        classroomSettings,
+        teachers,
+        students,
+        regularLessons,
+        boardWeeks: scheduleBoardWeeks,
+        suppressedRegularLessonOccurrences,
+      }),
+      students,
+      regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
+      teachers,
+      scheduleCountAdjustments,
+      defaultStartDate: storedRange.startDate,
+      defaultEndDate: storedRange.endDate,
+      defaultPeriodValue: storedRange.periodValue,
+      defaultPersonId: storedRange.personId,
+      titleLabel: formatWeeklyScheduleTitle(storedRange.startDate, storedRange.endDate),
+      classroomSettings,
+      classroomStorageKey,
+      optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      periodBands: specialSessions,
+      specialSessions,
+      groupClassEntries,
+      targetWindow: generatedStudentScheduleTabRef.current,
+    })
+    if (nextWindow) {
+      generatedStudentScheduleTabRef.current = nextWindow
+      nextWindow.focus()
+    }
+  }, [effectiveStudentScheduleRange, buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, studentScheduleOptionFieldEnabled, specialSessions, groupClassEntries])
+
+  const handleOpenEmptyFormat = useCallback(() => {
+    openGeneratedStudentScheduleTab()
+    setStatusMessage('空フォーマット印刷は開いた生徒日程表(従来画面)の「空フォーマット印刷」ボタンから実行できます。')
+  }, [openGeneratedStudentScheduleTab])
+
+  const handleOpenLectureSummary = useCallback(() => {
+    openGeneratedStudentScheduleTab()
+    setStatusMessage('講習集計結果は開いた生徒日程表(従来画面)の「講習集計結果」ボタンから確認できます。')
+  }, [openGeneratedStudentScheduleTab])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
@@ -10366,6 +10426,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onRangeChange={handleStudentScheduleViewRangeChange}
             onScheduleNoteChange={handleStudentScheduleViewNoteChange}
             onOpenPrintAll={handleOpenPrintAllStudents}
+            onOpenEmptyFormat={handleOpenEmptyFormat}
+            onOpenLectureSummary={handleOpenLectureSummary}
             classroomStorageKey={classroomStorageKey}
             fitToWindow={studentScheduleViewState.mode === 'popout'}
             onExecuteMove={stableExecuteScheduleViewMove}

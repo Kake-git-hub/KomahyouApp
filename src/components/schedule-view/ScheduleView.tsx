@@ -2,14 +2,14 @@
 // 盤面 state から親(ScheduleBoardScreen)が組んだ SchedulePayload を受け取り、
 // scheduleViewData の純関数で view model を算出して描画する。同一 React ツリーのため
 // 盤面編集は自動反映(リアルタイム同期は「同じ state で再レンダー」で成立)。
-// 期間・人選択の絞り込みは即時適用(旧「最新表示」ボタンは不要になった)。
+// 期間・人選択は下書き(draft)＋「反映」ボタンで適用する(旧生成HTMLの「最新表示」相当)。
 //
 // 日程表コマ組み(spec-student-schedule-dnd): 生徒ビューの授業カードを長押し(約250ms・盤面D&Dと
 // 同じ)で掴み、空きコマへドロップ → 机選択モーダル(コマ表と同じ配置) → 盤面の executeMoveStudent を
 // 直接呼ぶ(親から onExecuteMove として受け取る)。自動割振ルール・警告は評価も表示もしない。
-// ドラッグ中は盤面D&Dと同じ「画面周囲の青枠」を出し、ドロップ候補セルの青枠ハイライトは直接 DOM 操作
-// (React 再レンダーなし=メモリ規律)。ポップアウト(子ウィンドウ)でも動くよう、pointer 系は
-// カードの ownerDocument に対して張り、hit-test も同じ document で elementFromPoint する。
+// ⚠️ ポップアウト(子ウィンドウ)対応: pointer 操作は document への addEventListener ではなく、
+// カード要素の React synthetic pointer events ＋ setPointerCapture で完結させる(別ウィンドウでも
+// 確実にドロップ判定できる)。hit-test は event.view.document.elementFromPoint(発生元ウィンドウ)。
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
@@ -31,6 +31,7 @@ import {
 import type { ScheduleViewType, StudentCellCardData, StudentGridCellData } from '../../utils/scheduleViewData'
 import type { SlotCell } from '../schedule-board/types'
 import { StudentScheduleSheet, TeacherScheduleSheet } from './ScheduleSheet'
+import type { ScheduleCardDragHandlers } from './ScheduleSheet'
 import { buildDeskPickerDesks } from './scheduleViewMove'
 import type { DeskPickerDesk, ScheduleViewMoveSeat, ScheduleViewMoveSource } from './scheduleViewMove'
 
@@ -49,7 +50,10 @@ export type ScheduleViewProps = {
   range: ScheduleViewRange
   onRangeChange: (range: ScheduleViewRange) => void
   onScheduleNoteChange?: (noteKey: string, value: string) => void
+  // 従来の生成HTML(印刷)を開くアクション。生徒ビューでのみ空フォーマット/講習集計を出す。
   onOpenPrintAll?: () => void
+  onOpenEmptyFormat?: () => void
+  onOpenLectureSummary?: () => void
   classroomStorageKey?: string
   // 別ウィンドウ表示: 日程表シートが下まで収まるよう zoom を自動調整する。
   fitToWindow?: boolean
@@ -82,7 +86,13 @@ function findDropCandidate(doc: Document, x: number, y: number): HTMLElement | n
   return td instanceof HTMLElement ? td : null
 }
 
-export function ScheduleView({ viewType, payload, range, onRangeChange, onScheduleNoteChange, onOpenPrintAll, classroomStorageKey, fitToWindow, onExecuteMove, resolveMoveTargetCell, resolveStudentDisplayName }: ScheduleViewProps) {
+function eventDocument(event: ReactPointerEvent<HTMLElement>): Document {
+  // event.view は発生元ウィンドウ(ポップアウトなら子ウィンドウ)。その document で hit-test する。
+  const view = event.view as unknown as { document?: Document } | null
+  return view?.document ?? event.currentTarget.ownerDocument
+}
+
+export function ScheduleView({ viewType, payload, range, onRangeChange, onScheduleNoteChange, onOpenPrintAll, onOpenEmptyFormat, onOpenLectureSummary, classroomStorageKey, fitToWindow, onExecuteMove, resolveMoveTargetCell, resolveStudentDisplayName }: ScheduleViewProps) {
   const [personSearch, setPersonSearch] = useState('')
 
   const { startDate, endDate } = normalizeRangeDates(
@@ -111,24 +121,34 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     return { student: null, teacher: buildTeacherSheetViewModel(payload, { startDate, endDate, teacherId: resolvedPersonId, resolveQrSvg: buildSubmissionQrSvg }) }
   }, [payload, viewType, startDate, endDate, resolvedPersonId])
 
-  const applyRange = (next: Partial<ScheduleViewRange>) => {
-    onRangeChange({
-      startDate,
-      endDate,
-      periodValue: range.periodValue,
-      personId: resolvedPersonId,
-      ...next,
-    })
-  }
+  // ===== 期間・生徒(講師)の下書き(draft)＋「反映」ボタン =====
+  // 旧生成HTMLの「最新表示」に相当。開始日/終了日/講習期間/人選択を下書きに溜め、反映ボタンで適用する。
+  const [draft, setDraft] = useState<{ startDate: string; endDate: string; periodValue: string; personId: string }>(() => ({
+    startDate,
+    endDate,
+    periodValue: range.periodValue,
+    personId: range.personId ?? '',
+  }))
+  const draftPersonId = draft.personId || resolvedPersonId
 
-  const handlePeriodChange = (value: string) => {
+  const handlePeriodDraftChange = (value: string) => {
     if (!value) {
-      applyRange({ periodValue: '' })
+      setDraft((prev) => ({ ...prev, periodValue: '' }))
       return
     }
     const matched = periodOptions.find((option) => option.value === value)
     if (!matched) return
-    applyRange({ periodValue: value, startDate: matched.startDate, endDate: matched.endDate })
+    setDraft((prev) => ({ ...prev, periodValue: value, startDate: matched.startDate, endDate: matched.endDate }))
+  }
+
+  const applyDraft = () => {
+    const normalized = normalizeRangeDates(draft.startDate || startDate, draft.endDate || endDate)
+    onRangeChange({
+      startDate: normalized.startDate,
+      endDate: normalized.endDate,
+      periodValue: draft.periodValue,
+      personId: draftPersonId,
+    })
   }
 
   const storageScope = encodeURIComponent(classroomStorageKey || 'default')
@@ -137,9 +157,15 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     [storageScope],
   )
 
+  // 講習集計結果は表示期間に講習期間(specialSession)が重なるときだけ出す(旧生成HTMLと同じ出し分け)。
+  const hasLectureSummary = useMemo(
+    () => (payload.specialSessions || []).some((session) => session.startDate <= endDate && session.endDate >= startDate),
+    [payload.specialSessions, startDate, endDate],
+  )
+
   // ===== 別ウィンドウ fit: シートが下まで収まる zoom を計算して適用する =====
   // zoom は transform と違いレイアウト箱ごと縮むため縦スクロールが出ず、elementFromPoint も
-  // 縮小後の座標で正しく当たる(D&Dの hit-test と両立する)。印刷時は注入した print CSS が zoom:1 に戻す。
+  // 縮小後の座標で正しく当たる(D&Dの hit-test と両立)。印刷時は注入した print CSS が zoom:1 に戻す。
   const pagesRef = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
     if (!fitToWindow) return
@@ -154,7 +180,7 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
       const natW = sheet.offsetWidth
       const natH = sheet.offsetHeight
       if (!natW || !natH || availW <= 0 || availH <= 0) return
-      const z = Math.min(availW / natW, availH / natH, 1.5)
+      const z = Math.min(availW / natW, availH / natH, 2)
       sheet.style.zoom = z > 0 ? String(z) : '1'
     }
     applyFit()
@@ -166,12 +192,10 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
       observer.disconnect()
       win?.removeEventListener('resize', applyFit)
     }
-    // vm(表示内容)が変わるとシート高さが変わるため再計算する。
   }, [fitToWindow, resolvedPersonId, startDate, endDate, payload])
 
   // ===== 日程表コマ組み(D&D) =====
   const dndEnabled = viewType === 'student' && Boolean(onExecuteMove && resolveMoveTargetCell)
-  // ドラッグ中フラグは青枠・ゴーストの描画にのみ使う(1回のレンダー)。掴んだ内容は ref。
   const [dragLabel, setDragLabel] = useState<string | null>(null)
   const dragActive = dragLabel !== null
   const [deskPicker, setDeskPicker] = useState<DeskPickerState | null>(null)
@@ -179,8 +203,9 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
   const dragSourceRef = useRef<{ source: ScheduleViewMoveSource; label: string } | null>(null)
   const dragGhostRef = useRef<HTMLDivElement | null>(null)
   const hoverCellRef = useRef<HTMLElement | null>(null)
-  const pressRef = useRef<{ timer: number; startX: number; startY: number; card: StudentCellCardData; cell: StudentGridCellData; doc: Document } | null>(null)
-  const listenersRef = useRef<{ doc: Document; move: (event: PointerEvent) => void; up: (event: PointerEvent) => void; cancel: () => void } | null>(null)
+  const pressTimerRef = useRef<number | null>(null)
+  const pressRef = useRef<{ startX: number; startY: number; card: StudentCellCardData; cell: StudentGridCellData } | null>(null)
+  const captureRef = useRef<{ el: HTMLElement; pointerId: number } | null>(null)
 
   const setHoverCell = useCallback((td: HTMLElement | null) => {
     if (hoverCellRef.current === td) return
@@ -189,31 +214,37 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     hoverCellRef.current = td
   }, [])
 
-  const detachDocListeners = useCallback(() => {
-    const attached = listenersRef.current
-    if (!attached) return
-    attached.doc.removeEventListener('pointermove', attached.move)
-    attached.doc.removeEventListener('pointerup', attached.up)
-    attached.doc.removeEventListener('pointercancel', attached.cancel)
-    listenersRef.current = null
-  }, [])
-
-  const clearPress = useCallback(() => {
-    if (pressRef.current) {
-      window.clearTimeout(pressRef.current.timer)
-      pressRef.current = null
+  const clearPressTimer = useCallback(() => {
+    if (pressTimerRef.current !== null) {
+      window.clearTimeout(pressTimerRef.current)
+      pressTimerRef.current = null
     }
   }, [])
 
-  const endDrag = useCallback(() => {
+  const releaseCapture = useCallback(() => {
+    const capture = captureRef.current
+    if (capture) {
+      try {
+        capture.el.releasePointerCapture(capture.pointerId)
+      } catch {
+        // すでに解放済み等は無視
+      }
+      captureRef.current = null
+    }
+  }, [])
+
+  const finishDrag = useCallback(() => {
+    clearPressTimer()
+    pressRef.current = null
     dragSourceRef.current = null
     setHoverCell(null)
     setDragLabel(null)
-    detachDocListeners()
-    clearPress()
-  }, [detachDocListeners, clearPress, setHoverCell])
+  }, [clearPressTimer, setHoverCell])
 
-  useEffect(() => endDrag, [endDrag])
+  useEffect(() => () => {
+    releaseCapture()
+    finishDrag()
+  }, [releaseCapture, finishDrag])
 
   const moveGhost = (clientX: number, clientY: number) => {
     const ghost = dragGhostRef.current
@@ -246,73 +277,77 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     })
   }, [resolveMoveTargetCell, resolveStudentDisplayName])
 
-  const handleCardPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, card: StudentCellCardData, cell: StudentGridCellData) => {
-    if (!dndEnabled || !card.entryId) return
-    if (event.button !== 0 && event.pointerType === 'mouse') return
-    // ドラッグ確定中の別ポインタ再入(マルチタッチ等)は無視。長押し待ち中の再入は前の待ちと
-    // 前の document リスナーを破棄してから付け直す(リスナー残留=微リーク防止)。
-    if (dragSourceRef.current) return
-    const doc = event.currentTarget.ownerDocument
-    clearPress()
-    detachDocListeners()
-    setMoveStatus('')
-    const startX = event.clientX
-    const startY = event.clientY
-    const timer = window.setTimeout(() => {
-      const pressed = pressRef.current
-      if (!pressed) return
-      pressRef.current = null
-      const source: ScheduleViewMoveSource = {
-        entryId: card.entryId!,
-        studentId: card.studentId,
-        sourceDateKey: cell.dateKey,
-        sourceSlotNumber: cell.slotNumber,
-        lessonType: card.lessonType ?? '',
-        subject: card.subject ?? '',
-        studentName: card.studentName ?? '',
+  // カードに直接ぶら下げる pointer ハンドラ束。useMemo で安定参照にし行のメモ化を壊さない。
+  const dragHandlers = useMemo<ScheduleCardDragHandlers | undefined>(() => {
+    if (!dndEnabled) return undefined
+    const onPointerDown = (event: ReactPointerEvent<HTMLElement>, card: StudentCellCardData, cell: StudentGridCellData) => {
+      if (!card.entryId) return
+      if (event.button !== 0 && event.pointerType === 'mouse') return
+      if (dragSourceRef.current) return
+      clearPressTimer()
+      releaseCapture()
+      setMoveStatus('')
+      const el = event.currentTarget
+      const pointerId = event.pointerId
+      // 掴んでいる間 pointer をカードに固定する。以降の move/up はカードの synthetic event で受ける
+      // (ポップアウト子ウィンドウでも document に頼らず確実に届く)。
+      try {
+        el.setPointerCapture(pointerId)
+        captureRef.current = { el, pointerId }
+      } catch {
+        captureRef.current = null
       }
-      const label = `${resolveStudentDisplayName ? resolveStudentDisplayName(source.studentName) : source.studentName} ${card.main}`
-      dragSourceRef.current = { source, label }
-      setDragLabel(label)
-      moveGhost(startX, startY)
-    }, LONG_PRESS_MS)
-    pressRef.current = { timer, startX, startY, card, cell, doc }
-
-    const handleMove = (moveEvent: PointerEvent) => {
-      const pressed = pressRef.current
-      if (pressed) {
+      pressRef.current = { startX: event.clientX, startY: event.clientY, card, cell }
+      pressTimerRef.current = window.setTimeout(() => {
+        const pressed = pressRef.current
+        if (!pressed) return
+        pressTimerRef.current = null
+        const source: ScheduleViewMoveSource = {
+          entryId: pressed.card.entryId!,
+          studentId: pressed.card.studentId,
+          sourceDateKey: pressed.cell.dateKey,
+          sourceSlotNumber: pressed.cell.slotNumber,
+          lessonType: pressed.card.lessonType ?? '',
+          subject: pressed.card.subject ?? '',
+          studentName: pressed.card.studentName ?? '',
+        }
+        const label = `${resolveStudentDisplayName ? resolveStudentDisplayName(source.studentName) : source.studentName} ${pressed.card.main}`
+        dragSourceRef.current = { source, label }
+        setDragLabel(label)
+        moveGhost(pressed.startX, pressed.startY)
+      }, LONG_PRESS_MS)
+    }
+    const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
+      if (pressTimerRef.current !== null) {
         // 長押し前に動いたらスクロール等とみなして掴まない(盤面D&Dと同じ感覚)。
-        const distance = Math.hypot(moveEvent.clientX - pressed.startX, moveEvent.clientY - pressed.startY)
-        if (distance > PRESS_MOVE_TOLERANCE_PX) {
-          window.clearTimeout(pressed.timer)
+        const pressed = pressRef.current
+        if (pressed && Math.hypot(event.clientX - pressed.startX, event.clientY - pressed.startY) > PRESS_MOVE_TOLERANCE_PX) {
+          clearPressTimer()
+          releaseCapture()
           pressRef.current = null
-          detachDocListeners()
         }
         return
       }
       if (dragSourceRef.current) {
-        moveEvent.preventDefault()
-        moveGhost(moveEvent.clientX, moveEvent.clientY)
-        // hit-test はイベントが実際に起きた document で行う(ポップアウト子ウィンドウでも正しく当たる)。
-        const evDoc = (moveEvent.target instanceof Element ? moveEvent.target.ownerDocument : null) ?? doc
-        setHoverCell(findDropCandidate(evDoc, moveEvent.clientX, moveEvent.clientY))
+        event.preventDefault()
+        moveGhost(event.clientX, event.clientY)
+        setHoverCell(findDropCandidate(eventDocument(event), event.clientX, event.clientY))
       }
     }
-    const handleUp = (upEvent: PointerEvent) => {
+    const onPointerUp = (event: ReactPointerEvent<HTMLElement>) => {
       if (dragSourceRef.current) {
-        const evDoc = (upEvent.target instanceof Element ? upEvent.target.ownerDocument : null) ?? doc
-        const td = hoverCellRef.current ?? findDropCandidate(evDoc, upEvent.clientX, upEvent.clientY)
+        const td = hoverCellRef.current ?? findDropCandidate(eventDocument(event), event.clientX, event.clientY)
         if (td) openDeskPicker(td)
       }
-      endDrag()
+      releaseCapture()
+      finishDrag()
     }
-    const handleCancel = () => endDrag()
-
-    doc.addEventListener('pointermove', handleMove, { passive: false })
-    doc.addEventListener('pointerup', handleUp)
-    doc.addEventListener('pointercancel', handleCancel)
-    listenersRef.current = { doc, move: handleMove, up: handleUp, cancel: handleCancel }
-  }, [dndEnabled, clearPress, detachDocListeners, endDrag, openDeskPicker, setHoverCell, resolveStudentDisplayName])
+    const onPointerCancel = () => {
+      releaseCapture()
+      finishDrag()
+    }
+    return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel }
+  }, [dndEnabled, clearPressTimer, releaseCapture, finishDrag, setHoverCell, openDeskPicker, resolveStudentDisplayName])
 
   const handleSeatSelect = (deskIndex: number, studentIndex: number) => {
     if (!deskPicker || !onExecuteMove) return
@@ -336,21 +371,21 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
           <label>開始日</label>
           <input
             type="date"
-            value={startDate}
-            onChange={(event) => applyRange({ startDate: event.target.value || startDate, periodValue: '' })}
+            value={draft.startDate}
+            onChange={(event) => setDraft((prev) => ({ ...prev, startDate: event.target.value || prev.startDate, periodValue: '' }))}
           />
         </div>
         <div className="toolbar-field">
           <label>終了日</label>
           <input
             type="date"
-            value={endDate}
-            onChange={(event) => applyRange({ endDate: event.target.value || endDate, periodValue: '' })}
+            value={draft.endDate}
+            onChange={(event) => setDraft((prev) => ({ ...prev, endDate: event.target.value || prev.endDate, periodValue: '' }))}
           />
         </div>
         <div className="toolbar-field">
           <label>登録された講習期間を表示する</label>
-          <select value={range.periodValue} onChange={(event) => handlePeriodChange(event.target.value)}>
+          <select value={draft.periodValue} onChange={(event) => handlePeriodDraftChange(event.target.value)}>
             <option value="">選択してください</option>
             {periodOptions.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
@@ -358,11 +393,17 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
           </select>
         </div>
         <div className="toolbar-spacer" />
-        {onOpenPrintAll ? (
-          <div className="toolbar-actions">
-            <button type="button" className="secondary" onClick={onOpenPrintAll} title="従来どおり印刷用の全員表示タブ(生成HTML)を開きます">印刷用全員表示</button>
-          </div>
-        ) : null}
+        <div className="toolbar-actions">
+          {viewType === 'student' && onOpenEmptyFormat ? (
+            <button type="button" className="secondary" onClick={onOpenEmptyFormat}>空フォーマット印刷</button>
+          ) : null}
+          {viewType === 'student' && hasLectureSummary && onOpenLectureSummary ? (
+            <button type="button" className="secondary" onClick={onOpenLectureSummary}>講習集計結果</button>
+          ) : null}
+          {onOpenPrintAll ? (
+            <button type="button" className="secondary" onClick={onOpenPrintAll} title="全員分を従来の印刷用タブで開きます">印刷用全員表示</button>
+          ) : null}
+        </div>
         <div className="toolbar-field toolbar-field--search">
           <label>{personLabel}名検索</label>
           <input type="search" placeholder={`${personLabel}名を検索`} value={personSearch} onChange={(event) => setPersonSearch(event.target.value)} />
@@ -370,8 +411,8 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
         <div className="toolbar-field">
           <label>{personLabel}選択</label>
           <select
-            value={filteredPeople.some((person) => person.id === resolvedPersonId) ? resolvedPersonId : (filteredPeople[0]?.id ?? '')}
-            onChange={(event) => applyRange({ personId: event.target.value })}
+            value={filteredPeople.some((person) => person.id === draftPersonId) ? draftPersonId : (filteredPeople[0]?.id ?? '')}
+            onChange={(event) => setDraft((prev) => ({ ...prev, personId: event.target.value }))}
           >
             {filteredPeople.length === 0 ? <option value="">該当なし</option> : null}
             {filteredPeople.map((person) => (
@@ -383,6 +424,9 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
             ))}
           </select>
         </div>
+        <div className="toolbar-actions">
+          <button type="button" onClick={applyDraft} title="選択した期間・生徒/講師を反映して表示を更新します">期間・{personLabel}反映</button>
+        </div>
       </div>
       {moveStatus ? (
         <div className="schedule-view-move-status" role="status" aria-live="polite" data-testid="schedule-view-move-status">{moveStatus}</div>
@@ -393,7 +437,7 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
             <StudentScheduleSheet
               vm={vm.student}
               onScheduleNoteChange={onScheduleNoteChange}
-              onCardPointerDown={dndEnabled ? handleCardPointerDown : undefined}
+              dragHandlers={dragHandlers}
             />
           ) : (
             <div className="empty-state">表示できる生徒が見つかりません。</div>

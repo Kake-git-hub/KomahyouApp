@@ -20,11 +20,12 @@ describe('scheduleViewPrint', () => {
 
   it('fit の zoom を打ち消し(zoom:1 !important)、シートを用紙寸法にする', () => {
     expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('zoom: 1 !important')
-    expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('width: 277mm')
+    expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('width: 291mm')
   })
 
-  it('用紙は従来どおり A4 横(給与超過ページ用の A3 縦も温存)', () => {
+  it('用紙は A4 横・余白最小(3mm)でいっぱいに広げる。給与超過ページ用の A3 縦も温存', () => {
     expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('size: A4 landscape')
+    expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('margin: 3mm')
     expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('@page sheetA3')
     expect(SCHEDULE_VIEW_POPOUT_PRINT_CSS).toContain('size: A3 portrait')
   })

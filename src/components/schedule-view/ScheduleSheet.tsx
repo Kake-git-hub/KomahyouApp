@@ -25,19 +25,23 @@ import type {
 // 日程表コマ組みのドラッグ中ハイライト(ドロップ候補セルの青枠)は React 状態ではなく直接 DOM 操作で
 // 付け外しするため、ドラッグ開始で行が再レンダーされない(メモリ規律を守る)。
 export function scheduleRowPropsAreEqual(
-  prev: { row: { signature: string }; onCardPointerDown?: unknown },
-  next: { row: { signature: string }; onCardPointerDown?: unknown },
+  prev: { row: { signature: string }; dragHandlers?: unknown },
+  next: { row: { signature: string }; dragHandlers?: unknown },
 ) {
   return prev.row.signature === next.row.signature
-    && prev.onCardPointerDown === next.onCardPointerDown
+    && prev.dragHandlers === next.dragHandlers
 }
 
 // 日程表コマ組み: 授業カードの長押し開始ハンドラ(ScheduleView が供給。未指定ならD&D無効)。
-export type ScheduleCardPointerDownHandler = (
-  event: ReactPointerEvent<HTMLElement>,
-  card: StudentCellCardData,
-  cell: StudentGridCellData,
-) => void
+// 日程表コマ組みのポインタ操作。ポップアウト(子ウィンドウ)でも動くよう、document への addEventListener
+// ではなく「カード要素の React synthetic pointer events ＋ setPointerCapture」で完結させる。
+// このオブジェクトは ScheduleView が useMemo で安定参照にして渡す(行のメモ化を壊さない)。
+export type ScheduleCardDragHandlers = {
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>, card: StudentCellCardData, cell: StudentGridCellData) => void
+  onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void
+  onPointerUp: (event: ReactPointerEvent<HTMLElement>) => void
+  onPointerCancel: (event: ReactPointerEvent<HTMLElement>) => void
+}
 
 function TimeHeaderCell({ time, slotLabel }: { time: ScheduleTimeRange; slotLabel?: string }) {
   return (
@@ -61,12 +65,15 @@ function buildSlotCellClassName(cell: { isHoliday: boolean; isUnavailable: boole
   return classes.join(' ')
 }
 
-function StudentLessonCard({ card, cell, onCardPointerDown }: { card: StudentCellCardData; cell: StudentGridCellData; onCardPointerDown?: ScheduleCardPointerDownHandler }) {
-  const draggable = Boolean(card.draggable && onCardPointerDown)
+function StudentLessonCard({ card, cell, dragHandlers }: { card: StudentCellCardData; cell: StudentGridCellData; dragHandlers?: ScheduleCardDragHandlers }) {
+  const draggable = Boolean(card.draggable && dragHandlers)
   return (
     <div
       className={`lesson-card${draggable ? ' is-draggable-card' : ''}`}
-      onPointerDown={draggable ? (event) => onCardPointerDown!(event, card, cell) : undefined}
+      onPointerDown={draggable ? (event) => dragHandlers!.onPointerDown(event, card, cell) : undefined}
+      onPointerMove={draggable ? dragHandlers!.onPointerMove : undefined}
+      onPointerUp={draggable ? dragHandlers!.onPointerUp : undefined}
+      onPointerCancel={draggable ? dragHandlers!.onPointerCancel : undefined}
     >
       <div className="lesson-main">{card.main}</div>
       <div className="lesson-sub">{card.sub}</div>
@@ -74,23 +81,23 @@ function StudentLessonCard({ card, cell, onCardPointerDown }: { card: StudentCel
   )
 }
 
-function StudentCellCards({ cell, onCardPointerDown }: { cell: StudentGridCellData; onCardPointerDown?: ScheduleCardPointerDownHandler }) {
+function StudentCellCards({ cell, dragHandlers }: { cell: StudentGridCellData; dragHandlers?: ScheduleCardDragHandlers }) {
   if (cell.cards.length === 0) return <div className="empty-label" />
   if (cell.cards.length === 1) {
-    return <StudentLessonCard card={cell.cards[0]} cell={cell} onCardPointerDown={onCardPointerDown} />
+    return <StudentLessonCard card={cell.cards[0]} cell={cell} dragHandlers={dragHandlers} />
   }
   return (
     <div className="lesson-card-stack">
       {cell.cards.map((card, index) => (
         <div key={index} className="lesson-card-stack-item">
-          <StudentLessonCard card={card} cell={cell} onCardPointerDown={onCardPointerDown} />
+          <StudentLessonCard card={card} cell={cell} dragHandlers={dragHandlers} />
         </div>
       ))}
     </div>
   )
 }
 
-const StudentGridRow = memo(function StudentGridRow({ row, onCardPointerDown }: { row: StudentGridRowData; onCardPointerDown?: ScheduleCardPointerDownHandler }) {
+const StudentGridRow = memo(function StudentGridRow({ row, dragHandlers }: { row: StudentGridRowData; dragHandlers?: ScheduleCardDragHandlers }) {
   bumpMemCounter('schedule-view-row-render')
   return (
     <tr>
@@ -113,7 +120,7 @@ const StudentGridRow = memo(function StudentGridRow({ row, onCardPointerDown }: 
           >
             <div className="slot-cell-content">
               <div className="slot-static">
-                <StudentCellCards cell={cell} onCardPointerDown={onCardPointerDown} />
+                <StudentCellCards cell={cell} dragHandlers={dragHandlers} />
               </div>
             </div>
           </td>
@@ -427,10 +434,10 @@ export type StudentScheduleSheetProps = {
   vm: StudentSheetViewModel
   onScheduleNoteChange?: (noteKey: string, value: string) => void
   // 日程表コマ組み(D&D)。未指定なら従来どおり表示のみ。
-  onCardPointerDown?: ScheduleCardPointerDownHandler
+  dragHandlers?: ScheduleCardDragHandlers
 }
 
-export function StudentScheduleSheet({ vm, onScheduleNoteChange, onCardPointerDown }: StudentScheduleSheetProps) {
+export function StudentScheduleSheet({ vm, onScheduleNoteChange, dragHandlers }: StudentScheduleSheetProps) {
   bumpMemCounter('schedule-view-sheet-render')
   return (
     <section className="sheet" data-role="student-sheet" data-student-id={vm.student.id}>
@@ -439,7 +446,7 @@ export function StudentScheduleSheet({ vm, onScheduleNoteChange, onCardPointerDo
         <SheetTableHead vm={vm} />
         <tbody>
           {vm.groupRows.map((row) => <GroupClassRow key={row.band} row={row} />)}
-          {vm.rows.map((row) => <StudentGridRow key={row.slotNumber} row={row} onCardPointerDown={onCardPointerDown} />)}
+          {vm.rows.map((row) => <StudentGridRow key={row.slotNumber} row={row} dragHandlers={dragHandlers} />)}
         </tbody>
       </table>
       <div className={`bottom-grid${vm.optionFieldEnabled ? ' bottom-grid-option' : ''}`}>

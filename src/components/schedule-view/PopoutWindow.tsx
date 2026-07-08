@@ -56,13 +56,25 @@ export function PopoutWindow({ onClose, onOpenBlocked, children }: PopoutWindowP
   })
 
   useEffect(() => {
-    // アドレスバー(about:blank)やタブを出さない別ウィンドウで開く。location/menubar/toolbar を
-    // 無効にし、サイズ指定でポップアップウィンドウ扱いにする。名前は無指定(既存タブを再利用しない)。
-    const childWindow = window.open('', '', 'popup=yes,width=1280,height=900,resizable=yes,scrollbars=yes,location=no,menubar=no,toolbar=no,status=no')
+    // アドレスバー(about:blank)やタブを出さない別ウィンドウを、画面いっぱい(最大化相当)で開く。
+    // location/menubar/toolbar を無効にし、利用可能な画面全体のサイズ・位置を指定する。
+    const availW = window.screen?.availWidth ?? 1280
+    const availH = window.screen?.availHeight ?? 900
+    const availLeft = (window.screen as Screen & { availLeft?: number })?.availLeft ?? 0
+    const availTop = (window.screen as Screen & { availTop?: number })?.availTop ?? 0
+    const features = `popup=yes,resizable=yes,scrollbars=yes,location=no,menubar=no,toolbar=no,status=no,width=${availW},height=${availH},left=${availLeft},top=${availTop}`
+    const childWindow = window.open('', '', features)
     if (!childWindow) {
       // ポップアップブロック等で開けない場合はポップアウトを諦める(既定はビューを閉じる)。
       ;(onOpenBlockedRef.current ?? onCloseRef.current)()
       return
+    }
+    // 一部ブラウザは open 時の width/height を無視するため、開いた後にも最大化相当へ広げる。
+    try {
+      childWindow.moveTo(availLeft, availTop)
+      childWindow.resizeTo(availW, availH)
+    } catch {
+      // クロスウィンドウの resize が制限されている場合は無視(開いたサイズのまま)
     }
     // タイトルは空にする(タブ/ウィンドウに「生徒日程表」等を出さない・オーナー指示 2026-07-08)。
     childWindow.document.title = ''
