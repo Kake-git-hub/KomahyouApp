@@ -3642,8 +3642,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
   // React 日程表ビュー(staging 先行)の表示状態。ドック/ポップアウトは生徒・講師で独立に切替できる。
-  const [studentScheduleViewState, setStudentScheduleViewState] = useState<{ open: boolean; mode: ScheduleViewDisplayMode; expanded: boolean }>({ open: false, mode: 'dock', expanded: false })
-  const [teacherScheduleViewState, setTeacherScheduleViewState] = useState<{ open: boolean; mode: ScheduleViewDisplayMode; expanded: boolean }>({ open: false, mode: 'dock', expanded: false })
+  // 対話用日程表は別ウィンドウ(ポップアウト)既定(オーナー指示 2026-07-08)。dock はポップアップ
+  // ブロック時のフォールバックのみ。
+  const [studentScheduleViewState, setStudentScheduleViewState] = useState<{ open: boolean; mode: ScheduleViewDisplayMode }>({ open: false, mode: 'popout' })
+  const [teacherScheduleViewState, setTeacherScheduleViewState] = useState<{ open: boolean; mode: ScheduleViewDisplayMode }>({ open: false, mode: 'popout' })
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.studentScheduleRange)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.teacherScheduleRange)
   const [stockActionModal, setStockActionModal] = useState<StockActionModalState | null>(null)
@@ -8388,8 +8390,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         scheduleFallbackEndDate,
       )
       setStudentScheduleRange(storedRange)
-      setStudentScheduleViewState((prev) => ({ ...prev, open: true }))
-      setStatusMessage('生徒日程表を表示しました。盤面の編集は自動で反映されます。')
+      setStudentScheduleViewState({ open: true, mode: 'popout' })
+      setStatusMessage('生徒日程表を別ウィンドウで表示しました。盤面の編集は自動で反映されます。')
       return
     }
 
@@ -8453,8 +8455,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         scheduleFallbackEndDate,
       )
       setTeacherScheduleRange(storedRange)
-      setTeacherScheduleViewState((prev) => ({ ...prev, open: true }))
-      setStatusMessage('講師日程表を表示しました。盤面の編集は自動で反映されます。')
+      setTeacherScheduleViewState({ open: true, mode: 'popout' })
+      setStatusMessage('講師日程表を別ウィンドウで表示しました。盤面の編集は自動で反映されます。')
       return
     }
 
@@ -10344,65 +10346,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           ) : null}
         </section>
       </main>
-      {/* React 日程表ビュー(staging 先行)。ドックは画面下部パネル、ポップアウトは子ウィンドウへの portal。
-          生徒・講師を同時に開けるよう、ドック分は1つのエリアに横並びでまとめる。 */}
-      {(studentScheduleViewState.open && studentScheduleViewState.mode === 'dock') || (teacherScheduleViewState.open && teacherScheduleViewState.mode === 'dock') ? (
-        <div className="schedule-view-dock-area">
-          {studentScheduleViewState.open && studentScheduleViewState.mode === 'dock' && studentScheduleViewPayload ? (
-            <ScheduleViewPanel
-              title="生徒日程表"
-              mode="dock"
-              expanded={studentScheduleViewState.expanded}
-              onToggleMode={() => setStudentScheduleViewState((prev) => ({ ...prev, mode: 'popout' }))}
-              onToggleExpanded={() => setStudentScheduleViewState((prev) => ({ ...prev, expanded: !prev.expanded }))}
-              onClose={() => setStudentScheduleViewState((prev) => ({ ...prev, open: false }))}
-            >
-              <ScheduleView
-                viewType="student"
-                payload={studentScheduleViewPayload}
-                range={effectiveStudentScheduleRange}
-                onRangeChange={handleStudentScheduleViewRangeChange}
-                onScheduleNoteChange={handleStudentScheduleViewNoteChange}
-                onOpenPrintAll={handleOpenPrintAllStudents}
-                classroomStorageKey={classroomStorageKey}
-                onExecuteMove={stableExecuteScheduleViewMove}
-                resolveMoveTargetCell={stableResolveScheduleViewMoveTargetCell}
-                resolveStudentDisplayName={resolveBoardStudentDisplayName}
-              />
-            </ScheduleViewPanel>
-          ) : null}
-          {teacherScheduleViewState.open && teacherScheduleViewState.mode === 'dock' && teacherScheduleViewPayload ? (
-            <ScheduleViewPanel
-              title="講師日程表"
-              mode="dock"
-              expanded={teacherScheduleViewState.expanded}
-              onToggleMode={() => setTeacherScheduleViewState((prev) => ({ ...prev, mode: 'popout' }))}
-              onToggleExpanded={() => setTeacherScheduleViewState((prev) => ({ ...prev, expanded: !prev.expanded }))}
-              onClose={() => setTeacherScheduleViewState((prev) => ({ ...prev, open: false }))}
-            >
-              <ScheduleView
-                viewType="teacher"
-                payload={teacherScheduleViewPayload}
-                range={effectiveTeacherScheduleRange}
-                onRangeChange={handleTeacherScheduleViewRangeChange}
-                onOpenPrintAll={handleOpenPrintAllTeachers}
-                classroomStorageKey={classroomStorageKey}
-              />
-            </ScheduleViewPanel>
-          ) : null}
-        </div>
-      ) : null}
-      {studentScheduleViewState.open && studentScheduleViewState.mode === 'popout' && studentScheduleViewPayload ? (
+      {/* React 日程表ビュー(staging 先行)。別ウィンドウ(ポップアウト)既定。fitToWindow で日程表が
+          下まで収まるよう自動縮小し、子ウィンドウの Ctrl+P は日程表だけを印刷する。dock はポップアップ
+          ブロック時のフォールバックのみ(chrome の閉じるボタンで閉じる)。 */}
+      {studentScheduleViewState.open && studentScheduleViewPayload ? (
         <ScheduleViewPanel
           title="生徒日程表"
-          mode="popout"
-          expanded={false}
-          onToggleMode={() => setStudentScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))}
-          onToggleExpanded={() => {}}
+          mode={studentScheduleViewState.mode}
           onClose={() => setStudentScheduleViewState((prev) => ({ ...prev, open: false }))}
           onPopoutBlocked={() => {
             setStudentScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))
-            setStatusMessage('別ウィンドウを開けませんでした(ポップアップブロック)。画面内表示に戻します。')
+            setStatusMessage('別ウィンドウを開けませんでした(ポップアップブロック)。画面内表示に切り替えました。')
           }}
         >
           <ScheduleView
@@ -10413,23 +10367,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onScheduleNoteChange={handleStudentScheduleViewNoteChange}
             onOpenPrintAll={handleOpenPrintAllStudents}
             classroomStorageKey={classroomStorageKey}
+            fitToWindow={studentScheduleViewState.mode === 'popout'}
             onExecuteMove={stableExecuteScheduleViewMove}
             resolveMoveTargetCell={stableResolveScheduleViewMoveTargetCell}
             resolveStudentDisplayName={resolveBoardStudentDisplayName}
           />
         </ScheduleViewPanel>
       ) : null}
-      {teacherScheduleViewState.open && teacherScheduleViewState.mode === 'popout' && teacherScheduleViewPayload ? (
+      {teacherScheduleViewState.open && teacherScheduleViewPayload ? (
         <ScheduleViewPanel
           title="講師日程表"
-          mode="popout"
-          expanded={false}
-          onToggleMode={() => setTeacherScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))}
-          onToggleExpanded={() => {}}
+          mode={teacherScheduleViewState.mode}
           onClose={() => setTeacherScheduleViewState((prev) => ({ ...prev, open: false }))}
           onPopoutBlocked={() => {
             setTeacherScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))
-            setStatusMessage('別ウィンドウを開けませんでした(ポップアップブロック)。画面内表示に戻します。')
+            setStatusMessage('別ウィンドウを開けませんでした(ポップアップブロック)。画面内表示に切り替えました。')
           }}
         >
           <ScheduleView
@@ -10439,6 +10391,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onRangeChange={handleTeacherScheduleViewRangeChange}
             onOpenPrintAll={handleOpenPrintAllTeachers}
             classroomStorageKey={classroomStorageKey}
+            fitToWindow={teacherScheduleViewState.mode === 'popout'}
           />
         </ScheduleViewPanel>
       ) : null}

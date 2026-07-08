@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { SCHEDULE_VIEW_POPOUT_PRINT_CSS } from './scheduleViewPrint'
 
 // 親 document.head の <style>/<link rel=stylesheet> を子ウィンドウへ複製する。
 // このアプリは素の CSS のみ(CSS-in-JS 不使用)なので、これで見た目が移送できる。
@@ -38,7 +39,6 @@ function copyStylesIntoWindow(childWindow: Window) {
 }
 
 export type PopoutWindowProps = {
-  title: string
   onClose: () => void
   // ポップアップブロック等でウィンドウ自体を開けなかったとき(開けた後に閉じたのとは区別)。
   // 未指定なら onClose にフォールバックする。
@@ -46,28 +46,33 @@ export type PopoutWindowProps = {
   children: ReactNode
 }
 
-export function PopoutWindow({ title, onClose, onOpenBlocked, children }: PopoutWindowProps) {
+export function PopoutWindow({ onClose, onOpenBlocked, children }: PopoutWindowProps) {
   const [container, setContainer] = useState<HTMLElement | null>(null)
   const onCloseRef = useRef(onClose)
   const onOpenBlockedRef = useRef(onOpenBlocked)
-  const titleRef = useRef(title)
   useEffect(() => {
     onCloseRef.current = onClose
     onOpenBlockedRef.current = onOpenBlocked
-    titleRef.current = title
   })
 
   useEffect(() => {
-    const childWindow = window.open('', '', 'width=1280,height=860,resizable=yes,scrollbars=yes')
+    // アドレスバー(about:blank)やタブを出さない別ウィンドウで開く。location/menubar/toolbar を
+    // 無効にし、サイズ指定でポップアップウィンドウ扱いにする。名前は無指定(既存タブを再利用しない)。
+    const childWindow = window.open('', '', 'popup=yes,width=1280,height=900,resizable=yes,scrollbars=yes,location=no,menubar=no,toolbar=no,status=no')
     if (!childWindow) {
       // ポップアップブロック等で開けない場合はポップアウトを諦める(既定はビューを閉じる)。
       ;(onOpenBlockedRef.current ?? onCloseRef.current)()
       return
     }
-    childWindow.document.title = titleRef.current
+    // タイトルは空にする(タブ/ウィンドウに「生徒日程表」等を出さない・オーナー指示 2026-07-08)。
+    childWindow.document.title = ''
     const meta = childWindow.document.createElement('meta')
     meta.setAttribute('charset', 'utf-8')
     childWindow.document.head.appendChild(meta)
+    // 子ウィンドウ専用の印刷CSS(本体アプリには入れない)。Ctrl+P で日程表だけを従来体裁で印刷する。
+    const printStyle = childWindow.document.createElement('style')
+    printStyle.textContent = SCHEDULE_VIEW_POPOUT_PRINT_CSS
+    childWindow.document.head.appendChild(printStyle)
     childWindow.document.body.style.margin = '0'
     childWindow.document.body.className = 'schedule-popout-body'
     const observer = copyStylesIntoWindow(childWindow)

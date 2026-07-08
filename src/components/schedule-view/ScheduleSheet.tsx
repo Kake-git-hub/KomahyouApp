@@ -22,14 +22,13 @@ import type {
 
 // React.memo の等価判定。view model は毎回新しいオブジェクトになるため、表示内容を確定する
 // signature(純データのJSON)で比較し、内容が同じ行の再レンダーをスキップする。テストで固定する。
-// dragActive(日程表コマ組みのドラッグ中ハイライト)はドラッグ開始/終了の2回だけ変わる想定で、
-// 盤面編集ごとの再レンダー抑止(メモリ規律)は損なわない。
+// 日程表コマ組みのドラッグ中ハイライト(ドロップ候補セルの青枠)は React 状態ではなく直接 DOM 操作で
+// 付け外しするため、ドラッグ開始で行が再レンダーされない(メモリ規律を守る)。
 export function scheduleRowPropsAreEqual(
-  prev: { row: { signature: string }; dragActive?: boolean; onCardPointerDown?: unknown },
-  next: { row: { signature: string }; dragActive?: boolean; onCardPointerDown?: unknown },
+  prev: { row: { signature: string }; onCardPointerDown?: unknown },
+  next: { row: { signature: string }; onCardPointerDown?: unknown },
 ) {
   return prev.row.signature === next.row.signature
-    && Boolean(prev.dragActive) === Boolean(next.dragActive)
     && prev.onCardPointerDown === next.onCardPointerDown
 }
 
@@ -91,19 +90,20 @@ function StudentCellCards({ cell, onCardPointerDown }: { cell: StudentGridCellDa
   )
 }
 
-const StudentGridRow = memo(function StudentGridRow({ row, dragActive, onCardPointerDown }: { row: StudentGridRowData; dragActive?: boolean; onCardPointerDown?: ScheduleCardPointerDownHandler }) {
+const StudentGridRow = memo(function StudentGridRow({ row, onCardPointerDown }: { row: StudentGridRowData; onCardPointerDown?: ScheduleCardPointerDownHandler }) {
   bumpMemCounter('schedule-view-row-render')
   return (
     <tr>
       <TimeHeaderCell time={row.time} />
       {row.cells.map((cell) => {
-        // ドラッグ中は「開校日かつこの生徒の授業が無い空きセル」をドロップ候補として示す
-        // (spec-student-schedule-dnd §C-1。実際の可否は机選択と executeMoveStudent が最終判定)。
-        const isDropCandidate = Boolean(dragActive && !cell.isHoliday && cell.cards.length === 0)
+        // 「開校日かつこの生徒の授業が無い空きセル」を日程表コマ組みのドロップ候補として静的にマークする
+        // (hit-test 用・spec-student-schedule-dnd §C-1)。ドラッグ中のハイライトは ScheduleView が
+        // 直接 DOM で is-drop-hover を付け外しする(行はドラッグで再レンダーしない=メモリ規律)。
+        const isDropCandidate = !cell.isHoliday && cell.cards.length === 0
         return (
           <td
             key={cell.slotKey}
-            className={`${buildSlotCellClassName(cell)}${isDropCandidate ? ' is-drop-target' : ''}`}
+            className={buildSlotCellClassName(cell)}
             title={cell.title || undefined}
             data-role="schedule-view-student-cell"
             data-date-key={cell.dateKey}
@@ -427,11 +427,10 @@ export type StudentScheduleSheetProps = {
   vm: StudentSheetViewModel
   onScheduleNoteChange?: (noteKey: string, value: string) => void
   // 日程表コマ組み(D&D)。未指定なら従来どおり表示のみ。
-  dragActive?: boolean
   onCardPointerDown?: ScheduleCardPointerDownHandler
 }
 
-export function StudentScheduleSheet({ vm, onScheduleNoteChange, dragActive, onCardPointerDown }: StudentScheduleSheetProps) {
+export function StudentScheduleSheet({ vm, onScheduleNoteChange, onCardPointerDown }: StudentScheduleSheetProps) {
   bumpMemCounter('schedule-view-sheet-render')
   return (
     <section className="sheet" data-role="student-sheet" data-student-id={vm.student.id}>
@@ -440,7 +439,7 @@ export function StudentScheduleSheet({ vm, onScheduleNoteChange, dragActive, onC
         <SheetTableHead vm={vm} />
         <tbody>
           {vm.groupRows.map((row) => <GroupClassRow key={row.band} row={row} />)}
-          {vm.rows.map((row) => <StudentGridRow key={row.slotNumber} row={row} dragActive={dragActive} onCardPointerDown={onCardPointerDown} />)}
+          {vm.rows.map((row) => <StudentGridRow key={row.slotNumber} row={row} onCardPointerDown={onCardPointerDown} />)}
         </tbody>
       </table>
       <div className={`bottom-grid${vm.optionFieldEnabled ? ' bottom-grid-option' : ''}`}>

@@ -1419,21 +1419,21 @@
   touch-action: none;
 }
 
-.schedule-react-view .slot-cell.is-drop-target {
-  background: #e3f2e8;
-  box-shadow: inset 0 0 0 2px #3f9d63;
+/* ドラッグ中の画面周囲の青枠(盤面D&D .drag-move-screen-frame と同じ見た目)。
+   ポップアウトでは子ウィンドウ内に描かれるので inset:0 が子ウィンドウ全体を囲む。 */
+.schedule-react-view .schedule-drag-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  pointer-events: none;
+  border: 4px solid #1a73e8;
+  box-shadow: inset 0 0 22px rgba(26, 115, 232, 0.45);
 }
 
-.schedule-react-view .slot-cell.is-drop-target:hover {
-  background: #c9e9d5;
-}
-
-.schedule-react-view .schedule-view-dnd-hint {
-  padding: 2px 12px;
-  font-size: 11px;
-  color: #5a6b7d;
-  background: #f4f7fa;
-  border-bottom: 1px solid #dfe5ec;
+/* ドロップ先候補としてポインタが乗っているコマ(直接DOMで付け外し・緑ではなく青系)。 */
+.schedule-react-view .slot-cell.is-drop-hover {
+  box-shadow: inset 0 0 0 3px #1a73e8;
+  background: #e8f0fe;
 }
 
 .schedule-react-view .schedule-view-move-status {

@@ -7,7 +7,10 @@
 // 日程表コマ組み(spec-student-schedule-dnd): 生徒ビューの授業カードを長押し(約250ms・盤面D&Dと
 // 同じ)で掴み、空きコマへドロップ → 机選択モーダル(コマ表と同じ配置) → 盤面の executeMoveStudent を
 // 直接呼ぶ(親から onExecuteMove として受け取る)。自動割振ルール・警告は評価も表示もしない。
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+// ドラッグ中は盤面D&Dと同じ「画面周囲の青枠」を出し、ドロップ候補セルの青枠ハイライトは直接 DOM 操作
+// (React 再レンダーなし=メモリ規律)。ポップアウト(子ウィンドウ)でも動くよう、pointer 系は
+// カードの ownerDocument に対して張り、hit-test も同じ document で elementFromPoint する。
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 import { buildSubmissionQrSvg } from '../../utils/scheduleHtml'
@@ -48,6 +51,8 @@ export type ScheduleViewProps = {
   onScheduleNoteChange?: (noteKey: string, value: string) => void
   onOpenPrintAll?: () => void
   classroomStorageKey?: string
+  // 別ウィンドウ表示: 日程表シートが下まで収まるよう zoom を自動調整する。
+  fitToWindow?: boolean
   // 日程表コマ組み(生徒ビューのみ)。両方が揃ったときだけD&Dが有効になる。
   onExecuteMove?: (source: ScheduleViewMoveSource, seat: ScheduleViewMoveSeat) => ScheduleViewMoveResult
   resolveMoveTargetCell?: (dateKey: string, slotNumber: number) => SlotCell | null
@@ -71,7 +76,13 @@ type DeskPickerState = {
 const LONG_PRESS_MS = 250
 const PRESS_MOVE_TOLERANCE_PX = 8
 
-export function ScheduleView({ viewType, payload, range, onRangeChange, onScheduleNoteChange, onOpenPrintAll, classroomStorageKey, onExecuteMove, resolveMoveTargetCell, resolveStudentDisplayName }: ScheduleViewProps) {
+function findDropCandidate(doc: Document, x: number, y: number): HTMLElement | null {
+  const hit = doc.elementFromPoint(x, y)
+  const td = hit instanceof Element ? hit.closest('[data-role="schedule-view-student-cell"][data-drop-candidate="true"]') : null
+  return td instanceof HTMLElement ? td : null
+}
+
+export function ScheduleView({ viewType, payload, range, onRangeChange, onScheduleNoteChange, onOpenPrintAll, classroomStorageKey, fitToWindow, onExecuteMove, resolveMoveTargetCell, resolveStudentDisplayName }: ScheduleViewProps) {
   const [personSearch, setPersonSearch] = useState('')
 
   const { startDate, endDate } = normalizeRangeDates(
@@ -126,25 +137,57 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     [storageScope],
   )
 
+  // ===== 別ウィンドウ fit: シートが下まで収まる zoom を計算して適用する =====
+  // zoom は transform と違いレイアウト箱ごと縮むため縦スクロールが出ず、elementFromPoint も
+  // 縮小後の座標で正しく当たる(D&Dの hit-test と両立する)。印刷時は注入した print CSS が zoom:1 に戻す。
+  const pagesRef = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (!fitToWindow) return
+    const pages = pagesRef.current
+    if (!pages) return
+    const applyFit = () => {
+      const sheet = pages.querySelector('.sheet') as HTMLElement | null
+      if (!sheet) return
+      sheet.style.zoom = '1'
+      const availW = pages.clientWidth - 16
+      const availH = pages.clientHeight - 16
+      const natW = sheet.offsetWidth
+      const natH = sheet.offsetHeight
+      if (!natW || !natH || availW <= 0 || availH <= 0) return
+      const z = Math.min(availW / natW, availH / natH, 1.5)
+      sheet.style.zoom = z > 0 ? String(z) : '1'
+    }
+    applyFit()
+    const win = pages.ownerDocument.defaultView
+    const observer = new ResizeObserver(applyFit)
+    observer.observe(pages)
+    win?.addEventListener('resize', applyFit)
+    return () => {
+      observer.disconnect()
+      win?.removeEventListener('resize', applyFit)
+    }
+    // vm(表示内容)が変わるとシート高さが変わるため再計算する。
+  }, [fitToWindow, resolvedPersonId, startDate, endDate, payload])
+
   // ===== 日程表コマ組み(D&D) =====
   const dndEnabled = viewType === 'student' && Boolean(onExecuteMove && resolveMoveTargetCell)
-  // ドラッグ中はゴーストのラベルを state に持つ(null=非ドラッグ)。source はハンドラ専用に ref で持つ
-  // (レンダー中に ref を読まない react-hooks/refs 対応)。
+  // ドラッグ中フラグは青枠・ゴーストの描画にのみ使う(1回のレンダー)。掴んだ内容は ref。
   const [dragLabel, setDragLabel] = useState<string | null>(null)
   const dragActive = dragLabel !== null
   const [deskPicker, setDeskPicker] = useState<DeskPickerState | null>(null)
   const [moveStatus, setMoveStatus] = useState('')
   const dragSourceRef = useRef<{ source: ScheduleViewMoveSource; label: string } | null>(null)
   const dragGhostRef = useRef<HTMLDivElement | null>(null)
-  const pressRef = useRef<{
-    timer: number
-    startX: number
-    startY: number
-    card: StudentCellCardData
-    cell: StudentGridCellData
-    doc: Document
-  } | null>(null)
+  const hoverCellRef = useRef<HTMLElement | null>(null)
+  const pressRef = useRef<{ timer: number; startX: number; startY: number; card: StudentCellCardData; cell: StudentGridCellData; doc: Document } | null>(null)
   const listenersRef = useRef<{ doc: Document; move: (event: PointerEvent) => void; up: (event: PointerEvent) => void; cancel: () => void } | null>(null)
+
+  const setHoverCell = useCallback((td: HTMLElement | null) => {
+    if (hoverCellRef.current === td) return
+    hoverCellRef.current?.classList.remove('is-drop-hover')
+    if (td) td.classList.add('is-drop-hover')
+    hoverCellRef.current = td
+  }, [])
 
   const detachDocListeners = useCallback(() => {
     const attached = listenersRef.current
@@ -164,29 +207,27 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
 
   const endDrag = useCallback(() => {
     dragSourceRef.current = null
+    setHoverCell(null)
     setDragLabel(null)
     detachDocListeners()
     clearPress()
-  }, [detachDocListeners, clearPress])
+  }, [detachDocListeners, clearPress, setHoverCell])
 
   useEffect(() => endDrag, [endDrag])
 
   const moveGhost = (clientX: number, clientY: number) => {
     const ghost = dragGhostRef.current
     if (!ghost) return
-    ghost.style.left = `${clientX + 12}px`
-    ghost.style.top = `${clientY + 12}px`
+    ghost.style.left = `${clientX + 14}px`
+    ghost.style.top = `${clientY + 14}px`
   }
 
-  const handleDrop = useCallback((doc: Document, clientX: number, clientY: number) => {
+  const openDeskPicker = useCallback((td: HTMLElement) => {
     const dragging = dragSourceRef.current
-    if (!dragging) return
-    const hit = doc.elementFromPoint(clientX, clientY)
-    const cellElement = hit instanceof Element ? hit.closest('[data-role="schedule-view-student-cell"][data-drop-candidate="true"]') : null
-    if (!(cellElement instanceof HTMLElement)) return
-    const dateKey = cellElement.dataset.dateKey ?? ''
-    const slotNumber = Number(cellElement.dataset.slotNumber ?? '0')
-    if (!dateKey || !slotNumber || !resolveMoveTargetCell) return
+    if (!dragging || !resolveMoveTargetCell) return
+    const dateKey = td.dataset.dateKey ?? ''
+    const slotNumber = Number(td.dataset.slotNumber ?? '0')
+    if (!dateKey || !slotNumber) return
     const boardCell = resolveMoveTargetCell(dateKey, slotNumber)
     if (!boardCell) {
       setMoveStatus('移動先のコマ情報を取得できませんでした。')
@@ -252,11 +293,17 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
       if (dragSourceRef.current) {
         moveEvent.preventDefault()
         moveGhost(moveEvent.clientX, moveEvent.clientY)
+        // hit-test はイベントが実際に起きた document で行う(ポップアウト子ウィンドウでも正しく当たる)。
+        const evDoc = (moveEvent.target instanceof Element ? moveEvent.target.ownerDocument : null) ?? doc
+        setHoverCell(findDropCandidate(evDoc, moveEvent.clientX, moveEvent.clientY))
       }
     }
     const handleUp = (upEvent: PointerEvent) => {
-      const wasDragging = Boolean(dragSourceRef.current)
-      if (wasDragging) handleDrop(doc, upEvent.clientX, upEvent.clientY)
+      if (dragSourceRef.current) {
+        const evDoc = (upEvent.target instanceof Element ? upEvent.target.ownerDocument : null) ?? doc
+        const td = hoverCellRef.current ?? findDropCandidate(evDoc, upEvent.clientX, upEvent.clientY)
+        if (td) openDeskPicker(td)
+      }
       endDrag()
     }
     const handleCancel = () => endDrag()
@@ -265,7 +312,7 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
     doc.addEventListener('pointerup', handleUp)
     doc.addEventListener('pointercancel', handleCancel)
     listenersRef.current = { doc, move: handleMove, up: handleUp, cancel: handleCancel }
-  }, [dndEnabled, clearPress, detachDocListeners, endDrag, handleDrop, resolveStudentDisplayName])
+  }, [dndEnabled, clearPress, detachDocListeners, endDrag, openDeskPicker, setHoverCell, resolveStudentDisplayName])
 
   const handleSeatSelect = (deskIndex: number, studentIndex: number) => {
     if (!deskPicker || !onExecuteMove) return
@@ -283,6 +330,7 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
 
   return (
     <div className="schedule-view-body">
+      {dragActive ? <div className="schedule-drag-frame" aria-hidden="true" data-testid="schedule-drag-frame" /> : null}
       <div className="toolbar schedule-view-toolbar">
         <div className="toolbar-field">
           <label>開始日</label>
@@ -339,16 +387,12 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
       {moveStatus ? (
         <div className="schedule-view-move-status" role="status" aria-live="polite" data-testid="schedule-view-move-status">{moveStatus}</div>
       ) : null}
-      {dndEnabled && !dragActive && !deskPicker ? (
-        <div className="schedule-view-dnd-hint">授業カードを長押しすると空きコマへ移動できます(日程表コマ組み)</div>
-      ) : null}
-      <main className="pages schedule-view-pages">
+      <main className="pages schedule-view-pages" ref={pagesRef}>
         {viewType === 'student' ? (
           vm.student ? (
             <StudentScheduleSheet
               vm={vm.student}
               onScheduleNoteChange={onScheduleNoteChange}
-              dragActive={dragActive}
               onCardPointerDown={dndEnabled ? handleCardPointerDown : undefined}
             />
           ) : (
