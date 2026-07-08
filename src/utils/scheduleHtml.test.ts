@@ -2911,3 +2911,73 @@ describe('日程表コマ組み payload: pickerDesks / scheduleDndEnabled', () =
     expect(cell.pickerDesks).toBeUndefined()
   })
 })
+
+// 埋め込みJS(別タブ)の掴めるカード判定と配線。生成HTMLからクライアント関数を抽出して実挙動を固定する。
+describe('日程表コマ組み 埋め込みJS: 掴めるカードのゲートと配線', () => {
+  function openDndHtml(extra: Record<string, unknown>): string {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      ...extra,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    return html
+  }
+
+  // 生成HTMLから buildLessonCardDragAttrs(entry) の本体を取り出し、DATA/escapeHtml を差し替えて実行する。
+  function extractDragAttrsFn(html: string) {
+    const match = html.match(/function buildLessonCardDragAttrs\(entry\) \{([\s\S]*?)\n {6}\}/)
+    expect(match).not.toBeNull()
+    const fn = new Function('entry', 'DATA', 'escapeHtml', match![1]) as (entry: unknown, data: unknown, esc: (value: unknown) => string) => string
+    const esc = (value: unknown) => String(value == null ? '' : value)
+    return (entry: unknown, data: unknown) => fn(entry, data, esc)
+  }
+
+  it('scheduleDndEnabled 時、通常/振替/講習カードに is-draggable と source 属性を付ける', () => {
+    const run = extractDragAttrsFn(openDndHtml({ scheduleDndEnabled: true }))
+    const makeup = run({ id: 'e1', lessonType: 'makeup', subject: '数', linkedStudentId: 's1', name: '山田' }, { scheduleDndEnabled: true })
+    expect(makeup).toContain('is-draggable')
+    expect(makeup).toContain('data-role="lesson-card-draggable"')
+    expect(makeup).toContain('data-entry-id="e1"')
+    expect(makeup).toContain('data-lesson-type="makeup"')
+    expect(makeup).toContain('data-linked-student-id="s1"')
+    expect(run({ id: 'e2', lessonType: 'regular', subject: '英' }, { scheduleDndEnabled: true })).toContain('is-draggable')
+    expect(run({ id: 'e3', lessonType: 'special', subject: '国' }, { scheduleDndEnabled: true })).toContain('is-draggable')
+  })
+
+  it('DnD無効・対象外種別(体験/増コマ)・entryId欠落は掴めない(空文字)', () => {
+    const run = extractDragAttrsFn(openDndHtml({ scheduleDndEnabled: true }))
+    expect(run({ id: 'e1', lessonType: 'makeup', subject: '数' }, { scheduleDndEnabled: false })).toBe('')
+    expect(run({ id: 'e1', lessonType: 'trial', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+    expect(run({ id: 'e1', lessonType: 'extra', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+    expect(run({ id: '', lessonType: 'makeup', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+  })
+
+  it('D&D・机選択・移動要求送信・再描画時破棄の配線が埋め込みJSに含まれる(削除の回帰検知)', () => {
+    const html = openDndHtml({ scheduleDndEnabled: true })
+    expect(html).toContain('function setupScheduleDndMove()')
+    expect(html).toContain('function onScheduleDndPointerDown(')
+    expect(html).toContain('function openScheduleDeskPicker(')
+    expect(html).toContain("type: 'schedule-student-move-request'")
+    // 自動同期の再描画でドラッグ/モーダルを破棄する(宙に浮く DOM 参照を防ぐ)。
+    expect(html).toContain('cancelScheduleDndInteraction();')
+  })
+})

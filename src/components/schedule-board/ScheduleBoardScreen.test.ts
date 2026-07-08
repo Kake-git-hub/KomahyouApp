@@ -5262,7 +5262,8 @@ describe('登録解除リクエストの一過性消費(Issue #46 回帰防止)'
   // 講習コマが消える(Issue #46 の構造)。修正なし=2回処理・修正あり=1回処理、で固定する。
   const simulateBoardLifecycle = (options: { consumeOnProcess: boolean }) => {
     // App 側の永続 state。登録解除で 1 件発行された想定。
-    let appRequest: ReturnType<typeof makeRequest> | null = makeRequest(1)
+    // StudentScheduleRequest は unassign/move の union なので消費関数の戻り型で受ける(move 追加後の型不整合を避ける)。
+    let appRequest: ReturnType<typeof consumeStudentScheduleRequest> = makeRequest(1)
     let processCount = 0
 
     // 1 回のマウント(=教室ロード/画面遷移ごと)。processedRef はマウントローカルなので毎回リセット。

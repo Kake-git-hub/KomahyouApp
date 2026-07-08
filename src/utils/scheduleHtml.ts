@@ -2175,6 +2175,103 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
       @keyframes schedule-sync-spin { to { transform: rotate(360deg); } }
 
+      /* 日程表コマ組み(別タブD&D・spec-student-schedule-dnd)。scheduleDndEnabled 時のみ授業カードに .is-draggable が付く。 */
+      .lesson-card.is-draggable {
+        cursor: grab;
+        touch-action: none;
+      }
+      .lesson-card.is-draggable:active { cursor: grabbing; }
+      /* ドラッグ中に掴んだ元カードを半透明にする。 */
+      .lesson-card.is-drag-origin { opacity: 0.35; }
+      /* ドロップ可能な空きコマ(開校日・当該生徒が空き)の青枠ハイライト(盤面D&Dと同系統)。 */
+      .slot-cell.is-drop-target {
+        outline: 2px solid #2f6fed;
+        outline-offset: -2px;
+        background: #eaf1ff;
+        cursor: copy;
+      }
+      /* ポインタに追従するドラッグゴースト。 */
+      .schedule-drag-ghost {
+        position: fixed;
+        z-index: 100000;
+        pointer-events: none;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: #1a73e8;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+        transform: translate(-50%, -50%);
+        white-space: nowrap;
+      }
+      /* 机選択モーダル(移動先コマの全机をコマ表と同じ配置で表示)。 */
+      .desk-picker-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(17, 24, 39, 0.44);
+      }
+      .desk-picker-overlay[hidden] { display: none; }
+      .desk-picker-modal {
+        background: #fff;
+        border-radius: 10px;
+        padding: 18px 20px;
+        max-width: 92vw;
+        max-height: 88vh;
+        overflow: auto;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      }
+      .desk-picker-title { font-size: 16px; font-weight: 800; color: #16385c; margin: 0 0 4px; }
+      .desk-picker-note { font-size: 12px; color: #5b6470; margin: 0 0 12px; }
+      .desk-picker-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .desk-picker-desk {
+        border: 1.5px solid #c3ccd8;
+        border-radius: 8px;
+        padding: 6px;
+        display: grid;
+        gap: 6px;
+      }
+      .desk-picker-desk-teacher { font-size: 12px; font-weight: 700; text-align: center; color: #16385c; }
+      .desk-picker-seat {
+        border: 1px solid #d3dae3;
+        border-radius: 6px;
+        min-height: 34px;
+        padding: 4px 6px;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        background: #f6f8fb;
+      }
+      button.desk-picker-seat {
+        cursor: pointer;
+        color: #1a56c4;
+        font-weight: 700;
+        background: #eaf1ff;
+        border-color: #2f6fed;
+      }
+      button.desk-picker-seat:hover { background: #d6e5ff; }
+      .desk-picker-seat.is-occupied { color: #33404f; background: #eef1f5; }
+      .desk-picker-seat.is-blocked { color: #9aa0a6; font-style: italic; }
+      .desk-picker-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
+      .desk-picker-cancel {
+        border: 1px solid #c3ccd8;
+        background: #fff;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
       @media print {
         *,
         *::before,
@@ -3124,6 +3221,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return (v === '60' || v === '45') ? v : '';
       }
 
+      // 日程表コマ組み(別タブD&D): 掴める授業カードか判定し、掴めるなら drag 用の属性を返す。
+      // 対象は通常/振替/講習のみ(集団は別行・体験や出欠済みの記録カードは対象外)。scheduleDndEnabled 時だけ有効。
+      function buildLessonCardDragAttrs(entry) {
+        if (!DATA.scheduleDndEnabled) return '';
+        var type = entry.lessonType;
+        if (type !== 'regular' && type !== 'makeup' && type !== 'special') return '';
+        if (!entry.id) return '';
+        return ' class="lesson-card is-draggable" data-role="lesson-card-draggable"'
+          + ' data-entry-id="' + escapeHtml(entry.id) + '"'
+          + ' data-linked-student-id="' + escapeHtml(entry.linkedStudentId || '') + '"'
+          + ' data-lesson-type="' + escapeHtml(type) + '"'
+          + ' data-subject="' + escapeHtml(entry.subject || '') + '"'
+          + ' data-student-name="' + escapeHtml(entry.name || '') + '"';
+      }
+
       function renderStudentCellCard(entry) {
         var subjectWithMinutes = entry.subject + formatScheduleMinutesSuffix(entry.noteSuffix);
         if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended') {
@@ -3131,7 +3243,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';
           return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml([statusLabel, linkedDestinationLabel].filter(Boolean).join(' ')) + '</div><div class="lesson-sub">' + escapeHtml([subjectWithMinutes, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
-        return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(subjectWithMinutes) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
+        var dragAttrs = buildLessonCardDragAttrs(entry);
+        var openTag = dragAttrs ? '<div' + dragAttrs + '>' : '<div class="lesson-card">';
+        return openTag + '<div class="lesson-main">' + escapeHtml(subjectWithMinutes) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
       }
 
       function renderStudentCellCards(entries) {
@@ -3139,6 +3253,247 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (lessons.length === 0) return '<div class="empty-label"></div>';
         if (lessons.length === 1) return renderStudentCellCard(lessons[0]);
         return '<div class="lesson-card-stack">' + lessons.map((lesson) => '<div class="lesson-card-stack-item">' + renderStudentCellCard(lesson) + '</div>').join('') + '</div>';
+      }
+
+      // ==== 日程表コマ組み(別タブD&D・spec-student-schedule-dnd) ==================================
+      // 生徒日程表の授業カードを長押し(約250ms)→空きコマへドラッグ→机選択モーダル→席確定で、本体盤面へ
+      // schedule-student-move-request を送る。移動の実処理は盤面(executeScheduleViewMove)。ここは UI と要求送信のみ。
+      // 自動同期の再描画(flushIncomingPayload)は pagesElement.innerHTML を差し替えるため、pointerdown は
+      // 再描画で消えない安定要素(pagesElement)への委譲で拾う。ドラッグ中/モーダル表示中に再描画が来たら破棄する。
+      var scheduleDndDrag = null; // { phase:'pending'|'dragging', pointerId, startX, startY, card, source, ghost, hoverCell }
+      var scheduleDndLongPressTimer = null;
+      var scheduleDeskPickerOverlay = null;
+      var scheduleDeskPickerKeydown = null;
+
+      function findScheduleCellForMove(dateKey, slotNumber) {
+        var cells = Array.isArray(DATA.cells) ? DATA.cells : [];
+        for (var i = 0; i < cells.length; i++) {
+          if (cells[i].dateKey === dateKey && cells[i].slotNumber === slotNumber) return cells[i];
+        }
+        return null;
+      }
+
+      // ポインタ座標の下にあるドロップ可能な空きコマ(td)を返す。開校日・当該生徒が空き(カード無し)・
+      // pickerDesks を持つコマだけが対象。掴んでいる元カードのコマ自身は空きではないので自然に除外される。
+      function findDroppableCellFromPoint(clientX, clientY) {
+        var element = document.elementFromPoint(clientX, clientY);
+        if (!element || !(element instanceof HTMLElement)) return null;
+        var cell = element.closest('td[data-role="student-slot-cell"]');
+        if (!cell || !(cell instanceof HTMLElement)) return null;
+        if (cell.classList.contains('is-holiday')) return null;
+        if (cell.querySelector('.lesson-card')) return null; // 当該生徒が既にそのコマに授業を持つ
+        var dateKey = cell.getAttribute('data-date-key');
+        var slotNumber = Number(cell.getAttribute('data-slot-number'));
+        var payloadCell = findScheduleCellForMove(dateKey, slotNumber);
+        if (!payloadCell || !Array.isArray(payloadCell.pickerDesks) || payloadCell.pickerDesks.length === 0) return null;
+        return cell;
+      }
+
+      function clearScheduleDropHighlight() {
+        var previous = document.querySelector('.slot-cell.is-drop-target');
+        if (previous) previous.classList.remove('is-drop-target');
+      }
+
+      function removeScheduleDragGhost() {
+        if (scheduleDndDrag && scheduleDndDrag.ghost && scheduleDndDrag.ghost.parentNode) {
+          scheduleDndDrag.ghost.parentNode.removeChild(scheduleDndDrag.ghost);
+        }
+      }
+
+      // ドラッグ/長押し待ちの後始末(モーダルは閉じない)。
+      function endScheduleDndDrag() {
+        if (scheduleDndLongPressTimer) { window.clearTimeout(scheduleDndLongPressTimer); scheduleDndLongPressTimer = null; }
+        clearScheduleDropHighlight();
+        removeScheduleDragGhost();
+        if (scheduleDndDrag && scheduleDndDrag.card) scheduleDndDrag.card.classList.remove('is-drag-origin');
+        document.removeEventListener('pointermove', onScheduleDndPointerMove, true);
+        document.removeEventListener('pointerup', onScheduleDndPointerUp, true);
+        document.removeEventListener('pointercancel', onScheduleDndPointerCancel, true);
+        scheduleDndDrag = null;
+      }
+
+      // ドラッグ中も机選択モーダルも含めて破棄(再描画時に呼ぶ)。
+      function cancelScheduleDndInteraction() {
+        endScheduleDndDrag();
+        closeScheduleDeskPicker();
+      }
+
+      function startScheduleDndDrag(clientX, clientY) {
+        if (!scheduleDndDrag) return;
+        scheduleDndDrag.phase = 'dragging';
+        scheduleDndDrag.card.classList.add('is-drag-origin');
+        var ghost = document.createElement('div');
+        ghost.className = 'schedule-drag-ghost';
+        ghost.textContent = (scheduleDndDrag.source.subject || '') + ' ' + (lessonTypeLabels[scheduleDndDrag.source.lessonType] || '');
+        document.body.appendChild(ghost);
+        scheduleDndDrag.ghost = ghost;
+        moveScheduleDragGhost(clientX, clientY);
+      }
+
+      function moveScheduleDragGhost(clientX, clientY) {
+        if (scheduleDndDrag && scheduleDndDrag.ghost) {
+          scheduleDndDrag.ghost.style.left = clientX + 'px';
+          scheduleDndDrag.ghost.style.top = clientY + 'px';
+        }
+      }
+
+      function onScheduleDndPointerMove(event) {
+        if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
+        var dx = event.clientX - scheduleDndDrag.startX;
+        var dy = event.clientY - scheduleDndDrag.startY;
+        if (scheduleDndDrag.phase === 'pending') {
+          // 長押し完了前に動きすぎたら「スクロール/誤タップ」としてドラッグにしない。
+          if (Math.abs(dx) > 10 || Math.abs(dy) > 10) { endScheduleDndDrag(); }
+          return;
+        }
+        event.preventDefault();
+        moveScheduleDragGhost(event.clientX, event.clientY);
+        var cell = findDroppableCellFromPoint(event.clientX, event.clientY);
+        var current = document.querySelector('.slot-cell.is-drop-target');
+        if (current && current !== cell) current.classList.remove('is-drop-target');
+        if (cell && cell !== current) cell.classList.add('is-drop-target');
+      }
+
+      function onScheduleDndPointerUp(event) {
+        if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
+        if (scheduleDndDrag.phase !== 'dragging') { endScheduleDndDrag(); return; }
+        var source = scheduleDndDrag.source;
+        var cell = findDroppableCellFromPoint(event.clientX, event.clientY);
+        endScheduleDndDrag();
+        if (cell) {
+          openScheduleDeskPicker(source, cell.getAttribute('data-date-key'), Number(cell.getAttribute('data-slot-number')));
+        }
+      }
+
+      function onScheduleDndPointerCancel(event) {
+        if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
+        endScheduleDndDrag();
+      }
+
+      function onScheduleDndPointerDown(event) {
+        if (!DATA.scheduleDndEnabled) return;
+        if (event.button !== 0) return;
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        var card = target.closest('.lesson-card.is-draggable[data-role="lesson-card-draggable"]');
+        if (!card || !(card instanceof HTMLElement)) return;
+        var cell = card.closest('td[data-role="student-slot-cell"]');
+        if (!cell || !(cell instanceof HTMLElement)) return;
+        // 掴んだ瞬間に空きコマトグル等の後続ハンドラを止める(同じ pagesElement 上の別 pointerdown を抑止)。
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelScheduleDndInteraction();
+        scheduleDndDrag = {
+          phase: 'pending',
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          card: card,
+          ghost: null,
+          source: {
+            entryId: card.getAttribute('data-entry-id') || '',
+            studentId: card.getAttribute('data-linked-student-id') || '',
+            lessonType: card.getAttribute('data-lesson-type') || '',
+            subject: card.getAttribute('data-subject') || '',
+            studentName: card.getAttribute('data-student-name') || '',
+            sourceDateKey: cell.getAttribute('data-date-key') || '',
+            sourceSlotNumber: Number(cell.getAttribute('data-slot-number')),
+          },
+        };
+        document.addEventListener('pointermove', onScheduleDndPointerMove, true);
+        document.addEventListener('pointerup', onScheduleDndPointerUp, true);
+        document.addEventListener('pointercancel', onScheduleDndPointerCancel, true);
+        var downX = event.clientX;
+        var downY = event.clientY;
+        scheduleDndLongPressTimer = window.setTimeout(function() {
+          scheduleDndLongPressTimer = null;
+          startScheduleDndDrag(downX, downY);
+        }, 250);
+      }
+
+      function closeScheduleDeskPicker() {
+        if (scheduleDeskPickerKeydown) { document.removeEventListener('keydown', scheduleDeskPickerKeydown, true); scheduleDeskPickerKeydown = null; }
+        if (scheduleDeskPickerOverlay && scheduleDeskPickerOverlay.parentNode) {
+          scheduleDeskPickerOverlay.parentNode.removeChild(scheduleDeskPickerOverlay);
+        }
+        scheduleDeskPickerOverlay = null;
+      }
+
+      function renderDeskPickerSeatHtml(deskIndex, seat) {
+        if (seat.selectable) {
+          return '<button type="button" class="desk-picker-seat" data-role="desk-picker-seat" data-desk-index="' + deskIndex + '" data-student-index="' + seat.studentIndex + '">空き<br>ここに置く</button>';
+        }
+        if (seat.blockedByMemo) {
+          return '<div class="desk-picker-seat is-blocked">メモあり</div>';
+        }
+        if (seat.occupied) {
+          return '<div class="desk-picker-seat is-occupied">' + escapeHtml(seat.label || '使用中') + '</div>';
+        }
+        return '<div class="desk-picker-seat is-blocked">' + escapeHtml(seat.statusLabel || '選択不可') + '</div>';
+      }
+
+      // 移動先コマの全机(コマ表と同じ配置)を出す机選択モーダル。物理的な空き席だけを選べる(§C-2)。
+      function openScheduleDeskPicker(source, targetDateKey, targetSlotNumber) {
+        var payloadCell = findScheduleCellForMove(targetDateKey, targetSlotNumber);
+        if (!payloadCell || !Array.isArray(payloadCell.pickerDesks) || payloadCell.pickerDesks.length === 0) return;
+        closeScheduleDeskPicker();
+        var desks = payloadCell.pickerDesks;
+        var desksHtml = desks.map(function(desk) {
+          var seatsHtml = (desk.seats || []).map(function(seat) { return renderDeskPickerSeatHtml(desk.deskIndex, seat); }).join('');
+          return '<div class="desk-picker-desk"><div class="desk-picker-desk-teacher">' + escapeHtml(desk.teacher || '講師未設定') + '</div>' + seatsHtml + '</div>';
+        }).join('');
+        var dateLabel = escapeHtml((payloadCell.dateLabel || targetDateKey) + '(' + (payloadCell.dayLabel || '') + ') ' + (payloadCell.slotLabel || (targetSlotNumber + '限')));
+        var noteText = source.lessonType === 'regular'
+          ? 'この回のみ振替として移動します(基本データは変わりません)。空いている机の席を選んでください。'
+          : '空いている机の席を選んでください。';
+        var overlay = document.createElement('div');
+        overlay.className = 'desk-picker-overlay';
+        overlay.setAttribute('data-role', 'desk-picker-overlay');
+        overlay.innerHTML = '<div class="desk-picker-modal" role="dialog" aria-modal="true"><div class="desk-picker-title">' + escapeHtml(source.studentName || '') + ' の移動先の机を選ぶ</div><div class="desk-picker-note">' + dateLabel + ' / ' + escapeHtml(noteText) + '</div><div class="desk-picker-grid">' + desksHtml + '</div><div class="desk-picker-actions"><button type="button" class="desk-picker-cancel" data-role="desk-picker-cancel">キャンセル</button></div></div>';
+        overlay.addEventListener('click', function(event) {
+          var clickTarget = event.target;
+          if (!(clickTarget instanceof HTMLElement)) return;
+          if (clickTarget === overlay || clickTarget.closest('[data-role="desk-picker-cancel"]')) { closeScheduleDeskPicker(); return; }
+          var seatButton = clickTarget.closest('[data-role="desk-picker-seat"]');
+          if (!seatButton || !(seatButton instanceof HTMLElement)) return;
+          var deskIndex = Number(seatButton.getAttribute('data-desk-index'));
+          var studentIndex = Number(seatButton.getAttribute('data-student-index'));
+          sendScheduleMoveRequest(source, { targetDateKey: targetDateKey, targetSlotNumber: targetSlotNumber, deskIndex: deskIndex, studentIndex: studentIndex });
+          closeScheduleDeskPicker();
+        });
+        scheduleDeskPickerKeydown = function(event) { if (event.key === 'Escape') closeScheduleDeskPicker(); };
+        document.addEventListener('keydown', scheduleDeskPickerKeydown, true);
+        document.body.appendChild(overlay);
+        scheduleDeskPickerOverlay = overlay;
+      }
+
+      function sendScheduleMoveRequest(source, seat) {
+        try {
+          if (!window.opener || window.opener.closed) return;
+          // 盤面編集→反映の間の同期中スピナーを即時に出す(自動同期のフィードバックと共通)。
+          if (typeof showScheduleSyncingOverlay === 'function') showScheduleSyncingOverlay();
+          window.opener.postMessage({
+            type: 'schedule-student-move-request',
+            classroomStorageKey: (DATA.classroomStorageKey || 'default'),
+            source: {
+              entryId: source.entryId,
+              studentId: source.studentId || undefined,
+              sourceDateKey: source.sourceDateKey,
+              sourceSlotNumber: source.sourceSlotNumber,
+              lessonType: source.lessonType,
+              subject: source.subject,
+              studentName: source.studentName,
+            },
+            seat: seat,
+          }, '*');
+        } catch {}
+      }
+
+      function setupScheduleDndMove() {
+        if (!DATA.scheduleDndEnabled) return;
+        // 空きコマトグル(handleUnavailablePointerDown)より先に拾うため、そのハンドラより前に登録する
+        // (掴めるカードのときだけ stopImmediatePropagation で後続を止める)。委譲なので再描画に強い。
+        pagesElement.addEventListener('pointerdown', onScheduleDndPointerDown);
       }
 
       function groupScheduleEntriesBySlot(entries) {
@@ -5037,6 +5392,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function flushIncomingPayload() {
         incomingPayloadJobId = 0;
+        // 自動同期の再描画は pagesElement.innerHTML を差し替えるため、進行中のドラッグ/机選択モーダルは破棄する
+        // (再描画で参照先の DOM が消えて宙に浮くのを防ぐ)。
+        cancelScheduleDndInteraction();
         const nextPayload = pendingIncomingPayload;
         pendingIncomingPayload = null;
         if (nextPayload) applyIncomingPayload(nextPayload);
@@ -5715,6 +6073,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         applyFilters();
       });
       applyButton.addEventListener('click', applyFilters);
+      // 日程表コマ組み(別タブD&D): 空きコマトグルより前に登録し、掴めるカードのときだけ後続を止める。
+      setupScheduleDndMove();
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
         acquireInteractionLock();
