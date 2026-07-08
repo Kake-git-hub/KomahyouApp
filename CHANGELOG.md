@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.407 (2026-07-08)
+
+- docs: 日程表リアルタイム同期＋生徒日程表D&D移動の確定仕様と改修手順書を追加(オーナーQ&A 10問で要件確定。docs/spec-schedule-popup-realtime-sync.md / docs/spec-student-schedule-dnd.md / docs/handoff-popup-sync-and-dnd.md。spec-index の大方針6を正式上書き。コード変更なし)
+
 ## v1.5.406 (2026-07-07)
 
 - fix: 登録解除→再登録→再割振後に画面遷移すると組み直した講習コマが消える回帰を修正(Issue #46)。一過性の unassign リクエスト(`studentScheduleRequest`)が処理後も App state に残り、盤面 `key={boardMountKey}` 再マウントで重複ガード(ローカル ref)が消えて再発火していた。処理後に App 側 state を消費済み(null)にする `consumeStudentScheduleRequest` を導入し、処理判定 `shouldProcessStudentScheduleRequest` を純関数化。セッション/生徒ロード後にのみ消費するよう処理順も整理(未ロード時の取りこぼしも解消)。再マウント再発火の回帰テスト同梱(src/App.tsx, src/components/schedule-board/ScheduleBoardScreen.tsx, ScheduleBoardScreen.test.ts)
