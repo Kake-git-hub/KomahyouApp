@@ -24,6 +24,7 @@ import {
   normalizeRegularLessonNote,
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
+import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
 import { AppMenu } from '../navigation/AppMenu'
 
 type BasicDataScreenProps = {
@@ -33,6 +34,11 @@ type BasicDataScreenProps = {
   onUpdateTeachers: Dispatch<SetStateAction<TeacherRow[]>>
   onUpdateStudents: Dispatch<SetStateAction<StudentRow[]>>
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
+  // 未消化の講習/振替が残る生徒ID→残数（削除確認で誤削除を警告する）。
+  studentDeletionStockSummary?: StudentDeletionStockSummary
+  // 削除時にログインアカウントのパスワード再認証を要求するか（本番=firebase のみ true）。
+  requiresDeletePassword?: boolean
+  onVerifyDeletePassword?: (password: string) => Promise<boolean>
   onBackToBoard: () => void
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
@@ -862,9 +868,15 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
+  // 削除確認モーダル（生徒/講師共通）。window.confirm を廃し、不可逆警告・退塾日での非表示案内・
+  // 未消化ストック警告・ログインパスワード再認証を1画面にまとめる（オーナー指示 2026-07-08）。
+  const [deleteModalState, setDeleteModalState] = useState<{ scope: DeleteScope; id: string; name: string; stock?: StudentDeletionStock } | null>(null)
+  const [deletePassword, setDeletePassword] = useState('')
+  const [deleteError, setDeleteError] = useState('')
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
 
   const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', subjectCapabilities: [] as TeacherSubjectCapability[] })
@@ -1057,21 +1069,53 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   }
 
   const removeTeacher = (id: string) => {
-    if (!window.confirm('この講師を削除します。よろしいですか。')) {
-      setStatusMessage('講師の削除をキャンセルしました。')
-      return
-    }
-    onUpdateTeachers((current) => current.filter((row) => row.id !== id))
-    setStatusMessage('講師を削除しました。')
+    const teacher = teachers.find((row) => row.id === id)
+    setDeletePassword('')
+    setDeleteError('')
+    setDeleteModalState({ scope: 'teacher', id, name: teacher ? getTeacherDisplayName(teacher) : '' })
   }
 
   const removeStudent = (id: string) => {
-    if (!window.confirm('この生徒を削除します。よろしいですか。')) {
-      setStatusMessage('生徒の削除をキャンセルしました。')
-      return
+    const student = students.find((row) => row.id === id)
+    setDeletePassword('')
+    setDeleteError('')
+    setDeleteModalState({ scope: 'student', id, name: student ? getStudentDisplayName(student) : '', stock: studentDeletionStockSummary?.[id] })
+  }
+
+  const cancelDelete = () => {
+    const scope = deleteModalState?.scope
+    setDeleteModalState(null)
+    setDeletePassword('')
+    setDeleteError('')
+    setStatusMessage(scope === 'teacher' ? '講師の削除をキャンセルしました。' : '生徒の削除をキャンセルしました。')
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteModalState || deleteBusy) return
+    const { scope, id } = deleteModalState
+    if (requiresDeletePassword) {
+      if (!deletePassword) {
+        setDeleteError('ログイン中アカウントのパスワードを入力してください。')
+        return
+      }
+      setDeleteBusy(true)
+      const ok = onVerifyDeletePassword ? await onVerifyDeletePassword(deletePassword) : false
+      setDeleteBusy(false)
+      if (!ok) {
+        setDeleteError('パスワードが一致しないため、削除できませんでした。')
+        return
+      }
     }
-    onUpdateStudents((current) => current.filter((row) => row.id !== id))
-    setStatusMessage('生徒を削除しました。')
+    if (scope === 'teacher') {
+      onUpdateTeachers((current) => current.filter((row) => row.id !== id))
+      setStatusMessage('講師を削除しました。')
+    } else {
+      onUpdateStudents((current) => current.filter((row) => row.id !== id))
+      setStatusMessage('生徒を削除しました。')
+    }
+    setDeleteModalState(null)
+    setDeletePassword('')
+    setDeleteError('')
   }
 
 
@@ -1379,6 +1423,44 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
 
   return (
     <div className="page-shell page-shell-basic-data">
+
+      {deleteModalState ? (() => {
+        const confirmation = buildDeleteConfirmation({
+          scope: deleteModalState.scope,
+          name: deleteModalState.name,
+          stock: deleteModalState.stock,
+          requiresPassword: requiresDeletePassword,
+        })
+        return (
+          <div className="auto-assign-modal-overlay" role="presentation">
+            <div className="auto-assign-modal basic-data-delete-modal" role="dialog" aria-modal="true" aria-label={confirmation.title}>
+              <div className="auto-assign-modal-title">{confirmation.title}</div>
+              <p className="basic-data-delete-warning">⚠️ {confirmation.irreversibleWarning}</p>
+              {confirmation.stockWarning ? (
+                <p className="basic-data-delete-stock-warning" data-testid="basic-data-delete-stock-warning">{confirmation.stockWarning}</p>
+              ) : null}
+              <p className="basic-data-delete-hint">{confirmation.hideHint}</p>
+              {confirmation.requiresPassword ? (
+                <label className="basic-data-delete-password">
+                  <span>ログイン中アカウントのパスワード</span>
+                  <input
+                    type="password"
+                    value={deletePassword}
+                    autoComplete="current-password"
+                    onChange={(event) => { setDeletePassword(event.target.value); setDeleteError('') }}
+                    data-testid="basic-data-delete-password-input"
+                  />
+                </label>
+              ) : null}
+              {deleteError ? <p className="basic-data-delete-error" role="alert">{deleteError}</p> : null}
+              <div className="auto-assign-modal-actions">
+                <button className="secondary-button" type="button" onClick={cancelDelete} disabled={deleteBusy}>キャンセル</button>
+                <button className="primary-button basic-data-delete-confirm" type="button" onClick={confirmDelete} disabled={deleteBusy} data-testid="basic-data-delete-confirm-button">{deleteBusy ? '確認中…' : '削除する'}</button>
+              </div>
+            </div>
+          </div>
+        )
+      })() : null}
 
       {teacherEditorModalConfig ? (
         <div className="auto-assign-modal-overlay basic-data-teacher-modal-overlay" role="presentation">

@@ -4,6 +4,7 @@ import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../
 import { resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
+import { deriveStudentDeletionStockSummary, type StudentDeletionStockSummary } from '../basic-data/deleteGuard'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import { resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
 import { GroupAttendanceModal } from './GroupAttendanceModal'
@@ -679,6 +680,8 @@ type ScheduleBoardScreenProps = {
   syncStatusMessage?: string
   syncProgressPercent?: number | null
   syncElapsedSeconds?: number | null
+  // 削除ガード用: 未消化の講習/振替が残る生徒ID→残数を親(App)へ通知する（BasicDataScreen の誤削除警告に使う）。
+  onDeletionStockSummaryChange?: (summary: StudentDeletionStockSummary) => void
 }
 
 export type ScheduleRangePreference = {
@@ -3543,7 +3546,7 @@ export function computeStudentMove(params: {
   return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
@@ -4616,6 +4619,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return (left.sessionLabel ?? '盤面からストック').localeCompare(right.sessionLabel ?? '盤面からストック', 'ja')
     })
   }, [currentGradeReferenceDate, lecturePendingItemsByEntryKey, specialSessions, students])
+
+  // 未消化の講習/振替が残る生徒ID→残数を親(App)へ持ち上げる（盤面の残数と一致させるため盤面側で算出）。
+  // BasicDataScreen の削除確認で誤削除（例: 講習提出済みの生徒を名簿から消す）を警告するのに使う。
+  const deletionStockSummary = useMemo(
+    () => deriveStudentDeletionStockSummary(
+      lectureStockEntries.map((entry) => ({ studentId: entry.studentId, requestedCount: entry.requestedCount })),
+      makeupStockEntries.map((entry) => ({ studentId: entry.studentId, balance: entry.balance })),
+    ),
+    [lectureStockEntries, makeupStockEntries],
+  )
+  useEffect(() => {
+    onDeletionStockSummaryChange?.(deletionStockSummary)
+  }, [deletionStockSummary, onDeletionStockSummaryChange])
 
   const runStockAutoAssign = async (entryKey: string, runner: () => void) => {
     setActiveStockAutoAssignKey(entryKey)

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
+import type { StudentDeletionStockSummary } from './components/basic-data/deleteGuard'
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { autoAssignRuleDefinitions, backfillMissingAutoAssignRules, initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
@@ -2626,6 +2627,27 @@ function AuthenticatedApp() {
     })
   }, [isRemoteAdminAutomationEnabled, isRemoteBackendEnabled, reloadRemoteWorkspace, workspaceClassrooms, workspaceUsers])
 
+  // 未消化の講習/振替が残る生徒ID→残数（盤面から持ち上げる）。BasicDataScreen の削除確認で誤削除を警告する。
+  const [studentDeletionStockSummary, setStudentDeletionStockSummary] = useState<StudentDeletionStockSummary>({})
+  const studentDeletionStockSignatureRef = useRef('{}')
+  const handleDeletionStockSummaryChange = useCallback((summary: StudentDeletionStockSummary) => {
+    const signature = JSON.stringify(summary)
+    if (signature === studentDeletionStockSignatureRef.current) return
+    studentDeletionStockSignatureRef.current = signature
+    setStudentDeletionStockSummary(summary)
+  }, [])
+  // 削除時のログインアカウント再認証（本番=firebase のみ。ローカル開発はログインアカウントが無いので不要）。
+  // 教室削除(deleteClassroom)と同じ reauthenticateFirebaseUser を流用する。
+  const verifyDeletePassword = useCallback(async (password: string) => {
+    if (!isRemoteBackendEnabled) return true
+    try {
+      await reauthenticateFirebaseUser(password)
+      return true
+    } catch {
+      return false
+    }
+  }, [isRemoteBackendEnabled])
+
   const deleteClassroom = useCallback(async (classroomId: string, password: string) => {
     if (isRemoteBackendEnabled) {
       try {
@@ -4871,6 +4893,9 @@ function AuthenticatedApp() {
         onUpdateTeachers={setTeachers}
         onUpdateStudents={setStudents}
         onUpdateClassroomSettings={setClassroomSettings}
+        studentDeletionStockSummary={studentDeletionStockSummary}
+        requiresDeletePassword={isRemoteBackendEnabled}
+        onVerifyDeletePassword={verifyDeletePassword}
         onBackToBoard={() => navigateClassroomScreen('board')}
         onOpenSpecialData={() => navigateClassroomScreen('special-data')}
         onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
@@ -5004,6 +5029,7 @@ function AuthenticatedApp() {
         : (manualFirebaseSaveStabilityEnabled ? undefined : ((isSavingNow || hasImmediateUnsavedBoardChanges) ? persistenceMessage : undefined))}
       syncProgressPercent={shouldShowRemoteSyncStatus ? remoteSyncProgress?.percent ?? 1 : null}
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
+      onDeletionStockSummaryChange={handleDeletionStockSummaryChange}
     />
   )
 }

@@ -3396,6 +3396,63 @@ tr.sa-group-row td {
   flex-wrap: wrap;
 }
 
+/* 基本データ削除確認モーダル（生徒/講師）: 不可逆・未消化ストック・退塾日での非表示案内を強調する。 */
+.basic-data-delete-modal .basic-data-delete-warning {
+  margin: 0;
+  font-weight: 600;
+  color: #b42318;
+}
+
+.basic-data-delete-modal .basic-data-delete-stock-warning {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fef3f2;
+  border: 1px solid #fda29b;
+  color: #912018;
+  font-size: 0.9rem;
+}
+
+.basic-data-delete-modal .basic-data-delete-hint {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eef4ff;
+  border: 1px solid #b6cdf5;
+  color: #16314f;
+  font-size: 0.85rem;
+}
+
+.basic-data-delete-modal .basic-data-delete-password {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+  color: #16314f;
+}
+
+.basic-data-delete-modal .basic-data-delete-password input {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #c3ccd8;
+  font-size: 0.95rem;
+}
+
+.basic-data-delete-modal .basic-data-delete-error {
+  margin: 0;
+  color: #b42318;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.basic-data-delete-modal .basic-data-delete-confirm {
+  background: #d92d20;
+  border-color: #d92d20;
+}
+
+.basic-data-delete-modal .basic-data-delete-confirm:disabled {
+  opacity: 0.6;
+}
+
 .auto-assign-include-makeup {
   display: flex;
   align-items: center;

@@ -17,6 +17,9 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- feat: 基本データの生徒/講師削除に確認モーダルを追加(window.confirm 廃止)。不可逆である旨・データを残すなら退塾日で非表示にできる案内・未消化の講習/振替が残る生徒への警告・本番はログインアカウントのパスワード再認証を要求(src/components/basic-data/BasicDataScreen.tsx・deleteGuard.ts)。富樫兄弟(講習提出済み)の誤削除で講習一覧に生ID表示された事象の再発防止。
+- feat: 盤面(ScheduleBoardScreen)が未消化の講習/振替残数を生徒ID単位で親へ通知し、削除警告に利用(onDeletionStockSummaryChange・App.tsx)。
+- test: 削除ガードの純ロジックに回帰テストを追加(deleteGuard.test.ts・講習のみ/両方/なし/講師除外/名前フォールバック)。
 
 ## v1.5.410 (2026-07-08)
 
