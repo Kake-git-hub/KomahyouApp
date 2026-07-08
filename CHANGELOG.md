@@ -18,6 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- feat: 対話用日程表のReact化 Phase 0+1(土台＋リアルタイム同期・staging先行)。盤面と同一Reactツリーの `ScheduleView`(ドック⇄ポップアウト切替・spec-schedule-interactive-view)を新設し、staging環境判定(`isStagingEnvironment`/`scheduleInteractiveReactView`・stagingと開発用教室のみ有効)で日程表ボタンの対話用途を差し替え。表示算出は生成HTMLと同じ `buildStudentPayload`/`buildTeacherPayload` を共有し、埋め込みJSの表示ロジックを `scheduleViewData.ts` へ純関数移植(等価性テスト同梱)。行は React.memo＋signature比較で変更行のみ再レンダー(メモリ規律・`bumpMemCounter('schedule-view-row-render')` 等で ?memlog=1 実測可)。絞り込みは即時適用(旧「最新表示」ボタン廃止・Reactビュー内のみ)。印刷/PDF(全員表示・空フォーマット)と旧同期機構(forceゲート/scheduleSyncTrigger)は無変更で温存。本番3教室は従来の生成HTMLタブのまま(オーナーチェック合格まで main へマージしない)。(src/utils/scheduleViewData.ts / src/components/schedule-view/* / featureRollout.ts / ScheduleBoardScreen.tsx / BoardToolbar.tsx)
+- chore: ローカル検証用の launch 設定 `dev-local`(VITE_EXTERNAL_BACKEND_MODE=local・ポート5199)を追加。(.claude/launch.json)
+
 ## v1.5.410 (2026-07-08)
 
 - docs: 対話用日程表のReact化を土台に据える方針転換を確定(オーナー確定 2026-07-08。stagingでは生成HTMLタブを対話用途はReactビューに置換・印刷/PDFのHTML生成は残す)。同一Reactツリー化でリアルタイム同期は自動反映・日程表コマ組みはexecuteMoveStudent直呼びに単純化。ドック⇄ポップアウト(React portal→子ウィンドウ)トグルで両表示をstagingでユーザーが比較。新正本 docs/spec-schedule-interactive-view.md 追加、既存2仕様に§0(方式転換)追記、手順書をReact土台版(Phase0→1→2)に再構成、spec-index更新

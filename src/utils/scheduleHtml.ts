@@ -26,7 +26,10 @@ function parseDateKey(dateKey: string) {
   return new Date(`${dateKey}T00:00:00`)
 }
 
-type SerializedStudent = {
+// Serialized* / SchedulePayload 型と build*Payload は、生成HTML(印刷/PDF)と React 日程表ビュー
+// (scheduleViewData.ts / ScheduleView)が共有する表示算出の正本。二重定義で表示をズラさないため、
+// React ビュー側はこの payload を入力として使う(spec-schedule-interactive-view §C-3)。
+export type SerializedStudent = {
   id: string
   name: string
   fullName: string
@@ -42,7 +45,7 @@ type SerializedStudent = {
   optionChecks?: Record<string, boolean>
 }
 
-type SerializedTeacher = {
+export type SerializedTeacher = {
   id: string
   name: string
   fullName?: string
@@ -54,7 +57,7 @@ type SerializedTeacher = {
   submissionSubmitted?: boolean
 }
 
-type SerializedStudentEntry = {
+export type SerializedStudentEntry = {
   id: string
   linkedStudentId?: string
   name: string
@@ -67,7 +70,7 @@ type SerializedStudentEntry = {
   warning?: string
 }
 
-type SerializedStudentStatusEntry = {
+export type SerializedStudentStatusEntry = {
   id: string
   linkedStudentId?: string
   name: string
@@ -85,7 +88,7 @@ type SerializedStudentStatusEntry = {
   linkedDestinationSlotNumber?: number
 }
 
-type SerializedCell = {
+export type SerializedCell = {
   dateKey: string
   dateLabel: string
   dayLabel: string
@@ -105,7 +108,7 @@ type SerializedCell = {
   }>
 }
 
-type SerializedStudentSpecialSessionInput = {
+export type SerializedStudentSpecialSessionInput = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   // spec-schedule-pdf §E: 科目ごとの授業時間(60/45分)。講習回数表の科目名に併記する(未配置の希望科目でも表示)。
@@ -119,13 +122,13 @@ type SerializedStudentSpecialSessionInput = {
   submissionToken?: string
 }
 
-type SerializedTeacherSpecialSessionInput = {
+export type SerializedTeacherSpecialSessionInput = {
   unavailableSlots: string[]
   countSubmitted: boolean
   submissionToken?: string
 }
 
-type SerializedSpecialSession = {
+export type SerializedSpecialSession = {
   id: string
   label: string
   startDate: string
@@ -134,13 +137,13 @@ type SerializedSpecialSession = {
   studentInputs: Record<string, SerializedStudentSpecialSessionInput>
 }
 
-type SerializedExpectedRegularOccurrence = {
+export type SerializedExpectedRegularOccurrence = {
   linkedStudentId: string
   subject: string
   dateKey: string
 }
 
-type SerializedScheduleCountAdjustment = {
+export type SerializedScheduleCountAdjustment = {
   studentKey: string
   subject: string
   countKind: 'regular' | 'special'
@@ -148,7 +151,7 @@ type SerializedScheduleCountAdjustment = {
   delta: number
 }
 
-type SchedulePayload = {
+export type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
   defaultEndDate: string
@@ -205,7 +208,7 @@ type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
   __buildScheduleQrSvg?: (token?: string) => string | undefined
 }
 
-function buildSubmissionQrSvg(token: string | undefined) {
+export function buildSubmissionQrSvg(token: string | undefined) {
   if (!token) return undefined
   const url = buildSubmissionUrl(token)
   if (!url) return undefined
@@ -229,7 +232,7 @@ function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined
   return { session: overlapping[0], error: undefined }
 }
 
-type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
+export type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   regularLessonTemplateHistory?: RegularLessonTemplate[]
@@ -245,7 +248,7 @@ type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   } | null
 }
 
-type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
+export type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
   teachers: TeacherRow[]
   students?: StudentRow[]
   regularLessons?: RegularLessonRow[]
@@ -688,7 +691,7 @@ export function buildCombinedRegularLessonsFromHistory(params: {
   return combinedLessons
 }
 
-function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
+export function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params, params.students)
   const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
     regularLessons: params.regularLessons,
@@ -752,7 +755,7 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
   }
 }
 
-function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePayload {
+export function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params)
   const overlappingResult = findOverlappingSession(params.specialSessions, params.defaultStartDate, params.defaultEndDate)
   const targetSession = overlappingResult.session

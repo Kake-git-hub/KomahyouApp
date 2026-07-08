@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { featureRolloutRegistry, isFeatureEnabledForClassroom } from './featureRollout'
+import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled, isStagingEnvironment } from './featureRollout'
 
 describe('featureRollout', () => {
   it('enables manual Firebase save stability in every classroom', () => {
@@ -27,5 +27,20 @@ describe('featureRollout', () => {
     expect(featureRolloutRegistry.studentDragAndDropMove.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'development', name: '開発用教室' })).toBe(true)
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
+  })
+
+  it('judges the staging environment by Firebase project id', () => {
+    // staging 先行機能(日程表 React ビュー)は教室IDでなくプロジェクトIDで有効化する(2026-07-08 確定)。
+    expect(isStagingEnvironment('komahyouapp-staging')).toBe(true)
+    expect(isStagingEnvironment('komahyouapp-prod')).toBe(false)
+    expect(isStagingEnvironment('')).toBe(false)
+  })
+
+  it('keeps the interactive React schedule view staging-first (production classrooms stay on HTML tabs)', () => {
+    // オーナーチェック合格まで本番3教室では無効のまま。staging では全教室、その他環境では開発用教室のみ。
+    expect(featureRolloutRegistry.scheduleInteractiveReactView.scope).toBe('staging-environment')
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
   })
 })

@@ -13,6 +13,9 @@ type BoardToolbarProps = {
   isPrintingPdf: boolean
   isStudentScheduleOpen: boolean
   isTeacherScheduleOpen: boolean
+  // React 日程表ビュー(staging 先行)では「別タブ」ではなくドック/別ウィンドウ表示のため文言を差し替える。
+  studentScheduleOpenLabel?: string
+  teacherScheduleOpenLabel?: string
   hasSelectedStudent: boolean
   canUndo: boolean
   canRedo: boolean
@@ -68,6 +71,8 @@ function BoardToolbarComponent({
   isPrintingPdf,
   isStudentScheduleOpen,
   isTeacherScheduleOpen,
+  studentScheduleOpenLabel,
+  teacherScheduleOpenLabel,
   hasSelectedStudent,
   canUndo,
   canRedo,
@@ -219,10 +224,10 @@ function BoardToolbarComponent({
                 {makeupStockTotalCount > 0 ? <span className="toolbar-inline-count">{makeupStockTotalCount}</span> : null}
               </button>
               <button className="secondary-button slim" type="button" onClick={onOpenStudentSchedule} disabled={isStudentScheduleOpen} data-testid="board-student-schedule-button">
-                {isStudentScheduleOpen ? '生徒日程は別タブで表示中' : '生徒日程'}
+                {isStudentScheduleOpen ? (studentScheduleOpenLabel ?? '生徒日程は別タブで表示中') : '生徒日程'}
               </button>
               <button className="secondary-button slim" type="button" onClick={onOpenTeacherSchedule} disabled={isTeacherScheduleOpen} data-testid="board-teacher-schedule-button">
-                {isTeacherScheduleOpen ? '講師日程は別タブで表示中' : '講師日程'}
+                {isTeacherScheduleOpen ? (teacherScheduleOpenLabel ?? '講師日程は別タブで表示中') : '講師日程'}
               </button>
               <button className="secondary-button slim" type="button" onClick={onPrintPdf} disabled={isPrintingPdf} data-testid="board-print-pdf-button">
                 {isPrintingPdf ? 'PDF出力中...' : 'PDF出力'}

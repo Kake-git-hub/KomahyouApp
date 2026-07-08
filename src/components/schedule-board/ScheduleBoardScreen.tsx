@@ -30,7 +30,9 @@ import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
 import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { generateQrSvg } from '../../utils/qrcode'
-import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, buildStudentPayload, buildTeacherPayload, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
+import { ScheduleView, type ScheduleViewRange } from '../schedule-view/ScheduleView'
+import { ScheduleViewPanel, type ScheduleViewDisplayMode } from '../schedule-view/ScheduleViewPanel'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
@@ -3550,6 +3552,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
+  // 対話用日程表の React ビュー(ドック⇄ポップアウト)。staging 先行(オーナーチェック合格まで本番は
+  // 従来の生成HTMLタブのまま)。有効時は日程表ボタンが React ビューを開き、印刷は従来経路を使う。
+  const scheduleReactViewEnabled = isFeatureEnabledForClassroom('scheduleInteractiveReactView', { name: classroomName })
   const boardExportRef = useRef<HTMLDivElement | null>(null)
   const studentScheduleWindowRef = useRef<Window | null>(null)
   const teacherScheduleWindowRef = useRef<Window | null>(null)
@@ -3635,6 +3640,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
+  // React 日程表ビュー(staging 先行)の表示状態。ドック/ポップアウトは生徒・講師で独立に切替できる。
+  const [studentScheduleViewState, setStudentScheduleViewState] = useState<{ open: boolean; mode: ScheduleViewDisplayMode; expanded: boolean }>({ open: false, mode: 'dock', expanded: false })
+  const [teacherScheduleViewState, setTeacherScheduleViewState] = useState<{ open: boolean; mode: ScheduleViewDisplayMode; expanded: boolean }>({ open: false, mode: 'dock', expanded: false })
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.studentScheduleRange)
   const [teacherScheduleRange, setTeacherScheduleRange] = useState<ScheduleRangePreference | null>(initialBoardSnapshot.teacherScheduleRange)
   const [stockActionModal, setStockActionModal] = useState<StockActionModalState | null>(null)
@@ -5459,7 +5467,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   )
 
   const studentScheduleCells = useMemo(() => {
-    if (!isStudentScheduleOpen) return []
+    // React 日程表ビュー(staging 先行)を開いている間も同じセル算出を共有する(表示算出の正本は1つ)。
+    if (!isStudentScheduleOpen && !studentScheduleViewState.open) return []
     return buildScheduleCellsForRange({
       range: effectiveStudentScheduleRange,
       fallbackStartDate: scheduleFallbackStartDate,
@@ -5471,10 +5480,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
       suppressedRegularLessonOccurrences,
     })
-  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, studentScheduleViewState.open, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const teacherScheduleCells = useMemo(() => {
-    if (!isTeacherScheduleOpen) return []
+    if (!isTeacherScheduleOpen && !teacherScheduleViewState.open) return []
     return buildScheduleCellsForRange({
       range: effectiveTeacherScheduleRange,
       fallbackStartDate: scheduleFallbackStartDate,
@@ -5486,7 +5495,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
       suppressedRegularLessonOccurrences,
     })
-  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, teacherScheduleViewState.open, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const studentScheduleTitle = useMemo(
     () => formatWeeklyScheduleTitle(effectiveStudentScheduleRange.startDate, effectiveStudentScheduleRange.endDate),
@@ -5599,6 +5608,100 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 生徒側と同様、scheduleSyncTrigger(開いた時/最新表示)でのみ再生成し、編集ごとの自動再生成を停止。
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scheduleSyncTrigger])
+
+  // ==== React 日程表ビュー(staging 先行・spec-schedule-interactive-view) ====
+  // 生成HTMLタブと同じ純関数(buildStudentPayload/buildTeacherPayload)で表示データを組み、
+  // 同一 React ツリー内の ScheduleView が盤面編集に自動追従する(機能1: リアルタイム同期)。
+  // ビューを閉じている間は一切計算しない。QR は lazyQrLoading で表示中の1名だけ遅延生成する。
+  const studentScheduleViewPayload = useMemo(() => {
+    if (!studentScheduleViewState.open) return null
+    bumpMemCounter('schedule-view-payload-build')
+    return buildStudentPayload({
+      cells: studentScheduleCells,
+      students,
+      regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
+      teachers,
+      scheduleCountAdjustments,
+      highlightedStudentSlot: movingStudentContext
+        ? {
+            studentId: movingStudentContext.student.managedStudentId ?? movingStudentContext.student.id,
+            studentName: movingStudentContext.student.name,
+            studentDisplayName: resolveBoardStudentDisplayName(movingStudentContext.student.name),
+            dateKey: movingStudentContext.cell.dateKey,
+            slotNumber: movingStudentContext.cell.slotNumber,
+          }
+        : null,
+      defaultStartDate: effectiveStudentScheduleRange.startDate,
+      defaultEndDate: effectiveStudentScheduleRange.endDate,
+      defaultPeriodValue: effectiveStudentScheduleRange.periodValue,
+      defaultPersonId: effectiveStudentScheduleRange.personId,
+      titleLabel: studentScheduleTitle,
+      classroomSettings,
+      classroomStorageKey,
+      optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      periodBands: specialSessions,
+      specialSessions,
+      groupClassEntries,
+      lazyQrLoading: true,
+      showSubmittedQr: true,
+    })
+  }, [studentScheduleViewState.open, studentScheduleCells, students, regularLessons, classroomSettings, teachers, scheduleCountAdjustments, movingStudentContext, effectiveStudentScheduleRange, studentScheduleTitle, classroomStorageKey, studentScheduleOptionFieldEnabled, specialSessions, groupClassEntries])
+
+  const teacherScheduleViewPayload = useMemo(() => {
+    if (!teacherScheduleViewState.open) return null
+    bumpMemCounter('schedule-view-payload-build')
+    return buildTeacherPayload({
+      cells: teacherScheduleCells,
+      teachers,
+      students,
+      regularLessons,
+      regularLessonTemplateHistory: classroomSettings.regularLessonTemplateHistory,
+      preTemplateRegularLessons: classroomSettings.preTemplateRegularLessons,
+      defaultStartDate: effectiveTeacherScheduleRange.startDate,
+      defaultEndDate: effectiveTeacherScheduleRange.endDate,
+      defaultPeriodValue: effectiveTeacherScheduleRange.periodValue,
+      defaultPersonId: effectiveTeacherScheduleRange.personId,
+      titleLabel: teacherScheduleTitle,
+      classroomSettings,
+      classroomStorageKey,
+      periodBands: specialSessions,
+      specialSessions,
+      groupClassEntries,
+      lazyQrLoading: true,
+      showSubmittedQr: true,
+    })
+  }, [teacherScheduleViewState.open, teacherScheduleCells, teachers, students, regularLessons, classroomSettings, effectiveTeacherScheduleRange, teacherScheduleTitle, classroomStorageKey, specialSessions, groupClassEntries])
+
+  // 期間・人の絞り込み変更(即時適用)。旧ポップアップの range-update と同じ保存先(localStorage)と
+  // state を共有するため、旧タブ⇄Reactビューで期間・選択が引き継がれる。
+  const handleStudentScheduleViewRangeChange = useCallback((range: ScheduleViewRange) => {
+    const normalized = normalizeScheduleRange(range, scheduleFallbackStartDate, scheduleFallbackEndDate)
+    writeStoredScheduleRange('student', normalized, classroomStorageKey)
+    setStudentScheduleRange(normalized)
+  }, [classroomStorageKey, scheduleFallbackEndDate, scheduleFallbackStartDate])
+
+  const handleTeacherScheduleViewRangeChange = useCallback((range: ScheduleViewRange) => {
+    const normalized = normalizeScheduleRange(range, scheduleFallbackStartDate, scheduleFallbackEndDate)
+    writeStoredScheduleRange('teacher', normalized, classroomStorageKey)
+    setTeacherScheduleRange(normalized)
+  }, [classroomStorageKey, scheduleFallbackEndDate, scheduleFallbackStartDate])
+
+  // 連絡事項の保存は既存の 'schedule-note-update' ハンドラ(同一ウィンドウへの postMessage)を再利用し、
+  // classroomSettings.scheduleNotes への永続化経路を一本に保つ。
+  const handleStudentScheduleViewNoteChange = useCallback((noteKey: string, value: string) => {
+    window.postMessage({ type: 'schedule-note-update', viewType: 'student', noteKey, value }, '*')
+  }, [])
+
+  // 印刷用全員表示は従来どおり生成HTMLタブ(既存の 'open-all-schedule' ハンドラ)へ委譲する。印刷経路は不変。
+  const handleOpenPrintAllStudents = useCallback(() => {
+    window.postMessage({ type: 'open-all-schedule', viewType: 'all-student', startDate: effectiveStudentScheduleRange.startDate, endDate: effectiveStudentScheduleRange.endDate }, '*')
+  }, [effectiveStudentScheduleRange.endDate, effectiveStudentScheduleRange.startDate])
+
+  const handleOpenPrintAllTeachers = useCallback(() => {
+    window.postMessage({ type: 'open-all-schedule', viewType: 'all-teacher', startDate: effectiveTeacherScheduleRange.startDate, endDate: effectiveTeacherScheduleRange.endDate }, '*')
+  }, [effectiveTeacherScheduleRange.endDate, effectiveTeacherScheduleRange.startDate])
 
   const menuStudent = useMemo(() => {
     if (!studentMenu) return null
@@ -8206,6 +8309,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleOpenStudentSchedule = () => {
+    // staging 先行: React ビュー有効時は生成HTMLタブではなくドック/ポップアウトで開く
+    // (印刷用全員表示はビュー内ボタンから従来経路で開ける)。
+    if (scheduleReactViewEnabled) {
+      const storedRange = normalizeScheduleRange(
+        readStoredScheduleRange('student', scheduleFallbackStartDate, scheduleFallbackEndDate, classroomStorageKey),
+        scheduleFallbackStartDate,
+        scheduleFallbackEndDate,
+      )
+      setStudentScheduleRange(storedRange)
+      setStudentScheduleViewState((prev) => ({ ...prev, open: true }))
+      setStatusMessage('生徒日程表を表示しました。盤面の編集は自動で反映されます。')
+      return
+    }
+
     if (studentScheduleWindowRef.current && !studentScheduleWindowRef.current.closed) {
       setStatusMessage('生徒日程は別タブで表示中です。')
       studentScheduleWindowRef.current.focus()
@@ -8259,6 +8376,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleOpenTeacherSchedule = () => {
+    if (scheduleReactViewEnabled) {
+      const storedRange = normalizeScheduleRange(
+        readStoredScheduleRange('teacher', scheduleFallbackStartDate, scheduleFallbackEndDate, classroomStorageKey),
+        scheduleFallbackStartDate,
+        scheduleFallbackEndDate,
+      )
+      setTeacherScheduleRange(storedRange)
+      setTeacherScheduleViewState((prev) => ({ ...prev, open: true }))
+      setStatusMessage('講師日程表を表示しました。盤面の編集は自動で反映されます。')
+      return
+    }
+
     if (teacherScheduleWindowRef.current && !teacherScheduleWindowRef.current.closed) {
       setStatusMessage('講師日程は別タブで表示中です。')
       teacherScheduleWindowRef.current.focus()
@@ -9117,8 +9246,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             isMakeupStockOpen={isMakeupStockOpen}
             isMakeupMoveActive={selectedMakeupStockKey !== null || selectedLectureStockKey !== null}
             isPrintingPdf={isPrintingPdf}
-            isStudentScheduleOpen={isStudentScheduleOpen}
-            isTeacherScheduleOpen={isTeacherScheduleOpen}
+            isStudentScheduleOpen={isStudentScheduleOpen || studentScheduleViewState.open}
+            isTeacherScheduleOpen={isTeacherScheduleOpen || teacherScheduleViewState.open}
+            studentScheduleOpenLabel={studentScheduleViewState.open ? '生徒日程を表示中' : undefined}
+            teacherScheduleOpenLabel={teacherScheduleViewState.open ? '講師日程を表示中' : undefined}
             hasSelectedStudent={selectedStudentId !== null || selectedMakeupStockKey !== null || selectedLectureStockKey !== null}
             canUndo={isTemplateMode ? templateUndoStack.length > 0 : undoStack.length > 0}
             canRedo={isTemplateMode ? templateRedoStack.length > 0 : redoStack.length > 0}
@@ -10143,6 +10274,98 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           ) : null}
         </section>
       </main>
+      {/* React 日程表ビュー(staging 先行)。ドックは画面下部パネル、ポップアウトは子ウィンドウへの portal。
+          生徒・講師を同時に開けるよう、ドック分は1つのエリアに横並びでまとめる。 */}
+      {(studentScheduleViewState.open && studentScheduleViewState.mode === 'dock') || (teacherScheduleViewState.open && teacherScheduleViewState.mode === 'dock') ? (
+        <div className="schedule-view-dock-area">
+          {studentScheduleViewState.open && studentScheduleViewState.mode === 'dock' && studentScheduleViewPayload ? (
+            <ScheduleViewPanel
+              title="生徒日程表"
+              mode="dock"
+              expanded={studentScheduleViewState.expanded}
+              onToggleMode={() => setStudentScheduleViewState((prev) => ({ ...prev, mode: 'popout' }))}
+              onToggleExpanded={() => setStudentScheduleViewState((prev) => ({ ...prev, expanded: !prev.expanded }))}
+              onClose={() => setStudentScheduleViewState((prev) => ({ ...prev, open: false }))}
+            >
+              <ScheduleView
+                viewType="student"
+                payload={studentScheduleViewPayload}
+                range={effectiveStudentScheduleRange}
+                onRangeChange={handleStudentScheduleViewRangeChange}
+                onScheduleNoteChange={handleStudentScheduleViewNoteChange}
+                onOpenPrintAll={handleOpenPrintAllStudents}
+                classroomStorageKey={classroomStorageKey}
+              />
+            </ScheduleViewPanel>
+          ) : null}
+          {teacherScheduleViewState.open && teacherScheduleViewState.mode === 'dock' && teacherScheduleViewPayload ? (
+            <ScheduleViewPanel
+              title="講師日程表"
+              mode="dock"
+              expanded={teacherScheduleViewState.expanded}
+              onToggleMode={() => setTeacherScheduleViewState((prev) => ({ ...prev, mode: 'popout' }))}
+              onToggleExpanded={() => setTeacherScheduleViewState((prev) => ({ ...prev, expanded: !prev.expanded }))}
+              onClose={() => setTeacherScheduleViewState((prev) => ({ ...prev, open: false }))}
+            >
+              <ScheduleView
+                viewType="teacher"
+                payload={teacherScheduleViewPayload}
+                range={effectiveTeacherScheduleRange}
+                onRangeChange={handleTeacherScheduleViewRangeChange}
+                onOpenPrintAll={handleOpenPrintAllTeachers}
+                classroomStorageKey={classroomStorageKey}
+              />
+            </ScheduleViewPanel>
+          ) : null}
+        </div>
+      ) : null}
+      {studentScheduleViewState.open && studentScheduleViewState.mode === 'popout' && studentScheduleViewPayload ? (
+        <ScheduleViewPanel
+          title="生徒日程表"
+          mode="popout"
+          expanded={false}
+          onToggleMode={() => setStudentScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))}
+          onToggleExpanded={() => {}}
+          onClose={() => setStudentScheduleViewState((prev) => ({ ...prev, open: false }))}
+          onPopoutBlocked={() => {
+            setStudentScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))
+            setStatusMessage('別ウィンドウを開けませんでした(ポップアップブロック)。画面内表示に戻します。')
+          }}
+        >
+          <ScheduleView
+            viewType="student"
+            payload={studentScheduleViewPayload}
+            range={effectiveStudentScheduleRange}
+            onRangeChange={handleStudentScheduleViewRangeChange}
+            onScheduleNoteChange={handleStudentScheduleViewNoteChange}
+            onOpenPrintAll={handleOpenPrintAllStudents}
+            classroomStorageKey={classroomStorageKey}
+          />
+        </ScheduleViewPanel>
+      ) : null}
+      {teacherScheduleViewState.open && teacherScheduleViewState.mode === 'popout' && teacherScheduleViewPayload ? (
+        <ScheduleViewPanel
+          title="講師日程表"
+          mode="popout"
+          expanded={false}
+          onToggleMode={() => setTeacherScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))}
+          onToggleExpanded={() => {}}
+          onClose={() => setTeacherScheduleViewState((prev) => ({ ...prev, open: false }))}
+          onPopoutBlocked={() => {
+            setTeacherScheduleViewState((prev) => ({ ...prev, mode: 'dock' }))
+            setStatusMessage('別ウィンドウを開けませんでした(ポップアップブロック)。画面内表示に戻します。')
+          }}
+        >
+          <ScheduleView
+            viewType="teacher"
+            payload={teacherScheduleViewPayload}
+            range={effectiveTeacherScheduleRange}
+            onRangeChange={handleTeacherScheduleViewRangeChange}
+            onOpenPrintAll={handleOpenPrintAllTeachers}
+            classroomStorageKey={classroomStorageKey}
+          />
+        </ScheduleViewPanel>
+      ) : null}
     </div>
   )
 }
