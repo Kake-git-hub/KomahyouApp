@@ -4138,6 +4138,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // Issue #46: shouldProcess で「未処理の 1 件」だけを対象にする。
     if (!shouldProcessStudentScheduleRequest(studentScheduleRequest, processedStudentScheduleRequestIdRef.current)) return
     const request = studentScheduleRequest!
+    // move リクエストは別 effect(executeScheduleViewMove 定義後)で処理する。ここでは消費しない。
+    if (request.mode !== 'unassign') return
 
     const session = specialSessions.find((entry) => entry.id === request.sessionId)
     const student = students.find((entry) => entry.id === request.studentId)
@@ -7951,6 +7953,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return { ok: true, message: `${result.message} 手動保存で確定されます。` }
   }
   const stableExecuteScheduleViewMove = useStableCallback(executeScheduleViewMove)
+
+  // 日程表コマ組み(spec-student-schedule-dnd): 別タブから来た mode:'move' の一過性リクエストを処理する。
+  // unassign と同じ Issue #46 規律(処理時に processedRef を立て App 側 state を消費)。盤面 weeks が
+  // まだ空(ロード前)なら消費せず待つ。executeScheduleViewMove は週の自動拡張・source再解決・
+  // 不成立時の理由表示まで内包する(stable 参照なので依存に入れても再実行は request 変化時のみ)。
+  useEffect(() => {
+    if (!shouldProcessStudentScheduleRequest(studentScheduleRequest, processedStudentScheduleRequestIdRef.current)) return
+    const request = studentScheduleRequest!
+    if (request.mode !== 'move') return
+    if (normalizedWeeks.length === 0) return
+    processedStudentScheduleRequestIdRef.current = request.requestId
+    onStudentScheduleRequestProcessed?.(request.requestId)
+    stableExecuteScheduleViewMove(request.source, request.seat)
+  }, [normalizedWeeks.length, onStudentScheduleRequestProcessed, stableExecuteScheduleViewMove, studentScheduleRequest])
 
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {
     // 長押しD&Dで移動を確定した直後の click は無視する(掴んだセルでメニューが開くのを防ぐ)。

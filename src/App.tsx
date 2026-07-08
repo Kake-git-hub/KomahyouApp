@@ -9,6 +9,7 @@ import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLes
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
 const BackupRestoreScreen = lazy(() => import('./components/backup-restore/BackupRestoreScreen').then((m) => ({ default: m.BackupRestoreScreen })))
@@ -146,12 +147,24 @@ export function buildTeacherAutoAssignItems(
     .map((entry) => ({ sessionId: entry.sessionId, teacherId: entry.personId, mode: 'assign' as const }))
 }
 
-export type StudentScheduleRequest = {
-  requestId: number
-  sessionId: string
-  studentId: string
-  mode: 'unassign'
-}
+// 生徒日程表(別タブ)から本体盤面へ渡す一過性リクエスト。Issue #46 の規律(App 永続 state に載せ、
+// 処理側が requestId 一致時のみ消費)を踏襲する。mode で分岐:
+//  - 'unassign': 講習の登録解除(schedule-student-count-save の countSubmitted=false 由来)。
+//  - 'move'    : 日程表コマ組み(spec-student-schedule-dnd)。D&D+机選択の確定で送られ、
+//                盤面の executeScheduleViewMove で実移動する。source/seat は純関数で検証済み。
+export type StudentScheduleRequest =
+  | {
+      requestId: number
+      mode: 'unassign'
+      sessionId: string
+      studentId: string
+    }
+  | {
+      requestId: number
+      mode: 'move'
+      source: ScheduleViewMoveSource
+      seat: ScheduleViewMoveSeat
+    }
 
 export type SubmissionAcknowledgementEntry = {
   id: string
@@ -3382,6 +3395,22 @@ function AuthenticatedApp() {
             .then(() => { syncTeacherSchedulePopup(true) })
             .catch(() => { syncTeacherSchedulePopup(true) })
         }
+        return
+      }
+
+      if (message.type === 'schedule-student-move-request') {
+        // 日程表コマ組み(spec-student-schedule-dnd): 別タブ(生成HTML)のD&D+机選択の確定で送られる。
+        // 埋め込みJS(信頼境界外)の入力を純関数で厳密に検証し、mode:'move' の一過性リクエストとして
+        // 盤面へ渡す(Issue #46 の規律: App 永続 state に載せ処理側が requestId 一致時のみ消費)。
+        const parsedMove = parseScheduleViewMoveMessage(message)
+        if (!parsedMove) return
+        studentScheduleRequestIdRef.current += 1
+        setStudentScheduleRequest({
+          requestId: studentScheduleRequestIdRef.current,
+          mode: 'move',
+          source: parsedMove.source,
+          seat: parsedMove.seat,
+        })
         return
       }
 

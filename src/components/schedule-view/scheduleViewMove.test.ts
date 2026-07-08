@@ -7,6 +7,7 @@ import {
   buildDeskPickerDesks,
   findScheduleViewMoveSource,
   findScheduleViewTargetCell,
+  parseScheduleViewMoveMessage,
   validateScheduleViewMoveTarget,
 } from './scheduleViewMove'
 import { computeStudentMove } from '../schedule-board/ScheduleBoardScreen'
@@ -232,5 +233,63 @@ describe('scheduleViewMove: computeStudentMove 経由の移動セマンティク
 
     expect(result.status).toBe('moved')
     expect(JSON.stringify(weeks)).toBe(before)
+  })
+})
+
+describe('parseScheduleViewMoveMessage: 別タブからの移動要求メッセージ検証', () => {
+  const validMessage = {
+    type: 'schedule-student-move-request',
+    source: {
+      entryId: 'entry-1',
+      studentId: 'stu-1',
+      sourceDateKey: '2026-07-06',
+      sourceSlotNumber: 1,
+      lessonType: 'makeup',
+      subject: '数',
+      studentName: '山田太',
+    },
+    seat: { targetDateKey: '2026-07-08', targetSlotNumber: 3, deskIndex: 2, studentIndex: 1 },
+  }
+
+  it('正常な payload を {source, seat} に変換する', () => {
+    const parsed = parseScheduleViewMoveMessage(validMessage)
+    expect(parsed).not.toBeNull()
+    expect(parsed!.source).toEqual({
+      entryId: 'entry-1',
+      studentId: 'stu-1',
+      sourceDateKey: '2026-07-06',
+      sourceSlotNumber: 1,
+      lessonType: 'makeup',
+      subject: '数',
+      studentName: '山田太',
+    })
+    expect(parsed!.seat).toEqual({ targetDateKey: '2026-07-08', targetSlotNumber: 3, deskIndex: 2, studentIndex: 1 })
+  })
+
+  it('studentId は任意(欠けても成立し undefined になる)', () => {
+    const { studentId: _omit, ...sourceWithoutId } = validMessage.source
+    const parsed = parseScheduleViewMoveMessage({ ...validMessage, source: sourceWithoutId })
+    expect(parsed).not.toBeNull()
+    expect(parsed!.source.studentId).toBeUndefined()
+  })
+
+  it('必須フィールドが欠けたら null(移動不成立)', () => {
+    expect(parseScheduleViewMoveMessage(null)).toBeNull()
+    expect(parseScheduleViewMoveMessage({})).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, source: undefined })).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, seat: undefined })).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, source: { ...validMessage.source, entryId: '' } })).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, seat: { ...validMessage.seat, targetDateKey: 123 } })).toBeNull()
+  })
+
+  it('席番号は 0/1 のみ・机番号は非負(範囲外は null)', () => {
+    expect(parseScheduleViewMoveMessage({ ...validMessage, seat: { ...validMessage.seat, studentIndex: 2 } })).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, seat: { ...validMessage.seat, deskIndex: -1 } })).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, seat: { ...validMessage.seat, studentIndex: 0 } })).not.toBeNull()
+  })
+
+  it('数値フィールドが文字列や NaN なら null(埋め込みJS由来の型崩れを弾く)', () => {
+    expect(parseScheduleViewMoveMessage({ ...validMessage, source: { ...validMessage.source, sourceSlotNumber: '1' } })).toBeNull()
+    expect(parseScheduleViewMoveMessage({ ...validMessage, seat: { ...validMessage.seat, targetSlotNumber: Number.NaN } })).toBeNull()
   })
 })

@@ -24,6 +24,49 @@ export type ScheduleViewMoveSeat = {
   studentIndex: number
 }
 
+// 生徒日程表(別タブ・生成HTML)のD&D確定で popup が opener(本体)へ送る
+// `schedule-student-move-request` の payload を検証して {source, seat} に変換する。
+// 埋め込みJS(信頼境界の外)からの入力なので型を厳密に絞り、1つでも欠け/不正なら null(移動不成立)を返す。
+// studentIndex は机の2席(0/1)のみ。deskIndex は非負。
+export function parseScheduleViewMoveMessage(
+  message: unknown,
+): { source: ScheduleViewMoveSource; seat: ScheduleViewMoveSeat } | null {
+  if (!message || typeof message !== 'object') return null
+  const raw = message as Record<string, unknown>
+  if (!raw.source || typeof raw.source !== 'object' || !raw.seat || typeof raw.seat !== 'object') return null
+  const s = raw.source as Record<string, unknown>
+  const t = raw.seat as Record<string, unknown>
+  const asKey = (value: unknown): string | null => (typeof value === 'string' && value.length > 0 ? value : null)
+  const asNum = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+
+  const entryId = asKey(s.entryId)
+  const sourceDateKey = asKey(s.sourceDateKey)
+  const sourceSlotNumber = asNum(s.sourceSlotNumber)
+  const lessonType = asKey(s.lessonType)
+  const targetDateKey = asKey(t.targetDateKey)
+  const targetSlotNumber = asNum(t.targetSlotNumber)
+  const deskIndex = asNum(t.deskIndex)
+  const studentIndex = asNum(t.studentIndex)
+
+  if (entryId === null || sourceDateKey === null || sourceSlotNumber === null || lessonType === null) return null
+  if (targetDateKey === null || targetSlotNumber === null || deskIndex === null || studentIndex === null) return null
+  if (deskIndex < 0 || (studentIndex !== 0 && studentIndex !== 1)) return null
+
+  const studentId = typeof s.studentId === 'string' && s.studentId.length > 0 ? s.studentId : undefined
+  return {
+    source: {
+      entryId,
+      studentId,
+      sourceDateKey,
+      sourceSlotNumber,
+      lessonType,
+      subject: typeof s.subject === 'string' ? s.subject : '',
+      studentName: typeof s.studentName === 'string' ? s.studentName : '',
+    },
+    seat: { targetDateKey, targetSlotNumber, deskIndex, studentIndex },
+  }
+}
+
 export type ScheduleViewMoveSourceHit = {
   cellId: string
   deskIndex: number
