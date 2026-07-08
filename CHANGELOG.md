@@ -18,6 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Phase C 移動失敗の原因): 別タブのコマ組みで「本来移動できるはずが移動不可になる」ケースを修正。日程表(overlay 済みセル)と盤面の生 weeks は机の並び/本数が食い違うことがあり、モーダルの positional deskIndex が盤面の別の机(占有/存在せず)を指して弾かれていた。机選択モーダルに机同一性(deskId=盤面 desk.id・講師名)を持たせ、移動確定時に resolveScheduleViewTargetDeskIndex で deskId→講師名→positional の順に実机へ解決してから検証・移動する。回帰テスト3件(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
+- feat(Phase C 移動の結果表示): 盤面→別タブへ移動結果を ack 送信。成功=移動先コマを数秒(約4s)黄色ハイライト(自動同期の再描画をまたいで持続)。失敗=理由を最前面に大きく表示し「日程表に戻る」ボタンで閉じる(盤面は不変)。回帰テスト: 配線マーカー(scheduleHtml.ts(+test) / ScheduleBoardScreen.tsx)
+- style(Phase C 机選択モーダル 2): 説明テキスト(タイトル/注記)を削除し、机列の左に時限列(rowspan)・一番上に日付行を追加して「盤面の一コマをそのまま切り取った」表にした(オーナー要望)。回帰テスト: 席セルの机同一性属性・日付/時限セルの配線(scheduleHtml.ts(+test))
 - style(Phase C 机選択モーダル): 机一覧の形式を盤面と同じ「1コマを切り取った」表に変更(オーナー要望)。カード式(席を縦積み)をやめ、盤面の .slot-adjust-grid/sa-* に合わせた 1机=1行 [机番号][講師][席1][席2] のダーク罫線テーブルに。空席=クリック可td(青ホバー)・占有=非クリックtd(生徒名+科目)・メモ/休記録=淡色。回帰テスト: 席セルtd形式2件・盤面テーブルの配線マーカー(scheduleHtml.ts(+test))
 - feat(Phase C 別タブD&D本体): 生徒日程表(別タブ・生成HTML)の授業カード長押しD&Dでコマ組み。通常/振替/講習カードを約250ms長押しで掴み→空きコマ(開校日・当該生徒が空き)へドラッグ(青枠ハイライト)→ドロップで机選択モーダル(移動先コマの全机=pickerDesks をコマ表と同配置で表示・空席のみ選択可・自動割振ルール/警告は無関係)→席確定で本体へ schedule-student-move-request 送信→盤面が executeScheduleViewMove で実移動→自動同期で別タブ更新。pointerdown は再描画に強い pagesElement 委譲で拾い、空きコマトグルより先に登録し掴めるカードのみ後続を止める。自動同期の再描画中はドラッグ/モーダルを破棄。scheduleDndEnabled(staging/開発用教室)時のみ有効。埋め込みJSのエスケープ罠に配慮(new Function 構文検証テストが番人)。回帰テスト: 掴めるカードのゲート/対象外種別/配線 3件(scheduleHtml.ts(+test))
 - feat(Phase C 机レイアウト+ゲート): 日程表コマ組みの机選択モーダル用データとフィーチャーゲート。serializeCells に includeDeskPicker フラグを追加し、有効時は開校日コマに pickerDesks(空席の机も含む全机レイアウト=既存テスト済み buildDeskPickerDesks)を別途載せる(desks は空席の机を落とすので机選択に不足するため。印刷/講師/全員表示のペイロードは不変)。featureRollout に `studentScheduleDndMove`(staging-environment スコープ)を追加、盤面が生徒ペイロードに scheduleDndEnabled として渡す。回帰テスト: pickerDesks の載せ分け2件・featureRollout スコープ1件(scheduleHtml.ts(+test) / featureRollout.ts(+test) / ScheduleBoardScreen.tsx)

@@ -33,7 +33,7 @@ import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, buildStudentPayload, buildTeacherPayload, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { ScheduleView, type ScheduleViewRange } from '../schedule-view/ScheduleView'
 import { ScheduleViewPanel, type ScheduleViewDisplayMode } from '../schedule-view/ScheduleViewPanel'
-import { findScheduleViewMoveSource, findScheduleViewTargetCell, validateScheduleViewMoveTarget, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
+import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetDeskIndex, validateScheduleViewMoveTarget, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
@@ -7914,7 +7914,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     // 休校日判定は開校ルール適用後のセルで行う(週を拡張した直後の cell は設定反映前のことがある)。
     const availabilityCell = findScheduleViewTargetCell(applyClassroomAvailability(ensured.weeks, classroomSettings), seat.targetDateKey, seat.targetSlotNumber)?.cell ?? target.cell
-    const validation = validateScheduleViewMoveTarget(availabilityCell, seat.deskIndex, seat.studentIndex)
+    // 別タブの机選択が見せた机(日程表の overlay 済みセル基準)を、盤面の生セルの実机 index に解決する。
+    // positional な deskIndex は日程表と盤面で食い違うことがあるため、deskId→講師名で解決してから検証する。
+    const resolvedDeskIndex = resolveScheduleViewTargetDeskIndex(availabilityCell, seat)
+    const validation = validateScheduleViewMoveTarget(availabilityCell, resolvedDeskIndex, seat.studentIndex)
     if (!validation.ok) {
       return { ok: false, message: validation.reason }
     }
@@ -7929,7 +7932,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       cells: ensured.weeks[target.weekIndex],
       movingStudentId: source.entryId,
       cellId: target.cell.id,
-      deskIndex: seat.deskIndex,
+      deskIndex: resolvedDeskIndex,
       studentIndex: seat.studentIndex,
       suppressedRegularLessonOccurrences,
       managedStudentByAnyName,
@@ -7970,7 +7973,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (normalizedWeeks.length === 0) return
     processedStudentScheduleRequestIdRef.current = request.requestId
     onStudentScheduleRequestProcessed?.(request.requestId)
-    stableExecuteScheduleViewMove(request.source, request.seat)
+    const result = stableExecuteScheduleViewMove(request.source, request.seat)
+    // 別タブへ結果を返す: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示(日程表に戻る導線)。
+    // 成功時の盤面反映自体は既存の自動同期(デバウンス)で別タブに届く。
+    const ackMessage = {
+      type: 'schedule-student-move-result',
+      ok: result.ok,
+      message: result.message,
+      targetDateKey: request.seat.targetDateKey,
+      targetSlotNumber: request.seat.targetSlotNumber,
+    }
+    const ackTargets = new Set<Window>()
+    if (studentScheduleWindowRef.current && !studentScheduleWindowRef.current.closed) ackTargets.add(studentScheduleWindowRef.current)
+    if (generatedStudentScheduleTabRef.current && !generatedStudentScheduleTabRef.current.closed) ackTargets.add(generatedStudentScheduleTabRef.current)
+    ackTargets.forEach((win) => { try { win.postMessage(ackMessage, '*') } catch { /* non-fatal */ } })
   }, [normalizedWeeks.length, onStudentScheduleRequestProcessed, stableExecuteScheduleViewMove, studentScheduleRequest])
 
   const handleStudentClick = (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, _statusKind: StudentStatusKind | null, x: number, y: number) => {

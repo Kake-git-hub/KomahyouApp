@@ -22,6 +22,11 @@ export type ScheduleViewMoveSeat = {
   targetSlotNumber: number
   deskIndex: number
   studentIndex: number
+  // 別タブ(生成HTML)の机選択モーダルが見せた机の同一性。盤面の生 weeks と日程表の overlay 済みセルは
+  // 机の並び/本数が食い違うことがある(テンプレ由来の机・未ロード週)ため、positional な deskIndex だけに
+  // 頼らず、まず deskId(=盤面 desk.id と一致)→ 講師名で実机を解決する(resolveScheduleViewTargetDeskIndex)。
+  deskId?: string
+  deskTeacher?: string
 }
 
 // 生徒日程表(別タブ・生成HTML)のD&D確定で popup が opener(本体)へ送る
@@ -63,7 +68,14 @@ export function parseScheduleViewMoveMessage(
       subject: typeof s.subject === 'string' ? s.subject : '',
       studentName: typeof s.studentName === 'string' ? s.studentName : '',
     },
-    seat: { targetDateKey, targetSlotNumber, deskIndex, studentIndex },
+    seat: {
+      targetDateKey,
+      targetSlotNumber,
+      deskIndex,
+      studentIndex,
+      deskId: typeof t.deskId === 'string' && t.deskId.length > 0 ? t.deskId : undefined,
+      deskTeacher: typeof t.deskTeacher === 'string' ? t.deskTeacher : undefined,
+    },
   }
 }
 
@@ -132,6 +144,8 @@ export type DeskPickerSeat = {
 
 export type DeskPickerDesk = {
   deskIndex: number
+  // 盤面 desk.id。移動確定時に positional index ではなく机同一性で解決するために持たせる。
+  deskId: string
   teacher: string
   seats: DeskPickerSeat[]
 }
@@ -141,6 +155,7 @@ export function buildDeskPickerDesks(cell: SlotCell, resolveDisplayName?: (name:
   const displayName = (name: string) => (resolveDisplayName ? resolveDisplayName(name) : name)
   return cell.desks.map((desk, deskIndex) => ({
     deskIndex,
+    deskId: desk.id,
     teacher: desk.teacher,
     seats: [0, 1].map((studentIndex) => {
       const student = desk.lesson?.studentSlots[studentIndex] ?? null
@@ -159,4 +174,37 @@ export function buildDeskPickerDesks(cell: SlotCell, resolveDisplayName?: (name:
       }
     }),
   }))
+}
+
+// 別タブ(生成HTML)の机選択で「机選択モーダルが見せた机」を、盤面の対象セルの実机に解決して index を返す。
+// 日程表(overlay 済みセル)と盤面の生 weeks は机の並び/本数が食い違うことがあるため、positional な
+// deskIndex に頼らず机同一性で解決する。優先順:
+//   1) deskId 一致(=盤面 desk.id)かつ対象席が空き
+//   2) positional deskIndex の机の講師が一致し対象席が空き(deskId 未指定時の後方互換)
+//   3) 講師名一致の机で対象席が空き
+//   4) 講師名指定なし: 空席のある任意の机
+// どれも満たさなければ元の deskIndex を返す(呼び出し側の validate が最終的に弾く)。
+export function resolveScheduleViewTargetDeskIndex(cell: SlotCell, seat: ScheduleViewMoveSeat): number {
+  const seatEmpty = (desk: SlotCell['desks'][number]) =>
+    !desk.lesson?.studentSlots[seat.studentIndex] && !desk.memoSlots?.[seat.studentIndex]
+
+  if (seat.deskId) {
+    const byId = cell.desks.findIndex((desk) => desk.id === seat.deskId && seatEmpty(desk))
+    if (byId >= 0) return byId
+  }
+
+  const positional = cell.desks[seat.deskIndex]
+  if (positional && seatEmpty(positional) && (seat.deskTeacher === undefined || positional.teacher === seat.deskTeacher)) {
+    return seat.deskIndex
+  }
+
+  if (seat.deskTeacher !== undefined && seat.deskTeacher !== '') {
+    const byTeacher = cell.desks.findIndex((desk) => desk.teacher === seat.deskTeacher && seatEmpty(desk))
+    if (byTeacher >= 0) return byTeacher
+  } else if (seat.deskTeacher === '') {
+    const byEmptyTeacher = cell.desks.findIndex((desk) => desk.teacher === '' && seatEmpty(desk))
+    if (byEmptyTeacher >= 0) return byEmptyTeacher
+  }
+
+  return seat.deskIndex
 }
