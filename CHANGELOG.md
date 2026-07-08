@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.410 (2026-07-08)
+
+- docs: 対話用日程表のReact化を土台に据える方針転換を確定(オーナー確定 2026-07-08。stagingでは生成HTMLタブを対話用途はReactビューに置換・印刷/PDFのHTML生成は残す)。同一Reactツリー化でリアルタイム同期は自動反映・日程表コマ組みはexecuteMoveStudent直呼びに単純化。ドック⇄ポップアウト(React portal→子ウィンドウ)トグルで両表示をstagingでユーザーが比較。新正本 docs/spec-schedule-interactive-view.md 追加、既存2仕様に§0(方式転換)追記、手順書をReact土台版(Phase0→1→2)に再構成、spec-index更新
+
 ## v1.5.409 (2026-07-08)
 
 - docs: 機能2を「日程表コマ組み」と命名・自動割振ルール/警告をスコープ外に・両機能ともstaging先行オーナーチェック待ちへリリース方針変更(オーナー確定 2026-07-08。spec-student-schedule-dnd / spec-schedule-popup-realtime-sync / handoff-popup-sync-and-dnd / spec-index)

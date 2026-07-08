@@ -18,8 +18,9 @@
 | 7 | 特別講習データ・提出ページ | `spec-special-session-submission.md` |
 | 8 | 自動割振ルール | `spec-auto-assign-rules.md` |
 | 9 | 日程表・PDF | `spec-schedule-pdf.md` |
-| 10 | 日程表リアルタイム同期（2026-07-08 確定・未実装） | `spec-schedule-popup-realtime-sync.md` |
-| 11 | 日程表コマ組み＝生徒日程表D&Dコマ移動（2026-07-08 確定・未実装・staging先行） | `spec-student-schedule-dnd.md` |
+| 10 | **対話用日程表の React 化＋ドック/ポップアウト（2026-07-08 確定・未実装・下記⑪⑫の土台）** | `spec-schedule-interactive-view.md` |
+| 11 | 日程表リアルタイム同期（2026-07-08 確定・未実装・⑩で大部分が自明化） | `spec-schedule-popup-realtime-sync.md` |
+| 12 | 日程表コマ組み＝生徒日程表D&Dコマ移動（2026-07-08 確定・未実装・staging先行） | `spec-student-schedule-dnd.md` |
 
 ## 今回の見直しの「大方針」（横断テーマ）
 
