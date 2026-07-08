@@ -1,9 +1,14 @@
-# 改修作業手順書：日程表リアルタイム同期 ＋ 生徒日程表D&D移動
+# 改修作業手順書：日程表リアルタイム同期 ＋ 日程表コマ組み
 
-> 次セッションの実装担当（AIモデル問わず）向けの自己完結手順書。2026-07-08 作成。
+> 次セッションの実装担当（AIモデル問わず）向けの自己完結手順書。2026-07-08 作成・同日改訂。
 > 仕様の正本は `docs/spec-schedule-popup-realtime-sync.md`（機能1）と
-> `docs/spec-student-schedule-dnd.md`（機能2）。**本書と正本2つを読んでから着手すること**。
+> `docs/spec-student-schedule-dnd.md`（機能2＝**正式名称「日程表コマ組み」**）。
+> **本書と正本2つを読んでから着手すること**。
 > 行番号は 2026-07-08（v1.5.406）時点の目安。ズレていたら記載のシンボル名で検索する。
+>
+> ⚠️ **リリース方針（2026-07-08 オーナー確定）：両機能とも staging だけに実装して
+> オーナーチェックを待つ。チェック合格まで main（＝本番）へマージしない。**（§4 参照）
+> 日程表コマ組みでは**自動割振ルール・警告は一切無関係**（評価も表示もしない）。
 
 ## 0. 着手前チェック（毎回必須）
 
@@ -94,7 +99,8 @@
      **`new Function` 構文検証テストが通ることを編集のたびに確認**。
 3. **ポップアップ側・机選択モーダル**：ドロップで対象コマ（dateKey×slotNumber）の
    `DATA.cells` から机テーブルを描画（講師名・着席生徒・空席。コマ表のコマと同じ見た目）。
-   空席のみ選択可、ソフト警告席は警告付きで選択可、キャンセル可。
+   空席のみ選択可、キャンセル可。**自動割振ルール・警告は評価も表示もしない**
+   （2026-07-08 オーナー確定・spec §B-4。判定は物理的な空きのみ）。
 4. **移動要求メッセージ**：席確定で
    `window.opener.postMessage({type:'schedule-student-move-request', classroomStorageKey,
    payloadAppVersion, studentId, source:{dateKey, slotNumber, entryId, lessonType, subject},
@@ -124,24 +130,34 @@
    - リクエスト消費（再マウント再発火なし・Issue #46 型テストに倣う）。
    - scheduleHtml の `new Function` 構文検証。
 
-## 4. Phase 3：検証・リリース（両機能共通・機能ごとに実施）
+## 4. Phase 3：検証・リリース（staging 先行・2026-07-08 オーナー確定フロー）
 
-1. **regression-reviewer**（読み取り専用レビュー）に diff を検査させる
-   （特に §1 の「巻き戻し厳禁」リスト）。
-2. `npm run lint` / ユニット全件 / `npm run build` green → コミット（CHANGELOG 同梱）→
-   CI（`.github/workflows/ci-tests.yml`）緑を確認 → main マージ。
-3. **staging 実機検証**（`komahyouapp-staging`・`.claude/skills/staging-environment`）：
-   - 機能1：受け入れ条件 §E（spec-schedule-popup-realtime-sync.md）を実施。
-     **heap 計測（popup 2枚開いたまま連続出席入力）は必須**（旧障害の宿題）。
-   - 機能2：受け入れ条件 §E（spec-student-schedule-dnd.md）を実施。
-4. 本番デプロイ後、**開発用教室 `v8OZ7zH8vONNHjjYVcR1`** で実機確認
-   （featureRollout が development-only なので本番3教室は不変）。
-5. 問題なければ featureRollout を `all-classrooms` へ昇格する**単独コミット**を出し、
-   safe-release スキルのチェックリストで最終確認。昇格後に各端末ハードリロード周知。
-6. 障害時ロールバック：Hosting 巻き戻し（`docs/runbooks/rollback.md` A）または
-   featureRollout を `development-only` に戻す1行コミット（機能2の盤面D&D前例では
-   「回帰で development-only へ戻さない」と明記されているが、これは**安定後**の話。
-   導入直後の不具合対応としての一時降格は可）。
+**チェック合格まで main（＝本番）へマージしない。** 実装は feature ブランチ上で完結させる。
+
+1. **staging のテストデータ準備**：日大前の現状データ（出席込み）を
+   `node tools/copy-prod-classroom-to-staging.mjs`（`--promote-staging-member` で staging
+   ログインから教室を選択可能にする）でコピーする。再実行すれば最新を取り直せる。
+   ⚠️ Claude の自動実行は Firestore 書き込み系の権限ルールでブロックされるため、
+   **オーナーがターミナルで実行**（gcloud 認証済みPC・数分で完了）。
+2. **staging での機能有効化**：staging のテスト教室は開発用教室IDではないため、
+   featureRollout に **staging 環境判定**（firebaseConfig の
+   `projectId === 'komahyouapp-staging'` なら有効。判定ヘルパーを `featureRollout.ts` に追加）
+   を入れる。本番側の scope は `development-only` のままにしておく。
+3. **ユニットゲート**：`npm run lint` / ユニット全件 / `npm run build` green を feature
+   ブランチで確認（CI はブランチ push でも走る）。**regression-reviewer** に diff を
+   検査させる（特に §1 の「巻き戻し厳禁」リスト）。
+4. **staging デプロイ**：GitHub → Actions → **「Deploy to Staging」→ Run workflow →
+   feature ブランチを選択**（functions 変更が無ければ deploy_functions は不要）。
+   `https://komahyouapp-staging.web.app` で §6-4 の検証シナリオを実施
+   （機能1の heap 計測必須・日程表コマ組みは日大前実データで一通り操作）。
+5. **オーナーチェック待ち**：staging URL・確認観点（受け入れ条件の要約）・既知の制限を
+   オーナーへ報告し、**合格の明示をもらうまで次へ進まない**。指摘があれば feature
+   ブランチ上で修正 → staging 再デプロイを繰り返す。
+6. **本番リリース（オーナー合格後）**：本番への展開形（featureRollout 段階導入の要否・
+   ボタン改名の出し分け等）をオーナーと確定 → safe-release スキルに従い main マージ →
+   本番デプロイ → 開発用教室 `v8OZ7zH8vONNHjjYVcR1` でスモーク → 各端末ハードリロード周知。
+7. 障害時ロールバック：Hosting 巻き戻し（`docs/runbooks/rollback.md` A）または
+   featureRollout を戻す1行コミット。staging 段階では本番影響ゼロなので気軽に壊してよい。
 
 ## 5. テスト計画（何を・どこに・どう固定するか）
 
@@ -232,6 +248,8 @@
 - [ ] CI（lint / unit / build）緑。`new Function` 構文検証テスト緑。
 - [ ] regression-reviewer の巻き戻し検査済み（§1 の厳禁リスト）。
 - [ ] staging で §6-4 の4シナリオ全部合格（heap 実測値を Issue/CHANGELOG に記録）。
+- [ ] **オーナーの staging チェック合格を明示的にもらった**（2026-07-08 方針。合格前の
+      main マージは禁止）。本番への展開形（featureRollout 等）もオーナーと確定済み。
 - [ ] バージョンスキュー対策が入っている（`payloadAppVersion` 同梱＋再オープン要求＋
       両側の防御的メッセージハンドリング）。**これが無いままメッセージ形を変えるリリースをしない**。
 - [ ] featureRollout が `development-only` である（初回リリース時）。

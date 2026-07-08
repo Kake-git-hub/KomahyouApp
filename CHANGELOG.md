@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.409 (2026-07-08)
+
+- docs: 機能2を「日程表コマ組み」と命名・自動割振ルール/警告をスコープ外に・両機能ともstaging先行オーナーチェック待ちへリリース方針変更(オーナー確定 2026-07-08。spec-student-schedule-dnd / spec-schedule-popup-realtime-sync / handoff-popup-sync-and-dnd / spec-index)
+- chore: 本番教室→stagingのFirestoreコピースクリプトを追加(tools/copy-prod-classroom-to-staging.mjs。日大前の現状データをstagingテストデータ化するオーナー明示指示対応。本番=読み取りのみ/staging=書き込みのみのURLガード付き。実行はオーナーのターミナルから)
+
 ## v1.5.408 (2026-07-08)
 
 - docs: 日程表同期+D&D仕様のギャップ精査追補(教室切替ガード・バージョンスキュー自己修復・机選択モーダルは物理空きのみ判定・週範囲拡張・操作ロック・Undo)と、手順書へテスト計画/デバッグ手順(?memlog計測手順)/本番エラーゼロチェックリストを追加(spec-*-realtime-sync / spec-student-schedule-dnd / handoff-popup-sync-and-dnd。コード変更なし)

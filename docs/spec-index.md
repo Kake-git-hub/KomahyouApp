@@ -19,7 +19,7 @@
 | 8 | 自動割振ルール | `spec-auto-assign-rules.md` |
 | 9 | 日程表・PDF | `spec-schedule-pdf.md` |
 | 10 | 日程表リアルタイム同期（2026-07-08 確定・未実装） | `spec-schedule-popup-realtime-sync.md` |
-| 11 | 生徒日程表D&Dコマ移動（2026-07-08 確定・未実装） | `spec-student-schedule-dnd.md` |
+| 11 | 日程表コマ組み＝生徒日程表D&Dコマ移動（2026-07-08 確定・未実装・staging先行） | `spec-student-schedule-dnd.md` |
 
 ## 今回の見直しの「大方針」（横断テーマ）
 
