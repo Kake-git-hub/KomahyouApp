@@ -128,7 +128,10 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
 
   // ===== 日程表コマ組み(D&D) =====
   const dndEnabled = viewType === 'student' && Boolean(onExecuteMove && resolveMoveTargetCell)
-  const [dragActive, setDragActive] = useState(false)
+  // ドラッグ中はゴーストのラベルを state に持つ(null=非ドラッグ)。source はハンドラ専用に ref で持つ
+  // (レンダー中に ref を読まない react-hooks/refs 対応)。
+  const [dragLabel, setDragLabel] = useState<string | null>(null)
+  const dragActive = dragLabel !== null
   const [deskPicker, setDeskPicker] = useState<DeskPickerState | null>(null)
   const [moveStatus, setMoveStatus] = useState('')
   const dragSourceRef = useRef<{ source: ScheduleViewMoveSource; label: string } | null>(null)
@@ -161,7 +164,7 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
 
   const endDrag = useCallback(() => {
     dragSourceRef.current = null
-    setDragActive(false)
+    setDragLabel(null)
     detachDocListeners()
     clearPress()
   }, [detachDocListeners, clearPress])
@@ -223,8 +226,9 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
         subject: card.subject ?? '',
         studentName: card.studentName ?? '',
       }
-      dragSourceRef.current = { source, label: `${resolveStudentDisplayName ? resolveStudentDisplayName(source.studentName) : source.studentName} ${card.main}` }
-      setDragActive(true)
+      const label = `${resolveStudentDisplayName ? resolveStudentDisplayName(source.studentName) : source.studentName} ${card.main}`
+      dragSourceRef.current = { source, label }
+      setDragLabel(label)
       moveGhost(startX, startY)
     }, LONG_PRESS_MS)
     pressRef.current = { timer, startX, startY, card, cell, doc }
@@ -352,8 +356,8 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
           <div className="empty-state">表示できる講師が見つかりません。</div>
         )}
       </main>
-      {dragActive && dragSourceRef.current ? (
-        <div className="schedule-drag-ghost" ref={dragGhostRef} aria-hidden="true">{dragSourceRef.current.label}</div>
+      {dragLabel !== null ? (
+        <div className="schedule-drag-ghost" ref={dragGhostRef} aria-hidden="true">{dragLabel}</div>
       ) : null}
       {deskPicker ? (
         <div className="schedule-desk-picker-overlay" onClick={(event) => { if (event.target === event.currentTarget) setDeskPicker(null) }}>
