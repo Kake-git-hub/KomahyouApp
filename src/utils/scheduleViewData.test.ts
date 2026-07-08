@@ -381,4 +381,16 @@ describe('scheduleViewData: 共通ヘルパ', () => {
     // 2限行は出席化で変化 → signature が変わり再レンダーされる
     expect(scheduleRowPropsAreEqual({ row: beforeRow2 }, { row: afterRow2 })).toBe(false)
   })
+
+  it('行メモ化: dragActive の切替とハンドラ参照の変化でも再レンダーされる(日程表コマ組みのハイライト)', () => {
+    const row = { signature: 'sig' }
+    const handler = () => {}
+    const otherHandler = () => {}
+    // 3要素すべて同一 → スキップ
+    expect(scheduleRowPropsAreEqual({ row, dragActive: false, onCardPointerDown: handler }, { row, dragActive: false, onCardPointerDown: handler })).toBe(true)
+    // ドラッグ開始/終了(dragActive 切替)ではドロップ候補ハイライトのため再レンダーする
+    expect(scheduleRowPropsAreEqual({ row, dragActive: false, onCardPointerDown: handler }, { row, dragActive: true, onCardPointerDown: handler })).toBe(false)
+    // ハンドラの参照が変わったら古いクロージャで掴まないよう再レンダーする
+    expect(scheduleRowPropsAreEqual({ row, dragActive: false, onCardPointerDown: handler }, { row, dragActive: false, onCardPointerDown: otherHandler })).toBe(false)
+  })
 })

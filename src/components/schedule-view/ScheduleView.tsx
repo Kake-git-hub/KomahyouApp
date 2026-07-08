@@ -208,8 +208,12 @@ export function ScheduleView({ viewType, payload, range, onRangeChange, onSchedu
   const handleCardPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>, card: StudentCellCardData, cell: StudentGridCellData) => {
     if (!dndEnabled || !card.entryId) return
     if (event.button !== 0 && event.pointerType === 'mouse') return
+    // ドラッグ確定中の別ポインタ再入(マルチタッチ等)は無視。長押し待ち中の再入は前の待ちと
+    // 前の document リスナーを破棄してから付け直す(リスナー残留=微リーク防止)。
+    if (dragSourceRef.current) return
     const doc = event.currentTarget.ownerDocument
     clearPress()
+    detachDocListeners()
     setMoveStatus('')
     const startX = event.clientX
     const startY = event.clientY
