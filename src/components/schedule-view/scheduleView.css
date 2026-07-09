@@ -1,0 +1,1572 @@
+/* 対話用日程表 React ビュー(ScheduleView)のスタイル。
+ * createScheduleHtml(scheduleHtml.ts)の <style> ブロック(印刷/PDF用生成HTMLと同一の見た目定義)を
+ * .schedule-react-view 配下へネイティブCSSネスティングでスコープ化して転記したもの。
+ * ⚠️ 見た目を変えるときは生成HTML側の <style> とこのファイルの両方を直す(表示の二重定義ズレ防止)。
+ * @media print ブロックは除外(印刷は従来の生成HTMLタブが担当。@page がアプリ全体へ波及するのを防ぐ)。
+ * body/:root/html 由来の規則は & (＝.schedule-react-view ルート)へ変換済み。 */
+.schedule-react-view {
+      & {
+        color-scheme: light;
+        --paper: #ffffff;
+        --line: #111111;
+        --soft-line: #777777;
+        --ink: #111111;
+        --muted: #666666;
+        --sun: #d00000;
+        --sat: #003cff;
+        --holiday-bg: #d9dde3;
+        --header-bg: #f8f8f8;
+        --schedule-toolbar-offset: 0px;
+      }
+
+      * { box-sizing: border-box; }
+
+      & {
+        margin: 0;
+        background: #f2f2f2;
+        color: var(--ink);
+        font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Meiryo', sans-serif;
+        scrollbar-width: thin;
+        scrollbar-color: #8f9cac #e6ebf2;
+      }
+
+      & {
+        scrollbar-width: thin;
+        scrollbar-color: #8f9cac #e6ebf2;
+      }
+
+      &::-webkit-scrollbar,
+      .pages::-webkit-scrollbar {
+        width: 12px;
+        height: 12px;
+      }
+
+      &::-webkit-scrollbar-track,
+      .pages::-webkit-scrollbar-track {
+        background: #e6ebf2;
+      }
+
+      &::-webkit-scrollbar-thumb,
+      .pages::-webkit-scrollbar-thumb {
+        background: #8f9cac;
+        border: 2px solid #e6ebf2;
+        border-radius: 999px;
+      }
+
+      .toolbar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        z-index: 20;
+        display: flex;
+        flex-wrap: nowrap;
+        gap: 8px;
+        align-items: end;
+        padding: 6px 12px;
+        border-bottom: 1px solid #c9c9c9;
+        background: rgba(255, 255, 255, 0.97);
+        white-space: nowrap;
+        overflow: hidden;
+      }
+
+      .toolbar-field {
+        display: grid;
+        gap: 2px;
+        flex-shrink: 1;
+        min-width: 0;
+      }
+
+      .toolbar-spacer {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      .toolbar-actions {
+        display: flex;
+        align-items: end;
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      .toolbar-field label,
+      .toolbar-summary,
+      .toolbar-title {
+        font-size: 11px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .interaction-lock-banner {
+        margin: 0 16px 12px;
+        padding: 10px 14px;
+        border: 1px solid #c5d3e4;
+        background: #eef4fb;
+        color: #244564;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      body.surface-locked .toolbar,
+      body.surface-locked .pages {
+        opacity: 0.82;
+      }
+
+      .toolbar-title {
+        flex-shrink: 0;
+        font-weight: 700;
+        color: var(--ink);
+        font-size: 13px;
+      }
+
+      .toolbar input {
+        min-width: 0;
+        width: 130px;
+        padding: 5px 6px;
+        border: 1px solid #666666;
+        border-radius: 0;
+        font: inherit;
+        font-size: 13px;
+      }
+
+      .toolbar-field--search input {
+        width: 150px;
+      }
+
+      .toolbar select {
+        min-width: 0;
+        width: 160px;
+        padding: 5px 6px;
+        border: 1px solid #666666;
+        border-radius: 0;
+        font: inherit;
+        font-size: 13px;
+        background: #ffffff;
+      }
+
+      .toolbar button {
+        height: 32px;
+        padding: 0 12px;
+        border: 1px solid #333333;
+        border-radius: 0;
+        background: #ffffff;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        color: #111111;
+        white-space: nowrap;
+      }
+
+      .toolbar button.secondary {
+        background: #f3f3f3;
+        color: var(--ink);
+      }
+
+      .pages {
+        display: grid;
+        gap: 12px;
+        padding: calc(var(--schedule-toolbar-offset) + 12px) 12px 12px;
+        justify-content: center;
+        align-content: start;
+        overflow: auto;
+        scrollbar-width: thin;
+        scrollbar-color: #8f9cac #e6ebf2;
+      }
+
+      body.all-view .pages {
+        padding-top: 12px;
+      }
+
+      body.all-view .sheet {
+        pointer-events: none;
+      }
+
+      .sheet {
+        background: var(--paper);
+        border: 1.5px solid var(--line);
+        border-radius: 0;
+        padding: 10px;
+        box-shadow: none;
+        break-inside: avoid;
+        width: 277mm;
+        aspect-ratio: 297 / 210;
+        overflow: hidden;
+      }
+
+      .sheet-top {
+        display: grid;
+        grid-template-columns: 150px 172px minmax(0, 1fr) auto;
+        gap: 6px;
+        align-items: stretch;
+        margin-bottom: 8px;
+      }
+
+      .logo-box,
+      .school-box,
+      .title-box,
+      .meta-box {
+        border: 0;
+        min-height: 44px;
+        background: #ffffff;
+      }
+
+      .logo-box {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+        overflow: hidden;
+        padding: 2px 4px;
+        cursor: pointer;
+      }
+
+      .logo-placeholder {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .logo-image {
+        max-width: 100%;
+        max-height: 36px;
+        object-fit: contain;
+        display: block;
+      }
+
+      .school-box {
+        display: flex;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 3px 8px;
+        min-width: 200px;
+      }
+
+      .school-input {
+        width: 100%;
+        min-height: 34px;
+        border: 0;
+        outline: 0;
+        font: inherit;
+        font-size: 13px;
+        color: #444444;
+        background: transparent;
+        resize: none;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+
+      .title-box {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0 10px;
+        min-width: 0;
+      }
+
+      .title-input {
+        width: 100%;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        font: inherit;
+        font-size: 18px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-align: center;
+      }
+
+      .meta-box {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding: 3px 8px;
+        gap: 10px;
+        font-size: 13px;
+        font-weight: 700;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .meta-qr-block {
+        flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        line-height: 0;
+      }
+
+      .meta-info {
+        display: grid;
+        align-content: center;
+        justify-items: end;
+        gap: 2px;
+      }
+
+      .meta-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        white-space: nowrap;
+      }
+
+      .person-meta-row {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        max-width: 100%;
+      }
+
+      .meta-label {
+        font-weight: 700;
+      }
+
+      .page-count {
+        color: var(--muted);
+        font-weight: 400;
+      }
+
+      .print-only-hidden {
+        display: inline;
+      }
+
+      .qr-code {
+        flex: 0 0 auto;
+        line-height: 0;
+      }
+
+      .qr-code.is-hidden {
+        display: none;
+      }
+
+      .qr-code svg {
+        display: block;
+      }
+
+      .submission-badge {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 52px;
+        height: 52px;
+        background: #e8f5e8;
+        color: #2a7e2a;
+        font-size: 10px;
+        font-weight: 700;
+        border-radius: 4px;
+        cursor: pointer;
+        border: 1px solid #b5d9b5;
+        white-space: nowrap;
+        text-align: center;
+        line-height: 1.2;
+        padding: 2px;
+      }
+
+      .submission-badge:hover {
+        background: #d0ecd0;
+      }
+
+      table.schedule-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      .schedule-table th,
+      .schedule-table td {
+        border: 1.5px solid var(--line);
+      }
+
+      .schedule-table thead th {
+        background: #ffffff;
+        text-align: center;
+        padding: 4px 2px;
+        font-size: 12px;
+      }
+
+      .schedule-table .time-col {
+        width: 62px;
+        min-width: 62px;
+        background: #ffffff;
+      }
+
+      .month-row th {
+        background: var(--header-bg);
+        font-size: 13px;
+        padding-top: 2px;
+        padding-bottom: 2px;
+      }
+
+      .time-corner {
+        background: var(--header-bg);
+        padding: 0;
+      }
+
+      .time-corner-box {
+        min-height: 58px;
+        display: grid;
+        align-content: center;
+        justify-items: center;
+        gap: 1px;
+        padding: 3px 2px;
+      }
+
+      .time-corner-year {
+        display: block;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.05;
+      }
+
+      .period-row th {
+        background: #ffffff;
+        padding: 3px 2px;
+      }
+
+      .period-gap {
+        background: #ffffff;
+      }
+
+      .period-band {
+        background: #fff6cf;
+      }
+
+      .period-pill {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 4px;
+        min-height: 22px;
+        background: #ffe48a;
+        color: #5a4200;
+        font-size: 12px;
+        font-weight: 700;
+        border: 1.5px solid #b18d26;
+        padding: 0 6px;
+      }
+
+      .period-pill-center {
+        flex: 1 1 0;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+
+      .period-pill-button {
+        width: 100%;
+        border: 0;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .period-pill-button.is-registered .period-pill {
+        background: #d8f0d8;
+        border-color: #5b8f5b;
+        color: #214a21;
+      }
+
+      .period-pill-state {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .period-pill-state-inline {
+        flex: 0 0 auto;
+        font-size: 10px;
+        font-weight: 700;
+        white-space: nowrap;
+        color: #5a4200;
+      }
+
+      .count-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(17, 17, 17, 0.28);
+      }
+
+      .count-modal {
+        width: min(420px, 100%);
+        border: 1.5px solid var(--line);
+        background: #ffffff;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.14);
+      }
+
+      .count-modal-head,
+      .count-modal-body,
+      .count-modal-actions {
+        padding: 14px 16px;
+      }
+
+      .count-modal-head {
+        border-bottom: 1px solid #d7d7d7;
+        display: grid;
+        gap: 4px;
+      }
+
+      .count-modal-title {
+        font-size: 16px;
+        font-weight: 700;
+      }
+
+      .count-modal-subtitle,
+      .count-modal-note {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .count-modal-body {
+        display: grid;
+        gap: 12px;
+      }
+
+      .count-modal-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      .count-modal-table td {
+        border: 1px solid #d7d7d7;
+        padding: 8px 10px;
+        font-size: 13px;
+      }
+
+      .count-modal-table input[type="number"] {
+        width: 84px;
+        padding: 6px 8px;
+        border: 1px solid #888888;
+        font: inherit;
+      }
+
+      .count-modal-duration {
+        margin-right: 8px;
+        padding: 6px 8px;
+        border: 1px solid #888888;
+        font: inherit;
+        vertical-align: middle;
+      }
+
+      .count-modal-check {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .count-modal-actions {
+        border-top: 1px solid #d7d7d7;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .period-pill-label {
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+
+      .period-pill-edge {
+        flex: 0 0 auto;
+        font-size: 11px;
+        line-height: 1;
+      }
+
+      .date-row th {
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .date-label,
+      .weekday-label {
+        display: block;
+      }
+
+      .weekday-row th {
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .weekday-sun { color: var(--sun); }
+      .weekday-sat { color: var(--sat); }
+
+      .holiday-col,
+      .slot-cell.is-holiday {
+        background: var(--holiday-bg);
+      }
+
+      .time-box {
+        display: grid;
+        align-items: center;
+        justify-items: center;
+        gap: 2px;
+        padding: 2px 2px;
+        min-height: 0;
+      }
+
+      .time-range {
+        display: grid;
+        justify-items: center;
+        font-size: 10px;
+        font-weight: 400;
+        line-height: 1.15;
+      }
+
+      .time-part,
+      .time-separator {
+        display: block;
+        white-space: nowrap;
+      }
+
+      .time-slot {
+        font-size: 12px;
+        color: var(--ink);
+        font-weight: 700;
+        line-height: 1.1;
+      }
+
+      .header-toggle {
+        width: 100%;
+        border: 0;
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .header-toggle:focus-visible,
+      .slot-button:focus-visible {
+        outline: 2px solid #2f6fed;
+        outline-offset: -2px;
+      }
+
+      .header-toggle.is-unavailable {
+        background: rgba(17, 17, 17, 0.08);
+      }
+
+      .header-toggle.is-pending,
+      .slot-button.is-pending {
+        cursor: progress;
+      }
+
+      .slot-cell {
+        /* 講習回数表に集理/集社の2行が増えたぶん、時限の行高を少し詰めて
+           A4横シート(overflow:hidden)の下端で集社が見切れないようにする。 */
+        height: 53px;
+        vertical-align: top;
+        background: #fff;
+      }
+
+      .slot-cell.is-unavailable {
+        background: #d1d6dc;
+      }
+
+      /* spec-group-lesson §E: 集団授業の行(中3・1限の上) */
+      .group-class-row .group-slot-cell {
+        height: 40px;
+        background: #fff7ec;
+        text-align: center;
+        vertical-align: middle;
+      }
+
+      .group-class-row .group-slot-cell.is-holiday {
+        background: #eef0f3;
+      }
+
+      .group-slot-label {
+        font-weight: 700;
+        font-size: 12px;
+        color: #7c3a00;
+      }
+
+      .group-slot-absent {
+        color: #b00020;
+        text-decoration: line-through;
+      }
+
+      .group-slot-empty {
+        color: #9aa0a6;
+        font-weight: 600;
+      }
+
+      .slot-cell.is-moving-highlight {
+        background: #fff4ad;
+        box-shadow: inset 0 0 0 2px #d0a000;
+      }
+
+      .slot-cell.is-pending {
+        position: relative;
+      }
+
+      .slot-cell.is-pending::after {
+        content: '';
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        border: 2px solid rgba(47, 111, 237, 0.18);
+        border-top-color: #2f6fed;
+        animation: schedule-spin 0.7s linear infinite;
+      }
+
+      .slot-cell.is-pending::after {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        margin-left: -7px;
+        margin-top: -7px;
+      }
+
+      .slot-cell.is-editable {
+        cursor: pointer;
+      }
+
+      .slot-cell-content {
+        height: 100%;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .slot-button,
+      .slot-static {
+        width: 100%;
+        height: 100%;
+        min-height: 100%;
+        border: 0;
+        padding: 3px;
+        margin: 0;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .slot-static:has(.lesson-card-teacher),
+      .slot-button:has(.lesson-card-teacher) {
+        padding-left: 0;
+        padding-right: 0;
+      }
+
+      .slot-button {
+        cursor: pointer;
+      }
+
+      .slot-button:disabled {
+        cursor: default;
+      }
+
+      .slot-button.is-unavailable {
+        background: rgba(17, 17, 17, 0.06);
+      }
+
+      @keyframes schedule-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .lesson-card {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        align-content: center;
+        justify-items: center;
+        gap: 2px;
+        padding: 2px 4px;
+        border: 0;
+        background: transparent;
+      }
+
+      .lesson-card-stack {
+        width: 100%;
+        height: 100%;
+        display: grid;
+        grid-auto-rows: minmax(0, 1fr);
+        overflow: hidden;
+      }
+
+      .lesson-card-stack-item {
+        min-height: 0;
+        overflow: hidden;
+      }
+
+      .lesson-card-stack-item + .lesson-card-stack-item {
+        border-top: 1px solid rgba(17, 17, 17, 0.28);
+      }
+
+      .lesson-card-stack .lesson-card {
+        padding: 1px 2px;
+        gap: 0;
+      }
+
+      .lesson-card-teacher {
+        align-items: stretch;
+        justify-items: stretch;
+        gap: 0;
+        padding: 1px 0;
+        overflow: hidden;
+      }
+
+      .lesson-card-teacher.is-single {
+        grid-template-columns: 1fr;
+      }
+
+      .lesson-card-teacher.is-pair {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .lesson-card-teacher.is-multi {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-rows: minmax(0, 1fr);
+      }
+
+      .teacher-lesson-person {
+        box-sizing: border-box;
+        width: 100%;
+        min-width: 0;
+        min-height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding: 2px 0;
+        writing-mode: vertical-rl;
+        text-orientation: upright;
+        overflow: hidden;
+      }
+
+      .lesson-card-teacher.is-pair .teacher-lesson-person {
+        gap: 0;
+        padding: 1px 0;
+      }
+
+      .lesson-card-teacher.is-multi .teacher-lesson-person {
+        min-height: 0;
+        gap: 0;
+        padding: 1px 0;
+      }
+
+      .teacher-lesson-line {
+        display: block;
+        line-height: 1;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      .teacher-lesson-name {
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .teacher-lesson-meta {
+        font-size: 9px;
+      }
+
+      .teacher-lesson-person.is-condensed .teacher-lesson-name,
+      .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 10px;
+      }
+
+      .teacher-lesson-person.is-condensed .teacher-lesson-meta,
+      .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 7px;
+      }
+
+      .teacher-lesson-person.is-ultra-condensed .teacher-lesson-name {
+        font-size: 9px;
+      }
+
+      .teacher-lesson-person.is-ultra-condensed .teacher-lesson-meta {
+        font-size: 6px;
+      }
+
+      .lesson-main {
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.1;
+        text-align: center;
+      }
+
+      .lesson-sub {
+        font-size: 11px;
+        line-height: 1.1;
+        text-align: center;
+      }
+
+      .lesson-footnote {
+        font-size: 9px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .schedule-table.is-compact .lesson-main {
+        font-size: 11px;
+      }
+
+      .schedule-table.is-compact .lesson-sub {
+        font-size: 9px;
+      }
+
+      .schedule-table.is-dense .lesson-main {
+        font-size: 10px;
+      }
+
+      .schedule-table.is-dense .lesson-sub {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-dense .lesson-card {
+        gap: 1px;
+        padding: 1px 2px;
+      }
+
+      .schedule-table.is-compact .teacher-lesson-name {
+        font-size: 11px;
+      }
+
+      .schedule-table.is-compact .teacher-lesson-meta {
+        font-size: 9px;
+      }
+
+      .schedule-table.is-compact .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 9px;
+      }
+
+      .schedule-table.is-compact .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-dense .teacher-lesson-name {
+        font-size: 10px;
+      }
+
+      .schedule-table.is-dense .teacher-lesson-meta {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 6px;
+      }
+
+      .schedule-table.is-dense .date-row th,
+      .schedule-table.is-dense .weekday-row th {
+        font-size: 10px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-main {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-sub {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-card {
+        gap: 0;
+        padding: 0 1px;
+      }
+
+      .schedule-table.is-ultra-dense .teacher-lesson-name {
+        font-size: 8px;
+      }
+
+      .schedule-table.is-ultra-dense .teacher-lesson-meta {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
+        font-size: 7px;
+      }
+
+      .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
+        font-size: 5px;
+      }
+
+      .schedule-table.is-ultra-dense .date-row th,
+      .schedule-table.is-ultra-dense .weekday-row th {
+        font-size: 8px;
+      }
+
+      .empty-label {
+        width: 100%;
+        height: 100%;
+      }
+
+      .closed-label {
+        display: grid;
+        place-items: center;
+        height: 100%;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .bottom-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) 168px 206px 246px;
+        gap: 8px;
+        margin-top: 10px;
+        align-items: start;
+      }
+
+      .bottom-grid.bottom-grid-teacher {
+        grid-template-columns: minmax(0, 1.5fr) 206px 246px;
+      }
+
+      /* オプション欄あり: 休み欄(168px)を削除し、振替授業を左へ、空いた所にオプション欄を置く。
+         振替授業欄は従来比4/5(206→165px)に狭め、空いた分は可変幅の連絡事項2列が吸収して広がる。 */
+      .bottom-grid.bottom-grid-option {
+        grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.35fr) 165px 190px 246px;
+      }
+
+      /* オプション欄あり: 連絡事項(共通/個別)のテキストは周囲より2px小さく表示する。 */
+      .bottom-grid.bottom-grid-option .box-textarea {
+        font-size: calc(1em - 2px);
+      }
+
+      .box-panel {
+        border: 1.5px solid var(--line);
+        background: #ffffff;
+      }
+
+      .box-stack {
+        display: grid;
+        align-content: start;
+      }
+
+      .box-stack .box-panel {
+        border-top: 0;
+      }
+
+      .panel-title {
+        font-size: 12px;
+        margin-bottom: 2px;
+      }
+
+      .box-textarea {
+        width: 100%;
+        min-height: 124px;
+        border: 0;
+        padding: 6px 8px;
+        resize: none;
+        font: inherit;
+      }
+
+      .salary-section {
+        font-size: 11px;
+      }
+      .salary-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+        table-layout: fixed;
+      }
+      .salary-table col.salary-col-label { width: auto; }
+      .salary-table col.salary-col-count { width: 64px; }
+      .salary-table col.salary-col-unit { width: 80px; }
+      .salary-table col.salary-col-sub { width: 72px; }
+      .salary-scroll {
+        max-height: 120px;
+        overflow-y: auto;
+        border-left: 1px solid var(--line);
+        border-right: 1px solid var(--line);
+      }
+      .salary-scroll .salary-table { border-top: 0; }
+      .salary-table-head { border-bottom: 0; }
+      .salary-table-foot { border-top: 0; }
+      .salary-table th, .salary-table td {
+        border: 1px solid var(--line);
+        padding: 2px 4px;
+        text-align: right;
+        white-space: nowrap;
+      }
+      .salary-table th {
+        background: var(--bg);
+        text-align: center;
+        font-weight: normal;
+      }
+      .salary-table .salary-label {
+        text-align: left;
+        font-weight: 600;
+      }
+      .salary-input {
+        width: 64px;
+        border: 1px solid var(--line);
+        padding: 1px 3px;
+        font: inherit;
+        font-size: 11px;
+        text-align: right;
+      }
+      .salary-total-row td {
+        font-weight: 600;
+        background: #fafafa;
+      }
+
+      /* 給与計算の行が多くA4横では見切れる講師ページは A3 縦へ自動切替して全行を表示する。
+         A3縦は幅がA4横と同じ(297mm)なので週グリッドの横レイアウトは保ったまま縦だけ伸ばせる。 */
+      .sheet.is-a3-portrait {
+        aspect-ratio: 297 / 420;
+      }
+      .sheet.is-a3-portrait .salary-scroll {
+        max-height: none;
+        overflow: visible;
+      }
+
+      .check-line {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        padding: 6px 8px 2px;
+        font-size: 12px;
+      }
+
+      .count-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+
+      .count-table,
+      .absence-table,
+      .makeup-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+      }
+
+      .count-table {
+        border-bottom: 1.5px solid var(--line);
+      }
+
+      /* オプション欄(2列5行)。左列=学年共通テキスト入力、右列=チェック1文字分。 */
+      .option-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        border: 1.5px solid var(--line);
+        border-top: 0;
+      }
+      .option-table col.option-col-check { width: 20px; }
+      .option-table td {
+        border: 1px solid var(--line);
+        padding: 0;
+        height: 24px;
+        vertical-align: middle;
+      }
+      .option-input {
+        width: 100%;
+        min-height: 22px;
+        height: 24px;
+        border: 0;
+        padding: 2px 5px;
+        font: inherit;
+        font-size: 11px;
+        box-sizing: border-box;
+        background: transparent;
+      }
+      .option-check-cell {
+        text-align: center;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1;
+      }
+
+      .count-table th,
+      .count-table td,
+      .absence-table th,
+      .absence-table td,
+      .makeup-table th,
+      .makeup-table td {
+        border: 1.5px solid var(--line);
+        padding: 3px 4px;
+        text-align: center;
+        height: 22px;
+      }
+
+      .absence-table td,
+      .makeup-table td {
+        font-size: 9px;
+        line-height: 1.05;
+        padding: 2px 3px;
+        height: 17px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: left;
+      }
+
+      .count-table tbody tr:last-child td {
+        border-bottom: 1.5px solid var(--line);
+      }
+
+      .count-stack {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 8px;
+        align-content: start;
+      }
+
+      .count-stack-block {
+        display: grid;
+        align-content: start;
+        gap: 6px;
+      }
+
+      .count-warning-stamp {
+        border: 2px solid #c3342f;
+        color: #c3342f;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 1.2;
+        text-align: center;
+        padding: 4px 4px;
+        background: rgba(255, 244, 244, 0.94);
+        transform: rotate(-4deg);
+        letter-spacing: 0.04em;
+      }
+
+      .box-table-title {
+        border: 1.5px solid var(--line);
+        border-bottom: 0;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 4px 6px;
+      }
+
+      .empty-state {
+        padding: 44px 18px;
+        text-align: center;
+        color: var(--muted);
+        border: 1.5px dashed var(--soft-line);
+        background: rgba(255, 255, 255, 0.86);
+      }
+
+
+      @page {
+        size: A4 landscape;
+        margin: 8mm;
+      }
+
+      /* 給与計算が多い講師ページ用(.sheet.is-a3-portrait が参照)。 */
+      @page sheetA3 {
+        size: A3 portrait;
+        margin: 8mm;
+      }
+}
+
+/* ===== ここから React ビュー専用の追加スタイル(転記CSSへの上書き・ドック/ポップアウトの外枠) ===== */
+
+/* 転記CSSの .toolbar は生成HTMLタブ用に position:fixed。パネル内では sticky に上書きする。 */
+.schedule-react-view .toolbar.schedule-view-toolbar {
+  position: sticky;
+  top: 0;
+  left: auto;
+  width: auto;
+}
+
+/* 生成HTMLの .sheet はA4横の紙寸法に固定(overflow:hidden)。対話ビューでは内容を切らずに見せる。 */
+.schedule-react-view .sheet {
+  aspect-ratio: auto;
+  height: auto;
+  overflow: visible;
+}
+
+.schedule-react-view .pages.schedule-view-pages {
+  padding: 12px;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.schedule-react-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.schedule-react-view .schedule-view-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.schedule-react-view .schedule-view-chrome {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px;
+  background: #243447;
+  color: #fff;
+  font-size: 12px;
+}
+
+.schedule-react-view .schedule-view-chrome-title {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.schedule-react-view .schedule-view-chrome-note {
+  color: #b8c4d4;
+  font-size: 11px;
+}
+
+.schedule-react-view .schedule-view-chrome-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.schedule-react-view .schedule-view-chrome-actions button {
+  font-size: 11px;
+  padding: 3px 10px;
+  border: 1px solid #8fa3bb;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #1c2b3a;
+  cursor: pointer;
+}
+
+.schedule-react-view .schedule-view-chrome-actions button:hover {
+  background: #e8eef5;
+}
+
+.schedule-react-view .empty-state {
+  padding: 24px;
+  color: #666;
+  font-size: 13px;
+}
+
+/* ドック(画面内パネル): 画面下部に固定し、盤面と同時に見えるようにする。 */
+.schedule-view-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 52vh;
+  z-index: 60;
+  background: #f2f2f2;
+  border-top: 2px solid #243447;
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-view-dock.is-expanded {
+  height: 88vh;
+}
+
+/* 生徒・講師の両ドックを同時に開いたときは横に並べる。 */
+.schedule-view-dock-area {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  display: flex;
+  align-items: stretch;
+}
+
+.schedule-view-dock-area .schedule-view-dock {
+  position: static;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.schedule-view-dock-area .schedule-view-dock + .schedule-view-dock {
+  border-left: 2px solid #243447;
+}
+
+/* ポップアウト(子ウィンドウ): ルートいっぱいに表示。 */
+.schedule-popout-body {
+  margin: 0;
+}
+
+.schedule-popout-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-popout-root .schedule-react-view {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ===== 日程表コマ組み(D&D・机選択モーダル) ===== */
+
+.schedule-react-view .is-draggable-card {
+  cursor: grab;
+  touch-action: none;
+}
+
+/* ドラッグ中の画面周囲の青枠(盤面D&D .drag-move-screen-frame と同じ見た目)。
+   ポップアウトでは子ウィンドウ内に描かれるので inset:0 が子ウィンドウ全体を囲む。 */
+.schedule-react-view .schedule-drag-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 800;
+  pointer-events: none;
+  border: 4px solid #1a73e8;
+  box-shadow: inset 0 0 22px rgba(26, 115, 232, 0.45);
+}
+
+/* ドロップ先候補としてポインタが乗っているコマ(直接DOMで付け外し・緑ではなく青系)。 */
+.schedule-react-view .slot-cell.is-drop-hover {
+  box-shadow: inset 0 0 0 3px #1a73e8;
+  background: #e8f0fe;
+}
+
+.schedule-react-view .schedule-view-move-status {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #14532d;
+  background: #dcfce7;
+  border-bottom: 1px solid #86efac;
+}
+
+.schedule-drag-ghost {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: #243447;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+}
+
+.schedule-desk-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  background: rgba(17, 24, 39, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.schedule-desk-picker {
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px 16px;
+  min-width: 420px;
+  max-width: min(760px, 92vw);
+  max-height: 86vh;
+  overflow: auto;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  color: #1c2b3a;
+}
+
+.schedule-desk-picker-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.schedule-desk-picker-source {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.schedule-desk-picker-note {
+  font-size: 12px;
+  color: #7c4a03;
+  background: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+}
+
+/* コマ表のコマと同じ「机=講師1名+生徒2席」の並び */
+.schedule-desk-picker-desks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.schedule-desk-picker-desk {
+  border: 1.5px solid #243447;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-desk-picker-teacher {
+  background: #243447;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.schedule-desk-picker-seat {
+  border: none;
+  border-top: 1px solid #cdd5df;
+  background: #fff;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.schedule-desk-picker-seat.is-selectable {
+  color: #14532d;
+  background: #ecfdf3;
+  cursor: pointer;
+}
+
+.schedule-desk-picker-seat.is-selectable:hover {
+  background: #bbf7d0;
+}
+
+.schedule-desk-picker-seat.is-blocked {
+  color: #64748b;
+  background: #f1f5f9;
+  cursor: not-allowed;
+}
+
+.schedule-desk-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.schedule-desk-picker-actions button {
+  padding: 5px 14px;
+  border: 1px solid #8fa3bb;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+}

@@ -1,7 +1,18 @@
 import type { DevelopmentClassroomIdentity } from './developmentClassroom'
 import { isDevelopmentClassroom } from './developmentClassroom'
+import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 
-export type FeatureRolloutScope = 'development-only' | 'all-classrooms'
+// staging 検証環境(komahyouapp-staging)の判定。日程表 React ビュー等の staging 先行機能は
+// 教室IDではなく環境(プロジェクトID)で有効化する(stagingテスト教室は開発用教室IDではないため)。
+// 2026-07-08 オーナー確定: 対話用日程表の React 化は staging だけに実装し、チェック合格まで本番へ出さない。
+export const STAGING_PROJECT_ID = 'komahyouapp-staging'
+
+export function isStagingEnvironment(projectId?: string): boolean {
+  const resolvedProjectId = projectId ?? getFirebaseBackendConfig().projectId
+  return resolvedProjectId === STAGING_PROJECT_ID
+}
+
+export type FeatureRolloutScope = 'development-only' | 'all-classrooms' | 'staging-environment'
 
 type FeatureRolloutDefinition = {
   scope: FeatureRolloutScope
@@ -34,15 +45,51 @@ export const featureRolloutRegistry = {
     scope: 'all-classrooms',
     description: 'Long-press drag-and-drop move of a student name between desks on the live board.',
   },
+  // 対話用日程表(生徒/講師)を生成HTMLタブではなく同一 React ツリーのビュー(ドック⇄ポップアウト)で
+  // 表示する土台(spec-schedule-interactive-view)。staging 先行・オーナーチェック合格まで本番展開しない
+  // (2026-07-08 確定)。印刷/PDF(全員表示・空フォーマット)は従来の生成HTML経路のまま。
+  scheduleInteractiveReactView: {
+    scope: 'staging-environment',
+    description: 'Interactive schedule view as an in-tree React component (dock/popout) instead of generated HTML tabs.',
+  },
+  // 日程表コマ組み(spec-student-schedule-dnd): 生徒日程表(別タブ)の授業カードを長押しD&Dで空きコマへ移し、
+  // 机選択モーダルで席を選んで盤面の executeScheduleViewMove を呼ぶ。自動割振ルール・警告は無関係(物理的な空きのみ)。
+  // staging 先行・オーナーチェック合格まで本番展開しない(2026-07-08 確定)。development-only も有効=ローカル検証可。
+  studentScheduleDndMove: {
+    scope: 'staging-environment',
+    description: 'Drag-and-drop lesson move on the generated-HTML student schedule tab (long-press card -> empty slot -> desk picker -> board move).',
+  },
+  // 別タブ日程表の自動同期(盤面編集をデバウンス約1.5秒で自動反映)＋同期スピナー。日程表コマ組み(別タブD&D)と
+  // 同じく staging/開発用教室のみ先行有効にする。2026-06-05 のポップアップ再生成メモリ障害と同種の負荷があり、
+  // 大きな本番教室では未検証のため、本番3教室は従来どおり「最新表示ボタン/開いた時のみ更新」に保つ
+  // (オーナー確定 2026-07-09)。off の教室では自動同期effectを no-op にし、スピナーも出さない。
+  schedulePopupAutoSync: {
+    scope: 'staging-environment',
+    description: 'Auto-sync (debounced) the generated-HTML schedule popup on board edits, with a syncing spinner.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry
+
+// 純粋なスコープ判定(テスト用に環境を引数で受ける)。staging-environment は staging プロジェクトで
+// 全教室有効、それ以外の環境では開発用教室のみ(ローカル/開発用教室での動作検証を可能にするため。
+// 本番3教室では無効のまま)。
+export function isFeatureScopeEnabled(
+  scope: FeatureRolloutScope,
+  context: { isStaging: boolean; isDevelopmentClassroom: boolean },
+): boolean {
+  if (scope === 'all-classrooms') return true
+  if (scope === 'staging-environment') return context.isStaging || context.isDevelopmentClassroom
+  return context.isDevelopmentClassroom
+}
 
 export function isFeatureEnabledForClassroom(
   featureKey: FeatureRolloutKey,
   classroom: DevelopmentClassroomIdentity | null | undefined,
 ) {
   const feature = featureRolloutRegistry[featureKey]
-  if (feature.scope === 'all-classrooms') return true
-  return isDevelopmentClassroom(classroom)
+  return isFeatureScopeEnabled(feature.scope, {
+    isStaging: isStagingEnvironment(),
+    isDevelopmentClassroom: isDevelopmentClassroom(classroom),
+  })
 }

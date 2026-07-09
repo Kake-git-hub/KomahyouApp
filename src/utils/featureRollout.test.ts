@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { featureRolloutRegistry, isFeatureEnabledForClassroom } from './featureRollout'
+import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled, isStagingEnvironment } from './featureRollout'
 
 describe('featureRollout', () => {
   it('enables manual Firebase save stability in every classroom', () => {
@@ -27,5 +27,34 @@ describe('featureRollout', () => {
     expect(featureRolloutRegistry.studentDragAndDropMove.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'development', name: '開発用教室' })).toBe(true)
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
+  })
+
+  it('judges the staging environment by Firebase project id', () => {
+    // staging 先行機能(日程表 React ビュー)は教室IDでなくプロジェクトIDで有効化する(2026-07-08 確定)。
+    expect(isStagingEnvironment('komahyouapp-staging')).toBe(true)
+    expect(isStagingEnvironment('komahyouapp-prod')).toBe(false)
+    expect(isStagingEnvironment('')).toBe(false)
+  })
+
+  it('keeps the interactive React schedule view staging-first (production classrooms stay on HTML tabs)', () => {
+    // オーナーチェック合格まで本番3教室では無効のまま。staging では全教室、その他環境では開発用教室のみ。
+    expect(featureRolloutRegistry.scheduleInteractiveReactView.scope).toBe('staging-environment')
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
+    expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
+  })
+
+  it('keeps schedule drag-and-drop (日程表コマ組み) staging-first (production classrooms unaffected)', () => {
+    // spec-student-schedule-dnd: 本番3教室ではオーナーチェック合格まで無効。staging/開発用教室でのみ有効。
+    expect(featureRolloutRegistry.studentScheduleDndMove.scope).toBe('staging-environment')
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+  })
+
+  it('keeps schedule popup auto-sync (自動同期+スピナー) staging-first (production classrooms unaffected)', () => {
+    // オーナー確定 2026-07-09: 本番3教室は従来どおり「最新表示/開いた時のみ更新」。staging/開発用教室でのみ自動同期。
+    expect(featureRolloutRegistry.schedulePopupAutoSync.scope).toBe('staging-environment')
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
   })
 })

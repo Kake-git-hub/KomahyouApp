@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -304,6 +304,41 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
     expect(student?.name).toBe('旧表示名')
     expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 別タブ日程表の「同期中」スピナー(オーナー指示 2026-07-08)。盤面編集→別タブ反映までの数秒、
+  // 最前面に大きく出す。本体は __showScheduleSyncing() で出し、同期ペイロード適用(flushIncomingPayload)で消す。
+  it('別タブ日程表に同期中スピナー(overlay + __showScheduleSyncing + flushで自動非表示)を含む', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('id="schedule-sync-overlay"')
+    expect(html).toContain('window.__showScheduleSyncing = showScheduleSyncingOverlay')
+    // flushIncomingPayload の末尾で必ず非表示にする(等価ペイロードでも固着しない)
+    expect(html).toContain('hideScheduleSyncingOverlay();')
 
     vi.unstubAllGlobals()
   })
@@ -2902,5 +2937,245 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(run({ countSubmitted: true, subjectSlots: {} })).toBe('—')
 
     vi.unstubAllGlobals()
+  })
+})
+
+// 日程表コマ組み(別タブD&D・spec-student-schedule-dnd): 机選択モーダルは移動先コマの「全机(空席含む)」が要るが、
+// serializeCells の desks は空席の机を落とす。scheduleDndEnabled=true のとき開校日コマに pickerDesks を別途載せる。
+describe('日程表コマ組み payload: pickerDesks / scheduleDndEnabled', () => {
+  function createDndTestCell(): SlotCell {
+    return {
+      id: '2026-03-24_3',
+      dateKey: '2026-03-24',
+      dayLabel: '火',
+      dateLabel: '3/24',
+      slotLabel: '3限',
+      slotNumber: 3,
+      timeLabel: '16:20-17:50',
+      isOpenDay: true,
+      desks: [
+        {
+          id: '2026-03-24_3_desk_1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'l1',
+            studentSlots: [
+              { id: 'entry-1', name: '山田', managedStudentId: 'student-1', grade: '中3', subject: '数', lessonType: 'regular', teacherType: 'normal' },
+              null,
+            ],
+          },
+        },
+        // 空席の机(lesson/statuses なし)。serializeCells の desks では落ちるが pickerDesks には残す。
+        { id: '2026-03-24_3_desk_2', teacher: '鈴木講師' },
+      ],
+    }
+  }
+
+  function openDndPayload(extra: Record<string, unknown>) {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    openStudentScheduleHtml({
+      cells: [createDndTestCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      ...extra,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    const match = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    return JSON.parse(match![1])
+  }
+
+  it('scheduleDndEnabled: true で開校日コマに pickerDesks(空席の机も含む)が載る', () => {
+    const payload = openDndPayload({ scheduleDndEnabled: true })
+    expect(payload.scheduleDndEnabled).toBe(true)
+    const cell = payload.cells.find((c: { dateKey: string; slotNumber: number }) => c.dateKey === '2026-03-24' && c.slotNumber === 3)
+    expect(cell.pickerDesks).toBeDefined()
+    // 空席の机(鈴木講師)は desks では落ちるが pickerDesks には残る(机選択モーダルで空席を選べる)。
+    expect(cell.pickerDesks.map((d: { teacher: string }) => d.teacher)).toEqual(['田中講師', '鈴木講師'])
+    // 占有席は選択不可・空席は選択可(§C-2: 物理的な空きのみ判定)。
+    expect(cell.pickerDesks[0].seats[0].occupied).toBe(true)
+    expect(cell.pickerDesks[0].seats[0].selectable).toBe(false)
+    expect(cell.pickerDesks[0].seats[1].selectable).toBe(true)
+    expect(cell.pickerDesks[1].seats[0].selectable).toBe(true)
+    expect(cell.pickerDesks[1].seats[1].selectable).toBe(true)
+    // desks(印刷/表示用)は従来どおり空席の机を落とす(印刷経路は不変)。
+    expect(cell.desks.length).toBe(1)
+  })
+
+  it('scheduleDndEnabled 未指定なら pickerDesks を載せない(本番/印刷のバイト増を避ける)', () => {
+    const payload = openDndPayload({})
+    expect(payload.scheduleDndEnabled).toBe(false)
+    const cell = payload.cells.find((c: { dateKey: string; slotNumber: number }) => c.dateKey === '2026-03-24' && c.slotNumber === 3)
+    expect(cell.pickerDesks).toBeUndefined()
+  })
+})
+
+// 埋め込みJS(別タブ)の掴めるカード判定と配線。生成HTMLからクライアント関数を抽出して実挙動を固定する。
+describe('日程表コマ組み 埋め込みJS: 掴めるカードのゲートと配線', () => {
+  function openDndHtml(extra: Record<string, unknown>): string {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      ...extra,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    return html
+  }
+
+  // 生成HTMLから buildLessonCardDragAttrs(entry) の本体を取り出し、DATA/escapeHtml を差し替えて実行する。
+  function extractDragAttrsFn(html: string) {
+    const match = html.match(/function buildLessonCardDragAttrs\(entry\) \{([\s\S]*?)\n {6}\}/)
+    expect(match).not.toBeNull()
+    const fn = new Function('entry', 'DATA', 'escapeHtml', match![1]) as (entry: unknown, data: unknown, esc: (value: unknown) => string) => string
+    const esc = (value: unknown) => String(value == null ? '' : value)
+    return (entry: unknown, data: unknown) => fn(entry, data, esc)
+  }
+
+  it('scheduleDndEnabled 時、通常/振替/講習/増コマカードに is-draggable と source 属性を付ける', () => {
+    const run = extractDragAttrsFn(openDndHtml({ scheduleDndEnabled: true }))
+    const makeup = run({ id: 'e1', lessonType: 'makeup', subject: '数', linkedStudentId: 's1', name: '山田' }, { scheduleDndEnabled: true })
+    expect(makeup).toContain('is-draggable')
+    expect(makeup).toContain('data-role="lesson-card-draggable"')
+    expect(makeup).toContain('data-entry-id="e1"')
+    expect(makeup).toContain('data-lesson-type="makeup"')
+    expect(makeup).toContain('data-linked-student-id="s1"')
+    expect(run({ id: 'e2', lessonType: 'regular', subject: '英' }, { scheduleDndEnabled: true })).toContain('is-draggable')
+    expect(run({ id: 'e3', lessonType: 'special', subject: '国' }, { scheduleDndEnabled: true })).toContain('is-draggable')
+    // 増コマも移動対象(2026-07-09 追加): prepareStudentForMove は regular/makeup 以外は単純な位置移動のみで、
+    // 既存の講習(special)と同じ経路を通るため特別な副作用は無い。
+    const extra = run({ id: 'e4', lessonType: 'extra', subject: '理' }, { scheduleDndEnabled: true })
+    expect(extra).toContain('is-draggable')
+    expect(extra).toContain('data-lesson-type="extra"')
+  })
+
+  it('DnD無効・対象外種別(体験)・entryId欠落は掴めない(空文字)', () => {
+    const run = extractDragAttrsFn(openDndHtml({ scheduleDndEnabled: true }))
+    expect(run({ id: 'e1', lessonType: 'makeup', subject: '数' }, { scheduleDndEnabled: false })).toBe('')
+    expect(run({ id: 'e1', lessonType: 'trial', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+    expect(run({ id: '', lessonType: 'makeup', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+  })
+
+  it('D&D・机選択・移動要求送信・再描画時破棄の配線が埋め込みJSに含まれる(削除の回帰検知)', () => {
+    const html = openDndHtml({ scheduleDndEnabled: true })
+    expect(html).toContain('function setupScheduleDndMove()')
+    expect(html).toContain('function onScheduleDndPointerDown(')
+    expect(html).toContain('function openScheduleDeskPicker(')
+    expect(html).toContain("type: 'schedule-student-move-request'")
+    // 自動同期の再描画でドラッグ/モーダルを破棄する(宙に浮く DOM 参照を防ぐ)。
+    expect(html).toContain('cancelScheduleDndInteraction();')
+    // 机選択モーダルは盤面の一コマを切り取った表形式(日付行+時限列+1机=1行)。
+    expect(html).toContain('class="desk-picker-board"')
+    expect(html).toContain('class="dp-seatno"')
+    expect(html).toContain('class="dp-teacher"')
+    expect(html).toContain('class="dp-datehead"')
+    expect(html).toContain('class="dp-time"')
+    // 説明テキスト(タイトル/注記)は置かない(オーナー要望)。
+    expect(html).not.toContain('の移動先の机を選ぶ')
+    expect(html).not.toContain('この回のみ振替として移動します')
+    // 移動結果ack(成功ハイライト/失敗の理由表示・日程表に戻る導線)の配線。
+    expect(html).toContain('function handleScheduleMoveResult(')
+    expect(html).toContain("message.type === 'schedule-student-move-result'")
+    expect(html).toContain('function showScheduleMoveError(')
+    expect(html).toContain('日程表に戻る')
+    expect(html).toContain('function highlightMovedSlot(')
+    expect(html).toContain('is-move-done-highlight')
+  })
+
+  // 生成HTMLから renderDeskPickerSeatCellHtml(desk, seat) を取り出し、席セルの形式を固定する。
+  function extractSeatCellFn(html: string) {
+    const match = html.match(/function renderDeskPickerSeatCellHtml\(desk, seat\) \{([\s\S]*?)\n {6}\}/)
+    expect(match).not.toBeNull()
+    const fn = new Function('desk', 'seat', 'escapeHtml', match![1]) as (desk: unknown, seat: unknown, esc: (value: unknown) => string) => string
+    const esc = (value: unknown) => String(value == null ? '' : value)
+    return (desk: unknown, seat: unknown) => fn(desk, seat, esc)
+  }
+
+  it('机選択モーダルの席セル: 空席=クリックで配置・在席=クリックで入れ替え(占有席も data-role+相手entryId)・メモ=不可', () => {
+    const run = extractSeatCellFn(openDndHtml({ scheduleDndEnabled: true }))
+    // 空席: 配置クリック可+机同一性(deskId/講師/在席者)。
+    const deskWithSeats = { deskIndex: 2, deskId: 'desk-2', teacher: '佐藤', seats: [{ occupantEntryId: 'e-nakano' }, {}] }
+    const selectable = run(deskWithSeats, { studentIndex: 1, selectable: true, occupied: false })
+    expect(selectable).toContain('<td class="dp-student dp-selectable"')
+    expect(selectable).toContain('data-role="desk-picker-seat"')
+    expect(selectable).toContain('data-desk-index="2"')
+    expect(selectable).toContain('data-student-index="1"')
+    expect(selectable).toContain('data-desk-id="desk-2"')
+    expect(selectable).toContain('data-desk-teacher="佐藤"')
+    // 机の在席者(deskOccupants)を持たせて、盤面側で「その机」を在席同一性で特定できるようにする。
+    expect(selectable).toContain('data-desk-occupants="e-nakano"')
+    // 在席: 入れ替えクリック可(盤面の入れ替えと同じ)。相手の entryId を持たせる。
+    const occupied = run({ deskIndex: 0, deskId: 'desk-1', teacher: '田中' }, { studentIndex: 0, occupied: true, selectable: false, occupantEntryId: 'e-yamada', label: '山田 数' })
+    expect(occupied).toContain('dp-swap')
+    expect(occupied).toContain('data-role="desk-picker-seat"')
+    expect(occupied).toContain('data-occupant-entry-id="e-yamada"')
+    expect(occupied).toContain('山田 数')
+    expect(occupied).toContain('入替')
+    // メモ席のみクリック不可(data-role を持たない)。
+    const memo = run({ deskIndex: 1, deskId: 'desk-x', teacher: '' }, { studentIndex: 0, blockedByMemo: true, selectable: false })
+    expect(memo).toContain('dp-blocked')
+    expect(memo).not.toContain('data-role="desk-picker-seat"')
+  })
+
+  it('掴めるカードのタップは出席不可トグルへ・出席不可トグルは同期スピナーを抑制する配線', () => {
+    const html = openDndHtml({ scheduleDndEnabled: true })
+    // 長押し未満のタップでカードでも出席不可トグルを実行(D&Dとの両立)。
+    expect(html).toContain("if (tapCell && tapCell.getAttribute('data-editable') === 'true')")
+    expect(html).toContain('handleUnavailablePointerDown(tapCell)')
+    // 出席不可トグルは自分の操作なので同期スピナーを抑制(連続入力の妨げにしない)。
+    expect(html).toContain('suppressSyncSpinnerUntil = Date.now() + 3000')
+    expect(html).toContain('if (Date.now() < suppressSyncSpinnerUntil) return')
+  })
+})
+
+describe('computeDeskPickerFitScale (机選択モーダルをビューポートに収める縮小率)', () => {
+  it('コンテンツがビューポート内に収まる場合は拡大しない(=1)', () => {
+    expect(computeDeskPickerFitScale(400, 800)).toBe(1)
+    expect(computeDeskPickerFitScale(776, 800, 24)).toBe(1) // 境界: avail ちょうど
+  })
+
+  it('コンテンツがビューポートをはみ出す場合は縮小率(<1)を返す', () => {
+    const scale = computeDeskPickerFitScale(1000, 800, 24)
+    // avail = 800 - 24 = 776, scale = 776/1000
+    expect(scale).toBeCloseTo(0.776, 5)
+    expect(scale).toBeLessThan(1)
+  })
+
+  it('marginを差し引いた後の高さが0以下になる異常な入力では1を返す(スケール不能)', () => {
+    expect(computeDeskPickerFitScale(500, 10, 24)).toBe(1) // avail<=0
+    expect(computeDeskPickerFitScale(0, 800)).toBe(1) // contentHeight<=0
+    expect(computeDeskPickerFitScale(Number.NaN, 800)).toBe(1)
   })
 })
