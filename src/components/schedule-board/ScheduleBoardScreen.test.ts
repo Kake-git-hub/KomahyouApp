@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -5325,5 +5325,149 @@ describe('resolvePostLectureAutoAssignView (講習自動割振後に開くスト
       const result = resolvePostLectureAutoAssignView(params)
       expect(Object.keys(result).sort()).toEqual(['openLectureStock', 'openMakeupStock'])
     }
+  })
+})
+
+describe('checkScheduleViewMoveRangeWithinCap (日程表コマ組みD&Dの週自動拡張上限・2026-07-09オーナー確定)', () => {
+  // weeks[0][0].dateKey と weeks[length-1][6].dateKey だけを見る純関数のため、
+  // 最小限(先頭セル・7番目のセル)だけ実体を持つダミー週で検証する。
+  function makeDummyWeek(mondayDateKey: string, sundayDateKey: string): SlotCell[] {
+    const cells = Array.from({ length: 7 }, (_, index) => makeBoardCell(`dummy-${mondayDateKey}-${index}`, 1)) as SlotCell[]
+    cells[0] = { ...cells[0], dateKey: mondayDateKey }
+    cells[6] = { ...cells[6], dateKey: sundayDateKey }
+    return cells
+  }
+
+  it('weeks が空(未ロード)なら常に ok:true(既存動作維持)', () => {
+    expect(checkScheduleViewMoveRangeWithinCap([], '2026-01-01', '2026-01-01')).toEqual({ ok: true })
+  })
+
+  it('現在ロード済み範囲内(拡張不要)は ok:true', () => {
+    const weeks = [makeDummyWeek('2026-07-06', '2026-07-12')]
+    expect(checkScheduleViewMoveRangeWithinCap(weeks, '2026-07-08', '2026-07-10')).toEqual({ ok: true })
+  })
+
+  it('上限(8週=56日)ちょうどの前方拡張は ok:true(境界値)', () => {
+    const weeks = [makeDummyWeek('2026-07-06', '2026-07-12')]
+    // 2026-07-06 から56日前 = 2026-05-11
+    expect(checkScheduleViewMoveRangeWithinCap(weeks, '2026-05-11', '2026-07-12')).toEqual({ ok: true })
+  })
+
+  it('上限を1日でも超える前方拡張は ok:false + 理由メッセージ', () => {
+    const weeks = [makeDummyWeek('2026-07-06', '2026-07-12')]
+    // 57日前 = 2026-05-10
+    const result = checkScheduleViewMoveRangeWithinCap(weeks, '2026-05-10', '2026-07-12')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toContain('移動先が現在表示中の週から離れすぎている')
+      expect(result.reason).toContain(`約${SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS}週間`)
+    }
+  })
+
+  it('上限(8週=56日)ちょうどの後方拡張は ok:true(境界値)', () => {
+    const weeks = [makeDummyWeek('2026-07-06', '2026-07-12')]
+    // 2026-07-12 から56日後 = 2026-09-06
+    expect(checkScheduleViewMoveRangeWithinCap(weeks, '2026-07-06', '2026-09-06')).toEqual({ ok: true })
+  })
+
+  it('上限を1日でも超える後方拡張は ok:false', () => {
+    const weeks = [makeDummyWeek('2026-07-06', '2026-07-12')]
+    // 57日後 = 2026-09-07
+    const result = checkScheduleViewMoveRangeWithinCap(weeks, '2026-07-06', '2026-09-07')
+    expect(result.ok).toBe(false)
+  })
+})
+
+describe('ensureWeeksCoverDateRange の週生成結果(O(n^2)→O(n)最適化・挙動不変の回帰確認)', () => {
+  const emptyRegularLessons: RegularLessonRow[] = []
+
+  // 注意: 後方拡張の終了判定は週配列の index[6](day-major で 1日5コマなら火曜2限)を見る既存実装のため、
+  // "終了日を含む週かどうか" は月曜からの日数ぴったりでは判定されない(既存の挙動・本テストで変更しない)。
+  // ここでは実際に観測された既存(リファクタ前)の挙動と完全一致することを固定して回帰防止する。
+  function buildBaseWeek(): SlotCell[] {
+    return buildManagedScheduleCellsForRange({
+      range: { startDate: '2026-05-11', endDate: '2026-05-17', periodValue: '' },
+      fallbackStartDate: '2026-05-11',
+      fallbackEndDate: '2026-05-17',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: emptyRegularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+  }
+
+  it('範囲内(拡張不要)なら weeks 数・weekIndexOffset とも変化しない', () => {
+    const baseWeek = buildBaseWeek()
+    const result = ensureWeeksCoverDateRange({
+      weeks: [baseWeek],
+      startDate: '2026-05-11',
+      endDate: '2026-05-12',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: emptyRegularLessons,
+    })
+    expect(result.weeks).toHaveLength(1)
+    expect(result.weekIndexOffset).toBe(0)
+    expect(result.weeks[0][0].dateKey).toBe('2026-05-11')
+  })
+
+  it('前方(過去方向)にのみ1週拡張する', () => {
+    const baseWeek = buildBaseWeek()
+    const result = ensureWeeksCoverDateRange({
+      weeks: [baseWeek],
+      startDate: '2026-05-04',
+      endDate: '2026-05-12',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: emptyRegularLessons,
+    })
+    expect(result.weeks).toHaveLength(2)
+    expect(result.weekIndexOffset).toBe(1)
+    expect(result.weeks.map((week) => week[0].dateKey)).toEqual(['2026-05-04', '2026-05-11'])
+  })
+
+  it('後方(未来方向)にのみ1週拡張する(weekIndexOffsetは0のまま)', () => {
+    const baseWeek = buildBaseWeek()
+    const result = ensureWeeksCoverDateRange({
+      weeks: [baseWeek],
+      startDate: '2026-05-11',
+      endDate: '2026-05-19',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: emptyRegularLessons,
+    })
+    expect(result.weeks).toHaveLength(2)
+    expect(result.weekIndexOffset).toBe(0)
+    expect(result.weeks.map((week) => week[0].dateKey)).toEqual(['2026-05-11', '2026-05-18'])
+  })
+
+  it('前後両方向に拡張し、生成順序・weekIndexOffsetとも期待通り', () => {
+    const baseWeek = buildBaseWeek()
+    const result = ensureWeeksCoverDateRange({
+      weeks: [baseWeek],
+      startDate: '2026-04-27',
+      endDate: '2026-06-02',
+      classroomSettings,
+      teachers: initialTeachers,
+      students: initialStudents,
+      regularLessons: emptyRegularLessons,
+    })
+    expect(result.weeks).toHaveLength(6)
+    expect(result.weekIndexOffset).toBe(2)
+    expect(result.weeks.map((week) => week[0].dateKey)).toEqual([
+      '2026-04-27',
+      '2026-05-04',
+      '2026-05-11',
+      '2026-05-18',
+      '2026-05-25',
+      '2026-06-01',
+    ])
+    // 拡張前の元の週(2026-05-11)はオフセット分ずれた位置に残っている(既存参照の整合性)
+    expect(result.weeks[result.weekIndexOffset][0].dateKey).toBe('2026-05-11')
   })
 })

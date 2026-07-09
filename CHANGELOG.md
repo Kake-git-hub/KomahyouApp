@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Phase C D&D対象拡大): 日程表コマ組み(別タブD&D)で増コマ(lessonType='extra')が掴めなかった問題を修正。prepareStudentForMove は regular/makeup 以外は単純な位置移動のみで既存の講習(special)と同じ経路のため副作用なし。buildLessonCardDragAttrs の対象種別に 'extra' を追加(spec-student-schedule-dnd.md も更新)。回帰テスト追加(src/utils/scheduleHtml.ts(+test))
+- fix(Phase C 週自動拡張の上限): 日程表コマ組みD&Dで移動先が現在ロード済みの週から離れていると weeks state が無制限に肥大化し(cloneWeeks全週クローン+Undo履歴×最大10で増幅)後続操作が重くなる問題に対処。executeScheduleViewMove に上限8週間(56日)のガードを追加し、超える移動は ensureWeeksCoverDateRange を呼ばず不成立を返す(盤面自体の週送りには影響なし・スコープ限定)。純関数 checkScheduleViewMoveRangeWithinCap を export しユニットテスト化(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+- refactor(ensureWeeksCoverDateRange 性能): 週の自動拡張ループが毎回 `[newWeek, ...nextWeeks]` / `[...nextWeeks, newWeek]` で配列全体をコピーしO(n^2)になっていたのを、前方/後方それぞれ一時配列に貯めてから最後に一度だけ結合するO(n)に最適化。生成される週の内容・順序・weekIndexOffsetは完全に不変(リファクタ前実装との出力一致をスタッシュ比較で確認済み)。回帰テスト追加(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+
 - fix(Phase C 机選択モーダル 3): 机が多い/横向き画面で全机が縦スクロール必須になる問題を修正。`.desk-picker-modal` を `overflow:auto/max-height` から `overflow:visible`+`transform-origin:center top` に変更し、表示直後にモーダル実高さから `scale(k)`(k<=1)を算出して縮小適用し、全机を1画面に収める(横幅は `max-width:92vw` を維持)。純関数 `computeDeskPickerFitScale` を export しユニットテスト化(埋め込みJS側は同式のミラー)(src/utils/scheduleHtml.ts(+test))
 - fix(Phase C 移動成立ハイライト): 移動成立時の黄色ハイライトが「同期中」スピナー表示中に始まり被って見えづらい問題を修正。成立通知は即ハイライトせず `pendingScheduleMoveHighlightKey` に保留し、`flushIncomingPayload` でスピナーを消した直後(250ms後)に開始する`promotePendingScheduleMoveHighlight`へ昇格。メッセージ到着順の保険として、既にスピナーが消えている場合は即昇格する(src/utils/scheduleHtml.ts)
 - fix(Phase C 講習自動割振後の武装解除): 講習自動割振で割振りきれない残があると `selectedLectureStockKey` 等がセットされタップ配置モードに武装されてしまう挙動を廃止(オーナー確定 2026-07-09)。純関数 `resolvePostLectureAutoAssignView` を export し、割振り後は常に選択キーをクリアしたうえで、講習残があれば未消化講習一覧・講習ゼロで振替残があれば未消化振替一覧・両ゼロなら未消化講習一覧を開くだけにする。回帰テスト4件(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))

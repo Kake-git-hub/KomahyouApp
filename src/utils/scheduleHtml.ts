@@ -3303,11 +3303,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       // 日程表コマ組み(別タブD&D): 掴める授業カードか判定し、掴めるなら drag 用の属性を返す。
-      // 対象は通常/振替/講習のみ(集団は別行・体験や出欠済みの記録カードは対象外)。scheduleDndEnabled 時だけ有効。
+      // 対象は通常/振替/講習/増コマ(集団は別行・体験や出欠済みの記録カードは対象外)。scheduleDndEnabled 時だけ有効。
       function buildLessonCardDragAttrs(entry) {
         if (!DATA.scheduleDndEnabled) return '';
         var type = entry.lessonType;
-        if (type !== 'regular' && type !== 'makeup' && type !== 'special') return '';
+        if (type !== 'regular' && type !== 'makeup' && type !== 'special' && type !== 'extra') return '';
         if (!entry.id) return '';
         return ' class="lesson-card is-draggable" data-role="lesson-card-draggable"'
           + ' data-entry-id="' + escapeHtml(entry.id) + '"'

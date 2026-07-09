@@ -3085,6 +3085,41 @@ export function resolveNewlyUnsubmittedSessionStudents(params: {
   return { newlyUnsubmitted, nextBasisKeys: currentSubmittedKeys }
 }
 
+// 日程表コマ組み(別タブD&D)が一度の移動で自動拡張してよい週数の上限。
+// 上限を設けない場合、盤面 weeks が際限なく肥大化し(cloneWeeks の全週クローン+Undo履歴×最大10で
+// さらに増幅)、後続の全操作が重くなる(2026-07-09 メモリ肥大化の根本原因・オーナー確定で導入)。
+// 盤面自体の通常の週送り(switchWeek/jumpToWeekByDate)には適用しない(スコープ限定)。
+export const SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS = 8
+
+// weeks(現在ロード済みの週)から見て、startDate〜endDate が片側どれだけはみ出すかを日数で判定し、
+// 上限(週数×7日)を超えていれば不成立の理由を返す。weeks が空(未ロード)なら制限しない(既存動作維持)。
+export function checkScheduleViewMoveRangeWithinCap(
+  weeks: SlotCell[][],
+  startDate: string,
+  endDate: string,
+  maxExtensionWeeks: number = SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS,
+): { ok: true } | { ok: false; reason: string } {
+  const firstLoadedDate = weeks[0]?.[0]?.dateKey
+  const lastLoadedDate = weeks[weeks.length - 1]?.[6]?.dateKey
+  if (!firstLoadedDate || !lastLoadedDate) return { ok: true }
+
+  const maxDays = maxExtensionWeeks * 7
+  const daysBefore = startDate < firstLoadedDate
+    ? Math.round((parseDateKey(firstLoadedDate).getTime() - parseDateKey(startDate).getTime()) / 86400000)
+    : 0
+  const daysAfter = endDate > lastLoadedDate
+    ? Math.round((parseDateKey(endDate).getTime() - parseDateKey(lastLoadedDate).getTime()) / 86400000)
+    : 0
+
+  if (daysBefore > maxDays || daysAfter > maxDays) {
+    return {
+      ok: false,
+      reason: `移動先が現在表示中の週から離れすぎているため移動できません(上限: 約${maxExtensionWeeks}週間)。日程表またはコマ表の表示週を移動先に近づけてから操作してください。`,
+    }
+  }
+  return { ok: true }
+}
+
 export function ensureWeeksCoverDateRange(params: {
   weeks: SlotCell[][]
   startDate: string
@@ -3094,40 +3129,47 @@ export function ensureWeeksCoverDateRange(params: {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
 }) {
-  let nextWeeks = cloneWeeks(params.weeks)
+  const nextWeeks = cloneWeeks(params.weeks)
   let weekIndexOffset = 0
 
-  while ((nextWeeks[0]?.[0]?.dateKey ?? params.startDate) > params.startDate) {
-    const firstWeekStart = getWeekStart(parseDateKey(nextWeeks[0]?.[0]?.dateKey ?? params.startDate))
+  // 前方(過去方向)への拡張分を一時配列に貯め、最後に一度だけ結合する(毎回配列全体をコピーするO(n^2)を回避)。
+  const prependedWeeks: SlotCell[][] = []
+  let firstDateKey = nextWeeks[0]?.[0]?.dateKey ?? params.startDate
+  while (firstDateKey > params.startDate) {
+    const firstWeekStart = getWeekStart(parseDateKey(firstDateKey))
     const previousWeekStart = shiftDate(firstWeekStart, -7)
-    nextWeeks = [
-      createBoardWeek(previousWeekStart, {
-        classroomSettings: params.classroomSettings,
-        teachers: params.teachers,
-        students: params.students,
-        regularLessons: params.regularLessons,
-      }),
-      ...nextWeeks,
-    ]
+    const newWeek = createBoardWeek(previousWeekStart, {
+      classroomSettings: params.classroomSettings,
+      teachers: params.teachers,
+      students: params.students,
+      regularLessons: params.regularLessons,
+    })
+    prependedWeeks.unshift(newWeek)
+    firstDateKey = newWeek[0]?.dateKey ?? firstDateKey
     weekIndexOffset += 1
   }
 
-  while ((nextWeeks[nextWeeks.length - 1]?.[6]?.dateKey ?? params.endDate) < params.endDate) {
-    const lastWeekStart = getWeekStart(parseDateKey(nextWeeks[nextWeeks.length - 1]?.[0]?.dateKey ?? params.endDate))
+  // 後方(未来方向)への拡張分も同様に一時配列へ貯める。
+  const appendedWeeks: SlotCell[][] = []
+  let lastDateKey = nextWeeks[nextWeeks.length - 1]?.[6]?.dateKey ?? params.endDate
+  while (lastDateKey < params.endDate) {
+    const baseLastWeek = appendedWeeks.length > 0 ? appendedWeeks[appendedWeeks.length - 1] : nextWeeks[nextWeeks.length - 1]
+    const lastWeekStart = getWeekStart(parseDateKey(baseLastWeek?.[0]?.dateKey ?? params.endDate))
     const nextWeekStart = shiftDate(lastWeekStart, 7)
-    nextWeeks = [
-      ...nextWeeks,
-      createBoardWeek(nextWeekStart, {
-        classroomSettings: params.classroomSettings,
-        teachers: params.teachers,
-        students: params.students,
-        regularLessons: params.regularLessons,
-      }),
-    ]
+    const newWeek = createBoardWeek(nextWeekStart, {
+      classroomSettings: params.classroomSettings,
+      teachers: params.teachers,
+      students: params.students,
+      regularLessons: params.regularLessons,
+    })
+    appendedWeeks.push(newWeek)
+    lastDateKey = newWeek[6]?.dateKey ?? lastDateKey
   }
 
+  const finalWeeks = [...prependedWeeks, ...nextWeeks, ...appendedWeeks]
+
   return {
-    weeks: nextWeeks,
+    weeks: finalWeeks,
     weekIndexOffset,
   }
 }
@@ -7930,6 +7972,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 週範囲の自動拡張(spec §D-2-1): 移動元・移動先の両日付を盤面 weeks がカバーするようにする。
     const rangeStart = source.sourceDateKey < seat.targetDateKey ? source.sourceDateKey : seat.targetDateKey
     const rangeEnd = source.sourceDateKey > seat.targetDateKey ? source.sourceDateKey : seat.targetDateKey
+    // 週の自動拡張には上限を設ける(2026-07-09・オーナー確定): 上限を超える移動は weeks state を
+    // 一切変更せず(ensureWeeksCoverDateRange を呼ばない)不成立として返す。理由は SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS 参照。
+    const rangeCapCheck = checkScheduleViewMoveRangeWithinCap(weeks, rangeStart, rangeEnd)
+    if (!rangeCapCheck.ok) {
+      return { ok: false, message: rangeCapCheck.reason }
+    }
     const ensured = ensureWeeksCoverDateRange({ weeks, startDate: rangeStart, endDate: rangeEnd, classroomSettings, teachers, students, regularLessons })
     const target = findScheduleViewTargetCell(ensured.weeks, seat.targetDateKey, seat.targetSlotNumber)
     if (!target) {
