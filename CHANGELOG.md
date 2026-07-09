@@ -14,9 +14,7 @@
 
 ## 未リリース
 
-<!-- ここに編集内容を1行ずつ追記する。例:
-- fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
--->
+- fix: 講師が盤面から削除操作なしに勝手に消える不具合を修正(緑が丘 8/4 講習で門田/角田等)。原因は `teacherAutoAssignRequest`(講師の自動配置/登録解除の一過性コマンド)が App 永続 state に載ったまま消費されず、盤面 key 再マウントで重複ガード(processedRef)が消えるたびに古い unassign(登録解除)が再発火して講師を再削除していた。Issue #46(studentScheduleRequest)と同型で、同じ規律=処理後に App 側 state を消費(null)＋判定を純関数化(`shouldProcessTeacherAutoAssignRequest`/`consumeTeacherAutoAssignRequest`)で修正。再マウント再発火の回帰テスト8件追加(src/App.tsx・src/components/schedule-board/ScheduleBoardScreen.tsx)
 
 ## v1.5.420 (2026-07-09)
 

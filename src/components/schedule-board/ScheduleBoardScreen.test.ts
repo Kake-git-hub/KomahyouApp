@@ -5,7 +5,8 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import type { TeacherAutoAssignRequest } from '../../App'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -5327,6 +5328,79 @@ describe('登録解除リクエストの一過性消費(Issue #46 回帰防止)'
   }
 
   it('修正なし(消費しない)だと再マウントごとに再処理され、コマが消える構造になる', () => {
+    expect(simulateBoardLifecycle({ consumeOnProcess: false })).toBe(3)
+  })
+
+  it('修正あり(処理後に消費)なら再マウントを挟んでも 1 回だけ処理される', () => {
+    expect(simulateBoardLifecycle({ consumeOnProcess: true })).toBe(1)
+  })
+})
+
+// 2026-07-09 報告: 緑が丘 8/4 講習で講師(門田/角田)が削除操作なしに盤面から消える。
+// 真因は teacherAutoAssignRequest(mode:unassign 登録解除)が studentScheduleRequest と同型の
+// 「App 永続 state + 再マウントで消える processedRef」構造で、消費(null 化)していなかったこと。
+// 盤面 key 再マウントのたびに古い unassign が再発火し、講師が再び消えていた。
+describe('講師の自動配置/解除リクエストの一過性消費(Issue #46 同型・2026-07-09 回帰防止)', () => {
+  const makeRequest = (requestId: number): TeacherAutoAssignRequest => ({
+    requestId,
+    items: [{ sessionId: 'sess1', teacherId: 'tch-a', mode: 'unassign' as const }],
+  })
+
+  describe('shouldProcessTeacherAutoAssignRequest', () => {
+    it('リクエストが無ければ処理しない', () => {
+      expect(shouldProcessTeacherAutoAssignRequest(null, null)).toBe(false)
+      expect(shouldProcessTeacherAutoAssignRequest(undefined, 5)).toBe(false)
+    })
+
+    it('未処理(processedId が異なる)なら処理する', () => {
+      expect(shouldProcessTeacherAutoAssignRequest(makeRequest(7), null)).toBe(true)
+      expect(shouldProcessTeacherAutoAssignRequest(makeRequest(7), 6)).toBe(true)
+    })
+
+    it('同じ requestId を処理済みなら二度と処理しない(同マウント内の重複ガード)', () => {
+      expect(shouldProcessTeacherAutoAssignRequest(makeRequest(7), 7)).toBe(false)
+    })
+  })
+
+  describe('consumeTeacherAutoAssignRequest', () => {
+    it('処理した requestId と現在の state が一致すれば null 化(消費)する', () => {
+      expect(consumeTeacherAutoAssignRequest(makeRequest(7), 7)).toBeNull()
+    })
+
+    it('現在の state がより新しいリクエストなら消費しない(取りこぼし防止)', () => {
+      const newer = makeRequest(8)
+      expect(consumeTeacherAutoAssignRequest(newer, 7)).toBe(newer)
+    })
+
+    it('既に null なら null のまま', () => {
+      expect(consumeTeacherAutoAssignRequest(null, 7)).toBeNull()
+    })
+  })
+
+  // 本丸: 盤面 key 再マウントで processedRef が消えても、App 側 state を消費(null 化)していれば
+  // 古い unassign(登録解除)が再発火しない。消費しないと再マウントごとに再処理され、講師が
+  // 盤面から勝手に消える。修正なし=3回処理・修正あり=1回処理、で固定する。
+  const simulateBoardLifecycle = (options: { consumeOnProcess: boolean }) => {
+    let appRequest: TeacherAutoAssignRequest | null = makeRequest(1)
+    let processCount = 0
+
+    const mountAndRunEffect = () => {
+      const processedRef: number | null = null // 再マウントで必ず null に戻る
+      if (!shouldProcessTeacherAutoAssignRequest(appRequest, processedRef)) return
+      // セッション/講師はロード済みの前提(load ガードを通過した状態)。
+      if (options.consumeOnProcess) {
+        appRequest = consumeTeacherAutoAssignRequest(appRequest, appRequest!.requestId)
+      }
+      processCount += 1
+    }
+
+    mountAndRunEffect() // 初回マウント(登録解除発行直後)
+    mountAndRunEffect() // 画面遷移して戻る = 再マウント
+    mountAndRunEffect() // もう一度往復
+    return processCount
+  }
+
+  it('修正なし(消費しない)だと再マウントごとに再処理され、講師が消える構造になる', () => {
     expect(simulateBoardLifecycle({ consumeOnProcess: false })).toBe(3)
   })
 

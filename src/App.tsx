@@ -8,7 +8,7 @@ import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, g
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
@@ -1328,6 +1328,12 @@ function AuthenticatedApp() {
   // これをしないと盤面 key 再マウントで古いリクエストが再発火し、組み直した講習コマが消える。
   const handleStudentScheduleRequestProcessed = useCallback((requestId: number) => {
     setStudentScheduleRequest((current) => consumeStudentScheduleRequest(current, requestId))
+  }, [])
+  // Issue #46 同型(2026-07-09): 盤面が講師の自動配置/解除リクエストを処理し終えたら一過性 state を
+  // 消費(null)にする。消さないと盤面 key 再マウントで processedRef が消え、古い unassign(登録解除)が
+  // 再発火して講師が盤面から勝手に消える(8/4 講習で門田/角田が削除操作なしに消える報告)。
+  const handleTeacherAutoAssignRequestProcessed = useCallback((requestId: number) => {
+    setTeacherAutoAssignRequest((current) => consumeTeacherAutoAssignRequest(current, requestId))
   }, [])
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
@@ -5051,6 +5057,7 @@ function AuthenticatedApp() {
       autoAssignRules={autoAssignRules}
       pairConstraints={pairConstraints}
       teacherAutoAssignRequest={teacherAutoAssignRequest}
+      onTeacherAutoAssignRequestProcessed={handleTeacherAutoAssignRequestProcessed}
       studentScheduleRequest={studentScheduleRequest}
       onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       initialBoardState={boardState}

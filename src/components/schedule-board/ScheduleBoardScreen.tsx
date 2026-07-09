@@ -679,6 +679,8 @@ type ScheduleBoardScreenProps = {
   autoAssignRules: AutoAssignRuleRow[]
   pairConstraints: PairConstraintRow[]
   teacherAutoAssignRequest?: TeacherAutoAssignRequest | null
+  // Issue #46 同型: 一過性の講師配置/解除リクエストを処理し終えたら App 側の state を消費済み(null)にさせる。
+  onTeacherAutoAssignRequestProcessed?: (requestId: number) => void
   studentScheduleRequest?: StudentScheduleRequest | null
   // Issue #46: 一過性 unassign を処理し終えたら App 側の state を消費済み(null)にさせる。
   onStudentScheduleRequestProcessed?: (requestId: number) => void
@@ -2926,6 +2928,31 @@ export function shouldProcessStudentScheduleRequest(
   return processedRequestId !== request.requestId
 }
 
+// --- 講師の自動配置/解除リクエスト(一過性コマンド)の消費判定 ------------------------------
+// Issue #46 と同型(2026-07-09 修正)。teacherAutoAssignRequest(mode: assign/unassign)も App 側の
+// 永続 state に載る一過性コマンドで、盤面は key={boardMountKey} で教室ロード/画面遷移のたびに再マウント
+// され、重複ガード(processedTeacherAutoAssignRequestIdRef)が null にリセットされる。App state を
+// null 化しないと、古い unassign(講師の登録解除)が再マウント後に「新規」として再処理され、盤面から
+// 講師が削除操作なしに勝手に消える(緑が丘 8/4 講習で門田/角田が消える報告)。studentScheduleRequest と
+// 同じ2点で守る:(1)未処理の1件だけ処理する判定を純関数化、(2)処理したら App 側 state を消費(null)。
+export function shouldProcessTeacherAutoAssignRequest(
+  request: TeacherAutoAssignRequest | null | undefined,
+  processedRequestId: number | null,
+): boolean {
+  if (!request) return false
+  return processedRequestId !== request.requestId
+}
+
+// App 側の teacherAutoAssignRequest を「消費済み」にする。処理した requestId と現在の state の
+// requestId が一致するときだけ null 化する(処理〜クリアの間に来たより新しいリクエストは消さない)。
+export function consumeTeacherAutoAssignRequest(
+  current: TeacherAutoAssignRequest | null,
+  processedRequestId: number,
+): TeacherAutoAssignRequest | null {
+  if (current && current.requestId === processedRequestId) return null
+  return current
+}
+
 // App 側の studentScheduleRequest を「消費済み」にする。処理した requestId と現在の state の
 // requestId が一致するときだけ null 化する(処理〜クリアの間に新しいリクエストが来ていたら
 // それは消さない = より新しい一過性コマンドを取りこぼさない)。
@@ -3627,7 +3654,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
@@ -4168,13 +4195,23 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [isStudentScheduleOpen, isTeacherScheduleOpen, normalizedWeeks])
 
   useEffect(() => {
-    if (!teacherAutoAssignRequest) return
-    if (processedTeacherAutoAssignRequestIdRef.current === teacherAutoAssignRequest.requestId) return
-    processedTeacherAutoAssignRequestIdRef.current = teacherAutoAssignRequest.requestId
+    // Issue #46 同型: 未処理の1件だけを処理し、処理したら App 側の一過性 state を消費(null)する。
+    // これをしないと盤面 key 再マウントで processedRef が消え、古い unassign(講師の登録解除)が
+    // 再発火して講師が盤面から削除操作なしに勝手に消える。
+    if (!shouldProcessTeacherAutoAssignRequest(teacherAutoAssignRequest, processedTeacherAutoAssignRequestIdRef.current)) return
+    const request = teacherAutoAssignRequest!
+    // セッション/講師が未ロードの間は消費せず、同マウント内での再評価(deps 変化)に委ねる。
+    // ここで消費すると、データ到着前に来たリクエストを取りこぼす(reconcile と同じ待ち条件)。
+    if (specialSessions.length === 0 || teachers.length === 0) return
+
+    // 処理に着手した時点で重複ガードを立て、App 側の一過性 state も消費済み(null)にさせる。
+    // これにより盤面 key 再マウント(processedRef リセット)後も同じリクエストが再発火しない。
+    processedTeacherAutoAssignRequestIdRef.current = request.requestId
+    onTeacherAutoAssignRequestProcessed?.(request.requestId)
 
     const result = applyTeacherAutoAssignRequest({
       weeks,
-      items: teacherAutoAssignRequest.items,
+      items: request.items,
       specialSessions,
       teachers,
       students,
@@ -4193,7 +4230,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (result.messages.length > 0) {
       setStatusMessage(result.messages[result.messages.length - 1])
     }
-  }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
+  }, [classroomSettings, onTeacherAutoAssignRequestProcessed, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
 
   // 起動時の自己修復(2026-06-30): 提出済み(countSubmitted=true)なのに盤面に居ない講師を配置し直す。
   // 盤面は boardMountKey で教室ロード/リロード毎に再マウントされ、その時 specialSessions と weeks は
