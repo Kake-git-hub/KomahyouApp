@@ -18,7 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
-## v1.5.418 (2026-07-09)
+## v1.5.419 (2026-07-09)
+
+- feat(日程表コマ組みを全教室へ公開): 生徒日程表(別タブ)のコマ組みD&D(`studentScheduleDndMove`)と、その移動結果の即反映に必要な自動同期＋スピナー(`schedulePopupAutoSync`)の scope を `staging-environment` から `all-classrooms` へ昇格(オーナー確定 2026-07-09)。staging→本番の開発用教室で段階検証済み。2026-06-05 のポップアップ再生成メモリ障害はデバウンス+fingerprintスキップ+表示範囲限定で緩和済み。テスト更新: 両フラグが全教室で有効(src/utils/featureRollout.ts(+test))
 
 - feat(自動バックアップ3階層化・オーナー確定 2026-07-09): ワークスペース自動バックアップを hourly(72h保持)+daily(14日保持) の2階層から、**15分毎(新規・保持24時間)+毎時(保持48時間に短縮)+日次(保持7日に短縮)** の3階層へ変更。純ロジック(日時キー生成・Storageパス・displayLabel・保持判定)を `functions/src/workspaceBackupSchedule.ts` へ抽出しユニットテスト化(`functions/src/workspaceBackupSchedule.test.ts`・13件)。15分tierはStorage+Firestore summaryのみでGoogle Driveミラーはスキップ(APIクォータ回避・保持定数は既存のDriveプルーンが自動追従)。ダウンロード解決経路(storagePath由来)は無変更。フロント型 `backupKind` を `'daily'|'hourly'|'quarterHourly'` へ拡張(src/integrations/firebase/adminFunctions.ts)。**次回プルーン実行時、既存の48時間超の毎時バックアップ・7日超の日次バックアップは仕様どおり削除される点に注意。**
 

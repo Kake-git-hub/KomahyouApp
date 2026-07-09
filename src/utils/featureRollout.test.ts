@@ -44,17 +44,17 @@ describe('featureRollout', () => {
     expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
   })
 
-  it('keeps schedule drag-and-drop (日程表コマ組み) staging-first (production classrooms unaffected)', () => {
-    // spec-student-schedule-dnd: 本番3教室ではオーナーチェック合格まで無効。staging/開発用教室でのみ有効。
-    expect(featureRolloutRegistry.studentScheduleDndMove.scope).toBe('staging-environment')
+  it('enables schedule drag-and-drop (日程表コマ組み) in every classroom', () => {
+    // staging→本番の開発用教室で段階検証後、オーナー確定(2026-07-09)で全教室へ展開。回帰で staging-environment へ戻さない。
+    expect(featureRolloutRegistry.studentScheduleDndMove.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'development', name: '開発用教室' })).toBe(true)
-    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
   })
 
-  it('keeps schedule popup auto-sync (自動同期+スピナー) staging-first (production classrooms unaffected)', () => {
-    // オーナー確定 2026-07-09: 本番3教室は従来どおり「最新表示/開いた時のみ更新」。staging/開発用教室でのみ自動同期。
-    expect(featureRolloutRegistry.schedulePopupAutoSync.scope).toBe('staging-environment')
+  it('enables schedule popup auto-sync (自動同期+スピナー) in every classroom', () => {
+    // コマ組みの移動結果反映に必要。コマ組みと同時に全教室へ展開(オーナー確定 2026-07-09)。回帰で戻さない。
+    expect(featureRolloutRegistry.schedulePopupAutoSync.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'development', name: '開発用教室' })).toBe(true)
-    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
   })
 })

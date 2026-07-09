@@ -54,17 +54,16 @@ export const featureRolloutRegistry = {
   },
   // 日程表コマ組み(spec-student-schedule-dnd): 生徒日程表(別タブ)の授業カードを長押しD&Dで空きコマへ移し、
   // 机選択モーダルで席を選んで盤面の executeScheduleViewMove を呼ぶ。自動割振ルール・警告は無関係(物理的な空きのみ)。
-  // staging 先行・オーナーチェック合格まで本番展開しない(2026-07-08 確定)。development-only も有効=ローカル検証可。
+  // staging→本番の開発用教室と段階検証し、オーナー確定(2026-07-09)で全教室へ展開。回帰で staging-environment へ戻さない。
   studentScheduleDndMove: {
-    scope: 'staging-environment',
+    scope: 'all-classrooms',
     description: 'Drag-and-drop lesson move on the generated-HTML student schedule tab (long-press card -> empty slot -> desk picker -> board move).',
   },
-  // 別タブ日程表の自動同期(盤面編集をデバウンス約1.5秒で自動反映)＋同期スピナー。日程表コマ組み(別タブD&D)と
-  // 同じく staging/開発用教室のみ先行有効にする。2026-06-05 のポップアップ再生成メモリ障害と同種の負荷があり、
-  // 大きな本番教室では未検証のため、本番3教室は従来どおり「最新表示ボタン/開いた時のみ更新」に保つ
-  // (オーナー確定 2026-07-09)。off の教室では自動同期effectを no-op にし、スピナーも出さない。
+  // 別タブ日程表の自動同期(盤面編集をデバウンス約1.5秒で自動反映)＋同期スピナー。コマ組み(別タブD&D)の移動結果を
+  // 別タブへ即反映するために必要。2026-06-05 のポップアップ再生成メモリ障害はデバウンス+fingerprintスキップ+表示範囲限定で
+  // 緩和済み。staging→開発用教室で検証後、コマ組みと同時に全教室へ展開(オーナー確定 2026-07-09)。回帰で戻さない。
   schedulePopupAutoSync: {
-    scope: 'staging-environment',
+    scope: 'all-classrooms',
     description: 'Auto-sync (debounced) the generated-HTML schedule popup on board edits, with a syncing spinner.',
   },
 } as const satisfies Record<string, FeatureRolloutDefinition>
