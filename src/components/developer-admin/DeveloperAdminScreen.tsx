@@ -40,8 +40,7 @@ type DeveloperAdminScreenProps = {
     estimatedReferenceUsageRate: number
     estimatedReferenceMaxRetentionDays: number
     referenceClassroomCount: number
-    retentionDays: number
-    hourlyRetentionHours: number
+    estimatedRetainedBackupCount: number
     freeTierStorageBytes: number
   }
   serverAutoBackupSummaries: ServerAutoBackupSummary[]
@@ -276,14 +275,14 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
               <div className="basic-data-card-head">
                 <h3>Blaze 無料枠の目安</h3>
               </div>
-              <div className="toolbar-status">Cloud Storage 5 GB 中 <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong> 使用中（毎時 {blazeFreeTierEstimate.hourlyRetentionHours} 本 + 日次 {blazeFreeTierEstimate.retentionDays} 日 × {blazeFreeTierEstimate.currentClassroomCount} 教室で概算）</div>
+              <div className="toolbar-status">Cloud Storage 5 GB 中 <strong>{formatPercent(blazeFreeTierEstimate.currentWorkspaceUsageRate)}</strong> 使用中（バックアップ概算 {blazeFreeTierEstimate.estimatedRetainedBackupCount} 本 × {blazeFreeTierEstimate.currentClassroomCount} 教室で概算）</div>
             </section>
           ) : null}
 
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
               <h3>サーバーバックアップ</h3>
-              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で毎時 10 分に hourly、毎日 02:10 JST に daily の自動バックアップが作成されます。Google Drive サーバー同期を設定している場合は、Web アプリを開かなくても同じ JSON が自動同期されます。' : ''}</p>
+              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で15分ごとに自動バックアップが作成され、直近24時間は15分刻み、24〜72時間は毎時0分のみ、72時間〜7日間はAM3:00のみを段階的に間引いて保持します。Google Drive サーバー同期を設定している場合は、Web アプリを開かなくても同じ JSON が自動同期されます。' : ''}</p>
             </div>
             <div className="developer-backup-grid">
               <div className="basic-data-row-actions">

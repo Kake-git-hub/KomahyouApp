@@ -245,13 +245,17 @@ type BlazeFreeTierEstimate = {
   estimatedReferenceUsageRate: number
   estimatedReferenceMaxRetentionDays: number
   referenceClassroomCount: number
-  retentionDays: number
-  hourlyRetentionHours: number
+  estimatedRetainedBackupCount: number
   freeTierStorageBytes: number
 }
 
-const SERVER_AUTO_BACKUP_RETENTION_DAYS = 14
-const SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS = 72
+// 2026-07-10: 生成15分毎1本化+間引き方式(functions/src/workspaceBackupSchedule.ts と同じ数値)。
+// 保持される概算本数 = 24h分(15分毎) + 24-72h分(毎時) + 72h-7日分(日次) の合計。
+// 過去の実装(14日+72時間の単純合算)がここだけ短縮反映漏れになっていたバグの修正も兼ねる。
+const SERVER_AUTO_BACKUP_FULL_RESOLUTION_COUNT = 24 * 4 // 24時間 ÷ 15分 = 96本
+const SERVER_AUTO_BACKUP_HOURLY_THINNED_COUNT = 72 - 24 // 24-72時間帯、毎時1本 = 48本
+const SERVER_AUTO_BACKUP_DAILY_THINNED_COUNT = 7 - 3 // 72時間-7日帯(=4日分)、日次1本 = 4本
+const SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT = SERVER_AUTO_BACKUP_FULL_RESOLUTION_COUNT + SERVER_AUTO_BACKUP_HOURLY_THINNED_COUNT + SERVER_AUTO_BACKUP_DAILY_THINNED_COUNT
 const BLAZE_STORAGE_FREE_TIER_BYTES = 5_000_000_000
 const BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT = 50
 
@@ -1601,8 +1605,7 @@ function AuthenticatedApp() {
         estimatedReferenceUsageRate: 0,
         estimatedReferenceMaxRetentionDays: 0,
         referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
-        retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
-        hourlyRetentionHours: SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS,
+        estimatedRetainedBackupCount: SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT,
         freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
       }
     }
@@ -1627,9 +1630,9 @@ function AuthenticatedApp() {
     const estimatedAverageClassroomBytes = Math.max(1, Math.round((totalClassroomBytes + totalManagerBytes) / currentClassroomCount))
     const estimateDailyBytes = (classroomCount: number) => fixedSnapshotBytes + estimatedAverageClassroomBytes * Math.max(0, classroomCount)
 
-    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * (SERVER_AUTO_BACKUP_RETENTION_DAYS + SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS)
+    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT
     const estimatedReferenceDailyBytes = estimateDailyBytes(BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT)
-    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * (SERVER_AUTO_BACKUP_RETENTION_DAYS + SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS)
+    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT
 
     return {
       currentClassroomCount,
@@ -1643,8 +1646,7 @@ function AuthenticatedApp() {
       estimatedReferenceUsageRate: estimatedReferenceRetentionBytes / BLAZE_STORAGE_FREE_TIER_BYTES * 100,
       estimatedReferenceMaxRetentionDays: Math.floor(BLAZE_STORAGE_FREE_TIER_BYTES / estimatedReferenceDailyBytes),
       referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
-      retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
-      hourlyRetentionHours: SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS,
+      estimatedRetainedBackupCount: SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT,
       freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
     }
   }, [buildWorkspaceSnapshot])
