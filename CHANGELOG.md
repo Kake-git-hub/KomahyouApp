@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.431 (2026-07-10)
+
+- fix(サーバーバックアップの Google Drive 自動同期がCIデプロイで無効化される事故の恒久対策): `functions/.env`(Google Drive OAuth 一式)は .gitignore 済みで CI のチェックアウトに含まれないのに、本番 `deploy-functions.yml` には staging のような env 書き込みステップが無かったため、CI経由で functions をデプロイするたびに `GOOGLE_DRIVE_BACKUP_FOLDER_ID` 等が空になり `isGoogleDriveBackupConfigured()` が false となって Drive 同期が黙って停止していた(2026-07-10 のバックアップ再設計で初めてCI経由デプロイして顕在化)。deploy-functions.yml に「Write functions env for production」ステップを追加し、GitHub シークレット `PROD_FUNCTIONS_ENV`(ローカル functions/.env と同内容)を `functions/.env.komahyouapp-prod` へ書き出して runtime env に焼き込むようにした。**シークレット `PROD_FUNCTIONS_ENV` の登録が必要**(.github/workflows/deploy-functions.yml)
+- feat(自動バックアップ: 早朝の静音時間帯をスキップして取得回数を抑制・オーナー確定 2026-07-10): 15分毎バックアップのうち JST 3:15〜8:45(ユーザーが操作しない早朝)は生成をスキップし、9:00 から通常の15分刻みへ復帰する。ただし 72時間〜7日帯の日次保持アンカーである **AM3:00 の1本だけは静音帯でも取得**する(取らないと3〜7日前の日次バックアップが存在しなくなるため)。純関数 `isWorkspaceAutoBackupSkippedAt` をスケジュール関数側で判定(手動「今すぐバックアップ」は対象外)。回帰テスト7件を同コミットで追加(functions/src/workspaceBackupSchedule.ts(+test)・functions/src/index.ts・src/components/developer-admin/DeveloperAdminScreen.tsx)
 - fix(生徒日程表コマ組みの机選択モーダル: ブラウザ拡大時に画面からはみ出す): コマ組み(別タブD&D)で移動先を選ぶ「机選択モーダル」を、日程表をブラウザ拡大していても画面いっぱいに収まるよう修正。原因は2点 — (1) `.desk-picker-modal` の `transform-origin` が `center top` で、机数が多く縦長になると flex 中央寄せでボックス上端が画面外に出た状態から上基点で縮むため上端が切れていた → `center center` に変更し中央基点で確実に画面内へ収める。(2) 縮小率計算が高さのみで幅を見ておらず、ブラウザ拡大で viewport の CSS px が縮むと固定px寸法の盤面が横にもはみ出していた → `computeDeskPickerFitScale` を高さ・幅の両方で判定し厳しい方の縮小率を採用(埋め込みJSミラーも同式に更新)。回帰テスト5件を同コミットで追加(src/utils/scheduleHtml.ts(+test))
 
 ## v1.5.429 (2026-07-10)
