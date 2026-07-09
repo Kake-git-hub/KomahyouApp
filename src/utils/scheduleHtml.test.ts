@@ -308,6 +308,42 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // タブ名(document.title)は取り違え防止のため教室名を出し、期間は出さない(オーナー要望 2026-07-09)。
+  it('タブ名に教室名を出し、期間は出さない', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.classroomName).toBe('開発用教室') // 教室名がペイロードに乗る
+    // document.title は教室名を使い、期間(formatRangeLabel)を使わない。
+    expect(html).toContain("document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '')")
+    expect(html).not.toContain("document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate)")
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の
   // 下端で見切れる不具合を、印刷時だけ count-table の行高を詰めることで解消した。@media print 内で
   // .count-table の行高が既定(22px)より小さいことを固定する(将来の変更で 22px 等へ戻すと落ちる)。

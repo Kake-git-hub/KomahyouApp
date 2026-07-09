@@ -31,7 +31,7 @@ import { compactBoardSharePayload, publishBoardShare } from './integrations/fire
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
-import { isDevelopmentClassroom, stripForeignSubmissionTokensFromInputs } from './utils/developmentClassroom'
+import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
@@ -1005,6 +1005,13 @@ export function applyIssuedSubmissionTokensToSessions(
           if (!existing.submissionToken) {
             nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
             changed = true
+          } else if (classroomId !== undefined && existing.submissionTokenClassroomId !== classroomId) {
+            // 混入防止(2026-07-09): 開発用教室で他教室由来/未タグのトークンを、自教室タグ付きに差し替える。
+            // ここに来るのは ensureScheduleSubmissionTokens が sessionForIssue で非所有トークンを外して
+            // 再発行した生徒のみ(本番教室は素通しのため既発行済みは再発行対象にならず、この分岐に来ない)。
+            // 提出内容(countSubmitted/subjectSlots 等)は ...existing で保持し、トークンだけ差し替える(巻き戻さない)。
+            nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
+            changed = true
           }
         } else {
           nextStudentInputs[issued.personId] = {
@@ -1023,6 +1030,10 @@ export function applyIssuedSubmissionTokensToSessions(
         const existing = nextTeacherInputs[issued.personId]
         if (existing) {
           if (!existing.submissionToken) {
+            nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
+            changed = true
+          } else if (classroomId !== undefined && existing.submissionTokenClassroomId !== classroomId) {
+            // 混入防止(2026-07-09): 開発用教室で他教室由来/未タグの講師トークンを自教室タグ付きに差し替える(生徒と同じ)。
             nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
             changed = true
           }
@@ -3092,8 +3103,15 @@ function AuthenticatedApp() {
     const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
     const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
-    const allStudentsHaveTokens = activeStudents.every((s) => session.studentInputs[s.id]?.submissionToken)
-    const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)
+    // 混入防止(2026-07-09): 開発用教室では、自教室が発行したものでない(他教室由来/タグ未設定)トークンを
+    // 「無し」として扱い、下の ensureSubmissionTokens で自教室タグ付きに再発行させる。これにより
+    // (1)他教室トークンが日程表に残らず本番への誤スキャンを構造的に防ぎ、(2)v1.5.415 のガードで
+    // 未タグ既存トークンのQRが消えた回帰も解消する(再発行後は owned となりQRが出る)。本番教室は素通し。
+    const sessionForIssue = isActingDevelopmentClassroom
+      ? { ...session, studentInputs: stripForeignSubmissionTokensFromInputs(session.studentInputs, actingClassroomId), teacherInputs: stripForeignSubmissionTokensFromInputs(session.teacherInputs, actingClassroomId) }
+      : session
+    const allStudentsHaveTokens = activeStudents.every((s) => sessionForIssue.studentInputs[s.id]?.submissionToken)
+    const allTeachersHaveTokens = activeTeachers.every((t) => sessionForIssue.teacherInputs[t.id]?.submissionToken)
 
     // Build occupied slots from board cells
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3195,8 +3213,8 @@ function AuthenticatedApp() {
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
 
     const { updatedSession, newTokens } = allStudentsHaveTokens && allTeachersHaveTokens
-      ? { updatedSession: session, newTokens: [] }
-      : await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings, slotNumbers)
+      ? { updatedSession: sessionForIssue, newTokens: [] }
+      : await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers)
 
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
@@ -3238,7 +3256,7 @@ function AuthenticatedApp() {
     if (existingTokenEntries.length > 0) {
       updateSubmissionOccupiedSlots(existingTokenEntries).catch(() => { /* non-fatal */ })
     }
-  }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
+  }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, isActingDevelopmentClassroom, specialSessions, students, teachers])
 
   const buildPopupBoardWeeksForRange = useCallback((range: ScheduleRangePreference) => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3322,13 +3340,14 @@ function AuthenticatedApp() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
+      classroomName: actingClassroom?.name ?? '',
       periodBands: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
       specialSessions: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: studentPopup,
     })
-  }, [actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
+  }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
 
   // syncStudentSchedulePopup と同様に force=true の明示パスのみ同期する(自動再生成の停止)。
   const syncTeacherSchedulePopup = useCallback((force = false, rangeOverride: ScheduleRangePreference | null = null) => {
@@ -3368,6 +3387,7 @@ function AuthenticatedApp() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
+      classroomName: actingClassroom?.name ?? '',
       highlightedTeacherId,
       periodBands: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
       specialSessions: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
@@ -3375,7 +3395,7 @@ function AuthenticatedApp() {
       showSubmittedQr: true,
       targetWindow: teacherPopup,
     })
-  }, [actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
+  }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
 
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
@@ -3523,7 +3543,9 @@ function AuthenticatedApp() {
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const targetInput = targetSession?.studentInputs[message.personId]
         const studentToken = targetInput?.submissionToken
-        if (studentToken) {
+        // 混入防止(2026-07-09): 開発用教室では、自教室が発行したものでないトークン(他教室由来/未タグ=再発行前)には
+        // 絶対に書き込まない(他教室=本番のドキュメントを誤って提出ロック/リセットしない)。本番教室は従来どおり素通し。
+        if (studentToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(targetInput, actingClassroomId))) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           // spec-group-lesson §C 回帰修正: 室長が日程表で決めた集団参加/オプションを提出ドキュメントにも書き戻す。
           // doc を更新しないと購読の反映(doc→ローカル)が空で上書きし、生徒日程表での集団参加登録が
@@ -3633,8 +3655,10 @@ function AuthenticatedApp() {
         })
 
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
-        const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
-        if (teacherToken) {
+        const teacherTargetInput = targetTeacherSession?.teacherInputs[message.personId]
+        const teacherToken = teacherTargetInput?.submissionToken
+        // 混入防止(2026-07-09): 開発用教室では自教室発行でない講師トークンへ書き込まない(生徒と同じ)。本番は素通し。
+        if (teacherToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(teacherTargetInput, actingClassroomId))) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
           else resetLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
@@ -3679,7 +3703,7 @@ function AuthenticatedApp() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     const timerId = window.setTimeout(() => syncStudentSchedulePopup(), 400)
