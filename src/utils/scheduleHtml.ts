@@ -894,13 +894,35 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
   }
 }
 
-// ビューポート高に机モーダルを収めるための縮小率(<=1)。contentHeight<=avail のときは1(拡大しない)。
+// ビューポートに机モーダルを収めるための縮小率(<=1)。高さ・幅の両方で足りない分だけ縮める
+// (ブラウザ拡大時は viewport の CSS px が縮むため、固定px寸法の盤面が縦にも横にもはみ出しうる)。
+// content<=avail のときは1(拡大しない)。幅の引数を省略すると従来どおり高さのみで判定する。
 // 埋め込みJS(openScheduleDeskPicker)側にも同式のミラーがある(new Function文字列内で export 関数を呼べないため)。
-export function computeDeskPickerFitScale(contentHeight: number, viewportHeight: number, margin = 24): number {
-  if (!Number.isFinite(contentHeight) || contentHeight <= 0) return 1
-  const avail = Math.max(0, viewportHeight - margin)
-  if (avail <= 0) return 1
-  return Math.min(1, avail / contentHeight)
+export function computeDeskPickerFitScale(
+  contentHeight: number,
+  viewportHeight: number,
+  margin = 24,
+  contentWidth?: number,
+  viewportWidth?: number,
+): number {
+  const scales: number[] = []
+  if (Number.isFinite(contentHeight) && contentHeight > 0) {
+    const availH = Math.max(0, viewportHeight - margin)
+    if (availH <= 0) return 1
+    scales.push(availH / contentHeight)
+  }
+  if (
+    contentWidth !== undefined &&
+    viewportWidth !== undefined &&
+    Number.isFinite(contentWidth) &&
+    contentWidth > 0
+  ) {
+    const availW = Math.max(0, viewportWidth - margin)
+    if (availW <= 0) return 1
+    scales.push(availW / contentWidth)
+  }
+  if (scales.length === 0) return 1
+  return Math.min(1, ...scales)
 }
 
 function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher' | 'all-student' | 'all-teacher') {
@@ -2249,7 +2271,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         padding: 18px 20px;
         max-width: 92vw;
         overflow: visible;
-        transform-origin: center top;
+        /* 中央基点で縮小する。center top だと縦長時に flex 中央寄せでボックス上端が画面外へ出た状態から
+           上基点で縮むため上端が切れてはみ出す(ブラウザ拡大時に顕在化)。center 基点なら必ず画面内に収まる。 */
+        transform-origin: center center;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
       }
       /* 盤面の一コマをそのまま切り取った見た目(App.css の .slot-adjust-grid / sa-* に合わせる)。
@@ -3626,12 +3650,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         document.body.appendChild(overlay);
         scheduleDeskPickerOverlay = overlay;
         // 全机を1画面に収める(縦スクロール無し)。computeDeskPickerFitScale と同式(ミラー):
-        // avail = max(0, viewportHeight - margin); scale = min(1, avail / contentHeight)。
+        // 高さ・幅の両方で足りない分だけ縮める(ブラウザ拡大時は viewport の CSS px が縮み縦横ともにはみ出しうる)。
+        // avail = max(0, viewport - margin); k = min(1, availH/contentH, availW/contentW)。
         var modalEl = overlay.querySelector('.desk-picker-modal');
         if (modalEl) {
-          var h = modalEl.getBoundingClientRect().height;
-          var avail = Math.max(0, window.innerHeight - 24);
-          var k = (h > 0 && avail > 0) ? Math.min(1, avail / h) : 1;
+          var rect = modalEl.getBoundingClientRect();
+          var availH = Math.max(0, window.innerHeight - 24);
+          var availW = Math.max(0, window.innerWidth - 24);
+          var kH = (rect.height > 0 && availH > 0) ? availH / rect.height : 1;
+          var kW = (rect.width > 0 && availW > 0) ? availW / rect.width : 1;
+          var k = Math.min(1, kH, kW);
           if (k < 1) modalEl.style.transform = 'scale(' + k + ')';
         }
       }
