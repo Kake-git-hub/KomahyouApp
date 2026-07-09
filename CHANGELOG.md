@@ -18,6 +18,13 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.416 (2026-07-09)
+
+- fix: v1.5.415 のガードで開発用教室のQRが生徒/講師日程表に表示されなくなった回帰を修正。開発用教室の既発行トークンは全て「発行元教室タグ未設定」のためガードが一律に他教室由来とみなして除去していた。ensureScheduleSubmissionTokens で**開発用教室のみ**、自教室が発行したものでない(未タグ/他教室タグ)トークンを自教室タグ付きで**再発行**するようにした(applyIssuedSubmissionTokensToSessions に差し替え分岐・提出内容は保持)。再発行後は owned となりQRが復活し、かつ他教室トークンが残らないため混入も起きない。本番教室は素通し(既存・印刷配布済みトークンは不変)。
+- feat: 日程表(別タブ)のタブ名に「開いている教室名」を表示、期間表示は廃止(取り違え防止・オーナー要望)。scheduleHtml に classroomName を渡し document.title を教室名ベースに変更(App.tsx / scheduleHtml.ts)。
+- fix(混入監査): 開発用教室での登録/登録解除(markLectureSubmissionDocAsSubmitted / resetLectureSubmissionDoc)が、自教室発行でないトークンのドキュメント(=他教室=本番)へ書き込み得る残存経路にガードを追加(開発用のみ・所有トークンのみ書込)。他の書込経路(教室スナップショット保存=acting限定、occupiedSlots/集団同期=再発行後の所有トークンのみ)は問題なしを確認。
+- test: 再発行差し替え・冪等性・タブ名・所有判定の回帰テストを追加(App.test.ts / scheduleHtml.test.ts / developmentClassroom.test.ts)。関連メモリ [[komahyou-dev-classroom-qr-token-contamination]]
+
 ## v1.5.415 (2026-07-09)
 
 - fix: 開発用教室のQRテストが本番教室(日大前校)へ書き込まれる混入事故の恒久対策。開発用教室は他教室の生データをコピーしてテストするため、コピー元(本番)の提出トークンが残っていると日程表がそのQRを表示し、スキャンで本番へ誤書き込みする(2026-07-09 実発生・日大前校の複数生徒が誤登録)。対策: 提出トークンに発行元教室ID(`submissionTokenClassroomId`)を刻み(applyIssuedSubmissionTokensToSessions)、他教室→開発用コピー時に除去(buildDevelopmentClassroomCopyPayload)、**開発用教室でのみ**日程表へ渡す前に「自教室が発行したものでないトークン」を除去してQRを出せなくする(applyDevelopmentScheduleTokenGuard)。本番教室ではこのガードは一切走らず、既存・印刷配布済みトークンは不変。純関数化して回帰テスト追加(developmentClassroom.ts / App.tsx / specialSessionModel.ts)。関連メモリ [[komahyou-classroom-restore-cross-contamination]]

@@ -176,6 +176,8 @@ type SchedulePayload = {
   // spec-group-lesson §A/§E: 盤面の集団授業割当(key=`${dateKey}_${band}`)。生徒/講師日程表の集団行・回数・給与に使う。
   groupClassEntries: GroupClassEntryMap
   classroomStorageKey: string
+  // タブ名に表示する教室名(2026-07-09)。
+  classroomName: string
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄(休み欄を置き換え/振替を左詰め)を有効化する。開発用教室のみ。
   optionFieldEnabled?: boolean
@@ -194,6 +196,8 @@ type OpenScheduleHtmlParams = {
   // spec-group-lesson §A: 盤面の集団授業割当。生徒/講師日程表へ集団行・回数・給与として反映する。
   groupClassEntries?: GroupClassEntryMap
   classroomStorageKey?: string
+  // タブ名(document.title)に表示する教室名。取り違え防止のため期間ではなく教室名を出す(2026-07-09)。
+  classroomName?: string
   targetWindow?: Window | null
   lazyQrLoading?: boolean
   showSubmittedQr?: boolean
@@ -555,6 +559,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     })),
     groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
     classroomStorageKey: params.classroomStorageKey || 'default',
+    classroomName: params.classroomName || '',
     optionFieldEnabled: Boolean(params.optionFieldEnabled),
   }
 }
@@ -5495,7 +5500,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           } catch (error) {
             pagesElement.innerHTML = '<div class="empty-state">表示中にエラーが発生しました: ' + escapeHtml(String(error)) + '</div>';
           }
-          document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate);
+          // タブ名は取り違え防止のため「教室名」を出す。期間は出さない(2026-07-09 オーナー指示)。
+          document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '');
           updateSheetScreenSize();
           bindNotes();
           bindSalaryInputs();
@@ -5523,7 +5529,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ? (VIEW_TYPE === 'student' ? formatStudentHeaderName(displayedPerson, startDate) : formatTeacherHeaderName(displayedPerson))
           : '対象なし';
         if (summaryLabel) summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
-        document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate) + ' | ' + personLabel;
+        // タブ名は「教室名」を出す(期間は出さない)。生徒/講師名は残す(2026-07-09 オーナー指示)。
+        document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '') + ' | ' + personLabel;
         updateSheetScreenSize();
         syncPendingUnavailableUi(pagesElement);
         bindNotes();
