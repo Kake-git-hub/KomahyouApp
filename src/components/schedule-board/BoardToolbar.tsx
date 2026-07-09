@@ -1,5 +1,6 @@
 import { memo, useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
+import { createWeekJumpPicker } from './weekJumpPicker'
 
 type BoardToolbarProps = {
   weekLabel: string
@@ -115,6 +116,14 @@ function BoardToolbarComponent({
   syncElapsedSeconds,
 }: BoardToolbarProps) {
   const weekJumpInputRef = useRef<HTMLInputElement | null>(null)
+  // ネイティブ日付ピッカーは操作中(ホイール/カレンダー)に change を発火させるため、
+  // change では確定せず「保留」だけ行い、ピッカーを閉じて確定した時(blur / Enter)に
+  // 最後の値へジャンプする。詳細は weekJumpPicker.ts のコメント参照。
+  const weekJumpPickerRef = useRef(createWeekJumpPicker())
+  const commitWeekJump = () => {
+    const target = weekJumpPickerRef.current.commit()
+    if (target) onJumpToDate(target)
+  }
 
   // 保存ボタンを押した瞬間に「保存中…」へ切り替えるためのローカル状態。
   // 親の保存状態(isBoardSaving)の伝播タイミングに依存せず、クリック即フィードバックを保証する。
@@ -245,9 +254,17 @@ function BoardToolbarComponent({
                     ref={weekJumpInputRef}
                     className="week-jump-input"
                     type="date"
-                    value={weekStartDate}
+                    defaultValue={weekStartDate}
+                    key={weekStartDate}
                     onChange={(event) => {
-                      if (event.currentTarget.value) onJumpToDate(event.currentTarget.value)
+                      // 確定前は保留のみ（ここでは週を変えない）。
+                      weekJumpPickerRef.current.stage(event.currentTarget.value)
+                    }}
+                    onBlur={commitWeekJump}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') commitWeekJump()
+                      // Escape はキャンセル：保留を破棄して週を変えない。
+                      else if (event.key === 'Escape') weekJumpPickerRef.current.reset()
                     }}
                     data-testid="week-jump-date-input"
                     aria-label="表示したい日付"
