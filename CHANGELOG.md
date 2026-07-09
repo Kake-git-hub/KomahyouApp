@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.427 (2026-07-10)
+
+- fix(盤面の表示週選択カレンダー: 日付を確定するまで表示週を変えない・オーナー依頼 2026-07-10): 「表示週を選択」のネイティブ日付ピッカー(`<input type="date">`)は、タブレット等でホイール/カレンダー操作中に `change` を発火させるため、以前は確定前に表示週が勝手に切り替わっていた。`change` では週を変えず「保留(stage)」のみ行い、ピッカーを閉じて確定した時(blur / Enter)に最後の値へジャンプする方式へ変更(Escape はキャンセルで保留破棄)。確定制御を純関数 `createWeekJumpPicker`(stage/commit/reset)に切り出し、controlled(`value`)だと保留中に値が戻ってしまうため uncontrolled(`defaultValue`＋`key={weekStartDate}`)にして週変更時のみ再同期。回帰防止テスト: stage だけでは commit まで値を返さない/commit は最後の値を一度だけ返す(多重ジャンプ防止)/空値・reset は null、を新規追加(src/components/schedule-board/weekJumpPicker.ts(+test)・src/components/schedule-board/BoardToolbar.tsx)
+
 ## v1.5.426 (2026-07-10)
 
 - refactor(ワークスペース自動バックアップの間引き方式へ再設計・オーナー確定 2026-07-10): 生成スケジュールを15分毎(`*/15 * * * *`)の1本に一本化し、毎時生成(`createWorkspaceServerHourlyBackups`)・日次生成(`createWorkspaceServerAutoBackups`)の**Cloud Functionsを本番から削除**。保持はプルーン時の経過時間ベースの間引きで実現(新関数 `shouldKeepWorkspaceAutoBackup`: age<24h=全保持/24-72h=JST分00のみ/72h-7日=JST時03分00のみ/7日以上=削除)。Google Driveミラーも「15分毎はスキップ」を撤回し毎回アップロード、プルーンも同じ間引きルールへ統一(`shouldKeepGoogleDriveBackupFile`)。フロントのストレージ使用量見積り(`src/App.tsx`)も新方式の概算本数(96+48+4=148本)に合わせて修正し、旧実装が保持短縮(14日→7日、72h→48h)の反映漏れで古い数値のまま放置されていたバグも併せて修正。回帰防止テスト: `shouldKeepWorkspaceAutoBackup` の境界値(24h/72h/7日ちょうど・JSTオフセット跨ぎ含む)を新規追加(functions/src/workspaceBackupSchedule.ts(+test)・functions/src/index.ts・src/App.tsx・src/components/developer-admin/DeveloperAdminScreen.tsx)
