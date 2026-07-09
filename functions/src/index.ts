@@ -1820,6 +1820,9 @@ export const createWorkspaceServerHourlyBackups = onSchedule({
   await runWorkspaceServerAutoBackup('hourly')
 })
 
+// 2026-07-09: 初回デプロイ時に cloudscheduler.jobs.update の403でスケジューラー紐付けだけ失敗し、
+// 関数はACTIVEだがトリガー無しの状態で取り残された(権限付与後の再デプロイが「変更なし」でスキップされたため)。
+// このコメントは再デプロイを強制してスケジューラージョブを作り直すための実質的な差分。
 export const createWorkspaceServerQuarterHourlyBackups = onSchedule({
   schedule: WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_SCHEDULE,
   timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
