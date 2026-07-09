@@ -100,6 +100,44 @@ describe('updateSubmissionOccupiedSlots', () => {
     const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(writtenDoc.holidayDates).toEqual(['2026-08-10']) // 既存値(spread)が維持される
   })
+
+  // 回帰防止: 後から追加した科目(理社など)が、既発行トークンの提出画面に出ない不具合の是正。
+  // availableSubjects は発行時に凍結されるため、既存トークンにも同期して伝播する必要がある。
+  it('propagates availableSubjects to existing tokens when provided', async () => {
+    existingData.mockReturnValue({
+      status: 'pending',
+      occupiedSlots: {},
+      availableSubjects: ['算', '算国', '英', '国', '理', '社'], // 理社 追加前の古い凍結値
+    })
+
+    await updateSubmissionOccupiedSlots([{
+      token: 'student-token',
+      occupiedSlots: {},
+      availableSubjects: ['算', '算国', '英', '国', '理', '社', '理社'],
+    }])
+
+    expect(setDoc).toHaveBeenCalledWith(
+      { token: 'student-token' },
+      expect.objectContaining({ availableSubjects: ['算', '算国', '英', '国', '理', '社', '理社'] }),
+    )
+  })
+
+  // 後方互換: availableSubjects を渡さない呼び出し(講師トークン等)では既存値を書き換えない。
+  it('does not overwrite availableSubjects when omitted', async () => {
+    existingData.mockReturnValue({
+      status: 'submitted',
+      occupiedSlots: {},
+      availableSubjects: ['数', '英', '国', '理', '社'],
+    })
+
+    await updateSubmissionOccupiedSlots([{
+      token: 'teacher-token',
+      occupiedSlots: { '2026-08-31_1': '通常' },
+    }])
+
+    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(writtenDoc.availableSubjects).toEqual(['数', '英', '国', '理', '社']) // 既存値(spread)が維持される
+  })
 })
 
 // spec-group-lesson §C 回帰防止: 室長が生徒日程表の「登録」で決めた集団参加/オプションを

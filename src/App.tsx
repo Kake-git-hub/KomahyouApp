@@ -3204,7 +3204,7 @@ function AuthenticatedApp() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[] }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[] }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
@@ -3213,7 +3213,7 @@ function AuthenticatedApp() {
       if (token && !newTokenSet.has(token)) {
         const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
         const isThirdGrade = gradeLabel === '中3'
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s) })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s), availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel) })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         // 盤面に登録された集団科目のみ。空(集団未設定の講習)なら集団欄を出さないよう [] で後埋めする。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
