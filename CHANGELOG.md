@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.418 (2026-07-09)
+
+- feat(自動バックアップ3階層化・オーナー確定 2026-07-09): ワークスペース自動バックアップを hourly(72h保持)+daily(14日保持) の2階層から、**15分毎(新規・保持24時間)+毎時(保持48時間に短縮)+日次(保持7日に短縮)** の3階層へ変更。純ロジック(日時キー生成・Storageパス・displayLabel・保持判定)を `functions/src/workspaceBackupSchedule.ts` へ抽出しユニットテスト化(`functions/src/workspaceBackupSchedule.test.ts`・13件)。15分tierはStorage+Firestore summaryのみでGoogle Driveミラーはスキップ(APIクォータ回避・保持定数は既存のDriveプルーンが自動追従)。ダウンロード解決経路(storagePath由来)は無変更。フロント型 `backupKind` を `'daily'|'hourly'|'quarterHourly'` へ拡張(src/integrations/firebase/adminFunctions.ts)。**次回プルーン実行時、既存の48時間超の毎時バックアップ・7日超の日次バックアップは仕様どおり削除される点に注意。**
+
 ## v1.5.417 (2026-07-09)
 
 - feat(Phase C 本番展開ゲート): 日程表コマ組み(別タブD&D)を本番の**開発用教室のみ**へ展開(scope=staging-environment・本番3教室は無効)。加えて別タブ日程表の**自動同期(デバウンス)＋同期スピナー**も本番3教室では意図せず有効化されないよう新フラグ `schedulePopupAutoSync`(staging-environment)を追加してゲート。off の教室では自動同期effectを no-op にし従来どおり「最新表示ボタン/開いた時のみ更新」に保つ(2026-06-05 のポップアップ再生成メモリ障害と同種の負荷が本番大教室で未検証のため・オーナー確定 2026-07-09)。回帰テスト追加(src/utils/featureRollout.ts(+test) / src/components/schedule-board/ScheduleBoardScreen.tsx)

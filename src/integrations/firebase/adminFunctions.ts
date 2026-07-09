@@ -11,7 +11,7 @@ export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
 export type GoogleDriveBackupDiagnostic = {
   workspaceKey: string
   backupDateKey: string
-  backupKind: 'daily' | 'hourly'
+  backupKind: 'daily' | 'hourly' | 'quarterHourly'
   status: GoogleDriveBackupStatus
   configured: boolean
   folderIdMasked: string
@@ -26,7 +26,7 @@ export type GoogleDriveBackupDiagnostic = {
 
 export type ServerAutoBackupSummary = {
   backupDateKey: string
-  backupKind: 'daily' | 'hourly'
+  backupKind: 'daily' | 'hourly' | 'quarterHourly'
   displayLabel: string
   savedAt: string
   sourceSavedAt: string
@@ -43,7 +43,7 @@ export type ServerAutoBackupSummary = {
 
 export type TriggerServerAutoBackupResult = {
   backupDateKey: string
-  backupKind: 'daily' | 'hourly'
+  backupKind: 'daily' | 'hourly' | 'quarterHourly'
   workspaceCount: number
   googleDriveBackups: GoogleDriveBackupDiagnostic[]
 }
@@ -123,7 +123,7 @@ function normalizeGoogleDriveBackupDiagnostic(value: unknown): GoogleDriveBackup
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const data = value as Record<string, unknown>
   const status = normalizeGoogleDriveBackupStatus(data.status) ?? 'disabled'
-  const backupKind = data.backupKind === 'daily' ? 'daily' : 'hourly'
+  const backupKind = data.backupKind === 'quarterHourly' ? 'quarterHourly' : data.backupKind === 'daily' ? 'daily' : 'hourly'
   const errorStatusCode = Number(data.errorStatusCode)
 
   return {
@@ -425,7 +425,7 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
   return snapshot.docs.map((entry) => {
     const data = entry.data()
     const backupDateKey = String(data.backupDateKey ?? entry.id)
-    const backupKind = data.backupKind === 'hourly' ? 'hourly' : 'daily'
+    const backupKind = data.backupKind === 'quarterHourly' ? 'quarterHourly' : data.backupKind === 'hourly' ? 'hourly' : 'daily'
     return {
       backupDateKey,
       backupKind,
@@ -486,14 +486,14 @@ export async function triggerFirebaseServerAutoBackup(): Promise<TriggerServerAu
   const config = getFirebaseBackendConfig()
   const callable = httpsCallable<{ workspaceKey: string }, {
     backupDateKey: string
-    backupKind?: 'daily' | 'hourly'
+    backupKind?: 'daily' | 'hourly' | 'quarterHourly'
     workspaceCount: number
     googleDriveBackups?: unknown[]
   }>(functions, 'triggerWorkspaceServerAutoBackup', { timeout: 120_000 })
   const result = await callable({ workspaceKey: config.workspaceKey })
   return {
     backupDateKey: String(result.data.backupDateKey ?? ''),
-    backupKind: result.data.backupKind === 'daily' ? 'daily' : 'hourly',
+    backupKind: result.data.backupKind === 'quarterHourly' ? 'quarterHourly' : result.data.backupKind === 'daily' ? 'daily' : 'hourly',
     workspaceCount: Number(result.data.workspaceCount ?? 0),
     googleDriveBackups: (result.data.googleDriveBackups ?? [])
       .map(normalizeGoogleDriveBackupDiagnostic)
@@ -510,7 +510,7 @@ export type ClassroomFromServerAutoBackup = {
 
 export type DevelopmentBackupSource = {
   backupDateKey: string
-  backupKind: 'daily' | 'hourly'
+  backupKind: 'daily' | 'hourly' | 'quarterHourly'
   displayLabel: string
   savedAt: string
   sourceSavedAt: string
