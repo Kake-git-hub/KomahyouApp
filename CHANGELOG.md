@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Phase C 机選択モーダル 3): 机が多い/横向き画面で全机が縦スクロール必須になる問題を修正。`.desk-picker-modal` を `overflow:auto/max-height` から `overflow:visible`+`transform-origin:center top` に変更し、表示直後にモーダル実高さから `scale(k)`(k<=1)を算出して縮小適用し、全机を1画面に収める(横幅は `max-width:92vw` を維持)。純関数 `computeDeskPickerFitScale` を export しユニットテスト化(埋め込みJS側は同式のミラー)(src/utils/scheduleHtml.ts(+test))
+- fix(Phase C 移動成立ハイライト): 移動成立時の黄色ハイライトが「同期中」スピナー表示中に始まり被って見えづらい問題を修正。成立通知は即ハイライトせず `pendingScheduleMoveHighlightKey` に保留し、`flushIncomingPayload` でスピナーを消した直後(250ms後)に開始する`promotePendingScheduleMoveHighlight`へ昇格。メッセージ到着順の保険として、既にスピナーが消えている場合は即昇格する(src/utils/scheduleHtml.ts)
+- fix(Phase C 講習自動割振後の武装解除): 講習自動割振で割振りきれない残があると `selectedLectureStockKey` 等がセットされタップ配置モードに武装されてしまう挙動を廃止(オーナー確定 2026-07-09)。純関数 `resolvePostLectureAutoAssignView` を export し、割振り後は常に選択キーをクリアしたうえで、講習残があれば未消化講習一覧・講習ゼロで振替残があれば未消化振替一覧・両ゼロなら未消化講習一覧を開くだけにする。回帰テスト4件(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+
 - fix(Phase C 席の解決2): 「空き席なのに移動不可」の残存を根治。resolveScheduleViewTargetSeat の机特定を **deskId→机の在席者(deskOccupantEntryIds)→講師名→positional** に強化(日程表と盤面で机の並び/deskId が食い違っても、在席生徒で「その机」を一意特定)。空きも入れ替え対象も無いときは盤面の実際の席内容(席1=◯/席2=◯)を添えた診断メッセージを返す。回帰テスト: 在席者での机特定・診断(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
 - fix(Phase C×出席不可トグル): 掴めるカード(通/振/講)をタップすると出席不可トグルが効かない回帰を修正。D&Dの pointerdown が stopImmediatePropagation でトグルを潰していたため、長押し未満のタップ(pending→up)でカードでも `handleUnavailablePointerDown` を実行するようにした(カード全体が反応対象＝テキストの短い/余白の狭いコマでもトグル可)。staging のD&D有効時のみの回帰(本番は影響なし)。回帰テスト: タップ→トグルの配線(scheduleHtml.ts(+test))
 - perf(Phase C×出席不可トグル): 出席不可コマの連続入力を妨げないよう、ポップアップ自身の操作(出席不可トグル)では「同期中」スピナーを抑制(この操作はローカル反映＋fingerprint スキップ済みでエコーに描画変化なし)。applyStudent/TeacherUnavailableSlots で suppress 窓(3秒)を張り、showScheduleSyncingOverlay で抑制。移動(反映待ち)は抑制を解除してスピナー表示。回帰テスト: 抑制の配線(scheduleHtml.ts(+test))

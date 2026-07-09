@@ -876,6 +876,15 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
   }
 }
 
+// ビューポート高に机モーダルを収めるための縮小率(<=1)。contentHeight<=avail のときは1(拡大しない)。
+// 埋め込みJS(openScheduleDeskPicker)側にも同式のミラーがある(new Function文字列内で export 関数を呼べないため)。
+export function computeDeskPickerFitScale(contentHeight: number, viewportHeight: number, margin = 24): number {
+  if (!Number.isFinite(contentHeight) || contentHeight <= 0) return 1
+  const avail = Math.max(0, viewportHeight - margin)
+  if (avail <= 0) return 1
+  return Math.min(1, avail / contentHeight)
+}
+
 function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher' | 'all-student' | 'all-teacher') {
   const serializedPayload = JSON.stringify(payload).replace(/</g, '\\u003c')
   const isAllView = viewType === 'all-student' || viewType === 'all-teacher'
@@ -2221,8 +2230,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         border-radius: 10px;
         padding: 18px 20px;
         max-width: 92vw;
-        max-height: 88vh;
-        overflow: auto;
+        overflow: visible;
+        transform-origin: center top;
         box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
       }
       /* 盤面の一コマをそのまま切り取った見た目(App.css の .slot-adjust-grid / sa-* に合わせる)。
@@ -3339,6 +3348,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       var scheduleMoveErrorOverlay = null;   // 移動失敗の理由オーバーレイ
       var scheduleMoveHighlightKey = null;   // 移動成立コマ(dateKey_slotNumber)を数秒ハイライト
       var scheduleMoveHighlightTimer = null;
+      // 移動成立の通知はスピナー表示中に届くことがあるため、同期スピナーが消えるまでハイライト開始を
+      // 保留する(スピナーと4秒ハイライトの窓が被って見えづらくなるのを避ける)。
+      var pendingScheduleMoveHighlightKey = null;
 
       function findScheduleCellForMove(dateKey, slotNumber) {
         var cells = Array.isArray(DATA.cells) ? DATA.cells : [];
@@ -3578,6 +3590,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         document.addEventListener('keydown', scheduleDeskPickerKeydown, true);
         document.body.appendChild(overlay);
         scheduleDeskPickerOverlay = overlay;
+        // 全机を1画面に収める(縦スクロール無し)。computeDeskPickerFitScale と同式(ミラー):
+        // avail = max(0, viewportHeight - margin); scale = min(1, avail / contentHeight)。
+        var modalEl = overlay.querySelector('.desk-picker-modal');
+        if (modalEl) {
+          var h = modalEl.getBoundingClientRect().height;
+          var avail = Math.max(0, window.innerHeight - 24);
+          var k = (h > 0 && avail > 0) ? Math.min(1, avail / h) : 1;
+          if (k < 1) modalEl.style.transform = 'scale(' + k + ')';
+        }
       }
 
       function sendScheduleMoveRequest(source, seat) {
@@ -3637,6 +3658,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }, 4000);
       }
 
+      // 保留中のハイライトがあれば、同期スピナーが消えた後に少し間を置いて開始する(昇格は一度きり)。
+      function promotePendingScheduleMoveHighlight() {
+        if (!pendingScheduleMoveHighlightKey) return;
+        var key = pendingScheduleMoveHighlightKey;
+        pendingScheduleMoveHighlightKey = null;
+        var sep = key.indexOf('_');
+        if (sep <= 0) return;
+        var d = key.slice(0, sep);
+        var s = key.slice(sep + 1);
+        window.setTimeout(function() { highlightMovedSlot(d, s); }, 250);
+      }
+
       function closeScheduleMoveError() {
         if (scheduleMoveErrorOverlay && scheduleMoveErrorOverlay.parentNode) scheduleMoveErrorOverlay.parentNode.removeChild(scheduleMoveErrorOverlay);
         scheduleMoveErrorOverlay = null;
@@ -3660,8 +3693,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function handleScheduleMoveResult(message) {
         if (message && message.ok) {
-          // 成立: 反映(自動同期)が届いたら移動先コマが黄色ハイライトされる(再描画をまたいで持続)。
-          highlightMovedSlot(String(message.targetDateKey || ''), String(message.targetSlotNumber == null ? '' : message.targetSlotNumber));
+          // 成立: ハイライトは即開始せず保留する。同期中スピナーと4秒ハイライトの窓が被って見えづらいのを
+          // 避けるため、スピナーが消えた後(flushIncomingPayload)に開始する。
+          pendingScheduleMoveHighlightKey = String(message.targetDateKey || '') + '_' + String(message.targetSlotNumber == null ? '' : message.targetSlotNumber);
+          // 保険: メッセージ到着順の都合で既にスピナーが消えている(または無い)場合は、ここで即昇格する。
+          if (!scheduleSyncOverlay || scheduleSyncOverlay.hidden) promotePendingScheduleMoveHighlight();
           return;
         }
         // 不成立: 同期スピナーを消し、理由を大きく表示する(盤面は不変)。
@@ -5579,6 +5615,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (nextPayload) applyIncomingPayload(nextPayload);
         // 反映が終わったら(等価ペイロードで再描画なしでも)同期中スピナーを必ず消す。
         hideScheduleSyncingOverlay();
+        // スピナーが消えた後に、保留中の移動成立ハイライトがあれば開始する。
+        promotePendingScheduleMoveHighlight();
       }
 
       function scheduleIncomingPayload(nextPayload) {

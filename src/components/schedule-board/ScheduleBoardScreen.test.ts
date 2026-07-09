@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -5290,5 +5290,40 @@ describe('登録解除リクエストの一過性消費(Issue #46 回帰防止)'
 
   it('修正あり(処理後に消費)なら再マウントを挟んでも 1 回だけ処理される', () => {
     expect(simulateBoardLifecycle({ consumeOnProcess: true })).toBe(1)
+  })
+})
+
+describe('resolvePostLectureAutoAssignView (講習自動割振後に開くストック一覧・オーナー確定 2026-07-09)', () => {
+  it('講習の残がある場合は未消化講習一覧を開く(振替残の有無によらない)', () => {
+    expect(resolvePostLectureAutoAssignView({ remainingLectureCount: 2, remainingMakeupCount: 0 }))
+      .toEqual({ openLectureStock: true, openMakeupStock: false })
+    // 講習残があるときは振替が残っていても講習一覧を優先して開く。
+    expect(resolvePostLectureAutoAssignView({ remainingLectureCount: 1, remainingMakeupCount: 3 }))
+      .toEqual({ openLectureStock: true, openMakeupStock: false })
+  })
+
+  it('講習ゼロだが振替が残る場合は未消化振替一覧を開く', () => {
+    expect(resolvePostLectureAutoAssignView({ remainingLectureCount: 0, remainingMakeupCount: 2 }))
+      .toEqual({ openLectureStock: false, openMakeupStock: true })
+  })
+
+  it('両方ゼロ(全て配置済み)なら従来どおり未消化講習一覧を開く', () => {
+    expect(resolvePostLectureAutoAssignView({ remainingLectureCount: 0, remainingMakeupCount: 0 }))
+      .toEqual({ openLectureStock: true, openMakeupStock: false })
+  })
+
+  it('回帰観点: どのケースでも配置モードを武装する情報(選択キー)は返さない設計', () => {
+    // 戻り値のキーが openLectureStock/openMakeupStock の2つのみであることを固定する。
+    // 呼び出し側はこの戻り値とは別に selectedLectureStockKey 等を必ず null クリアする(タスク仕様)。
+    const cases = [
+      { remainingLectureCount: 2, remainingMakeupCount: 0 },
+      { remainingLectureCount: 0, remainingMakeupCount: 2 },
+      { remainingLectureCount: 0, remainingMakeupCount: 0 },
+      { remainingLectureCount: 1, remainingMakeupCount: 1 },
+    ]
+    for (const params of cases) {
+      const result = resolvePostLectureAutoAssignView(params)
+      expect(Object.keys(result).sort()).toEqual(['openLectureStock', 'openMakeupStock'])
+    }
   })
 })

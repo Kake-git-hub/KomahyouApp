@@ -3546,6 +3546,20 @@ export function computeStudentMove(params: {
   return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences }
 }
 
+// 講習自動割振の完了後にどのストック一覧モーダルを開くかを決める。
+// 割振りきれない残があってもタップ配置モードには入れない(オーナー確定 2026-07-09)。
+// 戻り値はどちらのモーダルを開くかのみで、選択キー(配置モードの武装)は一切返さない設計にすること
+// (呼び出し側は常に selected*StockKey をクリアする=回帰防止観点)。
+export function resolvePostLectureAutoAssignView(params: {
+  remainingLectureCount: number
+  remainingMakeupCount: number
+}): { openLectureStock: boolean; openMakeupStock: boolean } {
+  if (params.remainingMakeupCount > 0 && params.remainingLectureCount === 0) {
+    return { openLectureStock: false, openMakeupStock: true }
+  }
+  return { openLectureStock: true, openMakeupStock: false }
+}
+
 export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
@@ -7761,8 +7775,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       placementCandidates: [...placementCandidates, ...makeupPlacementCandidates],
       remainingCount: remainingItems.length + remainingMakeupCount,
     }))
-    setIsLectureStockOpen(true)
-    setSelectedLectureStockKey(remainingItems.length > 0 ? entry.key : null)
+    // 配置モードには入れない(オーナー確定 2026-07-09): 割振りきれない残があっても selected*StockKey は
+    // 常にクリアし、タップ配置(武装状態)にはしない。開くモーダルだけを残数種別で選ぶ。
+    const postView = resolvePostLectureAutoAssignView({
+      remainingLectureCount: remainingItems.length,
+      remainingMakeupCount,
+    })
+    setSelectedLectureStockKey(null)
+    setSelectedMakeupStockKey(null)
+    setSelectedLectureStockItemKey(null)
+    setIsLectureStockOpen(postView.openLectureStock)
+    setIsMakeupStockOpen(postView.openMakeupStock)
     // 振替を含めない従来経路はメッセージ文言を完全に踏襲する(回帰防止: e2e が文言を検証)。
     setStatusMessage(
       options.includeMakeup
