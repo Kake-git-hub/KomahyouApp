@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isDevelopmentClassroom } from './developmentClassroom'
+import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionToken, stripForeignSubmissionTokensFromInputs } from './developmentClassroom'
 
 describe('isDevelopmentClassroom', () => {
   it('accepts exact and extended development classroom names', () => {
@@ -14,5 +14,60 @@ describe('isDevelopmentClassroom', () => {
 
   it('does not match normal classrooms', () => {
     expect(isDevelopmentClassroom({ id: 'classroom_001', name: '本校' })).toBe(false)
+  })
+})
+
+// 混入防止(2026-07-09): 開発用教室が他教室の生データをコピーしてテストする際、コピー元(本番)の
+// 提出トークンが日程表でQR表示され、スキャンで本番へ誤書き込みした事故の是正ガード。
+describe('isSubmissionTokenOwnedByClassroom', () => {
+  it('trusts a token only when its issuing classroom tag matches', () => {
+    expect(isSubmissionTokenOwnedByClassroom({ submissionToken: 't', submissionTokenClassroomId: 'dev' }, 'dev')).toBe(true)
+  })
+  it('rejects a token issued by another classroom (本番トークンの混入)', () => {
+    expect(isSubmissionTokenOwnedByClassroom({ submissionToken: 't', submissionTokenClassroomId: '5w5OMueE' }, 'dev')).toBe(false)
+  })
+  it('rejects an untagged legacy token (発行元不明は信用しない)', () => {
+    expect(isSubmissionTokenOwnedByClassroom({ submissionToken: 't' }, 'dev')).toBe(false)
+  })
+  it('rejects when there is no token or no acting classroom', () => {
+    expect(isSubmissionTokenOwnedByClassroom({ submissionTokenClassroomId: 'dev' }, 'dev')).toBe(false)
+    expect(isSubmissionTokenOwnedByClassroom({ submissionToken: 't', submissionTokenClassroomId: 'dev' }, '')).toBe(false)
+  })
+})
+
+describe('stripForeignSubmissionToken', () => {
+  it('keeps own-classroom tokens intact', () => {
+    const input = { submissionToken: 't', submissionTokenClassroomId: 'dev', countSubmitted: true }
+    expect(stripForeignSubmissionToken(input, 'dev')).toBe(input)
+  })
+  it('removes token+tag for foreign tokens (QRを出せなくする)', () => {
+    const result = stripForeignSubmissionToken({ submissionToken: 't', submissionTokenClassroomId: '5w5OMueE', countSubmitted: false }, 'dev')
+    expect(result.submissionToken).toBeUndefined()
+    expect(result.submissionTokenClassroomId).toBeUndefined()
+    expect(result.countSubmitted).toBe(false) // 他フィールドは保持
+  })
+  it('removes untagged legacy tokens too', () => {
+    const result = stripForeignSubmissionToken({ submissionToken: 't', regularOnly: false }, 'dev')
+    expect(result.submissionToken).toBeUndefined()
+  })
+  it('leaves tokenless inputs untouched (参照そのまま)', () => {
+    const input = { unavailableSlots: [], submissionToken: undefined, submissionTokenClassroomId: undefined }
+    expect(stripForeignSubmissionToken(input, 'dev')).toBe(input)
+  })
+})
+
+describe('stripForeignSubmissionTokensFromInputs (日程表へ渡す前の防波堤・開発用のみ)', () => {
+  it('自教室のトークンは残し、他教室由来トークンだけQRを出せなくする', () => {
+    const inputs = {
+      own: { submissionToken: 'a', submissionTokenClassroomId: 'dev', countSubmitted: true },
+      foreign: { submissionToken: 'b', submissionTokenClassroomId: '5w5OMueE', countSubmitted: false },
+      legacy: { submissionToken: 'c', countSubmitted: false },
+    }
+    const result = stripForeignSubmissionTokensFromInputs(inputs, 'dev')
+    expect(result.own!.submissionToken).toBe('a')
+    expect(result.foreign!.submissionToken).toBeUndefined()
+    expect(result.legacy!.submissionToken).toBeUndefined()
+    // 他フィールドは保持(登録状態などを壊さない)
+    expect(result.foreign!.countSubmitted).toBe(false)
   })
 })

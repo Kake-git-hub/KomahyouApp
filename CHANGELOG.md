@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.415 (2026-07-09)
+
+- fix: 開発用教室のQRテストが本番教室(日大前校)へ書き込まれる混入事故の恒久対策。開発用教室は他教室の生データをコピーしてテストするため、コピー元(本番)の提出トークンが残っていると日程表がそのQRを表示し、スキャンで本番へ誤書き込みする(2026-07-09 実発生・日大前校の複数生徒が誤登録)。対策: 提出トークンに発行元教室ID(`submissionTokenClassroomId`)を刻み(applyIssuedSubmissionTokensToSessions)、他教室→開発用コピー時に除去(buildDevelopmentClassroomCopyPayload)、**開発用教室でのみ**日程表へ渡す前に「自教室が発行したものでないトークン」を除去してQRを出せなくする(applyDevelopmentScheduleTokenGuard)。本番教室ではこのガードは一切走らず、既存・印刷配布済みトークンは不変。純関数化して回帰テスト追加(developmentClassroom.ts / App.tsx / specialSessionModel.ts)。関連メモリ [[komahyou-classroom-restore-cross-contamination]]
+
 ## v1.5.414 (2026-07-09)
 
 - fix: 追加した科目「理社」がQR提出画面に出ない不具合を修正。availableSubjects はトークン発行時に提出ドキュメントへ凍結保存されるため、v1.5.413 以前に発行済みの生徒トークンには理社が伝播していなかった。既発行トークンの同期経路 `updateSubmissionOccupiedSlots` に availableSubjects の伝播を追加し、盤面更新のたびに最新の選択可能科目へ揃うようにした(提出済みドキュメントでも subjectSlots>0 の科目のみ表示するため害なし)。回帰テスト2件追加(lectureSubmission.ts・App.tsx)
