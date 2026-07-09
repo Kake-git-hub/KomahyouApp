@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.413 (2026-07-09)
+
+- feat: 小学生の科目に合体科目「理社」を追加(算国と同型・小学限定)。要望対応。1コマで理科+社会をまとめて扱う選択肢で、科目選択・体験授業・通常テンプレ・QR希望提出(getSelectableStudentSubjectsForGrade経由)・回数表(社の直後に表示)に反映。講師対応判定は理または社の担当で可。非小学に紛れた場合は理へ畳む。A4への影響: 回数表は理社の授業がある生徒のみ1行(理+社の2行を1行に統合する形で最悪行数は増えない・講習表はhideZeroZeroで0非表示)。回帰テスト追加(types.ts/studentGradeSubject.ts/scheduleHtml.ts/ScheduleBoardScreen.tsx/regularLessonTemplate.ts)
+
 ## v1.5.412 (2026-07-09)
 
 - fix: `tools/copy-prod-classroom-to-staging.mjs` が無出力のまま止まって見える不具合を修正。`classroomSnapshots/{id}/saveAttempts`(保存の冪等性ログ・稼働中教室では数百〜数千件に達し得る)を削除・コピーの両方で丸ごとスキップするようにした(進捗ログも追加)。アプリ本体(デプロイ物)には影響しない開発ツールのみの変更(tools/copy-prod-classroom-to-staging.mjs)

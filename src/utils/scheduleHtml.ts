@@ -2306,9 +2306,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const lessonTypeLabels = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習', trial: '体験' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-      // 通常回数・講習回数表の表示順。算国は国の直後に置き、集理/集社は末尾。
-      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社'];
-      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '集理', '集社'];
+      // 通常回数・講習回数表の表示順。算国は国の直後、理社は社の直後(いずれも小学限定の合体科目)、集理/集社は末尾。
+      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社'];
+      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社'];
       let activeCountDialog = null;
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = buildPayloadFingerprint(DATA);
@@ -3013,6 +3013,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return subjectDefinitions.filter((subject) => {
           if (subject === '算' || subject === '数') return subject === preferredMathSubject;
           if (subject === '算国') return preferredMathSubject === '算';
+          // 理社は算国と同じく小学限定の合体科目。小学(preferredMathSubject==='算')のみ表示。
+          if (subject === '理社') return preferredMathSubject === '算';
           // 理は学年を問わず常に表示。高校生は理に加えて生・物・化も表示する。
           if (subject === '理') return true;
           if (subject === '生' || subject === '物' || subject === '化') return prefersHighSchoolScience || legacySubjects.includes(subject);
@@ -3022,6 +3024,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function normalizeSubjectForStudent(subject, student, referenceDate) {
         if (subject === '算国') return getPreferredMathSubject(student, referenceDate) === '算' ? '算国' : '数';
+        if (subject === '理社') return getPreferredMathSubject(student, referenceDate) === '算' ? '理社' : '理';
         if (subject !== '算' && subject !== '数') return subject;
         return getPreferredMathSubject(student, referenceDate);
       }

@@ -1,7 +1,7 @@
 import type { GradeLabel, SubjectLabel } from '../components/schedule-board/types'
 
-export const allStudentSubjectOptions: SubjectLabel[] = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社']
-export const elementaryStudentSubjectOptions: SubjectLabel[] = ['算', '算国', '英', '国', '理', '社']
+export const allStudentSubjectOptions: SubjectLabel[] = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社', '理社']
+export const elementaryStudentSubjectOptions: SubjectLabel[] = ['算', '算国', '英', '国', '理', '社', '理社']
 export const middleSchoolStudentSubjectOptions: SubjectLabel[] = ['数', '英', '国', '理', '社']
 export const highSchoolStudentSubjectOptions: SubjectLabel[] = ['数', '英', '国', '生', '物', '化', '社']
 
@@ -82,6 +82,8 @@ export function resolveDisplayedSubjectForGrade(subject: string, gradeLabel?: st
 
 export function normalizeRequestedSubjectForGrade(subject: string, gradeLabel?: string) {
   if (subject === '算国') return isElementaryGradeLabel(gradeLabel) ? '算国' : '数'
+  // 理社は小学限定の合体科目(算国と同型)。非小学に紛れ込んだ場合は理へ畳む。
+  if (subject === '理社') return isElementaryGradeLabel(gradeLabel) ? '理社' : '理'
   if (subject === '算' || subject === '数') return isElementaryGradeLabel(gradeLabel) ? '算' : '数'
   return subject
 }

@@ -16,7 +16,7 @@ export type GradeLabel =
   | '高2'
   | '高3'
 
-export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '生' | '物' | '化' | '社'
+export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '生' | '物' | '化' | '社' | '理社'
 
 export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended' | 'moved'
 
