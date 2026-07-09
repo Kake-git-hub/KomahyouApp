@@ -1,4 +1,4 @@
-import { memo, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { createWeekJumpPicker } from './weekJumpPicker'
 
@@ -116,14 +116,39 @@ function BoardToolbarComponent({
   syncElapsedSeconds,
 }: BoardToolbarProps) {
   const weekJumpInputRef = useRef<HTMLInputElement | null>(null)
-  // ネイティブ日付ピッカーは操作中(ホイール/カレンダー)に change を発火させるため、
-  // change では確定せず「保留」だけ行い、ピッカーを閉じて確定した時(blur / Enter)に
-  // 最後の値へジャンプする。詳細は weekJumpPicker.ts のコメント参照。
+  // ネイティブ日付ピッカーの確定制御（プラットフォーム差の吸収）。
+  //   ・タブレットのホイールやカレンダーのキー移動は、操作の「途中」でも change を
+  //     連続発火させる → 以前は即ジャンプし、確定前に週が勝手に変わっていた。
+  //   ・かといって blur/Enter だけを確定にすると、デスクトップのカレンダーは日付を
+  //     クリックしてもフォーカスが外れず(=blur が来ず)、選んでも切り替わらない。
+  // そこで「最後の change から少し間が空いた＝日付を選び終えた」とみなして確定する。
+  // blur / Enter が来たら即確定（待ち時間ゼロ）、Escape は取り消し。
+  // 保留/確定の store は純関数 createWeekJumpPicker（weekJumpPicker.ts）。
   const weekJumpPickerRef = useRef(createWeekJumpPicker())
+  const weekJumpCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearWeekJumpTimer = () => {
+    if (weekJumpCommitTimerRef.current !== null) {
+      clearTimeout(weekJumpCommitTimerRef.current)
+      weekJumpCommitTimerRef.current = null
+    }
+  }
   const commitWeekJump = () => {
+    clearWeekJumpTimer()
     const target = weekJumpPickerRef.current.commit()
     if (target) onJumpToDate(target)
   }
+  const stageWeekJump = (value: string) => {
+    weekJumpPickerRef.current.stage(value)
+    // 操作が続く限り確定を先送りし、止まった＝選び終えたら確定する。
+    clearWeekJumpTimer()
+    weekJumpCommitTimerRef.current = setTimeout(commitWeekJump, 320)
+  }
+  const cancelWeekJump = () => {
+    clearWeekJumpTimer()
+    weekJumpPickerRef.current.reset()
+  }
+  // アンマウント時に確定タイマーを止める（確定コールバックの遅延発火を防ぐ）。
+  useEffect(() => () => clearWeekJumpTimer(), [])
 
   // 保存ボタンを押した瞬間に「保存中…」へ切り替えるためのローカル状態。
   // 親の保存状態(isBoardSaving)の伝播タイミングに依存せず、クリック即フィードバックを保証する。
@@ -257,14 +282,14 @@ function BoardToolbarComponent({
                     defaultValue={weekStartDate}
                     key={weekStartDate}
                     onChange={(event) => {
-                      // 確定前は保留のみ（ここでは週を変えない）。
-                      weekJumpPickerRef.current.stage(event.currentTarget.value)
+                      // 確定はせず保留し、操作が止まったら確定する（stageWeekJump 内）。
+                      stageWeekJump(event.currentTarget.value)
                     }}
                     onBlur={commitWeekJump}
                     onKeyDown={(event) => {
                       if (event.key === 'Enter') commitWeekJump()
                       // Escape はキャンセル：保留を破棄して週を変えない。
-                      else if (event.key === 'Escape') weekJumpPickerRef.current.reset()
+                      else if (event.key === 'Escape') cancelWeekJump()
                     }}
                     data-testid="week-jump-date-input"
                     aria-label="表示したい日付"
