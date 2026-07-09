@@ -1793,6 +1793,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  it('embeds 理社 as an elementary-only combined subject (回帰防止)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ birthDate: '2015-05-10' })],
+      regularLessons: [],
+      defaultStartDate: '2026-04-10',
+      defaultEndDate: '2026-04-16',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(typeof html).toBe('string')
+    // 理社は小学限定で表示され、非小学では理へ畳む(算国と同型)。
+    expect(html).toContain("if (subject === '理社') return preferredMathSubject === '算';")
+    expect(html).toContain("if (subject === '理社') return getPreferredMathSubject(student, referenceDate) === '算' ? '理社' : '理';")
+    // 表示順は社の直後・集理/集社の前。
+    expect(html).toContain("['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社']")
+    vi.unstubAllGlobals()
+  })
+
   it('renders a fixed top toolbar that compensates for browser zoom', () => {
     const write = vi.fn()
     const popup = {
