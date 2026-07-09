@@ -2509,8 +2509,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       // 盤面編集→別タブ反映の間の「同期中」スピナー。本体(盤面)が編集時に __showScheduleSyncing() を呼んで
       // 出し、同期ペイロード適用(flushIncomingPayload)で自動的に消す。来ないときの固着防止に保険タイマー。
       let scheduleSyncHideTimer = 0;
+      // このポップアップ自身の操作(出席不可トグル等)はローカル反映＋fingerprint スキップ済みで、盤面からの
+      // 同期エコーに実描画変化が無い。その間の「同期中」スピナーは連続入力の妨げになるだけなので抑制する。
+      let suppressSyncSpinnerUntil = 0;
       function showScheduleSyncingOverlay() {
         if (!scheduleSyncOverlay) return;
+        if (Date.now() < suppressSyncSpinnerUntil) return;
         if (scheduleSyncHideTimer) { window.clearTimeout(scheduleSyncHideTimer); scheduleSyncHideTimer = 0; }
         scheduleSyncOverlay.hidden = false;
         scheduleSyncHideTimer = window.setTimeout(hideScheduleSyncingOverlay, 8000);
@@ -3427,7 +3431,19 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function onScheduleDndPointerUp(event) {
         if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
-        if (scheduleDndDrag.phase !== 'dragging') { endScheduleDndDrag(); return; }
+        if (scheduleDndDrag.phase !== 'dragging') {
+          // 長押し未満のタップ = ドラッグではない。掴めるカードでも既存の「出席不可トグル」を維持する。
+          // (pointerdown で stopImmediatePropagation してトグルを止めているので、ここでタップとして実行する。)
+          var tapCard = scheduleDndDrag.card;
+          endScheduleDndDrag();
+          if (tapCard && typeof handleUnavailablePointerDown === 'function') {
+            var tapCell = tapCard.closest('td[data-role="student-slot-cell"]');
+            if (tapCell && tapCell.getAttribute('data-editable') === 'true') {
+              handleUnavailablePointerDown(tapCell);
+            }
+          }
+          return;
+        }
         var source = scheduleDndDrag.source;
         var cell = findDroppableCellFromPoint(event.clientX, event.clientY);
         endScheduleDndDrag();
@@ -3496,11 +3512,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function renderDeskPickerSeatCellHtml(desk, seat) {
         if (!seat) return '<td class="dp-student dp-blocked"></td>';
         if (seat.blockedByMemo) return '<td class="dp-student dp-blocked">メモ</td>';
+        // この机の在席者(両席)の entryId。盤面側で「その机」を在席同一性で特定するために持たせる。
+        var deskOccupants = (desk.seats || []).map(function(s) { return s && s.occupantEntryId ? s.occupantEntryId : ''; }).filter(Boolean).join(',');
         var idAttrs = ' data-role="desk-picker-seat"'
           + ' data-desk-index="' + desk.deskIndex + '"'
           + ' data-student-index="' + seat.studentIndex + '"'
           + ' data-desk-id="' + escapeHtml(desk.deskId || '') + '"'
-          + ' data-desk-teacher="' + escapeHtml(desk.teacher || '') + '"';
+          + ' data-desk-teacher="' + escapeHtml(desk.teacher || '') + '"'
+          + ' data-desk-occupants="' + escapeHtml(deskOccupants) + '"';
         if (seat.occupied) {
           return '<td class="dp-student dp-occupied dp-swap"' + idAttrs
             + ' data-occupant-entry-id="' + escapeHtml(seat.occupantEntryId || '') + '">'
@@ -3551,6 +3570,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             deskId: seatButton.getAttribute('data-desk-id') || undefined,
             deskTeacher: seatButton.getAttribute('data-desk-teacher') || '',
             occupantEntryId: seatButton.getAttribute('data-occupant-entry-id') || undefined,
+            deskOccupantEntryIds: (seatButton.getAttribute('data-desk-occupants') || '').split(',').filter(Boolean),
           });
           closeScheduleDeskPicker();
         });
@@ -3563,7 +3583,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function sendScheduleMoveRequest(source, seat) {
         try {
           if (!window.opener || window.opener.closed) return;
-          // 盤面編集→反映の間の同期中スピナーを即時に出す(自動同期のフィードバックと共通)。
+          // 盤面編集→反映の間の同期中スピナーを即時に出す(移動は反映を待つのでスピナーを出す=抑制窓を解除)。
+          suppressSyncSpinnerUntil = 0;
           if (typeof showScheduleSyncingOverlay === 'function') showScheduleSyncingOverlay();
           window.opener.postMessage({
             type: 'schedule-student-move-request',
@@ -4229,6 +4250,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
         syncPayloadFingerprint();
         refreshStudentUnavailableUi(studentId);
+        // 連続入力の妨げになる同期スピナーを抑制(この操作はローカル反映済み・エコーに描画変化なし)。
+        suppressSyncSpinnerUntil = Date.now() + 3000;
       }
 
       function toggleStudentUnavailableSlot(studentId, slotKey) {
@@ -4268,6 +4291,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
         syncPayloadFingerprint();
         refreshTeacherUnavailableUi(teacherId);
+        // 連続入力の妨げになる同期スピナーを抑制(この操作はローカル反映済み・エコーに描画変化なし)。
+        suppressSyncSpinnerUntil = Date.now() + 3000;
       }
 
       function toggleTeacherUnavailableSlot(teacherId, slotKey) {

@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Phase C 席の解決2): 「空き席なのに移動不可」の残存を根治。resolveScheduleViewTargetSeat の机特定を **deskId→机の在席者(deskOccupantEntryIds)→講師名→positional** に強化(日程表と盤面で机の並び/deskId が食い違っても、在席生徒で「その机」を一意特定)。空きも入れ替え対象も無いときは盤面の実際の席内容(席1=◯/席2=◯)を添えた診断メッセージを返す。回帰テスト: 在席者での机特定・診断(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
+- fix(Phase C×出席不可トグル): 掴めるカード(通/振/講)をタップすると出席不可トグルが効かない回帰を修正。D&Dの pointerdown が stopImmediatePropagation でトグルを潰していたため、長押し未満のタップ(pending→up)でカードでも `handleUnavailablePointerDown` を実行するようにした(カード全体が反応対象＝テキストの短い/余白の狭いコマでもトグル可)。staging のD&D有効時のみの回帰(本番は影響なし)。回帰テスト: タップ→トグルの配線(scheduleHtml.ts(+test))
+- perf(Phase C×出席不可トグル): 出席不可コマの連続入力を妨げないよう、ポップアップ自身の操作(出席不可トグル)では「同期中」スピナーを抑制(この操作はローカル反映＋fingerprint スキップ済みでエコーに描画変化なし)。applyStudent/TeacherUnavailableSlots で suppress 窓(3秒)を張り、showScheduleSyncingOverlay で抑制。移動(反映待ち)は抑制を解除してスピナー表示。回帰テスト: 抑制の配線(scheduleHtml.ts(+test))
+
 - fix(Phase C 席の解決): 別タブのコマ組みで「空き席なのに『すでに生徒がいます』で移動不可」を根治。日程表(overlay 済みセル)と盤面の生 weeks は机内の席(左右=studentSlots)の並びも食い違うことがあり、positional な studentIndex を鵜呑みにすると占有席を指していた。resolveScheduleViewTargetSeat で机は deskId→講師名、席は「入れ替え対象の在席生徒(occupantEntryId)/その机の実際の空き席」で解決してから配置するようにした(旧 resolveScheduleViewTargetDeskIndex を置換)。空きも入れ替え対象も無い場合は理由を出す。回帰テスト4件(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
 - feat(Phase C 入れ替え): 机選択モーダルで在席の生徒を選ぶと**盤面の入れ替えと同じ**挙動で交換できるようにした(オーナー要望)。在席セルをクリック可(橙ホバー・「入替」表示)にし、相手の entryId を送って computeStudentMove の入れ替え(相手を移動元へ振替で入れる)に乗せる。メモ席のみ選択不可。回帰テスト: 入れ替えの通し1件・席セルの入替属性(scheduleViewMove.ts(+test) / scheduleHtml.ts(+test))
 

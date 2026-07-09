@@ -30,6 +30,9 @@ export type ScheduleViewMoveSeat = {
   // 在席の席を選んだ場合(=盤面と同じ入れ替え)、その席にいる生徒の entryId。空席配置のときは未指定。
   // 席の解決を positional index ではなく在席生徒の同一性で行う(日程表と盤面で席の並びが食い違う対策)。
   occupantEntryId?: string
+  // 選んだ机に居る生徒全員の entryId(モーダルが見せた机の在席者)。盤面側で「その机」を在席同一性で特定するのに使う
+  // (deskId/positional/講師名だけでは机を取り違えることがある = 8/5 中川机の「空き席なのに埋まってる扱い」の根治)。
+  deskOccupantEntryIds?: string[]
 }
 
 // 生徒日程表(別タブ・生成HTML)のD&D確定で popup が opener(本体)へ送る
@@ -79,6 +82,9 @@ export function parseScheduleViewMoveMessage(
       deskId: typeof t.deskId === 'string' && t.deskId.length > 0 ? t.deskId : undefined,
       deskTeacher: typeof t.deskTeacher === 'string' ? t.deskTeacher : undefined,
       occupantEntryId: typeof t.occupantEntryId === 'string' && t.occupantEntryId.length > 0 ? t.occupantEntryId : undefined,
+      deskOccupantEntryIds: Array.isArray(t.deskOccupantEntryIds)
+        ? t.deskOccupantEntryIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
+        : undefined,
     },
   }
 }
@@ -183,17 +189,25 @@ export function buildDeskPickerDesks(cell: SlotCell, resolveDisplayName?: (name:
   }))
 }
 
+export type ResolvedScheduleViewSeat =
+  | { ok: true; deskIndex: number; studentIndex: number }
+  | { ok: false; reason: string }
+
 // 別タブ(生成HTML)の机選択で選ばれた席を、盤面の対象セルの「実際の机・席」に解決する。
-// 日程表(overlay 済みセル)と盤面の生 weeks は机の並び/本数だけでなく、机内の席(studentSlots)の
-// 並びも食い違うことがある。そのため positional な deskIndex/studentIndex を鵜呑みにせず、机は
-// deskId(=盤面 desk.id)→ 講師名で、席は「入れ替え対象の在席生徒(occupantEntryId)」または
-// 「その机の実際の空き席」で解決する。解決できないとき(埋まっていて入れ替え対象もいない等)は null。
-export function resolveScheduleViewTargetSeat(
-  cell: SlotCell,
-  seat: ScheduleViewMoveSeat,
-): { deskIndex: number; studentIndex: number } | null {
+// 日程表(overlay 済みセル)と盤面の生 weeks は机の並び/本数だけでなく机内の席(studentSlots)の並びも
+// 食い違うことがある。そのため positional な deskIndex/studentIndex を鵜呑みにせず:
+//   机 = deskId(=盤面 desk.id)→ 机の在席者(deskOccupantEntryIds のいずれかを含む机)→ 講師名 → positional
+//   席 = 入れ替え対象の在席生徒(occupantEntryId)→ その机の実際の空き席
+// で解決する。空きも入れ替え対象も無ければ、盤面の実際の席内容を添えた理由(診断)を返す。
+export function resolveScheduleViewTargetSeat(cell: SlotCell, seat: ScheduleViewMoveSeat): ResolvedScheduleViewSeat {
   // --- 机を同一性で解決(空き条件は課さない: 入れ替えもあるため) ---
   let deskIndex = seat.deskId ? cell.desks.findIndex((desk) => desk.id === seat.deskId) : -1
+  if (deskIndex < 0 && seat.deskOccupantEntryIds && seat.deskOccupantEntryIds.length > 0) {
+    // モーダルが見せた机に居た生徒を含む机を探す(生徒は同コマ内で高々1机なので机を一意に特定できる)。
+    deskIndex = cell.desks.findIndex((desk) =>
+      (desk.lesson?.studentSlots ?? []).some((student) => student && seat.deskOccupantEntryIds!.includes(student.id)),
+    )
+  }
   if (deskIndex < 0) {
     const positional = cell.desks[seat.deskIndex]
     if (positional && (seat.deskTeacher === undefined || positional.teacher === seat.deskTeacher)) deskIndex = seat.deskIndex
@@ -203,7 +217,7 @@ export function resolveScheduleViewTargetSeat(
   }
   if (deskIndex < 0) deskIndex = seat.deskIndex
   const desk = cell.desks[deskIndex]
-  if (!desk) return null
+  if (!desk) return { ok: false, reason: '移動先の机が見つかりませんでした。表示が最新か「最新表示」で更新してください。' }
 
   const slotStudent = (index: number) => desk.lesson?.studentSlots[index] ?? null
   const seatEmpty = (index: number) => !slotStudent(index) && !desk.memoSlots?.[index]
@@ -212,14 +226,23 @@ export function resolveScheduleViewTargetSeat(
   // 1) 入れ替え(在席生徒を選択): その生徒がいる席を実データから探す(席の並びのズレに強い)。
   if (seat.occupantEntryId) {
     const bySwap = [0, 1].find((index) => slotStudent(index)?.id === seat.occupantEntryId)
-    if (bySwap !== undefined) return { deskIndex, studentIndex: bySwap }
+    if (bySwap !== undefined) return { ok: true, deskIndex, studentIndex: bySwap }
     // 入れ替え対象がもう居ない(ずれ) → 空席配置として続行する。
   }
   // 2) 空席配置: 指定席が空きならそれ、違えば同じ机の実際の空き席へ(左右の並びが食い違っても正しい席へ)。
-  if (seatEmpty(seat.studentIndex)) return { deskIndex, studentIndex: seat.studentIndex }
+  if (seatEmpty(seat.studentIndex)) return { ok: true, deskIndex, studentIndex: seat.studentIndex }
   const anyEmpty = [0, 1].find((index) => seatEmpty(index))
-  if (anyEmpty !== undefined) return { deskIndex, studentIndex: anyEmpty }
+  if (anyEmpty !== undefined) return { ok: true, deskIndex, studentIndex: anyEmpty }
 
-  // 空きも入れ替え対象も無い(表示と盤面がずれている) → 解決不能。
-  return null
+  // 空きも入れ替え対象も無い(表示と盤面がずれている) → 盤面の実際の席内容を添えて理由を返す(診断)。
+  const describe = (index: number) => {
+    const student = slotStudent(index)
+    if (student) return `${student.name}${student.subject ? ' ' + student.subject : ''}`
+    return desk.memoSlots?.[index] ? 'メモ' : '空き'
+  }
+  const teacherLabel = desk.teacher || '講師未設定'
+  return {
+    ok: false,
+    reason: `移動先の机(${teacherLabel})に空き席がありません。席1=${describe(0)} / 席2=${describe(1)}。表示が最新か「最新表示」で更新してください。`,
+  }
 }

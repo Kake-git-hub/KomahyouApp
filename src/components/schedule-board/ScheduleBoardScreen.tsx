@@ -7921,8 +7921,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // 机だけでなく机内の席の並びも食い違うことがあるため、deskId→講師名で机を、occupantEntryId(入れ替え)/実空き席で
     // 席を解決する(positional 依存で「空き席なのに埋まっている扱い」になる不具合の根治)。空きも入れ替え対象も無ければ不成立。
     const resolvedSeat = resolveScheduleViewTargetSeat(availabilityCell, seat)
-    if (!resolvedSeat) {
-      return { ok: false, message: '移動先に空き席が見つかりませんでした。表示が最新か確認してください(「最新表示」で更新できます)。' }
+    if (!resolvedSeat.ok) {
+      return { ok: false, message: resolvedSeat.reason }
     }
     // source 特定の頑健性(spec §D-2-2): entryId＋生徒id＋日付＋時限で特定。見つからなければ不成立。
     const sourceHit = findScheduleViewMoveSource(ensured.weeks, source)
