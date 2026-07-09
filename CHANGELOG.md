@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.420 (2026-07-09)
+
+- feat(講師選択セレクターに講習の出席可否記号・オーナー要望 2026-07-09・全教室): 盤面の講師選択セレクター(`<select>`)で、そのコマの日が講習期間内かつ講師が出席不可コマを提出済み(`countSubmitted`)のとき、講師名の横に **○=出席可能 / ×=出席不可** を付ける。未提出(teacherInputs 無し/`countSubmitted=false`)や講習期間外は記号なし。純関数 `resolveTeacherLectureSlotMark`(specialSessions から日付でセッションを引き、`teacherInputs[id].unavailableSlots` の有無で判定)を新設しユニットテスト4件を同コミットで追加。`value` は従来どおり `teacher.name` のままで保存/確定ロジックは不変(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+
 ## v1.5.419 (2026-07-09)
 
 - feat(日程表コマ組みを全教室へ公開): 生徒日程表(別タブ)のコマ組みD&D(`studentScheduleDndMove`)と、その移動結果の即反映に必要な自動同期＋スピナー(`schedulePopupAutoSync`)の scope を `staging-environment` から `all-classrooms` へ昇格(オーナー確定 2026-07-09)。staging→本番の開発用教室で段階検証済み。2026-06-05 のポップアップ再生成メモリ障害はデバウンス+fingerprintスキップ+表示範囲限定で緩和済み。テスト更新: 両フラグが全教室で有効(src/utils/featureRollout.ts(+test))
