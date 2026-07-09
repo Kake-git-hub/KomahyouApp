@@ -1165,6 +1165,71 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止(2026-07-09): 講習集計結果の「提出日時/提出方法」を出すため、submittedAt/submissionMethod を
+  // payload に必ず載せる。欠けると popup の DATA.specialSessions に届かず全て '—' に化ける
+  // (subjectDurations が serialize から落ちて分数が消えた v1.5.400 と同型の非対称)。
+  it('serializes submittedAt/submissionMethod (student & teacher) into the schedule payload', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      specialSessions: [{
+        id: 'session-1',
+        label: '春期講習',
+        startDate: '2026-03-20',
+        endDate: '2026-03-31',
+        teacherInputs: {
+          'teacher-1': {
+            unavailableSlots: [],
+            countSubmitted: true,
+            submittedAt: '2026-03-05T01:00:00.000Z',
+            submissionMethod: 'manual',
+            updatedAt: '2026-03-05T01:00:00.000Z',
+          },
+        },
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: [],
+            regularBreakSlots: [],
+            subjectSlots: { 数: 2 },
+            regularOnly: false,
+            countSubmitted: true,
+            submittedAt: '2026-03-04T02:00:00.000Z',
+            submissionMethod: 'qr',
+            updatedAt: '2026-03-04T02:00:00.000Z',
+          },
+        },
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-05T01:00:00.000Z',
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('"submittedAt":"2026-03-04T02:00:00.000Z"')
+    expect(html).toContain('"submissionMethod":"qr"')
+    expect(html).toContain('"submittedAt":"2026-03-05T01:00:00.000Z"')
+    expect(html).toContain('"submissionMethod":"manual"')
+
+    vi.unstubAllGlobals()
+  })
+
   it('includes A3-portrait paging plumbing for overflowing salary tables (teacher view)', () => {
     // 給与計算の行が多くA4横で見切れる講師ページを A3 縦へ自動切替するための CSS / @page / 計測関数が
     // 生成HTMLに含まれていること。実測ベースの切替なので文字列の存在で配線を担保する(回帰防止)。
@@ -2809,6 +2874,10 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     // 講習集計結果に「希望科目（授業時間）」列を追加(希望各科目の授業時間付き数量)。
     expect(studentHtml).toContain('<th>希望科目（授業時間）</th>')
     expect(studentHtml).toContain('function formatDesiredSubjectsWithDuration(input, student, referenceDate)')
+    // 提出日時/提出方法の列とヘルパ(2026-07-09)。
+    expect(studentHtml).toContain('<th>提出日時</th><th>提出方法</th>')
+    expect(studentHtml).toContain('function formatSubmissionDateTime(submittedAt)')
+    expect(studentHtml).toContain('function resolveSubmissionMethodLabel(input)')
     // 最下部がWindowsタスクバーに隠れないようスクロール余白を確保する(回帰防止)。
     expect(studentHtml).toContain('padding-bottom:160px')
 
@@ -2825,7 +2894,12 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
       targetWindow: popup,
     })
     const teacherHtml = write.mock.calls[0]?.[0] as string
-    expect(teacherHtml).not.toContain('id="schedule-lecture-summary-button"')
+    // 講師日程にも講習集計結果ボタンを追加(2026-07-09)。講師版は希望科目列を出さず、専用ビルダを使う。
+    expect(teacherHtml).toContain('id="schedule-lecture-summary-button"')
+    expect(teacherHtml).toContain('function buildTeacherLectureSummaryHtml(startDate, endDate)')
+    // 講師版の集計結果表は希望科目列を出さない(オーナー指示)。列は No./講師名/登録状況/提出日時/提出方法。
+    // (生徒版ビルダも同じ script に同梱されるため、講師表ヘッダの完全一致で列構成を固定する)
+    expect(teacherHtml).toContain('<th>No.</th><th>講師名</th><th>登録状況</th><th>提出日時</th><th>提出方法</th>')
 
     vi.unstubAllGlobals()
   })
@@ -2868,6 +2942,92 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(resolveStatus({ countSubmitted: true, regularOnly: false })).toEqual({ label: '登録', kind: 'registered' })
     // 提出済みでも通常のみ → 注記つき。
     expect(resolveStatus({ countSubmitted: true, regularOnly: true })).toEqual({ label: '登録（通常のみ）', kind: 'regular-only' })
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-09): 講習集計結果の「提出日時」列。ISO文字列を JST(M/D HH:MM)で出す。
+  // ランタイムのタイムゾーンに依存せず +9h→UTC成分で読むこと(CIのUTCでも決定的)。未提出/不正は '—'。
+  it('formats the submission datetime in JST for the lecture summary', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function formatSubmissionDateTime\(submittedAt\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const format = new Function('submittedAt', match![1]) as (submittedAt: unknown) => string
+
+    // UTC 2026-07-06T06:25:00Z = JST 15:25 → '7/6 15:25'。
+    expect(format('2026-07-06T06:25:00.000Z')).toBe('7/6 15:25')
+    // 日付境界: UTC 2026-07-06T15:30:00Z = JST 翌日 00:30 → '7/7 00:30'。
+    expect(format('2026-07-06T15:30:00.000Z')).toBe('7/7 00:30')
+    // 未提出・不正・非文字列は '—'。
+    expect(format(null)).toBe('—')
+    expect(format('')).toBe('—')
+    expect(format('not-a-date')).toBe('—')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-09): 講習集計結果の「提出方法」列。QR提出/室長登録を区別する。
+  // 未登録は '—'、登録済みでも方法不明(機能導入前の既存データ)は '—'。
+  it('labels the submission method (QR vs classroom-head) for the lecture summary', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function resolveSubmissionMethodLabel\(input\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const resolveMethod = new Function('input', match![1]) as (
+      input: { countSubmitted?: boolean; submissionMethod?: string } | null | undefined,
+    ) => string
+
+    expect(resolveMethod(undefined)).toBe('—')
+    expect(resolveMethod({ countSubmitted: false, submissionMethod: 'qr' })).toBe('—')
+    expect(resolveMethod({ countSubmitted: true, submissionMethod: 'qr' })).toBe('QR提出')
+    expect(resolveMethod({ countSubmitted: true, submissionMethod: 'manual' })).toBe('室長登録')
+    // 登録済みだが方法未設定(既存データ)は '—'。
+    expect(resolveMethod({ countSubmitted: true })).toBe('—')
 
     vi.unstubAllGlobals()
   })

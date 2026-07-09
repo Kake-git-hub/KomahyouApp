@@ -180,6 +180,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       groupClassParticipation: {},
       optionChecks: {},
       regularOnly: false,
+      submittedAt: null,
     }, {
       token: 'teacher-token',
       sessionId: 'session-1',
@@ -191,6 +192,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       groupClassParticipation: {},
       optionChecks: {},
       regularOnly: false,
+      submittedAt: null,
     }]
 
     const result = buildSubmissionAcknowledgementEntries(entries, {

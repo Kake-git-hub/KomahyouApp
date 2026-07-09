@@ -372,6 +372,8 @@ export type SubmissionChangeEntry = {
   groupClassParticipation: Record<string, boolean>
   optionChecks: Record<string, boolean>
   regularOnly: boolean
+  // 講習集計結果の「提出日時」列に使う。QR提出ドキュメントの提出時刻(ISO文字列)。未設定=null。
+  submittedAt: string | null
 }
 
 export function subscribeLectureSubmissions(
@@ -408,6 +410,7 @@ export function subscribeLectureSubmissions(
           groupClassParticipation: data.groupClassParticipation ?? {},
           optionChecks: data.optionChecks ?? {},
           regularOnly: data.regularOnly ?? false,
+          submittedAt: typeof data.submittedAt === 'string' ? data.submittedAt : null,
         })
       }
     }
