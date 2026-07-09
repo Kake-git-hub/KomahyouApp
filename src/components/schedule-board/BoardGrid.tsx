@@ -197,6 +197,8 @@ type BoardGridProps = {
   // window リスナと純CSS(:hover)で行い、ここでは mousedown の起点通知だけを担う(再描画を増やさない)。
   dragMoveActive?: boolean
   onStudentMouseDown?: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, isAttended: boolean, button: number, x: number, y: number) => void
+  // 講師の長押しD&D移動/入れ替え(同一コマ内限定・ライブ盤面のみ・開発用教室限定)。有効時のみ渡す。
+  onTeacherMouseDown?: (cellId: string, deskIndex: number, hasTeacher: boolean, button: number, x: number, y: number) => void
   // spec-group-lesson §A: 集団行のセル操作。空の科目セル→科目ピッカー、科目入り→メニュー(出席者一覧/削除)、講師セル→講師ピッカー。
   onGroupSubjectClick?: (dateKey: string, band: GroupClassBand, hasSubject: boolean, x: number, y: number) => void
   onGroupTeacherClick?: (dateKey: string, band: GroupClassBand, hasEntry: boolean, x: number, y: number) => void
@@ -219,6 +221,7 @@ function BoardGridComponent({
   onStudentClick,
   dragMoveActive,
   onStudentMouseDown,
+  onTeacherMouseDown,
   onGroupSubjectClick,
   onGroupTeacherClick,
 }: BoardGridProps) {
@@ -625,6 +628,9 @@ function BoardGridComponent({
                           key={`${cell.id}_${deskIndex}_teacher`}
                           className={teacherClassName}
                           onClick={(event) => onTeacherClick(cell.id, deskIndex, event.clientX, event.clientY)}
+                          onMouseDown={onTeacherMouseDown ? (event) => onTeacherMouseDown(cell.id, deskIndex, Boolean(cell.isOpenDay && desk.teacher.trim()), event.button, event.clientX, event.clientY) : undefined}
+                          data-cell-id={cell.id}
+                          data-desk-index={deskIndex}
                           data-testid={`teacher-cell-${cell.id}-${deskIndex}`}
                         >
                           <div
