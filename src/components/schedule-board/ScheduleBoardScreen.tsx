@@ -345,6 +345,28 @@ export function isStudentUnavailableAtSlot(unavailableSlots: Set<string> | null 
   return Boolean(unavailableSlots?.has(slotKey))
 }
 
+// 講習コマの講師選択セレクターに付ける出席可否記号(オーナー要望 2026-07-09・全教室)。
+// そのコマの日が講習期間内(いずれかの specialSession の [startDate,endDate] に含まれる)で、
+// かつその講師が出席不可コマを提出済み(countSubmitted=true)のときのみ記号を返す:
+//   - 出席可能(その slot が unavailableSlots に無い) → '○'
+//   - 出席不可(その slot が unavailableSlots に有る) → '×'
+// 未提出(teacherInputs 無し / countSubmitted=false)や講習期間外は '' (記号なし)。
+// 講習期間は重複不可(spec A3)なので該当セッションは高々1つ。slotKey = `${dateKey}_${slotNumber}`。
+export function resolveTeacherLectureSlotMark(params: {
+  specialSessions: SpecialSessionRow[]
+  teacherId: string
+  dateKey: string
+  slotNumber: number
+}): '○' | '×' | '' {
+  const { specialSessions, teacherId, dateKey, slotNumber } = params
+  const session = specialSessions.find((entry) => !isLectureOutsideSessionPeriod(dateKey, entry))
+  if (!session) return ''
+  const input = session.teacherInputs[teacherId]
+  if (!input || !input.countSubmitted) return ''
+  const slotKey = `${dateKey}_${slotNumber}`
+  return input.unavailableSlots.includes(slotKey) ? '×' : '○'
+}
+
 export type LessonPatternRuleKey = 'allowTwoConsecutiveLessons' | 'requireBreakBetweenLessons' | 'connectRegularLessons'
 export type LessonPatternOccurrence = { occurrenceKey: string; slotNumber: number; lessonType: LessonType }
 
@@ -6365,6 +6387,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })
   }, [isTemplateMode, teacherMenu?.deskIndex, teacherMenuContext, teachers, templateEffectiveStartDate])
 
+  // 講習コマの講師選択セレクターに出席可否記号(○=出席可能/×=出席不可)を付ける(オーナー要望 2026-07-09)。
+  // テンプレモード(実日付なし)や講習期間外・未提出は記号なし。teacherId ごとに記号を持つ Map。
+  const teacherOptionLectureMarks = useMemo(() => {
+    const marks = new Map<string, '○' | '×'>()
+    if (isTemplateMode || !teacherMenuContext) return marks
+    const { dateKey, slotNumber } = teacherMenuContext.cell
+    for (const option of teacherOptions) {
+      const mark = resolveTeacherLectureSlotMark({ specialSessions, teacherId: option.id, dateKey, slotNumber })
+      if (mark) marks.set(option.id, mark)
+    }
+    return marks
+  }, [isTemplateMode, teacherMenuContext, teacherOptions, specialSessions])
+
   const centeredStatusMessage = statusMessage.includes('同コマにすでに') && statusMessage.includes('不可です。') ? statusMessage : null
 
   // ── Template mode helpers ──
@@ -9973,9 +10008,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                   onChange={(event) => setTeacherMenu((current) => (current ? { ...current, selectedTeacherName: event.target.value } : current))}
                   data-testid="teacher-select-input"
                 >
-                  {teacherOptions.map((teacher) => (
-                    <option key={teacher.id} value={teacher.name}>{teacher.name}</option>
-                  ))}
+                  {teacherOptions.map((teacher) => {
+                    const lectureMark = teacherOptionLectureMarks.get(teacher.id)
+                    return (
+                      <option key={teacher.id} value={teacher.name}>{lectureMark ? teacher.name + '　' + lectureMark : teacher.name}</option>
+                    )
+                  })}
                 </select>
               </div>
               <div className="student-menu-section student-menu-actions">

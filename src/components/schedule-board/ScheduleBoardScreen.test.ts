@@ -5,7 +5,7 @@ import { createInitialRegularLessons, type RegularLessonRow } from '../basic-dat
 import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -4497,6 +4497,42 @@ describe('盤面の警告評価(E2E移植: 科目対応外/一コマ空け/講�
     it('出席可能コマ/未設定は違反なし', () => {
       expect(isStudentUnavailableAtSlot(new Set(['2026-04-06_1']), '2026-04-06_2')).toBe(false)
       expect(isStudentUnavailableAtSlot(undefined, '2026-04-06_1')).toBe(false)
+    })
+  })
+
+  describe('resolveTeacherLectureSlotMark (講師選択セレクターの出席可否記号・2026-07-09)', () => {
+    const makeMarkSession = (teacherInputs: SpecialSessionRow['teacherInputs']): SpecialSessionRow => ({
+      id: 'sess1',
+      label: '夏期講習',
+      startDate: '2026-07-20',
+      endDate: '2026-07-25',
+      teacherInputs,
+      studentInputs: {},
+      createdAt: '',
+      updatedAt: '',
+    })
+
+    it('提出済み・出席可能コマは ○', () => {
+      const sessions = [makeMarkSession({ t1: { unavailableSlots: ['2026-07-20_2'], countSubmitted: true, updatedAt: '' } })]
+      expect(resolveTeacherLectureSlotMark({ specialSessions: sessions, teacherId: 't1', dateKey: '2026-07-20', slotNumber: 1 })).toBe('○')
+    })
+
+    it('提出済み・出席不可コマは ×', () => {
+      const sessions = [makeMarkSession({ t1: { unavailableSlots: ['2026-07-20_1'], countSubmitted: true, updatedAt: '' } })]
+      expect(resolveTeacherLectureSlotMark({ specialSessions: sessions, teacherId: 't1', dateKey: '2026-07-20', slotNumber: 1 })).toBe('×')
+    })
+
+    it('未提出(teacherInputs 無し / countSubmitted=false)は記号なし', () => {
+      const noInput = [makeMarkSession({})]
+      expect(resolveTeacherLectureSlotMark({ specialSessions: noInput, teacherId: 't1', dateKey: '2026-07-20', slotNumber: 1 })).toBe('')
+      const notSubmitted = [makeMarkSession({ t1: { unavailableSlots: ['2026-07-20_1'], countSubmitted: false, updatedAt: '' } })]
+      expect(resolveTeacherLectureSlotMark({ specialSessions: notSubmitted, teacherId: 't1', dateKey: '2026-07-20', slotNumber: 1 })).toBe('')
+    })
+
+    it('講習期間外(どのセッションにも含まれない日)は全員記号なし', () => {
+      const sessions = [makeMarkSession({ t1: { unavailableSlots: [], countSubmitted: true, updatedAt: '' } })]
+      expect(resolveTeacherLectureSlotMark({ specialSessions: sessions, teacherId: 't1', dateKey: '2026-07-19', slotNumber: 1 })).toBe('')
+      expect(resolveTeacherLectureSlotMark({ specialSessions: [], teacherId: 't1', dateKey: '2026-07-20', slotNumber: 1 })).toBe('')
     })
   })
 
