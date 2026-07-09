@@ -11,6 +11,21 @@ import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
+import {
+  buildWorkspaceAutoBackupDisplayLabel,
+  buildWorkspaceAutoBackupStoragePath,
+  getWorkspaceDailyAutoBackupCutoffKey,
+  HOUR_IN_MS,
+  resolveBackupKindFromSummary,
+  shouldKeepAutoBackupSummary,
+  toHourlyDateKeyJst,
+  toOperationalDateKeyJst,
+  toQuarterHourlyDateKeyJst,
+  WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS,
+  WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS,
+  WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_RETENTION_HOURS,
+  type WorkspaceAutoBackupKind,
+} from './workspaceBackupSchedule'
 
 initializeApp()
 
@@ -24,17 +39,13 @@ const auth = getAuth()
 const storage = getStorage()
 const STORAGE_BUCKET = process.env.STORAGE_BUCKET ?? 'komahyouapp-prod.firebasestorage.app'
 
-const WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS = 14
-const WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS = 72
-const WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST = 2
 const WORKSPACE_DAILY_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_AUTO_BACKUP_SCHEDULE ?? '10 2 * * *'
 const WORKSPACE_HOURLY_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_HOURLY_AUTO_BACKUP_SCHEDULE ?? '10 * * * *'
+const WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_SCHEDULE ?? '*/15 * * * *'
 const WORKSPACE_AUTO_BACKUP_TIME_ZONE = 'Asia/Tokyo'
 const WORKSPACE_INCIDENT_BACKUP_PREFIX = 'workspace-incident-backups'
 const WORKSPACE_LATEST_ROLLBACK_PREFIX = 'workspace-latest-rollbacks'
 const DEVELOPMENT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
-const HOUR_IN_MS = 60 * 60 * 1000
-const JST_OFFSET_IN_MS = 9 * HOUR_IN_MS
 const FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT = 700_000
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 const GOOGLE_DRIVE_API_SCOPE = 'https://www.googleapis.com/auth/drive'
@@ -135,8 +146,6 @@ type WorkspaceSnapshot = {
   classrooms: WorkspaceClassroom[]
   users: WorkspaceUser[]
 }
-
-type WorkspaceAutoBackupKind = 'daily' | 'hourly'
 
 type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
 
@@ -336,51 +345,6 @@ async function assertNoSnapshotDataLoss(params: {
   if (previousManagementCount <= 0) return
 
   throw new HttpsError('failed-precondition', `既存の教室管理データがあるため、空の管理データでのFirebase上書きを中止しました。前回データ件数=${previousManagementCount}`)
-}
-
-function toUtcDateKey(date: Date) {
-  const year = date.getUTCFullYear()
-  const month = `${date.getUTCMonth() + 1}`.padStart(2, '0')
-  const day = `${date.getUTCDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function toUtcHourKey(date: Date) {
-  const dateKey = toUtcDateKey(date)
-  const hour = `${date.getUTCHours()}`.padStart(2, '0')
-  return `${dateKey}T${hour}`
-}
-
-function toOperationalDateKeyJst(date: Date, boundaryHourJst = WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST) {
-  const operationalDate = new Date(date.getTime() + JST_OFFSET_IN_MS - boundaryHourJst * HOUR_IN_MS)
-  return toUtcDateKey(operationalDate)
-}
-
-function toHourlyDateKeyJst(date: Date) {
-  const jstDate = new Date(date.getTime() + JST_OFFSET_IN_MS)
-  return toUtcHourKey(jstDate)
-}
-
-function getWorkspaceDailyAutoBackupCutoffKey(referenceDate: Date, retentionDays: number) {
-  const safeRetentionDays = Math.max(1, Math.trunc(retentionDays) || 1)
-  const operationalDate = new Date(referenceDate.getTime() + JST_OFFSET_IN_MS - WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST * HOUR_IN_MS)
-  operationalDate.setUTCDate(operationalDate.getUTCDate() - (safeRetentionDays - 1))
-  return toUtcDateKey(operationalDate)
-}
-
-function buildWorkspaceAutoBackupStoragePath(workspaceKey: string, backupDateKey: string, backupKind: WorkspaceAutoBackupKind = 'daily') {
-  if (backupKind === 'hourly') {
-    return `workspace-auto-backups/${workspaceKey}/hourly/${backupDateKey}.json`
-  }
-  return `workspace-auto-backups/${workspaceKey}/${backupDateKey}.json`
-}
-
-function buildWorkspaceAutoBackupDisplayLabel(backupDateKey: string, backupKind: WorkspaceAutoBackupKind) {
-  if (backupKind === 'hourly') {
-    const [datePart, hourPart = '00'] = backupDateKey.split('T')
-    return `${datePart} ${hourPart}:10 毎時`
-  }
-  return `${backupDateKey} 日次`
 }
 
 function isGoogleDriveBackupConfigured() {
@@ -1095,6 +1059,7 @@ async function buildWorkspaceServerBackupSnapshot(workspaceKey: string, savedAt:
 async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDate: Date) {
   const dailyCutoffKey = getWorkspaceDailyAutoBackupCutoffKey(referenceDate, WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS)
   const hourlyCutoffTime = referenceDate.getTime() - WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS * HOUR_IN_MS
+  const quarterHourlyCutoffTime = referenceDate.getTime() - WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_RETENTION_HOURS * HOUR_IN_MS
   const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
   const bucket = storage.bucket(STORAGE_BUCKET)
   const summarySnapshots = await workspaceRef.collection('workspaceAutoBackupSummaries').get()
@@ -1103,12 +1068,12 @@ async function pruneWorkspaceServerAutoBackups(workspaceKey: string, referenceDa
 
   await Promise.all(summarySnapshots.docs.map(async (summaryDoc) => {
     const summary = summaryDoc.data() as WorkspaceAutoBackupSummaryDoc
-    const backupKind: WorkspaceAutoBackupKind = summary.backupKind === 'hourly' || summaryDoc.id.includes('T')
-      ? 'hourly'
-      : 'daily'
-    const shouldKeep = backupKind === 'hourly'
-      ? (Date.parse(summary.savedAt || '') || 0) >= hourlyCutoffTime
-      : summaryDoc.id >= dailyCutoffKey
+    const kind = resolveBackupKindFromSummary(summary.backupKind, summaryDoc.id)
+    const shouldKeep = shouldKeepAutoBackupSummary(
+      kind,
+      { docId: summaryDoc.id, savedAtMs: Date.parse(summary.savedAt || '') || 0 },
+      { dailyCutoffKey, hourlyCutoffTime, quarterHourlyCutoffTime },
+    )
     if (shouldKeep) return
 
     if (typeof summary.storagePath === 'string' && summary.storagePath.trim()) {
@@ -1733,7 +1698,7 @@ export const listDevelopmentClassroomBackupSources = onCall({ invoker: 'public',
     const data = entry.data() as WorkspaceAutoBackupSummaryDoc
     return {
       backupDateKey: String(data.backupDateKey ?? entry.id),
-      backupKind: data.backupKind === 'hourly' ? 'hourly' : 'daily',
+      backupKind: resolveBackupKindFromSummary(data.backupKind, entry.id),
       displayLabel: String(data.displayLabel ?? data.backupDateKey ?? entry.id),
       savedAt: String(data.savedAt ?? ''),
       sourceSavedAt: String(data.sourceSavedAt ?? ''),
@@ -1855,6 +1820,15 @@ export const createWorkspaceServerHourlyBackups = onSchedule({
   await runWorkspaceServerAutoBackup('hourly')
 })
 
+export const createWorkspaceServerQuarterHourlyBackups = onSchedule({
+  schedule: WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_SCHEDULE,
+  timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
+  timeoutSeconds: 300,
+  memory: '1GiB',
+}, async () => {
+  await runWorkspaceServerAutoBackup('quarterHourly')
+})
+
 // A4: 保存ごとに増える saveAttempts(冪等保存の重複防止記録)を定期的に掃除する。
 // saveAttempts は保存リクエストの再送(ネットワーク再試行)を見分けるための一時記録で、
 // 数十日後の saveId が再送されることはないため、保持期間を過ぎたものは削除して無限増加を防ぐ。
@@ -1909,7 +1883,11 @@ export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', time
 async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind) {
   const now = new Date()
   const savedAt = now.toISOString()
-  const backupDateKey = backupKind === 'daily' ? toOperationalDateKeyJst(now) : toHourlyDateKeyJst(now)
+  const backupDateKey = backupKind === 'daily'
+    ? toOperationalDateKeyJst(now)
+    : backupKind === 'quarterHourly'
+      ? toQuarterHourlyDateKeyJst(now)
+      : toHourlyDateKeyJst(now)
   logger.info(`[AutoBackup] Starting ${backupKind} backup run: backupDateKey=${backupDateKey}, savedAt=${savedAt}, bucket=${STORAGE_BUCKET}`)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   logger.info(`[AutoBackup] Found ${workspacesSnapshot.docs.length} workspace(s)`)
@@ -1960,7 +1938,7 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
       backupKind,
       status: 'disabled',
     })
-    if (isGoogleDriveBackupConfigured()) {
+    if (backupKind !== 'quarterHourly' && isGoogleDriveBackupConfigured()) {
       try {
         const googleDriveResult = await upsertWorkspaceGoogleDriveBackup({
           workspaceKey,
