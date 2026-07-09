@@ -15,6 +15,7 @@ import {
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
   HOUR_IN_MS,
+  isWorkspaceAutoBackupSkippedAt,
   resolveBackupKindFromSummary,
   shouldKeepWorkspaceAutoBackup,
   toQuarterHourlyDateKeyJst,
@@ -1797,6 +1798,13 @@ export const createWorkspaceServerQuarterHourlyBackups = onSchedule({
   timeoutSeconds: 300,
   memory: '1GiB',
 }, async () => {
+  // 静音時間帯(JST 3:15〜8:45)は取得をスキップして回数を抑える(3:00の日次アンカーは取得する)。
+  // 手動トリガー(triggerWorkspaceServerAutoBackup)はこのスキップの対象外(オーナーが明示実行するため)。
+  const now = new Date()
+  if (isWorkspaceAutoBackupSkippedAt(now)) {
+    logger.info(`[AutoBackup] Skipped quarterHourly run (quiet hours JST): ${now.toISOString()}`)
+    return
+  }
   await runWorkspaceServerAutoBackup('quarterHourly')
 })
 

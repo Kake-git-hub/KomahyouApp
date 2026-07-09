@@ -83,6 +83,22 @@ export const WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS = 72
 export const WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS = 7
 export const WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST = 3
 
+// 静音時間帯(JST 3:00〜9:00・ユーザーが操作しない早朝)はバックアップ生成をスキップし取得回数を抑える
+// (オーナー確定 2026-07-10)。ただし日次保持アンカーの 3:00(WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST)だけは
+// 取得する — これを取らないと 72h〜7日帯の日次バックアップ(3:00のみ保持)が丸ごと存在しなくなるため。
+// 実質のスキップ帯は 3:15〜8:45、9:00 から通常の15分毎へ復帰する。
+export const WORKSPACE_BACKUP_QUIET_HOURS_START_JST = 3
+export const WORKSPACE_BACKUP_QUIET_HOURS_END_JST = 9
+
+export function isWorkspaceAutoBackupSkippedAt(date: Date): boolean {
+  const jst = new Date(date.getTime() + JST_OFFSET_IN_MS)
+  const hourJst = jst.getUTCHours()
+  const minuteJst = jst.getUTCMinutes()
+  // 日次アンカー(3:00)は静音帯でも必ず取得する。
+  if (hourJst === WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST && minuteJst === 0) return false
+  return hourJst >= WORKSPACE_BACKUP_QUIET_HOURS_START_JST && hourJst < WORKSPACE_BACKUP_QUIET_HOURS_END_JST
+}
+
 // バックアップの実時刻(savedAtMs)と現在時刻(nowMs)から、保持すべきかを判定する純関数。
 // age<24h: 全保持(15分毎そのまま) / 24h≤age<72h: JSTで分=00のみ(実質毎時) /
 // 72h≤age<7日: JSTで時=03かつ分=00のみ(実質日次AM3:00) / age≥7日: 削除。

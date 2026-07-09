@@ -10,6 +10,11 @@ name: Deploy Cloud Functions
 #   ※ このサービスアカウントには Cloud Functions のデプロイ権限が必要:
 #     Cloud Functions Admin / Service Account User / (初回は Cloud Build Editor・Artifact Registry 関連)。
 #     権限不足の場合はこのワークフローが失敗するので、GCP コンソールでロールを付与すること。
+#   PROD_FUNCTIONS_ENV … 本番 functions の runtime env(ローカル functions/.env と同じ内容の全文)。
+#     GOOGLE_DRIVE_BACKUP_FOLDER_ID / GOOGLE_DRIVE_OAUTH_CLIENT_ID / GOOGLE_DRIVE_OAUTH_CLIENT_SECRET /
+#     GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN を含む(1行1キー)。firebase-tools が functions/.env.komahyouapp-prod を
+#     読んで runtime env に焼き込む。**未設定だと Google Drive 自動同期が無効のままデプロイされる**
+#     (functions/.env は .gitignore 済みで CI には来ないため。2026-07-10 の同期停止事故の恒久対策)。
 #
 # トリガー:
 #   - 手動(workflow_dispatch): Actions タブから「Run workflow」で実行。
@@ -53,6 +58,23 @@ jobs:
 
       - name: Build functions
         run: npm --prefix functions run build
+
+      # 本番 functions の runtime env(Google Drive バックアップの OAuth 等)を書き込む。
+      # functions/.env は .gitignore 済み(秘密情報)なので CI のチェックアウトには含まれない。
+      # firebase-tools は functions/.env.<projectId> を自動で読み込み runtime env に焼き込むため、
+      # ここに本番用の env を書いておかないと GOOGLE_DRIVE_BACKUP_FOLDER_ID 等が空になり
+      # Google Drive 自動同期が無効化される(2026-07-10 に CI デプロイで同期が止まった事故の恒久対策)。
+      # シークレット PROD_FUNCTIONS_ENV = ローカル functions/.env と同じ内容(GOOGLE_DRIVE_* 一式)。
+      - name: Write functions env for production
+        run: |
+          if [ -n "$PROD_FUNCTIONS_ENV" ]; then
+            printf '%s\n' "$PROD_FUNCTIONS_ENV" > functions/.env.komahyouapp-prod
+            echo "Wrote functions/.env.komahyouapp-prod ($(printf '%s' "$PROD_FUNCTIONS_ENV" | grep -c '=') keys)"
+          else
+            echo "::warning::PROD_FUNCTIONS_ENV secret が未設定です。GOOGLE_DRIVE_* が空になり Google Drive 自動同期は無効のままデプロイされます。"
+          fi
+        env:
+          PROD_FUNCTIONS_ENV: ${{ secrets.PROD_FUNCTIONS_ENV }}
 
       - name: Write Firebase service account credentials
         run: |
