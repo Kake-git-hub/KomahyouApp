@@ -343,6 +343,82 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // タブ名(document.title)は取り違え防止のため教室名を出し、期間は出さない(オーナー要望 2026-07-09)。
+  it('タブ名に教室名を出し、期間は出さない', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.classroomName).toBe('開発用教室') // 教室名がペイロードに乗る
+    // document.title は教室名を使い、期間(formatRangeLabel)を使わない。
+    expect(html).toContain("document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '')")
+    expect(html).not.toContain("document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate)")
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の
+  // 下端で見切れる不具合を、印刷時だけ count-table の行高を詰めることで解消した。@media print 内で
+  // .count-table の行高が既定(22px)より小さいことを固定する(将来の変更で 22px 等へ戻すと落ちる)。
+  it('印刷時は講習回数/通常回数表の行高を詰める(科目が多い生徒のA4見切れ防止)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // @media print ブロック内の count-table 行高だけを見る(画面表示の 22px と区別)。
+    const printBlock = html.slice(html.indexOf('@media print'))
+    const heightMatch = printBlock.match(/\.count-table th,\s*\.count-table td\s*\{[^}]*height:\s*(\d+)px/)
+    expect(heightMatch).not.toBeNull()
+    expect(Number(heightMatch![1])).toBeLessThanOrEqual(18)
+
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(2026-07-04 監査領域9 A1 オーナー確定): plannedCells は埋め込みJSから一度も読まれないデッド payload
   // だったため撤去した。planned 通常回数の唯一の根拠は expectedRegularOccurrences(テンプレ由来)。
   // plannedCells を payload に復活させる変更(=毎同期の無駄な生成/シリアライズと「二重の planned 根拠」の再発)を検知する。
@@ -1785,6 +1861,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const html = write.mock.calls[0]?.[0]
     expect(typeof html).toBe('string')
     expect(html).toContain("if (subject === '算国') return getPreferredMathSubject(student, referenceDate) === '算' ? '算国' : '数';")
+    vi.unstubAllGlobals()
+  })
+
+  it('embeds 理社 as an elementary-only combined subject (回帰防止)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ birthDate: '2015-05-10' })],
+      regularLessons: [],
+      defaultStartDate: '2026-04-10',
+      defaultEndDate: '2026-04-16',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(typeof html).toBe('string')
+    // 理社は小学限定で表示され、非小学では理へ畳む(算国と同型)。
+    expect(html).toContain("if (subject === '理社') return preferredMathSubject === '算';")
+    expect(html).toContain("if (subject === '理社') return getPreferredMathSubject(student, referenceDate) === '算' ? '理社' : '理';")
+    // 表示順は社の直後・集理/集社の前。
+    expect(html).toContain("['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社']")
     vi.unstubAllGlobals()
   })
 

@@ -184,6 +184,8 @@ export type SchedulePayload = {
   // spec-group-lesson §A/§E: 盤面の集団授業割当(key=`${dateKey}_${band}`)。生徒/講師日程表の集団行・回数・給与に使う。
   groupClassEntries: GroupClassEntryMap
   classroomStorageKey: string
+  // タブ名に表示する教室名(2026-07-09)。
+  classroomName: string
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄(休み欄を置き換え/振替を左詰め)を有効化する。開発用教室のみ。
   optionFieldEnabled?: boolean
@@ -205,6 +207,8 @@ type OpenScheduleHtmlParams = {
   // spec-group-lesson §A: 盤面の集団授業割当。生徒/講師日程表へ集団行・回数・給与として反映する。
   groupClassEntries?: GroupClassEntryMap
   classroomStorageKey?: string
+  // タブ名(document.title)に表示する教室名。取り違え防止のため期間ではなく教室名を出す(2026-07-09)。
+  classroomName?: string
   targetWindow?: Window | null
   lazyQrLoading?: boolean
   showSubmittedQr?: boolean
@@ -573,6 +577,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     })),
     groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
     classroomStorageKey: params.classroomStorageKey || 'default',
+    classroomName: params.classroomName || '',
     optionFieldEnabled: Boolean(params.optionFieldEnabled),
     scheduleDndEnabled: Boolean(params.scheduleDndEnabled),
   }
@@ -2415,6 +2420,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           aspect-ratio: 297 / 420;
           page: sheetA3;
         }
+        /* 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で
+           見切れるのを防ぐため、通常回数・講習回数表の行高を印刷時だけ少し詰める
+           (欄の行高さ縮小・オーナー要望 2026-07-08)。画面表示は 22px のまま。 */
+        .count-table th,
+        .count-table td {
+          height: 16px;
+          padding: 1px 4px;
+          line-height: 1.05;
+        }
         .teacher-lesson-person {
           gap: 1px;
           padding: 1px 0;
@@ -2540,9 +2554,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const lessonTypeLabels = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習', trial: '体験' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-      // 通常回数・講習回数表の表示順。算国は国の直後に置き、集理/集社は末尾。
-      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社'];
-      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '集理', '集社'];
+      // 通常回数・講習回数表の表示順。算国は国の直後、理社は社の直後(いずれも小学限定の合体科目)、集理/集社は末尾。
+      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社'];
+      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社'];
       let activeCountDialog = null;
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = buildPayloadFingerprint(DATA);
@@ -3247,6 +3261,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return subjectDefinitions.filter((subject) => {
           if (subject === '算' || subject === '数') return subject === preferredMathSubject;
           if (subject === '算国') return preferredMathSubject === '算';
+          // 理社は算国と同じく小学限定の合体科目。小学(preferredMathSubject==='算')のみ表示。
+          if (subject === '理社') return preferredMathSubject === '算';
           // 理は学年を問わず常に表示。高校生は理に加えて生・物・化も表示する。
           if (subject === '理') return true;
           if (subject === '生' || subject === '物' || subject === '化') return prefersHighSchoolScience || legacySubjects.includes(subject);
@@ -3256,6 +3272,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function normalizeSubjectForStudent(subject, student, referenceDate) {
         if (subject === '算国') return getPreferredMathSubject(student, referenceDate) === '算' ? '算国' : '数';
+        if (subject === '理社') return getPreferredMathSubject(student, referenceDate) === '算' ? '理社' : '理';
         if (subject !== '算' && subject !== '数') return subject;
         return getPreferredMathSubject(student, referenceDate);
       }
@@ -6129,7 +6146,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           } catch (error) {
             pagesElement.innerHTML = '<div class="empty-state">表示中にエラーが発生しました: ' + escapeHtml(String(error)) + '</div>';
           }
-          document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate);
+          // タブ名は取り違え防止のため「教室名」を出す。期間は出さない(2026-07-09 オーナー指示)。
+          document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '');
           updateSheetScreenSize();
           bindNotes();
           bindSalaryInputs();
@@ -6157,7 +6175,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ? (VIEW_TYPE === 'student' ? formatStudentHeaderName(displayedPerson, startDate) : formatTeacherHeaderName(displayedPerson))
           : '対象なし';
         if (summaryLabel) summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
-        document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate) + ' | ' + personLabel;
+        // タブ名は「教室名」を出す(期間は出さない)。生徒/講師名は残す(2026-07-09 オーナー指示)。
+        document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '') + ' | ' + personLabel;
         updateSheetScreenSize();
         syncPendingUnavailableUi(pagesElement);
         bindNotes();

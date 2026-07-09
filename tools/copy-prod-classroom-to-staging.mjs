@@ -18,6 +18,9 @@
 //
 // 前提: gcloud CLI がオーナーアカウントで認証済み（両プロジェクトへの IAM アクセス）。
 // 実行時間の目安: 数十秒〜数分（ドキュメント数による）。
+// 注意: classroomSnapshots/{id}/saveAttempts（保存の冪等性ログ・稼働中教室では数百〜数千件に
+// なり得る）は削除・コピーの両方で丸ごとスキップする(2026-07-09 修正)。含めると進捗ログ無しで
+// 1件ずつ逐次リクエストになり、数分〜十数分「無出力で止まって見える」原因になっていた。
 
 import { execSync } from 'node:child_process'
 
@@ -114,7 +117,15 @@ async function queryLectureSubmissions(base) {
   return rows.filter((r) => r.document).map((r) => r.document)
 }
 
-const stats = { copied: 0, deleted: 0 }
+// classroomSnapshots/{id}/saveAttempts は保存の冪等性チェック用ログ(functions/src/index.ts の
+// saveClassroomSnapshotFromCallable が保存のたびに1件作る・30日保持で毎日3:30に自動掃除)。
+// 稼働中の教室(例: 日大前)では数百〜数千件に達することがあり、テストデータとしては不要。
+// このスクリプトは削除・コピーの両方でこのサブコレクションを丸ごとスキップする
+// (スキップしないと「進捗ログ無しで1件ずつ逐次 GET/DELETE/PATCH」を数百〜数千回繰り返すことになり、
+// 数分〜十数分も無出力のまま止まって見える=フリーズと誤認される原因になっていた)。
+const SKIP_SUBCOLLECTIONS = new Set(['saveAttempts'])
+
+const stats = { copied: 0, deleted: 0, skipped: 0 }
 
 async function dstWrite(relDocPath, fields) {
   await http('PATCH', `${DST_BASE}/${relDocPath}`, { fields: fields ?? {} })
@@ -122,10 +133,14 @@ async function dstWrite(relDocPath, fields) {
   if (stats.copied % 50 === 0) console.log(`  ... ${stats.copied} docs copied`)
 }
 
-async function dstDeleteTree(relDocPath) {
+async function dstDeleteTree(relDocPath, depth = 0) {
   for (const col of await listCollectionIds(DST_BASE, relDocPath)) {
-    for (const doc of await listDocs(DST_BASE, `${relDocPath}/${col}`)) {
-      await dstDeleteTree(relFromName(doc.name))
+    if (SKIP_SUBCOLLECTIONS.has(col)) { stats.skipped += 1; continue }
+    const docs = await listDocs(DST_BASE, `${relDocPath}/${col}`)
+    if (depth === 0 && docs.length > 0) console.log(`  deleting ${relDocPath}/${col}: ${docs.length} docs`)
+    for (const doc of docs) {
+      await dstDeleteTree(relFromName(doc.name), depth + 1)
+      if (stats.deleted > 0 && stats.deleted % 50 === 0) console.log(`  ... ${stats.deleted} docs deleted`)
     }
   }
   const res = await http('DELETE', `${DST_BASE}/${relDocPath}`)
@@ -138,11 +153,15 @@ async function copyTree(relDocPath, { required = false } = {}) {
   if (!doc && required) throw new Error(`本番に存在しません: ${relDocPath}`)
   if (doc) await dstWrite(relDocPath, doc.fields)
   for (const col of await listCollectionIds(SRC_BASE, relDocPath)) {
-    for (const srcDoc of await listDocs(SRC_BASE, `${relDocPath}/${col}`)) {
+    if (SKIP_SUBCOLLECTIONS.has(col)) { stats.skipped += 1; continue }
+    const srcDocs = await listDocs(SRC_BASE, `${relDocPath}/${col}`)
+    if (srcDocs.length > 0) console.log(`  copying ${relDocPath}/${col}: ${srcDocs.length} docs`)
+    for (const srcDoc of srcDocs) {
       const rel = relFromName(srcDoc.name)
       await dstWrite(rel, srcDoc.fields)
       // さらに深いサブコレクションがあれば辿る(現行データ構造では通常なし)
       for (const subCol of await listCollectionIds(SRC_BASE, rel)) {
+        if (SKIP_SUBCOLLECTIONS.has(subCol)) { stats.skipped += 1; continue }
         for (const subDoc of await listDocs(SRC_BASE, `${rel}/${subCol}`)) {
           await dstWrite(relFromName(subDoc.name), subDoc.fields)
         }
@@ -199,7 +218,7 @@ async function main() {
   }
   const dstSubs = await queryLectureSubmissions(DST_BASE)
   console.log(`  lectureSubmissions: ${dstSubs.length} docs`)
-  console.log(`== 完了: copied=${stats.copied} deleted=${stats.deleted} ==`)
+  console.log(`== 完了: copied=${stats.copied} deleted=${stats.deleted} skipped(saveAttempts等)=${stats.skipped} ==`)
 }
 
 main().catch((err) => {

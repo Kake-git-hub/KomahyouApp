@@ -309,6 +309,7 @@ export function canTeacherHandleStudentSubject(teacher: TeacherRow, subject: Sub
       capability.subject === subject
       || ((capability.subject === '数' || capability.subject === '算') && (subject === '数' || subject === '算'))
       || (subject === '算国' && (capability.subject === '国' || capability.subject === '数' || capability.subject === '算'))
+      || (subject === '理社' && (capability.subject === '理' || capability.subject === '社'))
       || ((subject === '生' || subject === '物' || subject === '化') && capability.subject === '理')
     )
     && gradeCeilingOrder[capability.maxGrade] >= gradeCeilingOrder[studentGradeCeiling]
@@ -10480,7 +10481,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                       onChange={(event) => setTrialStudentDraft((current) => current ? { ...current, subject: event.target.value as SubjectLabel } : current)}
                       data-testid="menu-trial-subject-select"
                     >
-                      {(['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社'] as SubjectLabel[]).map((subject) => (
+                      {(['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社', '理社'] as SubjectLabel[]).map((subject) => (
                         <option key={subject} value={subject}>{subject}</option>
                       ))}
                     </select>

@@ -52,6 +52,32 @@
 - feat: 日程表コマ組み Phase 2(spec-student-schedule-dnd・staging先行)。生徒日程表(Reactビュー)の授業カード(通/振/講)を長押し(約250ms)D&D→空きコマへドロップ→机選択モーダル(コマ表と同じ机配置・物理的な空きのみ判定、自動割振ルール/警告は評価も表示もしない)→盤面の computeStudentMove を直接実行。通常授業は「移動先に振替manual追加＋移動元当該日の抑制」の両方(7/20事故の教訓)、講習は選択科目・授業時間維持(v1.5.364回帰なし)、週範囲は ensureWeeksCoverDateRange で自動拡張、source は entryId+生徒id+日付+時限で特定(取り違え防止)、Undoで1操作復元。未保存のローカル変更(手動保存で確定)。集団カード・出欠カードは掴めない。テスト8件同梱(scheduleViewMove.test.ts)。(schedule-view/scheduleViewMove.ts / ScheduleView.tsx / ScheduleSheet.tsx / ScheduleBoardScreen.tsx / scheduleViewData.ts)
 - feat/fix: 対話用日程表のUX調整(オーナーstaging指摘・2026-07-08)。①対話は**別ウィンドウ(ポップアウト)既定**に変更しドック/トグルUIを撤去(ドックはポップアップブロック時のフォールバックのみ)。②ポップアウトの chrome バー(「生徒日程表」タイトル/ボタン)・D&Dヒントバーを撤去、ウィンドウは location/menubar/toolbar 無効のポップアップで開き document.title を空に(タブの about:blank/タイトルを抑制)。③日程表コマ組みの緑ハイライトを撤去し、盤面D&Dと同じ**画面周囲の青枠**＋ドロップ先コマの青枠ハイライト(直接DOM操作で行を再レンダーしない=メモリ規律)に変更。ドロップ判定を hover 追跡＋イベントの ownerDocument での elementFromPoint に堅牢化し**ポップアウトでも移動成立**。④ポップアウトは日程表シートが下まで収まるよう **zoom を自動調整**(fitToWindow)。⑤ポップアウトの **Ctrl+P は日程表だけを従来体裁で印刷**(子ウィンドウ専用の印刷CSSを注入・非対象パーツ非表示・A4横・fit zoom打ち消し)。印刷CSS回帰テスト＋行メモ化テスト更新。(schedule-view/ScheduleView.tsx / ScheduleSheet.tsx / ScheduleViewPanel.tsx / PopoutWindow.tsx / scheduleViewPrint.ts(+test) / scheduleView.css / ScheduleBoardScreen.tsx)
 - fix: 対話用日程表のオーナー再指摘対応(2026-07-08)。①**ポップアウトでD&Dが効かない不具合を根治**: pointer 操作を document への addEventListener＋ownerDocument 依存から、カード要素の **React synthetic pointer events ＋ setPointerCapture** に変更し、hit-test は event.view.document(発生元ウィンドウ)で行う。dock/popout の両方で長押し→ドロップ→机選択→移動が成立(盤面側が誤って掴まれる副作用も解消)。②**別ウィンドウを最大化(画面いっぱい)で開く**(availWidth/Height で open＋moveTo/resizeTo)。③**印刷は A4横いっぱいの倍率**(余白3mm・シート291×204mm・aspect-ratio固定解除)。④**「印刷用全員表示」を直接呼び出しで動作**(postMessage 経由をやめ runOpenAllSchedule 直呼び)。⑤**空フォーマット印刷・講習集計結果ボタンを復活**(生成HTMLの生徒日程タブへ委譲・講習集計は講習期間が重なる時のみ表示)。⑥**生徒/講師セレクター右の「期間・◯反映」ボタンを復活**(旧「最新表示」相当のdraft＋apply。選択は反映を押すまで表示に効かない)。(schedule-view/ScheduleView.tsx / ScheduleSheet.tsx / PopoutWindow.tsx / scheduleViewPrint.ts(+test) / ScheduleBoardScreen.tsx)
+## v1.5.416 (2026-07-09)
+
+- fix: v1.5.415 のガードで開発用教室のQRが生徒/講師日程表に表示されなくなった回帰を修正。開発用教室の既発行トークンは全て「発行元教室タグ未設定」のためガードが一律に他教室由来とみなして除去していた。ensureScheduleSubmissionTokens で**開発用教室のみ**、自教室が発行したものでない(未タグ/他教室タグ)トークンを自教室タグ付きで**再発行**するようにした(applyIssuedSubmissionTokensToSessions に差し替え分岐・提出内容は保持)。再発行後は owned となりQRが復活し、かつ他教室トークンが残らないため混入も起きない。本番教室は素通し(既存・印刷配布済みトークンは不変)。
+- feat: 日程表(別タブ)のタブ名に「開いている教室名」を表示、期間表示は廃止(取り違え防止・オーナー要望)。scheduleHtml に classroomName を渡し document.title を教室名ベースに変更(App.tsx / scheduleHtml.ts)。
+- fix(混入監査): 開発用教室での登録/登録解除(markLectureSubmissionDocAsSubmitted / resetLectureSubmissionDoc)が、自教室発行でないトークンのドキュメント(=他教室=本番)へ書き込み得る残存経路にガードを追加(開発用のみ・所有トークンのみ書込)。他の書込経路(教室スナップショット保存=acting限定、occupiedSlots/集団同期=再発行後の所有トークンのみ)は問題なしを確認。
+- test: 再発行差し替え・冪等性・タブ名・所有判定の回帰テストを追加(App.test.ts / scheduleHtml.test.ts / developmentClassroom.test.ts)。関連メモリ [[komahyou-dev-classroom-qr-token-contamination]]
+
+## v1.5.415 (2026-07-09)
+
+- fix: 開発用教室のQRテストが本番教室(日大前校)へ書き込まれる混入事故の恒久対策。開発用教室は他教室の生データをコピーしてテストするため、コピー元(本番)の提出トークンが残っていると日程表がそのQRを表示し、スキャンで本番へ誤書き込みする(2026-07-09 実発生・日大前校の複数生徒が誤登録)。対策: 提出トークンに発行元教室ID(`submissionTokenClassroomId`)を刻み(applyIssuedSubmissionTokensToSessions)、他教室→開発用コピー時に除去(buildDevelopmentClassroomCopyPayload)、**開発用教室でのみ**日程表へ渡す前に「自教室が発行したものでないトークン」を除去してQRを出せなくする(applyDevelopmentScheduleTokenGuard)。本番教室ではこのガードは一切走らず、既存・印刷配布済みトークンは不変。純関数化して回帰テスト追加(developmentClassroom.ts / App.tsx / specialSessionModel.ts)。関連メモリ [[komahyou-classroom-restore-cross-contamination]]
+
+## v1.5.414 (2026-07-09)
+
+- fix: 追加した科目「理社」がQR提出画面に出ない不具合を修正。availableSubjects はトークン発行時に提出ドキュメントへ凍結保存されるため、v1.5.413 以前に発行済みの生徒トークンには理社が伝播していなかった。既発行トークンの同期経路 `updateSubmissionOccupiedSlots` に availableSubjects の伝播を追加し、盤面更新のたびに最新の選択可能科目へ揃うようにした(提出済みドキュメントでも subjectSlots>0 の科目のみ表示するため害なし)。回帰テスト2件追加(lectureSubmission.ts・App.tsx)
+
+## v1.5.413 (2026-07-09)
+
+- feat: 小学生の科目に合体科目「理社」を追加(算国と同型・小学限定)。要望対応。1コマで理科+社会をまとめて扱う選択肢で、科目選択・体験授業・通常テンプレ・QR希望提出(getSelectableStudentSubjectsForGrade経由)・回数表(社の直後に表示)に反映。講師対応判定は理または社の担当で可。非小学に紛れた場合は理へ畳む。A4への影響: 回数表は理社の授業がある生徒のみ1行(理+社の2行を1行に統合する形で最悪行数は増えない・講習表はhideZeroZeroで0非表示)。回帰テスト追加(types.ts/studentGradeSubject.ts/scheduleHtml.ts/ScheduleBoardScreen.tsx/regularLessonTemplate.ts)
+
+## v1.5.412 (2026-07-09)
+
+- fix: `tools/copy-prod-classroom-to-staging.mjs` が無出力のまま止まって見える不具合を修正。`classroomSnapshots/{id}/saveAttempts`(保存の冪等性ログ・稼働中教室では数百〜数千件に達し得る)を削除・コピーの両方で丸ごとスキップするようにした(進捗ログも追加)。アプリ本体(デプロイ物)には影響しない開発ツールのみの変更(tools/copy-prod-classroom-to-staging.mjs)
+
+## v1.5.411 (2026-07-08)
+
+- fix: 生徒日程表の印刷で、講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で見切れる不具合を修正。@media print 内で通常回数/講習回数表(.count-table)の行高を 22px→16px・縦paddingを詰めた(画面表示は22pxのまま)。回帰テスト同コミット追加(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
 
 ## v1.5.410 (2026-07-08)
 

@@ -87,6 +87,7 @@ function makeCell(dateKey: string, slotNumber: number, desks: SerializedCell['de
 function makePayload(overrides: Partial<SchedulePayload> = {}): SchedulePayload {
   return {
     titleLabel: 'テスト',
+    classroomName: 'テスト教室',
     defaultStartDate: '2026-07-06',
     defaultEndDate: '2026-07-12',
     defaultPeriodValue: '',
