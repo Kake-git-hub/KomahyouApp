@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.425 (2026-07-09)
+
 - feat(講習集計結果に提出日時・提出方法を表示＋講師日程にも集計結果ボタン・オーナー依頼 2026-07-09): 生徒の「講習集計結果」に「提出日時」(QR提出/室長登録の日時・JST `M/D HH:MM`)と「提出方法」(`QR提出`/`室長登録`・不明は `—`)の2列を追加。方法は最後の操作で決まる(保護者/講師のQR提出=`qr`、室長が日程表の登録操作で確定=`manual`)。搬送は4経路を揃える: (1)QR提出のFunctions側スナップショット統合(`lectureSubmissionApi`)に `submittedAt`/`submissionMethod:'qr'` を追加、(2)購読反映(`subscribeLectureSubmissions`/`SubmissionChangeEntry` に `submittedAt` を追加し `App.tsx` の新規反映で `qr` を付与)、(3)室長の代行登録(`schedule-student-count-save`/`schedule-teacher-count-save` で `manual`＋操作時刻、登録解除でクリア)、(4)payload serialize(`SerializedStudent/TeacherSpecialSessionInput` へ追加=欠落すると popup で全て `—` に化ける v1.5.400 と同型の非対称を回避)。**講師日程にも「講習集計結果」ボタンを新設**(`buildTeacherLectureSummaryHtml`)。講師版は希望科目列を出さない(No./講師名/登録状況/提出日時/提出方法の5列)。既存データ(未搬送)は `—` 表示・遡及バックフィルなし(本番書き込みを伴うため)。回帰テスト: `formatSubmissionDateTime`(JST・日付境界・不正)/`resolveSubmissionMethodLabel`(qr/manual/未登録/不明)/payload serialize(生徒・講師)/講師ボタン・列構成 を同コミットで追加(src/utils/scheduleHtml.ts(+test)・functions/src/index.ts・src/App.tsx・src/integrations/firebase/lectureSubmission.ts・src/components/special-data/specialSessionModel.ts・src/App.test.ts)
 
 ## v1.5.423 (2026-07-09)
