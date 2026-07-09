@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.428 (2026-07-10)
+
+- fix(表示週選択カレンダー: 日付を選んで確定した時に確実に切り替える・v1.5.427の追随修正・オーナー報告 2026-07-10): v1.5.427 で「blur / Enter で確定」にした結果、デスクトップ等のカレンダーは**日付をクリックしてもフォーカスが外れず(=blur が来ず)、選んでも表示週が切り替わらない**回帰が出た。プラットフォーム差(タブレットのホイール/カレンダーは操作途中に change 連発、デスクトップのカレンダークリックは blur なし)を吸収するため、確定トリガーを「**最後の change から約320msの静止＝日付を選び終えた**」とみなす方式へ変更。blur / Enter が来れば即確定(待ち時間ゼロ)、Escape は取り消し、アンマウント時はタイマー解除。純関数 `createWeekJumpPicker`(stage/commit/reset)はそのまま流用し、確定タイミングのみ component 側(`weekJumpCommitTimerRef`)で制御(src/components/schedule-board/BoardToolbar.tsx)
+
 ## v1.5.427 (2026-07-10)
 
 - fix(盤面の表示週選択カレンダー: 日付を確定するまで表示週を変えない・オーナー依頼 2026-07-10): 「表示週を選択」のネイティブ日付ピッカー(`<input type="date">`)は、タブレット等でホイール/カレンダー操作中に `change` を発火させるため、以前は確定前に表示週が勝手に切り替わっていた。`change` では週を変えず「保留(stage)」のみ行い、ピッカーを閉じて確定した時(blur / Enter)に最後の値へジャンプする方式へ変更(Escape はキャンセルで保留破棄)。確定制御を純関数 `createWeekJumpPicker`(stage/commit/reset)に切り出し、controlled(`value`)だと保留中に値が戻ってしまうため uncontrolled(`defaultValue`＋`key={weekStartDate}`)にして週変更時のみ再同期。回帰防止テスト: stage だけでは commit まで値を返さない/commit は最後の値を一度だけ返す(多重ジャンプ防止)/空値・reset は null、を新規追加(src/components/schedule-board/weekJumpPicker.ts(+test)・src/components/schedule-board/BoardToolbar.tsx)
