@@ -141,6 +141,26 @@ describe('scheduleViewMove: 机選択モーダルの表示データ', () => {
     expect(desks[1].seats[0]).toMatchObject({ occupied: false, selectable: true, statusLabel: '休 鈴木' })
     expect(desks[1].seats[1]).toMatchObject({ occupied: false, selectable: false, blockedByMemo: true })
   })
+
+  it('出席済みの物理的空席は selectable:false(欠席/振無休と違い配置不可)にする(2026-07-09 回帰防止)', () => {
+    const cell = makeCell('2026-07-07', 3, [
+      {
+        teacher: '田中',
+        memoSlots: [null, null] as [string | null, string | null],
+        statusSlots: [
+          {
+            id: 'st-attended', studentId: 'stu-3', sourceManagedLesson: true, name: '出席花子', grade: '中1',
+            subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '田中',
+            dateKey: '2026-07-07', slotNumber: 3, recordedAt: 'r', status: 'attended', sourceLessonId: 'l2',
+          },
+          null,
+        ] as SlotCell['desks'][number]['statusSlots'],
+      },
+    ])
+    const desks = buildDeskPickerDesks(cell)
+    // studentSlots は空(出席で除去済み)でも、statusSlots が attended なら selectable:false。
+    expect(desks[0].seats[0]).toMatchObject({ occupied: false, selectable: false, statusLabel: '出席 出席花子' })
+  })
 })
 
 describe('scheduleViewMove: computeStudentMove 経由の移動セマンティクス(方式非依存の確定事項)', () => {
@@ -246,6 +266,78 @@ describe('scheduleViewMove: computeStudentMove 経由の移動セマンティク
     expect(moved.noteSuffix).toBe('60')
     // 講習は通常の抑制キー対象外
     expect(result.nextSuppressedRegularLessonOccurrences).toEqual([])
+  })
+
+  it('移動先が出席済みの席(studentSlots空・statusSlots=attended)なら blocked にする(2026-07-09 回帰防止: studentSlots依存だと素通りしていた)', () => {
+    const movingEntry = makeStudentEntry({ id: 'entry-move-to-attended' })
+    const sourceCell = makeCell('2026-07-06', 1, [makeLessonDesk('佐藤', [movingEntry, null])])
+    const targetCell = makeCell('2026-07-08', 2, [
+      {
+        teacher: '田中',
+        lesson: { id: 'lesson-target', studentSlots: [null, null] },
+        statusSlots: [
+          {
+            id: 'st-attended', studentId: 'stu-9', sourceManagedLesson: true, name: '出席花子', grade: '中1',
+            subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '田中',
+            dateKey: '2026-07-08', slotNumber: 2, recordedAt: 'r', status: 'attended', sourceLessonId: 'l3',
+          },
+          null,
+        ] as SlotCell['desks'][number]['statusSlots'],
+      },
+    ])
+    const weeks: SlotCell[][] = [[sourceCell, targetCell]]
+
+    const result = computeStudentMove({
+      weeks,
+      weekIndex: 0,
+      cells: weeks[0],
+      movingStudentId: 'entry-move-to-attended',
+      cellId: targetCell.id,
+      deskIndex: 0,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: emptyManagedMap,
+      resolveBoardStudentDisplayName: displayName,
+    })
+
+    expect(result.status).toBe('blocked')
+    if (result.status !== 'blocked') return
+    expect(result.message).toContain('出席済み')
+  })
+
+  it('移動先が欠席記録つき空席(statusSlots=absent)なら attended と違いブロックせず moved になる', () => {
+    const movingEntry = makeStudentEntry({ id: 'entry-move-to-absent' })
+    const sourceCell = makeCell('2026-07-06', 1, [makeLessonDesk('佐藤', [movingEntry, null])])
+    const targetCell = makeCell('2026-07-08', 2, [
+      {
+        teacher: '田中',
+        lesson: { id: 'lesson-target-absent', studentSlots: [null, null] },
+        statusSlots: [
+          {
+            id: 'st-absent', studentId: 'stu-10', sourceManagedLesson: true, name: '欠席太郎', grade: '中1',
+            subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '田中',
+            dateKey: '2026-07-08', slotNumber: 2, recordedAt: 'r', status: 'absent', sourceLessonId: 'l4',
+          },
+          null,
+        ] as SlotCell['desks'][number]['statusSlots'],
+      },
+    ])
+    const weeks: SlotCell[][] = [[sourceCell, targetCell]]
+
+    const result = computeStudentMove({
+      weeks,
+      weekIndex: 0,
+      cells: weeks[0],
+      movingStudentId: 'entry-move-to-absent',
+      cellId: targetCell.id,
+      deskIndex: 0,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: emptyManagedMap,
+      resolveBoardStudentDisplayName: displayName,
+    })
+
+    expect(result.status).toBe('moved')
   })
 
   it('入力 weeks を破壊しない(盤面 Undo が1操作で戻れる前提)', () => {

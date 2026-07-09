@@ -173,6 +173,9 @@ export function buildDeskPickerDesks(cell: SlotCell, resolveDisplayName?: (name:
       const student = desk.lesson?.studentSlots[studentIndex] ?? null
       const status = desk.statusSlots?.[studentIndex] ?? null
       const blockedByMemo = !student && Boolean(desk.memoSlots?.[studentIndex])
+      // 出席済みの席は studentSlots が空(名前は statusSlots に退避)でも配置不可(2026-07-09 修正)。
+      // 欠席/振無休は物理的空席として選択可のまま(既存仕様)。
+      const isAttended = status?.status === 'attended'
       const statusLabel = !student && status && status.status !== 'moved'
         ? `${status.status === 'attended' ? '出席' : status.status === 'absent-no-makeup' ? '振無休' : '休'} ${displayName(status.name)}`
         : ''
@@ -183,7 +186,7 @@ export function buildDeskPickerDesks(cell: SlotCell, resolveDisplayName?: (name:
         label: student ? `${displayName(student.name)} ${student.subject}` : '',
         statusLabel,
         blockedByMemo,
-        selectable: !student && !blockedByMemo,
+        selectable: !student && !blockedByMemo && !isAttended,
       }
     }),
   }))

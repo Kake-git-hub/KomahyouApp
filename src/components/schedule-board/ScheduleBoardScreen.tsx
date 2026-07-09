@@ -3427,8 +3427,10 @@ export function computeStudentMove(params: {
   }
 
   const targetStatusBeforeMove = targetDeskBeforeMove?.statusSlots?.[studentIndex] ?? null
-  if (targetStudentBeforeMove && targetStatusBeforeMove?.status === 'attended') {
-    return { status: 'blocked', message: '出席済みの生徒とは入れ替えできません。出席を解除してから操作してください。' }
+  // 出席席は studentSlots が空(名前は statusSlots に退避)なので、studentSlots 依存だと素通りしていた(2026-07-09 修正)。
+  // attended は配置も入れ替えも不可(欠席/振無休/移動済みは空席として配置可なのでブロックしない)。
+  if (targetStatusBeforeMove?.status === 'attended') {
+    return { status: 'blocked', message: '出席済みの生徒がいる席には配置・入れ替えできません。出席を解除してから操作してください。' }
   }
 
   let movedStudent: StudentEntry | null = null
@@ -8032,6 +8034,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       result.nextSuppressedRegularLessonOccurrences,
     )
+    // 日程表コマ組みは明示的・低頻度操作。1.5秒の自動同期デバウンスを待たず即同期し、別タブの同期スピナーを最短で消す
+    // (講習自動割振と同じ扱い)。
+    setScheduleSyncTrigger((prev) => prev + 1)
     setStatusMessage(`日程表コマ組み: ${result.message}`)
     return { ok: true, message: `${result.message} 手動保存で確定されます。` }
   }
@@ -8050,7 +8055,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     onStudentScheduleRequestProcessed?.(request.requestId)
     const result = stableExecuteScheduleViewMove(request.source, request.seat)
     // 別タブへ結果を返す: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示(日程表に戻る導線)。
-    // 成功時の盤面反映自体は既存の自動同期(デバウンス)で別タブに届く。
+    // 成功時の盤面反映自体は executeScheduleViewMove 内の即時同期トリガー(2026-07-09)で別タブに届く
+    // (1.5秒デバウンスを待たない。講習自動割振と同じ扱い)。
     const ackMessage = {
       type: 'schedule-student-move-result',
       ok: result.ok,

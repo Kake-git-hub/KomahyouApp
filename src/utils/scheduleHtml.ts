@@ -3537,6 +3537,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             + ' data-occupant-entry-id="' + escapeHtml(seat.occupantEntryId || '') + '">'
             + escapeHtml(seat.label || '使用中') + '<span class="dp-swap-hint">入替</span></td>';
         }
+        // 出席済みなど配置不可の記録席(selectable:false)は空きに見せず、記録ラベルでブロック表示する。
+        // (欠席/振無休は selectable:true のままなので、この分岐には入らず従来どおり選択可)
+        if (!seat.selectable) {
+          return '<td class="dp-student dp-blocked">' + escapeHtml(seat.statusLabel || '不可') + '</td>';
+        }
         var emptyText = seat.statusLabel ? escapeHtml(seat.statusLabel) : '空き';
         return '<td class="dp-student dp-selectable"' + idAttrs + '><span class="dp-empty">' + emptyText + '</span></td>';
       }

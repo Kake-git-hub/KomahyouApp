@@ -18,6 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Phase C 出席済み席への配置ガード): 出席済みにした生徒は studentSlots から除去され statusSlots に退避される仕様上、`computeStudentMove` の出席ガードが `targetStudentBeforeMove &&` 条件で studentSlots 依存になっており出席席へ別生徒を配置・入れ替えできてしまう回帰を修正。statusSlots が `attended` なら studentSlots の有無に関わらずブロックするよう変更(欠席/振無休/移動済みは従来どおり配置可能な空席のまま)。机選択モーダル側(`buildDeskPickerDesks`)も出席席を `selectable:false` にし、埋め込みJS(`renderDeskPickerSeatCellHtml`)も非選択席を記録ラベル付きのブロック表示に変更。回帰テスト追加(src/components/schedule-board/ScheduleBoardScreen.tsx(+test)・src/components/schedule-view/scheduleViewMove.ts(+test)・src/utils/scheduleHtml.ts)
+- fix(Phase C 日程表コマ組みの同期即時化): 別タブでの生徒移動成立時、1.5秒の自動同期デバウンス任せだった別タブへの反映を、講習自動割振と同様に `setScheduleSyncTrigger` で即時トリガーするよう変更し、同期スピナー表示を最短化(src/components/schedule-board/ScheduleBoardScreen.tsx)
+
 - fix(Phase C D&D対象拡大): 日程表コマ組み(別タブD&D)で増コマ(lessonType='extra')が掴めなかった問題を修正。prepareStudentForMove は regular/makeup 以外は単純な位置移動のみで既存の講習(special)と同じ経路のため副作用なし。buildLessonCardDragAttrs の対象種別に 'extra' を追加(spec-student-schedule-dnd.md も更新)。回帰テスト追加(src/utils/scheduleHtml.ts(+test))
 - fix(Phase C 週自動拡張の上限): 日程表コマ組みD&Dで移動先が現在ロード済みの週から離れていると weeks state が無制限に肥大化し(cloneWeeks全週クローン+Undo履歴×最大10で増幅)後続操作が重くなる問題に対処。executeScheduleViewMove に上限8週間(56日)のガードを追加し、超える移動は ensureWeeksCoverDateRange を呼ばず不成立を返す(盤面自体の週送りには影響なし・スコープ限定)。純関数 checkScheduleViewMoveRangeWithinCap を export しユニットテスト化(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
 - refactor(ensureWeeksCoverDateRange 性能): 週の自動拡張ループが毎回 `[newWeek, ...nextWeeks]` / `[...nextWeeks, newWeek]` で配列全体をコピーしO(n^2)になっていたのを、前方/後方それぞれ一時配列に貯めてから最後に一度だけ結合するO(n)に最適化。生成される週の内容・順序・weekIndexOffsetは完全に不変(リファクタ前実装との出力一致をスタッシュ比較で確認済み)。回帰テスト追加(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
