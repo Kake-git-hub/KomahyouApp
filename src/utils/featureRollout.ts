@@ -48,9 +48,9 @@ export const featureRolloutRegistry = {
   // 講師を生徒と同様に長押しD&Dして、同一コマ内の別の机へ移動/入れ替えできる。生徒は動かさず机の
   // 「講師ブロック」だけを入れ替える(移動先が空きなら単純移動、講師がいれば入れ替え)。同一コマ限定
   // (別コマへのドロップは無効)。実移動は純関数 computeTeacherMove に集約。開発用教室で先行検証後、
-  // オーナー確定で全教室へ昇格予定。回帰で development-only へ戻さない。
+  // オーナー確定(2026-07-09)で全教室へ昇格。回帰で development-only へ戻さない。
   teacherDragAndDropMove: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Long-press drag-and-drop move/swap of a teacher between desks within the same slot column.',
   },
   // 対話用日程表(生徒/講師)を生成HTMLタブではなく同一 React ツリーのビュー(ドック⇄ポップアウト)で
