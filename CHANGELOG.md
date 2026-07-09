@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.412 (2026-07-09)
+
+- fix: `tools/copy-prod-classroom-to-staging.mjs` が無出力のまま止まって見える不具合を修正。`classroomSnapshots/{id}/saveAttempts`(保存の冪等性ログ・稼働中教室では数百〜数千件に達し得る)を削除・コピーの両方で丸ごとスキップするようにした(進捗ログも追加)。アプリ本体(デプロイ物)には影響しない開発ツールのみの変更(tools/copy-prod-classroom-to-staging.mjs)
+
 ## v1.5.411 (2026-07-08)
 
 - fix: 生徒日程表の印刷で、講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で見切れる不具合を修正。@media print 内で通常回数/講習回数表(.count-table)の行高を 22px→16px・縦paddingを詰めた(画面表示は22pxのまま)。回帰テスト同コミット追加(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
