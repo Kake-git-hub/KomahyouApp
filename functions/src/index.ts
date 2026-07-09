@@ -2237,6 +2237,9 @@ export const lectureSubmissionApi = onRequest({
           ...(data.personType === 'student' ? { subjectSlots, subjectDurations, groupClassParticipation, optionChecks, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
           countSubmitted: true,
           submissionToken: token,
+          // 講習集計結果の提出日時/方法。QRからの提出なので method='qr'、時刻は提出時刻(now)。
+          submittedAt: now,
+          submissionMethod: 'qr',
           updatedAt: now,
         }
         session[inputKey] = inputs

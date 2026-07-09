@@ -3558,6 +3558,10 @@ function AuthenticatedApp() {
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
+                // 講習集計結果: 室長が登録操作で確定=method='manual'・日時は操作時刻。登録解除は日時/方法をクリア。
+                // QR提出済みでも室長が再度「登録」で確定すれば「室長登録」に更新される(最後の操作が正)。
+                submittedAt: countSubmitted ? updatedAt : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
                 updatedAt,
               },
             },
@@ -3645,6 +3649,9 @@ function AuthenticatedApp() {
                 unavailableSlots,
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
+                // 出席不可の保存では登録状況を変えないので提出日時/方法も保全する(消すと集計結果が '—' に化ける)。
+                submittedAt: previousInput?.submittedAt ?? null,
+                submissionMethod: previousInput?.submissionMethod,
                 updatedAt,
               },
             },
@@ -3672,6 +3679,9 @@ function AuthenticatedApp() {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
+                // 講習集計結果(講師): 室長が登録で確定=method='manual'・日時は操作時刻。解除は日時/方法をクリア。
+                submittedAt: countSubmitted ? updatedAt : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
                 updatedAt,
               },
             },
@@ -3824,6 +3834,9 @@ function AuthenticatedApp() {
                     ...existing,
                     unavailableSlots: entry.unavailableSlots,
                     countSubmitted: true,
+                    // 講習集計結果(講師): QR提出の反映なので method='qr'、日時は提出ドキュメントの submittedAt。
+                    submittedAt: entry.submittedAt,
+                    submissionMethod: 'qr',
                     updatedAt: now,
                   },
                 },
@@ -3865,6 +3878,9 @@ function AuthenticatedApp() {
                     optionChecks: entry.optionChecks ?? existing?.optionChecks ?? {},
                     regularOnly: entry.regularOnly,
                     countSubmitted: true,
+                    // 講習集計結果(生徒): QR提出の反映なので method='qr'、日時は提出ドキュメントの submittedAt。
+                    submittedAt: entry.submittedAt,
+                    submissionMethod: 'qr',
                     updatedAt: now,
                   },
                 },

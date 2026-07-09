@@ -125,12 +125,19 @@ export type SerializedStudentSpecialSessionInput = {
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string
+  // 講習集計結果の「提出日時」「提出方法」列に使う。QR提出/室長登録の日時と方法('qr'|'manual')。
+  // 未搬送(既存データ)や未登録は undefined。payload に必ず載せる(欠落すると popup で '—' に化ける)。
+  submittedAt?: string | null
+  submissionMethod?: 'qr' | 'manual'
 }
 
 export type SerializedTeacherSpecialSessionInput = {
   unavailableSlots: string[]
   countSubmitted: boolean
   submissionToken?: string
+  // 講師の講習集計結果でも提出日時/方法を表示する。生徒と同じ扱い。
+  submittedAt?: string | null
+  submissionMethod?: 'qr' | 'manual'
 }
 
 export type SerializedSpecialSession = {
@@ -562,6 +569,9 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
+        // 講習集計結果(講師)の提出日時/方法。欠落すると popup へ届かず '—' に化けるため必ず載せる。
+        submittedAt: input.submittedAt ?? undefined,
+        submissionMethod: input.submissionMethod ?? undefined,
       }])),
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
@@ -573,6 +583,9 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         regularOnly: Boolean(input.regularOnly),
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
+        // 講習集計結果(生徒)の提出日時/方法。欠落すると popup へ届かず '—' に化けるため必ず載せる。
+        submittedAt: input.submittedAt ?? undefined,
+        submissionMethod: input.submissionMethod ?? undefined,
       }])),
     })),
     groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
@@ -2490,7 +2503,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         ${viewType === 'student' ? '<button type="button" id="schedule-empty-format-button" class="secondary">空フォーマット印刷</button>' : ''}
-        ${viewType === 'student' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
+        ${viewType === 'student' || viewType === 'teacher' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
         <button type="button" id="schedule-show-all-button" class="secondary">印刷用全員表示</button>
       </div>
       <div class="toolbar-field toolbar-field--search">
@@ -4145,6 +4158,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
                 subjectSlots: normalizeSubjectSlots(currentInput.subjectSlots),
                 regularOnly: Boolean(currentInput.regularOnly),
                 countSubmitted: Boolean(currentInput.countSubmitted),
+                // 講習集計結果の提出日時/方法は登録状況を変えないこの操作では保全する。
+                submittedAt: currentInput.submittedAt || null,
+                submissionMethod: currentInput.submissionMethod,
               },
             },
           };
@@ -4170,6 +4186,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
                 optionChecks: optionChecks !== undefined ? (optionChecks || {}) : (currentInput.optionChecks || {}),
                 regularOnly: Boolean(regularOnly),
                 countSubmitted: Boolean(countSubmitted),
+                // 講習集計結果: 室長の登録操作なので即時に method='manual'・日時=今。解除は日時/方法をクリア。
+                // (opener 側の schedule-student-count-save と同じ規則。最新表示前でも集計結果に反映される)
+                submittedAt: countSubmitted ? new Date().toISOString() : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
               },
             },
           };
@@ -4195,6 +4215,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(unavailableSlots),
                 countSubmitted: Boolean(currentInput.countSubmitted),
+                // 提出日時/方法は登録状況を変えないこの操作では保全する。
+                submittedAt: currentInput.submittedAt || null,
+                submissionMethod: currentInput.submissionMethod,
               },
             },
           };
@@ -4212,6 +4235,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
                 countSubmitted: Boolean(countSubmitted),
+                // 講習集計結果(講師): 室長の登録操作なので即時に method='manual'・日時=今。解除はクリア。
+                submittedAt: countSubmitted ? new Date().toISOString() : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
               },
             },
           };
@@ -6068,6 +6094,31 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }).join(' / ');
       }
 
+      // 講習集計結果の「提出日時」セル。ISO文字列を JST(M/D HH:MM)で返す。未提出/不正は '—'。
+      // ランタイムのタイムゾーンに依存しないよう +9h した上で UTC 成分を読む(CIのUTCでも同結果=テスト決定的)。
+      // (scheduleHtml.test.ts が new Function で抽出して固定する)
+      function formatSubmissionDateTime(submittedAt) {
+        if (typeof submittedAt !== 'string' || !submittedAt) return '—';
+        var ms = Date.parse(submittedAt);
+        if (isNaN(ms)) return '—';
+        var jst = new Date(ms + 9 * 60 * 60 * 1000);
+        var month = jst.getUTCMonth() + 1;
+        var day = jst.getUTCDate();
+        var hours = ('0' + jst.getUTCHours()).slice(-2);
+        var minutes = ('0' + jst.getUTCMinutes()).slice(-2);
+        return month + '/' + day + ' ' + hours + ':' + minutes;
+      }
+
+      // 講習集計結果の「提出方法」セル。'qr'=QR提出、'manual'=室長登録。
+      // 未登録は '—'、登録済みでも方法不明(この機能導入前の既存データ)は '—'。
+      // (scheduleHtml.test.ts が new Function で抽出して固定する)
+      function resolveSubmissionMethodLabel(input) {
+        if (!input || !input.countSubmitted) return '—';
+        if (input.submissionMethod === 'qr') return 'QR提出';
+        if (input.submissionMethod === 'manual') return '室長登録';
+        return '—';
+      }
+
       // 表示期間の講習について、全生徒の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
       function buildLectureSummaryHtml(startDate, endDate) {
         var sessions = getOverlappingSpecialSessions(startDate, endDate);
@@ -6082,15 +6133,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
               + '<td class="lecture-summary-name">' + escapeHtml(formatStudentHeaderName(student, startDate)) + '</td>'
               + '<td class="' + statusClassMap[status.kind] + '">' + escapeHtml(status.label) + '</td>'
-              + '<td class="lecture-summary-subjects">' + escapeHtml(formatDesiredSubjectsWithDuration(inputs[student.id], student, startDate)) + '</td></tr>';
+              + '<td class="lecture-summary-subjects">' + escapeHtml(formatDesiredSubjectsWithDuration(inputs[student.id], student, startDate)) + '</td>'
+              + '<td class="lecture-summary-submitted-at">' + escapeHtml(formatSubmissionDateTime(inputs[student.id] && inputs[student.id].submittedAt)) + '</td>'
+              + '<td class="lecture-summary-method">' + escapeHtml(resolveSubmissionMethodLabel(inputs[student.id])) + '</td></tr>';
           }).join('');
-          if (!rowsHtml) rowsHtml = '<tr><td colspan="4" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="6" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
           var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
           var summaryLine = '登録 ' + counts.registered + '人 / 通常のみ ' + counts['regular-only'] + '人 / 未登録 ' + counts.unregistered + '人（全 ' + students.length + '人）';
           return '<section class="lecture-summary-section">'
             + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
             + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
-            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th></tr></thead>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th><th>提出日時</th><th>提出方法</th></tr></thead>'
             + '<tbody>' + rowsHtml + '</tbody></table></section>';
         }).join('');
         if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
@@ -6103,14 +6156,74 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '.lecture-summary-section h2{font-size:16px;margin:0 0 6px;border-bottom:2px solid #cbd2d9;padding-bottom:4px;}'
           + '.lecture-summary-range{font-size:12px;color:#52606d;font-weight:normal;margin-left:10px;}'
           + '.lecture-summary-count{font-size:13px;color:#52606d;margin:0 0 10px;}'
-          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:760px;}'
+          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:920px;}'
           + '.lecture-summary-table th,.lecture-summary-table td{border:1px solid #cbd2d9;padding:6px 10px;text-align:left;font-size:14px;}'
           + '.lecture-summary-table th{background:#f5f7fa;}'
           + '.lecture-summary-index{width:44px;text-align:right;color:#7b8794;}'
           + '.lecture-summary-name{white-space:nowrap;}'
           + '.lecture-summary-subjects{color:#1f2933;}'
+          + '.lecture-summary-submitted-at{white-space:nowrap;color:#1f2933;}'
+          + '.lecture-summary-method{white-space:nowrap;color:#334e68;}'
           + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
           + '.lecture-summary-regular-only{color:#b45309;font-weight:bold;}'
+          + '.lecture-summary-unregistered{color:#9aa5b1;}'
+          + '.lecture-summary-empty{color:#7b8794;}'
+          + '.lecture-summary-print{margin:0 0 20px;}'
+          + '@media print{.lecture-summary-print{display:none;}body{padding-bottom:0;}}';
+        var printButton = '<div class="lecture-summary-print"><button type="button" onclick="window.print()">印刷</button></div>';
+        return '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>' + escapeHtml(title) + '</title>'
+          + '<style>' + style + '</style></head><body>'
+          + '<h1>' + escapeHtml(title) + '</h1>'
+          + '<p class="lecture-summary-subtitle">' + escapeHtml('表示期間: ' + formatRangeLabel(startDate, endDate)) + '</p>'
+          + printButton + sectionsHtml + '</body></html>';
+      }
+
+      // 表示期間の講習について、全講師の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
+      // 生徒版と異なり希望科目列は出さない(講師は科目提出がないため・オーナー指示 2026-07-09)。
+      function buildTeacherLectureSummaryHtml(startDate, endDate) {
+        var sessions = getOverlappingSpecialSessions(startDate, endDate);
+        var teachers = getVisibleTeachers(startDate, endDate);
+        var sectionsHtml = sessions.map(function(session) {
+          var inputs = session && session.teacherInputs && typeof session.teacherInputs === 'object' ? session.teacherInputs : {};
+          var registeredCount = 0;
+          var rowsHtml = teachers.map(function(teacher, index) {
+            var input = inputs[teacher.id];
+            var registered = Boolean(input && input.countSubmitted);
+            if (registered) registeredCount += 1;
+            var statusLabel = registered ? '登録' : '未登録';
+            var statusClass = registered ? 'lecture-summary-registered' : 'lecture-summary-unregistered';
+            return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
+              + '<td class="lecture-summary-name">' + escapeHtml(formatTeacherHeaderName(teacher)) + '</td>'
+              + '<td class="' + statusClass + '">' + escapeHtml(statusLabel) + '</td>'
+              + '<td class="lecture-summary-submitted-at">' + escapeHtml(formatSubmissionDateTime(input && input.submittedAt)) + '</td>'
+              + '<td class="lecture-summary-method">' + escapeHtml(resolveSubmissionMethodLabel(input)) + '</td></tr>';
+          }).join('');
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="5" class="lecture-summary-empty">表示対象の講師がいません</td></tr>';
+          var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
+          var summaryLine = '登録 ' + registeredCount + '人 / 未登録 ' + (teachers.length - registeredCount) + '人（全 ' + teachers.length + '人）';
+          return '<section class="lecture-summary-section">'
+            + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
+            + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>講師名</th><th>登録状況</th><th>提出日時</th><th>提出方法</th></tr></thead>'
+            + '<tbody>' + rowsHtml + '</tbody></table></section>';
+        }).join('');
+        if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
+        var title = '講習集計結果（講師）';
+        var style = 'body{font-family:sans-serif;margin:24px;padding-bottom:160px;color:#1f2933;}'
+          + 'h1{font-size:20px;margin:0 0 4px;}'
+          + '.lecture-summary-subtitle{color:#52606d;font-size:13px;margin:0 0 20px;}'
+          + '.lecture-summary-section{margin-bottom:28px;}'
+          + '.lecture-summary-section h2{font-size:16px;margin:0 0 6px;border-bottom:2px solid #cbd2d9;padding-bottom:4px;}'
+          + '.lecture-summary-range{font-size:12px;color:#52606d;font-weight:normal;margin-left:10px;}'
+          + '.lecture-summary-count{font-size:13px;color:#52606d;margin:0 0 10px;}'
+          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:720px;}'
+          + '.lecture-summary-table th,.lecture-summary-table td{border:1px solid #cbd2d9;padding:6px 10px;text-align:left;font-size:14px;}'
+          + '.lecture-summary-table th{background:#f5f7fa;}'
+          + '.lecture-summary-index{width:44px;text-align:right;color:#7b8794;}'
+          + '.lecture-summary-name{white-space:nowrap;}'
+          + '.lecture-summary-submitted-at{white-space:nowrap;color:#1f2933;}'
+          + '.lecture-summary-method{white-space:nowrap;color:#334e68;}'
+          + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
           + '.lecture-summary-unregistered{color:#9aa5b1;}'
           + '.lecture-summary-empty{color:#7b8794;}'
           + '.lecture-summary-print{margin:0 0 20px;}'
@@ -6280,7 +6393,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             currentEndDate = swap;
           }
           if (getOverlappingSpecialSessions(currentStartDate, currentEndDate).length === 0) return;
-          var summaryHtml = buildLectureSummaryHtml(currentStartDate, currentEndDate);
+          var summaryHtml = VIEW_TYPE === 'teacher'
+            ? buildTeacherLectureSummaryHtml(currentStartDate, currentEndDate)
+            : buildLectureSummaryHtml(currentStartDate, currentEndDate);
           var summaryWindow = window.open('', 'lecture-summary-' + Date.now());
           if (summaryWindow) {
             summaryWindow.document.open();
