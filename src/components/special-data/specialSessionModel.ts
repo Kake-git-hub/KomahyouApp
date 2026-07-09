@@ -2,6 +2,10 @@ export type SpecialSessionTeacherInput = {
   unavailableSlots: string[]
   countSubmitted: boolean
   submissionToken?: string
+  // 混入防止(2026-07-09): このトークンを発行した教室ID。開発用教室が他教室の生データを
+  // コピーしたときに「他教室由来のトークン」を見分けて弾くために使う(開発用教室でのみ判定)。
+  // 本番教室ではこの値を参照せず、既存(未タグ)トークンも従来どおり動く。後方互換のため optional。
+  submissionTokenClassroomId?: string
   updatedAt: string
 }
 
@@ -22,6 +26,10 @@ export type SpecialSessionStudentInput = {
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string
+  // 混入防止(2026-07-09): このトークンを発行した教室ID。開発用教室が他教室の生データを
+  // コピーしたときに「他教室由来のトークン」を見分けて弾くために使う(開発用教室でのみ判定)。
+  // 本番教室ではこの値を参照せず、既存(未タグ)トークンも従来どおり動く。後方互換のため optional。
+  submissionTokenClassroomId?: string
   updatedAt: string
 }
 
