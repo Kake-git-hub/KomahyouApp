@@ -3,6 +3,7 @@ import {
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
   HOUR_IN_MS,
+  isWorkspaceAutoBackupSkippedAt,
   resolveBackupKindFromSummary,
   shouldKeepWorkspaceAutoBackup,
   toQuarterHourlyDateKeyJst,
@@ -10,6 +11,36 @@ import {
   toUtcHourKey,
   toUtcQuarterHourKey,
 } from './workspaceBackupSchedule'
+
+describe('isWorkspaceAutoBackupSkippedAt (静音時間帯 JST 3:15〜8:45 をスキップ・3:00は取得)', () => {
+  // JST = UTC+9。UTC 18:00 = JST 翌 03:00。
+  const at = (utcIso: string) => isWorkspaceAutoBackupSkippedAt(new Date(utcIso))
+
+  it('日次アンカーの JST 3:00 は取得する(スキップしない)', () => {
+    expect(at('2026-07-09T18:00:00Z')).toBe(false) // JST 2026-07-10 03:00
+  })
+  it('JST 3:15 はスキップする', () => {
+    expect(at('2026-07-09T18:15:00Z')).toBe(true) // JST 03:15
+  })
+  it('JST 3:45 はスキップする', () => {
+    expect(at('2026-07-09T18:45:00Z')).toBe(true) // JST 03:45
+  })
+  it('JST 4:00〜8:45 はスキップする', () => {
+    expect(at('2026-07-09T19:00:00Z')).toBe(true) // JST 04:00
+    expect(at('2026-07-09T23:45:00Z')).toBe(true) // JST 08:45
+    expect(at('2026-07-09T23:00:00Z')).toBe(true) // JST 08:00
+  })
+  it('JST 9:00 から通常の取得へ復帰する(スキップしない)', () => {
+    expect(at('2026-07-10T00:00:00Z')).toBe(false) // JST 09:00
+    expect(at('2026-07-10T00:15:00Z')).toBe(false) // JST 09:15
+  })
+  it('静音帯の直前 JST 2:45 は取得する(スキップしない)', () => {
+    expect(at('2026-07-09T17:45:00Z')).toBe(false) // JST 02:45
+  })
+  it('昼間(JST 12:00)は取得する', () => {
+    expect(at('2026-07-10T03:00:00Z')).toBe(false) // JST 12:00
+  })
+})
 
 describe('toUtcDateKey', () => {
   it('UTC日付を YYYY-MM-DD 形式にする', () => {

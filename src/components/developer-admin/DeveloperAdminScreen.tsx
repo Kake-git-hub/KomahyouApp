@@ -282,7 +282,7 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
           <section className="basic-data-section-card developer-backup-panel">
             <div className="basic-data-card-head">
               <h3>サーバーバックアップ</h3>
-              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で15分ごとに自動バックアップが作成され、直近24時間は15分刻み、24〜72時間は毎時0分のみ、72時間〜7日間はAM3:00のみを段階的に間引いて保持します。Google Drive サーバー同期を設定している場合は、Web アプリを開かなくても同じ JSON が自動同期されます。' : ''}</p>
+              <p>ワークスペース全体を JSON で退避し、削除済み教室もまとめて復元できます。{authMode === 'firebase' ? 'Firebase サーバー側で15分ごとに自動バックアップが作成され、直近24時間は15分刻み、24〜72時間は毎時0分のみ、72時間〜7日間はAM3:00のみを段階的に間引いて保持します。早朝(JST 3:15〜8:45)は操作されない時間帯のため取得を休止します(AM3:00の1本のみ取得)。Google Drive サーバー同期を設定している場合は、Web アプリを開かなくても同じ JSON が自動同期されます。' : ''}</p>
             </div>
             <div className="developer-backup-grid">
               <div className="basic-data-row-actions">
