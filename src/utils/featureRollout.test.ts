@@ -50,4 +50,11 @@ describe('featureRollout', () => {
     expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'development', name: '開発用教室' })).toBe(true)
     expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
   })
+
+  it('keeps schedule popup auto-sync (自動同期+スピナー) staging-first (production classrooms unaffected)', () => {
+    // オーナー確定 2026-07-09: 本番3教室は従来どおり「最新表示/開いた時のみ更新」。staging/開発用教室でのみ自動同期。
+    expect(featureRolloutRegistry.schedulePopupAutoSync.scope).toBe('staging-environment')
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+  })
 })

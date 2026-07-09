@@ -3615,6 +3615,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 日程表コマ組み(別タブD&D・spec-student-schedule-dnd)は staging/開発用教室のみ先行有効。生徒ペイロードに
   // scheduleDndEnabled として渡し、埋め込みJSのD&D起動と各コマの pickerDesks(机選択モーダル用)の載せ分けに使う。
   const scheduleDndMoveEnabled = isFeatureEnabledForClassroom('studentScheduleDndMove', { name: classroomName })
+  // 別タブ日程表の自動同期(デバウンス)＋同期スピナーも staging/開発用教室のみ。本番3教室は従来どおり
+  // 「最新表示」ボタン/開いた時のみ更新に保つ(オーナー確定 2026-07-09: メモリ負荷が本番大教室で未検証のため)。
+  const scheduleAutoSyncEnabled = isFeatureEnabledForClassroom('schedulePopupAutoSync', { name: classroomName })
   // 対話用日程表の React ビュー(ドック⇄ポップアウト)は棚上げ(オーナー確定 2026-07-08 再指摘)。
   // 別ウィンドウ(React portal)への pointer 操作が別ブラウザウィンドウで確実に届かず D&D が成立しない・
   // 従来タブと操作感が変わる、という理由で「別タブ(生成HTML)に同期＋コマ組みを実装する」方針へ回帰。
@@ -5702,6 +5705,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // __showScheduleSyncing を即時に呼ぶ→同期ペイロード適用で自動的に消える)。
   const syncSpinnerArmedRef = useRef(false)
   useEffect(() => {
+    // 本番3教室(自動同期オフ)では編集ごとの再同期・スピナーを一切行わない(main 挙動: 最新表示/開いた時のみ更新)。
+    // 開発用教室/staging のみ自動同期する(オーナー確定 2026-07-09)。
+    if (!scheduleAutoSyncEnabled) {
+      syncSpinnerArmedRef.current = false
+      return
+    }
     if (!isStudentScheduleOpen && !isTeacherScheduleOpen) {
       syncSpinnerArmedRef.current = false
       return
@@ -5743,6 +5752,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     effectiveStudentScheduleRange,
     effectiveTeacherScheduleRange,
     classroomSettings.scheduleNotes,
+    scheduleAutoSyncEnabled,
   ])
 
   // ==== React 日程表ビュー(staging 先行・spec-schedule-interactive-view) ====

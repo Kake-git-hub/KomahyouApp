@@ -59,6 +59,14 @@ export const featureRolloutRegistry = {
     scope: 'staging-environment',
     description: 'Drag-and-drop lesson move on the generated-HTML student schedule tab (long-press card -> empty slot -> desk picker -> board move).',
   },
+  // 別タブ日程表の自動同期(盤面編集をデバウンス約1.5秒で自動反映)＋同期スピナー。日程表コマ組み(別タブD&D)と
+  // 同じく staging/開発用教室のみ先行有効にする。2026-06-05 のポップアップ再生成メモリ障害と同種の負荷があり、
+  // 大きな本番教室では未検証のため、本番3教室は従来どおり「最新表示ボタン/開いた時のみ更新」に保つ
+  // (オーナー確定 2026-07-09)。off の教室では自動同期effectを no-op にし、スピナーも出さない。
+  schedulePopupAutoSync: {
+    scope: 'staging-environment',
+    description: 'Auto-sync (debounced) the generated-HTML schedule popup on board edits, with a syncing spinner.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry
