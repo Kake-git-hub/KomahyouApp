@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.417 (2026-07-09)
+
 - feat(Phase C 本番展開ゲート): 日程表コマ組み(別タブD&D)を本番の**開発用教室のみ**へ展開(scope=staging-environment・本番3教室は無効)。加えて別タブ日程表の**自動同期(デバウンス)＋同期スピナー**も本番3教室では意図せず有効化されないよう新フラグ `schedulePopupAutoSync`(staging-environment)を追加してゲート。off の教室では自動同期effectを no-op にし従来どおり「最新表示ボタン/開いた時のみ更新」に保つ(2026-06-05 のポップアップ再生成メモリ障害と同種の負荷が本番大教室で未検証のため・オーナー確定 2026-07-09)。回帰テスト追加(src/utils/featureRollout.ts(+test) / src/components/schedule-board/ScheduleBoardScreen.tsx)
 - fix(Phase C 出席済み席への配置ガード): 出席済みにした生徒は studentSlots から除去され statusSlots に退避される仕様上、`computeStudentMove` の出席ガードが `targetStudentBeforeMove &&` 条件で studentSlots 依存になっており出席席へ別生徒を配置・入れ替えできてしまう回帰を修正。statusSlots が `attended` なら studentSlots の有無に関わらずブロックするよう変更(欠席/振無休/移動済みは従来どおり配置可能な空席のまま)。机選択モーダル側(`buildDeskPickerDesks`)も出席席を `selectable:false` にし、埋め込みJS(`renderDeskPickerSeatCellHtml`)も非選択席を記録ラベル付きのブロック表示に変更。回帰テスト追加(src/components/schedule-board/ScheduleBoardScreen.tsx(+test)・src/components/schedule-view/scheduleViewMove.ts(+test)・src/utils/scheduleHtml.ts)
 - fix(Phase C 日程表コマ組みの同期即時化・二重スピナー修正): 別タブでの生徒移動成立時、1.5秒の自動同期デバウンス任せだった別タブへの反映を短縮。当初は即時 `setScheduleSyncTrigger` を別途足したが、自動同期(デバウンス)effectと経路が二重化し「早期hide→再show」でスピナーが2回出る問題が判明。同期経路を自動同期effectに一本化し、移動時だけ次回1回のデバウンス遅延を0msにする方式(`scheduleSyncDelayRef`)に変更してスピナーを1回・最短に(src/components/schedule-board/ScheduleBoardScreen.tsx)
