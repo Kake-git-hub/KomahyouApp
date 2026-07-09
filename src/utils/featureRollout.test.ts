@@ -29,6 +29,13 @@ describe('featureRollout', () => {
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
   })
 
+  it('keeps teacher drag-and-drop move development-only until validated', () => {
+    // 講師の同コマ内D&D移動/入れ替えは開発用教室で先行検証中。本番3教室ではまだ無効(検証後に昇格予定)。
+    expect(featureRolloutRegistry.teacherDragAndDropMove.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+  })
+
   it('judges the staging environment by Firebase project id', () => {
     // staging 先行機能(日程表 React ビュー)は教室IDでなくプロジェクトIDで有効化する(2026-07-08 確定)。
     expect(isStagingEnvironment('komahyouapp-staging')).toBe(true)

@@ -3640,6 +3640,98 @@ export function computeStudentMove(params: {
   return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences }
 }
 
+// 机の「講師ブロック」(講師名＋割当メタ)を1まとまりとして扱うための型。DeskCell からこの6フィールド
+// だけを抜き出して2机間で入れ替えることで、生徒(lesson)は動かさず講師だけを移動/入れ替えする。
+type DeskTeacherBlock = {
+  teacher: string
+  manualTeacher?: boolean
+  teacherAssignmentSource?: DeskCell['teacherAssignmentSource']
+  teacherAssignmentSessionId?: string
+  teacherAssignmentTeacherId?: string
+  teacherUnavailableWarning?: boolean
+}
+
+function extractDeskTeacherBlock(desk: DeskCell): DeskTeacherBlock {
+  return {
+    teacher: desk.teacher,
+    manualTeacher: desk.manualTeacher,
+    teacherAssignmentSource: desk.teacherAssignmentSource,
+    teacherAssignmentSessionId: desk.teacherAssignmentSessionId,
+    teacherAssignmentTeacherId: desk.teacherAssignmentTeacherId,
+    teacherUnavailableWarning: desk.teacherUnavailableWarning,
+  }
+}
+
+function applyDeskTeacherBlock(desk: DeskCell, block: DeskTeacherBlock) {
+  desk.teacher = block.teacher
+  desk.manualTeacher = block.manualTeacher
+  desk.teacherAssignmentSource = block.teacherAssignmentSource
+  desk.teacherAssignmentSessionId = block.teacherAssignmentSessionId
+  desk.teacherAssignmentTeacherId = block.teacherAssignmentTeacherId
+  desk.teacherUnavailableWarning = block.teacherUnavailableWarning
+}
+
+export type ComputeTeacherMoveResult =
+  | { status: 'moved'; message: string; nextWeeks: SlotCell[][] }
+  | { status: 'blocked'; message: string }
+  | { status: 'cancelled'; message: string }
+
+// 講師の同コマ内D&D移動/入れ替え(spec: 盤面で講師を生徒のように長押しD&Dで動かせる・同一コマ限定)。
+// 生徒(lesson)は一切動かさず、机の「講師ブロック」(6フィールド)だけを 2机間で入れ替える。
+// 移動先が空き講師なら単純移動、講師がいれば入れ替え(swap)になる(1つの入れ替え処理で両方を賄う)。
+// 別コマ(cellId 違い)への移動は呼び出し側で弾く前提だが、この純関数は同一コマ内 index 指定のみを受ける。
+// lesson の無い机に非manualの講師を残すと managed 再マージ(mergeManagedWeek)で消えるため、講師が入った
+// 机は manualTeacher=true に固定する(既存の emptiedSourceDesk ガード=v1.5.349 と同型・回帰防止)。
+export function computeTeacherMove(params: {
+  weeks: SlotCell[][]
+  weekIndex: number
+  cellId: string
+  sourceDeskIndex: number
+  targetDeskIndex: number
+}): ComputeTeacherMoveResult {
+  const { weeks, weekIndex, cellId, sourceDeskIndex, targetDeskIndex } = params
+
+  if (sourceDeskIndex === targetDeskIndex) {
+    return { status: 'cancelled', message: '同じ机へドロップしたため、講師の移動は行いませんでした。' }
+  }
+
+  const nextWeeks = cloneWeeks(weeks)
+  const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === cellId)
+  if (!targetCell) {
+    return { status: 'cancelled', message: '移動先のコマが見つかりませんでした。' }
+  }
+  if (!targetCell.isOpenDay) {
+    return { status: 'blocked', message: '休校コマには講師を配置できません。' }
+  }
+
+  const sourceDesk = targetCell.desks[sourceDeskIndex]
+  const targetDesk = targetCell.desks[targetDeskIndex]
+  if (!sourceDesk || !targetDesk) {
+    return { status: 'cancelled', message: '対象の机が見つかりませんでした。' }
+  }
+  if (!sourceDesk.teacher.trim()) {
+    return { status: 'blocked', message: '移動する講師がいません。' }
+  }
+
+  const sourceBlock = extractDeskTeacherBlock(sourceDesk)
+  const targetBlock = extractDeskTeacherBlock(targetDesk)
+  const movedName = sourceBlock.teacher.trim()
+  const swappedName = targetBlock.teacher.trim()
+
+  applyDeskTeacherBlock(sourceDesk, targetBlock)
+  applyDeskTeacherBlock(targetDesk, sourceBlock)
+
+  // 講師が入った机(lesson の有無に関わらず)は manual 固定にして再マージで消えないようにする。
+  if (sourceDesk.teacher.trim() && !sourceDesk.manualTeacher) sourceDesk.manualTeacher = true
+  if (targetDesk.teacher.trim() && !targetDesk.manualTeacher) targetDesk.manualTeacher = true
+
+  const message = swappedName
+    ? `講師 ${movedName} と ${swappedName} を入れ替えました。`
+    : `講師 ${movedName} を ${targetDeskIndex + 1}机目へ移動しました。`
+
+  return { status: 'moved', message, nextWeeks }
+}
+
 // 講習自動割振の完了後にどのストック一覧モーダルを開くかを決める。
 // 割振りきれない残があってもタップ配置モードには入れない(オーナー確定 2026-07-09)。
 // 戻り値はどちらのモーダルを開くかのみで、選択キー(配置モードの武装)は一切返さない設計にすること
@@ -3661,6 +3753,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
+  // 講師の長押しD&D移動/入れ替え(同一コマ内限定)は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
+  const teacherDragMoveEnabled = isFeatureEnabledForClassroom('teacherDragAndDropMove', { name: classroomName })
   // 日程表コマ組み(別タブD&D・spec-student-schedule-dnd)は staging/開発用教室のみ先行有効。生徒ペイロードに
   // scheduleDndEnabled として渡し、埋め込みJSのD&D起動と各コマの pickerDesks(机選択モーダル用)の載せ分けに使う。
   const scheduleDndMoveEnabled = isFeatureEnabledForClassroom('studentScheduleDndMove', { name: classroomName })
@@ -3711,6 +3805,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (state.timer !== null) window.clearTimeout(state.timer)
     state.cleanup?.()
     dragMoveRef.current = null
+  }, [])
+  // 講師の長押しD&D(同一コマ内限定)用。生徒ドラッグとは独立した ref/state で持つ(状態干渉を避ける)。
+  const teacherDragMoveRef = useRef<{
+    timer: number | null
+    armed: boolean
+    startX: number
+    startY: number
+    cleanup: (() => void) | null
+  } | null>(null)
+  // 掴んでいる講師名(CursorFollowPreview の追従ラベル用)。掴む/離すの数回だけ更新する。
+  const [draggingTeacherLabel, setDraggingTeacherLabel] = useState<string | null>(null)
+  // 講師ドラッグ確定直後の click が講師メニュー(机選択)を開かないよう抑止するフラグ。
+  const suppressNextTeacherClickRef = useRef(false)
+  useEffect(() => () => {
+    const state = teacherDragMoveRef.current
+    if (!state) return
+    if (state.timer !== null) window.clearTimeout(state.timer)
+    state.cleanup?.()
+    teacherDragMoveRef.current = null
   }, [])
   const [selectedMakeupStockKey, setSelectedMakeupStockKey] = useState<string | null>(null)
   const [selectedMakeupStockRawKey, setSelectedMakeupStockRawKey] = useState<string | null>(null)
@@ -6308,6 +6421,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [addableSpecialSessions, addableStudents, displayWeekDate, emptyMenuContext, getSelectableSubjectsForStudent, studentMenu])
 
   const pointerPreviewLabel = useMemo(() => {
+    if (draggingTeacherLabel) {
+      return `講師 ${draggingTeacherLabel} を移動中(同じコマ内の机へドロップ)`
+    }
+
     if (selectedMakeupStockEntry?.nextPlacementEntry) {
       const entry = selectedMakeupStockEntry.nextPlacementEntry
       const originLabel = entry.nextOriginLabel ?? '元コマ未設定'
@@ -6330,7 +6447,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     return null
-  }, [movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupStockEntry])
+  }, [draggingTeacherLabel, movingStudentContext, resolveBoardStudentDisplayName, selectedLecturePlacementItem, selectedLectureStockEntry, selectedMakeupStockEntry])
 
   const isBoardInteractionLocked = interactionLockOwner !== null && interactionLockOwner !== 'board'
   const boardInteractionLockMessage = isBoardInteractionLocked
@@ -7098,6 +7215,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleSelectDesk = (cellId: string, deskIndex: number, x: number, y: number) => {
+    // 講師の長押しD&D確定直後の click は無視する(掴んだ机で講師メニューが開くのを防ぐ)。
+    if (suppressNextTeacherClickRef.current) {
+      suppressNextTeacherClickRef.current = false
+      return
+    }
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
     setStudentMenu(null)
@@ -8401,6 +8523,172 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
   }
 
+  // 講師の長押しD&D移動/入れ替え(ライブ盤面・開発用教室限定・同一コマ内のみ)。生徒D&Dと同じ操作感
+  // (約250ms長押しで掴む→追従プレビュー→ドロップ先の講師セルへ)だが、実移動は computeTeacherMove に
+  // 集約し「同じコマ内の別の机」だけを対象にする(別コマへのドロップは無効)。生徒(lesson)は動かさない。
+  const handleTeacherMouseDown = (
+    cellId: string,
+    deskIndex: number,
+    hasTeacher: boolean,
+    button: number,
+    clientX: number,
+    clientY: number,
+  ) => {
+    // 左ボタンのみ・機能ON(開発用教室)・講師がいる机だけがドラッグ起点になり得る。
+    if (!teacherDragMoveEnabled || button !== 0 || !hasTeacher) return
+
+    // 進行中の講師ドラッグがあれば後始末してから始める。
+    if (teacherDragMoveRef.current) {
+      if (teacherDragMoveRef.current.timer !== null) window.clearTimeout(teacherDragMoveRef.current.timer)
+      teacherDragMoveRef.current.cleanup?.()
+      teacherDragMoveRef.current = null
+    }
+
+    const sourceCell = cells.find((cell) => cell.id === cellId)
+    const sourceDesk = sourceCell?.desks[deskIndex]
+    const sourceTeacherName = sourceDesk?.teacher?.trim() ?? ''
+    if (!sourceCell || !sourceDesk || !sourceTeacherName) return
+
+    const DRAG_LONG_PRESS_MS = 250
+    const PRE_ARM_CANCEL_PX = 8
+    const AUTO_SCROLL_EDGE_PX = 60
+    const AUTO_SCROLL_MAX_SPEED = 22
+
+    const lastPointer = { x: clientX, y: clientY }
+    let autoScrollRafId: number | null = null
+
+    function edgeScrollSpeed(dist: number) {
+      if (dist >= AUTO_SCROLL_EDGE_PX) return 0
+      const ratio = Math.min(1, (AUTO_SCROLL_EDGE_PX - dist) / AUTO_SCROLL_EDGE_PX)
+      return ratio * AUTO_SCROLL_MAX_SPEED
+    }
+
+    function autoScrollStep() {
+      const grid = document.querySelector<HTMLElement>('.slot-adjust-grid')
+      if (grid) {
+        const rect = grid.getBoundingClientRect()
+        let dx = 0
+        let dy = 0
+        if (lastPointer.x < rect.left + AUTO_SCROLL_EDGE_PX) dx = -edgeScrollSpeed(lastPointer.x - rect.left)
+        else if (lastPointer.x > rect.right - AUTO_SCROLL_EDGE_PX) dx = edgeScrollSpeed(rect.right - lastPointer.x)
+        if (lastPointer.y < rect.top + AUTO_SCROLL_EDGE_PX) dy = -edgeScrollSpeed(lastPointer.y - rect.top)
+        else if (lastPointer.y > rect.bottom - AUTO_SCROLL_EDGE_PX) dy = edgeScrollSpeed(rect.bottom - lastPointer.y)
+        if (dx !== 0) grid.scrollLeft += dx
+        if (dy !== 0) grid.scrollTop += dy
+      }
+      autoScrollRafId = window.requestAnimationFrame(autoScrollStep)
+    }
+
+    function cleanup() {
+      window.removeEventListener('mousemove', handleWindowMouseMove)
+      window.removeEventListener('mouseup', handleWindowMouseUp)
+      window.removeEventListener('keydown', handleWindowKeyDown)
+      if (autoScrollRafId !== null) {
+        window.cancelAnimationFrame(autoScrollRafId)
+        autoScrollRafId = null
+      }
+    }
+
+    function cancel(clearPreview: boolean) {
+      const state = teacherDragMoveRef.current
+      if (!state) return
+      if (state.timer !== null) window.clearTimeout(state.timer)
+      cleanup()
+      teacherDragMoveRef.current = null
+      if (clearPreview) {
+        setDraggingTeacherLabel(null)
+        setIsDragMoveActive(false)
+      }
+    }
+
+    function handleWindowMouseMove(event: MouseEvent) {
+      lastPointer.x = event.clientX
+      lastPointer.y = event.clientY
+      const state = teacherDragMoveRef.current
+      if (!state || state.armed) return // 掴んだ後の追従は CursorFollowPreview が担当する。
+      if (Math.abs(event.clientX - state.startX) > PRE_ARM_CANCEL_PX || Math.abs(event.clientY - state.startY) > PRE_ARM_CANCEL_PX) {
+        cancel(false)
+      }
+    }
+
+    function handleWindowMouseUp(event: MouseEvent) {
+      const state = teacherDragMoveRef.current
+      if (!state) return
+      const wasArmed = state.armed
+      cancel(false)
+      if (!wasArmed) return // 長押し未成立 = ただのクリック。通常の onClick(机選択)に委ねる。
+
+      // ドロップ確定後に発火する click は無視させる(掴んだ机で講師メニューが開くのを防ぐ)。
+      suppressNextTeacherClickRef.current = true
+      window.setTimeout(() => { suppressNextTeacherClickRef.current = false }, 0)
+
+      setIsDragMoveActive(false)
+      setDraggingTeacherLabel(null)
+
+      const dropTarget = document.elementFromPoint(event.clientX, event.clientY)
+      const dropCell = dropTarget?.closest<HTMLElement>('.sa-teacher[data-cell-id]') ?? null
+      if (!dropCell) {
+        setStatusMessage('講師の移動をキャンセルしました。')
+        return
+      }
+      const targetCellId = dropCell.dataset.cellId ?? ''
+      const targetDeskIndex = Number(dropCell.dataset.deskIndex)
+      if (!targetCellId || Number.isNaN(targetDeskIndex)) {
+        setStatusMessage('講師の移動をキャンセルしました。')
+        return
+      }
+      // 同一コマ限定: 別コマの講師セルへ離してもキャンセル扱いにする。
+      if (targetCellId !== cellId) {
+        setStatusMessage('講師は同じコマ内の机へのみ移動できます。')
+        return
+      }
+
+      const result = computeTeacherMove({
+        weeks,
+        weekIndex,
+        cellId,
+        sourceDeskIndex: deskIndex,
+        targetDeskIndex,
+      })
+      if (result.status !== 'moved') {
+        if (result.status === 'blocked') setStatusMessage(result.message)
+        return
+      }
+      commitWeeks(result.nextWeeks, weekIndex, cellId, targetDeskIndex)
+      setStatusMessage(result.message)
+    }
+
+    function handleWindowKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return
+      const wasArmed = teacherDragMoveRef.current?.armed ?? false
+      cancel(true)
+      if (wasArmed) setStatusMessage('講師の移動をキャンセルしました。')
+    }
+
+    const timer = window.setTimeout(() => {
+      const state = teacherDragMoveRef.current
+      if (!state) return
+      state.timer = null
+      state.armed = true
+      window.getSelection?.()?.removeAllRanges()
+      setDraggingTeacherLabel(sourceTeacherName)
+      setIsDragMoveActive(true)
+      if (autoScrollRafId === null) autoScrollRafId = window.requestAnimationFrame(autoScrollStep)
+    }, DRAG_LONG_PRESS_MS)
+
+    window.addEventListener('mousemove', handleWindowMouseMove)
+    window.addEventListener('mouseup', handleWindowMouseUp)
+    window.addEventListener('keydown', handleWindowKeyDown)
+
+    teacherDragMoveRef.current = {
+      timer,
+      armed: false,
+      startX: clientX,
+      startY: clientY,
+      cleanup,
+    }
+  }
+
   const handleStartMove = () => {
     if (!menuStudent) return
     setSelectedStudentId(menuStudent.student.id)
@@ -9547,6 +9835,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const stableHandleSelectDesk = useStableCallback(handleSelectDesk)
   const stableHandleStudentClick = useStableCallback(handleStudentClick)
   const stableHandleStudentMouseDown = useStableCallback(handleStudentMouseDown)
+  const stableHandleTeacherMouseDown = useStableCallback(handleTeacherMouseDown)
   const stableHandleDayHeaderClick = useStableCallback(handleDayHeaderClick)
   const stableHandleTemplateSelectDesk = useStableCallback(handleTemplateSelectDesk)
   const stableHandleTemplateStudentClick = useStableCallback(handleTemplateStudentClick)
@@ -9864,6 +10153,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
             dragMoveActive={isDragMoveActive}
             onStudentMouseDown={isTemplateMode ? undefined : stableHandleStudentMouseDown}
+            onTeacherMouseDown={isTemplateMode ? undefined : stableHandleTeacherMouseDown}
             onGroupSubjectClick={stableHandleGroupSubjectClick}
             onGroupTeacherClick={stableHandleGroupTeacherClick}
           />

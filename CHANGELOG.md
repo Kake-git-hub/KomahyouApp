@@ -14,6 +14,12 @@
 
 ## 未リリース
 
+## v1.5.422 (2026-07-09)
+
+- feat(盤面で講師を生徒のようにD&Dで移動/入れ替え・同一コマ限定・開発用教室先行): 講師名を長押し(約250ms)して掴み、同じコマ内の別の机へドラッグ&ドロップで移動できる。移動先が空き講師なら単純移動、講師がいれば2机の講師だけを入れ替える(生徒=lesson は動かさない)。別コマの講師セルへ離しても無効(同一コマ限定)。実移動は純関数 `computeTeacherMove`(机の「講師ブロック」6フィールドだけを入れ替え・lesson の無い机に残った講師は managed 再マージで消えないよう manualTeacher=true に固定=v1.5.349 の emptiedSourceDesk ガードと同型)に集約。UIは生徒D&D(`studentDragAndDropMove`)と同じ操作感で、独立した `teacherDragMoveRef`/`draggingTeacherLabel`/`suppressNextTeacherClickRef` を使い生徒ドラッグ状態と干渉させない。新フラグ `teacherDragAndDropMove` は scope=`development-only`(本番3教室は無効のまま・検証後に昇格予定)。回帰テスト: `computeTeacherMove` 5件＋フラグの development-only 1件を同コミットで追加(src/utils/featureRollout.ts(+test)・src/components/schedule-board/ScheduleBoardScreen.tsx(+test)・src/components/schedule-board/BoardGrid.tsx)
+
+## v1.5.421 (2026-07-09)
+
 - fix: 講師が盤面から削除操作なしに勝手に消える不具合を修正(緑が丘 8/4 講習で門田/角田等)。原因は `teacherAutoAssignRequest`(講師の自動配置/登録解除の一過性コマンド)が App 永続 state に載ったまま消費されず、盤面 key 再マウントで重複ガード(processedRef)が消えるたびに古い unassign(登録解除)が再発火して講師を再削除していた。Issue #46(studentScheduleRequest)と同型で、同じ規律=処理後に App 側 state を消費(null)＋判定を純関数化(`shouldProcessTeacherAutoAssignRequest`/`consumeTeacherAutoAssignRequest`)で修正。再マウント再発火の回帰テスト8件追加(src/App.tsx・src/components/schedule-board/ScheduleBoardScreen.tsx)
 
 ## v1.5.420 (2026-07-09)
