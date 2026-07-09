@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+## v1.5.426 (2026-07-10)
+
 - refactor(ワークスペース自動バックアップの間引き方式へ再設計・オーナー確定 2026-07-10): 生成スケジュールを15分毎(`*/15 * * * *`)の1本に一本化し、毎時生成(`createWorkspaceServerHourlyBackups`)・日次生成(`createWorkspaceServerAutoBackups`)の**Cloud Functionsを本番から削除**。保持はプルーン時の経過時間ベースの間引きで実現(新関数 `shouldKeepWorkspaceAutoBackup`: age<24h=全保持/24-72h=JST分00のみ/72h-7日=JST時03分00のみ/7日以上=削除)。Google Driveミラーも「15分毎はスキップ」を撤回し毎回アップロード、プルーンも同じ間引きルールへ統一(`shouldKeepGoogleDriveBackupFile`)。フロントのストレージ使用量見積り(`src/App.tsx`)も新方式の概算本数(96+48+4=148本)に合わせて修正し、旧実装が保持短縮(14日→7日、72h→48h)の反映漏れで古い数値のまま放置されていたバグも併せて修正。回帰防止テスト: `shouldKeepWorkspaceAutoBackup` の境界値(24h/72h/7日ちょうど・JSTオフセット跨ぎ含む)を新規追加(functions/src/workspaceBackupSchedule.ts(+test)・functions/src/index.ts・src/App.tsx・src/components/developer-admin/DeveloperAdminScreen.tsx)
 
 ## v1.5.425 (2026-07-09)
