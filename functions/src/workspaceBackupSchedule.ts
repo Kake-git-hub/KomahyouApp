@@ -1,20 +1,16 @@
 // ワークスペース自動バックアップの粒度・保持期間の純ロジック(firebase 非依存・テスト可能)。
 //
-// 2026-07-09 オーナー確定: hourly(72h)+daily(14日) の2階層 から、
-//  - 15分毎(quarterHourly): 保持 24時間
-//  - 毎時(hourly): 保持 48時間(72h→48hへ短縮)
-//  - 日次(daily): 保持 7日(14日→7日へ短縮)
-// の3階層へ変更する。index.ts はスケジュール関数・Firestore/Storage I/O のみを担い、
+// 2026-07-10 オーナー確定: 生成は15分毎(quarterHourly)の1本に一本化し、保持はプルーン時の
+// 経過時間ベースの間引きで実現する(毎時生成・日次生成のスケジュール関数は廃止)。
+// 「Storageで保持する回」と「Google Driveへミラーする回」は同じ判定を共有する(統一設計)。
+// index.ts はスケジュール関数・Firestore/Storage I/O のみを担い、
 // 日時計算・パス組み立て・保持判定はすべてここへ集約する(index.ts から新規 export しない=
 // Firebase が export をそのまま関数としてデプロイするため、誤って新規関数がデプロイされる事故を防ぐ)。
 
+// WorkspaceAutoBackupKind: 過去に生成された既存ドキュメントの表示ラベル解決のためだけに残す
+// (新規生成は全て 'quarterHourly' になるが、既存の古いドキュメントが残存期間中は正しく表示され続ける必要がある)。
 export type WorkspaceAutoBackupKind = 'daily' | 'hourly' | 'quarterHourly'
 
-export const WORKSPACE_DAILY_AUTO_BACKUP_RETENTION_DAYS = 7
-export const WORKSPACE_HOURLY_AUTO_BACKUP_RETENTION_HOURS = 48
-export const WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_RETENTION_HOURS = 24
-
-export const WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST = 2
 export const HOUR_IN_MS = 60 * 60 * 1000
 export const JST_OFFSET_IN_MS = 9 * HOUR_IN_MS
 
@@ -39,25 +35,8 @@ export function toUtcQuarterHourKey(date: Date) {
   return `${dateKey}T${hour}-${minute}`
 }
 
-export function toOperationalDateKeyJst(date: Date, boundaryHourJst = WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST) {
-  const operationalDate = new Date(date.getTime() + JST_OFFSET_IN_MS - boundaryHourJst * HOUR_IN_MS)
-  return toUtcDateKey(operationalDate)
-}
-
-export function toHourlyDateKeyJst(date: Date) {
-  const jstDate = new Date(date.getTime() + JST_OFFSET_IN_MS)
-  return toUtcHourKey(jstDate)
-}
-
 export function toQuarterHourlyDateKeyJst(date: Date) {
   return toUtcQuarterHourKey(new Date(date.getTime() + JST_OFFSET_IN_MS))
-}
-
-export function getWorkspaceDailyAutoBackupCutoffKey(referenceDate: Date, retentionDays: number) {
-  const safeRetentionDays = Math.max(1, Math.trunc(retentionDays) || 1)
-  const operationalDate = new Date(referenceDate.getTime() + JST_OFFSET_IN_MS - WORKSPACE_AUTO_BACKUP_BOUNDARY_HOUR_JST * HOUR_IN_MS)
-  operationalDate.setUTCDate(operationalDate.getUTCDate() - (safeRetentionDays - 1))
-  return toUtcDateKey(operationalDate)
 }
 
 export function buildWorkspaceAutoBackupStoragePath(workspaceKey: string, backupDateKey: string, backupKind: WorkspaceAutoBackupKind = 'daily') {
@@ -96,12 +75,27 @@ export function resolveBackupKindFromSummary(backupKind: unknown, docId: string)
   return afterT.includes('-') ? 'quarterHourly' : 'hourly'
 }
 
-export function shouldKeepAutoBackupSummary(
-  kind: WorkspaceAutoBackupKind,
-  params: { docId: string; savedAtMs: number },
-  cutoffs: { dailyCutoffKey: string; hourlyCutoffTime: number; quarterHourlyCutoffTime: number },
-): boolean {
-  if (kind === 'daily') return params.docId >= cutoffs.dailyCutoffKey
-  if (kind === 'hourly') return params.savedAtMs >= cutoffs.hourlyCutoffTime
-  return params.savedAtMs >= cutoffs.quarterHourlyCutoffTime
+// 2026-07-10 オーナー確定: 生成は15分毎(quarterHourly)の1本に一本化し、保持はプルーン時の
+// 経過時間ベースの間引きで実現する(毎時生成・日次生成のスケジュール関数は廃止)。
+// 「Storageで保持する回」と「Google Driveへミラーする回」は同じ判定を共有する(統一設計)。
+export const WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS = 24
+export const WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS = 72
+export const WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS = 7
+export const WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST = 3
+
+// バックアップの実時刻(savedAtMs)と現在時刻(nowMs)から、保持すべきかを判定する純関数。
+// age<24h: 全保持(15分毎そのまま) / 24h≤age<72h: JSTで分=00のみ(実質毎時) /
+// 72h≤age<7日: JSTで時=03かつ分=00のみ(実質日次AM3:00) / age≥7日: 削除。
+// kind(生成種別)には依存しない(生成が15分毎1本化されたため、判定は実時刻だけで完結する)。
+export function shouldKeepWorkspaceAutoBackup(params: { savedAtMs: number; nowMs: number }): boolean {
+  const ageMs = params.nowMs - params.savedAtMs
+  if (ageMs < WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS * HOUR_IN_MS) return true
+  if (ageMs >= WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS * 24 * HOUR_IN_MS) return false
+
+  const jst = new Date(params.savedAtMs + JST_OFFSET_IN_MS)
+  const minuteJst = jst.getUTCMinutes()
+  if (ageMs < WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS * HOUR_IN_MS) {
+    return minuteJst === 0
+  }
+  return jst.getUTCHours() === WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST && minuteJst === 0
 }
