@@ -3720,6 +3720,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [stockStudentSearch, setStockStudentSearch] = useState('')
   const [autoAssignDebugReport, setAutoAssignDebugReport] = useState<AutoAssignDebugReport | null>(null)
   const [scheduleSyncTrigger, setScheduleSyncTrigger] = useState(0)
+  // 別タブ自動同期のデバウンス遅延(ms)。通常編集は連打対策で1500ms、日程表コマ組みの移動は
+  // 明示・低頻度操作なので次の1回だけ0msにして即同期する。0msにするのは移動確定側で、実際の同期発火時に
+  // 1500へ戻す(即時 setScheduleSyncTrigger を別に足すと同期経路が二重化しスピナーが2回出るため統一する)。
+  const scheduleSyncDelayRef = useRef(1500)
   const boardInteractionTokenRef = useRef(createInteractionLockToken('board'))
   const [interactionLockOwner, setInteractionLockOwner] = useState<InteractionSurface | null>(() => parseInteractionLockOwner(typeof window === 'undefined' ? null : window.localStorage.getItem(interactionLockStorageKey)))
   const [teacherMenu, setTeacherMenu] = useState<TeacherMenuState | null>(null)
@@ -5717,9 +5721,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       // 初回(ポップアップを開いた直後)は初期表示なのでスピナーを出さない。
       syncSpinnerArmedRef.current = true
     }
+    // 通常は1500ms。日程表コマ組みの移動は移動確定側が 0ms を要求する(scheduleSyncDelayRef)。
+    // 実際に同期が発火したら次回以降の連打対策として既定(1500ms)へ戻す。
+    const debounceDelay = scheduleSyncDelayRef.current
     const timer = window.setTimeout(() => {
+      scheduleSyncDelayRef.current = 1500
       setScheduleSyncTrigger((prev) => prev + 1)
-    }, 1500)
+    }, debounceDelay)
     return () => window.clearTimeout(timer)
     // 表示内容に効く盤面データが変わるたびにデバウンスを張り直す(連打は最後の1回に集約)。
   }, [
@@ -8034,9 +8042,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       result.nextSuppressedRegularLessonOccurrences,
     )
-    // 日程表コマ組みは明示的・低頻度操作。1.5秒の自動同期デバウンスを待たず即同期し、別タブの同期スピナーを最短で消す
-    // (講習自動割振と同じ扱い)。
-    setScheduleSyncTrigger((prev) => prev + 1)
+    // 日程表コマ組みは明示的・低頻度操作。次の自動同期だけデバウンスを0msにして即反映する。
+    // 即時 setScheduleSyncTrigger を別に足すと自動同期(デバウンス)と経路が二重化し、早期hide→再showで
+    // スピナーが2回出るため、同期経路は自動同期effectに一本化して遅延だけ短縮する(2026-07-09 二重スピナー修正)。
+    scheduleSyncDelayRef.current = 0
     setStatusMessage(`日程表コマ組み: ${result.message}`)
     return { ok: true, message: `${result.message} 手動保存で確定されます。` }
   }
@@ -8055,8 +8064,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     onStudentScheduleRequestProcessed?.(request.requestId)
     const result = stableExecuteScheduleViewMove(request.source, request.seat)
     // 別タブへ結果を返す: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示(日程表に戻る導線)。
-    // 成功時の盤面反映自体は executeScheduleViewMove 内の即時同期トリガー(2026-07-09)で別タブに届く
-    // (1.5秒デバウンスを待たない。講習自動割振と同じ扱い)。
+    // 成功時の盤面反映自体は自動同期(デバウンス)で別タブに届く。移動時は scheduleSyncDelayRef=0 により
+    // その自動同期が即発火するため、1.5秒待たずに反映＋スピナー解消される(2026-07-09 二重スピナー修正で経路一本化)。
     const ackMessage = {
       type: 'schedule-student-move-result',
       ok: result.ok,
