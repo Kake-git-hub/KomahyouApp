@@ -1,6 +1,13 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
-import { createWeekJumpPicker } from './weekJumpPicker'
+import {
+  buildMonthMatrix,
+  formatMonthLabel,
+  isWithinWeek,
+  monthOfDateKey,
+  shiftMonth,
+  todayDateKey,
+} from './weekJumpCalendar'
 
 type BoardToolbarProps = {
   weekLabel: string
@@ -115,40 +122,43 @@ function BoardToolbarComponent({
   syncProgressPercent,
   syncElapsedSeconds,
 }: BoardToolbarProps) {
-  const weekJumpInputRef = useRef<HTMLInputElement | null>(null)
-  // ネイティブ日付ピッカーの確定制御（プラットフォーム差の吸収）。
-  //   ・タブレットのホイールやカレンダーのキー移動は、操作の「途中」でも change を
-  //     連続発火させる → 以前は即ジャンプし、確定前に週が勝手に変わっていた。
-  //   ・かといって blur/Enter だけを確定にすると、デスクトップのカレンダーは日付を
-  //     クリックしてもフォーカスが外れず(=blur が来ず)、選んでも切り替わらない。
-  // そこで「最後の change から少し間が空いた＝日付を選び終えた」とみなして確定する。
-  // blur / Enter が来たら即確定（待ち時間ゼロ）、Escape は取り消し。
-  // 保留/確定の store は純関数 createWeekJumpPicker（weekJumpPicker.ts）。
-  const weekJumpPickerRef = useRef(createWeekJumpPicker())
-  const weekJumpCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const clearWeekJumpTimer = () => {
-    if (weekJumpCommitTimerRef.current !== null) {
-      clearTimeout(weekJumpCommitTimerRef.current)
-      weekJumpCommitTimerRef.current = null
+  // 表示週を選択する自作カレンダー。
+  //   ネイティブ日付ピッカーは「月送り」と「日選択」を区別できず(端末により blur も
+  //   来ない)、月を送っただけで表示週が変わる問題があった。自作カレンダーにして
+  //   「月送りは表示だけ変える(週は変えない)／日付タップで初めて確定」を全端末で
+  //   決定的に再現する。表示計算は純関数 weekJumpCalendar.ts に切り出してテスト。
+  const weekJumpWrapperRef = useRef<HTMLSpanElement | null>(null)
+  const [weekJumpOpen, setWeekJumpOpen] = useState(false)
+  // カレンダーが表示している月(週ではない)。月送りはこの state だけを変える。
+  const [weekJumpViewMonth, setWeekJumpViewMonth] = useState(() => monthOfDateKey(weekStartDate))
+  const openWeekJumpPicker = () => {
+    // 開くたびに現在の表示週の月へ合わせる。
+    setWeekJumpViewMonth(monthOfDateKey(weekStartDate))
+    setWeekJumpOpen(true)
+  }
+  const selectWeekJumpDate = (dateKey: string) => {
+    setWeekJumpOpen(false)
+    onJumpToDate(dateKey)
+  }
+  // 外側クリック / Escape で閉じる（週は変えない）。
+  useEffect(() => {
+    if (!weekJumpOpen) return
+    const onPointerDown = (event: MouseEvent | TouchEvent) => {
+      const wrapper = weekJumpWrapperRef.current
+      if (wrapper && !wrapper.contains(event.target as Node)) setWeekJumpOpen(false)
     }
-  }
-  const commitWeekJump = () => {
-    clearWeekJumpTimer()
-    const target = weekJumpPickerRef.current.commit()
-    if (target) onJumpToDate(target)
-  }
-  const stageWeekJump = (value: string) => {
-    weekJumpPickerRef.current.stage(value)
-    // 操作が続く限り確定を先送りし、止まった＝選び終えたら確定する。
-    clearWeekJumpTimer()
-    weekJumpCommitTimerRef.current = setTimeout(commitWeekJump, 320)
-  }
-  const cancelWeekJump = () => {
-    clearWeekJumpTimer()
-    weekJumpPickerRef.current.reset()
-  }
-  // アンマウント時に確定タイマーを止める（確定コールバックの遅延発火を防ぐ）。
-  useEffect(() => () => clearWeekJumpTimer(), [])
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setWeekJumpOpen(false)
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('touchstart', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('touchstart', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [weekJumpOpen])
 
   // 保存ボタンを押した瞬間に「保存中…」へ切り替えるためのローカル状態。
   // 親の保存状態(isBoardSaving)の伝播タイミングに依存せず、クリック即フィードバックを保証する。
@@ -171,13 +181,6 @@ function BoardToolbarComponent({
     } else {
       setTimeout(() => onSaveBoard?.(), 0)
     }
-  }
-
-  const openWeekJumpPicker = () => {
-    const input = weekJumpInputRef.current
-    if (!input) return
-    if (typeof input.showPicker === 'function') input.showPicker()
-    else input.click()
   }
 
   return (
@@ -271,29 +274,49 @@ function BoardToolbarComponent({
               </button>
               <div className="toolbar-segmented">
                 <button className="segment-button" type="button" onClick={onGoPrevWeek} disabled={!canGoPrevWeek} data-testid="prev-week-button">◀ 前週</button>
-                <span className="week-jump-control">
-                  <button className="week-label week-jump-button" type="button" onClick={openWeekJumpPicker} data-testid="week-label" aria-label="表示週を選択" title="表示したい日付を選択">
+                <span className="week-jump-control" ref={weekJumpWrapperRef}>
+                  <button className="week-label week-jump-button" type="button" onClick={openWeekJumpPicker} data-testid="week-label" aria-haspopup="dialog" aria-expanded={weekJumpOpen} aria-label="表示週を選択" title="表示したい日付を選択">
                     {weekLabel}
                   </button>
-                  <input
-                    ref={weekJumpInputRef}
-                    className="week-jump-input"
-                    type="date"
-                    defaultValue={weekStartDate}
-                    key={weekStartDate}
-                    onChange={(event) => {
-                      // 確定はせず保留し、操作が止まったら確定する（stageWeekJump 内）。
-                      stageWeekJump(event.currentTarget.value)
-                    }}
-                    onBlur={commitWeekJump}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') commitWeekJump()
-                      // Escape はキャンセル：保留を破棄して週を変えない。
-                      else if (event.key === 'Escape') cancelWeekJump()
-                    }}
-                    data-testid="week-jump-date-input"
-                    aria-label="表示したい日付"
-                  />
+                  {weekJumpOpen && (
+                    <div className="week-jump-popover" role="dialog" aria-label="表示週を選択" data-testid="week-jump-popover">
+                      <div className="week-jump-popover-header">
+                        <button className="week-jump-nav" type="button" onClick={() => setWeekJumpViewMonth((month) => shiftMonth(month, -1))} aria-label="前の月" data-testid="week-jump-prev-month">‹</button>
+                        <span className="week-jump-month-label" data-testid="week-jump-month-label">{formatMonthLabel(weekJumpViewMonth)}</span>
+                        <button className="week-jump-nav" type="button" onClick={() => setWeekJumpViewMonth((month) => shiftMonth(month, 1))} aria-label="次の月" data-testid="week-jump-next-month">›</button>
+                      </div>
+                      <div className="week-jump-weekdays" aria-hidden="true">
+                        {['月', '火', '水', '木', '金', '土', '日'].map((label) => (
+                          <span key={label} className="week-jump-weekday">{label}</span>
+                        ))}
+                      </div>
+                      <div className="week-jump-grid">
+                        {buildMonthMatrix(weekJumpViewMonth).flat().map((cell) => {
+                          const classNames = [
+                            'week-jump-day',
+                            cell.inMonth ? '' : 'is-outside',
+                            isWithinWeek(cell.dateKey, weekStartDate) ? 'is-selected-week' : '',
+                            cell.dateKey === todayDateKey() ? 'is-today' : '',
+                          ].filter(Boolean).join(' ')
+                          return (
+                            <button
+                              key={cell.dateKey}
+                              type="button"
+                              className={classNames}
+                              onClick={() => selectWeekJumpDate(cell.dateKey)}
+                              data-testid={`week-jump-day-${cell.dateKey}`}
+                            >
+                              {cell.day}
+                            </button>
+                          )
+                        })}
+                      </div>
+                      <div className="week-jump-popover-footer">
+                        <button className="week-jump-today" type="button" onClick={() => selectWeekJumpDate(todayDateKey())} data-testid="week-jump-today-button">今日</button>
+                        <button className="week-jump-close" type="button" onClick={() => setWeekJumpOpen(false)} data-testid="week-jump-close-button">閉じる</button>
+                      </div>
+                    </div>
+                  )}
                 </span>
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
