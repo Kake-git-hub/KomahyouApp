@@ -11,6 +11,7 @@ import type { ScheduleCountAdjustmentEntry } from '../types/appState'
 import type { SlotCell, StudentEntry } from '../components/schedule-board/types'
 import type { ClassroomSettings } from '../types/appState'
 import { buildLinkedLessonDestinationMap } from '../components/schedule-board/lessonLinks'
+import { buildDeskPickerDesks, type DeskPickerDesk } from '../components/schedule-view/scheduleViewMove'
 import { normalizeGroupClassEntryMap, type GroupClassEntryMap } from '../components/schedule-board/groupClass'
 import { generateQrSvg } from './qrcode'
 import { buildSubmissionUrl } from './scheduleQrConfig'
@@ -26,7 +27,10 @@ function parseDateKey(dateKey: string) {
   return new Date(`${dateKey}T00:00:00`)
 }
 
-type SerializedStudent = {
+// Serialized* / SchedulePayload 型と build*Payload は、生成HTML(印刷/PDF)と React 日程表ビュー
+// (scheduleViewData.ts / ScheduleView)が共有する表示算出の正本。二重定義で表示をズラさないため、
+// React ビュー側はこの payload を入力として使う(spec-schedule-interactive-view §C-3)。
+export type SerializedStudent = {
   id: string
   name: string
   fullName: string
@@ -42,7 +46,7 @@ type SerializedStudent = {
   optionChecks?: Record<string, boolean>
 }
 
-type SerializedTeacher = {
+export type SerializedTeacher = {
   id: string
   name: string
   fullName?: string
@@ -54,7 +58,7 @@ type SerializedTeacher = {
   submissionSubmitted?: boolean
 }
 
-type SerializedStudentEntry = {
+export type SerializedStudentEntry = {
   id: string
   linkedStudentId?: string
   name: string
@@ -67,7 +71,7 @@ type SerializedStudentEntry = {
   warning?: string
 }
 
-type SerializedStudentStatusEntry = {
+export type SerializedStudentStatusEntry = {
   id: string
   linkedStudentId?: string
   name: string
@@ -85,7 +89,7 @@ type SerializedStudentStatusEntry = {
   linkedDestinationSlotNumber?: number
 }
 
-type SerializedCell = {
+export type SerializedCell = {
   dateKey: string
   dateLabel: string
   dayLabel: string
@@ -103,9 +107,13 @@ type SerializedCell = {
       students: SerializedStudentEntry[]
     }
   }>
+  // 日程表コマ組み(別タブD&D)専用: このコマの全机(空席含む)の席レイアウト。机選択モーダルの表示に使う。
+  // serializeCells の includeDeskPicker=true(=対話用の生徒ペイロード・DnD有効時)のときだけ載る。
+  // 印刷/講師/全員表示のペイロードには載せない(印刷経路のバイト増を避ける)。空席の机を落とす desks とは別に持つ。
+  pickerDesks?: DeskPickerDesk[]
 }
 
-type SerializedStudentSpecialSessionInput = {
+export type SerializedStudentSpecialSessionInput = {
   unavailableSlots: string[]
   subjectSlots: Record<string, number>
   // spec-schedule-pdf §E: 科目ごとの授業時間(60/45分)。講習回数表の科目名に併記する(未配置の希望科目でも表示)。
@@ -117,15 +125,22 @@ type SerializedStudentSpecialSessionInput = {
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string
+  // 講習集計結果の「提出日時」「提出方法」列に使う。QR提出/室長登録の日時と方法('qr'|'manual')。
+  // 未搬送(既存データ)や未登録は undefined。payload に必ず載せる(欠落すると popup で '—' に化ける)。
+  submittedAt?: string | null
+  submissionMethod?: 'qr' | 'manual'
 }
 
-type SerializedTeacherSpecialSessionInput = {
+export type SerializedTeacherSpecialSessionInput = {
   unavailableSlots: string[]
   countSubmitted: boolean
   submissionToken?: string
+  // 講師の講習集計結果でも提出日時/方法を表示する。生徒と同じ扱い。
+  submittedAt?: string | null
+  submissionMethod?: 'qr' | 'manual'
 }
 
-type SerializedSpecialSession = {
+export type SerializedSpecialSession = {
   id: string
   label: string
   startDate: string
@@ -134,13 +149,13 @@ type SerializedSpecialSession = {
   studentInputs: Record<string, SerializedStudentSpecialSessionInput>
 }
 
-type SerializedExpectedRegularOccurrence = {
+export type SerializedExpectedRegularOccurrence = {
   linkedStudentId: string
   subject: string
   dateKey: string
 }
 
-type SerializedScheduleCountAdjustment = {
+export type SerializedScheduleCountAdjustment = {
   studentKey: string
   subject: string
   countKind: 'regular' | 'special'
@@ -148,7 +163,7 @@ type SerializedScheduleCountAdjustment = {
   delta: number
 }
 
-type SchedulePayload = {
+export type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
   defaultEndDate: string
@@ -176,9 +191,14 @@ type SchedulePayload = {
   // spec-group-lesson §A/§E: 盤面の集団授業割当(key=`${dateKey}_${band}`)。生徒/講師日程表の集団行・回数・給与に使う。
   groupClassEntries: GroupClassEntryMap
   classroomStorageKey: string
+  // タブ名に表示する教室名(2026-07-09)。
+  classroomName: string
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄(休み欄を置き換え/振替を左詰め)を有効化する。開発用教室のみ。
   optionFieldEnabled?: boolean
+  // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。埋め込みJSがこのフラグで D&D を起動し、
+  // true のときだけ各コマに pickerDesks(机選択モーダル用の全机レイアウト)が載る。
+  scheduleDndEnabled?: boolean
 }
 
 type OpenScheduleHtmlParams = {
@@ -194,18 +214,22 @@ type OpenScheduleHtmlParams = {
   // spec-group-lesson §A: 盤面の集団授業割当。生徒/講師日程表へ集団行・回数・給与として反映する。
   groupClassEntries?: GroupClassEntryMap
   classroomStorageKey?: string
+  // タブ名(document.title)に表示する教室名。取り違え防止のため期間ではなく教室名を出す(2026-07-09)。
+  classroomName?: string
   targetWindow?: Window | null
   lazyQrLoading?: boolean
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄を有効化する(開発用教室のみ)。
   optionFieldEnabled?: boolean
+  // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。生徒ペイロードにのみ渡す。
+  scheduleDndEnabled?: boolean
 }
 
 type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
   __buildScheduleQrSvg?: (token?: string) => string | undefined
 }
 
-function buildSubmissionQrSvg(token: string | undefined) {
+export function buildSubmissionQrSvg(token: string | undefined) {
   if (!token) return undefined
   const url = buildSubmissionUrl(token)
   if (!url) return undefined
@@ -229,7 +253,7 @@ function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined
   return { session: overlapping[0], error: undefined }
 }
 
-type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
+export type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   regularLessonTemplateHistory?: RegularLessonTemplate[]
@@ -245,7 +269,7 @@ type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
   } | null
 }
 
-type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
+export type OpenTeacherScheduleHtmlParams = OpenScheduleHtmlParams & {
   teachers: TeacherRow[]
   students?: StudentRow[]
   regularLessons?: RegularLessonRow[]
@@ -268,6 +292,7 @@ function serializeCells(
   cells: SlotCell[],
   resolveLinkedStudentId?: (studentName: string) => string | undefined,
   resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell) => string[],
+  options?: { includeDeskPicker?: boolean },
 ): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
 
@@ -285,6 +310,10 @@ function serializeCells(
       slotLabel: cell.slotLabel,
       timeLabel: cell.timeLabel,
       isOpenDay: cell.isOpenDay,
+      // 日程表コマ組み(別タブD&D)専用: 机選択モーダルは移動先コマの「全机(空席含む)」が要るが、
+      // 下の desks は空席の机を落とす(line: !lesson && statuses空 → null)。そこで開校日に限り、盤面の
+      // 全机レイアウト(既存テスト済みの buildDeskPickerDesks)を pickerDesks として別に載せる(印刷経路は不変)。
+      ...(options?.includeDeskPicker && cell.isOpenDay ? { pickerDesks: buildDeskPickerDesks(cell) } : {}),
       desks: cell.desks.map((desk) => {
         const statuses = desk.statusSlots
           ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
@@ -501,7 +530,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
   }
   // 監査領域9 A1(2026-07-04 確定): plannedCells payload は撤去済み。planned 通常回数の唯一の根拠は
   // expectedRegularOccurrences(テンプレ由来)で、plannedCells は埋め込みJSから一度も読まれないデッドだった。
-  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds)
+  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds, { includeDeskPicker: Boolean(params.scheduleDndEnabled) })
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -540,6 +569,9 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
+        // 講習集計結果(講師)の提出日時/方法。欠落すると popup へ届かず '—' に化けるため必ず載せる。
+        submittedAt: input.submittedAt ?? undefined,
+        submissionMethod: input.submissionMethod ?? undefined,
       }])),
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
@@ -551,11 +583,16 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
         regularOnly: Boolean(input.regularOnly),
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
+        // 講習集計結果(生徒)の提出日時/方法。欠落すると popup へ届かず '—' に化けるため必ず載せる。
+        submittedAt: input.submittedAt ?? undefined,
+        submissionMethod: input.submissionMethod ?? undefined,
       }])),
     })),
     groupClassEntries: normalizeGroupClassEntryMap(params.groupClassEntries),
     classroomStorageKey: params.classroomStorageKey || 'default',
+    classroomName: params.classroomName || '',
     optionFieldEnabled: Boolean(params.optionFieldEnabled),
+    scheduleDndEnabled: Boolean(params.scheduleDndEnabled),
   }
 }
 
@@ -688,7 +725,7 @@ export function buildCombinedRegularLessonsFromHistory(params: {
   return combinedLessons
 }
 
-function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
+export function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params, params.students)
   const effectiveRegularLessons = buildCombinedRegularLessonsFromHistory({
     regularLessons: params.regularLessons,
@@ -752,7 +789,7 @@ function buildStudentPayload(params: OpenStudentScheduleHtmlParams): SchedulePay
   }
 }
 
-function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePayload {
+export function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): SchedulePayload {
   const basePayload = createBasePayload(params)
   const overlappingResult = findOverlappingSession(params.specialSessions, params.defaultStartDate, params.defaultEndDate)
   const targetSession = overlappingResult.session
@@ -855,6 +892,37 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
       }
     }),
   }
+}
+
+// ビューポートに机モーダルを収めるための縮小率(<=1)。高さ・幅の両方で足りない分だけ縮める
+// (ブラウザ拡大時は viewport の CSS px が縮むため、固定px寸法の盤面が縦にも横にもはみ出しうる)。
+// content<=avail のときは1(拡大しない)。幅の引数を省略すると従来どおり高さのみで判定する。
+// 埋め込みJS(openScheduleDeskPicker)側にも同式のミラーがある(new Function文字列内で export 関数を呼べないため)。
+export function computeDeskPickerFitScale(
+  contentHeight: number,
+  viewportHeight: number,
+  margin = 24,
+  contentWidth?: number,
+  viewportWidth?: number,
+): number {
+  const scales: number[] = []
+  if (Number.isFinite(contentHeight) && contentHeight > 0) {
+    const availH = Math.max(0, viewportHeight - margin)
+    if (availH <= 0) return 1
+    scales.push(availH / contentHeight)
+  }
+  if (
+    contentWidth !== undefined &&
+    viewportWidth !== undefined &&
+    Number.isFinite(contentWidth) &&
+    contentWidth > 0
+  ) {
+    const availW = Math.max(0, viewportWidth - margin)
+    if (availW <= 0) return 1
+    scales.push(availW / contentWidth)
+  }
+  if (scales.length === 0) return 1
+  return Math.min(1, ...scales)
 }
 
 function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher' | 'all-student' | 'all-teacher') {
@@ -2126,6 +2194,203 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: rgba(255, 255, 255, 0.86);
       }
 
+      /* 盤面編集→別タブ反映までの数秒間、最前面に大きく出す同期中スピナー(自動同期のフィードバック)。 */
+      .schedule-sync-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: rgba(244, 247, 250, 0.72);
+      }
+      .schedule-sync-overlay[hidden] { display: none; }
+      .schedule-sync-spinner {
+        width: 92px;
+        height: 92px;
+        border: 11px solid #c3d0e0;
+        border-top-color: #1a73e8;
+        border-radius: 50%;
+        animation: schedule-sync-spin 0.9s linear infinite;
+      }
+      .schedule-sync-text {
+        font-size: 24px;
+        font-weight: 800;
+        color: #16385c;
+        letter-spacing: 0.04em;
+        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
+      }
+      @keyframes schedule-sync-spin { to { transform: rotate(360deg); } }
+
+      /* 日程表コマ組み(別タブD&D・spec-student-schedule-dnd)。scheduleDndEnabled 時のみ授業カードに .is-draggable が付く。 */
+      .lesson-card.is-draggable {
+        cursor: grab;
+        touch-action: none;
+      }
+      .lesson-card.is-draggable:active { cursor: grabbing; }
+      /* ドラッグ中に掴んだ元カードを半透明にする。 */
+      .lesson-card.is-drag-origin { opacity: 0.35; }
+      /* ドロップ可能な空きコマ(開校日・当該生徒が空き)の青枠ハイライト(盤面D&Dと同系統)。 */
+      .slot-cell.is-drop-target {
+        outline: 2px solid #2f6fed;
+        outline-offset: -2px;
+        background: #eaf1ff;
+        cursor: copy;
+      }
+      /* ポインタに追従するドラッグゴースト。 */
+      .schedule-drag-ghost {
+        position: fixed;
+        z-index: 100000;
+        pointer-events: none;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: #1a73e8;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 700;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+        transform: translate(-50%, -50%);
+        white-space: nowrap;
+      }
+      /* 机選択モーダル(移動先コマの全机をコマ表と同じ配置で表示)。 */
+      .desk-picker-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100001;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(17, 24, 39, 0.44);
+      }
+      .desk-picker-overlay[hidden] { display: none; }
+      .desk-picker-modal {
+        background: #fff;
+        border-radius: 10px;
+        padding: 18px 20px;
+        max-width: 92vw;
+        overflow: visible;
+        /* 中央基点で縮小する。center top だと縦長時に flex 中央寄せでボックス上端が画面外へ出た状態から
+           上基点で縮むため上端が切れてはみ出す(ブラウザ拡大時に顕在化)。center 基点なら必ず画面内に収まる。 */
+        transform-origin: center center;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+      }
+      /* 盤面の一コマをそのまま切り取った見た目(App.css の .slot-adjust-grid / sa-* に合わせる)。
+         上=日付行・左=時限列・各行=机([机番号][講師][席1][席2])。ダーク1pxの罫線・寸法を盤面と揃える。 */
+      .desk-picker-board {
+        border-collapse: collapse;
+        margin: 0 auto;
+        background: #fff;
+        table-layout: fixed;
+      }
+      .desk-picker-board td,
+      .desk-picker-board th {
+        border: 1px solid #111111;
+        padding: 2px 4px;
+        text-align: center;
+        height: 38px;
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .desk-picker-board .dp-corner { width: 52px; background: #f4f4f4; }
+      .desk-picker-board .dp-datehead { background: #f4f4f4; color: #111111; font-size: 12px; font-weight: 700; height: 24px; }
+      .desk-picker-board .dp-time {
+        width: 52px;
+        background: #f4f4f4;
+        color: #111111;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+      .desk-picker-board .dp-time-range { font-size: 9px; font-weight: 400; color: #555555; }
+      .desk-picker-board .dp-seatno {
+        width: 22px;
+        background: #f7f7f7;
+        color: #333333;
+        font-size: 15px;
+        font-weight: 800;
+        line-height: 1;
+        letter-spacing: -0.06em;
+      }
+      .desk-picker-board .dp-teacher {
+        width: 68px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #294967;
+        white-space: nowrap;
+      }
+      .desk-picker-board .dp-student {
+        width: 96px;
+        background: #fff;
+        color: #1f2937;
+        white-space: nowrap;
+      }
+      .desk-picker-board .dp-student.dp-selectable { cursor: pointer; color: #1a56c4; font-weight: 700; }
+      .desk-picker-board .dp-selectable .dp-empty { color: #9aa7b6; font-weight: 700; }
+      .desk-picker-board .dp-selectable:hover { background: #dbe9ff; }
+      .desk-picker-board .dp-selectable:hover .dp-empty { color: #1a56c4; }
+      .desk-picker-board .dp-student.dp-occupied { background: #f3f5f8; color: #33404f; }
+      /* 在席=クリックで入れ替え(盤面の入れ替えと同じ)。ホバーで橙・「入替」ヒントを出す。 */
+      .desk-picker-board .dp-student.dp-swap { cursor: pointer; }
+      .desk-picker-board .dp-swap:hover { background: #ffe6c2; }
+      .desk-picker-board .dp-swap-hint { display: block; font-size: 8px; font-weight: 700; color: #a15c00; letter-spacing: 0.06em; }
+      .desk-picker-board .dp-student.dp-blocked { background: #f6f7f9; color: #9aa0a6; font-style: italic; }
+      .desk-picker-actions { margin-top: 14px; display: flex; justify-content: flex-end; }
+      .desk-picker-cancel {
+        border: 1px solid #c3ccd8;
+        background: #fff;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+
+      /* 移動が成立しなかったときに理由を大きく出す最前面オーバーレイ(「日程表に戻る」で閉じる)。 */
+      .move-error-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 100002;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 22px;
+        padding: 24px;
+        background: rgba(40, 12, 12, 0.55);
+      }
+      .move-error-overlay[hidden] { display: none; }
+      .move-error-card {
+        background: #fff;
+        border: 3px solid #c3342f;
+        border-radius: 14px;
+        padding: 28px 32px;
+        max-width: 90vw;
+        text-align: center;
+        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.4);
+      }
+      .move-error-heading { font-size: 22px; font-weight: 800; color: #b00020; margin: 0 0 12px; letter-spacing: 0.03em; }
+      .move-error-reason { font-size: 20px; font-weight: 700; color: #2b1414; line-height: 1.5; }
+      .move-error-back {
+        border: 0;
+        background: #1a73e8;
+        color: #fff;
+        border-radius: 8px;
+        padding: 12px 26px;
+        font-size: 18px;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .move-error-back:hover { background: #1560c4; }
+
+      /* 移動が完了したコマを数秒黄色でハイライト(盤面の is-moving-highlight と同系統)。 */
+      .slot-cell.is-move-done-highlight {
+        background: #fff4ad !important;
+        box-shadow: inset 0 0 0 2px #d0a000;
+        transition: background 0.2s ease;
+      }
+
       @media print {
         *,
         *::before,
@@ -2192,6 +2457,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           aspect-ratio: 297 / 420;
           page: sheetA3;
         }
+        /* 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で
+           見切れるのを防ぐため、通常回数・講習回数表の行高を印刷時だけ少し詰める
+           (欄の行高さ縮小・オーナー要望 2026-07-08)。画面表示は 22px のまま。 */
+        .count-table th,
+        .count-table td {
+          height: 16px;
+          padding: 1px 4px;
+          line-height: 1.05;
+        }
         .teacher-lesson-person {
           gap: 1px;
           padding: 1px 0;
@@ -2253,7 +2527,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         ${viewType === 'student' ? '<button type="button" id="schedule-empty-format-button" class="secondary">空フォーマット印刷</button>' : ''}
-        ${viewType === 'student' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
+        ${viewType === 'student' || viewType === 'teacher' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
         <button type="button" id="schedule-show-all-button" class="secondary">印刷用全員表示</button>
       </div>
       <div class="toolbar-field toolbar-field--search">
@@ -2272,6 +2546,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
     </div>`}
     <main class="pages" id="schedule-pages"></main>
     <input id="schedule-logo-input" type="file" accept="image/*" style="display:none" />
+    <div id="schedule-sync-overlay" class="schedule-sync-overlay print-only-hidden" hidden><div class="schedule-sync-spinner"></div><div class="schedule-sync-text">コマ表の最新を反映中…</div></div>
     <script id="schedule-data" type="application/json">${serializedPayload}</script>
     <script>
       const VIEW_TYPE = '${viewType}';
@@ -2290,6 +2565,25 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const personSearchInput = document.getElementById('schedule-person-search');
       const personSelect = document.getElementById('schedule-person-select');
       const applyButton = document.getElementById('schedule-apply-button');
+      const scheduleSyncOverlay = document.getElementById('schedule-sync-overlay');
+      // 盤面編集→別タブ反映の間の「同期中」スピナー。本体(盤面)が編集時に __showScheduleSyncing() を呼んで
+      // 出し、同期ペイロード適用(flushIncomingPayload)で自動的に消す。来ないときの固着防止に保険タイマー。
+      let scheduleSyncHideTimer = 0;
+      // このポップアップ自身の操作(出席不可トグル等)はローカル反映＋fingerprint スキップ済みで、盤面からの
+      // 同期エコーに実描画変化が無い。その間の「同期中」スピナーは連続入力の妨げになるだけなので抑制する。
+      let suppressSyncSpinnerUntil = 0;
+      function showScheduleSyncingOverlay() {
+        if (!scheduleSyncOverlay) return;
+        if (Date.now() < suppressSyncSpinnerUntil) return;
+        if (scheduleSyncHideTimer) { window.clearTimeout(scheduleSyncHideTimer); scheduleSyncHideTimer = 0; }
+        scheduleSyncOverlay.hidden = false;
+        scheduleSyncHideTimer = window.setTimeout(hideScheduleSyncingOverlay, 8000);
+      }
+      function hideScheduleSyncingOverlay() {
+        if (scheduleSyncHideTimer) { window.clearTimeout(scheduleSyncHideTimer); scheduleSyncHideTimer = 0; }
+        if (scheduleSyncOverlay) scheduleSyncOverlay.hidden = true;
+      }
+      window.__showScheduleSyncing = showScheduleSyncingOverlay;
       const STORAGE_SCOPE = encodeURIComponent(String(DATA.classroomStorageKey || 'default'));
       const sharedStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':' + BASE_VIEW_TYPE + ':';
       const sharedGlobalStoragePrefix = 'schedule-shared:' + STORAGE_SCOPE + ':global:';
@@ -2297,9 +2591,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const lessonTypeLabels = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習', trial: '体験' };
       const teacherTypeLabels = { normal: '', substitute: '代行', outside: '外部' };
       const dayLabels = ['日', '月', '火', '水', '木', '金', '土'];
-      // 通常回数・講習回数表の表示順。算国は国の直後に置き、集理/集社は末尾。
-      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社'];
-      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '集理', '集社'];
+      // 通常回数・講習回数表の表示順。算国は国の直後、理社は社の直後(いずれも小学限定の合体科目)、集理/集社は末尾。
+      const subjectDefinitions = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社'];
+      const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社'];
       let activeCountDialog = null;
       let activeTeacherRegisterDialog = null;
       let payloadFingerprint = buildPayloadFingerprint(DATA);
@@ -3004,6 +3298,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return subjectDefinitions.filter((subject) => {
           if (subject === '算' || subject === '数') return subject === preferredMathSubject;
           if (subject === '算国') return preferredMathSubject === '算';
+          // 理社は算国と同じく小学限定の合体科目。小学(preferredMathSubject==='算')のみ表示。
+          if (subject === '理社') return preferredMathSubject === '算';
           // 理は学年を問わず常に表示。高校生は理に加えて生・物・化も表示する。
           if (subject === '理') return true;
           if (subject === '生' || subject === '物' || subject === '化') return prefersHighSchoolScience || legacySubjects.includes(subject);
@@ -3013,6 +3309,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function normalizeSubjectForStudent(subject, student, referenceDate) {
         if (subject === '算国') return getPreferredMathSubject(student, referenceDate) === '算' ? '算国' : '数';
+        if (subject === '理社') return getPreferredMathSubject(student, referenceDate) === '算' ? '理社' : '理';
         if (subject !== '算' && subject !== '数') return subject;
         return getPreferredMathSubject(student, referenceDate);
       }
@@ -3059,6 +3356,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return (v === '60' || v === '45') ? v : '';
       }
 
+      // 日程表コマ組み(別タブD&D): 掴める授業カードか判定し、掴めるなら drag 用の属性を返す。
+      // 対象は通常/振替/講習/増コマ(集団は別行・体験や出欠済みの記録カードは対象外)。scheduleDndEnabled 時だけ有効。
+      function buildLessonCardDragAttrs(entry) {
+        if (!DATA.scheduleDndEnabled) return '';
+        var type = entry.lessonType;
+        if (type !== 'regular' && type !== 'makeup' && type !== 'special' && type !== 'extra') return '';
+        if (!entry.id) return '';
+        return ' class="lesson-card is-draggable" data-role="lesson-card-draggable"'
+          + ' data-entry-id="' + escapeHtml(entry.id) + '"'
+          + ' data-linked-student-id="' + escapeHtml(entry.linkedStudentId || '') + '"'
+          + ' data-lesson-type="' + escapeHtml(type) + '"'
+          + ' data-subject="' + escapeHtml(entry.subject || '') + '"'
+          + ' data-student-name="' + escapeHtml(entry.name || '') + '"';
+      }
+
       function renderStudentCellCard(entry) {
         var subjectWithMinutes = entry.subject + formatScheduleMinutesSuffix(entry.noteSuffix);
         if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended') {
@@ -3066,7 +3378,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';
           return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml([statusLabel, linkedDestinationLabel].filter(Boolean).join(' ')) + '</div><div class="lesson-sub">' + escapeHtml([subjectWithMinutes, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
-        return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml(subjectWithMinutes) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
+        var dragAttrs = buildLessonCardDragAttrs(entry);
+        var openTag = dragAttrs ? '<div' + dragAttrs + '>' : '<div class="lesson-card">';
+        return openTag + '<div class="lesson-main">' + escapeHtml(subjectWithMinutes) + '</div><div class="lesson-sub">' + escapeHtml(lessonTypeLabels[entry.lessonType] || entry.lessonType) + '</div></div>';
       }
 
       function renderStudentCellCards(entries) {
@@ -3074,6 +3388,384 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (lessons.length === 0) return '<div class="empty-label"></div>';
         if (lessons.length === 1) return renderStudentCellCard(lessons[0]);
         return '<div class="lesson-card-stack">' + lessons.map((lesson) => '<div class="lesson-card-stack-item">' + renderStudentCellCard(lesson) + '</div>').join('') + '</div>';
+      }
+
+      // ==== 日程表コマ組み(別タブD&D・spec-student-schedule-dnd) ==================================
+      // 生徒日程表の授業カードを長押し(約250ms)→空きコマへドラッグ→机選択モーダル→席確定で、本体盤面へ
+      // schedule-student-move-request を送る。移動の実処理は盤面(executeScheduleViewMove)。ここは UI と要求送信のみ。
+      // 自動同期の再描画(flushIncomingPayload)は pagesElement.innerHTML を差し替えるため、pointerdown は
+      // 再描画で消えない安定要素(pagesElement)への委譲で拾う。ドラッグ中/モーダル表示中に再描画が来たら破棄する。
+      var scheduleDndDrag = null; // { phase:'pending'|'dragging', pointerId, startX, startY, card, source, ghost, hoverCell }
+      var scheduleDndLongPressTimer = null;
+      var scheduleDeskPickerOverlay = null;
+      var scheduleDeskPickerKeydown = null;
+      var scheduleMoveErrorOverlay = null;   // 移動失敗の理由オーバーレイ
+      var scheduleMoveHighlightKey = null;   // 移動成立コマ(dateKey_slotNumber)を数秒ハイライト
+      var scheduleMoveHighlightTimer = null;
+      // 移動成立の通知はスピナー表示中に届くことがあるため、同期スピナーが消えるまでハイライト開始を
+      // 保留する(スピナーと4秒ハイライトの窓が被って見えづらくなるのを避ける)。
+      var pendingScheduleMoveHighlightKey = null;
+
+      function findScheduleCellForMove(dateKey, slotNumber) {
+        var cells = Array.isArray(DATA.cells) ? DATA.cells : [];
+        for (var i = 0; i < cells.length; i++) {
+          if (cells[i].dateKey === dateKey && cells[i].slotNumber === slotNumber) return cells[i];
+        }
+        return null;
+      }
+
+      // ポインタ座標の下にあるドロップ可能な空きコマ(td)を返す。開校日・当該生徒が空き(カード無し)・
+      // pickerDesks を持つコマだけが対象。掴んでいる元カードのコマ自身は空きではないので自然に除外される。
+      function findDroppableCellFromPoint(clientX, clientY) {
+        var element = document.elementFromPoint(clientX, clientY);
+        if (!element || !(element instanceof HTMLElement)) return null;
+        var cell = element.closest('td[data-role="student-slot-cell"]');
+        if (!cell || !(cell instanceof HTMLElement)) return null;
+        if (cell.classList.contains('is-holiday')) return null;
+        if (cell.querySelector('.lesson-card')) return null; // 当該生徒が既にそのコマに授業を持つ
+        var dateKey = cell.getAttribute('data-date-key');
+        var slotNumber = Number(cell.getAttribute('data-slot-number'));
+        var payloadCell = findScheduleCellForMove(dateKey, slotNumber);
+        if (!payloadCell || !Array.isArray(payloadCell.pickerDesks) || payloadCell.pickerDesks.length === 0) return null;
+        return cell;
+      }
+
+      function clearScheduleDropHighlight() {
+        var previous = document.querySelector('.slot-cell.is-drop-target');
+        if (previous) previous.classList.remove('is-drop-target');
+      }
+
+      function removeScheduleDragGhost() {
+        if (scheduleDndDrag && scheduleDndDrag.ghost && scheduleDndDrag.ghost.parentNode) {
+          scheduleDndDrag.ghost.parentNode.removeChild(scheduleDndDrag.ghost);
+        }
+      }
+
+      // ドラッグ/長押し待ちの後始末(モーダルは閉じない)。
+      function endScheduleDndDrag() {
+        if (scheduleDndLongPressTimer) { window.clearTimeout(scheduleDndLongPressTimer); scheduleDndLongPressTimer = null; }
+        clearScheduleDropHighlight();
+        removeScheduleDragGhost();
+        if (scheduleDndDrag && scheduleDndDrag.card) scheduleDndDrag.card.classList.remove('is-drag-origin');
+        document.removeEventListener('pointermove', onScheduleDndPointerMove, true);
+        document.removeEventListener('pointerup', onScheduleDndPointerUp, true);
+        document.removeEventListener('pointercancel', onScheduleDndPointerCancel, true);
+        scheduleDndDrag = null;
+      }
+
+      // ドラッグ中も机選択モーダルも含めて破棄(再描画時に呼ぶ)。
+      function cancelScheduleDndInteraction() {
+        endScheduleDndDrag();
+        closeScheduleDeskPicker();
+      }
+
+      function startScheduleDndDrag(clientX, clientY) {
+        if (!scheduleDndDrag) return;
+        scheduleDndDrag.phase = 'dragging';
+        scheduleDndDrag.card.classList.add('is-drag-origin');
+        var ghost = document.createElement('div');
+        ghost.className = 'schedule-drag-ghost';
+        ghost.textContent = (scheduleDndDrag.source.subject || '') + ' ' + (lessonTypeLabels[scheduleDndDrag.source.lessonType] || '');
+        document.body.appendChild(ghost);
+        scheduleDndDrag.ghost = ghost;
+        moveScheduleDragGhost(clientX, clientY);
+      }
+
+      function moveScheduleDragGhost(clientX, clientY) {
+        if (scheduleDndDrag && scheduleDndDrag.ghost) {
+          scheduleDndDrag.ghost.style.left = clientX + 'px';
+          scheduleDndDrag.ghost.style.top = clientY + 'px';
+        }
+      }
+
+      function onScheduleDndPointerMove(event) {
+        if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
+        var dx = event.clientX - scheduleDndDrag.startX;
+        var dy = event.clientY - scheduleDndDrag.startY;
+        if (scheduleDndDrag.phase === 'pending') {
+          // 長押し完了前に動きすぎたら「スクロール/誤タップ」としてドラッグにしない。
+          if (Math.abs(dx) > 10 || Math.abs(dy) > 10) { endScheduleDndDrag(); }
+          return;
+        }
+        event.preventDefault();
+        moveScheduleDragGhost(event.clientX, event.clientY);
+        var cell = findDroppableCellFromPoint(event.clientX, event.clientY);
+        var current = document.querySelector('.slot-cell.is-drop-target');
+        if (current && current !== cell) current.classList.remove('is-drop-target');
+        if (cell && cell !== current) cell.classList.add('is-drop-target');
+      }
+
+      function onScheduleDndPointerUp(event) {
+        if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
+        if (scheduleDndDrag.phase !== 'dragging') {
+          // 長押し未満のタップ = ドラッグではない。掴めるカードでも既存の「出席不可トグル」を維持する。
+          // (pointerdown で stopImmediatePropagation してトグルを止めているので、ここでタップとして実行する。)
+          var tapCard = scheduleDndDrag.card;
+          endScheduleDndDrag();
+          if (tapCard && typeof handleUnavailablePointerDown === 'function') {
+            var tapCell = tapCard.closest('td[data-role="student-slot-cell"]');
+            if (tapCell && tapCell.getAttribute('data-editable') === 'true') {
+              handleUnavailablePointerDown(tapCell);
+            }
+          }
+          return;
+        }
+        var source = scheduleDndDrag.source;
+        var cell = findDroppableCellFromPoint(event.clientX, event.clientY);
+        endScheduleDndDrag();
+        if (cell) {
+          openScheduleDeskPicker(source, cell.getAttribute('data-date-key'), Number(cell.getAttribute('data-slot-number')));
+        }
+      }
+
+      function onScheduleDndPointerCancel(event) {
+        if (!scheduleDndDrag || event.pointerId !== scheduleDndDrag.pointerId) return;
+        endScheduleDndDrag();
+      }
+
+      function onScheduleDndPointerDown(event) {
+        if (!DATA.scheduleDndEnabled) return;
+        if (event.button !== 0) return;
+        var target = event.target;
+        if (!(target instanceof HTMLElement)) return;
+        var card = target.closest('.lesson-card.is-draggable[data-role="lesson-card-draggable"]');
+        if (!card || !(card instanceof HTMLElement)) return;
+        var cell = card.closest('td[data-role="student-slot-cell"]');
+        if (!cell || !(cell instanceof HTMLElement)) return;
+        // 掴んだ瞬間に空きコマトグル等の後続ハンドラを止める(同じ pagesElement 上の別 pointerdown を抑止)。
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelScheduleDndInteraction();
+        scheduleDndDrag = {
+          phase: 'pending',
+          pointerId: event.pointerId,
+          startX: event.clientX,
+          startY: event.clientY,
+          card: card,
+          ghost: null,
+          source: {
+            entryId: card.getAttribute('data-entry-id') || '',
+            studentId: card.getAttribute('data-linked-student-id') || '',
+            lessonType: card.getAttribute('data-lesson-type') || '',
+            subject: card.getAttribute('data-subject') || '',
+            studentName: card.getAttribute('data-student-name') || '',
+            sourceDateKey: cell.getAttribute('data-date-key') || '',
+            sourceSlotNumber: Number(cell.getAttribute('data-slot-number')),
+          },
+        };
+        document.addEventListener('pointermove', onScheduleDndPointerMove, true);
+        document.addEventListener('pointerup', onScheduleDndPointerUp, true);
+        document.addEventListener('pointercancel', onScheduleDndPointerCancel, true);
+        var downX = event.clientX;
+        var downY = event.clientY;
+        scheduleDndLongPressTimer = window.setTimeout(function() {
+          scheduleDndLongPressTimer = null;
+          startScheduleDndDrag(downX, downY);
+        }, 250);
+      }
+
+      function closeScheduleDeskPicker() {
+        if (scheduleDeskPickerKeydown) { document.removeEventListener('keydown', scheduleDeskPickerKeydown, true); scheduleDeskPickerKeydown = null; }
+        if (scheduleDeskPickerOverlay && scheduleDeskPickerOverlay.parentNode) {
+          scheduleDeskPickerOverlay.parentNode.removeChild(scheduleDeskPickerOverlay);
+        }
+        scheduleDeskPickerOverlay = null;
+      }
+
+      // 盤面の1コマと同じ「1机=1行 [机番号][講師][席1][席2]」の席セル(td)を返す。
+      // 空席=クリックで配置 / 在席=クリックで入れ替え(盤面の入れ替えと同じ) / メモ=選択不可。
+      // 席セルには机同一性(deskId/講師)を持たせ、在席席には相手の entryId も持たせて、確定時に実机・実席へ解決させる。
+      function renderDeskPickerSeatCellHtml(desk, seat) {
+        if (!seat) return '<td class="dp-student dp-blocked"></td>';
+        if (seat.blockedByMemo) return '<td class="dp-student dp-blocked">メモ</td>';
+        // この机の在席者(両席)の entryId。盤面側で「その机」を在席同一性で特定するために持たせる。
+        var deskOccupants = (desk.seats || []).map(function(s) { return s && s.occupantEntryId ? s.occupantEntryId : ''; }).filter(Boolean).join(',');
+        var idAttrs = ' data-role="desk-picker-seat"'
+          + ' data-desk-index="' + desk.deskIndex + '"'
+          + ' data-student-index="' + seat.studentIndex + '"'
+          + ' data-desk-id="' + escapeHtml(desk.deskId || '') + '"'
+          + ' data-desk-teacher="' + escapeHtml(desk.teacher || '') + '"'
+          + ' data-desk-occupants="' + escapeHtml(deskOccupants) + '"';
+        if (seat.occupied) {
+          return '<td class="dp-student dp-occupied dp-swap"' + idAttrs
+            + ' data-occupant-entry-id="' + escapeHtml(seat.occupantEntryId || '') + '">'
+            + escapeHtml(seat.label || '使用中') + '<span class="dp-swap-hint">入替</span></td>';
+        }
+        // 出席済みなど配置不可の記録席(selectable:false)は空きに見せず、記録ラベルでブロック表示する。
+        // (欠席/振無休は selectable:true のままなので、この分岐には入らず従来どおり選択可)
+        if (!seat.selectable) {
+          return '<td class="dp-student dp-blocked">' + escapeHtml(seat.statusLabel || '不可') + '</td>';
+        }
+        var emptyText = seat.statusLabel ? escapeHtml(seat.statusLabel) : '空き';
+        return '<td class="dp-student dp-selectable"' + idAttrs + '><span class="dp-empty">' + emptyText + '</span></td>';
+      }
+
+      // 移動先コマを「盤面の一コマをそのまま切り取った」表で出す机選択モーダル。上=日付行・左=時限列・
+      // 各行=机([机番号][講師][席1][席2])。物理的な空き席だけ選べる。説明テキストは置かない(盤面と同じ見た目)。
+      function openScheduleDeskPicker(source, targetDateKey, targetSlotNumber) {
+        var payloadCell = findScheduleCellForMove(targetDateKey, targetSlotNumber);
+        if (!payloadCell || !Array.isArray(payloadCell.pickerDesks) || payloadCell.pickerDesks.length === 0) return;
+        closeScheduleDeskPicker();
+        var desks = payloadCell.pickerDesks;
+        var deskCount = desks.length;
+        var timeCellHtml = escapeHtml(payloadCell.slotLabel || (targetSlotNumber + '限'))
+          + '<br><span class="dp-time-range">' + escapeHtml(payloadCell.timeLabel || '') + '</span>';
+        var rowsHtml = desks.map(function(desk, rowIndex) {
+          var seats = desk.seats || [];
+          var timeCell = rowIndex === 0 ? '<td class="dp-time" rowspan="' + deskCount + '">' + timeCellHtml + '</td>' : '';
+          return '<tr>' + timeCell
+            + '<td class="dp-seatno">' + (Number(desk.deskIndex) + 1) + '</td>'
+            + '<td class="dp-teacher">' + escapeHtml(desk.teacher || '') + '</td>'
+            + renderDeskPickerSeatCellHtml(desk, seats[0])
+            + renderDeskPickerSeatCellHtml(desk, seats[1])
+            + '</tr>';
+        }).join('');
+        var dateHeadHtml = escapeHtml((payloadCell.dateLabel || targetDateKey) + '(' + (payloadCell.dayLabel || '') + ')');
+        var overlay = document.createElement('div');
+        overlay.className = 'desk-picker-overlay';
+        overlay.setAttribute('data-role', 'desk-picker-overlay');
+        overlay.innerHTML = '<div class="desk-picker-modal" role="dialog" aria-modal="true">'
+          + '<table class="desk-picker-board"><thead><tr><th class="dp-corner"></th><th class="dp-datehead" colspan="4">' + dateHeadHtml + '</th></tr></thead><tbody>' + rowsHtml + '</tbody></table>'
+          + '<div class="desk-picker-actions"><button type="button" class="desk-picker-cancel" data-role="desk-picker-cancel">キャンセル</button></div></div>';
+        overlay.addEventListener('click', function(event) {
+          var clickTarget = event.target;
+          if (!(clickTarget instanceof HTMLElement)) return;
+          if (clickTarget === overlay || clickTarget.closest('[data-role="desk-picker-cancel"]')) { closeScheduleDeskPicker(); return; }
+          var seatButton = clickTarget.closest('[data-role="desk-picker-seat"]');
+          if (!seatButton || !(seatButton instanceof HTMLElement)) return;
+          sendScheduleMoveRequest(source, {
+            targetDateKey: targetDateKey,
+            targetSlotNumber: targetSlotNumber,
+            deskIndex: Number(seatButton.getAttribute('data-desk-index')),
+            studentIndex: Number(seatButton.getAttribute('data-student-index')),
+            deskId: seatButton.getAttribute('data-desk-id') || undefined,
+            deskTeacher: seatButton.getAttribute('data-desk-teacher') || '',
+            occupantEntryId: seatButton.getAttribute('data-occupant-entry-id') || undefined,
+            deskOccupantEntryIds: (seatButton.getAttribute('data-desk-occupants') || '').split(',').filter(Boolean),
+          });
+          closeScheduleDeskPicker();
+        });
+        scheduleDeskPickerKeydown = function(event) { if (event.key === 'Escape') closeScheduleDeskPicker(); };
+        document.addEventListener('keydown', scheduleDeskPickerKeydown, true);
+        document.body.appendChild(overlay);
+        scheduleDeskPickerOverlay = overlay;
+        // 全机を1画面に収める(縦スクロール無し)。computeDeskPickerFitScale と同式(ミラー):
+        // 高さ・幅の両方で足りない分だけ縮める(ブラウザ拡大時は viewport の CSS px が縮み縦横ともにはみ出しうる)。
+        // avail = max(0, viewport - margin); k = min(1, availH/contentH, availW/contentW)。
+        var modalEl = overlay.querySelector('.desk-picker-modal');
+        if (modalEl) {
+          var rect = modalEl.getBoundingClientRect();
+          var availH = Math.max(0, window.innerHeight - 24);
+          var availW = Math.max(0, window.innerWidth - 24);
+          var kH = (rect.height > 0 && availH > 0) ? availH / rect.height : 1;
+          var kW = (rect.width > 0 && availW > 0) ? availW / rect.width : 1;
+          var k = Math.min(1, kH, kW);
+          if (k < 1) modalEl.style.transform = 'scale(' + k + ')';
+        }
+      }
+
+      function sendScheduleMoveRequest(source, seat) {
+        try {
+          if (!window.opener || window.opener.closed) return;
+          // 盤面編集→反映の間の同期中スピナーを即時に出す(移動は反映を待つのでスピナーを出す=抑制窓を解除)。
+          suppressSyncSpinnerUntil = 0;
+          if (typeof showScheduleSyncingOverlay === 'function') showScheduleSyncingOverlay();
+          window.opener.postMessage({
+            type: 'schedule-student-move-request',
+            classroomStorageKey: (DATA.classroomStorageKey || 'default'),
+            source: {
+              entryId: source.entryId,
+              studentId: source.studentId || undefined,
+              sourceDateKey: source.sourceDateKey,
+              sourceSlotNumber: source.sourceSlotNumber,
+              lessonType: source.lessonType,
+              subject: source.subject,
+              studentName: source.studentName,
+            },
+            seat: seat,
+          }, '*');
+        } catch {}
+      }
+
+      function setupScheduleDndMove() {
+        if (!DATA.scheduleDndEnabled) return;
+        // 空きコマトグル(handleUnavailablePointerDown)より先に拾うため、そのハンドラより前に登録する
+        // (掴めるカードのときだけ stopImmediatePropagation で後続を止める)。委譲なので再描画に強い。
+        pagesElement.addEventListener('pointerdown', onScheduleDndPointerDown);
+      }
+
+      // 移動成立コマの黄色ハイライトを現在の描画に適用する。renderStudentPages 後に毎回呼ぶことで、
+      // 自動同期の再描画(pagesElement.innerHTML 差し替え)をまたいで数秒間ハイライトを持続させる。
+      function applyScheduleMoveHighlight() {
+        if (!scheduleMoveHighlightKey || !pagesElement) return;
+        var sep = scheduleMoveHighlightKey.indexOf('_');
+        if (sep < 0) return;
+        var dateKey = scheduleMoveHighlightKey.slice(0, sep);
+        var slotNumber = scheduleMoveHighlightKey.slice(sep + 1);
+        var cell = pagesElement.querySelector('td[data-role="student-slot-cell"][data-date-key="' + dateKey + '"][data-slot-number="' + slotNumber + '"]');
+        if (cell) cell.classList.add('is-move-done-highlight');
+      }
+
+      function highlightMovedSlot(dateKey, slotNumber) {
+        if (!dateKey || slotNumber === '' || slotNumber == null) return;
+        scheduleMoveHighlightKey = dateKey + '_' + slotNumber;
+        if (scheduleMoveHighlightTimer) window.clearTimeout(scheduleMoveHighlightTimer);
+        applyScheduleMoveHighlight();
+        scheduleMoveHighlightTimer = window.setTimeout(function() {
+          scheduleMoveHighlightTimer = null;
+          scheduleMoveHighlightKey = null;
+          if (pagesElement) {
+            var nodes = pagesElement.querySelectorAll('.is-move-done-highlight');
+            for (var i = 0; i < nodes.length; i++) nodes[i].classList.remove('is-move-done-highlight');
+          }
+        }, 4000);
+      }
+
+      // 保留中のハイライトがあれば、同期スピナーが消えた後に少し間を置いて開始する(昇格は一度きり)。
+      function promotePendingScheduleMoveHighlight() {
+        if (!pendingScheduleMoveHighlightKey) return;
+        var key = pendingScheduleMoveHighlightKey;
+        pendingScheduleMoveHighlightKey = null;
+        var sep = key.indexOf('_');
+        if (sep <= 0) return;
+        var d = key.slice(0, sep);
+        var s = key.slice(sep + 1);
+        window.setTimeout(function() { highlightMovedSlot(d, s); }, 250);
+      }
+
+      function closeScheduleMoveError() {
+        if (scheduleMoveErrorOverlay && scheduleMoveErrorOverlay.parentNode) scheduleMoveErrorOverlay.parentNode.removeChild(scheduleMoveErrorOverlay);
+        scheduleMoveErrorOverlay = null;
+      }
+
+      // 移動が成立しなかったときに理由を大きく表示する(「日程表に戻る」で閉じる)。盤面は変わっていない。
+      function showScheduleMoveError(reason) {
+        closeScheduleMoveError();
+        var overlay = document.createElement('div');
+        overlay.className = 'move-error-overlay';
+        overlay.setAttribute('data-role', 'move-error-overlay');
+        overlay.innerHTML = '<div class="move-error-card"><div class="move-error-heading">移動できませんでした</div><div class="move-error-reason">' + escapeHtml(reason || '移動できませんでした。') + '</div></div><button type="button" class="move-error-back" data-role="move-error-back">日程表に戻る</button>';
+        overlay.addEventListener('click', function(event) {
+          var t = event.target;
+          if (!(t instanceof HTMLElement)) return;
+          if (t === overlay || t.closest('[data-role="move-error-back"]')) closeScheduleMoveError();
+        });
+        document.body.appendChild(overlay);
+        scheduleMoveErrorOverlay = overlay;
+      }
+
+      function handleScheduleMoveResult(message) {
+        if (message && message.ok) {
+          // 成立: ハイライトは即開始せず保留する。同期中スピナーと4秒ハイライトの窓が被って見えづらいのを
+          // 避けるため、スピナーが消えた後(flushIncomingPayload)に開始する。
+          pendingScheduleMoveHighlightKey = String(message.targetDateKey || '') + '_' + String(message.targetSlotNumber == null ? '' : message.targetSlotNumber);
+          // 保険: メッセージ到着順の都合で既にスピナーが消えている(または無い)場合は、ここで即昇格する。
+          if (!scheduleSyncOverlay || scheduleSyncOverlay.hidden) promotePendingScheduleMoveHighlight();
+          return;
+        }
+        // 不成立: 同期スピナーを消し、理由を大きく表示する(盤面は不変)。
+        hideScheduleSyncingOverlay();
+        showScheduleMoveError(message && message.message ? String(message.message) : '');
       }
 
       function groupScheduleEntriesBySlot(entries) {
@@ -3494,6 +4186,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
                 subjectSlots: normalizeSubjectSlots(currentInput.subjectSlots),
                 regularOnly: Boolean(currentInput.regularOnly),
                 countSubmitted: Boolean(currentInput.countSubmitted),
+                // 講習集計結果の提出日時/方法は登録状況を変えないこの操作では保全する。
+                submittedAt: currentInput.submittedAt || null,
+                submissionMethod: currentInput.submissionMethod,
               },
             },
           };
@@ -3519,6 +4214,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
                 optionChecks: optionChecks !== undefined ? (optionChecks || {}) : (currentInput.optionChecks || {}),
                 regularOnly: Boolean(regularOnly),
                 countSubmitted: Boolean(countSubmitted),
+                // 講習集計結果: 室長の登録操作なので即時に method='manual'・日時=今。解除は日時/方法をクリア。
+                // (opener 側の schedule-student-count-save と同じ規則。最新表示前でも集計結果に反映される)
+                submittedAt: countSubmitted ? new Date().toISOString() : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
               },
             },
           };
@@ -3544,6 +4243,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(unavailableSlots),
                 countSubmitted: Boolean(currentInput.countSubmitted),
+                // 提出日時/方法は登録状況を変えないこの操作では保全する。
+                submittedAt: currentInput.submittedAt || null,
+                submissionMethod: currentInput.submissionMethod,
               },
             },
           };
@@ -3561,6 +4263,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
                 countSubmitted: Boolean(countSubmitted),
+                // 講習集計結果(講師): 室長の登録操作なので即時に method='manual'・日時=今。解除はクリア。
+                submittedAt: countSubmitted ? new Date().toISOString() : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
               },
             },
           };
@@ -3657,6 +4362,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
         syncPayloadFingerprint();
         refreshStudentUnavailableUi(studentId);
+        // 連続入力の妨げになる同期スピナーを抑制(この操作はローカル反映済み・エコーに描画変化なし)。
+        suppressSyncSpinnerUntil = Date.now() + 3000;
       }
 
       function toggleStudentUnavailableSlot(studentId, slotKey) {
@@ -3696,6 +4403,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
         syncPayloadFingerprint();
         refreshTeacherUnavailableUi(teacherId);
+        // 連続入力の妨げになる同期スピナーを抑制(この操作はローカル反映済み・エコーに描画変化なし)。
+        suppressSyncSpinnerUntil = Date.now() + 3000;
       }
 
       function toggleTeacherUnavailableSlot(teacherId, slotKey) {
@@ -4700,6 +5409,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           return null;
         }
         pagesElement.innerHTML = result.html;
+        // 移動成立コマの黄色ハイライトを再描画のたびに適用し直す(自動同期をまたいで数秒持続させる)。
+        if (typeof applyScheduleMoveHighlight === 'function') applyScheduleMoveHighlight();
         return result.student;
       }
 
@@ -4972,10 +5683,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function flushIncomingPayload() {
         incomingPayloadJobId = 0;
+        // 自動同期の再描画は pagesElement.innerHTML を差し替えるため、進行中のドラッグ/机選択モーダルは破棄する
+        // (再描画で参照先の DOM が消えて宙に浮くのを防ぐ)。
+        cancelScheduleDndInteraction();
         const nextPayload = pendingIncomingPayload;
         pendingIncomingPayload = null;
-        if (!nextPayload) return;
-        applyIncomingPayload(nextPayload);
+        if (nextPayload) applyIncomingPayload(nextPayload);
+        // 反映が終わったら(等価ペイロードで再描画なしでも)同期中スピナーを必ず消す。
+        hideScheduleSyncingOverlay();
+        // スピナーが消えた後に、保留中の移動成立ハイライトがあれば開始する。
+        promotePendingScheduleMoveHighlight();
       }
 
       function scheduleIncomingPayload(nextPayload) {
@@ -5405,6 +6122,31 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }).join(' / ');
       }
 
+      // 講習集計結果の「提出日時」セル。ISO文字列を JST(M/D HH:MM)で返す。未提出/不正は '—'。
+      // ランタイムのタイムゾーンに依存しないよう +9h した上で UTC 成分を読む(CIのUTCでも同結果=テスト決定的)。
+      // (scheduleHtml.test.ts が new Function で抽出して固定する)
+      function formatSubmissionDateTime(submittedAt) {
+        if (typeof submittedAt !== 'string' || !submittedAt) return '—';
+        var ms = Date.parse(submittedAt);
+        if (isNaN(ms)) return '—';
+        var jst = new Date(ms + 9 * 60 * 60 * 1000);
+        var month = jst.getUTCMonth() + 1;
+        var day = jst.getUTCDate();
+        var hours = ('0' + jst.getUTCHours()).slice(-2);
+        var minutes = ('0' + jst.getUTCMinutes()).slice(-2);
+        return month + '/' + day + ' ' + hours + ':' + minutes;
+      }
+
+      // 講習集計結果の「提出方法」セル。'qr'=QR提出、'manual'=室長登録。
+      // 未登録は '—'、登録済みでも方法不明(この機能導入前の既存データ)は '—'。
+      // (scheduleHtml.test.ts が new Function で抽出して固定する)
+      function resolveSubmissionMethodLabel(input) {
+        if (!input || !input.countSubmitted) return '—';
+        if (input.submissionMethod === 'qr') return 'QR提出';
+        if (input.submissionMethod === 'manual') return '室長登録';
+        return '—';
+      }
+
       // 表示期間の講習について、全生徒の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
       function buildLectureSummaryHtml(startDate, endDate) {
         var sessions = getOverlappingSpecialSessions(startDate, endDate);
@@ -5419,15 +6161,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
               + '<td class="lecture-summary-name">' + escapeHtml(formatStudentHeaderName(student, startDate)) + '</td>'
               + '<td class="' + statusClassMap[status.kind] + '">' + escapeHtml(status.label) + '</td>'
-              + '<td class="lecture-summary-subjects">' + escapeHtml(formatDesiredSubjectsWithDuration(inputs[student.id], student, startDate)) + '</td></tr>';
+              + '<td class="lecture-summary-subjects">' + escapeHtml(formatDesiredSubjectsWithDuration(inputs[student.id], student, startDate)) + '</td>'
+              + '<td class="lecture-summary-submitted-at">' + escapeHtml(formatSubmissionDateTime(inputs[student.id] && inputs[student.id].submittedAt)) + '</td>'
+              + '<td class="lecture-summary-method">' + escapeHtml(resolveSubmissionMethodLabel(inputs[student.id])) + '</td></tr>';
           }).join('');
-          if (!rowsHtml) rowsHtml = '<tr><td colspan="4" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="6" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
           var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
           var summaryLine = '登録 ' + counts.registered + '人 / 通常のみ ' + counts['regular-only'] + '人 / 未登録 ' + counts.unregistered + '人（全 ' + students.length + '人）';
           return '<section class="lecture-summary-section">'
             + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
             + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
-            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th></tr></thead>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th><th>提出日時</th><th>提出方法</th></tr></thead>'
             + '<tbody>' + rowsHtml + '</tbody></table></section>';
         }).join('');
         if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
@@ -5440,14 +6184,74 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '.lecture-summary-section h2{font-size:16px;margin:0 0 6px;border-bottom:2px solid #cbd2d9;padding-bottom:4px;}'
           + '.lecture-summary-range{font-size:12px;color:#52606d;font-weight:normal;margin-left:10px;}'
           + '.lecture-summary-count{font-size:13px;color:#52606d;margin:0 0 10px;}'
-          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:760px;}'
+          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:920px;}'
           + '.lecture-summary-table th,.lecture-summary-table td{border:1px solid #cbd2d9;padding:6px 10px;text-align:left;font-size:14px;}'
           + '.lecture-summary-table th{background:#f5f7fa;}'
           + '.lecture-summary-index{width:44px;text-align:right;color:#7b8794;}'
           + '.lecture-summary-name{white-space:nowrap;}'
           + '.lecture-summary-subjects{color:#1f2933;}'
+          + '.lecture-summary-submitted-at{white-space:nowrap;color:#1f2933;}'
+          + '.lecture-summary-method{white-space:nowrap;color:#334e68;}'
           + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
           + '.lecture-summary-regular-only{color:#b45309;font-weight:bold;}'
+          + '.lecture-summary-unregistered{color:#9aa5b1;}'
+          + '.lecture-summary-empty{color:#7b8794;}'
+          + '.lecture-summary-print{margin:0 0 20px;}'
+          + '@media print{.lecture-summary-print{display:none;}body{padding-bottom:0;}}';
+        var printButton = '<div class="lecture-summary-print"><button type="button" onclick="window.print()">印刷</button></div>';
+        return '<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>' + escapeHtml(title) + '</title>'
+          + '<style>' + style + '</style></head><body>'
+          + '<h1>' + escapeHtml(title) + '</h1>'
+          + '<p class="lecture-summary-subtitle">' + escapeHtml('表示期間: ' + formatRangeLabel(startDate, endDate)) + '</p>'
+          + printButton + sectionsHtml + '</body></html>';
+      }
+
+      // 表示期間の講習について、全講師の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
+      // 生徒版と異なり希望科目列は出さない(講師は科目提出がないため・オーナー指示 2026-07-09)。
+      function buildTeacherLectureSummaryHtml(startDate, endDate) {
+        var sessions = getOverlappingSpecialSessions(startDate, endDate);
+        var teachers = getVisibleTeachers(startDate, endDate);
+        var sectionsHtml = sessions.map(function(session) {
+          var inputs = session && session.teacherInputs && typeof session.teacherInputs === 'object' ? session.teacherInputs : {};
+          var registeredCount = 0;
+          var rowsHtml = teachers.map(function(teacher, index) {
+            var input = inputs[teacher.id];
+            var registered = Boolean(input && input.countSubmitted);
+            if (registered) registeredCount += 1;
+            var statusLabel = registered ? '登録' : '未登録';
+            var statusClass = registered ? 'lecture-summary-registered' : 'lecture-summary-unregistered';
+            return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
+              + '<td class="lecture-summary-name">' + escapeHtml(formatTeacherHeaderName(teacher)) + '</td>'
+              + '<td class="' + statusClass + '">' + escapeHtml(statusLabel) + '</td>'
+              + '<td class="lecture-summary-submitted-at">' + escapeHtml(formatSubmissionDateTime(input && input.submittedAt)) + '</td>'
+              + '<td class="lecture-summary-method">' + escapeHtml(resolveSubmissionMethodLabel(input)) + '</td></tr>';
+          }).join('');
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="5" class="lecture-summary-empty">表示対象の講師がいません</td></tr>';
+          var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
+          var summaryLine = '登録 ' + registeredCount + '人 / 未登録 ' + (teachers.length - registeredCount) + '人（全 ' + teachers.length + '人）';
+          return '<section class="lecture-summary-section">'
+            + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
+            + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>講師名</th><th>登録状況</th><th>提出日時</th><th>提出方法</th></tr></thead>'
+            + '<tbody>' + rowsHtml + '</tbody></table></section>';
+        }).join('');
+        if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
+        var title = '講習集計結果（講師）';
+        var style = 'body{font-family:sans-serif;margin:24px;padding-bottom:160px;color:#1f2933;}'
+          + 'h1{font-size:20px;margin:0 0 4px;}'
+          + '.lecture-summary-subtitle{color:#52606d;font-size:13px;margin:0 0 20px;}'
+          + '.lecture-summary-section{margin-bottom:28px;}'
+          + '.lecture-summary-section h2{font-size:16px;margin:0 0 6px;border-bottom:2px solid #cbd2d9;padding-bottom:4px;}'
+          + '.lecture-summary-range{font-size:12px;color:#52606d;font-weight:normal;margin-left:10px;}'
+          + '.lecture-summary-count{font-size:13px;color:#52606d;margin:0 0 10px;}'
+          + '.lecture-summary-table{border-collapse:collapse;width:100%;max-width:720px;}'
+          + '.lecture-summary-table th,.lecture-summary-table td{border:1px solid #cbd2d9;padding:6px 10px;text-align:left;font-size:14px;}'
+          + '.lecture-summary-table th{background:#f5f7fa;}'
+          + '.lecture-summary-index{width:44px;text-align:right;color:#7b8794;}'
+          + '.lecture-summary-name{white-space:nowrap;}'
+          + '.lecture-summary-submitted-at{white-space:nowrap;color:#1f2933;}'
+          + '.lecture-summary-method{white-space:nowrap;color:#334e68;}'
+          + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
           + '.lecture-summary-unregistered{color:#9aa5b1;}'
           + '.lecture-summary-empty{color:#7b8794;}'
           + '.lecture-summary-print{margin:0 0 20px;}'
@@ -5483,7 +6287,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           } catch (error) {
             pagesElement.innerHTML = '<div class="empty-state">表示中にエラーが発生しました: ' + escapeHtml(String(error)) + '</div>';
           }
-          document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate);
+          // タブ名は取り違え防止のため「教室名」を出す。期間は出さない(2026-07-09 オーナー指示)。
+          document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '');
           updateSheetScreenSize();
           bindNotes();
           bindSalaryInputs();
@@ -5511,7 +6316,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ? (VIEW_TYPE === 'student' ? formatStudentHeaderName(displayedPerson, startDate) : formatTeacherHeaderName(displayedPerson))
           : '対象なし';
         if (summaryLabel) summaryLabel.textContent = '表示中: ' + formatRangeLabel(startDate, endDate) + ' / ' + personLabel;
-        document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate) + ' | ' + personLabel;
+        // タブ名は「教室名」を出す(期間は出さない)。生徒/講師名は残す(2026-07-09 オーナー指示)。
+        document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '') + ' | ' + personLabel;
         updateSheetScreenSize();
         syncPendingUnavailableUi(pagesElement);
         bindNotes();
@@ -5615,7 +6421,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             currentEndDate = swap;
           }
           if (getOverlappingSpecialSessions(currentStartDate, currentEndDate).length === 0) return;
-          var summaryHtml = buildLectureSummaryHtml(currentStartDate, currentEndDate);
+          var summaryHtml = VIEW_TYPE === 'teacher'
+            ? buildTeacherLectureSummaryHtml(currentStartDate, currentEndDate)
+            : buildLectureSummaryHtml(currentStartDate, currentEndDate);
           var summaryWindow = window.open('', 'lecture-summary-' + Date.now());
           if (summaryWindow) {
             summaryWindow.document.open();
@@ -5649,6 +6457,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         applyFilters();
       });
       applyButton.addEventListener('click', applyFilters);
+      // 日程表コマ組み(別タブD&D): 空きコマトグルより前に登録し、掴めるカードのときだけ後続を止める。
+      setupScheduleDndMove();
       document.addEventListener('pointerdown', (event) => {
         if (!(event instanceof PointerEvent) || event.button !== 0) return;
         acquireInteractionLock();
@@ -5729,6 +6539,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (message && message.type === 'schedule-force-release-interaction') {
           interactionLockSuspendUntil = Date.now() + 1500;
           releaseInteractionLock();
+          return;
+        }
+        // 日程表コマ組みの結果ack: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示。
+        if (message && message.type === 'schedule-student-move-result') {
+          handleScheduleMoveResult(message);
           return;
         }
         if (!message || message.type !== 'schedule-data-update' || message.viewType !== VIEW_TYPE || !message.payload) return;

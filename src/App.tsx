@@ -9,7 +9,8 @@ import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, g
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
-import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
+import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
 const BackupRestoreScreen = lazy(() => import('./components/backup-restore/BackupRestoreScreen').then((m) => ({ default: m.BackupRestoreScreen })))
@@ -32,7 +33,7 @@ import { compactBoardSharePayload, publishBoardShare } from './integrations/fire
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
-import { isDevelopmentClassroom } from './utils/developmentClassroom'
+import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
@@ -147,12 +148,24 @@ export function buildTeacherAutoAssignItems(
     .map((entry) => ({ sessionId: entry.sessionId, teacherId: entry.personId, mode: 'assign' as const }))
 }
 
-export type StudentScheduleRequest = {
-  requestId: number
-  sessionId: string
-  studentId: string
-  mode: 'unassign'
-}
+// 生徒日程表(別タブ)から本体盤面へ渡す一過性リクエスト。Issue #46 の規律(App 永続 state に載せ、
+// 処理側が requestId 一致時のみ消費)を踏襲する。mode で分岐:
+//  - 'unassign': 講習の登録解除(schedule-student-count-save の countSubmitted=false 由来)。
+//  - 'move'    : 日程表コマ組み(spec-student-schedule-dnd)。D&D+机選択の確定で送られ、
+//                盤面の executeScheduleViewMove で実移動する。source/seat は純関数で検証済み。
+export type StudentScheduleRequest =
+  | {
+      requestId: number
+      mode: 'unassign'
+      sessionId: string
+      studentId: string
+    }
+  | {
+      requestId: number
+      mode: 'move'
+      source: ScheduleViewMoveSource
+      seat: ScheduleViewMoveSeat
+    }
 
 export type SubmissionAcknowledgementEntry = {
   id: string
@@ -233,13 +246,17 @@ type BlazeFreeTierEstimate = {
   estimatedReferenceUsageRate: number
   estimatedReferenceMaxRetentionDays: number
   referenceClassroomCount: number
-  retentionDays: number
-  hourlyRetentionHours: number
+  estimatedRetainedBackupCount: number
   freeTierStorageBytes: number
 }
 
-const SERVER_AUTO_BACKUP_RETENTION_DAYS = 14
-const SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS = 72
+// 2026-07-10: 生成15分毎1本化+間引き方式(functions/src/workspaceBackupSchedule.ts と同じ数値)。
+// 保持される概算本数 = 24h分(15分毎) + 24-72h分(毎時) + 72h-7日分(日次) の合計。
+// 過去の実装(14日+72時間の単純合算)がここだけ短縮反映漏れになっていたバグの修正も兼ねる。
+const SERVER_AUTO_BACKUP_FULL_RESOLUTION_COUNT = 24 * 4 // 24時間 ÷ 15分 = 96本
+const SERVER_AUTO_BACKUP_HOURLY_THINNED_COUNT = 72 - 24 // 24-72時間帯、毎時1本 = 48本
+const SERVER_AUTO_BACKUP_DAILY_THINNED_COUNT = 7 - 3 // 72時間-7日帯(=4日分)、日次1本 = 4本
+const SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT = SERVER_AUTO_BACKUP_FULL_RESOLUTION_COUNT + SERVER_AUTO_BACKUP_HOURLY_THINNED_COUNT + SERVER_AUTO_BACKUP_DAILY_THINNED_COUNT
 const BLAZE_STORAGE_FREE_TIER_BYTES = 5_000_000_000
 const BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT = 50
 
@@ -475,11 +492,12 @@ export function buildDevelopmentClassroomCopyPayload(sourcePayload: AppSnapshotP
     specialSessions: sanitizedSource.specialSessions.map((session) => ({
       ...session,
       teacherInputs: Object.fromEntries(Object.entries(session.teacherInputs).map(([personId, input]) => {
-        const { submissionToken: _submissionToken, ...restInput } = input
+        // 混入防止: 提出トークンと発行元教室タグの両方を外す。開発用側で自分の教室のトークンを再発行させる。
+        const { submissionToken: _submissionToken, submissionTokenClassroomId: _submissionTokenClassroomId, ...restInput } = input
         return [personId, restInput]
       })),
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => {
-        const { submissionToken: _submissionToken, ...restInput } = input
+        const { submissionToken: _submissionToken, submissionTokenClassroomId: _submissionTokenClassroomId, ...restInput } = input
         return [personId, restInput]
       })),
     })),
@@ -986,6 +1004,9 @@ export function applyIssuedSubmissionTokensToSessions(
   sessionId: string,
   issuedTokens: Array<{ personType: 'student' | 'teacher'; personId: string; token: string }>,
   updatedAt: string,
+  // 混入防止(2026-07-09): 発行したトークンに「発行元教室ID」を刻む。開発用教室が他教室の
+  // 生データをコピーしたとき、他教室由来トークンを日程表で見分けて弾くために使う([[komahyou-...]])。
+  classroomId?: string,
 ): SpecialSessionRow[] {
   if (issuedTokens.length === 0) return currentSessions
   return currentSessions.map((session) => {
@@ -1000,7 +1021,14 @@ export function applyIssuedSubmissionTokensToSessions(
           // 既存エントリはトークンが無いときだけ後埋め。他フィールド(countSubmitted/subjectSlots 等)は
           // current(最新)を保持し、古いスナップショットで巻き戻さない。
           if (!existing.submissionToken) {
-            nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token }
+            nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
+            changed = true
+          } else if (classroomId !== undefined && existing.submissionTokenClassroomId !== classroomId) {
+            // 混入防止(2026-07-09): 開発用教室で他教室由来/未タグのトークンを、自教室タグ付きに差し替える。
+            // ここに来るのは ensureScheduleSubmissionTokens が sessionForIssue で非所有トークンを外して
+            // 再発行した生徒のみ(本番教室は素通しのため既発行済みは再発行対象にならず、この分岐に来ない)。
+            // 提出内容(countSubmitted/subjectSlots 等)は ...existing で保持し、トークンだけ差し替える(巻き戻さない)。
+            nextStudentInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
             changed = true
           }
         } else {
@@ -1011,6 +1039,7 @@ export function applyIssuedSubmissionTokensToSessions(
             regularOnly: false,
             countSubmitted: false,
             submissionToken: issued.token,
+            submissionTokenClassroomId: classroomId,
             updatedAt,
           }
           changed = true
@@ -1019,7 +1048,11 @@ export function applyIssuedSubmissionTokensToSessions(
         const existing = nextTeacherInputs[issued.personId]
         if (existing) {
           if (!existing.submissionToken) {
-            nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token }
+            nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
+            changed = true
+          } else if (classroomId !== undefined && existing.submissionTokenClassroomId !== classroomId) {
+            // 混入防止(2026-07-09): 開発用教室で他教室由来/未タグの講師トークンを自教室タグ付きに差し替える(生徒と同じ)。
+            nextTeacherInputs[issued.personId] = { ...existing, submissionToken: issued.token, submissionTokenClassroomId: classroomId }
             changed = true
           }
         } else {
@@ -1027,6 +1060,7 @@ export function applyIssuedSubmissionTokensToSessions(
             unavailableSlots: [],
             countSubmitted: false,
             submissionToken: issued.token,
+            submissionTokenClassroomId: classroomId,
             updatedAt,
           }
           changed = true
@@ -1047,8 +1081,9 @@ export function reflectIssuedSubmissionTokens(
   sessionId: string,
   issuedTokens: Array<{ personType: 'student' | 'teacher'; personId: string; token: string }>,
   updatedAt: string,
+  classroomId?: string,
 ): void {
-  setSessions((current) => applyIssuedSubmissionTokensToSessions(current, sessionId, issuedTokens, updatedAt))
+  setSessions((current) => applyIssuedSubmissionTokensToSessions(current, sessionId, issuedTokens, updatedAt, classroomId))
 }
 
 // 起動/再読込時のワークスペース確定。常にサーバー(リモート)最新を正とし、ローカルからは
@@ -1298,6 +1333,12 @@ function AuthenticatedApp() {
   // これをしないと盤面 key 再マウントで古いリクエストが再発火し、組み直した講習コマが消える。
   const handleStudentScheduleRequestProcessed = useCallback((requestId: number) => {
     setStudentScheduleRequest((current) => consumeStudentScheduleRequest(current, requestId))
+  }, [])
+  // Issue #46 同型(2026-07-09): 盤面が講師の自動配置/解除リクエストを処理し終えたら一過性 state を
+  // 消費(null)にする。消さないと盤面 key 再マウントで processedRef が消え、古い unassign(登録解除)が
+  // 再発火して講師が盤面から勝手に消える(8/4 講習で門田/角田が削除操作なしに消える報告)。
+  const handleTeacherAutoAssignRequestProcessed = useCallback((requestId: number) => {
+    setTeacherAutoAssignRequest((current) => consumeTeacherAutoAssignRequest(current, requestId))
   }, [])
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
   const [lastSavedAt, setLastSavedAt] = useState('')
@@ -1565,8 +1606,7 @@ function AuthenticatedApp() {
         estimatedReferenceUsageRate: 0,
         estimatedReferenceMaxRetentionDays: 0,
         referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
-        retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
-        hourlyRetentionHours: SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS,
+        estimatedRetainedBackupCount: SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT,
         freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
       }
     }
@@ -1591,9 +1631,9 @@ function AuthenticatedApp() {
     const estimatedAverageClassroomBytes = Math.max(1, Math.round((totalClassroomBytes + totalManagerBytes) / currentClassroomCount))
     const estimateDailyBytes = (classroomCount: number) => fixedSnapshotBytes + estimatedAverageClassroomBytes * Math.max(0, classroomCount)
 
-    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * (SERVER_AUTO_BACKUP_RETENTION_DAYS + SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS)
+    const currentWorkspaceRetentionBytes = currentWorkspaceDailyBytes * SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT
     const estimatedReferenceDailyBytes = estimateDailyBytes(BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT)
-    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * (SERVER_AUTO_BACKUP_RETENTION_DAYS + SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS)
+    const estimatedReferenceRetentionBytes = estimatedReferenceDailyBytes * SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT
 
     return {
       currentClassroomCount,
@@ -1607,8 +1647,7 @@ function AuthenticatedApp() {
       estimatedReferenceUsageRate: estimatedReferenceRetentionBytes / BLAZE_STORAGE_FREE_TIER_BYTES * 100,
       estimatedReferenceMaxRetentionDays: Math.floor(BLAZE_STORAGE_FREE_TIER_BYTES / estimatedReferenceDailyBytes),
       referenceClassroomCount: BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT,
-      retentionDays: SERVER_AUTO_BACKUP_RETENTION_DAYS,
-      hourlyRetentionHours: SERVER_AUTO_BACKUP_HOURLY_RETENTION_HOURS,
+      estimatedRetainedBackupCount: SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT,
       freeTierStorageBytes: BLAZE_STORAGE_FREE_TIER_BYTES,
     }
   }, [buildWorkspaceSnapshot])
@@ -3107,8 +3146,15 @@ function AuthenticatedApp() {
     const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
     const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
-    const allStudentsHaveTokens = activeStudents.every((s) => session.studentInputs[s.id]?.submissionToken)
-    const allTeachersHaveTokens = activeTeachers.every((t) => session.teacherInputs[t.id]?.submissionToken)
+    // 混入防止(2026-07-09): 開発用教室では、自教室が発行したものでない(他教室由来/タグ未設定)トークンを
+    // 「無し」として扱い、下の ensureSubmissionTokens で自教室タグ付きに再発行させる。これにより
+    // (1)他教室トークンが日程表に残らず本番への誤スキャンを構造的に防ぎ、(2)v1.5.415 のガードで
+    // 未タグ既存トークンのQRが消えた回帰も解消する(再発行後は owned となりQRが出る)。本番教室は素通し。
+    const sessionForIssue = isActingDevelopmentClassroom
+      ? { ...session, studentInputs: stripForeignSubmissionTokensFromInputs(session.studentInputs, actingClassroomId), teacherInputs: stripForeignSubmissionTokensFromInputs(session.teacherInputs, actingClassroomId) }
+      : session
+    const allStudentsHaveTokens = activeStudents.every((s) => sessionForIssue.studentInputs[s.id]?.submissionToken)
+    const allTeachersHaveTokens = activeTeachers.every((t) => sessionForIssue.teacherInputs[t.id]?.submissionToken)
 
     // Build occupied slots from board cells
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3210,8 +3256,8 @@ function AuthenticatedApp() {
     const teacherList = activeTeachers.map((t) => ({ id: t.id, name: getTeacherDisplayName(t), occupiedSlots: teacherOccupiedMap.get(t.id) ?? {} }))
 
     const { updatedSession, newTokens } = allStudentsHaveTokens && allTeachersHaveTokens
-      ? { updatedSession: session, newTokens: [] }
-      : await ensureSubmissionTokens(session, studentsWithSubjects, teacherList, classroomSettings, slotNumbers)
+      ? { updatedSession: sessionForIssue, newTokens: [] }
+      : await ensureSubmissionTokens(sessionForIssue, studentsWithSubjects, teacherList, classroomSettings, slotNumbers)
 
     if (newTokens.length > 0) {
       await writeSubmissionDocs(newTokens, actingClassroomId)
@@ -3222,11 +3268,12 @@ function AuthenticatedApp() {
         updatedSession.id,
         newTokens.map((entry) => ({ personType: entry.doc.personType, personId: entry.doc.personId, token: entry.token })),
         updatedSession.updatedAt,
+        actingClassroomId,
       )
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[] }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[] }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
@@ -3235,7 +3282,7 @@ function AuthenticatedApp() {
       if (token && !newTokenSet.has(token)) {
         const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
         const isThirdGrade = gradeLabel === '中3'
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s) })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s), availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel) })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         // 盤面に登録された集団科目のみ。空(集団未設定の講習)なら集団欄を出さないよう [] で後埋めする。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
@@ -3252,7 +3299,7 @@ function AuthenticatedApp() {
     if (existingTokenEntries.length > 0) {
       updateSubmissionOccupiedSlots(existingTokenEntries).catch(() => { /* non-fatal */ })
     }
-  }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, specialSessions, students, teachers])
+  }, [actingClassroomId, boardStateRef, classroomSettings, displayRegularLessons, isActingDevelopmentClassroom, specialSessions, students, teachers])
 
   const buildPopupBoardWeeksForRange = useCallback((range: ScheduleRangePreference) => {
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3287,6 +3334,19 @@ function AuthenticatedApp() {
   // specialSessions 等が更新され、それを依存する effect が再発火して毎編集で popup を再生成して
   // しまう(メモリ最大スパイク)。トリガを個別に潰すのではなく、ここで一括して自動再生成を止める。
   // rangeOverride を渡すと state 反映待ちなしにその範囲で即同期できる(「最新表示」用)。
+  // 混入防止(2026-07-09): 開発用教室でのみ、日程表へ渡す前に「今開いている教室が発行したものではない」
+  // 提出トークンを除去する。開発用教室は他教室の生データをコピーしてテストするため、コピー元(他教室=本番)の
+  // トークンが残っていると、日程表がそのQRを表示→スキャンで本番へ誤書き込みする事故が起きる(2026-07-09 実発生)。
+  // 本番教室ではこのガードは一切走らない(既存トークン・印刷済みQRは不変)。
+  const applyDevelopmentScheduleTokenGuard = useCallback((sessions: SpecialSessionRow[]): SpecialSessionRow[] => {
+    if (!isActingDevelopmentClassroom) return sessions
+    return sessions.map((session) => ({
+      ...session,
+      studentInputs: stripForeignSubmissionTokensFromInputs(session.studentInputs, actingClassroomId),
+      teacherInputs: stripForeignSubmissionTokensFromInputs(session.teacherInputs, actingClassroomId),
+    }))
+  }, [isActingDevelopmentClassroom, actingClassroomId])
+
   const syncStudentSchedulePopup = useCallback((force = false, rangeOverride: ScheduleRangePreference | null = null) => {
     if (!force) return
     const runtimeWindow = getSchedulePopupRuntimeWindow()
@@ -3323,13 +3383,14 @@ function AuthenticatedApp() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
-      periodBands: latestSpecialSessions,
-      specialSessions: latestSpecialSessions,
+      classroomName: actingClassroom?.name ?? '',
+      periodBands: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
+      specialSessions: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: studentPopup,
     })
-  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
+  }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
 
   // syncStudentSchedulePopup と同様に force=true の明示パスのみ同期する(自動再生成の停止)。
   const syncTeacherSchedulePopup = useCallback((force = false, rangeOverride: ScheduleRangePreference | null = null) => {
@@ -3369,14 +3430,15 @@ function AuthenticatedApp() {
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey: actingClassroomId ?? undefined,
+      classroomName: actingClassroom?.name ?? '',
       highlightedTeacherId,
-      periodBands: latestSpecialSessions,
-      specialSessions: latestSpecialSessions,
+      periodBands: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
+      specialSessions: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: teacherPopup,
     })
-  }, [actingClassroomId, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
+  }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
 
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
@@ -3404,6 +3466,22 @@ function AuthenticatedApp() {
             .then(() => { syncTeacherSchedulePopup(true) })
             .catch(() => { syncTeacherSchedulePopup(true) })
         }
+        return
+      }
+
+      if (message.type === 'schedule-student-move-request') {
+        // 日程表コマ組み(spec-student-schedule-dnd): 別タブ(生成HTML)のD&D+机選択の確定で送られる。
+        // 埋め込みJS(信頼境界外)の入力を純関数で厳密に検証し、mode:'move' の一過性リクエストとして
+        // 盤面へ渡す(Issue #46 の規律: App 永続 state に載せ処理側が requestId 一致時のみ消費)。
+        const parsedMove = parseScheduleViewMoveMessage(message)
+        if (!parsedMove) return
+        studentScheduleRequestIdRef.current += 1
+        setStudentScheduleRequest({
+          requestId: studentScheduleRequestIdRef.current,
+          mode: 'move',
+          source: parsedMove.source,
+          seat: parsedMove.seat,
+        })
         return
       }
 
@@ -3504,6 +3582,10 @@ function AuthenticatedApp() {
                 regularOnly,
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
+                // 講習集計結果: 室長が登録操作で確定=method='manual'・日時は操作時刻。登録解除は日時/方法をクリア。
+                // QR提出済みでも室長が再度「登録」で確定すれば「室長登録」に更新される(最後の操作が正)。
+                submittedAt: countSubmitted ? updatedAt : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
                 updatedAt,
               },
             },
@@ -3524,7 +3606,9 @@ function AuthenticatedApp() {
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const targetInput = targetSession?.studentInputs[message.personId]
         const studentToken = targetInput?.submissionToken
-        if (studentToken) {
+        // 混入防止(2026-07-09): 開発用教室では、自教室が発行したものでないトークン(他教室由来/未タグ=再発行前)には
+        // 絶対に書き込まない(他教室=本番のドキュメントを誤って提出ロック/リセットしない)。本番教室は従来どおり素通し。
+        if (studentToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(targetInput, actingClassroomId))) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           // spec-group-lesson §C 回帰修正: 室長が日程表で決めた集団参加/オプションを提出ドキュメントにも書き戻す。
           // doc を更新しないと購読の反映(doc→ローカル)が空で上書きし、生徒日程表での集団参加登録が
@@ -3589,6 +3673,9 @@ function AuthenticatedApp() {
                 unavailableSlots,
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
+                // 出席不可の保存では登録状況を変えないので提出日時/方法も保全する(消すと集計結果が '—' に化ける)。
+                submittedAt: previousInput?.submittedAt ?? null,
+                submissionMethod: previousInput?.submissionMethod,
                 updatedAt,
               },
             },
@@ -3616,6 +3703,9 @@ function AuthenticatedApp() {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
+                // 講習集計結果(講師): 室長が登録で確定=method='manual'・日時は操作時刻。解除は日時/方法をクリア。
+                submittedAt: countSubmitted ? updatedAt : null,
+                submissionMethod: countSubmitted ? 'manual' : undefined,
                 updatedAt,
               },
             },
@@ -3634,8 +3724,10 @@ function AuthenticatedApp() {
         })
 
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
-        const teacherToken = targetTeacherSession?.teacherInputs[message.personId]?.submissionToken
-        if (teacherToken) {
+        const teacherTargetInput = targetTeacherSession?.teacherInputs[message.personId]
+        const teacherToken = teacherTargetInput?.submissionToken
+        // 混入防止(2026-07-09): 開発用教室では自教室発行でない講師トークンへ書き込まない(生徒と同じ)。本番は素通し。
+        if (teacherToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(teacherTargetInput, actingClassroomId))) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
           else resetLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
@@ -3680,7 +3772,7 @@ function AuthenticatedApp() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     const timerId = window.setTimeout(() => syncStudentSchedulePopup(), 400)
@@ -3766,6 +3858,9 @@ function AuthenticatedApp() {
                     ...existing,
                     unavailableSlots: entry.unavailableSlots,
                     countSubmitted: true,
+                    // 講習集計結果(講師): QR提出の反映なので method='qr'、日時は提出ドキュメントの submittedAt。
+                    submittedAt: entry.submittedAt,
+                    submissionMethod: 'qr',
                     updatedAt: now,
                   },
                 },
@@ -3807,6 +3902,9 @@ function AuthenticatedApp() {
                     optionChecks: entry.optionChecks ?? existing?.optionChecks ?? {},
                     regularOnly: entry.regularOnly,
                     countSubmitted: true,
+                    // 講習集計結果(生徒): QR提出の反映なので method='qr'、日時は提出ドキュメントの submittedAt。
+                    submittedAt: entry.submittedAt,
+                    submissionMethod: 'qr',
                     updatedAt: now,
                   },
                 },
@@ -5002,6 +5100,7 @@ function AuthenticatedApp() {
       autoAssignRules={autoAssignRules}
       pairConstraints={pairConstraints}
       teacherAutoAssignRequest={teacherAutoAssignRequest}
+      onTeacherAutoAssignRequestProcessed={handleTeacherAutoAssignRequestProcessed}
       studentScheduleRequest={studentScheduleRequest}
       onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       initialBoardState={boardState}

@@ -33,7 +33,7 @@ export type RegularLessonTemplate = {
 export const regularTemplateDayOptions = [1, 2, 3, 4, 5, 6, 0] as const
 export const regularTemplateSlotNumbers = [1, 2, 3, 4, 5] as const
 
-const subjectOptions: SubjectLabel[] = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社']
+const subjectOptions: SubjectLabel[] = ['英', '数', '算', '算国', '国', '理', '生', '物', '化', '社', '理社']
 const dayLabelByValue: Record<number, string> = {
   0: '日',
   1: '月',

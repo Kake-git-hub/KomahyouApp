@@ -21,6 +21,123 @@
 - feat: 盤面(ScheduleBoardScreen)が未消化の講習/振替残数を生徒ID単位で親へ通知し、削除警告に利用(onDeletionStockSummaryChange・App.tsx)。
 - test: 削除ガードの純ロジックに回帰テストを追加(deleteGuard.test.ts・講習のみ/両方/なし/講師除外/名前フォールバック)。
 
+## v1.5.432 (2026-07-10)
+
+- docs(保守体制にオーナー要望3点を明文化・オーナー指示 2026-07-10): ①**隔離開発環境(staging)と本番の版を常に一致** — どちらでも動作確認するため。常時CI自動追従はせず「staging で新機能の実装・検証を始める直前に最新 main を Deploy to Staging で反映し両 version.json を揃える」オンデマンド同期を採用(CLAUDE.md staging 項・staging-environment スキルに手順追加・safe-release 手順3/チェックリストに版一致項目追加)。②**モデルのコスト使い分けを再確認** — 複雑作業・構想・原因特定・仕様策定・レビュー=高コスト上位モデル/確立した単純作業=安い下位モデル。主セッションの Agent 起動・Workflow の agent() の model 選択にも適用する旨を「モデル割当方針」冒頭に大原則として明記。③**ユーザビリティ影響の機能要望は実装前に懸案+妥協案を提示して合意** — 標準フロー step2 と spec-curator エージェント(手順5・アウトプット形式)に妥協案ゲートを追加。合意前に dev-fix へ渡さない(CLAUDE.md・.claude/skills/{safe-release,staging-environment}・.claude/agents/spec-curator.md)
+
+## v1.5.431 (2026-07-10)
+
+- fix(サーバーバックアップの Google Drive 自動同期がCIデプロイで無効化される事故の恒久対策): `functions/.env`(Google Drive OAuth 一式)は .gitignore 済みで CI のチェックアウトに含まれないのに、本番 `deploy-functions.yml` には staging のような env 書き込みステップが無かったため、CI経由で functions をデプロイするたびに `GOOGLE_DRIVE_BACKUP_FOLDER_ID` 等が空になり `isGoogleDriveBackupConfigured()` が false となって Drive 同期が黙って停止していた(2026-07-10 のバックアップ再設計で初めてCI経由デプロイして顕在化)。deploy-functions.yml に「Write functions env for production」ステップを追加し、GitHub シークレット `PROD_FUNCTIONS_ENV`(ローカル functions/.env と同内容)を `functions/.env.komahyouapp-prod` へ書き出して runtime env に焼き込むようにした。**シークレット `PROD_FUNCTIONS_ENV` の登録が必要**(.github/workflows/deploy-functions.yml)
+- feat(自動バックアップ: 早朝の静音時間帯をスキップして取得回数を抑制・オーナー確定 2026-07-10): 15分毎バックアップのうち JST 3:15〜8:45(ユーザーが操作しない早朝)は生成をスキップし、9:00 から通常の15分刻みへ復帰する。ただし 72時間〜7日帯の日次保持アンカーである **AM3:00 の1本だけは静音帯でも取得**する(取らないと3〜7日前の日次バックアップが存在しなくなるため)。純関数 `isWorkspaceAutoBackupSkippedAt` をスケジュール関数側で判定(手動「今すぐバックアップ」は対象外)。回帰テスト7件を同コミットで追加(functions/src/workspaceBackupSchedule.ts(+test)・functions/src/index.ts・src/components/developer-admin/DeveloperAdminScreen.tsx)
+- fix(生徒日程表コマ組みの机選択モーダル: ブラウザ拡大時に画面からはみ出す): コマ組み(別タブD&D)で移動先を選ぶ「机選択モーダル」を、日程表をブラウザ拡大していても画面いっぱいに収まるよう修正。原因は2点 — (1) `.desk-picker-modal` の `transform-origin` が `center top` で、机数が多く縦長になると flex 中央寄せでボックス上端が画面外に出た状態から上基点で縮むため上端が切れていた → `center center` に変更し中央基点で確実に画面内へ収める。(2) 縮小率計算が高さのみで幅を見ておらず、ブラウザ拡大で viewport の CSS px が縮むと固定px寸法の盤面が横にもはみ出していた → `computeDeskPickerFitScale` を高さ・幅の両方で判定し厳しい方の縮小率を採用(埋め込みJSミラーも同式に更新)。回帰テスト5件を同コミットで追加(src/utils/scheduleHtml.ts(+test))
+
+## v1.5.429 (2026-07-10)
+
+- feat(表示週選択を自作カレンダーへ差し替え: 月送りでは週を変えず日付タップでのみ確定・オーナー確定 2026-07-10): 盤面ツールバー「表示週を選択」のネイティブ日付ピッカー(`<input type="date">`)を廃止し、アプリ自作のカレンダーポップオーバーに差し替え。ネイティブは「月送り」と「日選択」をどちらも同じ change で通知し端末によっては blur も来ないため、月を送っただけで表示週が変わる/選んでも変わらない、をコード側で確実に分離できなかった(v1.5.427/428 の試行錯誤)。自作カレンダーは **‹ › の月送りは表示月(state)だけを変え週は一切変えず、日付ボタンのタップで初めて `onJumpToDate` を呼んで確定** する挙動を全端末で決定的に再現。今日/選択中の週/前後月をハイライト、外側クリック・Escape・「閉じる」で週を変えずに閉じる、「今日」ボタンで今日の週へ。表示計算(月曜始まり6週×7日の行列生成・月送り・週内判定・今日)は純関数 `weekJumpCalendar.ts` に切り出し回帰テスト9件を同コミットで追加。旧 `weekJumpPicker.ts`(＋test)は役目を終えたため削除(src/components/schedule-board/weekJumpCalendar.ts(+test)・src/components/schedule-board/BoardToolbar.tsx・src/App.css)
+
+## v1.5.428 (2026-07-10)
+
+- fix(表示週選択カレンダー: 日付を選んで確定した時に確実に切り替える・v1.5.427の追随修正・オーナー報告 2026-07-10): v1.5.427 で「blur / Enter で確定」にした結果、デスクトップ等のカレンダーは**日付をクリックしてもフォーカスが外れず(=blur が来ず)、選んでも表示週が切り替わらない**回帰が出た。プラットフォーム差(タブレットのホイール/カレンダーは操作途中に change 連発、デスクトップのカレンダークリックは blur なし)を吸収するため、確定トリガーを「**最後の change から約320msの静止＝日付を選び終えた**」とみなす方式へ変更。blur / Enter が来れば即確定(待ち時間ゼロ)、Escape は取り消し、アンマウント時はタイマー解除。純関数 `createWeekJumpPicker`(stage/commit/reset)はそのまま流用し、確定タイミングのみ component 側(`weekJumpCommitTimerRef`)で制御(src/components/schedule-board/BoardToolbar.tsx)
+
+## v1.5.427 (2026-07-10)
+
+- fix(盤面の表示週選択カレンダー: 日付を確定するまで表示週を変えない・オーナー依頼 2026-07-10): 「表示週を選択」のネイティブ日付ピッカー(`<input type="date">`)は、タブレット等でホイール/カレンダー操作中に `change` を発火させるため、以前は確定前に表示週が勝手に切り替わっていた。`change` では週を変えず「保留(stage)」のみ行い、ピッカーを閉じて確定した時(blur / Enter)に最後の値へジャンプする方式へ変更(Escape はキャンセルで保留破棄)。確定制御を純関数 `createWeekJumpPicker`(stage/commit/reset)に切り出し、controlled(`value`)だと保留中に値が戻ってしまうため uncontrolled(`defaultValue`＋`key={weekStartDate}`)にして週変更時のみ再同期。回帰防止テスト: stage だけでは commit まで値を返さない/commit は最後の値を一度だけ返す(多重ジャンプ防止)/空値・reset は null、を新規追加(src/components/schedule-board/weekJumpPicker.ts(+test)・src/components/schedule-board/BoardToolbar.tsx)
+
+## v1.5.426 (2026-07-10)
+
+- refactor(ワークスペース自動バックアップの間引き方式へ再設計・オーナー確定 2026-07-10): 生成スケジュールを15分毎(`*/15 * * * *`)の1本に一本化し、毎時生成(`createWorkspaceServerHourlyBackups`)・日次生成(`createWorkspaceServerAutoBackups`)の**Cloud Functionsを本番から削除**。保持はプルーン時の経過時間ベースの間引きで実現(新関数 `shouldKeepWorkspaceAutoBackup`: age<24h=全保持/24-72h=JST分00のみ/72h-7日=JST時03分00のみ/7日以上=削除)。Google Driveミラーも「15分毎はスキップ」を撤回し毎回アップロード、プルーンも同じ間引きルールへ統一(`shouldKeepGoogleDriveBackupFile`)。フロントのストレージ使用量見積り(`src/App.tsx`)も新方式の概算本数(96+48+4=148本)に合わせて修正し、旧実装が保持短縮(14日→7日、72h→48h)の反映漏れで古い数値のまま放置されていたバグも併せて修正。回帰防止テスト: `shouldKeepWorkspaceAutoBackup` の境界値(24h/72h/7日ちょうど・JSTオフセット跨ぎ含む)を新規追加(functions/src/workspaceBackupSchedule.ts(+test)・functions/src/index.ts・src/App.tsx・src/components/developer-admin/DeveloperAdminScreen.tsx)
+
+## v1.5.425 (2026-07-09)
+
+- feat(講習集計結果に提出日時・提出方法を表示＋講師日程にも集計結果ボタン・オーナー依頼 2026-07-09): 生徒の「講習集計結果」に「提出日時」(QR提出/室長登録の日時・JST `M/D HH:MM`)と「提出方法」(`QR提出`/`室長登録`・不明は `—`)の2列を追加。方法は最後の操作で決まる(保護者/講師のQR提出=`qr`、室長が日程表の登録操作で確定=`manual`)。搬送は4経路を揃える: (1)QR提出のFunctions側スナップショット統合(`lectureSubmissionApi`)に `submittedAt`/`submissionMethod:'qr'` を追加、(2)購読反映(`subscribeLectureSubmissions`/`SubmissionChangeEntry` に `submittedAt` を追加し `App.tsx` の新規反映で `qr` を付与)、(3)室長の代行登録(`schedule-student-count-save`/`schedule-teacher-count-save` で `manual`＋操作時刻、登録解除でクリア)、(4)payload serialize(`SerializedStudent/TeacherSpecialSessionInput` へ追加=欠落すると popup で全て `—` に化ける v1.5.400 と同型の非対称を回避)。**講師日程にも「講習集計結果」ボタンを新設**(`buildTeacherLectureSummaryHtml`)。講師版は希望科目列を出さない(No./講師名/登録状況/提出日時/提出方法の5列)。既存データ(未搬送)は `—` 表示・遡及バックフィルなし(本番書き込みを伴うため)。回帰テスト: `formatSubmissionDateTime`(JST・日付境界・不正)/`resolveSubmissionMethodLabel`(qr/manual/未登録/不明)/payload serialize(生徒・講師)/講師ボタン・列構成 を同コミットで追加(src/utils/scheduleHtml.ts(+test)・functions/src/index.ts・src/App.tsx・src/integrations/firebase/lectureSubmission.ts・src/components/special-data/specialSessionModel.ts・src/App.test.ts)
+
+## v1.5.423 (2026-07-09)
+
+- feat(講師D&Dを全教室へ展開・オーナー確定 2026-07-09): 講師の同コマ内D&D移動/入れ替え(`teacherDragAndDropMove`)の scope を `development-only` から `all-classrooms` へ昇格。開発用教室での実機検証OK。テスト更新: 全教室で有効(src/utils/featureRollout.ts(+test))
+- style(掴み中のカーソルを grabbing に): 長押しD&D中(生徒/講師とも)、盤面全体のマウスカーソルを「掴んでいる手(grabbing)」にして掴んでいる最中であることを明示する。従来は生徒セル(`.sa-student`)だけに付いており講師ドラッグ時は既定カーソルのままだった。`.slot-adjust-grid-dragging` 配下全体へ `cursor: grabbing` を適用(src/App.css)
+
+## v1.5.422 (2026-07-09)
+
+- feat(盤面で講師を生徒のようにD&Dで移動/入れ替え・同一コマ限定・開発用教室先行): 講師名を長押し(約250ms)して掴み、同じコマ内の別の机へドラッグ&ドロップで移動できる。移動先が空き講師なら単純移動、講師がいれば2机の講師だけを入れ替える(生徒=lesson は動かさない)。別コマの講師セルへ離しても無効(同一コマ限定)。実移動は純関数 `computeTeacherMove`(机の「講師ブロック」6フィールドだけを入れ替え・lesson の無い机に残った講師は managed 再マージで消えないよう manualTeacher=true に固定=v1.5.349 の emptiedSourceDesk ガードと同型)に集約。UIは生徒D&D(`studentDragAndDropMove`)と同じ操作感で、独立した `teacherDragMoveRef`/`draggingTeacherLabel`/`suppressNextTeacherClickRef` を使い生徒ドラッグ状態と干渉させない。新フラグ `teacherDragAndDropMove` は scope=`development-only`(本番3教室は無効のまま・検証後に昇格予定)。回帰テスト: `computeTeacherMove` 5件＋フラグの development-only 1件を同コミットで追加(src/utils/featureRollout.ts(+test)・src/components/schedule-board/ScheduleBoardScreen.tsx(+test)・src/components/schedule-board/BoardGrid.tsx)
+
+## v1.5.421 (2026-07-09)
+
+- fix: 講師が盤面から削除操作なしに勝手に消える不具合を修正(緑が丘 8/4 講習で門田/角田等)。原因は `teacherAutoAssignRequest`(講師の自動配置/登録解除の一過性コマンド)が App 永続 state に載ったまま消費されず、盤面 key 再マウントで重複ガード(processedRef)が消えるたびに古い unassign(登録解除)が再発火して講師を再削除していた。Issue #46(studentScheduleRequest)と同型で、同じ規律=処理後に App 側 state を消費(null)＋判定を純関数化(`shouldProcessTeacherAutoAssignRequest`/`consumeTeacherAutoAssignRequest`)で修正。再マウント再発火の回帰テスト8件追加(src/App.tsx・src/components/schedule-board/ScheduleBoardScreen.tsx)
+
+## v1.5.420 (2026-07-09)
+
+- feat(講師選択セレクターに講習の出席可否記号・オーナー要望 2026-07-09・全教室): 盤面の講師選択セレクター(`<select>`)で、そのコマの日が講習期間内かつ講師が出席不可コマを提出済み(`countSubmitted`)のとき、講師名の横に **○=出席可能 / ×=出席不可** を付ける。未提出(teacherInputs 無し/`countSubmitted=false`)や講習期間外は記号なし。純関数 `resolveTeacherLectureSlotMark`(specialSessions から日付でセッションを引き、`teacherInputs[id].unavailableSlots` の有無で判定)を新設しユニットテスト4件を同コミットで追加。`value` は従来どおり `teacher.name` のままで保存/確定ロジックは不変(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+
+## v1.5.419 (2026-07-09)
+
+- feat(日程表コマ組みを全教室へ公開): 生徒日程表(別タブ)のコマ組みD&D(`studentScheduleDndMove`)と、その移動結果の即反映に必要な自動同期＋スピナー(`schedulePopupAutoSync`)の scope を `staging-environment` から `all-classrooms` へ昇格(オーナー確定 2026-07-09)。staging→本番の開発用教室で段階検証済み。2026-06-05 のポップアップ再生成メモリ障害はデバウンス+fingerprintスキップ+表示範囲限定で緩和済み。テスト更新: 両フラグが全教室で有効(src/utils/featureRollout.ts(+test))
+
+- feat(自動バックアップ3階層化・オーナー確定 2026-07-09): ワークスペース自動バックアップを hourly(72h保持)+daily(14日保持) の2階層から、**15分毎(新規・保持24時間)+毎時(保持48時間に短縮)+日次(保持7日に短縮)** の3階層へ変更。純ロジック(日時キー生成・Storageパス・displayLabel・保持判定)を `functions/src/workspaceBackupSchedule.ts` へ抽出しユニットテスト化(`functions/src/workspaceBackupSchedule.test.ts`・13件)。15分tierはStorage+Firestore summaryのみでGoogle Driveミラーはスキップ(APIクォータ回避・保持定数は既存のDriveプルーンが自動追従)。ダウンロード解決経路(storagePath由来)は無変更。フロント型 `backupKind` を `'daily'|'hourly'|'quarterHourly'` へ拡張(src/integrations/firebase/adminFunctions.ts)。**次回プルーン実行時、既存の48時間超の毎時バックアップ・7日超の日次バックアップは仕様どおり削除される点に注意。**
+
+## v1.5.417 (2026-07-09)
+
+- feat(Phase C 本番展開ゲート): 日程表コマ組み(別タブD&D)を本番の**開発用教室のみ**へ展開(scope=staging-environment・本番3教室は無効)。加えて別タブ日程表の**自動同期(デバウンス)＋同期スピナー**も本番3教室では意図せず有効化されないよう新フラグ `schedulePopupAutoSync`(staging-environment)を追加してゲート。off の教室では自動同期effectを no-op にし従来どおり「最新表示ボタン/開いた時のみ更新」に保つ(2026-06-05 のポップアップ再生成メモリ障害と同種の負荷が本番大教室で未検証のため・オーナー確定 2026-07-09)。回帰テスト追加(src/utils/featureRollout.ts(+test) / src/components/schedule-board/ScheduleBoardScreen.tsx)
+- fix(Phase C 出席済み席への配置ガード): 出席済みにした生徒は studentSlots から除去され statusSlots に退避される仕様上、`computeStudentMove` の出席ガードが `targetStudentBeforeMove &&` 条件で studentSlots 依存になっており出席席へ別生徒を配置・入れ替えできてしまう回帰を修正。statusSlots が `attended` なら studentSlots の有無に関わらずブロックするよう変更(欠席/振無休/移動済みは従来どおり配置可能な空席のまま)。机選択モーダル側(`buildDeskPickerDesks`)も出席席を `selectable:false` にし、埋め込みJS(`renderDeskPickerSeatCellHtml`)も非選択席を記録ラベル付きのブロック表示に変更。回帰テスト追加(src/components/schedule-board/ScheduleBoardScreen.tsx(+test)・src/components/schedule-view/scheduleViewMove.ts(+test)・src/utils/scheduleHtml.ts)
+- fix(Phase C 日程表コマ組みの同期即時化・二重スピナー修正): 別タブでの生徒移動成立時、1.5秒の自動同期デバウンス任せだった別タブへの反映を短縮。当初は即時 `setScheduleSyncTrigger` を別途足したが、自動同期(デバウンス)effectと経路が二重化し「早期hide→再show」でスピナーが2回出る問題が判明。同期経路を自動同期effectに一本化し、移動時だけ次回1回のデバウンス遅延を0msにする方式(`scheduleSyncDelayRef`)に変更してスピナーを1回・最短に(src/components/schedule-board/ScheduleBoardScreen.tsx)
+
+- fix(Phase C D&D対象拡大): 日程表コマ組み(別タブD&D)で増コマ(lessonType='extra')が掴めなかった問題を修正。prepareStudentForMove は regular/makeup 以外は単純な位置移動のみで既存の講習(special)と同じ経路のため副作用なし。buildLessonCardDragAttrs の対象種別に 'extra' を追加(spec-student-schedule-dnd.md も更新)。回帰テスト追加(src/utils/scheduleHtml.ts(+test))
+- fix(Phase C 週自動拡張の上限): 日程表コマ組みD&Dで移動先が現在ロード済みの週から離れていると weeks state が無制限に肥大化し(cloneWeeks全週クローン+Undo履歴×最大10で増幅)後続操作が重くなる問題に対処。executeScheduleViewMove に上限8週間(56日)のガードを追加し、超える移動は ensureWeeksCoverDateRange を呼ばず不成立を返す(盤面自体の週送りには影響なし・スコープ限定)。純関数 checkScheduleViewMoveRangeWithinCap を export しユニットテスト化(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+- refactor(ensureWeeksCoverDateRange 性能): 週の自動拡張ループが毎回 `[newWeek, ...nextWeeks]` / `[...nextWeeks, newWeek]` で配列全体をコピーしO(n^2)になっていたのを、前方/後方それぞれ一時配列に貯めてから最後に一度だけ結合するO(n)に最適化。生成される週の内容・順序・weekIndexOffsetは完全に不変(リファクタ前実装との出力一致をスタッシュ比較で確認済み)。回帰テスト追加(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+
+- fix(Phase C 机選択モーダル 3): 机が多い/横向き画面で全机が縦スクロール必須になる問題を修正。`.desk-picker-modal` を `overflow:auto/max-height` から `overflow:visible`+`transform-origin:center top` に変更し、表示直後にモーダル実高さから `scale(k)`(k<=1)を算出して縮小適用し、全机を1画面に収める(横幅は `max-width:92vw` を維持)。純関数 `computeDeskPickerFitScale` を export しユニットテスト化(埋め込みJS側は同式のミラー)(src/utils/scheduleHtml.ts(+test))
+- fix(Phase C 移動成立ハイライト): 移動成立時の黄色ハイライトが「同期中」スピナー表示中に始まり被って見えづらい問題を修正。成立通知は即ハイライトせず `pendingScheduleMoveHighlightKey` に保留し、`flushIncomingPayload` でスピナーを消した直後(250ms後)に開始する`promotePendingScheduleMoveHighlight`へ昇格。メッセージ到着順の保険として、既にスピナーが消えている場合は即昇格する(src/utils/scheduleHtml.ts)
+- fix(Phase C 講習自動割振後の武装解除): 講習自動割振で割振りきれない残があると `selectedLectureStockKey` 等がセットされタップ配置モードに武装されてしまう挙動を廃止(オーナー確定 2026-07-09)。純関数 `resolvePostLectureAutoAssignView` を export し、割振り後は常に選択キーをクリアしたうえで、講習残があれば未消化講習一覧・講習ゼロで振替残があれば未消化振替一覧・両ゼロなら未消化講習一覧を開くだけにする。回帰テスト4件(src/components/schedule-board/ScheduleBoardScreen.tsx(+test))
+
+- fix(Phase C 席の解決2): 「空き席なのに移動不可」の残存を根治。resolveScheduleViewTargetSeat の机特定を **deskId→机の在席者(deskOccupantEntryIds)→講師名→positional** に強化(日程表と盤面で机の並び/deskId が食い違っても、在席生徒で「その机」を一意特定)。空きも入れ替え対象も無いときは盤面の実際の席内容(席1=◯/席2=◯)を添えた診断メッセージを返す。回帰テスト: 在席者での机特定・診断(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
+- fix(Phase C×出席不可トグル): 掴めるカード(通/振/講)をタップすると出席不可トグルが効かない回帰を修正。D&Dの pointerdown が stopImmediatePropagation でトグルを潰していたため、長押し未満のタップ(pending→up)でカードでも `handleUnavailablePointerDown` を実行するようにした(カード全体が反応対象＝テキストの短い/余白の狭いコマでもトグル可)。staging のD&D有効時のみの回帰(本番は影響なし)。回帰テスト: タップ→トグルの配線(scheduleHtml.ts(+test))
+- perf(Phase C×出席不可トグル): 出席不可コマの連続入力を妨げないよう、ポップアップ自身の操作(出席不可トグル)では「同期中」スピナーを抑制(この操作はローカル反映＋fingerprint スキップ済みでエコーに描画変化なし)。applyStudent/TeacherUnavailableSlots で suppress 窓(3秒)を張り、showScheduleSyncingOverlay で抑制。移動(反映待ち)は抑制を解除してスピナー表示。回帰テスト: 抑制の配線(scheduleHtml.ts(+test))
+
+- fix(Phase C 席の解決): 別タブのコマ組みで「空き席なのに『すでに生徒がいます』で移動不可」を根治。日程表(overlay 済みセル)と盤面の生 weeks は机内の席(左右=studentSlots)の並びも食い違うことがあり、positional な studentIndex を鵜呑みにすると占有席を指していた。resolveScheduleViewTargetSeat で机は deskId→講師名、席は「入れ替え対象の在席生徒(occupantEntryId)/その机の実際の空き席」で解決してから配置するようにした(旧 resolveScheduleViewTargetDeskIndex を置換)。空きも入れ替え対象も無い場合は理由を出す。回帰テスト4件(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
+- feat(Phase C 入れ替え): 机選択モーダルで在席の生徒を選ぶと**盤面の入れ替えと同じ**挙動で交換できるようにした(オーナー要望)。在席セルをクリック可(橙ホバー・「入替」表示)にし、相手の entryId を送って computeStudentMove の入れ替え(相手を移動元へ振替で入れる)に乗せる。メモ席のみ選択不可。回帰テスト: 入れ替えの通し1件・席セルの入替属性(scheduleViewMove.ts(+test) / scheduleHtml.ts(+test))
+
+- fix(Phase C 移動失敗の原因): 別タブのコマ組みで「本来移動できるはずが移動不可になる」ケースを修正。日程表(overlay 済みセル)と盤面の生 weeks は机の並び/本数が食い違うことがあり、モーダルの positional deskIndex が盤面の別の机(占有/存在せず)を指して弾かれていた。机選択モーダルに机同一性(deskId=盤面 desk.id・講師名)を持たせ、移動確定時に resolveScheduleViewTargetDeskIndex で deskId→講師名→positional の順に実机へ解決してから検証・移動する。回帰テスト3件(scheduleViewMove.ts(+test) / ScheduleBoardScreen.tsx)
+- feat(Phase C 移動の結果表示): 盤面→別タブへ移動結果を ack 送信。成功=移動先コマを数秒(約4s)黄色ハイライト(自動同期の再描画をまたいで持続)。失敗=理由を最前面に大きく表示し「日程表に戻る」ボタンで閉じる(盤面は不変)。回帰テスト: 配線マーカー(scheduleHtml.ts(+test) / ScheduleBoardScreen.tsx)
+- style(Phase C 机選択モーダル 2): 説明テキスト(タイトル/注記)を削除し、机列の左に時限列(rowspan)・一番上に日付行を追加して「盤面の一コマをそのまま切り取った」表にした(オーナー要望)。回帰テスト: 席セルの机同一性属性・日付/時限セルの配線(scheduleHtml.ts(+test))
+- style(Phase C 机選択モーダル): 机一覧の形式を盤面と同じ「1コマを切り取った」表に変更(オーナー要望)。カード式(席を縦積み)をやめ、盤面の .slot-adjust-grid/sa-* に合わせた 1机=1行 [机番号][講師][席1][席2] のダーク罫線テーブルに。空席=クリック可td(青ホバー)・占有=非クリックtd(生徒名+科目)・メモ/休記録=淡色。回帰テスト: 席セルtd形式2件・盤面テーブルの配線マーカー(scheduleHtml.ts(+test))
+- feat(Phase C 別タブD&D本体): 生徒日程表(別タブ・生成HTML)の授業カード長押しD&Dでコマ組み。通常/振替/講習カードを約250ms長押しで掴み→空きコマ(開校日・当該生徒が空き)へドラッグ(青枠ハイライト)→ドロップで机選択モーダル(移動先コマの全机=pickerDesks をコマ表と同配置で表示・空席のみ選択可・自動割振ルール/警告は無関係)→席確定で本体へ schedule-student-move-request 送信→盤面が executeScheduleViewMove で実移動→自動同期で別タブ更新。pointerdown は再描画に強い pagesElement 委譲で拾い、空きコマトグルより先に登録し掴めるカードのみ後続を止める。自動同期の再描画中はドラッグ/モーダルを破棄。scheduleDndEnabled(staging/開発用教室)時のみ有効。埋め込みJSのエスケープ罠に配慮(new Function 構文検証テストが番人)。回帰テスト: 掴めるカードのゲート/対象外種別/配線 3件(scheduleHtml.ts(+test))
+- feat(Phase C 机レイアウト+ゲート): 日程表コマ組みの机選択モーダル用データとフィーチャーゲート。serializeCells に includeDeskPicker フラグを追加し、有効時は開校日コマに pickerDesks(空席の机も含む全机レイアウト=既存テスト済み buildDeskPickerDesks)を別途載せる(desks は空席の机を落とすので机選択に不足するため。印刷/講師/全員表示のペイロードは不変)。featureRollout に `studentScheduleDndMove`(staging-environment スコープ)を追加、盤面が生徒ペイロードに scheduleDndEnabled として渡す。回帰テスト: pickerDesks の載せ分け2件・featureRollout スコープ1件(scheduleHtml.ts(+test) / featureRollout.ts(+test) / ScheduleBoardScreen.tsx)
+- feat(Phase C 土台): 日程表コマ組み(別タブD&D)の受け側配線。StudentScheduleRequest を discriminated union 化し `mode:'move'`(source/seat)を追加、App.tsx が別タブからの `schedule-student-move-request` を純関数 parseScheduleViewMoveMessage で厳密検証して一過性リクエスト化、盤面が executeScheduleViewMove で実移動する effect を追加(Issue #46 規律: 処理時に消費・weeks 未ロード時は待つ)。埋め込みJSのD&D UI・机選択モーダルは次コミット。回帰テスト: parseScheduleViewMoveMessage 6件(scheduleViewMove.ts(+test) / App.tsx / ScheduleBoardScreen.tsx)
+- refactor: 対話用日程表の方針を「別タブ(生成HTML)に同期＋コマ組みを実装」へ回帰(オーナー確定 2026-07-08)。React ポップアウトは別ブラウザウィンドウへの portal で pointer 操作(D&D の drop)が確実に届かず・従来タブと操作感が変わるため棚上げ。scheduleReactViewEnabled を常時 false に(React ビュー・featureRollout は将来再検討用に温存)、日程表ボタンは従来の生成HTMLタブ(openStudentScheduleHtml/openTeacherScheduleHtml)を開く。(ScheduleBoardScreen.tsx)
+- feat: 別タブ日程表への自動同期(デバウンス約1.5秒)。盤面編集を別タブへ自動反映する。編集ごとの即再生成は 2026-06-05 メモリ障害の温床のため、①デバウンスで連打を1回に集約 ②受信側(埋め込みJS)の buildPayloadFingerprint で等価ペイロードの再描画をスキップ ③表示範囲限定、の3点で防ぐ。ポップアップを開いている間だけ作動。「最新表示(期間・生徒適用)」ボタンは残す。staging で ?memlog=1 の heap 実測を行う。(ScheduleBoardScreen.tsx)
+- feat: 別タブ日程表の「同期中」スピナー(オーナー指示 2026-07-08)。盤面編集→別タブ反映までの数秒、最前面に大きくスピナー＋「コマ表の最新を反映中…」を表示する。本体(盤面)が編集時に埋め込みJSの `__showScheduleSyncing()` を即時に呼び、同期ペイロード適用(flushIncomingPayload)で自動的に消える(等価ペイロードでも固着しないよう flush 末尾で必ず非表示＋8秒の保険タイマー)。ポップアップを開いた直後の初期表示ではスピナーを出さない。回帰テスト1件。(scheduleHtml.ts(+test) / ScheduleBoardScreen.tsx)
+
+- feat: 対話用日程表のReact化 Phase 0+1(土台＋リアルタイム同期・staging先行)。盤面と同一Reactツリーの `ScheduleView`(ドック⇄ポップアウト切替・spec-schedule-interactive-view)を新設し、staging環境判定(`isStagingEnvironment`/`scheduleInteractiveReactView`・stagingと開発用教室のみ有効)で日程表ボタンの対話用途を差し替え。表示算出は生成HTMLと同じ `buildStudentPayload`/`buildTeacherPayload` を共有し、埋め込みJSの表示ロジックを `scheduleViewData.ts` へ純関数移植(等価性テスト同梱)。行は React.memo＋signature比較で変更行のみ再レンダー(メモリ規律・`bumpMemCounter('schedule-view-row-render')` 等で ?memlog=1 実測可)。絞り込みは即時適用(旧「最新表示」ボタン廃止・Reactビュー内のみ)。印刷/PDF(全員表示・空フォーマット)と旧同期機構(forceゲート/scheduleSyncTrigger)は無変更で温存。本番3教室は従来の生成HTMLタブのまま(オーナーチェック合格まで main へマージしない)。(src/utils/scheduleViewData.ts / src/components/schedule-view/* / featureRollout.ts / ScheduleBoardScreen.tsx / BoardToolbar.tsx)
+- chore: ローカル検証用の launch 設定 `dev-local`(VITE_EXTERNAL_BACKEND_MODE=local・ポート5199)を追加。(.claude/launch.json)
+- feat: 日程表コマ組み Phase 2(spec-student-schedule-dnd・staging先行)。生徒日程表(Reactビュー)の授業カード(通/振/講)を長押し(約250ms)D&D→空きコマへドロップ→机選択モーダル(コマ表と同じ机配置・物理的な空きのみ判定、自動割振ルール/警告は評価も表示もしない)→盤面の computeStudentMove を直接実行。通常授業は「移動先に振替manual追加＋移動元当該日の抑制」の両方(7/20事故の教訓)、講習は選択科目・授業時間維持(v1.5.364回帰なし)、週範囲は ensureWeeksCoverDateRange で自動拡張、source は entryId+生徒id+日付+時限で特定(取り違え防止)、Undoで1操作復元。未保存のローカル変更(手動保存で確定)。集団カード・出欠カードは掴めない。テスト8件同梱(scheduleViewMove.test.ts)。(schedule-view/scheduleViewMove.ts / ScheduleView.tsx / ScheduleSheet.tsx / ScheduleBoardScreen.tsx / scheduleViewData.ts)
+- feat/fix: 対話用日程表のUX調整(オーナーstaging指摘・2026-07-08)。①対話は**別ウィンドウ(ポップアウト)既定**に変更しドック/トグルUIを撤去(ドックはポップアップブロック時のフォールバックのみ)。②ポップアウトの chrome バー(「生徒日程表」タイトル/ボタン)・D&Dヒントバーを撤去、ウィンドウは location/menubar/toolbar 無効のポップアップで開き document.title を空に(タブの about:blank/タイトルを抑制)。③日程表コマ組みの緑ハイライトを撤去し、盤面D&Dと同じ**画面周囲の青枠**＋ドロップ先コマの青枠ハイライト(直接DOM操作で行を再レンダーしない=メモリ規律)に変更。ドロップ判定を hover 追跡＋イベントの ownerDocument での elementFromPoint に堅牢化し**ポップアウトでも移動成立**。④ポップアウトは日程表シートが下まで収まるよう **zoom を自動調整**(fitToWindow)。⑤ポップアウトの **Ctrl+P は日程表だけを従来体裁で印刷**(子ウィンドウ専用の印刷CSSを注入・非対象パーツ非表示・A4横・fit zoom打ち消し)。印刷CSS回帰テスト＋行メモ化テスト更新。(schedule-view/ScheduleView.tsx / ScheduleSheet.tsx / ScheduleViewPanel.tsx / PopoutWindow.tsx / scheduleViewPrint.ts(+test) / scheduleView.css / ScheduleBoardScreen.tsx)
+- fix: 対話用日程表のオーナー再指摘対応(2026-07-08)。①**ポップアウトでD&Dが効かない不具合を根治**: pointer 操作を document への addEventListener＋ownerDocument 依存から、カード要素の **React synthetic pointer events ＋ setPointerCapture** に変更し、hit-test は event.view.document(発生元ウィンドウ)で行う。dock/popout の両方で長押し→ドロップ→机選択→移動が成立(盤面側が誤って掴まれる副作用も解消)。②**別ウィンドウを最大化(画面いっぱい)で開く**(availWidth/Height で open＋moveTo/resizeTo)。③**印刷は A4横いっぱいの倍率**(余白3mm・シート291×204mm・aspect-ratio固定解除)。④**「印刷用全員表示」を直接呼び出しで動作**(postMessage 経由をやめ runOpenAllSchedule 直呼び)。⑤**空フォーマット印刷・講習集計結果ボタンを復活**(生成HTMLの生徒日程タブへ委譲・講習集計は講習期間が重なる時のみ表示)。⑥**生徒/講師セレクター右の「期間・◯反映」ボタンを復活**(旧「最新表示」相当のdraft＋apply。選択は反映を押すまで表示に効かない)。(schedule-view/ScheduleView.tsx / ScheduleSheet.tsx / PopoutWindow.tsx / scheduleViewPrint.ts(+test) / ScheduleBoardScreen.tsx)
+## v1.5.416 (2026-07-09)
+
+- fix: v1.5.415 のガードで開発用教室のQRが生徒/講師日程表に表示されなくなった回帰を修正。開発用教室の既発行トークンは全て「発行元教室タグ未設定」のためガードが一律に他教室由来とみなして除去していた。ensureScheduleSubmissionTokens で**開発用教室のみ**、自教室が発行したものでない(未タグ/他教室タグ)トークンを自教室タグ付きで**再発行**するようにした(applyIssuedSubmissionTokensToSessions に差し替え分岐・提出内容は保持)。再発行後は owned となりQRが復活し、かつ他教室トークンが残らないため混入も起きない。本番教室は素通し(既存・印刷配布済みトークンは不変)。
+- feat: 日程表(別タブ)のタブ名に「開いている教室名」を表示、期間表示は廃止(取り違え防止・オーナー要望)。scheduleHtml に classroomName を渡し document.title を教室名ベースに変更(App.tsx / scheduleHtml.ts)。
+- fix(混入監査): 開発用教室での登録/登録解除(markLectureSubmissionDocAsSubmitted / resetLectureSubmissionDoc)が、自教室発行でないトークンのドキュメント(=他教室=本番)へ書き込み得る残存経路にガードを追加(開発用のみ・所有トークンのみ書込)。他の書込経路(教室スナップショット保存=acting限定、occupiedSlots/集団同期=再発行後の所有トークンのみ)は問題なしを確認。
+- test: 再発行差し替え・冪等性・タブ名・所有判定の回帰テストを追加(App.test.ts / scheduleHtml.test.ts / developmentClassroom.test.ts)。関連メモリ [[komahyou-dev-classroom-qr-token-contamination]]
+
+## v1.5.415 (2026-07-09)
+
+- fix: 開発用教室のQRテストが本番教室(日大前校)へ書き込まれる混入事故の恒久対策。開発用教室は他教室の生データをコピーしてテストするため、コピー元(本番)の提出トークンが残っていると日程表がそのQRを表示し、スキャンで本番へ誤書き込みする(2026-07-09 実発生・日大前校の複数生徒が誤登録)。対策: 提出トークンに発行元教室ID(`submissionTokenClassroomId`)を刻み(applyIssuedSubmissionTokensToSessions)、他教室→開発用コピー時に除去(buildDevelopmentClassroomCopyPayload)、**開発用教室でのみ**日程表へ渡す前に「自教室が発行したものでないトークン」を除去してQRを出せなくする(applyDevelopmentScheduleTokenGuard)。本番教室ではこのガードは一切走らず、既存・印刷配布済みトークンは不変。純関数化して回帰テスト追加(developmentClassroom.ts / App.tsx / specialSessionModel.ts)。関連メモリ [[komahyou-classroom-restore-cross-contamination]]
+
+## v1.5.414 (2026-07-09)
+
+- fix: 追加した科目「理社」がQR提出画面に出ない不具合を修正。availableSubjects はトークン発行時に提出ドキュメントへ凍結保存されるため、v1.5.413 以前に発行済みの生徒トークンには理社が伝播していなかった。既発行トークンの同期経路 `updateSubmissionOccupiedSlots` に availableSubjects の伝播を追加し、盤面更新のたびに最新の選択可能科目へ揃うようにした(提出済みドキュメントでも subjectSlots>0 の科目のみ表示するため害なし)。回帰テスト2件追加(lectureSubmission.ts・App.tsx)
+
+## v1.5.413 (2026-07-09)
+
+- feat: 小学生の科目に合体科目「理社」を追加(算国と同型・小学限定)。要望対応。1コマで理科+社会をまとめて扱う選択肢で、科目選択・体験授業・通常テンプレ・QR希望提出(getSelectableStudentSubjectsForGrade経由)・回数表(社の直後に表示)に反映。講師対応判定は理または社の担当で可。非小学に紛れた場合は理へ畳む。A4への影響: 回数表は理社の授業がある生徒のみ1行(理+社の2行を1行に統合する形で最悪行数は増えない・講習表はhideZeroZeroで0非表示)。回帰テスト追加(types.ts/studentGradeSubject.ts/scheduleHtml.ts/ScheduleBoardScreen.tsx/regularLessonTemplate.ts)
+
+## v1.5.412 (2026-07-09)
+
+- fix: `tools/copy-prod-classroom-to-staging.mjs` が無出力のまま止まって見える不具合を修正。`classroomSnapshots/{id}/saveAttempts`(保存の冪等性ログ・稼働中教室では数百〜数千件に達し得る)を削除・コピーの両方で丸ごとスキップするようにした(進捗ログも追加)。アプリ本体(デプロイ物)には影響しない開発ツールのみの変更(tools/copy-prod-classroom-to-staging.mjs)
+
+## v1.5.411 (2026-07-08)
+
+- fix: 生徒日程表の印刷で、講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の下端で見切れる不具合を修正。@media print 内で通常回数/講習回数表(.count-table)の行高を 22px→16px・縦paddingを詰めた(画面表示は22pxのまま)。回帰テスト同コミット追加(src/utils/scheduleHtml.ts・scheduleHtml.test.ts)
+
 ## v1.5.410 (2026-07-08)
 
 - docs: 対話用日程表のReact化を土台に据える方針転換を確定(オーナー確定 2026-07-08。stagingでは生成HTMLタブを対話用途はReactビューに置換・印刷/PDFのHTML生成は残す)。同一Reactツリー化でリアルタイム同期は自動反映・日程表コマ組みはexecuteMoveStudent直呼びに単純化。ドック⇄ポップアウト(React portal→子ウィンドウ)トグルで両表示をstagingでユーザーが比較。新正本 docs/spec-schedule-interactive-view.md 追加、既存2仕様に§0(方式転換)追記、手順書をReact土台版(Phase0→1→2)に再構成、spec-index更新

@@ -180,6 +180,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       groupClassParticipation: {},
       optionChecks: {},
       regularOnly: false,
+      submittedAt: null,
     }, {
       token: 'teacher-token',
       sessionId: 'session-1',
@@ -191,6 +192,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       groupClassParticipation: {},
       optionChecks: {},
       regularOnly: false,
+      submittedAt: null,
     }]
 
     const result = buildSubmissionAcknowledgementEntries(entries, {
@@ -570,6 +572,53 @@ describe('applyIssuedSubmissionTokensToSessions (A4: トークン発行は curre
     expect(applyIssuedSubmissionTokensToSessions(current, 'sess1', [], 'x')).toBe(current)
   })
 
+  // 混入防止(2026-07-09): 発行トークンに「発行元教室ID」を刻む。開発用教室で他教室由来トークンを弾く判定に使う。
+  it('発行元教室IDを submissionTokenClassroomId に刻む(既存後埋め/新規生徒/新規講師すべて)', () => {
+    const current = [makeSession({
+      'stu-a': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: {}, regularOnly: false, countSubmitted: false, updatedAt: '' },
+    })]
+    const result = applyIssuedSubmissionTokensToSessions(current, 'sess1', [
+      { personType: 'student', personId: 'stu-a', token: 'tok-a' },
+      { personType: 'student', personId: 'stu-new', token: 'tok-new' },
+      { personType: 'teacher', personId: 'tch-1', token: 'tok-t' },
+    ], '2026-07-06T00:00:00.000Z', 'dev-classroom-id')
+    const s = result[0]!
+    expect(s.studentInputs['stu-a']!.submissionTokenClassroomId).toBe('dev-classroom-id')
+    expect(s.studentInputs['stu-new']!.submissionTokenClassroomId).toBe('dev-classroom-id')
+    expect(s.teacherInputs['tch-1']!.submissionTokenClassroomId).toBe('dev-classroom-id')
+  })
+
+  // 混入防止/QR復活(2026-07-09): 開発用の再発行では、他教室由来・未タグの既存トークンを自教室タグ付きに
+  // 差し替える。提出内容(countSubmitted/subjectSlots)は保持し、トークンだけ差し替える(巻き戻さない)。
+  it('他教室由来/未タグの既存トークンは自教室タグ付きに差し替え、提出内容は保持する', () => {
+    const current = [makeSession({
+      'stu-foreign': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: { 算: 4 }, regularOnly: false, countSubmitted: true, submissionToken: 'old', submissionTokenClassroomId: '5w5OMueE', updatedAt: '' },
+      'stu-legacy': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: {}, regularOnly: false, countSubmitted: false, submissionToken: 'legacy', updatedAt: '' },
+    })]
+    const result = applyIssuedSubmissionTokensToSessions(current, 'sess1', [
+      { personType: 'student', personId: 'stu-foreign', token: 'new-1' },
+      { personType: 'student', personId: 'stu-legacy', token: 'new-2' },
+    ], 'x', 'dev')
+    const s = result[0]!
+    expect(s.studentInputs['stu-foreign']!.submissionToken).toBe('new-1')
+    expect(s.studentInputs['stu-foreign']!.submissionTokenClassroomId).toBe('dev')
+    expect(s.studentInputs['stu-foreign']!.countSubmitted).toBe(true) // 提出内容は保持
+    expect(s.studentInputs['stu-foreign']!.subjectSlots).toEqual({ 算: 4 })
+    expect(s.studentInputs['stu-legacy']!.submissionToken).toBe('new-2')
+    expect(s.studentInputs['stu-legacy']!.submissionTokenClassroomId).toBe('dev')
+  })
+
+  it('既に自教室タグのトークンは差し替えない(冪等・不要な巻き戻しをしない)', () => {
+    const current = [makeSession({
+      'stu-own': { unavailableSlots: [], regularBreakSlots: [], subjectSlots: {}, regularOnly: false, countSubmitted: false, submissionToken: 'own', submissionTokenClassroomId: 'dev', updatedAt: '' },
+    })]
+    const result = applyIssuedSubmissionTokensToSessions(current, 'sess1', [
+      { personType: 'student', personId: 'stu-own', token: 'new' },
+    ], 'x', 'dev')
+    expect(result[0]!).toBe(current[0]!) // 変更なし=参照維持
+    expect(result[0]!.studentInputs['stu-own']!.submissionToken).toBe('own')
+  })
+
   // A4 配線ガード(regression-reviewer 指摘): 呼び出し側が「関数型アップデータで最新 current へマージ」
   // という形を守ることをテストで固定する。旧実装(クロージャに捕捉した stale スナップショットでの
   // 丸ごと置換)に戻すと、await 中に届いた提出反映が消えてこのテストが落ちる。
@@ -650,6 +699,7 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
             unavailableSlots: ['2026-08-12_2'],
             countSubmitted: true,
             submissionToken: 'teacher-token',
+            submissionTokenClassroomId: 'source-classroom',
             updatedAt: '2026-08-01T00:00:00.000Z',
           },
         },
@@ -661,6 +711,7 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
             regularOnly: false,
             countSubmitted: true,
             submissionToken: 'student-token',
+            submissionTokenClassroomId: 'source-classroom',
             updatedAt: '2026-08-01T00:00:00.000Z',
           },
         },
@@ -687,6 +738,9 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
     }))
     expect(copied.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBeUndefined()
     expect(copied.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBeUndefined()
+    // 混入防止(2026-07-09): 発行元教室タグも外す。開発用側で自教室のトークンを再発行させるため。
+    expect(copied.specialSessions[0]?.studentInputs['student-1']?.submissionTokenClassroomId).toBeUndefined()
+    expect(copied.specialSessions[0]?.teacherInputs['teacher-1']?.submissionTokenClassroomId).toBeUndefined()
     expect(sourcePayload.classroomSettings.boardShareToken).toBe('board-share-token')
     expect(sourcePayload.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBe('student-token')
     expect(sourcePayload.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBe('teacher-token')

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -304,6 +304,117 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
     expect(student?.name).toBe('旧表示名')
     expect(student?.linkedStudentId).toBe('student-1')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 別タブ日程表の「同期中」スピナー(オーナー指示 2026-07-08)。盤面編集→別タブ反映までの数秒、
+  // 最前面に大きく出す。本体は __showScheduleSyncing() で出し、同期ペイロード適用(flushIncomingPayload)で消す。
+  it('別タブ日程表に同期中スピナー(overlay + __showScheduleSyncing + flushで自動非表示)を含む', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('id="schedule-sync-overlay"')
+    expect(html).toContain('window.__showScheduleSyncing = showScheduleSyncingOverlay')
+    // flushIncomingPayload の末尾で必ず非表示にする(等価ペイロードでも固着しない)
+    expect(html).toContain('hideScheduleSyncingOverlay();')
+
+    vi.unstubAllGlobals()
+  })
+
+  // タブ名(document.title)は取り違え防止のため教室名を出し、期間は出さない(オーナー要望 2026-07-09)。
+  it('タブ名に教室名を出し、期間は出さない', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.classroomName).toBe('開発用教室') // 教室名がペイロードに乗る
+    // document.title は教室名を使い、期間(formatRangeLabel)を使わない。
+    expect(html).toContain("document.title = VIEW_LABEL + (DATA.classroomName ? ' | ' + DATA.classroomName : '')")
+    expect(html).not.toContain("document.title = VIEW_LABEL + ' | ' + formatRangeLabel(startDate, endDate)")
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の
+  // 下端で見切れる不具合を、印刷時だけ count-table の行高を詰めることで解消した。@media print 内で
+  // .count-table の行高が既定(22px)より小さいことを固定する(将来の変更で 22px 等へ戻すと落ちる)。
+  it('印刷時は講習回数/通常回数表の行高を詰める(科目が多い生徒のA4見切れ防止)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // @media print ブロック内の count-table 行高だけを見る(画面表示の 22px と区別)。
+    const printBlock = html.slice(html.indexOf('@media print'))
+    const heightMatch = printBlock.match(/\.count-table th,\s*\.count-table td\s*\{[^}]*height:\s*(\d+)px/)
+    expect(heightMatch).not.toBeNull()
+    expect(Number(heightMatch![1])).toBeLessThanOrEqual(18)
 
     vi.unstubAllGlobals()
   })
@@ -1054,6 +1165,71 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止(2026-07-09): 講習集計結果の「提出日時/提出方法」を出すため、submittedAt/submissionMethod を
+  // payload に必ず載せる。欠けると popup の DATA.specialSessions に届かず全て '—' に化ける
+  // (subjectDurations が serialize から落ちて分数が消えた v1.5.400 と同型の非対称)。
+  it('serializes submittedAt/submissionMethod (student & teacher) into the schedule payload', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      specialSessions: [{
+        id: 'session-1',
+        label: '春期講習',
+        startDate: '2026-03-20',
+        endDate: '2026-03-31',
+        teacherInputs: {
+          'teacher-1': {
+            unavailableSlots: [],
+            countSubmitted: true,
+            submittedAt: '2026-03-05T01:00:00.000Z',
+            submissionMethod: 'manual',
+            updatedAt: '2026-03-05T01:00:00.000Z',
+          },
+        },
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: [],
+            regularBreakSlots: [],
+            subjectSlots: { 数: 2 },
+            regularOnly: false,
+            countSubmitted: true,
+            submittedAt: '2026-03-04T02:00:00.000Z',
+            submissionMethod: 'qr',
+            updatedAt: '2026-03-04T02:00:00.000Z',
+          },
+        },
+        createdAt: '2026-03-01T00:00:00.000Z',
+        updatedAt: '2026-03-05T01:00:00.000Z',
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('"submittedAt":"2026-03-04T02:00:00.000Z"')
+    expect(html).toContain('"submissionMethod":"qr"')
+    expect(html).toContain('"submittedAt":"2026-03-05T01:00:00.000Z"')
+    expect(html).toContain('"submissionMethod":"manual"')
+
+    vi.unstubAllGlobals()
+  })
+
   it('includes A3-portrait paging plumbing for overflowing salary tables (teacher view)', () => {
     // 給与計算の行が多くA4横で見切れる講師ページを A3 縦へ自動切替するための CSS / @page / 計測関数が
     // 生成HTMLに含まれていること。実測ベースの切替なので文字列の存在で配線を担保する(回帰防止)。
@@ -1750,6 +1926,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const html = write.mock.calls[0]?.[0]
     expect(typeof html).toBe('string')
     expect(html).toContain("if (subject === '算国') return getPreferredMathSubject(student, referenceDate) === '算' ? '算国' : '数';")
+    vi.unstubAllGlobals()
+  })
+
+  it('embeds 理社 as an elementary-only combined subject (回帰防止)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => {
+        callback()
+        return 0
+      },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ birthDate: '2015-05-10' })],
+      regularLessons: [],
+      defaultStartDate: '2026-04-10',
+      defaultEndDate: '2026-04-16',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(typeof html).toBe('string')
+    // 理社は小学限定で表示され、非小学では理へ畳む(算国と同型)。
+    expect(html).toContain("if (subject === '理社') return preferredMathSubject === '算';")
+    expect(html).toContain("if (subject === '理社') return getPreferredMathSubject(student, referenceDate) === '算' ? '理社' : '理';")
+    // 表示順は社の直後・集理/集社の前。
+    expect(html).toContain("['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社']")
     vi.unstubAllGlobals()
   })
 
@@ -2661,6 +2874,10 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     // 講習集計結果に「希望科目（授業時間）」列を追加(希望各科目の授業時間付き数量)。
     expect(studentHtml).toContain('<th>希望科目（授業時間）</th>')
     expect(studentHtml).toContain('function formatDesiredSubjectsWithDuration(input, student, referenceDate)')
+    // 提出日時/提出方法の列とヘルパ(2026-07-09)。
+    expect(studentHtml).toContain('<th>提出日時</th><th>提出方法</th>')
+    expect(studentHtml).toContain('function formatSubmissionDateTime(submittedAt)')
+    expect(studentHtml).toContain('function resolveSubmissionMethodLabel(input)')
     // 最下部がWindowsタスクバーに隠れないようスクロール余白を確保する(回帰防止)。
     expect(studentHtml).toContain('padding-bottom:160px')
 
@@ -2677,7 +2894,12 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
       targetWindow: popup,
     })
     const teacherHtml = write.mock.calls[0]?.[0] as string
-    expect(teacherHtml).not.toContain('id="schedule-lecture-summary-button"')
+    // 講師日程にも講習集計結果ボタンを追加(2026-07-09)。講師版は希望科目列を出さず、専用ビルダを使う。
+    expect(teacherHtml).toContain('id="schedule-lecture-summary-button"')
+    expect(teacherHtml).toContain('function buildTeacherLectureSummaryHtml(startDate, endDate)')
+    // 講師版の集計結果表は希望科目列を出さない(オーナー指示)。列は No./講師名/登録状況/提出日時/提出方法。
+    // (生徒版ビルダも同じ script に同梱されるため、講師表ヘッダの完全一致で列構成を固定する)
+    expect(teacherHtml).toContain('<th>No.</th><th>講師名</th><th>登録状況</th><th>提出日時</th><th>提出方法</th>')
 
     vi.unstubAllGlobals()
   })
@@ -2720,6 +2942,92 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(resolveStatus({ countSubmitted: true, regularOnly: false })).toEqual({ label: '登録', kind: 'registered' })
     // 提出済みでも通常のみ → 注記つき。
     expect(resolveStatus({ countSubmitted: true, regularOnly: true })).toEqual({ label: '登録（通常のみ）', kind: 'regular-only' })
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-09): 講習集計結果の「提出日時」列。ISO文字列を JST(M/D HH:MM)で出す。
+  // ランタイムのタイムゾーンに依存せず +9h→UTC成分で読むこと(CIのUTCでも決定的)。未提出/不正は '—'。
+  it('formats the submission datetime in JST for the lecture summary', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function formatSubmissionDateTime\(submittedAt\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const format = new Function('submittedAt', match![1]) as (submittedAt: unknown) => string
+
+    // UTC 2026-07-06T06:25:00Z = JST 15:25 → '7/6 15:25'。
+    expect(format('2026-07-06T06:25:00.000Z')).toBe('7/6 15:25')
+    // 日付境界: UTC 2026-07-06T15:30:00Z = JST 翌日 00:30 → '7/7 00:30'。
+    expect(format('2026-07-06T15:30:00.000Z')).toBe('7/7 00:30')
+    // 未提出・不正・非文字列は '—'。
+    expect(format(null)).toBe('—')
+    expect(format('')).toBe('—')
+    expect(format('not-a-date')).toBe('—')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-09): 講習集計結果の「提出方法」列。QR提出/室長登録を区別する。
+  // 未登録は '—'、登録済みでも方法不明(機能導入前の既存データ)は '—'。
+  it('labels the submission method (QR vs classroom-head) for the lecture summary', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function resolveSubmissionMethodLabel\(input\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const resolveMethod = new Function('input', match![1]) as (
+      input: { countSubmitted?: boolean; submissionMethod?: string } | null | undefined,
+    ) => string
+
+    expect(resolveMethod(undefined)).toBe('—')
+    expect(resolveMethod({ countSubmitted: false, submissionMethod: 'qr' })).toBe('—')
+    expect(resolveMethod({ countSubmitted: true, submissionMethod: 'qr' })).toBe('QR提出')
+    expect(resolveMethod({ countSubmitted: true, submissionMethod: 'manual' })).toBe('室長登録')
+    // 登録済みだが方法未設定(既存データ)は '—'。
+    expect(resolveMethod({ countSubmitted: true })).toBe('—')
 
     vi.unstubAllGlobals()
   })
@@ -2789,5 +3097,268 @@ describe('buildCombinedRegularLessonsFromHistory', () => {
     expect(run({ countSubmitted: true, subjectSlots: {} })).toBe('—')
 
     vi.unstubAllGlobals()
+  })
+})
+
+// 日程表コマ組み(別タブD&D・spec-student-schedule-dnd): 机選択モーダルは移動先コマの「全机(空席含む)」が要るが、
+// serializeCells の desks は空席の机を落とす。scheduleDndEnabled=true のとき開校日コマに pickerDesks を別途載せる。
+describe('日程表コマ組み payload: pickerDesks / scheduleDndEnabled', () => {
+  function createDndTestCell(): SlotCell {
+    return {
+      id: '2026-03-24_3',
+      dateKey: '2026-03-24',
+      dayLabel: '火',
+      dateLabel: '3/24',
+      slotLabel: '3限',
+      slotNumber: 3,
+      timeLabel: '16:20-17:50',
+      isOpenDay: true,
+      desks: [
+        {
+          id: '2026-03-24_3_desk_1',
+          teacher: '田中講師',
+          lesson: {
+            id: 'l1',
+            studentSlots: [
+              { id: 'entry-1', name: '山田', managedStudentId: 'student-1', grade: '中3', subject: '数', lessonType: 'regular', teacherType: 'normal' },
+              null,
+            ],
+          },
+        },
+        // 空席の机(lesson/statuses なし)。serializeCells の desks では落ちるが pickerDesks には残す。
+        { id: '2026-03-24_3_desk_2', teacher: '鈴木講師' },
+      ],
+    }
+  }
+
+  function openDndPayload(extra: Record<string, unknown>) {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    openStudentScheduleHtml({
+      cells: [createDndTestCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      ...extra,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    const match = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    return JSON.parse(match![1])
+  }
+
+  it('scheduleDndEnabled: true で開校日コマに pickerDesks(空席の机も含む)が載る', () => {
+    const payload = openDndPayload({ scheduleDndEnabled: true })
+    expect(payload.scheduleDndEnabled).toBe(true)
+    const cell = payload.cells.find((c: { dateKey: string; slotNumber: number }) => c.dateKey === '2026-03-24' && c.slotNumber === 3)
+    expect(cell.pickerDesks).toBeDefined()
+    // 空席の机(鈴木講師)は desks では落ちるが pickerDesks には残る(机選択モーダルで空席を選べる)。
+    expect(cell.pickerDesks.map((d: { teacher: string }) => d.teacher)).toEqual(['田中講師', '鈴木講師'])
+    // 占有席は選択不可・空席は選択可(§C-2: 物理的な空きのみ判定)。
+    expect(cell.pickerDesks[0].seats[0].occupied).toBe(true)
+    expect(cell.pickerDesks[0].seats[0].selectable).toBe(false)
+    expect(cell.pickerDesks[0].seats[1].selectable).toBe(true)
+    expect(cell.pickerDesks[1].seats[0].selectable).toBe(true)
+    expect(cell.pickerDesks[1].seats[1].selectable).toBe(true)
+    // desks(印刷/表示用)は従来どおり空席の机を落とす(印刷経路は不変)。
+    expect(cell.desks.length).toBe(1)
+  })
+
+  it('scheduleDndEnabled 未指定なら pickerDesks を載せない(本番/印刷のバイト増を避ける)', () => {
+    const payload = openDndPayload({})
+    expect(payload.scheduleDndEnabled).toBe(false)
+    const cell = payload.cells.find((c: { dateKey: string; slotNumber: number }) => c.dateKey === '2026-03-24' && c.slotNumber === 3)
+    expect(cell.pickerDesks).toBeUndefined()
+  })
+})
+
+// 埋め込みJS(別タブ)の掴めるカード判定と配線。生成HTMLからクライアント関数を抽出して実挙動を固定する。
+describe('日程表コマ組み 埋め込みJS: 掴めるカードのゲートと配線', () => {
+  function openDndHtml(extra: Record<string, unknown>): string {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      ...extra,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    return html
+  }
+
+  // 生成HTMLから buildLessonCardDragAttrs(entry) の本体を取り出し、DATA/escapeHtml を差し替えて実行する。
+  function extractDragAttrsFn(html: string) {
+    const match = html.match(/function buildLessonCardDragAttrs\(entry\) \{([\s\S]*?)\n {6}\}/)
+    expect(match).not.toBeNull()
+    const fn = new Function('entry', 'DATA', 'escapeHtml', match![1]) as (entry: unknown, data: unknown, esc: (value: unknown) => string) => string
+    const esc = (value: unknown) => String(value == null ? '' : value)
+    return (entry: unknown, data: unknown) => fn(entry, data, esc)
+  }
+
+  it('scheduleDndEnabled 時、通常/振替/講習/増コマカードに is-draggable と source 属性を付ける', () => {
+    const run = extractDragAttrsFn(openDndHtml({ scheduleDndEnabled: true }))
+    const makeup = run({ id: 'e1', lessonType: 'makeup', subject: '数', linkedStudentId: 's1', name: '山田' }, { scheduleDndEnabled: true })
+    expect(makeup).toContain('is-draggable')
+    expect(makeup).toContain('data-role="lesson-card-draggable"')
+    expect(makeup).toContain('data-entry-id="e1"')
+    expect(makeup).toContain('data-lesson-type="makeup"')
+    expect(makeup).toContain('data-linked-student-id="s1"')
+    expect(run({ id: 'e2', lessonType: 'regular', subject: '英' }, { scheduleDndEnabled: true })).toContain('is-draggable')
+    expect(run({ id: 'e3', lessonType: 'special', subject: '国' }, { scheduleDndEnabled: true })).toContain('is-draggable')
+    // 増コマも移動対象(2026-07-09 追加): prepareStudentForMove は regular/makeup 以外は単純な位置移動のみで、
+    // 既存の講習(special)と同じ経路を通るため特別な副作用は無い。
+    const extra = run({ id: 'e4', lessonType: 'extra', subject: '理' }, { scheduleDndEnabled: true })
+    expect(extra).toContain('is-draggable')
+    expect(extra).toContain('data-lesson-type="extra"')
+  })
+
+  it('DnD無効・対象外種別(体験)・entryId欠落は掴めない(空文字)', () => {
+    const run = extractDragAttrsFn(openDndHtml({ scheduleDndEnabled: true }))
+    expect(run({ id: 'e1', lessonType: 'makeup', subject: '数' }, { scheduleDndEnabled: false })).toBe('')
+    expect(run({ id: 'e1', lessonType: 'trial', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+    expect(run({ id: '', lessonType: 'makeup', subject: '数' }, { scheduleDndEnabled: true })).toBe('')
+  })
+
+  it('D&D・机選択・移動要求送信・再描画時破棄の配線が埋め込みJSに含まれる(削除の回帰検知)', () => {
+    const html = openDndHtml({ scheduleDndEnabled: true })
+    expect(html).toContain('function setupScheduleDndMove()')
+    expect(html).toContain('function onScheduleDndPointerDown(')
+    expect(html).toContain('function openScheduleDeskPicker(')
+    expect(html).toContain("type: 'schedule-student-move-request'")
+    // 自動同期の再描画でドラッグ/モーダルを破棄する(宙に浮く DOM 参照を防ぐ)。
+    expect(html).toContain('cancelScheduleDndInteraction();')
+    // 机選択モーダルは盤面の一コマを切り取った表形式(日付行+時限列+1机=1行)。
+    expect(html).toContain('class="desk-picker-board"')
+    expect(html).toContain('class="dp-seatno"')
+    expect(html).toContain('class="dp-teacher"')
+    expect(html).toContain('class="dp-datehead"')
+    expect(html).toContain('class="dp-time"')
+    // 説明テキスト(タイトル/注記)は置かない(オーナー要望)。
+    expect(html).not.toContain('の移動先の机を選ぶ')
+    expect(html).not.toContain('この回のみ振替として移動します')
+    // 移動結果ack(成功ハイライト/失敗の理由表示・日程表に戻る導線)の配線。
+    expect(html).toContain('function handleScheduleMoveResult(')
+    expect(html).toContain("message.type === 'schedule-student-move-result'")
+    expect(html).toContain('function showScheduleMoveError(')
+    expect(html).toContain('日程表に戻る')
+    expect(html).toContain('function highlightMovedSlot(')
+    expect(html).toContain('is-move-done-highlight')
+  })
+
+  // 生成HTMLから renderDeskPickerSeatCellHtml(desk, seat) を取り出し、席セルの形式を固定する。
+  function extractSeatCellFn(html: string) {
+    const match = html.match(/function renderDeskPickerSeatCellHtml\(desk, seat\) \{([\s\S]*?)\n {6}\}/)
+    expect(match).not.toBeNull()
+    const fn = new Function('desk', 'seat', 'escapeHtml', match![1]) as (desk: unknown, seat: unknown, esc: (value: unknown) => string) => string
+    const esc = (value: unknown) => String(value == null ? '' : value)
+    return (desk: unknown, seat: unknown) => fn(desk, seat, esc)
+  }
+
+  it('机選択モーダルの席セル: 空席=クリックで配置・在席=クリックで入れ替え(占有席も data-role+相手entryId)・メモ=不可', () => {
+    const run = extractSeatCellFn(openDndHtml({ scheduleDndEnabled: true }))
+    // 空席: 配置クリック可+机同一性(deskId/講師/在席者)。
+    const deskWithSeats = { deskIndex: 2, deskId: 'desk-2', teacher: '佐藤', seats: [{ occupantEntryId: 'e-nakano' }, {}] }
+    const selectable = run(deskWithSeats, { studentIndex: 1, selectable: true, occupied: false })
+    expect(selectable).toContain('<td class="dp-student dp-selectable"')
+    expect(selectable).toContain('data-role="desk-picker-seat"')
+    expect(selectable).toContain('data-desk-index="2"')
+    expect(selectable).toContain('data-student-index="1"')
+    expect(selectable).toContain('data-desk-id="desk-2"')
+    expect(selectable).toContain('data-desk-teacher="佐藤"')
+    // 机の在席者(deskOccupants)を持たせて、盤面側で「その机」を在席同一性で特定できるようにする。
+    expect(selectable).toContain('data-desk-occupants="e-nakano"')
+    // 在席: 入れ替えクリック可(盤面の入れ替えと同じ)。相手の entryId を持たせる。
+    const occupied = run({ deskIndex: 0, deskId: 'desk-1', teacher: '田中' }, { studentIndex: 0, occupied: true, selectable: false, occupantEntryId: 'e-yamada', label: '山田 数' })
+    expect(occupied).toContain('dp-swap')
+    expect(occupied).toContain('data-role="desk-picker-seat"')
+    expect(occupied).toContain('data-occupant-entry-id="e-yamada"')
+    expect(occupied).toContain('山田 数')
+    expect(occupied).toContain('入替')
+    // メモ席のみクリック不可(data-role を持たない)。
+    const memo = run({ deskIndex: 1, deskId: 'desk-x', teacher: '' }, { studentIndex: 0, blockedByMemo: true, selectable: false })
+    expect(memo).toContain('dp-blocked')
+    expect(memo).not.toContain('data-role="desk-picker-seat"')
+  })
+
+  it('掴めるカードのタップは出席不可トグルへ・出席不可トグルは同期スピナーを抑制する配線', () => {
+    const html = openDndHtml({ scheduleDndEnabled: true })
+    // 長押し未満のタップでカードでも出席不可トグルを実行(D&Dとの両立)。
+    expect(html).toContain("if (tapCell && tapCell.getAttribute('data-editable') === 'true')")
+    expect(html).toContain('handleUnavailablePointerDown(tapCell)')
+    // 出席不可トグルは自分の操作なので同期スピナーを抑制(連続入力の妨げにしない)。
+    expect(html).toContain('suppressSyncSpinnerUntil = Date.now() + 3000')
+    expect(html).toContain('if (Date.now() < suppressSyncSpinnerUntil) return')
+  })
+})
+
+describe('computeDeskPickerFitScale (机選択モーダルをビューポートに収める縮小率)', () => {
+  it('コンテンツがビューポート内に収まる場合は拡大しない(=1)', () => {
+    expect(computeDeskPickerFitScale(400, 800)).toBe(1)
+    expect(computeDeskPickerFitScale(776, 800, 24)).toBe(1) // 境界: avail ちょうど
+  })
+
+  it('コンテンツがビューポートをはみ出す場合は縮小率(<1)を返す', () => {
+    const scale = computeDeskPickerFitScale(1000, 800, 24)
+    // avail = 800 - 24 = 776, scale = 776/1000
+    expect(scale).toBeCloseTo(0.776, 5)
+    expect(scale).toBeLessThan(1)
+  })
+
+  it('marginを差し引いた後の高さが0以下になる異常な入力では1を返す(スケール不能)', () => {
+    expect(computeDeskPickerFitScale(500, 10, 24)).toBe(1) // avail<=0
+    expect(computeDeskPickerFitScale(0, 800)).toBe(1) // contentHeight<=0
+    expect(computeDeskPickerFitScale(Number.NaN, 800)).toBe(1)
+  })
+
+  // 回帰防止: ブラウザ拡大時は viewport の CSS px が縮み、高さだけでなく幅でもはみ出しうる。
+  // 幅の引数を渡したら高さ・幅の両方を考慮し、より厳しい(小さい)縮小率を返すこと。
+  it('幅がはみ出す場合は幅側の縮小率を返す(高さは収まっていても縮める)', () => {
+    // 高さは収まる(availH=776 > 400)が、幅がはみ出す: availW = 500-24 = 476, 476/1000
+    const scale = computeDeskPickerFitScale(400, 800, 24, 1000, 500)
+    expect(scale).toBeCloseTo(0.476, 5)
+    expect(scale).toBeLessThan(1)
+  })
+
+  it('高さ・幅の両方がはみ出す場合はより厳しい方の縮小率を返す', () => {
+    // 高さ: availH=776, 776/1000=0.776 / 幅: availW=776, 776/2000=0.388 → 幅が厳しい
+    const scale = computeDeskPickerFitScale(1000, 800, 24, 2000, 800)
+    expect(scale).toBeCloseTo(0.388, 5)
+  })
+
+  it('高さ・幅の両方が収まる場合は1(拡大しない)', () => {
+    expect(computeDeskPickerFitScale(400, 800, 24, 300, 900)).toBe(1)
+  })
+
+  it('幅の引数を省略すると従来どおり高さのみで判定する(後方互換)', () => {
+    expect(computeDeskPickerFitScale(1000, 800, 24)).toBeCloseTo(0.776, 5)
   })
 })

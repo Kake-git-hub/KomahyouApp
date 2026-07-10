@@ -1,7 +1,19 @@
+// 講習集計結果の「提出方法」。'qr'=保護者/講師がQRから提出、'manual'=室長が日程表の登録操作で確定。
+// 未設定=不明(この機能導入前に登録済みだった既存データ)。後方互換のため optional。
+export type SubmissionMethod = 'qr' | 'manual'
+
 export type SpecialSessionTeacherInput = {
   unavailableSlots: string[]
   countSubmitted: boolean
   submissionToken?: string
+  // 講習集計結果表示用。提出(登録)された日時(ISO文字列)と方法。登録解除で null/undefined に戻す。
+  // 既存データ(未搬送)や登録前は未設定=表示は '—'。後方互換のため optional。
+  submittedAt?: string | null
+  submissionMethod?: SubmissionMethod
+  // 混入防止(2026-07-09): このトークンを発行した教室ID。開発用教室が他教室の生データを
+  // コピーしたときに「他教室由来のトークン」を見分けて弾くために使う(開発用教室でのみ判定)。
+  // 本番教室ではこの値を参照せず、既存(未タグ)トークンも従来どおり動く。後方互換のため optional。
+  submissionTokenClassroomId?: string
   updatedAt: string
 }
 
@@ -22,6 +34,14 @@ export type SpecialSessionStudentInput = {
   regularOnly: boolean
   countSubmitted: boolean
   submissionToken?: string
+  // 混入防止(2026-07-09): このトークンを発行した教室ID。開発用教室が他教室の生データを
+  // コピーしたときに「他教室由来のトークン」を見分けて弾くために使う(開発用教室でのみ判定)。
+  // 本番教室ではこの値を参照せず、既存(未タグ)トークンも従来どおり動く。後方互換のため optional。
+  submissionTokenClassroomId?: string
+  // 講習集計結果表示用。提出(登録)された日時(ISO文字列)と方法。登録解除で null/undefined に戻す。
+  // 既存データ(未搬送)や登録前は未設定=表示は '—'。後方互換のため optional。
+  submittedAt?: string | null
+  submissionMethod?: SubmissionMethod
   updatedAt: string
 }
 

@@ -55,9 +55,24 @@ describe('studentGradeSubject', () => {
     expect(normalizeRequestedSubjectForBirthDate('算国', '2015-05-10', '2026-03-25')).toBe('算国')
   })
 
-  it('returns 算国 only for elementary selectable subjects', () => {
-    expect(getSelectableStudentSubjectsForGrade('小4')).toEqual(['算', '算国', '英', '国', '理', '社'])
+  it('returns 算国 and 理社 only for elementary selectable subjects', () => {
+    expect(getSelectableStudentSubjectsForGrade('小4')).toEqual(['算', '算国', '英', '国', '理', '社', '理社'])
     expect(getSelectableStudentSubjectsForGrade('中1')).toEqual(['数', '英', '国', '理', '社'])
     expect(getSelectableStudentSubjectsForGrade('高1')).toEqual(['数', '英', '国', '生', '物', '化', '社'])
+    // 理社は算国と同じく小学限定の合体科目。中高の選択肢には出さない。
+    expect(getSelectableStudentSubjectsForGrade('中1')).not.toContain('理社')
+    expect(getSelectableStudentSubjectsForGrade('高1')).not.toContain('理社')
+  })
+
+  it('keeps 理社 displayed as-is (合体科目・学年不問の表示)', () => {
+    expect(resolveDisplayedSubjectForGrade('理社', '小4')).toBe('理社')
+    expect(resolveDisplayedSubjectForBirthDate('理社', '2015-05-10', '2026-03-25')).toBe('理社')
+  })
+
+  it('keeps 理社 for elementary but folds it to 理 for non-elementary requests', () => {
+    expect(normalizeRequestedSubjectForGrade('理社', '小4')).toBe('理社')
+    expect(normalizeRequestedSubjectForBirthDate('理社', '2015-05-10', '2026-03-25')).toBe('理社')
+    expect(normalizeRequestedSubjectForGrade('理社', '中1')).toBe('理')
+    expect(normalizeRequestedSubjectForBirthDate('理社', '2012-05-10', '2026-04-10')).toBe('理')
   })
 })

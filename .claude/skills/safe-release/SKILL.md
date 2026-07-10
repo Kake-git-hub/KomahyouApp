@@ -36,8 +36,12 @@ npm run build              # tsc -b + vite build が通ること
 - ※E2E は廃止。UI操作の回帰はユニット（純粋関数）で、実環境の通し動作は staging 実機確認で担保する（`docs/test-strategy.md`）。
 
 ### 3. staging で実機確認（第2の柱）
-- 作業ブランチをそのまま使い、GitHub → Actions → **「Deploy to Staging」** を Run workflow。
+- **まず staging の版を本番に合わせる**（新機能検証はここで staging を使い始めるタイミング）。ローカル main が
+  最新（`package.json` の version = 本番 `version.json`）であることを確認してから、作業ブランチをそのまま使い、
+  GitHub → Actions → **「Deploy to Staging」** を Run workflow。詳細は `staging-environment` スキル。
 - 緑になったら `https://komahyouapp-staging.web.app` を**ハードリロード（Ctrl+Shift+R）**して開く。
+- `komahyouapp-staging.web.app/version.json` と `komahyouapp-prod.web.app/version.json` の版が揃っているか照合
+  （古い staging で誤判定しないため）。
 - 変更箇所＋下のチェックリストを実機で確認。**staging は書き込み自由**（本番データ保護ルールの対象外）。
 - staging 未整備の場合は `docs/runbooks/staging-setup.md`。整備が終わるまではローカル `npm run dev` で代替し、その旨を明示する。
 
@@ -45,6 +49,8 @@ npm run build              # tsc -b + vite build が通ること
 本番にマージする前に、毎回これを確認（詳細版は `docs/runbooks/release-checklist.md`）。
 - [ ] lint / test:unit / build が緑（保存/権限/教室分離を触ったら test:rules も）
 - [ ] 変更に対応する回帰防止テストを追加した（バグ修正時）
+- [ ] **staging と本番の版が揃っている**（staging を検証に使う前に最新 main を反映済み・両 `version.json` 一致）
+- [ ] （ユーザビリティ影響の要望なら）**着手前に懸案＋妥協案をオーナーへ提示し落とし所を合意済み**
 - [ ] staging 実機で**変更箇所**が期待どおり動く
 - [ ] staging 実機で**主要回帰観点**が壊れていない：複数教室の切替・QR提出・自動割振・手動保存（Cloud Function 経由）・生徒日程表のカウント
 - [ ] `CHANGELOG.md` の `## 未リリース` に1行追記した

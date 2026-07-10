@@ -1,6 +1,37 @@
-# 改修作業手順書：対話用日程表の React 化 ＋ リアルタイム同期 ＋ 日程表コマ組み
+# 改修作業手順書：対話用日程表 同期 ＋ 日程表コマ組み
 
-> 次セッションの実装担当（AIモデル問わず）向けの自己完結手順書。2026-07-08 作成・同日2回改訂。
+> ## 🔴 2026-07-08 最終方針転換（これを最優先で読む・以降の「React化」記述は棚上げ）
+>
+> **「React 化」方式は棚上げした。** 別ブラウザウィンドウへの React portal では pointer 操作
+> （D&D の drop）が確実に届かず移動が成立しない・従来タブと操作感が変わる、という理由で、
+> オーナー確定により **「既存の別タブ（生成HTML日程表）の中に同期＋コマ組みを実装する」方式へ回帰**した。
+> 現状（作業ブランチ `feature/schedule-react-view`・staging デプロイ済み・main マージ禁止）：
+>
+> - **React ビューは棚上げ（コード温存）**：`ScheduleBoardScreen.tsx` の `scheduleReactViewEnabled = false`。
+>   日程表ボタンは従来の生成HTML別タブ（`openStudentScheduleHtml`/`openTeacherScheduleHtml`）を開く。
+>   `src/components/schedule-view/*`・featureRollout `scheduleInteractiveReactView`・`scheduleViewData.ts` は削除せず温存。
+> - **実装済み・staging 反映済み**：
+>   - Phase A：React ビュー無効化＝別タブ主経路化（コミット 61868ce）。
+>   - Phase B：**別タブ日程表への自動同期（デバウンス約1.5秒）**。`ScheduleBoardScreen.tsx` のデバウンス
+>     effect が `scheduleSyncTrigger` を bump→既存 `sync*ScheduleHtml` が送信。受信側 `buildPayloadFingerprint`
+>     で等価再描画スキップ＋表示範囲限定で 2026-06-05 メモリ障害を防ぐ。オーナー「感触だいたいOK」。
+>   - 同期スピナー（4a89e38）：反映までの数秒、別タブ最前面に「コマ表の最新を反映中…」。本体が編集時に
+>     埋め込みJS `window.__showScheduleSyncing()` を即時呼び、`flushIncomingPayload` で自動消去。
+> - **残作業＝Phase C：別タブ（生成HTML 埋め込みJS）のコマ組みD&D**（未着手・オーナー最重要要望）：
+>   1. 生徒日程表の授業カード長押しD&D→空きコマへドロップ→**机選択モーダル（ポップアップ内）**→席確定。
+>   2. ⚠️設計課題：机選択には移動先コマの**全机レイアウト**が要るが `serializeCells` は空席の机を落とす。
+>      →対話用の生徒ペイロードにだけ全机レイアウトを載せる（`serializeCells` に flag・印刷は不変）方針、
+>      または drop 時 postMessage 往復で机情報取得（旧設計）。
+>   3. `schedule-student-move-request` を opener(本体)へ postMessage→App.tsx の `StudentScheduleRequest`
+>      （`src/App.tsx:149`・現状 `mode:'unassign'` のみ）を `mode:'move'` 拡張で受ける→盤面が
+>      **既存の `executeScheduleViewMove`（React 作業で実装済み・`scheduleViewMove.ts` の純関数群を利用）**で実行
+>      （通常＝振替manual追加+抑制の両方／講習＝科目維持／週自動拡張）→自動同期で別タブ更新。
+>   4. 一過性リクエスト規律（memory `komahyou-transient-request-remount-refire`・Issue#46）踏襲。埋め込みJSの
+>      エスケープ罠（memory `komahyou-schedulehtml-embedded-script`・`new Function` 構文検証テストあり）に注意。
+>      **テストは同コミット必須**。
+> - memory `komahyou-popup-sync-and-dnd-plan` に要約あり。以下の「React 化」記述（§0〜）は歴史的記録として残す。
+
+> 次セッションの実装担当（AIモデル問わず）向けの自己完結手順書。2026-07-08 作成・同日3回改訂。
 > 仕様の正本（**この順に読む**）：
 > 1. `docs/spec-schedule-interactive-view.md`（**土台**：対話用日程表の React 化＋ドック/ポップアウト）
 > 2. `docs/spec-schedule-popup-realtime-sync.md`（機能1：リアルタイム同期。§0 で大部分が土台に吸収）

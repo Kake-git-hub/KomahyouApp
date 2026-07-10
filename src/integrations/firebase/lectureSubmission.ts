@@ -332,7 +332,7 @@ export async function deleteLectureSubmissionDoc(token: string) {
 
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[] }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[] }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -353,6 +353,10 @@ export async function updateSubmissionOccupiedSlots(
       ...(entry.groupClassSlots ? { groupClassSlots: { ...entry.groupClassSlots } } : {}),
       // オプション欄(開発用教室): 既発行QRにも最新のオプション文言(学年共通)を反映する。
       ...(entry.optionLabels ? { optionLabels: [...entry.optionLabels] } : {}),
+      // 既発行QRにも最新の選択可能科目を反映する。理社など後から追加した科目が、
+      // トークン発行済みの生徒の提出画面に出ないのを防ぐ(availableSubjects は発行時に凍結されるため)。
+      // 提出済みドキュメントでも害はない(提出画面は subjectSlots>0 の科目だけ表示するため未選択科目は出ない)。
+      ...(entry.availableSubjects ? { availableSubjects: [...entry.availableSubjects] } : {}),
     })
   }
 }
@@ -368,6 +372,8 @@ export type SubmissionChangeEntry = {
   groupClassParticipation: Record<string, boolean>
   optionChecks: Record<string, boolean>
   regularOnly: boolean
+  // 講習集計結果の「提出日時」列に使う。QR提出ドキュメントの提出時刻(ISO文字列)。未設定=null。
+  submittedAt: string | null
 }
 
 export function subscribeLectureSubmissions(
@@ -404,6 +410,7 @@ export function subscribeLectureSubmissions(
           groupClassParticipation: data.groupClassParticipation ?? {},
           optionChecks: data.optionChecks ?? {},
           regularOnly: data.regularOnly ?? false,
+          submittedAt: typeof data.submittedAt === 'string' ? data.submittedAt : null,
         })
       }
     }
