@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import { buildTeacherAssignments, collectTeacherAssignmentEntries } from './scheduleViewData'
+import { computeTeacherMove } from '../components/schedule-board/ScheduleBoardScreen'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -2530,6 +2532,82 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     const html = write.mock.calls[0]?.[0] as string
     expect(html).toContain('if (desk.teacherId) teacherKeys.push(desk.teacherId);')
     expect(html).not.toContain('const teacherKeys = [desk.teacherId].concat(desk.regularTeacherIds || [], [desk.teacher, normalizeTeacherAssignmentName(desk.teacher)]).filter(Boolean);')
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止 end-to-end(2026-07-11 報告・開発用教室 落合↔山本 8/25 5限): テンプレ配置由来で
+  // teacherAssignmentTeacherId を持たない講師どうしを入れ替える(swap)と、着地した机が id を欠いたまま
+  // 書き出され、生徒の基本データ担当講師(=旧講師)の regularTeacherIds で二重表示されていた。
+  // 修正(computeTeacherMove が着地講師名から id を補完)を経て、書き出し→帰属ロジックまで通し、
+  // 生徒が新講師のページにだけ出て旧講師には出ないことを検証する(埋め込みJSと同一実装の TS 版で照合)。
+  it('講師の入れ替え(swap)後、生徒は新講師のページにだけ出て旧講師には二重表示されない(computeTeacherMove→書き出し端到端)', () => {
+    const teachers = [
+      createTeacher({ id: 't_ochiai', name: '落合 優太', displayName: '落合', subjectCapabilities: [{ subject: '英', maxGrade: '高3' }] }),
+      createTeacher({ id: 't_yamamoto', name: '山本 花子', displayName: '山本', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] }),
+    ]
+    const students = [
+      createStudent({ id: 'student-a', name: '井上 一郎', displayName: '井上' }),
+      createStudent({ id: 'student-b', name: '青木 二郎', displayName: '青木' }),
+    ]
+    const regularLessons = [
+      createRegularLesson({ id: 'r-ochiai-a', schoolYear: 2026, teacherId: 't_ochiai', student1Id: 'student-a', subject1: '英', startDate: '2026-04-01', endDate: '未定', dayOfWeek: 5, slotNumber: 5 }),
+      createRegularLesson({ id: 'r-yamamoto-b', schoolYear: 2026, teacherId: 't_yamamoto', student1Id: 'student-b', subject1: '数', startDate: '2026-04-01', endDate: '未定', dayOfWeek: 5, slotNumber: 5 }),
+    ]
+    // 盤面: 2026-07-24(金) 5限に落合(生徒A=井上)と山本(生徒B=青木)がテンプレ配置。どちらも id 未保持。
+    const boardWeeks = [[{
+      id: '2026-07-24_5',
+      dateKey: '2026-07-24',
+      dayLabel: '金',
+      dateLabel: '7/24',
+      slotLabel: '5限',
+      slotNumber: 5,
+      timeLabel: '19:40-21:10',
+      isOpenDay: true,
+      desks: [
+        { id: '2026-07-24_5_desk_1', teacher: '落合', lesson: { id: 'l-a', studentSlots: [{ id: 'student-a_2026-07-24_英', name: '井上', managedStudentId: 'student-a', grade: '中2', subject: '英', lessonType: 'regular', teacherType: 'normal' }, null] } },
+        { id: '2026-07-24_5_desk_2', teacher: '山本', lesson: { id: 'l-b', studentSlots: [{ id: 'student-b_2026-07-24_数', name: '青木', managedStudentId: 'student-b', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }, null] } },
+      ],
+    }]] as unknown as SlotCell[][]
+
+    const move = computeTeacherMove({ weeks: boardWeeks, weekIndex: 0, cellId: '2026-07-24_5', sourceDeskIndex: 0, targetDeskIndex: 1, teachers })
+    expect(move.status).toBe('moved')
+    if (move.status !== 'moved') return
+
+    const write = vi.fn()
+    const popup = { closed: false, document: { open() {}, write, close() {} }, focus() {}, postMessage() {} } as unknown as Window
+    vi.stubGlobal('window', { open: () => popup, setTimeout: (cb: () => void) => { cb(); return 0 } })
+
+    openTeacherScheduleHtml({
+      cells: move.nextWeeks[0],
+      teachers,
+      students,
+      regularLessons,
+      defaultStartDate: '2026-07-21',
+      defaultEndDate: '2026-07-31',
+      defaultPersonId: 't_ochiai',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+
+    const assignmentMap = buildTeacherAssignments(payload.cells)
+    const namesFor = (teacher: { id: string; name: string; fullName: string }) =>
+      collectTeacherAssignmentEntries(assignmentMap, teacher as Parameters<typeof collectTeacherAssignmentEntries>[1])
+        .flatMap((entry) => (entry.students || []).map((student) => student.name))
+    const ochiaiNames = namesFor({ id: 't_ochiai', name: '落合', fullName: '落合 優太' })
+    const yamamotoNames = namesFor({ id: 't_yamamoto', name: '山本', fullName: '山本 花子' })
+
+    // 井上(生徒A)は新担当の山本にだけ出る。旧担当の落合には二重表示されない(修正前はここで落合にも出て落ちる)。
+    expect(yamamotoNames).toContain('井上')
+    expect(ochiaiNames).not.toContain('井上')
+    // 対称に青木(生徒B)は落合にだけ出る。
+    expect(ochiaiNames).toContain('青木')
+    expect(yamamotoNames).not.toContain('青木')
     vi.unstubAllGlobals()
   })
 
