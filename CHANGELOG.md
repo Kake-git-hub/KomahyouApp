@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- feat: 管理データ画面の在籍表示を入塾日不問へ変更(オーナー指示)。入塾日が未来でも在籍として名簿に出し、退塾日は当日在籍・翌日以降を非在籍に。高3卒業は卒業日(翌3/31)を退塾日として自動補完して非在籍表示。盤面/請求/日程表の共有判定(isActiveOnDate/resolveScheduledStatus)は従来どおり入塾日前・卒業で非在籍のまま(この画面限定)。新設 resolveManagedRosterStatus/resolveEffectiveManagedWithdrawDate/resolveManagedStudentGradeLabel/compareManagedStudentsByGradeThenName(src/components/basic-data/basicDataModel.ts・BasicDataScreen.tsx)＋回帰テスト5件・spec-basic-data.md 更新
+
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
