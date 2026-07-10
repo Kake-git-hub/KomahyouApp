@@ -187,12 +187,15 @@ export function resolveTeacherRosterStatus(teacher: TeacherRow, referenceDate: s
   return '在籍'
 }
 
+// 管理データ画面の在籍表示はマネージド判定(入塾日不問)を使う。盤面/請求/日程表は
+// 引き続き resolveTeacherRosterStatus / resolveScheduledStatus / isActiveOnDate 側で
+// 入塾日前・高3卒業を尊重する(未来入塾の生徒を入塾日前から盤面に出さない)。
 export function isTeacherVisibleInManagement(teacher: TeacherRow, referenceDate: string) {
-  return resolveTeacherRosterStatus(teacher, referenceDate) === '在籍'
+  return resolveManagedRosterStatus(teacher.withdrawDate, '', referenceDate) === '在籍'
 }
 
 export function isStudentVisibleInManagement(student: StudentRow, referenceDate: string) {
-  return resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, referenceDate) === '在籍'
+  return resolveManagedRosterStatus(student.withdrawDate, student.birthDate, referenceDate) === '在籍'
 }
 
 export function resolveManagementRosterStatusLabel(status: string) {
@@ -210,4 +213,58 @@ export function resolveScheduledStatus(entryDate: string, withdrawDate: string, 
   if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return '退塾'
   if (hasGraduatedHighSchool(birthDate, referenceDate)) return '退塾'
   return '在籍'
+}
+
+// ── 管理データ画面(BasicDataScreen)専用の在籍表示(オーナー指示 2026-07-10) ──
+// 方針: 入塾日は在籍判定に使わない(未来入塾でも在籍として名簿に出す)。退塾日以降=退塾日の翌日から
+// 非在籍(退塾日当日は在籍=strictly after)。高3卒業は「卒業日(高3学年度末=翌3/31)を退塾日として
+// 自動補完」して扱う(明示の退塾日があればそれを優先)。盤面/請求/日程表は従来の isActiveOnDate /
+// resolveScheduledStatus を使い続け、入塾日前・高3卒業を尊重する(この画面限定の変更)。
+
+// 高3卒業日(=高3学年度末の翌3/31)を返す。生年月日が無効なら空文字。
+export function resolveGraduationWithdrawDate(birthDate: string): string {
+  const normalized = normalizeDateText(birthDate)
+  if (!normalized) return ''
+  const [yearText, monthText] = normalized.split('-')
+  const birthYear = Number(yearText)
+  const birthMonth = Number(monthText)
+  if (Number.isNaN(birthYear) || Number.isNaN(birthMonth)) return ''
+  const enrollmentYear = resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
+  // 高3(学年番号12)の学年度は schoolYear=enrollmentYear+11。その年度末=翌年3/31=(enrollmentYear+12)-03-31。
+  return `${enrollmentYear + 12}-03-31`
+}
+
+// 管理データ表示上の実効退塾日: 明示退塾日を最優先。無ければ高3卒業済みのとき卒業日を自動補完。
+// (講師は birthDate を持たない=空文字のため卒業補完はスキップされ、明示退塾日のみが効く。)
+export function resolveEffectiveManagedWithdrawDate(withdrawDate: string, birthDate: string, referenceDate: string): string {
+  const explicit = normalizeDateText(withdrawDate)
+  if (explicit) return explicit
+  if (hasGraduatedHighSchool(birthDate, referenceDate)) return resolveGraduationWithdrawDate(birthDate)
+  return ''
+}
+
+// 管理データの在籍/非在籍(入塾日は不問・退塾日当日は在籍・翌日以降は非在籍)。
+export function resolveManagedRosterStatus(withdrawDate: string, birthDate: string, referenceDate: string): '在籍' | '非在籍' {
+  const effectiveWithdraw = resolveEffectiveManagedWithdrawDate(withdrawDate, birthDate, referenceDate)
+  if (effectiveWithdraw && referenceDate > effectiveWithdraw) return '非在籍'
+  return '在籍'
+}
+
+// 管理データの生徒ステータス列: 在籍中は学年ラベル(未来入塾でも生年月日から算出)、非在籍は '非在籍'。
+export function resolveManagedStudentGradeLabel(student: StudentRow, referenceDate: string): string {
+  if (resolveManagedRosterStatus(student.withdrawDate, student.birthDate, referenceDate) === '非在籍') return '非在籍'
+  const [yearText, monthText, dayText] = referenceDate.split('-')
+  const referenceDateValue = new Date(Number(yearText), Number(monthText) - 1, Number(dayText))
+  return resolveSchoolGradeLabelFromBirthDate(student.birthDate, referenceDateValue)
+}
+
+// 管理データの生徒並び順: マネージド学年ラベルで昇順(非在籍は末尾)→表示名→氏名。
+export function compareManagedStudentsByGradeThenName(left: StudentRow, right: StudentRow, referenceDate: string) {
+  const gradeOrderDiff = resolveStudentGradeSortOrder(resolveManagedStudentGradeLabel(left, referenceDate)) - resolveStudentGradeSortOrder(resolveManagedStudentGradeLabel(right, referenceDate))
+  if (gradeOrderDiff !== 0) return gradeOrderDiff
+
+  const displayNameCompare = getStudentDisplayName(left).localeCompare(getStudentDisplayName(right), 'ja')
+  if (displayNameCompare !== 0) return displayNameCompare
+
+  return left.name.localeCompare(right.name, 'ja')
 }

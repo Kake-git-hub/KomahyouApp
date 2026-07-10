@@ -1,12 +1,13 @@
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
 import type { ClassroomSettings } from '../../types/appState'
 import {
-  compareStudentsByCurrentGradeThenName,
+  compareManagedStudentsByGradeThenName,
   deriveManagedDisplayName,
   type GradeCeiling,
   type ManagerRow,
-  resolveManagementRosterStatusLabel,
-  resolveCurrentStudentGradeLabel,
+  resolveManagedRosterStatus,
+  resolveManagedStudentGradeLabel,
+  resolveEffectiveManagedWithdrawDate,
   type StudentRow,
   type TeacherRow,
   type TeacherSubjectCapability,
@@ -17,8 +18,6 @@ import {
   initialStudents,
   initialTeachers,
   isTeacherVisibleInManagement,
-  resolveScheduledStatus,
-  resolveTeacherRosterStatus,
 } from './basicDataModel'
 import {
   normalizeRegularLessonNote,
@@ -325,14 +324,6 @@ function createWorkbookSheet(xlsx: XlsxModule, rows: Record<string, unknown>[], 
   }
 
   return sheet
-}
-
-function resolveStudentStatusLabel(student: StudentRow, today = new Date()) {
-  return resolveCurrentStudentGradeLabel(student, getReferenceDateKey(today))
-}
-
-function resolveTeacherStatusLabel(teacher: TeacherRow, today = new Date()) {
-  return resolveTeacherRosterStatus(teacher, getReferenceDateKey(today))
 }
 
 function serializeSubjectCapabilities(capabilities: TeacherSubjectCapability[]) {
@@ -915,17 +906,13 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
 
   const todayReferenceDate = useMemo(() => getReferenceDateKey(new Date()), [])
   const activeStudentRows = useMemo(
-    () => students.filter((student) => {
-      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, todayReferenceDate)
-      return status === '在籍'
-    }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
+    () => students.filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) === '在籍')
+      .slice().sort((left, right) => compareManagedStudentsByGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const withdrawnStudentRows = useMemo(
-    () => students.filter((student) => {
-      const status = resolveScheduledStatus(student.entryDate, student.withdrawDate, student.birthDate, todayReferenceDate)
-      return status !== '在籍'
-    }).slice().sort((left, right) => compareStudentsByCurrentGradeThenName(left, right, todayReferenceDate)),
+    () => students.filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) !== '在籍')
+      .slice().sort((left, right) => compareManagedStudentsByGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const activeTeacherRows = useMemo(
@@ -933,10 +920,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     [teachers, todayReferenceDate],
   )
   const withdrawnTeacherRows = useMemo(
-    () => teachers.filter((teacher) => {
-      const status = resolveTeacherRosterStatus(teacher, todayReferenceDate)
-      return status !== '在籍'
-    }),
+    () => teachers.filter((teacher) => resolveManagedRosterStatus(teacher.withdrawDate, '', todayReferenceDate) !== '在籍'),
     [teachers, todayReferenceDate],
   )
 
@@ -1124,12 +1108,12 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     const filteredTeachers = filterAndSortRows(
       visibleTeachers,
       tableControls.teachers,
-      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveTeacherStatusLabel(row), formatSubjectCapabilitySummary(row.subjectCapabilities)],
+      (row) => [row.name, getTeacherDisplayName(row), row.email, row.entryDate, row.withdrawDate, resolveManagedRosterStatus(row.withdrawDate, '', todayReferenceDate), formatSubjectCapabilitySummary(row.subjectCapabilities)],
       {
         name: (row) => getTeacherDisplayName(row),
         entryDate: (row) => row.entryDate,
         withdrawDate: (row) => formatManagedDateValue(row.withdrawDate),
-        status: (row) => resolveTeacherStatusLabel(row),
+        status: (row) => resolveManagedRosterStatus(row.withdrawDate, '', todayReferenceDate),
         subjects: (row) => formatSubjectCapabilitySummary(row.subjectCapabilities),
       },
     )
@@ -1226,7 +1210,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       ? <DateAssistInput value={row.withdrawDate} emptyLabel="退塾日を選択" hint="未定の場合未入力" onChange={(value) => updateTeacher(row.id, { withdrawDate: value })} />
                       : <span className="basic-data-cell-summary">{formatManagedDateValue(row.withdrawDate)}</span>}
                   </td>
-                  <td><span className="status-chip secondary" data-testid={`basic-data-teacher-status-${row.id}`}>{teacherRosterView === 'active' ? resolveTeacherStatusLabel(row) : resolveManagementRosterStatusLabel(resolveTeacherRosterStatus(row, todayReferenceDate))}</span></td>
+                  <td><span className="status-chip secondary" data-testid={`basic-data-teacher-status-${row.id}`}>{resolveManagedRosterStatus(row.withdrawDate, '', todayReferenceDate)}</span></td>
                   <td>
                     {isRowEditing('teacher', row.id)
                       ? (
@@ -1263,13 +1247,13 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     const filteredStudents = filterAndSortRows(
       visibleStudents,
       tableControls.students,
-      (row) => [row.name, row.displayName, row.email, row.entryDate, row.withdrawDate, row.birthDate, resolveStudentStatusLabel(row)],
+      (row) => [row.name, row.displayName, row.email, row.entryDate, formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate)), row.birthDate, resolveManagedStudentGradeLabel(row, todayReferenceDate)],
       {
-        name: (row) => `${resolveCurrentStudentGradeLabel(row, todayReferenceDate)}_${getStudentDisplayName(row)}`,
+        name: (row) => `${resolveManagedStudentGradeLabel(row, todayReferenceDate)}_${getStudentDisplayName(row)}`,
         entryDate: (row) => row.entryDate,
-        withdrawDate: (row) => formatManagedDateValue(row.withdrawDate),
+        withdrawDate: (row) => formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate)),
         birthDate: (row) => row.birthDate,
-        status: (row) => resolveStudentStatusLabel(row),
+        status: (row) => resolveManagedStudentGradeLabel(row, todayReferenceDate),
       },
     )
     const orderedStudents = applyFrozenRowOrder(filteredStudents, frozenRowOrders.student)
@@ -1352,15 +1336,15 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                   </td>
                   <td>
                     {isRowEditing('student', row.id)
-                      ? <DateAssistInput value={row.withdrawDate} emptyLabel="退塾日を選択" hint="未定の場合未入力" onChange={(value) => updateStudent(row.id, { withdrawDate: value })} />
-                      : <span className="basic-data-cell-summary">{formatManagedDateValue(row.withdrawDate)}</span>}
+                      ? <DateAssistInput value={row.withdrawDate} emptyLabel="退塾日を選択" hint="未定の場合未入力(高3卒業後は卒業日を自動表示)" onChange={(value) => updateStudent(row.id, { withdrawDate: value })} />
+                      : <span className="basic-data-cell-summary">{formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate))}</span>}
                   </td>
                   <td>
                     {isRowEditing('student', row.id)
                       ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudent(row.id, { birthDate: value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.birthDate)}</span>}
                   </td>
-                  <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{studentRosterView === 'active' ? resolveStudentStatusLabel(row) : resolveManagementRosterStatusLabel(resolveScheduledStatus(row.entryDate, row.withdrawDate, row.birthDate, todayReferenceDate))}</span></td>
+                  <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{resolveManagedStudentGradeLabel(row, todayReferenceDate)}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
                       <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
