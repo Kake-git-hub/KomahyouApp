@@ -4953,6 +4953,38 @@ describe('reconcileSubmittedTeacherPlacements (起動時に提出済み未配置
     expect(result.hasChanges).toBe(false)
     expect(result.placedCount).toBe(0)
   })
+
+  // 回帰防止 (dev-fix 2026-07-10 / 検証で発覚した repack 修正の穴): 講習の自動割当
+  // (autoAssignTeacherToSpecialSession)が削除tombstone(teacher='' だが source='deleted')を
+  // 「空き机」とみなして上書きし、削除記録を壊していた。この経路は起動毎に reconcile から自動で走るため、
+  // repack を直しても tombstone がここで消え、次の再マージで削除した講師が赤く復活していた。
+  it('reconcile(講習自動割当)は削除tombstoneを上書きせず、削除した講師が再マージで復活しない', () => {
+    const restoredTeacher = { id: 't1', name: '講師A', entryDate: '', withdrawDate: '' } as TeacherRow
+    const session: SpecialSessionRow = {
+      id: 'sess1', label: '夏期講習', startDate: '2026-07-25', endDate: '2026-07-25',
+      teacherInputs: { t1: { unavailableSlots: [], countSubmitted: true, updatedAt: '' } },
+      studentInputs: {}, createdAt: '', updatedAt: '',
+    } as SpecialSessionRow
+    // 席0 は「落合」を室長が削除した tombstone、席1・席2 は空き。
+    const cell = makeBoardCell('2026-07-25', 3, 3)
+    cell.desks[0] = { ...cell.desks[0], teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合講師' } as DeskCell
+
+    const result = reconcileSubmittedTeacherPlacements({
+      weeks: [[cell]], specialSessions: [session], teachers: [restoredTeacher], students: [], regularLessons: [], classroomSettings,
+    })
+    const resultCell = result.nextWeeks[0][0]
+    const tombstone = resultCell.desks.find((d) => d.teacherAssignmentTeacherId === '落合講師')
+    // 修正前: 自動割当が tombstone(teacher='')を空き机として上書きし source='schedule-registration' になり、
+    // teacherAssignmentTeacherId も別IDに置換されて find が undefined になり落ちる。
+    expect(tombstone?.teacherAssignmentSource).toBe('deleted')
+    // 提出済みの講師A は tombstone ではない別の空き机へ配置される。
+    expect(resultCell.desks.some((d) => d.teacher === getTeacherDisplayName(restoredTeacher))).toBe(true)
+
+    // さらに: テンプレに「落合」が居ても、tombstone が生き残っているので再マージで復活しない。
+    const managedCell = { ...makeBoardCell('2026-07-25', 3, 3), desks: [{ id: 'm0', teacher: '落合講師', teacherAssignmentTeacherId: 't025' }] } as unknown as SlotCell
+    const [merged] = overlayBoardWeeksOnScheduleCells([managedCell], result.nextWeeks, [])
+    expect(merged.desks.some((d) => d.teacher === '落合講師')).toBe(false)
+  })
 })
 
 describe('shouldHighlightStudentName', () => {

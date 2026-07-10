@@ -3288,15 +3288,18 @@ function autoAssignTeacherToSpecialSession(params: {
       }
 
       const teacherOnlyDesks = cell.desks.filter((desk) => !desk.lesson && desk.teacher.trim())
-      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson).length
+      // 削除tombstone(teacher='' だが source='deleted'=室長が意図的に消した机)は「空き机」ではない。
+      // 空き机としてカウント/配置先に選ぶと、講習の自動割当が tombstone を上書きして削除記録を壊し、
+      // 次の再マージで削除した講師が赤く復活する(回帰防止 2026-07-10。repack だけでなくこの経路も塞ぐ)。
+      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk)).length
       if (teacherOnlyDesks.length >= emptyDeskCount) {
         skippedFullCellCount += 1
         continue
       }
 
       const nextDesks = cell.desks.map((desk) => ({ ...desk }))
-      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim())
-        ?? nextDesks.find((desk) => !desk.lesson)
+      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk))
+        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk))
       if (!candidateDesk) {
         skippedFullCellCount += 1
         continue
