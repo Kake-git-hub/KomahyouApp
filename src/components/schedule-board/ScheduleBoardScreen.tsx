@@ -2834,9 +2834,18 @@ function setScheduleRegistrationTeacherAssignment(desk: DeskCell, teacherName: s
   desk.teacherAssignmentTeacherId = teacherId
 }
 
-function repackTeacherOnlyDesks(desks: DeskCell[]) {
+// 削除tombstone(手動で講師を削除した記録: teacher='' だが manualTeacher=true / source='deleted')かどうか。
+// これは「室長が意図的に講師を消した」手動編集で、テンプレ再マージ(mergeManagedWeek)がテンプレ講師の
+// 再付与を抑止するための唯一のキー。repack で消すと次の overlay で削除した講師が赤く復活する
+// (回帰防止 2026-07-10 / dev-fix: 「消した講師が更新で戻る」本番不具合。落合/永山 が土曜3-4限に赤で復活)。
+function isDeletedTeacherTombstone(desk: DeskCell) {
+  return !desk.lesson && Boolean(desk.manualTeacher) && desk.teacherAssignmentSource === 'deleted'
+}
+
+export function repackTeacherOnlyDesks(desks: DeskCell[]) {
   const teacherOnlyDesks = desks
-    .filter((desk) => !desk.lesson && desk.teacher.trim())
+    // tombstone(teacher='')は teacher.trim() が空なので元々ここには入らないが、意図を明示して除外する。
+    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && desk.teacher.trim())
     .map((desk) => ({
       teacher: desk.teacher,
       manualTeacher: Boolean(desk.manualTeacher),
@@ -2847,6 +2856,8 @@ function repackTeacherOnlyDesks(desks: DeskCell[]) {
 
   const nextDesks = desks.map((desk) => {
     if (desk.lesson) return desk
+    // 削除tombstone は詰め直しでクリアせず、その机にそのまま残す(手動編集の永続化)。
+    if (isDeletedTeacherTombstone(desk)) return desk
     return {
       ...desk,
       teacher: '',
@@ -2860,6 +2871,8 @@ function repackTeacherOnlyDesks(desks: DeskCell[]) {
   let teacherOnlyIndex = 0
   for (let deskIndex = 0; deskIndex < nextDesks.length; deskIndex += 1) {
     if (nextDesks[deskIndex]?.lesson) continue
+    // 削除tombstone の机は上書きしない(講師名ゼロ詰めの入れ先にしない)。
+    if (isDeletedTeacherTombstone(nextDesks[deskIndex])) continue
     const teacherOnlyDesk = teacherOnlyDesks[teacherOnlyIndex]
     if (!teacherOnlyDesk) break
     nextDesks[deskIndex] = {

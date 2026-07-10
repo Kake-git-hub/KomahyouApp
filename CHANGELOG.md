@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- fix: 消した講師が更新後に赤く盤面へ戻る不具合を修正。講師削除の tombstone(source='deleted')を repackTeacherOnlyDesks が「講師名が空の机」として巻き込みクリアしていたため、テンプレ再マージで削除講師が復活していた。repack が tombstone を消さないようにし、手動編集(削除/手動配置)を再マージより優先して永続化(src/components/schedule-board/ScheduleBoardScreen.tsx・回帰テスト5件追加)
+
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
