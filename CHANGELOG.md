@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.436 (2026-07-11)
+
+- fix: 講師のD&D入れ替え(swap)後に、講師日程表で同じ生徒が旧講師・新講師の両ページに二重表示される不具合を修正。テンプレ配置由来で teacherAssignmentTeacherId を持たない講師どうしを入れ替えると、着地した机が id を欠いたまま残り、書き出し(scheduleHtml serializeCells)が生徒の基本データ担当講師(=旧講師)の regularTeacherIds を採用して二重表示していた。swap では生徒が動かず v1.5.388 の同日移動ガードが発火しないための穴。computeTeacherMove が着地講師名から id を解決して teacherAssignmentTeacherId を補完(盤面の resolveTeacherIdForDesk と同じ照合規則)。既に id を持つ机は上書きせず、マスタ照合不可の旧表示名は補完しないため 5395a05 の regularTeacherIds フォールバックは不変。開発用教室のみ先行機能で未本番(src/components/schedule-board/ScheduleBoardScreen.tsx・回帰テスト2件追加=修正前に落ちる)
+
 ## v1.5.435 (2026-07-11)
 
 - fix: 消した講師が更新後に赤く盤面へ戻る不具合を修正。講師削除の tombstone(source='deleted')を repackTeacherOnlyDesks が「講師名が空の机」として巻き込みクリアしていたため、テンプレ再マージで削除講師が復活していた。repack が tombstone を消さないようにし、手動編集(削除/手動配置)を再マージより優先して永続化(src/components/schedule-board/ScheduleBoardScreen.tsx・回帰テスト5件追加)

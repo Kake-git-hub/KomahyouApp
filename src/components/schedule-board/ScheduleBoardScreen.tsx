@@ -3690,6 +3690,15 @@ function applyDeskTeacherBlock(desk: DeskCell, block: DeskTeacherBlock) {
   desk.teacherUnavailableWarning = block.teacherUnavailableWarning
 }
 
+// 机の講師名から講師IDを解決して teacherAssignmentTeacherId を補完する(既に id があれば何もしない)。
+// 盤面表示の resolveTeacherIdForDesk / resolveManagedTeacherForDesk と同じ「表示名 or 正式名で照合」規則。
+// 照合できない講師名(旧表示名など)は undefined のまま残し、regularTeacherIds フォールバック(5395a05)を壊さない。
+function backfillDeskTeacherAssignmentId(desk: DeskCell, teachers: TeacherRow[]) {
+  if (!desk.teacher.trim() || desk.teacherAssignmentTeacherId) return
+  const matched = teachers.find((teacher) => getTeacherDisplayName(teacher) === desk.teacher || teacher.name === desk.teacher)
+  if (matched) desk.teacherAssignmentTeacherId = matched.id
+}
+
 export type ComputeTeacherMoveResult =
   | { status: 'moved'; message: string; nextWeeks: SlotCell[][] }
   | { status: 'blocked'; message: string }
@@ -3707,8 +3716,10 @@ export function computeTeacherMove(params: {
   cellId: string
   sourceDeskIndex: number
   targetDeskIndex: number
+  // 着地した机の teacherAssignmentTeacherId を講師名から補完するために使う(二重表示防止・下記コメント)。
+  teachers?: TeacherRow[]
 }): ComputeTeacherMoveResult {
-  const { weeks, weekIndex, cellId, sourceDeskIndex, targetDeskIndex } = params
+  const { weeks, weekIndex, cellId, sourceDeskIndex, targetDeskIndex, teachers = [] } = params
 
   if (sourceDeskIndex === targetDeskIndex) {
     return { status: 'cancelled', message: '同じ机へドロップしたため、講師の移動は行いませんでした。' }
@@ -3743,6 +3754,15 @@ export function computeTeacherMove(params: {
   // 講師が入った机(lesson の有無に関わらず)は manual 固定にして再マージで消えないようにする。
   if (sourceDesk.teacher.trim() && !sourceDesk.manualTeacher) sourceDesk.manualTeacher = true
   if (targetDesk.teacher.trim() && !targetDesk.manualTeacher) targetDesk.manualTeacher = true
+
+  // テンプレ配置由来で teacherAssignmentTeacherId を持たない講師を入れ替え/移動した机は、着地した講師名から
+  // id を解決して補完する。これを欠くと講師日程の書き出し(scheduleHtml serializeCells)が teacherId 不在の机に
+  // regularTeacherIds(=生徒の基本データ担当講師=旧講師のID)を載せ、旧講師・新講師の両ページに同じ生徒が
+  // 二重表示される(2026-07-11 報告: 開発用教室 落合↔山本 8/25 5限)。v1.5.388 の同日移動ガードは「生徒が動いた」
+  // ことをキーにするが、swap では生徒が動かないため発火しない。ここで机側に id を持たせると書き出しは teacherId を
+  // 使い regularTeacherIds を無視する(buildTeacherAssignments の else-if)。既に id を持つ机は上書きしない。
+  backfillDeskTeacherAssignmentId(sourceDesk, teachers)
+  backfillDeskTeacherAssignmentId(targetDesk, teachers)
 
   const message = swappedName
     ? `講師 ${movedName} と ${swappedName} を入れ替えました。`
@@ -8681,6 +8701,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         cellId,
         sourceDeskIndex: deskIndex,
         targetDeskIndex,
+        teachers,
       })
       if (result.status !== 'moved') {
         if (result.status === 'blocked') setStatusMessage(result.message)
