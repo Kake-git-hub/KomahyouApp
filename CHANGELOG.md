@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.432 (2026-07-10)
+
+- docs(保守体制にオーナー要望3点を明文化・オーナー指示 2026-07-10): ①**隔離開発環境(staging)と本番の版を常に一致** — どちらでも動作確認するため。常時CI自動追従はせず「staging で新機能の実装・検証を始める直前に最新 main を Deploy to Staging で反映し両 version.json を揃える」オンデマンド同期を採用(CLAUDE.md staging 項・staging-environment スキルに手順追加・safe-release 手順3/チェックリストに版一致項目追加)。②**モデルのコスト使い分けを再確認** — 複雑作業・構想・原因特定・仕様策定・レビュー=高コスト上位モデル/確立した単純作業=安い下位モデル。主セッションの Agent 起動・Workflow の agent() の model 選択にも適用する旨を「モデル割当方針」冒頭に大原則として明記。③**ユーザビリティ影響の機能要望は実装前に懸案+妥協案を提示して合意** — 標準フロー step2 と spec-curator エージェント(手順5・アウトプット形式)に妥協案ゲートを追加。合意前に dev-fix へ渡さない(CLAUDE.md・.claude/skills/{safe-release,staging-environment}・.claude/agents/spec-curator.md)
+
 ## v1.5.431 (2026-07-10)
 
 - fix(サーバーバックアップの Google Drive 自動同期がCIデプロイで無効化される事故の恒久対策): `functions/.env`(Google Drive OAuth 一式)は .gitignore 済みで CI のチェックアウトに含まれないのに、本番 `deploy-functions.yml` には staging のような env 書き込みステップが無かったため、CI経由で functions をデプロイするたびに `GOOGLE_DRIVE_BACKUP_FOLDER_ID` 等が空になり `isGoogleDriveBackupConfigured()` が false となって Drive 同期が黙って停止していた(2026-07-10 のバックアップ再設計で初めてCI経由デプロイして顕在化)。deploy-functions.yml に「Write functions env for production」ステップを追加し、GitHub シークレット `PROD_FUNCTIONS_ENV`(ローカル functions/.env と同内容)を `functions/.env.komahyouapp-prod` へ書き出して runtime env に焼き込むようにした。**シークレット `PROD_FUNCTIONS_ENV` の登録が必要**(.github/workflows/deploy-functions.yml)
