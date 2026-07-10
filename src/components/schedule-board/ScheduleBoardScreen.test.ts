@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -2240,6 +2240,94 @@ describe('ScheduleBoardScreen buildManagedScheduleCellsForRange', () => {
     const teacherNames = mergedCell?.desks.filter((desk) => desk.teacher.trim()).map((desk) => desk.teacher) ?? []
 
     expect(teacherNames).toEqual(['佐藤講師'])
+  })
+})
+
+// 回帰防止 (dev-fix 2026-07-10): 「消したはずの講師が更新後に赤く盤面へ戻る」本番不具合。
+// 原因: 講師の削除は tombstone(teacher='' / manualTeacher=true / teacherAssignmentSource='deleted')で表現し、
+// mergeManagedWeek がこの tombstone を見てテンプレ講師の再付与を抑止する。ところが repackTeacherOnlyDesks
+// (講習の講師割当/解除などで走る机の詰め直し)が「講師名が空の机」として tombstone を巻き込みクリアしていた。
+// tombstone が消えると次の overlay で削除した講師(落合/永山 など)がテンプレから src=- で復活していた。
+// → repackTeacherOnlyDesks は削除 tombstone を消さない。手動編集(削除/手動配置)を再マージより優先し永続化する。
+describe('削除した講師がテンプレ再マージで戻らない (dev-fix 2026-07-10 回帰防止)', () => {
+  const mkCell = (cellId: string, desks: unknown[]) => ({ id: cellId, dateKey: '2026-07-25', dayLabel: '', dateLabel: '', slotLabel: '3限', slotNumber: 3, isOpenDay: true, desks }) as unknown as SlotCell
+
+  it('repackTeacherOnlyDesks は削除 tombstone(source=deleted)を消さない', () => {
+    // 落合を削除した机(tombstone) ＋ 永山の講師のみ机
+    const desks = [
+      { id: 'd0', teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合講師' },
+      { id: 'd1', teacher: '永山講師', manualTeacher: false },
+    ] as unknown as DeskCell[]
+    const out = repackTeacherOnlyDesks(desks)
+    // 修正前: teacher='' の机としてクリアされ tombstone が消えていた → ここで false になり落ちる。
+    expect(out.some((d) => d.teacherAssignmentSource === 'deleted' && d.teacherAssignmentTeacherId === '落合講師')).toBe(true)
+    // 永山(手動でない講師のみ机)は従来どおり残る。
+    expect(out.some((d) => d.teacher === '永山講師')).toBe(true)
+  })
+
+  it('repackTeacherOnlyDesks は手動配置(manualTeacher=true)の講師のみ机を保持する', () => {
+    const desks = [
+      { id: 'd0', teacher: '佐藤講師', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't002' },
+      { id: 'd1', teacher: '', manualTeacher: false },
+    ] as unknown as DeskCell[]
+    const out = repackTeacherOnlyDesks(desks)
+    const kept = out.find((d) => d.teacher === '佐藤講師')
+    expect(kept).toBeDefined()
+    expect(kept?.manualTeacher).toBe(true)
+    expect(kept?.teacherAssignmentSource).toBe('manual')
+  })
+
+  it('削除 → (講習操作などの)repack → テンプレ再マージ でも削除した講師は再付与されない', () => {
+    // テンプレ(managedWeek): 土曜3限に 落合・永山 が講師のみ机で出勤。
+    const managedCell = mkCell('C1', [
+      { id: 'd0', teacher: '落合講師', teacherAssignmentTeacherId: 't025' },
+      { id: 'd1', teacher: '永山講師', teacherAssignmentTeacherId: 't027' },
+    ])
+    // 盤面: 室長が 落合 を削除(tombstone)。その後、講習の講師操作でセルが repack される。
+    const boardCellAfterDelete = mkCell('C1', [
+      { id: 'd0', teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合講師' },
+      { id: 'd1', teacher: '永山講師', manualTeacher: false },
+    ])
+    const repacked = { ...boardCellAfterDelete, desks: repackTeacherOnlyDesks(boardCellAfterDelete.desks) }
+    const [merged] = overlayBoardWeeksOnScheduleCells([managedCell], [[repacked]], [])
+    const teachers = merged.desks.filter((d) => d.teacher.trim()).map((d) => d.teacher)
+    // 修正前: repack で tombstone が消え、overlay で 落合 が src=- で復活 → not.toContain が落ちる。
+    expect(teachers).not.toContain('落合講師')
+    // 永山は削除していないのでテンプレ講師として残るのが正しい。
+    expect(teachers).toContain('永山講師')
+  })
+
+  it('削除 tombstone を含む盤面を保存→再読込相当で繰り返し overlay に通しても戻らない', () => {
+    const managedCell = mkCell('C1', [
+      { id: 'd0', teacher: '落合講師', teacherAssignmentTeacherId: 't025' },
+    ])
+    let boardCell = mkCell('C1', [
+      { id: 'd0', teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合講師' },
+    ])
+    // 前回のマージ結果を次回の盤面(=保存→再読込)として渡し、3回再マージしても復活しないことを固定。
+    for (let i = 0; i < 3; i += 1) {
+      const [merged] = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [])
+      boardCell = merged
+    }
+    const teachers = boardCell.desks.filter((d) => d.teacher.trim()).map((d) => d.teacher)
+    expect(teachers).not.toContain('落合講師')
+    // tombstone 自体が生き残っていること(再マージの抑止キーが失われない)。
+    expect(boardCell.desks.some((d) => d.teacherAssignmentSource === 'deleted')).toBe(true)
+  })
+
+  it('手動で置いた講師(manualTeacher=true)はテンプレ沈黙時の再マージ後も消えない', () => {
+    // テンプレはこの机について沈黙(managedWeek に該当講師なし)。
+    const managedCell = mkCell('C1', [
+      { id: 'd0', teacher: '', lesson: undefined },
+    ])
+    const boardCell = mkCell('C1', [
+      { id: 'd0', teacher: '佐藤講師', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't002' },
+    ])
+    const [merged] = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [])
+    const kept = merged.desks.find((d) => d.teacher === '佐藤講師')
+    expect(kept).toBeDefined()
+    expect(kept?.manualTeacher).toBe(true)
+    expect(kept?.teacherAssignmentSource).toBe('manual')
   })
 })
 
@@ -4864,6 +4952,38 @@ describe('reconcileSubmittedTeacherPlacements (起動時に提出済み未配置
     })
     expect(result.hasChanges).toBe(false)
     expect(result.placedCount).toBe(0)
+  })
+
+  // 回帰防止 (dev-fix 2026-07-10 / 検証で発覚した repack 修正の穴): 講習の自動割当
+  // (autoAssignTeacherToSpecialSession)が削除tombstone(teacher='' だが source='deleted')を
+  // 「空き机」とみなして上書きし、削除記録を壊していた。この経路は起動毎に reconcile から自動で走るため、
+  // repack を直しても tombstone がここで消え、次の再マージで削除した講師が赤く復活していた。
+  it('reconcile(講習自動割当)は削除tombstoneを上書きせず、削除した講師が再マージで復活しない', () => {
+    const restoredTeacher = { id: 't1', name: '講師A', entryDate: '', withdrawDate: '' } as TeacherRow
+    const session: SpecialSessionRow = {
+      id: 'sess1', label: '夏期講習', startDate: '2026-07-25', endDate: '2026-07-25',
+      teacherInputs: { t1: { unavailableSlots: [], countSubmitted: true, updatedAt: '' } },
+      studentInputs: {}, createdAt: '', updatedAt: '',
+    } as SpecialSessionRow
+    // 席0 は「落合」を室長が削除した tombstone、席1・席2 は空き。
+    const cell = makeBoardCell('2026-07-25', 3, 3)
+    cell.desks[0] = { ...cell.desks[0], teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合講師' } as DeskCell
+
+    const result = reconcileSubmittedTeacherPlacements({
+      weeks: [[cell]], specialSessions: [session], teachers: [restoredTeacher], students: [], regularLessons: [], classroomSettings,
+    })
+    const resultCell = result.nextWeeks[0][0]
+    const tombstone = resultCell.desks.find((d) => d.teacherAssignmentTeacherId === '落合講師')
+    // 修正前: 自動割当が tombstone(teacher='')を空き机として上書きし source='schedule-registration' になり、
+    // teacherAssignmentTeacherId も別IDに置換されて find が undefined になり落ちる。
+    expect(tombstone?.teacherAssignmentSource).toBe('deleted')
+    // 提出済みの講師A は tombstone ではない別の空き机へ配置される。
+    expect(resultCell.desks.some((d) => d.teacher === getTeacherDisplayName(restoredTeacher))).toBe(true)
+
+    // さらに: テンプレに「落合」が居ても、tombstone が生き残っているので再マージで復活しない。
+    const managedCell = { ...makeBoardCell('2026-07-25', 3, 3), desks: [{ id: 'm0', teacher: '落合講師', teacherAssignmentTeacherId: 't025' }] } as unknown as SlotCell
+    const [merged] = overlayBoardWeeksOnScheduleCells([managedCell], result.nextWeeks, [])
+    expect(merged.desks.some((d) => d.teacher === '落合講師')).toBe(false)
   })
 })
 

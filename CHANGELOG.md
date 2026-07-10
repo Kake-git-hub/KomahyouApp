@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.435 (2026-07-11)
+
+- fix: 消した講師が更新後に赤く盤面へ戻る不具合を修正。講師削除の tombstone(source='deleted')を repackTeacherOnlyDesks が「講師名が空の机」として巻き込みクリアしていたため、テンプレ再マージで削除講師が復活していた。repack が tombstone を消さないようにし、手動編集(削除/手動配置)を再マージより優先して永続化(src/components/schedule-board/ScheduleBoardScreen.tsx・回帰テスト5件追加)
+- fix: 上記の続き。講習の講師自動割当 autoAssignTeacherToSpecialSession も削除 tombstone(teacher='')を「空き机」とみなして上書きし(source='deleted'→'schedule-registration')削除記録を壊していた。この経路は起動毎に reconcileSubmittedTeacherPlacements から自動で走るため、repack だけ直しても更新で削除講師が復活していた。空き机カウント/配置先選択から tombstone を除外(mergeManagedWeek の !manualTeacher ガードと同様)。回帰テスト1件追加(修正前に落ちる。多エージェント検証で発覚)
+
 ## v1.5.434
 
 - feat: 管理データ画面の在籍表示を入塾日不問へ変更(オーナー指示)。入塾日が未来でも在籍として名簿に出し、退塾日は当日在籍・翌日以降を非在籍に。高3卒業は卒業日(翌3/31)を退塾日として自動補完して非在籍表示。盤面/請求/日程表の共有判定(isActiveOnDate/resolveScheduledStatus)は従来どおり入塾日前・卒業で非在籍のまま(この画面限定)。新設 resolveManagedRosterStatus/resolveEffectiveManagedWithdrawDate/resolveManagedStudentGradeLabel/compareManagedStudentsByGradeThenName(src/components/basic-data/basicDataModel.ts・BasicDataScreen.tsx)＋回帰テスト7件(管理挙動・共有isActiveOnDateロック含む)・spec-basic-data.md 更新
