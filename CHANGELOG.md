@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.439 (2026-07-11)
+
+- fix: 講師の講習登録解除で提出が復活しうる回帰を修正(INV-07)。schedule-teacher-count-save の解除経路が recentlyReset ガードへ add せず bare reset していたため、解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活していた(生徒版 v1.5.392 の講師版・INV駆動レビュー2026-07-11で確認)。生徒/講師の解除を guardAndResetLectureSubmissionDoc へ集約し非対称を構造的に解消(src/integrations/firebase/lectureSubmission.ts・src/App.tsx)
+- test: INV-07回帰防止テストを追加(登録解除は reset 前に必ずトークンをガードする。ガードを外すと落ちるmutation確認済み・src/integrations/firebase/recentlyResetGuard.test.ts)
+
 ## v1.5.438 (2026-07-11)
 
 - docs: INV-02「非manual講師の既知乖離」を仕様確定で決着(コード無変更・INV-02)。実地調査でユーザーの講師配置は全経路manual扱い=自動処理で不可侵と判明し「手動配置が消える」は前提誤り。非manual=テンプレ足場講師のテンプレ追従を確定仕様として台帳へ記載、テスト2074に関する誤記(非manualクリアをロック中→実際はmanual生存方向のみ)も訂正(docs/spec-invariants.md)

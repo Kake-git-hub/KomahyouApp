@@ -23,7 +23,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -3621,8 +3621,8 @@ function AuthenticatedApp() {
           } else {
             // B4: reset 前に token をガードへ登録し、リセット前の古い submitted 購読で
             // countSubmitted が復活するのを防ぐ。TTL(既定2.5秒)後にガードが自動で解除する。
-            recentlyResetSubmissionGuardRef.current.add(studentToken)
-            resetLectureSubmissionDoc(studentToken).catch(() => { /* non-fatal */ })
+            // 生徒・講師で同じガード規律を共通ヘルパへ集約(INV-07)。
+            guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken).catch(() => { /* non-fatal */ })
           }
         }
         return
@@ -3730,7 +3730,9 @@ function AuthenticatedApp() {
         if (teacherToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(teacherTargetInput, actingClassroomId))) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
-          else resetLectureSubmissionDoc(teacherToken).catch(() => { /* non-fatal */ })
+          // INV-07: 講師の登録解除も reset 前に必ずガードへ add する(生徒経路と対称・v1.5.392 の講師版)。
+          // 欠けていると解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活する。
+          else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken).catch(() => { /* non-fatal */ })
         }
         return
       }

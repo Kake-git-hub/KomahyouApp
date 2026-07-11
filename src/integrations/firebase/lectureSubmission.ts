@@ -263,6 +263,21 @@ export async function resetLectureSubmissionDoc(token: string) {
 }
 
 /**
+ * 登録解除（countSubmitted OFF）時の共通処理（INV-07）。
+ *
+ * reset 前に必ずトークンを recentlyReset ガードへ add してから pending へ戻す。生徒・講師の両解除経路を
+ * この1関数へ集約し、「片方だけガードを付け忘れる」非対称を構造的に不可能にする。
+ *   実害（このガード add を欠くと）: 解除で楽観的に countSubmitted=false へ更新した直後、reset 完了前に
+ *   届いた「まだ submitted の」古いスナップショットを購読反映が「新規提出」と誤認し、登録と盤面配置を復活させる。
+ *   生徒経路は v1.5.392 で add を入れたが、講師経路（schedule-teacher-count-save の解除）に add が欠けていた回帰。
+ */
+export function guardAndResetLectureSubmissionDoc(guard: RecentlyResetGuard, token: string | null | undefined) {
+  if (!token) return Promise.resolve()
+  guard.add(token)
+  return resetLectureSubmissionDoc(token)
+}
+
+/**
  * spec-group-lesson §C: 既に配布済みのQR(集団欄なしで作られた古いトークン)でも中3が集団参加を選べるよう、
  * 未提出(pending)ドキュメントの availableGroupClassSubjects を後埋めする。
  * 提出済み(submitted)は再提出不可なので触らない。既に同値なら書き込まない(冪等)。
