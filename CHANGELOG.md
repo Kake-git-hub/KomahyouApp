@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.440 (2026-07-11)
+
 - feat: 講習集計結果(生徒版)に「オプション」列と「オプション有 N人」集計を追加(開発用教室=optionFieldEnabled 限定)。各生徒の学年別オプションのうちチェック済み項目のラベルを表示する。純関数 formatLectureOptionCell を追加し回帰テストで固定。非開発用教室では列・集計とも従来とバイト等価(src/utils/scheduleHtml.ts)
 - style: 集団授業 出席者一覧の印刷HTMLを内容幅で左詰めに変更(table幅100%→auto・roster-col伸長廃止)。無駄に横長だったのを解消。最右に手書きチェック用の空「チェック欄」列を追加(空行colspan 3→4)(src/components/schedule-board/groupAttendanceHtml.ts)
 - feat: 空フォーマット単体で共通連絡事項(学年別)・個別連絡事項・オプションを入力/保持できるように変更(オーナー確認済み・INV-04)。実データ(scheduleNotes)から切り離した空フォーマット専用ストレージ(sharedGlobalStoragePrefix + 'empty-format:')へ保存する data-empty-format-field 方式に切替。開いても自動印刷せず「編集してから印刷」(印刷ボタン+入力保持スクリプト buildEmptyFormatEditorScript を注入)。通常の生徒日程表の保存経路(data-note-key/memo-input)は不変。埋め込みスクリプトの構文妥当性は new Function パーステストで固定(src/utils/scheduleHtml.ts)
