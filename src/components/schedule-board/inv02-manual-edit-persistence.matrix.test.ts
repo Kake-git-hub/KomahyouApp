@@ -19,9 +19,14 @@ import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 //   盤面への手動編集（配置/削除/移動/入替/科目選択/出欠入力）は、自動処理
 //   （テンプレ再マージ/自動割当/詰め直し/リロード）で巻き戻らない。
 //
-// 例外（オーナー裁定 2026-07-11）:
-//   テンプレの反映日を決めて適用したときのみ、反映日以降はテンプレが正となり
-//   上書きする。それ以外のときはユーザーの配置が正。
+// 仕様確定（オーナー確定 2026-07-11: テンプレ由来講師はテンプレ追従・ユーザー配置は全経路manual扱いで不可侵）:
+//   - ユーザーが講師/生徒を触る全経路（講師セル選択/削除/生徒移動ピン/講師D&D/
+//     QR講習自動割当）は manualTeacher=true で記録され、日常の自動処理では不可侵
+//     （＝裁定「ユーザーの配置が正」の実装形）。
+//   - テンプレ由来（非manual＝テンプレが自動で置いた足場）の講師はテンプレに追従する。
+//     テンプレ/基本データ編集で盤面の足場講師が変わる・消えるのは正（既知乖離ではなく確定仕様）。
+//   - テンプレの反映日を決めて適用したときのみ、反映日以降はテンプレが正となり全て上書きする
+//     （適用ハンドラ内の挙動で、このマトリクスの対象外）。
 //
 // マトリクス:
 //   手動編集 = { 配置(生徒) / 削除(講師) / 移動(生徒) / 入替(生徒swap) / 科目選択 / 出欠入力 }
@@ -512,14 +517,76 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
   })
 
   // ------------------------------------------------------------------------
-  // 仕様未決セル（it.todo）
+  // 行: 手動編集=講師配置の帰属境界（オーナー確定 2026-07-11:
+  //   テンプレ由来はテンプレ追従・ユーザー配置は不可侵）
+  //
+  //   調査で前提が訂正された: ユーザーが講師を置く全経路（講師セル選択/削除/生徒移動ピン/
+  //   講師D&D/QR講習自動割当）は manualTeacher=true で記録され、日常の自動処理では不可侵
+  //   （既に実装済み）。よって「非manual講師」＝テンプレが自動で置いた足場講師に限られる。
+  //   足場講師はテンプレに追従するのが確定仕様（mergeManagedWeek 2620・2729 でクリア →
+  //   テンプレから再付与 2763-2803 する現挙動が仕様）。既存ロック
+  //   ScheduleBoardScreen.test.ts:2074（「manualTeacher の机は講師が消えない／非manual
+  //   かつ記録ステータス無しでは消える」）と整合する。
   // ------------------------------------------------------------------------
-  describe('仕様未決（現実装と INV-02 裁定の乖離・修正待ち）', () => {
-    // オーナー裁定 2026-07-11: テンプレ反映日を適用したとき以外はユーザー配置が正。
-    // 現実装(mergeManagedWeek の teacher: desk.manualTeacher ? ... 分岐 / 2620・2729付近)は、
-    // 非manual かつ記録ステータスの無い机に置かれた講師を、通常のテンプレ再マージでも常にクリアする。
-    // これは上記裁定と乖離しており修正待ち（別タスク）。実装も既存ロック
-    // （ScheduleBoardScreen.test.ts:2074 が現挙動をロック中）も本ファイルでは変更しない。
-    it.todo('非manual経路で置かれた講師×テンプレ再マージ: 反映日適用時以外はユーザー配置(講師)が正だが現実装はクリア（乖離・修正待ち・別タスク）')
+  describe('手動編集=講師配置の帰属境界（オーナー確定 2026-07-11: テンプレ由来はテンプレ追従・ユーザー配置は不可侵）', () => {
+    // テンプレが自動で置いた足場講師（非manual・source undefined・lessonなし・記録ステータス無し）の机。
+    function boardWithScaffoldTeacher(): SlotCell {
+      return createCell({
+        id: '2026-06-01_1',
+        desks: [
+          createDesk({ id: 'b-0', teacher: '講師X', manualTeacher: false, teacherAssignmentTeacherId: 'tX' }),
+          createDesk({ id: 'b-1' }),
+        ],
+      })
+    }
+
+    it('×テンプレ再マージ[仕様ロック]: テンプレ由来(非manual)の足場講師は、テンプレから外れると再マージでクリアされる（テンプレ追従が仕様）', () => {
+      const board = boardWithScaffoldTeacher()
+      // テンプレは同コマについて沈黙し、講師Xも持たない（＝テンプレから外れた足場講師）。
+      const [merged] = overlayBoardWeeksOnScheduleCells([silentManagedCell(board)], [[board]])
+      expect(merged.desks.some((desk) => desk.teacher === '講師X')).toBe(false)
+    })
+
+    it('×テンプレ再マージ[仕様ロック]: テンプレに講師が居続ける場合は再マージ後も同じ講師が置き直され見た目が維持される（追従の正方向）', () => {
+      const board = boardWithScaffoldTeacher()
+      // テンプレは同コマに講師X（足場講師）を持ち続ける（teacher-only の管理デスク）。
+      const managed = createCell({
+        id: board.id,
+        desks: [
+          createDesk({ id: 'm-0', teacher: '講師X', teacherAssignmentTeacherId: 'tX' }),
+          createDesk({ id: 'm-1' }),
+        ],
+      })
+      const [merged] = overlayBoardWeeksOnScheduleCells([managed], [[board]])
+      expect(merged.desks.some((desk) => desk.teacher === '講師X')).toBe(true)
+    })
+
+    it('×テンプレ再マージ[不可侵]: ユーザー配置(manual)の講師はテンプレ沈黙でも保持される（既存2074系の再確認）', () => {
+      const board = createCell({
+        id: '2026-06-01_1',
+        desks: [
+          createDesk({ id: 'b-0', teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 'tM' }),
+          createDesk({ id: 'b-1' }),
+        ],
+      })
+      const [merged] = overlayBoardWeeksOnScheduleCells([silentManagedCell(board)], [[board]])
+      const desk = merged.desks.find((d) => d.teacher === '講師M')
+      expect(desk).toBeDefined()
+      expect(desk?.manualTeacher).toBe(true)
+    })
+
+    it('×テンプレ再マージ[不可侵]: QR講習自動割当由来(manual・source=schedule-registration)の講師も保持される', () => {
+      const board = createCell({
+        id: '2026-06-01_1',
+        desks: [
+          createDesk({ id: 'b-0', teacher: '講師Q', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'sess1', teacherAssignmentTeacherId: 'tQ' }),
+          createDesk({ id: 'b-1' }),
+        ],
+      })
+      const [merged] = overlayBoardWeeksOnScheduleCells([silentManagedCell(board)], [[board]])
+      const desk = merged.desks.find((d) => d.teacher === '講師Q')
+      expect(desk).toBeDefined()
+      expect(desk?.teacherAssignmentSource).toBe('schedule-registration')
+    })
   })
 })
