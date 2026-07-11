@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.442 (2026-07-12)
+
+- refactor: 教室コピー時の「提出トークン消し」が2か所に別実装だったのを一本化(レビュー報告の指摘)。剥がすフィールド(submissionToken / submissionTokenClassroomId)の定義を developmentClassroom の唯一の権威関数 stripSubmissionToken / stripSubmissionTokensFromInputs に集約し、buildDevelopmentClassroomCopyPayload のインライン分割代入を廃してこれへ委譲。stripForeignSubmissionToken も同関数へ委譲(条件判定のみ担当)。挙動は不変(無条件で全トークンを剥がす)・書き込み経路や他教室には一切影響なし。回帰テスト追加(src/App.tsx・src/utils/developmentClassroom.ts)
+
 ## v1.5.441 (2026-07-12)
 
 - fix: 空フォーマットの連絡事項/オプション欄をクリックしても入力モードに入れなかった不具合を修正(INV-04)。body.all-view .sheet の pointer-events:none(一覧は非操作)を空フォーマット欄が継承していたため。data-empty-format-field 欄だけ pointer-events:auto へ再有効化する上書きをポップアップに注入。実ブラウザで elementFromPoint がフィールドに当たること・クリックで focus/入力できることを確認。回帰テスト追加(v1.5.440 で入った同機能の欠落)(src/utils/scheduleHtml.ts)
