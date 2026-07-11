@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.439 (2026-07-11)
+
 - fix: 講師の講習登録解除で提出が復活しうる回帰を修正(INV-07)。schedule-teacher-count-save の解除経路が recentlyReset ガードへ add せず bare reset していたため、解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活していた(生徒版 v1.5.392 の講師版・INV駆動レビュー2026-07-11で確認)。生徒/講師の解除を guardAndResetLectureSubmissionDoc へ集約し非対称を構造的に解消(src/integrations/firebase/lectureSubmission.ts・src/App.tsx)
 - test: INV-07回帰防止テストを追加(登録解除は reset 前に必ずトークンをガードする。ガードを外すと落ちるmutation確認済み・src/integrations/firebase/recentlyResetGuard.test.ts)
 
