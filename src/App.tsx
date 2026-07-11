@@ -33,7 +33,7 @@ import { compactBoardSharePayload, publishBoardShare } from './integrations/fire
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
-import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs } from './utils/developmentClassroom'
+import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
@@ -491,15 +491,10 @@ export function buildDevelopmentClassroomCopyPayload(sourcePayload: AppSnapshotP
     },
     specialSessions: sanitizedSource.specialSessions.map((session) => ({
       ...session,
-      teacherInputs: Object.fromEntries(Object.entries(session.teacherInputs).map(([personId, input]) => {
-        // 混入防止: 提出トークンと発行元教室タグの両方を外す。開発用側で自分の教室のトークンを再発行させる。
-        const { submissionToken: _submissionToken, submissionTokenClassroomId: _submissionTokenClassroomId, ...restInput } = input
-        return [personId, restInput]
-      })),
-      studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => {
-        const { submissionToken: _submissionToken, submissionTokenClassroomId: _submissionTokenClassroomId, ...restInput } = input
-        return [personId, restInput]
-      })),
+      // 混入防止: 提出トークンと発行元教室タグの両方を外す。開発用側で自分の教室のトークンを再発行させる。
+      // 剥がすフィールドの定義は developmentClassroom の stripSubmissionToken に一本化(別実装を作らない)。
+      teacherInputs: stripSubmissionTokensFromInputs(session.teacherInputs),
+      studentInputs: stripSubmissionTokensFromInputs(session.studentInputs),
     })),
   })
 }
