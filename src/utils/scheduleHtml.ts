@@ -4781,8 +4781,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const emptyFormat = options && options.emptyFormat;
         const commonNoteValue = emptyFormat ? '' : getScheduleNoteValue(commonKey);
         const individualNoteValue = emptyFormat ? '' : getScheduleNoteValue(individualKey);
-        const commonSectionHtml = '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(commonKey) + '">' + escapeHtml(commonNoteValue) + '</textarea></div></div>';
-        const individualSectionHtml = '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="box-textarea memo-input" data-note-key="' + escapeHtml(individualKey) + '">' + escapeHtml(individualNoteValue) + '</textarea></div></div>';
+        // 空フォーマットは実データ(scheduleNotes)から切り離し、空フォーマット専用ストレージ(data-empty-format-field)に保持する。
+        // 通常の生徒日程表は従来どおり memo-input + data-note-key で scheduleNotes に保存する。
+        const commonFieldAttr = emptyFormat ? ' data-empty-format-field="common"' : ' data-note-key="' + escapeHtml(commonKey) + '"';
+        const individualFieldAttr = emptyFormat ? ' data-empty-format-field="individual"' : ' data-note-key="' + escapeHtml(individualKey) + '"';
+        const noteInputClass = emptyFormat ? 'box-textarea' : 'box-textarea memo-input';
+        const commonSectionHtml = '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + commonFieldAttr + '>' + escapeHtml(commonNoteValue) + '</textarea></div></div>';
+        const individualSectionHtml = '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + individualFieldAttr + '>' + escapeHtml(individualNoteValue) + '</textarea></div></div>';
         const makeupSectionHtml = '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>';
         const countStackHtml = '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>';
         // オプション欄(開発用教室のみ): 休み欄を削除し、振替授業を左へ詰め、空いた所にオプション欄(2列5行)を置く。
@@ -4813,7 +4818,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         for (var i = 0; i < 5; i++) {
           var noteKey = 'student-option-grade-' + grade + '-' + i;
           var value = emptyFormat ? '' : getScheduleNoteValue(noteKey);
-          var inputAttr = emptyFormat ? '' : ' data-note-key="' + escapeHtml(noteKey) + '"';
+          // 空フォーマットは専用ストレージへ保持(data-empty-format-field="option-N")。通常は scheduleNotes(data-note-key)。
+          var inputAttr = emptyFormat ? ' data-empty-format-field="option-' + i + '"' : ' data-note-key="' + escapeHtml(noteKey) + '"';
           var inputClass = emptyFormat ? 'option-input' : 'option-input memo-input';
           // checks は行番号(0..4)キーのレコード(QR提出)または配列。どちらでも i 番目を判定。
           var checked = !!checks && checks[i] === true;
@@ -5466,6 +5472,25 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return nextHtml;
       }
 
+      // 空フォーマット専用の入力保持スクリプト。data-empty-format-field を持つ入力を
+      // 空フォーマット専用ストレージ(storagePrefix + フィールド名)へ読み書きする(実データ scheduleNotes とは別枠)。
+      // opener(元の日程表ウィンドウ)の localStorage を優先し、開き直しても保持する。
+      // (scheduleHtml.test.ts が new Function で抽出して構文と往復を固定する)
+      function buildEmptyFormatEditorScript(storagePrefix) {
+        return '<scr' + 'ipt>(function(){'
+          + 'var store=null;'
+          + 'try{store=(window.opener&&window.opener.localStorage)?window.opener.localStorage:window.localStorage;}catch(e){try{store=window.localStorage;}catch(e2){store=null;}}'
+          + 'var PREFIX=' + JSON.stringify(storagePrefix) + ';'
+          + 'var fields=document.querySelectorAll("[data-empty-format-field]");'
+          + 'Array.prototype.forEach.call(fields,function(el){'
+          + 'var name=el.getAttribute("data-empty-format-field");'
+          + 'var key=PREFIX+name;'
+          + 'try{var saved=store?store.getItem(key):null;if(saved!==null&&saved!==undefined)el.value=saved;}catch(e){}'
+          + 'el.addEventListener("input",function(){try{if(store)store.setItem(key,el.value);}catch(e){}});'
+          + '});'
+          + '})();</scr' + 'ipt>';
+      }
+
       function openEmptyFormatPrintWindow() {
         var startDate = (startInput && startInput.value) || appliedStartDate || DATA.defaultStartDate || DATA.availableStartDate;
         var endDate = (endInput && endInput.value) || appliedEndDate || DATA.defaultEndDate || DATA.availableEndDate;
@@ -5483,9 +5508,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var styleHtml = Array.from(document.querySelectorAll('style')).map((element) => element.outerHTML).join('');
         var printWindow = window.open('', 'schedule-empty-format-' + Date.now());
         if (!printWindow) return;
-        var printScript = '<scr' + 'ipt>window.addEventListener("load",function(){setTimeout(function(){window.focus();window.print();},300);});</scr' + 'ipt>';
+        // オーナー指示(2026-07-11): 空フォーマットは「編集してから印刷」。自動印刷せず、入力・保持のうえで印刷ボタンを押す。
+        var toolbarHtml = '<div class="empty-format-toolbar print-only-hidden" style="margin:0 0 12px;">'
+          + '<button type="button" onclick="window.print()" style="padding:8px 16px;font-size:14px;cursor:pointer;">印刷</button>'
+          + '<span style="margin-left:12px;color:#52606d;font-size:12px;">連絡事項・オプションは入力すると自動保存されます。</span>'
+          + '</div>';
+        var editorScript = buildEmptyFormatEditorScript(sharedGlobalStoragePrefix + 'empty-format:');
         printWindow.document.open();
-        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + sheetHtml + printScript + '</body></html>');
+        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + toolbarHtml + sheetHtml + editorScript + '</body></html>');
         printWindow.document.close();
       }
 
@@ -6147,31 +6177,68 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return '—';
       }
 
+      // 講習集計結果の「オプション」セル。チェック済み(optionChecks[i]===true)の行のラベルを ' / ' で並べる。
+      // ラベルは学年共通(labels[i])。チェック済みだがラベル未設定の行は 'オプションN' で補う。未チェックは '—'。
+      // labels は5要素の配列。optionChecks はキー'0'..'4'のレコード(QR提出/室長登録)。
+      // (scheduleHtml.test.ts が new Function で抽出して固定する)
+      function formatLectureOptionCell(input, labels) {
+        // 未登録(未提出)は希望科目/提出方法列と同じく '—'(登録済みの生徒のみオプションを表示・登録状況列と整合)。
+        if (!input || !input.countSubmitted) return '—';
+        var checks = input.optionChecks && typeof input.optionChecks === 'object' ? input.optionChecks : null;
+        if (!checks) return '—';
+        var parts = [];
+        for (var i = 0; i < 5; i++) {
+          if (checks[i] !== true) continue;
+          var label = labels && typeof labels[i] === 'string' ? labels[i].trim() : '';
+          parts.push(label || ('オプション' + (i + 1)));
+        }
+        return parts.length ? parts.join(' / ') : '—';
+      }
+
       // 表示期間の講習について、全生徒の登録/未登録一覧HTML(自己完結ページ)を組み立てる。
       function buildLectureSummaryHtml(startDate, endDate) {
         var sessions = getOverlappingSpecialSessions(startDate, endDate);
         var students = getVisibleStudents(startDate, endDate);
         var statusClassMap = { unregistered: 'lecture-summary-unregistered', 'regular-only': 'lecture-summary-regular-only', registered: 'lecture-summary-registered' };
+        // オプション欄は開発用教室のみ(空フォーマット/生徒日程表と同じゲート)。列とラベル取得を実行時に切り替える。
+        var optionEnabled = !!DATA.optionFieldEnabled;
+        function getStudentOptionLabels(student) {
+          var grade = (student && student.currentGradeLabel) || '未設定';
+          var labels = [];
+          for (var i = 0; i < 5; i++) labels.push(getScheduleNoteValue('student-option-grade-' + grade + '-' + i));
+          return labels;
+        }
+        var optionHeader = optionEnabled ? '<th>オプション</th>' : '';
+        var emptyColspan = optionEnabled ? 7 : 6;
         var sectionsHtml = sessions.map(function(session) {
           var inputs = session && session.studentInputs && typeof session.studentInputs === 'object' ? session.studentInputs : {};
           var counts = { registered: 0, 'regular-only': 0, unregistered: 0 };
+          var optionCount = 0;
           var rowsHtml = students.map(function(student, index) {
             var status = resolveLectureRegistrationStatus(inputs[student.id]);
             counts[status.kind] += 1;
+            var optionCell = '';
+            if (optionEnabled) {
+              var optionText = formatLectureOptionCell(inputs[student.id], getStudentOptionLabels(student));
+              if (optionText !== '—') optionCount += 1;
+              optionCell = '<td class="lecture-summary-option">' + escapeHtml(optionText) + '</td>';
+            }
             return '<tr><td class="lecture-summary-index">' + (index + 1) + '</td>'
               + '<td class="lecture-summary-name">' + escapeHtml(formatStudentHeaderName(student, startDate)) + '</td>'
               + '<td class="' + statusClassMap[status.kind] + '">' + escapeHtml(status.label) + '</td>'
               + '<td class="lecture-summary-subjects">' + escapeHtml(formatDesiredSubjectsWithDuration(inputs[student.id], student, startDate)) + '</td>'
               + '<td class="lecture-summary-submitted-at">' + escapeHtml(formatSubmissionDateTime(inputs[student.id] && inputs[student.id].submittedAt)) + '</td>'
-              + '<td class="lecture-summary-method">' + escapeHtml(resolveSubmissionMethodLabel(inputs[student.id])) + '</td></tr>';
+              + '<td class="lecture-summary-method">' + escapeHtml(resolveSubmissionMethodLabel(inputs[student.id])) + '</td>'
+              + optionCell + '</tr>';
           }).join('');
-          if (!rowsHtml) rowsHtml = '<tr><td colspan="6" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
+          if (!rowsHtml) rowsHtml = '<tr><td colspan="' + emptyColspan + '" class="lecture-summary-empty">表示対象の生徒がいません</td></tr>';
           var rangeLabel = formatRangeLabel(session.startDate, session.endDate);
-          var summaryLine = '登録 ' + counts.registered + '人 / 通常のみ ' + counts['regular-only'] + '人 / 未登録 ' + counts.unregistered + '人（全 ' + students.length + '人）';
+          var summaryLine = '登録 ' + counts.registered + '人 / 通常のみ ' + counts['regular-only'] + '人 / 未登録 ' + counts.unregistered + '人（全 ' + students.length + '人）'
+            + (optionEnabled ? ' / オプション有 ' + optionCount + '人' : '');
           return '<section class="lecture-summary-section">'
             + '<h2>' + escapeHtml(session.label || '講習') + '<span class="lecture-summary-range">' + escapeHtml(rangeLabel) + '</span></h2>'
             + '<p class="lecture-summary-count">' + escapeHtml(summaryLine) + '</p>'
-            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th><th>提出日時</th><th>提出方法</th></tr></thead>'
+            + '<table class="lecture-summary-table"><thead><tr><th>No.</th><th>生徒名</th><th>登録状況</th><th>希望科目（授業時間）</th><th>提出日時</th><th>提出方法</th>' + optionHeader + '</tr></thead>'
             + '<tbody>' + rowsHtml + '</tbody></table></section>';
         }).join('');
         if (!sectionsHtml) sectionsHtml = '<p class="lecture-summary-empty">表示期間に講習期間が含まれていません。</p>';
@@ -6192,6 +6259,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '.lecture-summary-subjects{color:#1f2933;}'
           + '.lecture-summary-submitted-at{white-space:nowrap;color:#1f2933;}'
           + '.lecture-summary-method{white-space:nowrap;color:#334e68;}'
+          + '.lecture-summary-option{color:#1f2933;}'
           + '.lecture-summary-registered{color:#0b7a3b;font-weight:bold;}'
           + '.lecture-summary-regular-only{color:#b45309;font-weight:bold;}'
           + '.lecture-summary-unregistered{color:#9aa5b1;}'

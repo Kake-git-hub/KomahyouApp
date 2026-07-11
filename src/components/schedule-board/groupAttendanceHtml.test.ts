@@ -83,6 +83,31 @@ describe('buildGroupAttendanceHtml', () => {
     expect(html).toContain('出席 25 名 / 欠席 25 名（合計 50 名）')
   })
 
+  // 回帰防止(2026-07-11): 印刷用一覧は無駄に横長にせず内容幅で左詰めし、最右に手書き用の空「チェック欄」列を出す。
+  it('left-aligns roster tables at content width (not full page) instead of stretching', () => {
+    const html = buildGroupAttendanceHtml({ ...base, attendees: [{ name: 'A', present: true }] })
+    // 旧: table{width:100%} + roster-col{flex:1 1 0} で1列がA4幅いっぱいに伸びていた。内容幅+左詰めに変更。
+    expect(html).toContain('table { width: auto;')
+    expect(html).toContain('.roster-col { flex: 0 0 auto; }')
+    expect(html).toContain('justify-content: flex-start')
+    expect(html).not.toContain('table { width: 100%;')
+  })
+
+  it('adds a rightmost blank チェック欄 column for handwritten checking when printed', () => {
+    const html = buildGroupAttendanceHtml({ ...base, attendees: [{ name: '青木太郎', present: true }] })
+    // ヘッダに「チェック欄」列、各行に空セル(td.check)。手書き用に幅を確保。
+    expect(html).toContain('<th class="check">チェック欄</th>')
+    expect(html).toContain('<td class="check"></td>')
+    expect(html).toContain('td.check, th.check { width:')
+  })
+
+  it('spans the empty-state row across all four columns', () => {
+    const html = buildGroupAttendanceHtml({ ...base, attendees: [] })
+    // #/氏名/出欠/チェック欄 の4列ぶん。
+    expect(html).toContain('colspan="4"')
+    expect(html).not.toContain('colspan="3"')
+  })
+
   it('escapes HTML in names to avoid markup injection', () => {
     const html = buildGroupAttendanceHtml({
       ...base,
