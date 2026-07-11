@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.441 (2026-07-12)
+
+- fix: 空フォーマットの連絡事項/オプション欄をクリックしても入力モードに入れなかった不具合を修正(INV-04)。body.all-view .sheet の pointer-events:none(一覧は非操作)を空フォーマット欄が継承していたため。data-empty-format-field 欄だけ pointer-events:auto へ再有効化する上書きをポップアップに注入。実ブラウザで elementFromPoint がフィールドに当たること・クリックで focus/入力できることを確認。回帰テスト追加(v1.5.440 で入った同機能の欠落)(src/utils/scheduleHtml.ts)
+
 ## v1.5.440 (2026-07-11)
 
 - feat: 講習集計結果(生徒版)に「オプション」列と「オプション有 N人」集計を追加(開発用教室=optionFieldEnabled 限定)。各生徒の学年別オプションのうちチェック済み項目のラベルを表示する。純関数 formatLectureOptionCell を追加し回帰テストで固定。非開発用教室では列・集計とも従来とバイト等価(src/utils/scheduleHtml.ts)

@@ -1079,6 +1079,9 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     // 編集してから印刷: 印刷ボタン(ツールバー)を出し、editorScript を差し込む(自動印刷しない)。
     expect(html).toContain('class="empty-format-toolbar')
     expect(html).toContain("' + toolbarHtml + sheetHtml + editorScript + '")
+    // 回帰防止(2026-07-12): body.all-view .sheet は pointer-events:none。この上書きが無いと欄をクリックしても
+    // 入力モードに入れない(ポップアップに実際に出た不具合)。空フォーマット欄だけ pointer-events を再有効化する。
+    expect(html).toContain('[data-empty-format-field]{pointer-events:auto;}')
 
     // エディタスクリプトビルダを抽出し、構文妥当性と専用キー束縛を固定する(テンプレートエスケープ崩れ検知)。
     const match = html.match(/function buildEmptyFormatEditorScript\(storagePrefix\)\s*\{([\s\S]*?)\n {6}\}/)

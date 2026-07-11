@@ -5514,8 +5514,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           + '<span style="margin-left:12px;color:#52606d;font-size:12px;">連絡事項・オプションは入力すると自動保存されます。</span>'
           + '</div>';
         var editorScript = buildEmptyFormatEditorScript(sharedGlobalStoragePrefix + 'empty-format:');
+        // body.all-view .sheet は pointer-events:none(一覧は非操作)。空フォーマットの連絡事項/オプション欄だけ
+        // クリック・入力できるよう pointer-events を再有効化する(継承 none を子要素側で auto へ上書き)。これが無いと入力モードに入れない。
+        var editableStyle = '<style>[data-empty-format-field]{pointer-events:auto;}</style>';
         printWindow.document.open();
-        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + '</head><body class="all-view">' + toolbarHtml + sheetHtml + editorScript + '</body></html>');
+        printWindow.document.write('<!doctype html><html lang="ja"><head><meta charset="UTF-8" /><title>空フォーマット印刷</title>' + styleHtml + editableStyle + '</head><body class="all-view">' + toolbarHtml + sheetHtml + editorScript + '</body></html>');
         printWindow.document.close();
       }
 
