@@ -31,12 +31,13 @@ const ATTENDEES_PER_COLUMN = 25
 function buildAttendeeRow(attendee: GroupAttendancePrintAttendee, displayIndex: number): string {
   const statusLabel = attendee.present ? '出席' : '欠席'
   const statusClass = attendee.present ? 'present' : 'absent'
-  return `<tr><td class="num">${displayIndex}</td><td class="name">${escapeHtml(attendee.name)}</td><td class="status ${statusClass}">${statusLabel}</td></tr>`
+  // 最右の「チェック欄」は印刷後の手書きチェック用に常に空欄。
+  return `<tr><td class="num">${displayIndex}</td><td class="name">${escapeHtml(attendee.name)}</td><td class="status ${statusClass}">${statusLabel}</td><td class="check"></td></tr>`
 }
 
 function buildRosterTable(rowsHtml: string): string {
   return `<table>
-<thead><tr><th class="num">#</th><th>氏名</th><th class="status">出欠</th></tr></thead>
+<thead><tr><th class="num">#</th><th class="name">氏名</th><th class="status">出欠</th><th class="check">チェック欄</th></tr></thead>
 <tbody>${rowsHtml}</tbody>
 </table>`
 }
@@ -58,7 +59,7 @@ export function buildGroupAttendanceHtml(params: GroupAttendancePrintParams): st
           .join('')
         return `<div class="roster-col">${buildRosterTable(rowsHtml)}</div>`
       }).join('')
-    : `<div class="roster-col">${buildRosterTable('<tr><td class="empty" colspan="3">出席者がいません</td></tr>')}</div>`
+    : `<div class="roster-col">${buildRosterTable('<tr><td class="empty" colspan="4">出席者がいません</td></tr>')}</div>`
 
   const headerRows = [
     params.schoolName ? `<div><span class="label">教室</span>${escapeHtml(params.schoolName)}</div>` : '',
@@ -82,14 +83,17 @@ export function buildGroupAttendanceHtml(params: GroupAttendancePrintParams): st
   h1 { font-size: 18px; margin: 0 0 8px; }
   .meta { display: flex; flex-wrap: wrap; gap: 2px 24px; margin-bottom: 12px; font-size: 13px; }
   .meta .label { display: inline-block; min-width: 64px; color: #555; margin-right: 8px; }
-  /* 出席者一覧は最大2列を横並びにする（25名超で2列）。 */
-  .roster { display: flex; gap: 12px; align-items: flex-start; }
-  .roster-col { flex: 1 1 0; min-width: 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { border: 1px solid #999; padding: 2px 8px; text-align: left; }
+  /* 出席者一覧は最大2列を横並びにする（25名超で2列）。各表は内容幅で左詰め(無駄に横長にしない)。 */
+  .roster { display: flex; gap: 16px; align-items: flex-start; justify-content: flex-start; }
+  .roster-col { flex: 0 0 auto; }
+  table { width: auto; border-collapse: collapse; font-size: 12px; }
+  th, td { border: 1px solid #999; padding: 2px 8px; text-align: left; white-space: nowrap; }
   th { background: #f2f2f2; }
   td.num, th.num { width: 36px; text-align: center; }
+  td.name, th.name { min-width: 132px; }
   td.status, th.status { width: 56px; text-align: center; font-weight: 700; }
+  /* チェック欄は印刷後に手書きチェックできる幅を確保する。 */
+  td.check, th.check { width: 84px; }
   td.status.absent { color: #b00020; }
   td.empty { text-align: center; color: #777; }
   .summary { margin-top: 12px; font-size: 13px; font-weight: 700; }

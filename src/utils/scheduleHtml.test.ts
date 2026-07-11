@@ -951,6 +951,152 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 回帰防止(2026-07-11): 講習集計結果の「オプション」列セル。チェック済み行のラベルを ' / ' で並べる。
+  // record キーは '0'..'4'。ラベル未設定のチェック行は 'オプションN'、未チェック/optionChecksなしは '—'。
+  it('formats the option cell (checked option labels) for the lecture summary', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/function formatLectureOptionCell\(input, labels\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const format = new Function('input', 'labels', match![1]) as (
+      input: { countSubmitted?: boolean; optionChecks?: Record<string, boolean> } | null | undefined,
+      labels: (string | undefined)[] | undefined,
+    ) => string
+    const labels = ['英検対策', '数検対策', '', '保護者面談', '教材']
+
+    // 未登録(countSubmitted なし)は、チェックが残っていても '—'(希望科目/提出方法列と整合)。
+    expect(format(undefined, labels)).toBe('—')
+    expect(format({ optionChecks: { '0': true } }, labels)).toBe('—')
+    // 登録済みだが optionChecks なし → —。
+    expect(format({ countSubmitted: true }, labels)).toBe('—')
+    expect(format({ countSubmitted: true, optionChecks: {} }, labels)).toBe('—')
+    // 登録済み: チェック済み行(record key '0'..'4')のラベルを ' / ' 連結。
+    expect(format({ countSubmitted: true, optionChecks: { '0': true, '3': true } }, labels)).toBe('英検対策 / 保護者面談')
+    // チェック済みだがラベル未設定の行は 'オプションN'。
+    expect(format({ countSubmitted: true, optionChecks: { '2': true } }, labels)).toBe('オプション3')
+    // false は無視。ラベル配列未指定でも落ちない。
+    expect(format({ countSubmitted: true, optionChecks: { '0': false } }, labels)).toBe('—')
+    expect(format({ countSubmitted: true, optionChecks: { '1': true } }, undefined)).toBe('オプション2')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-11): 講習集計結果(生徒版)は optionFieldEnabled のときだけ「オプション」列と有人数集計を追加する。
+  it('wires an オプション column + tally into the student lecture summary (gated on optionFieldEnabled)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // 実行時ゲート(開発用教室のみ)。列ヘッダ・セル・集計は optionEnabled でのみ出る。
+    expect(html).toContain('var optionEnabled = !!DATA.optionFieldEnabled;')
+    expect(html).toContain("var optionHeader = optionEnabled ? '<th>オプション</th>' : '';")
+    expect(html).toContain('formatLectureOptionCell(inputs[student.id], getStudentOptionLabels(student))')
+    // オプション有の人数を集計行に追加。空行 colspan もフラグで 7/6 に切り替える。
+    expect(html).toContain("(optionEnabled ? ' / オプション有 ' + optionCount + '人' : '')")
+    expect(html).toContain('var emptyColspan = optionEnabled ? 7 : 6;')
+    // 既存の列(希望科目/提出日時/提出方法)は維持(回帰防止)。
+    expect(html).toContain('<th>提出日時</th><th>提出方法</th>')
+
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(2026-07-11): 空フォーマットは「単体で」連絡事項/オプションを入力・保持する。
+  // 実データ(scheduleNotes)から切り離した専用ストレージへ保存し、開いても自動印刷せず編集→印刷ボタン。
+  it('makes the empty format self-persist 連絡事項/オプション in its own storage (edit-then-print)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    // 空フォーマットの3フィールドは data-note-key(scheduleNotes) ではなく専用の data-empty-format-field に切り替える。
+    expect(html).toContain(" data-empty-format-field=\"common\"")
+    expect(html).toContain(" data-empty-format-field=\"individual\"")
+    expect(html).toContain(" data-empty-format-field=\"option-' + i + '\"")
+    // 専用ストレージ(sharedGlobalStoragePrefix + 'empty-format:')へ読み書きするエディタスクリプトを注入。
+    expect(html).toContain('function buildEmptyFormatEditorScript(storagePrefix)')
+    expect(html).toContain("buildEmptyFormatEditorScript(sharedGlobalStoragePrefix + 'empty-format:')")
+    // 編集してから印刷: 印刷ボタン(ツールバー)を出し、editorScript を差し込む(自動印刷しない)。
+    expect(html).toContain('class="empty-format-toolbar')
+    expect(html).toContain("' + toolbarHtml + sheetHtml + editorScript + '")
+
+    // エディタスクリプトビルダを抽出し、構文妥当性と専用キー束縛を固定する(テンプレートエスケープ崩れ検知)。
+    const match = html.match(/function buildEmptyFormatEditorScript\(storagePrefix\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const build = new Function('storagePrefix', match![1]) as (prefix: string) => string
+    const script = build('schedule-shared:x:global:empty-format:')
+    expect(script.startsWith('<script>')).toBe(true)
+    expect(script).toContain('[data-empty-format-field]')
+    expect(script).toContain('addEventListener')
+    expect(script).toContain('window.opener')
+    expect(script).toContain('"schedule-shared:x:global:empty-format:"')
+    // 出荷スクリプト本体が構文的に妥当であること(<script>ラッパを外して new Function でパース)。
+    const inner = script.replace('<script>', '').replace('</script>', '')
+    expect(() => new Function(inner)).not.toThrow()
+
+    vi.unstubAllGlobals()
+  })
+
   it('emits a syntactically valid inline client script (guards template-literal escaping bugs)', () => {
     const write = vi.fn()
     const popup = {

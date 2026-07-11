@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- feat: 講習集計結果(生徒版)に「オプション」列と「オプション有 N人」集計を追加(開発用教室=optionFieldEnabled 限定)。各生徒の学年別オプションのうちチェック済み項目のラベルを表示する。純関数 formatLectureOptionCell を追加し回帰テストで固定。非開発用教室では列・集計とも従来とバイト等価(src/utils/scheduleHtml.ts)
+- style: 集団授業 出席者一覧の印刷HTMLを内容幅で左詰めに変更(table幅100%→auto・roster-col伸長廃止)。無駄に横長だったのを解消。最右に手書きチェック用の空「チェック欄」列を追加(空行colspan 3→4)(src/components/schedule-board/groupAttendanceHtml.ts)
+- feat: 空フォーマット単体で共通連絡事項(学年別)・個別連絡事項・オプションを入力/保持できるように変更(オーナー確認済み・INV-04)。実データ(scheduleNotes)から切り離した空フォーマット専用ストレージ(sharedGlobalStoragePrefix + 'empty-format:')へ保存する data-empty-format-field 方式に切替。開いても自動印刷せず「編集してから印刷」(印刷ボタン+入力保持スクリプト buildEmptyFormatEditorScript を注入)。通常の生徒日程表の保存経路(data-note-key/memo-input)は不変。埋め込みスクリプトの構文妥当性は new Function パーステストで固定(src/utils/scheduleHtml.ts)
+- chore: 空フォーマットのロゴ欄・校舎名/TELは従来どおり生徒日程表と共通の共有ストレージから流し込み(applyEmptyFormatBranding)を維持(既実装の確認)
+
 ## v1.5.439 (2026-07-11)
 
 - fix: 講師の講習登録解除で提出が復活しうる回帰を修正(INV-07)。schedule-teacher-count-save の解除経路が recentlyReset ガードへ add せず bare reset していたため、解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活していた(生徒版 v1.5.392 の講師版・INV駆動レビュー2026-07-11で確認)。生徒/講師の解除を guardAndResetLectureSubmissionDoc へ集約し非対称を構造的に解消(src/integrations/firebase/lectureSubmission.ts・src/App.tsx)
