@@ -53,6 +53,44 @@ jobs:
           grep -q 'src="/assets/' dist/index.html
           ! grep -q '/KomahyouApp/' dist/index.html
 
+  inv-guard:
+    name: INV改定ガード
+    # マトリクステスト(*.matrix.test.ts / .tsx)を変更する差分は、同一 push 内で
+    # docs/spec-invariants.md の改定(= INV 文言の改定はオーナー承認必須)を伴わなければ落とす。
+    # INV の assert 薄化(格下げ)を台帳の追認なしに通さないためのガード。軽量・独立 job。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 既定(fetch-depth:1)では差分が取れないので全履歴を取得する。
+          fetch-depth: 0
+      - name: matrix テスト変更に spec-invariants 改定が伴うか検査
+        run: |
+          set -euo pipefail
+          ZERO="0000000000000000000000000000000000000000"
+          BEFORE="${{ github.event.before }}"
+          # push の before が全ゼロ(新ブランチ初 push)や取得不能なときは origin/main と比較。
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            git fetch origin main --depth=1 || true
+            BASE="$(git rev-parse origin/main 2>/dev/null || echo '')"
+          else
+            BASE="$BEFORE"
+          fi
+          if [ -z "$BASE" ]; then
+            echo "比較基準が取得できないため INV改定ガードをスキップします"
+            exit 0
+          fi
+          CHANGED="$(git diff --name-only "$BASE" HEAD)"
+          MATRIX_CHANGED="$(echo "$CHANGED" | grep -E '\.matrix\.test\.(ts|tsx)$' || true)"
+          SPEC_CHANGED="$(echo "$CHANGED" | grep -E '^docs/spec-invariants\.md$' || true)"
+          if [ -n "$MATRIX_CHANGED" ] && [ -z "$SPEC_CHANGED" ]; then
+            echo "INVマトリクステストの変更には docs/spec-invariants.md の改定(オーナー承認)を同一pushに含めてください"
+            echo "--- 変更された matrix テスト ---"
+            echo "$MATRIX_CHANGED"
+            exit 1
+          fi
+          echo "INV改定ガード: OK"
+
   rules:
     name: Firestore rules isolation
     # 手動実行(workflow_dispatch)時のみ。エミュレータ(+Java)が要るため push/PR の必須ゲートには含めない。

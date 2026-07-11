@@ -18,6 +18,14 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.437 (2026-07-11)
+
+- docs: 横断保証(INV)台帳を制度化(docs/spec-invariants.md 新設・11件=強制7+準観察4・オーナー承認済み文言/例外/違反履歴/担保状況。spec-index.md に独立セクション追記)
+- feat: INV改定ガードをCIへ追加(.github/workflows/ci-tests.yml の inv-guard ジョブ。*.matrix.test.ts を触る差分は spec-invariants.md の改定を伴わないと落ちる=assert薄化防止)
+- test: INV-01 講師帰属一意の操作マトリクステスト新設(inv01-teacher-attribution.matrix.test.ts・14件。配置/移動/講師swap/削除/生徒swap × 直後/再マージ/serialize往復。INV-01)
+- test: INV-02 手動編集永続の操作マトリクステスト新設(inv02-manual-edit-persistence.matrix.test.ts・24件+todo1。6手動編集 × 再マージ/自動割当/詰め直し/リロード。非manual講師×再マージはオーナー裁定「テンプレ反映日適用時のみテンプレが正」と現実装が乖離のため it.todo で可視化・修正は別タスク。INV-02)
+- chore: 保守体制へINV制度を組込(CLAUDE.md にINVアンカー節、dev-fix にUX系バグの完了定義4点、regression-reviewer をINV監査ゲートへ昇格、spec-curator を台帳管理者化)
+
 ## v1.5.436 (2026-07-11)
 
 - fix: 講師のD&D入れ替え(swap)後に、講師日程表で同じ生徒が旧講師・新講師の両ページに二重表示される不具合を修正。テンプレ配置由来で teacherAssignmentTeacherId を持たない講師どうしを入れ替えると、着地した机が id を欠いたまま残り、書き出し(scheduleHtml serializeCells)が生徒の基本データ担当講師(=旧講師)の regularTeacherIds を採用して二重表示していた。swap では生徒が動かず v1.5.388 の同日移動ガードが発火しないための穴。computeTeacherMove が着地講師名から id を解決して teacherAssignmentTeacherId を補完(盤面の resolveTeacherIdForDesk と同じ照合規則)。既に id を持つ机は上書きせず、マスタ照合不可の旧表示名は補完しないため 5395a05 の regularTeacherIds フォールバックは不変。開発用教室のみ先行機能で未本番(src/components/schedule-board/ScheduleBoardScreen.tsx・回帰テスト2件追加=修正前に落ちる)
