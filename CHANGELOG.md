@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.445 (2026-07-14)
+
+- refactor: 対話用日程表の React ビュー(ドック⇄ポップアウト)を撤去。既に別タブ(生成HTML)方式へ回帰済みで本番では `scheduleReactViewEnabled=false`・staging スコープにより無効だったため、将来再検討用に温存していた React 経路一式を削除した(オーナー指示・本番挙動は不変)。削除: `src/components/schedule-view/` の ScheduleView.tsx / ScheduleViewPanel.tsx / ScheduleSheet.tsx / PopoutWindow.tsx / scheduleViewPrint.ts(+test)/ scheduleView.css、および ScheduleBoardScreen.tsx 内の React 専用 state・payload useMemo(buildStudentPayload/buildTeacherPayload 経路)・range/note/印刷委譲ハンドラ・描画・`scheduleReactViewEnabled` 分岐、featureRollout の `scheduleInteractiveReactView` エントリ。**維持(別タブ経路と共有・本番稼働中)**: `scheduleViewData.ts`(生成HTMLの表示算出正本)、`scheduleViewMove.ts`(+test・buildDeskPickerDesks は生成HTMLが使用)、`executeScheduleViewMove` 一式(別タブコマ組み studentScheduleDndMove の D&D 移動で再利用・line 8322 の request 処理)。約3,200行削減。回帰ゲート: tsc -b / eslint(0 error)/ vitest 768件全通過 / vite build 成功。別タブの生徒・講師日程表(表示/コマ組みD&D/自動同期)は既存テスト(scheduleViewData/scheduleViewMove/ScheduleBoardScreen/INVマトリクス)で保護され不変。
+
 ## v1.5.444 (2026-07-14)
 
 - style: 講師日程表のコマ(縦書きカード)を高密度化し A3 への飛び出しをさらに減らす(src/utils/scheduleHtml.ts・オーナー要望の続き)。4点: (1) 生徒1人(is-single)の名前/メタ文字サイズを2人(is-pair)と統一(画面・印刷の全密度段で is-single を is-pair 規則へ同居。1人だけ大きくして余白を取らない)。 (2) 名前まわりの上下余白と名前↔メタ(科目/種別/状態)の空きを詰める(teacher-lesson-person の gap/padding を 0、講師カードのコマ余白も 0)。 (3) メタは科目・種別(通/振/講)・状態(出/休/振無休)を空白なしで連結(例「数60通出」)。 (4) 出席の状態ラベルはセルでは1文字「出」に(tooltip の verbose は「出席」を維持)。加えて講師シート限定で日付/曜日ヘッダの上下余白を詰める([data-role="teacher-sheet"] 限定で生徒日程表へは波及なし)。すべて講師セル/講師シート限定で生徒日程表は無改変。回帰テスト2件追加(getCompactStatusLabel の '出'/メタ空白なし連結/is-single 同居/gap0)。ブラウザ実測: 8限×5日の重い講師で変更前 A4 縦オーバー130px→A3化だったのが、変更後オーバー0px→A4 に収まる(A3化せず)ことを確認。
