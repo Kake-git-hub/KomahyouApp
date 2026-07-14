@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.443 (2026-07-14)
+
+- style: 講師日程表を A4 横1枚に収めやすくレイアウト調整(src/utils/scheduleHtml.ts)。オーナー要望・印刷最適化。3点: (1) 休み生徒の席に別生徒が重なってコマ人数が通常の2席を超えたとき、溢れた休み生徒をセルから間引く新純関数 selectVisibleTeacherCellStatuses を追加(実配置生徒が居るコマのみ・出席実績は席占有としてカウント・溢れた分だけ非表示。単なる休み=実生徒1+休み1=2人は従来どおり表示。tooltip は全員保持)。 (2) 講師日程表の下段から振替授業欄を削除(週グリッド内の振替コマ自体は不変)。 (3) 空いた横幅を給与計算欄へ回し、レッスン行を常に左右2列(.salary-columns)へ振り分け+2列時は数値列/単価入力を細くしフォント1px詰めでラベル切れ防止。縦スクロール枠(salary-scroll)を廃止し縦伸びを解消(A3自動切替はシート本体はみ出しの安全網のみ残す)。合計計算は .salary-section 全体集計のまま不変。回帰テスト7ケース追加(scheduleHtml.test.ts・renderSalarySection を実体呼び出しして単一section内に全入力＋合計が収まることも実行時に固定)。ブラウザ実測で A4横に収まり(A3化せず縦はみ出し0)・ラベル無切れ・合計計算(A60小計＋事務給→合計)OKを確認。表示層のみの変更で講師帰属(INV-01)・回数表示(INV-05)・振替在庫(INV-06)の保証本体は不変(regression-reviewer 監査済・マージ可)。React版日程表経路(scheduleReactViewEnabled=false で棚上げ中)は未追従＝将来再有効化時の経路乖離に注意
+
 ## v1.5.442 (2026-07-12)
 
 - refactor: 教室コピー時の「提出トークン消し」が2か所に別実装だったのを一本化(レビュー報告の指摘)。剥がすフィールド(submissionToken / submissionTokenClassroomId)の定義を developmentClassroom の唯一の権威関数 stripSubmissionToken / stripSubmissionTokensFromInputs に集約し、buildDevelopmentClassroomCopyPayload のインライン分割代入を廃してこれへ委譲。stripForeignSubmissionToken も同関数へ委譲(条件判定のみ担当)。挙動は不変(無条件で全トークンを剥がす)・書き込み経路や他教室には一切影響なし。回帰テスト追加(src/App.tsx・src/utils/developmentClassroom.ts)

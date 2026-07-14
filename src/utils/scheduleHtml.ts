@@ -1961,8 +1961,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         align-items: start;
       }
 
+      /* Part2/3(A4省スペース): 振替授業欄(206px)を削除し、空いた分を給与計算欄へ回して横に広げる。
+         給与は 2 列レイアウト(.salary-columns)で縦に伸びず、A4 横に収まりやすくする。 */
       .bottom-grid.bottom-grid-teacher {
-        grid-template-columns: minmax(0, 1.5fr) 206px 246px;
+        grid-template-columns: minmax(0, 1fr) 246px;
       }
 
       /* オプション欄あり: 休み欄(168px)を削除し、振替授業を左へ、空いた所にオプション欄を置く。
@@ -2017,14 +2019,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .salary-table col.salary-col-count { width: 64px; }
       .salary-table col.salary-col-unit { width: 80px; }
       .salary-table col.salary-col-sub { width: 72px; }
-      .salary-scroll {
-        max-height: 120px;
-        overflow-y: auto;
-        border-left: 1px solid var(--line);
-        border-right: 1px solid var(--line);
+      /* Part3: 給与計算を横2列に振り分けて縦幅を節約する。各列は等幅で伸縮。 */
+      .salary-columns {
+        display: flex;
+        gap: 6px;
+        align-items: flex-start;
       }
-      .salary-scroll .salary-table { border-top: 0; }
-      .salary-table-head { border-bottom: 0; }
+      .salary-columns .salary-table { flex: 1 1 0; min-width: 0; }
+      /* 2列は各列が半幅になりラベル(例: B 90-90 (2名/中学以下/90+90分))が切れやすい。
+         数値列・単価入力を細くしフォントを1px詰めて、ラベルを1行に収める。 */
+      .salary-columns .salary-table { font-size: 10px; }
+      .salary-columns col.salary-col-count { width: 40px; }
+      .salary-columns col.salary-col-unit { width: 58px; }
+      .salary-columns col.salary-col-sub { width: 52px; }
+      .salary-columns .salary-input { width: 48px; font-size: 10px; }
       .salary-table-foot { border-top: 0; }
       .salary-table th, .salary-table td {
         border: 1px solid var(--line);
@@ -2058,10 +2066,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
          A3縦は幅がA4横と同じ(297mm)なので週グリッドの横レイアウトは保ったまま縦だけ伸ばせる。 */
       .sheet.is-a3-portrait {
         aspect-ratio: 297 / 420;
-      }
-      .sheet.is-a3-portrait .salary-scroll {
-        max-height: none;
-        overflow: visible;
       }
 
       .check-line {
@@ -4632,6 +4636,27 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return [student.name, lessonLabel].filter(Boolean).join(' / ');
       }
 
+      // Part1(A4省スペース): 休み(欠席)生徒の席に別生徒が重なってコマの人数が通常の2席を
+      // 超えたとき、溢れた休み生徒だけを講師日程表のセルから間引く(縦幅節約)。
+      // - 実配置生徒(students)が1人もいなければ何も隠さない(=別生徒が重なっていない単なる休みは残す)。
+      // - 出席(attended)実績は席を占有する人としてカウントし、休み/振無休(absent系)だけを間引く。
+      // - 溢れた分(合計が2を超える分)の休みだけ隠す。実生徒1+休み1=2人はそのまま。
+      // 純粋関数(new Function で単体テスト可)。tooltip には全員を残すので情報はホバーで確認できる。
+      function selectVisibleTeacherCellStatuses(students, statuses) {
+        var list = (statuses || []).filter(Boolean);
+        var active = students || [];
+        if (active.length === 0) return list;
+        function isAbsent(s) { return !!s && (s.status === 'absent' || s.status === 'absent-no-makeup'); }
+        var occupants = active.length + list.filter(function(s) { return !isAbsent(s); }).length;
+        var keepAbsent = Math.max(0, 2 - occupants);
+        var kept = 0;
+        return list.filter(function(s) {
+          if (!isAbsent(s)) return true;
+          if (kept < keepAbsent) { kept++; return true; }
+          return false;
+        });
+      }
+
       function renderTeacherCellCard(students, statuses) {
         const people = [...(students || []), ...(statuses || [])];
         const cardClass = 'lesson-card lesson-card-teacher ' + (people.length > 2 ? 'is-multi' : people.length > 1 ? 'is-pair' : 'is-single');
@@ -4740,27 +4765,24 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // spec-group-lesson §F: 集団授業の専用カテゴリ(1コマ単位・単価1種)。
         lessonDefs.push({ cat: 'G', label: '集団 (1コマ)' });
         var visible = lessonDefs.filter(function(d) { return (counts[d.cat] || 0) >= 1; });
-        var lessonRowsHtml = visible.map(function(d) { return lessonRow(d.cat, d.label); }).join('');
-        var scrollable = visible.length >= 5;
         var commuteRow = '<tr><td class="salary-label">交通費</td><td class="salary-count" data-salary-cat="commute">' + salaryData.attendanceDays + '日</td><td><input class="salary-input" type="number" min="0" data-salary-unit="commute" data-salary-key="salary-unit-commute-' + tid + '" /></td><td class="salary-subtotal" data-salary-sub="commute">0</td></tr>';
         var officeRow = '<tr><td class="salary-label">事務給</td><td class="salary-count salary-count-fixed" data-salary-cat="office">-</td><td><input class="salary-input" type="number" min="0" data-salary-unit="office" data-salary-key="salary-unit-office-' + tid + '" data-salary-fixed="1" /></td><td class="salary-subtotal" data-salary-sub="office">0</td></tr>';
         var totalRow = '<tr class="salary-total-row"><td class="salary-label">合計</td><td></td><td></td><td class="salary-grand-total">0</td></tr>';
-        var headHtml = '<table class="salary-table salary-table-head" data-salary-teacher-id="' + tid + '"><colgroup><col class="salary-col-label"/><col class="salary-col-count"/><col class="salary-col-unit"/><col class="salary-col-sub"/></colgroup><thead><tr><th></th><th>コマ数(実績)</th><th>単価</th><th>小計</th></tr></thead></table>';
-        var html;
-        if (scrollable) {
-          html = '<div class="box-stack salary-section"><div class="box-table-title">給与計算</div>' +
-            headHtml +
-            '<div class="salary-scroll"><table class="salary-table salary-table-body" data-salary-teacher-id="' + tid + '"><colgroup><col class="salary-col-label"/><col class="salary-col-count"/><col class="salary-col-unit"/><col class="salary-col-sub"/></colgroup><tbody>' + lessonRowsHtml + '</tbody></table></div>' +
-            '<table class="salary-table salary-table-foot" data-salary-teacher-id="' + tid + '"><colgroup><col class="salary-col-label"/><col class="salary-col-count"/><col class="salary-col-unit"/><col class="salary-col-sub"/></colgroup><tbody>' + commuteRow + officeRow + totalRow + '</tbody></table>' +
-            '</div>';
-        } else {
-          html = '<div class="box-stack salary-section"><div class="box-table-title">給与計算</div>' +
-            '<table class="salary-table" data-salary-teacher-id="' + tid + '">' +
-            '<colgroup><col class="salary-col-label"/><col class="salary-col-count"/><col class="salary-col-unit"/><col class="salary-col-sub"/></colgroup>' +
-            '<thead><tr><th></th><th>コマ数(実績)</th><th>単価</th><th>小計</th></tr></thead>' +
-            '<tbody>' + lessonRowsHtml + commuteRow + officeRow + totalRow + '</tbody></table></div>';
+        // Part3: 振替欄削除で空いた横幅を使い、給与のレッスン行を左右2列に振り分けて縦幅を節約する(常に2列)。
+        // 交通費/事務給/合計は下段に全幅で置く。合計は .salary-section 内の全 .salary-input を集計する
+        // recalcSalary が担うため、テーブルを分割しても集計は不変(inputは data-salary-key で一意)。
+        var salaryColgroup = '<colgroup><col class="salary-col-label"/><col class="salary-col-count"/><col class="salary-col-unit"/><col class="salary-col-sub"/></colgroup>';
+        var half = Math.ceil(visible.length / 2);
+        function salaryColumnTable(defs) {
+          var rows = defs.map(function(d) { return lessonRow(d.cat, d.label); }).join('');
+          return '<table class="salary-table salary-col-table" data-salary-teacher-id="' + tid + '">' + salaryColgroup +
+            '<thead><tr><th></th><th>コマ数</th><th>単価</th><th>小計</th></tr></thead>' +
+            '<tbody>' + rows + '</tbody></table>';
         }
-        return html;
+        var columnsHtml = '<div class="salary-columns">' + salaryColumnTable(visible.slice(0, half)) + salaryColumnTable(visible.slice(half)) + '</div>';
+        var footHtml = '<table class="salary-table salary-table-foot" data-salary-teacher-id="' + tid + '">' + salaryColgroup +
+          '<tbody>' + commuteRow + officeRow + totalRow + '</tbody></table>';
+        return '<div class="box-stack salary-section"><div class="box-table-title">給与計算</div>' + columnsHtml + footHtml + '</div>';
       }
 
       function renderBottomSection(commonKey, individualKey, absenceRows, makeupRows, regularCounts, lectureCounts, regularWarningHtml, lectureWarningHtml, options) {
@@ -4772,9 +4794,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           : '<div class="box-stack"><div class="box-table-title">休み</div><table class="absence-table" data-testid="' + escapeHtml(absenceTestId) + '"><tbody>' + absenceRows + '</tbody></table></div>';
         const salarySectionHtml = isTeacher && salaryData ? renderSalarySection(salaryData) : '';
         if (isTeacher) {
+          // Part2(A4省スペース): 振替授業欄は講師日程表から削除。空いた分は給与計算欄(2列)を広げる。
+          // 振替コマ自体は週グリッド内に残るので、講師が担当する振替授業が消えるわけではない。
           return '<div class="bottom-grid bottom-grid-teacher">' +
             salarySectionHtml +
-            '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>' +
             '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
           '</div>';
         }
@@ -5568,8 +5591,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
             const slotStudents = slotEntries.flatMap((entry) => entry.students || []);
             const slotStatuses = slotEntries.flatMap((entry) => entry.statuses || []);
+            // Part1: 休みに別生徒が重なって溢れたコマは、溢れた休み生徒を机(entry)単位で間引く。
+            const visibleStatuses = slotEntries.flatMap((entry) => selectVisibleTeacherCellStatuses(entry.students || [], entry.statuses || []));
             let content = '<div class="empty-label"></div>';
-            if (slotStudents.length > 0 || slotStatuses.length > 0) content = renderTeacherCellCard(slotStudents, slotStatuses);
+            if (slotStudents.length > 0 || visibleStatuses.length > 0) content = renderTeacherCellCard(slotStudents, visibleStatuses);
             const title = slotEntries.length ? [...slotStudents, ...slotStatuses].map((student) => formatTeacherTooltipEntry(student)).join(' | ') : '';
             return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
           }).join('');
@@ -5595,19 +5620,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return salaryHidden > 2 || sheetOverflow > 4;
       }
 
-      // 給与計算の行や週グリッドが用紙(印刷で見切れる範囲)に収まらない講師ページを A3 縦へ切替える。
+      // 週グリッドや給与計算が用紙(印刷で見切れる範囲)に収まらない講師ページを A3 縦へ切替える。
+      // Part3 で給与は横2列になり縦に伸びにくくなった(スクロール枠は廃止)。よって salaryHidden は
+      // 常に0で渡し、シート本体のはみ出し量だけで判定する(極端に行が多い講師の安全網は維持)。
       function applySalaryOverflowPaging() {
         if (!pagesElement) return;
         var sheets = pagesElement.querySelectorAll('.sheet[data-role="teacher-sheet"]');
         for (var i = 0; i < sheets.length; i++) {
           var sheet = sheets[i];
           sheet.classList.remove('is-a3-portrait');
-          var scroll = sheet.querySelector('.salary-scroll');
-          // 給与スクロール枠に隠れている行の高さ(給与計算が多い講師ページ)。
-          var salaryHidden = scroll ? scroll.scrollHeight - scroll.clientHeight : 0;
-          // シート本体からはみ出して下が見切れている高さ(週グリッドが縦に長い講師ページ)。
+          // シート本体からはみ出して下が見切れている高さ(週グリッド/給与が縦に長い講師ページ)。
           var sheetOverflow = sheet.scrollHeight - sheet.clientHeight;
-          if (shouldTeacherSheetUseA3(salaryHidden, sheetOverflow)) {
+          if (shouldTeacherSheetUseA3(0, sheetOverflow)) {
             sheet.classList.add('is-a3-portrait');
           }
         }
