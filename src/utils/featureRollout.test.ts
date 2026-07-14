@@ -37,15 +37,14 @@ describe('featureRollout', () => {
   })
 
   it('judges the staging environment by Firebase project id', () => {
-    // staging 先行機能(日程表 React ビュー)は教室IDでなくプロジェクトIDで有効化する(2026-07-08 確定)。
+    // staging 先行機能は教室IDでなくプロジェクトIDで有効化する(stagingテスト教室は開発用教室IDではないため)。
     expect(isStagingEnvironment('komahyouapp-staging')).toBe(true)
     expect(isStagingEnvironment('komahyouapp-prod')).toBe(false)
     expect(isStagingEnvironment('')).toBe(false)
   })
 
-  it('keeps the interactive React schedule view staging-first (production classrooms stay on HTML tabs)', () => {
-    // オーナーチェック合格まで本番3教室では無効のまま。staging では全教室、その他環境では開発用教室のみ。
-    expect(featureRolloutRegistry.scheduleInteractiveReactView.scope).toBe('staging-environment')
+  it('keeps the staging-environment scope staging-first (production classrooms stay disabled)', () => {
+    // 将来の staging 先行機能のためのスコープ判定基盤。staging では全教室、その他環境では開発用教室のみ、本番3教室は無効。
     expect(isFeatureScopeEnabled('staging-environment', { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
     expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: true })).toBe(true)
     expect(isFeatureScopeEnabled('staging-environment', { isStaging: false, isDevelopmentClassroom: false })).toBe(false)

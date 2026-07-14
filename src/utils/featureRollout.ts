@@ -2,9 +2,9 @@ import type { DevelopmentClassroomIdentity } from './developmentClassroom'
 import { isDevelopmentClassroom } from './developmentClassroom'
 import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 
-// staging 検証環境(komahyouapp-staging)の判定。日程表 React ビュー等の staging 先行機能は
-// 教室IDではなく環境(プロジェクトID)で有効化する(stagingテスト教室は開発用教室IDではないため)。
-// 2026-07-08 オーナー確定: 対話用日程表の React 化は staging だけに実装し、チェック合格まで本番へ出さない。
+// staging 検証環境(komahyouapp-staging)の判定。staging 先行機能は教室IDではなく環境(プロジェクトID)で
+// 有効化する(stagingテスト教室は開発用教室IDではないため)。現在 staging-environment スコープを使う
+// 機能は無いが、将来の staging 先行機能のために判定基盤は残す。
 export const STAGING_PROJECT_ID = 'komahyouapp-staging'
 
 export function isStagingEnvironment(projectId?: string): boolean {
@@ -52,13 +52,6 @@ export const featureRolloutRegistry = {
   teacherDragAndDropMove: {
     scope: 'all-classrooms',
     description: 'Long-press drag-and-drop move/swap of a teacher between desks within the same slot column.',
-  },
-  // 対話用日程表(生徒/講師)を生成HTMLタブではなく同一 React ツリーのビュー(ドック⇄ポップアウト)で
-  // 表示する土台(spec-schedule-interactive-view)。staging 先行・オーナーチェック合格まで本番展開しない
-  // (2026-07-08 確定)。印刷/PDF(全員表示・空フォーマット)は従来の生成HTML経路のまま。
-  scheduleInteractiveReactView: {
-    scope: 'staging-environment',
-    description: 'Interactive schedule view as an in-tree React component (dock/popout) instead of generated HTML tabs.',
   },
   // 日程表コマ組み(spec-student-schedule-dnd): 生徒日程表(別タブ)の授業カードを長押しD&Dで空きコマへ移し、
   // 机選択モーダルで席を選んで盤面の executeScheduleViewMove を呼ぶ。自動割振ルール・警告は無関係(物理的な空きのみ)。

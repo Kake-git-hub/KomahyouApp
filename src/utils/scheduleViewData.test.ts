@@ -1,6 +1,6 @@
-// 対話用日程表 React ビューの表示算出(scheduleViewData)の回帰防止テスト。
+// 対話用日程表(別タブ・生成HTML)の表示算出(scheduleViewData)の回帰防止テスト。
 // 埋め込みJS(生成HTML)と同じ入力(SchedulePayload)から同じ表示データが出ることを代表ケースで固定する
-// (docs/handoff-popup-sync-and-dnd.md §6 Phase 0 / spec-schedule-interactive-view §C-3)。
+// (docs/handoff-popup-sync-and-dnd.md §6 Phase 0)。
 import { describe, expect, it } from 'vitest'
 import type { SchedulePayload, SerializedCell, SerializedStudent, SerializedStudentEntry, SerializedStudentStatusEntry, SerializedTeacher } from './scheduleHtml'
 import {
@@ -11,7 +11,6 @@ import {
   hasCountMismatch,
   resolveDefaultPersonId,
 } from './scheduleViewData'
-import { scheduleRowPropsAreEqual } from '../components/schedule-view/ScheduleSheet'
 
 const TODAY = '2026-07-08'
 
@@ -356,43 +355,5 @@ describe('scheduleViewData: 共通ヘルパ', () => {
     expect(resolveDefaultPersonId(payload, 'student', '2026-07-06', '2026-07-12', 'stu-2', TODAY)).toBe('stu-2')
     // 指定なし → 配置のある stu-1 を優先(50音順先頭の stu-2 ではなく)
     expect(resolveDefaultPersonId(payload, 'student', '2026-07-06', '2026-07-12', '', TODAY)).toBe('stu-1')
-  })
-
-  it('行メモ化: 変化のない行は signature が同一で再レンダーをスキップし、編集した行だけ変わる', () => {
-    const basePayload = makePayload({
-      cells: [
-        makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }]),
-        makeCell('2026-07-06', 2, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent({ id: 'entry-2', subject: '数' })] } }]),
-      ],
-    })
-    const editedPayload = makePayload({
-      cells: [
-        makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }]),
-        makeCell('2026-07-06', 2, [{ teacher: '佐藤', statuses: [makeStatusEntry({ subject: '数' })], lesson: { students: [] } }]),
-      ],
-    })
-    const before = buildStudentSheetViewModel(basePayload, vmOptions)!
-    const after = buildStudentSheetViewModel(editedPayload, vmOptions)!
-    const beforeRow1 = before.rows.find((row) => row.slotNumber === 1)!
-    const afterRow1 = after.rows.find((row) => row.slotNumber === 1)!
-    const beforeRow2 = before.rows.find((row) => row.slotNumber === 2)!
-    const afterRow2 = after.rows.find((row) => row.slotNumber === 2)!
-    // 1限行は不変 → signature 同一 → React.memo が再レンダーをスキップ
-    expect(scheduleRowPropsAreEqual({ row: beforeRow1 }, { row: afterRow1 })).toBe(true)
-    // 2限行は出席化で変化 → signature が変わり再レンダーされる
-    expect(scheduleRowPropsAreEqual({ row: beforeRow2 }, { row: afterRow2 })).toBe(false)
-  })
-
-  it('行メモ化: signature と dragHandlers 参照が同一ならスキップ、参照が変わると再レンダー', () => {
-    // ドラッグ中のドロップ候補ハイライト(青枠)は直接DOM操作なので、行の再レンダーには依存しない
-    // (ドラッグ開始で全行が再レンダーされない=メモリ規律)。dragHandlers は useMemo で安定参照。
-    const row = { signature: 'sig' }
-    const handlers = {}
-    const otherHandlers = {}
-    expect(scheduleRowPropsAreEqual({ row, dragHandlers: handlers }, { row, dragHandlers: handlers })).toBe(true)
-    // ハンドラ束の参照が変わったら古いクロージャで掴まないよう再レンダーする
-    expect(scheduleRowPropsAreEqual({ row, dragHandlers: handlers }, { row, dragHandlers: otherHandlers })).toBe(false)
-    // signature が変われば(表示内容変化)当然再レンダーする
-    expect(scheduleRowPropsAreEqual({ row, dragHandlers: handlers }, { row: { signature: 'sig2' }, dragHandlers: handlers })).toBe(false)
   })
 })
