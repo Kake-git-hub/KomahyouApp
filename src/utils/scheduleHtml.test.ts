@@ -3721,4 +3721,36 @@ describe('teacher schedule A4 layout adjustments', () => {
     expect(secStart).toBeGreaterThanOrEqual(0)
     expect(grandPos).toBeGreaterThan(secStart)
   })
+
+  // 密度向上(A3飛び出し対策): 講師セルの状態ラベルは1文字'出'、科目/種別/状態は空白なしで詰める。
+  it('density: compact attended label is 出 and teacher meta joins without spaces', () => {
+    const html = renderTeacherHtml()
+    const match = html.match(/function getCompactStatusLabel\(status\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const getCompactStatusLabel = new Function('status', match![1]) as (s: string) => string
+    expect(getCompactStatusLabel('attended')).toBe('出') // セルは1文字(tooltip の verbose は '出席' のまま)
+    expect(getCompactStatusLabel('absent')).toBe('休')
+    expect(getCompactStatusLabel('absent-no-makeup')).toBe('振無休')
+    expect(getCompactStatusLabel('')).toBe('')
+    // verbose(tooltip)側は '出席' を維持している。
+    const vmatch = html.match(/function getVerboseStatusLabel\(status\)\s*\{([\s\S]*?)\n {6}\}/)
+    const getVerbose = new Function('status', vmatch![1]) as (s: string) => string
+    expect(getVerbose('attended')).toBe('出席')
+    // メタは科目/種別/状態の間に空白を入れずに詰める(縦書きの高さ節約)。
+    expect(html).toContain("if (statusLabel) return [lessonLabel, statusLabel].filter(Boolean).join('');")
+    expect(html).toContain("formatTeacherLessonLabel(student)].filter(Boolean).join('')")
+  })
+
+  // 密度向上: 生徒1人(is-single)の名前サイズを2人(is-pair)と統一(1人だけ大きくしない)。
+  it('density: single-student cells share the pair font size (screen and print)', () => {
+    const html = renderTeacherHtml()
+    // 画面・印刷の各段(基準/compact/dense/ultra-dense)で is-single が is-pair と同じ規則に同居している。
+    expect(html).toContain('.lesson-card-teacher.is-single .teacher-lesson-name,')
+    expect(html).toContain('.lesson-card-teacher.is-single .teacher-lesson-meta,')
+    expect(html).toContain('.schedule-table.is-compact .lesson-card-teacher.is-single .teacher-lesson-name,')
+    expect(html).toContain('.schedule-table.is-dense .lesson-card-teacher.is-single .teacher-lesson-name,')
+    expect(html).toContain('.schedule-table.is-ultra-dense .lesson-card-teacher.is-single .teacher-lesson-name,')
+    // 名前まわりの上下余白と名前↔メタの空きを詰めた(person の gap/padding を 0 に)。
+    expect(html).toContain('gap: 0;\n        padding: 0;')
+  })
 })
