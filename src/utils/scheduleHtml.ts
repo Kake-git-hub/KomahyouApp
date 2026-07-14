@@ -1320,6 +1320,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 12px;
       }
 
+      /* A4省スペース(講師日程表のみ): 日付/曜日ヘッダの上下余白を詰めて A3 に飛び出しにくくする。
+         生徒日程表(別ドキュメント)には波及させない。 */
+      .sheet[data-role="teacher-sheet"] .schedule-table thead th {
+        padding-top: 1px;
+        padding-bottom: 1px;
+      }
+
       .schedule-table .time-col {
         width: 62px;
         min-width: 62px;
@@ -1692,8 +1699,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .slot-static:has(.lesson-card-teacher),
       .slot-button:has(.lesson-card-teacher) {
-        padding-left: 0;
-        padding-right: 0;
+        /* A4省スペース: 講師カードのコマは上下左右の余白を詰めて行高を縮める。 */
+        padding: 0;
       }
 
       .slot-button {
@@ -1777,8 +1784,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 3px;
-        padding: 2px 0;
+        /* A4省スペース: 名前と科目/種別/状態(メタ)の間の空きと、上下の余白を詰める。 */
+        gap: 0;
+        padding: 0;
         writing-mode: vertical-rl;
         text-orientation: upright;
         overflow: hidden;
@@ -1786,13 +1794,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .lesson-card-teacher.is-pair .teacher-lesson-person {
         gap: 0;
-        padding: 1px 0;
+        padding: 0;
       }
 
       .lesson-card-teacher.is-multi .teacher-lesson-person {
         min-height: 0;
         gap: 0;
-        padding: 1px 0;
+        padding: 0;
       }
 
       .teacher-lesson-line {
@@ -1811,12 +1819,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 9px;
       }
 
+      /* 生徒1人(is-single)も2人(is-pair)と同じ文字サイズに統一(1人だけ大きくして余白を取らない)。 */
       .teacher-lesson-person.is-condensed .teacher-lesson-name,
+      .lesson-card-teacher.is-single .teacher-lesson-name,
       .lesson-card-teacher.is-pair .teacher-lesson-name {
         font-size: 10px;
       }
 
       .teacher-lesson-person.is-condensed .teacher-lesson-meta,
+      .lesson-card-teacher.is-single .teacher-lesson-meta,
       .lesson-card-teacher.is-pair .teacher-lesson-meta {
         font-size: 7px;
       }
@@ -1877,10 +1888,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 9px;
       }
 
+      .schedule-table.is-compact .lesson-card-teacher.is-single .teacher-lesson-name,
       .schedule-table.is-compact .lesson-card-teacher.is-pair .teacher-lesson-name {
         font-size: 9px;
       }
 
+      .schedule-table.is-compact .lesson-card-teacher.is-single .teacher-lesson-meta,
       .schedule-table.is-compact .lesson-card-teacher.is-pair .teacher-lesson-meta {
         font-size: 7px;
       }
@@ -1893,10 +1906,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 8px;
       }
 
+      .schedule-table.is-dense .lesson-card-teacher.is-single .teacher-lesson-name,
       .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
         font-size: 8px;
       }
 
+      .schedule-table.is-dense .lesson-card-teacher.is-single .teacher-lesson-meta,
       .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
         font-size: 6px;
       }
@@ -1927,10 +1942,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-size: 7px;
       }
 
+      .schedule-table.is-ultra-dense .lesson-card-teacher.is-single .teacher-lesson-name,
       .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
         font-size: 7px;
       }
 
+      .schedule-table.is-ultra-dense .lesson-card-teacher.is-single .teacher-lesson-meta,
       .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
         font-size: 5px;
       }
@@ -2471,8 +2488,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           line-height: 1.05;
         }
         .teacher-lesson-person {
-          gap: 1px;
-          padding: 1px 0;
+          gap: 0;
+          padding: 0;
         }
         .teacher-lesson-name {
           font-size: 10px;
@@ -2480,21 +2497,27 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         .teacher-lesson-meta {
           font-size: 7px;
         }
+        .lesson-card-teacher.is-single .teacher-lesson-name,
         .lesson-card-teacher.is-pair .teacher-lesson-name {
           font-size: 8px;
         }
+        .lesson-card-teacher.is-single .teacher-lesson-meta,
         .lesson-card-teacher.is-pair .teacher-lesson-meta {
           font-size: 6px;
         }
+        .schedule-table.is-dense .lesson-card-teacher.is-single .teacher-lesson-name,
         .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
           font-size: 7px;
         }
+        .schedule-table.is-dense .lesson-card-teacher.is-single .teacher-lesson-meta,
         .schedule-table.is-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
           font-size: 5px;
         }
+        .schedule-table.is-ultra-dense .lesson-card-teacher.is-single .teacher-lesson-name,
         .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-name {
           font-size: 6px;
         }
+        .schedule-table.is-ultra-dense .lesson-card-teacher.is-single .teacher-lesson-meta,
         .schedule-table.is-ultra-dense .lesson-card-teacher.is-pair .teacher-lesson-meta {
           font-size: 4px;
         }
@@ -4601,7 +4624,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function getCompactStatusLabel(status) {
         if (status === 'absent-no-makeup') return '振無休';
         if (status === 'absent') return '休';
-        if (status === 'attended') return '出席';
+        if (status === 'attended') return '出'; // A4省スペース: 講師セルは1文字表記(tooltip は verbose '出席')
         return '';
       }
 
@@ -4615,13 +4638,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function formatTeacherLessonLabel(student, options) {
         const lessonLabel = getCompactLessonTypeLabel(student.lessonType);
         const statusLabel = options && options.verbose ? getVerboseStatusLabel(student.status) : getCompactStatusLabel(student.status);
-        if (statusLabel) return [lessonLabel, statusLabel].filter(Boolean).join(' ');
+        // A4省スペース: 講師セルは科目・種別(通/振/講)・状態(出/休/振無休)を詰めて表記(間の空白なし)。
+        if (statusLabel) return [lessonLabel, statusLabel].filter(Boolean).join('');
         const teacherLabel = teacherTypeLabels[student.teacherType] || '';
         return teacherLabel ? lessonLabel + '(' + teacherLabel + ')' : lessonLabel;
       }
 
       function getTeacherLessonPersonDensityClass(student) {
-        const meta = [student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join(' ');
+        const meta = [student.subject, formatTeacherLessonLabel(student)].filter(Boolean).join('');
         const totalLength = String(student.name || '').length + meta.length;
         if (totalLength >= 13) return ' is-ultra-condensed';
         if (totalLength >= 9) return ' is-condensed';
@@ -4660,7 +4684,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function renderTeacherCellCard(students, statuses) {
         const people = [...(students || []), ...(statuses || [])];
         const cardClass = 'lesson-card lesson-card-teacher ' + (people.length > 2 ? 'is-multi' : people.length > 1 ? 'is-pair' : 'is-single');
-        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person' + getTeacherLessonPersonDensityClass(student) + '"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject + formatScheduleMinutesSuffix(student.noteSuffix), formatTeacherLessonLabel(student)].filter(Boolean).join(' ')) + '</span></div>').join('') + '</div>';
+        return '<div class="' + cardClass + '">' + people.map((student) => '<div class="teacher-lesson-person' + getTeacherLessonPersonDensityClass(student) + '"><span class="teacher-lesson-line teacher-lesson-name">' + escapeHtml(student.name) + '</span><span class="teacher-lesson-line teacher-lesson-meta">' + escapeHtml([student.subject + formatScheduleMinutesSuffix(student.noteSuffix), formatTeacherLessonLabel(student)].filter(Boolean).join('')) + '</span></div>').join('') + '</div>';
       }
 
       function makeCornerYearHtml(dateHeaders) {
