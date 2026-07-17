@@ -3846,4 +3846,18 @@ describe('reopenedSlots (後から出席可能に変更) の日程表配線', ()
     expect(html).toContain("type: 'schedule-teacher-reopen-save'")
     expect(html).toContain('function getReopenableSessionsForTeacher(teacherId, slotKey)')
   })
+
+  // staging実機で発覚した回帰(2026-07-18): 別タブ内のローカル明示再構築(生徒/講師の不可保存・登録/登録解除)が
+  // reopenedSlots を落とすと、その瞬間に黄色が剥がれてグレーへ戻る(講師の登録解除で顕在化)。
+  // 4関数すべてが currentInput.reopenedSlots を保全していることを固定する(v1.5.318型の保全漏れの兄弟)。
+  it('タブ内ローカル再構築4関数(不可保存/登録×生徒/講師)が reopenedSlots を保全する', () => {
+    const html = openStudentHtmlWithReopened()
+    const preservationCount = (html.match(/reopenedSlots: sortSlotKeys\(currentInput\.reopenedSlots \|\| \[\]\)/g) || []).length
+    expect(preservationCount).toBeGreaterThanOrEqual(4)
+    // 再構築関数そのものが存在すること(関数名の改名でこのテストが空振りしないための存在確認)
+    expect(html).toContain('function updateUnavailableSlotsLocally(sessionId, personId, unavailableSlots)')
+    expect(html).toContain('function updateStudentCountLocally(sessionId, personId, subjectSlots, regularOnly, countSubmitted')
+    expect(html).toContain('function updateTeacherUnavailableSlotsLocally(sessionId, personId, unavailableSlots)')
+    expect(html).toContain('function updateTeacherCountLocally(sessionId, personId, countSubmitted)')
+  })
 })

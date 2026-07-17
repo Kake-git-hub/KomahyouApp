@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix: 黄色コマが講師の登録解除で剥がれる回帰を修正(staging実機確認で発覚)。別タブ日程表のローカル明示再構築4関数(updateUnavailableSlotsLocally/updateStudentCountLocally/updateTeacherUnavailableSlotsLocally/updateTeacherCountLocally)が reopenedSlots を落としていた(v1.5.318型の保全漏れ)。4関数すべてで保全＋回帰テスト追加(scheduleHtml.ts/scheduleHtml.test.ts)
 - feat: 不可コマの「後から出席可能に変更」(黄色コマ)を追加(塚田先生要望 2026-07-18・LINE 合意)。室長が不可コマへ生徒を配置/移動/入替/手動追加/日程表D&Dしたとき確認ダイアログ承認で黄色化(reopenedSlots・提出 unavailableSlots は不変=INV-07)、講師は講師日程表の不可セルクリック→確認で黄色化。黄色コマは完全に可能コマ扱い(赤警告消去・自動割振/自動配置の候補化・○×記号は○)。登録解除でも黄色は保持、QR新規再提出でリセット、戻す操作なし(ラチェット)。日程表(画面/印刷 #f9e79f)・保護者/講師QR画面(黄色+注記)に表示。既存の不可コマ上の配置は自動変換しない(新規操作のみ)。QRドキュメントは配布情報として保持し Functions GET/POST 対応(要 functions デプロイ)。(specialSessionModel/App/ScheduleBoardScreen/scheduleHtml/scheduleViewData/scheduleViewMove/lectureStock/lectureSubmission/SubmissionPage/SpecialSessionScreen/functions・回帰テスト20件)
 
 ## v1.5.448 (2026-07-18)

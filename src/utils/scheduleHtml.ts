@@ -4335,6 +4335,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               ...(session.studentInputs || {}),
               [personId]: {
                 unavailableSlots: sortSlotKeys(unavailableSlots),
+                // 「後から出席可能に変更」(黄色)は明示再構築でも必ず保全する。落とすと登録/解除/不可保存の
+                // 瞬間に黄色が剥がれる(staging実機で発覚した回帰・2026-07-18)。4つのローカル再構築すべて対称。
+                reopenedSlots: sortSlotKeys(currentInput.reopenedSlots || []),
                 subjectSlots: normalizeSubjectSlots(currentInput.subjectSlots),
                 regularOnly: Boolean(currentInput.regularOnly),
                 countSubmitted: Boolean(currentInput.countSubmitted),
@@ -4357,6 +4360,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               ...(session.studentInputs || {}),
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
+                // 「後から出席可能に変更」(黄色)は登録/登録解除のローカル反映でも保全(落とすと解除で黄色が剥がれる)。
+                reopenedSlots: sortSlotKeys(currentInput.reopenedSlots || []),
                 subjectSlots: regularOnly ? {} : normalizeSubjectSlots(subjectSlots),
                 // 科目ごとの授業時間(分)。登録時は渡された値を採用、未指定は既存を保全(QR提出値を消さない)。regularOnly は空。
                 subjectDurations: regularOnly ? {} : (subjectDurations !== undefined ? normalizeSubjectDurations(subjectDurations) : normalizeSubjectDurations(currentInput.subjectDurations)),
@@ -4394,6 +4399,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               ...(session.teacherInputs || {}),
               [personId]: {
                 unavailableSlots: sortSlotKeys(unavailableSlots),
+                // 「後から出席可能に変更」(黄色)は明示再構築でも必ず保全(生徒側と対称)。
+                reopenedSlots: sortSlotKeys(currentInput.reopenedSlots || []),
                 countSubmitted: Boolean(currentInput.countSubmitted),
                 // 提出日時/方法は登録状況を変えないこの操作では保全する。
                 submittedAt: currentInput.submittedAt || null,
@@ -4414,6 +4421,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               ...(session.teacherInputs || {}),
               [personId]: {
                 unavailableSlots: sortSlotKeys(currentInput.unavailableSlots),
+                // 「後から出席可能に変更」(黄色)は登録/登録解除のローカル反映でも保全する。
+                // 落とすと講師の登録解除の瞬間に黄色が剥がれる(staging実機で発覚した回帰・2026-07-18)。
+                reopenedSlots: sortSlotKeys(currentInput.reopenedSlots || []),
                 countSubmitted: Boolean(countSubmitted),
                 // 講習集計結果(講師): 室長の登録操作なので即時に method='manual'・日時=今。解除はクリア。
                 submittedAt: countSubmitted ? new Date().toISOString() : null,
