@@ -1083,7 +1083,7 @@ function setDeskStudentStatus(desk: DeskCell, studentIndex: number, entry: Stude
   desk.statusSlots = nextStatusSlots.some((current) => current) ? nextStatusSlots : undefined
 }
 
-function appendLectureStockCount(countMap: LectureStockCountMap, key: string, increment = 1) {
+export function appendLectureStockCount(countMap: LectureStockCountMap, key: string, increment = 1) {
   return {
     ...countMap,
     [key]: (countMap[key] ?? 0) + increment,
@@ -1131,6 +1131,32 @@ export function removeLecturePendingItemFromStockState(params: {
   return {
     nextManualLectureStockCounts,
     nextManualLectureStockOrigins,
+  }
+}
+
+// spec-lecture-stock / INV-06: 欠席解除(handleClearStudentStatus)で、欠席化のとき未消化へ戻した1回分を
+// 「盤面へ再配置し直す」ぶんだけ再消化する（消化を1回積み直す）。
+// ★消してはならないガード（回帰源）:
+//   manualLectureStockCounts は「負=消化」を記録するデルタ台帳。ここで removeLectureStockCount を使うと
+//   「結果が0以下でキーごと削除」され、盤面に配置済みでも消化記録が消えて未消化に再出現する（二重計上）。
+//   実害: 緑が丘 犬飼凜 の夏期講習・数学で配置済み4コマが未消化4回として幽霊表示（2026-07-17 実発生）。
+//   handleMarkStudentAbsent の戻し appendLectureStockCount(+1) と対称に -1 を積むこと
+//   （removeLecturePendingItemFromStockState の session 枝と同じ規約）。origin は該当1件だけ取り除く。
+// ⚠️ テンプレ上書き(handleSaveRegularLessonTemplate 分岐C)には使わない。あちらは範囲一掃＋均衡復元で
+//   意味が異なり、-1 の純減を積むと逆に未消化が過少計上になる（同ハンドラのコメント参照）。
+export function reconsumeSessionLectureStock(params: {
+  manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
+  stockKey: string
+  origin?: {
+    sessionId?: string
+    originDateKey?: string
+    originSlotNumber?: number
+  }
+}) {
+  return {
+    nextManualLectureStockCounts: appendLectureStockCount(params.manualLectureStockCounts, params.stockKey, -1),
+    nextManualLectureStockOrigins: removeManualLectureStockOrigin(params.manualLectureStockOrigins, params.stockKey, params.origin),
   }
 }
 
@@ -4114,6 +4140,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               if (statusEntry.lessonType === 'special' && statusEntry.specialStockSource === 'session') {
                 const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
                 const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
+                // ⚠️ ここは欠席解除(handleClearStudentStatus)とは意味が異なる。reconsumeSessionLectureStock で
+                // 「単純化・統一」してはいけない（2026-07-17 の INV 監査で新規回帰と判明・回帰源）。
+                // テンプレ上書きは範囲(>=effectiveStart)を一掃し「盤面配置 + 未消化 = 提出希望数」へ戻す処理
+                // （8436bf5）。分岐A が配置済みを +1 返した時点で台帳は均衡(=0)しており、欠席分の +1 は既に
+                // 未消化へ計上済み。ここで appendLectureStockCount(-1) の純減を積むと欠席数ぶん未消化が過少計上
+                // になる（盤面0なのに在庫が減る）。欠席解除(site#2)は生徒を盤面へ再配置するので -1 が正、という
+                // 対称性がここには無い。freeze 境界(凍結前配置が残る)絡みの過少/過剰は別課題(Issue #48・要分析)。
                 nextManualLectureStockCounts = removeLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
                 nextManualLectureStockOrigins = removeManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
                   sessionId: statusEntry.specialSessionId,
@@ -9310,12 +9343,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         if (statusEntry.specialStockSource === 'session') {
           const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
           const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId)
-          nextManualLectureStockCounts = removeLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-          nextManualLectureStockOrigins = removeManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
-            sessionId: statusEntry.specialSessionId,
-            originDateKey: statusEntry.makeupSourceDate ?? targetCell.dateKey,
-            originSlotNumber: parseOriginSlotNumber(statusEntry.makeupSourceLabel) ?? targetCell.slotNumber,
+          // INV-06: 欠席化で戻した1回分を再消化する。負値デルタ台帳なので removeLectureStockCount は不可
+          // （0以下でキーが消え配置済みでも未消化に再出現する）。reconsumeSessionLectureStock で -1 を積む。
+          const reconsumed = reconsumeSessionLectureStock({
+            manualLectureStockCounts: nextManualLectureStockCounts,
+            manualLectureStockOrigins: nextManualLectureStockOrigins,
+            stockKey: lectureStockKey,
+            origin: {
+              sessionId: statusEntry.specialSessionId,
+              originDateKey: statusEntry.makeupSourceDate ?? targetCell.dateKey,
+              originSlotNumber: parseOriginSlotNumber(statusEntry.makeupSourceLabel) ?? targetCell.slotNumber,
+            },
           })
+          nextManualLectureStockCounts = reconsumed.nextManualLectureStockCounts
+          nextManualLectureStockOrigins = reconsumed.nextManualLectureStockOrigins
         }
       } else if (statusEntry.lessonType === 'regular' || !statusEntry.makeupSourceDate) {
         const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(restoredStudent), statusEntry.subject)

@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.447 (2026-07-17)
+
+- fix(INV-06): 講習の欠席解除で消化記録が消え未消化講習が二重計上される不具合を修正(緑が丘 犬飼凜 夏期講習 数4回で実発生)。欠席解除(handleClearStudentStatus)の session講習相殺が負値デルタ台帳に removeLectureStockCount(0以下でキー削除)を誤用し、盤面配置済みでも未消化に再出現していた。生徒を盤面へ再配置し直す操作なので appendLectureStockCount(-1) で1回積み直す reconsumeSessionLectureStock を新設して解消(回帰マトリクス inv06-lecture-stock-reconciliation.matrix.test.ts 4件)。テンプレ上書き(handleSaveRegularLessonTemplate 分岐C)は均衡復元で意味が異なるため統一せず、誤統一防止のガードコメントを付与(freeze境界の過少/過剰は Issue #48 で別途分析)
+- docs(INV-06): 保証台帳 docs/spec-invariants.md に本違反(lecture-stock-clear-status-wipe)を転記し、新設マトリクス inv06-lecture-stock-reconciliation.matrix.test.ts を台帳へ反映(担保状況に Issue #48 を追記)
+
 ## v1.5.446 (2026-07-17)
 
 - style: 盤面の生徒名赤文字の条件に「講師未選択の机に配置」を追加(オーナー指示 2026-07-17・出席不可コマ配置は従来どおり・他警告は黄背景+ツールチップのまま。shouldHighlightStudentName に missingTeacherWarning を追加 / BoardGrid.tsx・回帰テスト更新。関連: 43d9e06 の2026-07-02限定)
