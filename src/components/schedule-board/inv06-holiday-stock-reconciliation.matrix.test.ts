@@ -52,7 +52,7 @@ function sessionLesson(student: Partial<StudentEntry> & { name: string; subject:
   } as StudentEntry
 }
 
-function absentSessionStatus(entry: Partial<StudentStatusEntry> & { name: string; subject: SubjectLabel }): StudentStatusEntry {
+function sessionStatus(entry: Partial<StudentStatusEntry> & { name: string; subject: SubjectLabel; status: StudentStatusEntry['status'] }): StudentStatusEntry {
   return {
     id: `status_${entry.name}`,
     studentId: entry.managedStudentId ?? entry.name,
@@ -63,7 +63,6 @@ function absentSessionStatus(entry: Partial<StudentStatusEntry> & { name: string
     dateKey: '2026-08-01',
     slotNumber: 5,
     recordedAt: '2026-07-20T00:00:00.000Z',
-    status: 'absent',
     sourceLessonId: 'src',
     lessonType: 'special',
     specialStockSource: 'session',
@@ -96,20 +95,47 @@ describe('INV-06 休日化の在庫会計', () => {
   const roster = makeRoster([['犬飼 凜', 's028']])
   const mathKey = buildLectureStockKey('s028', '数', 'sess')
 
-  it('★Issue #49: 欠席済み(statusSlots)の講習を休日化しても在庫へ再+1しない(二重計上しない)', () => {
-    // 配置(-1)→欠席(+1)済みで台帳は 0（在庫に1件戻っている状態）。休日化で更に +1 されると二重計上=違反。
+  it('★Issue #49: 欠席(absent)の講習を休日化しても在庫へ再+1しない(二重計上しない)', () => {
+    // 配置(-1)→欠席(+1・mark-absentが実施)済みで台帳は 0（在庫に1件戻っている状態）。休日化で更に +1 されると二重計上=違反。
     const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [mathKey]: 0 } }
-    const d = desk({ statusSlots: [absentSessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: 'sess' }), null] })
+    const d = desk({ statusSlots: [sessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: 'sess', status: 'absent' }), null] })
     const result = run(d, roster, ledgers)
     expect(result.ledgers.manualLectureStockCounts[mathKey]).toBe(0) // ★+1 されない
-    expect(result.movedStudentCount).toBe(0) // statusSlots は「ストックへ移した件数」に数えない
+    expect(result.movedStudentCount).toBe(0)
   })
 
-  it('★Issue #49: 欠席済み(statusSlots)の通常授業を休日化しても振替 origin を二重追加しない', () => {
-    const d = desk({ statusSlots: [{ ...absentSessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: undefined }), lessonType: 'regular', specialStockSource: undefined } as StudentStatusEntry, null] })
+  it('★Issue #49: 欠席(absent)の通常授業を休日化しても振替 origin を二重追加しない', () => {
+    const d = desk({ statusSlots: [{ ...sessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: undefined, status: 'absent' }), lessonType: 'regular', specialStockSource: undefined } as StudentStatusEntry, null] })
     const result = run(d, roster)
     expect(Object.keys(result.ledgers.manualMakeupAdjustments)).toHaveLength(0) // 振替 origin を積まない
     expect(result.movedStudentCount).toBe(0)
+  })
+
+  it('移動済み(moved)の講習を休日化しても在庫を触らない(消化は移動先が保持)', () => {
+    // moved マーカーは会計を持たない。移動先の -1 を表す台帳は不変であるべき。
+    const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [mathKey]: -1 } }
+    const d = desk({ statusSlots: [sessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: 'sess', status: 'moved' }), null] })
+    const result = run(d, roster, ledgers)
+    expect(result.ledgers.manualLectureStockCounts[mathKey]).toBe(-1) // 不変
+    expect(result.movedStudentCount).toBe(0)
+  })
+
+  it('★出席(attended)の講習を休日化したら在庫へ +1 戻す(消化-1を孤児化させない=過少計上を防ぐ)', () => {
+    // mark-attended は在庫を触らないため配置の -1 が残る。休日で授業が消えるので +1 戻して均衡復帰させる。
+    const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [mathKey]: -1 } }
+    const d = desk({ statusSlots: [sessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: 'sess', status: 'attended' }), null] })
+    const result = run(d, roster, ledgers)
+    expect(result.ledgers.manualLectureStockCounts[mathKey]).toBe(0) // -1 → +1 で 0（提出希望数に復帰）
+    expect(result.movedStudentCount).toBe(1)
+  })
+
+  it('★振替なし欠席(absent-no-makeup)の講習を休日化したら在庫へ +1 戻す(過少計上を防ぐ)', () => {
+    // mark-absent-no-makeup も在庫を触らないため -1 が残る。休日で授業が消えるので戻す。
+    const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [mathKey]: -1 } }
+    const d = desk({ statusSlots: [sessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', specialSessionId: 'sess', status: 'absent-no-makeup' }), null] })
+    const result = run(d, roster, ledgers)
+    expect(result.ledgers.manualLectureStockCounts[mathKey]).toBe(0)
+    expect(result.movedStudentCount).toBe(1)
   })
 
   it('配置(studentSlots)の講習は休日化で在庫へ +1 戻す（正常経路の非回帰）', () => {

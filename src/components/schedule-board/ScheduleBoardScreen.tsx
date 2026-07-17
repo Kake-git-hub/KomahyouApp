@@ -1185,13 +1185,19 @@ type HolidayStockLedgers = {
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
 }
 
+// 休日化で「まだ在庫会計されていない1コマ」を未消化在庫へ戻す status（出欠記録）の集合。
+// - **戻す**: attended / absent-no-makeup … mark 時に在庫を一切触っていない（session講習は消化 -1 のまま・
+//   通常も振替 origin 未追加）。休日で授業が消えるので在庫へ戻さないと消化が孤児化＝過少計上（INV-06 違反）。
+// - **戻さない**: absent … mark-absent が既に +1/振替 origin を積み済み（再度戻すと二重計上＝Issue #49）。
+//   moved … 消化(-1)/振替は移動「先」のコマが保持（元の moved マーカーは会計を持たない）。
+// ※この集合は handleMarkStudent* 各ハンドラの在庫会計と1:1で対応する。ハンドラ側の会計を変えたらここも見直す。
+const HOLIDAY_STOCK_RETURNABLE_STATUSES: ReadonlySet<StudentStatusKind> = new Set(['attended', 'absent-no-makeup'])
+
 // spec-lecture-stock / INV-06 (Issue #49): ある日を休日にするときの、机1つ分の「未消化在庫へ戻す」会計。
-// - **studentSlots(未出欠の配置授業)** = 授業が消えるので在庫へ戻す：
-//     session講習 → 未消化 +1(origin 追加)。 通常(非manual) → 未消化振替 origin 追加。
-// - **statusSlots(出欠済み=absent/attended/absent-no-makeup/moved)** = status を付けた時点で在庫会計は
-//     確定済み（欠席=既に在庫へ戻し済み・出席/振替なし=消化済み・移動=移動先が保持）。
-//     ★ここで在庫を触ると二重計上/誤返却になる（Issue #49・実バグ）。よって statusSlots は在庫を一切触らない
-//     （呼び出し側で status を消すだけ）。この関数は studentSlots のみを在庫へ戻す。
+// - **studentSlots(未出欠の配置授業)** = 授業が消えるので必ず在庫へ戻す（session講習=+1/通常=振替 origin）。
+// - **statusSlots(出欠済み)** = status ごとに在庫会計済みか否かが異なる（上記 HOLIDAY_STOCK_RETURNABLE_STATUSES）。
+//     absent/moved は会計済みなので触らない（二重計上防止）。attended/absent-no-makeup は未会計なので戻す
+//     （戻さないと消化 -1 が孤児化＝過少計上。commit 0260430 の正しい部分）。
 // 机の破棄(lesson/statusSlots クリア)は呼び出し側が行う（この関数は台帳更新と件数だけを返す純関数）。
 export function reconcileHolidayDeskStockReturns(params: {
   desk: DeskCell
@@ -1206,42 +1212,58 @@ export function reconcileHolidayDeskStockReturns(params: {
   let { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents } = params.ledgers
   let movedStudentCount = 0
 
-  for (const student of desk.lesson?.studentSlots ?? []) {
-    if (!student) continue
+  // 1コマ分（session講習=+1 / 通常(非manual)=振替 origin）を在庫へ戻す共通処理。
+  // makeupOriginDateKey は studentSlots と statusSlots で従来から異なる（前者=元の通常授業日、後者=当日）。
+  const returnEntryToStock = (
+    entry: Pick<StudentEntry, 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'specialStockSource' | 'specialSessionId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'manualAdded'>,
+    makeupOriginDateKey: string,
+  ) => {
     movedStudentCount += 1
-
-    if (student.lessonType === 'special') {
-      if (student.specialStockSource === 'session') {
-        const lectureStockStudentKey = resolveLectureStockStudentKey(student, managedStudentByAnyName, resolveDisplayName)
-        const lectureStockKey = buildLectureStockKey(lectureStockStudentKey, student.subject, student.specialSessionId)
+    if (entry.lessonType === 'special') {
+      if (entry.specialStockSource === 'session') {
+        const lectureStockKey = buildLectureStockKey(
+          resolveLectureStockStudentKey(entry, managedStudentByAnyName, resolveDisplayName),
+          entry.subject,
+          entry.specialSessionId,
+        )
         manualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
         manualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
-          displayName: resolveDisplayName(student.name),
-          sessionId: student.specialSessionId,
-          originDateKey: student.makeupSourceDate ?? cellDateKey,
-          originSlotNumber: parseOriginSlotNumber(student.makeupSourceLabel) ?? cellSlotNumber,
+          displayName: resolveDisplayName(entry.name),
+          sessionId: entry.specialSessionId,
+          originDateKey: entry.makeupSourceDate ?? cellDateKey,
+          originSlotNumber: parseOriginSlotNumber(entry.makeupSourceLabel) ?? cellSlotNumber,
         })
         // fallback は key が `name:` に落ちたときだけ必要（managedStudentId 解決時は roster から表示名を引ける）
-        if (!student.managedStudentId && !managedStudentByAnyName.get(student.name)) {
+        if (!entry.managedStudentId && !managedStudentByAnyName.get(entry.name)) {
           fallbackLectureStockStudents = {
             ...fallbackLectureStockStudents,
-            [lectureStockKey]: { displayName: resolveDisplayName(student.name), subject: student.subject },
+            [lectureStockKey]: { displayName: resolveDisplayName(entry.name), subject: entry.subject },
           }
         }
       }
-      continue
+      return
     }
-
-    if (!student.manualAdded) {
-      const stockKey = buildMakeupStockKey(resolveStockId(student), student.subject)
-      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cellDateKey))
-      if (!managedStudentByAnyName.get(student.name)) {
+    if (!entry.manualAdded) {
+      const stockKey = buildMakeupStockKey(resolveStockId(entry as StudentEntry), entry.subject)
+      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, makeupOriginDateKey)
+      if (!managedStudentByAnyName.get(entry.name)) {
         fallbackMakeupStudents = {
           ...fallbackMakeupStudents,
-          [stockKey]: { studentName: student.name, displayName: resolveDisplayName(student.name), subject: student.subject },
+          [stockKey]: { studentName: entry.name, displayName: resolveDisplayName(entry.name), subject: entry.subject },
         }
       }
     }
+  }
+
+  for (const student of desk.lesson?.studentSlots ?? []) {
+    if (!student) continue
+    returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey))
+  }
+
+  for (const statusEntry of desk.statusSlots ?? []) {
+    if (!statusEntry) continue
+    if (!HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) continue // absent/moved は会計済みなので触らない
+    returnEntryToStock(statusEntry, cellDateKey)
   }
 
   return {
