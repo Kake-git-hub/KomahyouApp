@@ -6,6 +6,7 @@ import {
   resolveLectureStockStudentKey,
 } from './ScheduleBoardScreen'
 import { buildLectureStockKey } from './lectureStock'
+import { buildMakeupStockKey } from './makeupStock'
 
 // ============================================================================
 // INV-06 操作マトリクス（休日化 handleToggleHolidayDate の在庫会計）
@@ -165,6 +166,63 @@ describe('INV-06 休日化の在庫会計', () => {
     const ghostKey = buildLectureStockKey('name:犬飼 凜(旧)', '数', 'sess')
     expect(result.ledgers.manualLectureStockCounts[ghostKey]).toBeUndefined()
     expect(result.ledgers.manualLectureStockCounts[mathKey]).toBe(0)
+  })
+})
+
+describe('INV-06 休日化の振替(regular)会計と端ケース', () => {
+  const roster = makeRoster([['犬飼 凜', 's028']])
+  const makeupKey = buildMakeupStockKey('s028', '数')
+
+  function regularStatus(status: StudentStatusEntry['status']): StudentStatusEntry {
+    return { ...sessionStatus({ name: '犬飼 凜', managedStudentId: 's028', subject: '数', status }), lessonType: 'regular', specialStockSource: undefined } as StudentStatusEntry
+  }
+
+  it('出席(attended)の通常授業を休日化したら当日 dateKey で振替 origin を1件積む', () => {
+    const result = run(desk({ statusSlots: [regularStatus('attended'), null] }), roster)
+    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: '2026-08-01' }])
+    expect(result.movedStudentCount).toBe(1)
+  })
+
+  it('振替なし欠席(absent-no-makeup)の通常授業も休日化で振替 origin を積む', () => {
+    const result = run(desk({ statusSlots: [regularStatus('absent-no-makeup'), null] }), roster)
+    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: '2026-08-01' }])
+  })
+
+  it('欠席(absent)/移動(moved)の通常授業は休日化で振替 origin を積まない(二重防止)', () => {
+    expect(Object.keys(run(desk({ statusSlots: [regularStatus('absent'), null] }), roster).ledgers.manualMakeupAdjustments)).toHaveLength(0)
+    expect(Object.keys(run(desk({ statusSlots: [regularStatus('moved'), null] }), roster).ledgers.manualMakeupAdjustments)).toHaveLength(0)
+  })
+
+  it('配置(studentSlots)の通常授業は元授業日(makeupSourceDate)で origin を積む(statusSlots の当日と区別)', () => {
+    const student = { ...sessionLesson({ name: '犬飼 凜', managedStudentId: 's028', subject: '数' }), lessonType: 'regular', specialStockSource: undefined, makeupSourceDate: '2026-07-25' } as StudentEntry
+    const result = run(desk({ lesson: [student, null] }), roster)
+    expect(result.ledgers.manualMakeupAdjustments[makeupKey]).toEqual([{ dateKey: '2026-07-25' }]) // 当日(2026-08-01)ではない
+  })
+
+  it('同一 index に配置(B)と出席status(A)が併存する机は両方を在庫へ戻す(dedup廃止・孤児化させない)', () => {
+    const roster2 = makeRoster([['B太', 's028'], ['A子', 's099']])
+    const bKey = buildLectureStockKey('s028', '数', 'sess')
+    const aKey = buildLectureStockKey('s099', '英', 'sess')
+    const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [bKey]: -1, [aKey]: -1 } }
+    const d: DeskCell = {
+      id: 'd', teacher: 't',
+      lesson: { id: 'l', studentSlots: [sessionLesson({ name: 'B太', managedStudentId: 's028', subject: '数', specialSessionId: 'sess' }), null] },
+      statusSlots: [sessionStatus({ name: 'A子', managedStudentId: 's099', subject: '英', specialSessionId: 'sess', status: 'attended' }), null],
+    }
+    const result = run(d, roster2, ledgers)
+    expect(result.ledgers.manualLectureStockCounts[bKey]).toBe(0) // 配置 B を戻す
+    expect(result.ledgers.manualLectureStockCounts[aKey]).toBe(0) // 出席 A も戻す(消化-1を孤児化させない)
+    expect(result.movedStudentCount).toBe(2)
+  })
+
+  it('改名 × statusSlots(attended session): managedStudentId で配置と同じ正準キーへ +1', () => {
+    const renamedRoster = makeRoster([['犬飼 凛(新)', 's028']])
+    const mathKey = buildLectureStockKey('s028', '数', 'sess')
+    const ledgers = { ...emptyLedgers(), manualLectureStockCounts: { [mathKey]: -1 } }
+    const d = desk({ statusSlots: [sessionStatus({ name: '犬飼 凜(旧)', managedStudentId: 's028', subject: '数', specialSessionId: 'sess', status: 'attended' }), null] })
+    const result = run(d, renamedRoster, ledgers)
+    expect(result.ledgers.manualLectureStockCounts[mathKey]).toBe(0)
+    expect(result.ledgers.manualLectureStockCounts[buildLectureStockKey('name:犬飼 凜(旧)', '数', 'sess')]).toBeUndefined()
   })
 })
 

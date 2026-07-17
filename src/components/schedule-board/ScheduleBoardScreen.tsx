@@ -7467,8 +7467,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         if (cell.dateKey !== dateKey) continue
 
         for (const desk of cell.desks) {
-          // studentSlots(未出欠の配置)だけ在庫へ戻す。statusSlots(出欠済み)は在庫会計が確定済みなので
-          // 触らない(Issue #49 の二重計上防止)。reconcileHolidayDeskStockReturns が studentSlots のみ処理する。
+          // 1机分の在庫戻しは reconcileHolidayDeskStockReturns へ集約。studentSlots(未出欠の配置)は必ず戻し、
+          // statusSlots(出欠済み)は status 認識で戻す(attended/absent-no-makeup=未会計なので戻す・absent/moved=会計済みで触らない)。
           const result = reconcileHolidayDeskStockReturns({
             desk,
             cellDateKey: cell.dateKey,
