@@ -140,6 +140,8 @@ describe('SpecialSessionScreen Excel workbook', () => {
     }))
     expect(parsed[0]?.studentInputs.s001).toEqual({
       unavailableSlots: ['2026-03-24_2', '2026-03-27_1'],
+      // 「後から出席可能に変更」(黄色)は Excel 往復の対象外。既存値が無ければ空で保全(2026-07-18)。
+      reopenedSlots: [],
       regularBreakSlots: [],
       subjectSlots: { 数: 2, 英: 1 },
       regularOnly: false,
@@ -148,6 +150,7 @@ describe('SpecialSessionScreen Excel workbook', () => {
     })
     expect(parsed[0]?.teacherInputs.t001).toEqual({
       unavailableSlots: ['2026-03-26_4'],
+      reopenedSlots: [],
       countSubmitted: true,
       updatedAt: '2026-03-21 10:40',
     })

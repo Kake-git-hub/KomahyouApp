@@ -1999,6 +1999,9 @@ type LectureSubmissionDoc = {
   slotNumbers?: number[]
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(室長所有の配布情報・2026-07-18)。登録解除では維持され、
+  // 新規提出(POST)で空にリセットする(新しい提出が正)。提出ページは unavailableSlots との交差を黄色表示。
+  reopenedSlots?: string[]
   subjectSlots: Record<string, number>
   // 科目ごとの授業時間(分)。未設定=90分扱い。後方互換のため optional。
   subjectDurations?: Record<string, number>
@@ -2130,6 +2133,7 @@ export const lectureSubmissionApi = onRequest({
       slotNumbers: sanitizeSlotNumbers(data.slotNumbers, data.slotCount ?? 7),
       status: data.status ?? 'pending',
       unavailableSlots: data.unavailableSlots ?? [],
+      reopenedSlots: data.reopenedSlots ?? [],
       subjectSlots: data.subjectSlots ?? {},
       subjectDurations: data.subjectDurations ?? {},
       availableGroupClassSubjects: data.availableGroupClassSubjects ?? [],
@@ -2172,6 +2176,8 @@ export const lectureSubmissionApi = onRequest({
     await docRef.update({
       status: 'submitted',
       unavailableSlots,
+      // 新規提出は新しい不可申告が正。過去の「出席可能に変更」(reopenedSlots)は古い提出への上書きなので破棄する。
+      reopenedSlots: [],
       subjectSlots,
       subjectDurations,
       groupClassParticipation,
@@ -2206,6 +2212,8 @@ export const lectureSubmissionApi = onRequest({
         inputs[data.personId] = {
           ...existingInput,
           unavailableSlots,
+          // 新規提出でスナップショット側の「出席可能に変更」(reopenedSlots)もリセット(doc 側と対称)。
+          reopenedSlots: [],
           ...(data.personType === 'student' ? { subjectSlots, subjectDurations, groupClassParticipation, optionChecks, regularOnly, regularBreakSlots: existingInput.regularBreakSlots ?? [] } : {}),
           countSubmitted: true,
           submissionToken: token,

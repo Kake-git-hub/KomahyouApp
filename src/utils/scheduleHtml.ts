@@ -115,6 +115,9 @@ export type SerializedCell = {
 
 export type SerializedStudentSpecialSessionInput = {
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(2026-07-18)。unavailableSlots との交差を黄色表示し、
+  // D&D の不可判定は実効不可(unavailableSlots − reopenedSlots)で行う。
+  reopenedSlots?: string[]
   subjectSlots: Record<string, number>
   // spec-schedule-pdf §E: 科目ごとの授業時間(60/45分)。講習回数表の科目名に併記する(未配置の希望科目でも表示)。
   subjectDurations?: Record<string, number>
@@ -133,6 +136,9 @@ export type SerializedStudentSpecialSessionInput = {
 
 export type SerializedTeacherSpecialSessionInput = {
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(2026-07-18)。講師日程表では黄色表示し、不可(グレー)セルの
+  // クリック→確認ダイアログで室長がここへ変換できる(schedule-teacher-reopen-save)。
+  reopenedSlots?: string[]
   countSubmitted: boolean
   submissionToken?: string
   // 講師の講習集計結果でも提出日時/方法を表示する。生徒と同じ扱い。
@@ -567,6 +573,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       endDate: session.endDate,
       teacherInputs: Object.fromEntries(Object.entries(session.teacherInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
+        // 「後から出席可能に変更」(黄色)。欠落すると日程表で黄色が剥がれグレーに戻って見えるため必ず載せる。
+        reopenedSlots: Array.isArray(input.reopenedSlots) ? [...input.reopenedSlots] : [],
         countSubmitted: Boolean(input.countSubmitted),
         submissionToken: input.submissionToken ?? undefined,
         // 講習集計結果(講師)の提出日時/方法。欠落すると popup へ届かず '—' に化けるため必ず載せる。
@@ -575,6 +583,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
       }])),
       studentInputs: Object.fromEntries(Object.entries(session.studentInputs).map(([personId, input]) => [personId, {
         unavailableSlots: Array.isArray(input.unavailableSlots) ? [...input.unavailableSlots] : [],
+        // 「後から出席可能に変更」(黄色)。欠落すると日程表で黄色が剥がれグレーに戻って見えるため必ず載せる。
+        reopenedSlots: Array.isArray(input.reopenedSlots) ? [...input.reopenedSlots] : [],
         subjectSlots: input.subjectSlots && typeof input.subjectSlots === 'object' ? { ...input.subjectSlots } : {},
         // 講習回数表の授業時間併記(60/45分)に必要。未配置の希望科目でも分数を出すため payload に載せる。
         subjectDurations: input.subjectDurations && typeof input.subjectDurations === 'object' ? { ...input.subjectDurations } : {},
@@ -1616,6 +1626,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         background: #d1d6dc;
       }
 
+      /* 「後から出席可能に変更」(2026-07-18)。色は暫定=黄色(オーナー確認済・変更時は @media print 側も揃える) */
+      .slot-cell.is-reopened {
+        background: #f9e79f;
+      }
+
       /* spec-group-lesson §E: 集団授業の行(中3・1限の上) */
       .group-class-row .group-slot-cell {
         height: 40px;
@@ -1713,6 +1728,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       .slot-button.is-unavailable {
         background: rgba(17, 17, 17, 0.06);
+      }
+
+      .slot-button.is-reopened {
+        background: rgba(214, 158, 0, 0.08);
       }
 
       @keyframes schedule-spin {
@@ -2446,6 +2465,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         .slot-cell.is-holiday,
         .slot-cell.is-unavailable,
         .slot-button.is-unavailable,
+        .slot-cell.is-reopened,
+        .slot-button.is-reopened,
         .header-toggle.is-unavailable {
           -webkit-print-color-adjust: exact;
           print-color-adjust: exact;
@@ -2460,6 +2481,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         .header-toggle.is-unavailable {
           background: #d1d6dc !important;
           box-shadow: inset 0 0 0 999px #d1d6dc;
+        }
+        /* 「後から出席可能に変更」(黄色)。印刷でも保護者に色が伝わるよう色維持する */
+        .slot-cell.is-reopened,
+        .slot-button.is-reopened {
+          background: #f9e79f !important;
+          box-shadow: inset 0 0 0 999px #f9e79f;
         }
         .sheet {
           box-shadow: none;
@@ -2936,7 +2963,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function defaultStudentSessionInput() {
-        return { unavailableSlots: [], subjectSlots: {}, subjectDurations: {}, regularOnly: false, countSubmitted: false };
+        return { unavailableSlots: [], reopenedSlots: [], subjectSlots: {}, subjectDurations: {}, regularOnly: false, countSubmitted: false };
       }
 
       // 科目ごとの授業時間(分)。QR提出と同じく 60/45 のみ保持し、90(既定)や不正値は落とす。
@@ -2952,7 +2979,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function defaultTeacherSessionInput() {
-        return { unavailableSlots: [], countSubmitted: false };
+        return { unavailableSlots: [], reopenedSlots: [], countSubmitted: false };
       }
 
       function getSpecialSessionById(sessionId) {
@@ -2966,6 +2993,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ...defaultStudentSessionInput(),
           ...(current || {}),
           unavailableSlots: sortSlotKeys(current && Array.isArray(current.unavailableSlots) ? current.unavailableSlots : []),
+          reopenedSlots: sortSlotKeys(current && Array.isArray(current.reopenedSlots) ? current.reopenedSlots : []),
           subjectSlots: normalizeSubjectSlots(current && current.subjectSlots ? current.subjectSlots : {}),
           subjectDurations: normalizeSubjectDurations(current && current.subjectDurations ? current.subjectDurations : {}),
           regularOnly: Boolean(current && current.regularOnly),
@@ -2980,6 +3008,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           ...defaultTeacherSessionInput(),
           ...(current || {}),
           unavailableSlots: sortSlotKeys(current && Array.isArray(current.unavailableSlots) ? current.unavailableSlots : []),
+          reopenedSlots: sortSlotKeys(current && Array.isArray(current.reopenedSlots) ? current.reopenedSlots : []),
           countSubmitted: Boolean(current && current.countSubmitted),
         };
       }
@@ -3660,6 +3689,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           if (clickTarget === overlay || clickTarget.closest('[data-role="desk-picker-cancel"]')) { closeScheduleDeskPicker(); return; }
           var seatButton = clickTarget.closest('[data-role="desk-picker-seat"]');
           if (!seatButton || !(seatButton instanceof HTMLElement)) return;
+          // 「後から出席可能に変更」(2026-07-18): 出席不可提出コマへの着地は確認ダイアログ承認が必須。
+          // 承認は reopenApproved として盤面へ渡す(盤面側は承認無しの不可着地を不成立にする二重ゲート)。
+          var reopenOccupantEntryId = seatButton.getAttribute('data-occupant-entry-id') || '';
+          var reopenChecks = collectScheduleMoveReopenChecks(source, targetDateKey, targetSlotNumber, reopenOccupantEntryId);
+          var reopenApproved = false;
+          if (reopenChecks.length > 0) {
+            if (!window.confirm('出席不可と提出されたコマへの配置です。\\n' + reopenChecks.join('\\n') + '\\nこのコマを「出席可能(黄色)」に変更して配置しますか？\\n※変更すると自動割振の対象にもなります。元(不可)へ戻すことはできません。')) {
+              closeScheduleDeskPicker();
+              return;
+            }
+            reopenApproved = true;
+          }
           sendScheduleMoveRequest(source, {
             targetDateKey: targetDateKey,
             targetSlotNumber: targetSlotNumber,
@@ -3667,8 +3708,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             studentIndex: Number(seatButton.getAttribute('data-student-index')),
             deskId: seatButton.getAttribute('data-desk-id') || undefined,
             deskTeacher: seatButton.getAttribute('data-desk-teacher') || '',
-            occupantEntryId: seatButton.getAttribute('data-occupant-entry-id') || undefined,
+            occupantEntryId: reopenOccupantEntryId || undefined,
             deskOccupantEntryIds: (seatButton.getAttribute('data-desk-occupants') || '').split(',').filter(Boolean),
+            reopenApproved: reopenApproved,
           });
           closeScheduleDeskPicker();
         });
@@ -3689,6 +3731,43 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           var k = Math.min(1, kH, kW);
           if (k < 1) modalEl.style.transform = 'scale(' + k + ')';
         }
+      }
+
+      // 「後から出席可能に変更」(2026-07-18): D&D確定前のチェック。移動生徒→移動先、入れ替え相手→移動元の
+      // 着地コマが実効不可(未変換の不可提出)なら確認対象として列挙する。今いるコマと同じ着地は対象外。
+      function findScheduleEntryByEntryId(entryId) {
+        var found = null;
+        (DATA.cells || []).forEach(function(cell) {
+          (cell.desks || []).forEach(function(desk) {
+            var students = desk.lesson && Array.isArray(desk.lesson.students) ? desk.lesson.students : [];
+            students.forEach(function(entry) {
+              if (entry && entry.id === entryId) found = entry;
+            });
+          });
+        });
+        return found;
+      }
+
+      function collectScheduleMoveReopenChecks(source, targetDateKey, targetSlotNumber, occupantEntryId) {
+        var checks = [];
+        var targetSlotKey = targetDateKey + '_' + targetSlotNumber;
+        var sourceSlotKey = source.sourceDateKey + '_' + source.sourceSlotNumber;
+        if (targetSlotKey === sourceSlotKey) return checks;
+        var formatSlot = function(slotKey) {
+          var slotParts = slotKey.split('_');
+          var dateParts = (slotParts[0] || '').split('-');
+          return Number(dateParts[1]) + '/' + Number(dateParts[2]) + ' ' + (slotParts[1] || '') + '限';
+        };
+        if (source.studentId && getEffectiveUnavailableSlotsForStudent(source.studentId).has(targetSlotKey)) {
+          checks.push('・' + (source.studentName || '') + ': ' + formatSlot(targetSlotKey));
+        }
+        if (occupantEntryId) {
+          var occupant = findScheduleEntryByEntryId(occupantEntryId);
+          if (occupant && occupant.linkedStudentId && getEffectiveUnavailableSlotsForStudent(occupant.linkedStudentId).has(sourceSlotKey)) {
+            checks.push('・' + (occupant.name || '') + ': ' + formatSlot(sourceSlotKey));
+          }
+        }
+        return checks;
       }
 
       function sendScheduleMoveRequest(source, seat) {
@@ -3831,6 +3910,52 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           });
         });
         return unavailableSlots;
+      }
+
+      // 「後から出席可能に変更」(黄色・2026-07-18): 表示は unavailableSlots ∩ reopenedSlots(交差)。
+      // reopenedSlots 単独では黄色にしない(新規再提出後の残骸を出さない)。
+      function collectReopenedSlots(input, reopenedSlots) {
+        if (!input || !Array.isArray(input.unavailableSlots) || !Array.isArray(input.reopenedSlots)) return;
+        const reopened = new Set(input.reopenedSlots.filter((slotKey) => typeof slotKey === 'string' && slotKey));
+        if (!reopened.size) return;
+        input.unavailableSlots.forEach((slotKey) => {
+          if (typeof slotKey === 'string' && slotKey && reopened.has(slotKey)) reopenedSlots.add(slotKey);
+        });
+      }
+
+      function getReopenedSlotsForStudent(studentId) {
+        const reopenedSlots = new Set();
+        (DATA.specialSessions || []).forEach((session) => {
+          collectReopenedSlots(session.studentInputs && typeof session.studentInputs === 'object' ? session.studentInputs[studentId] : null, reopenedSlots);
+        });
+        return reopenedSlots;
+      }
+
+      function getReopenedSlotsForTeacher(teacherId) {
+        const reopenedSlots = new Set();
+        (DATA.specialSessions || []).forEach((session) => {
+          collectReopenedSlots(session.teacherInputs && typeof session.teacherInputs === 'object' ? session.teacherInputs[teacherId] : null, reopenedSlots);
+        });
+        return reopenedSlots;
+      }
+
+      // D&D の不可判定用: 実効不可 = unavailableSlots − reopenedSlots(盤面側の判定と同じ規則)。
+      function getEffectiveUnavailableSlotsForStudent(studentId) {
+        const effective = getUnavailableSlotsForStudent(studentId);
+        getReopenedSlotsForStudent(studentId).forEach((slotKey) => effective.delete(slotKey));
+        return effective;
+      }
+
+      // 講師の不可コマ(グレー)クリック→黄色化の対象セッション(提出済み・不可提出・未変換のみ)。
+      function getReopenableSessionsForTeacher(teacherId, slotKey) {
+        const dateKey = slotKey.split('_')[0] || '';
+        if (!dateKey) return [];
+        return getSpecialSessionsForDate(dateKey).filter((session) => {
+          const input = getTeacherSessionInput(teacherId, session.id);
+          if (!input.countSubmitted) return false;
+          if (input.unavailableSlots.indexOf(slotKey) < 0) return false;
+          return (input.reopenedSlots || []).indexOf(slotKey) < 0;
+        });
       }
 
       // spec-group-lesson §A/§D/§E: 集団授業(中3)の表示・回数ヘルパ。
@@ -4344,6 +4469,42 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         } catch {}
       }
 
+      // 「後から出席可能に変更」(2026-07-18): 講師の不可コマ(グレー)クリック→確認ダイアログ承認で黄色化する。
+      // ローカル DATA へ即時反映(楽観更新)し、opener(本体)へ schedule-teacher-reopen-save を送って
+      // specialSessions と QR ドキュメントへ反映させる。戻す操作は無い(ラチェット)。
+      function applyTeacherReopenSlot(teacherId, slotKey) {
+        const sessions = getReopenableSessionsForTeacher(teacherId, slotKey);
+        if (!sessions.length) return;
+        const teacher = (DATA.teachers || []).find((entry) => entry.id === teacherId);
+        const parts = (slotKey.split('_')[0] || '').split('-');
+        const slotLabel = Number(parts[1]) + '/' + Number(parts[2]) + ' ' + (slotKey.split('_')[1] || '') + '限';
+        const teacherLabel = teacher && teacher.name ? teacher.name : 'この講師';
+        if (!window.confirm(teacherLabel + ' の ' + slotLabel + ' は出席不可と提出されています。\\nこのコマを「出席可能(黄色)」に変更しますか？\\n※変更すると講習の自動配置の対象になります。元(不可)へ戻すことはできません。')) return;
+        sessions.forEach((session) => {
+          DATA.specialSessions = (DATA.specialSessions || []).map((current) => {
+            if (current.id !== session.id) return current;
+            const input = current.teacherInputs && current.teacherInputs[teacherId];
+            if (!input) return current;
+            const reopened = Array.isArray(input.reopenedSlots) ? input.reopenedSlots.slice() : [];
+            if (reopened.indexOf(slotKey) < 0) reopened.push(slotKey);
+            return { ...current, teacherInputs: { ...current.teacherInputs, [teacherId]: { ...input, reopenedSlots: sortSlotKeys(reopened) } } };
+          });
+          try {
+            if (!window.opener || window.opener.closed) return;
+            window.opener.postMessage({
+              type: 'schedule-teacher-reopen-save',
+              sessionId: session.id,
+              personId: teacherId,
+              slotKey: slotKey,
+            }, '*');
+          } catch {}
+        });
+        syncPayloadFingerprint();
+        refreshTeacherUnavailableUi(teacherId);
+        // 連続入力の妨げになる同期スピナーを抑制(この操作はローカル反映済み・エコーに描画変化なし)。
+        suppressSyncSpinnerUntil = Date.now() + 3000;
+      }
+
       function persistTeacherCount(sessionId, personId, countSubmitted) {
         try {
           if (!window.opener || window.opener.closed) return;
@@ -4442,12 +4603,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const hasEditableSession = !isDisabled && getEditableSpecialSessionsForStudent(studentId, slotKey.split('_')[0] || '').length > 0;
         const unavailableSlots = getUnavailableSlotsForStudent(studentId);
         const isUnavailable = unavailableSlots.has(slotKey);
+        const isReopened = isUnavailable && getReopenedSlotsForStudent(studentId).has(slotKey);
         const pendingKey = buildUnavailablePendingKey('student', studentId, 'cell', slotKey);
         if (!hasEditableSession) {
           return '<div class="slot-static">' + content + '</div>';
         }
         const buttonClasses = ['slot-button'];
-        if (isUnavailable) buttonClasses.push('is-unavailable');
+        if (isUnavailable) buttonClasses.push(isReopened ? 'is-reopened' : 'is-unavailable');
         return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-student-unavailable" data-student-id="' + studentId + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + pendingKey + '" data-testid="student-schedule-cell-button-' + studentId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
       }
 
@@ -4518,16 +4680,21 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
 
         const unavailableSlots = getUnavailableSlotsForStudent(studentId);
+        const reopenedSlots = getReopenedSlotsForStudent(studentId);
 
         section.querySelectorAll('[data-role="student-slot-cell"]').forEach((element) => {
           if (!(element instanceof HTMLElement)) return;
           const slotKey = element.getAttribute('data-slot-key') || '';
-          const isUnavailable = Boolean(slotKey) && unavailableSlots.has(slotKey);
+          // 「後から出席可能に変更」(2026-07-18): 黄色(is-reopened)はグレー(is-unavailable)より優先。
+          const isReopened = Boolean(slotKey) && unavailableSlots.has(slotKey) && reopenedSlots.has(slotKey);
+          const isUnavailable = Boolean(slotKey) && unavailableSlots.has(slotKey) && !isReopened;
           element.classList.toggle('is-unavailable', isUnavailable);
+          element.classList.toggle('is-reopened', isReopened);
 
           const button = element.querySelector('[data-role="toggle-student-unavailable"]');
           if (button instanceof HTMLElement) {
             button.classList.toggle('is-unavailable', isUnavailable);
+            button.classList.toggle('is-reopened', isReopened);
           }
         });
 
@@ -4563,16 +4730,25 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
 
         const unavailableSlots = getUnavailableSlotsForTeacher(teacherId);
+        const reopenedSlots = getReopenedSlotsForTeacher(teacherId);
 
         section.querySelectorAll('[data-role="teacher-slot-cell"]').forEach((element) => {
           if (!(element instanceof HTMLElement)) return;
           const slotKey = element.getAttribute('data-slot-key') || '';
-          const isUnavailable = Boolean(slotKey) && unavailableSlots.has(slotKey);
+          // 「後から出席可能に変更」(2026-07-18): 黄色(is-reopened)はグレー(is-unavailable)より優先。
+          const isReopened = Boolean(slotKey) && unavailableSlots.has(slotKey) && reopenedSlots.has(slotKey);
+          const isUnavailable = Boolean(slotKey) && unavailableSlots.has(slotKey) && !isReopened;
           element.classList.toggle('is-unavailable', isUnavailable);
+          element.classList.toggle('is-reopened', isReopened);
 
-          const button = element.querySelector('[data-role="toggle-teacher-unavailable"]');
+          const button = element.querySelector('[data-role="toggle-teacher-unavailable"], [data-role="reopen-teacher-slot"]');
           if (button instanceof HTMLElement) {
             button.classList.toggle('is-unavailable', isUnavailable);
+            button.classList.toggle('is-reopened', isReopened);
+            // 黄色化済みの reopen ボタンは操作を終える(戻す操作は無い)。
+            if (button.getAttribute('data-role') === 'reopen-teacher-slot' && isReopened) {
+              button.setAttribute('title', '出席可能に変更済み');
+            }
           }
         });
 
@@ -4599,16 +4775,22 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         syncPendingUnavailableUi(section);
       }
 
-      function renderTeacherSlotContent(teacherId, slotKey, content, title, isDisabled) {
+      function renderTeacherSlotContent(teacherId, slotKey, content, title, isDisabled, isOpenSlot) {
         const hasEditableSession = !isDisabled && getEditableSpecialSessionsForTeacher(teacherId, slotKey.split('_')[0] || '').length > 0;
         const unavailableSlots = getUnavailableSlotsForTeacher(teacherId);
         const isUnavailable = unavailableSlots.has(slotKey);
+        const isReopened = isUnavailable && getReopenedSlotsForTeacher(teacherId).has(slotKey);
         const pendingKey = buildUnavailablePendingKey('teacher', teacherId, 'cell', slotKey);
         if (!hasEditableSession) {
+          // 「後から出席可能に変更」(2026-07-18): 提出済み(登録済み=不可トグルはロック)講師の不可コマ(グレー)は
+          // クリック→確認ダイアログで黄色化できる(休校日は除外)。黄色化済み・可能コマは従来どおり静的表示。
+          if (isOpenSlot !== false && isUnavailable && !isReopened && getReopenableSessionsForTeacher(teacherId, slotKey).length > 0) {
+            return '<button type="button" class="slot-button is-unavailable" data-role="reopen-teacher-slot" data-teacher-id="' + teacherId + '" data-slot-key="' + slotKey + '" data-testid="teacher-schedule-reopen-button-' + teacherId + '-' + slotKey + '" title="クリックで出席可能(黄色)に変更">' + content + '</button>';
+          }
           return '<div class="slot-static">' + content + '</div>';
         }
         const buttonClasses = ['slot-button'];
-        if (isUnavailable) buttonClasses.push('is-unavailable');
+        if (isUnavailable) buttonClasses.push(isReopened ? 'is-reopened' : 'is-unavailable');
         return '<button type="button" class="' + buttonClasses.join(' ') + '" data-role="toggle-teacher-unavailable" data-teacher-id="' + teacherId + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + pendingKey + '" data-testid="teacher-schedule-cell-button-' + teacherId + '-' + slotKey + '"' + (title ? ' title="' + escapeHtml(title) + '"' : '') + '>' + content + '</button>';
       }
 
@@ -5360,6 +5542,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const entries = getStudentAssignmentKeys(student).flatMap((key) => assignmentMap.get(key) || []);
         const keyMap = groupScheduleEntriesBySlot(entries);
         const unavailableSlots = getUnavailableSlotsForStudent(student.id);
+        const reopenedSlots = getReopenedSlotsForStudent(student.id);
         const subjectCounts = {};
         const plannedRegularCounts = {};
         const lectureCounts = {};
@@ -5416,7 +5599,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const classes = ['slot-cell'];
             if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
             if (isEditable) classes.push('is-editable');
-            if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
+            // 「後から出席可能に変更」(2026-07-18): 不可(グレー)より黄色を優先(不可提出∩変更済み=黄色)。
+            if (unavailableSlots.has(slotKey)) classes.push(reopenedSlots.has(slotKey) ? 'is-reopened' : 'is-unavailable');
             const highlightedStudentSlot = DATA.highlightedStudentSlot;
             const isHighlightedStudent = highlightedStudentSlot && (
               highlightedStudentSlot.studentId === student.id
@@ -5588,6 +5772,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const entries = collectTeacherAssignmentEntries(assignmentMap, teacher);
         const keyMap = groupScheduleEntriesBySlot(entries);
         const unavailableSlots = getUnavailableSlotsForTeacher(teacher.id);
+        const reopenedSlots = getReopenedSlotsForTeacher(teacher.id);
         const regularCounts = {};
         const lectureCounts = {};
         const makeupNotes = collectTeacherMakeupNotes(entries);
@@ -5612,7 +5797,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             const classes = ['slot-cell'];
             if (!dateHeader.isOpenDay || (cell && !cell.isOpenDay)) classes.push('is-holiday');
             if (isEditable) classes.push('is-editable');
-            if (unavailableSlots.has(slotKey)) classes.push('is-unavailable');
+            // 「後から出席可能に変更」(2026-07-18): 不可(グレー)より黄色を優先(不可提出∩変更済み=黄色)。
+            if (unavailableSlots.has(slotKey)) classes.push(reopenedSlots.has(slotKey) ? 'is-reopened' : 'is-unavailable');
             const slotStudents = slotEntries.flatMap((entry) => entry.students || []);
             const slotStatuses = slotEntries.flatMap((entry) => entry.statuses || []);
             // Part1: 休みに別生徒が重なって溢れたコマは、溢れた休み生徒を机(entry)単位で間引く。
@@ -5620,7 +5806,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             let content = '<div class="empty-label"></div>';
             if (slotStudents.length > 0 || visibleStatuses.length > 0) content = renderTeacherCellCard(slotStudents, visibleStatuses);
             const title = slotEntries.length ? [...slotStudents, ...slotStatuses].map((student) => formatTeacherTooltipEntry(student)).join(' | ') : '';
-            return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable) + '</div></td>';
+            return '<td class="' + classes.join(' ') + '" data-role="teacher-slot-cell" data-teacher-id="' + teacher.id + '" data-date-key="' + dateHeader.dateKey + '" data-slot-number="' + slotNumber + '" data-slot-key="' + slotKey + '" data-pending-unavailable-key="' + buildUnavailablePendingKey('teacher', teacher.id, 'cell', slotKey) + '" data-editable="' + (isEditable ? 'true' : 'false') + '" data-testid="teacher-schedule-cell-' + teacher.id + '-' + slotKey + '"><div class="slot-cell-content">' + renderTeacherSlotContent(teacher.id, slotKey, content, title, !isEditable, dateHeader.isOpenDay && (!cell || cell.isOpenDay)) + '</div></td>';
           }).join('');
           return '<tr>' + renderTeacherTimeHeaderCell(teacher.id, timeLabel, slotNumber, dateHeaders, cellMap) + cellsHtml + '</tr>';
         }).join('');
@@ -6067,6 +6253,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function handleUnavailablePointerDown(target) {
         if (isUnavailableTogglePending(target)) return true;
         const role = target.getAttribute('data-role') || '';
+        // 「後から出席可能に変更」(2026-07-18): 提出済み講師の不可コマ(グレー)クリック→確認→黄色化。
+        if (role === 'reopen-teacher-slot') {
+          applyTeacherReopenSlot(target.getAttribute('data-teacher-id') || '', target.getAttribute('data-slot-key') || '');
+          return true;
+        }
         if (!role.includes('unavailable') && role !== 'student-slot-cell' && role !== 'teacher-slot-cell') return false;
         if (role.includes('modal')) return false;
         if (role.includes('teacher')) {
@@ -6586,7 +6777,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (event.button !== 0) return;
         const target = event.target;
         if (!(target instanceof HTMLElement)) return;
-        const toggleTarget = target.closest('[data-role="toggle-student-unavailable"], [data-role="student-slot-cell"], [data-role="toggle-student-unavailable-date"], [data-role="toggle-student-unavailable-slot"], [data-role="toggle-teacher-unavailable"], [data-role="teacher-slot-cell"], [data-role="toggle-teacher-unavailable-date"], [data-role="toggle-teacher-unavailable-slot"]');
+        const toggleTarget = target.closest('[data-role="toggle-student-unavailable"], [data-role="student-slot-cell"], [data-role="toggle-student-unavailable-date"], [data-role="toggle-student-unavailable-slot"], [data-role="toggle-teacher-unavailable"], [data-role="teacher-slot-cell"], [data-role="toggle-teacher-unavailable-date"], [data-role="toggle-teacher-unavailable-slot"], [data-role="reopen-teacher-slot"]');
         if (!toggleTarget || !(toggleTarget instanceof HTMLElement)) return;
         if (!handleUnavailablePointerDown(toggleTarget)) return;
         suppressNextToggleClick = true;

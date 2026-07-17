@@ -3754,3 +3754,96 @@ describe('teacher schedule A4 layout adjustments', () => {
     expect(html).toContain('gap: 0;\n        padding: 0;')
   })
 })
+
+// 「後から出席可能に変更」(黄色コマ・2026-07-18 塚田先生要望)。
+// payload に reopenedSlots が載らないと日程表側で黄色が剥がれてグレーに戻って見える(欠落=回帰)。
+describe('reopenedSlots (後から出席可能に変更) の日程表配線', () => {
+  function openStudentHtmlWithReopened(): string {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      location: { origin: 'https://komahyouapp-prod.web.app' },
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-07-25',
+      defaultEndDate: '2026-07-25',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      specialSessions: [{
+        id: 'session-1',
+        label: '夏期講習',
+        startDate: '2026-07-21',
+        endDate: '2026-08-28',
+        teacherInputs: {
+          'teacher-1': {
+            unavailableSlots: ['2026-07-25_3', '2026-07-26_2'],
+            reopenedSlots: ['2026-07-25_3'],
+            countSubmitted: true,
+            updatedAt: '2026-07-18T00:00:00.000Z',
+          },
+        },
+        studentInputs: {
+          'student-1': {
+            unavailableSlots: ['2026-07-25_3', '2026-07-26_2'],
+            reopenedSlots: ['2026-07-25_3'],
+            regularBreakSlots: [],
+            subjectSlots: { 数: 2 },
+            regularOnly: false,
+            countSubmitted: true,
+            updatedAt: '2026-07-18T00:00:00.000Z',
+          },
+        },
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-18T00:00:00.000Z',
+      }],
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    return html
+  }
+
+  it('payload の studentInputs / teacherInputs に reopenedSlots を必ず載せる', () => {
+    const html = openStudentHtmlWithReopened()
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(payloadMatch).toBeTruthy()
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.specialSessions[0]?.studentInputs?.['student-1']?.reopenedSlots).toEqual(['2026-07-25_3'])
+    expect(payload.specialSessions[0]?.teacherInputs?.['teacher-1']?.reopenedSlots).toEqual(['2026-07-25_3'])
+  })
+
+  it('セル描画は黄色(is-reopened)をグレー(is-unavailable)より優先し、CSSは画面/印刷の両方で定義される', () => {
+    const html = openStudentHtmlWithReopened()
+    // 生徒/講師シートのセルクラス分岐(黄色優先)
+    expect(html).toContain("classes.push(reopenedSlots.has(slotKey) ? 'is-reopened' : 'is-unavailable')")
+    // 画面と @media print の両方に黄色(色は暫定 #f9e79f・オーナー確認済)がある
+    expect((html.match(/\.slot-cell\.is-reopened/g) || []).length).toBeGreaterThanOrEqual(2)
+    expect((html.match(/#f9e79f/g) || []).length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('D&Dの着地確認(実効不可)と承認フラグ(reopenApproved)が配線されている', () => {
+    const html = openStudentHtmlWithReopened()
+    expect(html).toContain('function getEffectiveUnavailableSlotsForStudent(studentId)')
+    expect(html).toContain('collectScheduleMoveReopenChecks(source, targetDateKey, targetSlotNumber, reopenOccupantEntryId)')
+    expect(html).toContain('reopenApproved: reopenApproved')
+  })
+
+  it('講師日程表: 提出済み講師の不可コマにクリック→黄色化の導線(reopen-teacher-slot)がある', () => {
+    const html = openStudentHtmlWithReopened()
+    expect(html).toContain('data-role="reopen-teacher-slot"')
+    expect(html).toContain("type: 'schedule-teacher-reopen-save'")
+    expect(html).toContain('function getReopenableSessionsForTeacher(teacherId, slotKey)')
+  })
+})

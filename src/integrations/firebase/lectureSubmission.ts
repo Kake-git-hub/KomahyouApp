@@ -31,6 +31,10 @@ export type LectureSubmissionDoc = {
   slotNumbers?: number[]
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(室長所有の配布情報・2026-07-18)。提出内容(unavailableSlots)とは
+  // 別レイヤで、登録解除(resetLectureSubmissionDoc)でもクリアしない。新規提出(POST)でサーバーが空にリセットする。
+  // 提出ページは unavailableSlots ∩ reopenedSlots を黄色表示する。後方互換のため optional。
+  reopenedSlots?: string[]
   subjectSlots: Record<string, number>
   // 科目ごとの授業時間(分)。未設定=90分扱い。後方互換のため optional。
   subjectDurations?: Record<string, number>
@@ -240,6 +244,8 @@ export function createRecentlyResetGuard(
 /**
  * 登録削除（spec §E / TODO2）: 提出内容をクリアして pending に戻し、同じQRで再提出可能にする。
  * occupiedSlots / availableSubjects / slotNumbers 等の配布情報は維持する。
+ * reopenedSlots(後から出席可能に変更)も配布情報として維持する（クリア対象に加えると
+ * 「登録解除しても黄色コマはキープ」の確定仕様(2026-07-18)が壊れる）。
  */
 export async function resetLectureSubmissionDoc(token: string) {
   const db = getFirebaseFirestoreInstance()
@@ -345,9 +351,30 @@ export async function deleteLectureSubmissionDoc(token: string) {
   await deleteDoc(docRef)
 }
 
+/**
+ * 「後から出席可能に変更」(reopenedSlots)を提出ドキュメントへ反映する。
+ * 室長の変換操作(盤面/日程表)の直後に呼び、保護者/講師がQRを開いたとき黄色表示が即反映されるようにする。
+ * 提出済み(submitted)ドキュメントも更新対象(変換は通常提出後に起きるため)。同値なら書き込まない(冪等)。
+ */
+export async function updateSubmissionReopenedSlots(token: string, reopenedSlots: string[]) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !token) return
+
+  const docRef = doc(db, 'lectureSubmissions', token)
+  const existing = await getDoc(docRef)
+  if (!existing.exists()) return
+  const data = existing.data() as LectureSubmissionDoc
+  const current = Array.isArray(data.reopenedSlots) ? data.reopenedSlots : []
+  const isSame = current.length === reopenedSlots.length
+    && current.every((value, index) => value === reopenedSlots[index])
+  if (isSame) return
+
+  await setDoc(docRef, { ...data, reopenedSlots: [...reopenedSlots] })
+}
+
 /** Update occupiedSlots on existing submission docs so the phone screen reflects current board state */
 export async function updateSubmissionOccupiedSlots(
-  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[] }>,
+  entries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers?: number[]; holidayDates?: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[] }>,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !entries.length) return
@@ -372,6 +399,9 @@ export async function updateSubmissionOccupiedSlots(
       // トークン発行済みの生徒の提出画面に出ないのを防ぐ(availableSubjects は発行時に凍結されるため)。
       // 提出済みドキュメントでも害はない(提出画面は subjectSlots>0 の科目だけ表示するため未選択科目は出ない)。
       ...(entry.availableSubjects ? { availableSubjects: [...entry.availableSubjects] } : {}),
+      // 「後から出席可能に変更」(reopenedSlots)の後追い反映。変換直後の updateSubmissionReopenedSlots が
+      // 失敗した場合でも、日程表を開いたタイミングでアプリ内の正へ収束させる(アプリ内 state が正)。
+      ...(entry.reopenedSlots ? { reopenedSlots: [...entry.reopenedSlots] } : {}),
     })
   }
 }

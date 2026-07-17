@@ -8,7 +8,7 @@ import { initialPairConstraints } from './types/pairConstraint'
 import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
-import { groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type SpecialSessionRow } from './components/special-data/specialSessionModel'
+import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
@@ -23,7 +23,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, updateSubmissionReopenedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -3268,7 +3268,7 @@ function AuthenticatedApp() {
     }
 
     // Update occupiedSlots on existing pending submission docs so phone shows current board state
-    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[] }> = []
+    const existingTokenEntries: Array<{ token: string; occupiedSlots: Record<string, string>; slotNumbers: number[]; holidayDates: string[]; groupClassSlots?: Record<string, string>; optionLabels?: string[]; availableSubjects?: string[]; reopenedSlots?: string[] }> = []
     const newTokenSet = new Set(newTokens.map((t) => t.token))
     const tokenHolidayDates = [...classroomSettings.holidayDates]
     for (const s of activeStudents) {
@@ -3277,7 +3277,7 @@ function AuthenticatedApp() {
       if (token && !newTokenSet.has(token)) {
         const gradeLabel = resolveCurrentStudentGradeLabel(s, referenceDate)
         const isThirdGrade = gradeLabel === '中3'
-        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s), availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel) })
+        existingTokenEntries.push({ token, occupiedSlots: studentOccupiedMap.get(s.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, groupClassSlots: isThirdGrade ? sessionGroupClassSlots : {}, optionLabels: resolveStudentOptionLabels(s), availableSubjects: getSelectableStudentSubjectsForGrade(gradeLabel), reopenedSlots: studentInput?.reopenedSlots ?? [] })
         // spec-group-lesson §C: 既配布QR(集団欄なし)でも中3が集団を選べるよう、未提出なら集団科目を後埋め。
         // 盤面に登録された集団科目のみ。空(集団未設定の講習)なら集団欄を出さないよう [] で後埋めする。
         if (!studentInput?.countSubmitted && resolveCurrentStudentGradeLabel(s, referenceDate) === '中3') {
@@ -3286,9 +3286,10 @@ function AuthenticatedApp() {
       }
     }
     for (const t of activeTeachers) {
-      const token = updatedSession.teacherInputs[t.id]?.submissionToken
+      const teacherInput = updatedSession.teacherInputs[t.id]
+      const token = teacherInput?.submissionToken
       if (token && !newTokenSet.has(token)) {
-        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates })
+        existingTokenEntries.push({ token, occupiedSlots: teacherOccupiedMap.get(t.id) ?? {}, slotNumbers, holidayDates: tokenHolidayDates, reopenedSlots: teacherInput?.reopenedSlots ?? [] })
       }
     }
     if (existingTokenEntries.length > 0) {
@@ -3435,6 +3436,31 @@ function AuthenticatedApp() {
     })
   }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, getHighlightedTeacherIdFromBoardState, specialSessionsRef, students, teacherScheduleRange, teachers])
 
+  // 「後から出席可能に変更」(黄色コマ・2026-07-18)の唯一の適用点。
+  // 盤面の確認ダイアログ承認(生徒の配置/移動/入替/手動追加/日程表D&D)と、講師日程表のセルクリック承認
+  // (schedule-teacher-reopen-save)の両方がここへ集まる。アプリ内 state(正)へラチェット追記した上で、
+  // QR 提出ドキュメントへも反映し、保護者/講師が QR を開いたときに黄色が出るようにする。
+  const applyReopenedSlotConversions = useCallback((targets: ReopenSlotTarget[]) => {
+    if (targets.length === 0) return
+    const updatedAt = new Date().toISOString()
+    setSpecialSessions((current) => appendReopenedSlots(current, targets, updatedAt))
+
+    // ドキュメント反映は ref の最新値へ同じ純関数を適用して算出する(冪等なので state 反映との順序に依存しない)。
+    const nextSessions = appendReopenedSlots(specialSessionsRef.current, targets, updatedAt)
+    const syncedTokens = new Set<string>()
+    for (const target of targets) {
+      for (const session of nextSessions) {
+        const input = target.personType === 'student' ? session.studentInputs[target.personId] : session.teacherInputs[target.personId]
+        if (!input?.submissionToken) continue
+        if (syncedTokens.has(input.submissionToken)) continue
+        // 混入防止(2026-07-09): 開発用教室では自教室発行でないトークンへ書き込まない(登録/解除経路と同じガード)。
+        if (isActingDevelopmentClassroom && !isSubmissionTokenOwnedByClassroom(input, actingClassroomId)) continue
+        syncedTokens.add(input.submissionToken)
+        updateSubmissionReopenedSlots(input.submissionToken, input.reopenedSlots ?? []).catch(() => { /* non-fatal: 後追い反映(updateSubmissionOccupiedSlots)で収束 */ })
+      }
+    }
+  }, [actingClassroomId, isActingDevelopmentClassroom, setSpecialSessions, specialSessionsRef])
+
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
       const message = event.data
@@ -3497,6 +3523,8 @@ function AuthenticatedApp() {
               ...session.studentInputs,
               [message.personId]: {
                 unavailableSlots,
+                // 「出席可能に変更」(黄色)は室長所有の上書きレイヤ。明示再構築のため保全する(消すと黄色が剥がれる)。
+                reopenedSlots: previousInput?.reopenedSlots ?? [],
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: previousInput?.subjectSlots ?? {},
                 subjectDurations: previousInput?.subjectDurations ?? {},
@@ -3545,6 +3573,8 @@ function AuthenticatedApp() {
               ...session.studentInputs,
               [message.personId]: {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
+                // 「出席可能に変更」(黄色)は登録/登録解除では保全する(確定仕様 2026-07-18: 解除しても黄色はキープ)。
+                reopenedSlots: previousInput?.reopenedSlots ?? [],
                 regularBreakSlots: previousInput?.regularBreakSlots ?? [],
                 subjectSlots: regularOnly ? {} : subjectSlots,
                 // 科目ごとの授業時間(分): 登録ダイアログ(生徒日程表)で送られた値を反映。QRと同じく 60/45 のみ採用、
@@ -3666,6 +3696,8 @@ function AuthenticatedApp() {
               ...session.teacherInputs,
               [message.personId]: {
                 unavailableSlots,
+                // 「出席可能に変更」(黄色)は室長所有の上書きレイヤ。明示再構築のため保全する(消すと黄色が剥がれる)。
+                reopenedSlots: previousInput?.reopenedSlots ?? [],
                 countSubmitted: Boolean(previousInput?.countSubmitted),
                 submissionToken: previousInput?.submissionToken,
                 // 出席不可の保存では登録状況を変えないので提出日時/方法も保全する(消すと集計結果が '—' に化ける)。
@@ -3677,6 +3709,15 @@ function AuthenticatedApp() {
             updatedAt,
           }
         }))
+        return
+      }
+
+      if (message.type === 'schedule-teacher-reopen-save') {
+        // 講師日程表の不可コマ(グレー)クリック→確認ダイアログ承認で届く「出席可能に変更」(黄色化・2026-07-18)。
+        // 提出データ(unavailableSlots)は触らず、reopenedSlots へのラチェット追記のみ(戻す操作は無い)。
+        if (typeof message.personId !== 'string' || typeof message.slotKey !== 'string') return
+        if (!/^\d{4}-\d{2}-\d{2}_\d+$/.test(message.slotKey)) return
+        applyReopenedSlotConversions([{ personType: 'teacher', personId: message.personId, slotKey: message.slotKey }])
         return
       }
 
@@ -3696,6 +3737,8 @@ function AuthenticatedApp() {
               ...session.teacherInputs,
               [message.personId]: {
                 unavailableSlots: previousInput?.unavailableSlots ?? [],
+                // 「出席可能に変更」(黄色)は登録/登録解除では保全する(確定仕様 2026-07-18: 解除しても黄色はキープ)。
+                reopenedSlots: previousInput?.reopenedSlots ?? [],
                 countSubmitted,
                 submissionToken: previousInput?.submissionToken,
                 // 講習集計結果(講師): 室長が登録で確定=method='manual'・日時は操作時刻。解除は日時/方法をクリア。
@@ -3769,7 +3812,7 @@ function AuthenticatedApp() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [actingClassroomId, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [actingClassroomId, applyReopenedSlotConversions, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     const timerId = window.setTimeout(() => syncStudentSchedulePopup(), 400)
@@ -3854,6 +3897,8 @@ function AuthenticatedApp() {
                   [entry.personId]: {
                     ...existing,
                     unavailableSlots: entry.unavailableSlots,
+                    // 新規提出は新しい不可申告が正。過去の「出席可能に変更」(黄色)はリセットする(Functions 側 POST と対称)。
+                    reopenedSlots: [],
                     countSubmitted: true,
                     // 講習集計結果(講師): QR提出の反映なので method='qr'、日時は提出ドキュメントの submittedAt。
                     submittedAt: entry.submittedAt,
@@ -3890,6 +3935,8 @@ function AuthenticatedApp() {
                   [entry.personId]: {
                     ...existing,
                     unavailableSlots: entry.unavailableSlots,
+                    // 新規提出は新しい不可申告が正。過去の「出席可能に変更」(黄色)はリセットする(Functions 側 POST と対称)。
+                    reopenedSlots: [],
                     regularBreakSlots: existing?.regularBreakSlots ?? [],
                     subjectSlots: entry.subjectSlots,
                     subjectDurations: entry.regularOnly ? {} : entry.subjectDurations,
@@ -5104,6 +5151,7 @@ function AuthenticatedApp() {
       onBoardStateChange={handleBoardStateChange}
       onReplaceRegularLessons={setRegularLessons}
       onUpdateSpecialSessions={setSpecialSessions}
+      onApplyReopenedSlots={applyReopenedSlotConversions}
       onUpdateClassroomSettings={updateClassroomSettings}
       onOpenBasicData={() => navigateClassroomScreen('basic-data')}
       onOpenSpecialData={() => navigateClassroomScreen('special-data')}

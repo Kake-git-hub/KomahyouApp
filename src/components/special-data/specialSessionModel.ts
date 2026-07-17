@@ -4,6 +4,11 @@ export type SubmissionMethod = 'qr' | 'manual'
 
 export type SpecialSessionTeacherInput = {
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(2026-07-18 塚田先生要望)。提出された unavailableSlots は
+  // 不変のまま(INV-07)、室長の明示操作(講師日程表のセルクリック→確認)でここに追記する上書きレイヤ。
+  // 実効不可 = unavailableSlots − reopenedSlots(resolveEffectiveUnavailableSlots)。
+  // 登録解除では保持し、QRからの新規再提出で空にリセットする(新しい提出が正)。戻す操作は設けない(ラチェット)。
+  reopenedSlots?: string[]
   countSubmitted: boolean
   submissionToken?: string
   // 講習集計結果表示用。提出(登録)された日時(ISO文字列)と方法。登録解除で null/undefined に戻す。
@@ -19,6 +24,11 @@ export type SpecialSessionTeacherInput = {
 
 export type SpecialSessionStudentInput = {
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(2026-07-18 塚田先生要望)。提出された unavailableSlots は
+  // 不変のまま(INV-07)、室長が不可コマへ配置/移動を確認ダイアログで承認したときにここへ追記する上書きレイヤ。
+  // 実効不可 = unavailableSlots − reopenedSlots(resolveEffectiveUnavailableSlots)。日程表/QRでは黄色表示。
+  // 登録解除では保持し、QRからの新規再提出で空にリセットする(新しい提出が正)。戻す操作は設けない(ラチェット)。
+  reopenedSlots?: string[]
   regularBreakSlots: string[]
   subjectSlots: Record<string, number>
   // spec-lecture-stock §6 / TODO4: 科目ごとの授業時間(分)。未設定=90分扱い。
@@ -86,6 +96,86 @@ export function resolveSavedGroupClassParticipation(
     if (source[subject] === true) result[subject] = true
   }
   return result
+}
+
+// 「後から出席可能に変更」レイヤの共有ヘルパ群(2026-07-18)。
+// 不可コマの実効判定(警告・自動割振・○×記号・在庫アイテム)は必ずこの関数を通す。
+// unavailableSlots を直接読むと reopenedSlots(出席可能に変更)が効かず、黄色コマに赤警告が出続ける回帰になる。
+export function resolveEffectiveUnavailableSlots(
+  input: Pick<SpecialSessionStudentInput, 'unavailableSlots' | 'reopenedSlots'> | Pick<SpecialSessionTeacherInput, 'unavailableSlots' | 'reopenedSlots'> | null | undefined,
+): string[] {
+  if (!input) return []
+  const unavailable = Array.isArray(input.unavailableSlots) ? input.unavailableSlots : []
+  const reopened = new Set(Array.isArray(input.reopenedSlots) ? input.reopenedSlots : [])
+  if (reopened.size === 0) return unavailable
+  return unavailable.filter((slotKey) => !reopened.has(slotKey))
+}
+
+// 表示用: 「不可提出かつ出席可能に変更済み」= 黄色コマの集合(交差)。
+// reopenedSlots 単独では表示しない(新規再提出後の残骸を黄色に出さないため、必ず unavailableSlots との交差を取る)。
+export function resolveReopenedUnavailableSlots(
+  input: Pick<SpecialSessionStudentInput, 'unavailableSlots' | 'reopenedSlots'> | Pick<SpecialSessionTeacherInput, 'unavailableSlots' | 'reopenedSlots'> | null | undefined,
+): string[] {
+  if (!input) return []
+  const reopened = new Set(Array.isArray(input.reopenedSlots) ? input.reopenedSlots : [])
+  if (reopened.size === 0) return []
+  const unavailable = Array.isArray(input.unavailableSlots) ? input.unavailableSlots : []
+  return unavailable.filter((slotKey) => reopened.has(slotKey))
+}
+
+export type ReopenSlotTarget = {
+  personType: 'student' | 'teacher'
+  personId: string
+  slotKey: string
+}
+
+// 「出席可能に変更」のラチェット追記(純関数)。対象者の unavailableSlots に含まれ、まだ reopenedSlots に
+// 無い slotKey だけを追加する(冪等・再実行しても二重追加しない)。該当が無いセッション/入力は参照を維持する。
+// 提出データ(unavailableSlots)自体は変更しない(INV-07: 提出はユーザーの登録解除でのみ消える)。
+export function appendReopenedSlots(
+  sessions: SpecialSessionRow[],
+  targets: ReopenSlotTarget[],
+  updatedAt: string,
+): SpecialSessionRow[] {
+  if (targets.length === 0) return sessions
+  return sessions.map((session) => {
+    let studentInputs = session.studentInputs
+    let teacherInputs = session.teacherInputs
+    let changed = false
+    for (const target of targets) {
+      const dateKey = target.slotKey.split('_')[0] ?? ''
+      if (!dateKey || dateKey < session.startDate || dateKey > session.endDate) continue
+      if (target.personType === 'student') {
+        const input = studentInputs[target.personId]
+        if (!input || !input.unavailableSlots.includes(target.slotKey)) continue
+        if ((input.reopenedSlots ?? []).includes(target.slotKey)) continue
+        studentInputs = {
+          ...studentInputs,
+          [target.personId]: {
+            ...input,
+            reopenedSlots: [...(input.reopenedSlots ?? []), target.slotKey].sort((left, right) => left.localeCompare(right, 'ja', { numeric: true })),
+            updatedAt,
+          },
+        }
+        changed = true
+      } else {
+        const input = teacherInputs[target.personId]
+        if (!input || !input.unavailableSlots.includes(target.slotKey)) continue
+        if ((input.reopenedSlots ?? []).includes(target.slotKey)) continue
+        teacherInputs = {
+          ...teacherInputs,
+          [target.personId]: {
+            ...input,
+            reopenedSlots: [...(input.reopenedSlots ?? []), target.slotKey].sort((left, right) => left.localeCompare(right, 'ja', { numeric: true })),
+            updatedAt,
+          },
+        }
+        changed = true
+      }
+    }
+    if (!changed) return session
+    return { ...session, studentInputs, teacherInputs, updatedAt }
+  })
 }
 
 export type SpecialSessionRow = {

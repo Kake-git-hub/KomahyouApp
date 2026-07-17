@@ -52,6 +52,8 @@ export type StudentGridCellData = {
   slotNumber: number
   isHoliday: boolean
   isUnavailable: boolean
+  // 「後から出席可能に変更」(2026-07-18)。不可提出∩変更済み=黄色表示。isUnavailable(グレー)とは排他。
+  isReopened: boolean
   isEditable: boolean
   isHighlighted: boolean
   cards: StudentCellCardData[]
@@ -74,6 +76,8 @@ export type TeacherGridCellData = {
   slotNumber: number
   isHoliday: boolean
   isUnavailable: boolean
+  // 「後から出席可能に変更」(2026-07-18)。不可提出∩変更済み=黄色表示。isUnavailable(グレー)とは排他。
+  isReopened: boolean
   isEditable: boolean
   people: TeacherCellPersonData[]
   cardSizeClass: 'is-single' | 'is-pair' | 'is-multi'
@@ -481,6 +485,36 @@ export function getUnavailableSlotsForTeacher(payload: SchedulePayload, teacherI
     })
   })
   return unavailableSlots
+}
+
+// 「後から出席可能に変更」(黄色・2026-07-18): 表示は unavailableSlots ∩ reopenedSlots(交差)。
+// scheduleHtml.ts(印刷/別タブHTML)の getReopenedSlotsFor* と同じ規則(表示の二重定義を避けるため揃える)。
+function collectReopenedSlotsIntoSet(
+  input: { unavailableSlots?: unknown; reopenedSlots?: unknown } | null | undefined,
+  reopenedSlots: Set<string>,
+) {
+  if (!input || !Array.isArray(input.unavailableSlots) || !Array.isArray(input.reopenedSlots)) return
+  const reopened = new Set(input.reopenedSlots.filter((slotKey): slotKey is string => typeof slotKey === 'string' && slotKey.length > 0))
+  if (reopened.size === 0) return
+  input.unavailableSlots.forEach((slotKey) => {
+    if (typeof slotKey === 'string' && slotKey && reopened.has(slotKey)) reopenedSlots.add(slotKey)
+  })
+}
+
+export function getReopenedSlotsForStudent(payload: SchedulePayload, studentId: string) {
+  const reopenedSlots = new Set<string>()
+  ;(payload.specialSessions || []).forEach((session) => {
+    collectReopenedSlotsIntoSet(session.studentInputs && typeof session.studentInputs === 'object' ? session.studentInputs[studentId] : null, reopenedSlots)
+  })
+  return reopenedSlots
+}
+
+export function getReopenedSlotsForTeacher(payload: SchedulePayload, teacherId: string) {
+  const reopenedSlots = new Set<string>()
+  ;(payload.specialSessions || []).forEach((session) => {
+    collectReopenedSlotsIntoSet(session.teacherInputs && typeof session.teacherInputs === 'object' ? session.teacherInputs[teacherId] : null, reopenedSlots)
+  })
+  return reopenedSlots
 }
 
 function isStudentSessionUnavailableFixed(payload: SchedulePayload, studentId: string, sessionId: string) {
@@ -1242,6 +1276,7 @@ export function buildStudentSheetViewModel(payload: SchedulePayload, options: Bu
   const entries = getStudentAssignmentKeys(payload, student).flatMap((key) => assignmentMap.get(key) || [])
   const keyMap = groupScheduleEntriesBySlot(entries)
   const unavailableSlots = getUnavailableSlotsForStudent(payload, student.id)
+  const reopenedSlots = getReopenedSlotsForStudent(payload, student.id)
   const subjectCounts: Record<string, number> = {}
   const plannedRegularCounts: Record<string, number> = {}
   const lectureCounts: Record<string, number> = {}
@@ -1300,7 +1335,8 @@ export function buildStudentSheetViewModel(payload: SchedulePayload, options: Bu
         dateKey: dateHeader.dateKey,
         slotNumber,
         isHoliday: !dateHeader.isOpenDay || Boolean(cell && !cell.isOpenDay),
-        isUnavailable: unavailableSlots.has(slotKey),
+        isUnavailable: unavailableSlots.has(slotKey) && !reopenedSlots.has(slotKey),
+        isReopened: unavailableSlots.has(slotKey) && reopenedSlots.has(slotKey),
         isEditable,
         isHighlighted: Boolean(isHighlightedStudent && highlightedStudentSlot && highlightedStudentSlot.dateKey === dateHeader.dateKey && highlightedStudentSlot.slotNumber === slotNumber),
         cards,
@@ -1380,6 +1416,7 @@ export function buildTeacherSheetViewModel(payload: SchedulePayload, options: Bu
   const entries = collectTeacherAssignmentEntries(assignmentMap, teacher)
   const keyMap = groupScheduleEntriesBySlot(entries)
   const unavailableSlots = getUnavailableSlotsForTeacher(payload, teacher.id)
+  const reopenedSlots = getReopenedSlotsForTeacher(payload, teacher.id)
   const regularCounts: Record<string, number> = {}
   const lectureCounts: Record<string, number> = {}
   const makeupNotes = collectTeacherMakeupNotes(entries)
@@ -1411,7 +1448,8 @@ export function buildTeacherSheetViewModel(payload: SchedulePayload, options: Bu
         dateKey: dateHeader.dateKey,
         slotNumber,
         isHoliday: !dateHeader.isOpenDay || Boolean(cell && !cell.isOpenDay),
-        isUnavailable: unavailableSlots.has(slotKey),
+        isUnavailable: unavailableSlots.has(slotKey) && !reopenedSlots.has(slotKey),
+        isReopened: unavailableSlots.has(slotKey) && reopenedSlots.has(slotKey),
         isEditable,
         people,
         cardSizeClass: people.length > 2 ? 'is-multi' : people.length > 1 ? 'is-pair' : 'is-single',

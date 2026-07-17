@@ -16,6 +16,9 @@ type SubmissionData = {
   slotNumbers?: number[]
   status: 'pending' | 'submitted'
   unavailableSlots: string[]
+  // 「後から出席可能に変更」されたコマ(2026-07-18)。unavailableSlots との交差を黄色表示する。
+  // 登録解除では維持・新規提出でサーバーが空にリセットする(配布情報)。後方互換のため optional。
+  reopenedSlots?: string[]
   subjectSlots: Record<string, number>
   subjectDurations: Record<string, number>
   // spec-group-lesson §C: 集団授業(中3のみ)。availableGroupClassSubjects が非空なら参加/不参加欄を表示。
@@ -59,6 +62,7 @@ const DEBUG_DUMMY_DATA: SubmissionData = {
   slotNumbers: [1, 2, 3, 4, 5],
   status: 'pending',
   unavailableSlots: [],
+  reopenedSlots: [],
   subjectSlots: { 英語: 2, 数学: 3 },
   subjectDurations: { 数学: 60 },
   availableGroupClassSubjects: ['集団理科', '集団社会'],
@@ -470,6 +474,8 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   if (submitted) {
     const isStudentView = data.personType === 'student'
     const viewOccupiedSlots = data.occupiedSlots ?? {}
+    // 「後から出席可能に変更」(2026-07-18): 提出済みの不可コマ(✕)のうち教室が出席可能へ変更したコマは黄色表示。
+    const viewReopenedSlots = new Set((data.reopenedSlots ?? []).filter((slotKey) => selectedSlots.has(slotKey)))
     const viewMaxSlot = availableDates.length > 0 ? Math.max(...availableDates.map((d) => d.slots.length)) : 5
     const viewUnavailableCount = selectedSlots.size
     const viewSubjectTotal = Object.values(subjectSlots).reduce((sum, v) => sum + v, 0)
@@ -529,7 +535,16 @@ export default function SubmissionPage({ token, debug = false }: { token: string
                       {dateSlot.slots.map((slot) => {
                         const slotKey = `${dateSlot.dateKey}_${slot}`
                         const isSelected = selectedSlots.has(slotKey)
+                        const isReopened = isSelected && viewReopenedSlots.has(slotKey)
                         const occupied = viewOccupiedSlots[slotKey]
+                        if (isReopened) {
+                          // 黄色=教室で出席可能に変更されたコマ。✕は出さず、組まれた授業(occupied)があれば表示する。
+                          return (
+                            <td key={slot} className="sub-td-slot sub-slot-reopened" data-testid={`sub-slot-reopened-${slotKey}`}>
+                              {occupied || ''}
+                            </td>
+                          )
+                        }
                         return (
                           <td key={slot} className={`sub-td-slot${isSelected ? ' sub-slot-x' : ''}${occupied && !isSelected ? ' sub-slot-occ' : ''}`}>
                             {isSelected
@@ -544,6 +559,11 @@ export default function SubmissionPage({ token, debug = false }: { token: string
               </tbody>
             </table>
           </div>
+          {viewReopenedSlots.size > 0 && (
+            <div className="sub-reopened-note" data-testid="sub-reopened-note">
+              <span className="sub-reopened-swatch" />黄色のコマは、提出後に教室で「出席可能」に変更されたコマです
+            </div>
+          )}
         </section>
 
         {isStudentView && (
@@ -910,6 +930,10 @@ const baseStyles = `
   .sub-th-slot, .sub-td-slot { width: var(--u); height: var(--u); padding: 0; cursor: pointer; user-select: none; font-size: calc(var(--u) * 0.4375); -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
   .sub-th-slot { background: #f0f0f0; font-weight: 700; }
   .sub-slot-x { background: #fee5e5 !important; color: #c00; font-weight: 700; }
+  /* 「後から出席可能に変更」(2026-07-18)。日程表の is-reopened と同じ暫定=黄色(#f9e79f) */
+  .sub-slot-reopened { background: #f9e79f !important; color: #7a5b00; font-weight: 700; }
+  .sub-reopened-note { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: calc(var(--u) * 0.4); color: #555; }
+  .sub-reopened-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; background: #f9e79f; border: 1px solid #d8c46a; }
   .sub-x-mark { display: block; font-size: calc(var(--u) * 0.5); line-height: 1; }
   .sub-x-label { display: block; font-size: calc(var(--u) * 0.25); line-height: 1.05; margin-top: 1px; }
   .sub-slot-occ { background: #e8f0ff; color: #336; font-size: calc(var(--u) * 0.344); font-weight: 700; }
