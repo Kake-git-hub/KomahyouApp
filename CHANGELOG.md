@@ -17,7 +17,10 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
-- fix(INV-06 #49): 「その日を休日に設定」で出欠済み(statusSlots)の講習・振替を出欠種別を見ず無条件に在庫へ+1し二重計上/誤返却していた不具合を修正。休日化の在庫戻しを status 認識にした(reconcileHolidayDeskStockReturns へ純関数化)：欠席(absent=mark時に既に戻し済み)・移動(moved=消化は移動先が保持)は触らず二重計上を防止、出席(attended)・振替なし欠席(absent-no-makeup=mark時に在庫未処理で消化-1のまま)は在庫へ戻して過少計上(孤児化)を防止。未出欠の配置(studentSlots)は従来どおり戻す。回帰マトリクス inv06-holiday-stock-reconciliation.matrix.test.ts(10件・全statusを両方向で固定)
+
+## v1.5.448 (2026-07-18)
+
+- fix(INV-06 #49): 「その日を休日に設定」で出欠済み(statusSlots)の講習・振替を出欠種別を見ず無条件に在庫へ+1し二重計上/誤返却していた不具合を修正。休日化の在庫戻しを status 認識にした(reconcileHolidayDeskStockReturns へ純関数化)：欠席(absent=mark時に既に戻し済み)・移動(moved=消化は移動先が保持)は触らず二重計上を防止、出席(attended)・振替なし欠席(absent-no-makeup=mark時に在庫未処理で消化-1のまま)は在庫へ戻して過少計上(孤児化)を防止。未出欠の配置(studentSlots)は従来どおり戻す。回帰マトリクス inv06-holiday-stock-reconciliation.matrix.test.ts(16件・全statusを両方向で固定＋振替origin/dateKey/併存/改名の端ケース)
 - fix(INV-06): 講習の在庫キーを managedStudentId 最優先へ統一(resolveLectureStockStudentKey)。配置後に基本データで生徒を改名すると名前逆引きが外れ配置(-1)と戻し(+1)のキーがズレて残数が壊れる問題を解消(欠席/欠席解除/格納/削除/休日化/テンプレ上書きの講習キー6+1経路)。makeup側resolveBoardStudentStockIdは既にmanagedStudentId優先で無改変
 
 ## v1.5.447 (2026-07-17)
