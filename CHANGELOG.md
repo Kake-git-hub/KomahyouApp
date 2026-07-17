@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix(INV-06): 講習の欠席解除・テンプレ上書きで消化記録が消え未消化講習が二重計上される不具合を修正(緑が丘 犬飼凜 夏期講習 数4回で実発生)。session講習の相殺が負値デルタ台帳に removeLectureStockCount(0以下でキー削除)を誤用していた真因を、appendLectureStockCount(-1)へ一本化した reconsumeSessionLectureStock で解消(handleClearStudentStatus / handleSaveRegularLessonTemplate・回帰マトリクス inv06-lecture-stock-reconciliation.matrix.test.ts 4件)
 
 ## v1.5.446 (2026-07-17)
 
