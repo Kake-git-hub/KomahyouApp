@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.448 (2026-07-18)
+
+- fix(INV-06 #49): 「その日を休日に設定」で出欠済み(statusSlots)の講習・振替を出欠種別を見ず無条件に在庫へ+1し二重計上/誤返却していた不具合を修正。休日化の在庫戻しを status 認識にした(reconcileHolidayDeskStockReturns へ純関数化)：欠席(absent=mark時に既に戻し済み)・移動(moved=消化は移動先が保持)は触らず二重計上を防止、出席(attended)・振替なし欠席(absent-no-makeup=mark時に在庫未処理で消化-1のまま)は在庫へ戻して過少計上(孤児化)を防止。未出欠の配置(studentSlots)は従来どおり戻す。回帰マトリクス inv06-holiday-stock-reconciliation.matrix.test.ts(16件・全statusを両方向で固定＋振替origin/dateKey/併存/改名の端ケース)
+- fix(INV-06): 講習の在庫キーを managedStudentId 最優先へ統一(resolveLectureStockStudentKey)。配置後に基本データで生徒を改名すると名前逆引きが外れ配置(-1)と戻し(+1)のキーがズレて残数が壊れる問題を解消(欠席/欠席解除/格納/削除/休日化/テンプレ上書きの講習キー6+1経路)。makeup側resolveBoardStudentStockIdは既にmanagedStudentId優先で無改変
+
 ## v1.5.447 (2026-07-17)
 
 - fix(INV-06): 講習の欠席解除で消化記録が消え未消化講習が二重計上される不具合を修正(緑が丘 犬飼凜 夏期講習 数4回で実発生)。欠席解除(handleClearStudentStatus)の session講習相殺が負値デルタ台帳に removeLectureStockCount(0以下でキー削除)を誤用し、盤面配置済みでも未消化に再出現していた。生徒を盤面へ再配置し直す操作なので appendLectureStockCount(-1) で1回積み直す reconsumeSessionLectureStock を新設して解消(回帰マトリクス inv06-lecture-stock-reconciliation.matrix.test.ts 4件)。テンプレ上書き(handleSaveRegularLessonTemplate 分岐C)は均衡復元で意味が異なるため統一せず、誤統一防止のガードコメントを付与(freeze境界の過少/過剰は Issue #48 で別途分析)

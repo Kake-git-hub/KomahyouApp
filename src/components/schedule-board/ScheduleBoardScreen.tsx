@@ -1160,6 +1160,118 @@ export function reconsumeSessionLectureStock(params: {
   }
 }
 
+// spec-lecture-stock / INV-06: 盤面コマ(session講習)の在庫キーに使う生徒識別子を解決する。
+// 配置(consume)は提出データの studentId(=studentInputs のキー)で -1 し、配置コマの managedStudentId に
+// その studentId を焼き込む。よって在庫を戻す/相殺する側も **managedStudentId を最優先**で使うのが正
+// （提出希望数 buildLectureStockEntries も同じ studentId でキーする＝これが正準キー）。
+// ★名前逆引き(managedStudentByAnyName.get(name))だけに頼ると、配置後に基本データで**改名**された生徒で
+// 逆引きが外れ `name:表示名` に落ち、配置(-1)と戻し(+1)のキーがズレて残数が壊れる。managedStudentId は
+// 改名に影響されない安定キーなので先に見る。未管理(name:)配置では managedStudentId が無く従来どおり名前解決。
+export function resolveLectureStockStudentKey(
+  entry: { managedStudentId?: string; name: string },
+  managedStudentByAnyName: Map<string, StudentRow>,
+  resolveDisplayName: (name: string) => string,
+): string {
+  return entry.managedStudentId
+    ?? managedStudentByAnyName.get(entry.name)?.id
+    ?? `name:${resolveDisplayName(entry.name)}`
+}
+
+type HolidayStockLedgers = {
+  manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
+  manualMakeupAdjustments: MakeupOriginMap
+  fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
+  fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
+}
+
+// 休日化で「まだ在庫会計されていない1コマ」を未消化在庫へ戻す status（出欠記録）の集合。
+// - **戻す**: attended / absent-no-makeup … mark 時に在庫を一切触っていない（session講習は消化 -1 のまま・
+//   通常も振替 origin 未追加）。休日で授業が消えるので在庫へ戻さないと消化が孤児化＝過少計上（INV-06 違反）。
+// - **戻さない**: absent … mark-absent が既に +1/振替 origin を積み済み（再度戻すと二重計上＝Issue #49）。
+//   moved … 消化(-1)/振替は移動「先」のコマが保持（元の moved マーカーは会計を持たない）。
+// ※この集合は handleMarkStudent* 各ハンドラの在庫会計と1:1で対応する。ハンドラ側の会計を変えたらここも見直す。
+const HOLIDAY_STOCK_RETURNABLE_STATUSES: ReadonlySet<StudentStatusKind> = new Set(['attended', 'absent-no-makeup'])
+
+// spec-lecture-stock / INV-06 (Issue #49): ある日を休日にするときの、机1つ分の「未消化在庫へ戻す」会計。
+// - **studentSlots(未出欠の配置授業)** = 授業が消えるので必ず在庫へ戻す（session講習=+1/通常=振替 origin）。
+// - **statusSlots(出欠済み)** = status ごとに在庫会計済みか否かが異なる（上記 HOLIDAY_STOCK_RETURNABLE_STATUSES）。
+//     absent/moved は会計済みなので触らない（二重計上防止）。attended/absent-no-makeup は未会計なので戻す
+//     （戻さないと消化 -1 が孤児化＝過少計上。commit 0260430 の正しい部分）。
+// 机の破棄(lesson/statusSlots クリア)は呼び出し側が行う（この関数は台帳更新と件数だけを返す純関数）。
+export function reconcileHolidayDeskStockReturns(params: {
+  desk: DeskCell
+  cellDateKey: string
+  cellSlotNumber: number
+  ledgers: HolidayStockLedgers
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+}): { ledgers: HolidayStockLedgers; movedStudentCount: number } {
+  const { desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
+  let { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents } = params.ledgers
+  let movedStudentCount = 0
+
+  // 1コマ分（session講習=+1 / 通常(非manual)=振替 origin）を在庫へ戻す共通処理。
+  // makeupOriginDateKey は studentSlots と statusSlots で従来から異なる（前者=元の通常授業日、後者=当日）。
+  const returnEntryToStock = (
+    entry: Pick<StudentEntry, 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'specialStockSource' | 'specialSessionId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'manualAdded'>,
+    makeupOriginDateKey: string,
+  ) => {
+    movedStudentCount += 1
+    if (entry.lessonType === 'special') {
+      if (entry.specialStockSource === 'session') {
+        const lectureStockKey = buildLectureStockKey(
+          resolveLectureStockStudentKey(entry, managedStudentByAnyName, resolveDisplayName),
+          entry.subject,
+          entry.specialSessionId,
+        )
+        manualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
+        manualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
+          displayName: resolveDisplayName(entry.name),
+          sessionId: entry.specialSessionId,
+          originDateKey: entry.makeupSourceDate ?? cellDateKey,
+          originSlotNumber: parseOriginSlotNumber(entry.makeupSourceLabel) ?? cellSlotNumber,
+        })
+        // fallback は key が `name:` に落ちたときだけ必要（managedStudentId 解決時は roster から表示名を引ける）
+        if (!entry.managedStudentId && !managedStudentByAnyName.get(entry.name)) {
+          fallbackLectureStockStudents = {
+            ...fallbackLectureStockStudents,
+            [lectureStockKey]: { displayName: resolveDisplayName(entry.name), subject: entry.subject },
+          }
+        }
+      }
+      return
+    }
+    if (!entry.manualAdded) {
+      const stockKey = buildMakeupStockKey(resolveStockId(entry as StudentEntry), entry.subject)
+      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, makeupOriginDateKey)
+      if (!managedStudentByAnyName.get(entry.name)) {
+        fallbackMakeupStudents = {
+          ...fallbackMakeupStudents,
+          [stockKey]: { studentName: entry.name, displayName: resolveDisplayName(entry.name), subject: entry.subject },
+        }
+      }
+    }
+  }
+
+  for (const student of desk.lesson?.studentSlots ?? []) {
+    if (!student) continue
+    returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey))
+  }
+
+  for (const statusEntry of desk.statusSlots ?? []) {
+    if (!statusEntry) continue
+    if (!HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) continue // absent/moved は会計済みなので触らない
+    returnEntryToStock(statusEntry, cellDateKey)
+  }
+
+  return {
+    ledgers: { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents },
+    movedStudentCount,
+  }
+}
+
 // spec-lecture-stock §6 / spec-schedule-pdf §D: ストック由来(session)講習の配置時、提出された授業時間を
 // 盤面コマの noteSuffix('60'/'45'/'') として持たせ、日程表にも反映できるようにする。未設定=90='' 。
 function resolveSessionLectureNoteSuffix(specialSessions: SpecialSessionRow[], sessionId: string | undefined, studentId: string | undefined, subject: string): string {
@@ -4097,7 +4209,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             for (const student of desk.lesson?.studentSlots ?? []) {
               if (!student) continue
               if (student.lessonType === 'special' && student.specialStockSource === 'session') {
-                const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
+                const lectureStudentKey = resolveLectureStockStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
                 const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
                 nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
                 nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
@@ -4138,7 +4250,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             for (const statusEntry of desk.statusSlots ?? []) {
               if (!statusEntry || statusEntry.status !== 'absent') continue
               if (statusEntry.lessonType === 'special' && statusEntry.specialStockSource === 'session') {
-                const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
+                const lectureStudentKey = resolveLectureStockStudentKey(statusEntry, managedStudentByAnyName, resolveBoardStudentDisplayName)
                 const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
                 // ⚠️ ここは欠席解除(handleClearStudentStatus)とは意味が異なる。reconsumeSessionLectureStock で
                 // 「単純化・統一」してはいけない（2026-07-17 の INV 監査で新規回帰と判明・回帰源）。
@@ -7341,11 +7453,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     const nextWeeks = cloneWeeks(weeks)
-    let nextManualMakeupAdjustments = cloneOriginMap(manualMakeupAdjustments)
-    const nextFallbackMakeupStudents = { ...fallbackMakeupStudents }
-    let nextManualLectureStockCounts = { ...manualLectureStockCounts }
-    let nextManualLectureStockOrigins = cloneManualLectureStockOrigins(manualLectureStockOrigins)
-    const nextFallbackLectureStockStudents = { ...fallbackLectureStockStudents }
+    let ledgers: HolidayStockLedgers = {
+      manualLectureStockCounts: { ...manualLectureStockCounts },
+      manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
+      manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
+      fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
+      fallbackMakeupStudents: { ...fallbackMakeupStudents },
+    }
     let movedStudentCount = 0
 
     for (const week of nextWeeks) {
@@ -7353,91 +7467,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         if (cell.dateKey !== dateKey) continue
 
         for (const desk of cell.desks) {
-          const processedSlotIndices = new Set<number>()
-          for (let slotIdx = 0; slotIdx < (desk.lesson?.studentSlots ?? []).length; slotIdx++) {
-            const student = desk.lesson!.studentSlots[slotIdx]
-            if (!student) continue
-            processedSlotIndices.add(slotIdx)
-            movedStudentCount += 1
-            if (student.lessonType === 'special') {
-              if (student.specialStockSource === 'session') {
-                const lectureStudentKey = managedStudentByAnyName.get(student.name)?.id ?? `name:${resolveBoardStudentDisplayName(student.name)}`
-                const lectureStockKey = buildLectureStockKey(lectureStudentKey, student.subject, student.specialSessionId)
-                nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-                nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
-                  displayName: resolveBoardStudentDisplayName(student.name),
-                  sessionId: student.specialSessionId,
-                  originDateKey: student.makeupSourceDate ?? cell.dateKey,
-                  originSlotNumber: parseOriginSlotNumber(student.makeupSourceLabel) ?? cell.slotNumber,
-                })
-                if (!managedStudentByAnyName.get(student.name)) {
-                  nextFallbackLectureStockStudents[lectureStockKey] = {
-                    displayName: resolveBoardStudentDisplayName(student.name),
-                    subject: student.subject,
-                  }
-                }
-              }
-              continue
-            }
-            if (!student.manualAdded) {
-              const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(student), student.subject)
-              nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, resolveOriginalRegularDate(student, cell.dateKey))
-
-              const managedStudent = managedStudentByAnyName.get(student.name)
-              if (!managedStudent) {
-                nextFallbackMakeupStudents[stockKey] = {
-                  studentName: student.name,
-                  displayName: resolveBoardStudentDisplayName(student.name),
-                  subject: student.subject,
-                }
-              }
-            }
-          }
-
-          if (desk.statusSlots) {
-            for (let slotIdx = 0; slotIdx < desk.statusSlots.length; slotIdx++) {
-              if (processedSlotIndices.has(slotIdx)) continue
-              const statusEntry = desk.statusSlots[slotIdx]
-              if (!statusEntry) continue
-              movedStudentCount += 1
-              if (statusEntry.lessonType === 'special') {
-                if (statusEntry.specialStockSource === 'session') {
-                  const lectureStudentKey = statusEntry.managedStudentId ?? managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
-                  const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId ?? '')
-                  nextManualLectureStockCounts = appendLectureStockCount(nextManualLectureStockCounts, lectureStockKey)
-                  nextManualLectureStockOrigins = appendManualLectureStockOrigin(nextManualLectureStockOrigins, lectureStockKey, {
-                    displayName: resolveBoardStudentDisplayName(statusEntry.name),
-                    sessionId: statusEntry.specialSessionId ?? '',
-                    originDateKey: statusEntry.makeupSourceDate ?? cell.dateKey,
-                    originSlotNumber: parseOriginSlotNumber(statusEntry.makeupSourceLabel) ?? cell.slotNumber,
-                  })
-                  if (!managedStudentByAnyName.get(statusEntry.name)) {
-                    nextFallbackLectureStockStudents[lectureStockKey] = {
-                      displayName: resolveBoardStudentDisplayName(statusEntry.name),
-                      subject: statusEntry.subject,
-                    }
-                  }
-                }
-                continue
-              }
-              if (!statusEntry.manualAdded) {
-                const statusStudentAsEntry = { name: statusEntry.name, manualAdded: statusEntry.manualAdded, subject: statusEntry.subject, lessonType: statusEntry.lessonType } as StudentEntry
-                const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(statusStudentAsEntry), statusEntry.subject)
-                nextManualMakeupAdjustments = appendMakeupOrigin(nextManualMakeupAdjustments, stockKey, cell.dateKey)
-
-                const managedStudent = managedStudentByAnyName.get(statusEntry.name)
-                if (!managedStudent) {
-                  nextFallbackMakeupStudents[stockKey] = {
-                    studentName: statusEntry.name,
-                    displayName: resolveBoardStudentDisplayName(statusEntry.name),
-                    subject: statusEntry.subject,
-                  }
-                }
-              }
-            }
-            desk.statusSlots = undefined
-          }
-
+          // 1机分の在庫戻しは reconcileHolidayDeskStockReturns へ集約。studentSlots(未出欠の配置)は必ず戻し、
+          // statusSlots(出欠済み)は status 認識で戻す(attended/absent-no-makeup=未会計なので戻す・absent/moved=会計済みで触らない)。
+          const result = reconcileHolidayDeskStockReturns({
+            desk,
+            cellDateKey: cell.dateKey,
+            cellSlotNumber: cell.slotNumber,
+            ledgers,
+            managedStudentByAnyName,
+            resolveDisplayName: resolveBoardStudentDisplayName,
+            resolveStockId: resolveBoardStudentStockId,
+          })
+          ledgers = result.ledgers
+          movedStudentCount += result.movedStudentCount
+          desk.statusSlots = undefined
           desk.lesson = undefined
         }
       }
@@ -7450,12 +7493,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       selectedDeskIndex,
       [...classroomSettings.holidayDates, dateKey].sort(),
       classroomSettings.forceOpenDates.filter((value) => value !== dateKey),
-      nextManualMakeupAdjustments,
+      ledgers.manualMakeupAdjustments,
       suppressedMakeupOrigins,
-      nextFallbackMakeupStudents,
-      nextManualLectureStockCounts,
-      nextManualLectureStockOrigins,
-      nextFallbackLectureStockStudents,
+      ledgers.fallbackMakeupStudents,
+      ledgers.manualLectureStockCounts,
+      ledgers.manualLectureStockOrigins,
+      ledgers.fallbackLectureStockStudents,
     )
     setSelectedHolidayDate(dateKey)
     setSelectedStudentId(null)
@@ -9052,7 +9095,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
 
-      const lectureStudentKey = managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${resolveBoardStudentDisplayName(menuStudent.student.name)}`
+      const lectureStudentKey = resolveLectureStockStudentKey(menuStudent.student, managedStudentByAnyName, resolveBoardStudentDisplayName)
       const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
       const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
       const nextManualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
@@ -9167,7 +9210,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
 
-      const lectureStudentKey = managedStudentByAnyName.get(targetStudent.name)?.id ?? `name:${resolveBoardStudentDisplayName(targetStudent.name)}`
+      const lectureStudentKey = resolveLectureStockStudentKey(targetStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
       const lectureStockKey = buildLectureStockKey(lectureStudentKey, targetStudent.subject, targetStudent.specialSessionId)
       const nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey)
       const nextManualLectureStockOrigins = appendManualLectureStockOrigin(manualLectureStockOrigins, lectureStockKey, {
@@ -9341,7 +9384,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (statusEntry.status === 'absent' && restoredStudent) {
       if (statusEntry.lessonType === 'special') {
         if (statusEntry.specialStockSource === 'session') {
-          const lectureStudentKey = managedStudentByAnyName.get(statusEntry.name)?.id ?? `name:${resolveBoardStudentDisplayName(statusEntry.name)}`
+          const lectureStudentKey = resolveLectureStockStudentKey(statusEntry, managedStudentByAnyName, resolveBoardStudentDisplayName)
           const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId)
           // INV-06: 欠席化で戻した1回分を再消化する。負値デルタ台帳なので removeLectureStockCount は不可
           // （0以下でキーが消え配置済みでも未消化に再出現する）。reconsumeSessionLectureStock で -1 を積む。
@@ -9451,7 +9494,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       if (menuStudent.student.specialStockSource === 'session') {
         // ストック由来の講習削除: 希望数 −1。配置時に消費した分(-1)を打ち消して残数会計を保つ
         // （削除は「戻す」ではないため、希望数自体を1減らして純減させる）。
-        const lectureStudentKey = managedStudentByAnyName.get(menuStudent.student.name)?.id ?? `name:${resolveBoardStudentDisplayName(menuStudent.student.name)}`
+        const lectureStudentKey = resolveLectureStockStudentKey(menuStudent.student, managedStudentByAnyName, resolveBoardStudentDisplayName)
         const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
         nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)
         decrementSpecialSessionSubjectCount(menuStudent.student.specialSessionId, menuStudent.student.managedStudentId, menuStudent.student.subject)
