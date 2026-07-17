@@ -19,11 +19,15 @@ import { appendLectureStockCount, reconsumeSessionLectureStock } from './Schedul
 //
 // 実発生（2026-07-17 / 緑が丘 犬飼凜 s028・夏期講習 数4回）:
 //   自動割当＋日程表コマ組で数4コマを全配置済みなのに、未消化に数4回が幽霊表示（二重計上）。
-//   真因: 欠席解除(handleClearStudentStatus) と テンプレ上書き(handleSaveRegularLessonTemplate) の
-//   session 講習相殺が removeLectureStockCount（結果0以下でキー削除）を使い、負値=消化を記録する
-//   デルタ台帳 manualLectureStockCounts の消化記録ごと消していた。
-//   修正: reconsumeSessionLectureStock（appendLectureStockCount(-1)＝負値保持）へ一本化。
-//   handleMarkStudentAbsent の戻し appendLectureStockCount(+1) と対称。
+//   真因: 欠席解除(handleClearStudentStatus) の session 講習相殺が removeLectureStockCount
+//   （結果0以下でキー削除）を使い、負値=消化を記録するデルタ台帳 manualLectureStockCounts の
+//   消化記録ごと消していた。
+//   修正: 欠席解除は生徒を盤面へ再配置し直す操作なので、reconsumeSessionLectureStock
+//   （appendLectureStockCount(-1)＝負値保持）で1回積み直す。handleMarkStudentAbsent の戻し(+1)と対称。
+//
+// ⚠️ テンプレ上書き(handleSaveRegularLessonTemplate 分岐C)は本関数へ統一しない（2026-07-17 INV監査）。
+//   あちらは範囲一掃＋「盤面配置 + 未消化 = 提出希望数」の均衡復元で意味が異なり、-1 の純減を積むと
+//   逆に未消化が過少計上になる。統一は新規回帰源のため禁止（ハンドラ側コメントで固定・Issue #48）。
 //
 // マトリクス:
 //   欠席化(+1 戻し) ⇔ 欠席解除(-1 再消化) の往復対称性を、
