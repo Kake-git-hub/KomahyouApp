@@ -7,14 +7,16 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 
-// 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」だけに限定する。
-// 制約違反・講師なし・手動追加などの他の警告はセル背景(黄=sa-warning)とツールチップで示し、名前は赤くしない
-// (オーナー指示 2026-07-02)。回帰防止: ここを warningHighlight や missingTeacherWarning に戻すと赤文字が広がる。
+// 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
+// と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
+// 制約違反・手動追加などの他の警告はセル背景(黄=sa-warning)とツールチップで示し、名前は赤くしない。
+// 回帰防止: ここを warningHighlight(全警告)に戻すと赤文字が広がる。
 export function shouldHighlightStudentName(params: {
   warning: string | undefined
   warningUnavailableHighlight: boolean | undefined
+  missingTeacherWarning?: string | undefined
 }): boolean {
-  return Boolean(params.warningUnavailableHighlight && params.warning)
+  return Boolean((params.warningUnavailableHighlight && params.warning) || params.missingTeacherWarning)
 }
 
 function getStudentStatusLabel(status: StudentStatusKind) {
@@ -308,8 +310,8 @@ function BoardGridComponent({
     const visibleNote = lessonNote === '管理データ反映' ? undefined : lessonNote
     const isTrial = resolvedLessonType === 'trial'
     const hasWarning = Boolean((warningHighlight && studentWarning) || missingTeacherWarning)
-    // セル背景(黄)は従来どおり全警告で出すが、名前の赤文字は出席不可コマ配置のみに限定する。
-    const hasNameWarning = shouldHighlightStudentName({ warning: studentWarning, warningUnavailableHighlight })
+    // セル背景(黄)は従来どおり全警告で出すが、名前の赤文字は「出席不可コマ配置」と「講師未選択」に限定する。
+    const hasNameWarning = shouldHighlightStudentName({ warning: studentWarning, warningUnavailableHighlight, missingTeacherWarning })
     const hasMemo = !studentName && Boolean(memoLabel)
     const hasStatus = !studentName && Boolean(statusEntry) && !hasMemo
     const memoText = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(0, 2).join('\n') : ''

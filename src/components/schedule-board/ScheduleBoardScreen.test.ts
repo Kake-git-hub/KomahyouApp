@@ -5043,15 +5043,22 @@ describe('reconcileSubmittedTeacherPlacements (起動時に提出済み未配置
 })
 
 describe('shouldHighlightStudentName', () => {
-  // 赤文字ハイライトは「出席不可コマに配置された生徒」のみ(オーナー指示 2026-07-02)。
-  it('出席不可コマ配置(warningUnavailableHighlight=true)のときだけ赤文字にする', () => {
+  // 赤文字ハイライトは「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)と
+  // 「講師未選択の机に配置された生徒」(オーナー指示 2026-07-17)の2条件のみ。
+  it('出席不可コマ配置(warningUnavailableHighlight=true)のとき赤文字にする', () => {
     expect(shouldHighlightStudentName({ warning: '制約違反\n絶対事項: 出席可能コマのみ', warningUnavailableHighlight: true })).toBe(true)
   })
 
-  it('制約違反など他の警告(unavailableHighlight=false)では赤文字にしない', () => {
+  it('講師未選択(missingTeacherWarning)のとき赤文字にする(オーナー指示 2026-07-17)', () => {
+    expect(shouldHighlightStudentName({ warning: undefined, warningUnavailableHighlight: undefined, missingTeacherWarning: '講師なし' })).toBe(true)
+    // 出席不可でなくても講師未選択なら赤文字。
+    expect(shouldHighlightStudentName({ warning: '制約違反\n制約事項: 組み合わせ不可', warningUnavailableHighlight: false, missingTeacherWarning: '講師なし' })).toBe(true)
+  })
+
+  it('制約違反など他の警告(unavailableHighlight=false・講師選択済み)では赤文字にしない', () => {
     // 過去は warningHighlight/hasWarning で赤くしていた。ここを true に戻すと赤文字が広がる回帰。
     expect(shouldHighlightStudentName({ warning: '制約違反\n制約事項: 組み合わせ不可', warningUnavailableHighlight: false })).toBe(false)
-    expect(shouldHighlightStudentName({ warning: '講師なし', warningUnavailableHighlight: undefined })).toBe(false)
+    expect(shouldHighlightStudentName({ warning: '制約違反\n制約事項: 組み合わせ不可', warningUnavailableHighlight: false, missingTeacherWarning: undefined })).toBe(false)
   })
 
   it('警告文が無ければ(フラグが立っていても)赤文字にしない', () => {

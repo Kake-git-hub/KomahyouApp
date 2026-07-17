@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.446 (2026-07-17)
+
+- style: 盤面の生徒名赤文字の条件に「講師未選択の机に配置」を追加(オーナー指示 2026-07-17・出席不可コマ配置は従来どおり・他警告は黄背景+ツールチップのまま。shouldHighlightStudentName に missingTeacherWarning を追加 / BoardGrid.tsx・回帰テスト更新。関連: 43d9e06 の2026-07-02限定)
+
 ## v1.5.445 (2026-07-14)
 
 - refactor: 対話用日程表の React ビュー(ドック⇄ポップアウト)を撤去。既に別タブ(生成HTML)方式へ回帰済みで本番では `scheduleReactViewEnabled=false`・staging スコープにより無効だったため、将来再検討用に温存していた React 経路一式を削除した(オーナー指示・本番挙動は不変)。削除: `src/components/schedule-view/` の ScheduleView.tsx / ScheduleViewPanel.tsx / ScheduleSheet.tsx / PopoutWindow.tsx / scheduleViewPrint.ts(+test)/ scheduleView.css、および ScheduleBoardScreen.tsx 内の React 専用 state・payload useMemo(buildStudentPayload/buildTeacherPayload 経路)・range/note/印刷委譲ハンドラ・描画・`scheduleReactViewEnabled` 分岐、featureRollout の `scheduleInteractiveReactView` エントリ。**維持(別タブ経路と共有・本番稼働中)**: `scheduleViewData.ts`(生成HTMLの表示算出正本)、`scheduleViewMove.ts`(+test・buildDeskPickerDesks は生成HTMLが使用)、`executeScheduleViewMove` 一式(別タブコマ組み studentScheduleDndMove の D&D 移動で再利用・line 8322 の request 処理)。約3,200行削減。回帰ゲート: tsc -b / eslint(0 error)/ vitest 768件全通過 / vite build 成功。別タブの生徒・講師日程表(表示/コマ組みD&D/自動同期)は既存テスト(scheduleViewData/scheduleViewMove/ScheduleBoardScreen/INVマトリクス)で保護され不変。
