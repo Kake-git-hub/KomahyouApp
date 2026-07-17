@@ -1,6 +1,6 @@
 import { formatStudentSelectionLabel, type StudentRow } from '../basic-data/basicDataModel'
 import type { SubjectLabel } from './types'
-import type { SpecialSessionRow } from '../special-data/specialSessionModel'
+import { resolveEffectiveUnavailableSlots, type SpecialSessionRow } from '../special-data/specialSessionModel'
 import type { LectureStockCountMap, ManualLectureStockOrigin } from '../../types/appState'
 
 export type LectureStockEntry = {
@@ -121,7 +121,8 @@ export function buildLecturePendingItemsByEntryKey(params: {
   for (const stockEntry of rawLectureStockEntries) {
     if (stockEntry.requestedCount <= 0) continue
     const session = specialSessions.find((currentSession) => currentSession.id === stockEntry.sessionId)
-    const unavailableSlots = session?.studentInputs[stockEntry.studentId]?.unavailableSlots ?? []
+    // 実効不可(unavailableSlots − reopenedSlots)。「出席可能に変更」済みコマは自動割振の候補に含める。
+    const unavailableSlots = resolveEffectiveUnavailableSlots(session?.studentInputs[stockEntry.studentId])
     const stockKey = buildLectureStockKey(stockEntry.studentId, stockEntry.subject, stockEntry.sessionId)
     const currentItems = expandedRawItemsByStockKey.get(stockKey) ?? []
     for (let index = 0; index < stockEntry.requestedCount; index += 1) {
@@ -201,7 +202,7 @@ export function buildLecturePendingItemsByEntryKey(params: {
           startDate: session?.startDate,
           endDate: session?.endDate,
           unavailableSlots: session && !studentKey.startsWith('name:')
-            ? session.studentInputs[studentKey]?.unavailableSlots ?? []
+            ? resolveEffectiveUnavailableSlots(session.studentInputs[studentKey])
             : [],
         },
       })

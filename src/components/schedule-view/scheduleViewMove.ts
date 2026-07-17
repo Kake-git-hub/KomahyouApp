@@ -33,6 +33,10 @@ export type ScheduleViewMoveSeat = {
   // 選んだ机に居る生徒全員の entryId(モーダルが見せた机の在席者)。盤面側で「その机」を在席同一性で特定するのに使う
   // (deskId/positional/講師名だけでは机を取り違えることがある = 8/5 中川机の「空き席なのに埋まってる扱い」の根治)。
   deskOccupantEntryIds?: string[]
+  // 「後から出席可能に変更」(2026-07-18): 移動先(または入れ替え相手の着地先)が出席不可提出コマのとき、
+  // 別タブ側の確認ダイアログで承認済みなら true。盤面側はこれが無い限り不可コマへの着地を不成立にする
+  // (別タブの表示が古い場合に無確認で黄色化されるのを防ぐ二重ゲート)。
+  reopenApproved?: boolean
 }
 
 // 生徒日程表(別タブ・生成HTML)のD&D確定で popup が opener(本体)へ送る
@@ -85,6 +89,7 @@ export function parseScheduleViewMoveMessage(
       deskOccupantEntryIds: Array.isArray(t.deskOccupantEntryIds)
         ? t.deskOccupantEntryIds.filter((value): value is string => typeof value === 'string' && value.length > 0)
         : undefined,
+      reopenApproved: t.reopenApproved === true ? true : undefined,
     },
   }
 }

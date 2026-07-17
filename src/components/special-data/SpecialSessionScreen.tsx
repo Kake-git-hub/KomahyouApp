@@ -425,6 +425,9 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
 
       nextStudentInputsBySessionId.get(session.id)![studentId] = {
         unavailableSlots: parseSlotList(row['参加不可コマ']),
+        // 「後から出席可能に変更」(黄色)は Excel 往復の対象外。regularBreakSlots と同じく既存値を保全する
+        // (Excel 再取込で黄色が剥がれるのを防ぐ・2026-07-18)。
+        reopenedSlots: importedById.get(session.id)?.studentInputs[studentId]?.reopenedSlots ?? [],
         regularBreakSlots: importedById.get(session.id)?.studentInputs[studentId]?.regularBreakSlots ?? [],
         subjectSlots: normalizeBooleanCell(row['通常のみ']) ? {} : parseSubjectSlots(row['希望科目数']),
         regularOnly: normalizeBooleanCell(row['通常のみ']),
@@ -453,6 +456,8 @@ export function parseSpecialSessionWorkbook(xlsx: XlsxModule, workbook: import('
 
       nextTeacherInputsBySessionId.get(session.id)![teacherId] = {
         unavailableSlots: parseSlotList(row['参加不可コマ']),
+        // 「後から出席可能に変更」(黄色)は Excel 往復の対象外。既存値を保全する(2026-07-18)。
+        reopenedSlots: importedById.get(session.id)?.teacherInputs[teacherId]?.reopenedSlots ?? [],
         countSubmitted: normalizeBooleanCell(row['講師予定提出済']),
         updatedAt: normalizeTimestampText(row['入力更新日時']) || session.updatedAt || timestamp,
       }

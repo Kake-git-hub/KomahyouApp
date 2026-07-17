@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { markLectureSubmissionDocAsSubmitted, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, type SubmissionChangeEntry } from './lectureSubmission'
+import { markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
 
 const existingData = vi.fn()
 const setDoc = vi.fn()
@@ -137,6 +137,94 @@ describe('updateSubmissionOccupiedSlots', () => {
 
     const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
     expect(writtenDoc.availableSubjects).toEqual(['数', '英', '国', '理', '社']) // 既存値(spread)が維持される
+  })
+})
+
+// 「後から出席可能に変更」(reopenedSlots・2026-07-18) の QR ドキュメント反映。
+describe('updateSubmissionReopenedSlots / reopenedSlots の配布情報扱い', () => {
+  beforeEach(() => {
+    existingData.mockReset()
+    setDoc.mockReset()
+  })
+
+  it('提出済みドキュメントにも reopenedSlots を反映する(変換は通常提出後に起きる)', async () => {
+    existingData.mockReturnValue({
+      status: 'submitted',
+      unavailableSlots: ['2026-07-25_3', '2026-07-26_2'],
+      occupiedSlots: {},
+    })
+
+    await updateSubmissionReopenedSlots('student-token', ['2026-07-25_3'])
+
+    expect(setDoc).toHaveBeenCalledWith(
+      { token: 'student-token' },
+      expect.objectContaining({
+        status: 'submitted',
+        unavailableSlots: ['2026-07-25_3', '2026-07-26_2'], // 提出内容は不変(INV-07)
+        reopenedSlots: ['2026-07-25_3'],
+      }),
+    )
+  })
+
+  it('同値なら書き込まない(冪等)', async () => {
+    existingData.mockReturnValue({
+      status: 'submitted',
+      unavailableSlots: ['2026-07-25_3'],
+      reopenedSlots: ['2026-07-25_3'],
+    })
+
+    await updateSubmissionReopenedSlots('student-token', ['2026-07-25_3'])
+
+    expect(setDoc).not.toHaveBeenCalled()
+  })
+
+  // 確定仕様(2026-07-18): 登録解除しても黄色(reopenedSlots)はキープする。
+  // resetLectureSubmissionDoc のクリア対象に reopenedSlots を加えると本テストが落ちる(巻き戻し検知)。
+  it('登録解除(reset)は reopenedSlots を配布情報として維持する', async () => {
+    existingData.mockReturnValue({
+      status: 'submitted',
+      unavailableSlots: ['2026-07-25_3'],
+      reopenedSlots: ['2026-07-25_3'],
+      subjectSlots: { 数: 4 },
+      occupiedSlots: { '2026-07-21_1': '数' },
+      submittedAt: '2026-07-18T00:00:00.000Z',
+    })
+
+    await resetLectureSubmissionDoc('student-token')
+
+    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(writtenDoc.status).toBe('pending')
+    expect(writtenDoc.unavailableSlots).toEqual([]) // 提出内容はクリア
+    expect(writtenDoc.subjectSlots).toEqual({})
+    expect(writtenDoc.reopenedSlots).toEqual(['2026-07-25_3']) // 黄色はキープ
+    expect(writtenDoc.occupiedSlots).toEqual({ '2026-07-21_1': '数' }) // 配布情報は維持(既存仕様)
+  })
+
+  it('updateSubmissionOccupiedSlots の後追い反映は reopenedSlots を指定時のみ更新する', async () => {
+    existingData.mockReturnValue({
+      status: 'submitted',
+      occupiedSlots: {},
+      reopenedSlots: ['2026-07-25_3'],
+    })
+
+    await updateSubmissionOccupiedSlots([{
+      token: 'student-token',
+      occupiedSlots: {},
+      reopenedSlots: ['2026-07-25_3', '2026-07-26_2'],
+    }])
+
+    expect(setDoc).toHaveBeenCalledWith(
+      { token: 'student-token' },
+      expect.objectContaining({ reopenedSlots: ['2026-07-25_3', '2026-07-26_2'] }),
+    )
+
+    setDoc.mockReset()
+    await updateSubmissionOccupiedSlots([{
+      token: 'student-token',
+      occupiedSlots: {},
+    }])
+    const writtenDoc = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(writtenDoc.reopenedSlots).toEqual(['2026-07-25_3']) // 未指定は既存値(spread)を維持
   })
 })
 

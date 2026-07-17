@@ -5,8 +5,8 @@ import { resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategor
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, buildRegularLessonTemplateWorkbook, buildTemplateBoardCells, convertTemplateCellsToTemplate, copyBoardCellsForTemplate, filterTemplateParticipantsForReferenceDate, listTemplateStartDatesFromWorkbook, normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { deriveStudentDeletionStockSummary, type StudentDeletionStockSummary } from '../basic-data/deleteGuard'
-import type { SpecialSessionRow } from '../special-data/specialSessionModel'
-import { resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
+import type { ReopenSlotTarget, SpecialSessionRow } from '../special-data/specialSessionModel'
+import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resolveLectureSubjectDuration } from '../special-data/specialSessionModel'
 import { GroupAttendanceModal } from './GroupAttendanceModal'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
@@ -363,7 +363,119 @@ export function resolveTeacherLectureSlotMark(params: {
   const input = session.teacherInputs[teacherId]
   if (!input || !input.countSubmitted) return ''
   const slotKey = `${dateKey}_${slotNumber}`
-  return input.unavailableSlots.includes(slotKey) ? '×' : '○'
+  // 実効不可で判定する: 「出席可能に変更」(reopenedSlots・黄色)済みのコマは ○(可能)扱い(2026-07-18)。
+  return resolveEffectiveUnavailableSlots(input).includes(slotKey) ? '×' : '○'
+}
+
+// ==== 「後から出席可能に変更」(黄色コマ・2026-07-18 塚田先生要望) ====
+// 生徒の配置/移動/入替/手動追加/日程表D&Dが「実効不可コマ」に着地するとき、確認ダイアログで承認を取り、
+// 承認されたコマを reopenedSlots(出席可能に変更)へラチェット追記するための純関数群。
+// 判定は必ず実効不可(unavailableSlots − reopenedSlots)の集合で行う(変換済みコマは再確認しない)。
+
+export type ReopenPlacementCheck = {
+  managedStudentId: string | null | undefined
+  displayName: string
+  dateKey: string
+  slotNumber: number
+}
+
+export type ReopenTargetWithLabel = ReopenSlotTarget & { displayName: string; dateKey: string; slotNumber: number }
+
+// 着地コマの一覧から「黄色化(=確認)が必要」なものを抽出する。studentUnavailableSlotsById は実効不可の集合。
+export function collectReopenTargetsForPlacements(params: {
+  placements: ReopenPlacementCheck[]
+  studentUnavailableSlotsById: Map<string, Set<string>>
+}): ReopenTargetWithLabel[] {
+  const results: ReopenTargetWithLabel[] = []
+  const seen = new Set<string>()
+  for (const placement of params.placements) {
+    if (!placement.managedStudentId) continue
+    const slotKey = `${placement.dateKey}_${placement.slotNumber}`
+    if (!params.studentUnavailableSlotsById.get(placement.managedStudentId)?.has(slotKey)) continue
+    const dedupeKey = `${placement.managedStudentId}|${slotKey}`
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+    results.push({
+      personType: 'student',
+      personId: placement.managedStudentId,
+      slotKey,
+      displayName: placement.displayName,
+      dateKey: placement.dateKey,
+      slotNumber: placement.slotNumber,
+    })
+  }
+  return results
+}
+
+export function buildReopenConfirmMessage(targets: Array<Pick<ReopenTargetWithLabel, 'displayName' | 'dateKey' | 'slotNumber'>>): string {
+  const formatSlotLabel = (dateKey: string, slotNumber: number) => {
+    const [, month, day] = dateKey.split('-')
+    return `${Number(month)}/${Number(day)} ${slotNumber}限`
+  }
+  const lines = targets.map((target) => `・${target.displayName}: ${formatSlotLabel(target.dateKey, target.slotNumber)}`)
+  return `出席不可と提出されたコマへの配置です。\n${lines.join('\n')}\nこのコマを「出席可能(黄色)」に変更して配置しますか？\n※変更すると日程表・QR画面で黄色表示になり、自動割振の対象にもなります。元(不可)へ戻すことはできません。`
+}
+
+// 移動/入れ替えの着地コマを列挙する(移動生徒→移動先、入れ替え相手→移動元)。
+// computeStudentMove の分岐・順序は変更しない(回帰防止)。着地が「今いるコマと同じ」場合は対象外
+// (既存配置の置き直しで確認を出さない=リリース時の既存配置は自動変換しない・オーナー確定 2026-07-18)。
+export function collectStudentMoveLandingPlacements(params: {
+  weeks: SlotCell[][]
+  cells: SlotCell[]
+  movingStudentId: string
+  cellId: string
+  deskIndex: number
+  studentIndex: number
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveBoardStudentDisplayName: (name: string) => string
+}): ReopenPlacementCheck[] {
+  const { weeks, cells, movingStudentId, cellId, deskIndex, studentIndex, managedStudentByAnyName, resolveBoardStudentDisplayName } = params
+  const targetCell = cells.find((cell) => cell.id === cellId)
+  if (!targetCell) return []
+
+  const resolveManagedId = (entry: StudentEntry): string | null => {
+    if (entry.managedStudentId) return entry.managedStudentId
+    const byName = managedStudentByAnyName.get(entry.name) ?? managedStudentByAnyName.get(resolveBoardStudentDisplayName(entry.name))
+    return byName?.id ?? null
+  }
+
+  let movingEntry: StudentEntry | null = null
+  let sourceCell: SlotCell | null = null
+  for (const week of weeks) {
+    for (const cell of week) {
+      for (const desk of cell.desks) {
+        const hit = desk.lesson?.studentSlots.find((student) => student?.id === movingStudentId) ?? null
+        if (hit) {
+          movingEntry = hit
+          sourceCell = cell
+          break
+        }
+      }
+      if (movingEntry) break
+    }
+    if (movingEntry) break
+  }
+
+  const placements: ReopenPlacementCheck[] = []
+  const isSameSlot = (left: SlotCell | null, right: SlotCell) => Boolean(left && left.dateKey === right.dateKey && left.slotNumber === right.slotNumber)
+  if (movingEntry && !isSameSlot(sourceCell, targetCell)) {
+    placements.push({
+      managedStudentId: resolveManagedId(movingEntry),
+      displayName: resolveBoardStudentDisplayName(movingEntry.name),
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+    })
+  }
+  const swapPartner = targetCell.desks[deskIndex]?.lesson?.studentSlots[studentIndex] ?? null
+  if (swapPartner && swapPartner.id !== movingStudentId && sourceCell && !isSameSlot(sourceCell, targetCell)) {
+    placements.push({
+      managedStudentId: resolveManagedId(swapPartner),
+      displayName: resolveBoardStudentDisplayName(swapPartner.name),
+      dateKey: sourceCell.dateKey,
+      slotNumber: sourceCell.slotNumber,
+    })
+  }
+  return placements
 }
 
 export type LessonPatternRuleKey = 'allowTwoConsecutiveLessons' | 'requireBreakBetweenLessons' | 'connectRegularLessons'
@@ -687,6 +799,9 @@ type ScheduleBoardScreenProps = {
   onBoardStateChange?: (state: PersistedBoardState, meta?: { userInitiated: boolean }) => void
   onReplaceRegularLessons?: Dispatch<SetStateAction<RegularLessonRow[]>>
   onUpdateSpecialSessions: Dispatch<SetStateAction<SpecialSessionRow[]>>
+  // 「後から出席可能に変更」(黄色コマ・2026-07-18)の適用点(App.tsx の applyReopenedSlotConversions)。
+  // 確認ダイアログ承認済みの変換対象を渡すと、specialSessions への追記と QR ドキュメント反映を行う。
+  onApplyReopenedSlots?: (targets: ReopenSlotTarget[]) => void
   onUpdateClassroomSettings: (settings: ClassroomSettings) => void
   onOpenBasicData: () => void
   onOpenSpecialData: () => void
@@ -3386,7 +3501,8 @@ function autoAssignTeacherToSpecialSession(params: {
   regularLessons: RegularLessonRow[]
 }) {
   const teacherName = getTeacherDisplayName(params.teacher)
-  const unavailableSlots = new Set(params.session.teacherInputs[params.teacher.id]?.unavailableSlots ?? [])
+  // 実効不可(unavailableSlots − reopenedSlots)。「出席可能に変更」済みコマは自動配置の対象に含める(2026-07-18)。
+  const unavailableSlots = new Set(resolveEffectiveUnavailableSlots(params.session.teacherInputs[params.teacher.id]))
   const coveredWeeks = ensureWeeksCoverDateRange({
     weeks: params.weeks,
     startDate: params.session.startDate,
@@ -3921,7 +4037,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
@@ -5125,12 +5241,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       ...lectureConstraintGroups.map((group) => labelByGroupKey[group.key]),
     ].filter((label, index, labels) => labels.indexOf(label) === index)
   }, [autoAssignRules, lectureConstraintGroups])
+  // 実効不可(unavailableSlots − reopenedSlots)の集約。警告・自動割振・不可配置の確認ダイアログ判定が共有する
+  // 単一ソース。「出席可能に変更」(黄色)済みのコマはここから消えるため、赤警告が消え自動割振の候補になる(2026-07-18)。
   const studentUnavailableSlotsById = useMemo(() => {
     const byId = new Map<string, Set<string>>()
     for (const session of specialSessions) {
       for (const [studentId, input] of Object.entries(session.studentInputs)) {
         const current = byId.get(studentId) ?? new Set<string>()
-        for (const slotKey of input.unavailableSlots ?? []) current.add(slotKey)
+        for (const slotKey of resolveEffectiveUnavailableSlots(input)) current.add(slotKey)
         byId.set(studentId, current)
       }
     }
@@ -5142,7 +5260,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     for (const session of specialSessions) {
       for (const [teacherId, input] of Object.entries(session.teacherInputs)) {
         const current = byId.get(teacherId) ?? new Set<string>()
-        for (const slotKey of input.unavailableSlots ?? []) current.add(slotKey)
+        for (const slotKey of resolveEffectiveUnavailableSlots(input)) current.add(slotKey)
         byId.set(teacherId, current)
       }
     }
@@ -7615,6 +7733,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${dateKey} の生徒を削除しました。${clearedCount > 0 ? `${clearedCount}件の生徒を削除しました。` : '対象の生徒はいませんでした。'}`)
   }
 
+  // 「後から出席可能に変更」確認(2026-07-18): 着地コマが実効不可なら確認ダイアログを出す。
+  // 戻り値: null=キャンセル(配置を中止) / []=変換不要 / targets=承認済み(commit 後に onApplyReopenedSlots へ渡す)。
+  const confirmReopenForPlacements = (placements: ReopenPlacementCheck[]): ReopenTargetWithLabel[] | null => {
+    const targets = collectReopenTargetsForPlacements({ placements, studentUnavailableSlotsById })
+    if (targets.length === 0) return []
+    if (!window.confirm(buildReopenConfirmMessage(targets))) return null
+    return targets
+  }
+
   const handlePlaceMakeupFromStock = (cellId: string, deskIndex: number, studentIndex: number) => {
     if (!selectedMakeupStockEntry) return
     const placementEntry = selectedMakeupStockRawKey
@@ -7647,6 +7774,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey)
     if (duplicateStudent) {
       setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため振替不可です。`)
+      return
+    }
+
+    // 「後から出席可能に変更」(2026-07-18): 出席不可提出コマへの振替配置は確認ダイアログ承認で黄色化する。
+    const reopenTargets = confirmReopenForPlacements([{
+      managedStudentId: placementEntry.studentId ?? selectedMakeupStockEntry.studentId,
+      displayName: selectedMakeupStockEntry.displayName,
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+    }])
+    if (!reopenTargets) {
+      setStatusMessage('出席不可コマへの配置を取りやめました。')
       return
     }
 
@@ -7690,6 +7829,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       targetDate: targetCell.dateKey,
     })
     commitWeeks(nextWeeks, weekIndex, cellId, deskIndex)
+    if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     // 配置完了後: 残数にかかわらず生徒選択モーダルは閉じる。
     setStockPanelsRestoreState(null)
     setIsMakeupStockOpen(false)
@@ -7729,6 +7869,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const duplicateStudent = findDuplicateStudentInCell(targetCell, comparableStudentKey)
     if (duplicateStudent) {
       setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため講習配置不可です。`)
+      return
+    }
+
+    // 「後から出席可能に変更」(2026-07-18): 出席不可提出コマへの講習配置は確認ダイアログ承認で黄色化する。
+    const reopenTargets = confirmReopenForPlacements([{
+      managedStudentId: selectedLectureStockEntry.studentId,
+      displayName: selectedLectureStockEntry.displayName,
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+    }])
+    if (!reopenTargets) {
+      setStatusMessage('出席不可コマへの配置を取りやめました。')
       return
     }
 
@@ -7785,6 +7937,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
+    if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     // 配置完了後: 残数にかかわらず生徒選択モーダルは閉じる。
     setStockPanelsRestoreState(null)
     setIsLectureStockOpen(false)
@@ -8134,7 +8287,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
+    // 「後から出席可能に変更」(2026-07-18): 移動先(入れ替えは相手の着地=移動元も)が出席不可提出コマなら
+    // 確認ダイアログ承認で黄色化する。キャンセル時は blocked と同様に選択を維持して再操作できるようにする。
+    const reopenTargets = confirmReopenForPlacements(collectStudentMoveLandingPlacements({
+      weeks,
+      cells,
+      movingStudentId,
+      cellId,
+      deskIndex,
+      studentIndex,
+      managedStudentByAnyName,
+      resolveBoardStudentDisplayName,
+    }))
+    if (!reopenTargets) {
+      setStatusMessage('出席不可コマへの移動を取りやめました。')
+      return
+    }
+
     commitWeeks(result.nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, result.nextSuppressedRegularLessonOccurrences)
+    if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     setSelectedStudentId(null)
     setStatusMessage(result.message)
   }
@@ -8195,6 +8366,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (result.status !== 'moved') {
       return { ok: false, message: result.message }
     }
+    // 「後から出席可能に変更」(2026-07-18): 着地コマが実効不可なら、別タブ側の確認ダイアログで承認済み
+    // (seat.reopenApproved)のときだけ黄色化して配置する。承認が無い(別タブの表示が古い等)場合は不成立にする。
+    // window.confirm を盤面側で出しても別タブの裏に隠れて操作不能になるため、確認は別タブ側で行う。
+    const reopenTargets = collectReopenTargetsForPlacements({
+      placements: collectStudentMoveLandingPlacements({
+        weeks: ensured.weeks,
+        cells: ensured.weeks[target.weekIndex],
+        movingStudentId: source.entryId,
+        cellId: target.cell.id,
+        deskIndex: resolvedSeat.deskIndex,
+        studentIndex: resolvedSeat.studentIndex,
+        managedStudentByAnyName,
+        resolveBoardStudentDisplayName,
+      }),
+      studentUnavailableSlotsById,
+    })
+    if (reopenTargets.length > 0 && !seat.reopenApproved) {
+      return { ok: false, message: '移動先は出席不可と提出されたコマです。「最新表示」で日程表を更新してから、確認ダイアログで承認して移動してください。' }
+    }
     // 表示中の週は動かさない(週が前方に拡張された場合はオフセット分ずらして同じ週を指す)。
     commitWeeks(
       result.nextWeeks,
@@ -8211,6 +8401,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       result.nextSuppressedRegularLessonOccurrences,
     )
+    if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     // 日程表コマ組みは明示的・低頻度操作。次の自動同期だけデバウンスを0msにして即反映する。
     // 即時 setScheduleSyncTrigger を別に足すと自動同期(デバウンス)と経路が二重化し、早期hide→再showで
     // スピナーが2回出るため、同期経路は自動同期effectに一本化して遅延だけ短縮する(2026-07-09 二重スピナー修正)。
@@ -8723,6 +8914,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
+    // 「後から出席可能に変更」(2026-07-18): 出席不可提出コマへの手動追加も確認ダイアログ承認で黄色化する。
+    const reopenTargets = confirmReopenForPlacements([{
+      managedStudentId: managedStudent.id,
+      displayName: resolveBoardStudentDisplayName(getStudentDisplayName(managedStudent)),
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+    }])
+    if (!reopenTargets) {
+      setStatusMessage('出席不可コマへの追加を取りやめました。')
+      return
+    }
+
     const studentName = getStudentDisplayName(managedStudent)
     const grade = resolveSchoolGradeLabel(managedStudent.birthDate, parseDateKey(targetCell.dateKey))
     const nextStudent: StudentEntry = {
@@ -8775,6 +8978,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextManualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
+    if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     setAddExistingStudentDraft(null)
     setStatusMessage(
       addExistingStudentDraft.lessonType === 'special'

@@ -164,3 +164,59 @@ describe('未消化講習の残数ゴールデン (buildLecturePendingItemsByEnt
     expect(digest(map)).toMatchSnapshot()
   })
 })
+
+// 「後から出席可能に変更」(黄色コマ・2026-07-18): pending item が持つ unavailableSlots は
+// 実効不可(unavailableSlots − reopenedSlots)。自動割振の候補フィルタ(item.unavailableSlots)が
+// 黄色化済みコマを避け続ける巻き戻り(resolveEffectiveUnavailableSlots を外す)を検知する。
+describe('pending item の unavailableSlots は実効不可(reopenedSlots を除外)', () => {
+  const reopenSession = {
+    id: 'sess_reopen',
+    label: '夏期講習',
+    startDate: '2026-07-21',
+    endDate: '2026-08-28',
+    teacherInputs: {},
+    studentInputs: {
+      s_r: {
+        unavailableSlots: ['2026-07-25_3', '2026-07-26_2'],
+        reopenedSlots: ['2026-07-25_3'],
+        regularBreakSlots: [],
+        subjectSlots: { 数: 1 },
+        regularOnly: false,
+        countSubmitted: true,
+        updatedAt: '2026-07-18T00:00:00.000Z',
+      },
+    },
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-18T00:00:00.000Z',
+  }
+  const reopenStudents = [{
+    id: 's_r',
+    name: '黄色 太郎',
+    displayName: '黄色',
+    email: 'r@example.com',
+    entryDate: '2025-04-01',
+    withdrawDate: '未定',
+    birthDate: '2012-05-01',
+  }]
+
+  it('session 由来 / manual(正デルタ)由来の両方で reopened コマが除外される', () => {
+    const rawEntries = buildLectureStockEntries({
+      specialSessions: [reopenSession],
+      students: reopenStudents,
+      referenceDate: lectureStockReferenceDate,
+    })
+    const manualKey = buildLectureStockKey('s_r', '数', 'sess_reopen')
+    const map = buildLecturePendingItemsByEntryKey({
+      rawLectureStockEntries: rawEntries,
+      specialSessions: [reopenSession],
+      manualLectureStockCounts: { [manualKey]: 1 },
+      manualLectureStockOrigins: { [manualKey]: [{ displayName: '黄色', sessionId: 'sess_reopen' }] },
+      fallbackLectureStockStudents: {},
+    })
+    const items = map.get('s_r__sess_reopen')?.pendingItems ?? []
+    expect(items.length).toBe(2)
+    for (const item of items) {
+      expect(item.unavailableSlots).toEqual(['2026-07-26_2'])
+    }
+  })
+})
