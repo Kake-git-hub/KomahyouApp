@@ -242,21 +242,44 @@ export function createRecentlyResetGuard(
 }
 
 /**
+ * 本番データ保護(2026-07-19): この提出ドキュメントが「操作中の教室のもの」でなければ true。
+ *
+ * 開発用教室でも本番と同じく「登録=常にロック / 登録解除=常にリセット」する方針にしたため
+ * (呼び出し側の isActingDevelopmentClassroom スキップを撤廃)、書き込みの直前にここで
+ * doc.classroomId を権威として自教室以外への書き込みを構造的に禁止する。
+ * 「提出先はトークンの classroomId で決まる」([[komahyou-dev-classroom-qr-token-contamination]])。
+ * - expectedClassroomId 未指定(後方互換の直接呼び出し/テスト)や doc に classroomId が無い旧トークンは
+ *   false を返して従来どおり書き込みを妨げない。
+ * - expectedClassroomId 指定かつ doc.classroomId が別教室のときだけ true(=書き込みを弾く)。
+ */
+function isForeignClassroomSubmissionDoc(
+  data: { classroomId?: unknown } | undefined,
+  expectedClassroomId?: string | null,
+): boolean {
+  if (!expectedClassroomId) return false
+  const docClassroomId = typeof data?.classroomId === 'string' ? data.classroomId : ''
+  return docClassroomId !== '' && docClassroomId !== expectedClassroomId
+}
+
+/**
  * 登録削除（spec §E / TODO2）: 提出内容をクリアして pending に戻し、同じQRで再提出可能にする。
  * occupiedSlots / availableSubjects / slotNumbers 等の配布情報は維持する。
  * reopenedSlots(後から出席可能に変更)も配布情報として維持する（クリア対象に加えると
  * 「登録解除しても黄色コマはキープ」の確定仕様(2026-07-18)が壊れる）。
+ * expectedClassroomId を渡すと、別教室の doc には書き込まない(本番データ保護・上記ヘルパ参照)。
  */
-export async function resetLectureSubmissionDoc(token: string) {
+export async function resetLectureSubmissionDoc(token: string, expectedClassroomId?: string | null) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
 
   const docRef = doc(db, 'lectureSubmissions', token)
   const existing = await getDoc(docRef)
   if (!existing.exists()) return
+  const data = existing.data()
+  if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) return
 
   await setDoc(docRef, {
-    ...existing.data(),
+    ...data,
     status: 'pending',
     unavailableSlots: [],
     subjectSlots: {},
@@ -277,10 +300,14 @@ export async function resetLectureSubmissionDoc(token: string) {
  *   届いた「まだ submitted の」古いスナップショットを購読反映が「新規提出」と誤認し、登録と盤面配置を復活させる。
  *   生徒経路は v1.5.392 で add を入れたが、講師経路（schedule-teacher-count-save の解除）に add が欠けていた回帰。
  */
-export function guardAndResetLectureSubmissionDoc(guard: RecentlyResetGuard, token: string | null | undefined) {
+export function guardAndResetLectureSubmissionDoc(
+  guard: RecentlyResetGuard,
+  token: string | null | undefined,
+  expectedClassroomId?: string | null,
+) {
   if (!token) return Promise.resolve()
   guard.add(token)
-  return resetLectureSubmissionDoc(token)
+  return resetLectureSubmissionDoc(token, expectedClassroomId)
 }
 
 /**
@@ -319,6 +346,7 @@ export async function updateSubmissionGroupClassEligibility(token: string, avail
 export async function markLectureSubmissionDocAsSubmitted(
   token: string,
   parentOwnedFields?: { groupClassParticipation?: Record<string, boolean>; optionChecks?: Record<string, boolean> },
+  expectedClassroomId?: string | null,
 ) {
   const db = getFirebaseFirestoreInstance()
   if (!db || !token) return
@@ -329,6 +357,8 @@ export async function markLectureSubmissionDocAsSubmitted(
 
   const data = existing.data()
   if (data.status === 'submitted') return
+  // 本番データ保護: 別教室の doc はロックしない(開発用教室で他教室由来トークンを提出済みにしない)。
+  if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) return
 
   await setDoc(docRef, {
     ...data,

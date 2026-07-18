@@ -31,6 +31,7 @@ import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, Class
 import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
+import { buildOccupiedSlotLabel } from './utils/occupiedSlotLabel'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
@@ -3198,7 +3199,9 @@ function AuthenticatedApp() {
           const studentId = studentSlot.managedStudentId ?? studentSlot.id
           if (!studentOccupiedMap.has(studentId)) studentOccupiedMap.set(studentId, {})
           const existing = studentOccupiedMap.get(studentId)!
-          if (!existing[slotKey]) existing[slotKey] = lessonTypeLabels[studentSlot.lessonType] ?? ''
+          // オーナー指示(2026-07-19): 生徒の割振コマは「種別+科目」で表記する(例: 講習の数学→'講数'、通常の英語→'通英')。
+          // これにより提出後の再読込画面でも科目まで分かる。講師側(下)は生徒が2人で科目が一意でないため種別全長ラベルのまま。
+          if (!existing[slotKey]) existing[slotKey] = buildOccupiedSlotLabel(studentSlot.lessonType, studentSlot.subject)
         }
       }
     }
@@ -3631,9 +3634,13 @@ function AuthenticatedApp() {
         const targetSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const targetInput = targetSession?.studentInputs[message.personId]
         const studentToken = targetInput?.submissionToken
-        // 混入防止(2026-07-09): 開発用教室では、自教室が発行したものでないトークン(他教室由来/未タグ=再発行前)には
-        // 絶対に書き込まない(他教室=本番のドキュメントを誤って提出ロック/リセットしない)。本番教室は従来どおり素通し。
-        if (studentToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(targetInput, actingClassroomId))) {
+        // 本番と同一挙動(2026-07-19・オーナー指示): 開発用教室でも「登録=常にロック / 登録解除=常にリセット」する。
+        // 以前は開発用教室で「自教室発行タグ付きトークン」以外はロック/リセットをスキップしていたが、その結果
+        // 管理側は countSubmitted=true(提出済み表示)なのにトークンは pending のまま=QRが再提出可能、という
+        // 非対称(=提出済みQRの上書き提出)が起きていた。混入防止(他教室=本番docへの誤書き込み)は
+        // markLectureSubmissionDocAsSubmitted / resetLectureSubmissionDoc 側の doc.classroomId ガードで担保する
+        // (actingClassroomId を渡す)。本番教室は doc.classroomId が常に一致するため挙動不変。
+        if (studentToken) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
           // spec-group-lesson §C 回帰修正: 室長が日程表で決めた集団参加/オプションを提出ドキュメントにも書き戻す。
           // doc を更新しないと購読の反映(doc→ローカル)が空で上書きし、生徒日程表での集団参加登録が
@@ -3642,12 +3649,12 @@ function AuthenticatedApp() {
             markLectureSubmissionDocAsSubmitted(studentToken, {
               groupClassParticipation: targetInput?.groupClassParticipation ?? {},
               optionChecks: targetInput?.optionChecks ?? {},
-            }).catch(() => { /* non-fatal */ })
+            }, actingClassroomId).catch(() => { /* non-fatal */ })
           } else {
             // B4: reset 前に token をガードへ登録し、リセット前の古い submitted 購読で
             // countSubmitted が復活するのを防ぐ。TTL(既定2.5秒)後にガードが自動で解除する。
             // 生徒・講師で同じガード規律を共通ヘルパへ集約(INV-07)。
-            guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken).catch(() => { /* non-fatal */ })
+            guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId).catch(() => { /* non-fatal */ })
           }
         }
         return
@@ -3764,13 +3771,14 @@ function AuthenticatedApp() {
         const targetTeacherSession = specialSessionsRef.current.find((session) => session.id === message.sessionId)
         const teacherTargetInput = targetTeacherSession?.teacherInputs[message.personId]
         const teacherToken = teacherTargetInput?.submissionToken
-        // 混入防止(2026-07-09): 開発用教室では自教室発行でない講師トークンへ書き込まない(生徒と同じ)。本番は素通し。
-        if (teacherToken && (!isActingDevelopmentClassroom || isSubmissionTokenOwnedByClassroom(teacherTargetInput, actingClassroomId))) {
+        // 本番と同一挙動(2026-07-19・オーナー指示): 開発用教室でも常にロック/リセットする(生徒と同じ)。
+        // 混入防止(他教室=本番docへの誤書き込み)は書き込み関数側の doc.classroomId ガードで担保(actingClassroomId を渡す)。
+        if (teacherToken) {
           // spec-special-session-submission §E / TODO2: 登録確定で提出ロック、登録解除(削除)で提出をリセット→同QRで再提出可能。
-          if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken).catch(() => { /* non-fatal */ })
+          if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken, undefined, actingClassroomId).catch(() => { /* non-fatal */ })
           // INV-07: 講師の登録解除も reset 前に必ずガードへ add する(生徒経路と対称・v1.5.392 の講師版)。
           // 欠けていると解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活する。
-          else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken).catch(() => { /* non-fatal */ })
+          else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId).catch(() => { /* non-fatal */ })
         }
         return
       }
