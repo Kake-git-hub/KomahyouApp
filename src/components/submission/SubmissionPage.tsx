@@ -183,10 +183,11 @@ export default function SubmissionPage({ token, debug = false }: { token: string
   const viewportWidthOverride = debug ? debugViewportWidth : platformViewportWidth
   const zoomOverride = debug ? debugZoom : platformZoom
   const containerStyle = zoomOverride !== 1 ? ({ zoom: zoomOverride } as CSSProperties) : undefined
-  // Android のみ: コンテナ全体を zoom 0.7 で縮めつつ、出席不可コマの表だけは逆ズーム(1/zoom)で
-  // 打ち消して現状の全幅に戻す(オーナー要望: 表は現状の幅・それ以外は 520+0.7)。
-  // iOS は表も 0.7 のまま(従来どおり)なので逆ズームしない。
-  const tableWrapStyle = (isAndroid && zoomOverride !== 1)
+  // iOS/Android 共通: コンテナ全体を zoom 0.7 で縮めつつ、出席不可コマの表だけは逆ズーム(1/zoom)で
+  // 打ち消して画面全幅に戻す(オーナー要望 2026-07-19: iOS も Android と同じく表を全幅にする。
+  // 見出し/ボタン等の固定px要素は 520+0.7 のまま=ボタン類は両OSとも現状維持)。
+  // iOS/Android で viewport 値(520/0.7)は同一のため、同じ逆ズームで同じ全幅になる。
+  const tableWrapStyle = (zoomOverride !== 1)
     ? ({ zoom: 1 / zoomOverride } as CSSProperties)
     : undefined
 
@@ -996,8 +997,10 @@ const baseStyles = `
 
   /* 希望科目数(閲覧専用) */
   .sub-subject-row-readonly { justify-content: space-between; }
-  .sub-subject-readonly-value { font-size: 15px; font-weight: 700; color: #222; }
-  .sub-readonly-minutes { font-size: 12px; font-weight: 600; color: #777; margin-left: 6px; }
+  /* 提出後(閲覧専用)の希望コマ数「10コマ / 90分」を科目ラベルと同じ大きさに(オーナー要望 2026-07-19)。
+     コマ数(主)は科目と同一の 40px、分(従=単位注記)はやや小さめの 30px で階層を残す。 */
+  .sub-subject-readonly-value { font-size: 40px; font-weight: 700; color: #222; }
+  .sub-readonly-minutes { font-size: 30px; font-weight: 600; color: #777; margin-left: 6px; }
 
   /* 実機デバッグパネル(#/submit-debug のみ)。zoom 非適用にするため .sub-container の外側に置く。 */
   .sub-dbg { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 99999;

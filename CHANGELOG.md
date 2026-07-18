@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.451 (2026-07-19)
+
+- style(QR提出): iOS でも出席不可コマの表を Android と同じく画面全幅にした(オーナー要望)。表(.sub-table-wrap)への逆ズーム(1/zoom)適用条件を isAndroid 限定から「zoom≠1(=iOS/Android 共通)」に一般化(iOS/Android は viewport 520+zoom0.7 が同一のため同じ全幅になる)。見出し/ボタン等の固定px要素は 0.7 のままでボタン類は両OS現状維持。(src/components/submission/SubmissionPage.tsx)
+- style(QR提出): 提出後(閲覧専用)の希望コマ数「10コマ / 90分」のテキストを科目ラベルと同じ大きさに(オーナー要望)。コマ数(主)を科目と同一の 40px、分(従)を 30px に拡大(旧 15px/12px)。(sub-subject-readonly-value / sub-readonly-minutes)
+
 ## v1.5.450 (2026-07-19)
 
 - fix(INV-07/INV-08): 開発用教室で「管理上は提出済み(countSubmitted=true)なのに提出トークンが pending のまま＝提出用QRを再読込すると再提出(上書き)できる」非対称を修正(恩珂 呼欄で発覚)。生徒/講師の登録=常にロック・登録解除=常にリセットを本番と同一挙動にした(App.tsx の isActingDevelopmentClassroom スキップを撤廃)。教室混入(他教室=本番 doc への誤書込)は markLectureSubmissionDocAsSubmitted / resetLectureSubmissionDoc 側の doc.classroomId ガード(isForeignClassroomSubmissionDoc・actingClassroomId を貫通)で担保=App層の入力タグより権威的な doc.classroomId で守る。本番教室は doc.classroomId が常に一致するため挙動不変。反映(doc→ローカル)は従来どおり reflectParentOwnedSubmissionFields の union のみで希望科目数/配置/出席不可は不変。(App.tsx/lectureSubmission.ts・回帰テスト7件 lectureSubmission.test.ts)
