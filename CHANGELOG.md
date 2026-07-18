@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.450 (2026-07-19)
+
+- fix(INV-07/INV-08): 開発用教室で「管理上は提出済み(countSubmitted=true)なのに提出トークンが pending のまま＝提出用QRを再読込すると再提出(上書き)できる」非対称を修正(恩珂 呼欄で発覚)。生徒/講師の登録=常にロック・登録解除=常にリセットを本番と同一挙動にした(App.tsx の isActingDevelopmentClassroom スキップを撤廃)。教室混入(他教室=本番 doc への誤書込)は markLectureSubmissionDocAsSubmitted / resetLectureSubmissionDoc 側の doc.classroomId ガード(isForeignClassroomSubmissionDoc・actingClassroomId を貫通)で担保=App層の入力タグより権威的な doc.classroomId で守る。本番教室は doc.classroomId が常に一致するため挙動不変。反映(doc→ローカル)は従来どおり reflectParentOwnedSubmissionFields の union のみで希望科目数/配置/出席不可は不変。(App.tsx/lectureSubmission.ts・回帰テスト7件 lectureSubmission.test.ts)
+- feat: 提出用QRの割り振られたコマ表記を「種別+科目」にした(例: 講習の数学→講数・通常の英語→通英・振替の国語→振国)。提出後の再読込(閲覧専用)画面でも科目まで分かる。生徒の occupiedSlots のみ対象(講師は1コマに生徒2人で科目が一意でないため種別ラベル維持)。純関数 buildOccupiedSlotLabel に切り出し。出席不可コマ/黄色コマ(後から出席可能)/希望提出内容の提出後表示は v1.5.449 で実装済み。(App.tsx/occupiedSlotLabel.ts・テスト occupiedSlotLabel.test.ts 8件)
+
 ## v1.5.449 (2026-07-18)
 
 - fix: 黄色コマが講師の登録解除で剥がれる回帰を修正(staging実機確認で発覚)。別タブ日程表のローカル明示再構築4関数(updateUnavailableSlotsLocally/updateStudentCountLocally/updateTeacherUnavailableSlotsLocally/updateTeacherCountLocally)が reopenedSlots を落としていた(v1.5.318型の保全漏れ)。4関数すべてで保全＋回帰テスト追加(scheduleHtml.ts/scheduleHtml.test.ts)

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
+import { createRecentlyResetGuard, guardAndResetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
 
 const existingData = vi.fn()
 const setDoc = vi.fn()
@@ -277,6 +277,78 @@ describe('markLectureSubmissionDocAsSubmitted (室長登録の集団参加を do
 
     await markLectureSubmissionDocAsSubmitted('student-token', { groupClassParticipation: { 集団理科: true } })
 
+    expect(setDoc).not.toHaveBeenCalled()
+  })
+})
+
+// 本番データ保護(2026-07-19): 開発用教室でも本番と同じく「常にロック/リセット」する方針に変更したため、
+// 書き込み関数側で doc.classroomId を権威に「別教室の doc には書かない」低レベルガードを追加した。
+// このガードが消えると、開発用教室で他教室(本番)由来トークンをロック/リセットし本番docを汚染する回帰になる。
+describe('本番データ保護: 別教室 doc への書き込みを弾く (expectedClassroomId ガード)', () => {
+  beforeEach(() => {
+    existingData.mockReset()
+    setDoc.mockReset()
+  })
+
+  it('mark: doc.classroomId が期待教室と一致すればロックする', async () => {
+    existingData.mockReturnValue({ status: 'pending', classroomId: 'dev-classroom', groupClassParticipation: {}, optionChecks: {} })
+    await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
+    const written = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(written.status).toBe('submitted')
+  })
+
+  it('mark: doc.classroomId が別教室なら書き込まない(本番docを提出済みにしない)', async () => {
+    existingData.mockReturnValue({ status: 'pending', classroomId: 'prod-classroom', groupClassParticipation: {}, optionChecks: {} })
+    await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
+    expect(setDoc).not.toHaveBeenCalled()
+  })
+
+  it('mark: expectedClassroomId 未指定なら従来どおり書き込む(後方互換)', async () => {
+    existingData.mockReturnValue({ status: 'pending', classroomId: 'prod-classroom', groupClassParticipation: {}, optionChecks: {} })
+    await markLectureSubmissionDocAsSubmitted('tok')
+    expect(setDoc).toHaveBeenCalled()
+  })
+
+  it('reset: doc.classroomId が別教室なら書き込まない', async () => {
+    existingData.mockReturnValue({ status: 'submitted', classroomId: 'prod-classroom', unavailableSlots: ['2026-07-25_3'] })
+    await resetLectureSubmissionDoc('tok', 'dev-classroom')
+    expect(setDoc).not.toHaveBeenCalled()
+  })
+
+  it('reset: doc.classroomId が一致すれば pending に戻す', async () => {
+    existingData.mockReturnValue({ status: 'submitted', classroomId: 'dev-classroom', unavailableSlots: ['2026-07-25_3'] })
+    await resetLectureSubmissionDoc('tok', 'dev-classroom')
+    const written = setDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(written.status).toBe('pending')
+  })
+
+  it('guardAndReset: expectedClassroomId を reset まで貫通し、別教室なら書き込まない', async () => {
+    existingData.mockReturnValue({ status: 'submitted', classroomId: 'prod-classroom', unavailableSlots: ['2026-07-25_3'] })
+    const guard = createRecentlyResetGuard(2500, { set: () => 0, clear: () => {} })
+    await guardAndResetLectureSubmissionDoc(guard, 'tok', 'dev-classroom')
+    expect(setDoc).not.toHaveBeenCalled()
+  })
+
+  // 設計判断の固定(regression-reviewer 指摘): doc.classroomId が空/未設定の旧トークンは
+  // expectedClassroomId 指定でも「弾かない=書き込む」(後方互換)。稼働 doc は writeSubmissionDocs で
+  // 必ず classroomId を持つため実データでは踏まれないが、将来ここを「弾く」に変えたら気づける形で固定する。
+  it('mark: doc.classroomId が空/未設定なら expectedClassroomId 指定でも書き込む(旧トークン後方互換)', async () => {
+    existingData.mockReturnValue({ status: 'pending', groupClassParticipation: {}, optionChecks: {} }) // classroomId 無し
+    await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
+    expect(setDoc).toHaveBeenCalled()
+    existingData.mockReturnValue({ status: 'pending', classroomId: '', groupClassParticipation: {}, optionChecks: {} }) // 空文字
+    setDoc.mockReset()
+    await markLectureSubmissionDocAsSubmitted('tok', undefined, 'dev-classroom')
+    expect(setDoc).toHaveBeenCalled()
+  })
+
+  // 別教室 doc でも guard.add 自体は行われる(reset だけ弾く)。害はないが挙動を明示。
+  it('guardAndReset: 別教室でも guard へ add はする(reset のみ弾く)', async () => {
+    existingData.mockReturnValue({ status: 'submitted', classroomId: 'prod-classroom', unavailableSlots: [] })
+    const added: string[] = []
+    const guard = { add: (t: string) => { added.push(t) }, has: () => false, clear: () => {} }
+    await guardAndResetLectureSubmissionDoc(guard, 'tok', 'dev-classroom')
+    expect(added).toEqual(['tok'])
     expect(setDoc).not.toHaveBeenCalled()
   })
 })

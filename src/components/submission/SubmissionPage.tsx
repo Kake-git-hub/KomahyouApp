@@ -70,7 +70,7 @@ const DEBUG_DUMMY_DATA: SubmissionData = {
   optionLabels: ['英検対策希望', '定期テスト前補習', '夏期講習案内', '', ''],
   optionChecks: { '0': true },
   regularOnly: false,
-  occupiedSlots: { '2026-03-26_3': '英', '2026-03-27_1': '数', '2026-04-01_2': '国' },
+  occupiedSlots: { '2026-03-26_3': '通英', '2026-03-27_1': '講数', '2026-04-01_2': '振国' },
   groupClassSlots: { '2026-03-28_1': '集団理科', '2026-04-04_2': '集団社会' },
 }
 
