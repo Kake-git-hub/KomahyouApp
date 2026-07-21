@@ -3956,9 +3956,48 @@ export type ComputeTeacherMoveResult =
   | { status: 'blocked'; message: string }
   | { status: 'cancelled'; message: string }
 
+// 机の「生徒コンテンツ」(メモ/出欠ステータス/レッスン)を1まとまりとして扱う型。席まるごと入替
+// (swapMode: 'seat')で講師ブロックと一緒に 2机間で移すために使う。DeskCell の id(=席番号)は動かさない。
+type DeskStudentContent = {
+  memoSlots?: DeskCell['memoSlots']
+  statusSlots?: DeskCell['statusSlots']
+  lesson?: DeskCell['lesson']
+}
+
+function extractDeskStudentContent(desk: DeskCell): DeskStudentContent {
+  return { memoSlots: desk.memoSlots, statusSlots: desk.statusSlots, lesson: desk.lesson }
+}
+
+function applyDeskStudentContent(desk: DeskCell, content: DeskStudentContent) {
+  desk.memoSlots = content.memoSlots
+  desk.statusSlots = content.statusSlots
+  desk.lesson = content.lesson
+}
+
+// 机に生徒がいるか(レッスンの studentSlots か statusSlots に生徒が1人でもいるか)。呼び出し側が
+// 「生徒が絡む=講師だけ入替と席まるごと入替で結果が変わる」ときだけ選択モーダルを出す判定に使う。
+// メモだけの席は生徒とはみなさない(オーナー確定 2026-07-21: モーダルは生徒が絡むときのみ)。
+function deskHasStudentPresence(desk: DeskCell | undefined): boolean {
+  if (!desk) return false
+  const lessonHasStudent = !!desk.lesson?.studentSlots.some((slot) => slot != null)
+  const statusHasStudent = !!desk.statusSlots?.some((slot) => slot != null)
+  return lessonHasStudent || statusHasStudent
+}
+
+// 講師D&Dの移動元/移動先の 2机のどちらかに生徒がいるか(=選択モーダルを出すべきか)を返す純関数。
+// どちらの机にも生徒がいなければ「講師だけ入替」と「席まるごと入替」は同結果なのでモーダル不要。
+export function teacherMoveInvolvesStudents(cell: SlotCell | undefined, sourceDeskIndex: number, targetDeskIndex: number): boolean {
+  if (!cell || sourceDeskIndex === targetDeskIndex) return false
+  return deskHasStudentPresence(cell.desks[sourceDeskIndex]) || deskHasStudentPresence(cell.desks[targetDeskIndex])
+}
+
 // 講師の同コマ内D&D移動/入れ替え(spec: 盤面で講師を生徒のように長押しD&Dで動かせる・同一コマ限定)。
-// 生徒(lesson)は一切動かさず、机の「講師ブロック」(6フィールド)だけを 2机間で入れ替える。
-// 移動先が空き講師なら単純移動、講師がいれば入れ替え(swap)になる(1つの入れ替え処理で両方を賄う)。
+// swapMode='teacher'(既定・従来挙動): 机の「講師ブロック」(6フィールド)だけを 2机間で入れ替え、生徒
+//   (lesson/メモ/出欠)は各机に残す。移動先が空き講師なら単純移動、講師がいれば入れ替え(swap)になる。
+// swapMode='seat'(席まるごと入替・2026-07-21 追加): 講師ブロックに加え生徒コンテンツ(メモ/出欠/lesson)も
+//   一緒に 2机間で入れ替える。席番号(desk.id)は固定し、講師と生徒のペアを保ったまま席を交換する
+//   (オーナー要望: 席番号と講師生徒のペアを任意に合わせたい)。同一コマ内なので日付跨ぎの振替変換・
+//   suppressed 更新は不要(生徒は同じコマの別机へ移るだけ)。
 // 別コマ(cellId 違い)への移動は呼び出し側で弾く前提だが、この純関数は同一コマ内 index 指定のみを受ける。
 // lesson の無い机に非manualの講師を残すと managed 再マージ(mergeManagedWeek)で消えるため、講師が入った
 // 机は manualTeacher=true に固定する(既存の emptiedSourceDesk ガード=v1.5.349 と同型・回帰防止)。
@@ -3970,8 +4009,10 @@ export function computeTeacherMove(params: {
   targetDeskIndex: number
   // 着地した机の teacherAssignmentTeacherId を講師名から補完するために使う(二重表示防止・下記コメント)。
   teachers?: TeacherRow[]
+  // 'teacher'(既定)=講師だけ入替 / 'seat'=生徒ごと席入替。
+  swapMode?: 'teacher' | 'seat'
 }): ComputeTeacherMoveResult {
-  const { weeks, weekIndex, cellId, sourceDeskIndex, targetDeskIndex, teachers = [] } = params
+  const { weeks, weekIndex, cellId, sourceDeskIndex, targetDeskIndex, teachers = [], swapMode = 'teacher' } = params
 
   if (sourceDeskIndex === targetDeskIndex) {
     return { status: 'cancelled', message: '同じ机へドロップしたため、講師の移動は行いませんでした。' }
@@ -4003,6 +4044,16 @@ export function computeTeacherMove(params: {
   applyDeskTeacherBlock(sourceDesk, targetBlock)
   applyDeskTeacherBlock(targetDesk, sourceBlock)
 
+  // 席まるごと入替: 講師ブロックに続けて生徒コンテンツ(メモ/出欠/lesson)も 2机間で入れ替える。
+  // 上書き前に両机の中身を退避してからクロス代入する(nextWeeks は既にクローン済みなので参照の付け替えで安全)。
+  // これにより講師と生徒のペアが保たれたまま席(desk.id)だけが入れ替わる。移動先が空席なら単純に中身が移る。
+  if (swapMode === 'seat') {
+    const sourceContent = extractDeskStudentContent(sourceDesk)
+    const targetContent = extractDeskStudentContent(targetDesk)
+    applyDeskStudentContent(sourceDesk, targetContent)
+    applyDeskStudentContent(targetDesk, sourceContent)
+  }
+
   // 講師が入った机(lesson の有無に関わらず)は manual 固定にして再マージで消えないようにする。
   if (sourceDesk.teacher.trim() && !sourceDesk.manualTeacher) sourceDesk.manualTeacher = true
   if (targetDesk.teacher.trim() && !targetDesk.manualTeacher) targetDesk.manualTeacher = true
@@ -4016,9 +4067,13 @@ export function computeTeacherMove(params: {
   backfillDeskTeacherAssignmentId(sourceDesk, teachers)
   backfillDeskTeacherAssignmentId(targetDesk, teachers)
 
-  const message = swappedName
-    ? `講師 ${movedName} と ${swappedName} を入れ替えました。`
-    : `講師 ${movedName} を ${targetDeskIndex + 1}机目へ移動しました。`
+  const message = swapMode === 'seat'
+    ? (swappedName
+        ? `講師 ${movedName} と ${swappedName} を生徒ごと席入れ替えしました。`
+        : `講師 ${movedName} を生徒ごと ${targetDeskIndex + 1}机目へ移動しました。`)
+    : (swappedName
+        ? `講師 ${movedName} と ${swappedName} を入れ替えました。`
+        : `講師 ${movedName} を ${targetDeskIndex + 1}机目へ移動しました。`)
 
   return { status: 'moved', message, nextWeeks }
 }
@@ -4106,6 +4161,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [draggingTeacherLabel, setDraggingTeacherLabel] = useState<string | null>(null)
   // 講師ドラッグ確定直後の click が講師メニュー(机選択)を開かないよう抑止するフラグ。
   const suppressNextTeacherClickRef = useRef(false)
+  // 講師D&Dで生徒が絡む机へドロップしたとき、「講師だけ入替」か「生徒ごと席入替」かを選ぶモーダルの
+  // 保留状態(オーナー確定 2026-07-21)。生徒が絡まないドロップはモーダルを出さず即入替する。
+  const [pendingTeacherSeatMove, setPendingTeacherSeatMove] = useState<{ cellId: string; sourceDeskIndex: number; targetDeskIndex: number } | null>(null)
   useEffect(() => () => {
     const state = teacherDragMoveRef.current
     if (!state) return
@@ -8797,6 +8855,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
 
+      // どちらかの机に生徒がいれば「講師だけ入替 / 生徒ごと席入替」の選択モーダルを出す(オーナー確定 2026-07-21)。
+      // 生徒がいなければ両者は同結果なのでモーダルを出さず従来どおり講師だけ入替で確定する(無駄なクリックを避ける)。
+      const dropSourceCell = cells.find((cell) => cell.id === cellId)
+      if (teacherMoveInvolvesStudents(dropSourceCell, deskIndex, targetDeskIndex)) {
+        setPendingTeacherSeatMove({ cellId, sourceDeskIndex: deskIndex, targetDeskIndex })
+        return
+      }
+
       const result = computeTeacherMove({
         weeks,
         weekIndex,
@@ -8842,6 +8908,34 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       startY: clientY,
       cleanup,
     }
+  }
+
+  // 講師D&Dの選択モーダルで「講師だけ入替(teacher)」/「生徒ごと席入替(seat)」を選んだときに実移動を確定する。
+  const executePendingTeacherMove = (swapMode: 'teacher' | 'seat') => {
+    const pending = pendingTeacherSeatMove
+    if (!pending) return
+    setPendingTeacherSeatMove(null)
+    const result = computeTeacherMove({
+      weeks,
+      weekIndex,
+      cellId: pending.cellId,
+      sourceDeskIndex: pending.sourceDeskIndex,
+      targetDeskIndex: pending.targetDeskIndex,
+      teachers,
+      swapMode,
+    })
+    if (result.status !== 'moved') {
+      if (result.status === 'blocked') setStatusMessage(result.message)
+      return
+    }
+    commitWeeks(result.nextWeeks, weekIndex, pending.cellId, pending.targetDeskIndex)
+    setStatusMessage(result.message)
+  }
+
+  const cancelPendingTeacherMove = () => {
+    if (!pendingTeacherSeatMove) return
+    setPendingTeacherSeatMove(null)
+    setStatusMessage('講師の移動をキャンセルしました。')
   }
 
   const handleStartMove = () => {
@@ -10615,6 +10709,23 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     上書き保存を実行
                   </button>
                   <button type="button" className="secondary-button" onClick={() => setTemplateSaveConfirm(null)} data-testid="template-save-confirm-cancel-button">キャンセル</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {pendingTeacherSeatMove ? (
+            <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) cancelPendingTeacherMove() }}>
+              <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="teacher-seat-move-modal" style={{ minWidth: 280 }}>
+                <div className="auto-assign-modal-title">講師の入れ替え方法を選択</div>
+                <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {'この机には生徒がいます。\n・生徒ごと席を入れ替える（講師と生徒のペアはそのまま、席番号を交換）\n・講師だけを入れ替える（生徒は各机に残す）\nのどちらにしますか？'}
+                </div>
+                <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button type="button" className="primary-button" data-testid="teacher-seat-move-seat-button" onClick={() => executePendingTeacherMove('seat')}>生徒ごと席を入れ替え</button>
+                  <button type="button" className="secondary-button" data-testid="teacher-seat-move-teacher-button" onClick={() => executePendingTeacherMove('teacher')}>講師だけ入れ替え</button>
+                </div>
+                <div className="student-menu-section student-menu-actions">
+                  <button type="button" className="secondary-button" data-testid="teacher-seat-move-cancel-button" onClick={cancelPendingTeacherMove}>キャンセル</button>
                 </div>
               </div>
             </div>

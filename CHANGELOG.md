@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.453 (2026-07-21)
+
+- feat(INV-01): 講師名D&Dで生徒が絡む机へドロップしたとき、「講師だけ入替 / 生徒ごと席入替」を選ぶモーダルを追加(オーナー要望=席番号と講師生徒のペアを任意に合わせたい)。`computeTeacherMove` に `swapMode`('teacher'=従来 / 'seat'=席まるごと)を追加し、seat は講師ブロック＋生徒コンテンツ(メモ/出欠/lesson)を席番号(desk.id)固定でペアごと交換。生徒がいなければ両者同結果なのでモーダルは出さず即入替。回帰テスト(computeTeacherMove seat 3件+teacherMoveInvolvesStudents+INV-01マトリクス seat swap 3件)を同コミットで追加。開発用教室のみ有効(teacherDragAndDropMove)は不変(src/components/schedule-board/ScheduleBoardScreen.tsx)
+
 ## v1.5.452 (2026-07-21)
 
 - feat(QR提出通知/INV-07): PCを閉じている間に届いたQR提出も、次回コマ表を開いた最初にモーダル通知するようにした(オーナー要望)。以前は初回スナップショット(isInitial)では一切通知せず、閉じている間の提出は起動時にモーダルへ出なかった。localStorage は使わずサーバー側で既読管理する。提出ドキュメントに既読記録 `notifiedAt` を追加(表示した提出は `markLectureSubmissionsNotified` で `notifiedAt=submittedAt` を記録し再読込での再通知を防止)。通知対象の選び方を初回/実行中で分けた: (a)起動時は当該教室の submitted 全件から「前回保存 `lastSavedAt` 以降 かつ 未通知」を拾う `selectStartupSubmissionsToNotify`。これは Cloud Functions が QR提出時に classroomSnapshot へ `countSubmitted:true` を先行マージするため、反映差分 `newlyAppliedEntries` だけでは閉PC提出を取りこぼす(regression-reviewer 指摘)ことへの対処。ウォーターマークで過去分の氾濫を、notifiedAt で再通知を、それぞれ防ぐ。(b)実行中は従来どおり `newlyAppliedEntries`(室長の手動登録は楽観更新で除外)。**INV-07**: `notifiedAt` は提出内容(status/submittedAt/unavailableSlots/subjectSlots 等)に触れない既読メタのみ。`reopenedSlots:[]` リセット・recentlyReset ガード・reflectParentOwnedSubmissionFields は無改変。回帰テスト: `selectUnnotifiedSubmissions` 4件・`selectStartupSubmissionsToNotify`(閉PC検出/ウォーターマーク境界/既通知除外/不明時は非通知)・`markLectureSubmissionsNotified`(記録/冪等/他教室ガード)3件・subscribe の notifiedAt 伝搬。(src/App.tsx・src/integrations/firebase/lectureSubmission.ts)
