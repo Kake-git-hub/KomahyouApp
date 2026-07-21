@@ -10720,9 +10720,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
                   {'この机には生徒がいます。\n・生徒ごと席を入れ替える（講師と生徒のペアはそのまま、席番号を交換）\n・講師だけを入れ替える（生徒は各机に残す）\nのどちらにしますか？'}
                 </div>
-                <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <button type="button" className="primary-button" data-testid="teacher-seat-move-seat-button" onClick={() => executePendingTeacherMove('seat')}>生徒ごと席を入れ替え</button>
-                  <button type="button" className="secondary-button" data-testid="teacher-seat-move-teacher-button" onClick={() => executePendingTeacherMove('teacher')}>講師だけ入れ替え</button>
+                <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'row', gap: 8 }}>
+                  <button type="button" className="primary-button" style={{ flex: 1 }} data-testid="teacher-seat-move-teacher-button" onClick={() => executePendingTeacherMove('teacher')}>講師だけ入れ替え</button>
+                  <button type="button" className="primary-button" style={{ flex: 1 }} data-testid="teacher-seat-move-seat-button" onClick={() => executePendingTeacherMove('seat')}>席を入れ替え</button>
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="secondary-button" data-testid="teacher-seat-move-cancel-button" onClick={cancelPendingTeacherMove}>キャンセル</button>

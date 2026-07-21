@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.454 (2026-07-21)
+
+- style(講師D&D): 席入替の選択モーダルのボタンを上下→左右並び・同色(primary)に変更(左=講師だけ入れ替え / 右=席を入れ替え)。オーナー要望のレイアウト。機能・スコープは不変(teacherDragAndDropMoveは2026-07-09に全教室昇格済み)(src/components/schedule-board/ScheduleBoardScreen.tsx)
+
 ## v1.5.453 (2026-07-21)
 
 - feat(INV-01): 講師名D&Dで生徒が絡む机へドロップしたとき、「講師だけ入替 / 生徒ごと席入替」を選ぶモーダルを追加(オーナー要望=席番号と講師生徒のペアを任意に合わせたい)。`computeTeacherMove` に `swapMode`('teacher'=従来 / 'seat'=席まるごと)を追加し、seat は講師ブロック＋生徒コンテンツ(メモ/出欠/lesson)を席番号(desk.id)固定でペアごと交換。生徒がいなければ両者同結果なのでモーダルは出さず即入替。回帰テスト(computeTeacherMove seat 3件+teacherMoveInvolvesStudents+INV-01マトリクス seat swap 3件)を同コミットで追加。開発用教室のみ有効(teacherDragAndDropMove)は不変(src/components/schedule-board/ScheduleBoardScreen.tsx)
