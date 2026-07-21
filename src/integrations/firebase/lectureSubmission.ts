@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, collection, query, where, onSnapshot } from 'firebase/firestore'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import type { SpecialSessionRow } from '../../components/special-data/specialSessionModel'
@@ -53,6 +53,11 @@ export type LectureSubmissionDoc = {
   // key=`${dateKey}_${band}`(band=1|2)、value=科目('集団理科'|'集団社会')。中3のみ非空。後方互換のため optional。
   groupClassSlots?: Record<string, string>
   submittedAt: string | null
+  // QR提出通知(モーダル)を室長へ一度でも表示した提出の「通知済み」記録(サーバー側=localStorage 非依存)。
+  // 値は通知した時点の submittedAt と一致させる。次回起動の初回スナップショットで submittedAt===notifiedAt の
+  // 提出は再通知しない。PCを閉じている間に届いた(未通知の)提出は notifiedAt が付かないので次回起動時に通知される。
+  // 後方互換のため optional(旧トークンは undefined=未通知扱い)。
+  notifiedAt?: string | null
   createdAt: string
 }
 
@@ -436,6 +441,37 @@ export async function updateSubmissionOccupiedSlots(
   }
 }
 
+/**
+ * QR提出通知(モーダル)を室長へ一度でも表示した提出を「通知済み」としてサーバーへ記録する。
+ * notifiedAt には通知した時点の submittedAt を保存し、次回起動の初回スナップショットで
+ * submittedAt === notifiedAt の提出は再通知しない(localStorage を使わずサーバーで既読管理)。
+ * これにより「PCを閉じている間に届いた提出」は notifiedAt が付いていないため次回起動時に通知でき、
+ * 一度でも表示した提出は二度と再通知しない。
+ * 冪等: 既に同じ submittedAt で通知済みなら書き込まない。
+ * 本番データ保護: expectedClassroomId を渡すと別教室の doc には書き込まない(isForeignClassroomSubmissionDoc)。
+ * 書き込みは updateDoc の部分更新で notifiedAt だけを書く。全上書き(setDoc)にすると getDoc→書き込みの
+ * 窓で保護者が並行して再提出(Functions の docRef.update)した提出内容を古い data で巻き戻す恐れがあるため
+ * (INV-07・提出データ確定不変)。この関数は起動ごと・通知ごとに自動で走るので特にその窓を閉じる。
+ */
+export async function markLectureSubmissionsNotified(
+  entries: Array<{ token: string; submittedAt: string }>,
+  expectedClassroomId?: string | null,
+) {
+  const db = getFirebaseFirestoreInstance()
+  if (!db || !entries.length) return
+
+  for (const entry of entries) {
+    if (!entry.token || !entry.submittedAt) continue
+    const docRef = doc(db, 'lectureSubmissions', entry.token)
+    const existing = await getDoc(docRef)
+    if (!existing.exists()) continue
+    const data = existing.data() as LectureSubmissionDoc
+    if (isForeignClassroomSubmissionDoc(data, expectedClassroomId)) continue
+    if (data.notifiedAt === entry.submittedAt) continue
+    await updateDoc(docRef, { notifiedAt: entry.submittedAt })
+  }
+}
+
 export type SubmissionChangeEntry = {
   token: string
   sessionId: string
@@ -449,6 +485,8 @@ export type SubmissionChangeEntry = {
   regularOnly: boolean
   // 講習集計結果の「提出日時」列に使う。QR提出ドキュメントの提出時刻(ISO文字列)。未設定=null。
   submittedAt: string | null
+  // 「通知済み」記録(サーバー). submittedAt と一致していれば既にモーダル通知済み=再通知しない。未設定=未通知。
+  notifiedAt: string | null
 }
 
 export function subscribeLectureSubmissions(
@@ -486,6 +524,7 @@ export function subscribeLectureSubmissions(
           optionChecks: data.optionChecks ?? {},
           regularOnly: data.regularOnly ?? false,
           submittedAt: typeof data.submittedAt === 'string' ? data.submittedAt : null,
+          notifiedAt: typeof data.notifiedAt === 'string' ? data.notifiedAt : null,
         })
       }
     }

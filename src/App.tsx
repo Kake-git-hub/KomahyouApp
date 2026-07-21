@@ -23,7 +23,7 @@ import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirec
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
-import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, updateSubmissionReopenedSlots, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
+import { ensureSubmissionTokens, writeSubmissionDocs, markLectureSubmissionDocAsSubmitted, guardAndResetLectureSubmissionDoc, createRecentlyResetGuard, updateSubmissionOccupiedSlots, updateSubmissionGroupClassEligibility, updateSubmissionReopenedSlots, markLectureSubmissionsNotified, subscribeLectureSubmissions, type SubmissionChangeEntry } from './integrations/firebase/lectureSubmission'
 import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
@@ -202,6 +202,48 @@ export function buildSubmissionAcknowledgementEntries(
       : (teacherNameById.get(entry.personId) ?? entry.personId),
     classroomName: params.classroomName?.trim() || '教室',
   }))
+}
+
+/**
+ * QR提出通知(モーダル)をまだ室長へ出していない提出だけを選ぶ。
+ *
+ * サーバー記録 notifiedAt が提出時刻 submittedAt と一致していれば「表示済み」＝出さない。
+ * これにより「PCを閉じている間に届いた提出」(notifiedAt 未設定)を、次回起動の初回スナップショットでも
+ * 通知できるようにする。呼び出し側は表示後に markLectureSubmissionsNotified で notifiedAt=submittedAt を
+ * サーバーへ記録し、一度でも表示した提出は二度と再通知しない(localStorage 非依存)。
+ * submittedAt が無い旧トークンは順序付けできないため通知対象外にする。
+ */
+export function selectUnnotifiedSubmissions(entries: SubmissionChangeEntry[]): SubmissionChangeEntry[] {
+  return entries.filter((entry) => entry.submittedAt != null && entry.submittedAt !== entry.notifiedAt)
+}
+
+/**
+ * 起動時(購読の初回スナップショット)に「PCを閉じている間に届いた提出」をモーダル通知する対象を選ぶ。
+ *
+ * 背景: QR提出は Cloud Functions が classroomSnapshot 側にも countSubmitted=true を先行マージするため、
+ * 次回起動でロードした snapshot では既に countSubmitted=true になり、購読反映の newlyAppliedEntries には
+ * 乗らない(＝countSubmitted ゲートだけでは閉PC提出を検出できない)。そこで起動時は反映差分ではなく
+ * 当該教室の submitted 全件(activeEntries)を基準にし、
+ *   - submittedAt が前回保存(lastSavedAt ウォーターマーク)より後 = 前回セッション以降に届いた未処理の提出
+ *   - かつ未通知(notifiedAt !== submittedAt)
+ * だけを拾う。ウォーターマークで「過去の処理済み提出の一斉氾濫」を防ぎ、notifiedAt で「一度表示した提出の
+ * 再通知」を防ぐ(二重の氾濫防止)。ウォーターマークが不明(空/不正)なときは氾濫防止側に倒して何も出さない。
+ *
+ * ⚠️ 回帰監視点: この検出は「Cloud Functions の QR提出マージが classroomSnapshot の savedAt を据え置く」
+ * (functions/src/index.ts の runTransaction が既存 savedAt を維持し now に上げない)ことに依存する。
+ * もし functions 側が QR提出で savedAt を前進させると、ウォーターマークが提出時刻を追い越して閉PC提出を
+ * 取りこぼす。functions の該当箇所を変えるときはここも見直すこと。
+ */
+export function selectStartupSubmissionsToNotify(
+  activeEntries: SubmissionChangeEntry[],
+  lastSavedAtWatermark: string,
+): SubmissionChangeEntry[] {
+  const watermarkMs = lastSavedAtWatermark ? new Date(lastSavedAtWatermark).getTime() : Number.NaN
+  if (Number.isNaN(watermarkMs)) return []
+  return selectUnnotifiedSubmissions(activeEntries).filter((entry) => {
+    const submittedMs = new Date(entry.submittedAt as string).getTime()
+    return !Number.isNaN(submittedMs) && submittedMs > watermarkMs
+  })
 }
 
 type SchedulePopupRuntimeWindow = Window & typeof globalThis & {
@@ -1337,7 +1379,9 @@ function AuthenticatedApp() {
     setTeacherAutoAssignRequest((current) => consumeTeacherAutoAssignRequest(current, requestId))
   }, [])
   const [persistenceMessage, setPersistenceMessage] = useState('保存データを確認しています。')
-  const [lastSavedAt, setLastSavedAt] = useState('')
+  // lastSavedAt はワークスペース snapshot の保存時刻。QR提出通知(モーダル)の起動時ウォーターマークに使うため
+  // 最新値を ref でも参照できるようにする(購読 effect を毎保存で貼り直さずに閉PC提出の境界を判定する)。
+  const [lastSavedAt, setLastSavedAt, lastSavedAtRef] = useLatestState('')
   const [isSavingNow, setIsSavingNow] = useState(false)
   const [isRemoteSyncPending, setIsRemoteSyncPending] = useState(false)
   const [isRemoteSyncVisible, setIsRemoteSyncVisible] = useState(false)
@@ -3981,10 +4025,18 @@ function AuthenticatedApp() {
         })
       }
 
-      // 購読直後の初回スナップショットは「既存の提出済み」を一括配信するだけなので、
-      // 起動/教室切替の直後に過去の提出を「新着QR提出通知」として出さない(データ反映は上で実施済み)。
-      if (!isInitial) {
-        const nextAcknowledgements = buildSubmissionAcknowledgementEntries(newlyAppliedEntries, {
+      // QR提出通知(モーダル): PCを閉じている間に届いた提出も、次回起動時の最初に通知する。
+      //  - 起動時(初回スナップショット): 反映差分(newlyAppliedEntries)は Cloud Functions の
+      //    countSubmitted 先行マージにより閉PC提出を取りこぼすため、当該教室の submitted 全件から
+      //    「前回保存(lastSavedAt)以降 かつ 未通知(notifiedAt)」を拾う(selectStartupSubmissionsToNotify)。
+      //  - 実行中(リアルタイム): 従来どおり反映で countSubmitted が false→true になった提出だけ通知する。
+      //    室長の手動登録は楽観更新で既に true のため除外され、自分の登録で通知が出る回帰を防ぐ。
+      // 表示した提出は markLectureSubmissionsNotified で notifiedAt=submittedAt を記録し、再読込での再通知を防ぐ。
+      const unnotifiedEntries = isInitial
+        ? selectStartupSubmissionsToNotify(activeEntries, lastSavedAtRef.current)
+        : selectUnnotifiedSubmissions(newlyAppliedEntries)
+      if (unnotifiedEntries.length > 0) {
+        const nextAcknowledgements = buildSubmissionAcknowledgementEntries(unnotifiedEntries, {
           specialSessions: specialSessionsRef.current,
           students: studentsRef.current,
           teachers: teachersRef.current,
@@ -3997,6 +4049,13 @@ function AuthenticatedApp() {
             return freshEntries.length > 0 ? [...current, ...freshEntries] : current
           })
         }
+        // 表示した提出をサーバーへ「通知済み」記録(次回起動で再通知しない)。actingClassroomId を渡し他教室 doc は触らない。
+        void markLectureSubmissionsNotified(
+          unnotifiedEntries
+            .filter((entry): entry is SubmissionChangeEntry & { submittedAt: string } => entry.submittedAt != null)
+            .map((entry) => ({ token: entry.token, submittedAt: entry.submittedAt })),
+          actingClassroomId,
+        )
       }
     })
 
