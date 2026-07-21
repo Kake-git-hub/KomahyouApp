@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRecentlyResetGuard, guardAndResetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
+import { createRecentlyResetGuard, guardAndResetLectureSubmissionDoc, markLectureSubmissionDocAsSubmitted, markLectureSubmissionsNotified, resetLectureSubmissionDoc, subscribeLectureSubmissions, updateSubmissionOccupiedSlots, updateSubmissionReopenedSlots, type SubmissionChangeEntry } from './lectureSubmission'
 
 const existingData = vi.fn()
 const setDoc = vi.fn()
+const updateDoc = vi.fn()
 let onSnapshotCallback: ((snapshot: unknown) => void) | null = null
 
 vi.mock('./client', () => ({
@@ -23,6 +24,7 @@ vi.mock('firebase/firestore', () => ({
     data: existingData,
   })),
   setDoc: (...args: unknown[]) => setDoc(...args),
+  updateDoc: (...args: unknown[]) => updateDoc(...args),
   deleteDoc: vi.fn(),
   onSnapshot: (_query: unknown, callback: (snapshot: unknown) => void) => {
     onSnapshotCallback = callback
@@ -395,5 +397,67 @@ describe('subscribeLectureSubmissions initial-snapshot flag', () => {
     expect(calls[0].entries.map((entry) => entry.token)).toEqual(['token-a'])
     expect(calls[1].isInitial).toBe(false)
     expect(calls[1].entries.map((entry) => entry.token)).toEqual(['token-b'])
+  })
+
+  it('passes notifiedAt through to the change entry (null when absent)', () => {
+    const calls: Array<{ entries: SubmissionChangeEntry[] }> = []
+    subscribeLectureSubmissions('classroom-1', (entries) => {
+      calls.push({ entries })
+    })
+
+    onSnapshotCallback?.({
+      docChanges: () => [
+        {
+          type: 'added' as const,
+          doc: { id: 'notified', data: () => ({ sessionId: 's1', personType: 'student', personId: 'p1', submittedAt: '2026-07-20T00:00:00.000Z', notifiedAt: '2026-07-20T00:00:00.000Z' }) },
+        },
+        {
+          type: 'added' as const,
+          doc: { id: 'fresh', data: () => ({ sessionId: 's1', personType: 'student', personId: 'p2', submittedAt: '2026-07-21T00:00:00.000Z' }) },
+        },
+      ],
+    })
+
+    expect(calls[0].entries.map((e) => [e.token, e.notifiedAt])).toEqual([
+      ['notified', '2026-07-20T00:00:00.000Z'],
+      ['fresh', null],
+    ])
+  })
+})
+
+describe('markLectureSubmissionsNotified', () => {
+  beforeEach(() => {
+    existingData.mockReset()
+    setDoc.mockReset()
+    updateDoc.mockReset()
+  })
+
+  it('records notifiedAt = submittedAt via a partial updateDoc (does not overwrite submission content)', async () => {
+    existingData.mockReturnValue({ classroomId: 'classroom-1', status: 'submitted', submittedAt: '2026-07-20T00:00:00.000Z' })
+
+    await markLectureSubmissionsNotified([{ token: 'student-token', submittedAt: '2026-07-20T00:00:00.000Z' }], 'classroom-1')
+
+    // INV-07: 全上書き(setDoc)ではなく notifiedAt だけの部分更新(並行再提出のクロバー窓を閉じる)。
+    expect(setDoc).not.toHaveBeenCalled()
+    expect(updateDoc).toHaveBeenCalledWith(
+      { token: 'student-token' },
+      { notifiedAt: '2026-07-20T00:00:00.000Z' },
+    )
+  })
+
+  it('is idempotent: skips the write when already notified for the same submittedAt', async () => {
+    existingData.mockReturnValue({ classroomId: 'classroom-1', status: 'submitted', submittedAt: '2026-07-20T00:00:00.000Z', notifiedAt: '2026-07-20T00:00:00.000Z' })
+
+    await markLectureSubmissionsNotified([{ token: 'student-token', submittedAt: '2026-07-20T00:00:00.000Z' }], 'classroom-1')
+
+    expect(updateDoc).not.toHaveBeenCalled()
+  })
+
+  it('does not write to a submission doc belonging to another classroom (本番データ保護)', async () => {
+    existingData.mockReturnValue({ classroomId: 'other-classroom', status: 'submitted', submittedAt: '2026-07-20T00:00:00.000Z' })
+
+    await markLectureSubmissionsNotified([{ token: 'foreign-token', submittedAt: '2026-07-20T00:00:00.000Z' }], 'classroom-1')
+
+    expect(updateDoc).not.toHaveBeenCalled()
   })
 })

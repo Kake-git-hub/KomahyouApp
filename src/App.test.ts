@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import { resolveNewlyUnsubmittedSessionStudents } from './components/schedule-board/ScheduleBoardScreen'
 import { initialStudents, type StudentRow } from './components/basic-data/basicDataModel'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
@@ -181,6 +181,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       optionChecks: {},
       regularOnly: false,
       submittedAt: null,
+      notifiedAt: null,
     }, {
       token: 'teacher-token',
       sessionId: 'session-1',
@@ -193,6 +194,7 @@ describe('buildSubmissionAcknowledgementEntries', () => {
       optionChecks: {},
       regularOnly: false,
       submittedAt: null,
+      notifiedAt: null,
     }]
 
     const result = buildSubmissionAcknowledgementEntries(entries, {
@@ -243,6 +245,90 @@ describe('buildSubmissionAcknowledgementEntries', () => {
         personName: '田中',
       }),
     ])
+  })
+})
+
+describe('selectUnnotifiedSubmissions', () => {
+  const baseEntry = (overrides: Partial<SubmissionChangeEntry>): SubmissionChangeEntry => ({
+    token: 't',
+    sessionId: 's1',
+    personType: 'student',
+    personId: 'p1',
+    unavailableSlots: [],
+    subjectSlots: {},
+    subjectDurations: {},
+    groupClassParticipation: {},
+    optionChecks: {},
+    regularOnly: false,
+    submittedAt: '2026-07-20T00:00:00.000Z',
+    notifiedAt: null,
+    ...overrides,
+  })
+
+  it('includes a submission that has never been notified (notifiedAt=null)', () => {
+    // PCを閉じている間に届いた提出は notifiedAt が付かないので、起動時にも通知される。
+    const entries = [baseEntry({ token: 'fresh', notifiedAt: null })]
+    expect(selectUnnotifiedSubmissions(entries).map((e) => e.token)).toEqual(['fresh'])
+  })
+
+  it('excludes a submission already notified for the same submittedAt', () => {
+    // 一度でも表示した提出(notifiedAt===submittedAt)は再通知しない=毎起動の氾濫を防ぐ。
+    const entries = [baseEntry({ token: 'seen', submittedAt: '2026-07-20T00:00:00.000Z', notifiedAt: '2026-07-20T00:00:00.000Z' })]
+    expect(selectUnnotifiedSubmissions(entries)).toEqual([])
+  })
+
+  it('includes a re-submission whose submittedAt is newer than notifiedAt', () => {
+    // 登録解除→再提出で submittedAt が更新されたら、旧 notifiedAt とは不一致になり再通知される。
+    const entries = [baseEntry({ token: 'resubmit', submittedAt: '2026-07-21T00:00:00.000Z', notifiedAt: '2026-07-20T00:00:00.000Z' })]
+    expect(selectUnnotifiedSubmissions(entries).map((e) => e.token)).toEqual(['resubmit'])
+  })
+
+  it('excludes legacy submitted docs with no submittedAt (cannot be ordered)', () => {
+    const entries = [baseEntry({ token: 'legacy', submittedAt: null, notifiedAt: null })]
+    expect(selectUnnotifiedSubmissions(entries)).toEqual([])
+  })
+})
+
+describe('selectStartupSubmissionsToNotify', () => {
+  const baseEntry = (overrides: Partial<SubmissionChangeEntry>): SubmissionChangeEntry => ({
+    token: 't',
+    sessionId: 's1',
+    personType: 'student',
+    personId: 'p1',
+    unavailableSlots: [],
+    subjectSlots: {},
+    subjectDurations: {},
+    groupClassParticipation: {},
+    optionChecks: {},
+    regularOnly: false,
+    submittedAt: '2026-07-20T10:00:00.000Z',
+    notifiedAt: null,
+    ...overrides,
+  })
+  const watermark = '2026-07-20T09:00:00.000Z' // 前回保存
+
+  it('notifies a submission that arrived after the last save while the PC was closed', () => {
+    // Functions が countSubmitted を先行マージしても、起動時は activeEntries から前回保存以降の未通知を拾う。
+    const entries = [baseEntry({ token: 'closed-pc', submittedAt: '2026-07-20T12:00:00.000Z', notifiedAt: null })]
+    expect(selectStartupSubmissionsToNotify(entries, watermark).map((e) => e.token)).toEqual(['closed-pc'])
+  })
+
+  it('excludes submissions at or before the last-save watermark (過去分の氾濫防止)', () => {
+    const entries = [
+      baseEntry({ token: 'old', submittedAt: '2026-07-20T08:00:00.000Z' }),
+      baseEntry({ token: 'fresh', submittedAt: '2026-07-20T12:00:00.000Z' }),
+    ]
+    expect(selectStartupSubmissionsToNotify(entries, watermark).map((e) => e.token)).toEqual(['fresh'])
+  })
+
+  it('excludes submissions already notified even if after the watermark', () => {
+    const entries = [baseEntry({ token: 'seen', submittedAt: '2026-07-20T12:00:00.000Z', notifiedAt: '2026-07-20T12:00:00.000Z' })]
+    expect(selectStartupSubmissionsToNotify(entries, watermark)).toEqual([])
+  })
+
+  it('notifies nothing when the watermark is unknown (empty) to avoid a flood', () => {
+    const entries = [baseEntry({ token: 'x', submittedAt: '2026-07-20T12:00:00.000Z' })]
+    expect(selectStartupSubmissionsToNotify(entries, '')).toEqual([])
   })
 })
 
