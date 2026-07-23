@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix: 外形監視(uptime-check)が一時的なネットワーク瞬断で誤って赤くなり incident 起票＋失敗メールが出ていた問題を修正。問題があれば最大3回まで再試行し、連続失敗のみ異常扱いにする(誤報抑制)。回帰テストを同コミットで追加(tools/uptime-check.mjs・tools/uptime-check.test.mjs・vitest.config.ts・Issue #50)
 
 ## v1.5.454 (2026-07-21)
 
