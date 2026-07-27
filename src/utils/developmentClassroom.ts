@@ -3,6 +3,12 @@ export type DevelopmentClassroomIdentity = {
   name?: string | null
 }
 
+// 検証用(サンドボックス)教室の判定。開発用教室に加え、テスト教室もここに含める
+// (オーナー確定 2026-07-28: 手動テスト手順書をテスト教室で他教室データを使って回すため)。
+// この判定は「他教室のバックアップをこの教室へ読み込む(Feature B)」の解放だけでなく、
+// 混入防止ガード(自教室が発行していない提出トークンはQRを出さない・コピー時に剥がす)にも
+// 使われる。**両者は必ずセット**で、片方だけ有効にすると 2026-07-09 のQR混入事故が再発する。
+// サーバー側にも同じ判定がある(functions/src/developmentClassroomIdentity.ts)。片方だけ変えない。
 export function isDevelopmentClassroom(classroom: DevelopmentClassroomIdentity | null | undefined) {
   const id = classroom?.id?.trim().toLowerCase() ?? ''
   const name = classroom?.name?.trim() ?? ''
@@ -12,6 +18,8 @@ export function isDevelopmentClassroom(classroom: DevelopmentClassroomIdentity |
     || id.startsWith('dev_')
     || name === '開発用教室'
     || name.includes('開発用教室')
+    || name === 'テスト教室'
+    || name.includes('テスト教室')
 }
 
 type SubmissionTokenBearer = {

@@ -12,8 +12,28 @@ describe('isDevelopmentClassroom', () => {
     expect(isDevelopmentClassroom({ id: 'dev_room_001', name: '検証教室' })).toBe(true)
   })
 
+  // オーナー確定 2026-07-28: 手動テスト手順書をテスト教室で他教室データを使って回すため、
+  // テスト教室も検証用(サンドボックス)教室に含める。Feature B の解放と混入防止ガードはセットで付く。
+  it('accepts テスト教室 as a sandbox classroom (2026-07-28)', () => {
+    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai', name: 'テスト教室' })).toBe(true)
+    expect(isDevelopmentClassroom({ id: 'test_classroom_2', name: 'テスト教室2' })).toBe(true)
+  })
+
   it('does not match normal classrooms', () => {
     expect(isDevelopmentClassroom({ id: 'classroom_001', name: '本校' })).toBe(false)
+  })
+
+  // 本番3教室が誤ってサンドボックス扱いにならないこと(混入防止ガードの適用先が広がらないため
+  // ではなく、本番から他教室データを読み込めてしまわないための最重要ロック)。
+  it('never matches the production classrooms', () => {
+    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh', name: 'スクールIE 緑が丘校' })).toBe(false)
+    expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb', name: 'スクールIE 薬円台校' })).toBe(false)
+  })
+
+  // 「テスト」だけでは通さない(名前に紛れた一般教室を巻き込まない)。
+  it('does not match names that merely contain テスト', () => {
+    expect(isDevelopmentClassroom({ id: 'classroom_002', name: 'テスト前対策校' })).toBe(false)
   })
 })
 
