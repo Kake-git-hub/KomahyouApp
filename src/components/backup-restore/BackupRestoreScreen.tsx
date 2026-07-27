@@ -241,8 +241,8 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
             {isDevelopmentClassroom ? (
               <section className="basic-data-section-card" data-testid="backup-restore-development-load-panel">
                 <div className="basic-data-card-head">
-                  <h3>他教室のバックアップを開発用教室に読み込む</h3>
-                  <p>選んだ教室の「選んだバックアップ時点」のデータを開発用教室へ読み込みます。読み込みは開発用教室だけに書き込まれ、他教室には一切影響しません(データ混入防止)。共有用トークンは自動で外します。読み込み後は「保存」してください。</p>
+                  <h3>他教室のバックアップをこの教室に読み込む</h3>
+                  <p>選んだ教室の「選んだバックアップ時点」のデータを、いま開いているこの検証用教室(開発用教室・テスト教室)へ読み込みます。読み込みはこの教室だけに書き込まれ、読み込み元の教室には一切影響しません(データ混入防止)。共有用トークンは自動で外します(コピー元のQRで本番へ誤送信しないため)。読み込み後は「保存」してください。</p>
                 </div>
                 <div className="basic-data-form-grid">
                   <button
@@ -277,7 +277,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                     disabled={developmentBackupLoading || !selectedDevelopmentLoadClassroomId || !selectedDevelopmentLoadBackupDateKey}
                     data-testid="backup-restore-development-load-button"
                   >
-                    開発用教室へ読み込む
+                    この教室へ読み込む
                   </button>
                 </div>
               </section>

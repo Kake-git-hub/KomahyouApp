@@ -3186,7 +3186,7 @@ function AuthenticatedApp() {
     const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
     const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
-    // 混入防止(2026-07-09): 開発用教室では、自教室が発行したものでない(他教室由来/タグ未設定)トークンを
+    // 混入防止(2026-07-09): 検証用教室(開発用教室・テスト教室)では、自教室が発行したものでない(他教室由来/タグ未設定)トークンを
     // 「無し」として扱い、下の ensureSubmissionTokens で自教室タグ付きに再発行させる。これにより
     // (1)他教室トークンが日程表に残らず本番への誤スキャンを構造的に防ぎ、(2)v1.5.415 のガードで
     // 未タグ既存トークンのQRが消えた回帰も解消する(再発行後は owned となりQRが出る)。本番教室は素通し。
@@ -3377,8 +3377,8 @@ function AuthenticatedApp() {
   // specialSessions 等が更新され、それを依存する effect が再発火して毎編集で popup を再生成して
   // しまう(メモリ最大スパイク)。トリガを個別に潰すのではなく、ここで一括して自動再生成を止める。
   // rangeOverride を渡すと state 反映待ちなしにその範囲で即同期できる(「最新表示」用)。
-  // 混入防止(2026-07-09): 開発用教室でのみ、日程表へ渡す前に「今開いている教室が発行したものではない」
-  // 提出トークンを除去する。開発用教室は他教室の生データをコピーしてテストするため、コピー元(他教室=本番)の
+  // 混入防止(2026-07-09): 検証用教室(開発用教室・テスト教室)でのみ、日程表へ渡す前に「今開いている教室が発行したものではない」
+  // 提出トークンを除去する。検証用教室は他教室の生データをコピーしてテストするため、コピー元(他教室=本番)の
   // トークンが残っていると、日程表がそのQRを表示→スキャンで本番へ誤書き込みする事故が起きる(2026-07-09 実発生)。
   // 本番教室ではこのガードは一切走らない(既存トークン・印刷済みQRは不変)。
   const applyDevelopmentScheduleTokenGuard = useCallback((sessions: SpecialSessionRow[]): SpecialSessionRow[] => {
@@ -3500,7 +3500,7 @@ function AuthenticatedApp() {
         const input = target.personType === 'student' ? session.studentInputs[target.personId] : session.teacherInputs[target.personId]
         if (!input?.submissionToken) continue
         if (syncedTokens.has(input.submissionToken)) continue
-        // 混入防止(2026-07-09): 開発用教室では自教室発行でないトークンへ書き込まない(登録/解除経路と同じガード)。
+        // 混入防止(2026-07-09): 検証用教室では自教室発行でないトークンへ書き込まない(登録/解除経路と同じガード)。
         if (isActingDevelopmentClassroom && !isSubmissionTokenOwnedByClassroom(input, actingClassroomId)) continue
         syncedTokens.add(input.submissionToken)
         updateSubmissionReopenedSlots(input.submissionToken, input.reopenedSlots ?? []).catch(() => { /* non-fatal: 後追い反映(updateSubmissionOccupiedSlots)で収束 */ })
@@ -4592,10 +4592,10 @@ function AuthenticatedApp() {
   // サーバー復元は開発者画面(restoreServerAutoBackup→openDeveloperRestoreModal)のみ。rollbackはUndoで代替。
 
   // Feature B: 読み込み元(他教室)× バックアップ時点の候補をサーバーから取得する。
-  // in-memory の他教室参照を一切使わないため、開発用教室の室長アカウントでも機能する。
+  // in-memory の他教室参照を一切使わないため、検証用教室の室長アカウントでも機能する。
   const loadDevelopmentBackupSources = useCallback(async () => {
     if (!isActingDevelopmentClassroom) {
-      setPersistenceMessage('この操作は開発用教室でのみ実行できます。')
+      setPersistenceMessage('この操作は検証用教室(開発用教室・テスト教室)でのみ実行できます。')
       return
     }
     if (!isRemoteBackendEnabled) {
@@ -4621,7 +4621,7 @@ function AuthenticatedApp() {
   // 他教室には一切書き込まないため、データ混入が構造的に発生しない。
   const loadClassroomBackupIntoDevelopment = useCallback(async (backupDateKey: string, sourceClassroomId: string) => {
     if (!actingClassroomId || !isActingDevelopmentClassroom) {
-      setPersistenceMessage('この操作は開発用教室でのみ実行できます。')
+      setPersistenceMessage('この操作は検証用教室(開発用教室・テスト教室)でのみ実行できます。')
       return
     }
     if (!backupDateKey || !sourceClassroomId) {
@@ -4629,7 +4629,7 @@ function AuthenticatedApp() {
       return
     }
     if (sourceClassroomId === actingClassroomId) {
-      setPersistenceMessage('開発用教室自身は読み込み元にできません。')
+      setPersistenceMessage('いま開いている教室自身は読み込み元にできません。')
       return
     }
 
@@ -4642,11 +4642,11 @@ function AuthenticatedApp() {
       const sourceTemplateCells = source.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0
       const backupLabel = developmentBackupSources.backups.find((backup) => backup.backupDateKey === backupDateKey)?.displayLabel ?? backupDateKey
       const confirmed = window.confirm([
-        `「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータを開発用教室へ読み込みます。`,
+        `「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータをこの教室へ読み込みます。`,
         `読み込み元の規模: 生徒${sourceStudentCount}名 / 講師${sourceTeacherCount}名 / テンプレ${sourceTemplateCells}コマ`,
         'この人数・コマ数が想定と違う場合は、教室や時点の取り違えの可能性があるので中止してください。',
-        '共有用トークン類は開発用教室向けに自動で外します。',
-        '現在の開発用教室データは上書きされます。続行しますか?',
+        '共有用トークン類は自動で外します(コピー元のQRで他教室へ誤送信しないため)。',
+        '現在のこの教室のデータは上書きされます。続行しますか?',
       ].join('\n'))
       if (!confirmed) {
         setPersistenceMessage('バックアップの読み込みをキャンセルしました。')
@@ -4677,7 +4677,7 @@ function AuthenticatedApp() {
       })
       // 読み込み先は開発用教室(acting)のみ。編集 state の出所も acting に一致させる。
       loadedEditingClassroomIdRef.current = actingClassroomId
-      setPersistenceMessage(`「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータを開発用教室へ読み込みました。保存してください。`)
+      setPersistenceMessage(`「${source.classroomName || sourceClassroomId}」(${backupLabel})のデータをこの教室へ読み込みました。保存してください。`)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'バックアップの読み込みに失敗しました。'
       setPersistenceMessage(`読み込みエラー: ${message}`)

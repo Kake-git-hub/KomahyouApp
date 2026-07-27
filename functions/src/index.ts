@@ -10,6 +10,7 @@ import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-fu
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
+import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import {
   buildWorkspaceAutoBackupDisplayLabel,
@@ -1634,21 +1635,11 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
   return { snapshotGzipBase64: compressed.toString('base64') }
 })
 
-// 開発用教室の判定(クライアント src/utils/developmentClassroom.ts と同じ規則)。
+// 検証用(サンドボックス)教室の判定は ./developmentClassroomIdentity へ切り出し済み。
 // 本番の開発用教室は id=v8OZ7zH8vONNHjjYVcR1・name=「開発用教室」なので name 判定が要。
-function isDevelopmentClassroomIdentity(id: string | null | undefined, name: string | null | undefined) {
-  const normalizedId = (id ?? '').trim().toLowerCase()
-  const normalizedName = (name ?? '').trim()
-  return normalizedId === 'development'
-    || normalizedId === 'dev'
-    || normalizedId.includes('development')
-    || normalizedId.startsWith('dev_')
-    || normalizedName === '開発用教室'
-    || normalizedName.includes('開発用教室')
-}
 
-// 「他教室のバックアップを開発用教室へ読み込む(Feature B)」のアクセス判定。
-// 許可: 開発者、または【開発用教室の室長】(開発用教室はサンドボックスのため任意教室を読み込める)。
+// 「他教室のバックアップを検証用教室(開発用教室・テスト教室)へ読み込む(Feature B)」のアクセス判定。
+// 許可: 開発者、または【検証用教室の室長】(サンドボックスのため任意教室を読み込める)。
 async function resolveDevelopmentBackupAccess(authUid: string | undefined, workspaceKey: string) {
   if (!authUid) throw new HttpsError('unauthenticated', 'Firebase へログインしてください。')
   const memberSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('members').doc(authUid).get()
@@ -1661,11 +1652,11 @@ async function resolveDevelopmentBackupAccess(authUid: string | undefined, works
     const name = (classroomSnapshot.data() as FirebaseClassroomDoc | undefined)?.name ?? ''
     if (isDevelopmentClassroomIdentity(assignedId, name)) return { member, isDeveloper: false as const, developmentClassroomId: assignedId }
   }
-  throw new HttpsError('permission-denied', 'この操作には開発者または開発用教室の権限が必要です。')
+  throw new HttpsError('permission-denied', 'この操作には開発者または検証用教室(開発用教室・テスト教室)の権限が必要です。')
 }
 
 // Feature B のピッカー用: 利用可能なバックアップ一覧と、読み込み元として選べる教室(id+名前)を返す。
-// 開発用教室の室長でも直接 Firestore を読まずに済むよう、サーバー(admin権限)でまとめて返す。
+// 検証用教室(開発用教室・テスト教室)の室長でも直接 Firestore を読まずに済むよう、サーバー(admin権限)でまとめて返す。
 export const listDevelopmentClassroomBackupSources = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
@@ -1688,7 +1679,7 @@ export const listDevelopmentClassroomBackupSources = onCall({ invoker: 'public',
     }
   })
 
-  // 読み込み元候補は開発用教室自身を除いた全教室。
+  // 読み込み元候補は検証用教室(開発用教室・テスト教室)を除いた全教室。サンドボックス同士のコピーはしない。
   const classrooms = classroomsSnapshot.docs
     .map((entry) => ({ id: entry.id, name: (entry.data() as FirebaseClassroomDoc).name ?? entry.id }))
     .filter((classroom) => !isDevelopmentClassroomIdentity(classroom.id, classroom.name))
@@ -1713,7 +1704,7 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
     throw new HttpsError('permission-denied', 'このワークスペースのメンバーではありません。')
   }
 
-  // 許可: 開発者 / 自分の担当教室 / 開発用教室の室長(任意教室を開発用へ読み込むため)。
+  // 許可: 開発者 / 自分の担当教室 / 検証用教室(開発用教室・テスト教室)の室長(任意教室を自教室へ読み込むため)。
   const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc | undefined
   let allowed = member?.role === 'developer' || member?.assignedClassroomId === classroomId
   if (!allowed && typeof member?.assignedClassroomId === 'string' && member.assignedClassroomId) {
