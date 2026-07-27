@@ -18,9 +18,24 @@ describe('isDevelopmentClassroomIdentity', () => {
   })
 
   // オーナー確定 2026-07-28: テスト教室でも他教室バックアップを読み込めるようにする(Feature B)。
-  it('accepts テスト教室 as a sandbox classroom (2026-07-28)', () => {
+  // 判定は【教室ID】(オーナー指示: 名前判定は不安)。名前を変えても効き続けること。
+  it('accepts テスト教室 by classroom id, independent of its name (2026-07-28)', () => {
     expect(isDevelopmentClassroomIdentity('test_classroom_20260507_dai', 'テスト教室')).toBe(true)
-    expect(isDevelopmentClassroomIdentity('test_classroom_2', 'テスト教室2')).toBe(true)
+    expect(isDevelopmentClassroomIdentity('test_classroom_20260507_dai', '石川先生 検証用')).toBe(true)
+    expect(isDevelopmentClassroomIdentity('test_classroom_20260507_dai', '')).toBe(true)
+  })
+
+  // 名前判定は廃止。教室名を「テスト教室」にしただけの別教室(本番教室の改名を含む)は通さない。
+  it('never accepts a classroom just because it is named テスト教室', () => {
+    expect(isDevelopmentClassroomIdentity('5w5OMueETerSKrSf14HC', 'テスト教室')).toBe(false)
+    expect(isDevelopmentClassroomIdentity('test_classroom_2', 'テスト教室2')).toBe(false)
+  })
+
+  // 許可リストは完全一致。似たIDや大小差では通さない。
+  it('matches the allowed id exactly (no prefix / case slack)', () => {
+    expect(isDevelopmentClassroomIdentity('test_classroom_20260507_dai_2', '')).toBe(false)
+    expect(isDevelopmentClassroomIdentity('TEST_CLASSROOM_20260507_DAI', '')).toBe(false)
+    expect(isDevelopmentClassroomIdentity(' test_classroom_20260507_dai ', '')).toBe(true)
   })
 
   // 本番3教室がサンドボックス扱いになると、その室長が他教室のバックアップを読み込めてしまう。
