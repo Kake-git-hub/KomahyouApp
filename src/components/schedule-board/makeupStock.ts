@@ -421,7 +421,7 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
 }
 
 // 有効な未消化 origin 日付を決める唯一の権威関数（分散させない）。
-// 4 つの発生源の和집合から、個別に非表示化(suppressedOrigins)された日付を除く。日付単位で一意。
+// 4 つの発生源の和集合から、個別に非表示化(suppressedOrigins)された日付を除く。日付単位で一意。
 export function resolveEffectiveMakeupOriginDates(params: {
   autoOriginDates: string[]
   conflictOriginDates: string[]
