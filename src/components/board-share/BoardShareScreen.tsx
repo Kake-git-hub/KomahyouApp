@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { loadBoardShare, subscribeBoardShare, type BoardShareCell, type BoardSharePayload, type BoardShareStatusEntry, type BoardShareStudentEntry } from '../../integrations/firebase/boardShare'
+import { isExternalBoardShareStudent, loadBoardShare, subscribeBoardShare, type BoardShareCell, type BoardSharePayload, type BoardShareStatusEntry, type BoardShareStudentEntry } from '../../integrations/firebase/boardShare'
 import { lessonTypeLabels, teacherTypeLabels } from '../schedule-board/mockData'
 import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, type GroupClassEntry } from '../schedule-board/groupClass'
 import { buildLinkedLessonDestinationMap, formatShortDateLabel } from '../schedule-board/lessonLinks'
@@ -46,7 +46,10 @@ function getStudentStatusLabel(status: StudentStatusKind) {
   return '休'
 }
 
-function getLessonShortLabel(lessonType: LessonType) {
+// 外部生(生徒基本データの「外部生」チェック)は、通/振/講/増/体 をまとめて 外 で表示する。
+// 盤面(BoardGrid の getLessonPrefix)と同じ規則。⚠️ lessonType の実データは書き換えない。
+function getLessonShortLabel(lessonType: LessonType, isExternalStudent = false) {
+  if (isExternalStudent) return '外'
   if (lessonType === 'extra') return '増'
   if (lessonType === 'regular') return '通'
   if (lessonType === 'makeup') return '振'
@@ -54,15 +57,24 @@ function getLessonShortLabel(lessonType: LessonType) {
   return '体'
 }
 
+// 授業区分の全角ラベル(セル下段のチップ)も外部生では 外部生 に置き換える。
+export function getLessonTypeLabel(lessonType: LessonType, isExternalStudent = false) {
+  if (isExternalStudent) return '外部生'
+  return lessonTypeLabels[lessonType]
+}
+
 function getTeacherTypeLabel(teacherType: TeacherType) {
   if (teacherType === 'normal') return ''
   return teacherTypeLabels[teacherType]
 }
 
-function formatStudentLabel(student: BoardShareStudentEntry | BoardShareStatusEntry | null | undefined) {
+export function formatStudentLabel(
+  student: BoardShareStudentEntry | BoardShareStatusEntry | null | undefined,
+  isExternalStudent = false,
+) {
   if (!student) return ''
   const noteSuffix = normalizeRegularLessonNote(student.noteSuffix)
-  const lessonLabel = getLessonShortLabel(student.lessonType)
+  const lessonLabel = getLessonShortLabel(student.lessonType, isExternalStudent)
   const teacherTypeLabel = getTeacherTypeLabel(student.teacherType)
   return [
     `${lessonLabel}) ${student.name}`,
@@ -166,6 +178,8 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
   const dateOptions = useMemo(() => Array.from(new Map(sortedCells.map((cell) => [cell.dateKey, cell])).values()), [sortedCells])
   const slotOptions = useMemo(() => Array.from(new Set(sortedCells.map((cell) => cell.slotNumber))).sort((left, right) => left - right), [sortedCells])
   const linkedLessonDestinationByStatusId = useMemo(() => buildLinkedLessonDestinationMap(sortedCells), [sortedCells])
+  // 外部生の managedStudentId 集合。旧ドキュメント(未設定)は空集合＝全員通常表示になる(後方互換)。
+  const externalStudentIds = useMemo(() => new Set(payload?.externalStudentIds ?? []), [payload])
   const currentCell = sortedCells.find((cell) => cell.dateKey === selectedDateKey && cell.slotNumber === selectedSlotNumber) ?? null
   // spec-group-lesson §A: 選択日の集団授業(2バンド)。デスク一覧の上に表示する。
   const groupEntriesForDate = useMemo<GroupClassEntry[]>(() => {
@@ -257,14 +271,15 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                     <div className="board-share-students">
                       {studentSlots.map(({ student, status }, studentIndex) => {
                         const visibleStudent = student ?? status
+                        const isExternalStudent = isExternalBoardShareStudent(externalStudentIds, visibleStudent)
                         const visibleDateLabel = getVisibleDateLabel(visibleStudent, status, currentCell, status ? linkedLessonDestinationByStatusId.get(status.id)?.dateKey : undefined)
                         return (
                         <div className={`board-share-student${status ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`}>
                           <span className="board-share-student-label">
-                            {formatStudentLabel(visibleStudent)}{status ? `(${getStudentStatusLabel(status.status)}` : ''}
+                            {formatStudentLabel(visibleStudent, isExternalStudent)}{status ? `(${getStudentStatusLabel(status.status)}` : ''}
                           </span>
                           {visibleDateLabel ? <span className="board-share-origin-date">{visibleDateLabel}</span> : null}
-                          {visibleStudent ? <span className="board-share-lesson-type">{lessonTypeLabels[visibleStudent.lessonType]}</span> : null}
+                          {visibleStudent ? <span className="board-share-lesson-type">{getLessonTypeLabel(visibleStudent.lessonType, isExternalStudent)}</span> : null}
                         </div>
                         )
                       })}

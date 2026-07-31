@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.461 (2026-08-01)
+
+- feat: **配布用盤面(共有URL)も外部生表記 外) に対応**(オーナー要望 2026-08-01・v1.5.460 で盤面のみ対応した続き)。共有ドキュメントに `externalStudentIds`(外部生の managedStudentId 一覧)を追加し、共有画面は `isExternalBoardShareStudent` で突き合わせて 通/振/講/増/体 を **外** に、下段チップを **外部生** に置き換える。⚠️ **名簿そのものは共有しない**(必要なのは ID の集合だけ)。未設定/型崩れの旧ドキュメントは空集合＝全員通常表示に倒す(`normalizeExternalStudentIds`・後方互換)。**公開署名(`lastPublishedBoardShareSignatureRef`)にも `externalStudentIds` を含める**: ここを外すと外部生チェックを付け外ししても署名が変わらず publish がスキップされ、配布用盤面だけ旧表記のまま取り残される。また外部生チェックは**盤面を編集しない**ため `handleBoardStateChange` 経由の公開が走らない。専用の追い公開 effect を追加したが、**★クロス教室汚染防止として「教室が切り替わった直後は公開しない」ガードを必ず残す**(切替中は actingClassroomId が先に新教室へ変わり boardState/名簿が旧教室のまま残る窓があり、そこで公開すると旧教室の盤面を新教室のトークンで配布する=2026-06-06 のクロス汚染と同じ形)。直前に公開した教室IDと外部生集合を ref で覚え、**同じ教室のまま集合が変わったときだけ**追い公開する。あわせて `isExternalStudentRow` の引数を `Pick<StudentRow,'isExternal'>` から `StudentRow` へ変更(弱い型になり isExternal 未設定の生徒を渡すと TS2559 で落ちるため)。回帰テスト7件を同コミットで追加(旧ドキュメント/重複・整列/compact 化での欠落/managedStudentId なしは対象外/全区分で 外/学年・科目・分数は維持)。外部生分岐と整列を外す mutation で3件落ちることを確認(src/integrations/firebase/boardShare.ts・src/components/board-share/BoardShareScreen.tsx・src/App.tsx)
+
 ## v1.5.460 (2026-08-01)
 
 - feat: 生徒基本データに**外部生チェック**を追加(オーナー要望 2026-08-01)。チェックを付けた生徒はコマ表(盤面)の授業区分表記が、通)/振)/講)/増)/体) をまとめて **外)** になる。新規登録フォームと既存生徒の「編集」の両方から切り替えでき、盤面は名簿の変更を即座に反映する(保存不要の表示解決)。⚠️ **表示だけの置き換えで、`StudentEntry.lessonType` の実データは書き換えない**(オーナー判断 2026-08-01): 振替在庫・講習ストック・コマ数集計・自動割振はすべて従来どおり計上する。ここを「実データの授業区分を外部生用の値へ変える」実装にすると INV-06(在庫整合)まで巻き込むため、**その方向へ寄せてはいけない**。判定は権威関数 `isExternalStudentRow` に一本化し(`row.isExternal` を直読みしない)、盤面側は登録名・表示名のどちらでも引ける `managedStudentByAnyName` 経由の `isExternalStudentName` で解決する(名簿外の体験生・メモは常に通常表示)。`StudentRow.isExternal` は optional=未設定は通常生徒なので既存データの移行は不要。Excel の生徒シートにも「外部生」列を追加(出力は はい/空欄、取り込みは はい/○/1/true などを受ける `parseExternalStudentFlag`)。反映範囲は**盤面のみ**(生徒日程表・講師日程表・盤面共有画面は従来表記のまま=オーナー選択)。回帰テスト6件を同コミットで追加(src/components/basic-data/basicDataModel.ts・BasicDataScreen.tsx・src/components/schedule-board/BoardGrid.tsx・ScheduleBoardScreen.tsx・src/App.css)

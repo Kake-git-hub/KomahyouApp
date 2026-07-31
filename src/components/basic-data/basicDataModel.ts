@@ -30,7 +30,9 @@ export type StudentRow = {
 }
 
 // 外部生判定の唯一の権威関数。呼び出し側で row.isExternal を直読みしない(判定の分散を防ぐ)。
-export function isExternalStudentRow(student: Pick<StudentRow, 'isExternal'> | null | undefined) {
+// 引数は StudentRow 全体で受ける。`Pick<StudentRow, 'isExternal'>` にすると isExternal だけの
+// 弱い型(全プロパティが optional)になり、isExternal 未設定の生徒を渡した呼び出しが TS2559 で落ちる。
+export function isExternalStudentRow(student: StudentRow | null | undefined) {
   return student?.isExternal === true
 }
 

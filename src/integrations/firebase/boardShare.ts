@@ -35,6 +35,10 @@ export type BoardSharePayload = {
   cells: BoardShareCell[]
   // spec-group-lesson §A: 集団授業の割当(共有画面に集団行を表示するため)。後方互換のため optional。
   groupClassEntries?: GroupClassEntryMap
+  // 外部生(生徒基本データの「外部生」チェック)の managedStudentId 一覧。共有画面はこれを見て
+  // 授業区分表記を 外) に置き換える。⚠️ 名簿そのものは共有しない(必要なのは ID の集合だけ)。
+  // 未設定/旧ドキュメントは「外部生なし」として扱う(後方互換)。
+  externalStudentIds?: string[]
 }
 
 export type BoardSharePayloadInput = Omit<BoardSharePayload, 'cells'> & {
@@ -56,6 +60,7 @@ type StoredBoardShareDoc = {
   cellsEncoding?: typeof BOARD_SHARE_GZIP_ENCODING
   compressedCells?: string
   groupClassEntries?: GroupClassEntryMap
+  externalStudentIds?: string[]
 }
 
 type CompressionStreamConstructor = new (format: 'gzip') => TransformStream
@@ -112,12 +117,30 @@ async function hydrateBoardShareDoc(data: StoredBoardShareDoc | null | undefined
     classroomName: data.classroomName,
     sharedAt: data.sharedAt,
     groupClassEntries: normalizeGroupClassEntryMap(data.groupClassEntries),
+    externalStudentIds: normalizeExternalStudentIds(data.externalStudentIds),
   }
   if (data.cellsEncoding === BOARD_SHARE_GZIP_ENCODING && typeof data.compressedCells === 'string') {
     const json = await gunzipBase64ToText(data.compressedCells)
     return { ...base, cells: JSON.parse(json) as BoardShareCell[] }
   }
   return { ...base, cells: Array.isArray(data.cells) ? data.cells : [] }
+}
+
+// 共有ドキュメントの externalStudentIds を正規化する。旧ドキュメント(未設定)・型崩れは空配列。
+// 重複と空文字を落として並べ替え、公開時の署名比較が値の並び順で揺れないようにする。
+export function normalizeExternalStudentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const ids = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+  return Array.from(new Set(ids)).sort()
+}
+
+// 共有画面での外部生判定の唯一の権威関数。managedStudentId を持たない体験生・メモは常に false。
+export function isExternalBoardShareStudent(
+  externalStudentIds: ReadonlySet<string>,
+  student: Pick<BoardShareStudentEntry, 'managedStudentId'> | null | undefined,
+) {
+  const managedStudentId = student?.managedStudentId
+  return Boolean(managedStudentId && externalStudentIds.has(managedStudentId))
 }
 
 function compactStudentEntry(student: StudentEntry | null): BoardShareStudentEntry | null {
@@ -175,6 +198,7 @@ export async function publishBoardShare(payload: BoardSharePayloadInput) {
     classroomName: compacted.classroomName,
     sharedAt: compacted.sharedAt,
     groupClassEntries: normalizeGroupClassEntryMap(compacted.groupClassEntries),
+    externalStudentIds: normalizeExternalStudentIds(compacted.externalStudentIds),
   }
   // 圧縮して Firestore 1MiB 上限を回避する。CompressionStream 非対応環境では従来どおり
   // 非圧縮で保存（小さい盤面はそのまま通る）。

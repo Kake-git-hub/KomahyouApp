@@ -5,7 +5,7 @@ import type { StudentDeletionStockSummary } from './components/basic-data/delete
 import { AutoAssignRuleScreen, buildAutoAssignWorkbook, parseAutoAssignWorkbook } from './components/auto-assign-rules/AutoAssignRuleScreen'
 import { autoAssignRuleDefinitions, backfillMissingAutoAssignRules, initialAutoAssignRules } from './components/auto-assign-rules/autoAssignRuleModel'
 import { initialPairConstraints } from './types/pairConstraint'
-import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
+import { deriveManagedDisplayName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, initialStudents, initialTeachers, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, type ManagerRow, type StudentRow, type TeacherRow } from './components/basic-data/basicDataModel'
 import { createInitialRegularLessons, packSortRegularLessonRows, type RegularLessonRow } from './components/basic-data/regularLessonModel'
 import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecialSessionWorkbook, SpecialSessionScreen } from './components/special-data/SpecialSessionScreen'
 import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
@@ -1361,6 +1361,9 @@ function AuthenticatedApp() {
   const boardSharePublishInFlightRef = useRef(false)
   const boardSharePendingStateRef = useRef<PersistedBoardState | null>(null)
   const lastPublishedBoardShareSignatureRef = useRef<string | null>(null)
+  // 外部生チェックの変更は盤面を編集しないため、盤面変更ハンドラだけでは配布用盤面が古いまま残る。
+  // 直前に公開した教室と外部生集合を覚えておき、同じ教室で集合が変わったときだけ追い公開する。
+  const boardShareExternalStudentsRef = useRef<{ classroomId: string; signature: string } | null>(null)
   const publishBoardStateSnapshotRef = useRef<(state: PersistedBoardState) => void>(() => {})
   const [boardMountKey, setBoardMountKey] = useState(0)
   const [studentScheduleRange, setStudentScheduleRange] = useState<ScheduleRangePreference | null>(null)
@@ -2348,6 +2351,13 @@ function AuthenticatedApp() {
     return snapshot
   }, [buildWorkspaceSnapshot, clearDelayedAutoRemoteSyncTimer, getCurrentClassroomSyncTargetIds, isRemoteBackendEnabled, queueFirebaseWorkspaceSync, remoteSessionUserId])
 
+  // 配布用盤面へ載せる外部生の managedStudentId 一覧(表示の 外) 置換に必要なのは ID の集合だけ)。
+  // 並べ替え済みにして、名簿の並び順が変わっただけで署名がぶれないようにする。
+  const boardShareExternalStudentIds = useMemo(
+    () => students.filter((student) => isExternalStudentRow(student)).map((student) => student.id).sort(),
+    [students],
+  )
+
   const copyBoardDistributionUrl = useCallback(async () => {
     if (!actingClassroomId || !actingClassroom) throw new Error('配布対象の教室が見つかりません。')
     if (!boardState) throw new Error('配布できる盤面データがまだありません。')
@@ -2367,6 +2377,7 @@ function AuthenticatedApp() {
       sharedAt: new Date().toISOString(),
       cells: selectBoardShareCells(boardState.weeks),
       groupClassEntries: boardState.groupClassEntries ?? {},
+      externalStudentIds: boardShareExternalStudentIds,
     })
     try {
       await copyTextToClipboard(url)
@@ -2374,7 +2385,7 @@ function AuthenticatedApp() {
       // クリップボードコピー失敗は致命的でない（URL は QR とテキストで表示される）。
     }
     return url
-  }, [actingClassroom, actingClassroomId, boardState, classroomSettings])
+  }, [actingClassroom, actingClassroomId, boardShareExternalStudentIds, boardState, classroomSettings])
 
   const publishBoardStateSnapshot = useCallback((nextBoardState: PersistedBoardState) => {
     if (!actingClassroomId || !actingClassroom) return
@@ -2396,8 +2407,10 @@ function AuthenticatedApp() {
       sharedAt: '',
       cells: sharedCells,
     }).cells
-    // 集団の変更だけでも再公開されるよう署名に含める。
-    const signature = `${token}|${actingClassroom.name}|${JSON.stringify(compactedCells)}|${JSON.stringify(sharedGroupClassEntries)}`
+    // 集団・外部生の変更だけでも再公開されるよう署名に含める。
+    // ⚠️ externalStudentIds を署名から外すと、外部生チェックを付け外ししても署名が変わらず
+    //    publish がスキップされ、配布用盤面だけ 通)/振)/講) のまま取り残される。
+    const signature = `${token}|${actingClassroom.name}|${JSON.stringify(compactedCells)}|${JSON.stringify(sharedGroupClassEntries)}|${boardShareExternalStudentIds.join(',')}`
     if (signature === lastPublishedBoardShareSignatureRef.current) return
 
     // 公開中に新たな変更が来たら最新内容だけを保留し、完了後に1回だけ追い公開する
@@ -2416,6 +2429,7 @@ function AuthenticatedApp() {
       sharedAt: new Date().toISOString(),
       cells: sharedCells,
       groupClassEntries: sharedGroupClassEntries,
+      externalStudentIds: boardShareExternalStudentIds,
     })
       .then(() => {
         lastPublishedBoardShareSignatureRef.current = signature
@@ -2431,8 +2445,26 @@ function AuthenticatedApp() {
           publishBoardStateSnapshotRef.current(pending)
         }
       })
-  }, [actingClassroom, actingClassroomId, classroomSettings])
+  }, [actingClassroom, actingClassroomId, boardShareExternalStudentIds, classroomSettings])
   publishBoardStateSnapshotRef.current = publishBoardStateSnapshot
+
+  // 外部生チェックを付け外ししただけでも配布用盤面を追い公開する(盤面編集を伴わないため)。
+  // ★クロス教室汚染防止: 教室が切り替わった直後は公開しない。切替中は actingClassroomId が
+  //   先に新教室へ変わり boardState/名簿が旧教室のまま残る窓があり、そこで公開すると
+  //   旧教室の盤面を新教室のトークンで配布してしまう(2026-06-06 のクロス汚染と同じ形)。
+  //   同じ教室のまま外部生集合が変わったときだけ実行する。
+  useEffect(() => {
+    const classroomId = actingClassroomId ?? ''
+    const signature = boardShareExternalStudentIds.join(',')
+    const previous = boardShareExternalStudentsRef.current
+    boardShareExternalStudentsRef.current = { classroomId, signature }
+    if (!classroomId) return
+    if (!previous || previous.classroomId !== classroomId) return
+    if (previous.signature === signature) return
+    const currentBoardState = boardStateRef.current
+    if (!currentBoardState) return
+    publishBoardStateSnapshotRef.current(currentBoardState)
+  }, [actingClassroomId, boardShareExternalStudentIds, boardStateRef])
 
   const handleBoardStateChange = useCallback((nextBoardState: PersistedBoardState, meta: { userInitiated: boolean } = { userInitiated: true }) => {
     // ★クロス教室汚染防止（厳守）: userInitiated:false（教室切替・ロード・受動同期）では
