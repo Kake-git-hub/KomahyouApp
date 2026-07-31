@@ -116,7 +116,8 @@ async function main() {
   try {
     for (const file of files) {
       const snapshot = JSON.parse(await readFile(file, 'utf8'))
-      const label = snapshot.classroomSettings?.classroomName ?? path.basename(file)
+      // 書き出し JSON に教室名フィールドは無いので、日程表ヘッダの校舎名→ファイル名の順で見出しにする。
+      const label = snapshot.classroomSettings?.scheduleHeader?.schoolName || path.basename(file)
       const report = buildReportFromSnapshot(snapshot)
       reportsByLabel.push([label, report])
       printReport(label, report)
