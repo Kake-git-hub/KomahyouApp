@@ -21,7 +21,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildMakeupStockEntries, buildMakeupStockKey, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -273,6 +273,8 @@ type MakeupStockOriginItem = {
   rawEntryKey: string
   originIndex: number
   date: string
+  /** 同じ日付が2件並ぶ（同日同科目2コマ）ときに行を区別するための時限。不明なら null。 */
+  slotNumber: number | null
   label: string
   reasonLabel: string
   subject: string
@@ -1156,11 +1158,14 @@ function consumeManualLectureStockOrigin(originMap: Record<string, ManualLecture
   }
 }
 
-function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string) {
+function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string, slotNumber?: number | null) {
   const nextDates = originMap[key] ?? []
+  // 時限を持たせるのは「削除(抑制)」など時限が特定できる操作だけ。時限なしは同じ日付の全 origin を指す
+  // ワイルドカードとして扱われる（makeupStock.ts の resolveEffectiveMakeupOriginDates）。
+  const nextOrigin = slotNumber ? { dateKey: originDate, slotNumber } : { dateKey: originDate }
   return {
     ...originMap,
-    [key]: [...nextDates, { dateKey: originDate }].sort((left, right) => left.dateKey.localeCompare(right.dateKey)),
+    [key]: [...nextDates, nextOrigin].sort((left, right) => left.dateKey.localeCompare(right.dateKey)),
   }
 }
 
@@ -1186,11 +1191,16 @@ function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
 //   削除 → コマを足し直す → 休み ⇒ 未消化振替に入る（足し直して休んだ＝振替が必要という意思表示）
 //   休み → ×で消す        ⇒ 消えたまま（意図的な削除を尊重する）
 // の両方が、操作の順番だけで説明できる。日付単位で全件外す（同じ日の抑制が複数積まれていても解除する）。
-export function clearMakeupOrigins(originMap: MakeupOriginMap, key: string, originDate: string) {
+export function clearMakeupOrigins(originMap: MakeupOriginMap, key: string, originDate: string, slotNumber?: number | null) {
+  // 時限まで分かるときは「同じ日付 かつ（時限なし＝旧データ or 同じ時限）」だけを外す。
+  // 同じ日の別コマ（例: 数4限を削除済み・数5限を休み）まで巻き込んで解除しない。
+  const matches = (entry: ManualMakeupOrigin) => (
+    entry.dateKey === originDate && (!slotNumber || !entry.slotNumber || entry.slotNumber === slotNumber)
+  )
   const currentDates = originMap[key] ?? []
-  if (!currentDates.some((entry) => entry.dateKey === originDate)) return originMap
+  if (!currentDates.some(matches)) return originMap
 
-  const nextDates = currentDates.filter((entry) => entry.dateKey !== originDate)
+  const nextDates = currentDates.filter((entry) => !matches(entry))
   if (nextDates.length === 0) {
     const { [key]: _removed, ...rest } = originMap
     return rest
@@ -1755,6 +1765,13 @@ function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: stri
   return student.makeupSourceDate ?? student.sameDayMoveSourceDate ?? fallbackDateKey
 }
 
+// resolveOriginalRegularDate の時限版。振替コマは振替元ラベル("7/29(水) 5限")から、
+// 通常/増コマはそのコマの時限から取る（同日移動でも時限は移動先＝現在のコマのものを使う）。
+function resolveOriginalRegularSlotNumber(student: StudentEntry, fallbackSlotNumber: number) {
+  if (student.makeupSourceDate) return parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
+  return fallbackSlotNumber
+}
+
 function resolveSuppressedRegularLessonOccurrenceKey(student: StudentEntry, fallbackDateKey: string, fallbackSlotNumber: number) {
   if (student.lessonType !== 'regular') return null
   return buildManagedOccurrenceKey(student, fallbackDateKey, fallbackSlotNumber)
@@ -1826,11 +1843,17 @@ function formatSignedStockCount(count: number) {
  *   使っており、選んだ振替元日付ではなく一番古い振替が割り当てられる不具合があった。
  */
 export function resolveSelectedMakeupOrigin(
-  placementEntry: Pick<MakeupStockEntry, 'remainingOriginDates' | 'remainingOriginLabels' | 'remainingOriginReasonLabels' | 'nextOriginDate' | 'nextOriginLabel' | 'nextOriginReasonLabel'>,
-  selectedOriginDate: string | null,
+  placementEntry: Pick<MakeupStockEntry, 'remainingOriginDates' | 'remainingOriginLabels' | 'remainingOriginReasonLabels' | 'nextOriginDate' | 'nextOriginLabel' | 'nextOriginReasonLabel'>
+    & Partial<Pick<MakeupStockEntry, 'remainingOriginSlots'>>,
+  selectedOriginToken: string | null,
 ) {
-  const selectedOriginIndex = selectedOriginDate
-    ? placementEntry.remainingOriginDates.indexOf(selectedOriginDate)
+  // 2026-07-31 時限単位化: 同じ日付が2件並ぶ（同日同科目2コマ）ため、選択の識別子は
+  // `日付#限` のトークン。旧UI/旧状態の「日付だけ」も同じ日付の先頭に一致させて受け付ける。
+  const selectedOriginIndex = selectedOriginToken
+    ? placementEntry.remainingOriginDates.findIndex((dateKey, index) => (
+      buildOriginToken(dateKey, placementEntry.remainingOriginSlots?.[index] ?? null) === selectedOriginToken
+      || dateKey === selectedOriginToken
+    ))
     : -1
 
   if (selectedOriginIndex >= 0) {
@@ -8311,7 +8334,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage('未消化振替の削除をキャンセルしました。')
       return
     }
-    const nextSuppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, item.rawEntryKey, item.date)
+    // 2026-07-31 時限単位化: 同じ日の別コマを巻き込まないよう、時限まで指定して抑制する。
+    const nextSuppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, item.rawEntryKey, item.date, item.slotNumber)
 
     commitWeeks(
       weeks,
@@ -9485,6 +9509,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedMakeupOrigins,
       stockKey,
       resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
+      resolveOriginalRegularSlotNumber(menuStudent.student, targetCell.slotNumber),
     )
     const managedStudent = managedStudentByAnyName.get(menuStudent.student.name)
     const nextFallbackMakeupStudents = managedStudent
@@ -9611,6 +9636,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedMakeupOrigins,
       stockKey,
       resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+      resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
     )
     const managedStudent = managedStudentByAnyName.get(targetStudent.name)
     const nextFallbackMakeupStudents = managedStudent
@@ -10385,6 +10411,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     rawEntryKey: raw.key,
                     originIndex: i,
                     date: raw.remainingOriginDates[i] ?? '',
+                    slotNumber: raw.remainingOriginSlots[i] ?? null,
                     label: raw.remainingOriginLabels[i] ?? '',
                     reasonLabel: raw.remainingOriginReasonLabels[i] ?? '振替発生',
                     subject: raw.subject,
@@ -10406,7 +10433,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                             type="button"
                             className="stock-origin-item stock-origin-item-main"
                             onClick={() => {
-                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, originDate: item.date, hidePanelsDuringPlacement: true })
+                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, originDate: buildOriginToken(item.date, item.slotNumber), hidePanelsDuringPlacement: true })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}

@@ -2,7 +2,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, originTokenDateKey, type ManualMakeupOrigin } from './makeupStock'
 
 // ============================================================================
 // INV-06 の修正（2026-07-31・移動しただけの振替コマを休みにすると未消化振替から消滅する）で
@@ -153,8 +153,13 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
   const beforeBalances = new Map(beforeEntries.map((entry) => [entry.key, entry.balance]))
   const displayNameByKey = new Map([...beforeEntries, ...afterEntries].map((entry) => [entry.key, entry.studentName]))
 
+  // collectMakeupOriginDatesByKey は `日付#限` のトークンを返すので、日付だけに落として突き合わせる
+  // （レポートの用途では「その日に元コマがあるか」まで分かれば足りる）。
+  const toDateKeys = (origins: Record<string, string[]>) => Object.fromEntries(
+    Object.entries(origins).map(([key, tokens]) => [key, tokens.map(originTokenDateKey)]),
+  )
   // 台帳（自動休校日 / 同時間帯重複 / 手動調整）だけの有効 origin。absent 由来を外した盤面で求める。
-  const ledgerOriginDates = collectMakeupOriginDatesByKey({
+  const ledgerOriginDates = toDateKeys(collectMakeupOriginDatesByKey({
     students: params.students,
     regularLessons: params.regularLessons,
     classroomSettings: params.classroomSettings,
@@ -163,9 +168,9 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
     suppressedOrigins: params.suppressedOrigins,
     resolveStudentKey: params.resolveStudentKey,
     today: params.today,
-  })
+  }))
   // absent 由来を含めた有効 origin。ここに載らない＝個別抑制（削除）済み。
-  const effectiveOriginDates = collectMakeupOriginDatesByKey({
+  const effectiveOriginDates = toDateKeys(collectMakeupOriginDatesByKey({
     students: params.students,
     regularLessons: params.regularLessons,
     classroomSettings: params.classroomSettings,
@@ -174,7 +179,7 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
     suppressedOrigins: params.suppressedOrigins,
     resolveStudentKey: params.resolveStudentKey,
     today: params.today,
-  })
+  }))
 
   const candidates = collectAbsentMakeupCandidates(params.weeks, params.resolveStudentKey)
   const remainingIncreaseByKey = new Map<string, number>()

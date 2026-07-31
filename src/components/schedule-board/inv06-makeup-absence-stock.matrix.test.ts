@@ -9,7 +9,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, resolveSelectedMakeupOrigin } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -284,6 +284,118 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
     })
   })
 
+  // ==========================================================================
+  // 同日複数コマ（2026-07-31 時限単位化）
+  // origin の同一性を「日付」から「日付＋時限」へ広げた。誤減（同じ日の2コマ目が数えられない）を
+  // 解消しつつ、誤増（同じ1コマの授業が2件に増える）を起こさないことを両方向で固定する。
+  // ==========================================================================
+  describe('同日に同じ科目が2コマ（時限単位）', () => {
+    const cellAt = (slotNumber: number, desk: DeskCell): SlotCell => ({
+      ...cellWithDesk(desk),
+      id: `cell-${slotNumber}`,
+      slotLabel: `${slotNumber}限`,
+      slotNumber,
+    })
+
+    function balanceOf(params: { weeks: SlotCell[][]; manualAdjustments?: Record<string, ManualMakeupOrigin[]>; suppressedOrigins?: Record<string, ManualMakeupOrigin[]> }) {
+      const entries = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings(),
+        weeks: params.weeks,
+        manualAdjustments: params.manualAdjustments ?? {},
+        suppressedOrigins: params.suppressedOrigins ?? {},
+        resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+        today: TODAY,
+      })
+      return entries.find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+    }
+
+    it('回帰防止: 同じ日の 4限と5限 を両方休み → 残2（日付でまとめると1コマ消える）', () => {
+      expect(balanceOf({
+        weeks: [[
+          cellAt(4, deskWithStatus(boardStatus({ id: 'status-4', lessonType: 'regular', slotNumber: 4 }))),
+          cellAt(5, deskWithStatus(boardStatus({ id: 'status-5', lessonType: 'regular', slotNumber: 5 }))),
+        ]],
+        manualAdjustments: { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }, { dateKey: BOARD_DATE, slotNumber: 5 }] },
+      })).toBe(2)
+    })
+
+    it('誤増しない: 同じ1コマを指す origin（元コマの休み＋その振替コマの休み）は時限が同じなので残1', () => {
+      expect(balanceOf({
+        weeks: [[
+          // 7/29 5限の通常授業を休み（台帳 origin は 7/29#5）
+          // その振替として置いた 8/5 のコマも休み（振替元ラベルから 7/29 5限＝同じトークン）
+          cellAt(5, deskWithStatus(boardStatus({
+            lessonType: 'makeup',
+            makeupSourceDate: MAKEUP_SOURCE_DATE,
+            makeupSourceLabel: '2026/7/29(水) 5限',
+          }))),
+        ]],
+        manualAdjustments: { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE, slotNumber: 5 }] },
+      })).toBe(1)
+    })
+
+    it('時限不明の origin は同じ日付の時限つき origin に吸収される（過大計上しない）', () => {
+      expect(balanceOf({
+        weeks: [[cellAt(5, deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })))]],
+        // 台帳側は時限つき、算出側（振替元ラベル無し）は時限不明。同じ1コマなので残1。
+        manualAdjustments: { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE, slotNumber: 5 }] },
+      })).toBe(1)
+    })
+
+    it('削除(抑制)は時限つきなら同じ日の別コマを巻き込まない', () => {
+      expect(balanceOf({
+        weeks: [[
+          cellAt(4, deskWithStatus(boardStatus({ id: 'status-4', lessonType: 'regular', slotNumber: 4 }))),
+          cellAt(5, deskWithStatus(boardStatus({ id: 'status-5', lessonType: 'regular', slotNumber: 5 }))),
+        ]],
+        manualAdjustments: { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }, { dateKey: BOARD_DATE, slotNumber: 5 }] },
+        suppressedOrigins: { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }] },
+      })).toBe(1)
+    })
+
+    it('後方互換: 時限なしの抑制（旧データ）はその日付を丸ごと落とす', () => {
+      expect(balanceOf({
+        weeks: [[
+          cellAt(4, deskWithStatus(boardStatus({ id: 'status-4', lessonType: 'regular', slotNumber: 4 }))),
+          cellAt(5, deskWithStatus(boardStatus({ id: 'status-5', lessonType: 'regular', slotNumber: 5 }))),
+        ]],
+        manualAdjustments: { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }, { dateKey: BOARD_DATE, slotNumber: 5 }] },
+        suppressedOrigins: { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] },
+      })).toBe(0)
+    })
+
+    it('clearMakeupOrigins: 時限を指定した解除は同じ日の別コマの抑制を残す', () => {
+      const suppressed = { [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }, { dateKey: BOARD_DATE, slotNumber: 5 }] }
+      expect(clearMakeupOrigins(suppressed, STOCK_KEY, BOARD_DATE, 5)).toEqual({
+        [STOCK_KEY]: [{ dateKey: BOARD_DATE, slotNumber: 4 }],
+      })
+      // 時限なしの抑制（旧データ）は時限を指定しても外す（順序方式で「休み」を効かせるため）
+      expect(clearMakeupOrigins({ [STOCK_KEY]: [{ dateKey: BOARD_DATE }] }, STOCK_KEY, BOARD_DATE, 5)).toEqual({})
+    })
+
+    it('配置の選択: 同じ日付が2件並んでも、選んだ時限の origin が配置に引き継がれる', () => {
+      const placementEntry = {
+        remainingOriginDates: [BOARD_DATE, BOARD_DATE],
+        remainingOriginSlots: [4, 5],
+        remainingOriginLabels: ['2026/8/5(水) 4限', '2026/8/5(水) 5限'],
+        remainingOriginReasonLabels: ['手動調整', '手動調整'],
+        nextOriginDate: BOARD_DATE,
+        nextOriginLabel: '2026/8/5(水) 4限',
+        nextOriginReasonLabel: '手動調整',
+      }
+      expect(resolveSelectedMakeupOrigin(placementEntry, `${BOARD_DATE}#5`)).toEqual({
+        originDate: BOARD_DATE,
+        originLabel: '2026/8/5(水) 5限',
+        originReasonLabel: '手動調整',
+      })
+      // 旧状態（日付だけ）でも壊れない＝同じ日付の先頭に一致させる
+      expect(resolveSelectedMakeupOrigin(placementEntry, BOARD_DATE).originLabel).toBe('2026/8/5(水) 4限')
+    })
+  })
+
   describe('休み解除(往復)', () => {
     it('移動しただけの振替コマ: 休み解除で盤面へ戻ると残0（休みで+1したぶんが残らない）', () => {
       const balance = stockBalance({
@@ -371,7 +483,8 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
         resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
         today: TODAY,
       })
-      expect(originDates[STOCK_KEY]).toContain(HOLIDAY_SOURCE_DATE)
+      // 時限単位化以降は `日付#限` のトークン。ここは 5限の通常授業。
+      expect(originDates[STOCK_KEY]).toContain(`${HOLIDAY_SOURCE_DATE}#5`)
     })
 
     it('移動しただけの振替コマが盤面にあるだけでは origin を持たない（＝格納時に積む対象）', () => {
