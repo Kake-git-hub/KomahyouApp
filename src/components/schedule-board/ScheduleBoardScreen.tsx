@@ -21,7 +21,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -5100,6 +5100,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     resolveStudentKey: resolveBoardStudentStockId,
   }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, teachers])
 
+  // INV-06: 盤面操作（格納）で「この振替コマは台帳に origin を持つか」を判定するための有効 origin 一覧。
+  // 未消化残の算出(buildMakeupStockEntries)と同じ発生源・同じ権威関数を使う。
+  const makeupOriginDatesByKey = useMemo(() => collectMakeupOriginDatesByKey({
+    students,
+    regularLessons,
+    classroomSettings,
+    weeks: normalizedWeeks,
+    manualAdjustments: manualMakeupAdjustments,
+    suppressedOrigins: suppressedMakeupOrigins,
+    resolveStudentKey: resolveBoardStudentStockId,
+  }), [classroomSettings, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins])
+
   const rawLectureStockEntries = useMemo(() => buildLectureStockEntries({
     specialSessions,
     students,
@@ -9438,8 +9450,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
-    const nextManualMakeupAdjustments = (menuStudent.student.lessonType === 'regular' || !menuStudent.student.makeupSourceDate)
-      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey))
+    // INV-06: 在庫由来の振替は台帳の origin が再浮上するので積まない／台帳に origin が無い
+    // 「移動しただけの振替コマ」は盤面が唯一の記録なので積む（外した瞬間の消滅を防ぐ）。
+    const storeOriginDate = resolveStoreMakeupOriginDate({
+      student: menuStudent.student,
+      cellDateKey: targetCell.dateKey,
+      ledgerOriginDates: makeupOriginDatesByKey[stockKey] ?? [],
+    })
+    const nextManualMakeupAdjustments = storeOriginDate
+      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate)
       : manualMakeupAdjustments
     const managedStudent = managedStudentByAnyName.get(menuStudent.student.name)
     const nextFallbackMakeupStudents = managedStudent
@@ -9550,6 +9569,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
+    // INV-06（回帰防止・2026-07-31）: 振替コマ（makeupSourceDate あり）を休みにしたときは、ここで
+    // origin を積んではいけない。台帳に origin がある在庫由来の振替は「積む＋再浮上」で二重計上になり、
+    // 台帳に origin が無い（＝別日へ移動しただけの）振替は makeupStock.ts の collectAbsentMakeupOrigins が
+    // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
+    // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
     const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
       ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
       : manualMakeupAdjustments

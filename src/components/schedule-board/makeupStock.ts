@@ -20,6 +20,7 @@ export type MakeupStockEntry = {
   subject: string
   balance: number
   autoShortage: number
+  absentMakeupOrigins: number
   manualAdjustments: number
   plannedMakeups: number
   totalLessonCount: number
@@ -160,9 +161,10 @@ function resolveOriginReasonLabel(dateKey: string, params: {
   autoOriginDates: string[]
   conflictOriginDates: string[]
   manualOriginDates: string[]
+  absentMakeupOriginDates: string[]
   manualOriginReasonLabels: Record<string, string>
 }) {
-  const { classroomSettings, autoOriginDates, conflictOriginDates, manualOriginDates, manualOriginReasonLabels } = params
+  const { classroomSettings, autoOriginDates, conflictOriginDates, manualOriginDates, absentMakeupOriginDates, manualOriginReasonLabels } = params
 
   if (!isDateKey(dateKey)) {
     if (manualOriginDates.includes(dateKey)) return manualOriginReasonLabels[dateKey] ?? '手動調整'
@@ -183,6 +185,11 @@ function resolveOriginReasonLabel(dateKey: string, params: {
   }
   if (autoOriginDates.includes(dateKey)) {
     return '休校日'
+  }
+  // 台帳に無い origin は「別日へ移動した授業を休みにした」ぶん(collectAbsentMakeupOrigins)。
+  // 台帳側に同じ日付があればそちらのラベルが優先されるよう、この判定は最後に置く。
+  if (absentMakeupOriginDates.includes(dateKey)) {
+    return '振替コマの欠席'
   }
   return '振替発生'
 }
@@ -363,6 +370,69 @@ export function countPlannedMakeupsByKey(weeks: SlotCell[][], resolveStudentKey:
   }
 
   return counts
+}
+
+function parseOriginSlotNumberFromLabel(label?: string) {
+  const matched = String(label ?? '').match(/(\d+)限/)
+  return matched ? Number(matched[1]) : null
+}
+
+// INV-06（未消化振替の消滅・2026-07-31 緑が丘校 報告）:
+//
+// 通常授業を別日へ「移動」しただけの振替コマは、台帳（自動休校日 / 同時間帯重複 / 手動調整）に
+// origin を一切登録しない。盤面に置かれていること自体が唯一の記録で、消化(plannedMakeups)と
+// 使用済み origin(usedOriginDates) が打ち消し合って残0になる、という均衡で成り立っている。
+//
+// このため、この振替コマを「休み」にすると
+//   - 盤面からは消える（studentSlots → statusSlots(absent)）
+//   - absent は消化に数えない（＝均衡が崩れる）が、戻すべき origin が台帳に無い
+// ので、未消化振替へ1件も戻らず授業が丸ごと消滅していた（在庫由来の振替コマは台帳に origin が
+// 残るので正しく戻り、同じ「休み」でも生徒によって結果が違う＝報告の「入らない生徒がいる」）。
+//
+// 出欠記録(absent)が盤面に残っている限り、その振替元日を origin として計上して復元する。
+// 台帳へ書き戻さず**算出で復元**するのが要点:
+//   - 休み解除で statusSlot が消えれば origin も自動的に消える（二重計上・非対称が起きない）
+//   - 既に壊れている保存済みデータも、読み込み直しただけで復旧する（データ修復操作が不要）
+// statusSlots を持つ週は trimBoardWeeksForMemory が必ず保持するため、算出元は失われない。
+function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (student: StudentEntry) => string) {
+  const origins: OriginMap = {}
+  const slotNumbers: OriginSlotMap = {}
+
+  for (const week of weeks) {
+    for (const cell of week) {
+      if (!cell.isOpenDay) continue
+      for (const desk of cell.desks) {
+        for (const statusEntry of desk.statusSlots ?? []) {
+          if (!statusEntry || statusEntry.manualAdded) continue
+          // absent 限定。absent-no-makeup(振無休)は振替を出さない仕様、attended/moved は消化済み。
+          if (statusEntry.status !== 'absent') continue
+          if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) continue
+          const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
+          const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
+          pushOrigin(origins, key, statusEntry.makeupSourceDate)
+          const slotNumber = parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel)
+          if (slotNumber) pushOriginSlot(slotNumbers, key, statusEntry.makeupSourceDate, slotNumber)
+        }
+      }
+    }
+  }
+
+  return { origins, slotNumbers }
+}
+
+// 有効な未消化 origin 日付を決める唯一の権威関数（分散させない）。
+// 4 つの発生源の和집合から、個別に非表示化(suppressedOrigins)された日付を除く。日付単位で一意。
+export function resolveEffectiveMakeupOriginDates(params: {
+  autoOriginDates: string[]
+  conflictOriginDates: string[]
+  manualOriginDates: string[]
+  absentMakeupOriginDates: string[]
+  suppressedOriginDates: string[]
+}) {
+  const { autoOriginDates, conflictOriginDates, manualOriginDates, absentMakeupOriginDates, suppressedOriginDates } = params
+  return Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...manualOriginDates, ...absentMakeupOriginDates]))
+    .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
+    .sort()
 }
 
 function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (student: StudentEntry) => string) {
@@ -577,6 +647,64 @@ function consumeOriginDates(originDates: string[], usedOriginDates: string[], us
   return remaining
 }
 
+// ある振替コマが「台帳に origin を持つ在庫由来」か「移動しただけで台帳未登録」かを、盤面の操作側から
+// 判定するための有効 origin 一覧（key → 日付配列）。buildMakeupStockEntries と同じ発生源・同じ
+// 権威関数(resolveEffectiveMakeupOriginDates)を使う＝判定が二重定義にならないようにする。
+export function collectMakeupOriginDatesByKey(params: {
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  classroomSettings: ClassroomSettings
+  weeks: SlotCell[][]
+  manualAdjustments: Record<string, ManualMakeupOrigin[]>
+  suppressedOrigins?: Record<string, ManualMakeupOrigin[]>
+  resolveStudentKey: (student: StudentEntry) => string
+  today?: Date
+}) {
+  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date() } = params
+  const managedStudentIds = new Set(students.map((student) => student.id))
+  const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today).origins
+  const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
+  const absentMakeupOrigins = normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(weeks, resolveStudentKey).origins, managedStudentIds)
+  const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)
+  const normalizedSuppressedOrigins = normalizeMakeupOriginMapKeysByIdSet(suppressedOrigins, managedStudentIds)
+
+  const keys = new Set([
+    ...Object.keys(automaticShortages),
+    ...Object.keys(conflictOrigins),
+    ...Object.keys(absentMakeupOrigins),
+    ...Object.keys(normalizedManualAdjustments),
+  ])
+
+  return Array.from(keys).reduce<Record<string, string[]>>((accumulator, key) => {
+    accumulator[key] = resolveEffectiveMakeupOriginDates({
+      autoOriginDates: automaticShortages[key] ?? [],
+      conflictOriginDates: conflictOrigins[key] ?? [],
+      manualOriginDates: (normalizedManualAdjustments[key] ?? []).map((origin) => origin.dateKey),
+      absentMakeupOriginDates: absentMakeupOrigins[key] ?? [],
+      suppressedOriginDates: (normalizedSuppressedOrigins[key] ?? []).map((origin) => origin.dateKey),
+    })
+    return accumulator
+  }, {})
+}
+
+// INV-06: 盤面から授業を外す操作（「未消化振替へ戻す」= 格納）で、台帳へ origin を積むべきか。
+// - 通常授業 / 振替元日を持たないコマ … 従来どおり積む（元の通常授業日＝移動元があればそれ）。
+// - 振替コマで**台帳に振替元日の origin がある**（在庫由来の振替） … 積まない。盤面から外れた時点で
+//   その origin が未消化として再浮上するので、積むと二重計上になる。
+// - 振替コマで**台帳に origin が無い**（通常授業を別日へ移動しただけの振替） … 積む。
+//   盤面が唯一の記録なので、外した瞬間に授業が消滅する（休みでの消滅と同じ INV-06 違反）。
+export function resolveStoreMakeupOriginDate(params: {
+  student: Pick<StudentEntry, 'lessonType' | 'makeupSourceDate' | 'sameDayMoveSourceDate'>
+  cellDateKey: string
+  ledgerOriginDates: string[]
+}): string | null {
+  const { student, cellDateKey, ledgerOriginDates } = params
+  const originDate = student.makeupSourceDate ?? student.sameDayMoveSourceDate ?? cellDateKey
+
+  if (student.lessonType === 'regular' || !student.makeupSourceDate) return originDate
+  return ledgerOriginDates.includes(student.makeupSourceDate) ? null : student.makeupSourceDate
+}
+
 export function buildMakeupStockEntries(params: {
   students: StudentRow[]
   teachers: TeacherRow[]
@@ -593,6 +721,7 @@ export function buildMakeupStockEntries(params: {
   const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
   const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
   const conflictResult = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
+  const absentMakeupResult = collectAbsentMakeupOrigins(weeks, resolveStudentKey)
   const automaticShortages = automaticShortageResult.origins
   const conflictOrigins = conflictResult.origins
   const makeupUsage = collectMakeupUsageByKey(weeks, resolveStudentKey)
@@ -606,11 +735,12 @@ export function buildMakeupStockEntries(params: {
   }, {})
   const plannedMakeups = normalizeNumberMapKeys(makeupUsage.counts, managedStudentIds)
   const usedOriginDatesByKey = normalizeStringArrayMapKeys(makeupUsage.usedOriginDates, managedStudentIds)
+  const absentMakeupOrigins = normalizeStringArrayMapKeys(absentMakeupResult.origins, managedStudentIds)
   const assignedRegularLessons = normalizeNumberMapKeys(countAssignedRegularLessonsByKey(weeks, resolveStudentKey, regularLessons), managedStudentIds)
   const totalLessonCounts = countTotalLessonQuotaByKey(regularLessons)
   const eligiblePlannedMakeupKeys = Object.keys(plannedMakeups)
   const trackedAssignedRegularKeys = Object.keys(assignedRegularLessons)
-  const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(normalizedManualAdjustments), ...eligiblePlannedMakeupKeys, ...Object.keys(normalizedFallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
+  const allKeys = new Set([...Object.keys(automaticShortages), ...Object.keys(conflictOrigins), ...Object.keys(normalizedManualAdjustments), ...Object.keys(absentMakeupOrigins), ...eligiblePlannedMakeupKeys, ...Object.keys(normalizedFallbackStudents), ...Object.keys(totalLessonCounts), ...trackedAssignedRegularKeys])
 
   const entries = Array.from(allKeys).map((key) => {
     const [studentKey, subject = ''] = key.split('__')
@@ -622,6 +752,7 @@ export function buildMakeupStockEntries(params: {
     const conflictOriginDates = conflictOrigins[key] ?? []
     const manualOrigins = normalizedManualAdjustments[key] ?? []
     const manualOriginDates = manualOrigins.map((origin) => origin.dateKey)
+    const absentMakeupOriginDates = absentMakeupOrigins[key] ?? []
     const suppressedOriginDates = (normalizedSuppressedOrigins[key] ?? []).map((origin) => origin.dateKey)
     const manualOriginReasonLabels = manualOrigins.reduce<Record<string, string>>((accumulator, origin) => {
       if (!origin.reasonLabel || accumulator[origin.dateKey]) return accumulator
@@ -634,13 +765,18 @@ export function buildMakeupStockEntries(params: {
       return accumulator
     }, {})
     const allSlotNumbers: Record<string, number> = {
+      ...(absentMakeupResult.slotNumbers[key] ?? {}),
       ...(automaticShortageResult.slotNumbers[key] ?? {}),
       ...(conflictResult.slotNumbers[key] ?? {}),
       ...manualSlotNumbers,
     }
-    const allOriginDates = Array.from(new Set([...autoOriginDates, ...conflictOriginDates, ...manualOriginDates]))
-      .filter((dateKey) => !suppressedOriginDates.includes(dateKey))
-      .sort()
+    const allOriginDates = resolveEffectiveMakeupOriginDates({
+      autoOriginDates,
+      conflictOriginDates,
+      manualOriginDates,
+      absentMakeupOriginDates,
+      suppressedOriginDates,
+    })
     const usedOriginDates = usedOriginDatesByKey[key] ?? []
     const plannedCount = plannedMakeups[key] ?? 0
     const assignedRegularCount = assignedRegularLessons[key] ?? 0
@@ -655,6 +791,7 @@ export function buildMakeupStockEntries(params: {
       autoOriginDates,
       conflictOriginDates,
       manualOriginDates,
+      absentMakeupOriginDates,
       manualOriginReasonLabels,
     }))
     const manualIndependentPlannedMakeups = isManualEntry ? Math.max(0, plannedCount - allOriginDates.length) : 0
@@ -675,6 +812,9 @@ export function buildMakeupStockEntries(params: {
       subject: student ? subject : (fallback?.subject ?? subject),
       balance,
       autoShortage: autoOriginDates.length + conflictOriginDates.length,
+      absentMakeupOrigins: absentMakeupOriginDates.filter((dateKey) => (
+        !autoOriginDates.includes(dateKey) && !conflictOriginDates.includes(dateKey) && !manualOriginDates.includes(dateKey)
+      )).length,
       manualAdjustments: manualOriginDates.length,
       plannedMakeups: plannedCount,
       totalLessonCount,

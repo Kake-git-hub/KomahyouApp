@@ -293,7 +293,29 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     - 併せて講習在庫キーを `resolveLectureStockStudentKey`（`managedStudentId` 最優先→名簿逆引き→`name:`）へ統一。
       配置(-1)は提出 studentId で消化し配置コマの managedStudentId にその id を焼くため、戻し側が名前逆引きだけだと
       **改名**でキーがズレる。戻し 6+1 経路（欠席/欠席解除/格納/削除/休日化/テンプレ上書き）に適用（非改名は挙動不変）。
-- **マトリクステストファイル**：`inv06-lecture-stock-reconciliation.matrix.test.ts`（2026-07-17・4 テスト：
+  - moved-makeup-absence-loss（別日へ移動した授業を休みにすると未消化振替から消滅／緑が丘 室長報告 2026-07-31）：
+    - **v1.5.459** / 2026-07-31 … 通常授業を別日へ**移動**した振替コマは台帳（自動休校日 / 同時間帯重複 /
+      手動調整）に origin を登録しない。「盤面に置かれていること」＋「消化(`plannedMakeups`)と使用済み origin が
+      打ち消し合う」均衡だけで残 0 を保つ設計のため、この振替コマを**休み**にすると盤面から消え、
+      `absent` は消化に数えない（正）のに戻すべき origin が台帳に無く、**未消化振替へ1件も戻らず授業が消滅**していた。
+      在庫由来（台帳に origin あり）の振替コマは正しく戻るため、**同じ「休み」でも生徒によって結果が違う**
+      ＝報告「休みにしても未消化振替に入らない生徒がいる」の正体。誤減（実施されなかった授業の消滅）側の INV-06 違反。
+    - 修正＝`makeupStock.ts` の `collectAbsentMakeupOrigins` が、`absent` の出欠記録が盤面にある限り
+      その振替元日を origin として**算出で復元**する（台帳へ書き戻さない）。`resolveEffectiveMakeupOriginDates` を
+      有効 origin 決定の唯一の権威関数にして 4 発生源（自動休校日/重複/手動/振替コマ欠席）を統合。
+    - ⚠️ **台帳へ materialize しない理由（回帰防止）**：`handleMarkStudentAbsent` で origin を積むと
+      (1) 在庫由来の振替では「積む＋台帳 origin の再浮上」で二重計上、(2) 休み解除側の同条件ガードと非対称になり
+      解除後に origin が残る、(3) **既に壊れて保存済みのデータが復旧しない**。算出方式なら休み解除で自動的に消え、
+      読み込み直しただけで過去分も復旧する。`statusSlots` を持つ週は `trimBoardWeeksForMemory` が必ず保持するため
+      算出元は失われない。ハンドラ側の非対称ガードは意図的なので条件を緩めないこと。
+    - 兄弟監査で同根の穴を1つ是正：**格納（未消化振替へ戻す・`handleStoreStudent`）** も同じガードで
+      移動しただけの振替コマを origin なしで盤面から外していた（出欠記録すら残らないため算出でも救えない）。
+      `resolveStoreMakeupOriginDate` で「台帳に origin があれば積まない（二重計上防止）／無ければ振替元日で積む
+      （消滅防止）」に是正。削除（`handleDeleteStudent`＝`suppressedMakeupOrigins` へ退避）・振無休・出席・移動は
+      仕様どおり未消化にしないことをマトリクスで固定。
+- **マトリクステストファイル**：`inv06-makeup-absence-stock.matrix.test.ts`（2026-07-31・18 テスト：
+  休み × 通常/同日移動/在庫由来の振替/移動しただけの振替/手動追加、休み解除の往復、隣接出欠〔振無休・出席・移動〕の
+  誤増なし、格納の origin 判定、個別非表示化した元コマを復活させないこと）＋`inv06-lecture-stock-reconciliation.matrix.test.ts`（2026-07-17・4 テスト：
   犬飼シナリオ再現／欠席化⇔欠席解除の往復対称性／負値保持）＋`inv06-holiday-stock-reconciliation.matrix.test.ts`
   （2026-07-18・16 テスト：休日化を全 status〔absent/moved=スキップ・attended/absent-no-makeup=戻す〕×session講習/通常で
   両方向固定／振替 origin の dateKey 区別／同一 index 併存／改名キーの正準化）。加えて `makeupStock.test.ts`（3→2 で 1 件だけ減る／出席消化と欠席未消化の区別／
