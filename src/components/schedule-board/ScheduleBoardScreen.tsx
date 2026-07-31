@@ -1287,6 +1287,18 @@ export function removeLecturePendingItemFromStockState(params: {
 //   （removeLecturePendingItemFromStockState の session 枝と同じ規約）。origin は該当1件だけ取り除く。
 // ⚠️ テンプレ上書き(handleSaveRegularLessonTemplate 分岐C)には使わない。あちらは範囲一掃＋均衡復元で
 //   意味が異なり、-1 の純減を積むと逆に未消化が過少計上になる（同ハンドラのコメント参照）。
+// INV-06 / spec-makeup-stock §B-3（2026-07-31 オーナー確定・例外を作らない）:
+// 「休み」にした講習コマを未消化講習へ戻すか。**手動追加(specialStockSource='manual')でも戻す。**
+// 日程表の実績カウントは手動追加を除外しない（希望数側も +1 の調整が入る）ので、休みで実績から
+// 外れた分を在庫へ戻さないと 希望1・実績0 のまま1コマが宙に浮く。
+// 講習期間(specialSessionId)は手動追加時も必須入力なので通常は常に真。旧データで欠けている場合だけ
+// 対象外にする（未消化講習は講習期間ごとに並ぶため、期間が無いと戻し先の行が決まらない）。
+// ★休み側と休み解除側で必ず同じ判定を使う（片方だけ広げると解除後に在庫が残って誤増する）。
+export function shouldReturnLectureStockOnAbsence(entry: { lessonType?: string | null; specialSessionId?: string; specialStockSource?: string }) {
+  // ★specialStockSource（session / manual）は見ない。見た瞬間に「手動追加だけ戻らない」例外が復活する。
+  return entry.lessonType === 'special' && Boolean(entry.specialSessionId)
+}
+
 export function reconsumeSessionLectureStock(params: {
   manualLectureStockCounts: LectureStockCountMap
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
@@ -9559,7 +9571,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentStatusEntry)
 
     if (targetStudent.lessonType === 'special') {
-      if (targetStudent.specialStockSource !== 'session') {
+      if (!shouldReturnLectureStockOnAbsence(targetStudent)) {
         commitWeeks(
           nextWeeks,
           weekIndex,
@@ -9574,7 +9586,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           manualLectureStockOrigins,
           fallbackLectureStockStudents,
         )
-        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。手動追加講習のため未消化講習には戻していません。`)
+        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。講習期間が特定できないため未消化講習には戻していません。`)
         return
       }
 
@@ -9766,7 +9778,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     if (statusEntry.status === 'absent' && restoredStudent) {
       if (statusEntry.lessonType === 'special') {
-        if (statusEntry.specialStockSource === 'session') {
+        // 休み側と同じ権威関数で判定する（手動追加も戻したので、解除でも同じ条件で再消化する）。
+        if (shouldReturnLectureStockOnAbsence(statusEntry)) {
           const lectureStudentKey = resolveLectureStockStudentKey(statusEntry, managedStudentByAnyName, resolveBoardStudentDisplayName)
           const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId)
           // INV-06: 欠席化で戻した1回分を再消化する。負値デルタ台帳なので removeLectureStockCount は不可

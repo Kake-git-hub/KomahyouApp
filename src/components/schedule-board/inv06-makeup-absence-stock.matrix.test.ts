@@ -9,7 +9,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, resolveSelectedMakeupOrigin } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -289,6 +289,29 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
   // origin の同一性を「日付」から「日付＋時限」へ広げた。誤減（同じ日の2コマ目が数えられない）を
   // 解消しつつ、誤増（同じ1コマの授業が2件に増える）を起こさないことを両方向で固定する。
   // ==========================================================================
+  // 講習側（spec-makeup-stock §B-3 / spec-lecture-stock）: 休みにした講習は未消化“講習”へ戻る。
+  // 振替と講習は別経路なので、手動追加の扱いを片方だけ直すと非対称になる（CLAUDE.md の B8）。
+  describe('休みで戻す先の判定（講習は未消化講習へ・例外を作らない）', () => {
+    it('ストック由来の講習は未消化講習へ戻す', () => {
+      expect(shouldReturnLectureStockOnAbsence({ lessonType: 'special', specialSessionId: 'session-1', specialStockSource: 'session' })).toBe(true)
+    })
+
+    it('回帰防止: 手動追加した講習も未消化講習へ戻す（2026-07-31 オーナー確定・実績カウントと整合）', () => {
+      // specialStockSource を判定に使わないことが要点。使うと「手動追加だけ戻らない」例外が復活する。
+      expect(shouldReturnLectureStockOnAbsence({ lessonType: 'special', specialSessionId: 'session-1', specialStockSource: 'manual' })).toBe(true)
+    })
+
+    it('講習期間が特定できない講習コマ（旧データ）は戻さない＝戻し先の行が決まらないため', () => {
+      expect(shouldReturnLectureStockOnAbsence({ lessonType: 'special', specialSessionId: undefined })).toBe(false)
+    })
+
+    it('通常・振替・増コマは講習在庫の対象外（未消化振替へ戻す側）', () => {
+      expect(shouldReturnLectureStockOnAbsence({ lessonType: 'regular', specialSessionId: 'session-1' })).toBe(false)
+      expect(shouldReturnLectureStockOnAbsence({ lessonType: 'makeup' })).toBe(false)
+      expect(shouldReturnLectureStockOnAbsence({ lessonType: 'extra' })).toBe(false)
+    })
+  })
+
   describe('同日に同じ科目が2コマ（時限単位）', () => {
     const cellAt = (slotNumber: number, desk: DeskCell): SlotCell => ({
       ...cellWithDesk(desk),
