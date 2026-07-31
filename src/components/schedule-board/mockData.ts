@@ -1,3 +1,4 @@
+import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import type { DeskCell, GradeLabel, LessonType, OpenIssue, SlotCell, StudentEntry, SubjectLabel, TeacherType } from './types'
 
 const dayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
@@ -369,6 +370,17 @@ export const lessonTypeLabels: Record<LessonType, string> = {
   makeup: '振替',
   special: '講習',
   trial: '体験',
+}
+
+// 授業時間(90/60/45分 = noteSuffix ''/'60'/'45')を保持できる授業区分。
+// 振替は 2026-08-01 にオーナー要望で追加(それまでは追加/編集ともに時間を持てず 90 分固定表示だった)。
+// 体験(trial)は名簿外の一時登録なので対象外のまま。ここを削るとコマ表・日程表の分数表記が消える。
+export const LESSON_TYPES_WITH_MINUTES: LessonType[] = ['regular', 'extra', 'special', 'makeup']
+
+// 生徒追加/編集メニューで保存する noteSuffix(授業時間)の唯一の決定関数。
+// 対象外の区分では undefined を返し、コマに分数が残らないようにする。
+export function resolveLessonMinutesNoteSuffix(lessonType: LessonType, noteSuffix: string | undefined) {
+  return LESSON_TYPES_WITH_MINUTES.includes(lessonType) ? normalizeRegularLessonNote(noteSuffix) : undefined
 }
 
 export const teacherTypeLabels: Record<TeacherType, string> = {

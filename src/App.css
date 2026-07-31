@@ -2435,7 +2435,8 @@ tr.sa-group-row td {
 .sa-student-detail-prefix.prefix-lesson-regular,
 .sa-student-detail-prefix.prefix-lesson-makeup,
 .sa-student-detail-prefix.prefix-lesson-special,
-.sa-student-detail-prefix.prefix-lesson-extra {
+.sa-student-detail-prefix.prefix-lesson-extra,
+.sa-student-detail-prefix.prefix-lesson-external {
   color: inherit;
 }
 
@@ -4161,6 +4162,17 @@ tr.sa-group-row td {
 .basic-data-inline-field input {
   min-width: 0;
   width: 100%;
+}
+
+/* 外部生チェック: 入力欄と違いチェックボックスは横幅 100% に伸ばさない。 */
+.basic-data-inline-field-check {
+  flex: 0 0 auto;
+}
+
+.basic-data-inline-field-check input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
 }
 
 .date-assist-field {

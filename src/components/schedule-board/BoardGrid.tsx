@@ -26,7 +26,12 @@ function getStudentStatusLabel(status: StudentStatusKind) {
   return '休'
 }
 
-function getLessonPrefix(lessonType: LessonType) {
+// 外部生(生徒基本データの「外部生」チェック)は、通)/振)/講)/増)/体) をまとめて 外) で表示する。
+// ⚠️ 表示だけの置き換え。lessonType の実データは書き換えない(在庫・集計・自動割振は従来どおり)。
+export const EXTERNAL_STUDENT_LESSON_PREFIX = { label: '外部生', text: '外)', className: 'prefix-lesson-external' } as const
+
+export function getLessonPrefix(lessonType: LessonType, isExternalStudent = false) {
+  if (isExternalStudent) return EXTERNAL_STUDENT_LESSON_PREFIX
   switch (lessonType) {
     case 'extra':
       return { label: lessonTypeLabels[lessonType], text: '増)', className: 'prefix-lesson-extra' }
@@ -192,6 +197,8 @@ type BoardGridProps = {
   resolveStudentDisplayName: (name: string) => string
   resolveStudentGradeLabel: (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => string
   resolveDisplayedLessonType: (name: string, subject: string, lessonType: LessonType | null, dateKey: string, slotNumber: number) => LessonType | null
+  // 生徒基本データの「外部生」チェック解決(名前 = 登録名/表示名のどちらでも引ける)。未指定なら全員通常扱い。
+  isExternalStudentName?: (name: string) => boolean
   onDayHeaderClick: (dateKey: string, x: number, y: number) => void
   onTeacherClick: (cellId: string, deskIndex: number, x: number, y: number) => void
   onStudentClick: (cellId: string, deskIndex: number, studentIndex: number, hasStudent: boolean, hasMemo: boolean, statusKind: StudentStatusKind | null, x: number, y: number) => void
@@ -218,6 +225,7 @@ function BoardGridComponent({
   resolveStudentDisplayName,
   resolveStudentGradeLabel,
   resolveDisplayedLessonType,
+  isExternalStudentName,
   onDayHeaderClick,
   onTeacherClick,
   onStudentClick,
@@ -287,7 +295,8 @@ function BoardGridComponent({
     const effectiveMakeupSourceLabel = studentName ? makeupSourceLabel : (statusEntry?.makeupSourceLabel ?? makeupSourceLabel)
     const statusLabel = statusEntry ? getStudentStatusLabel(statusEntry.status) : ''
     const resolvedLessonType = effectiveName ? resolveDisplayedLessonType(effectiveName, effectiveSubject, effectiveLessonType, cell.dateKey, cell.slotNumber) : effectiveLessonType
-    const lessonPrefix = resolvedLessonType ? getLessonPrefix(resolvedLessonType) : null
+    const isExternalStudent = Boolean(effectiveName) && Boolean(isExternalStudentName?.(effectiveName))
+    const lessonPrefix = resolvedLessonType ? getLessonPrefix(resolvedLessonType, isExternalStudent) : null
     const teacherStar = getTeacherStar(effectiveTeacherType)
     const displayName = studentName
       ? resolveStudentDisplayName(studentName)

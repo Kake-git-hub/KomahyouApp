@@ -17,7 +17,9 @@ import {
   getTeacherDisplayName,
   initialStudents,
   initialTeachers,
+  isExternalStudentRow,
   isTeacherVisibleInManagement,
+  parseExternalStudentFlag,
 } from './basicDataModel'
 import {
   normalizeRegularLessonNote,
@@ -471,6 +473,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     入塾日: row.entryDate,
     退塾日: normalizeDateString(row.withdrawDate),
     生年月日: row.birthDate,
+    外部生: isExternalStudentRow(row) ? 'はい' : '',
   })), ['入塾日', '退塾日', '生年月日']), '生徒')
 
   const template = bundle.classroomSettings.regularLessonTemplate
@@ -505,6 +508,7 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     { 項目: '講師/生徒.入塾日', 説明: 'YYYY-MM-DD 形式に加えて Excel の日付セルも取り込めます。空欄なら即時在籍として扱います。' },
     { 項目: '講師/生徒.退塾日', 説明: 'YYYY-MM-DD または Excel の日付セルで入力できます。空欄と 未定 はどちらも日付未設定として扱います。' },
     { 項目: '生徒.生年月日', 説明: 'YYYY-MM-DD 形式または Excel の日付セルで入力できます。学年/在籍列はアプリ側で自動計算します。' },
+    { 項目: '生徒.外部生', 説明: 'はい / ○ / 1 / true のいずれかで外部生になります。空欄は通常の在籍生徒です。外部生はコマ表の授業区分表記が 外) になります(集計は従来どおり)。' },
     { 項目: '通常授業テンプレ', 説明: 'コマ表のテンプレモードで作成した通常授業テンプレです。講師名と生徒名は各シートの名前列に一致させてください。' },
     { 項目: '教室データ', 説明: '休校曜日 は 日曜, 月曜 のように曜日名をカンマ区切りで入力します。ペア制約は自動割振ルール画面の Excel 管理で扱います。' },
   ]), '説明')
@@ -589,6 +593,7 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
           entryDate: normalizeDateString(row['入塾日'], xlsx),
           withdrawDate: normalizeDateString(row['退塾日'], xlsx) || normalizeText(row['退塾日']) || '未定',
           birthDate: normalizeDateString(row['生年月日'], xlsx),
+          isExternal: parseExternalStudentFlag(row['外部生']),
         }))
         .filter((row) => row.name)
     : fallback.students
@@ -872,7 +877,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
 
   const [teacherDraft, setTeacherDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', subjectCapabilities: [] as TeacherSubjectCapability[] })
   const [teacherEditorModalState, setTeacherEditorModalState] = useState<TeacherEditorModalState | null>(null)
-  const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
+  const [studentDraft, setStudentDraft] = useState({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '', isExternal: false })
   const [editingRows, setEditingRows] = useState<Record<string, boolean>>({})
   const [frozenRowOrders, setFrozenRowOrders] = useState<Partial<Record<RowEditScope, string[]>>>({})
   const [teacherDrafts, setTeacherDrafts] = useState<Record<string, Partial<TeacherRow>>>({})
@@ -1047,8 +1052,9 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
       entryDate: studentDraft.entryDate,
       withdrawDate: studentDraft.withdrawDate.trim(),
       birthDate: studentDraft.birthDate,
+      isExternal: studentDraft.isExternal,
     }])
-    setStudentDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '' })
+    setStudentDraft({ name: '', displayName: '', email: '', entryDate: '', withdrawDate: '', birthDate: '', isExternal: false })
     setStatusMessage('生徒を追加しました。')
   }
 
@@ -1247,7 +1253,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     const filteredStudents = filterAndSortRows(
       visibleStudents,
       tableControls.students,
-      (row) => [row.name, row.displayName, row.email, row.entryDate, formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate)), row.birthDate, resolveManagedStudentGradeLabel(row, todayReferenceDate)],
+      (row) => [row.name, row.displayName, row.email, row.entryDate, formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate)), row.birthDate, resolveManagedStudentGradeLabel(row, todayReferenceDate), isExternalStudentRow(row) ? '外部生' : ''],
       {
         name: (row) => `${resolveManagedStudentGradeLabel(row, todayReferenceDate)}_${getStudentDisplayName(row)}`,
         entryDate: (row) => row.entryDate,
@@ -1289,6 +1295,15 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
               <span>生年月日</span>
               <DateAssistInput value={studentDraft.birthDate} emptyLabel="生年月日を選択" onChange={(value) => setStudentDraft((current) => ({ ...current, birthDate: value }))} testIdPrefix="basic-data-student-draft-birthdate" />
             </label>
+            <label className="basic-data-inline-field basic-data-inline-field-check" title="外部生はコマ表の授業区分表記が 外) になります(集計は従来どおり)">
+              <span>外部生</span>
+              <input
+                type="checkbox"
+                checked={studentDraft.isExternal}
+                onChange={(event) => setStudentDraft((current) => ({ ...current, isExternal: event.target.checked }))}
+                data-testid="basic-data-student-draft-is-external"
+              />
+            </label>
             <button className="primary-button" type="button" onClick={addStudent} data-testid="basic-data-add-student-button">追加</button>
           </div>
         </section>
@@ -1310,7 +1325,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
             </div>
           </div>
           <table className="basic-data-table" data-testid={studentRosterView === 'active' ? 'basic-data-students-table' : 'basic-data-withdrawn-students-table'}>
-            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>生年月日</th><th>学年/状態</th><th>操作</th></tr></thead>
+            <thead><tr><th>氏名</th><th>表示名</th><th>メール</th><th>入塾日</th><th>退塾日</th><th>生年月日</th><th>外部生</th><th>学年/状態</th><th>操作</th></tr></thead>
             <tbody>
               {orderedStudents.map((row) => (
                 <tr key={row.id}>
@@ -1344,6 +1359,17 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudent(row.id, { birthDate: value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.birthDate)}</span>}
                   </td>
+                  <td>
+                    {/* 外部生チェック: 既存生徒も「編集」から後付けでチェックでき、コマ表の授業区分表記が即 外) になる。 */}
+                    {isRowEditing('student', row.id)
+                      ? <input
+                          type="checkbox"
+                          checked={isExternalStudentRow(row)}
+                          onChange={(event) => updateStudent(row.id, { isExternal: event.target.checked })}
+                          data-testid={`basic-data-student-is-external-input-${row.id}`}
+                        />
+                      : <span className="basic-data-cell-summary" data-testid={`basic-data-student-is-external-${row.id}`}>{isExternalStudentRow(row) ? '外部生' : '-'}</span>}
+                  </td>
                   <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{resolveManagedStudentGradeLabel(row, todayReferenceDate)}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
@@ -1353,7 +1379,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                   </td>
                 </tr>
               ))}
-              {orderedStudents.length === 0 ? <tr><td colSpan={8} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '非在籍生徒はまだありません。'}</td></tr> : null}
+              {orderedStudents.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '非在籍生徒はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>

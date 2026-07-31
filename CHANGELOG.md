@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.460 (2026-08-01)
+
+- feat: 生徒基本データに**外部生チェック**を追加(オーナー要望 2026-08-01)。チェックを付けた生徒はコマ表(盤面)の授業区分表記が、通)/振)/講)/増)/体) をまとめて **外)** になる。新規登録フォームと既存生徒の「編集」の両方から切り替えでき、盤面は名簿の変更を即座に反映する(保存不要の表示解決)。⚠️ **表示だけの置き換えで、`StudentEntry.lessonType` の実データは書き換えない**(オーナー判断 2026-08-01): 振替在庫・講習ストック・コマ数集計・自動割振はすべて従来どおり計上する。ここを「実データの授業区分を外部生用の値へ変える」実装にすると INV-06(在庫整合)まで巻き込むため、**その方向へ寄せてはいけない**。判定は権威関数 `isExternalStudentRow` に一本化し(`row.isExternal` を直読みしない)、盤面側は登録名・表示名のどちらでも引ける `managedStudentByAnyName` 経由の `isExternalStudentName` で解決する(名簿外の体験生・メモは常に通常表示)。`StudentRow.isExternal` は optional=未設定は通常生徒なので既存データの移行は不要。Excel の生徒シートにも「外部生」列を追加(出力は はい/空欄、取り込みは はい/○/1/true などを受ける `parseExternalStudentFlag`)。反映範囲は**盤面のみ**(生徒日程表・講師日程表・盤面共有画面は従来表記のまま=オーナー選択)。回帰テスト6件を同コミットで追加(src/components/basic-data/basicDataModel.ts・BasicDataScreen.tsx・src/components/schedule-board/BoardGrid.tsx・ScheduleBoardScreen.tsx・src/App.css)
+- feat: **振替(makeup)にも授業時間(90/60/45分)を持たせた**(オーナー要望 2026-08-01)。従来は通常・増コマ・講習だけが授業時間を保持し、振替は追加時に選べず 90 分固定表示だった。生徒追加メニューに加えて**編集メニューからも変更できる**(追加でだけ選べて後から直せない非対称を作らないため・オーナー選択)。対象区分は `LESSON_TYPES_WITH_MINUTES` と権威関数 `resolveLessonMinutesNoteSuffix` へ集約し、追加/編集の2つの保存経路が同じ関数を通る(片方だけ広げると保存時に分数が落ちる)。体験(trial)は名簿外の一時登録なので従来どおり対象外。回帰テスト4件を同コミットで追加(src/components/schedule-board/mockData.ts・ScheduleBoardScreen.tsx)
+
 ## v1.5.459
 
 - fix(INV-06): **手動追加した講習を「休み」にしても未消化講習に戻らず1コマ宙に浮く**問題を修正(オーナー確定 2026-07-31・例外を作らない)。旧挙動は「手動追加講習のため未消化講習には戻していません」で戻さなかったが、日程表では手動追加講習も**実績+1・希望数+1**(`buildSerializedScheduleCountAdjustments`)で釣り合っており、休みにすると実績だけ−1になって希望1・実績0の1コマが残る。判定を権威関数 `shouldReturnLectureStockOnAbsence` に一本化し、**休み側と休み解除側の両方が同じ関数を使う**(片方だけ広げると解除後に在庫が残って誤増する)。★判定に `specialStockSource`(session/manual)を**使わない**=使うと例外が復活する。対象外は講習期間(`specialSessionId`)を持たないコマだけで、**手動追加時も講習期間は必須入力**(「講習を追加するには特別講習を選択してください。」)なので通常は発生しない旧データ向けの保険(未消化講習は講習期間ごとに並ぶため戻し先の行が決まらない。本番2教室の手動追加講習51件はすべて講習期間あり=影響なしを実データで確認)。削除は従来どおり(ストック由来は希望数−1・手動追加は変更なし)。回帰テスト4件を同コミットで追加(ストック由来/手動追加/講習期間なし/通常・振替・増コマは対象外)(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md §B-4)

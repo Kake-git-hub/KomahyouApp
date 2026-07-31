@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
-import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, isExternalStudentRow, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
@@ -23,7 +23,7 @@ import {
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
 import { buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
-import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
+import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
@@ -5084,6 +5084,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [students])
 
   const resolveBoardStudentDisplayName = useCallback((name: string) => managedStudentNameMap.get(name) ?? name, [managedStudentNameMap])
+  // 外部生(生徒基本データのチェック)判定。盤面セルは生徒名しか持たないため、登録名・表示名の
+  // 両方から引ける managedStudentByAnyName を経由する(体験/メモなど名簿外の名前は常に false)。
+  const isExternalStudentName = useCallback(
+    (name: string) => isExternalStudentRow(managedStudentByAnyName.get(name)),
+    [managedStudentByAnyName],
+  )
   const resolveBoardStudentGradeLabel = (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => {
     if (birthDate) return resolveSchoolGradeLabel(birthDate, parseDateKey(dateKey))
     const managedStudent = managedStudentByAnyName.get(name)
@@ -9097,9 +9103,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       subject: addExistingStudentDraft.subject,
       lessonType: addExistingStudentDraft.lessonType,
       teacherType: 'normal',
-      noteSuffix: addExistingStudentDraft.lessonType === 'regular' || addExistingStudentDraft.lessonType === 'extra' || addExistingStudentDraft.lessonType === 'special'
-        ? normalizeRegularLessonNote(addExistingStudentDraft.noteSuffix)
-        : undefined,
+      // 授業時間(90/60/45分)を持てる区分。振替は 2026-08-01 に追加(オーナー要望)。体験のみ対象外。
+      noteSuffix: resolveLessonMinutesNoteSuffix(addExistingStudentDraft.lessonType, addExistingStudentDraft.noteSuffix),
       manualAdded: true,
       specialSessionId: addExistingStudentDraft.lessonType === 'special' ? addExistingStudentDraft.specialSessionId : undefined,
       specialStockSource: addExistingStudentDraft.lessonType === 'special' ? 'manual' : undefined,
@@ -9248,9 +9253,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       subject: editStudentDraft.subject,
       lessonType: editStudentDraft.lessonType,
       teacherType: editStudentDraft.teacherType,
-      noteSuffix: editStudentDraft.lessonType === 'regular' || editStudentDraft.lessonType === 'extra'
-        ? normalizeRegularLessonNote(editStudentDraft.noteSuffix)
-        : undefined,
+      // 編集からも振替の授業時間を変更できる(追加でだけ選べて後から直せない非対称を作らない)。
+      // 講習はこの関数の冒頭で「コマ表から編集できません」と弾いているため、ここには到達しない。
+      noteSuffix: resolveLessonMinutesNoteSuffix(editStudentDraft.lessonType, editStudentDraft.noteSuffix),
     }
 
     commitWeeks(nextWeeks, weekIndex, studentMenu.cellId, studentMenu.deskIndex)
@@ -10183,6 +10188,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const stableHandleTemplateStudentClick = useStableCallback(handleTemplateStudentClick)
   const stableResolveStudentGradeLabel = useStableCallback(resolveBoardStudentGradeLabel)
   const stableResolveDisplayedLessonType = useStableCallback(resolveDisplayedLessonType)
+  // 外部生表記(外))はテンプレモードでも同じにする(通常授業テンプレにも外部生が並ぶため)。
+  const stableIsExternalStudentName = useStableCallback(isExternalStudentName)
   const stableTemplateGradeLabel = useStableCallback((_name: string, fallbackGrade: string, _dateKey: string, birthDate?: string) => (birthDate ? resolveSchoolGradeLabel(birthDate, new Date()) : fallbackGrade))
   const stableTemplateLessonType = useStableCallback((_name: string, _subject: string, lessonType: LessonType | null) => lessonType)
   const stableNoopDayHeaderClick = useStableCallback(() => {})
@@ -10489,6 +10496,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             resolveStudentDisplayName={resolveBoardStudentDisplayName}
             resolveStudentGradeLabel={isTemplateMode ? stableTemplateGradeLabel : stableResolveStudentGradeLabel}
             resolveDisplayedLessonType={isTemplateMode ? stableTemplateLessonType : stableResolveDisplayedLessonType}
+            isExternalStudentName={stableIsExternalStudentName}
             onDayHeaderClick={isTemplateMode ? stableNoopDayHeaderClick : stableHandleDayHeaderClick}
             onTeacherClick={isTemplateMode ? stableHandleTemplateSelectDesk : stableHandleSelectDesk}
             onStudentClick={isTemplateMode ? stableHandleTemplateStudentClick : stableHandleStudentClick}
@@ -11148,7 +11156,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                       </select>
                     </div>
                   ) : null}
-                  {addExistingStudentDraft?.lessonType === 'regular' || addExistingStudentDraft?.lessonType === 'extra' || addExistingStudentDraft?.lessonType === 'special' ? (
+                  {addExistingStudentDraft && LESSON_TYPES_WITH_MINUTES.includes(addExistingStudentDraft.lessonType) ? (
                     <div className="student-menu-section">
                       <span className="student-menu-label">授業時間</span>
                       <div className="student-menu-type-grid student-menu-type-grid-time">
@@ -11294,7 +11302,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                       ))}
                     </select>
                   </div>
-                  {editStudentDraft?.lessonType === 'regular' || editStudentDraft?.lessonType === 'extra' ? (
+                  {editStudentDraft && LESSON_TYPES_WITH_MINUTES.includes(editStudentDraft.lessonType) && editStudentDraft.lessonType !== 'special' ? (
                     <div className="student-menu-section">
                       <span className="student-menu-label">授業時間</span>
                       <div className="student-menu-type-grid student-menu-type-grid-time">

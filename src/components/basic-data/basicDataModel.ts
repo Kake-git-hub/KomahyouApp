@@ -21,6 +21,25 @@ export type StudentRow = {
   entryDate: string
   withdrawDate: string
   birthDate: string
+  // 外部生フラグ(2026-08-01)。true の生徒は盤面の授業区分表記を通)/振)/講)/増) ではなく 外) で表示する。
+  // ⚠️ これは「表示のみ」のフラグ。StudentEntry.lessonType は従来どおり保持し、振替在庫・講習ストック・
+  // コマ数集計・自動割振の計算には一切影響させない(オーナー判断 2026-08-01)。集計側へ波及させると
+  // INV-06(在庫整合)まで巻き込むため、ここを「実データの授業区分を書き換える」実装に変えてはいけない。
+  // 後方互換のため optional(未設定=外部生でない)。
+  isExternal?: boolean
+}
+
+// 外部生判定の唯一の権威関数。呼び出し側で row.isExternal を直読みしない(判定の分散を防ぐ)。
+export function isExternalStudentRow(student: Pick<StudentRow, 'isExternal'> | null | undefined) {
+  return student?.isExternal === true
+}
+
+// Excel 取り込み用。日本語/英語/記号のいずれの真値表記も外部生として受ける(空欄=外部生でない)。
+export function parseExternalStudentFlag(value: unknown) {
+  if (typeof value === 'boolean') return value
+  const normalized = String(value ?? '').trim().toLowerCase()
+  if (!normalized) return false
+  return ['はい', 'true', '1', 'yes', 'y', '○', '◯', '〇', 'o', '✓', '✔', '外部生', '外'].includes(normalized)
 }
 
 export const initialTeachers: TeacherRow[] = [
