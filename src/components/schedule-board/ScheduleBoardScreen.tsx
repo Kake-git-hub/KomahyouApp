@@ -21,7 +21,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildMakeupStockEntries, buildMakeupStockKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, lessonTypeLabels, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -273,6 +273,8 @@ type MakeupStockOriginItem = {
   rawEntryKey: string
   originIndex: number
   date: string
+  /** 同じ日付が2件並ぶ（同日同科目2コマ）ときに行を区別するための時限。不明なら null。 */
+  slotNumber: number | null
   label: string
   reasonLabel: string
   subject: string
@@ -1156,11 +1158,14 @@ function consumeManualLectureStockOrigin(originMap: Record<string, ManualLecture
   }
 }
 
-function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string) {
+function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string, slotNumber?: number | null) {
   const nextDates = originMap[key] ?? []
+  // 時限を持たせるのは「削除(抑制)」など時限が特定できる操作だけ。時限なしは同じ日付の全 origin を指す
+  // ワイルドカードとして扱われる（makeupStock.ts の resolveEffectiveMakeupOriginDates）。
+  const nextOrigin = slotNumber ? { dateKey: originDate, slotNumber } : { dateKey: originDate }
   return {
     ...originMap,
-    [key]: [...nextDates, { dateKey: originDate }].sort((left, right) => left.dateKey.localeCompare(right.dateKey)),
+    [key]: [...nextDates, nextOrigin].sort((left, right) => left.dateKey.localeCompare(right.dateKey)),
   }
 }
 
@@ -1179,6 +1184,29 @@ function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
     ...originMap,
     [key]: nextDates,
   }
+}
+
+// INV-06（2026-07-31・順序方式）: 「休み」「未消化振替へ戻す(格納)」は、その元コマ日の**抑制を解除**する。
+// 削除（×／コマ削除）は抑制を積む。＝**後にやった操作が勝つ**。これで
+//   削除 → コマを足し直す → 休み ⇒ 未消化振替に入る（足し直して休んだ＝振替が必要という意思表示）
+//   休み → ×で消す        ⇒ 消えたまま（意図的な削除を尊重する）
+// の両方が、操作の順番だけで説明できる。日付単位で全件外す（同じ日の抑制が複数積まれていても解除する）。
+export function clearMakeupOrigins(originMap: MakeupOriginMap, key: string, originDate: string, slotNumber?: number | null) {
+  // 時限まで分かるときは「同じ日付 かつ（時限なし＝旧データ or 同じ時限）」だけを外す。
+  // 同じ日の別コマ（例: 数4限を削除済み・数5限を休み）まで巻き込んで解除しない。
+  const matches = (entry: ManualMakeupOrigin) => (
+    entry.dateKey === originDate && (!slotNumber || !entry.slotNumber || entry.slotNumber === slotNumber)
+  )
+  const currentDates = originMap[key] ?? []
+  if (!currentDates.some(matches)) return originMap
+
+  const nextDates = currentDates.filter((entry) => !matches(entry))
+  if (nextDates.length === 0) {
+    const { [key]: _removed, ...rest } = originMap
+    return rest
+  }
+
+  return { ...originMap, [key]: nextDates }
 }
 
 export function removeStudentFromDeskLesson(desk: DeskCell, studentIndex: number) {
@@ -1259,6 +1287,18 @@ export function removeLecturePendingItemFromStockState(params: {
 //   （removeLecturePendingItemFromStockState の session 枝と同じ規約）。origin は該当1件だけ取り除く。
 // ⚠️ テンプレ上書き(handleSaveRegularLessonTemplate 分岐C)には使わない。あちらは範囲一掃＋均衡復元で
 //   意味が異なり、-1 の純減を積むと逆に未消化が過少計上になる（同ハンドラのコメント参照）。
+// INV-06 / spec-makeup-stock §B-3（2026-07-31 オーナー確定・例外を作らない）:
+// 「休み」にした講習コマを未消化講習へ戻すか。**手動追加(specialStockSource='manual')でも戻す。**
+// 日程表の実績カウントは手動追加を除外しない（希望数側も +1 の調整が入る）ので、休みで実績から
+// 外れた分を在庫へ戻さないと 希望1・実績0 のまま1コマが宙に浮く。
+// 講習期間(specialSessionId)は手動追加時も必須入力なので通常は常に真。旧データで欠けている場合だけ
+// 対象外にする（未消化講習は講習期間ごとに並ぶため、期間が無いと戻し先の行が決まらない）。
+// ★休み側と休み解除側で必ず同じ判定を使う（片方だけ広げると解除後に在庫が残って誤増する）。
+export function shouldReturnLectureStockOnAbsence(entry: { lessonType?: string | null; specialSessionId?: string; specialStockSource?: string }) {
+  // ★specialStockSource（session / manual）は見ない。見た瞬間に「手動追加だけ戻らない」例外が復活する。
+  return entry.lessonType === 'special' && Boolean(entry.specialSessionId)
+}
+
 export function reconsumeSessionLectureStock(params: {
   manualLectureStockCounts: LectureStockCountMap
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
@@ -1737,6 +1777,13 @@ function resolveOriginalRegularDate(student: StudentEntry, fallbackDateKey: stri
   return student.makeupSourceDate ?? student.sameDayMoveSourceDate ?? fallbackDateKey
 }
 
+// resolveOriginalRegularDate の時限版。振替コマは振替元ラベル("7/29(水) 5限")から、
+// 通常/増コマはそのコマの時限から取る（同日移動でも時限は移動先＝現在のコマのものを使う）。
+function resolveOriginalRegularSlotNumber(student: StudentEntry, fallbackSlotNumber: number) {
+  if (student.makeupSourceDate) return parseOriginSlotNumberFromLabel(student.makeupSourceLabel)
+  return fallbackSlotNumber
+}
+
 function resolveSuppressedRegularLessonOccurrenceKey(student: StudentEntry, fallbackDateKey: string, fallbackSlotNumber: number) {
   if (student.lessonType !== 'regular') return null
   return buildManagedOccurrenceKey(student, fallbackDateKey, fallbackSlotNumber)
@@ -1808,11 +1855,17 @@ function formatSignedStockCount(count: number) {
  *   使っており、選んだ振替元日付ではなく一番古い振替が割り当てられる不具合があった。
  */
 export function resolveSelectedMakeupOrigin(
-  placementEntry: Pick<MakeupStockEntry, 'remainingOriginDates' | 'remainingOriginLabels' | 'remainingOriginReasonLabels' | 'nextOriginDate' | 'nextOriginLabel' | 'nextOriginReasonLabel'>,
-  selectedOriginDate: string | null,
+  placementEntry: Pick<MakeupStockEntry, 'remainingOriginDates' | 'remainingOriginLabels' | 'remainingOriginReasonLabels' | 'nextOriginDate' | 'nextOriginLabel' | 'nextOriginReasonLabel'>
+    & Partial<Pick<MakeupStockEntry, 'remainingOriginSlots'>>,
+  selectedOriginToken: string | null,
 ) {
-  const selectedOriginIndex = selectedOriginDate
-    ? placementEntry.remainingOriginDates.indexOf(selectedOriginDate)
+  // 2026-07-31 時限単位化: 同じ日付が2件並ぶ（同日同科目2コマ）ため、選択の識別子は
+  // `日付#限` のトークン。旧UI/旧状態の「日付だけ」も同じ日付の先頭に一致させて受け付ける。
+  const selectedOriginIndex = selectedOriginToken
+    ? placementEntry.remainingOriginDates.findIndex((dateKey, index) => (
+      buildOriginToken(dateKey, placementEntry.remainingOriginSlots?.[index] ?? null) === selectedOriginToken
+      || dateKey === selectedOriginToken
+    ))
     : -1
 
   if (selectedOriginIndex >= 0) {
@@ -5100,6 +5153,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     resolveStudentKey: resolveBoardStudentStockId,
   }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, teachers])
 
+  // INV-06: 盤面操作（格納）で「この振替コマは台帳に origin を持つか」を判定するための有効 origin 一覧。
+  // 未消化残の算出(buildMakeupStockEntries)と同じ発生源・同じ権威関数を使う。
+  const makeupOriginDatesByKey = useMemo(() => collectMakeupOriginDatesByKey({
+    students,
+    regularLessons,
+    classroomSettings,
+    weeks: normalizedWeeks,
+    manualAdjustments: manualMakeupAdjustments,
+    suppressedOrigins: suppressedMakeupOrigins,
+    resolveStudentKey: resolveBoardStudentStockId,
+  }), [classroomSettings, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins])
+
   const rawLectureStockEntries = useMemo(() => buildLectureStockEntries({
     specialSessions,
     students,
@@ -8281,7 +8346,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage('未消化振替の削除をキャンセルしました。')
       return
     }
-    const nextSuppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, item.rawEntryKey, item.date)
+    // 2026-07-31 時限単位化: 同じ日の別コマを巻き込まないよう、時限まで指定して抑制する。
+    const nextSuppressedMakeupOrigins = appendMakeupOrigin(suppressedMakeupOrigins, item.rawEntryKey, item.date, item.slotNumber)
 
     commitWeeks(
       weeks,
@@ -9438,9 +9504,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
-    const nextManualMakeupAdjustments = (menuStudent.student.lessonType === 'regular' || !menuStudent.student.makeupSourceDate)
-      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey))
+    // INV-06: 在庫由来の振替は台帳の origin が再浮上するので積まない／台帳に origin が無い
+    // 「移動しただけの振替コマ」は盤面が唯一の記録なので積む（外した瞬間の消滅を防ぐ）。
+    const storeOriginDate = resolveStoreMakeupOriginDate({
+      student: menuStudent.student,
+      cellDateKey: targetCell.dateKey,
+      ledgerOriginDates: makeupOriginDatesByKey[stockKey] ?? [],
+    })
+    const nextManualMakeupAdjustments = storeOriginDate
+      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate)
       : manualMakeupAdjustments
+    // INV-06（順序方式）: 格納は「未消化振替へ戻す」意思表示なので、過去の削除でこの元コマ日が抑制
+    // されていても解除する。在庫由来（storeOriginDate=null）でも台帳 origin の再浮上を抑制が止めるため、
+    // 積む/積まないに関わらず解除する。
+    const nextSuppressedMakeupOrigins = clearMakeupOrigins(
+      suppressedMakeupOrigins,
+      stockKey,
+      resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
+      resolveOriginalRegularSlotNumber(menuStudent.student, targetCell.slotNumber),
+    )
     const managedStudent = managedStudentByAnyName.get(menuStudent.student.name)
     const nextFallbackMakeupStudents = managedStudent
       ? fallbackMakeupStudents
@@ -9461,7 +9543,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       nextManualMakeupAdjustments,
-      suppressedMakeupOrigins,
+      nextSuppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
@@ -9489,7 +9571,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentStatusEntry)
 
     if (targetStudent.lessonType === 'special') {
-      if (targetStudent.specialStockSource !== 'session') {
+      if (!shouldReturnLectureStockOnAbsence(targetStudent)) {
         commitWeeks(
           nextWeeks,
           weekIndex,
@@ -9504,7 +9586,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           manualLectureStockOrigins,
           fallbackLectureStockStudents,
         )
-        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。手動追加講習のため未消化講習には戻していません。`)
+        setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。講習期間が特定できないため未消化講習には戻していません。`)
         return
       }
 
@@ -9550,9 +9632,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
+    // INV-06（回帰防止・2026-07-31）: 振替コマ（makeupSourceDate あり）を休みにしたときは、ここで
+    // origin を積んではいけない。台帳に origin がある在庫由来の振替は「積む＋再浮上」で二重計上になり、
+    // 台帳に origin が無い（＝別日へ移動しただけの）振替は makeupStock.ts の collectAbsentMakeupOrigins が
+    // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
+    // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
     const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
       ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
       : manualMakeupAdjustments
+    // INV-06（順序方式・2026-07-31 オーナー確定）: 「休み」は「この授業は実施されなかった＝振替が要る」という
+    // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
+    // ×を押せば抑制が積まれて消える＝**後にやった操作が勝つ**。休み解除では抑制を戻さない（解除は
+    // 台帳 origin を取り下げるだけ）。
+    const nextSuppressedMakeupOrigins = clearMakeupOrigins(
+      suppressedMakeupOrigins,
+      stockKey,
+      resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+      resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+    )
     const managedStudent = managedStudentByAnyName.get(targetStudent.name)
     const nextFallbackMakeupStudents = managedStudent
       ? fallbackMakeupStudents
@@ -9573,7 +9670,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       nextManualMakeupAdjustments,
-      suppressedMakeupOrigins,
+      nextSuppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
@@ -9681,7 +9778,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     if (statusEntry.status === 'absent' && restoredStudent) {
       if (statusEntry.lessonType === 'special') {
-        if (statusEntry.specialStockSource === 'session') {
+        // 休み側と同じ権威関数で判定する（手動追加も戻したので、解除でも同じ条件で再消化する）。
+        if (shouldReturnLectureStockOnAbsence(statusEntry)) {
           const lectureStudentKey = resolveLectureStockStudentKey(statusEntry, managedStudentByAnyName, resolveBoardStudentDisplayName)
           const lectureStockKey = buildLectureStockKey(lectureStudentKey, statusEntry.subject, statusEntry.specialSessionId)
           // INV-06: 欠席化で戻した1回分を再消化する。負値デルタ台帳なので removeLectureStockCount は不可
@@ -10326,6 +10424,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     rawEntryKey: raw.key,
                     originIndex: i,
                     date: raw.remainingOriginDates[i] ?? '',
+                    slotNumber: raw.remainingOriginSlots[i] ?? null,
                     label: raw.remainingOriginLabels[i] ?? '',
                     reasonLabel: raw.remainingOriginReasonLabels[i] ?? '振替発生',
                     subject: raw.subject,
@@ -10347,7 +10446,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                             type="button"
                             className="stock-origin-item stock-origin-item-main"
                             onClick={() => {
-                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, originDate: item.date, hidePanelsDuringPlacement: true })
+                              handleSelectMakeupStockEntry(makeupEntry, { rawKey: item.rawEntryKey, originDate: buildOriginToken(item.date, item.slotNumber), hidePanelsDuringPlacement: true })
                               setStockActionModal(null)
                             }}
                             data-testid={`stock-origin-item-${index}`}

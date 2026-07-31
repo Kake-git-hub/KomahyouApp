@@ -113,8 +113,9 @@ describe('makeupStock', () => {
       new Date('2025-04-10T00:00:00'),
     )
 
+    // 2026-07-31 時限単位化: origin は `日付#限` のトークンで持つ。
     expect(result.origins).toEqual({
-      'student-1__数': ['2025-04-07'],
+      'student-1__数': ['2025-04-07#1'],
     })
 
     const reopenedResult = computeAutomaticShortageOrigins(
@@ -142,7 +143,7 @@ describe('makeupStock', () => {
     )
 
     expect(result.origins).toEqual({
-      'student-1__数': ['2025-04-21'],
+      'student-1__数': ['2025-04-21#1'],
     })
   })
 
@@ -162,7 +163,7 @@ describe('makeupStock', () => {
     )
 
     expect(result.origins).toEqual({
-      'student-1__数': ['2026-03-10'],
+      'student-1__数': ['2026-03-10#4'],
     })
   })
 
@@ -975,8 +976,9 @@ describe('makeupStock', () => {
       new Date('2025-04-10T00:00:00'),
     )
 
-    expect(result.slotNumbers).toEqual({
-      'student-1__数': { '2025-04-07': 3 },
+    // 2026-07-31 時限単位化: origin は `日付#限` のトークンで持つ（旧: 日付配列＋別の時限マップ）。
+    expect(result.origins).toEqual({
+      'student-1__数': ['2025-04-07#3'],
     })
 
     // End-to-end: the slot number should appear in origin labels
