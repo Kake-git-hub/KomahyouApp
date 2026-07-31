@@ -403,7 +403,12 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
       if (!cell.isOpenDay) continue
       for (const desk of cell.desks) {
         for (const statusEntry of desk.statusSlots ?? []) {
-          if (!statusEntry || statusEntry.manualAdded) continue
+          if (!statusEntry) continue
+          // ★手動追加コマ(manualAdded)も対象にする（2026-07-31 オーナー確定・例外を作らない）。
+          // 日程表の実績カウントは manualAdded を除外しない＝手動追加した通常/振替/増コマも実績 +1 になる。
+          // 休みにすれば実績から外れるので、在庫へ戻さないと1コマ消える（手動追加した振替コマを休みにすると
+          // 台帳にも積まれず算出でも拾われず消滅していた）。消化(plannedMakeups)側が manualAdded を数えない
+          // 非対称は仕様どおり（手動追加＝在庫を消費せずに足したコマ）で、その結果の在庫純増は許容する。
           // absent 限定。absent-no-makeup(振無休)は振替を出さない仕様、attended/moved は消化済み。
           if (statusEntry.status !== 'absent') continue
           if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) continue

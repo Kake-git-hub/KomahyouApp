@@ -313,9 +313,24 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
       `resolveStoreMakeupOriginDate` で「台帳に origin があれば積まない（二重計上防止）／無ければ振替元日で積む
       （消滅防止）」に是正。削除（`handleDeleteStudent`＝`suppressedMakeupOrigins` へ退避）・振無休・出席・移動は
       仕様どおり未消化にしないことをマトリクスで固定。
-- **マトリクステストファイル**：`inv06-makeup-absence-stock.matrix.test.ts`（2026-07-31・18 テスト：
+  - deleted-then-absent（削除した日を後から休みにしても未消化振替に入らない／緑が丘 室長報告 2026-07-31・大槻 8/5）：
+    - 上の moved-makeup-absence-loss と**別原因**。`suppressedMakeupOrigins`（削除＝×／コマ削除で積まれる）は
+      **生徒×科目×日付**の永続フィルタで、解除するUIが無い（Issue #39）。そのため「削除 → コマを足し直す →
+      あらためて休み」をしても、その日付は恒久的にブロックされ**未消化振替へ入らなかった**。過去に削除した日を
+      持つ生徒だけ症状が出るため「同じ休みでも生徒によって違う」に見える。
+    - 対処＝**順序方式（後にやった操作が勝つ）**。「休み」「格納」は `clearMakeupOrigins` でその元コマ日の抑制を
+      **解除**し、削除は従来どおり抑制を積む。詳細と非対称（休み解除では抑制を戻さない）は
+      `docs/spec-makeup-stock.md` §2 削除（抑制）。
+    - ⚠️ **算出で一律に無効化する方式は採らない**（オーナー確定 2026-07-31）：「休みの記録がある日は抑制を無視」に
+      すると、**意図的に×で消した分まで復活する**（本番実データで緑が丘 13 件・日大前 4 件が復活し、うち 10 件は
+      元の予定コマが盤面に残ったまま行だけ消した＝意図的な削除だった）。順序方式なら過去データは動かない。
+    - 併せて **B-3（手動追加コマの休み）** を確定：手動追加した通常・振替・増コマの休みも未消化振替へ戻す
+      （日程表の実績カウントが `manualAdded` を除外しないため、戻さないと1コマ消える）。
+      `collectAbsentMakeupOrigins` の `manualAdded` 除外を撤廃。消化（配置）側の非対称は据え置き＝在庫の純増は許容。
+- **マトリクステストファイル**：`inv06-makeup-absence-stock.matrix.test.ts`（2026-07-31・20 テスト：
   休み × 通常/同日移動/在庫由来の振替/移動しただけの振替/手動追加、休み解除の往復、隣接出欠〔振無休・出席・移動〕の
-  誤増なし、格納の origin 判定、個別非表示化した元コマを復活させないこと）＋`inv06-lecture-stock-reconciliation.matrix.test.ts`（2026-07-17・4 テスト：
+  誤増なし、格納の origin 判定、個別非表示化した元コマを復活させないこと、**削除→足し直し→休みで入ること
+  （順序方式）**と `clearMakeupOrigins` の単体挙動）＋`inv06-lecture-stock-reconciliation.matrix.test.ts`（2026-07-17・4 テスト：
   犬飼シナリオ再現／欠席化⇔欠席解除の往復対称性／負値保持）＋`inv06-holiday-stock-reconciliation.matrix.test.ts`
   （2026-07-18・16 テスト：休日化を全 status〔absent/moved=スキップ・attended/absent-no-makeup=戻す〕×session講習/通常で
   両方向固定／振替 origin の dateKey 区別／同一 index 併存／改名キーの正準化）。加えて `makeupStock.test.ts`（3→2 で 1 件だけ減る／出席消化と欠席未消化の区別／

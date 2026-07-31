@@ -9,6 +9,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
+import { clearMakeupOrigins } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -221,11 +222,50 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
       expect(entry?.absentMakeupOrigins).toBe(1)
     })
 
-    it('手動追加の振替コマを休み → 在庫会計の対象外なので残0のまま', () => {
+    // 2026-07-31 オーナー確定で挙動を反転（旧: 手動追加は在庫会計の対象外＝残0のまま）。
+    // 日程表の実績カウントは manualAdded を除外しない（手動追加した通常/振替/増コマも実績 +1 になる）。
+    // 休みにすれば実績から外れるため、在庫へ戻さないと1コマ消える。台帳にも積まれない振替コマでは
+    // 実際に消滅していた。詳細は docs/spec-makeup-stock.md §B-3。
+    it('手動追加の振替コマを休み → 未消化振替へ戻る（実績カウントと整合させる・例外を作らない）', () => {
       const balance = stockBalance({
         desk: deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true })),
       })
-      expect(balance).toBe(0)
+      expect(balance).toBe(1)
+    })
+
+    it('回帰防止: 削除(抑制)済みの日でも、そのあと休みにすれば未消化振替へ入る（順序方式・後の操作が勝つ）', () => {
+      // 「×／コマ削除で消す → コマを足し直す → 休み」の流れ。休み操作が抑制を解除するため残1。
+      // 解除は clearMakeupOrigins（ScheduleBoardScreen）が行い、その結果を在庫計算に渡す。
+      const suppressedBefore = { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }
+      const suppressedAfterAbsence = clearMakeupOrigins(suppressedBefore, STOCK_KEY, MAKEUP_SOURCE_DATE)
+
+      const entries = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings(),
+        weeks: [[cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true })))]],
+        manualAdjustments: {},
+        suppressedOrigins: suppressedAfterAbsence,
+        resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+        today: TODAY,
+      })
+      expect(entries.find((entry) => entry.key === STOCK_KEY)?.balance).toBe(1)
+    })
+
+    it('clearMakeupOrigins: 同じ日付を全件外す／他の日付・他キーは残す／無ければ元のまま', () => {
+      const map = {
+        [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }, { dateKey: MAKEUP_SOURCE_DATE, slotNumber: 4 }, { dateKey: HOLIDAY_SOURCE_DATE }],
+        'student-2__英': [{ dateKey: MAKEUP_SOURCE_DATE }],
+      }
+      expect(clearMakeupOrigins(map, STOCK_KEY, MAKEUP_SOURCE_DATE)).toEqual({
+        [STOCK_KEY]: [{ dateKey: HOLIDAY_SOURCE_DATE }],
+        'student-2__英': [{ dateKey: MAKEUP_SOURCE_DATE }],
+      })
+      // キーの全件が外れたらキーごと消す（空配列を残さない）
+      expect(clearMakeupOrigins({ [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }, STOCK_KEY, MAKEUP_SOURCE_DATE)).toEqual({})
+      // 対象が無ければ同一参照を返す（無駄な再計算を起こさない）
+      expect(clearMakeupOrigins(map, STOCK_KEY, '2026-01-01')).toBe(map)
     })
 
     it('個別に非表示化(削除)された元コマは復活させない', () => {

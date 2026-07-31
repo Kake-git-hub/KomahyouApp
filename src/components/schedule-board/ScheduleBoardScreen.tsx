@@ -1181,6 +1181,24 @@ function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
   }
 }
 
+// INV-06（2026-07-31・順序方式）: 「休み」「未消化振替へ戻す(格納)」は、その元コマ日の**抑制を解除**する。
+// 削除（×／コマ削除）は抑制を積む。＝**後にやった操作が勝つ**。これで
+//   削除 → コマを足し直す → 休み ⇒ 未消化振替に入る（足し直して休んだ＝振替が必要という意思表示）
+//   休み → ×で消す        ⇒ 消えたまま（意図的な削除を尊重する）
+// の両方が、操作の順番だけで説明できる。日付単位で全件外す（同じ日の抑制が複数積まれていても解除する）。
+export function clearMakeupOrigins(originMap: MakeupOriginMap, key: string, originDate: string) {
+  const currentDates = originMap[key] ?? []
+  if (!currentDates.some((entry) => entry.dateKey === originDate)) return originMap
+
+  const nextDates = currentDates.filter((entry) => entry.dateKey !== originDate)
+  if (nextDates.length === 0) {
+    const { [key]: _removed, ...rest } = originMap
+    return rest
+  }
+
+  return { ...originMap, [key]: nextDates }
+}
+
 export function removeStudentFromDeskLesson(desk: DeskCell, studentIndex: number) {
   if (!desk.lesson) return
 
@@ -9460,6 +9478,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextManualMakeupAdjustments = storeOriginDate
       ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, storeOriginDate)
       : manualMakeupAdjustments
+    // INV-06（順序方式）: 格納は「未消化振替へ戻す」意思表示なので、過去の削除でこの元コマ日が抑制
+    // されていても解除する。在庫由来（storeOriginDate=null）でも台帳 origin の再浮上を抑制が止めるため、
+    // 積む/積まないに関わらず解除する。
+    const nextSuppressedMakeupOrigins = clearMakeupOrigins(
+      suppressedMakeupOrigins,
+      stockKey,
+      resolveOriginalRegularDate(menuStudent.student, targetCell.dateKey),
+    )
     const managedStudent = managedStudentByAnyName.get(menuStudent.student.name)
     const nextFallbackMakeupStudents = managedStudent
       ? fallbackMakeupStudents
@@ -9480,7 +9506,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       nextManualMakeupAdjustments,
-      suppressedMakeupOrigins,
+      nextSuppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
@@ -9577,6 +9603,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
       ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
       : manualMakeupAdjustments
+    // INV-06（順序方式・2026-07-31 オーナー確定）: 「休み」は「この授業は実施されなかった＝振替が要る」という
+    // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
+    // ×を押せば抑制が積まれて消える＝**後にやった操作が勝つ**。休み解除では抑制を戻さない（解除は
+    // 台帳 origin を取り下げるだけ）。
+    const nextSuppressedMakeupOrigins = clearMakeupOrigins(
+      suppressedMakeupOrigins,
+      stockKey,
+      resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+    )
     const managedStudent = managedStudentByAnyName.get(targetStudent.name)
     const nextFallbackMakeupStudents = managedStudent
       ? fallbackMakeupStudents
@@ -9597,7 +9632,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       nextManualMakeupAdjustments,
-      suppressedMakeupOrigins,
+      nextSuppressedMakeupOrigins,
       nextFallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
