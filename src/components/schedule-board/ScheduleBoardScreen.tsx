@@ -21,7 +21,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveAbsentMakeupOriginToMaterialize, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -1362,8 +1362,15 @@ export function reconcileHolidayDeskStockReturns(params: {
   managedStudentByAnyName: Map<string, StudentRow>
   resolveDisplayName: (name: string) => string
   resolveStockId: (student: StudentEntry) => string
+  /**
+   * 在庫キーごとの台帳 origin（`collectMakeupOriginDatesByKey`）。休みにした振替コマを台帳へ確定させるとき、
+   * 既に台帳にある（＝在庫由来で外れれば再浮上する）ものを二重に積まないための判定に使う。
+   * ⚠️ **必ず `includeAbsentMakeupOrigins: false` の版を渡す**（算出で復元した自分自身を見て確定を取りやめないため）。
+   * 省略不可にしてあるのは、新しい呼び出し側が黙って `{}` を渡して誤増するのを防ぐため。
+   */
+  ledgerOriginDatesByKey: Record<string, string[]>
 }): { ledgers: HolidayStockLedgers; movedStudentCount: number } {
-  const { desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
+  const { desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey } = params
   let { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents } = params.ledgers
   let movedStudentCount = 0
 
@@ -1417,6 +1424,37 @@ export function reconcileHolidayDeskStockReturns(params: {
 
   for (const statusEntry of desk.statusSlots ?? []) {
     if (!statusEntry) continue
+    // INV-06（2026-08-01・下流監査）: 休日化は机ごと（statusSlots も）破棄する。
+    // 「休みにした移動しただけの振替コマ」は台帳に origin が無く、この出欠記録の存在だけが唯一の根拠
+    // （makeupStock.collectAbsentMakeupOrigins が算出で復元している）なので、破棄する前に台帳へ確定
+    // させないと在庫ごと消える。v1.5.459 で算出方式にしたことで開いた下流の穴で、
+    // HOLIDAY_STOCK_RETURNABLE_STATUSES が absent を外している前提（＝mark-absent が積み済み）は
+    // 在庫由来・通常・講習にしか当てはまらない。台帳に origin があるものは積まない＝二重計上しない。
+    const absentStockKey = buildMakeupStockKey(resolveStockId(statusEntry as unknown as StudentEntry), statusEntry.subject)
+    const materializedOrigin = resolveAbsentMakeupOriginToMaterialize({
+      statusEntry,
+      ledgerOriginDates: ledgerOriginDatesByKey[absentStockKey] ?? [],
+    })
+    if (materializedOrigin) {
+      const stockKey = absentStockKey
+      // ↑ 同一キーを2度組み立てないためのエイリアス。以下は台帳(manualMakeupAdjustments)への確定。
+      // 同じ元コマを指す absent 記録が複数あっても、算出側はトークン(日付＋時限)の集合で1件に畳む。
+      // 台帳へ写すときも同じ畳み方をしないと誤増する（時限不明はワイルドカード＝過大計上しない側）。
+      const alreadyMaterialized = (manualMakeupAdjustments[stockKey] ?? []).some((origin) => (
+        origin.dateKey === materializedOrigin.dateKey
+        && (origin.slotNumber == null || materializedOrigin.slotNumber == null || origin.slotNumber === materializedOrigin.slotNumber)
+      ))
+      if (alreadyMaterialized) continue
+      movedStudentCount += 1
+      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, materializedOrigin.dateKey, materializedOrigin.slotNumber)
+      if (!managedStudentByAnyName.get(statusEntry.name)) {
+        fallbackMakeupStudents = {
+          ...fallbackMakeupStudents,
+          [stockKey]: { studentName: statusEntry.name, displayName: resolveDisplayName(statusEntry.name), subject: statusEntry.subject },
+        }
+      }
+      continue
+    }
     if (!HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) continue // absent/moved は会計済みなので触らない
     returnEntryToStock(statusEntry, cellDateKey)
   }
@@ -5171,6 +5209,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     resolveStudentKey: resolveBoardStudentStockId,
   }), [classroomSettings, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins])
 
+  // INV-06: 休日設定のように「休みの出欠記録ごと破棄する」操作で使う台帳 origin 一覧。
+  // ⚠️ こちらは **算出由来(absent)を除く**。含めると、算出で復元した自分自身を見て
+  // 「台帳にあるから積まなくてよい」と誤読し、記録の破棄と同時に在庫が消える。
+  const ledgerMakeupOriginDatesByKey = useMemo(() => collectMakeupOriginDatesByKey({
+    students,
+    regularLessons,
+    classroomSettings,
+    weeks: normalizedWeeks,
+    manualAdjustments: manualMakeupAdjustments,
+    suppressedOrigins: suppressedMakeupOrigins,
+    resolveStudentKey: resolveBoardStudentStockId,
+    includeAbsentMakeupOrigins: false,
+  }), [classroomSettings, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins])
+
   const rawLectureStockEntries = useMemo(() => buildLectureStockEntries({
     specialSessions,
     students,
@@ -7724,6 +7776,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             managedStudentByAnyName,
             resolveDisplayName: resolveBoardStudentDisplayName,
             resolveStockId: resolveBoardStudentStockId,
+            ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
           })
           ledgers = result.ledgers
           movedStudentCount += result.movedStudentCount

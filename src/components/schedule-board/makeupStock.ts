@@ -437,7 +437,12 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
 
   for (const week of weeks) {
     for (const cell of week) {
-      if (!cell.isOpenDay) continue
+      // ★非営業日(isOpenDay=false)のセルも走査する（2026-08-01・下流監査）。
+      // 他の収集関数（countPlannedMakeupsByKey / collectMakeupUsageByKey）が非営業日を飛ばすのは
+      // 「休日には授業が無い＝消化に数えない」ためだが、こちらは**消化ではなく在庫の根拠**を集める。
+      // 出欠記録(absent)が残っているコマの日が、後から定休日・休日設定になった（＝盤面の中身は
+      // 残ったまま isOpenDay だけ false になった）ときにここで飛ばすと、その1コマが在庫からも
+      // 盤面からも消える（INV-06 誤減）。absent は消化側が必ず除外するので二重計上にはならない。
       for (const desk of cell.desks) {
         for (const statusEntry of desk.statusSlots ?? []) {
           if (!statusEntry) continue
@@ -724,12 +729,21 @@ export function collectMakeupOriginDatesByKey(params: {
   suppressedOrigins?: Record<string, ManualMakeupOrigin[]>
   resolveStudentKey: (student: StudentEntry) => string
   today?: Date
+  /**
+   * 「休み(absent)の出欠記録から算出で復元している origin」を含めるか（既定 true）。
+   * ⚠️ **その出欠記録を破棄する操作**（休日設定）の側で「台帳に origin があるか」を判定するときは
+   * false にする。true のまま使うと、算出で復元した自分自身を「台帳にある」と誤読して確定を取りやめ、
+   * 記録の破棄と同時に在庫が消える（INV-06 誤減）。
+   */
+  includeAbsentMakeupOrigins?: boolean
 }) {
-  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date() } = params
+  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true } = params
   const managedStudentIds = new Set(students.map((student) => student.id))
   const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today).origins
   const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
-  const absentMakeupOrigins = normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(weeks, resolveStudentKey), managedStudentIds)
+  const absentMakeupOrigins = includeAbsentMakeupOrigins
+    ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(weeks, resolveStudentKey), managedStudentIds)
+    : {}
   const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)
   const normalizedSuppressedOrigins = normalizeMakeupOriginMapKeysByIdSet(suppressedOrigins, managedStudentIds)
 
@@ -767,7 +781,42 @@ export function resolveStoreMakeupOriginDate(params: {
   const originDate = student.makeupSourceDate ?? student.sameDayMoveSourceDate ?? cellDateKey
 
   if (student.lessonType === 'regular' || !student.makeupSourceDate) return originDate
-  return ledgerOriginDates.includes(student.makeupSourceDate) ? null : student.makeupSourceDate
+  return ledgerOriginsIncludeDate(ledgerOriginDates, student.makeupSourceDate) ? null : student.makeupSourceDate
+}
+
+// 台帳（collectMakeupOriginDatesByKey の戻り値）に、その振替元日の origin が既にあるか。
+// ⚠️ 台帳側は時限つきトークン（`YYYY-MM-DD#限`）なのに、突き合わせる相手（statusEntry.makeupSourceDate /
+// student.makeupSourceDate）は**日付だけ**。素の `includes` で比べると時限つき origin に当たらず
+// 「台帳に無い」と誤判定して二重に積む（＝誤増）。**日付で突き合わせる**のが正しい
+// （時限不明はワイルドカード＝過大計上しない側に倒す・2026-07-31 の時限単位化の方針と同じ）。
+export function ledgerOriginsIncludeDate(ledgerOriginDates: string[], dateKey: string) {
+  return ledgerOriginDates.some((token) => originTokenDateKey(token) === dateKey)
+}
+
+// INV-06: 「休み」の出欠記録だけが根拠になっている振替コマ（＝台帳に origin が無く
+// collectAbsentMakeupOrigins が算出で復元している分）を、**その記録を破棄する操作**
+// （休日設定など）の側で台帳へ確定させるための判定。算出方式は「盤面に出欠記録が残っている間だけ」
+// 成立する仮の姿なので、記録を消す側が確定させないと在庫ごと消える。
+// - 台帳に既に同じ日付の origin がある（在庫由来の振替）… null（外れた時点で再浮上するので二重計上になる）。
+// - 通常授業 / 講習 / 振替元日を持たないコマ … null（mark 時に在庫会計済み。ここで触ると二重計上）。
+// - 手動追加(manualAdded)も対象にする（collectAbsentMakeupOrigins と同じ扱い・例外を作らない）。
+export function resolveAbsentMakeupOriginToMaterialize(params: {
+  statusEntry: {
+    status: string
+    lessonType?: string | null
+    makeupSourceDate?: string
+    makeupSourceLabel?: string
+  }
+  ledgerOriginDates: string[]
+}): { dateKey: string; slotNumber: number | null } | null {
+  const { statusEntry, ledgerOriginDates } = params
+  if (statusEntry.status !== 'absent') return null
+  if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) return null
+  if (ledgerOriginsIncludeDate(ledgerOriginDates, statusEntry.makeupSourceDate)) return null
+  return {
+    dateKey: statusEntry.makeupSourceDate,
+    slotNumber: parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel),
+  }
 }
 
 export function buildMakeupStockEntries(params: {
