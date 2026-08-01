@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.462 (2026-08-01)
+
+- fix: **生徒登録フォームの外部生チェックにラベルが出ず、用途不明の四角になっていた**のを修正(オーナー指摘 2026-08-01)。原因は `.basic-data-compact-form .basic-data-inline-field span { display: none }`: このフォームは他の欄がプレースホルダ(「生徒名」「入塾日を選択」)で内容を示すためラベル文言を全て隠す設計だが、**チェックボックスにはプレースホルダが無い**ので隠すと何も手掛かりが残らなかった。`.basic-data-inline-field-check` にラベル表示の上書きを追加(⚠️ この上書きを消すと再発する)。あわせて2点: (1) `.basic-data-compact-form-student` の `grid-template-columns` 末尾を `auto auto` にした(列を足さないと外部生チェックが追加ボタンの列を占め、**追加ボタンが次の行へ折り返す**)。 (2) 基底の `.basic-data-inline-field` は `min-width: 0`(伸縮する入力欄向け)だが、この欄は文字とチェックだけで伸縮の余地が無く、そのままだと横幅が詰まったときにグリッド列が 0px へ潰れてラベルが消えるため `min-width: max-content` を指定。1920px/1280px の両方でラベル(36px)＋チェック(16px)が表示され追加ボタンと同じ行に収まる(横あふれ 0)ことを実機で確認(src/App.css)
+
 ## v1.5.461 (2026-08-01)
 
 - feat: **配布用盤面(共有URL)も外部生表記 外) に対応**(オーナー要望 2026-08-01・v1.5.460 で盤面のみ対応した続き)。共有ドキュメントに `externalStudentIds`(外部生の managedStudentId 一覧)を追加し、共有画面は `isExternalBoardShareStudent` で突き合わせて 通/振/講/増/体 を **外** に、下段チップを **外部生** に置き換える。⚠️ **名簿そのものは共有しない**(必要なのは ID の集合だけ)。未設定/型崩れの旧ドキュメントは空集合＝全員通常表示に倒す(`normalizeExternalStudentIds`・後方互換)。**公開署名(`lastPublishedBoardShareSignatureRef`)にも `externalStudentIds` を含める**: ここを外すと外部生チェックを付け外ししても署名が変わらず publish がスキップされ、配布用盤面だけ旧表記のまま取り残される。また外部生チェックは**盤面を編集しない**ため `handleBoardStateChange` 経由の公開が走らない。専用の追い公開 effect を追加したが、**★クロス教室汚染防止として「教室が切り替わった直後は公開しない」ガードを必ず残す**(切替中は actingClassroomId が先に新教室へ変わり boardState/名簿が旧教室のまま残る窓があり、そこで公開すると旧教室の盤面を新教室のトークンで配布する=2026-06-06 のクロス汚染と同じ形)。直前に公開した教室IDと外部生集合を ref で覚え、**同じ教室のまま集合が変わったときだけ**追い公開する。あわせて `isExternalStudentRow` の引数を `Pick<StudentRow,'isExternal'>` から `StudentRow` へ変更(弱い型になり isExternal 未設定の生徒を渡すと TS2559 で落ちるため)。回帰テスト7件を同コミットで追加(旧ドキュメント/重複・整列/compact 化での欠落/managedStudentId なしは対象外/全区分で 外/学年・科目・分数は維持)。外部生分岐と整列を外す mutation で3件落ちることを確認(src/integrations/firebase/boardShare.ts・src/components/board-share/BoardShareScreen.tsx・src/App.tsx)

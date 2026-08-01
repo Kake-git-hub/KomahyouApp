@@ -4040,8 +4040,9 @@ tr.sa-group-row td {
   align-items: end;
 }
 
+/* 末尾2つの auto = 外部生チェック / 追加ボタン。列を1つ足さないと追加ボタンが次行へ折り返す。 */
 .basic-data-compact-form-student {
-  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 1.25fr) repeat(3, minmax(190px, 1fr)) auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) minmax(220px, 1.25fr) repeat(3, minmax(190px, 1fr)) auto auto;
 }
 
 .basic-data-compact-form-teacher {
@@ -4056,6 +4057,26 @@ tr.sa-group-row td {
 
 .basic-data-compact-form .basic-data-inline-field span {
   display: none;
+}
+
+/* 外部生チェックだけはラベル文言を必ず出す。他の欄はプレースホルダ(「生徒名」「入塾日を選択」)で
+   何の入力か分かるが、チェックボックスにはプレースホルダが無く、隠すと用途不明の四角になる。
+   ⚠️ 上の span { display: none } に巻き込まれないよう、この上書きを消さないこと。 */
+.basic-data-compact-form .basic-data-inline-field-check {
+  display: inline-flex;
+  align-items: center;
+  align-self: end;
+  gap: 6px;
+  min-height: 42px;
+  white-space: nowrap;
+  /* 基底の .basic-data-inline-field は min-width: 0(伸縮する入力欄向け)。この欄は文字とチェックだけで
+     伸縮の余地が無く、0 のままだとグリッドが詰まったときに幅0へ潰れてラベルが消える。 */
+  min-width: max-content;
+}
+
+.basic-data-compact-form .basic-data-inline-field-check span {
+  display: inline;
+  width: auto;
 }
 
 .basic-data-compact-form .basic-data-inline-summary {
