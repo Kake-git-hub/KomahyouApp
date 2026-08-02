@@ -538,6 +538,51 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       expect(teachersOn(TARGET_DATE)).toEqual(['田中講師'])
     })
 
+    // ★本番の主経路: テンプレ側の管理セルは「講師＋管理授業(managed lesson)」の机を持つ。
+    // 丸ごと振替の per-student 抑止で studentSlots が全 null になると suppressManagedStudentsInCell が
+    // lesson だけ落として **teacher は残す**（:2707 付近）。この「講師だけになった管理机」が
+    // 再付与ループの燃料になるので、strip は必ず suppressManagedStudentsInCell の**後**に当てる必要がある。
+    // ★順序を入れ替えると（strip を先に当てると）この経路だけ静かに壊れる。それを検出するテスト。
+    it('★テンプレに授業がある日でも足場講師が湧かない（抑止で lesson が消えた管理机の講師も落ちる）', () => {
+      const outcome = transferredOrThrow(runTransfer({
+        sourceDesk: deskWithStudent(boardStudent()),
+        targetDesk: emptyDesk(),
+      }))
+      // 管理セル(テンプレ)の形を本番に合わせる: 机1 に「テンプレ講師U ＋ 管理授業(student-1/数)」
+      const managedLessonDesk = (teacherName: string): DeskCell => ({
+        id: 'm1',
+        teacher: teacherName,
+        lesson: {
+          id: `managed_${teacherName}`,
+          note: '管理データ反映',
+          studentSlots: [boardStudent({ id: `managed-${teacherName}` }), null],
+        },
+      })
+      const managedCells = [
+        slotCell(SOURCE_DATE, 5, [{ id: 'm0', teacher: '' }, managedLessonDesk('テンプレ講師V')]),
+        slotCell(TARGET_DATE, 5, [{ id: 'm0', teacher: '' }, managedLessonDesk('テンプレ講師U')]),
+      ]
+      const boardWeeks = outcome.result.nextWeeks.map((week) => week.map((cell) => ({
+        ...cell,
+        desks: [...cell.desks, { id: 'extra', teacher: '' } as DeskCell],
+      })))
+      const merged = overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, outcome.result.nextSuppressedRegularLessonOccurrences)
+
+      const teachersOn = (dateKey: string) => merged
+        .filter((cell) => cell.dateKey === dateKey)
+        .flatMap((cell) => cell.desks.map((desk) => desk.teacher))
+        .filter((name) => name.trim())
+      expect(teachersOn(SOURCE_DATE)).toEqual([])
+      expect(teachersOn(TARGET_DATE)).toEqual(['田中講師'])
+      // 生徒側も復活しない（抑止キーが効いている＝この経路を実際に通った証拠）
+      const targetStudents = merged
+        .filter((cell) => cell.dateKey === TARGET_DATE)
+        .flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []))
+        .filter((entry) => entry != null)
+      expect(targetStudents).toHaveLength(1)
+      expect(targetStudents[0]?.lessonType).toBe('makeup')
+    })
+
     it('抑止していない日では従来どおりテンプレ足場講師が付く（INV-02 のテンプレ追従を壊していない）', () => {
       const untouchedDate = '2026-08-26'
       const boardWeeks = [[slotCell(untouchedDate, 5, [{ id: 'd0', teacher: '' }, { id: 'd1', teacher: '' }])]]

@@ -2816,6 +2816,11 @@ export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boar
   const templateTeacherSuppressedDates = collectTemplateTeacherSuppressedDates(explicitlySuppressedManagedKeys)
 
   const mergedCells = scheduleCells.map((managedCell) => {
+    // ★順序が load-bearing: **必ず suppressManagedStudentsInCell の後に strip する**。
+    //   テンプレの管理机は通常「講師＋管理授業(lesson)」の形で、strip は lesson 付きの机を素通しする。
+    //   先に strip すると何も落ちず、そのあと抑止で lesson だけ消えて **teacher が残った机**（:2707 付近で
+    //   意図的に teacher を残す仕様）が再付与ループの燃料になり、テンプレ講師が湧く挙動へ戻る。
+    //   回帰テスト: inv06-whole-day-transfer「テンプレに授業がある日でも足場講師が湧かない」。
     const suppressedStudentsCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
     const adjustedManagedCell = templateTeacherSuppressedDates.has(managedCell.dateKey)
       ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
