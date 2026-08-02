@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.463 (2026-08-02)
+
+- fix(INV-06): **休みにした振替コマが「その日を休日設定」「非営業日化」で在庫ごと消える**下流の穴を塞いだ(2026-08-01 下流監査・オーナー依頼のP0)。v1.5.459 の算出方式(台帳へ書き戻さず `absent` の出欠記録から振替元日を復元)は**出欠記録が盤面に残っている間だけ**成立する仮の姿なので、記録を破棄する操作が確定させないと消える。実測で2経路が消滅していた: ①休日設定(`handleToggleHolidayDate` が `desk.statusSlots = undefined` で破棄。`HOLIDAY_STOCK_RETURNABLE_STATUSES` が absent を外す前提「mark-absent が積み済み」は**在庫由来・通常・講習にしか当てはまらない**) ②非営業日化(`collectAbsentMakeupOrigins` が `isOpenDay=false` のセルを飛ばしていた)。対処＝①破棄する側で台帳へ確定(`resolveAbsentMakeupOriginToMaterialize`・台帳に同じ日付の origin があれば積まない/無ければ振替元日で積む・手動追加も対象=例外を作らない) ②非営業日セルも走査(在庫の**根拠**を集めるので、消化を数える他の収集関数とは判定が違う)。⚠️台帳判定は**算出由来を除いた版**(`collectMakeupOriginDatesByKey` の `includeAbsentMakeupOrigins: false`)を使う(含めると算出で復元した自分自身を「台帳にある」と誤読し、破棄と同時に消える)。⚠️同じ元コマを指す absent が複数あっても台帳へは1件だけ確定(算出側はトークン集合で畳むため)。**本番影響の事前実測(読み取り専用)**: 緑が丘校・日大前校とも非営業日セルに残る欠席記録は0件＝**在庫数は1件も増えない**(過去に休日化された分は痕跡ごと消えており復活しない)。現在リスクを抱えているのは各校1件(緑が丘 藤田/英・日大前 松島/英)。マトリクスを39件へ拡張(下流列6件)し、確定の無効化/isOpenDayスキップ復活/台帳判定に算出由来を含める の3 mutation で計7件落ちることを確認(src/components/schedule-board/makeupStock.ts・ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md §B-2-1・docs/spec-invariants.md)
+- fix(INV-06): **格納(未消化振替へ戻す)が在庫由来の振替を二重に積む**誤増を修正。呼び出し側が渡す台帳は時限つきトークン(`YYYY-MM-DD#限`)なのに `resolveStoreMakeupOriginDate` が素の `includes` で**日付だけ**と比べており、「台帳に無い」と誤判定していた(時限単位化 `d02379c`/v1.5.459 の取りこぼし。ユニットの fixture がトークン化前の形のままだったため緑をすり抜けていた)。突き合わせを日付単位の権威関数 `ledgerOriginsIncludeDate` へ一本化(時限不明はワイルドカード＝過大計上しない側に倒す既存方針と同じ)。回帰テスト2件を追加し mutation で確認
+
 ## v1.5.462 (2026-08-01)
 
 - fix: **生徒登録フォームの外部生チェックにラベルが出ず、用途不明の四角になっていた**のを修正(オーナー指摘 2026-08-01)。原因は `.basic-data-compact-form .basic-data-inline-field span { display: none }`: このフォームは他の欄がプレースホルダ(「生徒名」「入塾日を選択」)で内容を示すためラベル文言を全て隠す設計だが、**チェックボックスにはプレースホルダが無い**ので隠すと何も手掛かりが残らなかった。`.basic-data-inline-field-check` にラベル表示の上書きを追加(⚠️ この上書きを消すと再発する)。あわせて2点: (1) `.basic-data-compact-form-student` の `grid-template-columns` 末尾を `auto auto` にした(列を足さないと外部生チェックが追加ボタンの列を占め、**追加ボタンが次の行へ折り返す**)。 (2) 基底の `.basic-data-inline-field` は `min-width: 0`(伸縮する入力欄向け)だが、この欄は文字とチェックだけで伸縮の余地が無く、そのままだと横幅が詰まったときにグリッド列が 0px へ潰れてラベルが消えるため `min-width: max-content` を指定。1920px/1280px の両方でラベル(36px)＋チェック(16px)が表示され追加ボタンと同じ行に収まる(横あふれ 0)ことを実機で確認(src/App.css)

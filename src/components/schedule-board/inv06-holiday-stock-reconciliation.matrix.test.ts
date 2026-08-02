@@ -89,6 +89,9 @@ function run(deskCell: DeskCell, roster: Map<string, StudentRow>, ledgers = empt
     managedStudentByAnyName: roster,
     resolveDisplayName,
     resolveStockId: (student) => resolveStockId(student, roster),
+    // 本セットは講習/通常の status 会計を見る列。振替コマの休みを台帳へ確定させる列（下流監査）は
+    // inv06-makeup-absence-stock.matrix.test.ts 側にあるため、ここでは台帳なし（＝空）で回す。
+    ledgerOriginDatesByKey: {},
   })
 }
 

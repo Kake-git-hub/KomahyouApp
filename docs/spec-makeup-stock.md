@@ -50,6 +50,28 @@
 - 削除（`handleDeleteStudent`）は §2「削除（抑制）」のとおり `suppressedMakeupOrigins` へ退避＝**振替対象にしない**
   （意図的な非対称）。振無休・出席・移動マーカーも未消化にしない。
 
+#### B-2-1. 算出で復元した在庫を「消す側」で確定させる（2026-08-01 追加・INV-06）★消してはならないガード
+
+算出方式（B-2）は **`absent` の出欠記録が盤面に残っている間だけ**成立する仮の姿である。したがって
+**その記録を破棄する操作は、破棄する前に台帳へ確定（materialize）しなければならない**。確定しないと在庫ごと消える。
+
+- **休日設定**（`handleToggleHolidayDate`）… 机ごと（`statusSlots` も）破棄する。`reconcileHolidayDeskStockReturns` が
+  `resolveAbsentMakeupOriginToMaterialize`（**台帳に同じ日付の origin があれば積まない／無ければ振替元日で積む**。
+  手動追加も対象＝例外を作らない）で確定させる。`HOLIDAY_STOCK_RETURNABLE_STATUSES` が `absent` を外している前提
+  ＝「mark-absent が積み済み」は**在庫由来・通常・講習にしか当てはまらない**（ここを読み違えると再発する）。
+- **非営業日化**… `collectAbsentMakeupOrigins` は `isOpenDay=false` のセルも走査する。他の収集関数
+  （`countPlannedMakeupsByKey` / `collectMakeupUsageByKey`）が非営業日を飛ばすのは**消化**を数えるからで、
+  こちらは**在庫の根拠**を集める。`absent` は消化側が必ず除外するので二重計上にはならない。
+- ⚠️ 台帳の有無を判定する一覧は **算出由来を除いた版**（`collectMakeupOriginDatesByKey` の
+  `includeAbsentMakeupOrigins: false`）を使う。含めると**算出で復元した自分自身**を「台帳にある」と誤読して
+  確定を取りやめ、記録の破棄と同時に消える。
+- ⚠️ 同じ元コマを指す `absent` 記録が複数あっても台帳へは **1 件だけ**確定する（算出側はトークン集合で畳むため）。
+- ⚠️ 台帳との突き合わせは**日付**で行う（台帳は `YYYY-MM-DD#限` トークン。素の `includes` で日付だけと比べると
+  当たらず二重に積む＝誤増。格納 `resolveStoreMakeupOriginDate` にも同じ誤りがあり 2026-08-01 に是正）。
+- **未確定**：「その日の全コマの生徒を削除」（`handleClearStudentsOnDate`）は UI で「ストックへの移行は行いません」と
+  明示している一方、台帳に origin がある在庫だけは残る（算出由来だけ消える）非対称がある。どちらへ揃えるかは
+  オーナー裁定待ち（マトリクスに `it.todo` で可視化）。
+
 ### B-3. 手動追加したコマを欠席したとき（2026-07-31 オーナー確定・INV-06）★例外を作らない
 
 - **手動追加した通常・振替・増コマを「休み」にした場合も、その1コマは未消化振替へ戻る**（講習は §B-4 のとおり

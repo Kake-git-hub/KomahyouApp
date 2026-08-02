@@ -6,10 +6,11 @@ import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './typ
 import {
   buildMakeupStockEntries,
   collectMakeupOriginDatesByKey,
+  ledgerOriginsIncludeDate,
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -521,6 +522,145 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
         today: TODAY,
       })
       expect(originDates[STOCK_KEY] ?? []).not.toContain(MAKEUP_SOURCE_DATE)
+    })
+  })
+
+  // ==========================================================================
+  // 下流監査（2026-08-01）: 「休みの出欠記録」を**消す側**の操作
+  //
+  // 上の休み/休み解除/格納は「在庫をどう立てるか」の列。算出方式（台帳へ書き戻さず、absent の
+  // 出欠記録が盤面にある限り振替元日を復元する）は、**その記録が残っている間だけ**成立する仮の姿で、
+  // 記録を破棄する操作が確定させないと在庫ごと消える。隣接操作でなく**下流操作**の列を固定する。
+  // ==========================================================================
+  describe('下流: 休みにした記録を破棄する操作', () => {
+    const resolveStudentKey = (entry: StudentEntry) => entry.managedStudentId ?? entry.id
+
+    // handleToggleHolidayDate と同じ手順を再現する:
+    //   (1) 机1つ分の在庫戻し(reconcileHolidayDeskStockReturns) → (2) 机を破棄 → (3) その日を休日に追加
+    function simulateHolidayToggle(desk: DeskCell, options: {
+      settings?: ClassroomSettings
+      manualAdjustments?: Record<string, ManualMakeupOrigin[]>
+    } = {}) {
+      const settings = options.settings ?? createSettings()
+      const manualAdjustments = options.manualAdjustments ?? {}
+      const weeks = [[cellWithDesk(desk)]]
+      // ★台帳の判定に算出由来(absent)を含めない。含めると自分自身を見て確定を取りやめ、机の破棄で消える。
+      const ledgerOriginDatesByKey = collectMakeupOriginDatesByKey({
+        students: [student],
+        regularLessons: [regularLesson],
+        classroomSettings: settings,
+        weeks,
+        manualAdjustments,
+        resolveStudentKey,
+        today: TODAY,
+        includeAbsentMakeupOrigins: false,
+      })
+      const result = reconcileHolidayDeskStockReturns({
+        desk,
+        cellDateKey: BOARD_DATE,
+        cellSlotNumber: 5,
+        ledgers: {
+          manualLectureStockCounts: {},
+          manualLectureStockOrigins: {},
+          manualMakeupAdjustments: manualAdjustments,
+          fallbackLectureStockStudents: {},
+          fallbackMakeupStudents: {},
+        },
+        managedStudentByAnyName: new Map([[student.name, student]]),
+        resolveDisplayName: (name: string) => name,
+        resolveStockId: resolveStudentKey,
+        ledgerOriginDatesByKey,
+      })
+      const clearedDesk: DeskCell = { ...desk, statusSlots: undefined, lesson: undefined }
+      const entries = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: { ...settings, holidayDates: [...settings.holidayDates, BOARD_DATE].sort() },
+        weeks: [[{ ...cellWithDesk(clearedDesk), isOpenDay: false }]],
+        manualAdjustments: result.ledgers.manualMakeupAdjustments,
+        resolveStudentKey,
+        today: TODAY,
+      })
+      return { entry: entries.find((item) => item.key === STOCK_KEY), ledgers: result.ledgers }
+    }
+
+    it('回帰防止: 移動しただけの振替コマを休み → その日を休日設定 → 振替元日が台帳へ確定して残る（消滅しない）', () => {
+      const { entry, ledgers } = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '2026/7/29(水) 5限' })),
+      )
+      expect(ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: MAKEUP_SOURCE_DATE, slotNumber: 5 }])
+      expect(entry?.remainingOriginDates).toContain(MAKEUP_SOURCE_DATE)
+    })
+
+    it('回帰防止: 手動追加の振替コマも同じく台帳へ確定する（例外を作らない）', () => {
+      const { ledgers } = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true })),
+      )
+      expect(ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: MAKEUP_SOURCE_DATE }])
+    })
+
+    it('誤増しない: 在庫由来の振替コマ(台帳に origin あり)は確定させない（台帳 origin が再浮上するので二重計上になる）', () => {
+      const { entry, ledgers } = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE })),
+        { settings: holidaySettings },
+      )
+      expect(ledgers.manualMakeupAdjustments[STOCK_KEY]).toBeUndefined()
+      expect(entry?.remainingOriginDates.filter((dateKey) => dateKey === HOLIDAY_SOURCE_DATE)).toHaveLength(1)
+    })
+
+    it('誤増しない: 通常授業の休みは触らない（mark-absent が手動 origin を積み済み）', () => {
+      const manualAdjustments = { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] }
+      const { ledgers } = simulateHolidayToggle(deskWithStatus(boardStatus({ lessonType: 'regular' })), { manualAdjustments })
+      expect(ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE }])
+    })
+
+    it('誤増しない: 同じ元コマを指す休みが同じ机に2件あっても台帳へは1件だけ確定する（算出側のトークン畳みと揃える）', () => {
+      const desk: DeskCell = {
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [
+          boardStatus({ id: 'status-1', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '2026/7/29(水) 5限' }),
+          boardStatus({ id: 'status-2', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '2026/7/29(水) 5限' }),
+        ],
+        lesson: { id: 'lesson-1', studentSlots: [null, null] },
+      }
+      const { ledgers } = simulateHolidayToggle(desk)
+      expect(ledgers.manualMakeupAdjustments[STOCK_KEY]).toHaveLength(1)
+    })
+
+    it('回帰防止: 休みにしたコマの日が非営業日(isOpenDay=false)になっても未消化振替に残る', () => {
+      const entries = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings(),
+        weeks: [[{ ...cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE }))), isOpenDay: false }]],
+        manualAdjustments: {},
+        resolveStudentKey,
+        today: TODAY,
+      })
+      expect(entries.find((item) => item.key === STOCK_KEY)?.balance).toBe(1)
+    })
+
+    // 「その日の全コマの生徒を削除」(handleClearStudentsOnDate) は UI で「ストックへの移行は行いません」と
+    // 明示している一方、台帳に origin がある在庫だけは残る（算出由来だけ消える）非対称がある。
+    // どちらへ揃えるか（全部残す / 全部抑制する）は仕様判断が要るためオーナー確認待ち。
+    it.todo('未確定: 「その日の生徒を全コマ削除」で台帳由来と算出由来の扱いを揃えるか')
+  })
+
+  describe('台帳突き合わせは日付で行う（時限つきトークンでも当てる）', () => {
+    it('回帰防止: 台帳が時限つきトークンでも「台帳にある」と判定する（素の includes だと二重に積んで誤増する）', () => {
+      expect(ledgerOriginsIncludeDate([`${HOLIDAY_SOURCE_DATE}#5`], HOLIDAY_SOURCE_DATE)).toBe(true)
+      expect(ledgerOriginsIncludeDate([`${HOLIDAY_SOURCE_DATE}#5`], MAKEUP_SOURCE_DATE)).toBe(false)
+    })
+
+    it('回帰防止: 格納も実際の台帳形式(トークン)で「在庫由来は積まない」と判定できる', () => {
+      expect(resolveStoreMakeupOriginDate({
+        student: { lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE },
+        cellDateKey: BOARD_DATE,
+        ledgerOriginDates: [`${HOLIDAY_SOURCE_DATE}#5`],
+      })).toBeNull()
     })
   })
 })
