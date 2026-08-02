@@ -113,6 +113,24 @@
   **削除 tombstone**（`teacherAssignmentSource='deleted'`）にして再マージ・講師日程反映での復活を防ぐ。
   通常授業の再配置は両日とも再マージ抑止（per-student キー＋予定行 row-scan＝`collectManagedOccurrenceSuppressionsForDate`
   へ一本化。全コマ削除も同関数を使う）で止める。
+- **テンプレ足場講師も両日で再付与しない**（★オーナー指示 2026-08-03「振替先にテンプレ講師が湧くのを止める」）:
+  丸ごと振替は「その日の姿ごと別日へ移す」操作なので、**講師の顔ぶれもユーザーの操作結果で固定**する。
+  実測（v1.5.466 時点）では リロード後に 振替元=空／振替先=移送講師＋**その日のテンプレ講師** となり表示が揃わなかった。
+  実装は日単位の抑止キー `buildTemplateTeacherSuppressionKey(dateKey)`（`TEMPLATE_TEACHER__DAY__<日付>__0`）を
+  **`suppressedRegularLessonOccurrences` に相乗り**させ、`overlayBoardWeeksOnScheduleCells` が該当日の管理セルから
+  「生徒のいない机の講師」を落とす（`stripTemplateScaffoldTeachers`）。
+  - ★相乗りの理由: この配列は 保存/復元・undo/redo・publish 3経路・App のダーティ署名・overlay への受け渡しが
+    **既に全経路で通っている**。専用フィールドを足すと約40箇所の配線が要り、1つ漏れると黙って消える。
+    キーは通常の抑止キーと同じ4分割で **parts[2] が日付**（テンプレ上書き時の日付フィルタがそのまま効く
+    ＝反映日以降は抑止が解除され、テンプレ追従へ戻る）。
+  - **抑止していない日の挙動は不変**（INV-02 の「テンプレ足場はテンプレに追従する」確定仕様はそのまま）。
+  - **講習自動割振・QR 自動配置には影響しない**（tombstone ではないので空き机として使える。ただし振替元は
+    全机 tombstone のため従来どおり対象外）。
+- **処分ループは共通関数 `disposeDayDeskEntries` に一本化**（2026-08-03）。丸ごと振替の Phase A と
+  「その日の生徒を全コマ削除」が同じ関数を呼び、違いはオプション2つだけ
+  （`clearMemoSlots`＝丸ごと振替のみ true／`suppressClearedRegularOccurrences`＝丸ごと振替のみ true）。
+  在庫会計はさらに `reconcileHolidayDeskStockReturns`（`includeRegularLessons:false`）へ委譲し、
+  **`studentSlots` と `statusSlots` の両方を同じ規則で走査**する（片方だけだと会計が漏れる＝INV-06 の再発温床）。
 - **振替元の日は以後、自動配置の対象外**（★オーナー確定 2026-08-02・INV 監査所見 A）: tombstone 化により
   講習自動割振・QR 提出の自動配置はその日に入らない（`isDeletedTeacherTombstone` は空き机として数えない仕様）。
   振替元は「丸ごと別日に移した日」＝以後は休日設定するか空のまま使う想定で、手動配置は引き続き可能。
