@@ -793,25 +793,36 @@ export function ledgerOriginsIncludeDate(ledgerOriginDates: string[], dateKey: s
   return ledgerOriginDates.some((token) => originTokenDateKey(token) === dateKey)
 }
 
-// INV-06: 「休み」の出欠記録だけが根拠になっている振替コマ（＝台帳に origin が無く
-// collectAbsentMakeupOrigins が算出で復元している分）を、**その記録を破棄する操作**
-// （休日設定など）の側で台帳へ確定させるための判定。算出方式は「盤面に出欠記録が残っている間だけ」
-// 成立する仮の姿なので、記録を消す側が確定させないと在庫ごと消える。
-// - 台帳に既に同じ日付の origin がある（在庫由来の振替）… null（外れた時点で再浮上するので二重計上になる）。
-// - 通常授業 / 講習 / 振替元日を持たないコマ … null（mark 時に在庫会計済み。ここで触ると二重計上）。
-// - 手動追加(manualAdded)も対象にする（collectAbsentMakeupOrigins と同じ扱い・例外を作らない）。
-export function resolveAbsentMakeupOriginToMaterialize(params: {
+// INV-06: **振替コマの出欠記録を破棄する操作**（休日設定・その日の生徒を全コマ削除）で、
+// その1コマを未消化振替へ返すときの元コマ判定。**振替コマの2種類で結果が食い違わないための唯一の関門**。
+//
+//   在庫由来（台帳に origin がある振替）… 盤面から外れれば台帳 origin が**自動で再浮上**する。
+//                                        ここで積むと二重計上（誤増）になるので **null**。
+//   移動由来（通常授業を別日へ移動しただけ・在庫を経由していない）… 盤面が唯一の記録なので、
+//                                        **振替元日で積む**。積まないと1コマ消える（誤減）。
+//
+// ★元コマは必ず **振替元日**（`makeupSourceDate`）。当日（記録が載っているコマの日）で積んではいけない：
+//   在庫由来は台帳の再浮上と合わせて二重計上になり、移動由来は同じ日の別 origin に吸収されて消える
+//   （2026-08-02 の対称性監査で出席済みの振替コマに実在した非対称。在庫由来=残2／移動由来=残1）。
+// - 通常授業 / 講習 / 振替元日を持たないコマ … null（mark 時に在庫会計済み・講習は講習在庫へ返す）。
+// - 移動マーカー(moved) … null（会計は移動先のコマが持つ）。
+// - 手動追加(manualAdded) … 在庫を消費していないので返す先が無く null。ただし **「休み」だけは例外的に返す**
+//   （日程表の実績カウントが manualAdded を除外せず、休みにすると実績だけ −1 になって1コマ宙に浮くため。
+//   spec-makeup-stock §B-3・2026-07-31 オーナー確定）。
+export function resolveMakeupStatusOriginToMaterialize(params: {
   statusEntry: {
     status: string
     lessonType?: string | null
     makeupSourceDate?: string
     makeupSourceLabel?: string
+    manualAdded?: boolean
   }
   ledgerOriginDates: string[]
 }): { dateKey: string; slotNumber: number | null } | null {
   const { statusEntry, ledgerOriginDates } = params
-  if (statusEntry.status !== 'absent') return null
   if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) return null
+  if (statusEntry.status === 'moved') return null
+  if (statusEntry.manualAdded && statusEntry.status !== 'absent') return null
   if (ledgerOriginsIncludeDate(ledgerOriginDates, statusEntry.makeupSourceDate)) return null
   return {
     dateKey: statusEntry.makeupSourceDate,
