@@ -7,6 +7,7 @@ import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, type ManualMake
 import {
   buildWholeDayTransferConfirmMessage,
   computeWholeDayTransfer,
+  disposeDayDeskEntries,
   overlayBoardWeeksOnScheduleCells,
   resolveWholeDayTransferSourceBlockReason,
   type WholeDayTransferSummary,
@@ -502,6 +503,94 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       expect(outcome.targetDesk.memoSlots).toEqual(['メモだけの日', null])
     })
 
+    // オーナー指示 2026-08-03: 丸ごと振替した日は**講師の顔ぶれもユーザーの操作結果で固定**する。
+    // テンプレ足場講師（非manual）は本来テンプレに追従する（INV-02 確定仕様）が、丸ごと振替の両日だけは
+    // 日単位の抑止キー（buildTemplateTeacherSuppressionKey）で再付与を止める。
+    // ★この抑止を外すと「振替先にその日のテンプレ講師が湧いて振替元と表示が揃わない」に戻る。
+    it('★再マージしてもテンプレ足場講師が湧かない（振替元・振替先とも／机位置がずれていても）', () => {
+      const outcome = transferredOrThrow(runTransfer({
+        sourceDesk: deskWithStudent(boardStudent()),
+        targetDesk: emptyDesk(),
+      }))
+      // 抑止キーが両日ぶん積まれている
+      expect(outcome.result.nextSuppressedRegularLessonOccurrences).toContain(`TEMPLATE_TEACHER__DAY__${SOURCE_DATE}__0`)
+      expect(outcome.result.nextSuppressedRegularLessonOccurrences).toContain(`TEMPLATE_TEACHER__DAY__${TARGET_DATE}__0`)
+
+      // テンプレ（管理データ）は両日とも「別の講師が机を持つ」状態。机位置は移送先とずらす。
+      const managedCells = [
+        slotCell(SOURCE_DATE, 5, [{ id: 'm0', teacher: '' }, { id: 'm1', teacher: 'テンプレ講師V' }]),
+        slotCell(TARGET_DATE, 5, [{ id: 'm0', teacher: '' }, { id: 'm1', teacher: 'テンプレ講師U' }]),
+      ]
+      // 盤面側も2机に揃える（移送は机位置1対1なので机数を合わせる）
+      const boardWeeks = outcome.result.nextWeeks.map((week) => week.map((cell) => ({
+        ...cell,
+        desks: [...cell.desks, { id: 'extra', teacher: '' } as DeskCell],
+      })))
+      const merged = overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, outcome.result.nextSuppressedRegularLessonOccurrences)
+
+      const teachersOn = (dateKey: string) => merged
+        .filter((cell) => cell.dateKey === dateKey)
+        .flatMap((cell) => cell.desks.map((desk) => desk.teacher))
+        .filter((name) => name.trim())
+      // 振替元: 空のまま（テンプレ講師Vが湧かない）
+      expect(teachersOn(SOURCE_DATE)).toEqual([])
+      // 振替先: 移送した講師だけ（テンプレ講師Uが湧かない）
+      expect(teachersOn(TARGET_DATE)).toEqual(['田中講師'])
+    })
+
+    // ★本番の主経路: テンプレ側の管理セルは「講師＋管理授業(managed lesson)」の机を持つ。
+    // 丸ごと振替の per-student 抑止で studentSlots が全 null になると suppressManagedStudentsInCell が
+    // lesson だけ落として **teacher は残す**（:2707 付近）。この「講師だけになった管理机」が
+    // 再付与ループの燃料になるので、strip は必ず suppressManagedStudentsInCell の**後**に当てる必要がある。
+    // ★順序を入れ替えると（strip を先に当てると）この経路だけ静かに壊れる。それを検出するテスト。
+    it('★テンプレに授業がある日でも足場講師が湧かない（抑止で lesson が消えた管理机の講師も落ちる）', () => {
+      const outcome = transferredOrThrow(runTransfer({
+        sourceDesk: deskWithStudent(boardStudent()),
+        targetDesk: emptyDesk(),
+      }))
+      // 管理セル(テンプレ)の形を本番に合わせる: 机1 に「テンプレ講師U ＋ 管理授業(student-1/数)」
+      const managedLessonDesk = (teacherName: string): DeskCell => ({
+        id: 'm1',
+        teacher: teacherName,
+        lesson: {
+          id: `managed_${teacherName}`,
+          note: '管理データ反映',
+          studentSlots: [boardStudent({ id: `managed-${teacherName}` }), null],
+        },
+      })
+      const managedCells = [
+        slotCell(SOURCE_DATE, 5, [{ id: 'm0', teacher: '' }, managedLessonDesk('テンプレ講師V')]),
+        slotCell(TARGET_DATE, 5, [{ id: 'm0', teacher: '' }, managedLessonDesk('テンプレ講師U')]),
+      ]
+      const boardWeeks = outcome.result.nextWeeks.map((week) => week.map((cell) => ({
+        ...cell,
+        desks: [...cell.desks, { id: 'extra', teacher: '' } as DeskCell],
+      })))
+      const merged = overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, outcome.result.nextSuppressedRegularLessonOccurrences)
+
+      const teachersOn = (dateKey: string) => merged
+        .filter((cell) => cell.dateKey === dateKey)
+        .flatMap((cell) => cell.desks.map((desk) => desk.teacher))
+        .filter((name) => name.trim())
+      expect(teachersOn(SOURCE_DATE)).toEqual([])
+      expect(teachersOn(TARGET_DATE)).toEqual(['田中講師'])
+      // 生徒側も復活しない（抑止キーが効いている＝この経路を実際に通った証拠）
+      const targetStudents = merged
+        .filter((cell) => cell.dateKey === TARGET_DATE)
+        .flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []))
+        .filter((entry) => entry != null)
+      expect(targetStudents).toHaveLength(1)
+      expect(targetStudents[0]?.lessonType).toBe('makeup')
+    })
+
+    it('抑止していない日では従来どおりテンプレ足場講師が付く（INV-02 のテンプレ追従を壊していない）', () => {
+      const untouchedDate = '2026-08-26'
+      const boardWeeks = [[slotCell(untouchedDate, 5, [{ id: 'd0', teacher: '' }, { id: 'd1', teacher: '' }])]]
+      const managedCells = [slotCell(untouchedDate, 5, [{ id: 'm0', teacher: '' }, { id: 'm1', teacher: 'テンプレ講師W' }])]
+      const merged = overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, [`TEMPLATE_TEACHER__DAY__${TARGET_DATE}__0`])
+      expect(merged[0]?.desks.some((desk) => desk.teacher === 'テンプレ講師W')).toBe(true)
+    })
+
     it('再マージ（overlay）を通しても、振替元に通常授業・講師が復活せず、振替先の移送結果も巻き戻らない', () => {
       const outcome = transferredOrThrow(runTransfer({
         sourceDesk: deskWithStudent(boardStudent()),
@@ -601,6 +690,86 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       expect(resolveWholeDayTransferSourceBlockReason([dayCell(SOURCE_DATE, emptyDesk())])).toContain('移動できるコマがありません')
       expect(resolveWholeDayTransferSourceBlockReason([])).toContain('表示範囲外')
       expect(resolveWholeDayTransferSourceBlockReason([dayCell(SOURCE_DATE, deskWithStudent(boardStudent()))])).toBeNull()
+    })
+  })
+
+  // 「その日の既存コマを処分する」裁定は共通関数 disposeDayDeskEntries に一本化されており、
+  // 丸ごと振替(Phase A)と「その日の生徒を全コマ削除」の両方がこれを呼ぶ。違いはオプション2つだけ。
+  // ★ここを2か所に分散させると、片方だけ直して会計がズレる（v1.5.464 の裁定が壊れる）。
+  describe('共通処分関数 disposeDayDeskEntries（丸ごと振替と全コマ削除で共有）', () => {
+    const baseParams = {
+      cellDateKey: TARGET_DATE,
+      cellSlotNumber: 5,
+      ledgers: {
+        manualLectureStockCounts: {},
+        manualLectureStockOrigins: {},
+        manualMakeupAdjustments: {},
+        fallbackLectureStockStudents: {},
+        fallbackMakeupStudents: {},
+      },
+      scheduleCountAdjustments: [],
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: new Map([[student.name, student]]),
+      resolveDisplayName: (name: string) => name,
+      resolveStockId: resolveStudentKey,
+      ledgerOriginDatesByKey: {},
+    }
+
+    it('丸ごと振替モード: メモを消し、消した通常の抑止キーを積む', () => {
+      const desk = deskWithStudent(boardStudent({ lessonType: 'regular' }), { memoSlots: ['メモ', null] })
+      const result = disposeDayDeskEntries({ ...baseParams, desk, suppressClearedRegularOccurrences: true, clearMemoSlots: true })
+      expect(desk.lesson).toBeUndefined()
+      expect(desk.memoSlots).toBeUndefined()
+      expect(result.counts.clearedMemoCount).toBe(1)
+      expect(result.counts.clearedRegularCount).toBe(1)
+      expect(result.nextSuppressedRegularLessonOccurrences).toContain(`student-1__数__${TARGET_DATE}__5`)
+      expect(result.nextScheduleCountAdjustments).toHaveLength(1)
+    })
+
+    it('全コマ削除モード: メモは残し、抑止キーは積まない（row-scan は呼び出し側の担当）', () => {
+      const desk = deskWithStudent(boardStudent({ lessonType: 'regular' }), { memoSlots: ['メモ', null] })
+      const result = disposeDayDeskEntries({ ...baseParams, desk, suppressClearedRegularOccurrences: false, clearMemoSlots: false })
+      expect(desk.lesson).toBeUndefined()
+      expect(desk.memoSlots).toEqual(['メモ', null])
+      expect(result.counts.clearedMemoCount).toBe(0)
+      expect(result.nextSuppressedRegularLessonOccurrences).toEqual([])
+      expect(result.nextScheduleCountAdjustments).toHaveLength(1)
+    })
+
+    it('★statusSlots(出欠済み)も同じ規則で処分する（片方だけ走査すると会計が漏れる）', () => {
+      // 出席済みの振替コマ: 在庫へ返り、希望回数は減らさない
+      const desk: DeskCell = {
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [boardStatus({ status: 'attended', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, dateKey: TARGET_DATE }), null],
+      }
+      const result = disposeDayDeskEntries({ ...baseParams, desk })
+      expect(desk.statusSlots).toBeUndefined()
+      expect(result.counts.clearedEntryCount).toBe(1)
+      expect(result.counts.returnedEntryCount).toBe(1)
+      expect(result.counts.returnedMakeupCount).toBe(1)
+      // 返した分は希望回数を減らさない
+      expect(result.nextScheduleCountAdjustments).toEqual([])
+      expect(result.ledgers.manualMakeupAdjustments[STOCK_KEY]).toBeDefined()
+    })
+
+    it('返却と希望回数−1を同時にやらない（返した分は−1をスキップ・返さない分だけ−1）', () => {
+      const desk: DeskCell = {
+        id: 'desk-1',
+        teacher: '田中講師',
+        lesson: {
+          id: 'lesson-1',
+          studentSlots: [
+            boardStudent({ id: 'e-makeup', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE }),
+            boardStudent({ id: 'e-regular', lessonType: 'regular' }),
+          ],
+        },
+      }
+      const result = disposeDayDeskEntries({ ...baseParams, desk })
+      expect(result.counts.returnedEntryCount).toBe(1)
+      expect(result.counts.clearedRegularCount).toBe(1)
+      expect(result.nextScheduleCountAdjustments).toHaveLength(1)
+      expect(result.nextScheduleCountAdjustments[0]?.delta).toBe(-1)
     })
   })
 

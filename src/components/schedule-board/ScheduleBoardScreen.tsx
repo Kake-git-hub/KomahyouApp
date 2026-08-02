@@ -2624,6 +2624,49 @@ function buildManagedOccurrenceKey(student: StudentEntry, dateKey: string, slotN
   return `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__${slotNumber}`
 }
 
+// 「この日はテンプレ由来の足場講師を足さない」を表す日単位の抑止キー（オーナー指示 2026-08-03）。
+// 丸ごと振替した日は**講師の顔ぶれもユーザーの操作結果で固定**する。テンプレ足場講師（非manual）は
+// 本来テンプレに追従する確定仕様（INV-02）だが、丸ごと振替は「その日の姿ごと別日へ移す」操作なので、
+// 移送先にその日のテンプレ講師が湧くと「振替元と同じ表示」にならない（実測: 振替元=空／振替先=移送講師＋テンプレ講師）。
+//
+// ★実装ノート: 専用の永続フィールドを新設せず `suppressedRegularLessonOccurrences` に相乗りする。
+//   この配列は 保存/復元・undo/redo・publish 3経路・App のダーティ署名・overlay への受け渡しが
+//   **既に全経路で通っている**ため（新フィールドは約40箇所の配線が必要で、1つ漏れると黙って消える）。
+//   キー書式は通常の抑止キー `${studentKey}__${subject}__${dateKey}__${slotNumber}` と同じ4分割にし、
+//   **parts[2] が日付**になるようにする（テンプレ上書き時の日付フィルタがそのまま効く＝反映日以降は抑止解除）。
+const TEMPLATE_TEACHER_SUPPRESSION_PREFIX = 'TEMPLATE_TEACHER__DAY__'
+
+export function buildTemplateTeacherSuppressionKey(dateKey: string) {
+  return `${TEMPLATE_TEACHER_SUPPRESSION_PREFIX}${dateKey}__0`
+}
+
+export function collectTemplateTeacherSuppressedDates(explicitlySuppressedKeys: string[] = []) {
+  const dates = new Set<string>()
+  for (const key of explicitlySuppressedKeys) {
+    if (!key.startsWith(TEMPLATE_TEACHER_SUPPRESSION_PREFIX)) continue
+    const dateKey = key.slice(TEMPLATE_TEACHER_SUPPRESSION_PREFIX.length).split('__')[0] ?? ''
+    if (dateKey) dates.add(dateKey)
+  }
+  return dates
+}
+
+// 抑止対象の日の管理セルから「生徒のいない机の講師（＝テンプレ足場講師）」を落とす。
+// mergeManagedWeek の再付与ループは第2引数(調整済み管理セル)の机だけを見るので、ここで落とせば湧かない。
+// 生徒つきの机は落とさない（生徒ごと再配置される経路は通常授業の抑止キー側で止まる）。
+function stripTemplateScaffoldTeachers(cell: SlotCell): SlotCell {
+  return {
+    ...cell,
+    desks: cell.desks.map((desk) => (desk.lesson ? desk : {
+      ...desk,
+      teacher: '',
+      manualTeacher: false,
+      teacherAssignmentSource: undefined,
+      teacherAssignmentSessionId: undefined,
+      teacherAssignmentTeacherId: undefined,
+    })),
+  }
+}
+
 function buildSuppressedManagedOccurrenceKeys(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedKeys: string[] = []) {
   const suppressedKeys = new Set<string>()
   const boardCellIds = new Set(boardWeeks.flat().map((cell) => cell.id))
@@ -2769,11 +2812,23 @@ export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boar
   const managedCellIds = new Set(scheduleCells.map((cell) => cell.id))
   const managedCellDateSlots = new Set(scheduleCells.map((cell) => buildCellDateSlotKey(cell)))
 
+  // 丸ごと振替した日はテンプレ足場講師を足さない（日単位の抑止・オーナー指示 2026-08-03）。
+  const templateTeacherSuppressedDates = collectTemplateTeacherSuppressedDates(explicitlySuppressedManagedKeys)
+
   const mergedCells = scheduleCells.map((managedCell) => {
-    const adjustedManagedCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
+    // ★順序が load-bearing: **必ず suppressManagedStudentsInCell の後に strip する**。
+    //   テンプレの管理机は通常「講師＋管理授業(lesson)」の形で、strip は lesson 付きの机を素通しする。
+    //   先に strip すると何も落ちず、そのあと抑止で lesson だけ消えて **teacher が残った机**（:2707 付近で
+    //   意図的に teacher を残す仕様）が再付与ループの燃料になり、テンプレ講師が湧く挙動へ戻る。
+    //   回帰テスト: inv06-whole-day-transfer「テンプレに授業がある日でも足場講師が湧かない」。
+    const suppressedStudentsCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
+    const adjustedManagedCell = templateTeacherSuppressedDates.has(managedCell.dateKey)
+      ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
+      : suppressedStudentsCell
     const boardCell = findMatchingBoardCell(managedCell, boardCellMaps)
     if (!boardCell) return adjustedManagedCell
     if (!adjustedManagedCell.isOpenDay) return adjustedManagedCell
+    // 第3引数は**素の**管理セル（テンプレの沈黙判定に使う）。抑止で書き換えた側を渡すと判定が狂う。
     return mergeManagedWeek([boardCell], [adjustedManagedCell], [managedCell])[0] ?? adjustedManagedCell
   })
 
@@ -4301,6 +4356,129 @@ function applyDeletedTeacherTombstone(desk: DeskCell, deletedTeacherName: string
   desk.teacherAssignmentTeacherId = deletedTeacherName || undefined
 }
 
+// 「その日の既存コマを処分する」机1つ分の共通処理（オーナー確定 2026-08-02 の裁定を1か所に集約）。
+// 使う側は2つ:
+//   - 丸ごと振替の Phase A（振替先の既存コマ）… メモも消す／消した通常の per-student 抑止キーも積む
+//   - その日の生徒を全コマ削除（handleClearStudentsOnDate）… 講師とメモは残す／抑止は呼び出し側の row-scan のみ
+// 在庫会計は権威関数 reconcileHolidayDeskStockReturns へ委譲（includeRegularLessons:false 固定）:
+//   在庫から出したコマ（振替・ストック由来の講習）=未消化へ返す／通常・体験・増コマ・手動追加=返さず希望回数−1。
+// ⚠️「返す」と「希望回数−1」を同時にやってはいけない（returnedEntryIds で −1 を飛ばす）。
+export type DayDeskDisposalCounts = {
+  clearedEntryCount: number
+  returnedEntryCount: number
+  clearedRegularCount: number
+  clearedTrialCount: number
+  clearedExtraCount: number
+  clearedManualCount: number
+  clearedMemoCount: number
+  returnedMakeupCount: number
+  returnedLectureCount: number
+}
+
+export function disposeDayDeskEntries(params: {
+  desk: DeskCell
+  cellDateKey: string
+  cellSlotNumber: number
+  ledgers: HolidayStockLedgers
+  scheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
+  suppressedRegularLessonOccurrences: string[]
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+  ledgerOriginDatesByKey: Record<string, string[]>
+  /** 消した通常授業の per-student 抑止キーも積むか（丸ごと振替=true／全コマ削除は呼び出し側の row-scan のみ）。 */
+  suppressClearedRegularOccurrences?: boolean
+  /** メモも消すか（丸ごと振替=true・移送内容で上書きするため／全コマ削除=false・講師とメモは残す）。 */
+  clearMemoSlots?: boolean
+}): {
+  ledgers: HolidayStockLedgers
+  nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
+  nextSuppressedRegularLessonOccurrences: string[]
+  counts: DayDeskDisposalCounts
+} {
+  const {
+    desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId,
+    ledgerOriginDatesByKey, suppressClearedRegularOccurrences = false, clearMemoSlots = false,
+  } = params
+
+  const counts: DayDeskDisposalCounts = {
+    clearedEntryCount: 0,
+    returnedEntryCount: 0,
+    clearedRegularCount: 0,
+    clearedTrialCount: 0,
+    clearedExtraCount: 0,
+    clearedManualCount: 0,
+    clearedMemoCount: 0,
+    returnedMakeupCount: 0,
+    returnedLectureCount: 0,
+  }
+
+  const result = reconcileHolidayDeskStockReturns({
+    desk,
+    cellDateKey,
+    cellSlotNumber,
+    ledgers: params.ledgers,
+    managedStudentByAnyName,
+    resolveDisplayName,
+    resolveStockId,
+    ledgerOriginDatesByKey,
+    includeRegularLessons: false,
+  })
+  const returnedIds = new Set(result.returnedEntryIds)
+  let nextScheduleCountAdjustments = params.scheduleCountAdjustments
+  let nextSuppressed = params.suppressedRegularLessonOccurrences
+
+  // studentSlots(未出欠) と statusSlots(出欠済み) の両方を同じ規則で処分する。
+  // ★片方だけ走査するとそちらの会計が漏れる（INV-06 の再発温床。両方走査を必ず維持する）。
+  const entries: Array<StudentEntry | StudentStatusEntry> = []
+  for (const student of desk.lesson?.studentSlots ?? []) {
+    if (student) entries.push(student)
+  }
+  for (const statusEntry of desk.statusSlots ?? []) {
+    if (statusEntry) entries.push(statusEntry)
+  }
+
+  for (const entry of entries) {
+    counts.clearedEntryCount += 1
+    if (returnedIds.has(entry.id)) {
+      counts.returnedEntryCount += 1
+      if (entry.lessonType === 'special') counts.returnedLectureCount += 1
+      else counts.returnedMakeupCount += 1
+      continue
+    }
+    // 在庫へ返さなかった分だけ希望回数を−1（manualAdded は関数内でスキップされる）。
+    nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, entry, cellDateKey)
+    if (entry.lessonType === 'regular') {
+      counts.clearedRegularCount += 1
+      if (suppressClearedRegularOccurrences) {
+        const suppressedKey = resolveSuppressedRegularLessonOccurrenceKey(entry as StudentEntry, cellDateKey, cellSlotNumber)
+        if (suppressedKey) nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, suppressedKey)
+      }
+    } else if (entry.lessonType === 'trial') {
+      counts.clearedTrialCount += 1
+    } else if (entry.lessonType === 'extra') {
+      // 増コマは消去のみ・未消化へ入れない（オーナー指示 2026-08-02）。
+      counts.clearedExtraCount += 1
+    } else {
+      counts.clearedManualCount += 1
+    }
+  }
+
+  if (clearMemoSlots) {
+    counts.clearedMemoCount += (desk.memoSlots ?? []).filter((memo) => memo != null && memo !== '').length
+    desk.memoSlots = undefined
+  }
+  desk.lesson = undefined
+  desk.statusSlots = undefined
+
+  return {
+    ledgers: result.ledgers,
+    nextScheduleCountAdjustments,
+    nextSuppressedRegularLessonOccurrences: nextSuppressed,
+    counts,
+  }
+}
+
 export function computeWholeDayTransfer(params: {
   weeks: SlotCell[][]
   sourceDateKey: string
@@ -4382,54 +4560,44 @@ export function computeWholeDayTransfer(params: {
   let nextScheduleCountAdjustments = params.scheduleCountAdjustments
   let nextSuppressed = [...params.suppressedRegularLessonOccurrences]
 
-  // Phase A: 振替先の既存コマを処分（「その日の生徒を全コマ削除」と同一裁定）。
+  // Phase A: 振替先の既存コマを処分（「その日の生徒を全コマ削除」と**同一の共通関数**へ委譲）。
   for (const cell of targetCells) {
     for (const desk of cell.desks) {
-      const result = reconcileHolidayDeskStockReturns({
+      const disposal = disposeDayDeskEntries({
         desk,
         cellDateKey: cell.dateKey,
         cellSlotNumber: cell.slotNumber,
         ledgers,
+        scheduleCountAdjustments: nextScheduleCountAdjustments,
+        suppressedRegularLessonOccurrences: nextSuppressed,
         managedStudentByAnyName,
         resolveDisplayName,
         resolveStockId,
         ledgerOriginDatesByKey,
-        includeRegularLessons: false,
+        // 丸ごと振替は移送内容で上書きするのでメモも消し、消した通常の抑止キーも積む。
+        suppressClearedRegularOccurrences: true,
+        clearMemoSlots: true,
       })
-      ledgers = result.ledgers
-      const returnedIds = new Set(result.returnedEntryIds)
-
-      for (const student of desk.lesson?.studentSlots ?? []) {
-        if (!student) continue
-        if (returnedIds.has(student.id)) {
-          // 在庫へ返した分は希望回数を減らさない（返す=別日にやる）。
-          if (student.lessonType === 'special') summary.returnedLectureCount += 1
-          else summary.returnedMakeupCount += 1
-          continue
-        }
-        nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, student, cell.dateKey)
-        if (student.lessonType === 'regular') {
-          summary.clearedRegularCount += 1
-          const suppressedKey = resolveSuppressedRegularLessonOccurrenceKey(student, cell.dateKey, cell.slotNumber)
-          if (suppressedKey) nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, suppressedKey)
-        } else if (student.lessonType === 'trial') {
-          summary.clearedTrialCount += 1
-        } else if (student.lessonType === 'extra') {
-          // 増コマは消去のみ・未消化へ入れない（オーナー指示 2026-08-02。全コマ削除の裁定とも一致）。
-          summary.clearedExtraCount += 1
-        } else {
-          summary.clearedManualCount += 1
-        }
-      }
-      summary.clearedMemoCount += (desk.memoSlots ?? []).filter((memo) => memo != null && memo !== '').length
-      desk.lesson = undefined
-      desk.memoSlots = undefined
+      ledgers = disposal.ledgers
+      nextScheduleCountAdjustments = disposal.nextScheduleCountAdjustments
+      nextSuppressed = disposal.nextSuppressedRegularLessonOccurrences
+      summary.clearedRegularCount += disposal.counts.clearedRegularCount
+      summary.clearedTrialCount += disposal.counts.clearedTrialCount
+      summary.clearedExtraCount += disposal.counts.clearedExtraCount
+      summary.clearedManualCount += disposal.counts.clearedManualCount
+      summary.clearedMemoCount += disposal.counts.clearedMemoCount
+      summary.returnedMakeupCount += disposal.counts.returnedMakeupCount
+      summary.returnedLectureCount += disposal.counts.returnedLectureCount
     }
   }
 
   // Phase B: 再マージ抑止の row-scan を両日に適用（先=消去した通常の復活防止／元=空いた日への再配置防止）。
   nextSuppressed = collectManagedOccurrenceSuppressionsForDate({ dateKey: sourceDateKey, students, regularLessons, suppressedRegularLessonOccurrences: nextSuppressed })
   nextSuppressed = collectManagedOccurrenceSuppressionsForDate({ dateKey: targetDateKey, students, regularLessons, suppressedRegularLessonOccurrences: nextSuppressed })
+  // テンプレ足場講師の再付与も両日で止める（オーナー指示 2026-08-03: 振替先に「その日のテンプレ講師」が
+  // 湧くと振替元と同じ表示にならない。振替元も「空のまま残す」確定仕様どおり湧かせない）。
+  nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, buildTemplateTeacherSuppressionKey(sourceDateKey))
+  nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, buildTemplateTeacherSuppressionKey(targetDateKey))
 
   // Phase C: 机ブロック移送（slotNumber×机位置で1対1）。
   const movedTeacherNames = new Set<string>()
@@ -8327,54 +8495,28 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       for (const cell of week) {
         if (cell.dateKey !== dateKey) continue
         for (const desk of cell.desks) {
-          // 在庫会計は休日設定と同じ権威関数へ委譲する（判定を2か所に分散させない）。
-          // 違いは includeRegularLessons だけ: 休日設定＝教室都合で全部返す／全コマ削除＝在庫由来だけ返す。
-          const result = reconcileHolidayDeskStockReturns({
+          // 処分の裁定は丸ごと振替(Phase A)と**同一の共通関数**へ委譲する（判定を2か所に分散させない）。
+          // 在庫会計はさらに休日設定と同じ権威関数へ委譲され、違いは includeRegularLessons だけ:
+          // 休日設定＝教室都合で全部返す／全コマ削除・丸ごと振替＝在庫由来だけ返す。
+          // この経路は**講師とメモを残す**ので clearMemoSlots は false、通常授業の抑止は下の row-scan が担う。
+          const disposal = disposeDayDeskEntries({
             desk,
             cellDateKey: cell.dateKey,
             cellSlotNumber: cell.slotNumber,
             ledgers: clearLedgers,
+            scheduleCountAdjustments: nextScheduleCountAdjustments,
+            suppressedRegularLessonOccurrences: [],
             managedStudentByAnyName,
             resolveDisplayName: resolveBoardStudentDisplayName,
             resolveStockId: resolveBoardStudentStockId,
             ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
-            includeRegularLessons: false,
+            suppressClearedRegularOccurrences: false,
+            clearMemoSlots: false,
           })
-          clearLedgers = result.ledgers
-          returnedCount += result.returnedEntryIds.length
-          const returnedIds = new Set(result.returnedEntryIds)
-
-          if (desk.lesson) {
-            for (let slotIdx = 0; slotIdx < desk.lesson.studentSlots.length; slotIdx++) {
-              const student = desk.lesson.studentSlots[slotIdx]
-              if (student) {
-                clearedCount += 1
-                // 在庫へ返した分は希望回数を減らさない（減らすと在庫は戻るのに目標だけ減って辻褄が合わない）。
-                if (!returnedIds.has(student.id)) {
-                  nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, student, cell.dateKey)
-                }
-                desk.lesson.studentSlots[slotIdx] = null
-              }
-            }
-            if (desk.lesson.studentSlots.every((s) => s === null)) {
-              desk.lesson = undefined
-            }
-          }
-          if (desk.statusSlots) {
-            for (let slotIdx = 0; slotIdx < desk.statusSlots.length; slotIdx++) {
-              const statusEntry = desk.statusSlots[slotIdx]
-              if (statusEntry) {
-                clearedCount += 1
-                if (!returnedIds.has(statusEntry.id)) {
-                  nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, statusEntry, cell.dateKey)
-                }
-                desk.statusSlots[slotIdx] = null
-              }
-            }
-            if (desk.statusSlots.every((s) => s === null)) {
-              desk.statusSlots = undefined
-            }
-          }
+          clearLedgers = disposal.ledgers
+          nextScheduleCountAdjustments = disposal.nextScheduleCountAdjustments
+          clearedCount += disposal.counts.clearedEntryCount
+          returnedCount += disposal.counts.returnedEntryCount
         }
       }
     }
