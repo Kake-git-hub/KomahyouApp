@@ -643,10 +643,162 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
       expect(entries.find((item) => item.key === STOCK_KEY)?.balance).toBe(1)
     })
 
-    // 「その日の全コマの生徒を削除」(handleClearStudentsOnDate) は UI で「ストックへの移行は行いません」と
-    // 明示している一方、台帳に origin がある在庫だけは残る（算出由来だけ消える）非対称がある。
-    // どちらへ揃えるか（全部残す / 全部抑制する）は仕様判断が要るためオーナー確認待ち。
-    it.todo('未確定: 「その日の生徒を全コマ削除」で台帳由来と算出由来の扱いを揃えるか')
+    // ------------------------------------------------------------------
+    // ★由来による食い違いを作らない（2026-08-02 オーナー指摘の観点）
+    //
+    // 振替コマには「在庫から出したもの（台帳に origin あり）」と「通常授業を別日へ移動しただけで
+    // 在庫を経由していないもの（台帳に origin なし）」がある。**内部の道筋は違ってよいが、
+    // ユーザーから見た結果（未消化の残数）は必ず一致していなければならない。**
+    // 在庫由来＝台帳 origin が再浮上する／移動由来＝振替元日を台帳へ確定する、で同じ1件になる。
+    // ------------------------------------------------------------------
+    it('回帰防止: 出席済みの振替コマを休日設定 → 在庫由来と移動由来で残が一致する（当日 origin で積むと崩れる）', () => {
+      const movedResult = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ status: 'attended', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })),
+      )
+      const stockResult = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ status: 'attended', lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE })),
+        { settings: holidaySettings },
+      )
+      // 在庫由来は台帳へ積まず再浮上に任せる／移動由来は振替元日で確定する（道筋は違う）
+      expect(stockResult.ledgers.manualMakeupAdjustments[STOCK_KEY]).toBeUndefined()
+      expect(movedResult.ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: MAKEUP_SOURCE_DATE }])
+      // 結果（残数）は一致する
+      expect(movedResult.entry?.balance).toBe(stockResult.entry?.balance)
+    })
+
+    it('回帰防止: 振無休の振替コマを休日設定 → 在庫由来と移動由来で残が一致する', () => {
+      const moved = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ status: 'absent-no-makeup', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })),
+      )
+      const stock = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ status: 'absent-no-makeup', lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE })),
+        { settings: holidaySettings },
+      )
+      expect(moved.entry?.balance).toBe(stock.entry?.balance)
+    })
+
+    it('移動(moved)マーカーは休日設定でも触らない（会計は移動先のコマが持つ）', () => {
+      const { ledgers } = simulateHolidayToggle(
+        deskWithStatus(boardStatus({ status: 'moved', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })),
+      )
+      expect(ledgers.manualMakeupAdjustments[STOCK_KEY]).toBeUndefined()
+    })
+  })
+
+  // ==========================================================================
+  // 「その日の全コマの生徒を削除」(handleClearStudentsOnDate) の在庫会計
+  // オーナー確定（2026-08-02）: **在庫から出したコマ（振替・ストック由来の講習）は未消化へ返す。
+  // 通常授業・体験・増コマ・手動追加コマは返さず、日程表の希望回数を1減らす。**
+  // 「返す＝別日にやる（回数はそのまま）／返さない＝もうやらない（回数−1）」の組み合わせを崩さない。
+  // ==========================================================================
+  describe('その日の生徒を全コマ削除', () => {
+    const resolveStudentKey = (entry: StudentEntry) => entry.managedStudentId ?? entry.id
+
+    function simulateClearDay(desk: DeskCell, options: { settings?: ClassroomSettings } = {}) {
+      const settings = options.settings ?? createSettings()
+      const ledgerOriginDatesByKey = collectMakeupOriginDatesByKey({
+        students: [student],
+        regularLessons: [regularLesson],
+        classroomSettings: settings,
+        weeks: [[cellWithDesk(desk)]],
+        manualAdjustments: {},
+        resolveStudentKey,
+        today: TODAY,
+        includeAbsentMakeupOrigins: false,
+      })
+      const result = reconcileHolidayDeskStockReturns({
+        desk,
+        cellDateKey: BOARD_DATE,
+        cellSlotNumber: 5,
+        ledgers: {
+          manualLectureStockCounts: {},
+          manualLectureStockOrigins: {},
+          manualMakeupAdjustments: {},
+          fallbackLectureStockStudents: {},
+          fallbackMakeupStudents: {},
+        },
+        managedStudentByAnyName: new Map([[student.name, student]]),
+        resolveDisplayName: (name: string) => name,
+        resolveStockId: resolveStudentKey,
+        ledgerOriginDatesByKey,
+        includeRegularLessons: false, // ★休日設定との唯一の違い
+      })
+      const clearedDesk: DeskCell = { ...desk, statusSlots: undefined, lesson: undefined }
+      const entries = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: settings,
+        weeks: [[cellWithDesk(clearedDesk)]],
+        manualAdjustments: result.ledgers.manualMakeupAdjustments,
+        resolveStudentKey,
+        today: TODAY,
+      })
+      return {
+        balance: entries.find((item) => item.key === STOCK_KEY)?.balance ?? 0,
+        ledgers: result.ledgers,
+        returnedEntryIds: result.returnedEntryIds,
+      }
+    }
+
+    function deskWithStudent(entry: StudentEntry): DeskCell {
+      return { id: 'desk-1', teacher: '田中講師', lesson: { id: 'lesson-1', studentSlots: [entry, null] } }
+    }
+
+    it('★由来で食い違わない: 在庫由来の振替と移動由来の振替は、どちらも残1になる', () => {
+      const moved = simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })))
+      const stock = simulateClearDay(
+        deskWithStudent(boardStudent({ lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE })),
+        { settings: holidaySettings },
+      )
+      // 未出欠の配置は在庫由来でも元コマ日を積むが、台帳 origin と**同じ日付**なのでトークンが畳まれて1件になる
+      // （在庫由来は積む/積まないどちらでも残1。出欠記録の側は畳めないので台帳判定が必須＝下記の attended 参照）。
+      expect(moved.ledgers.manualMakeupAdjustments[STOCK_KEY]).toEqual([{ dateKey: MAKEUP_SOURCE_DATE }])
+      // ★結果（ユーザーから見える残数）は由来によらず同じ
+      expect(moved.balance).toBe(1)
+      expect(stock.balance).toBe(1)
+    })
+
+    it('★由来で食い違わない: 出席済みの振替も、在庫由来と移動由来で残が一致する', () => {
+      const moved = simulateClearDay(deskWithStatus(boardStatus({ status: 'attended', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })))
+      const stock = simulateClearDay(
+        deskWithStatus(boardStatus({ status: 'attended', lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE })),
+        { settings: holidaySettings },
+      )
+      expect(moved.balance).toBe(1)
+      expect(stock.balance).toBe(1)
+    })
+
+    it('通常授業は返さない（呼び出し側が日程表の回数を−1する）', () => {
+      const result = simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'regular' })))
+      expect(result.ledgers.manualMakeupAdjustments[STOCK_KEY]).toBeUndefined()
+      expect(result.returnedEntryIds).toHaveLength(0)
+      expect(result.balance).toBe(0)
+    })
+
+    it('体験・増コマ（手動追加）は在庫を消費していないので返さない', () => {
+      expect(simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'trial', manualAdded: true }))).returnedEntryIds).toHaveLength(0)
+      expect(simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'extra', manualAdded: true }))).returnedEntryIds).toHaveLength(0)
+    })
+
+    it('手動追加の振替も返さない（在庫を経由していない＝返す先が無い）', () => {
+      const result = simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true })))
+      expect(result.ledgers.manualMakeupAdjustments[STOCK_KEY]).toBeUndefined()
+      expect(result.returnedEntryIds).toHaveLength(0)
+    })
+
+    it('ストック由来の講習は未消化講習へ戻す／手動追加の講習は戻さない', () => {
+      const session = simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'special', specialStockSource: 'session', specialSessionId: 'sess-1' })))
+      expect(Object.values(session.ledgers.manualLectureStockCounts)).toEqual([1])
+
+      const manual = simulateClearDay(deskWithStudent(boardStudent({ lessonType: 'special', specialStockSource: 'manual', specialSessionId: 'sess-1', manualAdded: true })))
+      expect(Object.keys(manual.ledgers.manualLectureStockCounts)).toHaveLength(0)
+    })
+
+    it('返した分だけ returnedEntryIds に入る（呼び出し側はこれを見て希望回数の−1を飛ばす）', () => {
+      const returned = simulateClearDay(deskWithStudent(boardStudent({ id: 'entry-x', lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE })))
+      expect(returned.returnedEntryIds).toEqual(['entry-x'])
+    })
   })
 
   describe('台帳突き合わせは日付で行う（時限つきトークンでも当てる）', () => {
