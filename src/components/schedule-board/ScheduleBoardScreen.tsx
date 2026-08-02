@@ -4185,6 +4185,369 @@ export function computeTeacherMove(params: {
   return { status: 'moved', message, nextWeeks }
 }
 
+// ============================================================================
+// 丸ごと振替（Issue #40 / spec-lecture-stock §4-2③・オーナー確定 2026-08-02）
+//
+// 振替元日の全コマ（講師・メモ・生徒）を同じ講師・生徒のまま振替先日へ移す。
+// - 移送側は在庫台帳を一切触らない（通常→振替変換は「消化+1 と使用済み origin+1 が打ち消し合う均衡」で
+//   在庫中立。台帳に何か積むと二重計上 = INV-06 違反）。
+// - 振替先の既存コマの処分は「その日の生徒を全コマ削除」と同一裁定（reconcileHolidayDeskStockReturns
+//   includeRegularLessons:false へ委譲・判定を2か所に分散させない = v1.5.464 の原則）:
+//   在庫から出したコマ（振替・ストック由来講習）= 未消化へ返す／通常・体験・増コマ・手動追加 = 返さず
+//   希望回数 −1（返した分は returnedEntryIds で −1 を飛ばす）。メモ・体験は消去のみ。
+// - 出欠記録（statusSlots）が両日のどちらかに1件でもあれば実行不可（記録を消す下流操作にしない =
+//   INV-06 の derived-origin-downstream-loss 回避。緩めるなら spec-invariants の下流列挙へ追加すること）。
+// ============================================================================
+
+export type WholeDayTransferSummary = {
+  movedStudentCount: number
+  /** 移送される講師の実人数(ユニーク名)。机×コマ数ではない。 */
+  movedTeacherCount: number
+  movedMemoCount: number
+  clearedRegularCount: number
+  clearedTrialCount: number
+  clearedExtraCount: number
+  clearedManualCount: number
+  clearedMemoCount: number
+  /** 上書きで消える振替先の講師の実人数(ユニーク名・移送講師と同名は除く)。破壊的操作の開示用。 */
+  clearedTeacherCount: number
+  returnedMakeupCount: number
+  returnedLectureCount: number
+}
+
+export type ComputeWholeDayTransferResult =
+  | {
+      status: 'transferred'
+      nextWeeks: SlotCell[][]
+      summary: WholeDayTransferSummary
+      nextManualMakeupAdjustments: MakeupOriginMap
+      nextFallbackMakeupStudents: Record<string, FallbackMakeupStudent>
+      nextManualLectureStockCounts: LectureStockCountMap
+      nextManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
+      nextFallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
+      nextSuppressedRegularLessonOccurrences: string[]
+      nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
+    }
+  | { status: 'blocked'; message: string }
+
+function cellsHaveStatusEntries(cells: SlotCell[]) {
+  return cells.some((cell) => cell.desks.some((desk) => desk.statusSlots?.some((entry) => entry != null)))
+}
+
+function cellsHaveTransferableContent(cells: SlotCell[]) {
+  return cells.some((cell) => cell.desks.some((desk) => (
+    desk.teacher.trim() !== ''
+    || Boolean(desk.memoSlots?.some((memo) => memo != null && memo !== ''))
+    || Boolean(desk.lesson?.studentSlots.some((student) => student != null))
+  )))
+}
+
+// メニュー押下時（振替元決定前）の軽量チェック。null=開始可 / メッセージ=ブロック。
+export function resolveWholeDayTransferSourceBlockReason(cells: SlotCell[]): string | null {
+  if (cells.length === 0) return 'この日付は表示範囲外のため丸ごと振替できません。'
+  if (cellsHaveStatusEntries(cells)) {
+    return '出欠記録（出席・休み・振無休・移動）があるため丸ごと振替できません。出欠を解除してから実行してください。'
+  }
+  if (!cellsHaveTransferableContent(cells)) return 'この日には移動できるコマがありません。'
+  return null
+}
+
+// 管理データ再マージがその日付へ通常授業を再配置しないよう、予定行ベースで抑止キーを積む
+// （handleClearStudentsOnDate の row-scan と同型。盤面に無い予定行も拾うため per-student キーと併用する）。
+function collectManagedOccurrenceSuppressionsForDate(params: {
+  dateKey: string
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  suppressedRegularLessonOccurrences: string[]
+}): string[] {
+  const { dateKey, students, regularLessons } = params
+  let next = params.suppressedRegularLessonOccurrences
+  const targetDate = parseDateKey(dateKey)
+  const targetDayOfWeek = targetDate.getDay()
+  const schoolYear = resolveOperationalSchoolYear(targetDate)
+  const studentById = new Map(students.map((s) => [s.id, s]))
+
+  for (const row of regularLessons) {
+    if (row.dayOfWeek !== targetDayOfWeek) continue
+    if (row.schoolYear !== schoolYear) continue
+    if (!isRegularLessonParticipantActiveOnDate(row, dateKey)) continue
+
+    const participants = [
+      { studentId: row.student1Id, subject: row.subject1 },
+      { studentId: row.student2Id, subject: row.subject2 },
+    ].filter((p) => p.studentId && p.subject)
+
+    for (const participant of participants) {
+      const student = studentById.get(participant.studentId)
+      if (!student) continue
+      if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)) continue
+      next = appendSuppressedRegularLessonOccurrence(next, `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`)
+    }
+  }
+  return next
+}
+
+// 講師を意図的に空にした机の削除 tombstone（handleDeleteTeacher と同一表現）。
+// 素の空机にすると再マージ・講師日程反映が講師を復活させるため、tombstone で再付与を抑止する。
+function applyDeletedTeacherTombstone(desk: DeskCell, deletedTeacherName: string) {
+  desk.teacher = ''
+  desk.manualTeacher = true
+  desk.teacherAssignmentSource = 'deleted'
+  desk.teacherAssignmentSessionId = undefined
+  desk.teacherAssignmentTeacherId = deletedTeacherName || undefined
+}
+
+export function computeWholeDayTransfer(params: {
+  weeks: SlotCell[][]
+  sourceDateKey: string
+  targetDateKey: string
+  manualMakeupAdjustments: MakeupOriginMap
+  manualLectureStockCounts: LectureStockCountMap
+  manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
+  fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
+  fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
+  suppressedRegularLessonOccurrences: string[]
+  scheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
+  students: StudentRow[]
+  teachers: TeacherRow[]
+  regularLessons: RegularLessonRow[]
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+  /** 台帳 origin（collectMakeupOriginDatesByKey・includeAbsentMakeupOrigins:false 版）。全コマ削除と同じものを渡す。 */
+  ledgerOriginDatesByKey: Record<string, string[]>
+}): ComputeWholeDayTransferResult {
+  const {
+    weeks, sourceDateKey, targetDateKey, students, teachers, regularLessons,
+    managedStudentByAnyName, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey,
+  } = params
+
+  if (sourceDateKey === targetDateKey) {
+    return { status: 'blocked', message: '同じ日へは振替できません。別の日付を選んでください。' }
+  }
+
+  const nextWeeks = cloneWeeks(weeks)
+  const flatCells = nextWeeks.flat()
+  const sourceCells = flatCells.filter((cell) => cell.dateKey === sourceDateKey)
+  const targetCells = flatCells.filter((cell) => cell.dateKey === targetDateKey)
+  if (sourceCells.length === 0) return { status: 'blocked', message: `振替元 ${sourceDateKey} は表示範囲外です。` }
+  if (targetCells.length === 0) return { status: 'blocked', message: `振替先 ${targetDateKey} は表示範囲外です。` }
+
+  if (cellsHaveStatusEntries(sourceCells)) {
+    return { status: 'blocked', message: '振替元に出欠記録があるため丸ごと振替できません。出欠を解除してから実行してください。' }
+  }
+  if (cellsHaveStatusEntries(targetCells)) {
+    return { status: 'blocked', message: '振替先に出欠記録があるため丸ごと振替できません。出欠を解除してから実行してください。' }
+  }
+  if (!cellsHaveTransferableContent(sourceCells)) {
+    return { status: 'blocked', message: '振替元の日に移動できるコマがありません。' }
+  }
+
+  // コマ構成(時限×机数)の1対1対応が取れない日は無言の部分移送になるため事前にブロックする
+  // (deskCount は通常正規化されるが、この純関数は生 weeks を受けるので防御的に検査する)。
+  const targetCellBySlot = new Map(targetCells.map((cell) => [cell.slotNumber, cell]))
+  for (const sourceCell of sourceCells) {
+    if (!cellsHaveTransferableContent([sourceCell])) continue
+    const targetCell = targetCellBySlot.get(sourceCell.slotNumber)
+    if (!targetCell || targetCell.desks.length < sourceCell.desks.length) {
+      return { status: 'blocked', message: '振替元と振替先のコマ構成（時限・机数）が一致しないため丸ごと振替できません。' }
+    }
+  }
+
+  const summary: WholeDayTransferSummary = {
+    movedStudentCount: 0,
+    movedTeacherCount: 0,
+    movedMemoCount: 0,
+    clearedRegularCount: 0,
+    clearedTrialCount: 0,
+    clearedExtraCount: 0,
+    clearedManualCount: 0,
+    clearedMemoCount: 0,
+    clearedTeacherCount: 0,
+    returnedMakeupCount: 0,
+    returnedLectureCount: 0,
+  }
+
+  let ledgers: HolidayStockLedgers = {
+    manualLectureStockCounts: { ...params.manualLectureStockCounts },
+    manualLectureStockOrigins: cloneManualLectureStockOrigins(params.manualLectureStockOrigins),
+    manualMakeupAdjustments: cloneOriginMap(params.manualMakeupAdjustments),
+    fallbackLectureStockStudents: { ...params.fallbackLectureStockStudents },
+    fallbackMakeupStudents: { ...params.fallbackMakeupStudents },
+  }
+  let nextScheduleCountAdjustments = params.scheduleCountAdjustments
+  let nextSuppressed = [...params.suppressedRegularLessonOccurrences]
+
+  // Phase A: 振替先の既存コマを処分（「その日の生徒を全コマ削除」と同一裁定）。
+  for (const cell of targetCells) {
+    for (const desk of cell.desks) {
+      const result = reconcileHolidayDeskStockReturns({
+        desk,
+        cellDateKey: cell.dateKey,
+        cellSlotNumber: cell.slotNumber,
+        ledgers,
+        managedStudentByAnyName,
+        resolveDisplayName,
+        resolveStockId,
+        ledgerOriginDatesByKey,
+        includeRegularLessons: false,
+      })
+      ledgers = result.ledgers
+      const returnedIds = new Set(result.returnedEntryIds)
+
+      for (const student of desk.lesson?.studentSlots ?? []) {
+        if (!student) continue
+        if (returnedIds.has(student.id)) {
+          // 在庫へ返した分は希望回数を減らさない（返す=別日にやる）。
+          if (student.lessonType === 'special') summary.returnedLectureCount += 1
+          else summary.returnedMakeupCount += 1
+          continue
+        }
+        nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(nextScheduleCountAdjustments, student, cell.dateKey)
+        if (student.lessonType === 'regular') {
+          summary.clearedRegularCount += 1
+          const suppressedKey = resolveSuppressedRegularLessonOccurrenceKey(student, cell.dateKey, cell.slotNumber)
+          if (suppressedKey) nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, suppressedKey)
+        } else if (student.lessonType === 'trial') {
+          summary.clearedTrialCount += 1
+        } else if (student.lessonType === 'extra') {
+          // 増コマは消去のみ・未消化へ入れない（オーナー指示 2026-08-02。全コマ削除の裁定とも一致）。
+          summary.clearedExtraCount += 1
+        } else {
+          summary.clearedManualCount += 1
+        }
+      }
+      summary.clearedMemoCount += (desk.memoSlots ?? []).filter((memo) => memo != null && memo !== '').length
+      desk.lesson = undefined
+      desk.memoSlots = undefined
+    }
+  }
+
+  // Phase B: 再マージ抑止の row-scan を両日に適用（先=消去した通常の復活防止／元=空いた日への再配置防止）。
+  nextSuppressed = collectManagedOccurrenceSuppressionsForDate({ dateKey: sourceDateKey, students, regularLessons, suppressedRegularLessonOccurrences: nextSuppressed })
+  nextSuppressed = collectManagedOccurrenceSuppressionsForDate({ dateKey: targetDateKey, students, regularLessons, suppressedRegularLessonOccurrences: nextSuppressed })
+
+  // Phase C: 机ブロック移送（slotNumber×机位置で1対1）。
+  const movedTeacherNames = new Set<string>()
+  const clearedTeacherNames = new Set<string>()
+  for (const sourceCell of sourceCells) {
+    const targetCell = targetCellBySlot.get(sourceCell.slotNumber)
+    if (!targetCell) continue
+    for (let deskIndex = 0; deskIndex < sourceCell.desks.length; deskIndex += 1) {
+      const srcDesk = sourceCell.desks[deskIndex]
+      const dstDesk = targetCell.desks[deskIndex]
+      if (!srcDesk || !dstDesk) continue
+
+      const srcTeacherBlock = extractDeskTeacherBlock(srcDesk)
+      const srcTeacherName = srcTeacherBlock.teacher.trim()
+      const dstTeacherName = dstDesk.teacher.trim()
+
+      // 振替先に元からいた講師は上書きで消える(破壊的操作なので確認ダイアログで人数を開示する)。
+      if (dstTeacherName && dstTeacherName !== srcTeacherName) clearedTeacherNames.add(dstTeacherName)
+      if (srcTeacherName) {
+        applyDeskTeacherBlock(dstDesk, srcTeacherBlock)
+        // lesson の無い机の非manual講師は再マージで消えるため manual 固定（v1.5.349 ガードと同型）。
+        if (!dstDesk.manualTeacher) dstDesk.manualTeacher = true
+        // 講師名から id を補完（講師日程の二重表示防止・computeTeacherMove と同型）。
+        backfillDeskTeacherAssignmentId(dstDesk, teachers)
+        movedTeacherNames.add(srcTeacherName)
+      } else if (dstTeacherName) {
+        // 素の空にすると再マージ/講師日程反映で復活するため tombstone。
+        applyDeletedTeacherTombstone(dstDesk, dstTeacherName)
+      }
+
+      if (srcDesk.memoSlots?.some((memo) => memo != null && memo !== '')) {
+        dstDesk.memoSlots = [...srcDesk.memoSlots] as [string | null, string | null]
+        summary.movedMemoCount += srcDesk.memoSlots.filter((memo) => memo != null && memo !== '').length
+      }
+
+      // 生徒のいない空 lesson シェルは移送しない(daymove_* の空 lesson を振替先に作らない)。
+      if (srcDesk.lesson?.studentSlots.some((student) => student != null)) {
+        const srcLesson = srcDesk.lesson
+        const movedSlots = srcLesson.studentSlots.map((student) => {
+          if (!student) return null
+          // 移送した通常の元コマは抑止（computeStudentMove と同じ。変換前の student で判定する）。
+          const suppressedKey = resolveSuppressedRegularLessonOccurrenceKey(student, sourceCell.dateKey, sourceCell.slotNumber)
+          if (suppressedKey) nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, suppressedKey)
+          summary.movedStudentCount += 1
+          // 通常→振替変換（元日+時限を焼く）。元の通常授業日へ戻る振替は通常へ復帰。他種別は素通し。
+          return prepareStudentForMove(student, sourceCell.dateKey, sourceCell.slotNumber, targetCell.dateKey)
+        }) as [StudentEntry | null, StudentEntry | null]
+        dstDesk.lesson = {
+          // managed_* の id のまま移すと isManagedLesson 扱いになり再マージに触られるため、移動 lesson として
+          // 新しい決定的 id を振る（buildMovedLesson と同じ発想）。振替元は空になるので重複しない。
+          id: `daymove_${sourceCell.dateKey}_${sourceCell.slotNumber}_${deskIndex}`,
+          warning: srcLesson.warning,
+          note: srcLesson.note === '管理データ反映' ? undefined : srcLesson.note,
+          studentSlots: movedSlots,
+        }
+      }
+
+      // 振替元の机は空にする。講師がいた机は tombstone（空の営業日のまま残す仕様・復活防止）。
+      srcDesk.lesson = undefined
+      srcDesk.memoSlots = undefined
+      if (srcTeacherName) {
+        applyDeletedTeacherTombstone(srcDesk, srcTeacherName)
+      }
+    }
+  }
+  summary.movedTeacherCount = movedTeacherNames.size
+  summary.clearedTeacherCount = clearedTeacherNames.size
+
+  return {
+    status: 'transferred',
+    nextWeeks,
+    summary,
+    nextManualMakeupAdjustments: ledgers.manualMakeupAdjustments,
+    nextFallbackMakeupStudents: ledgers.fallbackMakeupStudents,
+    nextManualLectureStockCounts: ledgers.manualLectureStockCounts,
+    nextManualLectureStockOrigins: ledgers.manualLectureStockOrigins,
+    nextFallbackLectureStockStudents: ledgers.fallbackLectureStockStudents,
+    nextSuppressedRegularLessonOccurrences: nextSuppressed,
+    nextScheduleCountAdjustments,
+  }
+}
+
+// 確認ダイアログ文面（0件の項目・行は省略）。
+export function buildWholeDayTransferConfirmMessage(sourceDateKey: string, targetDateKey: string, summary: WholeDayTransferSummary): string {
+  const formatDay = (dateKey: string) => {
+    const date = parseDateKey(dateKey)
+    return `${date.getMonth() + 1}/${date.getDate()}(${calendarDayLabels[date.getDay()]})`
+  }
+  const joinCounts = (items: Array<{ label: string; count: number; unit?: string }>) => (
+    items.filter((item) => item.count > 0).map((item) => `${item.label}${item.count}${item.unit ?? '件'}`).join('・')
+  )
+  const moved = joinCounts([
+    { label: '生徒', count: summary.movedStudentCount },
+    { label: '講師', count: summary.movedTeacherCount, unit: '名' },
+    { label: 'メモ', count: summary.movedMemoCount },
+  ])
+  const cleared = joinCounts([
+    { label: '通常', count: summary.clearedRegularCount },
+    { label: '体験', count: summary.clearedTrialCount },
+    { label: '増コマ', count: summary.clearedExtraCount },
+    { label: '手動追加', count: summary.clearedManualCount },
+    { label: 'メモ', count: summary.clearedMemoCount },
+    { label: '講師', count: summary.clearedTeacherCount, unit: '名' },
+  ])
+  const returned = joinCounts([
+    { label: '講習', count: summary.returnedLectureCount },
+    { label: '振替', count: summary.returnedMakeupCount },
+  ])
+
+  const lines = [`${formatDay(sourceDateKey)} の全コマを ${formatDay(targetDateKey)} へ丸ごと振替します。`]
+  if (moved) lines.push(`移動: ${moved}`)
+  if (cleared || returned) {
+    lines.push('振替先の既存コマ:')
+    if (cleared) lines.push(`・消去（未消化へ入れません）: ${cleared}`)
+    if (returned) lines.push(`・未消化へ返却: ${returned}`)
+  } else {
+    lines.push('振替先に既存のコマはありません。')
+  }
+  lines.push('よろしいですか。')
+  return lines.join('\n')
+}
+
 // 講習自動割振の完了後にどのストック一覧モーダルを開くかを決める。
 // 割振りきれない残があってもタップ配置モードには入れない(オーナー確定 2026-07-09)。
 // 戻り値はどちらのモーダルを開くかのみで、選択キー(配置モードの武装)は一切返さない設計にすること
@@ -4288,6 +4651,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [selectedLectureStockItemKey, setSelectedLectureStockItemKey] = useState<LecturePlacementSelectionKey | null>(null)
   const [selectedHolidayDate, setSelectedHolidayDate] = useState<string | null>(null)
   const [dayHeaderMenu, setDayHeaderMenu] = useState<{ dateKey: string; x: number; y: number } | null>(null)
+  // 丸ごと振替の「振替先選択モード」(Issue #40)。振替元の日付キーを持つ間だけモード中。
+  // 一時的な UI 状態なので永続化しない。commitWeeks(=盤面が変わる他操作)でも安全側で解除する。
+  const [wholeDayTransferSourceDate, setWholeDayTransferSourceDate] = useState<string | null>(null)
+  // 選択モード中は Escape でもキャンセルできる(モード中のみ keydown を張る)。
+  useEffect(() => {
+    if (!wholeDayTransferSourceDate) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setWholeDayTransferSourceDate(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [wholeDayTransferSourceDate])
   const [studentMenu, setStudentMenu] = useState<StudentMenuState | null>(null)
   const studentMenuPopoverRef = useRef<HTMLDivElement | null>(null)
   const [studentMenuPopoverSize, setStudentMenuPopoverSize] = useState<{ width: number; height: number } | null>(null)
@@ -4312,6 +4687,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
   const [distributionQrModal, setDistributionQrModal] = useState<{ url: string; svg: string; isLoading: boolean } | null>(null)
   const [isTemplateMode, setIsTemplateMode] = useState(false)
+  // テンプレモードに入ったら丸ごと振替の選択モードは解除する(戻ったとき古い振替元で突然復活させない)。
+  useEffect(() => {
+    if (isTemplateMode) setWholeDayTransferSourceDate(null)
+  }, [isTemplateMode])
   const [templateCells, setTemplateCells] = useState<SlotCell[]>([])
   const [templateEffectiveStartDate, setTemplateEffectiveStartDate] = useState('')
   const [templateEditDraft, setTemplateEditDraft] = useState<TemplateEditDraft | null>(null)
@@ -7549,6 +7928,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStudentMenu(null)
     setTeacherMenu(null)
     setEditStudentDraft(null)
+    // 丸ごと振替の選択モード中に他の盤面操作が確定したら安全側でモード解除(INV-03: 古い振替元での誤実行防止)。
+    setWholeDayTransferSourceDate(null)
     committedBoardChangeVersionRef.current += 1
     onBoardStateChange?.({
       weeks: cloneWeeksForPublish(applyClassroomAvailability(nextWeeks, persistedClassroomSettings)),
@@ -7652,12 +8033,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const targetDesk = targetCell?.desks[currentTeacherMenu.deskIndex]
     if (!targetCell || !targetDesk) return
 
-    const deletedTeacherName = targetDesk.teacher
-    targetDesk.teacher = ''
-    targetDesk.manualTeacher = true
-    targetDesk.teacherAssignmentSource = 'deleted'
-    targetDesk.teacherAssignmentSessionId = undefined
-    targetDesk.teacherAssignmentTeacherId = deletedTeacherName || undefined
+    // tombstone の正準表現は applyDeletedTeacherTombstone(丸ごと振替と共有)へ一本化。
+    applyDeletedTeacherTombstone(targetDesk, targetDesk.teacher)
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を削除しました。`)
@@ -7822,6 +8199,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
 
   const handleDayHeaderClick = (dateKey: string, x: number, y: number) => {
+    // 丸ごと振替の選択モード中は、日付ヘッダークリック=振替先の指定として扱う
+    // (休日ヘッダーの即時トグルも抑止し、誤って休日設定が走らないようにする)。
+    if (wholeDayTransferSourceDate) {
+      handleWholeDayTransferTargetClick(dateKey)
+      return
+    }
+
     const isHoliday = classroomSettings.holidayDates.includes(dateKey)
     const isForceOpen = classroomSettings.forceOpenDates.includes(dateKey)
     const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(dateKey).getDay())
@@ -7833,6 +8217,83 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     setDayHeaderMenu({ dateKey, x, y })
+  }
+
+  // 丸ごと振替: メニューで振替元を決めたあと、振替先ヘッダーのクリックで実行する(Issue #40)。
+  // ブロック(同日/非営業日/出欠記録あり)はモード維持で選び直し可。confirm キャンセルはモード解除。
+  const handleWholeDayTransferTargetClick = (targetDateKey: string) => {
+    const sourceDateKey = wholeDayTransferSourceDate
+    if (!sourceDateKey) return
+
+    if (targetDateKey === sourceDateKey) {
+      setStatusMessage('同じ日へは振替できません。別の日付ヘッダーをクリックしてください。')
+      return
+    }
+
+    const isHoliday = classroomSettings.holidayDates.includes(targetDateKey)
+    const isForceOpen = classroomSettings.forceOpenDates.includes(targetDateKey)
+    const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(targetDateKey).getDay())
+    if (isHoliday || (isClosedWeekday && !isForceOpen)) {
+      setStatusMessage(`振替先 ${targetDateKey} は休日です。先に営業日にしてから実行してください。`)
+      return
+    }
+
+    const result = computeWholeDayTransfer({
+      weeks,
+      sourceDateKey,
+      targetDateKey,
+      manualMakeupAdjustments,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackMakeupStudents,
+      fallbackLectureStockStudents,
+      suppressedRegularLessonOccurrences,
+      scheduleCountAdjustments,
+      students,
+      teachers,
+      regularLessons,
+      managedStudentByAnyName,
+      resolveDisplayName: resolveBoardStudentDisplayName,
+      resolveStockId: resolveBoardStudentStockId,
+      ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+    })
+    if (result.status === 'blocked') {
+      setStatusMessage(result.message)
+      return
+    }
+
+    const confirmed = window.confirm(buildWholeDayTransferConfirmMessage(sourceDateKey, targetDateKey, result.summary))
+    if (!confirmed) {
+      setWholeDayTransferSourceDate(null)
+      setStatusMessage('丸ごと振替をキャンセルしました。')
+      return
+    }
+
+    commitWeeks(
+      result.nextWeeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      undefined,
+      undefined,
+      result.nextManualMakeupAdjustments,
+      undefined,
+      result.nextFallbackMakeupStudents,
+      result.nextManualLectureStockCounts,
+      result.nextManualLectureStockOrigins,
+      result.nextFallbackLectureStockStudents,
+      result.nextSuppressedRegularLessonOccurrences,
+      result.nextScheduleCountAdjustments,
+    )
+    setSelectedHolidayDate(targetDateKey)
+    setSelectedStudentId(null)
+    setSelectedMakeupStockKey(null)
+    const returnedCount = result.summary.returnedLectureCount + result.summary.returnedMakeupCount
+    setStatusMessage(
+      `${sourceDateKey} の全コマを ${targetDateKey} へ丸ごと振替しました。`
+      + `生徒${result.summary.movedStudentCount}件・講師${result.summary.movedTeacherCount}名を移動しました。`
+      + (returnedCount > 0 ? `振替先の既存コマ${returnedCount}件を未消化ストックへ戻しました。` : ''),
+    )
   }
 
   const handleClearStudentsOnDate = (dateKey: string) => {
@@ -7915,30 +8376,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     // Suppress managed regular lessons so the overlay doesn't re-place them
-    let nextSuppressedRegularLessonOccurrences = [...suppressedRegularLessonOccurrences]
-    const targetDate = parseDateKey(dateKey)
-    const targetDayOfWeek = targetDate.getDay()
-    const schoolYear = resolveOperationalSchoolYear(targetDate)
-    const studentByIdLocal = new Map(students.map((s) => [s.id, s]))
-
-    for (const row of regularLessons) {
-      if (row.dayOfWeek !== targetDayOfWeek) continue
-      if (row.schoolYear !== schoolYear) continue
-      if (!isRegularLessonParticipantActiveOnDate(row, dateKey)) continue
-
-      const participants = [
-        { studentId: row.student1Id, subject: row.subject1 },
-        { studentId: row.student2Id, subject: row.subject2 },
-      ].filter((p) => p.studentId && p.subject)
-
-      for (const participant of participants) {
-        const student = studentByIdLocal.get(participant.studentId)
-        if (!student) continue
-        if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)) continue
-        const occurrenceKey = `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`
-        nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, occurrenceKey)
-      }
-    }
+    // (row-scan の実体は丸ごと振替と共有の collectManagedOccurrenceSuppressionsForDate へ一本化。
+    //  休日解除側 :7703 の同型ループは講師在籍フィルタが1行多い意図的な差があるため残している)。
+    const nextSuppressedRegularLessonOccurrences = collectManagedOccurrenceSuppressionsForDate({
+      dateKey,
+      students,
+      regularLessons,
+      suppressedRegularLessonOccurrences,
+    })
 
     commitWeeks(
       nextWeeks,
@@ -10608,6 +11053,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onGroupSubjectClick={stableHandleGroupSubjectClick}
             onGroupTeacherClick={stableHandleGroupTeacherClick}
           />
+          {wholeDayTransferSourceDate && !isTemplateMode ? (
+            <div className="whole-day-transfer-banner" data-testid="whole-day-transfer-banner">
+              <span>丸ごと振替: 振替元 {wholeDayTransferSourceDate} — 振替先の日付ヘッダーをクリックしてください</span>
+              <button
+                type="button"
+                className="secondary-button slim"
+                data-testid="whole-day-transfer-cancel"
+                onClick={() => {
+                  setWholeDayTransferSourceDate(null)
+                  setStatusMessage('丸ごと振替をキャンセルしました。')
+                }}
+              >キャンセル</button>
+            </div>
+          ) : null}
           {dayHeaderMenu ? (
             <div className="day-header-menu-backdrop" onClick={() => setDayHeaderMenu(null)}>
               <div
@@ -10616,6 +11075,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="day-header-menu-title">{dayHeaderMenu.dateKey}</div>
+                <button
+                  className="day-header-menu-button"
+                  data-testid="day-header-menu-transfer"
+                  onClick={() => {
+                    const dk = dayHeaderMenu.dateKey
+                    setDayHeaderMenu(null)
+                    const blockReason = resolveWholeDayTransferSourceBlockReason(normalizedWeeks.flat().filter((cell) => cell.dateKey === dk))
+                    if (blockReason) {
+                      setStatusMessage(blockReason)
+                      return
+                    }
+                    setWholeDayTransferSourceDate(dk)
+                    setStatusMessage(`丸ごと振替: 振替元 ${dk} を選択しました。振替先の日付ヘッダーをクリックしてください。`)
+                  }}
+                >丸ごと振替</button>
                 <button
                   className="day-header-menu-button"
                   data-testid="day-header-menu-holiday"
