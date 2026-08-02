@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.467 (2026-08-03)
+
 - feat(INV-02): **丸ごと振替した日にテンプレ足場講師が湧かないようにした**(オーナー指示 2026-08-03「振替先にテンプレ講師が湧くのを止める」)。丸ごと振替は「その日の姿ごと別日へ移す」操作なので、**講師の顔ぶれもユーザーの操作結果で固定**する。実測(v1.5.466)ではリロード(テンプレ再マージ)後に 振替元=空／振替先=移送講師＋**その日のテンプレ講師** となり表示が揃わなかった(机位置がずれると再付与ループが発火)。日単位の抑止キー `TEMPLATE_TEACHER__DAY__<日付>__0` を**既存の `suppressedRegularLessonOccurrences` に相乗り**させ、`overlayBoardWeeksOnScheduleCells` が該当日の管理セルから「生徒のいない机の講師」を落とす(`stripTemplateScaffoldTeachers`)。★相乗りの理由＝この配列は保存/復元・undo/redo・publish 3経路・App のダーティ署名・overlay 受け渡しが**既に全経路で通っている**(専用フィールドは約40箇所の配線が必要で1つ漏れると黙って消える)。キーは通常の抑止キーと同じ4分割で **parts[2] が日付**＝テンプレ上書きの日付フィルタがそのまま効き、反映日以降は抑止解除でテンプレ追従へ戻る。**抑止していない日の挙動は不変**(INV-02 のテンプレ追従は維持・ロックテストあり)。**講習自動割振/QR自動配置の経路は生きている**(tombstone ではないため空き机として使える)が、⚠️**満席判定は変わる**(足場講師が落ちてその日の空き机が増えるため、従来「空き机なし」でスキップしていたコマに提出済み講師が新規配置され得る＝多角レビューで実測再現し、docs/CHANGELOG の「影響しない」という言い切りを是正)。回帰テスト3件(本番形＝テンプレに授業がある日で抑止が効くケースを含む)＋mutation 2種(抑止無効化／strip と抑止の順序入替)で落ちることを確認。★strip は必ず `suppressManagedStudentsInCell` の**後**に当てる(順序が load-bearing。先に当てると lesson 付き管理机を素通しして再付与が復活する)(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md §B-2-3・docs/spec-invariants.md INV-02)
 - refactor(INV-06): **「その日の既存コマを処分する」ループを共通関数 `disposeDayDeskEntries` へ一本化**(挙動不変)。丸ごと振替の Phase A と「その日の生徒を全コマ削除」がほぼ同型の二重実装になっており、片方だけ直すと v1.5.464 で確定した会計裁定がズレる温床だった。違いはオプション2つだけ(`clearMemoSlots`＝丸ごと振替のみ true／`suppressClearedRegularOccurrences`＝丸ごと振替のみ true)にし、在庫会計はさらに `reconcileHolidayDeskStockReturns`(`includeRegularLessons:false`)へ委譲。**`studentSlots` と `statusSlots` の両方を同じ規則で走査**する形に統一(片方だけ走査は INV-06 の再発温床)。「返す」と「希望回数−1」を同時にやらない規則(`returnedEntryIds`)も1か所に集約。共通関数の回帰テスト4件を追加(既存の全コマ削除7件・丸ごと振替29件は緑のまま)
 
