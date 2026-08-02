@@ -3765,11 +3765,15 @@ export function reconcileSubmittedTeacherPlacements(params: {
   let placedCount = 0
 
   for (const session of params.specialSessions) {
-    // この講習期間に既に schedule-registration で配置済みの講師ID(=盤面に居る講師)を集める。
+    // この講習の登録として既に schedule-registration で配置済みの講師ID(=盤面に居る講師)を集める。
+    // ★盤面**全体**を見る(講習期間で絞らない・オーナー確定 2026-08-02)。
+    //   「丸ごと振替」などでユーザーが講師の机を**講習期間外の日へ意図的に移した**場合、期間内だけを見ると
+    //   「未配置」と誤判定して起動毎に期間内へ自動で置き直し、移動が巻き戻る(＝手動編集の巻き戻し・INV-02 違反。
+    //   移動先にも残るため同じ講師が2か所に見える)。この関数が直したい不具合は「配置が揮発してどこにも居ない」
+    //   ケースなので、盤面のどこかに居るなら再配置しないのが正しい(揮発ケースの復旧は従来どおり効く)。
     const placedTeacherIds = new Set<string>()
     for (const week of workingWeeks) {
       for (const cell of week) {
-        if (cell.dateKey < session.startDate || cell.dateKey > session.endDate) continue
         for (const desk of cell.desks) {
           if (desk.teacherAssignmentSource === 'schedule-registration'
             && desk.teacherAssignmentSessionId === session.id

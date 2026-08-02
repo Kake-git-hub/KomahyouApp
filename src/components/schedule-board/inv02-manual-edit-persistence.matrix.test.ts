@@ -588,5 +588,37 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(desk).toBeDefined()
       expect(desk?.teacherAssignmentSource).toBe('schedule-registration')
     })
+
+    // オーナー確定 2026-08-02（丸ごと振替 Issue #40 の追随・INV-02）:
+    // 「丸ごと振替」で QR 提出講師(schedule-registration)の机を**講習期間外の日へ意図的に移した**とき、
+    // 起動時の自己修復(reconcileSubmittedTeacherPlacements)が期間内へ置き直すと移動が巻き戻る
+    // （移動先にも残るため同じ講師が2か所に見える）。配置済み判定は盤面**全体**で行う。
+    // ★この判定を「講習期間内だけ」に戻すと再発する（消してはならないガード）。
+    it('×講習自動割当(reconcile)[不可侵]: 丸ごと振替で講習期間外へ移した提出講師は期間内へ置き直されない', () => {
+      const insideCell = createCell({ id: '2026-06-01_1', dateKey: '2026-06-01', desks: [createDesk({ id: 'b-0' }), createDesk({ id: 'b-1' })] })
+      // 講習期間(6/1-6/2)外の 6/3 へ移送済みの登録机
+      const movedCell = createCell({
+        id: '2026-06-03_1',
+        dateKey: '2026-06-03',
+        desks: [
+          createDesk({ id: 'c-0', teacher: '講師X', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'sess1', teacherAssignmentTeacherId: 'tX' }),
+        ],
+      })
+
+      const result = reconcileSubmittedTeacherPlacements({
+        weeks: [[insideCell, movedCell]],
+        specialSessions: [makeSession()],
+        teachers: [makeTeacher('tX', '講師X')],
+        students: [],
+        regularLessons: [],
+        classroomSettings,
+      })
+
+      expect(result.hasChanges).toBe(false)
+      const inside = result.nextWeeks.flat().find((cell) => cell.dateKey === '2026-06-01')
+      expect(inside?.desks.every((desk) => !desk.teacher.trim())).toBe(true)
+      const moved = result.nextWeeks.flat().find((cell) => cell.dateKey === '2026-06-03')
+      expect(moved?.desks[0]?.teacher).toBe('講師X')
+    })
   })
 })

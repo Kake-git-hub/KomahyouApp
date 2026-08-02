@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.466 (2026-08-02)
+
+- fix(INV-02): **丸ごと振替で講習期間外へ移した QR 提出講師を、起動時の自己修復が期間内へ置き直さない**ようにした(オーナー指示 2026-08-02「講師移動をわかって振替しているので」・v1.5.465 の丸ごと振替に対する追随)。`reconcileSubmittedTeacherPlacements` の「配置済み」判定が**講習期間内のセルだけ**を走査していたため、期間外へ意図的に移した机を「未配置」と誤判定し、起動毎に期間内へ自動配置して**手動の移動が巻き戻っていた**(移送先にも残るため同じ講師が2か所に見える)。判定を**盤面全体**へ広げて修正(この自己修復が直したい不具合は「配置が揮発してどこにも居ない」ケースなので、盤面のどこかに居るなら触らないのが正しい。揮発ケースの復旧・部分配置の尊重・未提出のスキップは従来どおり)。★**期間内限定に戻すと再発**するガード。回帰テスト2件(INV-02マトリクス29件へ+1／自己修復の経路テスト+1)を追加し、mutation で両方落ちることを確認(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md §B-2-3・docs/spec-lecture-stock.md §4-2・docs/spec-invariants.md INV-02)
+
 ## v1.5.465 (2026-08-02)
 
 - fix(INV-06): 丸ごと振替の INV 監査(regression-reviewer)反映。①**オーナー確定2件**=振替元の日は tombstone 化で以後講習自動割振・QR自動配置の対象外(仕様として正本明記)/QR提出講師(schedule-registration)の机を講習期間外へ移送すると次回起動の自己修復が期間内へ自動で置き直す(ブロックせず正本明記・INV-07隣接) ②確認ダイアログに**振替先で消える講師の実人数を開示**(講師カウントを机数→ユニーク実人数へ) ③空 lesson シェル非伝播/コマ構成(時限×机数)不一致・movedマーカー日のブロック/テンプレモード遷移で選択モード解除 ④権威関数の一本化=再マージ抑止 row-scan を `collectManagedOccurrenceSuppressionsForDate` へ(全コマ削除も同関数化・休日解除側は講師在籍フィルタが意図的な差のため据え置き)・講師削除 tombstone を `applyDeletedTeacherTombstone` へ(handleDeleteTeacher も同関数化) ⑤マトリクス22→**29件**(複数コマ×複数机の1対1マッピング/主用途連鎖=丸ごと振替→振替元休日設定の在庫中立(過去日=自動休校日origin発火構成)/移送側の2由来対称/増コマ・体験の移送実体+2人目スロット)・mutation 3件目(机index取り違え)で落ちることを確認(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md §B-2-3・docs/spec-invariants.md)

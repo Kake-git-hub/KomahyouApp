@@ -5087,6 +5087,40 @@ describe('reconcileSubmittedTeacherPlacements (起動時に提出済み未配置
     expect(board['2026-06-02'] ?? []).toEqual([])
   })
 
+  // 回帰防止(オーナー確定 2026-08-02・INV-02): 丸ごと振替などで講師の机を**講習期間外の日へ意図的に移した**とき、
+  // 起動時の自己修復が「期間内に居ない＝未配置」と誤判定して期間内へ置き直すと、移動が巻き戻る
+  // (移動先にも残るので同じ講師が2か所に見える)。判定は盤面全体で行い、どこかに居るなら触らない。
+  it('丸ごと振替で講習期間外へ移した講師は再配置しない(意図的な移動を巻き戻さない)', () => {
+    // 講習期間は 6/1-6/2。講師Aの登録机だけを期間外(6/3)へ移した状態を模す。
+    const outsideCell = makeBoardCell('2026-06-03', 1)
+    const movedDesk = outsideCell.desks[0]
+    movedDesk.teacher = getTeacherDisplayName(teacherA)
+    movedDesk.manualTeacher = true
+    movedDesk.teacherAssignmentSource = 'schedule-registration'
+    movedDesk.teacherAssignmentSessionId = 'sess1'
+    movedDesk.teacherAssignmentTeacherId = 't1'
+
+    const result = reconcileSubmittedTeacherPlacements({
+      weeks: [[...makeWeeks()[0], outsideCell]],
+      ...baseParams(),
+      specialSessions: [makeSession({
+        teacherInputs: {
+          t1: { unavailableSlots: [], countSubmitted: true, updatedAt: '' },
+          t2: { unavailableSlots: [], countSubmitted: false, updatedAt: '' },
+        },
+      })],
+    })
+
+    expect(result.placedCount).toBe(0)
+    expect(result.hasChanges).toBe(false)
+    const board = teacherNamesOnBoard(result.nextWeeks)
+    // 期間内(6/1・6/2)へ置き直されない＝移動が巻き戻らない
+    expect(board['2026-06-01'] ?? []).toEqual([])
+    expect(board['2026-06-02'] ?? []).toEqual([])
+    // 移動先(期間外)にはそのまま残る
+    expect(board['2026-06-03']).toEqual([getTeacherDisplayName(teacherA)])
+  })
+
   it('未提出(countSubmitted=false)の講師は配置しない', () => {
     const result = reconcileSubmittedTeacherPlacements({
       weeks: makeWeeks(),
