@@ -1485,6 +1485,29 @@
   background: #eef4ff;
 }
 
+/* 丸ごと振替の振替先選択モード中に出す固定バナー(Issue #40) */
+.whole-day-transfer-banner {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1002;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #1d4ed8;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  max-width: calc(100vw - 32px);
+}
+
+.whole-day-transfer-banner button {
+  flex-shrink: 0;
+}
+
 .toolbar-group-compact {
   gap: 8px;
 }
