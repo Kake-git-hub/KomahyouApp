@@ -5,7 +5,7 @@ import { computeTeacherMove } from '../components/schedule-board/ScheduleBoardSc
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
-import type { SlotCell } from '../components/schedule-board/types'
+import type { SlotCell, StudentEntry, StudentStatusEntry } from '../components/schedule-board/types'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -82,6 +82,64 @@ function createManualScheduleCell(): SlotCell {
           manualAdded: true,
         }, null],
       },
+    }],
+  }
+}
+
+function manualStudentEntry(overrides: Partial<StudentEntry> = {}): StudentEntry {
+  return {
+    id: 'student-entry-1',
+    name: '山田',
+    managedStudentId: 'student-1',
+    grade: '中3',
+    subject: '数',
+    lessonType: 'extra',
+    teacherType: 'normal',
+    manualAdded: true,
+    ...overrides,
+  }
+}
+
+function manualStatusEntry(overrides: Partial<StudentStatusEntry> = {}): StudentStatusEntry {
+  return {
+    id: 'student-status-1',
+    studentId: 'student-entry-1',
+    sourceManagedLesson: false,
+    name: '山田',
+    managedStudentId: 'student-1',
+    grade: '中3',
+    subject: '数',
+    lessonType: 'extra',
+    teacherType: 'normal',
+    teacherName: '田中講師',
+    dateKey: '2026-03-24',
+    slotNumber: 3,
+    recordedAt: '2026-03-24T00:00:00.000Z',
+    status: 'attended',
+    sourceLessonId: 'manual-regular',
+    manualAdded: true,
+    ...overrides,
+  }
+}
+
+function createManualBoardCell(
+  studentSlots: [StudentEntry | null, StudentEntry | null],
+  statusSlots?: [StudentStatusEntry | null, StudentStatusEntry | null],
+): SlotCell {
+  return {
+    id: '2026-03-24_3',
+    dateKey: '2026-03-24',
+    dayLabel: '火',
+    dateLabel: '3/24',
+    slotLabel: '3限',
+    slotNumber: 3,
+    timeLabel: '16:20-17:50',
+    isOpenDay: true,
+    desks: [{
+      id: '2026-03-24_3_desk_1',
+      teacher: '田中講師',
+      lesson: { id: 'manual-regular', studentSlots },
+      statusSlots,
     }],
   }
 }
@@ -251,6 +309,8 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       ],
     })
 
+    // 盤面の手動追加コマは通常(regular)なので予定側 +1 の対象外（テンプレ予定と二重計上になるため）。
+    // 削除調整の 2 件はそのまま素通しされる。
     expect(adjustments).toEqual([
       {
         studentKey: 'student-1',
@@ -267,6 +327,86 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
         delta: -1,
       },
     ])
+  })
+
+  // 回帰防止(INV-05・オーナー確定 2026-08-05): 室長が盤面で足した手動追加コマは「意図的な追加」なので、
+  // 予定/希望側も +1 して警告を出さない。以前は講習だけ +1 で、増コマは実績だけ増え、
+  // 生徒日程表に「予定数と一致していません！」が出っぱなしになっていた。
+  describe('手動追加コマの予定/希望側 +1（増コマと講習のみ）', () => {
+    it('増コマ(regular枠)と講習(special枠)は +1 する', () => {
+      const cases: Array<{ lessonType: StudentEntry['lessonType']; countKind: 'regular' | 'special' }> = [
+        { lessonType: 'extra', countKind: 'regular' },
+        { lessonType: 'special', countKind: 'special' },
+      ]
+
+      for (const { lessonType, countKind } of cases) {
+        const adjustments = buildSerializedScheduleCountAdjustments({
+          cells: [createManualBoardCell([manualStudentEntry({ lessonType }), null])],
+        })
+        expect(adjustments).toEqual([{
+          studentKey: 'student-1',
+          subject: '数',
+          countKind,
+          dateKey: '2026-03-24',
+          delta: 1,
+        }])
+      }
+    })
+
+    // ★手動追加の通常/振替を +1 してはいけない。基本データ由来の予定(expectedRegularOccurrences)と
+    // 同じ枠に重なることが多く、+1 すると予定が二重に増えて逆に警告が出る（本番実測 2026-08-05:
+    // 相殺されていない重複が 日大前54件・緑が丘68件）。増コマはテンプレに無いのでこの重複が起きない。
+    it('手動追加の通常・振替は +1 しない（テンプレ予定と二重計上になるため）', () => {
+      for (const lessonType of ['regular', 'makeup'] as const) {
+        const adjustments = buildSerializedScheduleCountAdjustments({
+          cells: [createManualBoardCell([manualStudentEntry({ lessonType }), null])],
+        })
+        expect(adjustments).toEqual([])
+      }
+    })
+
+    it('体験は生徒日程表に載らないので +1 しない', () => {
+      const adjustments = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'trial' }), null])],
+      })
+      expect(adjustments).toEqual([])
+    })
+
+    it('自動配置(手動追加でない)コマは +1 しない（テンプレ予定と二重に数えない）', () => {
+      const adjustments = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'extra', manualAdded: false }), null])],
+      })
+      expect(adjustments).toEqual([])
+    })
+
+    // ★studentSlots だけ走査すると、出席を付けた途端に +1 が消えて警告が出る（INV-06 と同じ両走査規則）。
+    it('出欠を付けた手動追加コマ(statusSlots へ移る)も +1 を維持する', () => {
+      const adjustments = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([null, null], [manualStatusEntry({ status: 'attended' }), null])],
+      })
+      expect(adjustments).toEqual([{
+        studentKey: 'student-1',
+        subject: '数',
+        countKind: 'regular',
+        dateKey: '2026-03-24',
+        delta: 1,
+      }])
+    })
+
+    it('欠席・移動済みは実績に数えないので +1 しない（振無休は数えるので +1 する）', () => {
+      for (const status of ['absent', 'moved'] as const) {
+        const adjustments = buildSerializedScheduleCountAdjustments({
+          cells: [createManualBoardCell([null, null], [manualStatusEntry({ status }), null])],
+        })
+        expect(adjustments).toEqual([])
+      }
+
+      const noMakeup = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([null, null], [manualStatusEntry({ status: 'absent-no-makeup' }), null])],
+      })
+      expect(noMakeup).toHaveLength(1)
+      expect(noMakeup[0]?.delta).toBe(1)
+    })
   })
 
   it('links board-visible lessons by managed student id even when the stored display name is stale', () => {
@@ -342,6 +482,43 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     // flushIncomingPayload の末尾で必ず非表示にする(等価ペイロードでも固着しない)
     expect(html).toContain('hideScheduleSyncingOverlay();')
 
+    vi.unstubAllGlobals()
+  })
+
+  // 回帰防止(オーナー確定 2026-08-05): 括弧内の呼称は通常＝テンプレ由来の「予定数」、講習＝提出由来の
+  // 「希望数」で出どころが違う。両方を「希望数」と書くと通常側が提出由来だと誤読される。警告文も同じ語で呼び分ける。
+  it('回数表の括弧と警告文は通常=予定数・講習=希望数で呼び分ける', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [createManualScheduleCell()],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('通常回数<span class="print-only-hidden">(予定数)</span>')
+    expect(html).toContain('講習回数<span class="print-only-hidden">(希望数)</span>')
+    expect(html).toContain('data-testid="student-schedule-regular-count-warning">予定数と一致していません！')
+    expect(html).toContain('data-testid="student-schedule-lecture-count-warning">希望数と一致していません！')
+    // 旧文言(通常側まで「希望数」)が残っていないこと。
+    expect(html).not.toContain('通常回数<span class="print-only-hidden">(希望数)</span>')
+    expect(html).not.toContain('希望数と予定数が一致していません！')
     vi.unstubAllGlobals()
   })
 
