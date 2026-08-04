@@ -1599,18 +1599,27 @@ export function isSessionLectureDeletion(student: Pick<StudentEntry, 'lessonType
 
 /**
  * 単発削除の希望数会計。生徒日程表の講習「希望数」を減らす正本は 2 系統ある。
- *  - 在庫由来(session)の講習 … 正本＝提出データ `subjectSlots`（呼び出し側が decrementSpecialSessionSubjectCount で −1）
- *  - それ以外 … 正本＝表示調整 `scheduleCountAdjustments`（ここで −1）
- * ★**必ずどちらか一方だけ**を減らす。両方積むと 1 回の削除で希望数が 2 減り、削除しただけで
- *   「希望数と一致していません！」が逆向きに出る（v1.5.468 で修正。この排他をほどくと即再発する）。
+ *  - 在庫由来(session)の講習 … 正本＝提出データ `subjectSlots`（`decrementSubjectSlots: true` を返す）
+ *  - それ以外 … 正本＝表示調整 `scheduleCountAdjustments`（`nextAdjustments` に −1 を積んで返す）
+ *
+ * ★**2つの帳簿の行き先をこの1関数だけで決める**。呼び出し側は戻り値を配るだけにし、
+ *   「どちらを減らすか」を各所で独立に判定しない。両方積むと 1 回の削除で希望数が 2 減り、
+ *   削除しただけで「希望数と一致していません！」が逆向きに出る（v1.5.468 で修正した本丸のバグ）。
+ *   `74c830d` は subjectSlots −1 を足したときに旧経路の −1 を外し忘れて同じ事故を起こした。
+ *   戻り値を分解して片方だけ別経路から取り直すと、その事故がそのまま再発する。
  */
-export function resolveDeletedStudentCountAdjustments(
+export function resolveDeletedStudentCountAccounting(
   adjustments: ScheduleCountAdjustmentEntry[],
   student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject' | 'lessonType' | 'manualAdded' | 'specialStockSource'> & { studentId?: string },
   dateKey: string,
-) {
-  if (isSessionLectureDeletion(student)) return adjustments
-  return appendDeletedStudentScheduleCountAdjustment(adjustments, student, dateKey)
+): { nextAdjustments: ScheduleCountAdjustmentEntry[]; decrementSubjectSlots: boolean } {
+  if (isSessionLectureDeletion(student)) {
+    return { nextAdjustments: adjustments, decrementSubjectSlots: true }
+  }
+  return {
+    nextAdjustments: appendDeletedStudentScheduleCountAdjustment(adjustments, student, dateKey),
+    decrementSubjectSlots: false,
+  }
 }
 
 export function filterTemplateOverwriteHolidayDates(holidayDates: string[], effectiveStartDate: string) {
@@ -10594,8 +10603,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
-    // 在庫由来(session)の講習はここで −1 を積まない（下の decrementSpecialSessionSubjectCount が正本）。
-    const nextScheduleCountAdjustments = resolveDeletedStudentCountAdjustments(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
+    // ★希望数の2つの帳簿（表示調整 / 提出データ subjectSlots）の行き先は、この1つの戻り値だけで決める。
+    //   下の講習分岐も countAccounting.decrementSubjectSlots を見る（片方を別経路で取り直さない＝二重減算防止）。
+    const countAccounting = resolveDeletedStudentCountAccounting(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
+    const nextScheduleCountAdjustments = countAccounting.nextAdjustments
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let nextManualLectureStockCounts = manualLectureStockCounts
     let statusSuffix = '振替対象にはしません。'
@@ -10612,10 +10623,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     if (menuStudent.student.lessonType === 'special') {
-      if (isSessionLecture) {
+      if (countAccounting.decrementSubjectSlots) {
         // ストック由来の講習削除: 希望数 −1。配置時に消費した分(-1)を打ち消して残数会計を保つ
         // （削除は「戻す」ではないため、希望数自体を1減らして純減させる）。
-        // ★この −1 が講習希望数の唯一の正本。scheduleCountAdjustments へは積まない（二重減算防止）。
+        // ★この −1 が講習希望数の唯一の正本。上の countAccounting が同時に
+        //   scheduleCountAdjustments へ積まないことを保証している（二重減算防止）。
         const lectureStudentKey = resolveLectureStockStudentKey(menuStudent.student, managedStudentByAnyName, resolveBoardStudentDisplayName)
         const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
         nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)

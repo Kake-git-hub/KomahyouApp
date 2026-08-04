@@ -11,6 +11,7 @@ import {
   hasCountMismatch,
   resolveDefaultPersonId,
 } from './scheduleViewData'
+import { resolveDeletedStudentCountAccounting } from '../components/schedule-board/ScheduleBoardScreen'
 
 const TODAY = '2026-07-08'
 
@@ -203,6 +204,48 @@ describe('scheduleViewData: 生徒シートの表示算出', () => {
     const mathRow = vm.lectureCountRows.find((row) => row.label.startsWith('数'))!
     expect(mathRow).toEqual({ label: '数60分', count: 1, desired: 2 })
     expect(vm.lectureCountMismatch).toBe(true)
+  })
+
+  // ★回帰防止(INV-05・v1.5.468): 在庫由来(session)講習を1コマ削除したとき、希望数は **1 だけ** 減る。
+  // 削除会計 resolveDeletedStudentCountAccounting の結果をそのまま日程表へ流し、症状
+  // （1減るはずが2減る＝提出データと表示調整の両方が引かれる）を実数値で固定する。
+  // ⚠️ 希望3→残2 のシナリオにしてあるのは意図的。希望1→残0 だと applyCountAdjustments の
+  //   0クランプで行ごと消え「希望=実績」に化けて二重減算が**素通りする**（実測で確認）。
+  //   残数が正のままになる規模でないと症状を捕まえられない。
+  it('在庫由来の講習を1コマ削除しても希望数は1しか減らない（実績2/希望2・警告なし）', () => {
+    const deletedLecture = {
+      managedStudentId: 'stu-1',
+      name: '山田太',
+      subject: '数' as const,
+      lessonType: 'special' as const,
+      specialStockSource: 'session' as const,
+    }
+    // 削除前は 希望3・盤面3コマ。1コマ削除した後の状態を会計の戻り値どおりに組み立てる。
+    const accounting = resolveDeletedStudentCountAccounting([], deletedLecture, '2026-07-07')
+    const subjectSlotsAfterDelete = accounting.decrementSubjectSlots ? 2 : 3
+
+    const payload = makePayload({
+      cells: [
+        makeCell('2026-07-06', 2, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent({ lessonType: 'special', subject: '数' })] } }]),
+        makeCell('2026-07-08', 2, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent({ id: 'entry-2', lessonType: 'special', subject: '数' })] } }]),
+      ],
+      countAdjustments: accounting.nextAdjustments,
+      specialSessions: [{
+        id: 'session-1',
+        label: '夏期講習',
+        startDate: '2026-07-01',
+        endDate: '2026-07-31',
+        teacherInputs: {},
+        studentInputs: {
+          'stu-1': { unavailableSlots: [], subjectSlots: { 数: subjectSlotsAfterDelete }, regularOnly: false, countSubmitted: true },
+        },
+      }],
+    })
+
+    const vm = buildStudentSheetViewModel(payload, vmOptions)!
+    const mathRow = vm.lectureCountRows.find((row) => row.label.startsWith('数'))!
+    expect(mathRow).toEqual({ label: '数', count: 2, desired: 2 })
+    expect(vm.lectureCountMismatch).toBe(false)
   })
 
   it('不可時間(QR提出)のコマは is-unavailable になる', () => {
