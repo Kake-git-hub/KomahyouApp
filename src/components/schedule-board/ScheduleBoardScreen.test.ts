@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAdjustments, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -199,7 +199,7 @@ describe('appendDeletedStudentScheduleCountAdjustment', () => {
 // 同じ削除で両方を減らすと希望数が 2 減る。在庫由来(session)の講習は提出データ(subjectSlots)側だけを
 // 減らす（呼び出し側の decrementSpecialSessionSubjectCount）ため、表示調整には積んではいけない。
 // この排他をほどくと「削除しただけで希望数と一致していません！が逆向きに出る」不具合が再発する。
-describe('resolveDeletedStudentCountAdjustments', () => {
+describe('resolveDeletedStudentCountAccounting', () => {
   const sessionLecture = {
     managedStudentId: 's001',
     name: '青木太郎',
@@ -207,21 +207,35 @@ describe('resolveDeletedStudentCountAdjustments', () => {
     lessonType: 'special' as const,
     specialStockSource: 'session' as const,
   }
+  const manualLecture = { ...sessionLecture, specialStockSource: 'manual' as const, manualAdded: true }
+  const regular = { managedStudentId: 's001', name: '青木太郎', subject: '数' as const, lessonType: 'regular' as const }
 
-  it('在庫由来(session)の講習は表示調整に −1 を積まない(subjectSlots 側で減らすため・二重減算防止)', () => {
-    expect(resolveDeletedStudentCountAdjustments([], sessionLecture, '2026-08-03')).toEqual([])
+  // ★これが本丸の assert。2つの帳簿(表示調整 / subjectSlots)が同時に立たないことを全ケースで固定する。
+  // 片方だけ別経路で取り直す改変（＝74c830d と同型の事故）はこの排他を破るので、ここで落ちる。
+  it('2つの帳簿は必ず排他（両方同時に減らさない・両方減らさないこともない）', () => {
+    for (const student of [sessionLecture, manualLecture, regular]) {
+      const result = resolveDeletedStudentCountAccounting([], student, '2026-08-03')
+      const touchedAdjustments = result.nextAdjustments.length > 0
+      expect(touchedAdjustments && result.decrementSubjectSlots).toBe(false)
+    }
+    // 在庫由来の講習だけが subjectSlots 側。ここが true のまま表示調整も積むと希望数が2減る。
+    expect(resolveDeletedStudentCountAccounting([], sessionLecture, '2026-08-03').decrementSubjectSlots).toBe(true)
+    expect(resolveDeletedStudentCountAccounting([], manualLecture, '2026-08-03').decrementSubjectSlots).toBe(false)
+    expect(resolveDeletedStudentCountAccounting([], regular, '2026-08-03').decrementSubjectSlots).toBe(false)
+  })
+
+  it('在庫由来(session)の講習は表示調整に −1 を積まない(subjectSlots 側で減らすため)', () => {
+    expect(resolveDeletedStudentCountAccounting([], sessionLecture, '2026-08-03').nextAdjustments).toEqual([])
     expect(isSessionLectureDeletion(sessionLecture)).toBe(true)
   })
 
   it('手動追加(manual)の講習は subjectSlots に無いので表示調整も積まない(従来どおり)', () => {
-    const manualLecture = { ...sessionLecture, specialStockSource: 'manual' as const, manualAdded: true }
-    expect(resolveDeletedStudentCountAdjustments([], manualLecture, '2026-08-03')).toEqual([])
+    expect(resolveDeletedStudentCountAccounting([], manualLecture, '2026-08-03').nextAdjustments).toEqual([])
     expect(isSessionLectureDeletion(manualLecture)).toBe(false)
   })
 
   it('通常授業の削除は従来どおり表示調整へ −1 を積む(講習の修正で通常側を巻き添えにしない)', () => {
-    const regular = { managedStudentId: 's001', name: '青木太郎', subject: '数' as const, lessonType: 'regular' as const }
-    expect(resolveDeletedStudentCountAdjustments([], regular, '2026-08-03')).toEqual([{
+    expect(resolveDeletedStudentCountAccounting([], regular, '2026-08-03').nextAdjustments).toEqual([{
       studentKey: 's001',
       subject: '数',
       countKind: 'regular',
