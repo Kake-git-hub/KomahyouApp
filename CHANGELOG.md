@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.469 (2026-08-05)
+
+- docs(INV-05): **two-strike 到達後も準観察のまま据え置くとオーナーが判断**(2026-08-05)したため台帳へ記録。あわせて運用ルール §2 の「two-strike で昇格」を**「昇格を検討する契機／実施可否はオーナー判断」**へ明確化した(マトリクス1ファイルは以後ずっと維持コストを負い、上限15〜20件の"横に増やさない"設計原則と競合するため)。見送り時は**判断・日付・代わりの担保**を該当 INV 節へ残す運用を明記。INV-05 の代替担保＝希望数の正本の排他／削除後の希望数の実数値固定／予定側 +1 の対称性の各経路テスト(いずれも mutation で落ちることを実測確認済み)。v1.5.468 の記述に残っていた旧関数名 `resolveDeletedStudentCountAdjustments` を実装どおり `resolveDeletedStudentCountAccounting` へ是正(docs/spec-invariants.md)
+
 ## v1.5.468 (2026-08-05)
 
 - fix(INV-05): **在庫由来(session)の講習コマを単発削除すると、生徒日程表の講習「希望数」が 2 減っていた**のを修正(オーナー確定 2026-08-05)。希望数を減らす正本が2系統あり(提出データ `subjectSlots` と表示調整 `scheduleCountAdjustments`)、単発削除が**両方**に −1 を積んでいた。確認ダイアログは「希望数が1減ります」と言うのに 2 減るため、削除しただけで「希望数と一致していません！」が**逆向きに**出る(実績1減・希望2減)。`74c830d` で `decrementSpecialSessionSubjectCount`(subjectSlots −1)を足したとき、それ以前からあった表示調整 −1 を外し忘れたのが真因。**2つの帳簿の行き先を1つの戻り値で決める純関数 `resolveDeletedStudentCountAccounting`** に固定した(`{ nextAdjustments, decrementSubjectSlots }` を返し、呼び出し側は配るだけ。判定は `isSessionLectureDeletion`)。★片方を別経路で取り直せる形だと `74c830d` と同型の事故がそのまま再発するため、**戻り値を分解して片方だけ取り直さないこと**。★兄弟監査: 「その日の生徒を全コマ削除」「丸ごと振替」は在庫へ**返す**経路なので `decrementSpecialSessionSubjectCount` を呼ばず二重減算は起きない(INV-06 の「返す＝別日にやる／返さない＝もうやらない」を維持・古いコメントを実態へ是正)。回帰テスト4件＋別タブ経路で**希望数を実数値で固定**する1件(`scheduleViewData.test.ts`)。⚠️後者は **希望3→残2 の規模**で書くこと: 希望1→残0 だと `applyCountAdjustments` の0クランプで行ごと消え「希望＝実績」に化け、**二重減算が素通りする**(実測で確認)。いずれも mutation(排他を外す)で落ちることを確認済み(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-invariants.md INV-05)
