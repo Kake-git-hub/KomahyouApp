@@ -1589,6 +1589,30 @@ export function appendDeletedStudentScheduleCountAdjustment(
   })
 }
 
+/**
+ * 単発削除で「講習の希望数」を提出データ側（`subjectSlots`）で減らす対象か。＝在庫由来(session)の講習。
+ * 希望数の呼称・正本は `docs/spec-invariants.md` INV-05（回数表示の実配置一致）に従う。
+ */
+export function isSessionLectureDeletion(student: Pick<StudentEntry, 'lessonType' | 'specialStockSource'>) {
+  return student.lessonType === 'special' && student.specialStockSource === 'session'
+}
+
+/**
+ * 単発削除の希望数会計。生徒日程表の講習「希望数」を減らす正本は 2 系統ある。
+ *  - 在庫由来(session)の講習 … 正本＝提出データ `subjectSlots`（呼び出し側が decrementSpecialSessionSubjectCount で −1）
+ *  - それ以外 … 正本＝表示調整 `scheduleCountAdjustments`（ここで −1）
+ * ★**必ずどちらか一方だけ**を減らす。両方積むと 1 回の削除で希望数が 2 減り、削除しただけで
+ *   「希望数と一致していません！」が逆向きに出る（v1.5.468 で修正。この排他をほどくと即再発する）。
+ */
+export function resolveDeletedStudentCountAdjustments(
+  adjustments: ScheduleCountAdjustmentEntry[],
+  student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'subject' | 'lessonType' | 'manualAdded' | 'specialStockSource'> & { studentId?: string },
+  dateKey: string,
+) {
+  if (isSessionLectureDeletion(student)) return adjustments
+  return appendDeletedStudentScheduleCountAdjustment(adjustments, student, dateKey)
+}
+
 export function filterTemplateOverwriteHolidayDates(holidayDates: string[], effectiveStartDate: string) {
   return holidayDates.filter((dateKey) => dateKey < effectiveStartDate)
 }
@@ -10519,8 +10543,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage(`${resolveBoardStudentDisplayName(statusEntry.name)} の${getStudentStatusActionLabel(statusEntry.status)}を解除しました。`)
   }
 
-  // spec-lecture-stock §4 / TODO1: 講習コマの「削除」「空にする」でストック由来(session)は希望数 −1。
+  // spec-lecture-stock §4 / TODO1: 講習コマの「削除」でストック由来(session)は希望数 −1。
   // subjectSlots は session×student×subject の希望回数。studentId 単位で1件減らす。
+  // ★呼ぶのは単発削除だけ。「その日の生徒を全コマ削除」「丸ごと振替」は在庫へ**返す**ので希望数は
+  //   減らさない（INV-06・2026-08-02 オーナー確定。「返す＝別日にやる／返さない＝もうやらない」）。
   const decrementSpecialSessionSubjectCount = (sessionId: string | undefined, studentId: string | undefined, subject: string) => {
     if (!sessionId || !studentId) return
     onUpdateSpecialSessions((prev) => prev.map((session) => {
@@ -10546,7 +10572,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!studentMenu || !menuStudent) return
 
     const studentDisplayName = resolveBoardStudentDisplayName(menuStudent.student.name)
-    const isSessionLecture = menuStudent.student.lessonType === 'special' && menuStudent.student.specialStockSource === 'session'
+    const isSessionLecture = isSessionLectureDeletion(menuStudent.student)
     const confirmBody = isSessionLecture
       ? '削除すると講習の希望数が1減ります（未消化ストックには戻りません）。'
       : '削除した授業は振替の対象になりません。'
@@ -10568,7 +10594,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
       ? appendSuppressedRegularLessonOccurrence(suppressedRegularLessonOccurrences, suppressedOccurrenceKey)
       : suppressedRegularLessonOccurrences
-    const nextScheduleCountAdjustments = appendDeletedStudentScheduleCountAdjustment(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
+    // 在庫由来(session)の講習はここで −1 を積まない（下の decrementSpecialSessionSubjectCount が正本）。
+    const nextScheduleCountAdjustments = resolveDeletedStudentCountAdjustments(scheduleCountAdjustments, menuStudent.student, targetCell.dateKey)
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let nextManualLectureStockCounts = manualLectureStockCounts
     let statusSuffix = '振替対象にはしません。'
@@ -10585,9 +10612,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     if (menuStudent.student.lessonType === 'special') {
-      if (menuStudent.student.specialStockSource === 'session') {
+      if (isSessionLecture) {
         // ストック由来の講習削除: 希望数 −1。配置時に消費した分(-1)を打ち消して残数会計を保つ
         // （削除は「戻す」ではないため、希望数自体を1減らして純減させる）。
+        // ★この −1 が講習希望数の唯一の正本。scheduleCountAdjustments へは積まない（二重減算防止）。
         const lectureStudentKey = resolveLectureStockStudentKey(menuStudent.student, managedStudentByAnyName, resolveBoardStudentDisplayName)
         const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
         nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)

@@ -636,15 +636,29 @@ export function buildSerializedScheduleCountAdjustments(params: {
     })
   }
 
+  // 手動追加コマ（室長が盤面で足した増コマ・通常・振替・講習）は「意図的な追加」なので、予定/希望側も
+  // +1 して警告を出さない。以前は講習だけ +1 していたため、増コマや手動追加の通常/振替を足すと
+  // 実績だけ増えて「予定数と一致していません！」が出っぱなしになっていた（オーナー確定 2026-08-05）。
+  // 数える条件は実績側（生徒日程表の回数表）と厳密に対称にする:
+  //   - 体験(trial)は生徒日程表に載らないので対象外。
+  //   - 出欠済みは studentSlots から statusSlots へ**移る**ので両方を走査する（片方だけだと出席を付けた
+  //     途端に +1 が消えて警告が出る。★INV-06 と同じ「両走査」規則）。
+  //   - 欠席(absent)・移動済み(moved)は実績に数えないので +1 もしない（振無休 absent-no-makeup は数える）。
   params.cells.forEach((cell) => {
     cell.desks.forEach((desk) => {
-      desk.lesson?.studentSlots.forEach((student) => {
-        if (!student?.manualAdded) return
-        if (student.lessonType !== 'special') return
+      const deskEntries = [
+        ...(desk.lesson?.studentSlots ?? []),
+        ...(desk.statusSlots ?? []),
+      ]
+      deskEntries.forEach((entry) => {
+        if (!entry?.manualAdded) return
+        if (entry.lessonType === 'trial') return
+        const status = 'status' in entry ? entry.status : undefined
+        if (status === 'absent' || status === 'moved') return
         appendEntry({
-          studentKey: student.managedStudentId ?? student.name,
-          subject: student.subject,
-          countKind: student.lessonType === 'special' ? 'special' : 'regular',
+          studentKey: entry.managedStudentId ?? entry.name,
+          subject: entry.subject,
+          countKind: entry.lessonType === 'special' ? 'special' : 'regular',
           dateKey: cell.dateKey,
           delta: 1,
         })
@@ -5014,7 +5028,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           // 振替コマ自体は週グリッド内に残るので、講師が担当する振替授業が消えるわけではない。
           return '<div class="bottom-grid bottom-grid-teacher">' +
             salarySectionHtml +
-            '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
+            '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(予定数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div></div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div></div></div>' +
           '</div>';
         }
         const emptyFormat = options && options.emptyFormat;
@@ -5028,7 +5042,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const commonSectionHtml = '<div class="box-stack"><div class="box-table-title">共通連絡事項(学年別)</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + commonFieldAttr + '>' + escapeHtml(commonNoteValue) + '</textarea></div></div>';
         const individualSectionHtml = '<div class="box-stack"><div class="box-table-title">個別連絡事項</div><div class="box-panel"><textarea class="' + noteInputClass + '"' + individualFieldAttr + '>' + escapeHtml(individualNoteValue) + '</textarea></div></div>';
         const makeupSectionHtml = '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>';
-        const countStackHtml = '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>';
+        // 括弧内の呼称は通常と講習で出どころが違う。通常＝基本データ(テンプレ)由来の「予定数」、
+        // 講習＝QR提出/室長登録の「希望数」。同じ「希望数」表記にすると通常側が提出由来だと誤読される。
+        const countStackHtml = '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(予定数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>';
         // オプション欄(開発用教室のみ): 休み欄を削除し、振替授業を左へ詰め、空いた所にオプション欄(2列5行)を置く。
         // 左列=学年共通のテキスト入力(scheduleNotes と同じ仕組み)、右列=QR提出のチェック状態(往復処理は次フェーズ。既定は未チェック)。
         if (DATA.optionFieldEnabled) {
@@ -5588,11 +5604,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const visibleDesiredLectureCounts = applyCountAdjustments(normalizeCountMapSubjects(desiredLectureCounts, student, startDate), lectureCountAdjustments);
         // spec-group-lesson §D: 中3参加者のみ 集理/集社 を講習回数表に注入(表示期間内・希望=コマ数/実績=出席数)。
         injectGroupClassCounts(student, startDate, endDate, visibleLectureCounts, visibleDesiredLectureCounts);
+        // 警告文も通常＝予定数(テンプレ由来)／講習＝希望数(提出由来)で呼び分ける(見出しの括弧と同じ語)。
         const regularCountWarningHtml = hasCountMismatch(visibleRegularCounts, visiblePlannedRegularCounts)
-          ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">希望数と予定数が一致していません！</div>'
+          ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-regular-count-warning">予定数と一致していません！</div>'
           : '';
         const lectureCountWarningHtml = hasCountMismatch(visibleLectureCounts, visibleDesiredLectureCounts)
-          ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と予定数が一致していません！</div>'
+          ? '<div class="count-warning-stamp print-only-hidden" data-testid="student-schedule-lecture-count-warning">希望数と一致していません！</div>'
           : '';
         const rows = slotNumbers.map((slotNumber) => {
           const timeLabel = filteredCells.find((cell) => cell.slotNumber === slotNumber)?.timeLabel || slotNumber + '限';

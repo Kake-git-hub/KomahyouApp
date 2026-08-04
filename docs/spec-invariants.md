@@ -260,12 +260,32 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     `mergeManagedDeskLesson` の生徒同一性補完（`managedStudentId` 等の managed 側優先補完）が、後続マージの
     `{ ...managedStudent, ...student }` 単純 spread に巻き戻り、生徒日程表で盤面配置済みの通常授業が
     回数表にカウントされず実態より少なく表示された。**CLAUDE.md 回帰防止ルール制定の直接の引き金**。
+  - **v1.5.468** / 2026-08-05 … **希望数の正本が二重に減る／予定側が種別で非対称**（オーナーからの
+    「通常・講習の回数と希望数を整理したい」に端を発する棚卸しで発見。2 件とも回数表示が実態と食い違う）。
+    - **二重減算**：在庫由来(session)講習の単発削除が、提出データ `subjectSlots` −1（`74c830d` で追加）と
+      表示調整 `scheduleCountAdjustments` −1（それ以前からの経路）の**両方**を積み、1 回の削除で希望数が
+      2 減った。新機能追加時に**旧経路を外し忘れる**古典型。純関数 `resolveDeletedStudentCountAdjustments`
+      （判定は `isSessionLectureDeletion`）へ排他を固定して解消。
+    - **予定側 +1 の非対称**：`buildSerializedScheduleCountAdjustments` の +1 が**講習だけ**に効いており、
+      手動追加の増コマ・通常・振替は実績だけ増えて警告が出っぱなしだった。種別を問わず +1 へ揃え、
+      数える条件を実績側と対称化（trial 除外／`studentSlots`＋`statusSlots` の**両走査**／absent・moved 除外）。
+      ★出欠を付けるとコマは `statusSlots` へ**移る**ため、片走査だと出席の瞬間に +1 が消える（INV-06 と同型）。
 - **マトリクステストファイル**：準観察のため未整備。経路テスト `ScheduleBoardScreen.test.ts`
-  （`managedStudentId` 欠落でも管理データ側 ID を保持＝96 行の回帰テスト）で担保。
+  （`managedStudentId` 欠落でも管理データ側 ID を保持＝96 行の回帰テスト／希望数の正本の排他 3 件）と
+  `scheduleHtml.test.ts`（手動追加コマの予定側 +1 の対称性 5 件・回数表の呼称 1 件）で担保。
   希望回数 −1（`scheduleCountAdjustments`）を積む経路は 削除／全コマ削除に加えて**丸ごと振替の振替先処分**
   （2026-08-02・Issue #40）が増えた（全コマ削除と同じ `returnedEntryIds` スキップ規則。
   `inv06-whole-day-transfer.matrix.test.ts` で回数調整も assert）。
+- **呼称の正本**（2026-08-05 オーナー確定）：括弧内・警告文は出どころで呼び分ける。
+  **通常＝「予定数」**（基本データ/テンプレ由来の `expectedRegularOccurrences`）、
+  **講習＝「希望数」**（QR提出・室長登録の `subjectSlots`）。両方を「希望数」と書かない。
 - **担保状況：○**（回帰テストで固定済み。**この同一性補完を spread 単純化で消すと再発**する＝重複ゼロ原則の実例）。
+- **⚠️ two-strike 到達（2026-08-05）**：違反 2 件目が確定したため**強制への昇格候補**。昇格＝
+  `*.matrix.test.ts` の新設義務が発生するため、**実施はオーナー承認待ち**（この行は記録であって昇格ではない）。
+- **未修正の隣接疑い（兄弟監査 2026-08-05・要オーナー判断）**：**欠席にした在庫由来講習がある日を「その日の
+  生徒を全コマ削除」すると、在庫へは +1 返却済みなのに希望数が −1 される**（`reconcileHolidayDeskStockReturns`
+  が absent/moved を「会計済み」として `returnedEntryIds` に入れないため、`disposeDayDeskEntries` が
+  希望数 −1 を積む）。在庫と希望数が食い違う同型の疑い。v1.5.468 では**挙動を変えていない**（スコープ外）。
 
 ---
 
