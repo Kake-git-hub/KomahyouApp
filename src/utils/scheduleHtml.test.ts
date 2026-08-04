@@ -309,9 +309,16 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       ],
     })
 
-    // 2026-08-05(オーナー確定): 手動追加コマは種別を問わず予定/希望側 +1 になった。盤面の手動追加(通常/数/3-24)の
-    // +1 と、同じ生徒・科目・日付の削除調整 −1 が相殺されて 0 になり、この 1 件は出力から落ちる。
+    // 盤面の手動追加コマは通常(regular)なので予定側 +1 の対象外（テンプレ予定と二重計上になるため）。
+    // 削除調整の 2 件はそのまま素通しされる。
     expect(adjustments).toEqual([
+      {
+        studentKey: 'student-1',
+        subject: '数',
+        countKind: 'regular',
+        dateKey: '2026-03-24',
+        delta: -1,
+      },
       {
         studentKey: 'student-1',
         subject: '英',
@@ -323,14 +330,12 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
   })
 
   // 回帰防止(INV-05・オーナー確定 2026-08-05): 室長が盤面で足した手動追加コマは「意図的な追加」なので、
-  // 予定/希望側も +1 して警告を出さない。以前は講習だけ +1 で、増コマ・手動追加の通常/振替は実績だけ増え、
+  // 予定/希望側も +1 して警告を出さない。以前は講習だけ +1 で、増コマは実績だけ増え、
   // 生徒日程表に「予定数と一致していません！」が出っぱなしになっていた。
-  describe('手動追加コマの予定/希望側 +1（種別で非対称にしない）', () => {
-    it('増コマ・通常・振替・講習のいずれも +1 する（講習だけの特別扱いを作らない）', () => {
+  describe('手動追加コマの予定/希望側 +1（増コマと講習のみ）', () => {
+    it('増コマ(regular枠)と講習(special枠)は +1 する', () => {
       const cases: Array<{ lessonType: StudentEntry['lessonType']; countKind: 'regular' | 'special' }> = [
         { lessonType: 'extra', countKind: 'regular' },
-        { lessonType: 'regular', countKind: 'regular' },
-        { lessonType: 'makeup', countKind: 'regular' },
         { lessonType: 'special', countKind: 'special' },
       ]
 
@@ -348,6 +353,18 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       }
     })
 
+    // ★手動追加の通常/振替を +1 してはいけない。基本データ由来の予定(expectedRegularOccurrences)と
+    // 同じ枠に重なることが多く、+1 すると予定が二重に増えて逆に警告が出る（本番実測 2026-08-05:
+    // 相殺されていない重複が 日大前54件・緑が丘68件）。増コマはテンプレに無いのでこの重複が起きない。
+    it('手動追加の通常・振替は +1 しない（テンプレ予定と二重計上になるため）', () => {
+      for (const lessonType of ['regular', 'makeup'] as const) {
+        const adjustments = buildSerializedScheduleCountAdjustments({
+          cells: [createManualBoardCell([manualStudentEntry({ lessonType }), null])],
+        })
+        expect(adjustments).toEqual([])
+      }
+    })
+
     it('体験は生徒日程表に載らないので +1 しない', () => {
       const adjustments = buildSerializedScheduleCountAdjustments({
         cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'trial' }), null])],
@@ -357,7 +374,7 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
 
     it('自動配置(手動追加でない)コマは +1 しない（テンプレ予定と二重に数えない）', () => {
       const adjustments = buildSerializedScheduleCountAdjustments({
-        cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'regular', manualAdded: false }), null])],
+        cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'extra', manualAdded: false }), null])],
       })
       expect(adjustments).toEqual([])
     })

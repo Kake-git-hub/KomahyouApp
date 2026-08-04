@@ -636,9 +636,17 @@ export function buildSerializedScheduleCountAdjustments(params: {
     })
   }
 
-  // 手動追加コマ（室長が盤面で足した増コマ・通常・振替・講習）は「意図的な追加」なので、予定/希望側も
-  // +1 して警告を出さない。以前は講習だけ +1 していたため、増コマや手動追加の通常/振替を足すと
-  // 実績だけ増えて「予定数と一致していません！」が出っぱなしになっていた（オーナー確定 2026-08-05）。
+  // 手動追加コマ（室長が盤面で足したコマ）は「意図的な追加」なので、予定/希望側も +1 して警告を出さない。
+  // 以前は講習だけ +1 していたため、増コマを足すと実績だけ増えて「予定数と一致していません！」が
+  // 出っぱなしになっていた（オーナー確定 2026-08-05）。
+  //
+  // ★対象は **増コマ(extra) と 講習(special) だけ**。手動追加の通常(regular)・振替(makeup)は含めない:
+  //   これらは基本データ由来の予定（`expectedRegularOccurrences`）と**同じ枠に重なる**ことが多く、+1 すると
+  //   予定が二重に増えて逆に警告が出る。本番実測（2026-08-05・読み取り専用）では、手動追加の通常授業のうち
+  //   基本データの同じ枠(生徒/科目/曜日/時限)と重なるものが 日大前 173/223 件・緑が丘 208/269 件あり、
+  //   削除調整や抑止で相殺されていないものが 54 件 / 68 件残っていた（＝そのまま +1 すると新規警告になる）。
+  //   増コマはテンプレに存在しない追加コマなので、この重複が起きない。
+  //
   // 数える条件は実績側（生徒日程表の回数表）と厳密に対称にする:
   //   - 体験(trial)は生徒日程表に載らないので対象外。
   //   - 出欠済みは studentSlots から statusSlots へ**移る**ので両方を走査する（片方だけだと出席を付けた
@@ -652,7 +660,7 @@ export function buildSerializedScheduleCountAdjustments(params: {
       ]
       deskEntries.forEach((entry) => {
         if (!entry?.manualAdded) return
-        if (entry.lessonType === 'trial') return
+        if (entry.lessonType !== 'extra' && entry.lessonType !== 'special') return
         const status = 'status' in entry ? entry.status : undefined
         if (status === 'absent' || status === 'moved') return
         appendEntry({
