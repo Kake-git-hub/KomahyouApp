@@ -461,7 +461,11 @@ export function computeOutstandingAbsenceOrigins(params: {
           if (!statusEntry || !isCountedLessonType(statusEntry.lessonType) || statusEntry.status === 'moved') continue
           const key = buildMakeupStockKey(params.resolveStudentKey(statusEntry), statusEntry.subject)
 
-          if (statusEntry.makeupSourceDate) {
+          // ★休み(absent)の振替コマは消化に数えない（実施していないため）。ここを数えると、
+          //   別日へ移動した授業を休んだとき（元コマは moved で義務が立たない）に、同じ記録が
+          //   義務と消化の両方へ積まれて相殺し、休んだ1コマが静かに消える
+          //   （INV-06 の v1.5.459「moved-makeup-absence-loss」と同型の消滅）。
+          if (statusEntry.makeupSourceDate && statusEntry.status !== 'absent') {
             pushOrigin(settled, key, buildOriginToken(statusEntry.makeupSourceDate, parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel)))
           }
 
@@ -477,11 +481,36 @@ export function computeOutstandingAbsenceOrigins(params: {
 
   const outstanding: OriginMap = {}
   for (const [key, tokens] of Object.entries(owed)) {
-    const remaining = consumeMatchingOriginTokens(tokens, settled[key] ?? [])
+    const remaining = consumeMatchingOriginTokens(dedupeOwedOriginTokens(tokens), settled[key] ?? [])
     if (remaining.length > 0) outstanding[key] = remaining
   }
 
   return outstanding
+}
+
+/**
+ * 義務トークンの畳み込み。**同じ元コマを指す休みは何件あっても1件**にする。
+ * 「7/1 を休み → 7/8 へ振替 → その 7/8 も休み」は、7/1 の授業1回が未実施なだけで義務は1件。
+ * 畳まないと同じ1回を2件に数える（誤増）。
+ * ★同じ日でも**時限が違えば別物**（7/1 の4限と5限を両方休んだら2件）。ここを日付だけで畳むと
+ *   同日2コマ休みが1件に潰れて誤減する（2026-07-31 に在庫側で直した回帰と同型）。
+ * 時限が判らないトークン（振替元ラベルが無い旧データ）は、同じ日の既存トークンへ吸収させる
+ *   ＝過大計上しない側へ倒す（`consumeMatchingOriginTokens` の同日フォールバックと同じ考え方）。
+ */
+function dedupeOwedOriginTokens(tokens: string[]) {
+  const kept: string[] = []
+
+  for (const token of tokens) {
+    const { dateKey, slotNumber } = parseOriginToken(token)
+    const alreadyCovered = kept.some((existing) => {
+      if (existing === token) return true
+      if (originTokenDateKey(existing) !== dateKey) return false
+      return slotNumber === null || parseOriginToken(existing).slotNumber === null
+    })
+    if (!alreadyCovered) kept.push(token)
+  }
+
+  return kept
 }
 
 // INV-06（未消化振替の消滅・2026-07-31 緑が丘校 報告）:
@@ -785,6 +814,8 @@ export function consumeMatchingOriginTokens(originTokens: string[], usedTokens: 
 function consumeOriginDates(originDates: string[], usedOriginDates: string[], usedCount: number) {
   const remaining = consumeMatchingOriginTokens(originDates, usedOriginDates)
 
+  // ★v1.5.78(`6829dd1`) のガード: origin と対応が取れない使用数のぶんを古い順に消す。
+  // 消すと「配置済みなのに未消化として再出現する」二重計上が復活する。★消してはならない。
   let unassignedUseCount = Math.max(0, usedCount - usedOriginDates.length)
   while (unassignedUseCount > 0 && remaining.length > 0) {
     remaining.shift()
