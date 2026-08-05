@@ -102,6 +102,7 @@ function makePayload(overrides: Partial<SchedulePayload> = {}): SchedulePayload 
     scheduleNotes: {},
     expectedRegularOccurrences: [],
     countAdjustments: [],
+    outstandingAbsences: [],
     specialSessions: [],
     groupClassEntries: {},
     classroomStorageKey: 'test',
@@ -246,6 +247,107 @@ describe('scheduleViewData: 生徒シートの表示算出', () => {
     const mathRow = vm.lectureCountRows.find((row) => row.label.startsWith('数'))!
     expect(mathRow).toEqual({ label: '数', count: 2, desired: 2 })
     expect(vm.lectureCountMismatch).toBe(false)
+  })
+
+  // ============================================================================
+  // 【移行中・INV-05】盤面ベースの予定数（オーナー確定 2026-08-05・開発用教室から段階導入）
+  // 予定数 ＝ その期間の実績 ＋ その期間の未振替の休み。テンプレ由来と表示調整は使わない。
+  // ============================================================================
+  describe('盤面ベースの予定数', () => {
+    const boardBasedPayload = (overrides: Partial<SchedulePayload> = {}) => makePayload({
+      boardBasedPlannedCountEnabled: true,
+      // 旧方式のデータをあえて残す。新方式ではこれらを読み捨てるのが正しい。
+      expectedRegularOccurrences: [
+        { linkedStudentId: 'stu-1', subject: '英', dateKey: '2026-07-06' },
+        { linkedStudentId: 'stu-1', subject: '英', dateKey: '2026-07-07' },
+        { linkedStudentId: 'stu-1', subject: '英', dateKey: '2026-07-08' },
+      ],
+      countAdjustments: [
+        { studentKey: 'stu-1', subject: '英', countKind: 'regular', dateKey: '2026-07-07', delta: -1 },
+      ],
+      ...overrides,
+    })
+
+    it('出欠記録が無ければ実績と一致し警告が出ない（テンプレ由来も表示調整も読み捨てる）', () => {
+      const payload = boardBasedPayload({
+        cells: [
+          makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }]),
+        ],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      expect(vm.regularCountRows).toEqual([{ label: '英', count: 1, desired: 1 }])
+      expect(vm.regularCountMismatch).toBe(false)
+    })
+
+    it('休んで振替がまだなら、その分だけ予定数が多い（警告あり）', () => {
+      const payload = boardBasedPayload({
+        cells: [
+          makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }]),
+          makeCell('2026-07-07', 1, [{ teacher: '佐藤', statuses: [makeStatusEntry({ status: 'absent' })] }]),
+        ],
+        outstandingAbsences: [{ studentKey: 'stu-1', subject: '英', dateKey: '2026-07-07' }],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      expect(vm.regularCountRows).toEqual([{ label: '英', count: 1, desired: 2 }])
+      expect(vm.regularCountMismatch).toBe(true)
+    })
+
+    // ★オーナー確定の芯。振替を表示期間外へ置くと未振替から消えるので、元の期間の予定数からも減る。
+    it('振替を表示期間外へ置くと、元の期間の予定数からも減って警告が消える', () => {
+      const payload = boardBasedPayload({
+        cells: [
+          makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }]),
+          makeCell('2026-07-07', 1, [{ teacher: '佐藤', statuses: [makeStatusEntry({ status: 'absent' })] }]),
+        ],
+        // 8月へ振替を置いた＝未振替一覧から消える（盤面全体で消化済みのため空）
+        outstandingAbsences: [],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      expect(vm.regularCountRows).toEqual([{ label: '英', count: 1, desired: 1 }])
+      expect(vm.regularCountMismatch).toBe(false)
+    })
+
+    it('未振替の休みは表示期間で絞る（期間外の休みは予定数に足さない）', () => {
+      const payload = boardBasedPayload({
+        cells: [makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }])],
+        outstandingAbsences: [{ studentKey: 'stu-1', subject: '英', dateKey: '2026-06-01' }],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      expect(vm.regularCountRows).toEqual([{ label: '英', count: 1, desired: 1 }])
+    })
+
+    it('無効な教室では従来どおりテンプレ由来＋表示調整で出す（旧方式が生きている）', () => {
+      const payload = boardBasedPayload({
+        boardBasedPlannedCountEnabled: false,
+        cells: [makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }])],
+        outstandingAbsences: [{ studentKey: 'stu-1', subject: '英', dateKey: '2026-07-07' }],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      // テンプレ3回 − 表示調整1 = 2（未振替の休みは無視される）
+      expect(vm.regularCountRows).toEqual([{ label: '英', count: 1, desired: 2 }])
+    })
+
+    it('講習の希望数は新方式でも提出データのまま（通常側の変更に巻き込まれない）', () => {
+      const payload = boardBasedPayload({
+        cells: [
+          makeCell('2026-07-06', 2, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent({ lessonType: 'special', subject: '数' })] } }]),
+        ],
+        specialSessions: [{
+          id: 'session-1',
+          label: '夏期講習',
+          startDate: '2026-07-01',
+          endDate: '2026-07-31',
+          teacherInputs: {},
+          studentInputs: {
+            'stu-1': { unavailableSlots: [], subjectSlots: { 数: 2 }, regularOnly: false, countSubmitted: true },
+          },
+        }],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      const mathRow = vm.lectureCountRows.find((row) => row.label.startsWith('数'))!
+      expect(mathRow).toEqual({ label: '数', count: 1, desired: 2 })
+      expect(vm.lectureCountMismatch).toBe(true)
+    })
   })
 
   it('不可時間(QR提出)のコマは is-unavailable になる', () => {

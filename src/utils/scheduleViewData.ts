@@ -1211,6 +1211,34 @@ export function buildPeriodOptions(payload: SchedulePayload): SchedulePeriodOpti
     }))
 }
 
+// 【移行中・INV-05】盤面ベースの予定数に足す「まだ振替コマが組まれていない休み」の件数。
+// 埋め込みJS の buildOutstandingAbsenceCountMap と同じ規則（生徒照合・科目正規化・期間フィルタ）。
+// ★片方だけ直すと経路で表示が食い違う（INV-04）。
+function buildOutstandingAbsenceCountMap(payload: SchedulePayload, student: SerializedStudent, startDate: string, endDate: string) {
+  const countMap: Record<string, number> = {}
+  ;(payload.outstandingAbsences || []).forEach((entry) => {
+    if (!entry) return
+    const matchesStudent = entry.studentKey === student.id || entry.studentKey === student.name || entry.studentKey === student.fullName
+    if (!matchesStudent) return
+    if (entry.dateKey < startDate || entry.dateKey > endDate) return
+    const normalizedSubject = normalizeSubjectForStudent(entry.subject, student, startDate)
+    if (!normalizedSubject) return
+    countMap[normalizedSubject] = (countMap[normalizedSubject] || 0) + 1
+  })
+  return countMap
+}
+
+// 実績に未振替の休みを足す（0以下を消す applyCountAdjustments とは別物・足すだけ）。
+function addCountMaps(baseMap: Record<string, number>, addedMap: Record<string, number>) {
+  const next = { ...(baseMap || {}) }
+  Object.entries(addedMap || {}).forEach(([subject, value]) => {
+    const added = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0
+    if (added <= 0) return
+    next[subject] = (next[subject] || 0) + added
+  })
+  return next
+}
+
 function buildStudentCountAdjustmentMap(payload: SchedulePayload, student: SerializedStudent, startDate: string, endDate: string, countKind: 'regular' | 'special') {
   const countMap: Record<string, number> = {}
   ;(payload.countAdjustments || []).forEach((entry) => {
@@ -1306,7 +1334,11 @@ export function buildStudentSheetViewModel(payload: SchedulePayload, options: Bu
     plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1
   })
   const visibleRegularCounts = normalizeCountMapSubjects(subjectCounts, student, startDate)
-  const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments)
+  // 新方式＝実績＋未振替の休み（盤面だけが根拠）／旧方式＝テンプレ由来±表示調整。
+  // ★新方式では通常側の表示調整を読み捨てる（本番に残る既存の−1と二重に引かないため）。
+  const visiblePlannedRegularCounts = payload.boardBasedPlannedCountEnabled
+    ? addCountMaps(visibleRegularCounts, buildOutstandingAbsenceCountMap(payload, student, startDate, endDate))
+    : applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments)
   const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate)
   const visibleDesiredLectureCounts = applyCountAdjustments(normalizeCountMapSubjects(desiredLectureCounts, student, startDate), lectureCountAdjustments)
   injectGroupClassCounts(payload, student, startDate, endDate, visibleLectureCounts, visibleDesiredLectureCounts)
