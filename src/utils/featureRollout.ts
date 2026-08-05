@@ -67,6 +67,16 @@ export const featureRolloutRegistry = {
     scope: 'all-classrooms',
     description: 'Auto-sync (debounced) the generated-HTML schedule popup on board edits, with a syncing spinner.',
   },
+  // 生徒日程表の「通常回数(予定数)」の括弧内を、テンプレ由来(expectedRegularOccurrences ± 表示調整)から
+  // **盤面ベース**(その期間の実績 ＋ その期間の未振替の休み)へ切り替える。オーナー確定 2026-08-05。
+  // 定義・移行段取り・仕様上の割り切りの正本は docs/spec-invariants.md INV-05（ここへ複製しない）。
+  // ★有効時は増コマの予定側 +1 も同時に止める（盤面から直接数えるため。止めないと1コマで予定が2増える）。
+  // ★デプロイした瞬間に既存の通常側 scheduleCountAdjustments を読み捨てるため過去月の数字が動く。
+  //   開発用教室で実機確認 → staging → 全教室、の順で昇格する（オーナー確定の段階導入）。
+  boardBasedPlannedCount: {
+    scope: 'development-only',
+    description: 'Student schedule: derive the regular planned count from the board (actual + outstanding absences) instead of template-derived occurrences.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

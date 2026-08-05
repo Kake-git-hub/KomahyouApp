@@ -365,6 +365,29 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       }
     })
 
+    // ★Step2 の最優先チェック（INV-05）。盤面ベースの予定数では増コマも盤面から直接数えるので、
+    // ここで +1 を残すと 1 つの増コマで予定数が 2 増える（v1.5.468 の二重減算と同じ
+    // 「新経路を足して旧経路を外し忘れる」型）。講習の +1 は新旧どちらでも積む。
+    it('盤面ベースの予定数が有効なときは増コマの +1 を積まない（講習の +1 は積む）', () => {
+      const extra = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'extra' }), null])],
+        boardBasedPlannedCountEnabled: true,
+      })
+      expect(extra).toEqual([])
+
+      const lecture = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'special' }), null])],
+        boardBasedPlannedCountEnabled: true,
+      })
+      expect(lecture).toEqual([{
+        studentKey: 'student-1',
+        subject: '数',
+        countKind: 'special',
+        dateKey: '2026-03-24',
+        delta: 1,
+      }])
+    })
+
     it('体験は生徒日程表に載らないので +1 しない', () => {
       const adjustments = buildSerializedScheduleCountAdjustments({
         cells: [createManualBoardCell([manualStudentEntry({ lessonType: 'trial' }), null])],
@@ -1860,7 +1883,13 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       delta: -2,
     }])
     expect(html).toContain("const regularCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'regular')")
-    expect(html).toContain('const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments)')
+    // 【移行中・INV-05】旧方式（テンプレ由来 ± 表示調整）は boardBasedPlannedCountEnabled=false の教室で使われ続ける。
+    expect(html).toContain('applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments)')
+    // 新方式（実績 ＋ 未振替の休み）への分岐が入っていること。この教室は無効なので旧方式で描画される。
+    expect(html).toContain('DATA.boardBasedPlannedCountEnabled')
+    expect(html).toContain('addCountMaps(visibleRegularCounts, buildOutstandingAbsenceCountMap(student, startDate, endDate))')
+    expect(payload.boardBasedPlannedCountEnabled).toBe(false)
+    expect(payload.outstandingAbsences).toEqual([])
     vi.unstubAllGlobals()
   })
 

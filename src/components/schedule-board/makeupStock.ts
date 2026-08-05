@@ -442,7 +442,8 @@ export function parseOriginSlotNumberFromLabel(label?: string) {
  */
 export function computeOutstandingAbsenceOrigins(params: {
   weeks: SlotCell[][]
-  resolveStudentKey: (entry: Pick<StudentEntry, 'managedStudentId' | 'name'>) => string
+  /** 盤面の在庫キー解決（`resolveBoardStudentStockId` を想定）。`manualAdded` も読むので型に含める。 */
+  resolveStudentKey: (entry: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => string
 }): Record<string, string[]> {
   const owed: OriginMap = {}
   const settled: OriginMap = {}
@@ -459,7 +460,8 @@ export function computeOutstandingAbsenceOrigins(params: {
 
         for (const statusEntry of desk.statusSlots ?? []) {
           if (!statusEntry || !isCountedLessonType(statusEntry.lessonType) || statusEntry.status === 'moved') continue
-          const key = buildMakeupStockKey(params.resolveStudentKey(statusEntry), statusEntry.subject)
+          // ★同ファイルの他経路と同じシムを噛ませる（キー解決が将来 id を見るようになっても割れないように）。
+          const key = buildMakeupStockKey(params.resolveStudentKey({ ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry), statusEntry.subject)
 
           // ★休み(absent)の振替コマは消化に数えない（実施していないため）。ここを数えると、
           //   別日へ移動した授業を休んだとき（元コマは moved で義務が立たない）に、同じ記録が
@@ -497,6 +499,43 @@ export function computeOutstandingAbsenceOrigins(params: {
  * 時限が判らないトークン（振替元ラベルが無い旧データ）は、同じ日の既存トークンへ吸収させる
  *   ＝過大計上しない側へ倒す（`consumeMatchingOriginTokens` の同日フォールバックと同じ考え方）。
  */
+export type OutstandingAbsenceEntry = {
+  studentKey: string
+  subject: string
+  /** 元の授業日。日程表はこの日付が表示期間に入るものだけを予定数へ足す。 */
+  dateKey: string
+}
+
+/**
+ * `computeOutstandingAbsenceOrigins` の結果を、日程表の payload に載せる 1 件 1 行の形へ落とす。
+ * ★`weeks` には**盤面全体**を渡すこと（表示期間で絞ると、期間外へ置いた振替を消化できず
+ *   「振替したのに未振替のまま」になる）。
+ */
+export function buildOutstandingAbsenceEntries(params: {
+  weeks: SlotCell[][]
+  resolveStudentKey: (entry: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => string
+}): OutstandingAbsenceEntry[] {
+  const origins = computeOutstandingAbsenceOrigins(params)
+  const entries: OutstandingAbsenceEntry[] = []
+
+  for (const [key, tokens] of Object.entries(origins)) {
+    // キーは `${studentKey}__${subject}`。studentKey 側に `__` が入り得るので後ろから切る。
+    const separatorIndex = key.lastIndexOf('__')
+    if (separatorIndex < 0) continue
+    const studentKey = key.slice(0, separatorIndex)
+    const subject = key.slice(separatorIndex + 2)
+    for (const token of tokens) {
+      entries.push({ studentKey, subject, dateKey: originTokenDateKey(token) })
+    }
+  }
+
+  return entries.sort((left, right) => (
+    left.studentKey.localeCompare(right.studentKey, 'ja')
+    || left.dateKey.localeCompare(right.dateKey)
+    || left.subject.localeCompare(right.subject, 'ja')
+  ))
+}
+
 function dedupeOwedOriginTokens(tokens: string[]) {
   const kept: string[] = []
 

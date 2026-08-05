@@ -21,7 +21,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
@@ -4772,6 +4772,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
+  // 【移行中・INV-05】通常の予定数を盤面ベース（実績＋未振替の休み）で出すか。開発用教室から段階導入。
+  const boardBasedPlannedCountEnabled = isFeatureEnabledForClassroom('boardBasedPlannedCount', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
   // 講師の長押しD&D移動/入れ替え(同一コマ内限定)は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
@@ -5772,13 +5774,25 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     return matchesStudent2 ? 'regular' : 'regular'
   }
-  const resolveBoardStudentStockId = (student: StudentEntry) => {
+  // 引数型は**実際に読むフィールドだけ**にする。盤面の出欠記録(StudentStatusEntry)や、
+  // 未振替の休みの算出（computeOutstandingAbsenceOrigins）からも同じキー解決を使うため。
+  const resolveBoardStudentStockId = (student: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => {
     const managedId = student.managedStudentId ?? managedStudentByAnyName.get(student.name)?.id
     if (managedId) return managedId
 
     const fallbackId = `name:${resolveBoardStudentDisplayName(student.name)}`
     return student.manualAdded ? `manual:${fallbackId}` : fallbackId
   }
+  // 【移行中・INV-05】盤面ベースの予定数に渡す「まだ振替コマが組まれていない休み」。
+  // ★weeks（盤面**全体**）から算出する。表示期間で絞った盤面から作ると、期間外へ置いた振替を
+  //   消化できず「振替したのに未振替のまま」になる（＝元の期間の予定数が減らない）。
+  // 無効な教室では計算そのものを走らせない（payload も空になる）。
+  const outstandingAbsenceEntries = useMemo(() => (
+    boardBasedPlannedCountEnabled
+      ? buildOutstandingAbsenceEntries({ weeks, resolveStudentKey: resolveBoardStudentStockId })
+      : []
+  ), [boardBasedPlannedCountEnabled, weeks, managedStudentByAnyName])
+
   const getSelectableSubjectsForStudent = useCallback((student: StudentRow | null, dateKey: string) => {
     if (!student) return editableSubjects
     const gradeLabel = resolveSchoolGradeLabel(student.birthDate, parseDateKey(dateKey))
@@ -6780,6 +6794,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings,
       classroomStorageKey,
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      outstandingAbsences: outstandingAbsenceEntries,
+      boardBasedPlannedCountEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -6912,6 +6928,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings,
       classroomStorageKey,
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      outstandingAbsences: outstandingAbsenceEntries,
+      boardBasedPlannedCountEnabled,
       scheduleDndEnabled: scheduleDndMoveEnabled,
       periodBands: specialSessions,
       specialSessions,
@@ -10092,6 +10110,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomSettings,
       classroomStorageKey,
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
+      outstandingAbsences: outstandingAbsenceEntries,
+      boardBasedPlannedCountEnabled,
       scheduleDndEnabled: scheduleDndMoveEnabled,
       periodBands: specialSessions,
       specialSessions,

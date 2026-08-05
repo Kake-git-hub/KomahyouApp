@@ -169,6 +169,20 @@ export type SerializedScheduleCountAdjustment = {
   delta: number
 }
 
+/**
+ * 【移行中・INV-05】盤面ベースの予定数に使う「まだ振替コマが組まれていない休み」1 件 1 行。
+ * 通常回数の予定数 ＝ その期間の実績 ＋ この一覧のうち **dateKey が表示期間内** の件数。
+ * dateKey は「元の授業日」なので、振替を表示期間外へ置くと消化されてこの一覧から消え、
+ * 結果として元の期間の予定数からも減る（オーナー確定 2026-08-05）。
+ * ★盤面**全体**から算出したものを渡すこと（表示期間で絞った盤面で算出すると、期間外に置いた
+ *   振替を消化できず「振替したのに未振替のまま」になる）。
+ */
+export type SerializedOutstandingAbsence = {
+  studentKey: string
+  subject: string
+  dateKey: string
+}
+
 export type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
@@ -193,6 +207,10 @@ export type SchedulePayload = {
   }
   highlightedTeacherId?: string
   countAdjustments: SerializedScheduleCountAdjustment[]
+  // 【移行中・INV-05】盤面ベースの予定数。boardBasedPlannedCount が有効な教室でのみ中身が入る。
+  outstandingAbsences: SerializedOutstandingAbsence[]
+  // true のとき通常回数の予定数を「実績＋未振替の休み」で出す（false ならテンプレ由来＋表示調整の旧方式）。
+  boardBasedPlannedCountEnabled?: boolean
   specialSessions: SerializedSpecialSession[]
   // spec-group-lesson §A/§E: 盤面の集団授業割当(key=`${dateKey}_${band}`)。生徒/講師日程表の集団行・回数・給与に使う。
   groupClassEntries: GroupClassEntryMap
@@ -229,6 +247,10 @@ type OpenScheduleHtmlParams = {
   optionFieldEnabled?: boolean
   // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。生徒ペイロードにのみ渡す。
   scheduleDndEnabled?: boolean
+  // 【移行中・INV-05】盤面ベースの予定数。★盤面**全体**から算出したものを呼び出し側で作って渡す
+  // （表示期間で絞った盤面から作ると、期間外へ置いた振替を消化できない）。
+  outstandingAbsences?: SerializedOutstandingAbsence[]
+  boardBasedPlannedCountEnabled?: boolean
 }
 
 type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
@@ -562,6 +584,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     cells: serializedCells,
     scheduleNotes: { ...(params.classroomSettings.scheduleNotes ?? {}) },
     expectedRegularOccurrences: [],
+    outstandingAbsences: [],
+    boardBasedPlannedCountEnabled: false,
     highlightedStudentSlot: undefined,
     highlightedTeacherId: undefined,
     showSubmittedQr: Boolean(params.showSubmittedQr),
@@ -609,6 +633,14 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
 export function buildSerializedScheduleCountAdjustments(params: {
   cells: SlotCell[]
   scheduleCountAdjustments?: ScheduleCountAdjustmentEntry[]
+  /**
+   * 【移行中・INV-05】盤面ベースの予定数が有効か。true のとき **増コマの +1 を積まない**。
+   * ★新方式は盤面から直接数えるので、+1 を残すと 1 つの増コマで予定数が 2 増える
+   *   （v1.5.468 の二重減算と同じ「新経路を足して旧経路を外し忘れる」型）。
+   * 講習(special)の +1 は**新旧どちらでも積む**（講習の希望数は提出データが正本のままで、
+   * 手動追加した講習は提出に載らないため）。
+   */
+  boardBasedPlannedCountEnabled?: boolean
 }) {
   const entries = new Map<string, SerializedScheduleCountAdjustment>()
 
@@ -668,6 +700,8 @@ export function buildSerializedScheduleCountAdjustments(params: {
       deskEntries.forEach((entry) => {
         if (!entry?.manualAdded) return
         if (entry.lessonType !== 'extra' && entry.lessonType !== 'special') return
+        // 盤面ベースの予定数では増コマも盤面から直接数えるので、ここで +1 しない（二重計上防止）。
+        if (params.boardBasedPlannedCountEnabled && entry.lessonType === 'extra') return
         const status = 'status' in entry ? entry.status : undefined
         if (status === 'absent' || status === 'moved') return
         appendEntry({
@@ -787,6 +821,9 @@ export function buildStudentPayload(params: OpenStudentScheduleHtmlParams): Sche
   return {
     ...basePayload,
     expectedRegularOccurrences,
+    // 【移行中・INV-05】呼び出し側（盤面画面）が盤面全体から作って渡す。旧方式の教室では空配列。
+    outstandingAbsences: params.outstandingAbsences ?? [],
+    boardBasedPlannedCountEnabled: Boolean(params.boardBasedPlannedCountEnabled),
     highlightedStudentSlot: params.highlightedStudentSlot ?? undefined,
     countAdjustments: buildSerializedScheduleCountAdjustments({
       cells: params.cells,
@@ -5552,6 +5589,34 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return countMap;
       }
 
+      // 【移行中・INV-05】盤面ベースの予定数に足す「まだ振替コマが組まれていない休み」の件数。
+      // dateKey は元の授業日なので、振替を表示期間外へ置くと一覧から消え、元の期間の予定数からも減る。
+      // 生徒の照合と科目の正規化は表示調整(buildStudentCountAdjustmentMap)と同じ規則を使う。
+      function buildOutstandingAbsenceCountMap(student, startDate, endDate) {
+        const countMap = {};
+        (DATA.outstandingAbsences || []).forEach((entry) => {
+          if (!entry) return;
+          const matchesStudent = entry.studentKey === student.id || entry.studentKey === student.name || entry.studentKey === student.fullName;
+          if (!matchesStudent) return;
+          if (entry.dateKey < startDate || entry.dateKey > endDate) return;
+          const normalizedSubject = normalizeSubjectForStudent(entry.subject, student, startDate);
+          if (!normalizedSubject) return;
+          countMap[normalizedSubject] = (countMap[normalizedSubject] || 0) + 1;
+        });
+        return countMap;
+      }
+
+      // 実績に未振替の休みを足す（0以下でも消さない applyCountAdjustments とは別物。足すだけ）。
+      function addCountMaps(baseMap, addedMap) {
+        const next = { ...(baseMap || {}) };
+        Object.entries(addedMap || {}).forEach(([subject, value]) => {
+          const added = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
+          if (added <= 0) return;
+          next[subject] = (next[subject] || 0) + added;
+        });
+        return next;
+      }
+
       function applyCountAdjustments(countMap, adjustmentMap) {
         const next = { ...(countMap || {}) };
         Object.entries(adjustmentMap || {}).forEach(([subject, rawDelta]) => {
@@ -5614,7 +5679,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           plannedRegularCounts[entry.subject] = (plannedRegularCounts[entry.subject] || 0) + 1;
         });
         const visibleRegularCounts = normalizeCountMapSubjects(subjectCounts, student, startDate);
-        const visiblePlannedRegularCounts = applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments);
+        // 【移行中・INV-05】通常の予定数: 新方式＝実績＋未振替の休み（盤面だけが根拠）／旧方式＝テンプレ由来±表示調整。
+        // ★新方式では通常側の表示調整(regularCountAdjustments)を**読み捨てる**。本番に残る既存の−1を
+        //   そのまま効かせると、盤面から消えた分と二重に引かれる（消さずに読み捨てるのが仕様）。
+        const visiblePlannedRegularCounts = DATA.boardBasedPlannedCountEnabled
+          ? addCountMaps(visibleRegularCounts, buildOutstandingAbsenceCountMap(student, startDate, endDate))
+          : applyCountAdjustments(normalizeCountMapSubjects(plannedRegularCounts, student, startDate), regularCountAdjustments);
         const visibleLectureCounts = normalizeCountMapSubjects(lectureCounts, student, startDate);
         const visibleDesiredLectureCounts = applyCountAdjustments(normalizeCountMapSubjects(desiredLectureCounts, student, startDate), lectureCountAdjustments);
         // spec-group-lesson §D: 中3参加者のみ 集理/集社 を講習回数表に注入(表示期間内・希望=コマ数/実績=出席数)。
