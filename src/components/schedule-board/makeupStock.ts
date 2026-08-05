@@ -415,6 +415,75 @@ export function parseOriginSlotNumberFromLabel(label?: string) {
   return matched ? Number(matched[1]) : null
 }
 
+/**
+ * 「まだ振替コマが組まれていない休み」を 生徒×科目 ごとに算出する（盤面だけが根拠）。
+ *
+ * 生徒日程表の通常回数の括弧内（要実施数）＝ その期間の実績 ＋ その期間に属する未振替の休み、に使う。
+ * オーナー確定の仕様（2026-08-05）「出欠記録が無ければ左と括弧は必ず一致する／休んで振替がまだなら
+ * その分だけ括弧が多い／振替を表示期間外へ置いたら元の期間の括弧からも減る」を満たすための土台。
+ *
+ * ★**未消化在庫の台帳（manualMakeupAdjustments）も「今日」も学年度も使わない。**
+ *   在庫は (a) 休日設定・格納・削除など由来の違うものが同じ器に混ざり区別できない、
+ *   (b) `today = new Date()` と `resolveOperationalSchoolYear` に依存して増減する、
+ *   (c) テンプレを曜日展開しただけで盤面に一度も存在しないコマを含む——の3点があり、
+ *   これを括弧内の根拠にすると「操作していないのに日付が変わるだけで過去月が動く」
+ *   「出欠を1件も付けていない生徒に警告が出る」が起きる（2026-08-05 の設計検証で確認）。
+ *
+ * 算出は多重集合の1対1消化で、既存の在庫算出と**同じ2段消化**（`consumeMatchingOriginTokens`）を共有する。
+ *   義務(owed)   … status='absent' の記録。振無休(absent-no-makeup)は実績に数えるので義務にしない。
+ *                   トークンは「元の通常授業日」＝ makeupSourceDate があればそれ、無ければそのコマの日付。
+ *   消化(settled)… makeupSourceDate を持つコマ。**未出欠(studentSlots)と出欠済み(statusSlots)の両方を走査**する。
+ *                   ★片方だけだと出席を付けた瞬間に消化が消え、振替済みの休みが未振替へ復活する
+ *                     （INV-06 で繰り返し踏んでいる「両走査」規則と同じ）。
+ *                   status='moved'（移動元マーカー）は移動先のコマが会計を持つので数えない。
+ *                   休み(absent)の振替コマは**消化に数える**（同時に義務も1件立つので差し引き1件残る＝
+ *                   「振替したがまた休んだ」を二重に数えないための要）。
+ *   講習(special)と体験(trial)は対象外（講習の括弧内は提出データが正本・体験は日程表に載らない）。
+ */
+export function computeOutstandingAbsenceOrigins(params: {
+  weeks: SlotCell[][]
+  resolveStudentKey: (entry: Pick<StudentEntry, 'managedStudentId' | 'name'>) => string
+}): Record<string, string[]> {
+  const owed: OriginMap = {}
+  const settled: OriginMap = {}
+  const isCountedLessonType = (lessonType?: string | null) => lessonType !== 'special' && lessonType !== 'trial'
+
+  for (const week of params.weeks) {
+    for (const cell of week) {
+      for (const desk of cell.desks) {
+        for (const student of desk.lesson?.studentSlots ?? []) {
+          if (!student || !isCountedLessonType(student.lessonType) || !student.makeupSourceDate) continue
+          const key = buildMakeupStockKey(params.resolveStudentKey(student), student.subject)
+          pushOrigin(settled, key, buildOriginToken(student.makeupSourceDate, parseOriginSlotNumberFromLabel(student.makeupSourceLabel)))
+        }
+
+        for (const statusEntry of desk.statusSlots ?? []) {
+          if (!statusEntry || !isCountedLessonType(statusEntry.lessonType) || statusEntry.status === 'moved') continue
+          const key = buildMakeupStockKey(params.resolveStudentKey(statusEntry), statusEntry.subject)
+
+          if (statusEntry.makeupSourceDate) {
+            pushOrigin(settled, key, buildOriginToken(statusEntry.makeupSourceDate, parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel)))
+          }
+
+          if (statusEntry.status !== 'absent') continue
+          const originToken = statusEntry.makeupSourceDate
+            ? buildOriginToken(statusEntry.makeupSourceDate, parseOriginSlotNumberFromLabel(statusEntry.makeupSourceLabel))
+            : buildOriginToken(cell.dateKey, cell.slotNumber)
+          pushOrigin(owed, key, originToken)
+        }
+      }
+    }
+  }
+
+  const outstanding: OriginMap = {}
+  for (const [key, tokens] of Object.entries(owed)) {
+    const remaining = consumeMatchingOriginTokens(tokens, settled[key] ?? [])
+    if (remaining.length > 0) outstanding[key] = remaining
+  }
+
+  return outstanding
+}
+
 // INV-06（未消化振替の消滅・2026-07-31 緑が丘校 報告）:
 //
 // 通常授業を別日へ「移動」しただけの振替コマは、台帳（自動休校日 / 同時間帯重複 / 手動調整）に
@@ -694,19 +763,27 @@ function computeScheduleConflictOrigins(
 // 完全一致（日付＋時限）を最優先し、一致しなければ**同じ日付の最初の origin** を消化する。
 // 後者は「配置コマの振替元ラベルから時限が取れない（旧データ）」「時限が食い違う」ケースの受け皿で、
 // これが無いと消化済みの振替が未消化として再出現する（誤増）。
-function consumeOriginDates(originDates: string[], usedOriginDates: string[], usedCount: number) {
-  const remaining = [...originDates]
+// ★1件の使用が1件の origin だけを消す（多重集合の1対1消化）。ここを「同日ぜんぶ消す」に変えると、
+//   同じ日に同じ科目が2コマある構成で1件の振替が2件を消し、未消化が過少になる。
+export function consumeMatchingOriginTokens(originTokens: string[], usedTokens: string[]) {
+  const remaining = [...originTokens]
 
-  for (const usedOriginDate of usedOriginDates) {
-    let index = remaining.indexOf(usedOriginDate)
+  for (const usedToken of usedTokens) {
+    let index = remaining.indexOf(usedToken)
     if (index < 0) {
-      const usedDateKey = originTokenDateKey(usedOriginDate)
+      const usedDateKey = originTokenDateKey(usedToken)
       index = remaining.findIndex((token) => originTokenDateKey(token) === usedDateKey)
     }
     if (index >= 0) {
       remaining.splice(index, 1)
     }
   }
+
+  return remaining
+}
+
+function consumeOriginDates(originDates: string[], usedOriginDates: string[], usedCount: number) {
+  const remaining = consumeMatchingOriginTokens(originDates, usedOriginDates)
 
   let unassignedUseCount = Math.max(0, usedCount - usedOriginDates.length)
   while (unassignedUseCount > 0 && remaining.length > 0) {

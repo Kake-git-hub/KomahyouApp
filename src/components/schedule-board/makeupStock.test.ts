@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
-import type { SlotCell, StudentEntry } from './types'
-import { buildMakeupStockEntries, computeAutomaticShortageOrigins, countPlannedMakeupsByKey } from './makeupStock'
+import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import { buildMakeupStockEntries, computeAutomaticShortageOrigins, computeOutstandingAbsenceOrigins, countPlannedMakeupsByKey } from './makeupStock'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -1201,5 +1201,158 @@ describe('makeupStock', () => {
     // The holiday shortage on 4/7 is consumed by absent-no-makeup → balance 0
     const match = entries.find((e) => e.key === 'student-1__数')
     expect(match).toBeUndefined()
+  })
+})
+// ============================================================================
+// computeOutstandingAbsenceOrigins（オーナー確定 2026-08-05・生徒日程表の括弧内を盤面ベースへ）
+//
+// 「まだ振替コマが組まれていない休み」を盤面だけから算出する。生徒日程表の通常回数の括弧内
+// （要実施数）＝ その期間の実績 ＋ その期間の未振替の休み、に使う土台。
+// ★在庫台帳・「今日」・学年度に依存しないことがこの関数の存在意義（在庫を根拠にすると
+//   操作していないのに過去月が動き、出欠を付けていない生徒に警告が出る）。
+// ============================================================================
+describe('computeOutstandingAbsenceOrigins', () => {
+  const resolveStudentKey = (entry: { managedStudentId?: string; name: string }) => entry.managedStudentId ?? entry.name
+
+  function absentStatus(overrides: Partial<StudentStatusEntry> = {}): StudentStatusEntry {
+    return {
+      id: 'status-1',
+      studentId: 'student-1',
+      sourceManagedLesson: true,
+      name: '山田',
+      managedStudentId: 'student-1',
+      grade: '中1',
+      subject: '数',
+      lessonType: 'regular',
+      teacherType: 'normal',
+      teacherName: '田中講師',
+      dateKey: '2026-07-01',
+      slotNumber: 1,
+      recordedAt: '2026-07-01T00:00:00.000Z',
+      status: 'absent',
+      sourceLessonId: 'lesson-1',
+      ...overrides,
+    }
+  }
+
+  function cellWith(dateKey: string, slotNumber: number, desk: Partial<SlotCell['desks'][number]>): SlotCell {
+    return {
+      id: `${dateKey}_${slotNumber}`,
+      dateKey,
+      dayLabel: '火',
+      dateLabel: dateKey.slice(5),
+      slotLabel: `${slotNumber}限`,
+      slotNumber,
+      timeLabel: '17:00-18:20',
+      isOpenDay: true,
+      desks: [{ id: `${dateKey}_${slotNumber}_desk_1`, teacher: '田中講師', ...desk }],
+    }
+  }
+
+  const run = (weeks: SlotCell[][]) => computeOutstandingAbsenceOrigins({ weeks, resolveStudentKey })
+
+  it('出欠記録がなければ未振替は0件（＝左と括弧が必ず一致する土台）', () => {
+    const weeks = [[cellWith('2026-07-01', 1, {
+      lesson: { id: 'l1', studentSlots: [createStudentEntry({ lessonType: 'regular' }), null] },
+    })]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  it('休んで振替がまだなら1件残る', () => {
+    const weeks = [[cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] })]]
+    expect(run(weeks)).toEqual({ 'student-1__数': ['2026-07-01#1'] })
+  })
+
+  it('振替コマを置くと消化されて0件になる（表示期間の内外を問わず盤面全体で相殺する）', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] }),
+      // 表示期間の外（8月）に置いた振替でも消化する＝元の月の括弧からも減る（オーナー確定）
+      cellWith('2026-08-05', 3, {
+        lesson: { id: 'l2', studentSlots: [createStudentEntry({ lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限' }), null] },
+      }),
+    ]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  // ★両走査規則。studentSlots だけ走査すると出席を付けた瞬間に消化が消え、振替済みの休みが復活する。
+  it('振替コマに出席を付けても消化のまま（statusSlots も走査する）', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] }),
+      cellWith('2026-07-08', 2, {
+        statusSlots: [absentStatus({
+          id: 'status-2', dateKey: '2026-07-08', slotNumber: 2, status: 'attended',
+          lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限',
+        }), null],
+      }),
+    ]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  it('振替コマをまた休むと1件だけ残る（元の休みと二重に数えない）', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] }),
+      cellWith('2026-07-08', 2, {
+        statusSlots: [absentStatus({
+          id: 'status-2', dateKey: '2026-07-08', slotNumber: 2,
+          lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限',
+        }), null],
+      }),
+    ]]
+    expect(run(weeks)['student-1__数']).toHaveLength(1)
+  })
+
+  it('振無休(absent-no-makeup)は実績に数えるので義務にしない', () => {
+    const weeks = [[cellWith('2026-07-01', 1, { statusSlots: [absentStatus({ status: 'absent-no-makeup' }), null] })]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  it('移動元マーカー(moved)は義務にも消化にも数えない（移動先のコマが会計を持つ）', () => {
+    const weeks = [[cellWith('2026-07-01', 1, { statusSlots: [absentStatus({ status: 'moved' }), null] })]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  // ★多重集合。同日を1件に潰すと、2コマ休んで1コマ振替した状態が「振替済み」に化ける。
+  it('同じ日に同じ科目を2コマ休むと2件残る（1件の振替では1件しか消えない）', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] }),
+      cellWith('2026-07-01', 2, { statusSlots: [absentStatus({ id: 'status-2', slotNumber: 2 }), null] }),
+    ]]
+    expect(run(weeks)['student-1__数']).toHaveLength(2)
+
+    const withOneMakeup = [[
+      ...weeks[0],
+      cellWith('2026-07-08', 5, {
+        lesson: { id: 'l2', studentSlots: [createStudentEntry({ lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限' }), null] },
+      }),
+    ]]
+    expect(run(withOneMakeup)['student-1__数']).toHaveLength(1)
+  })
+
+  // 2段消化の受け皿。時限が取れない旧データでも同じ日付で1件消化する（消えないと未振替が過剰に残る）。
+  it('振替元ラベルから時限が取れない旧データは同じ日付で消化する', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] }),
+      cellWith('2026-07-08', 5, {
+        lesson: { id: 'l2', studentSlots: [createStudentEntry({ lessonType: 'makeup', makeupSourceDate: '2026-07-01' }), null] },
+      }),
+    ]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  it('講習と体験の休みは通常側の未振替に流れ込まない', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus({ lessonType: 'special', specialSessionId: 'sess-1' }), null] }),
+      cellWith('2026-07-02', 1, { statusSlots: [absentStatus({ id: 'status-3', lessonType: 'trial' }), null] }),
+    ]]
+    expect(run(weeks)).toEqual({})
+  })
+
+  it('生徒と科目ごとに分けて数える', () => {
+    const weeks = [[
+      cellWith('2026-07-01', 1, { statusSlots: [absentStatus(), null] }),
+      cellWith('2026-07-02', 1, { statusSlots: [absentStatus({ id: 'status-2', subject: '英' }), null] }),
+      cellWith('2026-07-03', 1, { statusSlots: [absentStatus({ id: 'status-3', managedStudentId: 'student-2', studentId: 'student-2' }), null] }),
+    ]]
+    expect(Object.keys(run(weeks)).sort()).toEqual(['student-1__数', 'student-1__英', 'student-2__数'])
   })
 })
