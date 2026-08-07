@@ -3011,6 +3011,16 @@ export function buildScheduleCellsForRange(params: {
   return overlayBoardWeeksOnScheduleCells(managedCells, params.boardWeeks, params.suppressedRegularLessonOccurrences ?? [])
 }
 
+// 出欠を記録済みの机は「実績が入った机」＝ユーザー操作の結果であり、空き机ではない。
+// 下の再付与ループが空き机として奪うと、statusSlots は机に残ったまま teacher だけテンプレ足場講師へ
+// 差し替わり、講師日程表で帰属が入れ替わる（元講師のコマは空白／テンプレ講師のページに他人の生徒）。
+// 実測(2026-08-07 本番): 緑が丘 8/6 4限 加藤→井上 ほか本番3教室で15件。INV-01 の3例目の経路。
+// mergeManagedWeek 冒頭の hasRecordedStatus（記録があれば teacher を消さない保護）と対称に、
+// consumedManagedTeacherIndexes と targetDesk 選定でも必ず除外する。
+function hasRecordedStatusSlots(desk: Pick<DeskCell, 'statusSlots'>) {
+  return desk.statusSlots?.some((entry) => entry != null) ?? false
+}
+
 function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], originalManagedWeek?: SlotCell[]) {
   const managedCellById = new Map(managedWeek.map((cell) => [cell.id, cell]))
   const originalManagedCellById = originalManagedWeek
@@ -3059,7 +3069,7 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
     const nextDesks = cell.desks.map((desk, deskIndex) => {
       const lesson = desk.lesson
       if (!lesson || !isManagedLesson(lesson)) {
-        const hasRecordedStatus = desk.statusSlots?.some((s) => s != null) ?? false
+        const hasRecordedStatus = hasRecordedStatusSlots(desk)
         return {
           ...desk,
           statusSlots: cloneStatusSlots(desk.statusSlots),
@@ -3187,8 +3197,10 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
       if (managedDesk.lesson || !managedDesk.teacher.trim()) return
       const boardDesk = nextDesks[idx]
       if (!boardDesk) return
-      // If the board desk now has a lesson, the teacher slot is consumed
-      if (boardDesk.lesson) {
+      // If the board desk now has a lesson, the teacher slot is consumed.
+      // 出欠記録だけが残る机も同様に「埋まっている」扱い（授業レコードが無くても実績が入っている）。
+      // ここを漏らすとテンプレ足場講師が別の机へ湧き、盤面に無い講師が日程表にだけ出る。
+      if (boardDesk.lesson || hasRecordedStatusSlots(boardDesk)) {
         consumedManagedTeacherIndexes.add(idx)
         return
       }
@@ -3219,8 +3231,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
         // Skip if this teacher was explicitly deleted from any desk in the cell
         if (deletedTeacherNameSet.has(managedDesk.teacher)) continue
 
-        const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
-          ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
+        // 出欠記録のある机は実績が入った机なので奪わない（hasRecordedStatusSlots の説明を参照・INV-01）。
+        const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
+          ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
 
         if (!targetDesk) continue
 
@@ -3235,8 +3248,9 @@ function mergeManagedWeek(currentWeek: SlotCell[], managedWeek: SlotCell[], orig
 
       if (preservedLessonIds.has(managedDesk.lesson.id)) continue
 
-      const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher)
-        ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher)
+      // 同上: 出欠記録のある机はテンプレ授業の置き場にしない（記録だけ残して講師が入れ替わるため）。
+      const targetDesk = nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !desk.teacher && !hasRecordedStatusSlots(desk))
+        ?? nextDesks.find((desk) => !desk.lesson && !desk.manualTeacher && !hasRecordedStatusSlots(desk))
 
       if (!targetDesk) continue
 
@@ -3288,10 +3302,13 @@ function isDeletedTeacherTombstone(desk: DeskCell) {
   return !desk.lesson && Boolean(desk.manualTeacher) && desk.teacherAssignmentSource === 'deleted'
 }
 
+// 兄弟監査(2026-08-07・INV-01): 出欠を記録済みの机は「講師だけの机」ではない。
+// lesson が無くても statusSlots に実績が入っており、詰め直しで講師名だけ別の机へ動かすと
+// 記録はその場に残って別講師の実績になる(盤面そのものが壊れる)。tombstone と同じ扱いで固定する。
 export function repackTeacherOnlyDesks(desks: DeskCell[]) {
   const teacherOnlyDesks = desks
     // tombstone(teacher='')は teacher.trim() が空なので元々ここには入らないが、意図を明示して除外する。
-    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && desk.teacher.trim())
+    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && desk.teacher.trim())
     .map((desk) => ({
       teacher: desk.teacher,
       manualTeacher: Boolean(desk.manualTeacher),
@@ -3304,6 +3321,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[]) {
     if (desk.lesson) return desk
     // 削除tombstone は詰め直しでクリアせず、その机にそのまま残す(手動編集の永続化)。
     if (isDeletedTeacherTombstone(desk)) return desk
+    // 出欠記録のある机も同様に据え置く(講師を剥がすと記録だけが講師なしで残る)。
+    if (hasRecordedStatusSlots(desk)) return desk
     return {
       ...desk,
       teacher: '',
@@ -3319,6 +3338,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[]) {
     if (nextDesks[deskIndex]?.lesson) continue
     // 削除tombstone の机は上書きしない(講師名ゼロ詰めの入れ先にしない)。
     if (isDeletedTeacherTombstone(nextDesks[deskIndex])) continue
+    // 出欠記録のある机も入れ先にしない(記録済みの実績が別講師のものになる)。
+    if (hasRecordedStatusSlots(nextDesks[deskIndex])) continue
     const teacherOnlyDesk = teacherOnlyDesks[teacherOnlyIndex]
     if (!teacherOnlyDesk) break
     nextDesks[deskIndex] = {
@@ -3738,15 +3759,16 @@ function autoAssignTeacherToSpecialSession(params: {
       // 削除tombstone(teacher='' だが source='deleted'=室長が意図的に消した机)は「空き机」ではない。
       // 空き机としてカウント/配置先に選ぶと、講習の自動割当が tombstone を上書きして削除記録を壊し、
       // 次の再マージで削除した講師が赤く復活する(回帰防止 2026-07-10。repack だけでなくこの経路も塞ぐ)。
-      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk)).length
+      // 出欠記録のある机も「空き机」ではない(講習の自動割当が講師を上書きすると実績の帰属が変わる)。
+      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk)).length
       if (teacherOnlyDesks.length >= emptyDeskCount) {
         skippedFullCellCount += 1
         continue
       }
 
       const nextDesks = cell.desks.map((desk) => ({ ...desk }))
-      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk))
-        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk))
+      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk))
+        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk))
       if (!candidateDesk) {
         skippedFullCellCount += 1
         continue

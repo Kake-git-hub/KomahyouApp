@@ -489,6 +489,19 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(packed[0]?.lesson?.studentSlots[1]?.name).toBe('右側生徒')
     })
 
+    // 兄弟監査(2026-08-07・INV-01 の実障害から): 詰め直しは「lesson の無い机＝講師だけの机」と
+    // みなして講師名を左へ寄せるが、出欠記録のある机を巻き込むと statusSlots はその場に残り、
+    // 実績だけが別講師（または講師なし）のものになる。盤面そのものが壊れるため据え置く。
+    it('×詰め直し(repack): 出席実績のある机の講師は他の机へ寄せられない', () => {
+      const out = repackTeacherOnlyDesks([
+        createDesk({ id: 'b-0' }),
+        createDesk({ id: 'b-1', teacher: '講師A', statusSlots: [createAttendedStatus(), null] }),
+      ])
+      expect(out[1].teacher).toBe('講師A')
+      expect(out[1].statusSlots?.[0]?.status).toBe('attended')
+      expect(out[0].teacher).toBe('')
+    })
+
     it('×テンプレ再マージ: 記録した出席実績は再マージで消えない（講師名も保持される）', () => {
       const board = boardWithAttendance()
       const [merged] = overlayBoardWeeksOnScheduleCells([silentManagedCell(board)], [[board]])
