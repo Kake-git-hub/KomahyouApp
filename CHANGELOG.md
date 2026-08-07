@@ -17,6 +17,9 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix(INV-01): 講師日程表で「出欠を記録した机」のコマが空白になり、テンプレ足場講師のページに他人の生徒が出る不具合を修正(報告: 緑が丘校 8/6 4限 加藤先生)。`mergeManagedWeek` の再付与ループが `lesson` の無い机を一律「空き机」とみなし、`statusSlots` に実績が入った机の `teacher` をテンプレ講師で上書きしていた。`hasRecordedStatusSlots` を追加し、`consumedManagedTeacherIndexes` と `targetDesk` 選定の両方で除外(src/components/schedule-board/ScheduleBoardScreen.tsx)。本番実測: 日大前 12 件・緑が丘 3 件 → 修正後 0 件
+- fix(INV-01, INV-02): 兄弟監査で見つかった盤面側の同型ルートも修正。`repackTeacherOnlyDesks` の詰め直しと講習の講師自動割当の空き机判定が、出欠記録のある机を「講師だけの机」として講師名を移動/上書きしていた(記録はその場に残り別講師の実績になる)。削除 tombstone と同じ扱いで据え置く
+- test(INV-01, INV-02): 回帰防止テスト4件を追加(`inv01-teacher-attribution.matrix.test.ts` に「出欠記録のみの机」操作行3件、`inv02-manual-edit-persistence.matrix.test.ts` の出欠入力行に ×詰め直し(repack) 1件)。いずれも修正なしで落ち・修正ありで通ることをミューテーションで確認
 
 ## v1.5.470 (2026-08-05)
 

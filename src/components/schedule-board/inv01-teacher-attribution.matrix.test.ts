@@ -598,3 +598,88 @@ describe('INV-01 マトリクス: 生徒swap — 生徒2人を入れ替え', () 
     expect(namesY).not.toContain('青木')
   })
 })
+
+// ============================================================================
+// 操作6: 出欠記録のみの机 — 授業レコード(lesson)は無いが statusSlots に出欠が入った机。
+//   実障害(2026-08-07 緑が丘校 8/6 4限): 加藤先生の机が日程表の再マージで「空き机」と
+//   みなされ、テンプレ足場講師(井上)に teacher を上書きされた。statusSlots は机に残るため、
+//   加藤のページは空白／井上のページに他人の生徒が出る、という INV-01 の3例目の経路。
+//   本番実測: 日大前12件・緑が丘3件（修正後 0 件）。
+//
+//   再現条件: 「講師が空でテンプレ足場でもない机」が1つも無い(=第1候補の find が空振り)コマで、
+//   第2候補 find(!lesson && !manualTeacher) が出欠記録だけの机を掴む。
+// ============================================================================
+describe('INV-01 マトリクス: 出欠記録のみの机 — テンプレ足場講師に奪われない', () => {
+  // 机2つだけの教室。desk0=山本(テンプレ足場=非manual・出欠記録あり) / desk1=田中(manual)で埋める。
+  const twoDeskSettings: ClassroomSettings = { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 2 }
+  // テンプレは Fri5 に「生徒のいない落合の机」(足場講師)だけを生む。
+  const scaffoldOnlyLessons: RegularLessonRow[] = [
+    createRegularLesson({ id: 'r-ochiai-scaffold', teacherId: 't_ochiai', student1Id: '', subject1: '' }),
+  ]
+
+  const buildBoard = (): SlotCell[][] => ([[
+    {
+      id: CELL_ID,
+      dateKey: FRI,
+      dayLabel: '金',
+      dateLabel: '7/24',
+      slotLabel: '5限',
+      slotNumber: 5,
+      timeLabel: '19:40-21:10',
+      isOpenDay: true,
+      desks: [
+        // 山本の机で青木の出席を記録済み。授業レコード(lesson)は持たない(実障害と同じ形)。
+        {
+          id: `${CELL_ID}_desk_1`,
+          teacher: '山本',
+          manualTeacher: false,
+          teacherAssignmentTeacherId: 't_yamamoto',
+          statusSlots: [
+            { id: 'st-aoki', name: '青木', managedStudentId: 'student-aoki', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal', status: 'attended', teacherName: '山本' },
+            null,
+          ],
+        },
+        // 第1候補(講師が空・非manual)の机を残さないための埋め机。
+        { id: `${CELL_ID}_desk_2`, teacher: '田中', manualTeacher: true, teacherAssignmentTeacherId: 'teacher-1' },
+      ],
+    } as unknown as SlotCell,
+  ]])
+
+  const merge = (boardWeeks: SlotCell[][]) => buildScheduleCellsForRange({
+    range: RANGE,
+    fallbackStartDate: RANGE.startDate,
+    fallbackEndDate: RANGE.endDate,
+    classroomSettings: twoDeskSettings,
+    teachers: allTeachers,
+    students: allStudents,
+    regularLessons: scaffoldOnlyLessons,
+    boardWeeks,
+    suppressedRegularLessonOccurrences: [],
+  })
+
+  it('テンプレ再マージ後: 出欠を記録した机の講師(山本)が足場講師(落合)に差し替わらない', () => {
+    const merged = merge(buildBoard())
+    const cell = merged.find((c) => c.dateKey === FRI && c.slotNumber === 5)
+    const statusDesk = cell?.desks.find((desk) => (desk.statusSlots ?? []).some((s) => s?.name === '青木'))
+    expect(statusDesk).toBeDefined()
+    // 修正前はここが '落合'(テンプレ足場講師)に上書きされていた。
+    expect(statusDesk?.teacher).toBe('山本')
+    // 注: 非manual机の teacherAssignmentTeacherId は再マージで落ちる（INV-02 のテンプレ追従仕様・
+    // 本修正の対象外）。帰属は payload の teacher.name(=displayName) 照合で成立する。
+  })
+
+  it('テンプレ再マージ後: 盤面に無い足場講師が別の机へ湧かない', () => {
+    const merged = merge(buildBoard())
+    const cell = merged.find((c) => c.dateKey === FRI && c.slotNumber === 5)
+    // 出欠記録のある机は「埋まっている」ので、その index のテンプレ足場講師は消費済み扱いになる。
+    expect(cell?.desks.filter((desk) => desk.teacher === '落合')).toHaveLength(0)
+  })
+
+  it('保存→再読込相当(serialize往復): 青木は山本のページにのみ出て、落合のページには出ない', () => {
+    const merged = merge(buildBoard())
+    const namesX = serializedTeacherStudentNames(merged, asTeacherKey(teacherX), { regularLessons: scaffoldOnlyLessons })
+    const namesY = serializedTeacherStudentNames(merged, asTeacherKey(teacherY), { regularLessons: scaffoldOnlyLessons })
+    expect(namesY).toEqual(['青木'])
+    expect(namesX).not.toContain('青木')
+  })
+})

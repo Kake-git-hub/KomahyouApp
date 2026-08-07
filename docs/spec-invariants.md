@@ -120,6 +120,12 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   - **v1.5.436** / `09724e6` / 2026-07-11 … 講師 D&D の入替（swap）。テンプレ配置由来で
     `teacherAssignmentTeacherId` を持たない机同士の swap では生徒が動かず v1.5.388 のガードが不発火。
     `computeTeacherMove` が着地机の講師名→ID を補完して修正。
+  - **2026-08-07** … **出欠記録だけが残る机**（`lesson` 無し・`statusSlots` あり）が「空き机」と判定され、
+    テンプレ足場講師に `teacher` を上書きされた。記録は机に残るため、元講師のコマは空白／テンプレ講師の
+    ページに他人の生徒が出る（報告: 緑が丘校 8/6 4限 加藤→井上。本番実測 日大前 12 件・緑が丘 3 件）。
+    `mergeManagedWeek` の再付与ループ（`consumedManagedTeacherIndexes` と `targetDesk` 選定）に
+    `hasRecordedStatusSlots` を追加して修正。**兄弟監査で盤面側の同型ルート**
+    （`repackTeacherOnlyDesks` の詰め直し／講習の講師自動割当の空き机判定）も同時に塞いだ。
 - **マトリクステストファイル**：`src/components/schedule-board/inv01-teacher-attribution.matrix.test.ts`
   （**実装済み・17 テスト**。操作＝配置(新規)/移動/入替(講師swap)/席まるごと入替(seat swap)/削除(講師)/
   生徒swap × 確認点＝直後/テンプレ再マージ後/serialize 往復）。
