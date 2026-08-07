@@ -77,6 +77,19 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Student schedule: derive the regular planned count from the board (actual + outstanding absences) instead of template-derived occurrences.',
   },
+  // 【移行中・INV-01/INV-02】生徒/講師日程表を「盤面そのまま」で描く。オーナー確定 2026-08-07。
+  // 現状の日程表は buildScheduleCellsForRange で通常授業テンプレを読み直し、盤面を上から重ねて
+  // 作り直している。この作り直しが盤面と日程表がズレる唯一の発生源で、v1.5.471 の
+  // 「出欠記録のある机がテンプレ足場講師に奪われる」不具合もここで起きた。
+  // ★テンプレの二度読みである点が要点: 日程表へ渡す盤面は ensureWeeksCoverDateRange が
+  //   未生成週をテンプレから生成済みなので、再マージを外しても未来週が空白になることはない。
+  // ★有効時の唯一の体感差: 基本データ(通常授業テンプレ)を直しても、盤面を開いて反映するまで
+  //   日程表に出なくなる(＝日程表は常に盤面の写しになる)。
+  // 開発用教室で実機確認 → 問題無ければ全教室へ昇格する(オーナー確定の段階導入)。
+  boardOnlyScheduleCells: {
+    scope: 'development-only',
+    description: 'Student/teacher schedule: render the board as-is instead of re-merging the regular-lesson template over it.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

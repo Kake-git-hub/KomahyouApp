@@ -3005,7 +3005,15 @@ export function buildScheduleCellsForRange(params: {
   regularLessons: RegularLessonRow[]
   boardWeeks: SlotCell[][]
   suppressedRegularLessonOccurrences?: string[]
+  // 【移行中・オーナー確定 2026-08-07】true で通常授業テンプレの再マージを行わず、盤面をそのまま返す。
+  // 段階導入フラグ featureRollout.boardOnlyScheduleCells(現在は開発用教室のみ)から渡す。
+  // 呼び出し側は必ず ensureWeeksCoverDateRange 済みの boardWeeks を渡すこと(未生成週はそこで
+  // テンプレから生成されるため、再マージを外しても未来週が空白にならない前提が崩れる)。
+  boardOnly?: boolean
 }) {
+  // 盤面をそのまま描く = 盤面と日程表がズレる余地が構造的に無くなる。
+  if (params.boardOnly) return params.boardWeeks.flat().map((cell) => cloneSlotCell(cell))
+
   const managedCells = buildBaseManagedScheduleCellsForRange(params)
 
   return overlayBoardWeeksOnScheduleCells(managedCells, params.boardWeeks, params.suppressedRegularLessonOccurrences ?? [])
@@ -4796,6 +4804,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   // 【移行中・INV-05】通常の予定数を盤面ベース（実績＋未振替の休み）で出すか。開発用教室から段階導入。
   const boardBasedPlannedCountEnabled = isFeatureEnabledForClassroom('boardBasedPlannedCount', { name: classroomName })
+  // 【移行中・INV-01/INV-02】日程表を盤面そのままで描く(テンプレ再マージを行わない)。開発用教室から段階導入。
+  const scheduleBoardOnlyEnabled = isFeatureEnabledForClassroom('boardOnlyScheduleCells', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
   // 講師の長押しD&D移動/入れ替え(同一コマ内限定)は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
@@ -6803,6 +6813,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         regularLessons,
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences,
+        boardOnly: scheduleBoardOnlyEnabled,
       }),
       students,
       teachers,
@@ -6860,8 +6871,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       regularLessons,
       boardWeeks: buildBoardWeeksForScheduleRange(effectiveStudentScheduleRange),
       suppressedRegularLessonOccurrences,
+      boardOnly: scheduleBoardOnlyEnabled,
     })
-  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveStudentScheduleRange, isStudentScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleBoardOnlyEnabled, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const teacherScheduleCells = useMemo(() => {
     if (!isTeacherScheduleOpen) return []
@@ -6875,8 +6887,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       regularLessons,
       boardWeeks: buildBoardWeeksForScheduleRange(effectiveTeacherScheduleRange),
       suppressedRegularLessonOccurrences,
+      boardOnly: scheduleBoardOnlyEnabled,
     })
-  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
+  }, [buildBoardWeeksForScheduleRange, classroomSettings, effectiveTeacherScheduleRange, isTeacherScheduleOpen, regularLessons, scheduleFallbackEndDate, scheduleBoardOnlyEnabled, scheduleFallbackStartDate, students, suppressedRegularLessonOccurrences, teachers])
 
   const studentScheduleTitle = useMemo(
     () => formatWeeklyScheduleTitle(effectiveStudentScheduleRange.startDate, effectiveStudentScheduleRange.endDate),
@@ -10117,6 +10130,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         regularLessons,
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences,
+        boardOnly: scheduleBoardOnlyEnabled,
       }),
       students,
       regularLessons,
@@ -10173,6 +10187,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         regularLessons,
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences,
+        boardOnly: scheduleBoardOnlyEnabled,
       }),
       teachers,
       students,

@@ -683,3 +683,105 @@ describe('INV-01 マトリクス: 出欠記録のみの机 — テンプレ足�
     expect(namesX).not.toContain('青木')
   })
 })
+
+// ============================================================================
+// 操作7: boardOnly（日程表を盤面そのままで描く・移行中フラグ boardOnlyScheduleCells）
+//   オーナー確定 2026-08-07:「必ず盤面と日程表がそろうようにして」。
+//   日程表は従来テンプレを読み直して盤面を重ね直しており、その作り直しが唯一のズレ発生源だった
+//   （操作6 の実障害／テンプレにだけ残る通常授業が日程表に湧く 等）。boardOnly=true では
+//   テンプレを読まず盤面をそのまま返すので、ズレる余地が構造的に無くなる。
+//   ※ 日程表へ渡す盤面は呼び出し側の ensureWeeksCoverDateRange が未生成週をテンプレから
+//     生成済みのため、再マージを外しても未来週が空白にならない（この前提を崩さないこと）。
+// ============================================================================
+describe('INV-01 マトリクス: boardOnly — 日程表が盤面と完全一致する', () => {
+  // 空き机を1つ残す(3机)。テンプレの授業が着地できる状態にして、従来挙動との差を見えるようにする。
+  const twoDeskSettings: ClassroomSettings = { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 3 }
+  // テンプレは Fri5 に「落合の足場講師」と「山本＋青木の通常授業」を生む（盤面には無い姿）。
+  const templateLessons: RegularLessonRow[] = [
+    createRegularLesson({ id: 'r-ochiai-scaffold', teacherId: 't_ochiai', student1Id: '', subject1: '' }),
+    createRegularLesson({ id: 'r-yamamoto-aoki-fri', teacherId: 't_yamamoto', student1Id: 'student-aoki', subject1: '数' }),
+  ]
+
+  // 盤面: 山本の机で井上の出席を記録済み（授業レコードは持たない）。青木も落合も盤面には居ない。
+  const buildBoard = (): SlotCell[][] => ([[
+    {
+      id: CELL_ID,
+      dateKey: FRI,
+      dayLabel: '金',
+      dateLabel: '7/24',
+      slotLabel: '5限',
+      slotNumber: 5,
+      timeLabel: '19:40-21:10',
+      isOpenDay: true,
+      desks: [
+        {
+          id: `${CELL_ID}_desk_1`,
+          teacher: '山本',
+          manualTeacher: false,
+          teacherAssignmentTeacherId: 't_yamamoto',
+          statusSlots: [
+            { id: 'st-inoue', name: '井上', managedStudentId: 'student-inoue', grade: '中2', subject: '英', lessonType: 'regular', teacherType: 'normal', status: 'attended', teacherName: '山本' },
+            null,
+          ],
+        },
+        { id: `${CELL_ID}_desk_2`, teacher: '田中', manualTeacher: true, teacherAssignmentTeacherId: 'teacher-1' },
+        { id: `${CELL_ID}_desk_3`, teacher: '', manualTeacher: false },
+      ],
+    } as unknown as SlotCell,
+  ]])
+
+  const merge = (boardWeeks: SlotCell[][], boardOnly: boolean) => buildScheduleCellsForRange({
+    range: RANGE,
+    fallbackStartDate: RANGE.startDate,
+    fallbackEndDate: RANGE.endDate,
+    classroomSettings: twoDeskSettings,
+    teachers: allTeachers,
+    students: allStudents,
+    regularLessons: templateLessons,
+    boardWeeks,
+    suppressedRegularLessonOccurrences: [],
+    boardOnly,
+  })
+
+  // 日程表に「出る」机だけを、講師＋人の組で取り出す（buildTeacherAssignments と同じ可視条件）。
+  const visibleSignatures = (cells: SlotCell[]) => cells
+    .filter((cell) => cell.dateKey === FRI && cell.slotNumber === 5)
+    .flatMap((cell) => cell.desks)
+    .filter((desk) => desk.teacher.trim() && (desk.lesson || (desk.statusSlots ?? []).some(Boolean)))
+    .map((desk) => [
+      desk.teacher,
+      ...(desk.lesson?.studentSlots ?? []).filter(Boolean).map((s) => s!.name),
+      ...(desk.statusSlots ?? []).filter(Boolean).map((s) => s!.name),
+    ].join('/'))
+    .sort()
+
+  it('boardOnly=false(従来): テンプレにしか無い青木の通常授業が日程表にだけ湧く', () => {
+    // 現行仕様の記録。これが「盤面に無いのに日程表に出る」の正体。
+    const merged = merge(buildBoard(), false)
+    expect(visibleSignatures(merged)).toContain('山本/青木')
+  })
+
+  it('boardOnly=true: 日程表に出る机が盤面と完全に一致する（湧かない・消えない）', () => {
+    const board = buildBoard()
+    const merged = merge(board, true)
+    expect(visibleSignatures(merged)).toEqual(visibleSignatures(board[0]))
+    expect(visibleSignatures(merged)).toEqual(['山本/井上'])
+  })
+
+  it('boardOnly=true: 出欠を記録した机の講師はテンプレ足場講師に置き換わらない', () => {
+    const merged = merge(buildBoard(), true)
+    const statusDesk = merged
+      .filter((cell) => cell.dateKey === FRI && cell.slotNumber === 5)
+      .flatMap((cell) => cell.desks)
+      .find((desk) => (desk.statusSlots ?? []).some((s) => s?.name === '井上'))
+    expect(statusDesk?.teacher).toBe('山本')
+    expect(statusDesk?.teacherAssignmentTeacherId).toBe('t_yamamoto')
+  })
+
+  it('boardOnly=true: 盤面を書き換えない（返り値はクローン）', () => {
+    const board = buildBoard()
+    const merged = merge(board, true)
+    merged[0].desks[0].teacher = '書き換え'
+    expect(board[0][0].desks[0].teacher).toBe('山本')
+  })
+})

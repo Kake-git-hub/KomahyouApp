@@ -64,3 +64,15 @@ describe('featureRollout', () => {
     expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
   })
 })
+
+describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのままで描く・移行中）', () => {
+  it('本番3教室では無効のまま、開発用教室でのみ有効', () => {
+    // オーナー確定 2026-08-07: まず開発用教室で実機確認し、問題無ければ全教室へ昇格する段階導入。
+    // 昇格するまで本番教室は従来どおりテンプレ再マージで日程表を作る。
+    expect(featureRolloutRegistry.boardOnlyScheduleCells.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(false)
+  })
+})

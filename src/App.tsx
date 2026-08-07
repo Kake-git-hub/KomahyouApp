@@ -3254,6 +3254,7 @@ function AuthenticatedApp() {
       regularLessons: displayRegularLessons,
       boardWeeks: sessionBoardWeeks,
       suppressedRegularLessonOccurrences: latestBoardStateForTokens?.suppressedRegularLessonOccurrences ?? [],
+      boardOnly: isFeatureEnabledForClassroom('boardOnlyScheduleCells', actingClassroom),
     })
     const lessonTypeLabels: Record<string, string> = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習' }
     const slotNumbers = Array.from(new Set(sessionCells.map((cell) => cell.slotNumber))).sort((left, right) => left - right)
@@ -3445,6 +3446,7 @@ function AuthenticatedApp() {
         regularLessons: displayRegularLessons,
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
+        boardOnly: isFeatureEnabledForClassroom('boardOnlyScheduleCells', actingClassroom),
       }),
       students,
       regularLessons: displayRegularLessons,
@@ -3492,6 +3494,7 @@ function AuthenticatedApp() {
         regularLessons: displayRegularLessons,
         boardWeeks: scheduleBoardWeeks,
         suppressedRegularLessonOccurrences: latestBoardState?.suppressedRegularLessonOccurrences ?? [],
+        boardOnly: isFeatureEnabledForClassroom('boardOnlyScheduleCells', actingClassroom),
       }),
       teachers,
       students,
