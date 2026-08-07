@@ -3005,8 +3005,8 @@ export function buildScheduleCellsForRange(params: {
   regularLessons: RegularLessonRow[]
   boardWeeks: SlotCell[][]
   suppressedRegularLessonOccurrences?: string[]
-  // 【移行中・オーナー確定 2026-08-07】true で通常授業テンプレの再マージを行わず、盤面をそのまま返す。
-  // 段階導入フラグ featureRollout.boardOnlyScheduleCells(現在は開発用教室のみ)から渡す。
+  // 【オーナー確定 2026-08-07・全教室】true で通常授業テンプレの再マージを行わず、盤面をそのまま返す。
+  // featureRollout.boardOnlyScheduleCells(all-classrooms)から渡す。false 経路はロールバック用に残す。
   // 呼び出し側は必ず ensureWeeksCoverDateRange 済みの boardWeeks を渡すこと(未生成週はそこで
   // テンプレから生成されるため、再マージを外しても未来週が空白にならない前提が崩れる)。
   boardOnly?: boolean
@@ -4804,7 +4804,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
   // 【移行中・INV-05】通常の予定数を盤面ベース（実績＋未振替の休み）で出すか。開発用教室から段階導入。
   const boardBasedPlannedCountEnabled = isFeatureEnabledForClassroom('boardBasedPlannedCount', { name: classroomName })
-  // 【移行中・INV-01/INV-02】日程表を盤面そのままで描く(テンプレ再マージを行わない)。開発用教室から段階導入。
+  // 【INV-01/INV-02】日程表を盤面そのままで描く(テンプレ再マージを行わない)。全教室で有効(2026-08-07)。
   const scheduleBoardOnlyEnabled = isFeatureEnabledForClassroom('boardOnlyScheduleCells', { name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
   const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })

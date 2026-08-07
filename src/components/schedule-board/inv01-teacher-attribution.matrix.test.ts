@@ -8,6 +8,7 @@ import {
   buildScheduleCellsForRange,
   computeStudentMove,
   computeTeacherMove,
+  ensureWeeksCoverDateRange,
   overlayBoardWeeksOnScheduleCells,
 } from './ScheduleBoardScreen'
 import { openTeacherScheduleHtml } from '../../utils/scheduleHtml'
@@ -685,8 +686,9 @@ describe('INV-01 マトリクス: 出欠記録のみの机 — テンプレ足�
 })
 
 // ============================================================================
-// 操作7: boardOnly（日程表を盤面そのままで描く・移行中フラグ boardOnlyScheduleCells）
-//   オーナー確定 2026-08-07:「必ず盤面と日程表がそろうようにして」。
+// 操作7: boardOnly（日程表を盤面そのままで描く・boardOnlyScheduleCells＝全教室で有効）
+//   オーナー確定 2026-08-07:「必ず盤面と日程表がそろうようにして」。開発用教室で先行(v1.5.472)後、
+//   同日オーナー確定で全教室へ昇格。「テンプレにだけ残る通常授業」は**盤面が正**で裁定済み。
 //   日程表は従来テンプレを読み直して盤面を重ね直しており、その作り直しが唯一のズレ発生源だった
 //   （操作6 の実障害／テンプレにだけ残る通常授業が日程表に湧く 等）。boardOnly=true では
 //   テンプレを読まず盤面をそのまま返すので、ズレる余地が構造的に無くなる。
@@ -755,8 +757,9 @@ describe('INV-01 マトリクス: boardOnly — 日程表が盤面と完全一�
     ].join('/'))
     .sort()
 
-  it('boardOnly=false(従来): テンプレにしか無い青木の通常授業が日程表にだけ湧く', () => {
-    // 現行仕様の記録。これが「盤面に無いのに日程表に出る」の正体。
+  it('boardOnly=false(旧経路・ロールバック用に保持): テンプレにしか無い青木の通常授業が日程表にだけ湧く', () => {
+    // 旧挙動の記録。これが「盤面に無いのに日程表に出る」の正体で、全教室昇格の理由。
+    // この経路は本番からは呼ばれない(フラグ all-classrooms)が、戻せるよう挙動を固定しておく。
     const merged = merge(buildBoard(), false)
     expect(visibleSignatures(merged)).toContain('山本/青木')
   })
@@ -783,5 +786,59 @@ describe('INV-01 マトリクス: boardOnly — 日程表が盤面と完全一�
     const merged = merge(board, true)
     merged[0].desks[0].teacher = '書き換え'
     expect(board[0][0].desks[0].teacher).toBe('山本')
+  })
+})
+
+// ============================================================================
+// 操作7-b: boardOnly の前提（この前提が崩れると未来週の日程表が空白になる）
+//   日程表へ渡す盤面は呼び出し側の ensureWeeksCoverDateRange が未生成週をテンプレから生成する。
+//   だからテンプレ再マージを外しても範囲内の日付が欠けない。ここを固定しておく。
+// ============================================================================
+describe('INV-01 マトリクス: boardOnly の前提 — 範囲内の日付が欠けない', () => {
+  it('盤面がまだ前の週しか持たなくても、範囲の週がテンプレから生成され日程表に載る', () => {
+    // 盤面は前週(7/13〜7/19)だけ。日程表の範囲(7/20〜7/26)は未生成 = 日程表を開くと初めて作られる。
+    const priorWeek = buildManagedScheduleCellsForRange({
+      range: { startDate: '2026-07-13', endDate: '2026-07-19', periodValue: '' },
+      fallbackStartDate: '2026-07-13',
+      fallbackEndDate: '2026-07-19',
+      classroomSettings,
+      teachers: allTeachers,
+      students: allStudents,
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+    const boardWeeks = ensureWeeksCoverDateRange({
+      weeks: [priorWeek],
+      startDate: RANGE.startDate,
+      endDate: RANGE.endDate,
+      classroomSettings,
+      teachers: allTeachers,
+      students: allStudents,
+      regularLessons,
+    }).weeks
+
+    const cells = buildScheduleCellsForRange({
+      range: RANGE,
+      fallbackStartDate: RANGE.startDate,
+      fallbackEndDate: RANGE.endDate,
+      classroomSettings,
+      teachers: allTeachers,
+      students: allStudents,
+      regularLessons,
+      boardWeeks,
+      suppressedRegularLessonOccurrences: [],
+      boardOnly: true,
+    })
+
+    // 開校日(月〜土。closedWeekdays=[0] なので日曜 7/26 は盤面にコマを持たない＝旧経路も同じ)。
+    const datesInRange = new Set(cells.filter((cell) => cell.dateKey >= RANGE.startDate && cell.dateKey <= RANGE.endDate).map((cell) => cell.dateKey))
+    for (const dateKey of ['2026-07-20', '2026-07-21', '2026-07-22', '2026-07-23', FRI, '2026-07-25']) {
+      expect(datesInRange.has(dateKey)).toBe(true)
+    }
+    // 範囲内の金5限に、テンプレ由来の通常授業（井上=落合 / 青木=山本）が生成時点で載っている。
+    const fridayCells = cells.filter((cell) => cell.dateKey === FRI)
+    expect(boardTeachersHoldingStudent(fridayCells, '井上')).toEqual(['落合'])
+    expect(boardTeachersHoldingStudent(fridayCells, '青木')).toEqual(['山本'])
   })
 })
