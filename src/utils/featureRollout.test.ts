@@ -65,14 +65,14 @@ describe('featureRollout', () => {
   })
 })
 
-describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのままで描く・移行中）', () => {
-  it('本番3教室では無効のまま、開発用教室でのみ有効', () => {
-    // オーナー確定 2026-08-07: まず開発用教室で実機確認し、問題無ければ全教室へ昇格する段階導入。
-    // 昇格するまで本番教室は従来どおりテンプレ再マージで日程表を作る。
-    expect(featureRolloutRegistry.boardOnlyScheduleCells.scope).toBe('development-only')
+describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのままで描く）', () => {
+  it('全教室で有効（盤面と日程表が構造的に一致する）', () => {
+    // 開発用教室で先行(v1.5.472)→ オーナー確定で全教室へ昇格(2026-08-07)。
+    // 回帰で development-only へ戻さない。戻すと「盤面にあるのに日程表に無い」が再発する。
+    expect(featureRolloutRegistry.boardOnlyScheduleCells.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'development', name: '開発用教室' })).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(false)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(true)
   })
 })
