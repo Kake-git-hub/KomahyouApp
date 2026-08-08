@@ -573,8 +573,26 @@
   opacity: 0;
 }
 
+/* 日付行は「日付 … N限」の2要素。時間帯より日付が短く右が余るので、そこに何限かを寄せる。 */
+.board-share-date-row {
+  justify-self: stretch;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+}
+
 .board-share-date-text {
   font-size: 12px;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.board-share-slot-number-text {
+  flex: 0 0 auto;
+  color: #5f7288;
+  font-size: 11px;
   line-height: 1.05;
   white-space: nowrap;
 }
@@ -622,6 +640,10 @@
 
   .board-share-date-text {
     font-size: 11px;
+  }
+
+  .board-share-slot-number-text {
+    font-size: 10px;
   }
 
   .board-share-slot-text {
