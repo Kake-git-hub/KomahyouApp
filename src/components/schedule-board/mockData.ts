@@ -1,15 +1,8 @@
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import type { DeskCell, GradeLabel, LessonType, OpenIssue, SlotCell, StudentEntry, SubjectLabel, TeacherType } from './types'
+import { boardSlotTimes } from './slotTimes'
 
 const dayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
-
-const slotTimes = [
-  '13:00-14:30',
-  '14:40-16:10',
-  '16:20-17:50',
-  '18:00-19:30',
-  '19:40-21:10',
-] as const
 
 const deskTeachers = [
   '山田先生',
@@ -115,7 +108,7 @@ function createWeekSlotCells(weekStart: Date): SlotCell[] {
       dateLabel: day.dateLabel,
       slotLabel: `${slotNumber}限`,
       slotNumber,
-      timeLabel: slotTimes[slotIndex],
+      timeLabel: boardSlotTimes[slotIndex],
       isOpenDay: true,
       desks: Array.from({ length: 14 }, (_, deskIndex) => createDesk(slotId, deskIndex)),
     }

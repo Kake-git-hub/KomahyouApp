@@ -15,6 +15,9 @@ export type BoardShareStatusEntry = Pick<
 >
 
 export type BoardShareCell = Pick<SlotCell, 'id' | 'dateKey' | 'dayLabel' | 'dateLabel' | 'slotLabel' | 'slotNumber'> & {
+  // コマの時間帯(例 16:20-17:50)。共有画面のフッターは「N限」ではなくこれを表示する。
+  // 旧ドキュメントには存在しないため optional。画面側で slotNumber から補完する(後方互換)。
+  timeLabel?: string
   desks: Array<{
     id: string
     teacher: string
@@ -165,6 +168,7 @@ export function compactBoardSharePayload(payload: BoardSharePayloadInput): Board
       dateLabel: cell.dateLabel,
       slotLabel: cell.slotLabel,
       slotNumber: cell.slotNumber,
+      timeLabel: cell.timeLabel,
       desks: cell.desks.map((desk) => ({
         id: desk.id,
         teacher: desk.teacher,

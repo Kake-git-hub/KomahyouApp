@@ -3,6 +3,7 @@ import { isExternalBoardShareStudent, loadBoardShare, subscribeBoardShare, type 
 import { lessonTypeLabels, teacherTypeLabels } from '../schedule-board/mockData'
 import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, type GroupClassEntry } from '../schedule-board/groupClass'
 import { buildLinkedLessonDestinationMap, formatShortDateLabel } from '../schedule-board/lessonLinks'
+import { getBoardSlotTimeLabel } from '../schedule-board/slotTimes'
 import type { LessonType, StudentStatusKind, TeacherType } from '../schedule-board/types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 
@@ -92,6 +93,20 @@ function getVisibleDateLabel(student: BoardShareStudentEntry | BoardShareStatusE
     return formatShortDateLabel(student.makeupSourceDate)
   }
   return ''
+}
+
+// フッターに出すコマの表示ラベル。講師は「何限か」より「何時からか」を見るため時間帯を出す。
+// 公開済みの旧ドキュメントには timeLabel が無いので、slotNumber から盤面と同じ定義で補完する。
+// どちらも取れない場合だけ従来の「N限」に倒す(後方互換・表示が空にならないことを保証)。
+export function resolveBoardShareTimeLabel(
+  cell: Pick<BoardShareCell, 'timeLabel' | 'slotLabel'> | null | undefined,
+  slotNumber: number,
+) {
+  const cellTimeLabel = cell?.timeLabel?.trim()
+  if (cellTimeLabel) return cellTimeLabel
+  const slotTimeLabel = getBoardSlotTimeLabel(slotNumber)
+  if (slotTimeLabel) return slotTimeLabel
+  return cell?.slotLabel || `${slotNumber}限`
 }
 
 function sortCells(cells: BoardShareCell[]) {
@@ -219,20 +234,15 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
     setSelectedSlotNumber(slotOptions[nextIndex] ?? selectedSlotNumber)
   }
 
-  const selectToday = () => {
-    if (dateOptions.length === 0) return
-    const todayKey = new Date().toLocaleDateString('sv-SE')
-    const exactDate = dateOptions.find((cell) => cell.dateKey === todayKey)
-    const nextDate = exactDate ?? dateOptions.find((cell) => cell.dateKey >= todayKey) ?? dateOptions[dateOptions.length - 1]
-    setSelectedDateKey(nextDate?.dateKey ?? selectedDateKey)
-  }
+  // 「今日」ボタンは廃止(2026-08-08)。日付ボタン(=日付ピッカー)から today へ跳べるため、
+  // 限られた横幅は前日/前コマ/後コマ/翌日の4つと時間表示に割り当てる。
 
   if (message) {
     return <div className="board-share-shell"><div className="board-share-message">{message}</div></div>
   }
 
   const currentDateLabel = currentCell ? `${currentCell.dateLabel}${currentCell.dayLabel ? `(${currentCell.dayLabel})` : ''}` : selectedDateKey
-  const currentSlotLabel = currentCell?.slotLabel ?? `${selectedSlotNumber}限`
+  const currentTimeLabel = resolveBoardShareTimeLabel(currentCell, selectedSlotNumber)
   const firstDateKey = dateOptions[0]?.dateKey
   const lastDateKey = dateOptions[dateOptions.length - 1]?.dateKey
   const firstSlotNumber = slotOptions[0]
@@ -297,7 +307,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
       <footer className="board-share-footer">
         <label className="board-share-footer-info" aria-label="表示日を選択">
           <span className="board-share-date-text">{currentDateLabel}</span>
-          <span className="board-share-slot-text">{currentSlotLabel}</span>
+          <span className="board-share-slot-text">{currentTimeLabel}</span>
           <input
             type="date"
             value={selectedDateKey}
@@ -311,7 +321,6 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
           <button type="button" onClick={() => moveSlot(-1)} disabled={firstSlotNumber === selectedSlotNumber}>▲前コマ</button>
           <button type="button" onClick={() => moveSlot(1)} disabled={lastSlotNumber === selectedSlotNumber}>▼後コマ</button>
           <button type="button" onClick={() => moveDate(1)} disabled={lastDateKey === selectedDateKey}>翌日▶</button>
-          <button type="button" className="board-share-today-button" onClick={selectToday}>今日</button>
         </div>
       </footer>
     </div>
