@@ -116,3 +116,21 @@ describe('Firestore rules: billing は billing開発者のみ', () => {
     await assertFails(getDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/billingMonths/2026-06`)))
   })
 })
+
+// 在籍生徒数の恒久記録(台帳)。請求の根拠なので、クライアントからは**読めるだけ**。
+// 書き込みは Cloud Function の Admin SDK 経由のみ(ルールを迂回する)。
+describe('Firestore rules: studentCountLedger は読み取り専用', () => {
+  it('billing対象メールの開発者は台帳を読める', async () => {
+    await assertSucceeds(getDoc(doc(devdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15`)))
+    await assertSucceeds(getDoc(doc(devdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15/classrooms/A`)))
+  })
+
+  it('マネージャーは台帳を読めない', async () => {
+    await assertFails(getDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15`)))
+  })
+
+  it('billing開発者でも台帳へは書き込めない(恒久記録を画面操作で動かさない)', async () => {
+    await assertFails(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15`), { studentCountTotal: 999 }))
+    await assertFails(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15/classrooms/A`), { studentCount: 999 }))
+  })
+})

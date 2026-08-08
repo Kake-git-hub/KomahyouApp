@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { createGmailDraftWithPdf, isGmailDraftCreationConfigured, requestGmailComposeAccessToken } from '../../integrations/gmail/drafts'
 import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integrations/gmail/compose'
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
+import { loadStudentCountLedgerEntry, recordStudentCountLedgerEntry, type StudentCountLedgerEntry } from '../../integrations/firebase/studentCountLedger'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, type BillingInvoiceRow, type BillingMonthKey } from '../../utils/billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
 import { buildInvoicePdfFileName, createInvoicePdfBlob, type InvoiceIssuerInfo } from '../../utils/invoicePdf'
 
 type BillingAutomationScreenProps = {
@@ -18,6 +19,11 @@ type BillingAutomationScreenProps = {
 type BillingRowDraft = BillingInvoiceRow & {
   draftId?: string
   draftCreatedAt?: string
+  // 生徒数の出どころ(恒久記録 or 現在の名簿からの再計算)と、その食い違い。表示の根拠として持つ。
+  studentCountSource: BillingStudentCountSource
+  ledgerStudentCount: number | null
+  liveStudentCount: number
+  hasStudentCountDrift: boolean
 }
 
 const DEFAULT_STUDENT_UNIT_PRICE = 300
@@ -58,12 +64,13 @@ function saveStoredIssuerInfo(value: InvoiceIssuerInfo) {
   }
 }
 
-function buildBillingRows(params: {
+export function buildBillingRows(params: {
   classrooms: WorkspaceClassroom[]
   users: WorkspaceUser[]
   monthKey: BillingMonthKey
   snapshotDate: string
   records: BillingClassroomRecord[]
+  ledgerEntry: StudentCountLedgerEntry | null
 }) {
   const recordByClassroomId = new Map(params.records.map((record) => [record.classroomId, record]))
   const managerById = new Map(params.users.map((user) => [user.id, user]))
@@ -72,11 +79,20 @@ function buildBillingRows(params: {
   return params.classrooms.map((classroom): BillingRowDraft => {
     const record = recordByClassroomId.get(classroom.id)
     const manager = managerById.get(classroom.managerUserId)
-    // 在籍数は常に選択中の集計日でライブ計算する（各教室の名簿と一致させるため）。
-    // 保存済みレコードの確定人数は表示には使わない（古い値で食い違う回帰を避ける）。
-    const studentCount = countActiveStudentsForBilling(classroom.data.students, params.monthKey, snapshotDate)
+    // 生徒数の優先順位:
+    //  1) 恒久記録(studentCountLedger) … 毎月15日 0:00(JST)にサーバーが記録した確定値。
+    //     名簿を後から直しても動かないので、遡っても同じ人数が読み取れる(この台帳の目的)。
+    //  2) 記録が無い日付 … 選択中の集計日で現在の名簿からライブ計算した暫定値。
+    // ⚠️ billingMonths 側の保存済み record.studentCount は今も表示に使わない。
+    //    あちらは画面操作で上書きされ得る可変値で、古い値と食い違う回帰の原因になる(既存ガード)。
+    //    「保存済みだから」と record.studentCount を復活させないこと。
+    const liveStudentCount = countActiveStudentsForBilling(classroom.data.students, params.monthKey, snapshotDate)
+    const resolvedStudentCount = resolveBillingStudentCount({
+      ledgerStudentCount: params.ledgerEntry?.countByClassroomId[classroom.id]?.studentCount ?? null,
+      liveStudentCount,
+    })
     const unitPrice = record?.unitPrice ?? classroom.studentUnitPrice ?? DEFAULT_STUDENT_UNIT_PRICE
-    const amounts = calculateBillingAmounts(studentCount, unitPrice, record?.billedAmount)
+    const amounts = calculateBillingAmounts(resolvedStudentCount.studentCount, unitPrice, record?.billedAmount)
 
     return {
       classroomId: classroom.id,
@@ -85,6 +101,10 @@ function buildBillingRows(params: {
       monthKey: params.monthKey,
       snapshotDate,
       studentCount: amounts.studentCount,
+      studentCountSource: resolvedStudentCount.source,
+      ledgerStudentCount: resolvedStudentCount.ledgerStudentCount,
+      liveStudentCount: resolvedStudentCount.liveStudentCount,
+      hasStudentCountDrift: resolvedStudentCount.hasDrift,
       unitPrice: amounts.unitPrice,
       calculatedAmount: amounts.calculatedAmount,
       billedAmount: amounts.billedAmount,
@@ -134,12 +154,16 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   // 集計基準日（単一のカレンダーで選択）。請求月はこの日付から導出する。既定は当月15日。
   const [snapshotDate, setSnapshotDate] = useState<string>(() => getBillingSnapshotDate(getCurrentBillingMonthKey()))
   const [rows, setRows] = useState<BillingRowDraft[]>([])
+  const [ledgerEntry, setLedgerEntry] = useState<StudentCountLedgerEntry | null>(null)
   const [issuerInfo, setIssuerInfo] = useState<InvoiceIssuerInfo>(() => loadStoredIssuerInfo())
   const [statusMessage, setStatusMessage] = useState('請求データを読み込んでいます。')
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [draftingClassroomId, setDraftingClassroomId] = useState<string | null>(null)
   const [isCreatingAllDrafts, setIsCreatingAllDrafts] = useState(false)
+  const [isRecordingLedger, setIsRecordingLedger] = useState(false)
+  // 手動記録の直後に請求データ＋台帳を読み直すためのトークン(値が変われば読み込み effect が再実行される)。
+  const [reloadToken, setReloadToken] = useState(0)
 
   const canUseBilling = isBillingAllowedEmail(currentUser.email) && currentUser.role === 'developer'
   // 請求月は集計日の年月から導出する（請求月ピッカーは集計日カレンダーに統合）。
@@ -158,6 +182,18 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     billedAmountWithTax: summary.billedAmountWithTax + row.billedAmountWithTax,
   }), { studentCount: 0, calculatedAmount: 0, billedAmount: 0, taxAmount: 0, billedAmountWithTax: 0 }), [rows])
 
+  // 表示中の生徒数がどれだけ恒久記録に裏付けられているか。全教室が記録由来なら「確定」と言い切れる。
+  const studentCountAudit = useMemo(() => {
+    const ledgerRowCount = rows.filter((row) => row.studentCountSource === 'ledger').length
+    return {
+      ledgerRowCount,
+      driftRowCount: rows.filter((row) => row.hasStudentCountDrift).length,
+      isFullyLedgerBacked: rows.length > 0 && ledgerRowCount === rows.length,
+    }
+  }, [rows])
+
+  const isSnapshotDayOfMonth = Number(snapshotDate.slice(8, 10)) === DEFAULT_BILLING_SNAPSHOT_DAY
+
   useEffect(() => {
     if (!canUseBilling) return
     let cancelled = false
@@ -166,19 +202,31 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     setStatusMessage('請求データを読み込んでいます。')
     void (async () => {
       try {
-        const records = authMode === 'firebase' ? await loadFirebaseBillingMonth(monthKey) : []
+        // 恒久記録の取得は請求データと独立。台帳が読めなくても画面は暫定値で使えるようにする
+        // (記録が無い日付・移行前の月でも請求作業を止めない)。
+        const [records, nextLedgerEntry] = await Promise.all([
+          authMode === 'firebase' ? loadFirebaseBillingMonth(monthKey) : Promise.resolve([]),
+          authMode === 'firebase'
+            ? loadStudentCountLedgerEntry(snapshotDate).catch(() => null)
+            : Promise.resolve(null),
+        ])
         if (cancelled) return
 
-        const nextRows = buildBillingRows({ classrooms, users, monthKey, snapshotDate, records })
+        setLedgerEntry(nextLedgerEntry)
+        const nextRows = buildBillingRows({ classrooms, users, monthKey, snapshotDate, records, ledgerEntry: nextLedgerEntry })
         setRows(nextRows)
+
+        const ledgerNote = nextLedgerEntry
+          ? `${formatJapaneseDate(snapshotDate)}の在籍生徒数は恒久記録から読み込みました。`
+          : `${formatJapaneseDate(snapshotDate)}の恒久記録が無いため、現在の名簿から計算した暫定値です。`
 
         if (authMode === 'firebase' && records.length < classrooms.length) {
           await saveFirebaseBillingRows(nextRows)
-          if (!cancelled) setStatusMessage(`${formatBillingMonthLabel(monthKey)}の請求スナップショットを保存しました。`)
+          if (!cancelled) setStatusMessage(`${formatBillingMonthLabel(monthKey)}の請求スナップショットを保存しました。${ledgerNote}`)
           return
         }
 
-        setStatusMessage(`${formatBillingMonthLabel(monthKey)}の請求データを読み込みました。`)
+        setStatusMessage(`${formatBillingMonthLabel(monthKey)}の請求データを読み込みました。${ledgerNote}`)
       } catch (error) {
         if (!cancelled) setStatusMessage(error instanceof Error ? error.message : '請求データの読み込みに失敗しました。')
       } finally {
@@ -189,7 +237,7 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
     return () => {
       cancelled = true
     }
-  }, [authMode, canUseBilling, classrooms, monthKey, snapshotDate, users])
+  }, [authMode, canUseBilling, classrooms, monthKey, reloadToken, snapshotDate, users])
 
   const updateIssuerInfo = (updates: Partial<InvoiceIssuerInfo>) => {
     setIssuerInfo((current) => {
@@ -246,6 +294,29 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
       setStatusMessage(error instanceof Error ? error.message : '請求データの保存に失敗しました。')
     } finally {
       setIsSaving(false)
+    }
+  }
+
+  // 選択中の集計日を恒久記録として残す(サーバー側で記録・開発者のみ)。
+  // 定期実行(毎月15日 0:00 JST)より前に当月分を確定させたいとき、あるいは取り逃した日を
+  // 後から記録するための入口。既に記録がある日付は上書きされない(write-once)。
+  const recordLedgerForSnapshotDate = async () => {
+    if (authMode !== 'firebase') {
+      setStatusMessage('ローカル表示中のため、恒久記録は作成できません。')
+      return
+    }
+    setIsRecordingLedger(true)
+    setStatusMessage(`${formatJapaneseDate(snapshotDate)}の在籍生徒数を恒久記録として保存しています。`)
+    try {
+      const result = await recordStudentCountLedgerEntry(snapshotDate)
+      setStatusMessage(result.created
+        ? `${formatJapaneseDate(snapshotDate)}時点の在籍生徒数（${result.classroomCount}教室 / 合計${result.studentCountTotal}人）を恒久記録として保存しました。`
+        : `${formatJapaneseDate(snapshotDate)}の恒久記録は既にあります。記録は書き換えていません。`)
+      setReloadToken((current) => current + 1)
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : '恒久記録の保存に失敗しました。')
+    } finally {
+      setIsRecordingLedger(false)
     }
   }
 
@@ -386,12 +457,36 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
               <p className="panel-kicker">対象月</p>
               <h2>{formatBillingMonthLabel(monthKey)}</h2>
               <p className="page-summary">集計基準: {formatJapaneseDate(snapshotDate)} 0:00時点 / 支払期限: {formatJapaneseDate(dueDate)}</p>
+              <p className="page-summary billing-ledger-summary">
+                {ledgerEntry ? (
+                  <>
+                    <span className="status-chip secondary">恒久記録</span>
+                    {' '}{formatJapaneseDate(snapshotDate)} 0:00時点の在籍生徒数として記録済み（記録日時 {formatDraftCreatedAt(ledgerEntry.recordedAt) || '不明'}{ledgerEntry.source === 'manual' ? ' / 手動記録' : ''}）。名簿を後から直してもこの人数は変わりません。
+                    {studentCountAudit.driftRowCount > 0 ? ` 現在の名簿から計算し直すと ${studentCountAudit.driftRowCount} 教室で人数が変わります（請求は記録値で出します）。` : ''}
+                  </>
+                ) : (
+                  <>
+                    <span className="status-chip warning">暫定</span>
+                    {' '}この日の恒久記録はありません。現在の名簿から計算した参考値です（名簿を直すと人数が変わります）。
+                    {isSnapshotDayOfMonth ? '毎月15日 0:00 に自動記録されます。' : `恒久記録があるのは毎月${DEFAULT_BILLING_SNAPSHOT_DAY}日です。`}
+                  </>
+                )}
+              </p>
             </div>
             <div className="basic-data-row-actions developer-actions-right">
               <label className="basic-data-inline-field billing-month-field">
                 <span>集計日（請求月）</span>
                 <input type="date" value={snapshotDate} onChange={(event) => handleSnapshotDateChange(event.target.value)} />
               </label>
+              {!ledgerEntry ? (
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => void recordLedgerForSnapshotDate()}
+                  disabled={isLoading || isRecordingLedger || rows.length === 0}
+                  title="この集計日の在籍生徒数を、後から名簿を直しても変わらない恒久記録として保存します。"
+                >{isRecordingLedger ? '記録中...' : 'この日の人数を恒久記録する'}</button>
+              ) : null}
               <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>
               <button className="primary-button" type="button" onClick={() => void handlePrepareAll()} disabled={isLoading || isCreatingAllDrafts || rows.length === 0}>{isCreatingAllDrafts ? (isGmailDraftCreationConfigured() ? '下書き作成中...' : 'ダウンロード中...') : (isGmailDraftCreationConfigured() ? '全教室の下書きを作成' : '全教室のPDFをダウンロード')}</button>
             </div>
@@ -421,7 +516,11 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
           </div>
           <div className="developer-summary-grid billing-summary-grid">
             <div className="developer-summary-card"><span>教室数</span><strong>{rows.length}</strong></div>
-            <div className="developer-summary-card"><span>在籍生徒数</span><strong>{totals.studentCount}</strong></div>
+            <div className="developer-summary-card">
+              <span>在籍生徒数</span>
+              <strong>{totals.studentCount}</strong>
+              <span className="detail-note">{studentCountAudit.isFullyLedgerBacked ? '恒久記録' : studentCountAudit.ledgerRowCount > 0 ? `恒久記録 ${studentCountAudit.ledgerRowCount}/${rows.length}教室` : '暫定（記録なし）'}</span>
+            </div>
             <div className="developer-summary-card"><span>合計金額（税抜）</span><strong>{formatYen(totals.calculatedAmount)}</strong></div>
             <div className="developer-summary-card"><span>請求金額（税抜）</span><strong>{formatYen(totals.billedAmount)}</strong></div>
             <div className="developer-summary-card"><span>消費税（10%）</span><strong>{formatYen(totals.taxAmount)}</strong></div>
@@ -450,7 +549,14 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   <tr key={row.classroomId}>
                     <td><strong>{row.classroomName}</strong><br /><span className="detail-note">{row.invoiceNumber}</span></td>
                     <td>{row.managerEmail || <span className="basic-data-muted-inline">未設定</span>}</td>
-                    <td className="numeric-cell">{row.studentCount.toLocaleString('ja-JP')}人</td>
+                    <td className="numeric-cell">
+                      {row.studentCount.toLocaleString('ja-JP')}人
+                      <br />
+                      {row.studentCountSource === 'ledger'
+                        ? <span className="status-chip secondary">恒久記録</span>
+                        : <span className="status-chip warning">暫定</span>}
+                      {row.hasStudentCountDrift ? <span className="detail-note">現在の名簿では{row.liveStudentCount.toLocaleString('ja-JP')}人</span> : null}
+                    </td>
                     <td className="numeric-cell"><input className="billing-number-input" type="number" min={0} value={row.unitPrice} onChange={(event) => updateRow(row.classroomId, { unitPrice: Number(event.target.value) })} onBlur={() => void saveRow(row)} />円</td>
                     <td className="numeric-cell">{formatYen(row.calculatedAmount)}</td>
                     <td className="numeric-cell"><input className="billing-number-input" type="number" min={0} value={row.billedAmount} onChange={(event) => updateRow(row.classroomId, { billedAmount: Number(event.target.value) })} onBlur={() => void saveRow(row)} />円</td>

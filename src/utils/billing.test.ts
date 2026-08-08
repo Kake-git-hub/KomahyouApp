@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, isBillingAllowedEmail } from './billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, isBillingAllowedEmail, resolveBillingStudentCount } from './billing'
 import type { StudentRow } from '../components/basic-data/basicDataModel'
 
 function student(overrides: Partial<StudentRow>): StudentRow {
@@ -101,5 +101,57 @@ describe('billing utilities', () => {
 
   it('builds stable invoice numbers per classroom and month', () => {
     expect(buildInvoiceNumber('classroom_abc-123', '2026-05')).toBe('INV-202605-CLASSROO')
+  })
+})
+// 恒久記録(studentCountLedger)がある日付では、記録値が請求の根拠になる。
+// 名簿を後から直しても過去の人数が動かないことがこの台帳の目的なので、
+// 「記録があるのにライブ値を採用する」変更が入ったらここが落ちる。
+describe('resolveBillingStudentCount', () => {
+  it('恒久記録があれば記録値を採用する(ライブ値では上書きしない)', () => {
+    expect(resolveBillingStudentCount({ ledgerStudentCount: 42, liveStudentCount: 40 })).toEqual({
+      studentCount: 42,
+      source: 'ledger',
+      ledgerStudentCount: 42,
+      liveStudentCount: 40,
+      hasDrift: true,
+    })
+  })
+
+  it('記録値とライブ値が一致していれば食い違いなしとして扱う', () => {
+    expect(resolveBillingStudentCount({ ledgerStudentCount: 40, liveStudentCount: 40 })).toEqual({
+      studentCount: 40,
+      source: 'ledger',
+      ledgerStudentCount: 40,
+      liveStudentCount: 40,
+      hasDrift: false,
+    })
+  })
+
+  it('記録が無ければライブ値へフォールバックする', () => {
+    expect(resolveBillingStudentCount({ ledgerStudentCount: null, liveStudentCount: 40 })).toEqual({
+      studentCount: 40,
+      source: 'live',
+      ledgerStudentCount: null,
+      liveStudentCount: 40,
+      hasDrift: false,
+    })
+    expect(resolveBillingStudentCount({ liveStudentCount: 7 }).source).toBe('live')
+  })
+
+  it('記録された0人は「記録なし」ではなく確定値の0として扱う', () => {
+    const resolved = resolveBillingStudentCount({ ledgerStudentCount: 0, liveStudentCount: 5 })
+    expect(resolved.studentCount).toBe(0)
+    expect(resolved.source).toBe('ledger')
+    expect(resolved.hasDrift).toBe(true)
+  })
+
+  it('壊れた値(NaN/Infinity)は記録なし扱いにしてライブ値を使う', () => {
+    expect(resolveBillingStudentCount({ ledgerStudentCount: Number.NaN, liveStudentCount: 9 }).source).toBe('live')
+    expect(resolveBillingStudentCount({ ledgerStudentCount: Number.POSITIVE_INFINITY, liveStudentCount: 9 }).studentCount).toBe(9)
+  })
+
+  it('負値は0へ、小数は切り捨てて正規化する', () => {
+    expect(resolveBillingStudentCount({ ledgerStudentCount: -3, liveStudentCount: 4 }).studentCount).toBe(0)
+    expect(resolveBillingStudentCount({ ledgerStudentCount: 12.9, liveStudentCount: 4 }).studentCount).toBe(12)
   })
 })
