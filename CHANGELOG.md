@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.474 (2026-08-08)
+
 - feat: **講師共有画面(配布用盤面)のフッターを時刻表示に変更**(オーナー指示 2026-08-08)。左下の表示を「3限」から**コマの時間帯「16:20-17:50」**に変えた(講師は何限かより何時からかを見るため)。あわせて**「今日」ボタンを廃止**し、前日/前コマ/後コマ/翌日の4つを右側いっぱいに詰め、左の日付/時間ボタンを 78px → 116px に広げた。★今日へ跳ぶ手段は**左の日付ボタン(=日付ピッカー)**が引き続き担う(消えていない)(src/components/board-share/BoardShareScreen.tsx・src/App.css)
 - feat: 配布用盤面の共有データにコマの時間帯 `timeLabel` を載せるようにした(`compactBoardSharePayload`)。**公開済みの旧ドキュメントには無いので、`resolveBoardShareTimeLabel` が `slotNumber` から盤面と同じ定義で補完**する(＝共有URLを作り直さなくても時刻表示になる)。定義外のコマだけ従来の「N限」に倒す(src/integrations/firebase/boardShare.ts)
 - refactor: コマ時間の定義(13:00-14:30〜19:40-21:10)を `src/components/schedule-board/slotTimes.ts` に一本化(盤面 `ScheduleBoardScreen` とモックデータで二重定義されていた)。共有画面もここを参照するため、時間帯を変えるときの直し漏れが起きない
