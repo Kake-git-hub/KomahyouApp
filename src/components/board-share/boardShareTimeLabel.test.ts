@@ -3,7 +3,7 @@ import { compactBoardSharePayload } from '../../integrations/firebase/boardShare
 import type { BoardSharePayloadInput } from '../../integrations/firebase/boardShare'
 import type { SlotCell } from '../schedule-board/types'
 import { boardSlotTimes, getBoardSlotTimeLabel } from '../schedule-board/slotTimes'
-import { resolveBoardShareTimeLabel } from './BoardShareScreen'
+import { resolveBoardShareSlotLabel, resolveBoardShareTimeLabel } from './BoardShareScreen'
 
 function createSlotCell(overrides: Partial<SlotCell> = {}): SlotCell {
   return {
@@ -50,6 +50,21 @@ describe('配布用盤面フッターの時間表示', () => {
   it('時間帯を決められないコマは従来のコマ表記に倒す', () => {
     expect(resolveBoardShareTimeLabel({ slotLabel: '6限' }, 6)).toBe('6限')
     expect(resolveBoardShareTimeLabel(null, 6)).toBe('6限')
+  })
+})
+
+// 時間帯だけだと何コマ目か分からないため、日付の右に「N限」も併記する(2026-08-08)。
+describe('日付行に併記するコマ番号', () => {
+  it('公開データの slotLabel をそのまま出す', () => {
+    expect(resolveBoardShareSlotLabel({ slotLabel: '3限' }, 3)).toBe('3限')
+  })
+
+  // slotLabel が空/未設定でも「限」表示が消えないこと(時間帯だけになると何コマ目か分からない)。
+  it('slotLabel が空/未設定なら slotNumber から組み立てる', () => {
+    expect(resolveBoardShareSlotLabel({ slotLabel: '' }, 4)).toBe('4限')
+    expect(resolveBoardShareSlotLabel({ slotLabel: '  ' }, 4)).toBe('4限')
+    expect(resolveBoardShareSlotLabel(null, 2)).toBe('2限')
+    expect(resolveBoardShareSlotLabel(undefined, 5)).toBe('5限')
   })
 })
 

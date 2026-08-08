@@ -109,6 +109,17 @@ export function resolveBoardShareTimeLabel(
   return cell?.slotLabel || `${slotNumber}限`
 }
 
+// 日付の右に添える「何限か」。時間帯だけだと何コマ目か分かりにくいので併記する(2026-08-08)。
+// 公開データの slotLabel を優先し、空/未設定なら slotNumber から組み立てる(表示が空にならない)。
+export function resolveBoardShareSlotLabel(
+  cell: Pick<BoardShareCell, 'slotLabel'> | null | undefined,
+  slotNumber: number,
+) {
+  const cellSlotLabel = cell?.slotLabel?.trim()
+  if (cellSlotLabel) return cellSlotLabel
+  return `${slotNumber}限`
+}
+
 function sortCells(cells: BoardShareCell[]) {
   return [...cells].sort((left, right) => {
     const dateCompare = left.dateKey.localeCompare(right.dateKey)
@@ -243,6 +254,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
 
   const currentDateLabel = currentCell ? `${currentCell.dateLabel}${currentCell.dayLabel ? `(${currentCell.dayLabel})` : ''}` : selectedDateKey
   const currentTimeLabel = resolveBoardShareTimeLabel(currentCell, selectedSlotNumber)
+  const currentSlotLabel = resolveBoardShareSlotLabel(currentCell, selectedSlotNumber)
   const firstDateKey = dateOptions[0]?.dateKey
   const lastDateKey = dateOptions[dateOptions.length - 1]?.dateKey
   const firstSlotNumber = slotOptions[0]
@@ -306,7 +318,10 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
 
       <footer className="board-share-footer">
         <label className="board-share-footer-info" aria-label="表示日を選択">
-          <span className="board-share-date-text">{currentDateLabel}</span>
+          <span className="board-share-date-row">
+            <span className="board-share-date-text">{currentDateLabel}</span>
+            <span className="board-share-slot-number-text">{currentSlotLabel}</span>
+          </span>
           <span className="board-share-slot-text">{currentTimeLabel}</span>
           <input
             type="date"
