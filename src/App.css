@@ -539,7 +539,8 @@
 .board-share-footer {
   position: relative;
   display: grid;
-  grid-template-columns: 78px minmax(0, 1fr);
+  /* 左の日付/時間ボタンは「16:20-17:50」が1行で収まる幅を確保する(「今日」廃止分を回す)。 */
+  grid-template-columns: 116px minmax(0, 1fr);
   gap: 5px;
   align-items: stretch;
   padding: 3px 6px calc(3px + env(safe-area-inset-bottom));
@@ -580,14 +581,17 @@
 
 .board-share-slot-text {
   margin-top: 2px;
+  /* 「3限」から「16:20-17:50」に変わり文字数が増えるため、狭い端末でも1行に収まる字送りにする。 */
   font-size: 13px;
+  letter-spacing: -0.02em;
   line-height: 1.05;
   white-space: nowrap;
 }
 
 .board-share-controls {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr)) 42px;
+  /* 「今日」を廃止し、前日/前コマ/後コマ/翌日の4つを右側いっぱいに詰める。 */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -598,15 +602,35 @@
   background: #f8fbff;
   color: #244564;
   font-weight: 800;
+  /* 「前コマ/後コマ」が狭い端末で2行に折れないよう、1行固定＋詰め気味の字送りにする。 */
   font-size: 12px;
-}
-
-.board-share-today-button {
-  background: #eef4fb !important;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+  padding: 0 2px;
 }
 
 .board-share-footer button:disabled {
   opacity: 0.4;
+}
+
+/* 幅の狭い端末(iPhone SE 世代など)では日付/時間ボタンと操作ボタンを一段小さくして、
+   時間表示「16:20-17:50」と「前コマ/後コマ」が両方1行に収まるようにする。 */
+@media (max-width: 360px) {
+  .board-share-footer {
+    grid-template-columns: 98px minmax(0, 1fr);
+  }
+
+  .board-share-date-text {
+    font-size: 11px;
+  }
+
+  .board-share-slot-text {
+    font-size: 12px;
+  }
+
+  .board-share-footer button {
+    font-size: 11px;
+  }
 }
 
 .developer-shell,

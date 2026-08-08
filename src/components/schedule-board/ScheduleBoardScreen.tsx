@@ -24,6 +24,7 @@ import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, 
 import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
+import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
@@ -38,13 +39,7 @@ import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
-const boardSlotTimes = [
-  '13:00-14:30',
-  '14:40-16:10',
-  '16:20-17:50',
-  '18:00-19:30',
-  '19:40-21:10',
-] as const
+// コマ時間の定義は slotTimes.ts が正本(配布用共有画面と共通)。ここで再定義しない。
 
 // テンプレモードで BoardGrid に渡す安定した空配列（毎レンダリングの新規 [] を避け memo を効かせる）
 const EMPTY_SPECIAL_PERIODS: Array<{ id: string; label: string; startDate: string; endDate: string }> = []
