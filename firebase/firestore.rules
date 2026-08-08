@@ -109,6 +109,20 @@ service cloud.firestore {
           allow read, write: if isBillingDeveloper(workspaceKey);
         }
       }
+
+      // 毎月15日 0:00(JST)時点の在籍生徒数の恒久記録(台帳)。請求の根拠になる記録なので、
+      // 書き込みは Cloud Function(recordMonthlyStudentCounts / triggerMonthlyStudentCountRecord)の
+      // Admin SDK からのみ。クライアントは読み取り専用にして、画面操作で記録が動かないようにする。
+      // write: false を「便利だから」と緩めないこと(恒久記録が上書きされる回帰になる)。
+      match /studentCountLedger/{snapshotDate} {
+        allow read: if isBillingDeveloper(workspaceKey);
+        allow write: if false;
+
+        match /classrooms/{classroomId} {
+          allow read: if isBillingDeveloper(workspaceKey);
+          allow write: if false;
+        }
+      }
     }
 
     match /boardShares/{token} {

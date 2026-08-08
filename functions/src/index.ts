@@ -11,6 +11,12 @@ import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
+import {
+  countActiveStudentsOnDate,
+  isMonthlyStudentCountSnapshotDate,
+  toJstDateKey,
+  toMonthKeyFromDateKey,
+} from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import {
   buildWorkspaceAutoBackupDisplayLabel,
@@ -1840,6 +1846,133 @@ export const cleanupOldSaveAttempts = onSchedule({
   memory: '512MiB',
 }, async () => {
   await runSaveAttemptCleanup()
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// 毎月15日の在籍生徒数の恒久記録(台帳)。オーナー指示 2026-08-08。
+//
+// 請求画面の生徒数は選択中の集計日でライブ再計算していたため、名簿から生徒を消したり
+// 入塾日/退塾日を後から直すと「当時の人数」を再現できなかった(自動バックアップも保持は最長7日)。
+// 毎月15日 0:00(JST)時点の在籍数をここで自動記録し、請求画面はこの台帳を読む。
+//
+// ⚠️ 台帳は**書き込み一回きり(write-once)**。同じ集計日の記録が既にあれば上書きしない。
+//   恒久記録である以上、後から名簿を直しても記録が動いてはいけない。batch.create で
+//   既存があればコミットごと失敗させ、同時実行でも二重記録・上書きが起きないようにする。
+//   この write-once を「便利だから」と set(merge) に緩めないこと(記録が消える回帰になる)。
+const STUDENT_COUNT_LEDGER_SCHEDULE = process.env.STUDENT_COUNT_LEDGER_SCHEDULE ?? '10 0 15 * *'
+
+type StudentCountLedgerSource = 'scheduled' | 'manual'
+
+async function recordStudentCountLedgerEntry(workspaceKey: string, snapshotDate: string, source: StudentCountLedgerSource, recordedBy: string) {
+  const workspaceRef = firestore.collection('workspaces').doc(workspaceKey)
+  const ledgerRef = workspaceRef.collection('studentCountLedger').doc(snapshotDate)
+
+  const existing = await ledgerRef.get()
+  if (existing.exists) {
+    logger.info(`[StudentCountLedger] Skipped (already recorded): workspace=${workspaceKey} snapshotDate=${snapshotDate}`)
+    return { created: false, workspaceKey, snapshotDate, classroomCount: 0, studentCountTotal: 0 }
+  }
+
+  const [classroomSnapshots, snapshotSnapshots] = await Promise.all([
+    workspaceRef.collection('classrooms').get(),
+    workspaceRef.collection('classroomSnapshots').get(),
+  ])
+  if (classroomSnapshots.empty) {
+    logger.info(`[StudentCountLedger] Skipped (no classrooms): workspace=${workspaceKey}`)
+    return { created: false, workspaceKey, snapshotDate, classroomCount: 0, studentCountTotal: 0 }
+  }
+
+  const snapshotByClassroomId = new Map(
+    snapshotSnapshots.docs.map((entry) => [entry.id, entry.data() as FirebaseClassroomSnapshotDoc]),
+  )
+  const recordedAt = new Date().toISOString()
+
+  const entries = classroomSnapshots.docs.map((entry) => {
+    const classroomData = entry.data() as FirebaseClassroomDoc
+    const payload = readStoredSnapshotPayload(snapshotByClassroomId.get(entry.id))
+    const { studentCount, studentIds } = countActiveStudentsOnDate(payload?.students, snapshotDate)
+    return {
+      classroomId: entry.id,
+      classroomName: typeof classroomData.name === 'string' ? classroomData.name : '',
+      snapshotDate,
+      monthKey: toMonthKeyFromDateKey(snapshotDate),
+      studentCount,
+      studentIds,
+      recordedAt,
+      recordedBy,
+      source,
+    }
+  })
+
+  const studentCountTotal = entries.reduce((total, entry) => total + entry.studentCount, 0)
+  const batch = firestore.batch()
+  entries.forEach((entry) => {
+    batch.set(ledgerRef.collection('classrooms').doc(entry.classroomId), entry)
+  })
+  // create: 既存の記録があればコミット全体が失敗する = 恒久記録を上書きしない。
+  batch.create(ledgerRef, {
+    snapshotDate,
+    monthKey: toMonthKeyFromDateKey(snapshotDate),
+    classroomCount: entries.length,
+    studentCountTotal,
+    recordedAt,
+    recordedBy,
+    source,
+  })
+
+  try {
+    await batch.commit()
+  } catch (error) {
+    // ALREADY_EXISTS(=6): 同時実行で先に記録された。恒久記録が守られた結果なので正常扱い。
+    const code = (error as { code?: number | string } | null)?.code
+    if (code === 6 || code === 'already-exists') {
+      logger.info(`[StudentCountLedger] Skipped (raced): workspace=${workspaceKey} snapshotDate=${snapshotDate}`)
+      return { created: false, workspaceKey, snapshotDate, classroomCount: 0, studentCountTotal: 0 }
+    }
+    throw error
+  }
+
+  logger.info(`[StudentCountLedger] Recorded: workspace=${workspaceKey} snapshotDate=${snapshotDate} classrooms=${entries.length} students=${studentCountTotal} source=${source}`)
+  return { created: true, workspaceKey, snapshotDate, classroomCount: entries.length, studentCountTotal }
+}
+
+async function runMonthlyStudentCountLedger(snapshotDate: string, source: StudentCountLedgerSource, recordedBy: string) {
+  const workspacesSnapshot = await firestore.collection('workspaces').get()
+  const results = []
+  for (const workspaceDoc of workspacesSnapshot.docs) {
+    results.push(await recordStudentCountLedgerEntry(workspaceDoc.id, snapshotDate, source, recordedBy))
+  }
+  return { snapshotDate, source, results }
+}
+
+export const recordMonthlyStudentCounts = onSchedule({
+  schedule: STUDENT_COUNT_LEDGER_SCHEDULE,
+  timeZone: WORKSPACE_AUTO_BACKUP_TIME_ZONE,
+  timeoutSeconds: 300,
+  memory: '512MiB',
+}, async () => {
+  // schedule は 15日 00:10 JST。関数内の new Date() は UTC 基準なので JST の日付キーへ寄せる。
+  const snapshotDate = toJstDateKey(new Date())
+  if (!isMonthlyStudentCountSnapshotDate(snapshotDate)) {
+    logger.warn(`[StudentCountLedger] Unexpected run date (skipped): ${snapshotDate}`)
+    return
+  }
+  await runMonthlyStudentCountLedger(snapshotDate, 'scheduled', 'scheduler')
+})
+
+// 手動記録(開発者のみ)。定期実行が始まる前の当月分を埋める、あるいは障害で取り逃した月を
+// 後から記録するための入口。write-once なので既存の記録は上書きしない。
+// snapshotDate を省略すると「今日(JST)」を記録する。
+export const triggerMonthlyStudentCountRecord = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '512MiB' }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  await requireDeveloperMember(request.auth?.uid, workspaceKey)
+  const requestedDate = typeof rawData.snapshotDate === 'string' ? rawData.snapshotDate.trim() : ''
+  if (requestedDate && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    throw new HttpsError('invalid-argument', 'snapshotDate は YYYY-MM-DD 形式で指定してください。')
+  }
+  const snapshotDate = requestedDate || toJstDateKey(new Date())
+  return recordStudentCountLedgerEntry(workspaceKey, snapshotDate, 'manual', request.auth?.uid ?? '')
 })
 
 export const triggerWorkspaceServerAutoBackup = onCall({ invoker: 'public', timeoutSeconds: 300, memory: '1GiB' }, async (request) => {

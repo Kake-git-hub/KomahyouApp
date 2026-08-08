@@ -38,6 +38,9 @@ export function normalizeBillingMonthKey(value: string, fallback: BillingMonthKe
   return fallback
 }
 
+// 既定の集計日。サーバーの恒久記録(studentCountLedger)もこの日に記録するので、
+// 変えるときは functions/src/monthlyStudentCount.ts の
+// MONTHLY_STUDENT_COUNT_SNAPSHOT_DAY と schedule も揃えること(片方だけ変えない)。
 export const DEFAULT_BILLING_SNAPSHOT_DAY = 15
 
 // 集計基準日。既定は毎月15日だが、任意の日を指定できる（月末を超える指定はその月の末日にクランプ）。
@@ -94,6 +97,51 @@ export function formatYen(value: number) {
 export function countActiveStudentsForBilling(students: StudentRow[], monthKey: string, snapshotDateOverride?: string) {
   const snapshotDate = snapshotDateOverride ?? getBillingSnapshotDate(monthKey)
   return students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, snapshotDate)).length
+}
+
+// 生徒数の出どころ。
+//  - 'ledger': 毎月15日 0:00(JST)にサーバーが記録した恒久記録。過去を遡っても動かない確定値。
+//  - 'live':   記録が無い日付なので、現在の名簿からその集計日で再計算した暫定値。
+//              名簿から生徒を消したり入退塾日を直すと結果が変わるため、過去日では当時と食い違い得る。
+export type BillingStudentCountSource = 'ledger' | 'live'
+
+export type ResolvedBillingStudentCount = {
+  studentCount: number
+  source: BillingStudentCountSource
+  ledgerStudentCount: number | null
+  liveStudentCount: number
+  // 記録値と現在の再計算値が食い違っているか(記録後に名簿を直した痕跡)。請求額は記録値で出す。
+  hasDrift: boolean
+}
+
+// 恒久記録があればそれを請求の根拠にし、無ければライブ計算へフォールバックする。
+// ⚠️ 記録があるときにライブ値を採用しない。名簿を後から直しても過去の請求根拠が動かないことが
+//    この台帳の目的そのもの(オーナー指示 2026-08-08)。
+export function resolveBillingStudentCount(params: {
+  ledgerStudentCount?: number | null
+  liveStudentCount: number
+}): ResolvedBillingStudentCount {
+  const normalizedLiveCount = Math.max(0, Math.trunc(Number.isFinite(params.liveStudentCount) ? params.liveStudentCount : 0))
+  const rawLedgerCount = params.ledgerStudentCount
+  const hasLedgerCount = typeof rawLedgerCount === 'number' && Number.isFinite(rawLedgerCount)
+  if (!hasLedgerCount) {
+    return {
+      studentCount: normalizedLiveCount,
+      source: 'live',
+      ledgerStudentCount: null,
+      liveStudentCount: normalizedLiveCount,
+      hasDrift: false,
+    }
+  }
+
+  const normalizedLedgerCount = Math.max(0, Math.trunc(rawLedgerCount))
+  return {
+    studentCount: normalizedLedgerCount,
+    source: 'ledger',
+    ledgerStudentCount: normalizedLedgerCount,
+    liveStudentCount: normalizedLiveCount,
+    hasDrift: normalizedLedgerCount !== normalizedLiveCount,
+  }
 }
 
 export function buildInvoiceNumber(classroomId: string, monthKey: string) {

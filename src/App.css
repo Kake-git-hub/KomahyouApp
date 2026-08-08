@@ -780,6 +780,29 @@
   font-size: 24px;
 }
 
+/* 生徒数が恒久記録(studentCountLedger)由来か、現在の名簿からの暫定値かの説明行。
+   長文になるので行間を詰めすぎず、先頭のバッジと本文がベースラインで揃うようにする。 */
+.billing-ledger-summary {
+  display: block;
+  margin-top: 4px;
+  line-height: 1.6;
+}
+
+.billing-ledger-summary .status-chip {
+  vertical-align: baseline;
+  margin-right: 2px;
+}
+
+/* 生徒数セルは「人数 / 出どころバッジ / 食い違いの注記」を縦に積む。 */
+.billing-table .numeric-cell .status-chip {
+  margin-top: 2px;
+}
+
+.billing-table .numeric-cell .detail-note {
+  display: block;
+  margin-top: 2px;
+}
+
 .billing-table-scroll {
   overflow-x: auto;
 }
