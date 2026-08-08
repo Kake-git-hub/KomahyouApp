@@ -35,6 +35,14 @@ export function isMonthlyStudentCountSnapshotDate(dateKey: string) {
   return Number(dateKey.slice(8, 10)) === MONTHLY_STUDENT_COUNT_SNAPSHOT_DAY
 }
 
+// 未来日の手動記録を禁じるための判定。
+// ⚠️ 台帳は write-once なので、未来日(例: 当月15日)を先に記録してしまうと、その日に走る
+//    定期実行が「既に記録あり」でスキップし、**本当の当日時点の在籍数が永久に残らなくなる**。
+//    請求画面の既定の集計日は当月15日＝月の前半は未来日なので、この穴は塞いでおく必要がある。
+export function isFutureSnapshotDate(snapshotDate: string, todayJstDateKey: string) {
+  return snapshotDate > todayJstDateKey
+}
+
 // 鏡像: basicDataModel.ts の normalizeDateText。'未定'/空/不正は空文字に潰す。
 export function normalizeRosterDateText(value: string) {
   const text = value.trim()

@@ -13,6 +13,7 @@ import * as logger from 'firebase-functions/logger'
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import {
   countActiveStudentsOnDate,
+  isFutureSnapshotDate,
   isMonthlyStudentCountSnapshotDate,
   toJstDateKey,
   toMonthKeyFromDateKey,
@@ -1971,7 +1972,14 @@ export const triggerMonthlyStudentCountRecord = onCall({ invoker: 'public', time
   if (requestedDate && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
     throw new HttpsError('invalid-argument', 'snapshotDate は YYYY-MM-DD 形式で指定してください。')
   }
-  const snapshotDate = requestedDate || toJstDateKey(new Date())
+  const todayJstDateKey = toJstDateKey(new Date())
+  // 未来日は記録させない。台帳は write-once なので、先回りして記録すると当日の定期実行が
+  // スキップされ、本当のその日時点の在籍数が永久に残らなくなる(請求画面の既定集計日は
+  // 当月15日＝月の前半は未来日になるため、実際に踏み得る穴)。
+  if (requestedDate && isFutureSnapshotDate(requestedDate, todayJstDateKey)) {
+    throw new HttpsError('invalid-argument', '未来の日付は記録できません。その日を過ぎてから記録してください（当月15日分は15日 0:10 に自動記録されます）。')
+  }
+  const snapshotDate = requestedDate || todayJstDateKey
   return recordStudentCountLedgerEntry(workspaceKey, snapshotDate, 'manual', request.auth?.uid ?? '')
 })
 

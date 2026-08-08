@@ -4,7 +4,7 @@ import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integratio
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
 import { loadStudentCountLedgerEntry, recordStudentCountLedgerEntry, type StudentCountLedgerEntry } from '../../integrations/firebase/studentCountLedger'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, getJstTodayDateKey, isBillingAllowedEmail, isFutureBillingSnapshotDate, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
 import { buildInvoicePdfFileName, createInvoicePdfBlob, type InvoiceIssuerInfo } from '../../utils/invoicePdf'
 
 type BillingAutomationScreenProps = {
@@ -193,6 +193,8 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
   }, [rows])
 
   const isSnapshotDayOfMonth = Number(snapshotDate.slice(8, 10)) === DEFAULT_BILLING_SNAPSHOT_DAY
+  // 未来日は恒久記録できない(先回りして記録するとその日の定期実行がスキップされる)。
+  const isFutureSnapshotDate = isFutureBillingSnapshotDate(snapshotDate, getJstTodayDateKey())
 
   useEffect(() => {
     if (!canUseBilling) return
@@ -468,7 +470,9 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   <>
                     <span className="status-chip warning">暫定</span>
                     {' '}この日の恒久記録はありません。現在の名簿から計算した参考値です（名簿を直すと人数が変わります）。
-                    {isSnapshotDayOfMonth ? '毎月15日 0:00 に自動記録されます。' : `恒久記録があるのは毎月${DEFAULT_BILLING_SNAPSHOT_DAY}日です。`}
+                    {isFutureSnapshotDate
+                      ? 'まだ来ていない日なので記録もできません（先回りして記録すると、その日の自動記録がスキップされます）。'
+                      : isSnapshotDayOfMonth ? '毎月15日 0:00 に自動記録されます。' : `恒久記録があるのは毎月${DEFAULT_BILLING_SNAPSHOT_DAY}日です。`}
                   </>
                 )}
               </p>
@@ -483,8 +487,10 @@ export function BillingAutomationScreen({ currentUser, authMode, classrooms, use
                   className="secondary-button"
                   type="button"
                   onClick={() => void recordLedgerForSnapshotDate()}
-                  disabled={isLoading || isRecordingLedger || rows.length === 0}
-                  title="この集計日の在籍生徒数を、後から名簿を直しても変わらない恒久記録として保存します。"
+                  disabled={isLoading || isRecordingLedger || isFutureSnapshotDate || rows.length === 0}
+                  title={isFutureSnapshotDate
+                    ? 'まだ来ていない日は記録できません。先回りして記録すると、その日の自動記録がスキップされてしまいます。'
+                    : 'この集計日の在籍生徒数を、後から名簿を直しても変わらない恒久記録として保存します。'}
                 >{isRecordingLedger ? '記録中...' : 'この日の人数を恒久記録する'}</button>
               ) : null}
               <button className="primary-button" type="button" onClick={saveAllRows} disabled={isLoading || isSaving || rows.length === 0}>{isSaving ? '保存中...' : '入力内容を保存'}</button>

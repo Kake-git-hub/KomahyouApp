@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { isActiveOnDate } from '../../src/components/basic-data/basicDataModel'
 import {
   countActiveStudentsOnDate,
+  isFutureSnapshotDate,
   isMonthlyStudentCountSnapshotDate,
   isStudentActiveOnDate,
   MONTHLY_STUDENT_COUNT_SNAPSHOT_DAY,
@@ -141,5 +142,21 @@ describe('記録日(JST)の決定', () => {
 
   it('日付キーから請求月キーを取り出す', () => {
     expect(toMonthKeyFromDateKey('2026-08-15')).toBe('2026-08')
+  })
+})
+
+// write-once の台帳に未来日を先回りで記録すると、その日の定期実行が「既に記録あり」で
+// スキップし、本当のその日時点の在籍数が永久に残らなくなる。請求画面の既定集計日は
+// 当月15日=月の前半は未来日なので、実際に踏み得る穴。このガードを外さないこと。
+describe('未来日の記録禁止', () => {
+  it('今日より後の日付は未来日と判定する', () => {
+    expect(isFutureSnapshotDate('2026-08-15', '2026-08-08')).toBe(true)
+    expect(isFutureSnapshotDate('2026-09-01', '2026-08-31')).toBe(true)
+  })
+
+  it('今日ちょうど・過去の日付は記録できる', () => {
+    expect(isFutureSnapshotDate('2026-08-08', '2026-08-08')).toBe(false)
+    expect(isFutureSnapshotDate('2026-07-15', '2026-08-08')).toBe(false)
+    expect(isFutureSnapshotDate('2025-12-31', '2026-01-01')).toBe(false)
   })
 })

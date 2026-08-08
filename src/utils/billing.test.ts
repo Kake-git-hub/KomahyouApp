@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, isBillingAllowedEmail, resolveBillingStudentCount } from './billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, getJstTodayDateKey, isBillingAllowedEmail, isFutureBillingSnapshotDate, resolveBillingStudentCount } from './billing'
 import type { StudentRow } from '../components/basic-data/basicDataModel'
 
 function student(overrides: Partial<StudentRow>): StudentRow {
@@ -153,5 +153,21 @@ describe('resolveBillingStudentCount', () => {
   it('負値は0へ、小数は切り捨てて正規化する', () => {
     expect(resolveBillingStudentCount({ ledgerStudentCount: -3, liveStudentCount: 4 }).studentCount).toBe(0)
     expect(resolveBillingStudentCount({ ledgerStudentCount: 12.9, liveStudentCount: 4 }).studentCount).toBe(12)
+  })
+})
+
+// 台帳は write-once。未来日を先回りで記録するとその日の定期実行がスキップされ、
+// 本当のその日時点の在籍数が残らなくなる。サーバー側 isFutureSnapshotDate と同じ規則。
+describe('未来の集計日は恒久記録の対象外', () => {
+  it('今日より後は未来日、今日ちょうど・過去は記録できる', () => {
+    expect(isFutureBillingSnapshotDate('2026-08-15', '2026-08-08')).toBe(true)
+    expect(isFutureBillingSnapshotDate('2026-08-08', '2026-08-08')).toBe(false)
+    expect(isFutureBillingSnapshotDate('2026-07-15', '2026-08-08')).toBe(false)
+  })
+
+  it('今日の判定は端末TZに依らず日本時間で行う', () => {
+    // 2026-08-08 15:30 UTC = 2026-08-09 00:30 JST。UTCのままだと1日ずれる。
+    expect(getJstTodayDateKey(new Date('2026-08-08T15:30:00Z'))).toBe('2026-08-09')
+    expect(getJstTodayDateKey(new Date('2026-08-08T14:30:00Z'))).toBe('2026-08-08')
   })
 })
