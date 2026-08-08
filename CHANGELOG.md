@@ -17,6 +17,9 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+
+## v1.5.477 (2026-08-08)
+
 - feat: **毎月15日 0:00(JST)時点の在籍生徒数を Firebase に恒久記録し、請求画面がそれを読むようにした**(オーナー指示 2026-08-08)。従来は選択中の集計日で現在の名簿からライブ再計算していたため、生徒を名簿から消したり入塾日/退塾日を後から直すと「当時の人数」を再現できなかった(自動バックアップも保持は最長7日)。新設のスケジュール関数 `recordMonthlyStudentCounts`(`10 0 15 * *` / Asia/Tokyo)が `workspaces/{key}/studentCountLedger/{YYYY-MM-DD}` とその `classrooms/{classroomId}` に人数＋内訳(生徒ID)を書き込む(functions/src/index.ts)
 - feat: 台帳は**書き込み一回きり(write-once)**。同じ集計日の記録があれば `batch.create` でコミットごと失敗させ、上書き・二重記録を防ぐ。Firestore ルールもクライアントからは `read` のみ・`write: false` に閉じた(firebase/firestore.rules `studentCountLedger`・回帰テスト3件を firebase/rules/firestore.rules.test.ts に追加)
 - feat: 請求画面の生徒数を「恒久記録 > ライブ計算」の優先順で解決するようにした(`resolveBillingStudentCount`・src/utils/billing.ts)。記録がある日は `恒久記録` バッジ＋記録日時を表示し、現在の名簿と食い違う教室は「現在の名簿では N 人」を併記(請求額は記録値で計算)。記録が無い日は `暫定` バッジで参考値と明示(src/components/billing/BillingAutomationScreen.tsx)
