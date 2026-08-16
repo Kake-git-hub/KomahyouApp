@@ -32,7 +32,7 @@ type BoardToolbarProps = {
   isTemplateMode: boolean
   onUndo: () => void
   onRedo: () => void
-  onPackSort: () => void
+  onOpenSortMenu: () => void
   onCopyDistributionUrl?: () => void
   onGoPrevWeek: () => void
   onGoNextWeek: () => void
@@ -89,7 +89,7 @@ function BoardToolbarComponent({
   isTemplateMode,
   onUndo,
   onRedo,
-  onPackSort,
+  onOpenSortMenu,
   onCopyDistributionUrl,
   onGoPrevWeek,
   onGoNextWeek,
@@ -223,7 +223,7 @@ function BoardToolbarComponent({
               <path d="M16 9.5H8.75C5.57 9.5 3 12.07 3 15.25" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
-          <button className="secondary-button slim" type="button" onClick={onPackSort} data-testid="pack-sort-button">詰めて並び替え</button>
+          <button className="secondary-button slim" type="button" onClick={onOpenSortMenu} data-testid="board-sort-menu-button">並べ替え</button>
           {!isTemplateMode && onCopyDistributionUrl ? (
             <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">講師日程共有</button>
           ) : null}

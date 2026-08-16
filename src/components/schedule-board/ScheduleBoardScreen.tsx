@@ -24,6 +24,8 @@ import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, 
 import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
+import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
+export { packSortCellDesks } from './deskSort'
 import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
@@ -2162,89 +2164,12 @@ function getStudentStockMenuLabel(student: StudentEntry) {
   return student.lessonType === 'special' ? '未消化講習に戻す' : '未消化振替に戻す'
 }
 
-function parseDeskOrder(deskId: string) {
-  const matched = deskId.match(/_desk_(\d+)$/)
-  return matched ? Number(matched[1]) : Number.MAX_SAFE_INTEGER
-}
-
 function hasMemoInStudentSlot(desk: DeskCell, studentIndex: number) {
   return Boolean(desk.memoSlots?.[studentIndex]?.trim())
 }
 
 function isStudentSlotBlocked(desk: DeskCell, studentIndex: number) {
   return Boolean(desk.lesson?.studentSlots[studentIndex]) || hasMemoInStudentSlot(desk, studentIndex)
-}
-
-function isStudentSlotFilled(student: StudentEntry | null | undefined): student is StudentEntry {
-  return Boolean(student && (student.id || student.name))
-}
-
-function resolveDeskPackPriority(desk: DeskCell) {
-  const filledStudentCount = desk.lesson?.studentSlots.filter(isStudentSlotFilled).length ?? 0
-  if (filledStudentCount >= 2) return 0
-  if (filledStudentCount === 1) return 1
-  if (desk.teacher.trim()) return 2
-  return 3
-}
-
-export function packSortCellDesks(cell: SlotCell, options?: { skipStatusSlotPack?: boolean }) {
-  const skipStatusSlotPack = options?.skipStatusSlotPack ?? false
-  const normalizedDesks = cell.desks.map((desk) => {
-    const nextDesk: DeskCell = {
-      ...desk,
-      memoSlots: desk.memoSlots ? [...desk.memoSlots] as [string | null, string | null] : undefined,
-      statusSlots: desk.statusSlots ? [...desk.statusSlots] as [StudentStatusEntry | null, StudentStatusEntry | null] : undefined,
-      lesson: desk.lesson
-        ? {
-          ...desk.lesson,
-          studentSlots: [
-            isStudentSlotFilled(desk.lesson.studentSlots[0]) ? { ...desk.lesson.studentSlots[0] } : null,
-            isStudentSlotFilled(desk.lesson.studentSlots[1]) ? { ...desk.lesson.studentSlots[1] } : null,
-          ] as [StudentEntry | null, StudentEntry | null],
-        }
-        : undefined,
-    }
-
-    if (!nextDesk.lesson) return nextDesk
-
-    const firstStudent = nextDesk.lesson.studentSlots[0]
-    const secondStudent = nextDesk.lesson.studentSlots[1]
-    const hasSlot0Status = skipStatusSlotPack && nextDesk.statusSlots?.[0] != null
-    if (!firstStudent && secondStudent && !hasSlot0Status) {
-      nextDesk.lesson.studentSlots = [secondStudent, null]
-      if (nextDesk.memoSlots && !nextDesk.memoSlots[0]) {
-        nextDesk.memoSlots = [nextDesk.memoSlots[1] ?? null, null]
-      }
-      if (nextDesk.statusSlots && !nextDesk.statusSlots[0]) {
-        nextDesk.statusSlots = [nextDesk.statusSlots[1] ?? null, null]
-      }
-    }
-
-    // Both slots empty → clear lesson
-    if (!nextDesk.lesson.studentSlots[0] && !nextDesk.lesson.studentSlots[1]) {
-      nextDesk.lesson = undefined
-    }
-
-    return nextDesk
-  })
-
-  return normalizedDesks
-    .sort((leftDesk, rightDesk) => {
-      const leftPriority = resolveDeskPackPriority(leftDesk)
-      const rightPriority = resolveDeskPackPriority(rightDesk)
-      if (leftPriority !== rightPriority) return leftPriority - rightPriority
-
-      const leftTeacherLabel = leftDesk.teacher ?? ''
-      const rightTeacherLabel = rightDesk.teacher ?? ''
-      const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
-      if (teacherCompare !== 0) return teacherCompare
-
-      return parseDeskOrder(leftDesk.id) - parseDeskOrder(rightDesk.id)
-    })
-    .map((desk, index) => ({
-      ...desk,
-      id: `${cell.id}_desk_${index + 1}`,
-    }))
 }
 
 function hasRegularPlacementConflict(cell: SlotCell, teacherId: string, studentIds: string[], teacherById: Map<string, TeacherRow>) {
@@ -4934,6 +4859,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const templateFileInputRef = useRef<HTMLInputElement | null>(null)
   const [templateSaveConfirm, setTemplateSaveConfirm] = useState<TemplateSaveConfirmState | null>(null)
   const [templateImportDateOptions, setTemplateImportDateOptions] = useState<{ dates: string[]; xlsxModule: typeof import('xlsx'); workbook: import('xlsx').WorkBook } | null>(null)
+  // 「並べ替え」ボタンを押したあとに、上に詰める / 同席番に揃える のどちらかを選ばせるモーダル。
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [activeStockAutoAssignKey, setActiveStockAutoAssignKey] = useState<string | null>(null)
   const [isStudentScheduleOpen, setIsStudentScheduleOpen] = useState(() => hasOpenSchedulePopup('student'))
   const [isTeacherScheduleOpen, setIsTeacherScheduleOpen] = useState(() => hasOpenSchedulePopup('teacher'))
@@ -8076,16 +8003,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setTemplateImportDateOptions(null)
   }
 
-  const handleTemplatePackSort = () => {
+  const handleTemplateSort = (mode: BoardSortMode) => {
     pushTemplateUndo(templateCells)
     const next = cloneTemplateCells(templateCells)
-    for (const cell of next) {
-      cell.desks = packSortCellDesks(cell)
+    if (mode === 'seat') {
+      // テンプレは曜日ごとに dateKey が分かれているため、そのまま「1日=1曜日」の単位になる。
+      const sorted = seatSortCells(next)
+      sorted.forEach((cell, index) => { next[index].desks = cell.desks })
+    } else {
+      for (const cell of next) {
+        cell.desks = packSortCellDesks(cell)
+      }
     }
     setTemplateCells(next)
     setStudentMenu(null)
     setTeacherMenu(null)
-    setStatusMessage('テンプレートを詰めて並び替えました。')
+    setStatusMessage(mode === 'seat'
+      ? 'テンプレートを曜日ごとに同席番で並べ替えました。'
+      : 'テンプレートを上に詰めて並べ替えました。')
   }
   // ── End template mode helpers ──
 
@@ -10950,16 +10885,31 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage('取り消した操作をやり直しました。')
   }
 
-  const handlePackSort = () => {
+  // 並べ替えの適用範囲は「テンプレ画面=テンプレ全体」「盤面=表示中の週だけ」に限定する
+  // (オーナー確認 2026-08-16)。他の週には触れない。
+  const handleBoardSort = (mode: BoardSortMode) => {
     const nextWeeks = cloneWeeks(weeks)
     const nextCells = nextWeeks[weekIndex]
 
-    for (const cell of nextCells) {
-      cell.desks = packSortCellDesks(cell, { skipStatusSlotPack: true })
+    if (mode === 'seat') {
+      const sorted = seatSortCells(nextCells, { skipStatusSlotPack: true })
+      sorted.forEach((cell, index) => { nextCells[index].desks = cell.desks })
+    } else {
+      for (const cell of nextCells) {
+        cell.desks = packSortCellDesks(cell, { skipStatusSlotPack: true })
+      }
     }
 
     commitWeeks(nextWeeks, weekIndex, selectedCellId, 0)
-    setStatusMessage('表示中の週だけ、埋まっている机を上に詰めて並び替えました。')
+    setStatusMessage(mode === 'seat'
+      ? '表示中の週だけ、1日の中で講師ができるだけ同じ席番になるよう並べ替えました。'
+      : '表示中の週だけ、埋まっている机を上に詰めて並び替えました。')
+  }
+
+  const handleApplySortMode = (mode: BoardSortMode) => {
+    setSortMenuOpen(false)
+    if (isTemplateMode) handleTemplateSort(mode)
+    else handleBoardSort(mode)
   }
 
   // BoardGrid を memo 化するため、渡す関数/配列 props を安定参照化する。
@@ -10985,7 +10935,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // BoardToolbar を memo 化するため、渡す関数 props を参照安定化する（挙動は不変）。
   const tbOnUndo = useStableCallback(isTemplateMode ? handleTemplateUndo : handleUndo)
   const tbOnRedo = useStableCallback(isTemplateMode ? handleTemplateRedo : handleRedo)
-  const tbOnPackSort = useStableCallback(isTemplateMode ? handleTemplatePackSort : handlePackSort)
+  const tbOnOpenSortMenu = useStableCallback(() => setSortMenuOpen(true))
   const tbOnCopyDistributionUrl = useStableCallback(handleCopyDistributionUrl)
   const tbOnGoPrevWeek = useStableCallback(() => switchWeek(weekIndex - 1))
   const tbOnGoNextWeek = useStableCallback(() => switchWeek(weekIndex + 1))
@@ -11076,7 +11026,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             isTemplateMode={isTemplateMode}
             onUndo={tbOnUndo}
             onRedo={tbOnRedo}
-            onPackSort={tbOnPackSort}
+            onOpenSortMenu={tbOnOpenSortMenu}
             onCopyDistributionUrl={tbOnCopyDistributionUrl}
             onGoPrevWeek={tbOnGoPrevWeek}
             onGoNextWeek={tbOnGoNextWeek}
@@ -11601,6 +11551,35 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               />
             )
           })() : null}
+          {sortMenuOpen ? (
+            <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setSortMenuOpen(false) }}>
+              <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="board-sort-menu-modal" style={{ minWidth: 300 }}>
+                <div className="auto-assign-modal-title">並べ替えの種類を選択</div>
+                <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
+                  {isTemplateMode
+                    ? '通常授業テンプレート全体に適用します。'
+                    : '表示中の週だけに適用します（他の週は変わりません）。'}
+                </div>
+                <div className="student-menu-section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button type="button" className="primary-button" onClick={() => handleApplySortMode('pack')} data-testid="board-sort-pack-button">
+                    上に詰めて並べ替え
+                  </button>
+                  <div className="student-menu-help-text">埋まっている机を上へ詰めて、空いた机を下にまとめます。</div>
+                  <button type="button" className="primary-button" onClick={() => handleApplySortMode('seat')} data-testid="board-sort-seat-button">
+                    同席番で並べ替え
+                  </button>
+                  <div className="student-menu-help-text">
+                    {isTemplateMode
+                      ? '曜日ごとに、コマ数の多い講師から順にできるだけ同じ席番へ揃えます（席が空いたままになることがあります）。'
+                      : '1日ごとに、コマ数の多い講師から順にできるだけ同じ席番へ揃えます（席が空いたままになることがあります）。'}
+                  </div>
+                </div>
+                <div className="student-menu-section student-menu-actions">
+                  <button type="button" className="secondary-button" onClick={() => setSortMenuOpen(false)} data-testid="board-sort-cancel-button">キャンセル</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
           {templateImportDateOptions ? (
             <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplateImportDateOptions(null) }}>
               <div className="auto-assign-modal" role="dialog" aria-modal="true" style={{ minWidth: 260 }}>
