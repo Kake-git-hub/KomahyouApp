@@ -10,7 +10,42 @@ import {
   toUtcDateKey,
   toUtcHourKey,
   toUtcQuarterHourKey,
+  WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST,
+  WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS,
+  WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS,
+  WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS,
+  WORKSPACE_BACKUP_QUIET_HOURS_END_JST,
+  WORKSPACE_BACKUP_QUIET_HOURS_START_JST,
 } from './workspaceBackupSchedule'
+
+// 保持期間のスペックロック（正本: docs/spec-save-restore.md §8「データ保持期間」8-2）。
+// 保持期間はユーザーへの約束であり、コードの都合で黙って変えてよい数値ではない。
+// この値を変えるときは §8 の表・CHANGELOG.md と**同じコミット**で更新すること
+// （過去に App.tsx 側の保持本数の見積りだけが短縮反映漏れになったドリフト事故があるため、
+//   数値そのものをテストで固定して静かなズレを検知する）。
+describe('保持期間のスペックロック（docs/spec-save-restore.md §8-2）', () => {
+  it('自動バックアップの段階間引きは 24時間 / 72時間 / 7日、日次アンカーは JST 3:00', () => {
+    expect(WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS).toBe(24)
+    expect(WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS).toBe(72)
+    expect(WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS).toBe(7)
+    expect(WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST).toBe(3)
+  })
+
+  it('静音時間帯は JST 3:00〜9:00（実質 3:15〜8:45・3:00 の日次アンカーだけは取得）', () => {
+    expect(WORKSPACE_BACKUP_QUIET_HOURS_START_JST).toBe(3)
+    expect(WORKSPACE_BACKUP_QUIET_HOURS_END_JST).toBe(9)
+    // 日次アンカーが静音帯に飲み込まれると 72時間〜7日帯が丸ごと消える（§8-2 の注記）。
+    expect(WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST).toBeGreaterThanOrEqual(WORKSPACE_BACKUP_QUIET_HOURS_START_JST)
+    expect(WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST).toBeLessThan(WORKSPACE_BACKUP_QUIET_HOURS_END_JST)
+    expect(isWorkspaceAutoBackupSkippedAt(new Date('2026-07-09T18:00:00Z'))).toBe(false) // JST 03:00
+  })
+
+  it('7日を超えたバックアップは種別・時刻によらず必ず削除される（遡れる上限＝7日）', () => {
+    const savedAtMs = new Date('2026-07-03T18:00:00Z').getTime() // JST 2026-07-04 03:00（日次アンカー）
+    const overRetention = savedAtMs + (WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS * 24 + 1) * HOUR_IN_MS
+    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs: overRetention })).toBe(false)
+  })
+})
 
 describe('isWorkspaceAutoBackupSkippedAt (静音時間帯 JST 3:15〜8:45 をスキップ・3:00は取得)', () => {
   // JST = UTC+9。UTC 18:00 = JST 翌 03:00。
