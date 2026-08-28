@@ -28,7 +28,7 @@ import type { SlotCell } from './components/schedule-board/types'
 import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
-import { formatWeeklyScheduleTitle, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
+import { formatWeeklyScheduleTitle, resolveDisplayedOverlappingSession, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
 import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { buildOccupiedSlotLabel } from './utils/occupiedSlotLabel'
@@ -3211,10 +3211,11 @@ function AuthenticatedApp() {
     const config = getFirebaseBackendConfig()
     if (!config.enabled || !actingClassroomId) return
 
-    const overlapping = specialSessions.filter((s) => s.startDate <= scheduleEndDate && s.endDate >= scheduleStartDate)
-    if (overlapping.length !== 1) return
-
-    const session = overlapping[0]
+    // No.201(2026-08-29): 表示範囲に講習が2つ重なると「!== 1 で return」となり、トークン発行と
+    // 提出状況の後追い反映(occupiedSlots/reopenedSlots)が止まっていた。日程表のQR・バッジと同じ
+    // 選択規則(resolveDisplayedOverlappingSession=表示開始日を含む講習を優先)で1つを選んで続行する。
+    const session = resolveDisplayedOverlappingSession(specialSessions, scheduleStartDate, scheduleEndDate)
+    if (!session) return
     const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
     const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
@@ -3733,7 +3734,11 @@ function AuthenticatedApp() {
             // B4: reset 前に token をガードへ登録し、リセット前の古い submitted 購読で
             // countSubmitted が復活するのを防ぐ。TTL(既定2.5秒)後にガードが自動で解除する。
             // 生徒・講師で同じガード規律を共通ヘルパへ集約(INV-07)。
-            guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId).catch(() => { /* non-fatal */ })
+            // No.210(2026-08-29): reset の失敗を握り潰すと「登録解除できたのに再提出できない」が無言で起きる。
+      // 失敗したら知らせて再操作を促す(ガード自体は積んであるので復活はしない)。
+      guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, studentToken, actingClassroomId).catch(() => {
+        window.alert('講習提出のリセット(再提出可能化)に失敗しました。通信状態を確認して、登録解除をもう一度お試しください。')
+      })
           }
         }
         return
@@ -3857,7 +3862,10 @@ function AuthenticatedApp() {
           if (countSubmitted) markLectureSubmissionDocAsSubmitted(teacherToken, undefined, actingClassroomId).catch(() => { /* non-fatal */ })
           // INV-07: 講師の登録解除も reset 前に必ずガードへ add する(生徒経路と対称・v1.5.392 の講師版)。
           // 欠けていると解除直後の古い submitted 購読で countSubmitted と盤面自動配置が復活する。
-          else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId).catch(() => { /* non-fatal */ })
+          // No.210: 生徒側と同じく reset 失敗を可視化する。
+      else guardAndResetLectureSubmissionDoc(recentlyResetSubmissionGuardRef.current, teacherToken, actingClassroomId).catch(() => {
+        window.alert('講習提出のリセット(再提出可能化)に失敗しました。通信状態を確認して、登録解除をもう一度お試しください。')
+      })
         }
         return
       }

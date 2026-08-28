@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml } from './scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml , resolveDisplayedOverlappingSession } from './scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries } from './scheduleViewData'
 import { computeTeacherMove } from '../components/schedule-board/ScheduleBoardScreen'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
@@ -672,6 +672,118 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('移動先は休校日のため移動できません。')
     expect(html).toContain('この生徒の授業がすでにあるコマへは移動できません。')
     vi.unstubAllGlobals()
+  })
+
+  // 手動テスト No.201(2026-08-29): 表示範囲に講習期間が2つ重なると session:undefined になり
+  // 全員のQR・「希望提出済」バッジが消えていた回帰防止。複数重なりでも1つを選ぶ。
+  describe('resolveDisplayedOverlappingSession (表示範囲に複数講習が重なるときのQR/バッジ講習の選択)', () => {
+    const sessionA = { id: 'a', startDate: '2026-07-20', endDate: '2026-08-10' }
+    const sessionB = { id: 'b', startDate: '2026-08-20', endDate: '2026-08-31' }
+
+    it('重なりが0件は undefined・1件はそれを返す', () => {
+      expect(resolveDisplayedOverlappingSession([sessionA], '2026-09-01', '2026-09-07')).toBeUndefined()
+      expect(resolveDisplayedOverlappingSession([sessionA, sessionB], '2026-07-25', '2026-08-01')?.id).toBe('a')
+    })
+
+    it('複数重なるときは表示開始日を含む講習を優先する(旧実装は undefined で全消しだった)', () => {
+      // 表示 8/1〜8/31 は A(〜8/10) と B(8/20〜) の両方に重なる。開始日 8/1 を含むのは A。
+      expect(resolveDisplayedOverlappingSession([sessionA, sessionB], '2026-08-01', '2026-08-31')?.id).toBe('a')
+      // 表示 8/25〜9/5 の開始日を含むのは B。
+      expect(resolveDisplayedOverlappingSession([sessionA, sessionB], '2026-08-25', '2026-09-05')?.id).toBe('b')
+    })
+
+    it('表示開始日を含む講習が無ければ、表示範囲内で最初に始まる講習を選ぶ', () => {
+      // 表示 8/12〜8/31: 開始日 8/12 はどちらの講習にも含まれない → 先に始まる B(8/20)…ではなく
+      // 重なっているのは B のみ(A は 8/10 まで)。A も残るケースとして 8/11〜9/30 で確認。
+      expect(resolveDisplayedOverlappingSession([sessionB, sessionA], '2026-08-11', '2026-09-30')?.id).toBe('b')
+    })
+  })
+
+  it('ペイロードに qrSessionId(バッジが指す講習)が載り、登録解除は表示中講習のときだけバッジを落とす(No.201)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-07-25',
+      defaultEndDate: '2026-08-01',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      specialSessions: [
+        { id: 'sess-display', label: '夏期', startDate: '2026-07-20', endDate: '2026-08-10', teacherInputs: {}, studentInputs: {}, createdAt: '', updatedAt: '' },
+      ] as unknown as NonNullable<Parameters<typeof openStudentScheduleHtml>[0]['specialSessions']>,
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    const payload = JSON.parse(payloadMatch![1])
+    expect(payload.qrSessionId).toBe('sess-display')
+    // 埋め込みJSの登録解除は qrSessionId 一致のときだけ submissionSubmitted を落とす(別講習の解除で消さない)。
+    expect(html).toContain('DATA.qrSessionId === activeCountDialog.sessionId')
+    expect(html).toContain('DATA.qrSessionId === activeTeacherRegisterDialog.sessionId')
+    vi.unstubAllGlobals()
+  })
+
+  // 手動テスト No.210(2026-08-29): opener(コマ表本体タブ)不在時、登録/解除の postMessage が黙って捨てられ
+  // 「登録解除できたのに再提出できない」に見えていた。ユーザーの明示操作(提出/解除/黄色化/移動)は
+  // 反映されないことをその場で知らせる。自動通知系(popup-ready/最新表示通知/連絡事項)は開くだけで
+  // 連発するため対象外(無言のまま)であることも固定する。
+  it('opener 不在の明示操作は isOpenerAvailable で知らせ、自動通知系は無言のまま(No.210)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('function isOpenerAvailable()')
+    expect(html).toContain('この操作は反映されていません')
+    // 明示操作の persist 系は isOpenerAvailable を通る(無言 return に戻すと落ちる)。
+    const persistFns = ['function persistStudentCount(', 'function persistTeacherCount(', 'function persistUnavailableSlots(', 'function persistTeacherUnavailableSlots(']
+    for (const fn of persistFns) {
+      const start = html.indexOf(fn)
+      expect(start, fn).toBeGreaterThan(-1)
+      const body = html.slice(start, start + 600)
+      expect(body, fn).toContain('isOpenerAvailable()')
+    }
+    // 自動通知系は対象外(alert 連発防止)。
+    for (const fn of ['function notifyPopupReady(', 'function notifyRangeChange(', 'function postScheduleNoteUpdate(']) {
+      const start = html.indexOf(fn)
+      expect(start, fn).toBeGreaterThan(-1)
+      const body = html.slice(start, start + 400)
+      expect(body, fn).not.toContain('isOpenerAvailable()')
+    }
   })
 
   // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の

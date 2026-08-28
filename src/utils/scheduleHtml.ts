@@ -220,6 +220,9 @@ export type SchedulePayload = {
   classroomStorageKey: string
   // タブ名に表示する教室名(2026-07-09)。
   classroomName: string
+  // QR・「希望提出済」バッジが指している講習ID(resolveDisplayedOverlappingSession で選ばれた講習)。
+  // 登録解除モーダルが「表示中の講習の解除のときだけ」バッジを落とす判定に使う(No.201・2026-08-29)。
+  qrSessionId?: string
   showSubmittedQr?: boolean
   // 生徒日程表のオプション欄(休み欄を置き換え/振替を左詰め)を有効化する。開発用教室のみ。
   optionFieldEnabled?: boolean
@@ -276,12 +279,28 @@ function registerScheduleQrBuilder() {
   ;(window as ScheduleQrRuntimeWindow).__buildScheduleQrSvg = buildSubmissionQrSvg
 }
 
-function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined, startDate: string, endDate: string) {
-  if (!specialSessions?.length) return { session: undefined, error: undefined }
+// 手動テスト No.201(2026-08-29): 表示範囲に講習期間が2つ重なると従来は session:undefined
+// (「複数の講習期間が重複しています」)になり、**全員のQR・「希望提出済」バッジが消え**、
+// トークン発行と提出状況の後追い反映(App.tsx の ensureScheduleSubmissionTokens)も止まっていた。
+// 「別の講習を作った瞬間に前の講習の提出済みが消えた」ように見える(提出データ自体は講習×人で独立・無事)。
+// 重なりが複数のときは**表示開始日を含む講習**(=いま表示している週の講習)を優先し、無ければ
+// 表示範囲内で最初に始まる講習を選ぶ。講習期間どうしの重複登録は仕様で禁止されている(特別講習データの
+// 重複チェック)ため「表示開始日を含む講習」は高々1つ。
+export function resolveDisplayedOverlappingSession<T extends { startDate: string; endDate: string }>(
+  specialSessions: T[] | undefined,
+  startDate: string,
+  endDate: string,
+): T | undefined {
+  if (!specialSessions?.length) return undefined
   const overlapping = specialSessions.filter((s) => s.startDate <= endDate && s.endDate >= startDate)
-  if (overlapping.length === 0) return { session: undefined, error: undefined }
-  if (overlapping.length > 1) return { session: undefined, error: '複数の講習期間が重複しています。QRを表示できません。' }
-  return { session: overlapping[0], error: undefined }
+  if (overlapping.length <= 1) return overlapping[0]
+  const containingStart = overlapping.filter((s) => s.startDate <= startDate && s.endDate >= startDate)
+  const candidates = containingStart.length > 0 ? containingStart : overlapping
+  return candidates.slice().sort((a, b) => a.startDate.localeCompare(b.startDate))[0]
+}
+
+function findOverlappingSession(specialSessions: SpecialSessionRow[] | undefined, startDate: string, endDate: string) {
+  return { session: resolveDisplayedOverlappingSession(specialSessions, startDate, endDate), error: undefined as string | undefined }
 }
 
 export type OpenStudentScheduleHtmlParams = OpenScheduleHtmlParams & {
@@ -825,6 +844,7 @@ export function buildStudentPayload(params: OpenStudentScheduleHtmlParams): Sche
   return {
     ...basePayload,
     expectedRegularOccurrences,
+    qrSessionId: targetSession?.id ?? '',
     // 【移行中・INV-05】呼び出し側（盤面画面）が盤面全体から作って渡す。旧方式の教室では空配列。
     outstandingAbsences: params.outstandingAbsences ?? [],
     boardBasedPlannedCountEnabled: Boolean(params.boardBasedPlannedCountEnabled),
@@ -876,6 +896,7 @@ export function buildTeacherPayload(params: OpenTeacherScheduleHtmlParams): Sche
 
   return {
     ...basePayload,
+    qrSessionId: targetSession?.id ?? '',
     highlightedTeacherId: params.highlightedTeacherId ?? undefined,
     countAdjustments: [],
     students: [],
@@ -920,6 +941,7 @@ function buildAllPayload(params: OpenAllScheduleHtmlParams): SchedulePayload {
   return {
     ...basePayload,
     expectedRegularOccurrences,
+    qrSessionId: targetSession?.id ?? '',
     countAdjustments: buildSerializedScheduleCountAdjustments({
       cells: params.cells,
       scheduleCountAdjustments: params.scheduleCountAdjustments,
@@ -3860,7 +3882,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function sendScheduleMoveRequest(source, seat) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!window.opener || window.opener.closed) {
+            // No.210: 移動系は理由オーバーレイで知らせる(alert より既存の move-error UI に合わせる)。
+            showScheduleMoveError('コマ表アプリ本体のタブが見つからないため移動できません。コマ表(盤面)を開いた状態で、この日程表を開き直してからお試しください。');
+            return;
+          }
           // 盤面編集→反映の間の同期中スピナーを即時に出す(移動は反映を待つのでスピナーを出す=抑制窓を解除)。
           suppressSyncSpinnerUntil = 0;
           if (typeof showScheduleSyncingOverlay === 'function') showScheduleSyncingOverlay();
@@ -4522,9 +4548,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
+      // No.210(2026-08-29): opener(コマ表本体タブ)が無いと postMessage が届かず、画面上は成功に
+      // 見えるのに本体 state も Firestore も変わらない(「登録解除したのに再提出できない」の最有力原因)。
+      // 無言 return をやめ、反映されないことをその場で知らせる。
+      function isOpenerAvailable() {
+        if (window.opener && !window.opener.closed) return true;
+        window.alert('コマ表アプリ本体のタブが見つからないため、この操作は反映されていません。\\nコマ表(盤面)を開いた状態で、盤面の「生徒日程」「講師日程」ボタンからこの日程表を開き直して、もう一度操作してください。');
+        return false;
+      }
+
       function persistUnavailableSlots(sessionId, personId, unavailableSlots) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!isOpenerAvailable()) return;
           window.opener.postMessage({
             type: 'schedule-student-unavailable-save',
             sessionId,
@@ -4536,7 +4571,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function persistStudentCount(sessionId, personId, subjectSlots, regularOnly, countSubmitted, groupClassParticipation, optionChecks, subjectDurations) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!isOpenerAvailable()) return;
           const message = {
             type: 'schedule-student-count-save',
             sessionId,
@@ -4557,7 +4592,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function persistTeacherUnavailableSlots(sessionId, personId, unavailableSlots) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!isOpenerAvailable()) return;
           window.opener.postMessage({
             type: 'schedule-teacher-unavailable-save',
             sessionId,
@@ -4588,7 +4623,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             return { ...current, teacherInputs: { ...current.teacherInputs, [teacherId]: { ...input, reopenedSlots: sortSlotKeys(reopened) } } };
           });
           try {
-            if (!window.opener || window.opener.closed) return;
+            if (!isOpenerAvailable()) return;
             window.opener.postMessage({
               type: 'schedule-teacher-reopen-save',
               sessionId: session.id,
@@ -4605,7 +4640,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function persistTeacherCount(sessionId, personId, countSubmitted) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!isOpenerAvailable()) return;
           window.opener.postMessage({
             type: 'schedule-teacher-count-save',
             sessionId,
@@ -5445,8 +5480,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const currentInput = getStudentSessionInput(activeCountDialog.studentId, activeCountDialog.sessionId);
         updateStudentCountLocally(activeCountDialog.sessionId, activeCountDialog.studentId, currentInput.subjectSlots, currentInput.regularOnly, false);
         persistStudentCount(activeCountDialog.sessionId, activeCountDialog.studentId, currentInput.subjectSlots, currentInput.regularOnly, false);
-        var matchedStudent = (DATA.students || []).find(function(s) { return s.id === activeCountDialog.studentId; });
-        if (matchedStudent) matchedStudent.submissionSubmitted = false;
+        // No.201(2026-08-29): submissionSubmitted バッジは「表示中の講習(DATA.qrSessionId)」の提出状態。
+        // どの講習の解除かを見ずに落とすと、別講習の解除で表示中講習のバッジまで消えていた。
+        if (!DATA.qrSessionId || DATA.qrSessionId === activeCountDialog.sessionId) {
+          var matchedStudent = (DATA.students || []).find(function(s) { return s.id === activeCountDialog.studentId; });
+          if (matchedStudent) matchedStudent.submissionSubmitted = false;
+        }
         activeCountDialog = null;
         syncPayloadFingerprint();
         render();
@@ -5465,8 +5504,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (!activeTeacherRegisterDialog || !activeTeacherRegisterDialog.teacherId || !activeTeacherRegisterDialog.sessionId) return;
         updateTeacherCountLocally(activeTeacherRegisterDialog.sessionId, activeTeacherRegisterDialog.teacherId, false);
         persistTeacherCount(activeTeacherRegisterDialog.sessionId, activeTeacherRegisterDialog.teacherId, false);
-        var matchedTeacher = (DATA.teachers || []).find(function(t) { return t.id === activeTeacherRegisterDialog.teacherId; });
-        if (matchedTeacher) matchedTeacher.submissionSubmitted = false;
+        // No.201: 生徒側と同じく、表示中の講習の解除のときだけバッジを落とす。
+        if (!DATA.qrSessionId || DATA.qrSessionId === activeTeacherRegisterDialog.sessionId) {
+          var matchedTeacher = (DATA.teachers || []).find(function(t) { return t.id === activeTeacherRegisterDialog.teacherId; });
+          if (matchedTeacher) matchedTeacher.submissionSubmitted = false;
+        }
         activeTeacherRegisterDialog = null;
         syncPayloadFingerprint();
         render();
@@ -6115,7 +6157,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function postScheduleNoteUpdate(noteKey, value) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!window.opener || window.opener.closed) return; // 自動通知系: opener不在のalert可視化(No.210)の対象外(開くだけで連発するため)
           window.opener.postMessage({
             type: 'schedule-note-update',
             viewType: BASE_VIEW_TYPE,
@@ -6254,7 +6296,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function notifyRangeChange(startDate, endDate, periodValue, personId) {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!window.opener || window.opener.closed) return; // 自動通知系: opener不在のalert可視化(No.210)の対象外(開くだけで連発するため)
           window.opener.postMessage({
             type: 'schedule-range-update',
             viewType: VIEW_TYPE,
@@ -6268,7 +6310,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function notifyPopupReady() {
         try {
-          if (!window.opener || window.opener.closed) return;
+          if (!window.opener || window.opener.closed) return; // 自動通知系: opener不在のalert可視化(No.210)の対象外(開くだけで連発するため)
           window.opener.postMessage({
             type: 'schedule-popup-ready',
             viewType: VIEW_TYPE,
