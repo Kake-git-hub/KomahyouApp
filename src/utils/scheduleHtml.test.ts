@@ -638,6 +638,42 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 手動テスト No.279(2026-08-29): D&D の無効ドロップが無言だった回帰防止。理由表示は
+  // 「盤面から ok:false が返るケース」だけで、別タブ側で弾く不成立(休校日・同一生徒のいるコマ等)に
+  // else が無かった。コマのセル上に落として置けないときは理由オーバーレイを出す(セル外は無言キャンセル)。
+  it('D&D 無効ドロップに理由表示の分岐が生成スクリプトへ含まれる(No.279)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('function resolveScheduleDndRejectReason')
+    expect(html).toContain('resolveScheduleDndRejectReason(event.clientX, event.clientY)')
+    expect(html).toContain('移動先は休校日のため移動できません。')
+    expect(html).toContain('この生徒の授業がすでにあるコマへは移動できません。')
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の
   // 下端で見切れる不具合を、印刷時だけ count-table の行高を詰めることで解消した。@media print 内で
   // .count-table の行高が既定(22px)より小さいことを固定する(将来の変更で 22px 等へ戻すと落ちる)。

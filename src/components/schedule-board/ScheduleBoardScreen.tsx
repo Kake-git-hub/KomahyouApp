@@ -50,6 +50,19 @@ const EMPTY_SPECIAL_PERIODS: Array<{ id: string; label: string; startDate: strin
 type MakeupOriginMap = Record<string, ManualMakeupOrigin[]>
 type LectureStockCountMap = Record<string, number>
 
+// 手動テスト No.131(2026-08-29): ストック由来講習の「削除」は2本の帳簿を動かす
+// (undo対象の在庫台帳 manualLectureStockCounts と、undo**対象外**の提出データ subjectSlots)。
+// undo が盤面と在庫台帳だけを戻すと、undo のたびに講習の希望数が1ずつ静かに欠損していた。
+// 提出データ(specialSessions)は QR 提出などの並行更新があるため履歴スナップショットで丸ごと復元できない
+// (INV-07: 提出の確定不変を壊す)。代わりに「その操作が subjectSlots に行った差分(delta)」を履歴エントリへ
+// 記録し、undo は逆適用・redo は順適用する(差分適用なら並行更新と可換で、丸ごと上書きより安全)。
+export type SpecialSessionSubjectDelta = {
+  sessionId: string
+  studentId: string
+  subject: string
+  delta: number
+}
+
 type HistoryEntry = {
   weeks: SlotCell[][]
   weekIndex: number
@@ -65,6 +78,9 @@ type HistoryEntry = {
   manualLectureStockCounts: LectureStockCountMap
   manualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
   fallbackLectureStockStudents: Record<string, { displayName: string }>
+  // この履歴対の操作が提出データ subjectSlots に行った差分。undo が逆適用・redo が順適用し、
+  // undo⇄redo でエントリ間を引き継ぐ(上の SpecialSessionSubjectDelta のコメント参照)。
+  specialSessionSubjectDelta?: SpecialSessionSubjectDelta
 }
 
 type StockPanelsRestoreState = {
@@ -720,6 +736,36 @@ export const MAX_HISTORY_DEPTH = 10
 
 // spec-template-behavior Q16: 通常授業テンプレ履歴(世代交代の世代)は最新3件まで保管する。
 export const REGULAR_LESSON_TEMPLATE_HISTORY_LIMIT = 3
+
+// 手動テスト No.131: 提出データ subjectSlots へ差分(delta×sign)を適用する純関数。
+// undo は sign=-1(逆適用)・redo は sign=+1(順適用)。適用先(講習/生徒入力)が既に無ければ何もしない
+// (登録解除後の undo で幽霊行を作らない)。0 未満にはクランプし、0 になった科目はキーごと消す
+// (decrementSpecialSessionSubjectCount と同じ正規化)。
+export function applySubjectSlotsDeltaToSessions(
+  sessions: SpecialSessionRow[],
+  deltaEntry: SpecialSessionSubjectDelta,
+  sign: 1 | -1,
+): SpecialSessionRow[] {
+  const applied = deltaEntry.delta * sign
+  if (applied === 0) return sessions
+  return sessions.map((session) => {
+    if (session.id !== deltaEntry.sessionId) return session
+    const input = session.studentInputs[deltaEntry.studentId]
+    if (!input) return session
+    const current = input.subjectSlots[deltaEntry.subject] ?? 0
+    const nextCount = Math.max(0, current + applied)
+    if (nextCount === current) return session
+    const nextSubjectSlots = { ...input.subjectSlots }
+    if (nextCount <= 0) delete nextSubjectSlots[deltaEntry.subject]
+    else nextSubjectSlots[deltaEntry.subject] = nextCount
+    const nowIso = new Date().toISOString()
+    return {
+      ...session,
+      studentInputs: { ...session.studentInputs, [deltaEntry.studentId]: { ...input, subjectSlots: nextSubjectSlots, updatedAt: nowIso } },
+      updatedAt: nowIso,
+    }
+  })
+}
 
 export function appendHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
   if (stack.length >= MAX_HISTORY_DEPTH) {
@@ -8227,6 +8273,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     sourceManualLectureStockCounts: LectureStockCountMap,
     sourceManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>,
     sourceFallbackLectureStockStudents: Record<string, { displayName: string }>,
+    sourceSpecialSessionSubjectDelta?: SpecialSessionSubjectDelta,
   ): HistoryEntry => ({
     weeks: cloneWeeks(sourceWeeks),
     weekIndex: sourceWeekIndex,
@@ -8242,6 +8289,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     manualLectureStockCounts: { ...sourceManualLectureStockCounts },
     manualLectureStockOrigins: cloneManualLectureStockOrigins(sourceManualLectureStockOrigins),
     fallbackLectureStockStudents: { ...sourceFallbackLectureStockStudents },
+    specialSessionSubjectDelta: sourceSpecialSessionSubjectDelta ? { ...sourceSpecialSessionSubjectDelta } : undefined,
   })
 
   const commitWeeks = (
@@ -8259,10 +8307,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     nextFallbackLectureStockStudents: Record<string, { displayName: string }> = fallbackLectureStockStudents,
     nextSuppressedRegularLessonOccurrences: string[] = suppressedRegularLessonOccurrences,
     nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[] = scheduleCountAdjustments,
+    // No.131: この操作が提出データ subjectSlots に行う差分(講習削除の -1 等)。undo/redo が逆・順適用する。
+    specialSessionSubjectDelta?: SpecialSessionSubjectDelta,
   ) => {
     setUndoStack((current) => appendHistoryEntry(
       current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, specialSessionSubjectDelta),
     ))
     setRedoStack([])
     const persistedClassroomSettings = !areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates)
@@ -10855,6 +10905,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextScheduleCountAdjustments = countAccounting.nextAdjustments
     let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let nextManualLectureStockCounts = manualLectureStockCounts
+    let deleteSubjectDelta: SpecialSessionSubjectDelta | undefined
     let statusSuffix = '振替対象にはしません。'
 
     if (menuStudent.student.lessonType === 'regular') {
@@ -10878,6 +10929,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         const lectureStockKey = buildLectureStockKey(lectureStudentKey, menuStudent.student.subject, menuStudent.student.specialSessionId)
         nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)
         decrementSpecialSessionSubjectCount(menuStudent.student.specialSessionId, menuStudent.student.managedStudentId, menuStudent.student.subject)
+        // No.131: この -1 を履歴にも差分として記録し、undo が +1 を戻せるようにする(undo対象外だった帳簿の欠損防止)。
+        if (menuStudent.student.specialSessionId && menuStudent.student.managedStudentId) {
+          deleteSubjectDelta = {
+            sessionId: menuStudent.student.specialSessionId,
+            studentId: menuStudent.student.managedStudentId,
+            subject: menuStudent.student.subject,
+            delta: -1,
+          }
+        }
         statusSuffix = '講習の希望数を1減らしました。'
       } else {
         // 手動追加の講習: 希望数に含まれないため変更なし。ストックへも戻さない。
@@ -10900,6 +10960,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
       nextScheduleCountAdjustments,
+      deleteSubjectDelta,
     )
     setStatusMessage(`${studentDisplayName} の授業を削除しました。${statusSuffix}`)
     if (selectedStudentId === menuStudent.student.id) {
@@ -11076,11 +11137,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const previous = undoStack[undoStack.length - 1]
     if (!previous) return
 
+    // No.131: delta はこの履歴対(操作)に紐づくため、redo 側エントリへ引き継ぐ(redo で再適用するため)。
     setRedoStack((current) => appendHistoryEntry(
       current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, previous.specialSessionSubjectDelta),
     ))
     setUndoStack((current) => current.slice(0, -1))
+    // No.131: この操作が提出データ subjectSlots に行った差分を**逆適用**する(講習削除の undo で希望数 +1 が戻る)。
+    if (previous.specialSessionSubjectDelta) {
+      const deltaEntry = previous.specialSessionSubjectDelta
+      onUpdateSpecialSessions((current) => applySubjectSlotsDeltaToSessions(current, deltaEntry, -1))
+    }
     if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
       onUpdateClassroomSettings({
         ...classroomSettings,
@@ -11112,11 +11179,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const next = redoStack[redoStack.length - 1]
     if (!next) return
 
+    // No.131: delta を undo 側エントリへ引き継ぐ(もう一度 undo できるようにする)。
     setUndoStack((current) => appendHistoryEntry(
       current,
-      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents),
+      createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, next.specialSessionSubjectDelta),
     ))
     setRedoStack((current) => current.slice(0, -1))
+    // No.131: redo は操作のやり直しなので差分を**順適用**する(講習削除の redo で希望数 -1 が再適用される)。
+    if (next.specialSessionSubjectDelta) {
+      const deltaEntry = next.specialSessionSubjectDelta
+      onUpdateSpecialSessions((current) => applySubjectSlotsDeltaToSessions(current, deltaEntry, 1))
+    }
     if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
       onUpdateClassroomSettings({
         ...classroomSettings,

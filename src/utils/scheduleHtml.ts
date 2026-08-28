@@ -3556,6 +3556,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return cell;
       }
 
+      // 手動テスト No.279(2026-08-29): 移動できない場所へのドロップが無言だった(理由表示は盤面へ要求が
+      // 届いて ok:false が返るケースだけで、別タブ側で弾く不成立に else が無かった)。ドロップ地点がコマの
+      // セル上なら「なぜ置けないか」を返す。表・セルの外(余白/ヘッダ等)は誤ドロップ扱いで null(=無言キャンセル。
+      // 掴み損ねの都度モーダルを出さない)。findDroppableCellFromPoint の null 条件と1:1で対応させること。
+      function resolveScheduleDndRejectReason(clientX, clientY) {
+        var element = document.elementFromPoint(clientX, clientY);
+        if (!element || !(element instanceof HTMLElement)) return null;
+        var cell = element.closest('td[data-role="student-slot-cell"]');
+        if (!cell || !(cell instanceof HTMLElement)) return null;
+        if (cell.classList.contains('is-holiday')) return '移動先は休校日のため移動できません。';
+        if (cell.querySelector('.lesson-card')) return 'この生徒の授業がすでにあるコマへは移動できません。';
+        return 'このコマの机情報がなく移動できません。「最新表示」で日程表を更新してからお試しください。';
+      }
+
       function clearScheduleDropHighlight() {
         var previous = document.querySelector('.slot-cell.is-drop-target');
         if (previous) previous.classList.remove('is-drop-target');
@@ -3641,6 +3655,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         endScheduleDndDrag();
         if (cell) {
           openScheduleDeskPicker(source, cell.getAttribute('data-date-key'), Number(cell.getAttribute('data-slot-number')));
+        } else {
+          // No.279: コマのセル上に落としたのに置けない場合は理由を大きく表示する(セル外は無言キャンセル)。
+          var rejectReason = resolveScheduleDndRejectReason(event.clientX, event.clientY);
+          if (rejectReason) showScheduleMoveError(rejectReason);
         }
       }
 

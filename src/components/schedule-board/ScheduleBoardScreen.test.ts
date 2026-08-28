@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -6166,5 +6166,45 @@ describe('ensureWeeksCoverDateRange の週生成結果(O(n^2)→O(n)最適化・
     ])
     // 拡張前の元の週(2026-05-11)はオフセット分ずれた位置に残っている(既存参照の整合性)
     expect(result.weeks[result.weekIndexOffset][0].dateKey).toBe('2026-05-11')
+  })
+})
+
+// 手動テスト No.131(2026-08-29): ストック由来講習の削除は在庫台帳(undo対象)と提出データ subjectSlots
+// (undo対象外)の2本を動かすのに、undo が片方しか戻さず希望数が1ずつ静かに欠損していた。
+// 提出データは QR 提出の並行更新があるためスナップショット復元は INV-07 違反。差分(delta)の逆・順適用で戻す。
+describe('applySubjectSlotsDeltaToSessions (講習削除 undo の希望数復元・No.131)', () => {
+  const makeSession = (subjectSlots: Record<string, number>): SpecialSessionRow => ({
+    id: 'sess1',
+    label: '夏期講習',
+    startDate: '2026-07-20',
+    endDate: '2026-07-25',
+    teacherInputs: {},
+    studentInputs: { st1: { subjectSlots, countSubmitted: true, updatedAt: '' } },
+    createdAt: '',
+    updatedAt: '',
+  } as unknown as SpecialSessionRow)
+  const deleteDelta = { sessionId: 'sess1', studentId: 'st1', subject: '数', delta: -1 }
+
+  it('undo(逆適用 sign=-1)で削除の -1 が +1 に戻る', () => {
+    const next = applySubjectSlotsDeltaToSessions([makeSession({ 数: 2 })], deleteDelta, -1)
+    expect(next[0].studentInputs.st1?.subjectSlots).toEqual({ 数: 3 })
+  })
+
+  it('redo(順適用 sign=+1)で -1 が再適用され、0 になった科目はキーごと消える(既存の正規化と同じ)', () => {
+    const next = applySubjectSlotsDeltaToSessions([makeSession({ 数: 1, 英: 2 })], deleteDelta, 1)
+    expect(next[0].studentInputs.st1?.subjectSlots).toEqual({ 英: 2 })
+  })
+
+  it('0 未満にはクランプする(希望0の状態で redo しても負値にならない)', () => {
+    const next = applySubjectSlotsDeltaToSessions([makeSession({})], deleteDelta, 1)
+    expect(next[0].studentInputs.st1?.subjectSlots).toEqual({})
+  })
+
+  it('適用先が無ければ何もしない(登録解除後の undo で幽霊行を作らない)', () => {
+    const noInput = { ...makeSession({ 数: 2 }), studentInputs: {} } as SpecialSessionRow
+    expect(applySubjectSlotsDeltaToSessions([noInput], deleteDelta, -1)).toEqual([noInput])
+    const otherSession = makeSession({ 数: 2 })
+    const result = applySubjectSlotsDeltaToSessions([otherSession], { ...deleteDelta, sessionId: 'sess-other' }, -1)
+    expect(result[0]).toBe(otherSession) // 同一参照のまま(触らない)
   })
 })
