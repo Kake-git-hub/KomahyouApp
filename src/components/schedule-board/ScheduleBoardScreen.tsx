@@ -4439,6 +4439,49 @@ export type DayDeskDisposalCounts = {
   returnedLectureCount: number
 }
 
+// INV-06(Issue #58): 「その日の生徒を全コマ削除」で処分する通常授業の振替抑制(suppressedMakeupOrigins)を集める。
+// 処分の裁定(v1.5.464)は「通常授業＝返さず希望回数−1(＝もうやらない)」なのに、その後この日を休日設定すると
+// 休日振替の自動計算(computeAutomaticShortageOrigins)が**盤面ではなくテンプレを根拠に**振替を積み直し、
+// 同じ1コマに「希望回数−1」と「未消化振替+1」が両方かかっていた(5週目を空けたい運用を直接妨げる)。
+// 1コマずつの「削除」(handleDeleteStudent)が抑制を積むのと同じ扱いへ対称化する。
+// ★時限つきで積む: 同じ生徒×科目の**欠席済み origin**(mark-absent が台帳へ確定済み＝未消化に立っている)を、
+//   時限なし抑制(＝その日付を丸ごと落とすワイルドカード)で巻き込んで消さないため。
+// ★absent の記録には積まない: その1コマの在庫は既に台帳に立っており、抑制すると立っている在庫が消える(誤減)。
+//   attended/振無休/moved の通常授業は「実施済み・休み処理済み・移動済み」なので、休日設定の自動計算が
+//   積み直すべきでない＝抑制を積む。
+// ★「全コマ削除→コマを足し直して休み」は順序方式(v1.5.459・後にやった操作が勝つ)のまま:
+//   休み(handleMarkStudentAbsent)側の clearMakeupOrigins が同じ(日付,時限)の抑制を解除するので振替に入る。
+// disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に呼ぶこと。
+export function collectClearedDayMakeupSuppressions(params: {
+  cell: SlotCell
+  suppressedMakeupOrigins: MakeupOriginMap
+  resolveStockId: (student: StudentEntry) => string
+}): MakeupOriginMap {
+  const { cell, resolveStockId } = params
+  let next = params.suppressedMakeupOrigins
+  const appendSuppression = (studentLike: StudentEntry) => {
+    const stockKey = buildMakeupStockKey(resolveStockId(studentLike), studentLike.subject)
+    next = appendMakeupOrigin(
+      next,
+      stockKey,
+      resolveOriginalRegularDate(studentLike, cell.dateKey),
+      resolveOriginalRegularSlotNumber(studentLike, cell.slotNumber),
+    )
+  }
+  for (const desk of cell.desks) {
+    for (const student of desk.lesson?.studentSlots ?? []) {
+      if (!student || student.lessonType !== 'regular') continue
+      appendSuppression(student)
+    }
+    for (const statusEntry of desk.statusSlots ?? []) {
+      if (!statusEntry || statusEntry.lessonType !== 'regular') continue
+      if (statusEntry.status === 'absent') continue // mark-absent が台帳へ確定済み(抑制すると立っている在庫が消える)
+      appendSuppression(buildStudentEntryFromStatus(statusEntry))
+    }
+  }
+  return next
+}
+
 export function disposeDayDeskEntries(params: {
   desk: DeskCell
   cellDateKey: string
@@ -8580,6 +8623,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     let clearedCount = 0
     let returnedCount = 0
     let nextScheduleCountAdjustments = scheduleCountAdjustments
+    // Issue #58(INV-06): 処分した通常授業が後からの休日設定(テンプレ根拠の自動計算)で振替に積み直されないよう、
+    // 単発削除と同じ振替抑制を積む(詳細は collectClearedDayMakeupSuppressions のコメント)。
+    let nextSuppressedMakeupOrigins = cloneOriginMap(suppressedMakeupOrigins)
     let clearLedgers: HolidayStockLedgers = {
       manualLectureStockCounts: { ...manualLectureStockCounts },
       manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
@@ -8591,6 +8637,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     for (const week of nextWeeks) {
       for (const cell of week) {
         if (cell.dateKey !== dateKey) continue
+        // 抑制の収集は disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に行う。
+        nextSuppressedMakeupOrigins = collectClearedDayMakeupSuppressions({
+          cell,
+          suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+          resolveStockId: resolveBoardStudentStockId,
+        })
         for (const desk of cell.desks) {
           // 処分の裁定は丸ごと振替(Phase A)と**同一の共通関数**へ委譲する（判定を2か所に分散させない）。
           // 在庫会計はさらに休日設定と同じ権威関数へ委譲され、違いは includeRegularLessons だけ:
@@ -8636,7 +8688,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       undefined,
       undefined,
       clearLedgers.manualMakeupAdjustments,
-      undefined,
+      nextSuppressedMakeupOrigins,
       clearLedgers.fallbackMakeupStudents,
       clearLedgers.manualLectureStockCounts,
       clearLedgers.manualLectureStockOrigins,

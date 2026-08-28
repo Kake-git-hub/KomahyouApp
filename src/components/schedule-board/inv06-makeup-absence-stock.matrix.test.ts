@@ -10,7 +10,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, computeStudentMove, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -813,6 +813,88 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
         cellDateKey: BOARD_DATE,
         ledgerOriginDates: [`${HOLIDAY_SOURCE_DATE}#5`],
       })).toBeNull()
+    })
+  })
+
+  // Issue #58(2026-08-29・手動テスト No.121): 「その日の生徒を全コマ削除」は通常授業を希望回数−1で処分するのに
+  // 振替抑制(suppressedMakeupOrigins)を積まない非対称があり、その日を後から休日設定すると自動計算
+  // (computeAutomaticShortageOrigins・テンプレ根拠)が振替を積み直していた=「希望−1」と「振替+1」の二重。
+  // 単発削除(handleDeleteStudent)と同じ抑制を対称に積む。5週目(授業のない週)対応を可能にする。
+  describe('下流: 全コマ削除した日を休日設定する(Issue #58)', () => {
+    const resolveStudentKey = (entry: StudentEntry) => entry.managedStudentId ?? entry.id
+
+    it('回帰防止: 全コマ削除で処分した通常授業は、その日を休日設定しても振替に積み直されない', () => {
+      const desk = deskWithStudent(boardStudent()) // 通常授業(テンプレ=水5限と同じ枠)
+      const suppressions = collectClearedDayMakeupSuppressions({
+        cell: cellWithDesk(desk),
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      expect(suppressions[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE, slotNumber: 5 }]) // 時限つきで積む
+
+      const clearedDesk: DeskCell = { ...desk, statusSlots: undefined, lesson: undefined }
+      const holidayAfterClear = createSettings({ holidayDates: [BOARD_DATE] })
+      const balanceOf = (suppressedOrigins: Record<string, ManualMakeupOrigin[]>) => buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: holidayAfterClear,
+        weeks: [[cellWithDesk(clearedDesk)]],
+        manualAdjustments: {},
+        suppressedOrigins,
+        resolveStudentKey,
+        today: TODAY,
+      }).find((item) => item.key === STOCK_KEY)?.balance ?? 0
+
+      expect(balanceOf({})).toBe(1) // 前提: 抑制が無ければテンプレ根拠の自動計算が積み直す(=旧挙動のバグ)
+      expect(balanceOf(suppressions)).toBe(0) // 抑制があれば積み直されない
+    })
+
+    it('欠席済み(absent)の通常授業には抑制を積まない(立っている在庫を消さない)/実施済み等は積む', () => {
+      // absent: mark-absent が台帳へ確定済み。抑制を積むとその在庫まで消える(誤減)ためスキップする。
+      const absentDesk = deskWithStatus(boardStatus({ lessonType: 'regular', status: 'absent' }))
+      const absentSuppressions = collectClearedDayMakeupSuppressions({
+        cell: cellWithDesk(absentDesk),
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      expect(Object.keys(absentSuppressions)).toHaveLength(0)
+
+      // absent が台帳に立てた在庫は、全コマ削除+休日設定の後も残る(端到端)
+      const clearedDesk: DeskCell = { ...absentDesk, statusSlots: undefined, lesson: undefined }
+      const balance = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings(),
+        weeks: [[cellWithDesk(clearedDesk)]],
+        manualAdjustments: { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] }, // mark-absent が積んだ想定
+        suppressedOrigins: absentSuppressions,
+        resolveStudentKey,
+        today: TODAY,
+      }).find((item) => item.key === STOCK_KEY)?.balance ?? 0
+      expect(balance).toBe(1)
+
+      // 実施済み(attended)・振無休・移動済み(moved)の通常授業は積む(休日設定が積み直すべきでない)
+      for (const status of ['attended', 'absent-no-makeup', 'moved'] as const) {
+        const statusSuppressions = collectClearedDayMakeupSuppressions({
+          cell: cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'regular', status }))),
+          suppressedMakeupOrigins: {},
+          resolveStockId: resolveStudentKey,
+        })
+        expect(statusSuppressions[STOCK_KEY], status).toEqual([{ dateKey: BOARD_DATE, slotNumber: 5 }])
+      }
+    })
+
+    it('順序方式(後にやった操作が勝つ): 全コマ削除→コマを足し直して休みにすると抑制が解除され振替に入る', () => {
+      const suppressions = collectClearedDayMakeupSuppressions({
+        cell: cellWithDesk(deskWithStudent(boardStudent())),
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      // 休み(handleMarkStudentAbsent)側と同じ引数(元日付+時限)で clearMakeupOrigins が解除できる
+      const cleared = clearMakeupOrigins(suppressions, STOCK_KEY, BOARD_DATE, 5)
+      expect(Object.keys(cleared)).toHaveLength(0)
     })
   })
 
