@@ -2054,11 +2054,16 @@ export function findDuplicateStudentInCellByKey(
   targetCell: SlotCell,
   studentKey: string,
   resolveComparableStudentKey: (student: StudentEntry) => string,
-  excludedStudentId?: string,
+  excludedStudentIds?: string | Array<string | undefined>,
 ) {
+  // Issue #56: 入れ替えでは「動く生徒」と「入れ替え相手」の両方を除外して検索する必要があるため
+  // 除外IDを複数受けられるようにした(単一 string の既存呼び出しはそのまま動く)。
+  const excluded = new Set(
+    (Array.isArray(excludedStudentIds) ? excludedStudentIds : [excludedStudentIds]).filter((id): id is string => Boolean(id)),
+  )
   for (const desk of targetCell.desks) {
     for (const student of desk.lesson?.studentSlots ?? []) {
-      if (!student || student.id === excludedStudentId) continue
+      if (!student || excluded.has(student.id)) continue
       const existingKey = resolveComparableStudentKey(student)
       if (existingKey === studentKey) {
         return student
@@ -3965,14 +3970,35 @@ export function computeStudentMove(params: {
 
   // Check for duplicates (exclude both source and target students from check)
   const comparableStudentKey = resolveStockComparableStudentKey(movedStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
+  const resolveComparableKey = (student: StudentEntry) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName)
+  // Issue #56: 入れ替え相手(targetStudentBeforeMove)は出ていくので**検索から除外**する。
+  // 旧実装の「見つかった1件が相手なら免除」だと、同コマに同一生徒が2エントリ(相手+別机)ある状態を
+  // 検出できず素通りして二重配置になっていた。除外して残った同キーは常にブロックする。
   const duplicateStudent = findDuplicateStudentInCellByKey(
     targetCell,
     comparableStudentKey,
-    (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName),
-    movedStudent.id,
+    resolveComparableKey,
+    [movedStudent.id, targetStudentBeforeMove?.id],
   )
-  if (duplicateStudent && duplicateStudent.id !== targetStudentBeforeMove?.id) {
+  if (duplicateStudent) {
     return { status: 'blocked', message: `同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているため移動不可です。` }
+  }
+  // Issue #56: 入れ替え相手の着地先(移動元コマ)にも同一生徒がいないか検査する。ここに検査が無く、
+  // 相手が移動元コマへ入ったとき既に同じ生徒が居ると二重配置になっていた(日程表D&Dスワップで顕在化)。
+  // movedStudent は上で移動元から抜いた後なので、除外するのは相手自身のIDだけで足りる(保険で両方除外)。
+  if (targetStudentBeforeMove) {
+    const sourceCellForSwapCheck = nextWeeks.flat().find((c) => c.id === sourceCellId)
+    const swapDuplicate = sourceCellForSwapCheck
+      ? findDuplicateStudentInCellByKey(
+          sourceCellForSwapCheck,
+          resolveComparableKey(targetStudentBeforeMove),
+          resolveComparableKey,
+          [targetStudentBeforeMove.id, movedStudent.id],
+        )
+      : null
+    if (swapDuplicate) {
+      return { status: 'blocked', message: `入れ替え先の同コマにすでに${resolveBoardStudentDisplayName(swapDuplicate.name)}が組まれているため入れ替え不可です。` }
+    }
   }
 
   // Get the target student (for swap)
