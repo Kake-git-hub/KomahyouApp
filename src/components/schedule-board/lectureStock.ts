@@ -225,3 +225,10 @@ export function buildLecturePendingItemsByEntryKey(params: {
     ]
   }))
 }
+// 手動テスト No.119(2026-08-29): ツールバーの「未消化講習」バッジが行数(生徒×講習期間のエントリ数)で、
+// 「未消化振替」バッジ(残コマ数の合計)と単位が食い違っていた。振替と同じ**コマ数合計**に揃える。
+// 行数のままだと、同じ生徒に未消化が既にあるとき欠席で+1してもバッジが動かず
+// 「未消化講習に戻らない」と誤認される(手動テスト No.118 の誤認の主因)。
+export function sumLectureStockRequestedCount(entries: Array<{ requestedCount: number }>): number {
+  return entries.reduce((total, entry) => total + Math.max(0, entry.requestedCount), 0)
+}

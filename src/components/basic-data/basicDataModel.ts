@@ -279,6 +279,19 @@ export function resolveManagedStudentGradeLabel(student: StudentRow, referenceDa
   return resolveSchoolGradeLabelFromBirthDate(student.birthDate, referenceDateValue)
 }
 
+// 手動テスト No.148(2026-08-29): 生徒一覧の「学年」ソートが学年ラベルの文字コード比較
+// (中U+4E2D < 小U+5C0F < 高U+9AD8)になり、昇順が「中→小→高」だった。ソートUIは
+// この学齢順の数値キー(未就学0/小N=N/中N=100+N/高N=200+N/非在籍系=末尾)を使うこと。
+export function resolveManagedStudentGradeSortValue(student: StudentRow, referenceDate: string): number {
+  return resolveStudentGradeSortOrder(resolveManagedStudentGradeLabel(student, referenceDate))
+}
+
+// 「表示名」ソートも「学年ラベル_表示名」の文字列合成で学年部分が文字コード順になっていた同根バグ。
+// 学齢順キーをゼロ埋めした文字列で合成する(3桁=最大999のフォールバックまで桁が揃う)。
+export function buildManagedStudentNameSortValue(student: StudentRow, referenceDate: string): string {
+  return `${String(resolveManagedStudentGradeSortValue(student, referenceDate)).padStart(3, '0')}_${getStudentDisplayName(student)}`
+}
+
 // 管理データの生徒並び順: マネージド学年ラベルで昇順(非在籍は末尾)→表示名→氏名。
 export function compareManagedStudentsByGradeThenName(left: StudentRow, right: StudentRow, referenceDate: string) {
   const gradeOrderDiff = resolveStudentGradeSortOrder(resolveManagedStudentGradeLabel(left, referenceDate)) - resolveStudentGradeSortOrder(resolveManagedStudentGradeLabel(right, referenceDate))

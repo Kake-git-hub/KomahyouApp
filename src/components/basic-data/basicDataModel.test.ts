@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareManagedStudentsByGradeThenName, compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isActiveOnDate, isStudentVisibleInManagement, isTeacherVisibleInManagement, resolveCurrentStudentGradeLabel, resolveEffectiveManagedWithdrawDate, resolveGraduationWithdrawDate, resolveManagedRosterStatus, resolveManagedStudentGradeLabel, resolveManagementRosterStatusLabel, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from './basicDataModel'
+import { buildManagedStudentNameSortValue, compareManagedStudentsByGradeThenName, compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isActiveOnDate, isStudentVisibleInManagement, isTeacherVisibleInManagement, resolveCurrentStudentGradeLabel, resolveEffectiveManagedWithdrawDate, resolveGraduationWithdrawDate, resolveManagedRosterStatus, resolveManagedStudentGradeLabel, resolveManagedStudentGradeSortValue, resolveManagementRosterStatusLabel, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from './basicDataModel'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -155,5 +155,35 @@ describe('basicDataModel student labels and sorting', () => {
     expect(resolveCurrentStudentGradeLabel(current3rd, '2026-04-22')).toBe('高3')
     expect(resolveCurrentStudentGradeLabel(graduated, '2026-04-22')).toBe('退塾')
     expect(resolveCurrentStudentGradeLabel(withdrawnAdult, '2026-04-22')).toBe('退塾')
+  })
+
+  // 手動テスト No.148(2026-08-29): 生徒一覧の「学年」昇順ソートが学年ラベルの文字コード比較
+  // (中U+4E2D < 小U+5C0F < 高U+9AD8)で「中→小→高」になっていた回帰防止。
+  // ソートUIはこの数値キー(学齢順)を使う。ラベル文字列を直接比較するソートに戻すと落ちる。
+  it('学年ソートキーは学齢順(小→中→高)の数値で、文字コード順(中→小→高)にならない', () => {
+    const referenceDate = '2026-04-22'
+    const sho5 = createStudent({ id: 's-sho', birthDate: '2015-05-01' }) // 小5
+    const chu3 = createStudent({ id: 's-chu', birthDate: '2011-05-01' }) // 中3
+    const ko2 = createStudent({ id: 's-ko', birthDate: '2009-05-01' }) // 高2
+
+    const values = [chu3, sho5, ko2].map((student) => resolveManagedStudentGradeSortValue(student, referenceDate))
+    // 数値キーで昇順に並べると 小5 → 中3 → 高2 になる
+    const sorted = [chu3, sho5, ko2].slice().sort((a, b) => resolveManagedStudentGradeSortValue(a, referenceDate) - resolveManagedStudentGradeSortValue(b, referenceDate))
+    expect(sorted.map((s) => s.id)).toEqual(['s-sho', 's-chu', 's-ko'])
+    // 対して学年ラベルの文字列比較は「中→小→高」になる(=旧バグの形。これをソートに使ってはいけない)
+    const byLabel = [chu3, sho5, ko2].slice().sort((a, b) => (resolveManagedStudentGradeLabel(a, referenceDate) > resolveManagedStudentGradeLabel(b, referenceDate) ? 1 : -1))
+    expect(byLabel.map((s) => s.id)).toEqual(['s-chu', 's-sho', 's-ko'])
+    expect(values.every((value) => typeof value === 'number')).toBe(true)
+  })
+
+  it('表示名ソートキーは学齢順のゼロ埋め数値+表示名で合成される(学年部分が文字コード順にならない)', () => {
+    const referenceDate = '2026-04-22'
+    const sho5 = createStudent({ id: 's-sho', displayName: 'たろう', birthDate: '2015-05-01' })
+    const chu3 = createStudent({ id: 's-chu', displayName: 'じろう', birthDate: '2011-05-01' })
+
+    expect(buildManagedStudentNameSortValue(sho5, referenceDate)).toBe('005_たろう')
+    expect(buildManagedStudentNameSortValue(chu3, referenceDate)).toBe('103_じろう')
+    // 文字列ソートでも小5が中3より前に来る(ゼロ埋めで桁が揃うため)
+    expect(buildManagedStudentNameSortValue(sho5, referenceDate) < buildManagedStudentNameSortValue(chu3, referenceDate)).toBe(true)
   })
 })

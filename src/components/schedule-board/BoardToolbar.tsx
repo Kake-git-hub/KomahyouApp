@@ -13,7 +13,8 @@ type BoardToolbarProps = {
   weekLabel: string
   weekStartDate: string
   statusMessage: string
-  lectureStockEntryCount: number
+  // 未消化講習のコマ数合計(No.119: 振替バッジと同じ単位。行数=生徒×講習期間ではない)
+  lectureStockTotalCount: number
   isLectureStockOpen: boolean
   makeupStockTotalCount: number
   isMakeupStockOpen: boolean
@@ -71,7 +72,7 @@ function BoardToolbarComponent({
   weekLabel,
   weekStartDate,
   statusMessage,
-  lectureStockEntryCount,
+  lectureStockTotalCount,
   isLectureStockOpen,
   makeupStockTotalCount,
   isMakeupStockOpen,
@@ -254,7 +255,7 @@ function BoardToolbarComponent({
             <>
               <button className={`secondary-button slim${isLectureStockOpen ? ' active' : ''}`} type="button" onClick={onToggleLectureStock} data-testid="lecture-stock-chip">
                 未消化講習
-                {lectureStockEntryCount > 0 ? <span className="toolbar-inline-count">{lectureStockEntryCount}</span> : null}
+                {lectureStockTotalCount > 0 ? <span className="toolbar-inline-count">{lectureStockTotalCount}</span> : null}
               </button>
               <button className={`secondary-button slim${isMakeupStockOpen || isMakeupMoveActive ? ' active' : ''}${isMakeupMoveActive ? ' is-emphasis' : ''}`} type="button" onClick={onToggleMakeupStock} data-testid="makeup-stock-chip">
                 {isMakeupMoveActive ? '振替移動中' : '未消化振替'}

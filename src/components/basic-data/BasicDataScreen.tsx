@@ -7,6 +7,8 @@ import {
   type ManagerRow,
   resolveManagedRosterStatus,
   resolveManagedStudentGradeLabel,
+  resolveManagedStudentGradeSortValue,
+  buildManagedStudentNameSortValue,
   resolveEffectiveManagedWithdrawDate,
   type StudentRow,
   type TeacherRow,
@@ -1255,11 +1257,13 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
       tableControls.students,
       (row) => [row.name, row.displayName, row.email, row.entryDate, formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate)), row.birthDate, resolveManagedStudentGradeLabel(row, todayReferenceDate), isExternalStudentRow(row) ? '外部生' : ''],
       {
-        name: (row) => `${resolveManagedStudentGradeLabel(row, todayReferenceDate)}_${getStudentDisplayName(row)}`,
+        // 手動テスト No.148(2026-08-29): 学年ラベルの文字コード比較だと昇順が「中→小→高」になる。
+        // 学齢順の数値キー(basicDataModel の権威関数)でソートする。
+        name: (row) => buildManagedStudentNameSortValue(row, todayReferenceDate),
         entryDate: (row) => row.entryDate,
         withdrawDate: (row) => formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate)),
         birthDate: (row) => row.birthDate,
-        status: (row) => resolveManagedStudentGradeLabel(row, todayReferenceDate),
+        status: (row) => resolveManagedStudentGradeSortValue(row, todayReferenceDate),
       },
     )
     const orderedStudents = applyFrozenRowOrder(filteredStudents, frozenRowOrders.student)

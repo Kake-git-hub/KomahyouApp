@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildLectureStockEntries,
+  sumLectureStockRequestedCount,
   buildLectureStockKey,
   buildLecturePendingItemsByEntryKey,
   type LecturePendingScopedEntry,
@@ -218,5 +219,23 @@ describe('pending item の unavailableSlots は実効不可(reopenedSlots を除
     for (const item of items) {
       expect(item.unavailableSlots).toEqual(['2026-07-26_2'])
     }
+  })
+})
+
+// 手動テスト No.119(2026-08-29): 「未消化講習」バッジは行数(生徒×講習期間)ではなく**未消化コマ数の合計**。
+// 「未消化振替」バッジ(残コマ数合計)と単位を揃える。行数(entries.length)へ戻すと、同じ生徒の2コマ目以降で
+// バッジが動かず「欠席にしても未消化講習に戻らない」と誤認される(No.118)。
+describe('sumLectureStockRequestedCount (未消化講習バッジの単位=コマ数合計)', () => {
+  it('全エントリの requestedCount を合計する(行数ではない)', () => {
+    const entries = [
+      { requestedCount: 3 }, // 生徒A: 3コマ
+      { requestedCount: 1 }, // 生徒B: 1コマ
+    ]
+    expect(sumLectureStockRequestedCount(entries)).toBe(4) // 行数(2)ではなくコマ数(4)
+  })
+
+  it('空配列は0・負値は0として扱う', () => {
+    expect(sumLectureStockRequestedCount([])).toBe(0)
+    expect(sumLectureStockRequestedCount([{ requestedCount: -1 }, { requestedCount: 2 }])).toBe(2)
   })
 })

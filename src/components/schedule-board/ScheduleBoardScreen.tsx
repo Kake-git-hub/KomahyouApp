@@ -18,6 +18,7 @@ import {
   buildLectureStockKey,
   buildLecturePendingItemsByEntryKey,
   parseLectureStockKey,
+  sumLectureStockRequestedCount,
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
@@ -6065,6 +6066,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     })
   }, [currentGradeReferenceDate, lecturePendingItemsByEntryKey, specialSessions, students])
 
+  // 手動テスト No.119(2026-08-29): 「未消化講習」バッジを行数(entries.length)から未消化コマ数の合計へ。
+  // 「未消化振替」バッジ(makeupStockTotalCount=balance 合計=コマ数)と単位を揃える。詳細は sumLectureStockRequestedCount。
+  const lectureStockTotalCount = useMemo(
+    () => sumLectureStockRequestedCount(lectureStockEntries),
+    [lectureStockEntries],
+  )
+
   // 未消化の講習/振替が残る生徒ID→残数を親(App)へ持ち上げる（盤面の残数と一致させるため盤面側で算出）。
   // BasicDataScreen の削除確認で誤削除（例: 講習提出済みの生徒を名簿から消す）を警告するのに使う。
   const deletionStockSummary = useMemo(
@@ -6897,6 +6905,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: formatWeeklyScheduleTitle(range.startDate, range.endDate),
       classroomSettings,
       classroomStorageKey,
+      // タブ名の教室名(2026-07-09 オーナー指示)。第三者手動テスト No.22/243 で未配線が発覚し 2026-08-29 に配線。
+      classroomName: classroomName ?? '',
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
       outstandingAbsences: outstandingAbsenceEntries,
       boardBasedPlannedCountEnabled,
@@ -6904,7 +6914,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       specialSessions,
       groupClassEntries,
     })
-  }, [buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, studentScheduleOptionFieldEnabled, specialSessions, groupClassEntries])
+  }, [buildBoardWeeksForScheduleRange, scheduleFallbackStartDate, scheduleFallbackEndDate, classroomSettings, classroomStorageKey, classroomName, teachers, students, regularLessons, suppressedRegularLessonOccurrences, scheduleCountAdjustments, studentScheduleOptionFieldEnabled, specialSessions, groupClassEntries])
 
   useEffect(() => {
     const handleOpenAllSchedule = (event: MessageEvent) => {
@@ -7033,6 +7043,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: studentScheduleTitle,
       classroomSettings,
       classroomStorageKey,
+      classroomName: classroomName ?? '',
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
       outstandingAbsences: outstandingAbsenceEntries,
       boardBasedPlannedCountEnabled,
@@ -7066,6 +7077,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: teacherScheduleTitle,
       classroomSettings,
       classroomStorageKey,
+      classroomName: classroomName ?? '',
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -10280,6 +10292,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: formatWeeklyScheduleTitle(storedRange.startDate, storedRange.endDate),
       classroomSettings,
       classroomStorageKey,
+      classroomName: classroomName ?? '',
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
       outstandingAbsences: outstandingAbsenceEntries,
       boardBasedPlannedCountEnabled,
@@ -10336,6 +10349,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       titleLabel: formatWeeklyScheduleTitle(storedRange.startDate, storedRange.endDate),
       classroomSettings,
       classroomStorageKey,
+      classroomName: classroomName ?? '',
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -11255,7 +11269,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             weekLabel={weekLabel}
             weekStartDate={weekDates[0]?.dateKey ?? displayWeekDate}
             statusMessage={statusMessage}
-            lectureStockEntryCount={lectureStockEntries.length}
+            lectureStockTotalCount={lectureStockTotalCount}
             isLectureStockOpen={isLectureStockOpen}
             makeupStockTotalCount={makeupStockTotalCount}
             isMakeupStockOpen={isMakeupStockOpen}

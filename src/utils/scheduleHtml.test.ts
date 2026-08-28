@@ -581,6 +581,63 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // 手動テスト No.250(2026-08-29): 盤面の講習コマの授業時間(60/45分)が日程表セルに出ない不具合の回帰防止。
+  // 描画側(renderStudentCellCard の formatScheduleMinutesSuffix)は対応済みだったが、シリアライズが
+  // noteSuffix を落としており(SerializedStudentEntry に項目が無い)、未出欠の配置コマだけ常に90分表示だった
+  // (出欠記録済みの statusEntry 側は元から載る非対称)。
+  it('盤面コマの noteSuffix(授業時間 60/45)がペイロードの students に載る', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [{
+        id: 'cell-1',
+        dateKey: '2026-03-24',
+        dayLabel: '火',
+        dateLabel: '3/24',
+        slotLabel: '1限',
+        slotNumber: 1,
+        timeLabel: '',
+        isOpenDay: true,
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中',
+          lesson: {
+            id: 'lesson-1',
+            studentSlots: [
+              { id: 'entry-1', name: '生徒A', managedStudentId: 'st-1', grade: '小5', subject: '算', lessonType: 'special', teacherType: 'normal', noteSuffix: '60' },
+              null,
+            ],
+          },
+        }],
+      } as unknown as Parameters<typeof openStudentScheduleHtml>[0]['cells'][number]],
+      students: [createStudent({})],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    const payload = JSON.parse(payloadMatch![1])
+    const serializedStudent = payload.cells?.[0]?.desks?.[0]?.lesson?.students?.[0]
+    expect(serializedStudent?.noteSuffix).toBe('60')
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(オーナー要望 2026-07-08): 講習回数の科目が多い生徒が A4横シート(height:190mm; overflow:hidden)の
   // 下端で見切れる不具合を、印刷時だけ count-table の行高を詰めることで解消した。@media print 内で
   // .count-table の行高が既定(22px)より小さいことを固定する(将来の変更で 22px 等へ戻すと落ちる)。

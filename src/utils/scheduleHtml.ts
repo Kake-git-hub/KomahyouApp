@@ -69,6 +69,9 @@ export type SerializedStudentEntry = {
   manualAdded: boolean
   makeupSourceLabel?: string
   warning?: string
+  // 授業時間サフィックス('60'/'45'/''=90分)。手動テスト No.250: statusEntry 側には元からあるのに
+  // こちらだけ欠けており、日程表セルで講習の 60/45 分が表示されなかった(2026-08-29 追加)。
+  noteSuffix?: string
 }
 
 export type SerializedStudentStatusEntry = {
@@ -382,6 +385,7 @@ function serializeCells(
                   manualAdded: Boolean(student.manualAdded),
                   makeupSourceLabel: student.makeupSourceLabel,
                   warning: student.warning,
+                  noteSuffix: student.noteSuffix,
                 })),
             }
           : undefined
