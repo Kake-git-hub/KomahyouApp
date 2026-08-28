@@ -4447,7 +4447,11 @@ export type DayDeskDisposalCounts = {
 // ★時限つきで積む: 同じ生徒×科目の**欠席済み origin**(mark-absent が台帳へ確定済み＝未消化に立っている)を、
 //   時限なし抑制(＝その日付を丸ごと落とすワイルドカード)で巻き込んで消さないため。
 // ★absent の記録には積まない: その1コマの在庫は既に台帳に立っており、抑制すると立っている在庫が消える(誤減)。
-//   attended/振無休/moved の通常授業は「実施済み・休み処理済み・移動済み」なので、休日設定の自動計算が
+// ★moved の記録にも積まない(INV監査 2026-08-29): moved の会計は**移動先の振替コマ**が持つ。移動先を休みに
+//   すると算出復元(collectAbsentMakeupOrigins)が移動元日の origin を立てるが、ここで移動元日に抑制を積むと
+//   その origin まで消える(誤減)。積まなくても #58 の狙いは崩れない: 休日設定の自動 origin は、盤面に残る
+//   移動先の振替コマが消化(usedOriginDates)として打ち消すため中立になる。
+//   attended/振無休の通常授業は「実施済み・振替なしで処理済み」なので、休日設定の自動計算が
 //   積み直すべきでない＝抑制を積む。
 // ★「全コマ削除→コマを足し直して休み」は順序方式(v1.5.459・後にやった操作が勝つ)のまま:
 //   休み(handleMarkStudentAbsent)側の clearMakeupOrigins が同じ(日付,時限)の抑制を解除するので振替に入る。
@@ -4461,11 +4465,16 @@ export function collectClearedDayMakeupSuppressions(params: {
   let next = params.suppressedMakeupOrigins
   const appendSuppression = (studentLike: StudentEntry) => {
     const stockKey = buildMakeupStockKey(resolveStockId(studentLike), studentLike.subject)
+    // 抑制は自動計算 origin(computeAutomaticShortageOrigins が**テンプレ行の時限**つきで積む)に当てるものなので、
+    // 時限も「テンプレ上の元の時限」で積む。同日移動した通常授業は盤面の時限がテンプレとズレるため、
+    // sameDayMoveSourceLabel("… 5限")の元時限を優先する(取れなければ現在のコマの時限=非移動ならテンプレと同じ)。
+    // 現在の時限で積むと抑制トークンが自動 origin と一致せず、Issue #58 のバグが同日移動の授業でだけ残る。
+    const templateSlotNumber = parseOriginSlotNumberFromLabel(studentLike.sameDayMoveSourceLabel) ?? cell.slotNumber
     next = appendMakeupOrigin(
       next,
       stockKey,
       resolveOriginalRegularDate(studentLike, cell.dateKey),
-      resolveOriginalRegularSlotNumber(studentLike, cell.slotNumber),
+      templateSlotNumber,
     )
   }
   for (const desk of cell.desks) {
@@ -4476,6 +4485,7 @@ export function collectClearedDayMakeupSuppressions(params: {
     for (const statusEntry of desk.statusSlots ?? []) {
       if (!statusEntry || statusEntry.lessonType !== 'regular') continue
       if (statusEntry.status === 'absent') continue // mark-absent が台帳へ確定済み(抑制すると立っている在庫が消える)
+      if (statusEntry.status === 'moved') continue // 会計は移動先の振替コマが持つ(抑制すると移動先を休みにした算出 origin まで消える)
       appendSuppression(buildStudentEntryFromStatus(statusEntry))
     }
   }
@@ -7727,6 +7737,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage(`同コマにすでに${resolveBoardStudentDisplayName(duplicateStudent.name)}が組まれているためテンプレ移動不可です。`)
       return
     }
+    // Issue #56(INV監査 2026-08-29): 入れ替え相手の着地先(移動元コマ)にも同一生徒がいないか検査する。
+    // 盤面(computeStudentMove)と同型の穴がテンプレ移動にも残っていた(検査ロジックは同じ関数を再利用)。
+    if (targetStudent) {
+      const swapDuplicate = findDuplicateStudentInCell(
+        next[sourceCellIdx],
+        resolveStockComparableStudentKey(targetStudent, managedStudentByAnyName, resolveBoardStudentDisplayName),
+        [targetStudent.id, sourceStudent.id],
+      )
+      if (swapDuplicate) {
+        setStatusMessage(`入れ替え先の同コマにすでに${resolveBoardStudentDisplayName(swapDuplicate.name)}が組まれているためテンプレ入れ替え不可です。`)
+        return
+      }
+    }
 
     // Save undo
     pushTemplateUndo(templateCells)
@@ -8148,12 +8171,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }
   // ── End template mode helpers ──
 
-  const findDuplicateStudentInCell = (targetCell: SlotCell, studentKey: string, excludedStudentId?: string) => {
+  const findDuplicateStudentInCell = (targetCell: SlotCell, studentKey: string, excludedStudentIds?: string | Array<string | undefined>) => {
     return findDuplicateStudentInCellByKey(
       targetCell,
       studentKey,
       (student) => resolveStockComparableStudentKey(student, managedStudentByAnyName, resolveBoardStudentDisplayName),
-      excludedStudentId,
+      excludedStudentIds,
     )
   }
 

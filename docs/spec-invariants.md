@@ -486,7 +486,43 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
       返さず希望回数 −1**。会計は休日設定と同じ `reconcileHolidayDeskStockReturns` に委譲し、違いは
       `includeRegularLessons:false` だけ。⚠️「返す」と「希望回数 −1」を同時にやらない（`returnedEntryIds` で伝える）。
     - 原則：**教室都合で外す（休日設定・全コマ削除）＝返す／1コマずつ「要らない」と消す（削除・一覧の×）＝返さない**。
-- **マトリクステストファイル**：`inv06-makeup-absence-stock.matrix.test.ts`（2026-08-02・49 テスト。由来の対称性 3 件
+  - move-displaces-absent-record（生徒移動が移動先の absent 記録を破棄し「休」表示と算出在庫が消える／
+    Issue #57・**v1.5.481** / 2026-08-29・第三者手動テスト No.113 で発見）：
+    - `computeStudentMove` が移動先（と入れ替え着地）スロットの出欠記録を**一律 null 化**していた
+      （`ee5728c`「移)日付の滞留を消す」の実装が moved 以外まで巻き込み）。移動由来振替の absent は
+      台帳に origin が無く**算出で復元**される（moved-makeup-absence-loss の方式）ため、記録が消えると
+      未消化振替が 1 件無言で消滅（誤減）。derived-origin-downstream-loss の教訓「statusSlots を消す経路を
+      列挙する」から**生徒移動が漏れていた**。
+    - 対処：①クリアは **moved マーカー限定**にし absent／振無休は保持（「休」表示と算出根拠が残る）
+      ②上書きが避けられない箇所（moved マーカー書き込み・出欠付与 3 ハンドラ）は、破棄前確定の判定を
+      共通関数 `materializeDisplacedStatusEntryIntoLedgers` へ一本化して確定（`reconcileHolidayDeskStockReturns`
+      も同関数へ委譲・挙動不変）。moved マーカー書き込みは消える記録を `displacedStatusEntries` で
+      呼び出し側（盤面移動／日程表D&D）へ返し、呼び出し側が確定してから commit する。
+    - ⚠️ moved マーカーの削除まで保持に変えると `ee5728c`（移動日付の引き継ぎ）が再発する。
+      ⚠️ 確定の台帳判定は `ledgerMakeupOriginDatesByKey`（`includeAbsentMakeupOrigins: false`）を渡すこと
+      （算出で復元した自分自身を「台帳にある」と誤読すると確定が取りやめられ同時消滅する）。
+  - clear-day-then-holiday-restack（全コマ削除した日の休日設定で処分済み通常授業の振替が積み直される／
+    Issue #58・**v1.5.481** / 2026-08-29・第三者手動テスト No.121「5週目対応が難しい」で発見）：
+    - 全コマ削除は通常授業を「返さず希望回数 −1（もうやらない）」で処分する（clear-day-stock-return）のに
+      振替抑制（`suppressedMakeupOrigins`）を積まない非対称があり、休日振替の自動計算
+      （`computeAutomaticShortageOrigins`）が**盤面ではなくテンプレを根拠に**発火するため、
+      同じ 1 コマに「希望 −1」と「振替 +1」が両方かかっていた（誤増）。
+    - 対処：単発削除（`handleDeleteStudent`）と同様に抑制を積む（新設 `collectClearedDayMakeupSuppressions`・
+      処分で lesson/statusSlots を破棄する**前**に収集）。
+    - ⚠️ **時限つき（テンプレ上の元時限）で積む**：時限なしの日付ワイルドカードだと同じ生徒×科目の
+      欠席済み origin（台帳確定済みの在庫）まで巻き込んで消す。同日移動した授業は盤面の時限がテンプレと
+      ズレるため `sameDayMoveSourceLabel` の元時限で積む（現在の時限だと自動 origin に当たらず取りこぼす）。
+    - ⚠️ **absent／moved の記録には積まない**：absent は mark-absent が台帳確定済み（抑制すると立っている
+      在庫が消える）。moved の会計は**移動先の振替コマ**が持ち、「移動先を休み → 移動元日を全コマ削除」の順で
+      算出復元 origin を抑制が消す（INV 監査 2026-08-29 で実証・端到端テストで固定）。attended／振無休は積む。
+    - 「全コマ削除 → コマを足し直して休み」は deleted-then-absent の順序方式（`clearMakeupOrigins`）が
+      そのまま効いて振替に入る。※**丸ごと振替の振替先処分には抑制を積んでいない**（意図的な差・
+      フォローアップ Issue で裁定予定。統一リファクタで安易に揃えないこと）。
+- **マトリクステストファイル**：`inv06-makeup-absence-stock.matrix.test.ts`（2026-08-29・**56 テスト**。
+  Issue #57 の下流列 1 件〔欠席記録のある席へ生徒を移動しても未消化振替が消えない〕と Issue #58 の
+  下流列 6 件〔全コマ削除の抑制で休日設定の積み直しを防ぐ（時限つき）／absent はスキップし在庫を守る／
+  attended・振無休は積む／moved はスキップ（積むと移動先休みの算出 origin が消える誤減・端到端で固定）／
+  同日移動はテンプレ元時限で積む／順序方式で足し直し→休みが入る〕を追加。以下は 2026-08-02 時点の 49 テスト。由来の対称性 3 件
   〔出席済み／振無休の休日設定で在庫由来と移動由来の残が一致・`moved` は触らない〕と「その日の生徒を全コマ削除」列 7 件
   〔在庫由来と移動由来がどちらも残1／出席済みも一致／通常は返さない／体験・増コマ・手動追加は返さない／
   ストック由来の講習は返し手動追加の講習は返さない／`returnedEntryIds`〕を追加。旧 `it.todo`〔全コマ削除の裁定〕は
@@ -523,7 +559,9 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   全消し（`handleClearStudentsOnDate`）の裁定は 2026-08-02 オーナー確定でマトリクス化済み。丸ごと振替も同裁定へ
   委譲しマトリクス化済み。復帰 UI（Issue #39）・テンプレ上書き複合の均衡（Issue #48）は未担保。
   **算出で復元する在庫（absent 由来）は「盤面に出欠記録がある間だけ」成立する**ため、statusSlots を消す経路を
-  追加・変更するときは必ず確定（materialize）の要否を判断する）。
+  追加・変更するときは必ず確定（materialize）の要否を判断する。既知の消す経路＝休日設定／全コマ削除／
+  生徒移動・入れ替え（v1.5.481 で moved 限定クリア＋確定に対応）／出欠付与の上書き（同・確定に対応）。
+  確定判定は `materializeDisplacedStatusEntryIntoLedgers` に一本化済み＝新しい経路もこの関数を通すこと）。
 
 ---
 

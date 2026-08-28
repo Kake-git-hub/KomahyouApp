@@ -875,8 +875,8 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
       }).find((item) => item.key === STOCK_KEY)?.balance ?? 0
       expect(balance).toBe(1)
 
-      // 実施済み(attended)・振無休・移動済み(moved)の通常授業は積む(休日設定が積み直すべきでない)
-      for (const status of ['attended', 'absent-no-makeup', 'moved'] as const) {
+      // 実施済み(attended)・振無休の通常授業は積む(休日設定が積み直すべきでない)
+      for (const status of ['attended', 'absent-no-makeup'] as const) {
         const statusSuppressions = collectClearedDayMakeupSuppressions({
           cell: cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'regular', status }))),
           suppressedMakeupOrigins: {},
@@ -884,6 +884,70 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
         })
         expect(statusSuppressions[STOCK_KEY], status).toEqual([{ dateKey: BOARD_DATE, slotNumber: 5 }])
       }
+    })
+
+    it('移動済み(moved)マーカーには抑制を積まない(移動先を休みにした算出 origin を消さない・INV監査 2026-08-29)', () => {
+      // moved の会計は移動先の振替コマが持つ。移動元日に抑制を積むと、
+      // 「移動先の振替を休み→移動元日を全コマ削除」の順で算出復元 origin が消える(誤減)。
+      const movedSuppressions = collectClearedDayMakeupSuppressions({
+        cell: cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'regular', status: 'moved' }))),
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      expect(Object.keys(movedSuppressions)).toHaveLength(0)
+    })
+
+    it('端到端: 移動先の振替を休みにした後、移動元日を全コマ削除しても未消化振替は残1のまま', () => {
+      // 移動元(BOARD_DATE=水5限)に moved マーカー、別日に移動先の振替コマの absent 記録(算出復元で残1)。
+      const movedMarkerDesk = deskWithStatus(boardStatus({ lessonType: 'regular', status: 'moved' }))
+      const absentMakeupCell: SlotCell = {
+        id: 'cell-dest',
+        dateKey: '2026-08-07',
+        dayLabel: '金',
+        dateLabel: '8/7',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:00-20:20',
+        isOpenDay: true,
+        desks: [{
+          id: 'desk-dest',
+          teacher: '田中講師',
+          statusSlots: [boardStatus({ id: 'status-dest', lessonType: 'makeup', status: 'absent', makeupSourceDate: BOARD_DATE, makeupSourceLabel: '2026/8/5(水) 5限', dateKey: '2026-08-07' }), null],
+          lesson: { id: 'lesson-dest', studentSlots: [null, null] },
+        }],
+      }
+      // 全コマ削除(移動元日)の抑制収集 → moved はスキップされるので抑制ゼロ
+      const suppressions = collectClearedDayMakeupSuppressions({
+        cell: cellWithDesk(movedMarkerDesk),
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      const clearedDesk: DeskCell = { ...movedMarkerDesk, statusSlots: undefined, lesson: undefined }
+      const balance = buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings(),
+        weeks: [[cellWithDesk(clearedDesk), absentMakeupCell]],
+        manualAdjustments: {},
+        suppressedOrigins: suppressions,
+        resolveStudentKey,
+        today: TODAY,
+      }).find((item) => item.key === STOCK_KEY)?.balance ?? 0
+      expect(balance).toBe(1) // moved に抑制を積むと 0 に誤減する
+    })
+
+    it('同日移動した通常授業の抑制は「テンプレ上の元の時限」で積む(現在の時限だと自動 origin に当たらない)', () => {
+      // テンプレ=水5限の授業を同日4限へ移動した状態。盤面の時限(4)で積むと自動計算 origin(5限)と
+      // トークンが一致せず、Issue #58 のバグが同日移動の授業でだけ残る。
+      const sameDayMoved = deskWithStudent(boardStudent({ sameDayMoveSourceDate: BOARD_DATE, sameDayMoveSourceLabel: '2026/8/5(水) 5限' }))
+      const cell: SlotCell = { ...cellWithDesk(sameDayMoved), slotNumber: 4, slotLabel: '4限' }
+      const suppressions = collectClearedDayMakeupSuppressions({
+        cell,
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      expect(suppressions[STOCK_KEY]).toEqual([{ dateKey: BOARD_DATE, slotNumber: 5 }])
     })
 
     it('順序方式(後にやった操作が勝つ): 全コマ削除→コマを足し直して休みにすると抑制が解除され振替に入る', () => {

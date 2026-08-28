@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -4713,6 +4713,76 @@ describe('computeStudentMove (盤面移動の純粋ロジック・E2Eからの�
     expect(r.status).toBe('moved')
     if (r.status !== 'moved') return
     expect(deskById(r.nextWeeks, 'C1', 'd1').statusSlots?.[0] ?? null).toBeNull()
+  })
+
+  // Issue #56 フォローアップ(INV監査 2026-08-29): テンプレモードの移動(handleTemplateMoveStudent)は
+  // コンポーネント内関数のため純関数テストができない。入れ替え着地の重複検査は computeStudentMove と
+  // 同じ findDuplicateStudentInCellByKey を配線済みだが、テンプレ移動自体の抽出とテストは未着手。
+  it.todo('テンプレ移動を純関数へ抽出し「入れ替え相手の着地先に同一生徒 → blocked」を固定する(Issue #56 フォローアップ)')
+})
+
+// Issue #57(INV-06): 出欠記録を上書き/破棄する側が台帳へ確定する共通関数の直接テスト。
+// reconcileHolidayDeskStockReturns 経由(マトリクス)の間接カバーに加え、確定規則そのものを固定する。
+describe('materializeDisplacedStatusEntryIntoLedgers (上書きで消える出欠記録の台帳確定)', () => {
+  const baseEntry: StudentStatusEntry = {
+    id: 'st1', studentId: 'sid1', name: '大槻 太郎', managedStudentId: 'student-1', grade: '中1',
+    subject: '数', lessonType: 'makeup', teacherType: 'normal', teacherName: '田中',
+    dateKey: '2026-08-05', slotNumber: 5, recordedAt: '2026-08-01T00:00:00.000Z',
+    status: 'absent', sourceLessonId: 'l1', sourceManagedLesson: true,
+    makeupSourceDate: '2026-07-29', makeupSourceLabel: '2026/7/29(水) 5限',
+  }
+  const helpers = {
+    ledgerOriginDatesByKey: {} as Record<string, string[]>,
+    managedStudentByAnyName: new Map(),
+    resolveDisplayName: (n: string) => n,
+    resolveStockId: (s: { managedStudentId?: string; id: string }) => s.managedStudentId ?? s.id,
+  }
+
+  it('移動由来(台帳に origin なし)の absent は振替元日+時限で台帳へ確定する', () => {
+    const r = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: baseEntry, manualMakeupAdjustments: {}, fallbackMakeupStudents: {}, ...helpers,
+    })
+    expect(r.materialized).toBe(true)
+    expect(r.manualMakeupAdjustments['student-1__数']).toEqual([{ dateKey: '2026-07-29', slotNumber: 5 }])
+  })
+
+  it('在庫由来(台帳に origin あり)は積まない(再浮上に任せる=二重計上防止)', () => {
+    const r = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: baseEntry, manualMakeupAdjustments: {}, fallbackMakeupStudents: {},
+      ...helpers, ledgerOriginDatesByKey: { 'student-1__数': ['2026-07-29#5'] },
+    })
+    expect(r.materialized).toBe(false)
+    expect(Object.keys(r.manualMakeupAdjustments)).toHaveLength(0)
+  })
+
+  it('確定済み(already-materialized)は2件目を積まない(時限不明はワイルドカード=過大計上しない側)', () => {
+    const withSlot = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: baseEntry,
+      manualMakeupAdjustments: { 'student-1__数': [{ dateKey: '2026-07-29', slotNumber: 5 }] },
+      fallbackMakeupStudents: {}, ...helpers,
+    })
+    expect(withSlot.materialized).toBe(false)
+    expect(withSlot.manualMakeupAdjustments['student-1__数']).toHaveLength(1)
+
+    // 既存が時限不明でも同じ元コマとみなして畳む
+    const wildcard = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: baseEntry,
+      manualMakeupAdjustments: { 'student-1__数': [{ dateKey: '2026-07-29' }] },
+      fallbackMakeupStudents: {}, ...helpers,
+    })
+    expect(wildcard.materialized).toBe(false)
+    expect(wildcard.manualMakeupAdjustments['student-1__数']).toHaveLength(1)
+  })
+
+  it('moved マーカー・makeup 以外は確定対象外(何も積まない)', () => {
+    const moved = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: { ...baseEntry, status: 'moved' as const }, manualMakeupAdjustments: {}, fallbackMakeupStudents: {}, ...helpers,
+    })
+    expect(moved.materialized).toBe(false)
+    const regular = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: { ...baseEntry, lessonType: 'regular' as const, makeupSourceDate: undefined }, manualMakeupAdjustments: {}, fallbackMakeupStudents: {}, ...helpers,
+    })
+    expect(regular.materialized).toBe(false)
   })
 })
 
