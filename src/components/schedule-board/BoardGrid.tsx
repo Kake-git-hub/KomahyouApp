@@ -194,7 +194,9 @@ type BoardGridProps = {
   specialPeriods: Array<{ id: string; label: string; startDate: string; endDate: string }>
   // spec-group-lesson §A: 集団授業（特別講習を含む週のみ・期間内開校日だけ）。
   groupClassEntries?: GroupClassEntryMap
-  resolveStudentDisplayName: (name: string) => string
+  // No.146(2026-08-29): managedStudentId を渡すと名簿からID優先で表示名を解決する(改名の即時反映)。
+  // 名前だけの呼び出し(名簿外の体験生・メモ等)は従来どおり名前逆引きへ落ちる。
+  resolveStudentDisplayName: (name: string, managedStudentId?: string) => string
   resolveStudentGradeLabel: (name: string, fallbackGrade: string, dateKey: string, birthDate?: string) => string
   resolveDisplayedLessonType: (name: string, subject: string, lessonType: LessonType | null, dateKey: string, slotNumber: number) => LessonType | null
   // 生徒基本データの「外部生」チェック解決(名前 = 登録名/表示名のどちらでも引ける)。未指定なら全員通常扱い。
@@ -282,6 +284,7 @@ function BoardGridComponent({
     lessonNote: string | undefined,
     isPicked: boolean,
     statusEntry: StudentStatusEntry | null = null,
+    studentManagedId: string | undefined = undefined,
     extraClassName = '',
   ) => {
     const effectiveName = studentName || statusEntry?.name || ''
@@ -299,9 +302,9 @@ function BoardGridComponent({
     const lessonPrefix = resolvedLessonType ? getLessonPrefix(resolvedLessonType, isExternalStudent) : null
     const teacherStar = getTeacherStar(effectiveTeacherType)
     const displayName = studentName
-      ? resolveStudentDisplayName(studentName)
+      ? resolveStudentDisplayName(studentName, studentManagedId)
       : statusEntry
-        ? `${resolveStudentDisplayName(statusEntry.name)}(${statusLabel}`
+        ? `${resolveStudentDisplayName(statusEntry.name, statusEntry.managedStudentId)}(${statusLabel}`
         : (memoLabel ?? '')
     const linkedDestination = statusEntry ? linkedLessonDestinationByStatusId.get(statusEntry.id) : null
     const visibleDateLabel = resolveVisibleSlotDateLabel({
@@ -672,6 +675,7 @@ function BoardGridComponent({
                           lesson?.note,
                           firstSelected,
                           firstStatus,
+                          firstStudent?.managedStudentId,
                         ),
                         renderStudentCell(
                           cell,
@@ -694,6 +698,7 @@ function BoardGridComponent({
                           lesson?.note,
                           secondSelected,
                           secondStatus,
+                          secondStudent?.managedStudentId,
                           'sa-day-group-end',
                         ),
                       ]

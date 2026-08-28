@@ -767,6 +767,21 @@ export function applySubjectSlotsDeltaToSessions(
   })
 }
 
+// 手動テスト No.146(2026-08-29): 盤面セルの表示名解決が名前逆引きだけだったため、基本データで
+// **登録名**を変更すると既存配置のセルが旧名のまま残った(表示名フィールドのみの変更は従来から即反映)。
+// 在庫キーは v1.5.451 で managedStudentId 最優先へ是正済みで、**表示だけ**が取り残されていた。
+// セルが managedStudentId を持つならそれを最優先で名簿から解決し、無ければ従来の名前逆引きへ落とす
+// (体験生・メモなど名簿外の名前はそのまま)。
+export function resolveStudentEntryDisplayNameFromRoster(
+  entry: { name: string; managedStudentId?: string },
+  managedStudentById: Map<string, StudentRow>,
+  managedStudentNameMap: Map<string, string>,
+): string {
+  const rosterStudent = entry.managedStudentId ? managedStudentById.get(entry.managedStudentId) : undefined
+  if (rosterStudent) return getStudentDisplayName(rosterStudent)
+  return managedStudentNameMap.get(entry.name) ?? entry.name
+}
+
 export function appendHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry): HistoryEntry[] {
   if (stack.length >= MAX_HISTORY_DEPTH) {
     return [...stack.slice(stack.length - MAX_HISTORY_DEPTH + 1), entry]
@@ -5874,6 +5889,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [students])
 
   const resolveBoardStudentDisplayName = useCallback((name: string) => managedStudentNameMap.get(name) ?? name, [managedStudentNameMap])
+  // No.146: 盤面セルの表示専用・ID優先版(BoardGrid へ渡す)。登録名を改名しても既存配置のセルが
+  // 新しい表示名になる。メッセージ等の名前ベース解決(resolveBoardStudentDisplayName)は従来どおり。
+  const resolveBoardStudentEntryDisplayName = useCallback(
+    (name: string, managedStudentId?: string) => resolveStudentEntryDisplayNameFromRoster({ name, managedStudentId }, managedStudentById, managedStudentNameMap),
+    [managedStudentById, managedStudentNameMap],
+  )
   // 外部生(生徒基本データのチェック)判定。盤面セルは生徒名しか持たないため、登録名・表示名の
   // 両方から引ける managedStudentByAnyName を経由する(体験/メモなど名簿外の名前は常に false)。
   const isExternalStudentName = useCallback(
@@ -11560,7 +11581,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             yearLabel={isTemplateMode ? '' : yearLabel}
             specialPeriods={isTemplateMode ? EMPTY_SPECIAL_PERIODS : visibleSpecialSessions}
             groupClassEntries={groupClassEntries}
-            resolveStudentDisplayName={resolveBoardStudentDisplayName}
+            resolveStudentDisplayName={resolveBoardStudentEntryDisplayName}
             resolveStudentGradeLabel={isTemplateMode ? stableTemplateGradeLabel : stableResolveStudentGradeLabel}
             resolveDisplayedLessonType={isTemplateMode ? stableTemplateLessonType : stableResolveDisplayedLessonType}
             isExternalStudentName={stableIsExternalStudentName}

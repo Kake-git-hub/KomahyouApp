@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -6206,5 +6206,28 @@ describe('applySubjectSlotsDeltaToSessions (講習削除 undo の希望数復元
     const otherSession = makeSession({ 数: 2 })
     const result = applySubjectSlotsDeltaToSessions([otherSession], { ...deleteDelta, sessionId: 'sess-other' }, -1)
     expect(result[0]).toBe(otherSession) // 同一参照のまま(触らない)
+  })
+})
+
+// 手動テスト No.146(2026-08-29): 基本データで登録名を変更しても盤面の既存配置セルが旧名のまま残った。
+// 表示解決が名前逆引きだけだったため(在庫キーは v1.5.451 で ID 優先へ是正済み・表示だけ未対応)。
+// managedStudentId 最優先で名簿から解決する。ID 解決を外して名前逆引きだけへ戻すと1件目が落ちる。
+describe('resolveStudentEntryDisplayNameFromRoster (改名の盤面表示反映・No.146)', () => {
+  const renamed: StudentRow = { id: 'st-1', name: '佐藤 花子', displayName: '佐藤(新)', email: '', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2013-05-01' }
+  const byId = new Map([[renamed.id, renamed]])
+  const nameMap = new Map([['佐藤 花子', '佐藤(新)'], ['佐藤(新)', '佐藤(新)']])
+
+  it('セルの名前が旧名でも managedStudentId から現在の表示名を解決する(改名の即時反映)', () => {
+    // 盤面セルは配置時の登録名「山田 太郎」を保持したまま、名簿では「佐藤 花子」へ改名済み。
+    expect(resolveStudentEntryDisplayNameFromRoster({ name: '山田 太郎', managedStudentId: 'st-1' }, byId, nameMap)).toBe('佐藤(新)')
+  })
+
+  it('managedStudentId が無ければ従来の名前逆引き(体験生・旧データ互換)', () => {
+    expect(resolveStudentEntryDisplayNameFromRoster({ name: '佐藤 花子' }, byId, nameMap)).toBe('佐藤(新)')
+  })
+
+  it('名簿に無い名前(メモ・体験生)はそのまま返す', () => {
+    expect(resolveStudentEntryDisplayNameFromRoster({ name: '体験 次郎' }, byId, nameMap)).toBe('体験 次郎')
+    expect(resolveStudentEntryDisplayNameFromRoster({ name: '体験 次郎', managedStudentId: 'unknown-id' }, byId, nameMap)).toBe('体験 次郎')
   })
 })
