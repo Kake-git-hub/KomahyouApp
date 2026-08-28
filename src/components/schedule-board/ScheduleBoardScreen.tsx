@@ -4344,6 +4344,7 @@ export type ComputeWholeDayTransferResult =
       nextWeeks: SlotCell[][]
       summary: WholeDayTransferSummary
       nextManualMakeupAdjustments: MakeupOriginMap
+      nextSuppressedMakeupOrigins: MakeupOriginMap
       nextFallbackMakeupStudents: Record<string, FallbackMakeupStudent>
       nextManualLectureStockCounts: LectureStockCountMap
       nextManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>
@@ -4606,6 +4607,8 @@ export function computeWholeDayTransfer(params: {
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
   fallbackLectureStockStudents: Record<string, { displayName: string; subject?: string }>
   suppressedRegularLessonOccurrences: string[]
+  /** 振替抑制。振替先で処分する通常授業に全コマ削除(Issue #58)と同じ抑制を積んで返す(Issue #59・2026-08-29 オーナー確定)。 */
+  suppressedMakeupOrigins: MakeupOriginMap
   scheduleCountAdjustments: ScheduleCountAdjustmentEntry[]
   students: StudentRow[]
   teachers: TeacherRow[]
@@ -4676,9 +4679,20 @@ export function computeWholeDayTransfer(params: {
   }
   let nextScheduleCountAdjustments = params.scheduleCountAdjustments
   let nextSuppressed = [...params.suppressedRegularLessonOccurrences]
+  // Issue #59(2026-08-29 オーナー確定): 振替先で処分する通常授業には全コマ削除(Issue #58)と同じ振替抑制を積む。
+  // 積まないと、振替先の日を後から休日設定したとき自動計算(テンプレ根拠)が処分済み通常授業の振替を
+  // 積み直し「希望−1」と「振替+1」が二重にかかる(§4-2 の「全コマ削除と同一裁定」を抑制まで対称化)。
+  // 振替元には積まない: 移送された振替コマの消化が自動 origin を打ち消して中立(#58 の moved スキップと同じ構図)。
+  let nextSuppressedMakeupOrigins = cloneOriginMap(params.suppressedMakeupOrigins)
 
   // Phase A: 振替先の既存コマを処分（「その日の生徒を全コマ削除」と**同一の共通関数**へ委譲）。
   for (const cell of targetCells) {
+    // 抑制の収集は disposeDayDeskEntries が lesson/statusSlots を破棄する**前**に行う(全コマ削除と同順)。
+    nextSuppressedMakeupOrigins = collectClearedDayMakeupSuppressions({
+      cell,
+      suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+      resolveStockId,
+    })
     for (const desk of cell.desks) {
       const disposal = disposeDayDeskEntries({
         desk,
@@ -4788,6 +4802,7 @@ export function computeWholeDayTransfer(params: {
     nextWeeks,
     summary,
     nextManualMakeupAdjustments: ledgers.manualMakeupAdjustments,
+    nextSuppressedMakeupOrigins,
     nextFallbackMakeupStudents: ledgers.fallbackMakeupStudents,
     nextManualLectureStockCounts: ledgers.manualLectureStockCounts,
     nextManualLectureStockOrigins: ledgers.manualLectureStockOrigins,
@@ -8583,6 +8598,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackMakeupStudents,
       fallbackLectureStockStudents,
       suppressedRegularLessonOccurrences,
+      suppressedMakeupOrigins,
       scheduleCountAdjustments,
       students,
       teachers,
@@ -8612,7 +8628,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       undefined,
       undefined,
       result.nextManualMakeupAdjustments,
-      undefined,
+      result.nextSuppressedMakeupOrigins,
       result.nextFallbackMakeupStudents,
       result.nextManualLectureStockCounts,
       result.nextManualLectureStockOrigins,

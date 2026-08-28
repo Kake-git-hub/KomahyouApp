@@ -18,6 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- docs(INV-12): **保証台帳に INV-12「配置の一意性」を新設**(オーナー承認 2026-08-29)。同一生徒を同一コマに二重配置しない保証(Issue #56 の違反履歴を transcribe)。強制層のためマトリクス `inv12-placement-uniqueness.matrix.test.ts` を新設し、`ScheduleBoardScreen.test.ts` から #56 の回帰テスト4件+テンプレ純関数化の todo を移設(テスト内容は不変・場所の昇格のみ)
+- fix(Issue #59, INV-06): **丸ごと振替の振替先処分にも全コマ削除(Issue #58)と同じ振替抑制を積むようにした**(オーナー確定 2026-08-29)。振替先で処分(希望回数−1)した通常授業が、その日を後から休日設定すると自動計算(テンプレ根拠)で振替に積み直される非対称を対称化。`computeWholeDayTransfer` の Phase A が処分前に `collectClearedDayMakeupSuppressions` を通し、`nextSuppressedMakeupOrigins` を返して commitWeeks へ配線。★振替元には積まない(移送された振替コマの消化が自動 origin を打ち消して中立=#58 の moved スキップと同じ構図)。マトリクス3件を追加(inv06-whole-day-transfer 36→39件)し、収集をスキップする mutation で2件落ちることを確認(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md・docs/spec-invariants.md)
+
 ## v1.5.481 (2026-08-29)
 
 - fix(INV監査反映・Issue #56/#57/#58): regression-reviewer の INV 監査(2026-08-29)で見つかった3点を同 push で修正。①**moved マーカーへの抑制で「移動先の振替を休み→移動元日を全コマ削除」の順に算出復元 origin が消える誤減**(#58 の初版実装の欠陥・端到端テストで実証)→ moved もスキップに変更 ②**同日移動した通常授業は抑制の時限が盤面時限になり自動 origin(テンプレ時限)に当たらず取りこぼす**→ `sameDayMoveSourceLabel` の元時限で積むよう修正 ③**テンプレモードの入れ替えにも #56 と同型の穴(入れ替え相手の着地先に重複検査なし)が残存**→ 同じ検査を配線(テンプレ移動の純関数化+テストはフォローアップ・it.todo で可視化)。あわせて `materializeDisplacedStatusEntryIntoLedgers` の直接テスト4件を追加し、`docs/spec-invariants.md`(INV-06 違反履歴2件+マトリクス56件)と `docs/spec-makeup-stock.md`(§2 削除・「空にする」の 2026-07-06 確定の改定・§B-2-1 破棄操作の列挙に生徒移動を追加)を改定

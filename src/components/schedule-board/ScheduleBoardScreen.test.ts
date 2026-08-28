@@ -4522,22 +4522,8 @@ describe('computeStudentMove (盤面移動の純粋ロジック・E2Eからの�
     expect(e0.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
   })
 
-  it('同コマに同一生徒が既にいる移動先はブロックして状態を維持する', () => {
-    const weeks: SlotCell[][] = [[
-      mkCell('C1', '2026-03-23', 1, [
-        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('a', '太郎', { managedStudentId: 'mX' }), null]) },
-      ]),
-      mkCell('C2', '2026-03-24', 1, [
-        { id: 'e0', teacher: '佐藤', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('b', '太郎', { managedStudentId: 'mX' }), null]) },
-        { id: 'e1', teacher: '', manualTeacher: false, lesson: undefined },
-      ]),
-    ]]
-    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 'a', cellId: 'C2', deskIndex: 1, studentIndex: 0 })
-    expect(r.status).toBe('blocked')
-    if (r.status !== 'blocked') return
-    expect(r.message).toContain('移動不可')
-    expect(r.message).toContain('太郎')
-  })
+  // 「同コマに同一生徒が既にいる移動先はブロック」系(Issue #56 含む)は INV-12 マトリクス
+  // (inv12-placement-uniqueness.matrix.test.ts)へ移設(2026-08-29・台帳新設に伴う昇格)。
 
   it('同じ位置をクリックした移動は取りやめる', () => {
     const weeks: SlotCell[][] = [[
@@ -4581,62 +4567,6 @@ describe('computeStudentMove (盤面移動の純粋ロジック・E2Eからの�
     const d1 = deskById(r.nextWeeks, 'C1', 'd1')
     expect(d1.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
     expect(d0.lesson?.studentSlots[0]?.managedStudentId).toBe('s2')
-  })
-
-  // Issue #56(2026-08-29): 日程表D&Dスワップで同一生徒が同コマに二重配置される(手動テスト No.276)。
-  // スワップ相手の着地先(移動元コマ)に重複検査が無く、移動先側も「最初の1件が相手なら免除」で
-  // 2エントリ目を素通りしていた。以下2件は修正なしで status='moved'(=二重配置)になり落ちる。
-  it('入れ替え相手の着地先(移動元コマ)に相手と同一生徒が既にいる入れ替えはブロックする(Issue #56)', () => {
-    // C1(8/25)に「南緒(y2)」と「應佑(x1)」。C2(8/26)に「南緒(y1)」。
-    // 應佑(x1) を C2 の南緒(y1)とスワップ → 南緒(y1) が C1 へ着地すると C1 に南緒が2人になる。
-    // 旧実装は入れ替え相手の着地先(移動元コマ)を一切検査せず二重配置になっていた。
-    const weeks: SlotCell[][] = [[
-      mkCell('C1', '2026-08-25', 1, [
-        { id: 'd0', teacher: '絹川', manualTeacher: false, lesson: mkLesson('la', [mkStudent('y2', '南緒', { managedStudentId: 'mY' }), null]) },
-        { id: 'd1', teacher: '山本', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('x1', '應佑', { managedStudentId: 'mX' }), null]) },
-      ]),
-      mkCell('C2', '2026-08-26', 1, [
-        { id: 'e0', teacher: '村上', manualTeacher: false, lesson: mkLesson('lc', [mkStudent('y1', '南緒', { managedStudentId: 'mY' }), null]) },
-      ]),
-    ]]
-    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 'x1', cellId: 'C2', deskIndex: 0, studentIndex: 0 })
-    expect(r.status).toBe('blocked')
-    if (r.status !== 'blocked') return
-    expect(r.message).toContain('南緒')
-  })
-
-  it('移動先コマに同一生徒が2エントリ(入れ替え相手+別机)ある入れ替えは免除せずブロックする(Issue #56)', () => {
-    // C2 の應佑(x2) を C1 の同キー相手(x1)とスワップしようとするが、C1 の別机にも應佑(x3)が居る。
-    // 旧実装は「見つかった1件=相手」で免除し、x3 を見落として二重配置になっていた。
-    const weeks: SlotCell[][] = [[
-      mkCell('C1', '2026-08-25', 1, [
-        { id: 'd0', teacher: '絹川', manualTeacher: false, lesson: mkLesson('la', [mkStudent('x1', '應佑', { managedStudentId: 'mX' }), null]) },
-        { id: 'd1', teacher: '山本', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('x3', '應佑', { managedStudentId: 'mX' }), null]) },
-      ]),
-      mkCell('C2', '2026-08-26', 1, [
-        { id: 'e0', teacher: '村上', manualTeacher: false, lesson: mkLesson('lc', [mkStudent('x2', '應佑', { managedStudentId: 'mX' }), null]) },
-      ]),
-    ]]
-    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 'x2', cellId: 'C1', deskIndex: 0, studentIndex: 0 })
-    expect(r.status).toBe('blocked')
-  })
-
-  it('入れ替え相手が移動元コマに重複を作らない通常のスワップは従来どおり成立する(Issue #56 回帰なし)', () => {
-    const weeks: SlotCell[][] = [[
-      mkCell('C1', '2026-08-25', 1, [
-        { id: 'd0', teacher: '絹川', manualTeacher: false, lesson: mkLesson('la', [mkStudent('y1', '南緒', { managedStudentId: 'mY' }), null]) },
-      ]),
-      mkCell('C2', '2026-08-26', 1, [
-        { id: 'e0', teacher: '村上', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('x2', '應佑', { managedStudentId: 'mX' }), null]) },
-      ]),
-    ]]
-    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 'x2', cellId: 'C1', deskIndex: 0, studentIndex: 0 })
-    expect(r.status).toBe('moved')
-    if (r.status !== 'moved') return
-    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
-    const e0 = deskById(r.nextWeeks, 'C2', 'e0')
-    expect(d0.lesson?.studentSlots[0]?.managedStudentId).toBe('mX')
-    expect(e0.lesson?.studentSlots[0]?.managedStudentId).toBe('mY')
   })
 
   // Issue #57(2026-08-29): 移動が移動先スロットの出欠記録を一律 null 化し、「休」表示と
@@ -4715,10 +4645,6 @@ describe('computeStudentMove (盤面移動の純粋ロジック・E2Eからの�
     expect(deskById(r.nextWeeks, 'C1', 'd1').statusSlots?.[0] ?? null).toBeNull()
   })
 
-  // Issue #56 フォローアップ(INV監査 2026-08-29): テンプレモードの移動(handleTemplateMoveStudent)は
-  // コンポーネント内関数のため純関数テストができない。入れ替え着地の重複検査は computeStudentMove と
-  // 同じ findDuplicateStudentInCellByKey を配線済みだが、テンプレ移動自体の抽出とテストは未着手。
-  it.todo('テンプレ移動を純関数へ抽出し「入れ替え相手の着地先に同一生徒 → blocked」を固定する(Issue #56 フォローアップ)')
 })
 
 // Issue #57(INV-06): 出欠記録を上書き/破棄する側が台帳へ確定する共通関数の直接テスト。

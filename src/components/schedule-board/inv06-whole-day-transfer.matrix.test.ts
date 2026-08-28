@@ -181,6 +181,7 @@ function runTransferWeeks(weeks: SlotCell[][], params: {
     fallbackMakeupStudents: {},
     fallbackLectureStockStudents: {},
     suppressedRegularLessonOccurrences: [],
+    suppressedMakeupOrigins: {},
     scheduleCountAdjustments: [],
     students: [student],
     teachers: [teacher],
@@ -198,6 +199,7 @@ function runTransferWeeks(weeks: SlotCell[][], params: {
     classroomSettings: settings,
     weeks: result.nextWeeks,
     manualAdjustments: result.nextManualMakeupAdjustments,
+    suppressedOrigins: result.nextSuppressedMakeupOrigins,
     resolveStudentKey,
     today: TODAY,
   })
@@ -672,6 +674,7 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
         fallbackMakeupStudents: {},
         fallbackLectureStockStudents: {},
         suppressedRegularLessonOccurrences: [],
+        suppressedMakeupOrigins: {},
         scheduleCountAdjustments: [],
         students: [student],
         teachers: [teacher],
@@ -813,6 +816,60 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       const message = buildWholeDayTransferConfirmMessage(SOURCE_DATE, TARGET_DATE, { ...emptySummary, movedStudentCount: 1, movedTeacherCount: 1 })
       expect(message).toContain('振替先に既存のコマはありません。')
       expect(message).not.toContain('未消化へ返却')
+    })
+  })
+
+  // Issue #59(2026-08-29 オーナー確定): 振替先で処分した通常授業に、全コマ削除(Issue #58)と同じ
+  // 振替抑制(suppressedMakeupOrigins・時限つき)を積む。積まないと、振替先の日を後から休日設定したとき
+  // 自動計算(テンプレ根拠)が処分済み通常授業の振替を積み直し「希望−1」と「振替+1」が二重にかかる。
+  // §4-2「振替先の処分は全コマ削除と同一裁定」を抑制まで対称化した。
+  describe('振替先処分の振替抑制(Issue #59・全コマ削除との対称化)', () => {
+    it('振替先で処分した通常授業に抑制が積まれる(時限つき)/振替元には積まない', () => {
+      const weeks = [[
+        dayCell(SOURCE_DATE, deskWithStudent(boardStudent())),
+        dayCell(TARGET_DATE, deskWithStudent(boardStudent({ id: 'entry-t' }), { id: 'desk-t' })),
+      ]]
+      const outcome = runTransferWeeks(weeks)
+      expect(outcome.result.status).toBe('transferred')
+      if (outcome.result.status !== 'transferred') return
+      // 振替先(TARGET_DATE)の処分済み通常授業ぶんだけが時限つきで積まれる
+      expect(outcome.result.nextSuppressedMakeupOrigins[STOCK_KEY]).toEqual([{ dateKey: TARGET_DATE, slotNumber: 5 }])
+    })
+
+    it('端到端: 丸ごと振替のあと振替先の日を休日設定しても、処分済み通常授業の振替が積み直されない', () => {
+      const weeks = [[
+        dayCell(SOURCE_DATE, deskWithStudent(boardStudent())),
+        dayCell(TARGET_DATE, deskWithStudent(boardStudent({ id: 'entry-t' }), { id: 'desk-t' })),
+      ]]
+      const outcome = runTransferWeeks(weeks)
+      expect(outcome.result.status).toBe('transferred')
+      if (outcome.result.status !== 'transferred') return
+      const balanceAfterHoliday = (suppressedOrigins: Record<string, ManualMakeupOrigin[]>) => buildMakeupStockEntries({
+        students: [student],
+        teachers: [teacher],
+        regularLessons: [regularLesson],
+        classroomSettings: createSettings({ holidayDates: [TARGET_DATE] }),
+        weeks: outcome.result.status === 'transferred' ? outcome.result.nextWeeks : [],
+        manualAdjustments: outcome.result.status === 'transferred' ? outcome.result.nextManualMakeupAdjustments : {},
+        suppressedOrigins,
+        resolveStudentKey,
+        today: TODAY,
+      }).find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+      // 前提: 抑制なしだと自動計算が TARGET_DATE#5 の振替を積み直す(=旧挙動のバグ)
+      expect(balanceAfterHoliday({})).toBe(1)
+      // 抑制ありだと積み直されない(移送コマの在庫中立も維持)
+      expect(balanceAfterHoliday(outcome.result.nextSuppressedMakeupOrigins)).toBe(0)
+    })
+
+    it('振替先が空(処分する通常授業なし)なら抑制は積まれない', () => {
+      const weeks = [[
+        dayCell(SOURCE_DATE, deskWithStudent(boardStudent())),
+        dayCell(TARGET_DATE, emptyDesk({ id: 'desk-t' })),
+      ]]
+      const outcome = runTransferWeeks(weeks)
+      expect(outcome.result.status).toBe('transferred')
+      if (outcome.result.status !== 'transferred') return
+      expect(Object.keys(outcome.result.nextSuppressedMakeupOrigins)).toHaveLength(0)
     })
   })
 })
