@@ -10,7 +10,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, computeStudentMove, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -813,6 +813,54 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
         cellDateKey: BOARD_DATE,
         ledgerOriginDates: [`${HOLIDAY_SOURCE_DATE}#5`],
       })).toBeNull()
+    })
+  })
+
+  // Issue #57(2026-08-29・手動テスト No.113): 生徒移動が移動先スロットの absent 記録を一律 null 化していた。
+  // 算出で復元する在庫(移動由来振替の休み)は「盤面に出欠記録がある間だけ」成立するため、記録が消えると
+  // 未消化振替が1件無言で消滅していた(誤減)。移動は記録を保持する(消すのは moved マーカーだけ)。
+  describe('下流: 欠席記録のある席へ生徒を移動する(Issue #57)', () => {
+    it('回帰防止: 移動由来振替の休みが残る席へ別生徒を移動しても、未消化振替が消えない', () => {
+      // 欠席記録(移動由来の振替・台帳に origin なし)を持つ机 + 移動元の別コマに生徒
+      const targetDesk: DeskCell = {
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE }), null],
+        lesson: undefined,
+      }
+      const sourceCell: SlotCell = {
+        id: 'cell-src',
+        dateKey: '2026-08-04',
+        dayLabel: '火',
+        dateLabel: '8/4',
+        slotLabel: '5限',
+        slotNumber: 5,
+        timeLabel: '19:00-20:20',
+        isOpenDay: true,
+        desks: [{ id: 'desk-src', teacher: '田中講師', lesson: { id: 'lesson-src', studentSlots: [{ id: 'entry-2', name: '別の子', managedStudentId: 'student-2', grade: '中1', subject: '英', lessonType: 'regular', teacherType: 'normal' }, null] } }],
+      }
+      const weeks: SlotCell[][] = [[sourceCell, cellWithDesk(targetDesk)]]
+      const before = stockBalance({ desk: targetDesk })
+      expect(before).toBe(1) // 前提: 欠席記録から算出で残1
+
+      const moved = computeStudentMove({
+        weeks,
+        weekIndex: 0,
+        cells: weeks[0],
+        movingStudentId: 'entry-2',
+        cellId: 'cell-1',
+        deskIndex: 0,
+        studentIndex: 0,
+        suppressedRegularLessonOccurrences: [],
+        managedStudentByAnyName: new Map(),
+        resolveBoardStudentDisplayName: (name: string) => name,
+      })
+      expect(moved.status).toBe('moved')
+      if (moved.status !== 'moved') return
+      const movedDesk = moved.nextWeeks.flat().find((cell) => cell.id === 'cell-1')?.desks[0]
+      expect(movedDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('student-2') // 生徒は配置された
+      const after = stockBalance({ desk: movedDesk! })
+      expect(after).toBe(1) // 欠席記録が保持され、未消化振替は消えない(修正なしだと 0 に誤減)
     })
   })
 })

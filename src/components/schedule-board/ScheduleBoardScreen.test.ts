@@ -4638,6 +4638,82 @@ describe('computeStudentMove (盤面移動の純粋ロジック・E2Eからの�
     expect(d0.lesson?.studentSlots[0]?.managedStudentId).toBe('mX')
     expect(e0.lesson?.studentSlots[0]?.managedStudentId).toBe('mY')
   })
+
+  // Issue #57(2026-08-29): 移動が移動先スロットの出欠記録を一律 null 化し、「休」表示と
+  // 移動由来振替の在庫算出根拠(collectAbsentMakeupOrigins が読む absent 記録)を消していた(手動テスト No.113)。
+  // 消してよいのは moved マーカーだけ(ee5728c の本来の対象)。以下は修正なしで落ちる。
+  const mkAbsentStatus = (name: string, extra: Record<string, unknown> = {}) => ({
+    id: `st_${name}`, studentId: `sid_${name}`, name, status: 'absent', lessonType: 'regular',
+    subject: '数', grade: '中3', teacherName: '', dateKey: '2026-03-23', slotNumber: 1,
+    recordedAt: '2026-03-23T00:00:00.000Z', sourceLessonId: 'src', sourceManagedLesson: false, ...extra,
+  })
+
+  it('移動先スロットの欠席(absent)記録は移動しても保持される(Issue #57)', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]) },
+        { id: 'd1', teacher: '', manualTeacher: false, lesson: undefined, statusSlots: [mkAbsentStatus('前の子'), null] },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d1 = deskById(r.nextWeeks, 'C1', 'd1')
+    expect(d1.lesson?.studentSlots[0]?.managedStudentId).toBe('s1')
+    expect(d1.statusSlots?.[0]?.status).toBe('absent') // 欠席記録は保持(「休」表示と在庫算出の根拠)
+    expect(d1.statusSlots?.[0]?.name).toBe('前の子')
+  })
+
+  it('入れ替えの着地スロット(移動元)の欠席記録も保持される(Issue #57)', () => {
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]), statusSlots: [mkAbsentStatus('前の子'), null] },
+        { id: 'd1', teacher: '佐藤', manualTeacher: false, lesson: mkLesson('lb', [mkStudent('s2', '二郎'), null]) },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
+    expect(d0.lesson?.studentSlots[0]?.managedStudentId).toBe('s2') // 相手が着地
+    expect(d0.statusSlots?.[0]?.status).toBe('absent') // 欠席記録は保持
+  })
+
+  it('moved マーカー上書きで消える既存記録は displacedStatusEntries で返される(Issue #57)', () => {
+    // 移動元スロットに前の生徒の欠席記録(移動由来振替)が保持された状態で、regular を別日へ移動すると
+    // 移動元へ moved マーカーを書き込む=既存記録が上書きで消える。消える分を台帳確定用に返す。
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]), statusSlots: [mkAbsentStatus('前の子', { lessonType: 'makeup', makeupSourceDate: '2026-03-16' }), null] },
+      ]),
+      mkCell('C2', '2026-03-24', 1, [
+        { id: 'e0', teacher: '', manualTeacher: false, lesson: undefined },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C2', deskIndex: 0, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    const d0 = deskById(r.nextWeeks, 'C1', 'd0')
+    expect(d0.statusSlots?.[0]?.status).toBe('moved') // マーカー自体は書かれる
+    expect(r.displacedStatusEntries).toHaveLength(1)
+    expect(r.displacedStatusEntries[0]?.name).toBe('前の子')
+    expect(r.displacedStatusEntries[0]?.makeupSourceDate).toBe('2026-03-16')
+  })
+
+  it('移動先スロットの moved マーカーは従来どおり消える(ee5728c 回帰なし・absent だけ保持)', () => {
+    // 既存テスト「移動先スロットに残った滞留ステータスを消し…」と同内容だが、Issue #57 の変更が
+    // moved 限定であることを明示するためこの並びにも固定しておく。
+    const weeks: SlotCell[][] = [[
+      mkCell('C1', '2026-03-23', 1, [
+        { id: 'd0', teacher: '田中', manualTeacher: false, lesson: mkLesson('la', [mkStudent('s1', '一郎'), null]) },
+        { id: 'd1', teacher: '', manualTeacher: false, lesson: undefined, statusSlots: [{ name: '前の子', status: 'moved', moveDestinationDateKey: '2026-04-01' }, null] },
+      ]),
+    ]]
+    const r = computeStudentMove({ ...baseParams(weeks), movingStudentId: 's1', cellId: 'C1', deskIndex: 1, studentIndex: 0 })
+    expect(r.status).toBe('moved')
+    if (r.status !== 'moved') return
+    expect(deskById(r.nextWeeks, 'C1', 'd1').statusSlots?.[0] ?? null).toBeNull()
+  })
 })
 
 // 講師の同コマ内D&D移動/入れ替え(spec: 生徒のように長押しで講師を動かす・同一コマ限定)。

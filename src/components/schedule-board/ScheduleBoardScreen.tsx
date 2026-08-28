@@ -1337,6 +1337,51 @@ type HolidayStockLedgers = {
   fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
 }
 
+// INV-06(Issue #57): **出欠記録(statusSlots)を破棄・上書きする操作**が、消える前に「振替コマの記録」を
+// 台帳へ確定(materialize)する唯一の共通関数。休日設定・全コマ削除(reconcileHolidayDeskStockReturns)と、
+// 生徒移動での上書き(computeStudentMove の moved マーカー)・出欠付与の上書き(handleMarkStudent*)が共有する。
+// 判定は resolveMakeupStatusOriginToMaterialize へ委譲(在庫由来=積まない・再浮上に任せる/移動由来=振替元日で積む/
+// moved・手動追加の出席等=対象外)。同じ元コマを指す記録が複数あっても台帳へは1件だけ確定する
+// (時限不明はワイルドカード＝過大計上しない側に倒す)。
+export function materializeDisplacedStatusEntryIntoLedgers(params: {
+  statusEntry: StudentStatusEntry
+  manualMakeupAdjustments: MakeupOriginMap
+  fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
+  ledgerOriginDatesByKey: Record<string, string[]>
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+}): { manualMakeupAdjustments: MakeupOriginMap; fallbackMakeupStudents: Record<string, FallbackMakeupStudent>; materialized: boolean } {
+  const { statusEntry, ledgerOriginDatesByKey, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
+  let { manualMakeupAdjustments, fallbackMakeupStudents } = params
+  if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) {
+    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
+  }
+  const stockKey = buildMakeupStockKey(resolveStockId(statusEntry as unknown as StudentEntry), statusEntry.subject)
+  const materializedOrigin = resolveMakeupStatusOriginToMaterialize({
+    statusEntry,
+    ledgerOriginDates: ledgerOriginDatesByKey[stockKey] ?? [],
+  })
+  if (!materializedOrigin) {
+    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
+  }
+  const alreadyMaterialized = (manualMakeupAdjustments[stockKey] ?? []).some((origin) => (
+    origin.dateKey === materializedOrigin.dateKey
+    && (origin.slotNumber == null || materializedOrigin.slotNumber == null || origin.slotNumber === materializedOrigin.slotNumber)
+  ))
+  if (alreadyMaterialized) {
+    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
+  }
+  manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, materializedOrigin.dateKey, materializedOrigin.slotNumber)
+  if (!managedStudentByAnyName.get(statusEntry.name)) {
+    fallbackMakeupStudents = {
+      ...fallbackMakeupStudents,
+      [stockKey]: { studentName: statusEntry.name, displayName: resolveDisplayName(statusEntry.name), subject: statusEntry.subject },
+    }
+  }
+  return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: true }
+}
+
 // 休日化で「まだ在庫会計されていない1コマ」を未消化在庫へ戻す status（出欠記録）の集合。
 // - **戻す**: attended / absent-no-makeup … mark 時に在庫を一切触っていない（session講習は消化 -1 のまま・
 //   通常も振替 origin 未追加）。休日で授業が消えるので在庫へ戻さないと消化が孤児化＝過少計上（INV-06 違反）。
@@ -1442,28 +1487,21 @@ export function reconcileHolidayDeskStockReturns(params: {
     // 当日で積む従来の扱いだと、在庫由来は再浮上と合わせて二重計上、移動由来は同じ日の別 origin に
     // 吸収されて消える、という**由来による食い違い**が出る（実測: 出席済みで 在庫由来=残2／移動由来=残1）。
     if (statusEntry.lessonType === 'makeup' && statusEntry.makeupSourceDate) {
-      const stockKey = buildMakeupStockKey(resolveStockId(statusEntry as unknown as StudentEntry), statusEntry.subject)
-      const materializedOrigin = resolveMakeupStatusOriginToMaterialize({
+      // 確定処理は共通関数へ委譲(Issue #57 で移動・出欠付与の上書き経路と一本化。挙動不変)。
+      const materializedResult = materializeDisplacedStatusEntryIntoLedgers({
         statusEntry,
-        ledgerOriginDates: ledgerOriginDatesByKey[stockKey] ?? [],
+        manualMakeupAdjustments,
+        fallbackMakeupStudents,
+        ledgerOriginDatesByKey,
+        managedStudentByAnyName,
+        resolveDisplayName,
+        resolveStockId,
       })
-      if (!materializedOrigin) continue // 在庫由来（再浮上に任せる）／移動マーカー／手動追加の出席・振無休
-      // 同じ元コマを指す記録が複数あっても、算出側はトークン(日付＋時限)の集合で1件に畳む。
-      // 台帳へ写すときも同じ畳み方をしないと誤増する（時限不明はワイルドカード＝過大計上しない側）。
-      const alreadyMaterialized = (manualMakeupAdjustments[stockKey] ?? []).some((origin) => (
-        origin.dateKey === materializedOrigin.dateKey
-        && (origin.slotNumber == null || materializedOrigin.slotNumber == null || origin.slotNumber === materializedOrigin.slotNumber)
-      ))
-      if (alreadyMaterialized) continue
+      manualMakeupAdjustments = materializedResult.manualMakeupAdjustments
+      fallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+      if (!materializedResult.materialized) continue // 在庫由来（再浮上に任せる）／移動マーカー／手動追加の出席・振無休／確定済み
       movedStudentCount += 1
       returnedEntryIds.push(statusEntry.id)
-      manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, materializedOrigin.dateKey, materializedOrigin.slotNumber)
-      if (!managedStudentByAnyName.get(statusEntry.name)) {
-        fallbackMakeupStudents = {
-          ...fallbackMakeupStudents,
-          [stockKey]: { studentName: statusEntry.name, displayName: resolveDisplayName(statusEntry.name), subject: statusEntry.subject },
-        }
-      }
       continue
     }
     if (!HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) continue // absent/moved は会計済みなので触らない
@@ -3869,8 +3907,10 @@ export type ComputeStudentMoveResult =
   | { status: 'blocked'; message: string }
   // 取りやめ(選択は解除): 生徒未発見/同一位置/移動先机なし
   | { status: 'cancelled'; message: string }
-  // 移動成立: commitWeeks 用の weeks と抑止リストを返す
-  | { status: 'moved'; message: string; nextWeeks: SlotCell[][]; nextSuppressedRegularLessonOccurrences: string[] }
+  // 移動成立: commitWeeks 用の weeks と抑止リストを返す。
+  // displacedStatusEntries = この移動が上書きで消した出欠記録(moved マーカー書き込み時の前記録・Issue #57)。
+  // 呼び出し側は materializeDisplacedStatusEntryIntoLedgers で台帳確定してから commit すること(INV-06)。
+  | { status: 'moved'; message: string; nextWeeks: SlotCell[][]; nextSuppressedRegularLessonOccurrences: string[]; displacedStatusEntries: StudentStatusEntry[] }
 
 // 生徒移動の純粋ロジック(weeks 変換・status 遷移・通常授業抑止・メッセージ生成)。
 // React 状態に触れず、結果だけを返す。副作用(commitWeeks/setStatusMessage/setSelectedStudentId)は呼び出し側。
@@ -4004,6 +4044,9 @@ export function computeStudentMove(params: {
   // Get the target student (for swap)
   const swapStudent = targetDesk.lesson?.studentSlots[studentIndex] ?? null
 
+  // Issue #57: この移動が上書きで消した出欠記録(呼び出し側で台帳確定させる)。
+  const displacedStatusEntries: StudentStatusEntry[] = []
+
   const targetLesson = targetDesk.lesson
   if (targetLesson) {
     targetLesson.studentSlots[studentIndex] = movedStudent
@@ -4017,8 +4060,13 @@ export function computeStudentMove(params: {
     }
   }
 
-  // 回帰防止: 移動先スロットに前の生徒の滞留ステータス(移)日付)が残ると新しい生徒が引き継いで表示されるため必ず消す。
-  setDeskStudentStatus(targetDesk, studentIndex, null)
+  // 回帰防止(ee5728c): 移動先スロットに残った「移)日付」マーカーは新しい生徒が引き継いで表示されるため消す。
+  // ★Issue #57: 消すのは moved だけ。absent/振無休(前の生徒の欠席記録)は**保持**する——生徒日程表の「休」表示と、
+  // 移動由来振替の在庫算出(collectAbsentMakeupOrigins が statusSlots から復元する)の両方の根拠のため。
+  // 一律 null 化すると「休」が消え、移動由来の振替では未消化振替が1件無言で消滅していた(INV-06)。
+  if (targetDesk.statusSlots?.[studentIndex]?.status === 'moved') {
+    setDeskStudentStatus(targetDesk, studentIndex, null)
+  }
 
   // If swap: convert the swap student to makeup and place at source position
   if (swapStudent) {
@@ -4035,8 +4083,11 @@ export function computeStudentMove(params: {
           ? [convertedSwapStudent, null]
           : [null, convertedSwapStudent]
       }
-      // 回帰防止: 入れ替え先(=元スロット)に滞留したステータスも消し、移動日付の引き継ぎを防ぐ。
-      setDeskStudentStatus(sourceDesk, sourceSlotIndex, null)
+      // 回帰防止: 入れ替え先(=元スロット)に滞留した「移)日付」マーカーも消し、移動日付の引き継ぎを防ぐ。
+      // ★Issue #57: こちらも moved だけ。absent 系(前の生徒の欠席記録)は保持する(上の移動先側と同じ理由)。
+      if (sourceDesk.statusSlots?.[sourceSlotIndex]?.status === 'moved') {
+        setDeskStudentStatus(sourceDesk, sourceSlotIndex, null)
+      }
     }
   }
 
@@ -4044,6 +4095,10 @@ export function computeStudentMove(params: {
     const sourceCell = nextWeeks.flat().find((c) => c.id === sourceCellId)
     const sourceDesk = sourceCell?.desks.find((d) => d.id === sourceDeskId)
     if (sourceCell && sourceDesk) {
+      // Issue #57: moved マーカーで上書きすると、このスロットに保持されていた前の生徒の出欠記録が消える。
+      // 消える分を呼び出し側へ返し、振替コマの記録なら台帳へ確定(materialize)させる(INV-06「破棄する側で確定」)。
+      const displacedByMovedMarker = sourceDesk.statusSlots?.[sourceSlotIndex]
+      if (displacedByMovedMarker) displacedStatusEntries.push({ ...displacedByMovedMarker })
       const movedStatusEntry = buildStudentStatusEntry(
         movedStatusStudent,
         sourceCell,
@@ -4083,7 +4138,7 @@ export function computeStudentMove(params: {
     ? `${resolveBoardStudentDisplayName(movedStudent.name)} と ${resolveBoardStudentDisplayName(swapStudent.name)} を入れ替えました。`
     : `${resolveBoardStudentDisplayName(movedStudent.name)} を ${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, deskIndex)} へ移動しました。`
 
-  return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences }
+  return { status: 'moved', message, nextWeeks, nextSuppressedRegularLessonOccurrences, displacedStatusEntries }
 }
 
 // 机の「講師ブロック」(講師名＋割当メタ)を1まとまりとして扱うための型。DeskCell からこの6フィールド
@@ -9169,7 +9224,24 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
 
-    commitWeeks(result.nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, result.nextSuppressedRegularLessonOccurrences)
+    // Issue #57(INV-06): 移動が上書きで消した出欠記録(移動由来振替の休み等)を台帳へ確定してから commit する。
+    let nextManualMakeupAdjustments = manualMakeupAdjustments
+    let nextFallbackMakeupStudents = fallbackMakeupStudents
+    for (const displaced of result.displacedStatusEntries) {
+      const materializedResult = materializeDisplacedStatusEntryIntoLedgers({
+        statusEntry: displaced,
+        manualMakeupAdjustments: nextManualMakeupAdjustments,
+        fallbackMakeupStudents: nextFallbackMakeupStudents,
+        ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+        managedStudentByAnyName,
+        resolveDisplayName: resolveBoardStudentDisplayName,
+        resolveStockId: resolveBoardStudentStockId,
+      })
+      nextManualMakeupAdjustments = materializedResult.manualMakeupAdjustments
+      nextFallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+    }
+
+    commitWeeks(result.nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, nextManualMakeupAdjustments, suppressedMakeupOrigins, nextFallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, result.nextSuppressedRegularLessonOccurrences)
     if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     setSelectedStudentId(null)
     setStatusMessage(result.message)
@@ -9250,6 +9322,22 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (reopenTargets.length > 0 && !seat.reopenApproved) {
       return { ok: false, message: '移動先は出席不可と提出されたコマです。「最新表示」で日程表を更新してから、確認ダイアログで承認して移動してください。' }
     }
+    // Issue #57(INV-06): 移動が上書きで消した出欠記録(移動由来振替の休み等)を台帳へ確定してから commit する。
+    let nextManualMakeupAdjustments = manualMakeupAdjustments
+    let nextFallbackMakeupStudents = fallbackMakeupStudents
+    for (const displaced of result.displacedStatusEntries) {
+      const materializedResult = materializeDisplacedStatusEntryIntoLedgers({
+        statusEntry: displaced,
+        manualMakeupAdjustments: nextManualMakeupAdjustments,
+        fallbackMakeupStudents: nextFallbackMakeupStudents,
+        ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+        managedStudentByAnyName,
+        resolveDisplayName: resolveBoardStudentDisplayName,
+        resolveStockId: resolveBoardStudentStockId,
+      })
+      nextManualMakeupAdjustments = materializedResult.manualMakeupAdjustments
+      nextFallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+    }
     // 表示中の週は動かさない(週が前方に拡張された場合はオフセット分ずらして同じ週を指す)。
     commitWeeks(
       result.nextWeeks,
@@ -9258,9 +9346,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       selectedDeskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
-      manualMakeupAdjustments,
+      nextManualMakeupAdjustments,
       suppressedMakeupOrigins,
-      fallbackMakeupStudents,
+      nextFallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
@@ -10311,6 +10399,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!targetCell || !targetDesk || !targetStudent) return
 
     const absentStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent')
+    // Issue #57(INV-06): このスロットに保持されている前の生徒の出欠記録(移動時に保持されたもの)を
+    // 上書きで消す前に、振替コマの記録なら台帳へ確定する(「破棄する側で確定」)。
+    const displacedStatusEntry = targetDesk.statusSlots?.[studentMenu.studentIndex] ?? null
+    const displacedLedgers = displacedStatusEntry
+      ? materializeDisplacedStatusEntryIntoLedgers({
+          statusEntry: displacedStatusEntry,
+          manualMakeupAdjustments,
+          fallbackMakeupStudents,
+          ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+          managedStudentByAnyName,
+          resolveDisplayName: resolveBoardStudentDisplayName,
+          resolveStockId: resolveBoardStudentStockId,
+        })
+      : { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
     setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentStatusEntry)
 
@@ -10323,9 +10425,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           studentMenu.deskIndex,
           classroomSettings.holidayDates,
           classroomSettings.forceOpenDates,
-          manualMakeupAdjustments,
+          displacedLedgers.manualMakeupAdjustments,
           suppressedMakeupOrigins,
-          fallbackMakeupStudents,
+          displacedLedgers.fallbackMakeupStudents,
           manualLectureStockCounts,
           manualLectureStockOrigins,
           fallbackLectureStockStudents,
@@ -10360,9 +10462,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         studentMenu.deskIndex,
         classroomSettings.holidayDates,
         classroomSettings.forceOpenDates,
-        manualMakeupAdjustments,
+        displacedLedgers.manualMakeupAdjustments,
         suppressedMakeupOrigins,
-        fallbackMakeupStudents,
+        displacedLedgers.fallbackMakeupStudents,
         nextManualLectureStockCounts,
         nextManualLectureStockOrigins,
         nextFallbackLectureStockStudents,
@@ -10382,8 +10484,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // absent の出欠記録から**算出で**復元する。台帳へ書き戻すと休み解除（下の同条件ガード）と非対称になり、
     // 既存の壊れたデータも復旧しない。この非対称ガードは意図的なので条件を緩めないこと。
     const nextManualMakeupAdjustments = (targetStudent.lessonType === 'regular' || !targetStudent.makeupSourceDate)
-      ? appendMakeupOrigin(manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
-      : manualMakeupAdjustments
+      ? appendMakeupOrigin(displacedLedgers.manualMakeupAdjustments, stockKey, resolveOriginalRegularDate(targetStudent, targetCell.dateKey))
+      : displacedLedgers.manualMakeupAdjustments
     // INV-06（順序方式・2026-07-31 オーナー確定）: 「休み」は「この授業は実施されなかった＝振替が要る」という
     // 意思表示なので、過去の削除（×／コマ削除）でこの元コマ日が抑制されていても解除する。逆に休みのあとで
     // ×を押せば抑制が積まれて消える＝**後にやった操作が勝つ**。休み解除では抑制を戻さない（解除は
@@ -10396,9 +10498,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
     const managedStudent = managedStudentByAnyName.get(targetStudent.name)
     const nextFallbackMakeupStudents = managedStudent
-      ? fallbackMakeupStudents
+      ? displacedLedgers.fallbackMakeupStudents
       : {
-          ...fallbackMakeupStudents,
+          ...displacedLedgers.fallbackMakeupStudents,
           [stockKey]: {
             studentName: targetStudent.name,
             displayName: resolveBoardStudentDisplayName(targetStudent.name),
@@ -10435,6 +10537,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!targetCell || !targetDesk || !targetStudent) return
 
     const absentNoMakeupStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent-no-makeup')
+    // Issue #57(INV-06): 上書きで消える前の生徒の出欠記録を台帳へ確定(handleMarkStudentAbsent と同じ防御)。
+    const displacedStatusEntry = targetDesk.statusSlots?.[studentMenu.studentIndex] ?? null
+    const displacedLedgers = displacedStatusEntry
+      ? materializeDisplacedStatusEntryIntoLedgers({
+          statusEntry: displacedStatusEntry,
+          manualMakeupAdjustments,
+          fallbackMakeupStudents,
+          ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+          managedStudentByAnyName,
+          resolveDisplayName: resolveBoardStudentDisplayName,
+          resolveStockId: resolveBoardStudentStockId,
+        })
+      : { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
     setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentNoMakeupStatusEntry)
 
@@ -10450,9 +10565,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       studentMenu.deskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
-      manualMakeupAdjustments,
+      displacedLedgers.manualMakeupAdjustments,
       suppressedMakeupOrigins,
-      fallbackMakeupStudents,
+      displacedLedgers.fallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
@@ -10472,6 +10587,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!targetCell || !targetDesk || !targetStudent) return
 
     const attendedStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'attended')
+    // Issue #57(INV-06): 上書きで消える前の生徒の出欠記録を台帳へ確定(handleMarkStudentAbsent と同じ防御)。
+    const displacedStatusEntry = targetDesk.statusSlots?.[studentMenu.studentIndex] ?? null
+    const displacedLedgers = displacedStatusEntry
+      ? materializeDisplacedStatusEntryIntoLedgers({
+          statusEntry: displacedStatusEntry,
+          manualMakeupAdjustments,
+          fallbackMakeupStudents,
+          ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+          managedStudentByAnyName,
+          resolveDisplayName: resolveBoardStudentDisplayName,
+          resolveStockId: resolveBoardStudentStockId,
+        })
+      : { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
     removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
     setDeskStudentStatus(targetDesk, studentMenu.studentIndex, attendedStatusEntry)
     const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
@@ -10486,9 +10614,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       studentMenu.deskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
-      manualMakeupAdjustments,
+      displacedLedgers.manualMakeupAdjustments,
       suppressedMakeupOrigins,
-      fallbackMakeupStudents,
+      displacedLedgers.fallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,

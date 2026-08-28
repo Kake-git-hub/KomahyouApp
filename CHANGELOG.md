@@ -18,6 +18,7 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix(Issue #57, INV-06): **生徒移動が移動先スロットの欠席記録を破棄し「休」表示が消える・移動由来振替の在庫が無言消滅する**のを修正(第三者手動テスト No.113)。`computeStudentMove` が移動先(と入れ替え着地)の出欠記録を一律 null 化していた(ee5728c「移)日付の滞留を消す」が absent まで巻き込み)。移動由来振替の absent は台帳に origin が無く算出で復元される(v1.5.459)ため、記録が消えると未消化振替が1件消滅していた。対処=①消すのは **moved マーカーだけ**にし absent/振無休は保持(「休」表示と在庫算出の根拠が残る) ②上書きが避けられない箇所は台帳へ確定してから消す: moved マーカー書き込みは消える記録を `displacedStatusEntries` で返し呼び出し側(盤面移動/日程表D&D)が確定、出欠付与(休み/振無休/出席)ハンドラは上書き前に確定。確定処理は休日設定・全コマ削除と同じロジックを共通関数 `materializeDisplacedStatusEntryIntoLedgers` へ切り出して一本化(reconcileHolidayDeskStockReturns も同関数へ委譲・挙動不変はマトリクス101件で確認)。★moved マーカーの削除まで保持に変えると ee5728c(移動日付の引き継ぎ)が再発するので戻さないこと。回帰テスト5件(computeStudentMove 4件+INV-06マトリクス端到端1件)を追加し、一律 null 化へ戻す mutation で4件落ちることを確認(src/components/schedule-board/ScheduleBoardScreen.tsx・inv06-makeup-absence-stock.matrix.test.ts)
 - fix(Issue #56): **入れ替え(日程表D&D/盤面)で同一生徒が同コマに二重配置される**のを修正(第三者手動テスト No.276・実例=富樫/小林のスワップで8/25に同一生徒×2)。`computeStudentMove` の入れ替え経路に2つの穴があった: ①**入れ替え相手の着地先(移動元コマ)に重複検査が皆無** ②移動先側の検査が「見つかった最初の1件が相手なら免除」のため、同コマに同一生徒が2エントリ(相手+別机)ある状態を素通り。対処=①相手の着地先にも同一生徒検査を追加してブロック ②相手を**検索から除外**する方式へ変更(免除をやめる・`findDuplicateStudentInCellByKey` を除外ID複数対応に拡張、単一 string の既存呼び出しは互換)。回帰テスト3件を同コミットで追加し、旧実装へ戻す mutation で2件落ちることを確認(src/components/schedule-board/ScheduleBoardScreen.tsx)
 
 ## v1.5.480 (2026-08-16)
