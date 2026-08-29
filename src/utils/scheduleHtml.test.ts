@@ -467,7 +467,10 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(payloadMatch).toBeTruthy()
     const payload = JSON.parse(payloadMatch![1])
     const student = payload.cells[0]?.desks?.[0]?.lesson?.students?.[0]
-    expect(student?.name).toBe('旧表示名')
+    // ★このテストの主眼は「表示名が古くても managedStudentId で紐付く」こと(linkedStudentId)。
+    // 氏名の期待値は 2026-08-29 のオーナー確定(氏名は名簿の現在値に追従・No.146)で
+    // 「旧表示名のまま」→「名簿の現在名」へ意図的に変更した(紐付けの保証は下の行で維持)。
+    expect(student?.name).toBe('新表示名')
     expect(student?.linkedStudentId).toBe('student-1')
 
     vi.unstubAllGlobals()
@@ -671,6 +674,69 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     expect(html).toContain('resolveScheduleDndRejectReason(event.clientX, event.clientY)')
     expect(html).toContain('移動先は休校日のため移動できません。')
     expect(html).toContain('この生徒の授業がすでにあるコマへは移動できません。')
+    vi.unstubAllGlobals()
+  })
+
+  // 手動テスト No.146(2026-08-29 オーナー確定の線引き): **氏名は名簿の現在値に追従**し、
+  // **科目・種別・授業時間は配置時の値のまま**(その授業の記録なので名簿に追従させない)。
+  // 盤面は v1.5.482 で ID 優先解決済みだったが日程表(講師日程表のセル・ツールチップ)が旧名のままだった。
+  it('改名後の日程表セルは名簿の現在の表示名になり、科目・種別は配置時の値のまま(No.146)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    // 名簿では「佐藤(新)」へ改名済み。盤面セルには配置時の旧表示名「山田」が焼き付いている。
+    const renamedStudent = createStudent({ id: 'st-1', name: '佐藤 花子', displayName: '佐藤(新)' })
+    openTeacherScheduleHtml({
+      cells: [{
+        id: 'cell-1',
+        dateKey: '2026-03-24',
+        dayLabel: '火',
+        dateLabel: '3/24',
+        slotLabel: '1限',
+        slotNumber: 1,
+        timeLabel: '',
+        isOpenDay: true,
+        desks: [{
+          id: 'desk-1',
+          teacher: '田中',
+          lesson: {
+            id: 'lesson-1',
+            studentSlots: [
+              { id: 'entry-1', name: '山田', managedStudentId: 'st-1', grade: '中1', subject: '数', lessonType: 'regular', teacherType: 'normal' },
+              // 名簿外(体験生)は配置時の名前のまま。
+              { id: 'entry-2', name: '体験 次郎', grade: '中1', subject: '英', lessonType: 'trial', teacherType: 'normal' },
+            ],
+          },
+        }],
+      } as unknown as Parameters<typeof openTeacherScheduleHtml>[0]['cells'][number]],
+      teachers: [],
+      students: [renamedStudent],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-30',
+      titleLabel: 'テスト',
+      classroomName: '開発用教室',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+
+    const html = write.mock.calls[0]?.[0] as string
+    const payloadMatch = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    const payload = JSON.parse(payloadMatch![1])
+    const [managed, trial] = payload.cells?.[0]?.desks?.[0]?.lesson?.students ?? []
+    expect(managed?.name).toBe('佐藤(新)') // 名簿の現在名へ追従(修正なしだと '山田' のまま)
+    expect(managed?.subject).toBe('数') // 科目は配置時の値のまま(名簿に追従させない)
+    expect(managed?.lessonType).toBe('regular')
+    expect(trial?.name).toBe('体験 次郎') // 名簿外・体験はそのまま
     vi.unstubAllGlobals()
   })
 

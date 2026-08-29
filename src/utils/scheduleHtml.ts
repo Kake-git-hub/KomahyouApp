@@ -338,11 +338,28 @@ export type OpenAllScheduleHtmlParams = OpenScheduleHtmlParams & {
   targetWindowName?: string
 }
 
+// 手動テスト No.146(2026-08-29 オーナー確定の線引き): **氏名は名簿(基本データ)の現在値に追従する**。
+// 盤面セルは配置時の表示名を文字列で保持しているため、これだけだと改名(改姓・入力ミスの修正)しても
+// 講師日程表のセルが旧名のまま残る(盤面は v1.5.482 で ID 優先解決済み)。ここで名簿の現在の表示名へ
+// 差し替え、日程表(セル・ツールチップ)も改名に追従させる。
+// ★対象は氏名だけ。**科目・種別・授業時間は配置時の値が正**(その授業で何をやったかの記録なので
+// 名簿の希望科目に後から追従させてはいけない)。学年は生年月日から都度計算するので元から追従する。
+// ★名簿に無い名前(体験生・メモ)と managedStudentId を持たない旧データはそのまま(フォールバック)。
+// 体験(trial)は「同名でも既存生徒として扱わない」既存規則に合わせて対象外にする。
+function resolveSerializedEntryName(
+  entry: { name: string; managedStudentId?: string; lessonType?: string },
+  resolveRosterDisplayName?: (managedStudentId: string) => string | undefined,
+): string {
+  if (!resolveRosterDisplayName || !entry.managedStudentId || entry.lessonType === 'trial') return entry.name
+  return resolveRosterDisplayName(entry.managedStudentId) ?? entry.name
+}
+
 function serializeCells(
   cells: SlotCell[],
   resolveLinkedStudentId?: (studentName: string) => string | undefined,
   resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell) => string[],
   options?: { includeDeskPicker?: boolean },
+  resolveRosterDisplayName?: (managedStudentId: string) => string | undefined,
 ): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
 
@@ -372,7 +389,7 @@ function serializeCells(
             return {
               id: entry.id,
               linkedStudentId: entry.managedStudentId ?? resolveLinkedStudentId?.(entry.name),
-              name: entry.name,
+              name: resolveSerializedEntryName(entry, resolveRosterDisplayName),
               grade: entry.grade,
               subject: resolveDisplayedSubjectForGrade(entry.subject, entry.grade),
               lessonType: entry.lessonType,
@@ -396,7 +413,7 @@ function serializeCells(
                   id: student.id,
                   // 体験授業の生徒は同名であっても既存生徒として扱わない
                   linkedStudentId: student.lessonType === 'trial' ? undefined : student.managedStudentId ?? resolveLinkedStudentId?.(student.name),
-                  name: student.name,
+                  name: resolveSerializedEntryName(student, resolveRosterDisplayName),
                   grade: student.grade,
                   subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
                   lessonType: student.lessonType,
@@ -581,7 +598,14 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
   }
   // 監査領域9 A1(2026-07-04 確定): plannedCells payload は撤去済み。planned 通常回数の唯一の根拠は
   // expectedRegularOccurrences(テンプレ由来)で、plannedCells は埋め込みJSから一度も読まれないデッドだった。
-  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds, { includeDeskPicker: Boolean(params.scheduleDndEnabled) })
+  // No.146: 氏名の名簿追従に使う「ID→現在の表示名」。生徒日程表は linkedStudents、講師日程表は
+  // params.students が名簿。どちらも渡されない経路では従来どおり配置時の名前のまま(フォールバック)。
+  const rosterDisplayNameById = new Map<string, string>()
+  for (const student of (paramsWithRegularLessons.students ?? linkedStudents)) {
+    rosterDisplayNameById.set(student.id, getStudentDisplayName(student))
+  }
+  const resolveRosterDisplayName = (managedStudentId: string) => rosterDisplayNameById.get(managedStudentId)
+  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds, { includeDeskPicker: Boolean(params.scheduleDndEnabled) }, resolveRosterDisplayName)
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 

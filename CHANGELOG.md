@@ -18,6 +18,9 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix: **日程表(講師日程表のセル・ツールチップ)も改名に追従するようにした**(手動テスト No.146 の残り・オーナー確定 2026-08-29)。v1.5.482 で盤面だけ ID 優先解決にしたため「盤面は新しい名前・講師に配る日程表は古い名前」という食い違いが残っていた。`serializeCells` で氏名を名簿の現在の表示名へ差し替える(`resolveSerializedEntryName`・`managedStudentId` で解決)。★**氏名だけが対象**で、**科目・授業種別・授業時間は配置時の値のまま**(その授業の記録なので名簿の希望科目に追従させない)。学年は生年月日から都度算出するため元から追従。名簿に無い名前(体験生・メモ)と ID を持たない旧データはそのまま。在庫キー・照合キーは従来どおり ID 優先で不変(v1.5.451 を巻き戻さない)。回帰テスト1件を追加し、名簿追従を外す mutation で2件落ちることを確認。既存テスト「表示名が古くても ID で紐付く」の**氏名の期待値のみ**新仕様へ更新(紐付け＝主眼の assert は維持)
+- docs: 上記の線引き(氏名=名簿追従／科目・種別・授業時間=配置時のまま／学年=自動追従)を `docs/spec-basic-data.md` §B-1 に明文化。**保証台帳(INV)には載せない**とオーナーが判断(2026-08-29・実害が限定的でマトリクス維持コストに見合わないため。同種の再発時に昇格を検討)
+
 ## v1.5.482 (2026-08-29)
 
 - fix(INV監査反映 2026-08-29): regression-reviewer の監査指摘(A)を同 push で修正。**No.131 の delta 記録が減算実体(current<=0 で no-op)と非対称で、提出データに当該科目が無い状態の削除→undo で希望数が 0→1 に誤増**し得た → 記録条件を `resolveDeleteSubjectDelta`(現在値>0 のときだけ)へ純関数化(回帰テスト3件)。あわせて監査指摘のテスト補強3点(講習選択のフォールバック分岐を実際に踏む fixture へ是正/opener 可視化の残り2経路〔黄色化・移動〕をスペックロック/INV-12 の配置系4経路を it.todo で可視化)と、台帳の件数更新(inv06-whole-day-transfer 39件)・INV-05 への希望数経路(undo/redo 差分適用)追記・spec-special-session-submission.md へ講習選択規則を明文化
@@ -30,7 +33,7 @@
   - **No.131(INV-05) 講習削除の undo で希望数が戻らない** … 削除は在庫台帳(undo対象)と提出データ subjectSlots(undo対象外)の2本を動かすのに undo が片方しか戻さず、undo のたびに希望数が1ずつ欠損していた。提出データはQR提出の並行更新があるためスナップショット復元は INV-07 違反 → 操作の差分(`SpecialSessionSubjectDelta`)を履歴に記録し undo=逆適用/redo=順適用する差分方式(`applySubjectSlotsDeltaToSessions`・0クランプ・適用先消滅時は不変)
   - **No.201(INV-07) 講習期間が表示範囲に2つ重なると全員のQR/提出済みバッジが消える** … `findOverlappingSession` が「複数重複=undefined」で全消しし、トークン発行・提出状況の後追い反映(App.tsx)も止まっていた。`resolveDisplayedOverlappingSession`(表示開始日を含む講習を優先→無ければ最初に始まる講習)で1つを選ぶ方式へ(App.tsx も同規則)。**登録解除がどの講習の解除かを見ずにバッジを落とす**別バグも `qrSessionId` ガードで修正
   - **No.210(INV-07) 登録解除→再提出できない** … リセットのロジック自体は正しく、(1) opener(本体タブ)不在で postMessage が黙って捨てられ画面上は成功に見える (2) reset 失敗が `.catch(()=>{})` で握り潰される (3) QRページ `/s/**`・提出API `/api/submission/**` にキャッシュ禁止が無い、の複合。(1)明示操作(提出/解除/黄色化/移動)は反映されない旨をその場で通知(自動通知系は連発防止で対象外・スペックロック) (2)失敗を alert で可視化 (3)`no-store` を追加しヘッダ検証テストで固定(firebase.json・src/utils/hostingHeaders.test.ts)
-  - **No.146 登録名の改名が盤面の既存配置に反映されない** … 表示解決が名前逆引きだけだった(在庫キーは v1.5.451 で ID 優先へ是正済み・表示だけ残存)。`resolveStudentEntryDisplayNameFromRoster`(managedStudentId 最優先→名前逆引き→そのまま)を新設し BoardGrid の表示を ID 優先へ。※日程表セルの表示名は従来どおり配置時の名前(意図的な据え置き)。「盤面表示と名簿の一致」に該当する INV は台帳に無く、台帳追加の要否はオーナー判断待ち
+  - **No.146 登録名の改名が盤面の既存配置に反映されない** … 表示解決が名前逆引きだけだった(在庫キーは v1.5.451 で ID 優先へ是正済み・表示だけ残存)。`resolveStudentEntryDisplayNameFromRoster`(managedStudentId 最優先→名前逆引き→そのまま)を新設し BoardGrid の表示を ID 優先へ。※日程表セルの表示名はこの版では据え置き(→ **次版で名簿追従へ揃えた**)。INV 化はオーナー判断で見送り(`docs/spec-basic-data.md` §B-1 に線引きを記録)
 - docs(INV-12): **保証台帳に INV-12「配置の一意性」を新設**(オーナー承認 2026-08-29)。同一生徒を同一コマに二重配置しない保証(Issue #56 の違反履歴を transcribe)。強制層のためマトリクス `inv12-placement-uniqueness.matrix.test.ts` を新設し、`ScheduleBoardScreen.test.ts` から #56 の回帰テスト4件+テンプレ純関数化の todo を移設(テスト内容は不変・場所の昇格のみ)
 - fix(Issue #59, INV-06): **丸ごと振替の振替先処分にも全コマ削除(Issue #58)と同じ振替抑制を積むようにした**(オーナー確定 2026-08-29)。振替先で処分(希望回数−1)した通常授業が、その日を後から休日設定すると自動計算(テンプレ根拠)で振替に積み直される非対称を対称化。`computeWholeDayTransfer` の Phase A が処分前に `collectClearedDayMakeupSuppressions` を通し、`nextSuppressedMakeupOrigins` を返して commitWeeks へ配線。★振替元には積まない(移送された振替コマの消化が自動 origin を打ち消して中立=#58 の moved スキップと同じ構図)。マトリクス3件を追加(inv06-whole-day-transfer 36→39件)し、収集をスキップする mutation で2件落ちることを確認(src/components/schedule-board/ScheduleBoardScreen.tsx・docs/spec-makeup-stock.md・docs/spec-invariants.md)
 
