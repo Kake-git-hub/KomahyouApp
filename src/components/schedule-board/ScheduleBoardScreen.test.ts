@@ -6,7 +6,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { buildLinkedLessonDestinationMap } from './lessonLinks'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherAutoAssignRequest } from '../../App'
-import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
+import { applyTeacherAutoAssignRequest, reconcileSubmittedTeacherPlacements, appendDeletedStudentScheduleCountAdjustment, isSessionLectureDeletion, resolveDeletedStudentCountAccounting, appendHistoryEntry, applyClassroomAvailability, buildBoardStudentSelectionOptions, buildMakeupAutoAssignPendingItems, buildManagedScheduleCellsForRange, buildScheduleCellsForRange, buildStudentOccurrencesByDateIndex, buildTeacherSelectionOptions, buildTemplateStudentSelectionOptions, checkScheduleViewMoveRangeWithinCap, clampPopoverPosition, clearStudentStatusFromDesk, cloneWeek, cloneWeeks, cloneWeeksForActiveWeek, cloneWeeksForPublish, collectStudentRegularTeacherIds, collectStudentRegularTeacherIdsFromWeeks, ensureWeeksCoverDateRange, filterTemplateOverwriteHolidayDates, findDuplicateStudentInCellByKey, MAX_HISTORY_DEPTH, normalizeLessonPlacement, overlayBoardWeeksOnScheduleCells, packSortCellDesks, repackTeacherOnlyDesks, prepareStudentForMove, removeLecturePendingItemFromStockState, removeStudentAssignmentsFromSpecialSession, removeStudentFromDeskLesson, resolveNewlyUnsubmittedSessionStudents, shouldProcessStudentScheduleRequest, consumeStudentScheduleRequest, shouldProcessTeacherAutoAssignRequest, consumeTeacherAutoAssignRequest, resolvePostLectureAutoAssignView, resolveSelectedMakeupOrigin, resolvePairConstraintWarningSeverity, SCHEDULE_VIEW_MOVE_MAX_EXTENSION_WEEKS, shouldWarnForbiddenPeriod, shouldWarnRegularTeachersOnly, shouldExcludeAutoAssignCandidateByConstraint, computeStudentMove, computeTeacherMove, materializeDisplacedStatusEntryIntoLedgers, applySubjectSlotsDeltaToSessions, resolveDeleteSubjectDelta, resolveStudentEntryDisplayNameFromRoster, teacherMoveInvolvesStudents, canTeacherHandleStudentSubject, isLectureOutsideSessionPeriod, isStudentUnavailableAtSlot, resolveTeacherLectureSlotMark, resolveLessonPatternWarnings, hasAdjacentSameSubjectLesson, resolveSubjectDiversityWarnings, type LessonPatternOccurrence, type SubjectDiversityOccurrence } from './ScheduleBoardScreen'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../regular-template/regularLessonTemplate'
 import { buildMakeupStockEntries } from './makeupStock'
 import { shouldHighlightStudentName } from './BoardGrid'
@@ -6229,5 +6229,33 @@ describe('resolveStudentEntryDisplayNameFromRoster (改名の盤面表示反映�
   it('名簿に無い名前(メモ・体験生)はそのまま返す', () => {
     expect(resolveStudentEntryDisplayNameFromRoster({ name: '体験 次郎' }, byId, nameMap)).toBe('体験 次郎')
     expect(resolveStudentEntryDisplayNameFromRoster({ name: '体験 次郎', managedStudentId: 'unknown-id' }, byId, nameMap)).toBe('体験 次郎')
+  })
+})
+
+// INV 監査 2026-08-29 指摘(A): 減算実体(current<=0 で no-op)と delta 記録の判定がズレると、
+// 提出データに当該科目が無い状態のコマを削除→undo したとき希望数が 0→1 に誤増する。
+// 記録条件を減算実体と同じ「current > 0」に固定する(無条件記録へ戻すと2件目が落ちる)。
+describe('resolveDeleteSubjectDelta (No.131 の delta 記録条件)', () => {
+  const session = {
+    id: 'sess1', label: '夏期', startDate: '2026-07-20', endDate: '2026-07-25',
+    teacherInputs: {}, studentInputs: { st1: { subjectSlots: { 数: 2 }, countSubmitted: true, updatedAt: '' } },
+    createdAt: '', updatedAt: '',
+  } as unknown as SpecialSessionRow
+
+  it('現在値 > 0 のときだけ -1 の delta を返す', () => {
+    expect(resolveDeleteSubjectDelta([session], { specialSessionId: 'sess1', managedStudentId: 'st1', subject: '数' }))
+      .toEqual({ sessionId: 'sess1', studentId: 'st1', subject: '数', delta: -1 })
+  })
+
+  it('科目が無い/0・入力が無い・ID欠落は undefined(減算実体が no-op のとき delta を積まない=undo 誤増防止)', () => {
+    expect(resolveDeleteSubjectDelta([session], { specialSessionId: 'sess1', managedStudentId: 'st1', subject: '英' })).toBeUndefined()
+    expect(resolveDeleteSubjectDelta([session], { specialSessionId: 'sess1', managedStudentId: 'st-none', subject: '数' })).toBeUndefined()
+    expect(resolveDeleteSubjectDelta([session], { specialSessionId: 'sess-none', managedStudentId: 'st1', subject: '数' })).toBeUndefined()
+    expect(resolveDeleteSubjectDelta([session], { subject: '数' })).toBeUndefined()
+  })
+
+  it('端到端: 科目が無い状態で記録(=undefined)→undo 相当の逆適用が走らず希望数が増えない', () => {
+    const delta = resolveDeleteSubjectDelta([session], { specialSessionId: 'sess1', managedStudentId: 'st1', subject: '英' })
+    expect(delta).toBeUndefined() // delta が無ければ handleUndo は逆適用しない=0→1 の誤増が起きない
   })
 })

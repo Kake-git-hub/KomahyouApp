@@ -692,10 +692,12 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       expect(resolveDisplayedOverlappingSession([sessionA, sessionB], '2026-08-25', '2026-09-05')?.id).toBe('b')
     })
 
-    it('表示開始日を含む講習が無ければ、表示範囲内で最初に始まる講習を選ぶ', () => {
-      // 表示 8/12〜8/31: 開始日 8/12 はどちらの講習にも含まれない → 先に始まる B(8/20)…ではなく
-      // 重なっているのは B のみ(A は 8/10 まで)。A も残るケースとして 8/11〜9/30 で確認。
-      expect(resolveDisplayedOverlappingSession([sessionB, sessionA], '2026-08-11', '2026-09-30')?.id).toBe('b')
+    it('表示開始日を含む講習が無ければ、表示範囲内で最初に始まる講習を選ぶ(フォールバック分岐)', () => {
+      // INV監査 2026-08-29: フォールバックを実際に踏む fixture にする(表示開始日 8/12 はどちらにも
+      // 含まれず、かつ両方が表示範囲に重なる)。早期 return では通らない分岐を mutation 耐性つきで固定。
+      const midA = { id: 'mid-a', startDate: '2026-08-15', endDate: '2026-08-20' }
+      const midB = { id: 'mid-b', startDate: '2026-08-25', endDate: '2026-08-31' }
+      expect(resolveDisplayedOverlappingSession([midB, midA], '2026-08-12', '2026-09-30')?.id).toBe('mid-a')
     })
   })
 
@@ -783,6 +785,16 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       expect(start, fn).toBeGreaterThan(-1)
       const body = html.slice(start, start + 400)
       expect(body, fn).not.toContain('isOpenerAvailable()')
+    }
+    // 残り2経路(INV監査 2026-08-29): 黄色化(applyTeacherReopenSlot)は isOpenerAvailable、
+    // 移動(sendScheduleMoveRequest)は既存の move-error オーバーレイで知らせる。無言 return へ戻すと落ちる。
+    {
+      const reopenStart = html.indexOf('function applyTeacherReopenSlot(')
+      expect(reopenStart).toBeGreaterThan(-1)
+      expect(html.slice(reopenStart, reopenStart + 2400)).toContain('isOpenerAvailable()')
+      const moveStart = html.indexOf('function sendScheduleMoveRequest(')
+      expect(moveStart).toBeGreaterThan(-1)
+      expect(html.slice(moveStart, moveStart + 800)).toContain('コマ表アプリ本体のタブが見つからないため移動できません')
     }
   })
 

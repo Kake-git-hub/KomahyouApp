@@ -311,6 +311,11 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   `inv06-whole-day-transfer.matrix.test.ts` で回数調整も assert）。
 - **呼称の正本**（2026-08-05 オーナー確定）：括弧内・警告文は出どころで呼び分ける。
   **通常＝「予定数」**、**講習＝「希望数」**（QR提出・室長登録の `subjectSlots` **± 調整**）。
+  ★希望数(`subjectSlots`)を動かす経路（2026-08-29 追記）: QR提出／室長登録／在庫由来講習コマの削除
+  （`decrementSpecialSessionSubjectCount` −1）／**削除の undo・redo**（v1.5.482・手動テスト No.131:
+  削除の −1 を履歴差分 `SpecialSessionSubjectDelta` として記録し、undo が逆適用(+1)・redo が順適用(−1)する。
+  記録条件は `resolveDeleteSubjectDelta`＝減算実体と同じ「現在値 > 0」。無条件記録に戻すと
+  科目が無い状態の削除→undo で希望数が 0→1 に誤増する）。
   両方を「希望数」と書かない。**講習側の定義は今後も変わらない**（提出データが正本）。
 
 - **★通常の予定数の算出方式を「テンプレ由来」から「盤面ベース」へ移行中**（オーナー確定 2026-08-05・段階導入）：
@@ -541,7 +546,11 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   犬飼シナリオ再現／欠席化⇔欠席解除の往復対称性／負値保持）＋`inv06-holiday-stock-reconciliation.matrix.test.ts`
   （2026-07-18・16 テスト：休日化を全 status〔absent/moved=スキップ・attended/absent-no-makeup=戻す〕×session講習/通常で
   両方向固定／振替 origin の dateKey 区別／同一 index 併存／改名キーの正準化）
-  ＋`inv06-whole-day-transfer.matrix.test.ts`（2026-08-02・**35 テスト**・Issue #40「丸ごと振替」。
+  ＋`inv06-whole-day-transfer.matrix.test.ts`（2026-08-29 時点 **39 テスト**・Issue #40「丸ごと振替」。
+  2026-08-29 に Issue #59（振替先処分の振替抑制・全コマ削除との対称化）3 件を追加
+  〔抑制が時限つきで積まれ振替元には積まない／振替先の日を休日設定しても積み直されない端到端／
+  空の振替先は積まない。手動追加・同日移動・absent/moved スキップの各列は共有関数
+  `collectClearedDayMakeupSuppressions` 経由で `inv06-makeup-absence-stock.matrix.test.ts` 側が担保＝重複させない〕。
   2026-08-03 に テンプレ足場講師の日単位抑止 3 件〔両日で湧かない／**テンプレに授業がある日（本番形＝抑止で lesson が
   消えた管理机の講師も落ちる。strip と抑止の順序入替を検出する）**／抑止していない日は従来どおり付く〕と
   共通処分関数 `disposeDayDeskEntries` 4 件〔丸ごと振替モード=メモ消去+抑止キー／全コマ削除モード=メモ保持+抑止なし／

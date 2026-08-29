@@ -741,6 +741,22 @@ export const REGULAR_LESSON_TEMPLATE_HISTORY_LIMIT = 3
 // undo は sign=-1(逆適用)・redo は sign=+1(順適用)。適用先(講習/生徒入力)が既に無ければ何もしない
 // (登録解除後の undo で幽霊行を作らない)。0 未満にはクランプし、0 になった科目はキーごと消す
 // (decrementSpecialSessionSubjectCount と同じ正規化)。
+// No.131 の記録条件(INV 監査 2026-08-29 指摘(A))。減算実体 decrementSpecialSessionSubjectCount は
+// current <= 0 で no-op なのに delta を無条件に -1 で積むと、「提出データに当該科目が無い(または0)状態の
+// session 由来コマ」を削除→undo したとき逆適用(+1)だけが効いて希望数が 0→1 に**誤増**する
+// (到達例: 登録解除→別科目構成で再提出した後、旧科目の盤面コマを削除→undo)。
+// 実際に減る(current > 0)ときだけ delta を記録する=減算実体と同じ判定。
+export function resolveDeleteSubjectDelta(
+  specialSessions: SpecialSessionRow[],
+  student: { specialSessionId?: string; managedStudentId?: string; subject: string },
+): SpecialSessionSubjectDelta | undefined {
+  if (!student.specialSessionId || !student.managedStudentId) return undefined
+  const current = specialSessions.find((session) => session.id === student.specialSessionId)
+    ?.studentInputs[student.managedStudentId]?.subjectSlots[student.subject] ?? 0
+  if (current <= 0) return undefined
+  return { sessionId: student.specialSessionId, studentId: student.managedStudentId, subject: student.subject, delta: -1 }
+}
+
 export function applySubjectSlotsDeltaToSessions(
   sessions: SpecialSessionRow[],
   deltaEntry: SpecialSessionSubjectDelta,
@@ -10951,14 +10967,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         nextManualLectureStockCounts = appendLectureStockCount(manualLectureStockCounts, lectureStockKey, 1)
         decrementSpecialSessionSubjectCount(menuStudent.student.specialSessionId, menuStudent.student.managedStudentId, menuStudent.student.subject)
         // No.131: この -1 を履歴にも差分として記録し、undo が +1 を戻せるようにする(undo対象外だった帳簿の欠損防止)。
-        if (menuStudent.student.specialSessionId && menuStudent.student.managedStudentId) {
-          deleteSubjectDelta = {
-            sessionId: menuStudent.student.specialSessionId,
-            studentId: menuStudent.student.managedStudentId,
-            subject: menuStudent.student.subject,
-            delta: -1,
-          }
-        }
+        // 記録条件は resolveDeleteSubjectDelta(実際に減るときだけ。無条件記録は undo で 0→1 の誤増を作る)。
+        deleteSubjectDelta = resolveDeleteSubjectDelta(specialSessions, menuStudent.student)
         statusSuffix = '講習の希望数を1減らしました。'
       } else {
         // 手動追加の講習: 希望数に含まれないため変更なし。ストックへも戻さない。
