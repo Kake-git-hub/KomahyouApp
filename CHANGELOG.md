@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.482 (2026-08-29)
+
 - fix(INV監査反映 2026-08-29): regression-reviewer の監査指摘(A)を同 push で修正。**No.131 の delta 記録が減算実体(current<=0 で no-op)と非対称で、提出データに当該科目が無い状態の削除→undo で希望数が 0→1 に誤増**し得た → 記録条件を `resolveDeleteSubjectDelta`(現在値>0 のときだけ)へ純関数化(回帰テスト3件)。あわせて監査指摘のテスト補強3点(講習選択のフォールバック分岐を実際に踏む fixture へ是正/opener 可視化の残り2経路〔黄色化・移動〕をスペックロック/INV-12 の配置系4経路を it.todo で可視化)と、台帳の件数更新(inv06-whole-day-transfer 39件)・INV-05 への希望数経路(undo/redo 差分適用)追記・spec-special-session-submission.md へ講習選択規則を明文化
 - fix: **第三者手動テストの小粒バグ9件を一括修正**(2026-08-29・オーナー指示。各修正に回帰テスト計19件を同伴):
   - **No.22/243 日程表タブ名に教室名が出ない** … 2026-07-09 のオーナー指示のコード(`document.title = … classroomName …`)は存在したが呼び出し側が `classroomName` を渡しておらず常に空(配線漏れ)。open/sync/全員表示の5経路すべてに配線(src/components/schedule-board/ScheduleBoardScreen.tsx)
