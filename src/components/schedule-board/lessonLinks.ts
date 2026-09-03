@@ -90,16 +90,28 @@ export function buildLinkedLessonDestinationMap(cells: LessonLinkSlotCell[]) {
     return left.slotNumber - right.slotNumber
   })
   const destinationByLinkKey = new Map<string, LinkedLessonDestination>()
+  const registerDestination = (entry: LessonLinkStudentEntry, cell: LessonLinkSlotCell) => {
+    for (const linkKey of resolvePlacedLessonLinkKeys(entry, cell)) {
+      if (destinationByLinkKey.has(linkKey)) continue
+      destinationByLinkKey.set(linkKey, { dateKey: cell.dateKey, slotNumber: cell.slotNumber })
+    }
+  }
 
   for (const cell of sortedCells) {
     for (const desk of cell.desks) {
       for (const student of desk.lesson?.studentSlots ?? []) {
         if (!student) continue
-        const linkKeys = resolvePlacedLessonLinkKeys(student, cell)
-        for (const linkKey of linkKeys) {
-          if (destinationByLinkKey.has(linkKey)) continue
-          destinationByLinkKey.set(linkKey, { dateKey: cell.dateKey, slotNumber: cell.slotNumber })
-        }
+        registerDestination(student, cell)
+      }
+      // 回帰防止(緑が丘 室長報告 2026-09-04): 振替コマを「出席」「振無休」にすると studentSlots → statusSlots へ
+      // 移る。配置(studentSlots)だけを振替先とみなすと、出席にした瞬間に元コマの「休」の振替先日付が消えていた。
+      // 在庫会計(makeupStock.ts collectMakeupUsageByKey)はこれらを消化として数えるので、表示も同じ扱いにする。
+      // ★absent(振替コマ自体を休みにした＝在庫へ戻った)と moved(会計は移動先が持つ・移動先の配置が別途リンクする)は
+      //   振替先にしない。ここを緩めると「戻った振替」や移動元マーカーへ誤ってリンクする。
+      for (const statusEntry of desk.statusSlots ?? []) {
+        if (!statusEntry) continue
+        if (statusEntry.status !== 'attended' && statusEntry.status !== 'absent-no-makeup') continue
+        registerDestination(statusEntry, cell)
       }
     }
   }

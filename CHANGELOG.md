@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- fix: **振替コマを「出席」にすると元コマの「休」に添えていた振替先日付が消える**のを修正(緑が丘 室長報告 2026-09-04・「休みの振替を他の日に入れて出席にしたら元のコマの振替日が消える」)。`buildLinkedLessonDestinationMap`(src/components/schedule-board/lessonLinks.ts)が振替先を配置(studentSlots)だけから集めており、出席/振無休で statusSlots へ移った振替コマを見ていなかった(cc5e5e8 導入時からの欠落)。在庫会計 `collectMakeupUsageByKey` は出席済み振替を消化として数えるので**残数は正しく表示だけ欠ける**非対称だった。本番実データ(緑が丘 9/3 時点・読み取り専用)で休み記録18件のうち出席済み振替13件が全件リンク無し、未出欠の配置5件はリンクあり。対処＝statusSlots の `attended`/`absent-no-makeup` も振替先として収集(★`absent`=在庫へ戻った振替・`moved`=移動元マーカーは対象外のまま)。盤面(BoardGrid)と生徒日程表の振替欄「→ 日付」(scheduleHtml/scheduleViewData)は同関数なので両方直る。回帰テスト4件を追加し、修正なしで2件落ち・修正ありで通ることを確認。※保証台帳の INV には該当なし(在庫会計不変・表示のみ)。仕様正本 `docs/spec-makeup-stock.md` §1-B に「出席にしても振替先表示は維持」を明記
 
 ## v1.5.485 (2026-08-29)
 
