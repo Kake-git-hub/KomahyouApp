@@ -78,7 +78,7 @@ function describeDesk(desk: DeskCell): string {
   const students = (desk.lesson?.studentSlots ?? [null, null]).map((student, index) => {
     if (!student) {
       const status = desk.statusSlots?.[index]
-      if (status) return `[${status.name}${status.subject ? ` ${status.subject}` : ''}${status.moveDestinationDateKey ? ` 移)${status.moveDestinationDateKey}` : ''}]`
+      if (status) return `[${status.name}${formatStudentIdForTrace(status.managedStudentId, status.studentId)}${status.subject ? ` ${status.subject}` : ''}${status.moveDestinationDateKey ? ` 移)${status.moveDestinationDateKey}` : ''}]`
       const memo = desk.memoSlots?.[index]
       return memo ? `メモ:${memo}` : '空'
     }
@@ -89,9 +89,18 @@ function describeDesk(desk: DeskCell): string {
       student.sameDayMoveSourceLabel ? `移)${student.sameDayMoveSourceLabel}` : '',
       student.noteSuffix ?? '',
     ].filter(Boolean).join(' ')
-    return `${student.name}(${marks})`
+    return `${student.name}${formatStudentIdForTrace(student.managedStudentId, student.id)}(${marks})`
   })
   return `${teacher}: ${students.join(' / ')}`
+}
+
+/**
+ * 生徒の識別子を「#id」で添える（オーナー指示 2026-09-04: 誰の何がバグだったかを取り違えずに追うため）。
+ * 名簿の生徒ID(managedStudentId)を優先し、無ければ盤面上の id を使う。
+ */
+function formatStudentIdForTrace(managedStudentId: string | undefined, fallbackId: string | undefined): string {
+  const id = managedStudentId?.trim() || fallbackId?.trim() || ''
+  return id ? `#${id}` : ''
 }
 
 function indexDesks(weeks: SlotCell[][]): Map<string, { cell: SlotCell; desk: DeskCell; deskIndex: number }> {

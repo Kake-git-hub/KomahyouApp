@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.491 (2026-09-04)
+
+- feat: 操作痕跡の盤面差分に生徒ID(#managedStudentId・無ければ盤面id)を生徒名に添える(オーナー指示 2026-09-04: 誰の何がバグかを取り違えずに追うため)。(src/utils/operationTrace.ts)
+
 ## v1.5.490 (2026-09-04)
 
 - feat: 「開発者へ報告」ボタンを追加(オーナー指示 2026-09-04・仕様 docs/spec-developer-report.md)。盤面ツールバーの「講師日程共有」の右と、日程表(別タブ)の「登録された講習期間を表示する」の右に色違いで配置。任意の一言は空欄でも送れる。端末内の全操作リングバッファ(commitWeeks 差分・undo/redo・保存・操作ログの写し・別タブメッセージ、教室ごと最新300件を localStorage にも保持。サーバーへは送らない)と報告時点の教室データ(未保存込み)を Cloud Function `submitDeveloperReport` へ送り、Firestore `developerReports`＋Storage `developer-reports/` に保存(本番データには書かない)。(src/utils/operationTrace.ts, src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, functions/src/developerReport.ts, functions/src/index.ts, src/utils/scheduleHtml.ts, firebase/firestore.rules)

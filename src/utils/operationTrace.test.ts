@@ -72,8 +72,15 @@ describe('operationTrace: リングバッファと要約', () => {
     const before = [[cell('2026-09-04', 3, [desk('田中', [student('青木'), null]), desk('鈴木', [null, null])])]]
     const after = [[cell('2026-09-04', 3, [desk('田中', [null, null], { statusSlots: [{ id: 'st', studentId: 's-青木', sourceManagedLesson: false, name: '青木', grade: '中1', subject: '数', lessonType: '通常', teacherType: '通常', teacherName: '田中', dateKey: '2026-09-04', slotNumber: 3 } as unknown as StudentStatusEntry, null] }), desk('鈴木', [null, null])])]]
     const summary = summarizeWeeksDiff(before, after)
-    expect(summary).toBe('2026-09-04 3限 机1: 田中: 青木(通常 数) / 空 → 田中: [青木 数] / 空')
+    // 生徒名に加えて生徒ID(#managedStudentId・無ければ盤面id)を添える(2026-09-04: 誰の何がバグかを取り違えない)。
+    expect(summary).toBe('2026-09-04 3限 机1: 田中: 青木#s-青木(通常 数) / 空 → 田中: [青木#s-青木 数] / 空')
     expect(summarizeWeeksDiff(before, before)).toBe('')
+  })
+
+  it('名簿の生徒ID(managedStudentId)があればそれを優先して添える', () => {
+    const before = [[cell('2026-09-04', 3, [desk('田中', [null, null])])]]
+    const after = [[cell('2026-09-04', 3, [desk('田中', [student('青木', { managedStudentId: 's012' }), null])])]]
+    expect(summarizeWeeksDiff(before, after)).toBe('2026-09-04 3限 机1: 田中: 空 / 空 → 田中: 青木#s012(通常 数) / 空')
   })
 
   it('summarizeWeeksDiff は列挙上限を超えた分を「他N件」にまとめ、机の追加/削除も拾う', () => {
