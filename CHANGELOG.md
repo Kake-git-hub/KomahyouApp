@@ -18,6 +18,8 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.489 (2026-09-04)
+
 - fix: 日次の保持期間掃除 `cleanupOldSaveAttempts` が毎晩 `Transaction too big` で失敗し、saveAttempts の
   30日保持が事実上無効になっていたのを修正(本番 日大前校に 2026-05-30 分から 17,519 件が滞留・
   1件最大 1MiB の文書を 300 件まとめて WriteBatch 削除していたため Firestore の 10MiB 上限超過)。
