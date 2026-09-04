@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.493 (2026-09-04)
+
+- chore: src/App.tsx の改行コードを CRLF に戻す(変更なし: v1.5.492 の編集で LF 化し全行差分になっていたため。git が -text 扱いの巨大ファイルなので自動正規化されない)
+
 ## v1.5.492 (2026-09-04)
 
 - feat: 「開発者へ報告」の一言を必須化(空欄では送れない・盤面/日程表とも)、日程表側も prompt をやめ盤面と同一表示・同一文言のモーダルに統一(文言正本 DEVELOPER_REPORT_UI_TEXT)、モーダルを大きく読みやすく(幅820px・本文17px・入力7行)。(オーナー指示 2026-09-04 / src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/App.tsx, src/App.css)
