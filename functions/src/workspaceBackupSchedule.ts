@@ -1,8 +1,11 @@
+import { gunzipSync, gzipSync } from 'node:zlib'
 // ワークスペース自動バックアップの粒度・保持期間の純ロジック(firebase 非依存・テスト可能)。
 //
 // 2026-07-10 オーナー確定: 生成は15分毎(quarterHourly)の1本に一本化し、保持はプルーン時の
 // 経過時間ベースの間引きで実現する(毎時生成・日次生成のスケジュール関数は廃止)。
 // 「Storageで保持する回」と「Google Driveへミラーする回」は同じ判定を共有する(統一設計)。
+// ★2026-09-04 の意図的な非対称: Drive は gzip(.json.gz)でミラーし、旧来の非圧縮 .json だけ 7 日で間引く
+//   (shouldKeepGoogleDriveBackupByName・docs/spec-save-restore.md §8-4 に明記)。保持の段階間引き自体は共通。
 // index.ts はスケジュール関数・Firestore/Storage I/O のみを担い、
 // 日時計算・パス組み立て・保持判定はすべてここへ集約する(index.ts から新規 export しない=
 // Firebase が export をそのまま関数としてデプロイするため、誤って新規関数がデプロイされる事故を防ぐ)。
@@ -13,6 +16,34 @@ export type WorkspaceAutoBackupKind = 'daily' | 'hourly' | 'quarterHourly'
 
 export const HOUR_IN_MS = 60 * 60 * 1000
 export const JST_OFFSET_IN_MS = 9 * HOUR_IN_MS
+
+// Google Drive のミラーは gzip(拡張子 .json.gz)。復元時は解凍すれば元の JSON とバイト単位で同一になる(可逆)。
+export const GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX = '.json.gz'
+
+export function isCompressedBackupFileName(name: string | undefined) {
+  return typeof name === 'string' && name.toLowerCase().endsWith(GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX)
+}
+
+export function compressBackupJson(json: string): Buffer {
+  return gzipSync(Buffer.from(json, 'utf8'))
+}
+
+export function decompressBackupJson(compressed: Buffer): string {
+  return gunzipSync(compressed).toString('utf8')
+}
+
+// Google Drive 側の保持判定。圧縮ファイル(.json.gz)は Storage と同じ段階間引き(日次 400 日)、
+// 旧来の非圧縮ファイル(.json)は Drive の容量を圧迫するので **7 日**で従来どおり間引く(移行期間の暫定)。
+export function shouldKeepGoogleDriveBackupByName(params: { name: string | undefined; savedAtMs: number; nowMs: number }): boolean {
+  if (isCompressedBackupFileName(params.name)) {
+    return shouldKeepWorkspaceAutoBackup({ savedAtMs: params.savedAtMs, nowMs: params.nowMs })
+  }
+  return shouldKeepWorkspaceAutoBackup({
+    savedAtMs: params.savedAtMs,
+    nowMs: params.nowMs,
+    dailyRetentionDays: WORKSPACE_BACKUP_LEGACY_UNCOMPRESSED_DRIVE_RETENTION_DAYS,
+  })
+}
 
 export function toUtcDateKey(date: Date) {
   const year = date.getUTCFullYear()
@@ -77,10 +108,14 @@ export function resolveBackupKindFromSummary(backupKind: unknown, docId: string)
 
 // 2026-07-10 オーナー確定: 生成は15分毎(quarterHourly)の1本に一本化し、保持はプルーン時の
 // 経過時間ベースの間引きで実現する(毎時生成・日次生成のスケジュール関数は廃止)。
-// 「Storageで保持する回」と「Google Driveへミラーする回」は同じ判定を共有する(統一設計)。
+// 「Storageで保持する回」と「Google Driveへミラーする回」は同じ段階間引きを共有する(旧来の非圧縮 Drive ファイルだけ 7 日)。
 export const WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS = 24
 export const WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS = 72
-export const WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS = 7
+// 2026-09-04 オーナー確定: 日次(JST 3:00)は **400 日**保持へ延長(「1年分を盤面ごと振り返れる」ため。
+// 緑が丘の調査で 8/29 以前が検証不能だった教訓)。Storage/Firestore は非圧縮のまま、Google Drive 側は gzip で
+// ミラーする(15GB 上限のため)。旧来の非圧縮 Drive ファイル(.json)は 7 日で従来どおり間引く(下記)。
+export const WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS = 400
+export const WORKSPACE_BACKUP_LEGACY_UNCOMPRESSED_DRIVE_RETENTION_DAYS = 7
 export const WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST = 3
 
 // 静音時間帯(JST 3:00〜9:00・ユーザーが操作しない早朝)はバックアップ生成をスキップし取得回数を抑える
@@ -101,12 +136,14 @@ export function isWorkspaceAutoBackupSkippedAt(date: Date): boolean {
 
 // バックアップの実時刻(savedAtMs)と現在時刻(nowMs)から、保持すべきかを判定する純関数。
 // age<24h: 全保持(15分毎そのまま) / 24h≤age<72h: JSTで分=00のみ(実質毎時) /
-// 72h≤age<7日: JSTで時=03かつ分=00のみ(実質日次AM3:00) / age≥7日: 削除。
+// 72h≤age<400日: JSTで時=03かつ分=00のみ(実質日次AM3:00) / age≥400日: 削除(2026-09-04 に 7日→400日)。
+// dailyRetentionDays を渡すと日次帯の上限だけ差し替えられる(旧来の非圧縮 Drive ファイル用の 7 日)。
 // kind(生成種別)には依存しない(生成が15分毎1本化されたため、判定は実時刻だけで完結する)。
-export function shouldKeepWorkspaceAutoBackup(params: { savedAtMs: number; nowMs: number }): boolean {
+export function shouldKeepWorkspaceAutoBackup(params: { savedAtMs: number; nowMs: number; dailyRetentionDays?: number }): boolean {
   const ageMs = params.nowMs - params.savedAtMs
+  const dailyRetentionDays = params.dailyRetentionDays ?? WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS
   if (ageMs < WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS * HOUR_IN_MS) return true
-  if (ageMs >= WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS * 24 * HOUR_IN_MS) return false
+  if (ageMs >= dailyRetentionDays * 24 * HOUR_IN_MS) return false
 
   const jst = new Date(params.savedAtMs + JST_OFFSET_IN_MS)
   const minuteJst = jst.getUTCMinutes()

@@ -37,6 +37,12 @@ export type OperationEventKind =
   | 'holiday-toggle'
   /** 生徒の移動で、移動元に書く「移)」マーカーが別生徒の出欠記録を上書きして消した */
   | 'record-displaced'
+  /** ★2 自動処理: 起動時の自己修復(提出済みで未配置の講師を自動配置) */
+  | 'auto-teacher-reconcile'
+  /** ★2 自動処理: QR 提出/登録解除に伴う講師の自動登録・解除 */
+  | 'auto-teacher-assign'
+  /** ★2 自動処理: 生徒の登録解除に伴う講習コマの自動除去 */
+  | 'auto-student-unassign'
 
 export type OperationEventDetail = Record<string, string | number | boolean>
 

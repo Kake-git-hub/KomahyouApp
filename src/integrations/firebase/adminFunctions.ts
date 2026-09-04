@@ -112,6 +112,8 @@ type SaveClassroomSnapshotRequest = {
   // 生徒授業台帳(生徒×科目の授業実績と未消化・元コマ一覧つき)。内容が変わった保存にだけ相乗りさせ、
   // サーバーが JST 日付ごとに残す(classroomSnapshots/{id}/lessonLedgerDays)。詳細は src/utils/studentLessonLedger.ts。
   lessonLedger?: StudentLessonLedger
+  // 保存した端末のアプリ版数と UA(2026-09-04)。古いキャッシュの版で操作していた報告を切り分ける監査項目。
+  client?: { appVersion: string; userAgent: string }
 }
 
 export type SaveClassroomSnapshotOptions = {

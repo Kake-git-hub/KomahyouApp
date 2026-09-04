@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SetStateAction } from 'react'
 import { BasicDataScreen, buildWorkbook as buildBasicDataWorkbook, createTemplateBundle as createBasicDataTemplateBundle, initialGroupLessons, initialManagers, mergeImportedBundle, parseImportedBundle, type GroupLessonRow } from './components/basic-data/BasicDataScreen'
 import { validateImportedBasicDataBundle } from './components/basic-data/basicDataImportValidation'
 import type { StudentDeletionStockSummary } from './components/basic-data/deleteGuard'
@@ -38,6 +38,8 @@ import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeign
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
+import { readBackupFileText } from './utils/backupFileText'
+import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
@@ -295,13 +297,8 @@ type BlazeFreeTierEstimate = {
   freeTierStorageBytes: number
 }
 
-// 2026-07-10: 生成15分毎1本化+間引き方式(functions/src/workspaceBackupSchedule.ts と同じ数値)。
-// 保持される概算本数 = 24h分(15分毎) + 24-72h分(毎時) + 72h-7日分(日次) の合計。
-// 過去の実装(14日+72時間の単純合算)がここだけ短縮反映漏れになっていたバグの修正も兼ねる。
-const SERVER_AUTO_BACKUP_FULL_RESOLUTION_COUNT = 24 * 4 // 24時間 ÷ 15分 = 96本
-const SERVER_AUTO_BACKUP_HOURLY_THINNED_COUNT = 72 - 24 // 24-72時間帯、毎時1本 = 48本
-const SERVER_AUTO_BACKUP_DAILY_THINNED_COUNT = 7 - 3 // 72時間-7日帯(=4日分)、日次1本 = 4本
-const SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT = SERVER_AUTO_BACKUP_FULL_RESOLUTION_COUNT + SERVER_AUTO_BACKUP_HOURLY_THINNED_COUNT + SERVER_AUTO_BACKUP_DAILY_THINNED_COUNT
+// 保持される概算本数は src/utils/backupRetentionEstimate.ts(スペックロック付き)へ切り出した。
+// 過去の実装がここだけ短縮反映漏れになっていたバグ(7a9b1e2)と、400日延長の取り残し(2026-09-04)の再発防止。
 const BLAZE_STORAGE_FREE_TIER_BYTES = 5_000_000_000
 const BLAZE_STORAGE_REFERENCE_CLASSROOM_COUNT = 50
 
@@ -1481,7 +1478,10 @@ function AuthenticatedApp() {
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
   // 操作ログ: 記録先の教室を登録する。未登録の間に起きた操作は記録しない(別教室へ混入させない)。
-  useEffect(() => {
+  // ★useLayoutEffect にする: 盤面(子)の起動時自動処理は useEffect で走り、親の useEffect より先に実行される。
+  //   親が useEffect だと最初の自動処理(講師の自己修復など)が教室未登録で捨てられる。layout effect は
+  //   ツリー全体で passive effect より先に走るので、盤面の effect 時点で教室が登録済みになる。
+  useLayoutEffect(() => {
     setOperationLogClassroomId(actingClassroomId)
   }, [actingClassroomId])
   const manualFirebaseSaveStabilityEnabled = useMemo(
@@ -1998,6 +1998,7 @@ function AuthenticatedApp() {
                 payload: targetClassroom.data,
                 ...(operationEvents.length > 0 ? { operationEvents } : {}),
                 ...(lessonLedgerToSend ? { lessonLedger: lessonLedgerToSend } : {}),
+                client: { appVersion: __APP_VERSION__, userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent },
               })
               if (lessonLedgerToSend) markStudentLessonLedgerSent(targetClassroom.id, lessonLedgerFingerprint, lessonLedgerDateKey)
               break
@@ -4525,7 +4526,8 @@ function AuthenticatedApp() {
 
   const importWorkspaceBackup = useCallback(async (file: File, _password: string) => {
     try {
-      const text = await file.text()
+      // Google Drive のミラー(.json.gz)をそのまま取り込める(2026-09-04)。バックアップ読み込みは必ず readBackupFileText を通す。
+      const text = await readBackupFileText(file)
       const snapshot = parseWorkspaceSnapshot(text)
       openDeveloperRestoreModal(snapshot, '開発者バックアップ')
       setPersistenceMessage('復元する教室をモーダルで選択してください。')
@@ -4536,7 +4538,8 @@ function AuthenticatedApp() {
 
   const importBackup = useCallback(async (file: File) => {
     try {
-      const text = await file.text()
+      // Google Drive のミラーは gzip(.json.gz)なので、解凍せずそのまま取り込める(2026-09-04)。
+      const text = await readBackupFileText(file)
       let snapshot: AppSnapshot
       try {
         snapshot = parseAppSnapshot(text)

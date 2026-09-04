@@ -12,7 +12,12 @@ import {
   toUtcQuarterHourKey,
   WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST,
   WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS,
+  WORKSPACE_BACKUP_LEGACY_UNCOMPRESSED_DRIVE_RETENTION_DAYS,
   WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS,
+  compressBackupJson,
+  decompressBackupJson,
+  isCompressedBackupFileName,
+  shouldKeepGoogleDriveBackupByName,
   WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS,
   WORKSPACE_BACKUP_QUIET_HOURS_END_JST,
   WORKSPACE_BACKUP_QUIET_HOURS_START_JST,
@@ -24,10 +29,11 @@ import {
 // （過去に App.tsx 側の保持本数の見積りだけが短縮反映漏れになったドリフト事故があるため、
 //   数値そのものをテストで固定して静かなズレを検知する）。
 describe('保持期間のスペックロック（docs/spec-save-restore.md §8-2）', () => {
-  it('自動バックアップの段階間引きは 24時間 / 72時間 / 7日、日次アンカーは JST 3:00', () => {
+  it('自動バックアップの段階間引きは 24時間 / 72時間 / 400日、日次アンカーは JST 3:00(2026-09-04 オーナー確定)', () => {
     expect(WORKSPACE_BACKUP_FULL_RESOLUTION_RETENTION_HOURS).toBe(24)
     expect(WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS).toBe(72)
-    expect(WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS).toBe(7)
+    expect(WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS).toBe(400)
+    expect(WORKSPACE_BACKUP_LEGACY_UNCOMPRESSED_DRIVE_RETENTION_DAYS).toBe(7)
     expect(WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST).toBe(3)
   })
 
@@ -40,7 +46,7 @@ describe('保持期間のスペックロック（docs/spec-save-restore.md §8-2
     expect(isWorkspaceAutoBackupSkippedAt(new Date('2026-07-09T18:00:00Z'))).toBe(false) // JST 03:00
   })
 
-  it('7日を超えたバックアップは種別・時刻によらず必ず削除される（遡れる上限＝7日）', () => {
+  it('400日を超えたバックアップは種別・時刻によらず必ず削除される（遡れる上限＝400日）', () => {
     const savedAtMs = new Date('2026-07-03T18:00:00Z').getTime() // JST 2026-07-04 03:00（日次アンカー）
     const overRetention = savedAtMs + (WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS * 24 + 1) * HOUR_IN_MS
     expect(shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs: overRetention })).toBe(false)
@@ -74,6 +80,27 @@ describe('isWorkspaceAutoBackupSkippedAt (静音時間帯 JST 3:15〜8:45 をス
   })
   it('昼間(JST 12:00)は取得する', () => {
     expect(at('2026-07-10T03:00:00Z')).toBe(false) // JST 12:00
+  })
+})
+
+describe('Google Drive ミラーの圧縮と保持(2026-09-04)', () => {
+  it('gzip は可逆: 圧縮→解凍で元の JSON と完全一致する', () => {
+    const json = JSON.stringify({ classrooms: [{ id: 'c1', name: 'スクールIE 緑が丘校', data: { weeks: [[{ dateKey: '2026-09-04' }]] } }], savedAt: '2026-09-04T00:00:00.000Z' }, null, 2)
+    const compressed = compressBackupJson(json)
+    expect(compressed.length).toBeLessThan(Buffer.byteLength(json, 'utf8'))
+    expect(decompressBackupJson(compressed)).toBe(json)
+    expect(JSON.parse(decompressBackupJson(compressed))).toEqual(JSON.parse(json))
+  })
+
+  it('圧縮ファイル(.json.gz)は Storage と同じ 400 日、旧来の非圧縮(.json)は 7 日で間引く', () => {
+    const nowAt3am = new Date('2026-07-10T18:00:00Z').getTime() // JST 03:00
+    const tenDaysAgo = nowAt3am - 10 * 24 * HOUR_IN_MS
+    expect(isCompressedBackupFileName('komahyouapp_main_quarterHourly_2026-07-01T03-00.json.gz')).toBe(true)
+    expect(isCompressedBackupFileName('komahyouapp_main_quarterHourly_2026-07-01T03-00.json')).toBe(false)
+    expect(shouldKeepGoogleDriveBackupByName({ name: 'x.json.gz', savedAtMs: tenDaysAgo, nowMs: nowAt3am })).toBe(true)
+    expect(shouldKeepGoogleDriveBackupByName({ name: 'x.json', savedAtMs: tenDaysAgo, nowMs: nowAt3am })).toBe(false)
+    // 7日未満の非圧縮は従来どおり残る
+    expect(shouldKeepGoogleDriveBackupByName({ name: 'x.json', savedAtMs: nowAt3am - 5 * 24 * HOUR_IN_MS, nowMs: nowAt3am })).toBe(true)
   })
 })
 
@@ -202,16 +229,21 @@ describe('shouldKeepWorkspaceAutoBackup', () => {
     expect(shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs: nowMsAtAge })).toBe(true)
   })
 
-  it('age = 7日ちょうど → 無条件削除(時=03分00でも削除)', () => {
+  it('age = 7日・8日でも時=03分00 なら保持する(日次は 400 日まで遡れる)', () => {
     const nowAt3am = new Date('2026-07-10T18:00:00Z').getTime() // JST 2026-07-11 03:00
-    const savedAtMs = nowAt3am - 7 * 24 * HOUR_IN_MS // JST 2026-07-04 03:00、age=7日ちょうど
-    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs: nowAt3am })).toBe(false)
+    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs: nowAt3am - 7 * 24 * HOUR_IN_MS, nowMs: nowAt3am })).toBe(true)
+    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs: nowAt3am - 8 * 24 * HOUR_IN_MS, nowMs: nowAt3am })).toBe(true)
+    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs: nowAt3am - 399 * 24 * HOUR_IN_MS, nowMs: nowAt3am })).toBe(true)
   })
 
-  it('age = 8日、時=03分00 → 削除する', () => {
+  it('age = 400日ちょうど → 無条件削除(時=03分00でも削除)', () => {
     const nowAt3am = new Date('2026-07-10T18:00:00Z').getTime() // JST 2026-07-11 03:00
-    const savedAtMs = nowAt3am - 8 * 24 * HOUR_IN_MS // JST 2026-07-03 03:00
-    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs: nowAt3am })).toBe(false)
+    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs: nowAt3am - 400 * 24 * HOUR_IN_MS, nowMs: nowAt3am })).toBe(false)
+  })
+
+  it('age = 8日の 03:00 以外(例: 21:00)は 72h 以降なので削除する', () => {
+    const nowMs2 = new Date('2026-07-10T12:00:00Z').getTime() // JST 21:00
+    expect(shouldKeepWorkspaceAutoBackup({ savedAtMs: nowMs2 - 8 * 24 * HOUR_IN_MS, nowMs: nowMs2 })).toBe(false)
   })
 
   it('JSTオフセット(UTC+9)を跨ぐ境界(UTC 18:00=JST翌3:00)で正しく時=03と判定する', () => {

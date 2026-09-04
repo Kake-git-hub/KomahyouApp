@@ -19,9 +19,12 @@ import {
   toMonthKeyFromDateKey,
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
-import { normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
+import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import {
+  compressBackupJson,
+  GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX,
+  shouldKeepGoogleDriveBackupByName,
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
   HOUR_IN_MS,
@@ -603,7 +606,8 @@ function escapeGoogleDriveQueryLiteral(value: string) {
 
 function buildGoogleDriveBackupFileName(workspaceKey: string, backupDateKey: string, backupKind: WorkspaceAutoBackupKind) {
   const safeWorkspaceKey = workspaceKey.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'workspace'
-  return `komahyouapp_${safeWorkspaceKey}_${backupKind}_${backupDateKey}.json`
+  // 2026-09-04: Drive は gzip でミラー(15GB 上限対策・日次 400 日保持)。復元時は解凍すれば元の JSON と同一。
+  return `komahyouapp_${safeWorkspaceKey}_${backupKind}_${backupDateKey}${GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX}`
 }
 
 async function findGoogleDriveBackupFile(fileName: string) {
@@ -627,17 +631,14 @@ async function findGoogleDriveBackupFile(fileName: string) {
   return payload.files?.[0] ?? null
 }
 
-function buildGoogleDriveMultipartBody(metadata: Record<string, unknown>, content: string) {
+function buildGoogleDriveMultipartBody(metadata: Record<string, unknown>, content: Buffer, contentType: string) {
   const boundary = `komahyouapp-drive-${randomBytes(8).toString('hex')}`
-  const body = Buffer.from([
-    `--${boundary}\r\n`,
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
-    `${JSON.stringify(metadata)}\r\n`,
-    `--${boundary}\r\n`,
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n',
-    `${content}\r\n`,
-    `--${boundary}--\r\n`,
-  ].join(''), 'utf8')
+  // 本文はバイナリ(gzip)なので文字列結合せず Buffer で連結する(文字列化すると壊れる)。
+  const body = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: ${contentType}\r\n\r\n`, 'utf8'),
+    content,
+    Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8'),
+  ])
   return { boundary, body }
 }
 
@@ -656,7 +657,7 @@ async function upsertWorkspaceGoogleDriveBackup(params: {
   const existingFile = await findGoogleDriveBackupFile(fileName)
   const metadata: Record<string, unknown> = {
     name: fileName,
-    mimeType: 'application/json',
+    mimeType: 'application/gzip',
     appProperties: {
       workspaceKey: params.workspaceKey,
       backupDateKey: params.backupDateKey,
@@ -670,7 +671,7 @@ async function upsertWorkspaceGoogleDriveBackup(params: {
     metadata.parents = [folderId]
   }
 
-  const { boundary, body } = buildGoogleDriveMultipartBody(metadata, params.snapshotJson)
+  const { boundary, body } = buildGoogleDriveMultipartBody(metadata, compressBackupJson(params.snapshotJson), 'application/gzip')
   const response = await googleDriveApiFetch({
     path: existingFile?.id ? `/files/${existingFile.id}` : '/files',
     method: existingFile?.id ? 'PATCH' : 'POST',
@@ -728,7 +729,8 @@ function shouldKeepGoogleDriveBackupFile(file: GoogleDriveFileMetadata, nowMs: n
   const appProperties = file.appProperties ?? {}
   const savedAt = appProperties.savedAt ?? appProperties.sourceSavedAt ?? ''
   const savedAtMs = Date.parse(savedAt) || 0
-  return shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs })
+  // 圧縮(.json.gz)は Storage と同じ段階間引き、旧来の非圧縮(.json)は 7 日で間引く(Drive 容量対策)。
+  return shouldKeepGoogleDriveBackupByName({ name: file.name, savedAtMs, nowMs })
 }
 
 async function pruneWorkspaceGoogleDriveBackups(workspaceKey: string, referenceDate: Date) {
@@ -910,6 +912,7 @@ async function persistOperationEvents(params: {
   saveId: string
   savedAt: string
   updatedBy: string
+  client?: { appVersion: string; userAgent: string }
 }) {
   if (params.events.length === 0) return 0
   try {
@@ -922,6 +925,8 @@ async function persistOperationEvents(params: {
         saveId: params.saveId,
         savedAt: params.savedAt,
         updatedBy: params.updatedBy,
+        ...(params.client?.appVersion ? { appVersion: params.client.appVersion } : {}),
+        ...(params.client?.userAgent ? { userAgent: params.client.userAgent } : {}),
         kind: event.kind,
         detail: event.detail,
         // at=操作時刻(クライアント時計)。recordedAt=サーバー受領時刻。掃除は recordedAt を見る。
@@ -985,8 +990,12 @@ function buildSaveAttemptPayload(params: {
   readbackHash?: string
   errorMessage?: string
   snapshotVersion?: number
+  appVersion?: string
+  userAgent?: string
 }) {
   return {
+    ...(params.appVersion ? { appVersion: params.appVersion } : {}),
+    ...(params.userAgent ? { userAgent: params.userAgent } : {}),
     classroomId: params.classroomId,
     savedAt: params.savedAt,
     saveId: params.saveId,
@@ -1513,6 +1522,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const incomingBaseVersion = typeof rawData.baseVersion === 'number' ? rawData.baseVersion : undefined
   // 操作ログ(相乗り・任意)。旧クライアントは送らない。壊れた要素はここで落とし、保存本体は巻き添えにしない。
   const incomingOperationEvents = normalizeOperationEvents(rawData.operationEvents, { fallbackIso: savedAt })
+  // 保存した端末のアプリ版数と UA(2026-09-04)。「古いキャッシュの版で操作していた」を切り分けるための監査項目。
+  const incomingClient = normalizeClientInfo(rawData.client)
   // 生徒授業台帳(相乗り・任意)。旧クライアントは送らない。壊れていれば null(保存本体は通す)。
   const incomingLessonLedger = normalizeLessonLedger(rawData.lessonLedger, { fallbackIso: savedAt })
 
@@ -1543,6 +1554,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
         saveId,
         savedAt: existingAttempt.savedAt || savedAt,
         updatedBy: memberRef.id,
+        client: incomingClient,
       })
       await persistLessonLedger({
         snapshotRef,
@@ -1616,6 +1628,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     updatedBy: memberRef.id,
     createdAt: saveAttemptCreatedAt,
     snapshotVersion: nextVersion,
+    appVersion: incomingClient.appVersion,
+    userAgent: incomingClient.userAgent,
   }
   await saveAttemptRef.set(buildSaveAttemptPayload({
     ...saveAttemptBase,
@@ -1655,6 +1669,7 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     saveId,
     savedAt,
     updatedBy: memberRef.id,
+    client: incomingClient,
   })
   await persistLessonLedger({
     snapshotRef,
