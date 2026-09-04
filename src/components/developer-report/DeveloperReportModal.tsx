@@ -84,6 +84,7 @@ export function DeveloperReportModal({ classroomName, sending, resultMessage, on
               data-testid="developer-report-note"
             />
             {validationError ? <p className="developer-report-error" role="alert" data-testid="developer-report-error">{validationError}</p> : null}
+            <p className="developer-report-hint developer-report-hint-primary" data-testid="developer-report-input-hint">{DEVELOPER_REPORT_UI_TEXT.inputHint}</p>
             <p className="developer-report-hint">{DEVELOPER_REPORT_UI_TEXT.testHint}</p>
             <div className="auto-assign-modal-actions developer-report-actions">
               <button type="button" className="secondary-button" onClick={onClose} disabled={sending} data-testid="developer-report-cancel">{DEVELOPER_REPORT_UI_TEXT.cancel}</button>

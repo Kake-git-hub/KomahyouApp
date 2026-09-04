@@ -4875,6 +4875,16 @@ tr.sa-group-row td {
   font-size: 14px;
 }
 
+/* 入力のヒント(生徒名・日付・コマ・何が起きたか)は本文と同じ読みやすさで目立たせる。 */
+.developer-report-hint-primary {
+  color: #16314f;
+  font-size: 16px;
+  line-height: 1.6;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #f1f6ff;
+}
+
 .developer-report-actions {
   justify-content: flex-end;
 }

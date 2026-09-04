@@ -36,6 +36,10 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
     expect(DEVELOPER_REPORT_UI_TEXT.title).toBe('要望・報告')
     expect(DEVELOPER_REPORT_UI_TEXT.description('')).toContain('要望')
     expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.map((o) => o.value)).toEqual(['bug', 'request'])
+    // 入力ヒント: 修正しやすい情報(生徒名・日付・コマ・何が起きたか)を促す(オーナー指示 2026-09-04)。
+    for (const keyword of ['生徒名', '日付', 'コマ', '何が起きたか', '精度']) {
+      expect(DEVELOPER_REPORT_UI_TEXT.inputHint).toContain(keyword)
+    }
   })
 
   it('種類は bug/request だけを受け付け、不明なら bug', () => {

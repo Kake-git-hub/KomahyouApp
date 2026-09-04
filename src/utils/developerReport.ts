@@ -66,7 +66,9 @@ export const DEVELOPER_REPORT_UI_TEXT = {
     { value: 'request', label: '追加してほしい・要望' },
   ] as ReadonlyArray<{ value: DeveloperReportCategory; label: string }>,
   noteLabel: '内容（必須）',
-  placeholder: '例: 9/3 の 3限で振替が消えた気がする ／ 講師日程表にも電話番号の欄がほしい',
+  placeholder: '例: 9/3(水) 3限、田中先生の机で、青木さんの振替(数学)を移動したら未消化に戻らなかった ／ 講師日程表にも電話番号の欄がほしい',
+  /** 入力のヒント(オーナー指示 2026-09-04): 詳細を書いてもらうほど開発者の確認精度が上がることを伝える。 */
+  inputHint: '生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか(期待した結果との違い)を具体的に書いていただくと、確認の精度が上がります。',
   testHint: `テスト送信のときは内容に「${DEVELOPER_REPORT_TEST_MARKER}」と書いてください（開発者への課題登録は行われません）。`,
   requiredError: '内容を入力してください。何がおかしいか・何をしてほしいかが分からないと、開発者が調べられません。',
   cancel: 'キャンセル',

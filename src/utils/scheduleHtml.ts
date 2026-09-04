@@ -1282,6 +1282,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .developer-report-category-option { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid #c7d3e3; border-radius: 12px; font-size: 16px; color: #36506d; cursor: pointer; background: #f8fafd; }
       .developer-report-category-option.is-selected { border-color: #1a73e8; background: #e8f0fe; color: #16314f; font-weight: 600; }
       .developer-report-hint { margin: 0; color: #5b6f86; font-size: 14px; }
+      .developer-report-hint-primary { color: #16314f; font-size: 16px; line-height: 1.6; padding: 10px 14px; border-radius: 12px; background: #f1f6ff; }
       .developer-report-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
       .developer-report-actions button {
         border: none;
@@ -6979,6 +6980,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         descriptionNoClassroom: DEVELOPER_REPORT_UI_TEXT.description(''),
         categoryLabel: DEVELOPER_REPORT_UI_TEXT.categoryLabel,
         categoryOptions: DEVELOPER_REPORT_UI_TEXT.categoryOptions,
+        inputHint: DEVELOPER_REPORT_UI_TEXT.inputHint,
         testHint: DEVELOPER_REPORT_UI_TEXT.testHint,
         noteLabel: DEVELOPER_REPORT_UI_TEXT.noteLabel,
         placeholder: DEVELOPER_REPORT_UI_TEXT.placeholder,
@@ -7082,6 +7084,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         error.className = 'developer-report-error';
         error.setAttribute('role', 'alert');
         error.hidden = true;
+        const inputHint = document.createElement('p');
+        inputHint.className = 'developer-report-hint developer-report-hint-primary';
+        inputHint.textContent = DEVELOPER_REPORT_TEXT.inputHint;
         const hint = document.createElement('p');
         hint.className = 'developer-report-hint';
         hint.textContent = DEVELOPER_REPORT_TEXT.testHint;
@@ -7103,6 +7108,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         modal.appendChild(label);
         modal.appendChild(textarea);
         modal.appendChild(error);
+        modal.appendChild(inputHint);
         modal.appendChild(hint);
         modal.appendChild(actions);
         overlay.appendChild(modal);

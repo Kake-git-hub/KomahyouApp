@@ -4394,6 +4394,9 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).toContain("name = 'schedule-developer-report-category'")
     expect(html).toContain('category: selectedCategory,')
     expect(html).toContain('"testHint":"テスト送信のときは内容に「#テスト」と書いてください')
+    // 入力のヒント(生徒名・日付・コマ・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04)。
+    expect(html).toContain('"inputHint":"生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか')
+    expect(html).toContain("inputHint.className = 'developer-report-hint developer-report-hint-primary'")
     // 色だけ変える(同じ枠線ボタン)。
     expect(html).toContain('.toolbar button.report-developer {')
     // 本体へ送るメッセージと、本体から返る結果メッセージの両方を扱う(App.tsx の定数と一致)。
@@ -4403,7 +4406,7 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).not.toContain('window.prompt(')
     expect(html).toContain('const DEVELOPER_REPORT_TEXT = {')
     expect(html).toContain('"requiredError":"内容を入力してください。')
-    expect(html).toContain('"placeholder":"例: 9/3 の 3限で振替が消えた気がする')
+    expect(html).toContain('"placeholder":"例: 9/3(水) 3限、田中先生の机で')
     expect(html).not.toContain('空欄のままでも送れます')
     expect(html).toContain('.developer-report-modal {')
     expect(html).toContain("id = 'schedule-developer-report-modal'")

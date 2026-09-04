@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.495 (2026-09-04)
+
+- feat: 要望・報告モーダルに入力のヒント(生徒名・日付・コマ・どの操作で何が起きたかを具体的に書くと確認精度が上がる)を追加し、例文も具体化(盤面・日程表とも同一文言)。(オーナー指示 2026-09-04 / src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/App.css)
+
 ## v1.5.494 (2026-09-04)
 
 - feat: 「開発者へ報告」ボタンを「要望・報告」に改名し、種類(不具合・おかしい／追加してほしい・要望)を選んで送れるようにした(盤面・日程表とも同一モーダル・既定は不具合)。Issue のラベルは種類で type:bug / type:feature。(src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/components/schedule-board/BoardToolbar.tsx, tools/developer-report-notify.mjs)
