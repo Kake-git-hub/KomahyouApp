@@ -18,6 +18,10 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.496 (2026-09-04)
+
+- style: 盤面の要望・報告モーダルをブラウザの表示倍率に左右されない実寸表示にした。盤面はコマ表を1週間分見るため倍率を下げて使うことが多く、モーダルまで一緒に縮んで日程表タブ(別タブ・通常100%)より読みにくくなっていた。寸法・文字を `--developer-report-unit`(vw/vh 基準・1920x1080 100% で 1px 相当・上限1.6px)基準に書き換え、倍率を下げても画面上の実寸が保たれるようにした。100% 表示時の見た目は従来と同一。(オーナー指示 2026-09-04 / src/App.css, src/utils/developerReportModalStyle.test.ts)
+
 ## v1.5.495 (2026-09-04)
 
 - feat: 要望・報告モーダルに入力のヒント(生徒名・日付・コマ・どの操作で何が起きたかを具体的に書くと確認精度が上がる)を追加し、例文も具体化(盤面・日程表とも同一文言)。(オーナー指示 2026-09-04 / src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/App.css)
