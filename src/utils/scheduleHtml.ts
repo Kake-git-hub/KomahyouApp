@@ -1277,6 +1277,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
       .developer-report-note.has-error { border-color: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.15); }
       .developer-report-error { margin: 0; color: #b3261e; font-size: 15px; font-weight: 600; }
+      .developer-report-category { border: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+      .developer-report-category-options { display: flex; gap: 12px; flex-wrap: wrap; }
+      .developer-report-category-option { display: inline-flex; align-items: center; gap: 8px; padding: 10px 16px; border: 1px solid #c7d3e3; border-radius: 12px; font-size: 16px; color: #36506d; cursor: pointer; background: #f8fafd; }
+      .developer-report-category-option.is-selected { border-color: #1a73e8; background: #e8f0fe; color: #16314f; font-weight: 600; }
+      .developer-report-hint { margin: 0; color: #5b6f86; font-size: 14px; }
       .developer-report-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
       .developer-report-actions button {
         border: none;
@@ -2762,7 +2767,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
-        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="「おかしいな」と思ったら、そのまま開発者へ知らせます">開発者へ報告</button>
+        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="「おかしいな」と思ったことも、追加してほしい要望も、そのまま開発者へ送れます">要望・報告</button>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
@@ -6972,6 +6977,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         title: DEVELOPER_REPORT_UI_TEXT.title,
         description: DEVELOPER_REPORT_UI_TEXT.description('__CLASSROOM__'),
         descriptionNoClassroom: DEVELOPER_REPORT_UI_TEXT.description(''),
+        categoryLabel: DEVELOPER_REPORT_UI_TEXT.categoryLabel,
+        categoryOptions: DEVELOPER_REPORT_UI_TEXT.categoryOptions,
+        testHint: DEVELOPER_REPORT_UI_TEXT.testHint,
         noteLabel: DEVELOPER_REPORT_UI_TEXT.noteLabel,
         placeholder: DEVELOPER_REPORT_UI_TEXT.placeholder,
         requiredError: DEVELOPER_REPORT_UI_TEXT.requiredError,
@@ -7028,6 +7036,38 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         description.textContent = DATA.classroomName
           ? DEVELOPER_REPORT_TEXT.description.replace('__CLASSROOM__', String(DATA.classroomName))
           : DEVELOPER_REPORT_TEXT.descriptionNoClassroom;
+        // 種類(不具合・おかしい／追加要望)。盤面モーダルと同じ選択肢・既定は不具合。
+        const categoryField = document.createElement('fieldset');
+        categoryField.className = 'developer-report-category';
+        const categoryLegend = document.createElement('legend');
+        categoryLegend.className = 'developer-report-note-label';
+        categoryLegend.textContent = DEVELOPER_REPORT_TEXT.categoryLabel;
+        const categoryOptions = document.createElement('div');
+        categoryOptions.className = 'developer-report-category-options';
+        let selectedCategory = 'bug';
+        const categoryLabels = [];
+        DEVELOPER_REPORT_TEXT.categoryOptions.forEach(function(option) {
+          const optionLabel = document.createElement('label');
+          optionLabel.className = 'developer-report-category-option' + (option.value === selectedCategory ? ' is-selected' : '');
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'schedule-developer-report-category';
+          radio.value = option.value;
+          radio.checked = option.value === selectedCategory;
+          radio.addEventListener('change', function() {
+            if (!radio.checked) return;
+            selectedCategory = option.value;
+            categoryLabels.forEach(function(item) { item.label.classList.toggle('is-selected', item.value === selectedCategory); });
+          });
+          const optionText = document.createElement('span');
+          optionText.textContent = option.label;
+          optionLabel.appendChild(radio);
+          optionLabel.appendChild(optionText);
+          categoryOptions.appendChild(optionLabel);
+          categoryLabels.push({ value: option.value, label: optionLabel });
+        });
+        categoryField.appendChild(categoryLegend);
+        categoryField.appendChild(categoryOptions);
         const label = document.createElement('label');
         label.className = 'developer-report-note-label';
         label.htmlFor = 'schedule-developer-report-note';
@@ -7042,6 +7082,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         error.className = 'developer-report-error';
         error.setAttribute('role', 'alert');
         error.hidden = true;
+        const hint = document.createElement('p');
+        hint.className = 'developer-report-hint';
+        hint.textContent = DEVELOPER_REPORT_TEXT.testHint;
         const actions = document.createElement('div');
         actions.className = 'developer-report-actions';
         const cancelButton = document.createElement('button');
@@ -7056,9 +7099,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         actions.appendChild(submitButton);
         modal.appendChild(title);
         modal.appendChild(description);
+        modal.appendChild(categoryField);
         modal.appendChild(label);
         modal.appendChild(textarea);
         modal.appendChild(error);
+        modal.appendChild(hint);
         modal.appendChild(actions);
         overlay.appendChild(modal);
         overlay.addEventListener('click', function(event) {
@@ -7088,6 +7133,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           window.opener.postMessage({
             type: 'schedule-developer-report',
             note: note,
+            category: selectedCategory,
             context: {
               viewType: VIEW_TYPE,
               startDate: (startInput && startInput.value) || appliedStartDate || '',

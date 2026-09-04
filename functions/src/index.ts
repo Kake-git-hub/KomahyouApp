@@ -5,7 +5,7 @@ import { getAuth } from 'firebase-admin/auth'
 import { getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { GoogleAuth, OAuth2Client } from 'google-auth-library'
-import { onDocumentWritten } from 'firebase-functions/v2/firestore'
+import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore'
 import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-functions/v2/https'
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
@@ -20,7 +20,8 @@ import {
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
-import { buildDeveloperReportId, buildDeveloperReportStoragePath, normalizeDeveloperReport, trimDeveloperReportTraceToBudget } from './developerReport'
+import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, normalizeDeveloperReport, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
+import { createTransport } from 'nodemailer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import {
   compressBackupJson,
@@ -1767,6 +1768,8 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     classroomId,
     classroomName,
     source: report.source,
+    category: report.category,
+    isTest: report.isTest,
     note: report.note,
     reportedAt: report.reportedAt,
     recordedAt,
@@ -1785,11 +1788,59 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     recentOperationCount: report.recentOperations.length,
     snapshotStoragePath: report.hasSnapshotPayload && snapshotByteLength >= 0 ? storagePath : '',
     snapshotByteLength,
-    notifiedAt: null,
+    // テスト扱い(#テスト)は Issue 起票をしない: 通知ワークフローは notifiedAt==null だけを拾うので、ここで埋めておく。
+    notifiedAt: report.isTest ? recordedAt : null,
+    notifySkipped: report.isTest ? 'test' : null,
     issueNumber: null,
   })
-  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
-  return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt }
+  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
+  return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt, isTest: report.isTest }
+})
+
+// 「要望・報告」のメール即時通知(オーナー要望 2026-09-04: LINE ではなくメールへ直接、15分待たずに)。
+// developerReports 文書の作成をトリガに SMTP で送る。設定は functions runtime env(functions/.env・CI では
+// secret PROD_FUNCTIONS_ENV)の REPORT_MAIL_SMTP_URL / REPORT_MAIL_TO(任意 REPORT_MAIL_FROM)。未設定なら送らず記録だけ残す。
+// 送信の成否は文書に mailSentAt / mailError として残す(本番データには触れない)。
+const REPORT_MAIL_SMTP_URL = (process.env.REPORT_MAIL_SMTP_URL ?? '').trim()
+const REPORT_MAIL_TO = (process.env.REPORT_MAIL_TO ?? '').trim()
+const REPORT_MAIL_FROM = (process.env.REPORT_MAIL_FROM ?? '').trim()
+
+export const notifyDeveloperReportByMail = onDocumentCreated({
+  document: 'workspaces/{workspaceKey}/developerReports/{reportId}',
+  timeoutSeconds: 60,
+  memory: '256MiB',
+}, async (event) => {
+  const snapshot = event.data
+  if (!snapshot) return
+  const data = snapshot.data() as DeveloperReportMailSource
+  const workspaceKey = String(event.params.workspaceKey ?? '')
+  const reportId = String(event.params.reportId ?? data.reportId ?? '')
+  if (!isMailTransportConfigured(REPORT_MAIL_SMTP_URL, REPORT_MAIL_TO)) {
+    logger.warn(`[DeveloperReportMail] Mail is not configured (REPORT_MAIL_SMTP_URL / REPORT_MAIL_TO). report=${reportId}`)
+    await snapshot.ref.set({ mailSkipped: 'not-configured' }, { merge: true })
+    return
+  }
+  const mail = buildDeveloperReportMail({ ...data, reportId }, {
+    workspaceKey,
+    projectId: process.env.GCLOUD_PROJECT ?? 'komahyouapp-prod',
+    storageBucket: STORAGE_BUCKET,
+  })
+  try {
+    const transport = createTransport(REPORT_MAIL_SMTP_URL)
+    const fromAddress = REPORT_MAIL_FROM || decodeURIComponent(new URL(REPORT_MAIL_SMTP_URL).username)
+    await transport.sendMail({
+      from: `コマ表アプリ 要望・報告 <${fromAddress}>`,
+      to: REPORT_MAIL_TO,
+      subject: mail.subject,
+      text: mail.text,
+    })
+    await snapshot.ref.set({ mailSentAt: new Date().toISOString(), mailTo: REPORT_MAIL_TO }, { merge: true })
+    logger.info(`[DeveloperReportMail] Sent report=${reportId} to=${REPORT_MAIL_TO}`)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[DeveloperReportMail] Failed report=${reportId}: ${message}`)
+    await snapshot.ref.set({ mailError: message.slice(0, 500), mailErrorAt: new Date().toISOString() }, { merge: true })
+  }
 })
 
 export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {

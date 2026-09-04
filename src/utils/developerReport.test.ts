@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   DEVELOPER_REPORT_UI_TEXT,
+  isDeveloperReportTestNote,
+  normalizeDeveloperReportCategory,
   validateDeveloperReportNote,
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_LIMIT,
@@ -30,6 +32,24 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
       expect(value).not.toContain('空欄')
     }
     expect(DEVELOPER_REPORT_UI_TEXT.description('緑が丘校')).toContain('教室「緑が丘校」')
+    // ボタン名・題名は「要望・報告」(オーナー確定 2026-09-04)。要望も同じ導線で送れることを本文で示す。
+    expect(DEVELOPER_REPORT_UI_TEXT.title).toBe('要望・報告')
+    expect(DEVELOPER_REPORT_UI_TEXT.description('')).toContain('要望')
+    expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.map((o) => o.value)).toEqual(['bug', 'request'])
+  })
+
+  it('種類は bug/request だけを受け付け、不明なら bug', () => {
+    expect(normalizeDeveloperReportCategory('request')).toBe('request')
+    expect(normalizeDeveloperReportCategory('bug')).toBe('bug')
+    expect(normalizeDeveloperReportCategory('other')).toBe('bug')
+    expect(normalizeDeveloperReportCategory(undefined)).toBe('bug')
+  })
+
+  it('内容に #テスト(または #test) があればテスト扱いと先読みできる', () => {
+    expect(isDeveloperReportTestNote('#テスト 送信確認')).toBe(true)
+    expect(isDeveloperReportTestNote('送信確認 #test')).toBe(true)
+    expect(isDeveloperReportTestNote('テストの振替が消えた')).toBe(false)
+    expect(isDeveloperReportTestNote('#testing')).toBe(false)
   })
 
   it('normalizeDeveloperReportNote は整形だけを担い、必須判定は validateDeveloperReportNote が担う', () => {
@@ -45,14 +65,16 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
     expect(parseScheduleDeveloperReportMessage(null)).toBeNull()
     expect(parseScheduleDeveloperReportMessage({ type: 'schedule-student-count-save' })).toBeNull()
     const empty = parseScheduleDeveloperReportMessage({ type: SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE })
-    expect(empty).toEqual({ note: '', scheduleContext: undefined })
+    expect(empty).toEqual({ note: '', category: 'bug', scheduleContext: undefined })
     expect(validateDeveloperReportNote(empty?.note)).toBe(DEVELOPER_REPORT_UI_TEXT.requiredError)
     expect(parseScheduleDeveloperReportMessage({
       type: SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE,
       note: ' 表示がおかしい ',
+      category: 'request',
       context: { viewType: 'student', startDate: '2026-09-01', endDate: '2026-09-07', personLabel: '山田', nested: { a: 1 }, count: 3, flag: true, 'bad key': 'x' },
     })).toEqual({
       note: '表示がおかしい',
+      category: 'request',
       scheduleContext: { viewType: 'student', startDate: '2026-09-01', endDate: '2026-09-07', personLabel: '山田', count: '3', flag: 'true' },
     })
   })
@@ -72,6 +94,7 @@ describe('developerReport: 送信本文の組み立て', () => {
     const body = buildDeveloperReportRequestBody({
       classroomId: 'c1',
       source: 'board',
+      category: 'bug',
       note: undefined,
       appVersion: '1.5.490',
       userAgent: 'u'.repeat(500),
@@ -84,6 +107,7 @@ describe('developerReport: 送信本文の組み立て', () => {
       now: new Date('2026-09-04T12:00:00.000Z'),
     })
     expect(body.note).toBe('')
+    expect(body.category).toBe('bug')
     expect(body.reportedAt).toBe('2026-09-04T12:00:00.000Z')
     expect(body.recentOperations).toHaveLength(DEVELOPER_REPORT_TRACE_LIMIT)
     expect(body.recentOperations[0]?.summary).toBe('op-20')
@@ -99,6 +123,7 @@ describe('developerReport: 送信本文の組み立て', () => {
     const body = buildDeveloperReportRequestBody({
       classroomId: 'c1',
       source: 'schedule',
+      category: 'request',
       note: 'x',
       appVersion: '1',
       userAgent: '',
@@ -111,11 +136,13 @@ describe('developerReport: 送信本文の組み立て', () => {
       snapshotPayload: null,
     })
     expect(body.source).toBe('schedule')
+    expect(body.category).toBe('request')
     expect(body.scheduleContext).toEqual({ viewType: 'teacher', personLabel: '佐藤' })
   })
 
-  it('結果文は成功に受付番号、失敗に理由を含む', () => {
+  it('結果文は成功に受付番号、テストはその旨、失敗に理由を含む', () => {
     expect(formatDeveloperReportResultMessage({ ok: true, reportId: '20260904-1200-abc' })).toContain('20260904-1200-abc')
+    expect(formatDeveloperReportResultMessage({ ok: true, reportId: 'r', isTest: true })).toContain('テストとして受け付けました')
     expect(formatDeveloperReportResultMessage({ ok: false, error: 'network' })).toContain('network')
   })
 })

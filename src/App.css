@@ -4835,6 +4835,46 @@ tr.sa-group-row td {
   font-weight: 600;
 }
 
+.developer-report-category {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.developer-report-category-options {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.developer-report-category-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid #c7d3e3;
+  border-radius: 12px;
+  font-size: 16px;
+  color: #36506d;
+  cursor: pointer;
+  background: #f8fafd;
+}
+
+.developer-report-category-option.is-selected {
+  border-color: #1a73e8;
+  background: #e8f0fe;
+  color: #16314f;
+  font-weight: 600;
+}
+
+.developer-report-hint {
+  margin: 0;
+  color: #5b6f86;
+  font-size: 14px;
+}
+
 .developer-report-actions {
   justify-content: flex-end;
 }

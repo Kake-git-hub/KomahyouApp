@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEVELOPER_REPORT_MAIL_TRACE_LINES,
+  buildDeveloperReportMail,
+  isDeveloperReportTestNote,
+  isMailTransportConfigured,
+  normalizeDeveloperReportCategory,
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_KINDS,
   DEVELOPER_REPORT_TRACE_LIMIT,
@@ -66,6 +71,8 @@ describe('developerReport(server): 報告本体の正規化', () => {
     }, { classroomId: 'c1', fallbackIso: FALLBACK })
     expect(report.classroomId).toBe('c1')
     expect(report.source).toBe('schedule')
+    expect(report.category).toBe('bug')
+    expect(report.isTest).toBe(false)
     expect(report.note).toHaveLength(DEVELOPER_REPORT_NOTE_LIMIT)
     expect(report.reportedAt).toBe(FALLBACK)
     expect(report.boardDirty).toBe(false)
@@ -73,6 +80,17 @@ describe('developerReport(server): 報告本体の正規化', () => {
     expect(report.recentOperations).toHaveLength(1)
     expect(report.scheduleContext).toEqual({ viewType: 'student' })
     expect(report.hasSnapshotPayload).toBe(true)
+  })
+
+  it('種類は bug/request のみ、#テスト を含む内容はテスト扱い', () => {
+    expect(normalizeDeveloperReportCategory('request')).toBe('request')
+    expect(normalizeDeveloperReportCategory('zzz')).toBe('bug')
+    expect(isDeveloperReportTestNote('#テスト 動作確認')).toBe(true)
+    expect(isDeveloperReportTestNote('確認 #TEST')).toBe(true)
+    expect(isDeveloperReportTestNote('テストの振替が消えた')).toBe(false)
+    const report = normalizeDeveloperReport({ category: 'request', note: '要望 #テスト' }, { classroomId: 'c1', fallbackIso: FALLBACK })
+    expect(report.category).toBe('request')
+    expect(report.isTest).toBe(true)
   })
 
   it('source が不明なら board、snapshotPayload が配列/欠落なら無し扱い', () => {
@@ -95,5 +113,64 @@ describe('developerReport(server): id と Storage パス', () => {
     expect(() => buildDeveloperReportStoragePath('main/../x', 'c1', 'r1')).toThrow()
     expect(() => buildDeveloperReportStoragePath('main', 'c 1', 'r1')).toThrow()
     expect(() => buildDeveloperReportStoragePath('main', 'c1', '')).toThrow()
+  })
+})
+
+describe('developerReport(server): メール即時通知の本文', () => {
+  const base = {
+    reportId: 'r1',
+    classroomId: 'KzFnOQoTFLsCxwUp1tvh',
+    classroomName: 'スクールIE 緑が丘校',
+    source: 'schedule',
+    category: 'request',
+    note: '講師日程表にも電話番号の欄がほしい\n2行目',
+    reportedAt: '2026-09-04T03:04:05.000Z',
+    recordedAt: '2026-09-04T03:04:06.000Z',
+    appVersion: '1.5.494',
+    reporterRole: 'manager',
+    boardDirty: true,
+    lastSavedAt: '2026-09-04T02:00:00.000Z',
+    scheduleContext: { viewType: 'teacher', personLabel: '佐藤', search: '' },
+    recentOperations: Array.from({ length: DEVELOPER_REPORT_MAIL_TRACE_LINES + 5 }, (_, i) => ({ at: FALLBACK, kind: 'board-commit', summary: `op-${i} 青木#s012` })),
+    recentOperationCount: DEVELOPER_REPORT_MAIL_TRACE_LINES + 5,
+    snapshotStoragePath: 'developer-reports/main/KzFnOQoTFLsCxwUp1tvh/r1.json.gz',
+  }
+  const options = { workspaceKey: 'main', projectId: 'komahyouapp-prod', storageBucket: 'komahyouapp-prod.firebasestorage.app' }
+
+  it('件名に教室・種類・内容の先頭、本文にメタ・内容・許可ルール・操作痕跡(新しい順・上限件数)・置き場所を載せる', () => {
+    const mail = buildDeveloperReportMail(base, options)
+    expect(mail.subject).toBe('[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 追加してほしい・要望: 講師日程表にも電話番号の欄がほしい')
+    expect(mail.text).toContain('種類: 追加してほしい・要望')
+    expect(mail.text).toContain('報告元: 日程表(別タブ)')
+    expect(mail.text).toContain('2026-09-04 12:04:05 JST')
+    expect(mail.text).toContain('講師日程表にも電話番号の欄がほしい\n2行目')
+    expect(mail.text).toContain('勝手に修正を始めない')
+    expect(mail.text).toContain('  - personLabel: 佐藤')
+    expect(mail.text).not.toContain('search:')
+    // 私的経路なので操作痕跡(生徒名+ID)を載せる。新しい方から上限件数。
+    expect(mail.text).toContain(`新しい方から ${DEVELOPER_REPORT_MAIL_TRACE_LINES} 件 / 全 ${DEVELOPER_REPORT_MAIL_TRACE_LINES + 5} 件`)
+    expect(mail.text).toContain(`op-${DEVELOPER_REPORT_MAIL_TRACE_LINES + 4} 青木#s012`)
+    expect(mail.text).not.toContain('op-4 青木')
+    expect(mail.text.indexOf(`op-${DEVELOPER_REPORT_MAIL_TRACE_LINES + 4}`)).toBeLessThan(mail.text.indexOf('op-5 '))
+    expect(mail.text).toContain('workspaces/main/developerReports/r1')
+    expect(mail.text).toContain('gsutil cp "gs://komahyouapp-prod.firebasestorage.app/developer-reports/main/KzFnOQoTFLsCxwUp1tvh/r1.json.gz"')
+    expect(mail.text).not.toContain('【テスト】')
+  })
+
+  it('#テスト の報告は件名・本文にテスト扱いを明示し、内容なし・教室データなしでも成立する', () => {
+    const mail = buildDeveloperReportMail({ ...base, isTest: true, note: '', category: 'bug', snapshotStoragePath: '', recentOperations: [], recentOperationCount: 0 }, options)
+    expect(mail.subject.startsWith('【テスト】[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 不具合・おかしい')).toBe(true)
+    expect(mail.text).toContain('GitHub Issue は作られません')
+    expect(mail.text).toContain('(なし)')
+    expect(mail.text).toContain('保存されていません')
+  })
+
+  it('SMTP URL と宛先が揃っていて smtp/smtps の URL のときだけ送る', () => {
+    expect(isMailTransportConfigured('', 'a@example.test')).toBe(false)
+    expect(isMailTransportConfigured('smtps://u%40x.test:p@smtp.example.test:465', '')).toBe(false)
+    expect(isMailTransportConfigured('https://example.test', 'a@example.test')).toBe(false)
+    expect(isMailTransportConfigured('not a url', 'a@example.test')).toBe(false)
+    expect(isMailTransportConfigured('smtps://u%40x.test:p@smtp.example.test:465', 'a@example.test')).toBe(true)
+    expect(isMailTransportConfigured('smtp://u:p@smtp.example.test:587', 'a@example.test')).toBe(true)
   })
 })

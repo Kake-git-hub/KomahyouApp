@@ -20,6 +20,11 @@ export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_KEY_LIMIT = 12
 export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_VALUE_LIMIT = 200
 export const DEVELOPER_REPORT_SOURCES = ['board', 'schedule'] as const
 export type DeveloperReportSource = (typeof DEVELOPER_REPORT_SOURCES)[number]
+/** 種類: 不具合・おかしい(bug) / 追加要望(request)。クライアント src/utils/developerReport.ts と二重管理。 */
+export const DEVELOPER_REPORT_CATEGORIES = ['bug', 'request'] as const
+export type DeveloperReportCategory = (typeof DEVELOPER_REPORT_CATEGORIES)[number]
+/** テスト扱いの目印。内容に含まれていれば Issue 起票をしない(メールは【テスト】付きで送る)。 */
+export const DEVELOPER_REPORT_TEST_MARKER = '#テスト'
 
 export const DEVELOPER_REPORT_TRACE_KINDS = [
   'board-commit',
@@ -43,6 +48,9 @@ export type NormalizedDeveloperReportTraceEntry = {
 export type NormalizedDeveloperReport = {
   classroomId: string
   source: DeveloperReportSource
+  category: DeveloperReportCategory
+  /** 内容に #テスト を含む(オーナーの動作確認用)。Issue 起票をスキップし notifiedAt を即時に埋める。 */
+  isTest: boolean
   note: string
   reportedAt: string
   appVersion: string
@@ -73,6 +81,15 @@ function normalizeIsoTimestamp(raw: unknown, fallbackIso: string): string {
 
 export function normalizeDeveloperReportSource(raw: unknown): DeveloperReportSource {
   return typeof raw === 'string' && (DEVELOPER_REPORT_SOURCES as readonly string[]).includes(raw) ? raw as DeveloperReportSource : 'board'
+}
+
+export function normalizeDeveloperReportCategory(raw: unknown): DeveloperReportCategory {
+  return typeof raw === 'string' && (DEVELOPER_REPORT_CATEGORIES as readonly string[]).includes(raw) ? raw as DeveloperReportCategory : 'bug'
+}
+
+/** 内容に「#テスト」(または #test) が含まれればテスト扱い。クライアント側 isDeveloperReportTestNote と同じ判定。 */
+export function isDeveloperReportTestNote(note: string): boolean {
+  return note.includes(DEVELOPER_REPORT_TEST_MARKER) || /#test\b/iu.test(note)
 }
 
 /**
@@ -118,10 +135,13 @@ export function normalizeDeveloperReportScheduleContext(raw: unknown): Record<st
 /** 受信した報告を正規化する。classroomId は呼び出し側が権限確認済みの値を渡す。 */
 export function normalizeDeveloperReport(raw: Record<string, unknown>, options: { classroomId: string; fallbackIso: string }): NormalizedDeveloperReport {
   const snapshotPayload = raw.snapshotPayload
+  const note = readTrimmedString(raw.note, DEVELOPER_REPORT_NOTE_LIMIT)
   return {
     classroomId: options.classroomId,
     source: normalizeDeveloperReportSource(raw.source),
-    note: readTrimmedString(raw.note, DEVELOPER_REPORT_NOTE_LIMIT),
+    category: normalizeDeveloperReportCategory(raw.category),
+    isTest: isDeveloperReportTestNote(note),
+    note,
     reportedAt: normalizeIsoTimestamp(raw.reportedAt, options.fallbackIso),
     appVersion: readTrimmedString(raw.appVersion, 40),
     userAgent: readTrimmedString(raw.userAgent, 300),
@@ -165,4 +185,101 @@ export function trimDeveloperReportTraceToBudget(entries: NormalizedDeveloperRep
     kept.push(entry)
   }
   return kept.reverse()
+}
+
+// ---------------------------------------------------------------------------
+// メール通知(オーナー要望 2026-09-04: LINE ではなくメールへ直接・即時)。
+// Firestore の developerReports 作成トリガ(index.ts notifyDeveloperReportByMail)から使う純粋な整形。
+// メールは開発者だけに届く私的経路なので、公開 Issue と違い操作痕跡(生徒名を含む)も載せる。
+// ---------------------------------------------------------------------------
+
+export type DeveloperReportMailSource = {
+  reportId: string
+  classroomId: string
+  classroomName?: string
+  source?: string
+  category?: string
+  isTest?: boolean
+  note?: string
+  reportedAt?: string
+  recordedAt?: string
+  appVersion?: string
+  reporterRole?: string
+  reporterEmail?: string
+  boardDirty?: boolean
+  lastSavedAt?: string
+  scheduleContext?: Record<string, string>
+  recentOperations?: Array<{ at: string; kind: string; summary: string }>
+  recentOperationCount?: number
+  snapshotStoragePath?: string
+}
+
+const SOURCE_LABELS: Record<string, string> = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
+const CATEGORY_LABELS: Record<string, string> = { bug: '不具合・おかしい', request: '追加してほしい・要望' }
+/** メールに載せる操作痕跡の件数(新しい方から)。全件は Firestore 文書で読む。 */
+export const DEVELOPER_REPORT_MAIL_TRACE_LINES = 60
+
+function toJstLabel(iso: string | undefined): string {
+  const ms = Date.parse(iso ?? '')
+  if (!Number.isFinite(ms)) return iso || '(不明)'
+  const jst = new Date(ms + 9 * 60 * 60 * 1000)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} ${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}:${pad(jst.getUTCSeconds())} JST`
+}
+
+export function buildDeveloperReportMail(report: DeveloperReportMailSource, options: { workspaceKey: string; projectId: string; storageBucket: string }): { subject: string; text: string } {
+  const classroom = report.classroomName || report.classroomId || '教室不明'
+  const category = CATEGORY_LABELS[report.category ?? ''] ?? report.category ?? '(不明)'
+  const noteHead = (report.note ?? '').split('\n')[0].trim()
+  const subject = `${report.isTest ? '【テスト】' : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
+  const docPath = `workspaces/${options.workspaceKey}/developerReports/${report.reportId}`
+  const consoleUrl = `https://console.firebase.google.com/project/${options.projectId}/firestore/databases/-default-/data/~2F${encodeURIComponent(docPath).replace(/%2F/g, '~2F')}`
+  const contextLines = Object.entries(report.scheduleContext ?? {})
+    .filter(([, value]) => typeof value === 'string' && value.trim() !== '')
+    .map(([key, value]) => `  - ${key}: ${value}`)
+  const operations = report.recentOperations ?? []
+  const shownOperations = operations.slice(-DEVELOPER_REPORT_MAIL_TRACE_LINES)
+  const lines: string[] = [
+    report.isTest ? '※ 内容に #テスト が含まれるためテスト扱いです。GitHub Issue は作られません。' : '',
+    '利用者が画面の「要望・報告」ボタンから送った内容です。',
+    '',
+    `教室: ${classroom} (${report.classroomId})`,
+    `種類: ${category}`,
+    `報告元: ${SOURCE_LABELS[report.source ?? ''] ?? report.source ?? '(不明)'}`,
+    `報告時刻: ${toJstLabel(report.reportedAt)} (サーバー受領 ${toJstLabel(report.recordedAt)})`,
+    `アプリ版数: ${report.appVersion || '(不明)'}`,
+    `報告者: ${report.reporterRole || '(権限不明)'}${report.reporterEmail ? ` ${report.reporterEmail}` : ''}`,
+    `未保存の変更: ${report.boardDirty ? 'あり(保存前の状態を含む)' : 'なし'} / 最終保存 ${report.lastSavedAt ? toJstLabel(report.lastSavedAt) : '(不明)'}`,
+    ...(contextLines.length > 0 ? ['日程表の表示条件:', ...contextLines] : []),
+    '',
+    '■ 内容',
+    report.note?.trim() ? report.note.trim() : '(なし)',
+    '',
+    '■ 進め方(オーナー指示 2026-09-04)',
+    '勝手に修正を始めない。切り分け・整理までにとどめ、修正の着手は開発者(オーナー)が確認して許可してから。',
+    '',
+    `■ 直近の操作痕跡(新しい方から ${shownOperations.length} 件 / 全 ${report.recentOperationCount ?? operations.length} 件は Firestore 文書で)`,
+    ...(shownOperations.length > 0
+      ? [...shownOperations].reverse().map((entry) => `${toJstLabel(entry.at)} [${entry.kind}] ${entry.summary}`)
+      : ['(なし)']),
+    '',
+    '■ 詳細の置き場所',
+    `Firestore: ${docPath}`,
+    consoleUrl,
+    report.snapshotStoragePath
+      ? `教室データ(gzip JSON): gs://${options.storageBucket}/${report.snapshotStoragePath}\n  gsutil cp "gs://${options.storageBucket}/${report.snapshotStoragePath}" ./report.json.gz && gunzip -f ./report.json.gz`
+      : '教室データ: (保存されていません。関数ログ [DeveloperReport] を確認)',
+  ]
+  return { subject, text: lines.filter((line) => line !== '').join('\n') }
+}
+
+/** SMTP URL(例: smtps://user%40gmail.com:app-password@smtp.gmail.com:465)が使える形か。空や不正なら送らない。 */
+export function isMailTransportConfigured(smtpUrl: string, to: string): boolean {
+  if (!smtpUrl.trim() || !to.trim()) return false
+  try {
+    const url = new URL(smtpUrl.trim())
+    return (url.protocol === 'smtp:' || url.protocol === 'smtps:') && Boolean(url.hostname)
+  } catch {
+    return false
+  }
 }

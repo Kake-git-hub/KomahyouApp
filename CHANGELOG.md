@@ -18,6 +18,12 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.494 (2026-09-04)
+
+- feat: 「開発者へ報告」ボタンを「要望・報告」に改名し、種類(不具合・おかしい／追加してほしい・要望)を選んで送れるようにした(盤面・日程表とも同一モーダル・既定は不具合)。Issue のラベルは種類で type:bug / type:feature。(src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/components/schedule-board/BoardToolbar.tsx, tools/developer-report-notify.mjs)
+- feat: 要望・報告をメールへ即時通知する Cloud Function notifyDeveloperReportByMail(developerReports 作成トリガ・SMTP/nodemailer・env REPORT_MAIL_SMTP_URL / REPORT_MAIL_TO)。LINE 通知は撤回(オーナー判断: Messaging API の取得条件が厳しくなったため)。設定手順は docs/runbooks/monitoring.md。(functions/src/index.ts, functions/src/developerReport.ts, functions/.env.example)
+- feat: 内容に「#テスト」を含む要望・報告はテスト扱いにして GitHub Issue を自動起票しない(サーバーが notifiedAt を即時に埋める・メールは【テスト】付き・結果文でテスト受付を明示)。(functions/src/index.ts, tools/developer-report-notify.mjs)
+
 ## v1.5.493 (2026-09-04)
 
 - chore: CHANGELOG の版ラベル修正のみ(変更なし: 直前の2コミットがCIで同時にデプロイされ v1.5.492 にまとまったため、別版として書いていた CRLF 復旧の記載を v1.5.492 へ統合)

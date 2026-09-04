@@ -4386,7 +4386,14 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(buttonIndex).toBeGreaterThan(periodIndex)
     expect(buttonIndex).toBeLessThan(showAllIndex)
     expect(html).toContain('class="secondary report-developer"')
-    expect(html).toContain('>開発者へ報告</button>')
+    // ボタン名は「要望・報告」(オーナー確定 2026-09-04・旧「開発者へ報告」)。
+    expect(html).toContain('>要望・報告</button>')
+    expect(html).not.toContain('>開発者へ報告</button>')
+    // 種類(不具合/要望)のラジオと #テスト の案内を盤面と同じ文言で埋め込む。
+    expect(html).toContain('"categoryOptions":[{"value":"bug","label":"不具合・おかしい"},{"value":"request","label":"追加してほしい・要望"}]')
+    expect(html).toContain("name = 'schedule-developer-report-category'")
+    expect(html).toContain('category: selectedCategory,')
+    expect(html).toContain('"testHint":"テスト送信のときは内容に「#テスト」と書いてください')
     // 色だけ変える(同じ枠線ボタン)。
     expect(html).toContain('.toolbar button.report-developer {')
     // 本体へ送るメッセージと、本体から返る結果メッセージの両方を扱う(App.tsx の定数と一致)。
@@ -4395,7 +4402,7 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     // 盤面と同一のモーダル(prompt ではない)。文言は DEVELOPER_REPORT_UI_TEXT を埋め込む。一言は必須。
     expect(html).not.toContain('window.prompt(')
     expect(html).toContain('const DEVELOPER_REPORT_TEXT = {')
-    expect(html).toContain('"requiredError":"一言を入力してください。')
+    expect(html).toContain('"requiredError":"内容を入力してください。')
     expect(html).toContain('"placeholder":"例: 9/3 の 3限で振替が消えた気がする')
     expect(html).not.toContain('空欄のままでも送れます')
     expect(html).toContain('.developer-report-modal {')

@@ -35,7 +35,7 @@ type BoardToolbarProps = {
   onRedo: () => void
   onOpenSortMenu: () => void
   onCopyDistributionUrl?: () => void
-  /** 「開発者へ報告」(2026-09-04): 講師日程共有の右に配置。未指定なら出さない。 */
+  /** 「要望・報告」(2026-09-04・旧「開発者へ報告」): 講師日程共有の右に配置。未指定なら出さない。 */
   onReportToDeveloper?: () => void
   onGoPrevWeek: () => void
   onGoNextWeek: () => void
@@ -233,7 +233,7 @@ function BoardToolbarComponent({
             <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">講師日程共有</button>
           ) : null}
           {!isTemplateMode && onReportToDeveloper ? (
-            <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title="「おかしいな」と思ったら、そのまま開発者へ知らせます(一言は空欄でも送れます)">開発者へ報告</button>
+            <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title="「おかしいな」と思ったことも、追加してほしい要望も、そのまま開発者へ送れます">要望・報告</button>
           ) : null}
         </div>
         <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}${syncProgressPercent !== null && syncProgressPercent !== undefined ? ' is-syncing' : ''}`} data-testid="toolbar-status">

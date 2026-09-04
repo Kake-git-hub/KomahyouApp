@@ -2,7 +2,8 @@
 #
 # 利用者が画面の「開発者へ報告」ボタンから送った報告は Cloud Function submitDeveloperReport が
 # Firestore workspaces/main/developerReports に書く(notifiedAt=null)。このワークフローが定期的に拾い、
-# GitHub Issue を起票して notifiedAt を埋める(開発者は GitHub 通知=メール/アプリで受け取る)。
+# GitHub Issue を起票して notifiedAt を埋める(課題管理の記録。即時のメール通知は Cloud Function
+# notifyDeveloperReportByMail が別途行う。#テスト の報告はサーバーが notifiedAt を埋めるので起票しない)。
 #
 # 認証はホスティング/functions デプロイと同じサービスアカウント secret RE_FIREBASE_SERVICE_ACCOUNT を使う
 # (追加の secret 不要)。Cloud Function 側に GitHub トークンを持たせない設計。
@@ -48,7 +49,3 @@ jobs:
           FIREBASE_PROJECT_ID: komahyouapp-prod
           FIREBASE_WORKSPACE_KEY: main
           STORAGE_BUCKET: komahyouapp-prod.firebasestorage.app
-          # LINE 通知(任意・オーナー要望 2026-09-04)。未設定なら Issue 起票だけ行う。
-          # 設定手順: docs/runbooks/monitoring.md「LINE 通知の設定」。
-          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-          LINE_NOTIFY_TO: ${{ secrets.LINE_NOTIFY_TO }}

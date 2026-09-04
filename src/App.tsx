@@ -42,7 +42,7 @@ import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
-import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportScheduleContext, type DeveloperReportSource } from './utils/developerReport'
+import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
@@ -3593,7 +3593,7 @@ function AuthenticatedApp() {
   // 報告時点の教室データ(未保存の変更込み)を開発者へ送る。本番データには一切書かない(Cloud Function は
   // 別コレクション developerReports と Storage にだけ書く)。盤面ツールバーと日程表タブの両方から呼ばれる。
   const [developerReportModal, setDeveloperReportModal] = useState<{ sending: boolean; resultMessage: string | null } | null>(null)
-  const submitDeveloperReport = useCallback(async (input: { source: DeveloperReportSource; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => {
+  const submitDeveloperReport = useCallback(async (input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => {
     if (!actingClassroomId) return { ok: false as const, error: '教室が選択されていません。' }
     const currentScreen = screenRef.current
     const snapshotPayload = buildClassroomSnapshotPayload({
@@ -3612,6 +3612,7 @@ function AuthenticatedApp() {
     const body = buildDeveloperReportRequestBody({
       classroomId: actingClassroomId,
       source: input.source,
+      category: input.category,
       note: input.note,
       appVersion: __APP_VERSION__,
       userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
@@ -3625,21 +3626,21 @@ function AuthenticatedApp() {
     })
     try {
       const result = await submitDeveloperReportViaFunction(body)
-      recordOperationTrace('navigation', `開発者へ報告を送信 source=${input.source} reportId=${result.reportId}`)
-      return { ok: true as const, reportId: result.reportId }
+      recordOperationTrace('navigation', `要望・報告を送信 source=${input.source} category=${input.category} reportId=${result.reportId}${result.isTest ? ' (テスト)' : ''}`)
+      return { ok: true as const, reportId: result.reportId, isTest: result.isTest === true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      recordOperationTrace('navigation', `開発者へ報告の送信に失敗 source=${input.source}: ${message}`)
+      recordOperationTrace('navigation', `要望・報告の送信に失敗 source=${input.source}: ${message}`)
       return { ok: false as const, error: message }
     }
   }, [actingClassroomId, autoAssignRulesRef, boardStateRef, classroomSettingsRef, cleanSignatureRef, dataSignature, groupLessonsRef, hasHydratedSnapshot, lastSavedAtRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef])
   const openDeveloperReportModal = useCallback(() => {
-    recordOperationTrace('navigation', '開発者へ報告モーダルを開く(盤面)')
+    recordOperationTrace('navigation', '要望・報告モーダルを開く(盤面)')
     setDeveloperReportModal({ sending: false, resultMessage: null })
   }, [])
-  const handleDeveloperReportSubmit = useCallback(async (note: string) => {
+  const handleDeveloperReportSubmit = useCallback(async (note: string, category: DeveloperReportCategory) => {
     setDeveloperReportModal({ sending: true, resultMessage: null })
-    const result = await submitDeveloperReport({ source: 'board', note })
+    const result = await submitDeveloperReport({ source: 'board', category, note })
     setDeveloperReportModal({ sending: false, resultMessage: formatDeveloperReportResultMessage(result) })
   }, [submitDeveloperReport])
 
@@ -3661,7 +3662,7 @@ function AuthenticatedApp() {
         const noteError = validateDeveloperReportNote(developerReport.note)
         const submission = noteError
           ? Promise.resolve({ ok: false as const, error: noteError })
-          : submitDeveloperReport({ source: 'schedule', note: developerReport.note, scheduleContext: developerReport.scheduleContext })
+          : submitDeveloperReport({ source: 'schedule', category: developerReport.category, note: developerReport.note, scheduleContext: developerReport.scheduleContext })
         void submission.then((result) => {
           try {
             replyTarget?.postMessage({ type: SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, ok: result.ok, message: formatDeveloperReportResultMessage(result) }, '*')
@@ -5417,7 +5418,7 @@ function AuthenticatedApp() {
         classroomName={actingClassroom?.name ?? ''}
         sending={developerReportModal.sending}
         resultMessage={developerReportModal.resultMessage}
-        onSubmit={(note) => { void handleDeveloperReportSubmit(note) }}
+        onSubmit={(note, category) => { void handleDeveloperReportSubmit(note, category) }}
         onClose={() => setDeveloperReportModal(null)}
       />
     ) : null}

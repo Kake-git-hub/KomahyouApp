@@ -381,6 +381,8 @@ export type SubmitDeveloperReportResponse = {
   reportId: string
   storagePath: string
   recordedAt: string
+  /** 内容に #テスト を含みテスト扱いになった(Issue 起票なし)。旧関数は返さない。 */
+  isTest?: boolean
 }
 
 /**

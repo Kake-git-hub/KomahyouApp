@@ -24,32 +24,35 @@
 - 保存の各試行は `classroomSnapshots/{id}/saveAttempts/{saveId}` に status（started/verified/verification-failed）が残る。
 - 保存不具合の調査時はここを**読み取り**で確認する（書き込み調査は staging で）。
 
-### 4. 利用者からの「開発者へ報告」（自動・実装済み 2026-09-04）
+### 4. 利用者からの「要望・報告」（自動・実装済み 2026-09-04）
 
-- 画面の「開発者へ報告」ボタン（盤面ツールバー／日程表タブ）から送られた報告は Firestore
-  `workspaces/main/developerReports` に溜まり、`.github/workflows/developer-reports.yml`（15分ごと）が
-  GitHub Issue を起票する（ラベル `source:user-report`）。開発者は GitHub 通知で受け取る。
+- 画面の「要望・報告」ボタン（盤面ツールバー／日程表タブ）から送られた内容は Firestore
+  `workspaces/main/developerReports` に溜まる。**即時にメール**（Cloud Function `notifyDeveloperReportByMail`・下記設定）が届き、
+  `.github/workflows/developer-reports.yml`（15分ごと）が課題管理用に GitHub Issue を起票する（ラベル `source:user-report`）。
+  内容に `#テスト` を含む報告は Issue を作らない（メールは【テスト】付きで届く）。
 - Issue 本文はメタ情報と置き場所だけ（公開リポジトリのため）。操作痕跡は Firestore 文書の `recentOperations`、
   報告時点の教室データは Storage `developer-reports/...json.gz`（Issue 内の `gsutil` コマンドで取得）。
 - 仕様: `docs/spec-developer-report.md`。ワークフローが赤なら Firestore 権限（サービスアカウント）か
   GitHub API の失敗。手動再実行は Actions → 「Notify developer reports」。
 - **受け取った後は勝手に修正を始めない**（オーナー指示 2026-09-04）。切り分け・整理まで進め、修正はオーナーの許可後。
 
-#### LINE 通知の設定（任意・オーナー作業 ~15分）
+#### メール即時通知の設定（オーナー作業 ~10分・推奨）
 
-旧 LINE Notify は 2025-03 に終了したため、LINE Messaging API の push を使う（無料枠: 月 200 通で十分）。
+Cloud Function が SMTP で直接送る。Gmail の場合は **アプリパスワード**（Google アカウント → セキュリティ → 2段階認証 →
+アプリパスワード）を使う。通常のログインパスワードは使えない。
 
-1. [LINE Developers](https://developers.line.biz/) にログイン → プロバイダー作成 → 「Messaging API チャネル」を作成
-   （LINE 公式アカウントが 1 つできる）。
-2. チャネルの「Messaging API 設定」→ **チャネルアクセストークン（長期）** を発行してコピー。
-3. 同じ画面の QR コードで、通知を受け取りたい LINE アカウント（オーナー自身）がそのアカウントを**友だち追加**する。
-4. 通知先 ID を取る: 「チャネル基本設定」の **あなたのユーザーID**（`U` で始まる）を使う。
-   グループに流したい場合はボットをグループに招待し、Webhook で `groupId` を取得する（手間が増えるので最初は個人宛て推奨）。
-5. GitHub → リポジトリ → Settings → Secrets and variables → Actions に追加:
-   - `LINE_CHANNEL_ACCESS_TOKEN` = 手順 2 のトークン
-   - `LINE_NOTIFY_TO` = 手順 4 の userId（または groupId）
-6. Actions → 「Notify developer reports」→ Run workflow で動作確認（報告が無ければ「新しい利用者報告はありません」）。
-   実際の通知は次の報告が起票されたときに届く。届かなければ run のログの `LINE:` 行に理由が出る。
+1. 送信用の Gmail でアプリパスワードを発行する（16桁）。
+2. functions の runtime env に次を足す（値は例。`@` は `%40` にする）。
+   - `REPORT_MAIL_SMTP_URL=smtps://you%40gmail.com:xxxxxxxxxxxxxxxx@smtp.gmail.com:465`
+   - `REPORT_MAIL_TO=通知を受け取るメールアドレス`（複数はカンマ区切り）
+   - 任意 `REPORT_MAIL_FROM=送信元として表示するアドレス`（省略時は SMTP のユーザー）
+   - 置き場所は2か所: ローカル `functions/.env`（手元デプロイ用）と、GitHub → Settings → Secrets and variables →
+     Actions → **`PROD_FUNCTIONS_ENV`**（CI デプロイ用。既存の `GOOGLE_DRIVE_*` 行はそのまま残し、上の行を追記して保存）。
+3. Actions → 「Deploy Cloud Functions」→ Run workflow で再デプロイする（env はデプロイ時に焼き込まれる）。
+4. 画面の「要望・報告」から内容に `#テスト` を含めて送る → 【テスト】付きのメールが届けば完了（Issue は作られない）。
+   届かないときは Firestore の該当文書の `mailError` / `mailSkipped` と関数ログ `[DeveloperReportMail]` を見る。
+
+GitHub 側の通知設定は不要（Issue はあくまで課題管理の記録。Issue のメール通知も欲しければリポジトリを Watch する）。
 
 ## アラートが来たら（対応フロー）
 1. 自動起票された `incident:uptime` Issue とワークフローのログ（report）を見る。

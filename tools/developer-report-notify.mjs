@@ -19,6 +19,13 @@ export const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
 export const DEFAULT_WORKSPACE_KEY = 'main'
 export const DEFAULT_STORAGE_BUCKET = 'komahyouapp-prod.firebasestorage.app'
 export const ISSUE_LABELS = ['type:bug', 'status:triage', 'source:user-report']
+export const ISSUE_LABELS_BY_CATEGORY = {
+  bug: ['type:bug', 'status:triage', 'source:user-report'],
+  request: ['type:feature', 'status:triage', 'source:user-report'],
+}
+export function resolveIssueLabels(report) {
+  return ISSUE_LABELS_BY_CATEGORY[report?.category] ?? ISSUE_LABELS
+}
 const QUERY_LIMIT = 20
 
 /** Firestore REST の値表現({ stringValue: 'x' } など)を素の JS 値へ戻す。 */
@@ -50,6 +57,8 @@ export function parseRunQueryResponse(rows) {
       documentPath: row.document.name,
       ...decodeFirestoreFields(row.document.fields),
     }))
+    // #テスト はサーバーが notifiedAt を埋めるので通常は来ないが、念のためここでも除外する(Issue を作らない)。
+    .filter((report) => report.isTest !== true)
     .sort((a, b) => String(a.recordedAt ?? '').localeCompare(String(b.recordedAt ?? '')))
 }
 
@@ -72,12 +81,14 @@ function toJstLabel(iso) {
 }
 
 const SOURCE_LABELS = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
+const CATEGORY_LABELS = { bug: '不具合・おかしい', request: '追加してほしい・要望' }
 
 export function buildIssueTitle(report) {
   const classroom = report.classroomName || report.classroomId || '教室不明'
   const noteHead = String(report.note ?? '').split('\n')[0].trim()
   const suffix = noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''
-  return `📣 [利用者報告] ${classroom}${suffix}`
+  const kind = report.category === 'request' ? '利用者要望' : '利用者報告'
+  return `📣 [${kind}] ${classroom}${suffix}`
 }
 
 /**
@@ -95,9 +106,10 @@ export function buildIssueBody(report, options = {}) {
   const docPath = `workspaces/${workspaceKey}/developerReports/${report.reportId}`
   const consoleUrl = `https://console.firebase.google.com/project/${projectId}/firestore/databases/-default-/data/~2F${encodeURIComponent(docPath).replace(/%2F/g, '~2F')}`
   const lines = [
-    '利用者が画面の「開発者へ報告」ボタンから送った報告です(自動起票)。',
+    '利用者が画面の「要望・報告」ボタンから送った内容です(自動起票)。',
     '',
     `- 教室: ${report.classroomName || '(名称不明)'} (\`${report.classroomId ?? ''}\`)`,
+    `- 種類: ${CATEGORY_LABELS[report.category] ?? report.category ?? '(不明)'}`,
     `- 報告元: ${SOURCE_LABELS[report.source] ?? report.source ?? '(不明)'}`,
     `- 報告時刻: ${toJstLabel(report.reportedAt)} (サーバー受領 ${toJstLabel(report.recordedAt)})`,
     `- アプリ版数: ${report.appVersion || '(不明)'}`,
@@ -180,42 +192,6 @@ export async function createIssue({ repository, githubToken, title, body, labels
   return { number: json.number, url: json.html_url }
 }
 
-/**
- * LINE 通知の本文(LINE Messaging API の push)。公開 Issue と同じく生徒名を含む痕跡は載せない。
- * 一言は先頭 80 字まで(スマホ通知で読める長さ)。
- */
-export function buildLineMessage(report, issueUrl) {
-  const classroom = report.classroomName || report.classroomId || '教室不明'
-  const noteHead = String(report.note ?? '').replace(/\s+/g, ' ').trim()
-  const note = noteHead ? `${noteHead.slice(0, 80)}${noteHead.length > 80 ? '…' : ''}` : '(一言なし)'
-  return [
-    `📣 コマ表アプリ 利用者報告: ${classroom}`,
-    `報告元: ${SOURCE_LABELS[report.source] ?? report.source ?? '(不明)'} / ${toJstLabel(report.reportedAt)} / v${report.appVersion || '?'}`,
-    `一言: ${note}`,
-    `Issue: ${issueUrl}`,
-    '※修正はオーナー確認・許可後に着手',
-  ].join('\n')
-}
-
-/**
- * LINE Messaging API で push 通知する(任意)。LINE_CHANNEL_ACCESS_TOKEN と LINE_NOTIFY_TO(userId/groupId)が
- * 設定されているときだけ送る。失敗しても Issue 起票は成功しているので例外にせず結果を返す。
- */
-export async function sendLineNotification({ channelAccessToken, to, text, fetchImpl = fetch }) {
-  if (!channelAccessToken || !to) return { sent: false, reason: 'not-configured' }
-  try {
-    const response = await fetchImpl('https://api.line.me/v2/bot/message/push', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${channelAccessToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to, messages: [{ type: 'text', text }] }),
-    })
-    if (!response.ok) return { sent: false, reason: `HTTP ${response.status} ${await response.text()}` }
-    return { sent: true }
-  } catch (error) {
-    return { sent: false, reason: error instanceof Error ? error.message : String(error) }
-  }
-}
-
 export async function markNotified({ projectId, documentPath, accessToken, issueNumber, issueUrl, nowIso = new Date().toISOString(), fetchImpl = fetch }) {
   const path = documentPath.startsWith('projects/') ? documentPath : `projects/${projectId}/databases/(default)/documents/${documentPath}`
   const url = `https://firestore.googleapis.com/v1/${path}?updateMask.fieldPaths=notifiedAt&updateMask.fieldPaths=issueNumber&updateMask.fieldPaths=issueUrl`
@@ -232,15 +208,9 @@ export async function notifyPendingReports(deps) {
   const reports = await fetchPendingReports(deps)
   const results = []
   for (const report of reports) {
-    const issue = await createIssue({ ...deps, title: buildIssueTitle(report), body: buildIssueBody(report, deps) })
+    const issue = await createIssue({ ...deps, title: buildIssueTitle(report), body: buildIssueBody(report, deps), labels: resolveIssueLabels(report) })
     await markNotified({ ...deps, documentPath: report.documentPath, issueNumber: issue.number, issueUrl: issue.url })
-    const line = await sendLineNotification({
-      channelAccessToken: deps.lineChannelAccessToken,
-      to: deps.lineNotifyTo,
-      text: buildLineMessage(report, issue.url),
-      fetchImpl: deps.fetchImpl,
-    })
-    results.push({ reportId: report.reportId, issueNumber: issue.number, issueUrl: issue.url, lineSent: line.sent, lineReason: line.reason })
+    results.push({ reportId: report.reportId, issueNumber: issue.number, issueUrl: issue.url })
   }
   return results
 }
@@ -259,12 +229,10 @@ async function main() {
     accessToken,
     githubToken,
     repository,
-    lineChannelAccessToken: (process.env.LINE_CHANNEL_ACCESS_TOKEN || '').trim(),
-    lineNotifyTo: (process.env.LINE_NOTIFY_TO || '').trim(),
   })
   const summary = results.length === 0
     ? '新しい利用者報告はありません。'
-    : results.map((r) => `- ${r.reportId} → ${r.issueUrl} (LINE: ${r.lineSent ? '送信' : `未送信 ${r.lineReason}`})`).join('\n')
+    : results.map((r) => `- ${r.reportId} → ${r.issueUrl}`).join('\n')
   console.log(summary)
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## 利用者報告の通知\n\n${summary}\n`)
