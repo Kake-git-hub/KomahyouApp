@@ -9456,6 +9456,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
       nextManualMakeupAdjustments = materializedResult.manualMakeupAdjustments
       nextFallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+      // 操作ログ: 移動元の「移)」マーカーが前の生徒の出欠記録を上書きして消した(在庫は上で台帳へ確定済み・表示は消える)。
+      recordOperationEvent('record-displaced', {
+        studentName: resolveBoardStudentDisplayName(displaced.name),
+        managedStudentId: displaced.managedStudentId ?? '',
+        subject: displaced.subject,
+        status: displaced.status,
+        lessonType: displaced.lessonType ?? '',
+        dateKey: displaced.dateKey,
+        slotNumber: displaced.slotNumber,
+        makeupSourceDate: displaced.makeupSourceDate ?? '',
+        materialized: materializedResult.materialized,
+      })
     }
 
     commitWeeks(result.nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, nextManualMakeupAdjustments, suppressedMakeupOrigins, nextFallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, result.nextSuppressedRegularLessonOccurrences)
@@ -9554,6 +9566,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
       nextManualMakeupAdjustments = materializedResult.manualMakeupAdjustments
       nextFallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+      // 操作ログ: 移動元の「移)」マーカーが前の生徒の出欠記録を上書きして消した(在庫は上で台帳へ確定済み・表示は消える)。
+      recordOperationEvent('record-displaced', {
+        studentName: resolveBoardStudentDisplayName(displaced.name),
+        managedStudentId: displaced.managedStudentId ?? '',
+        subject: displaced.subject,
+        status: displaced.status,
+        lessonType: displaced.lessonType ?? '',
+        dateKey: displaced.dateKey,
+        slotNumber: displaced.slotNumber,
+        makeupSourceDate: displaced.makeupSourceDate ?? '',
+        materialized: materializedResult.materialized,
+      })
     }
     // 表示中の週は動かさない(週が前方に拡張された場合はオフセット分ずらして同じ週を指す)。
     commitWeeks(

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
   OPERATION_EVENT_BUFFER_LIMIT,
+  type OperationEventKind,
   OPERATION_EVENT_DETAIL_VALUE_LIMIT,
   appendOperationEvent,
   buildOperationEvent,
@@ -92,6 +93,30 @@ describe('operationLog', () => {
     const overflow = Array.from({ length: OPERATION_EVENT_BUFFER_LIMIT + 5 }, (_, index) => buildOperationEvent('lesson-delete', { index }))
     restoreOperationEvents('classroom-a', overflow)
     expect(peekOperationEvents('classroom-a')).toHaveLength(OPERATION_EVENT_BUFFER_LIMIT)
+  })
+
+  it('保存失敗→戻す→次回 take で同じ id が1件だけ(再送で重複しない)', () => {
+    setOperationLogClassroomId('classroom-a')
+    const event = recordOperationEvent('makeup-stock-delete', { order: 1 })!
+    const firstAttempt = takeOperationEvents('classroom-a')
+    restoreOperationEvents('classroom-a', firstAttempt)
+    const secondAttempt = takeOperationEvents('classroom-a')
+    expect(secondAttempt.map((entry) => entry.id)).toEqual([event.id])
+    expect(peekOperationEvents('classroom-a')).toEqual([])
+  })
+
+  // サーバー側(functions/src/operationEvents.ts)の受け付け種別と二重管理になっている。
+  // 片方だけに kind を足すとサーバーが黙って捨てるので、期待一覧を両方のテストに同じ形で固定する。
+  it('操作種別の一覧はサーバー側と同じ(二重管理のドリフト検知)', () => {
+    const kinds: OperationEventKind[] = ['makeup-stock-delete', 'lecture-stock-delete', 'lesson-delete', 'lesson-store', 'status-mark', 'status-clear', 'clear-day-students', 'whole-day-transfer', 'holiday-toggle', 'record-displaced']
+    const record = (kind: OperationEventKind) => buildOperationEvent(kind, {}).kind
+    expect(kinds.map(record)).toEqual(kinds)
+    expect(kinds).toHaveLength(10)
+  })
+
+  it('クライアントのバッファ上限はサーバーの1リクエスト上限(400)を超えない', () => {
+    // 超えると超過分がサーバーで切り捨てられ、保存は成功するので戻しもされず永久に失われる。
+    expect(OPERATION_EVENT_BUFFER_LIMIT).toBeLessThanOrEqual(400)
   })
 
   it('clear でアカウント切替時に持ち越さない', () => {

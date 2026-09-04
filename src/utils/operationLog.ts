@@ -35,6 +35,8 @@ export type OperationEventKind =
   | 'whole-day-transfer'
   /** 休日設定・解除 */
   | 'holiday-toggle'
+  /** 生徒の移動で、移動元に書く「移)」マーカーが別生徒の出欠記録を上書きして消した */
+  | 'record-displaced'
 
 export type OperationEventDetail = Record<string, string | number | boolean>
 
@@ -54,8 +56,10 @@ export const OPERATION_EVENT_DETAIL_VALUE_LIMIT = 120
 /**
  * 未送信のまま溜められるイベント数の上限。超えたら**古いものから捨てる**（新しい操作を優先）。
  * 保存のたびに空になるため、通常の運用でこの上限に届くことはない。
+ * ★サーバー側の1リクエスト上限（functions/src/operationEvents.ts `OPERATION_EVENT_REQUEST_LIMIT`）と**同じ値**にする。
+ *   こちらが大きいと、超過分がサーバーで黙って切り捨てられ、保存は成功するので戻しもされず永久に失われる。
  */
-export const OPERATION_EVENT_BUFFER_LIMIT = 1000
+export const OPERATION_EVENT_BUFFER_LIMIT = 400
 
 function sanitizeDetail(detail: OperationEventDetail): OperationEventDetail {
   const result: OperationEventDetail = {}

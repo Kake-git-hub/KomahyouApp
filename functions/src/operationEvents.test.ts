@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { OPERATION_EVENT_REQUEST_LIMIT, normalizeOperationEvents } from './operationEvents'
+import { OPERATION_EVENT_KINDS, OPERATION_EVENT_REQUEST_LIMIT, normalizeOperationEvents } from './operationEvents'
 
 const FALLBACK = '2026-09-04T00:00:00.000Z'
 
@@ -13,6 +13,12 @@ function event(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
 }
+
+describe('操作種別の一覧(クライアント src/utils/operationLog.ts と二重管理)', () => {
+  it('クライアント側のテストと同じ一覧を受け付ける(片方だけ足すとサーバーが黙って捨てる)', () => {
+    expect([...OPERATION_EVENT_KINDS]).toEqual(['makeup-stock-delete', 'lecture-stock-delete', 'lesson-delete', 'lesson-store', 'status-mark', 'status-clear', 'clear-day-students', 'whole-day-transfer', 'holiday-toggle', 'record-displaced'])
+  })
+})
 
 describe('normalizeOperationEvents', () => {
   it('正しいイベントはそのまま通す', () => {

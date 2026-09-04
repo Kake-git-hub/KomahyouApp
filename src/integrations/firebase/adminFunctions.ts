@@ -6,6 +6,7 @@ import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 import { getClassroomSnapshotVersion, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
 import type { OperationEvent } from '../../utils/operationLog'
+import type { StudentLessonLedger } from '../../utils/studentLessonLedger'
 
 export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
 
@@ -108,6 +109,9 @@ type SaveClassroomSnapshotRequest = {
   // スナップショット本体(payload)には入れない: 復元/ロールバックで「消した記録」ごと巻き戻ると監査に使えないため、
   // サーバーが別コレクション(classroomSnapshots/{id}/operationEvents)へ書く。詳細は src/utils/operationLog.ts。
   operationEvents?: OperationEvent[]
+  // 生徒授業台帳(生徒×科目の授業実績と未消化・元コマ一覧つき)。内容が変わった保存にだけ相乗りさせ、
+  // サーバーが JST 日付ごとに残す(classroomSnapshots/{id}/lessonLedgerDays)。詳細は src/utils/studentLessonLedger.ts。
+  lessonLedger?: StudentLessonLedger
 }
 
 export type SaveClassroomSnapshotOptions = {

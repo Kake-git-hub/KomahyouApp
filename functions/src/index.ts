@@ -20,6 +20,7 @@ import {
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import { normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
+import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import {
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
@@ -936,6 +937,37 @@ async function persistOperationEvents(params: {
   }
 }
 
+// 生徒授業台帳(生徒×科目の授業実績と未消化・元コマ一覧つき)を JST 日付ごとに残す。
+// - 置き場所: classroomSnapshots/{id}/lessonLedgerDays/{YYYY-MM-DD}。同じ日の保存は上書き＝その日の最終状態。
+// - 本文は gzip+base64、集計値は平文(lessonLedger.ts)。保持 2 年(掃除は runSaveAttemptCleanup)。
+// - ★失敗しても保存本体は成功のまま(操作ログと同じ方針)。
+async function persistLessonLedger(params: {
+  snapshotRef: FirebaseFirestore.DocumentReference
+  ledger: NormalizedLessonLedger | null
+  classroomId: string
+  saveId: string
+  savedAt: string
+  updatedBy: string
+}) {
+  if (!params.ledger) return false
+  try {
+    const dateKey = toJstDateKeyFromIso(params.savedAt)
+    await params.snapshotRef.collection('lessonLedgerDays').doc(dateKey).set(buildLessonLedgerDayDoc({
+      ledger: params.ledger,
+      classroomId: params.classroomId,
+      dateKey,
+      savedAt: params.savedAt,
+      saveId: params.saveId,
+      updatedBy: params.updatedBy,
+      recordedAt: new Date().toISOString(),
+    }))
+    return true
+  } catch (error) {
+    logger.error(`[LessonLedger] Failed to persist ledger for classroom=${params.classroomId} saveId=${params.saveId}`, error)
+    return false
+  }
+}
+
 function buildSaveAttemptPayload(params: {
   classroomId: string
   savedAt: string
@@ -1481,6 +1513,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const incomingBaseVersion = typeof rawData.baseVersion === 'number' ? rawData.baseVersion : undefined
   // 操作ログ(相乗り・任意)。旧クライアントは送らない。壊れた要素はここで落とし、保存本体は巻き添えにしない。
   const incomingOperationEvents = normalizeOperationEvents(rawData.operationEvents, { fallbackIso: savedAt })
+  // 生徒授業台帳(相乗り・任意)。旧クライアントは送らない。壊れていれば null(保存本体は通す)。
+  const incomingLessonLedger = normalizeLessonLedger(rawData.lessonLedger, { fallbackIso: savedAt })
 
   if (options?.developmentOnly && classroomId !== DEVELOPMENT_CLASSROOM_ID) {
     throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
@@ -1505,6 +1539,14 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
       await persistOperationEvents({
         snapshotRef,
         events: incomingOperationEvents,
+        classroomId,
+        saveId,
+        savedAt: existingAttempt.savedAt || savedAt,
+        updatedBy: memberRef.id,
+      })
+      await persistLessonLedger({
+        snapshotRef,
+        ledger: incomingLessonLedger,
         classroomId,
         saveId,
         savedAt: existingAttempt.savedAt || savedAt,
@@ -1609,6 +1651,14 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   await persistOperationEvents({
     snapshotRef,
     events: incomingOperationEvents,
+    classroomId,
+    saveId,
+    savedAt,
+    updatedBy: memberRef.id,
+  })
+  await persistLessonLedger({
+    snapshotRef,
+    ledger: incomingLessonLedger,
     classroomId,
     saveId,
     savedAt,
@@ -1882,13 +1932,17 @@ const SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT = 300
 // 操作ログの保持期間。オーナー確定(2026-09-04)で **1 年**(年度をまたいで遡れること)。
 // saveAttempts(30日)より長いのは、こちらが「いつ誰が消したか」の監査記録で、後から問い合わせが来るため。
 const OPERATION_EVENT_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.OPERATION_EVENT_RETENTION_DAYS)) || 365)
+// 生徒授業台帳の保持期間。「1年分を振り返れる」(オーナー指示 2026-09-04)を年度末でも満たすよう **2 年**。
+const LESSON_LEDGER_RETENTION_DAYS = Math.max(400, Math.trunc(Number(process.env.LESSON_LEDGER_RETENTION_DAYS)) || 730)
 
 async function runSaveAttemptCleanup() {
   const cutoffIso = new Date(Date.now() - SAVE_ATTEMPT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
   const operationEventCutoffIso = new Date(Date.now() - OPERATION_EVENT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
+  const lessonLedgerCutoffIso = new Date(Date.now() - LESSON_LEDGER_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   let deletedTotal = 0
   let deletedOperationEvents = 0
+  let deletedLessonLedgerDays = 0
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
@@ -1916,10 +1970,22 @@ async function runSaveAttemptCleanup() {
         await batch.commit()
         deletedOperationEvents += oldOperationEvents.size
       }
+
+      // 生徒授業台帳(2年保持)。recordedAt=サーバー受領時刻で切る。
+      const oldLessonLedgerDays = await snapshotDoc.ref.collection('lessonLedgerDays')
+        .where('recordedAt', '<', lessonLedgerCutoffIso)
+        .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
+        .get()
+      if (!oldLessonLedgerDays.empty) {
+        const batch = firestore.batch()
+        oldLessonLedgerDays.docs.forEach((doc) => batch.delete(doc.ref))
+        await batch.commit()
+        deletedLessonLedgerDays += oldLessonLedgerDays.size
+      }
     }
   }
 
-  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedOperationEvents} old operationEvents (older than ${operationEventCutoffIso}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS})`)
+  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedOperationEvents} old operationEvents (older than ${operationEventCutoffIso}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedLessonLedgerDays} old lessonLedgerDays (older than ${lessonLedgerCutoffIso}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS})`)
   return { deleted: deletedTotal, cutoffIso, retentionDays: SAVE_ATTEMPT_RETENTION_DAYS, deletedOperationEvents, operationEventCutoffIso, operationEventRetentionDays: OPERATION_EVENT_RETENTION_DAYS }
 }
 

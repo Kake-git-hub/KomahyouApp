@@ -19,6 +19,7 @@ export const OPERATION_EVENT_KINDS = [
   'clear-day-students',
   'whole-day-transfer',
   'holiday-toggle',
+  'record-displaced',
 ] as const
 
 export type OperationEventKind = (typeof OPERATION_EVENT_KINDS)[number]

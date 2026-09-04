@@ -38,7 +38,8 @@ import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeign
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
-import { restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
+import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
+import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
 import './App.css'
@@ -1968,6 +1969,22 @@ function AuthenticatedApp() {
           // 操作ログ: 前回保存以降に溜まった分をこの保存へ相乗りさせる。保存が失敗したらバッファへ戻して
           // 次回に再送する(イベント id をドキュメント id にするので、再送で重複しない)。
           const operationEvents = takeOperationEvents(targetClassroom.id)
+          // 生徒授業台帳: 盤面と同じ計算で生徒×科目の実績・未消化を出し、内容が変わった(または日付が変わった)
+          // ときだけ相乗りさせる。計算に失敗しても保存は続ける(台帳は保存より優先度が低い)。
+          let lessonLedgerToSend: ReturnType<typeof buildStudentLessonLedger> = null
+          let lessonLedgerFingerprint = ''
+          const lessonLedgerDateKey = toJstDateKey(nextItem.snapshot.savedAt)
+          try {
+            const ledger = buildStudentLessonLedger({ payload: targetClassroom.data, now: new Date(nextItem.snapshot.savedAt) })
+            if (ledger) {
+              lessonLedgerFingerprint = resolveStudentLessonLedgerFingerprint(ledger)
+              if (shouldSendStudentLessonLedger(targetClassroom.id, lessonLedgerFingerprint, lessonLedgerDateKey)) {
+                lessonLedgerToSend = ledger
+              }
+            }
+          } catch (error) {
+            console.warn('[LessonLedger] 台帳の計算に失敗したため、この保存には載せません。', error)
+          }
           try {
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
@@ -1980,7 +1997,9 @@ function AuthenticatedApp() {
                 saveId,
                 payload: targetClassroom.data,
                 ...(operationEvents.length > 0 ? { operationEvents } : {}),
+                ...(lessonLedgerToSend ? { lessonLedger: lessonLedgerToSend } : {}),
               })
+              if (lessonLedgerToSend) markStudentLessonLedgerSent(targetClassroom.id, lessonLedgerFingerprint, lessonLedgerDateKey)
               break
             } catch (error) {
               if (!manualFirebaseSaveStabilityEnabled || !isTransientFirebaseSyncError(error) || attempt >= maxAttempts) {
@@ -3092,6 +3111,10 @@ function AuthenticatedApp() {
     // ログアウト時に必ず undo を破棄する(在庫の取り違えを断つ)。
     setUndoSnapshot(null)
     setDeveloperRestoreModalState(null)
+    // 操作ログの未送信バッファも破棄する。残すと、保存失敗で戻された前ユーザーの操作が
+    // 次にログインした別ユーザーの保存に相乗りし、実行者(updatedBy)を誤記録する(INV 監査 2026-09-04 指摘)。
+    clearOperationEvents()
+    clearStudentLessonLedgerSyncState()
 
     if (shouldReturnDeveloperOnLogout(screenRef.current, currentUser?.role)) {
       setScreen('developer')
