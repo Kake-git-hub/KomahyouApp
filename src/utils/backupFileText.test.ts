@@ -51,3 +51,39 @@ describe('readBackupFileText', () => {
     expect(isGzipBytes(new Uint8Array([0x1f]))).toBe(false)
   })
 })
+
+// ★2026-09-04: サーバー自動バックアップの書き出しを整形(2スペース字下げ)から最小化へ変更した。
+// 復元は「整形版(2026-09-04 以前のファイル)」と「最小化版(以降のファイル)」の**両方**を
+// 同じ結果として読めなければならない。ファイル形式そのものは変えていないことの担保。
+describe('整形版と最小化版のバックアップが同じ結果に復元される', () => {
+  // 形式検証(isWorkspaceSnapshot)を通る最小のワークスペーススナップショット。
+  const snapshot = {
+    schemaVersion: 1,
+    savedAt: '2026-09-04T01:15:04.205Z',
+    currentUserId: 'dev',
+    actingClassroomId: 'c1',
+    users: [],
+    classrooms: [],
+  }
+  const prettyJson = JSON.stringify(snapshot, null, 2)
+  const compactJson = JSON.stringify(snapshot)
+
+  it('非圧縮: 整形版と最小化版が同じスナップショットとして解析できる', async () => {
+    const pretty = parseWorkspaceSnapshot(await readBackupFileText(new Blob([prettyJson], { type: 'application/json' })))
+    const compact = parseWorkspaceSnapshot(await readBackupFileText(new Blob([compactJson], { type: 'application/json' })))
+    expect(compact).toEqual(pretty)
+    expect(compact.actingClassroomId).toBe('c1')
+  })
+
+  it('gzip(.json.gz): 整形版と最小化版が同じスナップショットとして解析できる', async () => {
+    const toBlob = (text: string) => new Blob([new Uint8Array(gzipSync(Buffer.from(text, 'utf8')))], { type: 'application/gzip' })
+    const pretty = parseWorkspaceSnapshot(await readBackupFileText(toBlob(prettyJson)))
+    const compact = parseWorkspaceSnapshot(await readBackupFileText(toBlob(compactJson)))
+    expect(compact).toEqual(pretty)
+  })
+
+  it('最小化しても gzip 後は整形版より小さい(Drive の 15GB 上限に効く)', () => {
+    expect(gzipSync(Buffer.from(compactJson, 'utf8')).length)
+      .toBeLessThanOrEqual(gzipSync(Buffer.from(prettyJson, 'utf8')).length)
+  })
+})
