@@ -108,10 +108,10 @@ describe('operationLog', () => {
   // サーバー側(functions/src/operationEvents.ts)の受け付け種別と二重管理になっている。
   // 片方だけに kind を足すとサーバーが黙って捨てるので、期待一覧を両方のテストに同じ形で固定する。
   it('操作種別の一覧はサーバー側と同じ(二重管理のドリフト検知)', () => {
-    const kinds: OperationEventKind[] = ['makeup-stock-delete', 'lecture-stock-delete', 'lesson-delete', 'lesson-store', 'status-mark', 'status-clear', 'clear-day-students', 'whole-day-transfer', 'holiday-toggle', 'record-displaced']
+    const kinds: OperationEventKind[] = ['makeup-stock-delete', 'lecture-stock-delete', 'lesson-delete', 'lesson-store', 'status-mark', 'status-clear', 'clear-day-students', 'whole-day-transfer', 'holiday-toggle', 'record-displaced', 'auto-teacher-reconcile', 'auto-teacher-assign', 'auto-student-unassign']
     const record = (kind: OperationEventKind) => buildOperationEvent(kind, {}).kind
     expect(kinds.map(record)).toEqual(kinds)
-    expect(kinds).toHaveLength(10)
+    expect(kinds).toHaveLength(13)
   })
 
   it('クライアントのバッファ上限はサーバーの1リクエスト上限(400)を超えない', () => {

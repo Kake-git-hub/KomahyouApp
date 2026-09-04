@@ -20,6 +20,10 @@ export const OPERATION_EVENT_KINDS = [
   'whole-day-transfer',
   'holiday-toggle',
   'record-displaced',
+  // ★2(2026-09-04): 自動処理が盤面を変えた記録(人の操作ではないので操作ログに載らなかった)。
+  'auto-teacher-reconcile',
+  'auto-teacher-assign',
+  'auto-student-unassign',
 ] as const
 
 export type OperationEventKind = (typeof OPERATION_EVENT_KINDS)[number]
@@ -70,6 +74,14 @@ function normalizeIsoTimestamp(raw: unknown, fallbackIso: string): string {
  * （1件の不正で保存全体を失敗させない。保存本体より監査記録の優先度は低い）。
  * 同じ id が複数あれば最初の1件だけ残す（再送とバッチ内重複の両方に効く）。
  */
+/** 保存した端末のアプリ版数・UA(自己申告だが、古いキャッシュの版の切り分けに十分)。長さは切り詰める。 */
+export function normalizeClientInfo(raw: unknown): { appVersion: string; userAgent: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { appVersion: '', userAgent: '' }
+  const candidate = raw as Record<string, unknown>
+  const pick = (value: unknown, limit: number) => (typeof value === 'string' ? value.trim().slice(0, limit) : '')
+  return { appVersion: pick(candidate.appVersion, 40), userAgent: pick(candidate.userAgent, 300) }
+}
+
 export function normalizeOperationEvents(raw: unknown, options: { fallbackIso?: string; limit?: number } = {}): NormalizedOperationEvent[] {
   if (!Array.isArray(raw)) return []
   const fallbackIso = options.fallbackIso ?? new Date().toISOString()

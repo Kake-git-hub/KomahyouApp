@@ -5566,6 +5566,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         selectedCellId,
         selectedDeskIndex,
       )
+      // ★2 操作ログ(自動処理): QR 提出/登録解除に伴う講師の自動登録・解除を1件ずつ残す。
+      for (const message of result.messages) {
+        recordOperationEvent('auto-teacher-assign', { requestId: request.requestId, itemCount: request.items.length, message })
+      }
     }
     if (result.messages.length > 0) {
       setStatusMessage(result.messages[result.messages.length - 1])
@@ -5596,6 +5600,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         selectedCellId,
         selectedDeskIndex,
       )
+      // ★2 操作ログ(自動処理): 起動時の自己修復が講師を置き直した(「講師が勝手に湧いた」系の調査用)。
+      recordOperationEvent('auto-teacher-reconcile', { placedCount: result.placedCount, weekIndexOffset: result.weekIndexOffset })
       if (result.placedCount > 0) {
         setStatusMessage(`提出済みで未配置だった講師 ${result.placedCount} 名を出席可能コマへ自動配置しました。保存してください。`)
       }
@@ -5648,6 +5654,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       result.nextManualLectureStockOrigins,
       result.nextFallbackLectureStockStudents,
     )
+    // ★2 操作ログ(自動処理): 日程表からの登録解除リクエストで講習コマを自動除去した。
+    recordOperationEvent('auto-student-unassign', { source: 'schedule-request', sessionLabel: session.label, studentName: result.studentName, clearedCellCount: result.clearedCellCount })
     setStatusMessage(`${session.label} で ${result.studentName} の講習授業を ${result.clearedCellCount} コマ解除しました。`)
   }, [classroomSettings.forceOpenDates, classroomSettings.holidayDates, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, normalizedWeeks, onStudentScheduleRequestProcessed, selectedCellId, selectedDeskIndex, specialSessions, studentScheduleRequest, students, suppressedMakeupOrigins, weekIndex])
 
@@ -5687,6 +5695,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextManualLectureStockOrigins = result.nextManualLectureStockOrigins
       nextFallbackLectureStockStudents = result.nextFallbackLectureStockStudents
       hasChanges = true
+      // ★2 操作ログ(自動処理): 提出が取り下げられた生徒の講習コマを自動除去した。
+      recordOperationEvent('auto-student-unassign', { source: 'submission-reset', sessionLabel: session.label, studentName: result.studentName, clearedCellCount: result.clearedCellCount })
     }
 
     if (!hasChanges) return

@@ -148,7 +148,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
 
   return (
     <div className="page-shell page-shell-basic-data">
-      <input ref={backupImportRef} className="basic-data-hidden-input" type="file" accept="application/json" onChange={(event) => {
+      <input ref={backupImportRef} className="basic-data-hidden-input" type="file" accept=".json,.gz,application/json,application/gzip" onChange={(event) => {
         const file = event.target.files?.[0]
         if (file) onImportBackup(file)
         event.currentTarget.value = ''

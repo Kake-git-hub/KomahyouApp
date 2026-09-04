@@ -17,6 +17,10 @@
 <!-- ここに編集内容を1行ずつ追記する。例:
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
+- feat: **日次バックアップ(JST 3:00)の保持を 7日→400日へ延長・Google Drive ミラーを gzip 化**(オーナー確定 2026-09-04・★1)。緑が丘の調査で 8/29 以前の盤面が検証不能だった教訓。Storage/Firestore は非圧縮のまま(`WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS=400`)、Drive は 15GB 上限のため `.json.gz`(`application/gzip`・multipart は Buffer 連結)で保存し、旧来の非圧縮 `.json` だけ 7 日で間引く(`shouldKeepGoogleDriveBackupByName`・移行期間の暫定)。**復元経路**: 「バックアップを読み込む」が gzip のマジックバイト判定でブラウザ内解凍(`src/utils/backupFileText.ts`・`DecompressionStream`)。往復テスト(圧縮→解凍で元 JSON と完全一致)・保持境界テスト・`.gz` 取り込みテストを追加し、保持期間スペックロックと `docs/spec-save-restore.md` §8(#7/#8・8-2)を同コミットで更新
+- fix(INV監査反映 2026-09-04): ★1 の regression-reviewer 指摘を同 push で対応。①**開発者画面の「開発者バックアップを読み込む」も `.json.gz` を受け付ける**(`importWorkspaceBackup` が `file.text()` のままで Drive ミラーからの復旧本線が塞がっていた→`readBackupFileText` へ統一・accept 追加・ワークスペース全体の gz 往復テスト) ②**App 側の保持本数見積り(開発者画面の容量表示)が 7 日のまま取り残されていた**(7a9b1e2 型ドリフトの再発)→ `src/utils/backupRetentionEstimate.ts` へ切り出し 400 日(541本)に更新・スペックロックテストで固定 ③保持期間の画面文言・コメント・正本 §8-1b(自動処理は「配置」も記録する例外・record-displaced)/§8-1c/§8-2/§8-3/§8-4(Drive gzip の意図的な非対称を明記)を追従 ④gzip 本体破損・空ファイルの異常系テスト
+- feat: **自動処理の記録**(★2)。人の操作でないため操作ログに載らなかった盤面の自動変更を記録: 起動時の自己修復 `auto-teacher-reconcile`(placedCount)・QR 提出/登録解除に伴う講師の自動登録/解除 `auto-teacher-assign`(メッセージ1件ずつ)・生徒の登録解除に伴う講習コマ除去 `auto-student-unassign`(source=schedule-request/submission-reset)。★操作ログの教室登録を `useLayoutEffect` に変更(盤面の起動時 effect より先に走らせないと最初の自動処理が教室未登録で捨てられる)
+- feat: **保存ごとにアプリ版数と端末情報を記録**(★3)。保存リクエストに `client{appVersion,userAgent}` を添え、`saveAttempts`・`operationEvents` に保存(サーバー側で長さを切り詰め)。「古いキャッシュの版で操作していた」報告の切り分け用
 
 ## v1.5.487 (2026-09-04)
 
