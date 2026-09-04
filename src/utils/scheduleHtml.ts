@@ -1225,6 +1225,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         color: var(--ink);
       }
 
+      /* 「開発者へ報告」(2026-09-04): 講習期間表示の右。色だけ変えて目に入るようにする。 */
+      .toolbar button.report-developer {
+        background: #fff3df;
+        color: #8a4b00;
+        border-color: #d68910;
+      }
+
       .pages {
         display: grid;
         gap: 12px;
@@ -2693,6 +2700,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         <select id="schedule-period-select">
           <option value="">選択してください</option>
         </select>
+      </div>
+      <div class="toolbar-actions">
+        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="「おかしいな」と思ったら、そのまま開発者へ知らせます(一言は空欄でも送れます)">開発者へ報告</button>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
@@ -6895,6 +6905,35 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
+      // 「開発者へ報告」(2026-09-04): 日程表は表示を見ただけで「おかしい」と思うことがあるので、ここからも送れる。
+      // 送信は本体(opener)が行う(教室データ・操作痕跡は本体が持つ)。この日程表の表示条件を context として添える。
+      const reportDeveloperButton = document.getElementById('schedule-report-developer-button');
+      if (reportDeveloperButton) {
+        reportDeveloperButton.addEventListener('click', function() {
+          const note = window.prompt('開発者へ報告します。気になった点があれば一言どうぞ(空欄のままでも送れます)。', '');
+          if (note === null) return;
+          if (!isOpenerAvailable()) return;
+          const personOption = personSelect && personSelect.options ? personSelect.options[personSelect.selectedIndex] : null;
+          const periodOption = periodSelect && periodSelect.options ? periodSelect.options[periodSelect.selectedIndex] : null;
+          reportDeveloperButton.disabled = true;
+          window.opener.postMessage({
+            type: 'schedule-developer-report',
+            note: note,
+            context: {
+              viewType: VIEW_TYPE,
+              startDate: (startInput && startInput.value) || appliedStartDate || '',
+              endDate: (endInput && endInput.value) || appliedEndDate || '',
+              periodLabel: periodOption ? (periodOption.textContent || '') : '',
+              personId: personSelect ? (personSelect.value || '') : '',
+              personLabel: personOption ? (personOption.textContent || '') : '',
+              search: personSearchInput ? (personSearchInput.value || '') : '',
+            },
+          }, '*');
+          // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即解除される。
+          window.setTimeout(function() { reportDeveloperButton.disabled = false; }, 15000);
+        });
+      }
+
       const showAllButton = document.getElementById('schedule-show-all-button');
       if (showAllButton) {
         showAllButton.addEventListener('click', function() {
@@ -7049,6 +7088,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (message && message.type === 'schedule-force-release-interaction') {
           interactionLockSuspendUntil = Date.now() + 1500;
           releaseInteractionLock();
+          return;
+        }
+        // 「開発者へ報告」の結果(本体が送信して返す)。alert で知らせ、ボタンを再び押せるようにする。
+        if (message && message.type === 'schedule-developer-report-result') {
+          const reportButton = document.getElementById('schedule-report-developer-button');
+          if (reportButton) reportButton.disabled = false;
+          window.alert(String(message.message || (message.ok ? '開発者へ報告しました。' : '報告を送れませんでした。')));
           return;
         }
         // 日程表コマ組みの結果ack: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示。

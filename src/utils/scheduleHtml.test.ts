@@ -4350,3 +4350,57 @@ describe('reopenedSlots (後から出席可能に変更) の日程表配線', ()
     expect(html).toContain('function updateTeacherCountLocally(sessionId, personId, countSubmitted)')
   })
 })
+
+// 「開発者へ報告」(2026-09-04・docs/spec-developer-report.md §B/§E): 日程表は表示だけ見て「おかしい」と思うことがあるので、
+// 別タブのツールバー(講習期間表示の右)にもボタンを出し、本体(opener)へ postMessage で報告を依頼する。
+describe('scheduleHtml 開発者へ報告ボタン', () => {
+  it('生徒日程表のツールバーにボタンがあり、送信・結果の両メッセージ種別が埋め込みスクリプトに含まれる', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-09-01',
+      defaultEndDate: '2026-09-07',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    // 位置: 「登録された講習期間を表示する」の直後(右)に配置する。
+    const periodIndex = html.indexOf('id="schedule-period-select"')
+    const buttonIndex = html.indexOf('id="schedule-report-developer-button"')
+    const showAllIndex = html.indexOf('id="schedule-show-all-button"')
+    expect(periodIndex).toBeGreaterThan(0)
+    expect(buttonIndex).toBeGreaterThan(periodIndex)
+    expect(buttonIndex).toBeLessThan(showAllIndex)
+    expect(html).toContain('class="secondary report-developer"')
+    expect(html).toContain('>開発者へ報告</button>')
+    // 色だけ変える(同じ枠線ボタン)。
+    expect(html).toContain('.toolbar button.report-developer {')
+    // 本体へ送るメッセージと、本体から返る結果メッセージの両方を扱う(App.tsx の定数と一致)。
+    expect(html).toContain("type: 'schedule-developer-report'")
+    expect(html).toContain("message.type === 'schedule-developer-report-result'")
+    // 一言は空欄でも送れる(prompt のキャンセル=null だけが中止)。
+    expect(html).toContain('if (note === null) return;')
+    // opener 不在なら No.210 の可視化(isOpenerAvailable)に乗せる。
+    expect(html).toContain('if (!isOpenerAvailable()) return;\n          const personOption')
+    // 表示条件を context として添える。
+    for (const key of ['viewType: VIEW_TYPE', 'startDate:', 'endDate:', 'periodLabel:', 'personId:', 'personLabel:', 'search:']) {
+      expect(html).toContain(key)
+    }
+
+    vi.unstubAllGlobals()
+  })
+})

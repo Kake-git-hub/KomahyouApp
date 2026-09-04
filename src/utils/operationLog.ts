@@ -15,6 +15,8 @@
 //  - モジュールスコープの単純なバッファ（1ブラウザ1タブ＝1インスタンス）。版数レジストリ
 //    `classroomSnapshotVersions.ts` と同じ方式で、巨大な ScheduleBoardScreen へ props を通さずに記録できる。
 
+import { recordOperationTrace } from './operationTrace'
+
 /** 記録する操作の種類。**在庫が減る／出欠記録が消える操作だけ**を対象にする（オーナー確定 2026-09-04）。 */
 export type OperationEventKind =
   /** 未消化振替一覧の × 削除（suppressedMakeupOrigins へ抑制を積む） */
@@ -140,7 +142,13 @@ export function recordOperationEvent(kind: OperationEventKind, detail: Operation
   if (!currentClassroomId) return null
   const event = buildOperationEvent(kind, detail)
   buffersByClassroomId.set(currentClassroomId, appendOperationEvent(buffersByClassroomId.get(currentClassroomId) ?? [], event))
+  // 「開発者へ報告」に同梱する端末内の操作痕跡へも写す（1本の時系列で読めるように）。失敗しても本体には影響させない。
+  recordOperationTrace('operation-event', `${kind} ${formatOperationEventDetailForTrace(event.detail)}`)
   return event
+}
+
+function formatOperationEventDetailForTrace(detail: OperationEventDetail): string {
+  return Object.entries(detail).map(([key, value]) => `${key}=${String(value)}`).join(' ')
 }
 
 /** 保存に載せるため取り出す（バッファからは消える）。保存が失敗したら restoreOperationEvents で戻すこと。 */

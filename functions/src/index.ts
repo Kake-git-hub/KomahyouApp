@@ -20,6 +20,7 @@ import {
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
+import { buildDeveloperReportId, buildDeveloperReportStoragePath, normalizeDeveloperReport, trimDeveloperReportTraceToBudget } from './developerReport'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import {
   compressBackupJson,
@@ -1710,6 +1711,85 @@ export const saveClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds:
 
 export const saveDevelopmentClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   return saveClassroomSnapshotFromCallable(request, { developmentOnly: true })
+})
+
+// 「開発者へ報告」(2026-09-04 オーナー指示): 利用者がボタン1つで、直近の操作痕跡と報告時点の教室データを
+// 開発者へ送る。メタ＋操作痕跡は Firestore(workspaces/{ws}/developerReports)、教室データ本体は Storage へ。
+// 通知(GitHub Issue 起票)は .github/workflows/developer-reports.yml が notifiedAt==null を拾って行う。
+// 本番データ(classroomSnapshots 等)には一切書かない＝読み取り専用の安全な機能。
+export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+  const rawData = readPayloadObject(request.data, 'request.data')
+  const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
+  const classroomId = readString(rawData.classroomId, 'classroomId')
+  const memberRef = await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+  const memberSnapshot = await memberRef.get()
+  const member = (memberSnapshot.data() ?? {}) as { email?: string; displayName?: string; role?: string }
+
+  const recordedAt = new Date().toISOString()
+  const report = normalizeDeveloperReport(rawData, { classroomId, fallbackIso: recordedAt })
+  const reportId = buildDeveloperReportId(recordedAt, randomBytes(6).toString('hex'))
+  const storagePath = buildDeveloperReportStoragePath(workspaceKey, classroomId, reportId)
+
+  const classroomSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(classroomId).get()
+  const classroomName = typeof classroomSnapshot.data()?.name === 'string' ? String(classroomSnapshot.data()?.name) : ''
+
+  let snapshotByteLength = 0
+  if (report.hasSnapshotPayload) {
+    try {
+      const json = JSON.stringify({
+        reportId,
+        workspaceKey,
+        classroomId,
+        classroomName,
+        recordedAt,
+        reportedAt: report.reportedAt,
+        appVersion: report.appVersion,
+        payload: sanitizeForFirestore(rawData.snapshotPayload as Record<string, unknown>),
+      })
+      const gz = gzipSync(Buffer.from(json, 'utf8'))
+      snapshotByteLength = gz.byteLength
+      await storage.bucket(STORAGE_BUCKET).file(storagePath).save(gz, {
+        resumable: false,
+        contentType: 'application/gzip',
+        metadata: { cacheControl: 'private, max-age=0, no-transform' },
+      })
+    } catch (error) {
+      // 教室データが保存できなくても報告本体(メタ＋痕跡)は残す。原因は Issue 側で分かるよう記録する。
+      logger.error(`[DeveloperReport] Failed to store snapshot for report=${reportId}`, error)
+      snapshotByteLength = -1
+    }
+  }
+
+  const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
+  await reportRef.set({
+    reportId,
+    workspaceKey,
+    classroomId,
+    classroomName,
+    source: report.source,
+    note: report.note,
+    reportedAt: report.reportedAt,
+    recordedAt,
+    reportedBy: memberRef.id,
+    reporterEmail: typeof member.email === 'string' ? member.email : '',
+    reporterName: typeof member.displayName === 'string' ? member.displayName : '',
+    reporterRole: typeof member.role === 'string' ? member.role : '',
+    appVersion: report.appVersion,
+    userAgent: report.userAgent,
+    pageUrl: report.pageUrl,
+    screen: report.screen,
+    boardDirty: report.boardDirty,
+    lastSavedAt: report.lastSavedAt,
+    scheduleContext: report.scheduleContext,
+    recentOperations: trimDeveloperReportTraceToBudget(report.recentOperations),
+    recentOperationCount: report.recentOperations.length,
+    snapshotStoragePath: report.hasSnapshotPayload && snapshotByteLength >= 0 ? storagePath : '',
+    snapshotByteLength,
+    notifiedAt: null,
+    issueNumber: null,
+  })
+  logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
+  return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt }
 })
 
 export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {

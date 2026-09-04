@@ -12,6 +12,7 @@ import { useStableCallback } from '../../utils/useStableCallback'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 // 操作ログ(在庫が減る・記録が消える操作の監査記録)。詳細は src/utils/operationLog.ts。
 import { recordOperationEvent } from '../../utils/operationLog'
+import { recordOperationTrace, summarizeBoardCommitForTrace, summarizeWeeksDiff } from '../../utils/operationTrace'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
@@ -892,6 +893,8 @@ type ScheduleBoardScreenProps = {
   onDismissUndoSnapshot?: () => void
   onLogout: () => void
   onCopyDistributionUrl?: () => Promise<string>
+  /** 「開発者へ報告」(2026-09-04): モーダルは App 側が持つ。ツールバーの講師日程共有の右に出す。 */
+  onReportToDeveloper?: () => void
   onSaveBoard?: () => void
   isBoardDirty?: boolean
   isBoardSaving?: boolean
@@ -4946,7 +4949,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
@@ -5412,6 +5415,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
+      recordOperationTrace('board-rebuild', `通常授業テンプレ保存・反映: ${summarizeWeeksDiff(weeks, overlaidWeeks) || '机の変化なし'}`)
       committedBoardChangeVersionRef.current += 1
       onBoardStateChange?.({
         weeks: cloneWeeksForPublish(applyClassroomAvailability(overlaidWeeks, nextClassroomSettingsForOverlay)),
@@ -8359,6 +8363,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // No.131: この操作が提出データ subjectSlots に行う差分(講習削除の -1 等)。undo/redo が逆・順適用する。
     specialSessionSubjectDelta?: SpecialSessionSubjectDelta,
   ) => {
+    // 操作痕跡(2026-09-04): 盤面が変わる全操作はここを通るので、前後差分を端末内バッファへ残す
+    // (「開発者へ報告」に同梱するだけ。サーバーへは送らない)。記録失敗は本体に影響させない。
+    recordOperationTrace('board-commit', summarizeBoardCommitForTrace({
+      previousWeeks: weeks,
+      nextWeeks,
+      holidayChanged: !areStringArraysEqual(nextHolidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(nextForceOpenDates, classroomSettings.forceOpenDates),
+      suppressedMakeupChanged: nextSuppressedMakeupOrigins !== suppressedMakeupOrigins,
+      manualMakeupChanged: nextManualMakeupAdjustments !== manualMakeupAdjustments,
+      lectureStockChanged: nextManualLectureStockCounts !== manualLectureStockCounts || nextManualLectureStockOrigins !== manualLectureStockOrigins,
+      countAdjustmentsChanged: nextScheduleCountAdjustments !== scheduleCountAdjustments,
+      suppressedRegularChanged: nextSuppressedRegularLessonOccurrences !== suppressedRegularLessonOccurrences,
+    }))
     setUndoStack((current) => appendHistoryEntry(
       current,
       createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, suppressedRegularLessonOccurrences, scheduleCountAdjustments, manualMakeupAdjustments, suppressedMakeupOrigins, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, specialSessionSubjectDelta),
@@ -11294,6 +11310,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleUndo = () => {
     const previous = undoStack[undoStack.length - 1]
     if (!previous) return
+    recordOperationTrace('undo', `元に戻す: ${summarizeWeeksDiff(weeks, previous.weeks) || '机の変化なし'}`)
 
     // No.131: delta はこの履歴対(操作)に紐づくため、redo 側エントリへ引き継ぐ(redo で再適用するため)。
     setRedoStack((current) => appendHistoryEntry(
@@ -11336,6 +11353,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const handleRedo = () => {
     const next = redoStack[redoStack.length - 1]
     if (!next) return
+    recordOperationTrace('redo', `やり直し: ${summarizeWeeksDiff(weeks, next.weeks) || '机の変化なし'}`)
 
     // No.131: delta を undo 側エントリへ引き継ぐ(もう一度 undo できるようにする)。
     setUndoStack((current) => appendHistoryEntry(
@@ -11518,6 +11536,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onRedo={tbOnRedo}
             onOpenSortMenu={tbOnOpenSortMenu}
             onCopyDistributionUrl={tbOnCopyDistributionUrl}
+            onReportToDeveloper={onReportToDeveloper}
             onGoPrevWeek={tbOnGoPrevWeek}
             onGoNextWeek={tbOnGoNextWeek}
             onJumpToDate={tbOnJumpToDate}

@@ -1,0 +1,50 @@
+# 「開発者へ報告」の通知(2026-09-04)
+#
+# 利用者が画面の「開発者へ報告」ボタンから送った報告は Cloud Function submitDeveloperReport が
+# Firestore workspaces/main/developerReports に書く(notifiedAt=null)。このワークフローが定期的に拾い、
+# GitHub Issue を起票して notifiedAt を埋める(開発者は GitHub 通知=メール/アプリで受け取る)。
+#
+# 認証はホスティング/functions デプロイと同じサービスアカウント secret RE_FIREBASE_SERVICE_ACCOUNT を使う
+# (追加の secret 不要)。Cloud Function 側に GitHub トークンを持たせない設計。
+# 公開リポジトリなので Issue 本文には操作痕跡(生徒名)や教室データを載せない(tools/developer-report-notify.mjs)。
+#
+# 手動実行: Actions → 「Notify developer reports」→ Run workflow。
+name: Notify developer reports
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: developer-reports-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Authenticate to Google Cloud (Firestore access token)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Notify pending developer reports
+        run: node tools/developer-report-notify.mjs
+        env:
+          FIRESTORE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FIREBASE_PROJECT_ID: komahyouapp-prod
+          FIREBASE_WORKSPACE_KEY: main
+          STORAGE_BUCKET: komahyouapp-prod.firebasestorage.app

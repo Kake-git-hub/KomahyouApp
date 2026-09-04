@@ -6,6 +6,7 @@ import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 import { getClassroomSnapshotVersion, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
 import type { OperationEvent } from '../../utils/operationLog'
+import type { DeveloperReportRequestBody } from '../../utils/developerReport'
 import type { StudentLessonLedger } from '../../utils/studentLessonLedger'
 
 export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
@@ -373,6 +374,29 @@ export async function saveClassroomSnapshotViaFunction(
   if (typeof result.data.version === 'number') {
     setClassroomSnapshotVersion(input.classroomId, result.data.version)
   }
+  return result.data
+}
+
+export type SubmitDeveloperReportResponse = {
+  reportId: string
+  storagePath: string
+  recordedAt: string
+}
+
+/**
+ * 「開発者へ報告」を Cloud Function `submitDeveloperReport` へ送る。
+ * 報告本文の組み立ては src/utils/developerReport.ts（純粋関数）。実行者・受領時刻はサーバーが付ける。
+ */
+export async function submitDeveloperReportViaFunction(input: DeveloperReportRequestBody): Promise<SubmitDeveloperReportResponse> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<DeveloperReportRequestBody & { workspaceKey: string }, SubmitDeveloperReportResponse>(functions, 'submitDeveloperReport', { timeout: 120_000 })
+  const result = await callable({
+    workspaceKey: config.workspaceKey,
+    ...input,
+    snapshotPayload: input.snapshotPayload ? sanitizeForFirestore(input.snapshotPayload) : null,
+  })
   return result.data
 }
 

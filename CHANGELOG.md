@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.490 (2026-09-04)
+
+- feat: 「開発者へ報告」ボタンを追加(オーナー指示 2026-09-04・仕様 docs/spec-developer-report.md)。盤面ツールバーの「講師日程共有」の右と、日程表(別タブ)の「登録された講習期間を表示する」の右に色違いで配置。任意の一言は空欄でも送れる。端末内の全操作リングバッファ(commitWeeks 差分・undo/redo・保存・操作ログの写し・別タブメッセージ、教室ごと最新300件を localStorage にも保持。サーバーへは送らない)と報告時点の教室データ(未保存込み)を Cloud Function `submitDeveloperReport` へ送り、Firestore `developerReports`＋Storage `developer-reports/` に保存(本番データには書かない)。(src/utils/operationTrace.ts, src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, functions/src/developerReport.ts, functions/src/index.ts, src/utils/scheduleHtml.ts, firebase/firestore.rules)
+- feat: 開発者が報告を受け取る仕組み: GitHub Actions `.github/workflows/developer-reports.yml`(15分ごと)が未通知の報告を Issue 起票(ラベル type:bug/status:triage/source:user-report)し notifiedAt を埋める。公開リポジトリのため Issue には生徒名を含む操作痕跡・教室データを載せず置き場所だけ示す。(tools/developer-report-notify.mjs)
+
 ## v1.5.489 (2026-09-04)
 
 - fix: 日次の保持期間掃除 `cleanupOldSaveAttempts` が毎晩 `Transaction too big` で失敗し、saveAttempts の

@@ -19,7 +19,7 @@ const DeveloperAdminScreen = lazy(() => import('./components/developer-admin/Dev
 const BillingAutomationScreen = lazy(() => import('./components/billing/BillingAutomationScreen').then((m) => ({ default: m.BillingAutomationScreen })))
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
-import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
+import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, submitDeveloperReportViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -41,6 +41,9 @@ import { bumpMemCounter } from './utils/memoryDiagnostics'
 import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
+import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
+import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, type DeveloperReportScheduleContext, type DeveloperReportSource } from './utils/developerReport'
+import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
@@ -1483,6 +1486,7 @@ function AuthenticatedApp() {
   //   ツリー全体で passive effect より先に走るので、盤面の effect 時点で教室が登録済みになる。
   useLayoutEffect(() => {
     setOperationLogClassroomId(actingClassroomId)
+    setOperationTraceClassroomId(actingClassroomId)
   }, [actingClassroomId])
   const manualFirebaseSaveStabilityEnabled = useMemo(
     () => isFeatureEnabledForClassroom('manualFirebaseSaveStability', actingClassroom),
@@ -2001,6 +2005,7 @@ function AuthenticatedApp() {
                 client: { appVersion: __APP_VERSION__, userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent },
               })
               if (lessonLedgerToSend) markStudentLessonLedgerSent(targetClassroom.id, lessonLedgerFingerprint, lessonLedgerDateKey)
+              recordOperationTrace('save', `保存成功 savedAt=${nextItem.snapshot.savedAt} version=${typeof result.version === 'number' ? result.version : '?'}`)
               break
             } catch (error) {
               if (!manualFirebaseSaveStabilityEnabled || !isTransientFirebaseSyncError(error) || attempt >= maxAttempts) {
@@ -2014,6 +2019,7 @@ function AuthenticatedApp() {
           if (!result) throw new Error('Firebase 同期の再試行が完了できませんでした。')
           } catch (error) {
             restoreOperationEvents(targetClassroom.id, operationEvents)
+            recordOperationTrace('save', `保存失敗: ${error instanceof Error ? error.message : String(error)}`)
             throw error
           }
         }
@@ -3115,6 +3121,7 @@ function AuthenticatedApp() {
     // 操作ログの未送信バッファも破棄する。残すと、保存失敗で戻された前ユーザーの操作が
     // 次にログインした別ユーザーの保存に相乗りし、実行者(updatedBy)を誤記録する(INV 監査 2026-09-04 指摘)。
     clearOperationEvents()
+    clearOperationTraceMemory()
     clearStudentLessonLedgerSyncState()
 
     if (shouldReturnDeveloperOnLogout(screenRef.current, currentUser?.role)) {
@@ -3582,10 +3589,83 @@ function AuthenticatedApp() {
     }
   }, [actingClassroomId, isActingDevelopmentClassroom, setSpecialSessions, specialSessionsRef])
 
+  // 「開発者へ報告」(2026-09-04 オーナー指示): 利用者がボタン1つで、直近の操作痕跡(端末内リングバッファ)と
+  // 報告時点の教室データ(未保存の変更込み)を開発者へ送る。本番データには一切書かない(Cloud Function は
+  // 別コレクション developerReports と Storage にだけ書く)。盤面ツールバーと日程表タブの両方から呼ばれる。
+  const [developerReportModal, setDeveloperReportModal] = useState<{ sending: boolean; resultMessage: string | null } | null>(null)
+  const submitDeveloperReport = useCallback(async (input: { source: DeveloperReportSource; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => {
+    if (!actingClassroomId) return { ok: false as const, error: '教室が選択されていません。' }
+    const currentScreen = screenRef.current
+    const snapshotPayload = buildClassroomSnapshotPayload({
+      screen: currentScreen === 'developer' ? 'board' : currentScreen,
+      classroomSettings: classroomSettingsRef.current,
+      managers: managersRef.current,
+      teachers: teachersRef.current,
+      students: studentsRef.current,
+      regularLessons: regularLessonsRef.current,
+      groupLessons: groupLessonsRef.current,
+      specialSessions: specialSessionsRef.current,
+      autoAssignRules: autoAssignRulesRef.current,
+      pairConstraints: pairConstraintsRef.current,
+      boardState: boardStateRef.current,
+    })
+    const body = buildDeveloperReportRequestBody({
+      classroomId: actingClassroomId,
+      source: input.source,
+      note: input.note,
+      appVersion: __APP_VERSION__,
+      userAgent: typeof navigator === 'undefined' ? '' : navigator.userAgent,
+      pageUrl: typeof window === 'undefined' ? '' : window.location.href,
+      screen: currentScreen,
+      boardDirty: hasHydratedSnapshot && dataSignature !== cleanSignatureRef.current,
+      lastSavedAt: lastSavedAtRef.current,
+      recentOperations: peekOperationTrace(actingClassroomId),
+      scheduleContext: input.scheduleContext,
+      snapshotPayload,
+    })
+    try {
+      const result = await submitDeveloperReportViaFunction(body)
+      recordOperationTrace('navigation', `開発者へ報告を送信 source=${input.source} reportId=${result.reportId}`)
+      return { ok: true as const, reportId: result.reportId }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      recordOperationTrace('navigation', `開発者へ報告の送信に失敗 source=${input.source}: ${message}`)
+      return { ok: false as const, error: message }
+    }
+  }, [actingClassroomId, autoAssignRulesRef, boardStateRef, classroomSettingsRef, cleanSignatureRef, dataSignature, groupLessonsRef, hasHydratedSnapshot, lastSavedAtRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef])
+  const openDeveloperReportModal = useCallback(() => {
+    recordOperationTrace('navigation', '開発者へ報告モーダルを開く(盤面)')
+    setDeveloperReportModal({ sending: false, resultMessage: null })
+  }, [])
+  const handleDeveloperReportSubmit = useCallback(async (note: string) => {
+    setDeveloperReportModal({ sending: true, resultMessage: null })
+    const result = await submitDeveloperReport({ source: 'board', note })
+    setDeveloperReportModal({ sending: false, resultMessage: formatDeveloperReportResultMessage(result) })
+  }, [submitDeveloperReport])
+
   useEffect(() => {
     const handleScheduleRangeMessage = (event: MessageEvent) => {
       const message = event.data
       if (!message) return
+
+      // 操作痕跡: 日程表など別タブからの操作メッセージを残す(開いた直後の ready/refresh は雑音なので除く)。
+      if (typeof message.type === 'string' && message.type.startsWith('schedule-') && message.type !== 'schedule-popup-ready' && message.type !== 'schedule-refresh-request') {
+        recordOperationTrace('schedule-message', `${message.type}${typeof message.personId === 'string' ? ` personId=${message.personId}` : ''}${typeof message.sessionId === 'string' ? ` sessionId=${message.sessionId}` : ''}`)
+      }
+
+      // 「開発者へ報告」(日程表タブ経由)。表示だけ見て「おかしい」と思った報告も本体が送り、結果を別タブへ返す。
+      const developerReport = parseScheduleDeveloperReportMessage(message)
+      if (developerReport) {
+        const replyTarget = event.source as Window | null
+        void submitDeveloperReport({ source: 'schedule', note: developerReport.note, scheduleContext: developerReport.scheduleContext }).then((result) => {
+          try {
+            replyTarget?.postMessage({ type: SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, ok: result.ok, message: formatDeveloperReportResultMessage(result) }, '*')
+          } catch {
+            // 別タブが閉じられていれば何もしない(報告自体は送れている)。
+          }
+        })
+        return
+      }
 
       if (message.type === 'schedule-refresh-request') {
         // 明示リフレッシュ(force=true)
@@ -3945,7 +4025,7 @@ function AuthenticatedApp() {
 
     window.addEventListener('message', handleScheduleRangeMessage)
     return () => window.removeEventListener('message', handleScheduleRangeMessage)
-  }, [actingClassroomId, applyReopenedSlotConversions, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
+  }, [submitDeveloperReport, actingClassroomId, applyReopenedSlotConversions, ensureScheduleSubmissionTokens, isActingDevelopmentClassroom, studentScheduleRange, teacherScheduleRange, syncStudentSchedulePopup, syncTeacherSchedulePopup])
 
   useEffect(() => {
     const timerId = window.setTimeout(() => syncStudentSchedulePopup(), 400)
@@ -5282,6 +5362,7 @@ function AuthenticatedApp() {
     : isRemoteSyncPending && (isRemoteSyncVisible || hasImmediateUnsavedBoardChanges)
 
   return renderWithSubmissionAcknowledgement(
+    <>
     <ScheduleBoardScreen
       key={boardMountKey}
       classroomSettings={classroomSettings}
@@ -5313,6 +5394,7 @@ function AuthenticatedApp() {
       onDismissUndoSnapshot={dismissUndoSnapshot}
       onLogout={logout}
       onCopyDistributionUrl={copyBoardDistributionUrl}
+      onReportToDeveloper={openDeveloperReportModal}
       onSaveBoard={saveBoard}
       isBoardDirty={hasImmediateUnsavedBoardChanges}
       isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
@@ -5325,6 +5407,16 @@ function AuthenticatedApp() {
       syncElapsedSeconds={shouldShowRemoteSyncStatus ? remoteSyncProgress?.elapsedSeconds ?? 0 : null}
       onDeletionStockSummaryChange={handleDeletionStockSummaryChange}
     />
+    {developerReportModal ? (
+      <DeveloperReportModal
+        classroomName={actingClassroom?.name ?? ''}
+        sending={developerReportModal.sending}
+        resultMessage={developerReportModal.resultMessage}
+        onSubmit={(note) => { void handleDeveloperReportSubmit(note) }}
+        onClose={() => setDeveloperReportModal(null)}
+      />
+    ) : null}
+    </>
   )
 }
 

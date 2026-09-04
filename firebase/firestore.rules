@@ -102,6 +102,12 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // 「開発者へ報告」(2026-09-04): Cloud Function submitDeveloperReport だけが書く。開発者は一覧・閲覧可。
+      match /developerReports/{reportId} {
+        allow read: if isDeveloper(workspaceKey);
+        allow write: if false;
+      }
+
       match /billingMonths/{monthKey} {
         allow read, write: if isBillingDeveloper(workspaceKey);
 

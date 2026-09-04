@@ -24,6 +24,16 @@
 - 保存の各試行は `classroomSnapshots/{id}/saveAttempts/{saveId}` に status（started/verified/verification-failed）が残る。
 - 保存不具合の調査時はここを**読み取り**で確認する（書き込み調査は staging で）。
 
+### 4. 利用者からの「開発者へ報告」（自動・実装済み 2026-09-04）
+
+- 画面の「開発者へ報告」ボタン（盤面ツールバー／日程表タブ）から送られた報告は Firestore
+  `workspaces/main/developerReports` に溜まり、`.github/workflows/developer-reports.yml`（15分ごと）が
+  GitHub Issue を起票する（ラベル `source:user-report`）。開発者は GitHub 通知で受け取る。
+- Issue 本文はメタ情報と置き場所だけ（公開リポジトリのため）。操作痕跡は Firestore 文書の `recentOperations`、
+  報告時点の教室データは Storage `developer-reports/...json.gz`（Issue 内の `gsutil` コマンドで取得）。
+- 仕様: `docs/spec-developer-report.md`。ワークフローが赤なら Firestore 権限（サービスアカウント）か
+  GitHub API の失敗。手動再実行は Actions → 「Notify developer reports」。
+
 ## アラートが来たら（対応フロー）
 1. 自動起票された `incident:uptime` Issue とワークフローのログ（report）を見る。
 2. 実際に `https://komahyouapp-prod.web.app` を開いて症状を確認（誤検知の切り分け）。
