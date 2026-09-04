@@ -1,7 +1,7 @@
 {
   "name": "komahyouapp",
   "private": true,
-  "version": "1.5.488",
+  "version": "1.5.489",
   "type": "module",
   "scripts": {
     "prebuild": "node tools/clean-dist.mjs",
