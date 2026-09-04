@@ -18,6 +18,11 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+## v1.5.492 (2026-09-04)
+
+- feat: 「開発者へ報告」の一言を必須化(空欄では送れない・盤面/日程表とも)、日程表側も prompt をやめ盤面と同一表示・同一文言のモーダルに統一(文言正本 DEVELOPER_REPORT_UI_TEXT)、モーダルを大きく読みやすく(幅820px・本文17px・入力7行)。(オーナー指示 2026-09-04 / src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/App.tsx, src/App.css)
+- feat: 利用者報告の受け取り後は勝手に修正を始めない運用を明文化(Issue 本文・CLAUDE.md・仕様)。LINE Messaging API への push 通知を追加(secrets LINE_CHANNEL_ACCESS_TOKEN / LINE_NOTIFY_TO 設定時のみ・設定手順は docs/runbooks/monitoring.md)。(tools/developer-report-notify.mjs, .github/workflows/developer-reports.yml)
+
 ## v1.5.491 (2026-09-04)
 
 - feat: 操作痕跡の盤面差分に生徒ID(#managedStudentId・無ければ盤面id)を生徒名に添える(オーナー指示 2026-09-04: 誰の何がバグかを取り違えずに追うため)。(src/utils/operationTrace.ts)

@@ -4786,15 +4786,28 @@ tr.sa-group-row td {
   background: #ffe8c2;
 }
 
+/* 大きく読みやすく(オーナー指示 2026-09-04)。日程表タブ側の同一モーダル(scheduleHtml.ts)も同じ寸法・文字サイズにする。 */
 .developer-report-modal {
-  max-width: 520px;
+  max-width: 820px;
+  padding: 28px 32px;
+  gap: 18px;
+}
+
+.developer-report-title {
+  font-size: 22px;
 }
 
 .developer-report-description {
   margin: 0;
   color: #36506d;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.developer-report-note-label {
+  font-size: 16px;
+  font-weight: 600;
+  color: #16314f;
 }
 
 .developer-report-note {
@@ -4802,16 +4815,40 @@ tr.sa-group-row td {
   box-sizing: border-box;
   border: 1px solid #c7d3e3;
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 14px 16px;
   font: inherit;
-  font-size: 14px;
+  font-size: 17px;
+  line-height: 1.6;
+  min-height: 180px;
   resize: vertical;
+}
+
+.developer-report-note.has-error {
+  border-color: #d93025;
+  box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.15);
+}
+
+.developer-report-error {
+  margin: 0;
+  color: #b3261e;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.developer-report-actions {
+  justify-content: flex-end;
+}
+
+.developer-report-actions .primary-button,
+.developer-report-actions .secondary-button {
+  font-size: 17px;
+  padding: 12px 24px;
 }
 
 .developer-report-result {
   margin: 0;
   white-space: pre-wrap;
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 17px;
+  line-height: 1.7;
   color: #1f3350;
 }

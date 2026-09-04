@@ -4392,8 +4392,15 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     // 本体へ送るメッセージと、本体から返る結果メッセージの両方を扱う(App.tsx の定数と一致)。
     expect(html).toContain("type: 'schedule-developer-report'")
     expect(html).toContain("message.type === 'schedule-developer-report-result'")
-    // 一言は空欄でも送れる(prompt のキャンセル=null だけが中止)。
-    expect(html).toContain('if (note === null) return;')
+    // 盤面と同一のモーダル(prompt ではない)。文言は DEVELOPER_REPORT_UI_TEXT を埋め込む。一言は必須。
+    expect(html).not.toContain('window.prompt(')
+    expect(html).toContain('const DEVELOPER_REPORT_TEXT = {')
+    expect(html).toContain('"requiredError":"一言を入力してください。')
+    expect(html).toContain('"placeholder":"例: 9/3 の 3限で振替が消えた気がする')
+    expect(html).not.toContain('空欄のままでも送れます')
+    expect(html).toContain('.developer-report-modal {')
+    expect(html).toContain("id = 'schedule-developer-report-modal'")
+    expect(html).toContain('if (!note) {')
     // opener 不在なら No.210 の可視化(isOpenerAvailable)に乗せる。
     expect(html).toContain('if (!isOpenerAvailable()) return;\n          const personOption')
     // 表示条件を context として添える。

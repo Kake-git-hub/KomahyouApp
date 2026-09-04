@@ -10,6 +10,8 @@
 
 - 目的: 利用者が「おかしいな」と感じた瞬間に、**直近の操作履歴と画面のデータ**を開発者へ届け、
   バグ／仕様の誤解／勘違いを開発者側で切り分けられるようにする。
+- **受け取った後の進め方（オーナー指示 2026-09-04・厳守）**: 利用者報告 Issue を見ても**勝手に修正を始めない**。
+  調査・整理までは進めてよいが、コード修正への着手はオーナーが確認して許可してから。
 - 非目的: 全操作をサーバーへ常時記録すること（コストとノイズが見合わない。オーナー判断 2026-09-04）。
   本番での不変条件(INV)自己検査（オーナー判断で不要。報告が来たら開発者が検査する）。
 
@@ -21,12 +23,15 @@
   同じ枠線ボタンで色だけ変える(`button.report-developer`)。印刷用全員表示(all-view)には出さない（ツールバー自体が無い）。
 - 日程表は**操作せず表示だけ見て**「おかしい」と思うことがある。そのため日程表側のボタンは、その日程表で
   表示していた条件（種別・期間・講習期間ラベル・選択人物・検索語）を報告に添える。
+- **モーダルは盤面・日程表で同一の表示・文言**（オーナー指示 2026-09-04）。文言の正本は
+  `DEVELOPER_REPORT_UI_TEXT`（`src/utils/developerReport.ts`）で、日程表 HTML の埋め込みスクリプトへ生成時に埋め込む。
+  大きく読みやすく（幅 820px・本文 17px・入力欄 7 行）。一言が空なら送信せず「一言を入力してください」と促す。
 
 ## C. 送信内容（`submitDeveloperReport`）
 
 | 項目 | 内容 | 出どころ |
 |---|---|---|
-| 任意の一言 | **空欄でも送れる**（上限 2000 字） | モーダルの textarea / 日程表は `prompt` |
+| 一言 | **必須**（2026-09-04 改定・空欄は送れない。上限 2000 字） | 盤面・日程表とも同一モーダルの textarea |
 | 直近の操作痕跡 | 端末内リングバッファの最新 300 件 | `operationTrace.ts`（§D） |
 | 報告時点の教室データ | メモリ上の教室データ（**未保存の変更込み**）を gzip して Storage へ | `buildClassroomSnapshotPayload` |
 | メタ | 教室・報告元(board/schedule)・アプリ版数・UA・URL・画面・未保存有無・最終保存時刻 | App |
@@ -53,13 +58,17 @@
   GitHub Issue を起票（ラベル `type:bug` / `status:triage` / `source:user-report`）→ `notifiedAt`・`issueNumber` を埋める。
   開発者は GitHub 通知（メール/アプリ）で受け取る。認証は既存 secret `RE_FIREBASE_SERVICE_ACCOUNT`。
 - **公開リポジトリのため Issue 本文に操作痕跡（生徒名）・教室データは載せない。** メタ＋一言＋置き場所
-  （Firestore 文書パス／Storage パスと取得コマンド）だけ。
+  （Firestore 文書パス／Storage パスと取得コマンド）だけ。Issue 本文にも「勝手に修正を始めない・許可後に着手」を明記。
+- **LINE 通知（任意）**: リポジトリ secret `LINE_CHANNEL_ACCESS_TOKEN`（LINE Messaging API のチャネルアクセストークン）と
+  `LINE_NOTIFY_TO`（通知先の userId または groupId）を設定すると、Issue 起票のたびに LINE へ push する
+  （教室・報告元・時刻・版数・一言の先頭 80 字・Issue URL。生徒名を含む痕跡は載せない）。未設定なら Issue のみ。
+  旧 LINE Notify は 2025-03 に終了しているため Messaging API を使う。設定手順は `docs/runbooks/monitoring.md`。
 - Firestore ルール: `developerReports` は開発者のみ read、write は不可（Cloud Function は Admin SDK で書く）。
   ルールの反映は `firebase deploy --only firestore:rules`（main マージでは反映されない）。
 
 ## F. 受け入れ条件（テストで固定）
 
-- 一言なしで送れる（`parseScheduleDeveloperReportMessage` / `normalizeDeveloperReportNote`）。
+- 一言が空なら盤面・日程表とも送れない（`validateDeveloperReportNote`。本体側でも日程表経由の空文を弾く）。
 - 操作痕跡は上限件数・上限文字数で切り、教室未登録なら記録しない（別教室混入防止）。
 - 盤面差分は変わった机だけを列挙し、机に現れない付随変更（休日・在庫・補正）も名前で残す。
 - サーバーは壊れた要素だけ捨てて残りを通し、`classroomId` は権限確認済みの値を使う。

@@ -48,3 +48,7 @@ jobs:
           FIREBASE_PROJECT_ID: komahyouapp-prod
           FIREBASE_WORKSPACE_KEY: main
           STORAGE_BUCKET: komahyouapp-prod.firebasestorage.app
+          # LINE 通知(任意・オーナー要望 2026-09-04)。未設定なら Issue 起票だけ行う。
+          # 設定手順: docs/runbooks/monitoring.md「LINE 通知の設定」。
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_NOTIFY_TO: ${{ secrets.LINE_NOTIFY_TO }}

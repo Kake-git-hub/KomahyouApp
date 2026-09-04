@@ -4,6 +4,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   ISSUE_LABELS,
+  buildLineMessage,
+  sendLineNotification,
   buildIssueBody,
   buildIssueTitle,
   buildMarkNotifiedBody,
@@ -87,6 +89,32 @@ describe('Issue の整形(公開リポジトリ前提)', () => {
     // 生徒名を含む操作痕跡とメールアドレスは公開 Issue に出さない。
     expect(body).not.toContain('青木 太郎')
     expect(body).not.toContain('secret@example.test')
+    // 勝手に修正を始めない(オーナー指示 2026-09-04)。
+    expect(body).toContain('勝手に修正を始めないこと')
+    expect(body).toContain('許可してから')
+  })
+
+  it('LINE 通知文は教室・報告元・一言の先頭・Issue URL だけで、生徒名を含む痕跡は載せない', () => {
+    const text = buildLineMessage(report, 'https://github.com/o/r/issues/77')
+    expect(text).toContain('スクールIE 緑が丘校')
+    expect(text).toContain('日程表(別タブ)')
+    expect(text).toContain('一言: 9/3 の振替が消えた 2行目')
+    expect(text).toContain('https://github.com/o/r/issues/77')
+    expect(text).toContain('許可後')
+    expect(text).not.toContain('青木 太郎')
+    expect(buildLineMessage({ ...report, note: 'x'.repeat(100) }, 'u')).toContain('x'.repeat(80) + '…')
+  })
+
+  it('LINE は secrets 未設定なら送らず、失敗しても例外にしない(Issue 起票は成功済みのため)', async () => {
+    expect(await sendLineNotification({ channelAccessToken: '', to: '', text: 't' })).toEqual({ sent: false, reason: 'not-configured' })
+    const failing = async () => ({ ok: false, status: 401, text: async () => 'bad token' })
+    expect(await sendLineNotification({ channelAccessToken: 'tok', to: 'U1', text: 't', fetchImpl: failing })).toEqual({ sent: false, reason: 'HTTP 401 bad token' })
+    const calls = []
+    const okFetch = async (url, init) => { calls.push({ url, body: JSON.parse(init.body), auth: init.headers.Authorization }); return { ok: true } }
+    expect(await sendLineNotification({ channelAccessToken: 'tok', to: 'U1', text: 'hello', fetchImpl: okFetch })).toEqual({ sent: true })
+    expect(calls[0].url).toBe('https://api.line.me/v2/bot/message/push')
+    expect(calls[0].auth).toBe('Bearer tok')
+    expect(calls[0].body).toEqual({ to: 'U1', messages: [{ type: 'text', text: 'hello' }] })
   })
 
   it('一言が空でも本文は成立し、教室データ未保存も明示する', () => {
@@ -121,7 +149,7 @@ describe('通知の一巡(fetch を注入)', () => {
       return { ok: true, json: async () => ({}) }
     }
     const results = await notifyPendingReports({ projectId: 'p', workspaceKey: 'main', accessToken: 't', githubToken: 'g', repository: 'o/r', fetchImpl })
-    expect(results).toEqual([{ reportId: '20260904-030405678-abcd1e2f', issueNumber: 77, issueUrl: 'https://github.com/o/r/issues/77' }])
+    expect(results).toEqual([{ reportId: '20260904-030405678-abcd1e2f', issueNumber: 77, issueUrl: 'https://github.com/o/r/issues/77', lineSent: false, lineReason: 'not-configured' }])
     expect(calls.map((c) => c.method)).toEqual(['POST', 'POST', 'PATCH'])
     expect(calls[1].body.labels).toEqual(ISSUE_LABELS)
     expect(calls[2].url).toContain('/workspaces/main/developerReports/r1?updateMask.fieldPaths=notifiedAt')

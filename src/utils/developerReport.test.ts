@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEVELOPER_REPORT_UI_TEXT,
+  validateDeveloperReportNote,
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_LIMIT,
   SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE,
@@ -16,8 +18,21 @@ function trace(index: number): OperationTraceEntry {
   return { at: `2026-09-04T00:00:${String(index % 60).padStart(2, '0')}.000Z`, kind: 'board-commit', summary: `op-${index}` }
 }
 
-describe('developerReport: 任意の一言は空でも送れる', () => {
-  it('note が無い/空/非文字列でも空文字として通す(送信を止めない)', () => {
+describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
+  it('validateDeveloperReportNote は空/空白/非文字列を弾き、入力があれば null', () => {
+    expect(validateDeveloperReportNote('')).toBe(DEVELOPER_REPORT_UI_TEXT.requiredError)
+    expect(validateDeveloperReportNote('   \n ')).toBe(DEVELOPER_REPORT_UI_TEXT.requiredError)
+    expect(validateDeveloperReportNote(undefined)).toBe(DEVELOPER_REPORT_UI_TEXT.requiredError)
+    expect(validateDeveloperReportNote('9/3 の振替が消えた')).toBeNull()
+    // 文言に「空欄のままでも送れます」を復活させない(オーナー指示で撤回)。
+    for (const text of Object.values(DEVELOPER_REPORT_UI_TEXT)) {
+      const value = typeof text === 'function' ? text('教室') : text
+      expect(value).not.toContain('空欄')
+    }
+    expect(DEVELOPER_REPORT_UI_TEXT.description('緑が丘校')).toContain('教室「緑が丘校」')
+  })
+
+  it('normalizeDeveloperReportNote は整形だけを担い、必須判定は validateDeveloperReportNote が担う', () => {
     expect(normalizeDeveloperReportNote(undefined)).toBe('')
     expect(normalizeDeveloperReportNote('')).toBe('')
     expect(normalizeDeveloperReportNote(42)).toBe('')
@@ -26,10 +41,12 @@ describe('developerReport: 任意の一言は空でも送れる', () => {
     expect(normalizeDeveloperReportNote('a\r\nb')).toBe('a\nb')
   })
 
-  it('日程表からのメッセージは type が一致するときだけ受け付け、note 無しでも報告になる', () => {
+  it('日程表からのメッセージは type が一致するときだけ受け付ける(空 note は解析は通し、本体側の必須検証で弾く)', () => {
     expect(parseScheduleDeveloperReportMessage(null)).toBeNull()
     expect(parseScheduleDeveloperReportMessage({ type: 'schedule-student-count-save' })).toBeNull()
-    expect(parseScheduleDeveloperReportMessage({ type: SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE })).toEqual({ note: '', scheduleContext: undefined })
+    const empty = parseScheduleDeveloperReportMessage({ type: SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE })
+    expect(empty).toEqual({ note: '', scheduleContext: undefined })
+    expect(validateDeveloperReportNote(empty?.note)).toBe(DEVELOPER_REPORT_UI_TEXT.requiredError)
     expect(parseScheduleDeveloperReportMessage({
       type: SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE,
       note: ' 表示がおかしい ',

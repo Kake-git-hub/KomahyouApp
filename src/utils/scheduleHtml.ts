@@ -4,6 +4,7 @@
 // 自動修正で外すと埋め込みスクリプトが壊れて実行時に全停止する(memory: komahyou-schedulehtml-embedded-script)。
 // そのためこのルールはファイル単位で無効化する。エスケープは絶対に変更しない。
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
+import { DEVELOPER_REPORT_UI_TEXT } from './developerReport'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
@@ -1231,6 +1232,65 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         color: #8a4b00;
         border-color: #d68910;
       }
+
+      /* 「開発者へ報告」モーダル: 盤面(src/App.css .developer-report-modal)と同じ見え方・文言にする(オーナー指示 2026-09-04)。 */
+      /* .print-only-hidden { display: inline } が後段で当たるため、複合セレクタで flex を勝たせる(中央寄せが崩れる)。 */
+      .developer-report-overlay,
+      .developer-report-overlay.print-only-hidden {
+        position: fixed;
+        inset: 0;
+        background: rgba(16, 40, 70, 0.45);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      }
+      .developer-report-modal {
+        background: #fff;
+        border-radius: 20px;
+        padding: 28px 32px;
+        max-width: 820px;
+        width: 100%;
+        display: grid;
+        gap: 18px;
+        box-shadow: 0 8px 32px rgba(16, 40, 70, 0.18);
+        max-height: 90vh;
+        overflow-y: auto;
+        box-sizing: border-box;
+      }
+      .developer-report-title { font-weight: 600; font-size: 22px; color: #16314f; }
+      .developer-report-description { margin: 0; color: #36506d; font-size: 17px; line-height: 1.7; }
+      .developer-report-note-label { font-size: 16px; font-weight: 600; color: #16314f; }
+      .developer-report-note {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #c7d3e3;
+        border-radius: 12px;
+        padding: 14px 16px;
+        font: inherit;
+        font-size: 17px;
+        line-height: 1.6;
+        min-height: 180px;
+        resize: vertical;
+      }
+      .developer-report-note.has-error { border-color: #d93025; box-shadow: 0 0 0 2px rgba(217, 48, 37, 0.15); }
+      .developer-report-error { margin: 0; color: #b3261e; font-size: 15px; font-weight: 600; }
+      .developer-report-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+      .developer-report-actions button {
+        border: none;
+        border-radius: 12px;
+        padding: 12px 24px;
+        font: inherit;
+        font-size: 17px;
+        cursor: pointer;
+        height: auto;
+      }
+      .developer-report-actions .developer-report-submit { background: #1a73e8; color: #fff; box-shadow: 0 6px 18px rgba(26, 115, 232, 0.24); }
+      .developer-report-actions .developer-report-cancel { background: #eef3fb; color: #36506d; }
+      .developer-report-actions button[disabled] { opacity: 0.6; cursor: default; }
+      .developer-report-result { margin: 0; white-space: pre-wrap; font-size: 17px; line-height: 1.7; color: #1f3350; }
 
       .pages {
         display: grid;
@@ -2702,7 +2762,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
-        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="「おかしいな」と思ったら、そのまま開発者へ知らせます(一言は空欄でも送れます)">開発者へ報告</button>
+        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="「おかしいな」と思ったら、そのまま開発者へ知らせます">開発者へ報告</button>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
@@ -6907,15 +6967,124 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       // 「開発者へ報告」(2026-09-04): 日程表は表示を見ただけで「おかしい」と思うことがあるので、ここからも送れる。
       // 送信は本体(opener)が行う(教室データ・操作痕跡は本体が持つ)。この日程表の表示条件を context として添える。
-      const reportDeveloperButton = document.getElementById('schedule-report-developer-button');
-      if (reportDeveloperButton) {
-        reportDeveloperButton.addEventListener('click', function() {
-          const note = window.prompt('開発者へ報告します。気になった点があれば一言どうぞ(空欄のままでも送れます)。', '');
-          if (note === null) return;
+      // 文言は盤面モーダル(src/utils/developerReport.ts DEVELOPER_REPORT_UI_TEXT)と同一。一言は必須。
+      const DEVELOPER_REPORT_TEXT = ${JSON.stringify({
+        title: DEVELOPER_REPORT_UI_TEXT.title,
+        description: DEVELOPER_REPORT_UI_TEXT.description('__CLASSROOM__'),
+        descriptionNoClassroom: DEVELOPER_REPORT_UI_TEXT.description(''),
+        noteLabel: DEVELOPER_REPORT_UI_TEXT.noteLabel,
+        placeholder: DEVELOPER_REPORT_UI_TEXT.placeholder,
+        requiredError: DEVELOPER_REPORT_UI_TEXT.requiredError,
+        cancel: DEVELOPER_REPORT_UI_TEXT.cancel,
+        submit: DEVELOPER_REPORT_UI_TEXT.submit,
+        sending: DEVELOPER_REPORT_UI_TEXT.sending,
+        close: DEVELOPER_REPORT_UI_TEXT.close,
+      })};
+      let developerReportOverlay = null;
+      let developerReportResultTimer = 0;
+      function closeDeveloperReportModal() {
+        if (developerReportResultTimer) { window.clearTimeout(developerReportResultTimer); developerReportResultTimer = 0; }
+        if (developerReportOverlay && developerReportOverlay.parentNode) developerReportOverlay.parentNode.removeChild(developerReportOverlay);
+        developerReportOverlay = null;
+      }
+      function showDeveloperReportResult(text) {
+        if (!developerReportOverlay) return;
+        const modal = developerReportOverlay.querySelector('.developer-report-modal');
+        if (!modal) return;
+        modal.innerHTML = '';
+        const title = document.createElement('div');
+        title.className = 'developer-report-title';
+        title.textContent = DEVELOPER_REPORT_TEXT.title;
+        const result = document.createElement('p');
+        result.className = 'developer-report-result';
+        result.textContent = text;
+        const actions = document.createElement('div');
+        actions.className = 'developer-report-actions';
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'developer-report-submit';
+        closeButton.textContent = DEVELOPER_REPORT_TEXT.close;
+        closeButton.addEventListener('click', closeDeveloperReportModal);
+        actions.appendChild(closeButton);
+        modal.appendChild(title);
+        modal.appendChild(result);
+        modal.appendChild(actions);
+        closeButton.focus();
+      }
+      function openDeveloperReportModal() {
+        if (developerReportOverlay) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'developer-report-overlay print-only-hidden';
+        overlay.id = 'schedule-developer-report-modal';
+        const modal = document.createElement('div');
+        modal.className = 'developer-report-modal';
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+        const title = document.createElement('div');
+        title.className = 'developer-report-title';
+        title.textContent = DEVELOPER_REPORT_TEXT.title;
+        const description = document.createElement('p');
+        description.className = 'developer-report-description';
+        description.textContent = DATA.classroomName
+          ? DEVELOPER_REPORT_TEXT.description.replace('__CLASSROOM__', String(DATA.classroomName))
+          : DEVELOPER_REPORT_TEXT.descriptionNoClassroom;
+        const label = document.createElement('label');
+        label.className = 'developer-report-note-label';
+        label.htmlFor = 'schedule-developer-report-note';
+        label.textContent = DEVELOPER_REPORT_TEXT.noteLabel;
+        const textarea = document.createElement('textarea');
+        textarea.id = 'schedule-developer-report-note';
+        textarea.className = 'developer-report-note';
+        textarea.rows = 7;
+        textarea.maxLength = 2000;
+        textarea.placeholder = DEVELOPER_REPORT_TEXT.placeholder;
+        const error = document.createElement('p');
+        error.className = 'developer-report-error';
+        error.setAttribute('role', 'alert');
+        error.hidden = true;
+        const actions = document.createElement('div');
+        actions.className = 'developer-report-actions';
+        const cancelButton = document.createElement('button');
+        cancelButton.type = 'button';
+        cancelButton.className = 'developer-report-cancel';
+        cancelButton.textContent = DEVELOPER_REPORT_TEXT.cancel;
+        const submitButton = document.createElement('button');
+        submitButton.type = 'button';
+        submitButton.className = 'developer-report-submit';
+        submitButton.textContent = DEVELOPER_REPORT_TEXT.submit;
+        actions.appendChild(cancelButton);
+        actions.appendChild(submitButton);
+        modal.appendChild(title);
+        modal.appendChild(description);
+        modal.appendChild(label);
+        modal.appendChild(textarea);
+        modal.appendChild(error);
+        modal.appendChild(actions);
+        overlay.appendChild(modal);
+        overlay.addEventListener('click', function(event) {
+          if (event.target === overlay && !submitButton.disabled) closeDeveloperReportModal();
+        });
+        cancelButton.addEventListener('click', closeDeveloperReportModal);
+        textarea.addEventListener('input', function() {
+          if (textarea.value.trim()) { error.hidden = true; textarea.classList.remove('has-error'); }
+        });
+        submitButton.addEventListener('click', function() {
+          const note = textarea.value.trim();
+          if (!note) {
+            // 一言は必須(2026-09-04 改定)。盤面モーダルと同じ文言で促す。
+            error.textContent = DEVELOPER_REPORT_TEXT.requiredError;
+            error.hidden = false;
+            textarea.classList.add('has-error');
+            textarea.focus();
+            return;
+          }
           if (!isOpenerAvailable()) return;
           const personOption = personSelect && personSelect.options ? personSelect.options[personSelect.selectedIndex] : null;
           const periodOption = periodSelect && periodSelect.options ? periodSelect.options[periodSelect.selectedIndex] : null;
-          reportDeveloperButton.disabled = true;
+          submitButton.disabled = true;
+          cancelButton.disabled = true;
+          textarea.disabled = true;
+          submitButton.textContent = DEVELOPER_REPORT_TEXT.sending;
           window.opener.postMessage({
             type: 'schedule-developer-report',
             note: note,
@@ -6929,9 +7098,18 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               search: personSearchInput ? (personSearchInput.value || '') : '',
             },
           }, '*');
-          // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即解除される。
-          window.setTimeout(function() { reportDeveloperButton.disabled = false; }, 15000);
+          // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即差し替わる。
+          developerReportResultTimer = window.setTimeout(function() {
+            showDeveloperReportResult('本体(コマ表)から応答がありません。コマ表のタブを開いた状態で、もう一度お試しください。');
+          }, 20000);
         });
+        document.body.appendChild(overlay);
+        developerReportOverlay = overlay;
+        textarea.focus();
+      }
+      const reportDeveloperButton = document.getElementById('schedule-report-developer-button');
+      if (reportDeveloperButton) {
+        reportDeveloperButton.addEventListener('click', openDeveloperReportModal);
       }
 
       const showAllButton = document.getElementById('schedule-show-all-button');
@@ -7090,11 +7268,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           releaseInteractionLock();
           return;
         }
-        // 「開発者へ報告」の結果(本体が送信して返す)。alert で知らせ、ボタンを再び押せるようにする。
+        // 「開発者へ報告」の結果(本体が送信して返す)。盤面と同じくモーダル内に結果を表示する。
         if (message && message.type === 'schedule-developer-report-result') {
-          const reportButton = document.getElementById('schedule-report-developer-button');
-          if (reportButton) reportButton.disabled = false;
-          window.alert(String(message.message || (message.ok ? '開発者へ報告しました。' : '報告を送れませんでした。')));
+          if (developerReportResultTimer) { window.clearTimeout(developerReportResultTimer); developerReportResultTimer = 0; }
+          const resultText = String(message.message || (message.ok ? '開発者へ報告しました。' : '報告を送れませんでした。'));
+          if (developerReportOverlay) showDeveloperReportResult(resultText);
+          else window.alert(resultText);
           return;
         }
         // 日程表コマ組みの結果ack: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示。

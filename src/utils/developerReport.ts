@@ -42,6 +42,28 @@ export const DEVELOPER_REPORT_TRACE_LIMIT = 300
 export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_KEY_LIMIT = 12
 export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_VALUE_LIMIT = 200
 
+/**
+ * モーダルの文言（盤面 React モーダルと日程表タブの同一モーダルで共用。オーナー指示 2026-09-04: 両方同じ表示・文言にする）。
+ * 一言は**必須**（2026-09-04 改定: 「空欄のままでも送れます」は撤回）。
+ */
+export const DEVELOPER_REPORT_UI_TEXT = {
+  title: '開発者へ報告',
+  description: (classroomName: string) =>
+    `「おかしいな」と思ったら、そのまま送ってください。${classroomName ? `教室「${classroomName}」の` : ''}直近の操作履歴と、いまの画面のデータが開発者に届きます。`,
+  noteLabel: '何がおかしいと感じたか（必須）',
+  placeholder: '例: 9/3 の 3限で振替が消えた気がする ／ 日程表の 9/5 に通常授業が出ていない',
+  requiredError: '一言を入力してください。何がおかしいと感じたかが分からないと、開発者が調べられません。',
+  cancel: 'キャンセル',
+  submit: '送信する',
+  sending: '送信中…',
+  close: '閉じる',
+} as const
+
+/** 一言の必須チェック。問題なければ null、あれば利用者向けのエラー文。 */
+export function validateDeveloperReportNote(raw: unknown): string | null {
+  return normalizeDeveloperReportNote(raw) ? null : DEVELOPER_REPORT_UI_TEXT.requiredError
+}
+
 /** 日程表タブからの postMessage の種別（scheduleHtml.ts の埋め込みスクリプトと一致させる）。 */
 export const SCHEDULE_DEVELOPER_REPORT_MESSAGE_TYPE = 'schedule-developer-report'
 export const SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE = 'schedule-developer-report-result'

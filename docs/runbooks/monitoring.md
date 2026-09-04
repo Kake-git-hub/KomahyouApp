@@ -33,6 +33,23 @@
   報告時点の教室データは Storage `developer-reports/...json.gz`（Issue 内の `gsutil` コマンドで取得）。
 - 仕様: `docs/spec-developer-report.md`。ワークフローが赤なら Firestore 権限（サービスアカウント）か
   GitHub API の失敗。手動再実行は Actions → 「Notify developer reports」。
+- **受け取った後は勝手に修正を始めない**（オーナー指示 2026-09-04）。切り分け・整理まで進め、修正はオーナーの許可後。
+
+#### LINE 通知の設定（任意・オーナー作業 ~15分）
+
+旧 LINE Notify は 2025-03 に終了したため、LINE Messaging API の push を使う（無料枠: 月 200 通で十分）。
+
+1. [LINE Developers](https://developers.line.biz/) にログイン → プロバイダー作成 → 「Messaging API チャネル」を作成
+   （LINE 公式アカウントが 1 つできる）。
+2. チャネルの「Messaging API 設定」→ **チャネルアクセストークン（長期）** を発行してコピー。
+3. 同じ画面の QR コードで、通知を受け取りたい LINE アカウント（オーナー自身）がそのアカウントを**友だち追加**する。
+4. 通知先 ID を取る: 「チャネル基本設定」の **あなたのユーザーID**（`U` で始まる）を使う。
+   グループに流したい場合はボットをグループに招待し、Webhook で `groupId` を取得する（手間が増えるので最初は個人宛て推奨）。
+5. GitHub → リポジトリ → Settings → Secrets and variables → Actions に追加:
+   - `LINE_CHANNEL_ACCESS_TOKEN` = 手順 2 のトークン
+   - `LINE_NOTIFY_TO` = 手順 4 の userId（または groupId）
+6. Actions → 「Notify developer reports」→ Run workflow で動作確認（報告が無ければ「新しい利用者報告はありません」）。
+   実際の通知は次の報告が起票されたときに届く。届かなければ run のログの `LINE:` 行に理由が出る。
 
 ## アラートが来たら（対応フロー）
 1. 自動起票された `incident:uptime` Issue とワークフローのログ（report）を見る。

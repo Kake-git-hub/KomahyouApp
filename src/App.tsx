@@ -42,7 +42,7 @@ import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
-import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, type DeveloperReportScheduleContext, type DeveloperReportSource } from './utils/developerReport'
+import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportScheduleContext, type DeveloperReportSource } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
@@ -3657,7 +3657,12 @@ function AuthenticatedApp() {
       const developerReport = parseScheduleDeveloperReportMessage(message)
       if (developerReport) {
         const replyTarget = event.source as Window | null
-        void submitDeveloperReport({ source: 'schedule', note: developerReport.note, scheduleContext: developerReport.scheduleContext }).then((result) => {
+        // 一言は必須(2026-09-04 改定)。日程表側モーダルでも検証するが、本体でも同じ規則で弾く。
+        const noteError = validateDeveloperReportNote(developerReport.note)
+        const submission = noteError
+          ? Promise.resolve({ ok: false as const, error: noteError })
+          : submitDeveloperReport({ source: 'schedule', note: developerReport.note, scheduleContext: developerReport.scheduleContext })
+        void submission.then((result) => {
           try {
             replyTarget?.postMessage({ type: SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, ok: result.ok, message: formatDeveloperReportResultMessage(result) }, '*')
           } catch {
