@@ -20,9 +20,11 @@
 
 ## v1.5.493 (2026-09-04)
 
-- chore: src/App.tsx の改行コードを CRLF に戻す(変更なし: v1.5.492 の編集で LF 化し全行差分になっていたため。git が -text 扱いの巨大ファイルなので自動正規化されない)
+- chore: CHANGELOG の版ラベル修正のみ(変更なし: 直前の2コミットがCIで同時にデプロイされ v1.5.492 にまとまったため、別版として書いていた CRLF 復旧の記載を v1.5.492 へ統合)
 
 ## v1.5.492 (2026-09-04)
+
+- chore: src/App.tsx の改行コードを CRLF に戻す(内容変更なし: 同版の編集で LF 化し全行差分になっていたため。git が -text 扱いの巨大ファイルなので自動正規化されない。書き換え後は CRLF に戻してからコミットする)
 
 - feat: 「開発者へ報告」の一言を必須化(空欄では送れない・盤面/日程表とも)、日程表側も prompt をやめ盤面と同一表示・同一文言のモーダルに統一(文言正本 DEVELOPER_REPORT_UI_TEXT)、モーダルを大きく読みやすく(幅820px・本文17px・入力7行)。(オーナー指示 2026-09-04 / src/utils/developerReport.ts, src/components/developer-report/DeveloperReportModal.tsx, src/utils/scheduleHtml.ts, src/App.tsx, src/App.css)
 - feat: 利用者報告の受け取り後は勝手に修正を始めない運用を明文化(Issue 本文・CLAUDE.md・仕様)。LINE Messaging API への push 通知を追加(secrets LINE_CHANNEL_ACCESS_TOKEN / LINE_NOTIFY_TO 設定時のみ・設定手順は docs/runbooks/monitoring.md)。(tools/developer-report-notify.mjs, .github/workflows/developer-reports.yml)
