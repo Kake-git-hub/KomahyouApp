@@ -38,6 +38,7 @@ import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeign
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
+import { restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
 import './App.css'
@@ -1478,6 +1479,10 @@ function AuthenticatedApp() {
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
+  // 操作ログ: 記録先の教室を登録する。未登録の間に起きた操作は記録しない(別教室へ混入させない)。
+  useEffect(() => {
+    setOperationLogClassroomId(actingClassroomId)
+  }, [actingClassroomId])
   const manualFirebaseSaveStabilityEnabled = useMemo(
     () => isFeatureEnabledForClassroom('manualFirebaseSaveStability', actingClassroom),
     [actingClassroom],
@@ -1960,6 +1965,10 @@ function AuthenticatedApp() {
           }
           const maxAttempts = manualFirebaseSaveStabilityEnabled ? 3 : 1
           let result: Awaited<ReturnType<typeof saveClassroomSnapshotViaFunction>> | null = null
+          // 操作ログ: 前回保存以降に溜まった分をこの保存へ相乗りさせる。保存が失敗したらバッファへ戻して
+          // 次回に再送する(イベント id をドキュメント id にするので、再送で重複しない)。
+          const operationEvents = takeOperationEvents(targetClassroom.id)
+          try {
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             try {
               // すべての教室で同一の保存経路 (saveClassroomSnapshot) を使う。
@@ -1970,6 +1979,7 @@ function AuthenticatedApp() {
                 savedAt: nextItem.snapshot.savedAt,
                 saveId,
                 payload: targetClassroom.data,
+                ...(operationEvents.length > 0 ? { operationEvents } : {}),
               })
               break
             } catch (error) {
@@ -1982,6 +1992,10 @@ function AuthenticatedApp() {
             }
           }
           if (!result) throw new Error('Firebase 同期の再試行が完了できませんでした。')
+          } catch (error) {
+            restoreOperationEvents(targetClassroom.id, operationEvents)
+            throw error
+          }
         }
         const finishedProgress = { percent: 100, label: 'Cloud Functions 経由のデータベース保存完了' }
         if (isRemoteSyncVisibleRef.current) {

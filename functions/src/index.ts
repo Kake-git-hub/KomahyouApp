@@ -19,6 +19,7 @@ import {
   toMonthKeyFromDateKey,
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
+import { normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import {
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
@@ -893,6 +894,48 @@ function getStoredSnapshotEncoding(snapshot: FirebaseClassroomSnapshotDoc) {
   return snapshot.dataEncoding === FIREBASE_COMPRESSED_SNAPSHOT_ENCODING ? FIREBASE_COMPRESSED_SNAPSHOT_ENCODING : 'inline'
 }
 
+// 操作ログ(在庫が減る・記録が消える操作の監査記録)を保存リクエストから取り出して書く。
+//
+// - 置き場所は **スナップショット本体の外**(classroomSnapshots/{id}/operationEvents)。盤面データに混ぜると
+//   復元/ロールバックで「消した記録」ごと巻き戻って監査に使えなくなるため。
+// - 実行者(updatedBy)と受領時刻(recordedAt)は**サーバーが付ける**。クライアントの自己申告にしない。
+// - ドキュメント id はイベント id。保存の再送(冪等リプレイ)で同じイベントが来ても重複しない。
+// - ★**ここで失敗しても保存本体は成功のままにする**(監査記録は保存より優先度が低い)。呼び出し側は
+//   この関数を await するが、内部で例外を握りつぶしてログに残す。
+async function persistOperationEvents(params: {
+  snapshotRef: FirebaseFirestore.DocumentReference
+  events: NormalizedOperationEvent[]
+  classroomId: string
+  saveId: string
+  savedAt: string
+  updatedBy: string
+}) {
+  if (params.events.length === 0) return 0
+  try {
+    const recordedAt = new Date().toISOString()
+    const collectionRef = params.snapshotRef.collection('operationEvents')
+    const batch = firestore.batch()
+    for (const event of params.events) {
+      batch.set(collectionRef.doc(event.id), {
+        classroomId: params.classroomId,
+        saveId: params.saveId,
+        savedAt: params.savedAt,
+        updatedBy: params.updatedBy,
+        kind: event.kind,
+        detail: event.detail,
+        // at=操作時刻(クライアント時計)。recordedAt=サーバー受領時刻。掃除は recordedAt を見る。
+        at: event.at,
+        recordedAt,
+      })
+    }
+    await batch.commit()
+    return params.events.length
+  } catch (error) {
+    logger.error(`[OperationLog] Failed to persist ${params.events.length} events for classroom=${params.classroomId} saveId=${params.saveId}`, error)
+    return 0
+  }
+}
+
 function buildSaveAttemptPayload(params: {
   classroomId: string
   savedAt: string
@@ -1436,6 +1479,8 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   const sanitizedPayload = sanitizeForFirestore(payload)
   // A1: クライアントが「読み込んだ時点の版数」。旧クライアントは送らない(undefined)。
   const incomingBaseVersion = typeof rawData.baseVersion === 'number' ? rawData.baseVersion : undefined
+  // 操作ログ(相乗り・任意)。旧クライアントは送らない。壊れた要素はここで落とし、保存本体は巻き添えにしない。
+  const incomingOperationEvents = normalizeOperationEvents(rawData.operationEvents, { fallbackIso: savedAt })
 
   if (options?.developmentOnly && classroomId !== DEVELOPMENT_CLASSROOM_ID) {
     throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
@@ -1455,6 +1500,16 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
       throw new HttpsError('already-exists', '同じ saveId で異なる保存内容が送信されました。')
     }
     if (existingAttempt.verified) {
+      // リプレイでも操作ログは書く: 初回で本体保存の後・ログ書き込みの前に落ちた場合を取りこぼさない。
+      // ドキュメント id がイベント id なので、既に書けていれば同じ内容で上書きされるだけ。
+      await persistOperationEvents({
+        snapshotRef,
+        events: incomingOperationEvents,
+        classroomId,
+        saveId,
+        savedAt: existingAttempt.savedAt || savedAt,
+        updatedBy: memberRef.id,
+      })
       return {
         classroomId,
         savedAt: existingAttempt.savedAt || savedAt,
@@ -1549,6 +1604,16 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
     readbackHash,
     verifiedAt: new Date().toISOString(),
   }), { merge: true })
+
+  // 操作ログは「保存が確定してから」書く。保存に失敗した操作は盤面にも残らないため、記録も残さない。
+  await persistOperationEvents({
+    snapshotRef,
+    events: incomingOperationEvents,
+    classroomId,
+    saveId,
+    savedAt,
+    updatedBy: memberRef.id,
+  })
 
   return {
     classroomId,
@@ -1814,11 +1879,16 @@ export const createWorkspaceServerQuarterHourlyBackups = onSchedule({
 const SAVE_ATTEMPT_RETENTION_DAYS = Math.max(7, Math.trunc(Number(process.env.SAVE_ATTEMPT_RETENTION_DAYS)) || 30)
 const SAVE_ATTEMPT_CLEANUP_SCHEDULE = process.env.SAVE_ATTEMPT_CLEANUP_SCHEDULE ?? '30 3 * * *'
 const SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT = 300
+// 操作ログの保持期間。オーナー確定(2026-09-04)で **1 年**(年度をまたいで遡れること)。
+// saveAttempts(30日)より長いのは、こちらが「いつ誰が消したか」の監査記録で、後から問い合わせが来るため。
+const OPERATION_EVENT_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.OPERATION_EVENT_RETENTION_DAYS)) || 365)
 
 async function runSaveAttemptCleanup() {
   const cutoffIso = new Date(Date.now() - SAVE_ATTEMPT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
+  const operationEventCutoffIso = new Date(Date.now() - OPERATION_EVENT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   let deletedTotal = 0
+  let deletedOperationEvents = 0
 
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
@@ -1828,16 +1898,29 @@ async function runSaveAttemptCleanup() {
         .where('createdAt', '<', cutoffIso)
         .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
         .get()
-      if (oldAttempts.empty) continue
-      const batch = firestore.batch()
-      oldAttempts.docs.forEach((doc) => batch.delete(doc.ref))
-      await batch.commit()
-      deletedTotal += oldAttempts.size
+      if (!oldAttempts.empty) {
+        const batch = firestore.batch()
+        oldAttempts.docs.forEach((doc) => batch.delete(doc.ref))
+        await batch.commit()
+        deletedTotal += oldAttempts.size
+      }
+
+      // 操作ログ(1年保持)。recordedAt=サーバー受領時刻の ISO 文字列で切る(クライアント時計に依存しない)。
+      const oldOperationEvents = await snapshotDoc.ref.collection('operationEvents')
+        .where('recordedAt', '<', operationEventCutoffIso)
+        .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
+        .get()
+      if (!oldOperationEvents.empty) {
+        const batch = firestore.batch()
+        oldOperationEvents.docs.forEach((doc) => batch.delete(doc.ref))
+        await batch.commit()
+        deletedOperationEvents += oldOperationEvents.size
+      }
     }
   }
 
-  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS})`)
-  return { deleted: deletedTotal, cutoffIso, retentionDays: SAVE_ATTEMPT_RETENTION_DAYS }
+  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedOperationEvents} old operationEvents (older than ${operationEventCutoffIso}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS})`)
+  return { deleted: deletedTotal, cutoffIso, retentionDays: SAVE_ATTEMPT_RETENTION_DAYS, deletedOperationEvents, operationEventCutoffIso, operationEventRetentionDays: OPERATION_EVENT_RETENTION_DAYS }
 }
 
 export const cleanupOldSaveAttempts = onSchedule({

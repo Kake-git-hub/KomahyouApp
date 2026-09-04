@@ -5,6 +5,7 @@ import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFireb
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 import { getClassroomSnapshotVersion, setClassroomSnapshotVersion } from './classroomSnapshotVersions'
+import type { OperationEvent } from '../../utils/operationLog'
 
 export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
 
@@ -103,6 +104,10 @@ type SaveClassroomSnapshotRequest = {
   payload: AppSnapshotPayload
   // A1: このタブが読み込んだ時点の版数。サーバーが現在版数と照合し、古ければ拒否する。
   baseVersion?: number
+  // 操作ログ(在庫が減る・記録が消える操作の監査記録)。前回保存以降に溜まった分を相乗りさせる。
+  // スナップショット本体(payload)には入れない: 復元/ロールバックで「消した記録」ごと巻き戻ると監査に使えないため、
+  // サーバーが別コレクション(classroomSnapshots/{id}/operationEvents)へ書く。詳細は src/utils/operationLog.ts。
+  operationEvents?: OperationEvent[]
 }
 
 export type SaveClassroomSnapshotOptions = {
