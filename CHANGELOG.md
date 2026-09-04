@@ -18,6 +18,23 @@
 - fix: 〇〇の不具合を修正(src/...・関連コミット xxxxxxx)
 -->
 
+- fix: 日次の保持期間掃除 `cleanupOldSaveAttempts` が毎晩 `Transaction too big` で失敗し、saveAttempts の
+  30日保持が事実上無効になっていたのを修正(本番 日大前校に 2026-05-30 分から 17,519 件が滞留・
+  1件最大 1MiB の文書を 300 件まとめて WriteBatch 削除していたため Firestore の 10MiB 上限超過)。
+  WriteBatch をやめ並列度つきの個別 delete へ移行し、1回の実行で予算(2万件/240秒)の範囲でページを繰り返す
+  ようにした。最初の教室で例外死して operationEvents / lessonLedgerDays の掃除にも到達していなかった問題も
+  併せて解消(教室・コレクション単位で失敗を握って続行)。回帰テスト
+  `functions/src/retentionCleanup.test.ts`(バッチへの逆戻りを実装ファイル走査で検知)
+- fix: サーバー自動バックアップ・復元前スナップショット・直前ロールバックの JSON を整形出力(2スペース字下げ)
+  から最小化へ変更。1本 54.3MB → 24.1MB(2.26倍の無駄)。日次400日保持(2026-09-04 開始)と教室数増加で効く。
+  読み出しは `JSON.parse` なので**既存の整形済みファイルもそのまま読める**(復元仕様は不変・
+  ファイル形式を gzip へ変える話とは別物)。`serializeWorkspaceBackupJson` に一本化
+- fix: 復元前の安全スナップショット(`workspace-incident-backups/`)に自動削除が無く、本番に 3,978 本＝46.8GB が
+  残置されていたのを **90日保持**で間引くようにした(オーナー確定 2026-09-04・仕様書 §8-1 の10番と §8-1a を改定)。
+  作成時刻は GCS の `timeCreated` を正とし、**読めないもの・未来日時は削除しない**。
+  掃除は `cleanupOldSaveAttempts` の同じ巡回で実施
+- docs: 上記3点に伴い `docs/spec-save-restore.md` §8-1(表の10番)と §8-1a(新設)を更新
+
 ## v1.5.488 (2026-09-04)
 
 - feat: **日次バックアップ(JST 3:00)の保持を 7日→400日へ延長・Google Drive ミラーを gzip 化**(オーナー確定 2026-09-04・★1)。緑が丘の調査で 8/29 以前の盤面が検証不能だった教訓。Storage/Firestore は非圧縮のまま(`WORKSPACE_BACKUP_DAILY_THINNED_RETENTION_DAYS=400`)、Drive は 15GB 上限のため `.json.gz`(`application/gzip`・multipart は Buffer 連結)で保存し、旧来の非圧縮 `.json` だけ 7 日で間引く(`shouldKeepGoogleDriveBackupByName`・移行期間の暫定)。**復元経路**: 「バックアップを読み込む」が gzip のマジックバイト判定でブラウザ内解凍(`src/utils/backupFileText.ts`・`DecompressionStream`)。往復テスト(圧縮→解凍で元 JSON と完全一致)・保持境界テスト・`.gz` 取り込みテストを追加し、保持期間スペックロックと `docs/spec-save-restore.md` §8(#7/#8・8-2)を同コミットで更新

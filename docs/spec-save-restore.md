@@ -173,13 +173,28 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 | 7 | **サーバー自動バックアップ**（Storage・15分ごと生成・非圧縮） | **日次（JST 3:00）は 400 日**、それ以外は下表 8-2 の段階間引き（2026-09-04 オーナー確定・7 日→400 日へ延長） | `shouldKeepWorkspaceAutoBackup`（`workspaceBackupSchedule.ts`） |
 | 8 | **Google Drive ミラー**（**gzip 圧縮・`.json.gz`**） | 保持は **#7 と同一**（日次 400 日）。旧来の非圧縮 `.json` だけは **7 日**で間引く（移行期間の暫定・Drive 15GB 上限対策） | `shouldKeepGoogleDriveBackupByName` |
 | 9 | 「直前に戻す」ロールバック（`workspace-latest-rollbacks/.../latest.json`） | **1 世代のみ**（保存のたび上書き） | `buildClassroomLatestRollbackStoragePath` |
-| 10 | 復元前の安全スナップショット（incident backup） | **間引き対象外＝残り続ける**（削除は手動のみ） | `writeWorkspaceIncidentBackup` |
+| 10 | 復元前の安全スナップショット（incident backup） | **90 日**（2026-09-04 オーナー確定・従来は「間引き対象外＝残り続ける」だった）。作成時刻が読めないものは削除しない | `shouldKeepWorkspaceIncidentBackup` / `pruneWorkspaceIncidentBackups`（`cleanupOldSaveAttempts` が同じ巡回で掃除） |
 | 11 | 保存の監査ログ（`saveAttempts`） | **30 日**（`SAVE_ATTEMPT_RETENTION_DAYS` で変更可・**最低 7 日**） | `cleanupOldSaveAttempts`（cron `30 3 * * *`） |
 | 12 | **操作ログ**（`operationEvents`・在庫が減る／記録が消える操作） | **1 年**（`OPERATION_EVENT_RETENTION_DAYS` で変更可・**最低 30 日**） | 同上（`cleanupOldSaveAttempts` が同じ巡回で掃除） |
 | 13 | **生徒授業台帳**（`lessonLedgerDays`・生徒×科目の授業実績と未消化・元コマ一覧つき・JST 日付ごと） | **2 年**（`LESSON_LEDGER_RETENTION_DAYS` で変更可・**最低 400 日**） | 同上（`cleanupOldSaveAttempts` が同じ巡回で掃除） |
 
 補足：Hosting のリリース履歴（ロールバック A の戻し先）は `npm run hosting:retention:enforce`（既定 5 世代）で
 制御する**手動運用**。デプロイ CI は自動実行しない。
+
+### 8-1a. 復元前の安全スナップショット（incident backup）— 2026-09-04 オーナー確定で 90 日保持へ
+
+`downloadServerAutoBackup`（＝復元の直前）で、全教室ぶんのワークスペーススナップショットを 1 本
+`workspace-incident-backups/{workspaceKey}/` へ書き出している。復元をやり直すための最後の砦。
+
+**従来は自動削除が無く**、本番に 3,978 本＝46.8GB が残置されていた（うち 3,943 本が 2026 年 5 月に集中。
+検証で復元ダウンロードを反復すると 1 回ごとに数十 MB が積み上がるため）。当時の Cloud Storage 請求の
+ほぼ全額がこの残置分だった。
+
+- 保持は **90 日**（`WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS`）。自動バックアップ側が日次 400 日を
+  保持しているので、こちらは「直近の復元操作をやり直せる」期間があれば足りるという判断。
+- 作成時刻は GCS オブジェクトの `timeCreated` を正とする（ファイル名の解析には頼らない）。
+  **作成時刻が読めないもの・未来日時のものは削除しない**（日付が読めないものを消すと事故になる）。
+- 掃除は `cleanupOldSaveAttempts`（cron `30 3 * * *`）の同じ巡回で行う。
 
 ### 8-1b. 操作ログ（`operationEvents`）— 2026-09-04 新設・オーナー確定
 

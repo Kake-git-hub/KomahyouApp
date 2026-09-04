@@ -18,6 +18,9 @@ import {
   decompressBackupJson,
   isCompressedBackupFileName,
   shouldKeepGoogleDriveBackupByName,
+  serializeWorkspaceBackupJson,
+  shouldKeepWorkspaceIncidentBackup,
+  WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS,
   WORKSPACE_BACKUP_HOURLY_THINNED_RETENTION_HOURS,
   WORKSPACE_BACKUP_QUIET_HOURS_END_JST,
   WORKSPACE_BACKUP_QUIET_HOURS_START_JST,
@@ -252,5 +255,73 @@ describe('shouldKeepWorkspaceAutoBackup', () => {
     // nowMs をちょうど72h後(72h帯の境界)に設定
     const nowMsAt72h = savedAtMs + 72 * HOUR_IN_MS
     expect(shouldKeepWorkspaceAutoBackup({ savedAtMs, nowMs: nowMsAt72h })).toBe(true)
+  })
+})
+
+// ★2026-09-04: Storage / Drive へ書き出す JSON の整形をやめた(1本 54.3MB → 24.1MB)。
+// 読み出し側は JSON.parse なので整形の有無に依存しない = 既存の整形済みファイルも読める(復元仕様は不変)。
+describe('serializeWorkspaceBackupJson', () => {
+  const snapshot = {
+    schemaVersion: 1,
+    savedAt: '2026-09-04T01:15:04.205Z',
+    classrooms: [{ id: 'c1', name: 'テスト教室', data: { board: [1, 2, 3] } }],
+  }
+
+  it('字下げ・改行を含まない(整形へ戻すと容量が2倍以上になる)', () => {
+    // 整形の有無は JSON.stringify の既定出力(字下げなし)と一致するかで固定する。
+    expect(serializeWorkspaceBackupJson(snapshot)).toBe(JSON.stringify(snapshot))
+  })
+
+  it('整形版と同じ内容へ復元できる(復元仕様は不変)', () => {
+    expect(JSON.parse(serializeWorkspaceBackupJson(snapshot))).toEqual(snapshot)
+    // 既存の整形済みファイルも同じ内容として読めることを明示しておく。
+    expect(JSON.parse(JSON.stringify(snapshot, null, 2))).toEqual(snapshot)
+  })
+
+  it('整形版より確実に小さい', () => {
+    const compact = serializeWorkspaceBackupJson(snapshot).length
+    const pretty = JSON.stringify(snapshot, null, 2).length
+    expect(compact).toBeLessThan(pretty)
+  })
+
+  it('gzip ミラー(Drive)も同じ最小化 JSON から作れる', () => {
+    const json = serializeWorkspaceBackupJson(snapshot)
+    expect(decompressBackupJson(compressBackupJson(json))).toBe(json)
+  })
+})
+
+// ★2026-09-04: workspace-incident-backups/ には自動削除が無く、本番に 3,978 本 = 46.8GB が残置されていた。
+describe('shouldKeepWorkspaceIncidentBackup', () => {
+  const nowMs = new Date('2026-09-04T00:00:00.000Z').getTime()
+  const dayMs = 24 * HOUR_IN_MS
+
+  it('保持期間の仕様ロック(変えるときは docs と CHANGELOG を同じコミットで更新する)', () => {
+    expect(WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS).toBe(90)
+  })
+
+  it('保持期間内は残す', () => {
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: nowMs - 89 * dayMs, nowMs })).toBe(true)
+  })
+
+  it('保持期間ちょうどで削除対象になる', () => {
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: nowMs - 90 * dayMs, nowMs })).toBe(false)
+  })
+
+  it('2026年5月に集中していた残置分(約97日前)は削除対象', () => {
+    const mayMs = new Date('2026-05-30T04:41:11.504Z').getTime()
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: mayMs, nowMs })).toBe(false)
+  })
+
+  it('作成時刻が不明なものは必ず残す(日付が読めないものを消さない)', () => {
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: 0, nowMs })).toBe(true)
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: Number.NaN, nowMs })).toBe(true)
+  })
+
+  it('未来日時(時計ずれ)も残す', () => {
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: nowMs + dayMs, nowMs })).toBe(true)
+  })
+
+  it('retentionDays を渡すと上書きできる', () => {
+    expect(shouldKeepWorkspaceIncidentBackup({ createdAtMs: nowMs - 100 * dayMs, nowMs, retentionDays: 400 })).toBe(true)
   })
 })

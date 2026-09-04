@@ -27,13 +27,24 @@ import {
   shouldKeepGoogleDriveBackupByName,
   buildWorkspaceAutoBackupDisplayLabel,
   buildWorkspaceAutoBackupStoragePath,
-  HOUR_IN_MS,
   isWorkspaceAutoBackupSkippedAt,
   resolveBackupKindFromSummary,
+  serializeWorkspaceBackupJson,
   shouldKeepWorkspaceAutoBackup,
+  shouldKeepWorkspaceIncidentBackup,
   toQuarterHourlyDateKeyJst,
+  WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS,
   type WorkspaceAutoBackupKind,
 } from './workspaceBackupSchedule'
+import {
+  chunkItems,
+  resolveRetentionCutoffIso,
+  RETENTION_CLEANUP_DELETE_CONCURRENCY,
+  RETENTION_CLEANUP_MAX_DELETES_PER_RUN,
+  RETENTION_CLEANUP_PAGE_LIMIT,
+  RETENTION_CLEANUP_TIME_BUDGET_MS,
+  shouldContinueRetentionPass,
+} from './retentionCleanup'
 
 initializeApp()
 
@@ -770,7 +781,7 @@ async function writeWorkspaceIncidentBackup(workspaceKey: string, reason: string
     const { snapshot } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
     const storagePath = buildWorkspaceIncidentBackupStoragePath(workspaceKey, reason, savedAt)
     const bucket = storage.bucket(STORAGE_BUCKET)
-    await bucket.file(storagePath).save(JSON.stringify(snapshot, null, 2), {
+    await bucket.file(storagePath).save(serializeWorkspaceBackupJson(snapshot), {
       resumable: false,
       contentType: 'application/json; charset=utf-8',
       metadata: {
@@ -820,7 +831,7 @@ async function writeLatestClassroomRollback(params: {
   }
 
   const bucket = storage.bucket(STORAGE_BUCKET)
-  await bucket.file(storagePath).save(JSON.stringify(storageDoc, null, 2), {
+  await bucket.file(storagePath).save(serializeWorkspaceBackupJson(storageDoc), {
     resumable: false,
     contentType: 'application/json; charset=utf-8',
     metadata: {
@@ -1943,17 +1954,98 @@ export const createWorkspaceServerQuarterHourlyBackups = onSchedule({
 // 版数(version はメインdoc)には一切触れない。
 const SAVE_ATTEMPT_RETENTION_DAYS = Math.max(7, Math.trunc(Number(process.env.SAVE_ATTEMPT_RETENTION_DAYS)) || 30)
 const SAVE_ATTEMPT_CLEANUP_SCHEDULE = process.env.SAVE_ATTEMPT_CLEANUP_SCHEDULE ?? '30 3 * * *'
-const SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT = 300
+// ★2026-09-04 撤去: 旧 SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT = 300(WriteBatch で一括削除)。
+// 1件最大 1MiB の saveAttempts では Firestore のトランザクション上限 10MiB を超えて毎晩失敗していた。
+// 削除は retentionCleanup.ts の予算に従う個別 delete へ移行済み。定数を復活させてバッチへ戻さないこと。
 // 操作ログの保持期間。オーナー確定(2026-09-04)で **1 年**(年度をまたいで遡れること)。
 // saveAttempts(30日)より長いのは、こちらが「いつ誰が消したか」の監査記録で、後から問い合わせが来るため。
 const OPERATION_EVENT_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.OPERATION_EVENT_RETENTION_DAYS)) || 365)
 // 生徒授業台帳の保持期間。「1年分を振り返れる」(オーナー指示 2026-09-04)を年度末でも満たすよう **2 年**。
 const LESSON_LEDGER_RETENTION_DAYS = Math.max(400, Math.trunc(Number(process.env.LESSON_LEDGER_RETENTION_DAYS)) || 730)
 
+// 保持期間を過ぎた文書を「1件ずつの delete」で消す。WriteBatch(トランザクション)は使わない。
+// ★回帰防止(2026-09-04): 旧実装は 300 件を WriteBatch でまとめて削除しており、1件が最大 1MiB になりうる
+// saveAttempts では Firestore のトランザクション上限 10MiB を超えて
+// `3 INVALID_ARGUMENT: Transaction too big` で毎晩失敗していた(30日保持が事実上無効・17,519件滞留)。
+// 掃除は冪等なので原子性は不要。バッチへ戻すとこの障害が再発する(retentionCleanup.ts の説明を参照)。
+async function deleteExpiredDocuments(params: {
+  collection: FirebaseFirestore.CollectionReference
+  timestampField: string
+  cutoffIso: string
+  startedAtMs: number
+}): Promise<number> {
+  let deletedTotal = 0
+  let lastPageSize = RETENTION_CLEANUP_PAGE_LIMIT
+
+  while (true) {
+    const page = await params.collection
+      .where(params.timestampField, '<', params.cutoffIso)
+      .limit(RETENTION_CLEANUP_PAGE_LIMIT)
+      .get()
+    lastPageSize = page.size
+    if (page.empty) break
+
+    // 並列度を抑えつつ個別 delete。トランザクションではないので文書サイズの上限に縛られない。
+    for (const chunk of chunkItems(page.docs, RETENTION_CLEANUP_DELETE_CONCURRENCY)) {
+      await Promise.all(chunk.map((doc) => doc.ref.delete()))
+      deletedTotal += chunk.length
+    }
+
+    if (!shouldContinueRetentionPass({
+      lastPageSize,
+      pageLimit: RETENTION_CLEANUP_PAGE_LIMIT,
+      deletedTotal,
+      maxDeletes: RETENTION_CLEANUP_MAX_DELETES_PER_RUN,
+      elapsedMs: Date.now() - params.startedAtMs,
+      timeBudgetMs: RETENTION_CLEANUP_TIME_BUDGET_MS,
+    })) break
+  }
+
+  return deletedTotal
+}
+
+// 復元前セーフティスナップショット(workspace-incident-backups/)の間引き。
+// ★2026-09-04: このプレフィックスにはこれまで自動削除が無く、本番に 46.8GB が残置されていた。
+// 作成時刻は GCS のオブジェクト metadata(timeCreated)を正とする(ファイル名の解析に頼らない)。
+async function pruneWorkspaceIncidentBackups(referenceDate: Date, startedAtMs: number) {
+  const bucket = storage.bucket(STORAGE_BUCKET)
+  const nowMs = referenceDate.getTime()
+  let deletedTotal = 0
+  let pageToken: string | undefined
+
+  do {
+    const [files, nextQuery] = await bucket.getFiles({
+      prefix: `${WORKSPACE_INCIDENT_BACKUP_PREFIX}/`,
+      maxResults: RETENTION_CLEANUP_PAGE_LIMIT,
+      autoPaginate: false,
+      pageToken,
+    }) as unknown as [Array<{ name: string; metadata?: { timeCreated?: string }; delete: () => Promise<unknown> }>, { pageToken?: string } | null]
+
+    const expired = files.filter((file) => !shouldKeepWorkspaceIncidentBackup({
+      createdAtMs: Date.parse(file.metadata?.timeCreated ?? '') || 0,
+      nowMs,
+    }))
+
+    for (const chunk of chunkItems(expired, RETENTION_CLEANUP_DELETE_CONCURRENCY)) {
+      await Promise.all(chunk.map((file) => file.delete().catch((error) => {
+        logger.warn(`[IncidentBackupPrune] Failed to delete ${file.name}: ${error instanceof Error ? error.message : String(error)}`)
+      })))
+      deletedTotal += chunk.length
+    }
+
+    pageToken = nextQuery?.pageToken
+    if (deletedTotal >= RETENTION_CLEANUP_MAX_DELETES_PER_RUN) break
+    if (Date.now() - startedAtMs >= RETENTION_CLEANUP_TIME_BUDGET_MS) break
+  } while (pageToken)
+
+  return deletedTotal
+}
+
 async function runSaveAttemptCleanup() {
-  const cutoffIso = new Date(Date.now() - SAVE_ATTEMPT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
-  const operationEventCutoffIso = new Date(Date.now() - OPERATION_EVENT_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
-  const lessonLedgerCutoffIso = new Date(Date.now() - LESSON_LEDGER_RETENTION_DAYS * 24 * HOUR_IN_MS).toISOString()
+  const startedAtMs = Date.now()
+  const cutoffIso = resolveRetentionCutoffIso(startedAtMs, SAVE_ATTEMPT_RETENTION_DAYS)
+  const operationEventCutoffIso = resolveRetentionCutoffIso(startedAtMs, OPERATION_EVENT_RETENTION_DAYS)
+  const lessonLedgerCutoffIso = resolveRetentionCutoffIso(startedAtMs, LESSON_LEDGER_RETENTION_DAYS)
   const workspacesSnapshot = await firestore.collection('workspaces').get()
   let deletedTotal = 0
   let deletedOperationEvents = 0
@@ -1962,46 +2054,50 @@ async function runSaveAttemptCleanup() {
   for (const workspaceDoc of workspacesSnapshot.docs) {
     const snapshotsSnapshot = await workspaceDoc.ref.collection('classroomSnapshots').get()
     for (const snapshotDoc of snapshotsSnapshot.docs) {
-      // createdAt は ISO 文字列。辞書順=時系列順なので文字列比較で「保持期間より古い」を抽出できる。
-      const oldAttempts = await snapshotDoc.ref.collection('saveAttempts')
-        .where('createdAt', '<', cutoffIso)
-        .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
-        .get()
-      if (!oldAttempts.empty) {
-        const batch = firestore.batch()
-        oldAttempts.docs.forEach((doc) => batch.delete(doc.ref))
-        await batch.commit()
-        deletedTotal += oldAttempts.size
-      }
+      // createdAt / recordedAt は ISO 文字列。辞書順=時系列順なので文字列比較で「保持期間より古い」を抽出できる。
+      // 1教室で失敗しても他教室・他コレクションの掃除を止めない(旧実装は最初の例外で全体が死んでいた)。
+      const targets = [
+        { collection: snapshotDoc.ref.collection('saveAttempts'), timestampField: 'createdAt', cutoffIso, label: 'saveAttempts' },
+        { collection: snapshotDoc.ref.collection('operationEvents'), timestampField: 'recordedAt', cutoffIso: operationEventCutoffIso, label: 'operationEvents' },
+        { collection: snapshotDoc.ref.collection('lessonLedgerDays'), timestampField: 'recordedAt', cutoffIso: lessonLedgerCutoffIso, label: 'lessonLedgerDays' },
+      ]
 
-      // 操作ログ(1年保持)。recordedAt=サーバー受領時刻の ISO 文字列で切る(クライアント時計に依存しない)。
-      const oldOperationEvents = await snapshotDoc.ref.collection('operationEvents')
-        .where('recordedAt', '<', operationEventCutoffIso)
-        .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
-        .get()
-      if (!oldOperationEvents.empty) {
-        const batch = firestore.batch()
-        oldOperationEvents.docs.forEach((doc) => batch.delete(doc.ref))
-        await batch.commit()
-        deletedOperationEvents += oldOperationEvents.size
-      }
-
-      // 生徒授業台帳(2年保持)。recordedAt=サーバー受領時刻で切る。
-      const oldLessonLedgerDays = await snapshotDoc.ref.collection('lessonLedgerDays')
-        .where('recordedAt', '<', lessonLedgerCutoffIso)
-        .limit(SAVE_ATTEMPT_CLEANUP_BATCH_LIMIT)
-        .get()
-      if (!oldLessonLedgerDays.empty) {
-        const batch = firestore.batch()
-        oldLessonLedgerDays.docs.forEach((doc) => batch.delete(doc.ref))
-        await batch.commit()
-        deletedLessonLedgerDays += oldLessonLedgerDays.size
+      for (const target of targets) {
+        try {
+          const deleted = await deleteExpiredDocuments({
+            collection: target.collection,
+            timestampField: target.timestampField,
+            cutoffIso: target.cutoffIso,
+            startedAtMs,
+          })
+          if (target.label === 'saveAttempts') deletedTotal += deleted
+          else if (target.label === 'operationEvents') deletedOperationEvents += deleted
+          else deletedLessonLedgerDays += deleted
+        } catch (error) {
+          logger.error(`[SaveAttemptCleanup] Failed to prune ${target.label} for classroom=${snapshotDoc.id}`, error)
+        }
       }
     }
   }
 
-  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedOperationEvents} old operationEvents (older than ${operationEventCutoffIso}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedLessonLedgerDays} old lessonLedgerDays (older than ${lessonLedgerCutoffIso}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS})`)
-  return { deleted: deletedTotal, cutoffIso, retentionDays: SAVE_ATTEMPT_RETENTION_DAYS, deletedOperationEvents, operationEventCutoffIso, operationEventRetentionDays: OPERATION_EVENT_RETENTION_DAYS }
+  let deletedIncidentBackups = 0
+  try {
+    deletedIncidentBackups = await pruneWorkspaceIncidentBackups(new Date(startedAtMs), startedAtMs)
+  } catch (error) {
+    logger.error('[SaveAttemptCleanup] Failed to prune workspace incident backups', error)
+  }
+
+  logger.info(`[SaveAttemptCleanup] Deleted ${deletedTotal} old saveAttempts (older than ${cutoffIso}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedOperationEvents} old operationEvents (older than ${operationEventCutoffIso}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedLessonLedgerDays} old lessonLedgerDays (older than ${lessonLedgerCutoffIso}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedIncidentBackups} old incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS})`)
+  return {
+    deleted: deletedTotal,
+    cutoffIso,
+    retentionDays: SAVE_ATTEMPT_RETENTION_DAYS,
+    deletedOperationEvents,
+    operationEventCutoffIso,
+    operationEventRetentionDays: OPERATION_EVENT_RETENTION_DAYS,
+    deletedLessonLedgerDays,
+    deletedIncidentBackups,
+  }
 }
 
 export const cleanupOldSaveAttempts = onSchedule({
@@ -2170,7 +2266,7 @@ async function runWorkspaceServerAutoBackup(backupKind: WorkspaceAutoBackupKind)
     logger.info(`[AutoBackup] Processing workspace: ${workspaceKey} (${backupKind})`)
     const { snapshot, latestSourceSavedAt } = await buildWorkspaceServerBackupSnapshot(workspaceKey, savedAt)
     const storagePath = buildWorkspaceAutoBackupStoragePath(workspaceKey, backupDateKey, backupKind)
-    const snapshotJson = JSON.stringify(snapshot, null, 2)
+    const snapshotJson = serializeWorkspaceBackupJson(snapshot)
 
     await bucket.file(storagePath).save(snapshotJson, {
       resumable: false,
