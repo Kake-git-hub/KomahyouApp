@@ -152,3 +152,31 @@ export function shouldKeepWorkspaceAutoBackup(params: { savedAtMs: number; nowMs
   }
   return jst.getUTCHours() === WORKSPACE_BACKUP_DAILY_THINNED_HOUR_JST && minuteJst === 0
 }
+
+// ★2026-09-04: Storage / Google Drive へ書き出すバックアップ JSON は「最小化(字下げなし)」で固定する。
+// それまでは JSON.stringify(snapshot, null, 2) で整形していたため、実データ 24.1MB のワークスペースが
+// 54.3MB(2.26倍)になっていた。日次400日保持(2026-09-04 開始)と 30教室規模が重なると効いてくる。
+// 読み出し側は JSON.parse なので整形の有無に依存せず、**既存の整形済みファイルもそのまま読める**
+// (= 復元仕様は不変。ファイル形式を gzip 等へ変える変更とは別物なので混同しない)。
+// 整形へ戻したくなったら、まず容量見積り(1本 × 保持520本)を確認すること。
+export function serializeWorkspaceBackupJson(snapshot: unknown): string {
+  return JSON.stringify(snapshot)
+}
+
+// 復元前セーフティスナップショット(workspace-incident-backups/)の保持期間。
+// ★2026-09-04: このプレフィックスにはこれまで自動削除が無く、本番に 3,978 本 = 46.8GB が残置されていた
+// (うち 3,943 本が 2026年5月に集中。downloadServerAutoBackup を呼ぶたびに全教室ぶんの
+//  スナップショットを1本書くため、検証の反復でも溜まる)。当時の Cloud Storage 請求のほぼ全額がこれ。
+// 自動バックアップ側が日次400日を保持しているので、こちらは「直近の復元操作をやり直せる」期間があればよい。
+export const WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS = 90
+
+// 復元前セーフティスナップショットを残すか。作成時刻が不明なものは**必ず残す**
+// (日付が読めないものを消すと、消してはいけないものを消す事故になる)。
+export function shouldKeepWorkspaceIncidentBackup(params: { createdAtMs: number; nowMs: number; retentionDays?: number }): boolean {
+  if (!Number.isFinite(params.createdAtMs) || params.createdAtMs <= 0) return true
+  const retentionDays = params.retentionDays ?? WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS
+  const ageMs = params.nowMs - params.createdAtMs
+  // 未来日時(端末時計のずれ等)も消さない。
+  if (ageMs < 0) return true
+  return ageMs < retentionDays * 24 * HOUR_IN_MS
+}
