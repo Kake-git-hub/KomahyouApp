@@ -10,6 +10,8 @@ import { resolveEffectiveUnavailableSlots, resolveGroupClassParticipation, resol
 import { GroupAttendanceModal } from './GroupAttendanceModal'
 import { useStableCallback } from '../../utils/useStableCallback'
 import { bumpMemCounter } from '../../utils/memoryDiagnostics'
+// 操作ログ(在庫が減る・記録が消える操作の監査記録)。詳細は src/utils/operationLog.ts。
+import { recordOperationEvent } from '../../utils/operationLog'
 import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
@@ -8566,6 +8568,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStudentMenu(null)
       setSelectedStudentId(null)
       setSelectedMakeupStockKey(null)
+      recordOperationEvent('holiday-toggle', { action: isClosedWeekday ? 'release-closed-weekday' : 'release-holiday', dateKey })
       setStatusMessage(isClosedWeekday ? `${dateKey} の休校設定を解除しました。営業日に戻しました。` : `${dateKey} の休日設定を解除しました。通常営業に戻しました。`)
       return
     }
@@ -8642,6 +8645,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       ledgers.manualLectureStockOrigins,
       ledgers.fallbackLectureStockStudents,
     )
+    recordOperationEvent('holiday-toggle', { action: 'set-holiday', dateKey, movedStudentCount })
     setSelectedHolidayDate(dateKey)
     setSelectedStudentId(null)
     setStatusMessage(`${dateKey} を休日に設定しました。${movedStudentCount > 0 ? `${movedStudentCount}件の授業をストックへ移しました。` : '移行対象の授業はありませんでした。'}`)
@@ -8739,6 +8743,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
     const returnedCount = result.summary.returnedLectureCount + result.summary.returnedMakeupCount
+    recordOperationEvent('whole-day-transfer', {
+      sourceDateKey,
+      targetDateKey,
+      movedStudentCount: result.summary.movedStudentCount,
+      movedTeacherCount: result.summary.movedTeacherCount,
+      returnedCount,
+    })
     setStatusMessage(
       `${sourceDateKey} の全コマを ${targetDateKey} へ丸ごと振替しました。`
       + `生徒${result.summary.movedStudentCount}件・講師${result.summary.movedTeacherCount}名を移動しました。`
@@ -8839,6 +8850,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStudentMenu(null)
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
+    recordOperationEvent('clear-day-students', { dateKey, clearedCount, returnedCount })
     setStatusMessage(`${dateKey} の生徒を削除しました。${clearedCount > 0 ? `${clearedCount}件の生徒を削除しました。${returnedCount > 0 ? `うち${returnedCount}件を未消化ストックへ戻しました。` : ''}` : '対象の生徒はいませんでした。'}`)
   }
 
@@ -9324,6 +9336,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStockActionModal(null)
     }
 
+    recordOperationEvent('lecture-stock-delete', {
+      studentName: entry.displayName,
+      managedStudentId: entry.studentId ?? '',
+      subject: item.subject,
+      sessionId: entry.sessionId ?? '',
+      sessionLabel: entry.sessionLabel ?? '',
+    })
     setStatusMessage(`${entry.displayName} の未消化講習 ${item.subject}${sessionLabel} を削除しました。`)
   }
 
@@ -9354,6 +9373,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStockActionModal(null)
     }
 
+    recordOperationEvent('makeup-stock-delete', {
+      studentName: entry.displayName,
+      managedStudentId: entry.studentId ?? '',
+      subject: item.subject,
+      originDate: item.date,
+      originSlotNumber: item.slotNumber ?? 0,
+      originLabel: item.label,
+    })
     setStatusMessage(`${entry.displayName} の未消化振替 ${item.subject} (${item.label}) を削除しました。`)
   }
 
@@ -9429,6 +9456,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
       nextManualMakeupAdjustments = materializedResult.manualMakeupAdjustments
       nextFallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+      // 操作ログ: 移動元の「移)」マーカーが前の生徒の出欠記録を上書きして消した(在庫は上で台帳へ確定済み・表示は消える)。
+      recordOperationEvent('record-displaced', {
+        studentName: resolveBoardStudentDisplayName(displaced.name),
+        managedStudentId: displaced.managedStudentId ?? '',
+        subject: displaced.subject,
+        status: displaced.status,
+        lessonType: displaced.lessonType ?? '',
+        dateKey: displaced.dateKey,
+        slotNumber: displaced.slotNumber,
+        makeupSourceDate: displaced.makeupSourceDate ?? '',
+        materialized: materializedResult.materialized,
+      })
     }
 
     commitWeeks(result.nextWeeks, weekIndex, cellId, deskIndex, classroomSettings.holidayDates, classroomSettings.forceOpenDates, nextManualMakeupAdjustments, suppressedMakeupOrigins, nextFallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, fallbackLectureStockStudents, result.nextSuppressedRegularLessonOccurrences)
@@ -9527,6 +9566,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
       nextManualMakeupAdjustments = materializedResult.manualMakeupAdjustments
       nextFallbackMakeupStudents = materializedResult.fallbackMakeupStudents
+      // 操作ログ: 移動元の「移)」マーカーが前の生徒の出欠記録を上書きして消した(在庫は上で台帳へ確定済み・表示は消える)。
+      recordOperationEvent('record-displaced', {
+        studentName: resolveBoardStudentDisplayName(displaced.name),
+        managedStudentId: displaced.managedStudentId ?? '',
+        subject: displaced.subject,
+        status: displaced.status,
+        lessonType: displaced.lessonType ?? '',
+        dateKey: displaced.dateKey,
+        slotNumber: displaced.slotNumber,
+        makeupSourceDate: displaced.makeupSourceDate ?? '',
+        materialized: materializedResult.materialized,
+      })
     }
     // 表示中の週は動かさない(週が前方に拡張された場合はオフセット分ずらして同じ週を指す)。
     commitWeeks(
@@ -10449,6 +10500,30 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setStatusMessage('講師日程は別タブで表示中です。')
   }
 
+  // 出欠付与(休み/振無休/出席)の操作ログ detail。★上書きで消える出欠記録(displaced)も残す:
+  // 「休」の席へ別生徒を入れて出席にすると前の生徒の「休」表示が消える(2026-09-04 の調査で実在)。
+  // 誰の記録が消えたかを後から追えるようにする。
+  const buildStatusMarkDetail = (
+    student: StudentEntry,
+    cell: SlotCell,
+    status: StudentStatusKind,
+    displaced: StudentStatusEntry | null,
+  ) => ({
+    action: status,
+    studentName: resolveBoardStudentDisplayName(student.name),
+    managedStudentId: student.managedStudentId ?? '',
+    subject: student.subject,
+    lessonType: student.lessonType ?? '',
+    dateKey: cell.dateKey,
+    slotNumber: cell.slotNumber,
+    makeupSourceDate: student.makeupSourceDate ?? '',
+    ...(displaced ? {
+      displacedStudentName: resolveBoardStudentDisplayName(displaced.name),
+      displacedStatus: displaced.status,
+      displacedSubject: displaced.subject,
+    } : {}),
+  })
+
   const handleStoreStudent = () => {
     if (!studentMenu || !menuStudent) return
 
@@ -10516,6 +10591,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         nextManualLectureStockOrigins,
         nextFallbackLectureStockStudents,
       )
+      recordOperationEvent('lesson-store', {
+        studentName: resolveBoardStudentDisplayName(menuStudent.student.name),
+        managedStudentId: menuStudent.student.managedStudentId ?? '',
+        subject: menuStudent.student.subject,
+        lessonType: 'special',
+        dateKey: targetCell.dateKey,
+        slotNumber: targetCell.slotNumber,
+        sessionId: menuStudent.student.specialSessionId ?? '',
+      })
       setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を未消化講習へ戻しました。`)
       if (selectedStudentId === menuStudent.student.id) {
         setSelectedStudentId(null)
@@ -10574,6 +10658,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
+    recordOperationEvent('lesson-store', {
+      studentName: resolveBoardStudentDisplayName(menuStudent.student.name),
+      managedStudentId: menuStudent.student.managedStudentId ?? '',
+      subject: menuStudent.student.subject,
+      lessonType: menuStudent.student.lessonType ?? '',
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+      storedOriginDate: storeOriginDate ?? '',
+    })
     setStatusMessage(`${resolveBoardStudentDisplayName(menuStudent.student.name)} を未消化振替へ戻しました。`)
     if (selectedStudentId === menuStudent.student.id) {
       setSelectedStudentId(null)
@@ -10624,6 +10717,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           manualLectureStockOrigins,
           fallbackLectureStockStudents,
         )
+        recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: false })
         setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。講習期間が特定できないため未消化講習には戻していません。`)
         return
       }
@@ -10661,6 +10755,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         nextManualLectureStockOrigins,
         nextFallbackLectureStockStudents,
       )
+      recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: true })
       setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化講習へ戻しました。`)
       return
     }
@@ -10715,6 +10810,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
+    recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化振替へ戻しました。`)
   }
 
@@ -10765,6 +10861,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
+    recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'absent-no-makeup', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を振無休にしました。`)
   }
 
@@ -10814,6 +10911,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
+    recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'attended', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を出席にしました。`)
   }
 
@@ -10882,6 +10980,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       fallbackLectureStockStudents,
       nextSuppressedRegularLessonOccurrences,
     )
+    recordOperationEvent('status-clear', {
+      action: statusEntry.status,
+      studentName: resolveBoardStudentDisplayName(statusEntry.name),
+      managedStudentId: statusEntry.managedStudentId ?? '',
+      subject: statusEntry.subject,
+      lessonType: statusEntry.lessonType ?? '',
+      dateKey: statusEntry.dateKey,
+      slotNumber: statusEntry.slotNumber,
+      makeupSourceDate: statusEntry.makeupSourceDate ?? '',
+    })
     setStatusMessage(`${resolveBoardStudentDisplayName(statusEntry.name)} の${getStudentStatusActionLabel(statusEntry.status)}を解除しました。`)
   }
 
@@ -10993,6 +11101,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       nextScheduleCountAdjustments,
       deleteSubjectDelta,
     )
+    recordOperationEvent('lesson-delete', {
+      studentName: studentDisplayName,
+      managedStudentId: menuStudent.student.managedStudentId ?? '',
+      subject: menuStudent.student.subject,
+      lessonType: menuStudent.student.lessonType ?? '',
+      dateKey: targetCell.dateKey,
+      slotNumber: targetCell.slotNumber,
+      makeupSourceDate: menuStudent.student.makeupSourceDate ?? '',
+    })
     setStatusMessage(`${studentDisplayName} の授業を削除しました。${statusSuffix}`)
     if (selectedStudentId === menuStudent.student.id) {
       setSelectedStudentId(null)
