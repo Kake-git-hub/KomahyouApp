@@ -1464,6 +1464,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         display: inline;
       }
 
+      /* 印刷にだけ出す要素(講習回数表の見出し「(予定)」)。画面では print-only-hidden の「(希望数)」を出す。 */
+      .print-only-visible {
+        display: none;
+      }
+
       .qr-code {
         flex: 0 0 auto;
         line-height: 0;
@@ -2649,6 +2654,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           scrollbar-width: none;
         }
         .print-only-hidden { display: none; }
+        .print-only-visible { display: inline; }
         .sheet,
         .holiday-col,
         .slot-cell.is-holiday,
@@ -3516,7 +3522,17 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           // 科目の横に授業時間(60/45分)を併記する。90分(既定)や不明・混在は付けない。spec-schedule-pdf §D。
           const minutesSuffix = labelMinutesMap && labelMinutesMap[label] ? labelMinutesMap[label] : '';
           const displayLabel = label + (minutesSuffix ? minutesSuffix + '分' : '');
-          return ['<tr><td>' + escapeHtml(displayLabel) + '</td><td>' + count + '<span class="print-only-hidden">(' + desiredCount + ')</span></td></tr>'];
+          // 講習回数表(printDesired)の右括弧は印刷にも載せる(Issue #61・オーナー確定 2026-09-07: 講師が
+          // 紙の実績だけを見て「講習終了」と誤読した)。印字するのは提出由来の希望がある科目だけ:
+          //  - desiredCountMap に無い科目(=実績へのフォールバック「N(N)」)は画面のみ。表示期間に重なる
+          //    セッションが無い紙(例: 9月の紙に載る夏期の残り)や、旧データの調整で 0 以下に潰れた行に
+          //    偽の予定数を印字しないため。
+          //  - 集団(集理/集社)は希望=期間内コマ数で家庭の希望ではないので画面のみ。
+          //  - 通常回数表・講師日程表は printDesired を渡さないので従来どおり画面のみ(予定数は印字しない)。
+          var hasDesired = !!(desiredCountMap && Object.prototype.hasOwnProperty.call(desiredCountMap, label) && desiredCountMap[label]);
+          var isGroupLabel = label === '集理' || label === '集社';
+          var desiredClass = (options && options.printDesired && hasDesired && !isGroupLabel) ? 'count-desired' : 'print-only-hidden';
+          return ['<tr><td>' + escapeHtml(displayLabel) + '</td><td>' + count + '<span class="' + desiredClass + '">(' + desiredCount + ')</span></td></tr>'];
         });
         return rows.length > 0 ? rows.join('') : '<tr><td>予定なし</td><td>0</td></tr>';
       }
@@ -5253,7 +5269,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const makeupSectionHtml = '<div class="box-stack"><div class="box-table-title">振替授業</div><table class="makeup-table"><tbody>' + makeupRows + '</tbody></table></div>';
         // 括弧内の呼称は通常と講習で出どころが違う。通常＝基本データ(テンプレ)由来の「予定数」、
         // 講習＝QR提出/室長登録の「希望数」。同じ「希望数」表記にすると通常側が提出由来だと誤読される。
-        const countStackHtml = '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(予定数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>';
+        // 講習の右括弧は印刷にも載せる(Issue #61)。紙の見出しは「(予定)」: 右括弧は提出値そのものではなく
+        // 「提出 ＋ 手動追加 − 削除」の運用上の予定総数なので、保護者向けには「希望」と書かない。
+        // 通常回数の予定数は従来どおり画面のみ(印字しない)。
+        const countStackHtml = '<div class="count-stack"><div class="count-stack-block"><div><div class="box-table-title">通常回数<span class="print-only-hidden">(予定数)</span></div><table class="count-table"><tbody>' + regularCounts + '</tbody></table></div>' + (regularWarningHtml || '') + '</div><div class="count-stack-block"><div><div class="box-table-title">講習回数<span class="print-only-hidden">(希望数)</span><span class="print-only-visible">(予定)</span></div><table class="count-table"><tbody>' + lectureCounts + '</tbody></table></div>' + (lectureWarningHtml || '') + '</div></div>';
         // オプション欄(開発用教室のみ): 休み欄を削除し、振替授業を左へ詰め、空いた所にオプション欄(2列5行)を置く。
         // 左列=学年共通のテキスト入力(scheduleNotes と同じ仕組み)、右列=QR提出のチェック状態(往復処理は次フェーズ。既定は未チェック)。
         if (DATA.optionFieldEnabled) {
@@ -5907,7 +5926,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var emptyFormatHasGroup = getGroupClassEntriesInRange(startDate, endDate).length > 0;
         var emptyFormatLectureSubjects = (emptyFormat && emptyFormatHasGroup) ? emptyFormatSubjects.concat(['集理', '集社']) : emptyFormatSubjects;
         var regularCountRows = emptyFormat ? toEmptyCountRows(emptyFormatSubjects) : toCountRows(visibleRegularCounts, visiblePlannedRegularCounts);
-        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true, labelMinutesMap: lectureMinutesBySubject});
+        var lectureCountRows = emptyFormat ? toEmptyCountRows(emptyFormatLectureSubjects) : toCountRows(visibleLectureCounts, visibleDesiredLectureCounts, allSubjectsForCounts, {hideZeroZero: true, labelMinutesMap: lectureMinutesBySubject, printDesired: true});
         var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat, optionGradeLabel: (student.currentGradeLabel || '未設定'), optionChecks: (emptyFormat ? undefined : student.optionChecks) });
         // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットは中3想定で盤面の集団コマを反映する。
         var groupRowsHtml = emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);

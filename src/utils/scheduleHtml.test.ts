@@ -1745,6 +1745,82 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
     vi.unstubAllGlobals()
   })
 
+  // Issue #61(緑が丘・オーナー確定 2026-09-07): 講習回数表の右括弧(希望数)を印刷にも載せる。
+  // 講師が紙の実績「13」だけを見て講習終了と誤読しカルテに記載した(実際は希望15・9月に2コマ組み済み)。
+  // 印字するのは提出由来の希望がある個別科目だけ: 希望が無く実績へフォールバックする行(「N(N)」)・
+  // 集団(集理/集社)・通常回数表(printDesired 無し)・講師日程表は従来どおり画面のみ。
+  // 見出しは画面「(希望数)」/印刷「(予定)」(右括弧は提出＋手動追加−削除の予定総数なので保護者向けに「希望」と書かない)。
+  // spec-schedule-pdf §E。修正なしでは count-desired / print-only-visible が存在せず落ちる。
+  it('prints the lecture desired count on paper only for submitted individual subjects (Issue #61)', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent({ displayName: '山田' })],
+      regularLessons: [],
+      defaultStartDate: '2026-03-24',
+      defaultEndDate: '2026-03-24',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+
+    const rowsMatch = html.match(/function toCountRows\(countMap, desiredCountMap, forcedLabels, options\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(rowsMatch).toBeTruthy()
+    const escapeHtml = (value: unknown) => String(value == null ? '' : value)
+    const SUBJECT_SORT_ORDER = ['英', '数', '算', '国', '算国', '理', '生', '物', '化', '社', '理社', '集理', '集社']
+    const toCountRows = new Function(
+      'countMap', 'desiredCountMap', 'forcedLabels', 'options', 'escapeHtml', 'SUBJECT_SORT_ORDER', rowsMatch![1],
+    ) as (
+      countMap: Record<string, number>,
+      desiredCountMap: Record<string, number>,
+      forcedLabels: string[] | null,
+      options: Record<string, unknown>,
+      escapeHtmlFn: (value: unknown) => string,
+      sortOrder: string[],
+    ) => string
+
+    // 講習回数表(printDesired): 提出由来の希望がある「英」だけ印刷用 span(count-desired)。
+    const printed = toCountRows({ 英: 13, 国: 2, 集理: 3 }, { 英: 15, 集理: 5 }, ['英'], { hideZeroZero: true, printDesired: true }, escapeHtml, SUBJECT_SORT_ORDER)
+    expect(printed).toContain('<td>英</td><td>13<span class="count-desired">(15)</span></td>')
+    // 希望が無い科目は実績へのフォールバック「2(2)」で、偽の予定数を紙に出さない(画面のみ)。
+    expect(printed).toContain('<td>国</td><td>2<span class="print-only-hidden">(2)</span></td>')
+    // 集団は希望=期間内コマ数(家庭の希望ではない)なので画面のみ。
+    expect(printed).toContain('<td>集理</td><td>3<span class="print-only-hidden">(5)</span></td>')
+    // 通常回数表(printDesired 無し)は従来どおり画面のみ(予定数は印字しない)。
+    const regular = toCountRows({ 英: 13 }, { 英: 15 }, ['英'], {}, escapeHtml, SUBJECT_SORT_ORDER)
+    expect(regular).toContain('<td>英</td><td>13<span class="print-only-hidden">(15)</span></td>')
+    expect(regular).not.toContain('count-desired')
+
+    // 生徒シートの講習回数表だけが printDesired を渡す(通常回数表・講師日程表には渡さない)。
+    expect((html.match(/printDesired: true/g) || []).length).toBe(1)
+    expect(html).toContain('labelMinutesMap: lectureMinutesBySubject, printDesired: true})')
+
+    // 見出し: 生徒シートは画面「(希望数)」+印刷「(予定)」。通常回数は印刷用 span を持たない。
+    expect(html).toContain('講習回数<span class="print-only-hidden">(希望数)</span><span class="print-only-visible">(予定)</span>')
+    expect(html).not.toContain('通常回数<span class="print-only-hidden">(予定数)</span><span class="print-only-visible">')
+    // 講師シートの見出しは従来どおり(印刷用 span 無し)= 「(希望数)</span></div>」が講師分の1箇所だけ残る。
+    expect((html.match(/講習回数<span class="print-only-hidden">\(希望数\)<\/span><\/div>/g) || []).length).toBe(1)
+
+    // CSS: print-only-visible は画面で隠し、@media print で出す。
+    expect(html).toMatch(/\.print-only-visible\s*\{\s*display:\s*none;\s*\}/)
+    const printBlock = html.slice(html.indexOf('@media print'))
+    expect(printBlock).toContain('.print-only-visible { display: inline; }')
+
+    vi.unstubAllGlobals()
+  })
+
   // 回帰防止(根本原因): 講習の希望登録の授業時間(subjectDurations)を payload に載せる。
   // これが欠けると popup の DATA.specialSessions に届かず、未配置の希望科目に分数が一切出なかった
   // (subjectSlots は載っていたため希望数だけ表示され、授業時間が消える非対称)。埋め込み DATA(JSON)で固定。
