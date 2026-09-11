@@ -97,8 +97,8 @@ export function buildScheduleLessonHistoryResultMessage(params: {
 export function formatLessonHistoryErrorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error ?? '')
   const trimmed = raw.trim()
-  if (!trimmed) return '講習履歴を取得できませんでした。時間をおいて、もう一度お試しください。'
-  return `講習履歴を取得できませんでした: ${trimmed.slice(0, 300)}`
+  if (!trimmed) return '通常授業履歴を取得できませんでした。時間をおいて、もう一度お試しください。'
+  return `通常授業履歴を取得できませんでした: ${trimmed.slice(0, 300)}`
 }
 
 // ---------------------------------------------------------------------------

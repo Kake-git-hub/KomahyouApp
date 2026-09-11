@@ -306,4 +306,30 @@ describe('exportBoardPdfSelection (html2canvas/jsPDF はモック)', () => {
     expect(capturedElement.querySelectorAll('.sa-day-header')).toHaveLength(DAYS.length)
     expect(capturedElement.querySelectorAll('.sa-print-blank')).toHaveLength(0)
   })
+
+  it('集団行の時限ラベル「集団」は横書き(回転しない)で出す・通常の時限ラベルは従来どおり縦回転(p-6)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, createInitialBoardPrintChecked(grid))
+
+    await exportBoardPdfSelection({ element, fileName: 'full.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const groupLabel = capturedElement.querySelector<HTMLElement>('.sa-group-time-cell .sa-group-time-label')
+    expect(groupLabel?.textContent).toBe('集団')
+    expect(groupLabel?.style.transform).toBe('')
+    const slotLabel = capturedElement.querySelector<HTMLElement>('tr[data-slot-number] .sa-time-cell > div')
+    expect(slotLabel?.style.transform).toBe('rotate(-90deg)')
+  })
+
+  it('講師名は nowrap + overflow hidden を付けてセルに収まるまで縮める前提を必ず作る(jsdom は寸法 0 なので初期値のまま・p-3)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, [boardPrintCellKey('2026-09-14', 1)])
+
+    await exportBoardPdfSelection({ element, fileName: 'one.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const names = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-teacher-name'))
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.every((node) => node.style.whiteSpace === 'nowrap' && node.style.overflow === 'hidden')).toBe(true)
+  })
 })

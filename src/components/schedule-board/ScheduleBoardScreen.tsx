@@ -37,7 +37,7 @@ import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjust
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
 import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport } from '../../utils/pdf'
-import { buildBoardPrintGrid, type BoardPrintSelection } from '../../utils/boardPrintSelection'
+import { buildBoardPrintGrid, buildBoardPrintTitle, type BoardPrintSelection } from '../../utils/boardPrintSelection'
 import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
@@ -10499,10 +10499,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     try {
       setIsPrintingPdf(true)
+      // 部分選択のときはタイトル(＝ファイル名)を残した曜日・時限で組む(確認リスト p-2・2026-09-12)。
+      // 全選択・従来経路は週タイトルのまま。
+      const printTitle = selection
+        ? buildBoardPrintTitle(weekScheduleTitle, buildBoardPrintGrid(cells), selection)
+        : weekScheduleTitle
       const params = {
         element: boardExportRef.current,
-        fileName: `${weekScheduleTitle}.pdf`,
-        title: weekScheduleTitle,
+        fileName: `${printTitle}.pdf`,
+        title: printTitle,
       }
       if (selection) await exportBoardPdfSelection(params, selection)
       else await exportBoardPdf(params)
@@ -11633,6 +11638,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           grid={buildBoardPrintGrid(cells)}
           weekLabel={weekScheduleTitle}
           isPrinting={isPrintingPdf}
+          storageKey={classroomStorageKey}
           onCancel={() => setIsBoardPrintSelectionOpen(false)}
           onSubmit={(selection) => {
             setIsBoardPrintSelectionOpen(false)

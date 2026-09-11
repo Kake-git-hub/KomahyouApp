@@ -3659,6 +3659,15 @@ tr.sa-group-row td {
   cursor: pointer;
 }
 
+/* 定休日の列も選べる(p-1・2026-09-12)。選べることは変えず、見た目だけ薄くして「定休日」と分かるようにする。 */
+.board-print-selection-head.is-closed-day {
+  color: #8a97a8;
+}
+
+.board-print-selection-table td.is-closed-day {
+  background: #f7f8fa;
+}
+
 /* 基本データ削除確認モーダル（生徒/講師）: 不可逆・未消化ストック・退塾日での非表示案内を強調する。 */
 .basic-data-delete-modal .basic-data-delete-warning {
   margin: 0;

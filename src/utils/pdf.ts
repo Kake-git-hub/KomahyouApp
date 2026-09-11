@@ -6,7 +6,8 @@ import {
   BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE,
   parseBoardPrintCellKey,
   resolveBoardPrintCanvasScale,
-  resolveBoardPrintStudentMaxFontSize,
+  resolveBoardPrintLayoutRelief,
+  resolveBoardPrintStudentMaxFontSizeByRelief,
   type BoardPrintSelection,
 } from './boardPrintSelection'
 
@@ -18,11 +19,51 @@ type ExportBoardPdfParams = {
 
 const PDF_SEAT_COLUMN_WIDTH = 30
 const PDF_SEAT_FONT_SIZE = 22
+const PDF_SEAT_MAX_FONT_SIZE = 48
 const PDF_TEACHER_COLUMN_WIDTH = 54
 const PDF_STUDENT_COLUMN_WIDTH = 115.5
 // ⚠️ 正本は boardPrintSelection.ts の BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE(定数二重定義の解消)。
 const PDF_STUDENT_MAX_FONT_SIZE = BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE
 const PDF_STUDENT_MIN_FONT_SIZE = 4.8
+// 講師名・席番号の基準文字サイズ(従来値)。コマ選択で拡大したときは relief 倍を上限にし、
+// セルに収まるまで縮める(fitSingleLineTextForPdf)。従来出力(relief=1)は上限がこの値のまま。
+const PDF_TEACHER_NAME_FONT_SIZE = 24
+const PDF_TEACHER_NAME_MIN_FONT_SIZE = 8
+const PDF_DESK_ROW_HEIGHT = 62
+const PDF_GROUP_ROW_HEIGHT = 40
+
+// 1 行テキスト(講師名・席番号)をセルに収まる最大の文字サイズにする。
+// 確認リスト p-3(2026-09-12): 従来は講師名を 24px 固定で overflow:hidden していたため、
+// 3 文字の講師名(72px)が講師列(54px)で見切れていた。画面側 fitTeacherTextForBoard と同じ発想で、
+// はみ出す間だけ縮める(収まっていれば初期値のまま＝従来出力は不変)。
+function fitSingleLineTextForPdf(node: HTMLElement, initialFontSize: number, minimumFontSize: number) {
+  if (!node.textContent?.trim()) return
+  const box = node.parentElement ?? node
+  node.style.whiteSpace = 'nowrap'
+  node.style.overflow = 'hidden'
+  node.style.textOverflow = 'clip'
+  const overflows = () => node.scrollWidth > box.clientWidth + 1 || node.scrollHeight > box.clientHeight + 1
+  const apply = (fontSize: number) => {
+    node.style.fontSize = `${fontSize}px`
+  }
+  apply(initialFontSize)
+  if (!overflows()) return
+  let low = minimumFontSize
+  let high = initialFontSize
+  for (let index = 0; index < 8; index += 1) {
+    const candidate = (low + high) / 2
+    apply(candidate)
+    if (overflows()) high = candidate
+    else low = candidate
+  }
+  apply(low)
+}
+
+function fitTeacherTextForPdf(root: HTMLElement, maxFontSize: number) {
+  root.querySelectorAll<HTMLElement>('.sa-teacher-name').forEach((node) => {
+    fitSingleLineTextForPdf(node, maxFontSize, PDF_TEACHER_NAME_MIN_FONT_SIZE)
+  })
+}
 
 function resolveTargetExportWidth(currentWidth: number, currentHeight: number, targetAspectRatio: number) {
   if (currentWidth <= 0 || currentHeight <= 0 || targetAspectRatio <= 0) {
@@ -422,6 +463,27 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
     const rangeLabel = node.querySelector<HTMLElement>('.sa-time-range')?.textContent?.trim() ?? ''
     const rotatedText = [slotLabel, rangeLabel].filter(Boolean).join(' ')
 
+    if (node.classList.contains('sa-group-time-cell')) {
+      // 集団行(高さ 40px)の時限ラベル「集団」は横書きにする(確認リスト p-6・2026-09-12)。
+      // 通常の時限ラベルと同じ -90° 回転＋36px だと 2 文字で 72px になり、40px の行では見切れる。
+      node.innerHTML = ''
+      const label = document.createElement('div')
+      label.className = 'sa-group-time-label'
+      label.textContent = slotLabel || '集団'
+      label.style.display = 'block'
+      label.style.whiteSpace = 'nowrap'
+      label.style.fontSize = '20px'
+      label.style.fontWeight = '800'
+      label.style.lineHeight = '1'
+      label.style.textAlign = 'center'
+      node.style.padding = '0'
+      node.style.display = 'table-cell'
+      node.style.textAlign = 'center'
+      node.style.verticalAlign = 'middle'
+      node.appendChild(label)
+      return
+    }
+
     node.innerHTML = ''
     const rotatedLabel = document.createElement('div')
     rotatedLabel.textContent = rotatedText
@@ -507,8 +569,6 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
   exportRoot.appendChild(clone)
   document.body.appendChild(exportRoot)
 
-  const exportWidth = Math.ceil(exportRoot.scrollWidth)
-  const exportHeight = Math.ceil(exportRoot.scrollHeight)
   const orientation = 'portrait'
   const pdf = new jsPDF({ orientation, unit: 'mm', format: 'a3' })
   const pageWidth = pdf.internal.pageSize.getWidth()
@@ -517,10 +577,45 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
   const marginY = 4
   const contentWidth = pageWidth - marginX * 2
   const contentHeight = pageHeight - marginY * 2
+  const pageAspectRatio = contentWidth / contentHeight
+
+  // コマ選択で間引いた表を A3 縦いっぱいに使う倍率(確認リスト p-2/p-3・2026-09-12)。
+  // 表が紙より横長(時限を絞った)なら行を縦に伸ばす。縦長(曜日を絞った)なら従来どおり下の幅合わせで列が伸びる。
+  // 文字上限(生徒・講師・席番号)は fontRelief で緩める。全選択は {1,1,1} で従来と同じ。
+  const relief = resolveBoardPrintLayoutRelief({
+    naturalWidth: exportRoot.scrollWidth,
+    naturalHeight: exportRoot.scrollHeight,
+    pageAspectRatio,
+    isFullSelection: !activeSelection,
+  })
+  if (relief.rowScale > 1) {
+    const deskRowHeight = `${Math.round(PDF_DESK_ROW_HEIGHT * relief.rowScale)}px`
+    clone.querySelectorAll<HTMLElement>('.sa-teacher, .sa-student').forEach((node) => {
+      if (node.closest('tr.sa-group-row')) return
+      node.style.height = deskRowHeight
+      node.style.minHeight = deskRowHeight
+    })
+    const groupRowHeight = `${Math.round(PDF_GROUP_ROW_HEIGHT * relief.rowScale)}px`
+    clone.querySelectorAll<HTMLElement>('tr.sa-group-row td').forEach((node) => {
+      node.style.height = groupRowHeight
+    })
+  }
+  if (relief.columnScale > 1) {
+    // 列が横に伸びるときだけ席番号(本体セル)も拡大する(行だけ伸びるときは席列の幅が変わらないので据え置き)。
+    // 上限は机行の高さ(62px)に収まる 48px。ヘッダーの「席」(高さ 34px)は据え置き。
+    const seatFontSize = Math.min(PDF_SEAT_MAX_FONT_SIZE, PDF_SEAT_FONT_SIZE * Math.min(relief.columnScale, relief.fontRelief))
+    clone.querySelectorAll<HTMLElement>('.sa-seat-number').forEach((node) => {
+      if (node.closest('tr.sa-group-row')) return
+      node.style.fontSize = `${seatFontSize}px`
+    })
+  }
+
+  const exportWidth = Math.ceil(exportRoot.scrollWidth)
+  const exportHeight = Math.ceil(exportRoot.scrollHeight)
   const targetExportWidth = resolveTargetExportWidth(
     exportWidth,
     exportHeight,
-    contentWidth / contentHeight,
+    pageAspectRatio,
   )
 
   if (targetExportWidth > exportRoot.scrollWidth + 1) {
@@ -540,7 +635,9 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
   // Fit after final PDF table width is known; otherwise student text is measured
   // against the pre-expanded table and stays unnecessarily small.
   void exportRoot.offsetWidth
-  fitStudentTextForPdf(exportRoot, activeSelection ? resolveBoardPrintStudentMaxFontSize(activeSelection) : PDF_STUDENT_MAX_FONT_SIZE)
+  fitStudentTextForPdf(exportRoot, activeSelection ? resolveBoardPrintStudentMaxFontSizeByRelief(relief.fontRelief) : PDF_STUDENT_MAX_FONT_SIZE)
+  // 講師名は従来の 24px を上限(拡大時は relief 倍)にし、列幅に収まらない名前だけ縮める(p-2/p-3)。
+  fitTeacherTextForPdf(exportRoot, PDF_TEACHER_NAME_FONT_SIZE * relief.fontRelief)
 
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',

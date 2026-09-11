@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- fix: 開発用教室の確認リスト(v1.5.502・受付 2026-09-11)の要改善 6 件を修正。**盤面PDFコマ選択** (p-1) 定休日(日曜)も選択候補に含める(`buildBoardPrintGrid` の isOpenDay フィルタ撤廃・モーダルは薄く表示)／出力した選択を曜日×時限のパターンとして教室ごとに `localStorage`(`board-print-selection:<教室>`)へ記憶し次回の初期状態にする(`serializeBoardPrintPattern` / `applyBoardPrintPattern`・記憶なし/壊れは全選択)。(p-2/p-3) 間引き後の表を A3 縦いっぱいに使う倍率を `resolveBoardPrintLayoutRelief` に一元化: 曜日を絞ると列が伸び(従来)、**時限を絞ると行が縦に伸びる**(従来は下半分が白紙)。文字上限は生徒 34px→最大 72px・講師名 24px→relief 倍・席番号 22px→列が伸びるときだけ relief 倍で揃えて拡大し、**講師名は列幅に収まるまで縮める**(`fitSingleLineTextForPdf`・従来は 24px 固定で 3 文字が見切れた)。PDF タイトル(=ファイル名)を選択に応じて `予定表9月14日(月)-9月16日(水) 1限-3限` の形で組む(`buildBoardPrintTitle`・全選択は従来の週タイトル)。(p-6) 集団行の時限ラベル「集団」を横書きに(縦回転 36px は 40px 行で見切れていた)。**通常授業履歴(旧・講習履歴)** (h-1) ボタン名・見出し・印刷タイトル・エラー文を「通常授業履歴」へ改名(id・メッセージ種別は不変)。(h-2) 「表示」で期間を正規化した結果を入力欄へ書き戻していたため「開始日が終了日に書き換わる」と見えていた不具合を修正: 開始日 > 終了日 は入れ替えずに理由を表示して送らず、入力欄は一切書き換えない。実際の表示期間(366日超の丸め後)は注記「表示期間」に出す(`src/utils/boardPrintSelection.ts` / `src/utils/pdf.ts` / `BoardPrintSelectionModal.tsx` / `ScheduleBoardScreen.tsx` / `src/utils/scheduleHtml.ts` / `lessonHistoryMessage.ts` / `docs/spec-schedule-pdf.md`・回帰テスト追加)
+- chore: 確認リストを第2版 `v1.5.504` へ(p-8 定休日選択・p-9 選択の記憶・p-10 ファイル名を追加、p-1/p-2/p-3/p-6/h-1/h-2/h-3 の手順を修正確認用に差し替え。下書きは版別なので旧版の下書きは引き継がない)
 
 ## v1.5.503 (2026-09-12)
 - feat: 開発用教室だけに確認事項チェックリストのパネルを追加(操作しながら OK/要改善+メモを記録し、下書きは教室別・版別に localStorage 保持。「保存して送信」は既存の「要望・報告」経路 submitDeveloperReport へ 2000 字ごとに分割送信。本番教室には一切出さない・src/utils/verificationChecklist.ts / src/components/developer-report/VerificationChecklistPanel.tsx)

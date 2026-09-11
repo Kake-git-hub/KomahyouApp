@@ -52,14 +52,14 @@ describe('確認リストの項目定義', () => {
     expect(ids).toContain('p-7')
     expect(ids).toContain('h-1')
     expect(ids).toContain('h-7')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.502')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.504')
   })
 })
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.502')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.502')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.504')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.504')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -131,7 +131,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('u0-2')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.502]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.504]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
