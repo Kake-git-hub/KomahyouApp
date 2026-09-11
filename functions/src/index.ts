@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
-import { getFirestore, Timestamp } from 'firebase-admin/firestore'
+import { FieldPath, getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore'
@@ -23,6 +23,7 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, normalizeDeveloperReport, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
+import { handleGetStudentLessonHistory, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
   compressBackupJson,
   GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX,
@@ -1712,6 +1713,30 @@ export const saveClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds:
 
 export const saveDevelopmentClassroomSnapshot = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
   return saveClassroomSnapshotFromCallable(request, { developmentOnly: true })
+})
+
+// 講習履歴(生徒1人の出席・休み・振替・配置の一覧)を返す。テーマ5/H-2。
+// 台帳 lessonLedgerDays はクライアントから読めない(firestore.rules に match なし)ので、
+// 教室メンバー権限を確認したうえでサーバーが読み出す。★読み取り専用(Firestore へ書かない)。
+export const getStudentLessonHistory = onCall({ invoker: 'public', timeoutSeconds: 60, memory: '512MiB' }, async (request) => {
+  return handleGetStudentLessonHistory(request.data, {
+    requireAccess: (workspaceKey, classroomId) => requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId),
+    invalidArgument: (message) => new HttpsError('invalid-argument', message),
+    todayJst: toJstDateKeyFromIso(new Date().toISOString()),
+    loadLatestLedgerDoc: async ({ workspaceKey, classroomId, to }) => {
+      // 保存が無い日は文書が無いので「to 以前で最新」を 1 件だけ読む(文書 ID = YYYY-MM-DD)。
+      const snapshot = await firestore
+        .collection('workspaces').doc(workspaceKey)
+        .collection('classroomSnapshots').doc(classroomId)
+        .collection('lessonLedgerDays')
+        .where(FieldPath.documentId(), '<=', to)
+        .orderBy(FieldPath.documentId(), 'desc')
+        .limit(1)
+        .get()
+      const doc = snapshot.docs[0]
+      return doc ? ({ ...(doc.data() as LessonLedgerDayDocLike), dateKey: doc.id }) : null
+    },
+  })
 })
 
 // 「開発者へ報告」(2026-09-04 オーナー指示): 利用者がボタン1つで、直近の操作痕跡と報告時点の教室データを
