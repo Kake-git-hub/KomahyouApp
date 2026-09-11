@@ -970,6 +970,19 @@ export function hasPendingBoardSaveState(params: {
   return params.isDirty || params.isSavingNow || params.isRemoteSyncPending
 }
 
+// U-0b / INV-02(手動編集の永続化): 盤面 publish を受けたとき clean 署名を更新してよいかを決める。
+// userInitiated:false（ロード/教室切替/受動再計算/盤面の再マウント）は「読み込み直後＝保存済み」なので
+// clean 化してよい。ただし②一段スナップショット復元（黄バナー「戻す」）の直後だけは例外で、
+// 復元で盤面が再マウントされて発火する false publish で clean 化すると、戻した結果が「保存済み」と
+// 誤認され保存できず、リロードで戻す前の状態が復活する。復元は未保存(dirty)として扱う。
+export function resolveBoardStateChangeCleanMarking(params: {
+  userInitiated: boolean
+  pendingUnsavedRestore: boolean
+}): { markClean: boolean; persist: boolean; consumePendingUnsavedRestore: boolean } {
+  if (params.userInitiated) return { markClean: false, persist: true, consumePendingUnsavedRestore: true }
+  return { markClean: !params.pendingUnsavedRestore, persist: false, consumePendingUnsavedRestore: true }
+}
+
 
 function mergeWorkspaceWithLocalPreferences(remoteSnapshot: WorkspaceSnapshot, localSnapshot: WorkspaceSnapshot | null) {
   if (!localSnapshot) return remoteSnapshot
@@ -1358,6 +1371,9 @@ function AuthenticatedApp() {
   const [classroomSettings, setClassroomSettings, classroomSettingsRef] = useLatestState<ClassroomSettings>(() => createInitialClassroomSettings())
   const [boardState, setBoardState, boardStateRef] = useLatestState<PersistedBoardState | null>(null)
   const boardShareStateChangePublishTimerRef = useRef<number | null>(null)
+  // ②一段スナップショット復元（黄バナー「戻す」）の直後は、再マウント由来の publish で clean 化しない
+  // ための一過性フラグ（U-0b・INV-02）。最初の publish で必ず消費する。
+  const pendingUnsavedUndoSnapshotRestoreRef = useRef(false)
   // boardShare 公開の多重発行ガード。出席などの連続編集で同一内容を何度も setDoc し、
   // Firestore 書き込みキューが枯渇 (resource-exhausted) してメモリが暴走するのを防ぐ。
   const boardSharePublishInFlightRef = useRef(false)
@@ -2228,10 +2244,12 @@ function AuthenticatedApp() {
     })
     // undo は現在開いている教室の編集 state を戻す操作なので、出所は acting のまま。
     loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
-    markStateLoadedClean()
+    // U-0b(INV-02): 戻した結果は「未保存の編集」。ここで clean 化すると保存できず、リロードで
+    // 破壊的操作後の状態に戻ってしまう。盤面再マウント由来の false publish にも clean 化させない。
+    pendingUnsavedUndoSnapshotRestoreRef.current = true
     setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
     setUndoSnapshot(null)
-  }, [actingClassroomIdRef, markStateLoadedClean, undoSnapshot])
+  }, [actingClassroomIdRef, undoSnapshot])
 
   const dismissUndoSnapshot = useCallback(() => {
     setUndoSnapshot(null)
@@ -2512,8 +2530,13 @@ function AuthenticatedApp() {
     // を呼ぶと、acting教室とメモリ上データが食い違う切替直後の窓で他教室データを書き込み得る
     // （2026-06-06 / 2026-06-13 のクロス汚染パターン）。集団授業の変更も例外にしない。
     setBoardState(nextBoardState)
-    if (!meta.userInitiated) {
-      markStateLoadedClean()
+    const cleanMarking = resolveBoardStateChangeCleanMarking({
+      userInitiated: meta.userInitiated,
+      pendingUnsavedRestore: pendingUnsavedUndoSnapshotRestoreRef.current,
+    })
+    if (cleanMarking.consumePendingUnsavedRestore) pendingUnsavedUndoSnapshotRestoreRef.current = false
+    if (!cleanMarking.persist) {
+      if (cleanMarking.markClean) markStateLoadedClean()
       return
     }
     writePendingWorkspaceSnapshotForRemoteSync()

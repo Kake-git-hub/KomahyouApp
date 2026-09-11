@@ -15,6 +15,7 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- fix: 「戻す」「やり直し」と一段スナップショット復元の直後に盤面が「保存済み」扱いになり保存できず、リロードで戻す前の状態へ巻き戻る不具合を修正(undo/redo を純関数 applyHistoryEntry 経由で版数 bump ＋ userInitiated:true publish／restoreUndoSnapshot は clean 化しない・INV-02)
 
 ## v1.5.501 (2026-09-12)
 

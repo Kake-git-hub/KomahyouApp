@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import type { TeacherRow } from '../basic-data/basicDataModel'
@@ -9,7 +11,10 @@ import {
   repackTeacherOnlyDesks,
   reconcileSubmittedTeacherPlacements,
   computeStudentMove,
+  applyHistoryEntry,
+  type HistoryEntry,
 } from './ScheduleBoardScreen'
+import { resolveBoardStateChangeCleanMarking } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 
 // ============================================================================
@@ -632,6 +637,134 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(inside?.desks.every((desk) => !desk.teacher.trim())).toBe(true)
       const moved = result.nextWeeks.flat().find((cell) => cell.dateKey === '2026-06-03')
       expect(moved?.desks[0]?.teacher).toBe('講師X')
+    })
+  })
+  // ==========================================================================
+  // 行: 戻す/やり直し(undo/redo) ・ ②一段スナップショット復元
+  // 列: 「保存済み扱い（clean 署名の上書き）」→ リロードで巻き戻る
+  //
+  // U-0（2026-09-12・計画書 docs/plan-2026-09-11-five-requests.md §2-4）:
+  //   handleUndo/handleRedo は版数 bump も onBoardStateChange も行わず、後追いの publish effect が
+  //   userInitiated:false で発火していた。App 側 handleBoardStateChange はそれを「ロード」と見なして
+  //   markStateLoadedClean() するため、戻した直後の盤面が clean 署名になり保存ボタンが効かず、
+  //   リロードで undo 前の状態が復活していた。手動編集の永続化が publish 経路の既定値（受動扱い）で
+  //   壊れる構造なので INV-02 に分類する。
+  //
+  // 兄弟監査:
+  //   - redo（やり直し）… 同型なので同じ列で固定する（下の it）。
+  //   - ②一段スナップショット復元（黄バナー「戻す」・App.tsx restoreUndoSnapshot）… 同型。
+  //     復元は盤面を再マウントするので「再マウント由来の受動 publish で clean 化しない」側で固定する。
+  //   - ③テンプレモード undo（templateUndoStack / pushTemplateUndo）… テンプレ編集は「テンプレ保存」で
+  //     別経路（onReplaceRegularLessons）に流れ、盤面の clean 署名経路を通らない。**対象外**。
+  // ==========================================================================
+  describe('戻す/やり直し/一段スナップショット復元 × 保存済み扱い（U-0・publish の userInitiated 経路）', () => {
+    const boardSource = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+    const appSource = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
+
+    function sliceFunctionBody(source: string, startMarker: string, endMarker: string): string {
+      const start = source.indexOf(startMarker)
+      expect(start).toBeGreaterThan(-1)
+      const end = source.indexOf(endMarker, start)
+      expect(end).toBeGreaterThan(start)
+      return source.slice(start, end)
+    }
+
+    // 手動編集（生徒を配置した状態）を持つ履歴エントリ。
+    function createHistoryEntryFixture(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
+      const cell = createCell({
+        id: '2026-06-01_1',
+        dateKey: '2026-06-01',
+        desks: [createDesk({ id: 'b-0', teacher: '講師A', lesson: { id: 'lesson-1', studentSlots: [createStudent(), null] } })],
+      })
+      return {
+        weeks: [[cell]],
+        weekIndex: 0,
+        selectedCellId: cell.id,
+        selectedDeskIndex: 0,
+        holidayDates: [],
+        forceOpenDates: [],
+        suppressedRegularLessonOccurrences: [],
+        scheduleCountAdjustments: [],
+        manualMakeupAdjustments: {},
+        suppressedMakeupOrigins: {},
+        fallbackMakeupStudents: {},
+        manualLectureStockCounts: {},
+        manualLectureStockOrigins: {},
+        fallbackLectureStockStudents: {},
+        ...overrides,
+      }
+    }
+
+    const historyContext = {
+      classroomSettings,
+      groupClassEntries: {},
+      isLectureStockOpen: false,
+      isMakeupStockOpen: false,
+      studentScheduleRange: null,
+      teacherScheduleRange: null,
+    }
+
+    it('undo: applyHistoryEntry が「戻した盤面そのもの」を publish payload にする（保存対象になる）', () => {
+      const entry = createHistoryEntryFixture()
+      const applied = applyHistoryEntry(entry, historyContext)
+      const desk = applied.publishPayload.weeks[0][0].desks[0]
+      expect(desk.teacher).toBe('講師A')
+      expect(desk.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+      expect(applied.publishPayload.weekIndex).toBe(0)
+      expect(applied.publishPayload.selectedCellId).toBe('2026-06-01_1')
+      // 参照を共有しない（publish 後の編集が履歴エントリを汚染しない）
+      expect(applied.publishPayload.weeks[0]).not.toBe(entry.weeks[0])
+    })
+
+    it('undo: 休日/強制開校が変わる履歴なら教室設定も戻し、その設定で開校判定を掛けた週を publish する', () => {
+      const entry = createHistoryEntryFixture({ holidayDates: ['2026-06-01'] })
+      const applied = applyHistoryEntry(entry, historyContext)
+      expect(applied.classroomSettingsChanged).toBe(true)
+      expect(applied.nextClassroomSettings.holidayDates).toEqual(['2026-06-01'])
+      expect(applied.publishPayload.weeks[0][0].isOpenDay).toBe(false)
+      // 変化が無いときは教室設定を触らない（余計な書き込みを増やさない）
+      expect(applyHistoryEntry(createHistoryEntryFixture(), historyContext).classroomSettingsChanged).toBe(false)
+    })
+
+    it('undo: handleUndo が版数 bump ＋ userInitiated:true で publish する（commitWeeks と同じ形）', () => {
+      const handleUndo = sliceFunctionBody(boardSource, 'const handleUndo = () => {', 'const handleRedo = () => {')
+      expect(handleUndo).toContain('applyHistoryEntry(previous, {')
+      expect(handleUndo).toContain('committedBoardChangeVersionRef.current += 1')
+      expect(handleUndo).toContain('onBoardStateChange?.(applied.publishPayload, { userInitiated: true })')
+    })
+
+    it('redo[兄弟]: handleRedo も版数 bump ＋ userInitiated:true で publish する', () => {
+      const handleRedo = sliceFunctionBody(boardSource, 'const handleRedo = () => {', 'const handleBoardSort =')
+      expect(handleRedo).toContain('applyHistoryEntry(next, {')
+      expect(handleRedo).toContain('committedBoardChangeVersionRef.current += 1')
+      expect(handleRedo).toContain('onBoardStateChange?.(applied.publishPayload, { userInitiated: true })')
+    })
+
+    it('②一段スナップショット復元[兄弟]: 復元直後の受動 publish では clean 署名を更新しない（＝未保存のまま）', () => {
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true })).toEqual({
+        markClean: false,
+        persist: false,
+        consumePendingUnsavedRestore: true,
+      })
+      // 通常のロード/教室切替（復元直後でない）は従来どおり clean 化する
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).markClean).toBe(true)
+      // userInitiated は従来どおり保存対象（clean 化しない）
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: true, pendingUnsavedRestore: false })).toEqual({
+        markClean: false,
+        persist: true,
+        consumePendingUnsavedRestore: true,
+      })
+    })
+
+    it('②一段スナップショット復元[兄弟]: restoreUndoSnapshot は clean 化せず未保存フラグを立てる', () => {
+      const restore = sliceFunctionBody(appSource, 'const restoreUndoSnapshot = useCallback(', 'const dismissUndoSnapshot =')
+      expect(restore).not.toContain('markStateLoadedClean()')
+      expect(restore).toContain('pendingUnsavedUndoSnapshotRestoreRef.current = true')
+    })
+
+    it('クロス教室汚染ガードは温存する（userInitiated:false では一切書き込まない）', () => {
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true }).persist).toBe(false)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).persist).toBe(false)
     })
   })
 })

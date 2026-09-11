@@ -66,7 +66,7 @@ export type SpecialSessionSubjectDelta = {
   delta: number
 }
 
-type HistoryEntry = {
+export type HistoryEntry = {
   weeks: SlotCell[][]
   weekIndex: number
   selectedCellId: string
@@ -806,6 +806,64 @@ export function appendHistoryEntry(stack: HistoryEntry[], entry: HistoryEntry): 
     return [...stack.slice(stack.length - MAX_HISTORY_DEPTH + 1), entry]
   }
   return [...stack, entry]
+}
+
+export type HistoryApplyContext = {
+  classroomSettings: ClassroomSettings
+  groupClassEntries: GroupClassEntryMap
+  isLectureStockOpen: boolean
+  isMakeupStockOpen: boolean
+  studentScheduleRange: ScheduleRangePreference | null
+  teacherScheduleRange: ScheduleRangePreference | null
+}
+
+export type HistoryApplyResult = {
+  nextClassroomSettings: ClassroomSettings
+  classroomSettingsChanged: boolean
+  publishPayload: PersistedBoardState
+}
+
+// U-0a / INV-02(手動編集の永続化・回帰防止): undo/redo で戻した盤面を「commitWeeks と同じ形」で
+// 外へ publish するための純関数。
+// 以前の handleUndo/handleRedo は committedBoardChangeVersionRef を上げず onBoardStateChange も呼ばず、
+// 後追いの publish effect が userInitiated:false で発火していた。その結果 App 側 handleBoardStateChange が
+// markStateLoadedClean() を実行して「戻した直後の盤面＝保存済み」と誤認し、保存ボタンが効かず
+// リロードで undo 前の状態が復活していた(2026-09-12 修正)。
+// 戻し操作はユーザー起因の編集なので、必ずこの payload を userInitiated:true で publish すること
+// (版数 bump とセット。どちらかを外すと同じ回帰が再発する)。
+export function applyHistoryEntry(entry: HistoryEntry, context: HistoryApplyContext): HistoryApplyResult {
+  const classroomSettingsChanged = !areStringArraysEqual(entry.holidayDates, context.classroomSettings.holidayDates)
+    || !areStringArraysEqual(entry.forceOpenDates, context.classroomSettings.forceOpenDates)
+  const nextClassroomSettings: ClassroomSettings = classroomSettingsChanged
+    ? {
+      ...context.classroomSettings,
+      holidayDates: [...entry.holidayDates],
+      forceOpenDates: [...entry.forceOpenDates],
+    }
+    : context.classroomSettings
+  return {
+    nextClassroomSettings,
+    classroomSettingsChanged,
+    publishPayload: {
+      weeks: cloneWeeksForPublish(applyClassroomAvailability(entry.weeks, nextClassroomSettings)),
+      weekIndex: entry.weekIndex,
+      selectedCellId: entry.selectedCellId,
+      selectedDeskIndex: entry.selectedDeskIndex,
+      suppressedRegularLessonOccurrences: [...entry.suppressedRegularLessonOccurrences],
+      scheduleCountAdjustments: cloneScheduleCountAdjustments(entry.scheduleCountAdjustments),
+      manualMakeupAdjustments: cloneOriginMap(entry.manualMakeupAdjustments),
+      suppressedMakeupOrigins: cloneOriginMap(entry.suppressedMakeupOrigins),
+      fallbackMakeupStudents: { ...entry.fallbackMakeupStudents },
+      manualLectureStockCounts: { ...entry.manualLectureStockCounts },
+      manualLectureStockOrigins: cloneManualLectureStockOrigins(entry.manualLectureStockOrigins),
+      fallbackLectureStockStudents: { ...entry.fallbackLectureStockStudents },
+      groupClassEntries: cloneGroupClassEntryMap(context.groupClassEntries),
+      isLectureStockOpen: context.isLectureStockOpen,
+      isMakeupStockOpen: context.isMakeupStockOpen,
+      studentScheduleRange: context.studentScheduleRange,
+      teacherScheduleRange: context.teacherScheduleRange,
+    },
+  }
 }
 
 export function cloneWeek(week: SlotCell[]): SlotCell[] {
@@ -11323,12 +11381,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const deltaEntry = previous.specialSessionSubjectDelta
       onUpdateSpecialSessions((current) => applySubjectSlotsDeltaToSessions(current, deltaEntry, -1))
     }
-    if (!areStringArraysEqual(previous.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(previous.forceOpenDates, classroomSettings.forceOpenDates)) {
-      onUpdateClassroomSettings({
-        ...classroomSettings,
-        holidayDates: [...previous.holidayDates],
-        forceOpenDates: [...previous.forceOpenDates],
-      })
+    // U-0a(INV-02): 戻し/やり直しの適用内容は純関数へ一元化し、commitWeeks と同じ publish payload を作る。
+    const applied = applyHistoryEntry(previous, {
+      classroomSettings,
+      groupClassEntries,
+      isLectureStockOpen,
+      isMakeupStockOpen,
+      studentScheduleRange,
+      teacherScheduleRange,
+    })
+    if (applied.classroomSettingsChanged) {
+      onUpdateClassroomSettings(applied.nextClassroomSettings)
     }
     setWeeks(previous.weeks)
     setWeekIndex(previous.weekIndex)
@@ -11347,6 +11410,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedLectureStockKey(null)
     setStudentMenu(null)
     setEditStudentDraft(null)
+    // U-0a(INV-02・回帰防止): 戻し/やり直しはユーザー起因の編集なので、commitWeeks と同じく
+    // 版数を上げて userInitiated:true で publish する。これを外すと後追いの publish effect が
+    // userInitiated:false で発火し、App 側が clean 署名を更新して「保存済み」と誤認する
+    // (保存ボタンが効かず、リロードで戻す前の状態が復活する)。
+    committedBoardChangeVersionRef.current += 1
+    onBoardStateChange?.(applied.publishPayload, { userInitiated: true })
     setStatusMessage('1つ前の状態に戻しました。')
   }
 
@@ -11366,12 +11435,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       const deltaEntry = next.specialSessionSubjectDelta
       onUpdateSpecialSessions((current) => applySubjectSlotsDeltaToSessions(current, deltaEntry, 1))
     }
-    if (!areStringArraysEqual(next.holidayDates, classroomSettings.holidayDates) || !areStringArraysEqual(next.forceOpenDates, classroomSettings.forceOpenDates)) {
-      onUpdateClassroomSettings({
-        ...classroomSettings,
-        holidayDates: [...next.holidayDates],
-        forceOpenDates: [...next.forceOpenDates],
-      })
+    // U-0a(INV-02): 戻し/やり直しの適用内容は純関数へ一元化し、commitWeeks と同じ publish payload を作る。
+    const applied = applyHistoryEntry(next, {
+      classroomSettings,
+      groupClassEntries,
+      isLectureStockOpen,
+      isMakeupStockOpen,
+      studentScheduleRange,
+      teacherScheduleRange,
+    })
+    if (applied.classroomSettingsChanged) {
+      onUpdateClassroomSettings(applied.nextClassroomSettings)
     }
     setWeeks(next.weeks)
     setWeekIndex(next.weekIndex)
@@ -11390,6 +11464,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedLectureStockKey(null)
     setStudentMenu(null)
     setEditStudentDraft(null)
+    // U-0a(INV-02・回帰防止): 戻し/やり直しはユーザー起因の編集なので、commitWeeks と同じく
+    // 版数を上げて userInitiated:true で publish する。これを外すと後追いの publish effect が
+    // userInitiated:false で発火し、App 側が clean 署名を更新して「保存済み」と誤認する
+    // (保存ボタンが効かず、リロードで戻す前の状態が復活する)。
+    committedBoardChangeVersionRef.current += 1
+    onBoardStateChange?.(applied.publishPayload, { userInitiated: true })
     setStatusMessage('取り消した操作をやり直しました。')
   }
 

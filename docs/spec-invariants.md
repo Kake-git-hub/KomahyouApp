@@ -179,6 +179,16 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   訂正：`ScheduleBoardScreen.test.ts:2074` は manual 講師の生存方向のみをロックしており、当初の
   「非 manual クリアをロック中」という記載は誤りだった。
 - **違反履歴**（transcribe）：
+  - **U-0（戻す／やり直し／一段スナップショット復元が「保存済み」扱いになる）・2026-09-12**：
+    `handleUndo` / `handleRedo` が `committedBoardChangeVersionRef` を上げず `onBoardStateChange` も
+    呼ばなかったため、後追いの publish effect が `userInitiated:false` で発火し、`App.handleBoardStateChange`
+    が「ロード」と見なして `markStateLoadedClean()` を実行。戻した直後の盤面が clean 署名になり保存ボタンが
+    効かず、リロードでサーバー上の（戻す前の）状態が復活した。②一段スナップショット復元
+    （`App.restoreUndoSnapshot`・黄バナー「戻す」）も同型で、自分で `markStateLoadedClean()` していた。
+    修正＝undo/redo の適用を純関数 `applyHistoryEntry` に切り出し、`commitWeeks` と同じく版数 bump ＋
+    `userInitiated:true` の publish を発行。②は clean 化をやめ、復元直後の受動 publish でも clean 化しない
+    （`resolveBoardStateChangeCleanMarking`）。★クロス教室汚染ガード（`userInitiated:false` では一切書き込まない）は不変。
+    ★テンプレモード undo（`templateUndoStack`）はテンプレ保存の別経路で、この機序の対象外。
   - **v1.5.435**（削除講師 tombstone・2 経路）：
     - `b8b075f` / 2026-07-10 … `repackTeacherOnlyDesks` が tombstone（`teacher=''`, `source='deleted'`）を
       空机とみなしクリア→テンプレ再マージで復活（日大前・落合/永山が 7-25 全限×でも赤配置）。
@@ -204,7 +214,9 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   （**実装済み・29 テスト**。旧 `it.todo` 1 件は 2026-07-11 の仕様確定を受けて講師帰属境界の仕様ロック 4 件
   ＝テンプレ足場は追従（クリア／再付与の両方向）・manual 配置は不可侵・QR 自動割当（schedule-registration）も
   不可侵、へ置換済み。2026-08-02 に「丸ごと振替で講習期間外へ移した提出講師を起動時自己修復が置き直さない」
-  1 件を追加）。
+  1 件を追加。2026-09-12 に U-0（戻す/やり直し/②一段スナップショット復元 × 保存済み扱い）
+  7 件を追加＝undo の publish payload・休日戻し・handleUndo/handleRedo の版数 bump と `userInitiated:true`・
+  `resolveBoardStateChangeCleanMarking`・`restoreUndoSnapshot` の非 clean 化・クロス教室汚染ガード温存）。
   - **違反履歴（2026-08-02・丸ごと振替 Issue #40 の追随／オーナー確定）**：起動時の自己修復
     `reconcileSubmittedTeacherPlacements` の「配置済み」判定が**講習期間内のセルだけ**を走査していたため、
     丸ごと振替で QR 提出講師の机を期間外へ意図的に移すと「未配置」と誤判定し、起動毎に期間内へ置き直して
