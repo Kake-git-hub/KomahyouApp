@@ -15,7 +15,7 @@
 //   - --classroom 省略時は開発用教室 v8OZ7zH8vONNHjjYVcR1。
 //   - --version でマーカーの版を絞る（例: v1.5.502。先頭の v は付けても付けなくてもよい）。
 //   - --json で集約結果をそのまま出す（他ツールへ渡す用）。
-import { execFileSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { mergeChecklistReports, summarizeChecklistResults, buildChecklistMarkdown, toChecklistReport } from './verification-checklist-report.lib.mjs'
 
 const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
@@ -52,6 +52,8 @@ function defaultSinceIso(days) {
 }
 
 function accessToken() {
+  // Windows では gcloud が .cmd のため shell 経由で呼ぶ(既存 tools と同じ引数)。
+  if (process.platform === 'win32') return execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim()
   return execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8' }).trim()
 }
 
