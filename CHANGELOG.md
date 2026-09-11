@@ -16,6 +16,10 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.498 (2026-09-11)
+
+- docs: オーナー要望5件(戻るボタン統一/要望・報告に「質問」+AI回答案/教室別オプション化/盤面PDFのコマ選択印刷/講習履歴)の調査結果と実装計画を `docs/plan-2026-09-11-five-requests.md` に起案(次セッション着手用・コード変更なし・役割分担=計画審査 Fable 5.1/実装 Opus/単純作業 Sonnet)。調査で判明した**現行バグ疑い「保存後に 戻る/やり直し を押すと盤面が保存済み扱いになり保存できず、リロードで巻き戻る」**(`ScheduleBoardScreen.tsx` handleUndo/handleRedo が `committedBoardChangeVersionRef` を上げず publish effect が userInitiated:false で `markStateLoadedClean` する・undo 履歴は保存で消えない・INV-02 相当)は **U-0 として最優先で計画に登録(本版では未修正)**
+
 ## v1.5.497 (2026-09-07)
 
 - feat: 生徒日程表の講習回数表の右括弧(希望数)を印刷にも載せる(Issue #61・緑が丘の要望: 講師が紙の実績だけを見て講習終了と誤読)。紙の見出しは「講習回数(予定)」、画面は「(希望数)」のまま。印字は提出由来の希望がある個別科目だけで、フォールバック行・集団(集理/集社)・通常回数の予定数・講師日程表は従来どおり画面のみ(`scheduleHtml.ts` toCountRows の printDesired / spec-schedule-pdf §E・INV-05 準観察)
