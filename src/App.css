@@ -3596,6 +3596,69 @@ tr.sa-group-row td {
   flex-wrap: wrap;
 }
 
+/* 盤面PDFのコマ選択モーダル(docs/spec-schedule-pdf.md §I)。行=時限・列=曜日のチェック表。 */
+.board-print-selection-modal .board-print-selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.board-print-selection-table-wrap {
+  overflow: auto;
+  max-height: 52vh;
+}
+
+.board-print-selection-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.board-print-selection-table th,
+.board-print-selection-table td {
+  border: 1px solid #dbe3ec;
+  padding: 2px 4px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.board-print-selection-table thead th {
+  background: #f4f7fb;
+  color: #16314f;
+}
+
+.board-print-selection-head {
+  border: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 8px;
+}
+
+.board-print-selection-head:hover {
+  background: #e6eefa;
+}
+
+.board-print-selection-head[aria-pressed='true'] {
+  font-weight: 700;
+  color: #1668c1;
+}
+
+.board-print-selection-cell {
+  display: block;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+
+.board-print-selection-cell input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
 /* 基本データ削除確認モーダル（生徒/講師）: 不可逆・未消化ストック・退塾日での非表示案内を強調する。 */
 .basic-data-delete-modal .basic-data-delete-warning {
   margin: 0;

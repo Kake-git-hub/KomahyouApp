@@ -31,6 +31,16 @@
 - 追加の縮小は 4.5px を下限にし、それ未満へは落とさない
 - 画面と PDF で判断基準を共有しつつ、PDF だけが必要最小限の追加縮小を許可する
 
+## コマ選択出力（2026-09-12 追加）
+
+- 「PDF出力」→ コマ選択モーダル（行＝時限・列＝営業日）→「出力」。**初期状態は全選択で従来出力と同一**。
+- 選択が全選択・空のときは**無改変の `exportBoardPdf` へ委譲**する（間引き経路に入れない）。
+- 間引きは `pruneBoardTableForSelection`（`src/utils/pdf.ts`）が DOM クローンに対して行い、列幅 `applyBoardPdfColumnWidths` は
+  **間引き後の `.sa-day-header` の数**で組み直す（順序を入れ替えない）。
+- 選択の判定材料は `src/utils/boardPrintSelection.ts` の純関数（`buildBoardPrintGrid` / `resolveBoardPrintSelection` /
+  `resolveBoardPrintCanvasScale` / `resolveBoardPrintStudentMaxFontSize`）。仕様の正本は `docs/spec-schedule-pdf.md` §I-0。
+- 用紙は A3 縦固定のまま。少数コマは既存の `renderScale` で拡大され、解像度と生徒文字上限だけを選択数に応じて上げる。
+
 ## 変更時の確認観点
 
 - 時間列がセル中央に寄り、文字が十分に大きく読めること
@@ -46,3 +56,5 @@
 - `src/components/schedule-board/memoText.ts`
 - `README.md`
 - `開発ルール.md`
+- コマ選択で曜日・時限を絞ったとき、列/行が詰まって A3 縦いっぱいに拡大されること（全選択では従来と同じ絵になること）
+- 選択を外したコマが「空白（枠は残る）」になり、黄色警告や生徒名が残っていないこと

@@ -17,6 +17,8 @@
 <!-- ここに編集内容を1行ずつ追記する -->
 - fix: 「戻す」「やり直し」と一段スナップショット復元の直後に盤面が「保存済み」扱いになり保存できず、リロードで戻す前の状態へ巻き戻る不具合を修正(undo/redo を純関数 applyHistoryEntry 経由で版数 bump ＋ userInitiated:true publish／restoreUndoSnapshot は clean 化しない・INV-02)
 - fix: 上記の追随(U-0c・INV-02/INV-03)。②一段スナップショット復元は盤面以外の画面からも起動でき、盤面未マウントだと未保存フラグが残留して**次に開いた教室が未保存扱いになり自動保存が走る**ため、明示 clean 化経路(読込/教室切替/ユーザー切替)で必ず落とすよう純関数 `resolveRestoreFlagLifecycle` に一元化(`src/App.tsx`)。あわせて undo/redo でも `commitWeeks` と同様に丸ごと振替の選択モード(`wholeDayTransferSourceDate`)と講師メニューを解除し、選択中の undo による古い振替元での誤実行を防止(INV-03 兄弟)
+- feat: 盤面PDF出力に「コマ選択」を追加(曜日×時限のチェック表で選んだコマだけを A3 縦に最大化・初期状態は全選択＝従来と同一出力・定休日は選択不可・空選択は出力不可)。純関数 `src/utils/boardPrintSelection.ts` と DOM 間引き `pruneBoardTableForSelection`(`src/utils/pdf.ts`)を新設し、既存 `exportBoardPdf` は無改変の入口として残して全選択時はそこへ委譲する。機能フラグ `boardPrintSelection`(開発用教室のみ)・仕様は `docs/spec-schedule-pdf.md` §I-0(レビュー追修正: html2canvas の解像度 scale は選択コマ数ではなく間引き後に残る矩形サイズ(曜日数×時限数)基準に修正・空選択は無改変出力への委譲をやめ no-op に修正・生徒文字上限の定数二重定義を解消し `pdf.ts` は `boardPrintSelection.ts` の `BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE` を正本として import・回帰防止テスト追加)
+- chore: 盤面PDFの DOM 間引き(`pruneBoardTableForSelection`)を合成テーブルで検証するため devDependency に `jsdom` を追加(対象テストのみ `// @vitest-environment jsdom`。既存のユニットは従来どおり node 環境)
 
 ## v1.5.501 (2026-09-12)
 

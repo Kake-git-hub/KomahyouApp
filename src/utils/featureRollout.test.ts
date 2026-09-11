@@ -76,3 +76,13 @@ describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのま�
     expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(true)
   })
 })
+
+describe('featureRollout: boardPrintSelection（盤面PDFのコマ選択）', () => {
+  it('開発用教室のみ先行（本番3教室は従来どおりモーダルなしの即出力）', () => {
+    expect(featureRolloutRegistry.boardPrintSelection.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(false)
+  })
+})

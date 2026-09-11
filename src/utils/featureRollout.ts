@@ -92,6 +92,15 @@ export const featureRolloutRegistry = {
     scope: 'all-classrooms',
     description: 'Student/teacher schedule: render the board as-is instead of re-merging the regular-lesson template over it.',
   },
+  // 盤面PDF出力の「コマ選択」(plan-2026-09-11-five-requests §5 / docs/spec-schedule-pdf.md §I)。
+  // ON: 「PDF出力」でモーダルを開き、曜日×時限のチェック表で選んだコマだけを A3 縦に最大化して出す。
+  // OFF: 従来どおりモーダルなしで表示週まるごと即出力する(入口の見え方も従来のまま)。
+  // ★初期状態は全選択＝従来と同一出力なので、ON にしても手数が 1 つ増えるだけで結果は変わらない。
+  // 用紙は A3 縦固定のまま(オーナー確定 2026-09-11)。開発用教室で先行検証する。
+  boardPrintSelection: {
+    scope: 'development-only',
+    description: 'Board PDF export: choose which day x slot cells to print (defaults to the whole week = current output).',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

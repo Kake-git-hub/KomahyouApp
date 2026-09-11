@@ -1,6 +1,14 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import type { SlotCell } from '../components/schedule-board/types'
+import {
+  BOARD_PRINT_FULL_CANVAS_SCALE,
+  BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE,
+  parseBoardPrintCellKey,
+  resolveBoardPrintCanvasScale,
+  resolveBoardPrintStudentMaxFontSize,
+  type BoardPrintSelection,
+} from './boardPrintSelection'
 
 type ExportBoardPdfParams = {
   element: HTMLElement
@@ -12,7 +20,8 @@ const PDF_SEAT_COLUMN_WIDTH = 30
 const PDF_SEAT_FONT_SIZE = 22
 const PDF_TEACHER_COLUMN_WIDTH = 54
 const PDF_STUDENT_COLUMN_WIDTH = 115.5
-const PDF_STUDENT_MAX_FONT_SIZE = 34
+// ⚠️ 正本は boardPrintSelection.ts の BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE(定数二重定義の解消)。
+const PDF_STUDENT_MAX_FONT_SIZE = BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE
 const PDF_STUDENT_MIN_FONT_SIZE = 4.8
 
 function resolveTargetExportWidth(currentWidth: number, currentHeight: number, targetAspectRatio: number) {
@@ -199,11 +208,13 @@ function prepareStudentTextEntriesForPdf(root: HTMLElement): PreparedStudentText
     .filter((entry): entry is PreparedStudentTextEntry => entry !== null)
 }
 
-function fitStudentTextForPdf(root: HTMLElement) {
+function fitStudentTextForPdf(root: HTMLElement, maxFontSize: number = PDF_STUDENT_MAX_FONT_SIZE) {
   const preparedEntries = prepareStudentTextEntriesForPdf(root)
   if (preparedEntries.length === 0) return
 
-  const initialFontSize = PDF_STUDENT_MAX_FONT_SIZE
+  // 全選択(＝従来出力)では必ず PDF_STUDENT_MAX_FONT_SIZE を使う。コマ選択で列を間引いたときだけ
+  // 上限を緩める(セルが横に伸びるため)。溢れ判定は従来どおり効くので拡大しすぎることはない。
+  const initialFontSize = maxFontSize
   const minimumFontSize = PDF_STUDENT_MIN_FONT_SIZE
 
   preparedEntries.forEach((entry) => {
@@ -234,8 +245,82 @@ function applyBoardPdfColumnWidths(table: HTMLElement) {
   table.style.minWidth = table.style.width
 }
 
-export async function exportBoardPdf({ element, fileName, title }: ExportBoardPdfParams) {
+// 盤面テーブル(クローン)を選択された曜日×時限だけに間引く純関数(DOM 操作のみ・副作用は引数の table に閉じる)。
+// (1) 未選択曜日の列(colgroup の 4 本 + すべての data-date-key セル + 帯セルの colSpan) を除去
+// (2) 未選択時限の行(tr[data-slot-number]) を除去
+// (3) 残った矩形の中で未選択のコマは「構造を残したまま中身を空白化」する
+// ⚠️ 全選択・空選択では絶対に呼ばない(従来出力と 1 ドットも変えないため)。
+export function pruneBoardTableForSelection(table: HTMLElement, selection: BoardPrintSelection) {
+  if (selection.isFullSelection || selection.isEmpty) return
+
+  const includedDays = new Set(selection.dateKeys)
+  const includedSlots = new Set(selection.slotNumbers.map((slotNumber) => String(slotNumber)))
+  const orderedDayKeys = Array.from(table.querySelectorAll<HTMLElement>('.sa-day-header'))
+    .map((header) => header.getAttribute('data-date-key') ?? '')
+
+  // (1-a) colgroup: 先頭 1 本が時間列、以降は曜日ごとに 4 本(席/講師/生徒/生徒)。
+  // ⚠️ 実経路では BoardGrid.tsx は colgroup を出力しない(列幅は runBoardPdfExport 内の
+  // applyBoardPdfColumnWidths がクローン後に組み直す)ため、この分岐は現状到達しない保険。
+  // (合成テーブルを使う pdfBoardPrint.test.ts の「既に colgroup がある場合」テストのために残す。)
+  const columnGroup = table.querySelector('colgroup')
+  if (columnGroup) {
+    const columns = Array.from(columnGroup.children)
+    if (columns.length === orderedDayKeys.length * 4 + 1) {
+      orderedDayKeys.forEach((dateKey, dayIndex) => {
+        if (includedDays.has(dateKey)) return
+        for (let offset = 0; offset < 4; offset += 1) {
+          columns[1 + dayIndex * 4 + offset].remove()
+        }
+      })
+    }
+  }
+
+  // (2) 未選択時限の行ごと除去(時限ラベルの rowSpan セルも同じ行にあるので一緒に消える)。
+  table.querySelectorAll<HTMLElement>('tr[data-slot-number]').forEach((row) => {
+    if (!includedSlots.has(row.getAttribute('data-slot-number') ?? '')) row.remove()
+  })
+
+  // (1-b) 複数曜日にまたがる帯セル(特別講習期間)は残った曜日数で colSpan を組み直す。
+  table.querySelectorAll<HTMLElement>('[data-date-keys]').forEach((cell) => {
+    const dateKeys = (cell.getAttribute('data-date-keys') ?? '').split(',').filter(Boolean)
+    const remaining = dateKeys.filter((dateKey) => includedDays.has(dateKey))
+    if (remaining.length === 0) {
+      cell.remove()
+      return
+    }
+    cell.setAttribute('data-date-keys', remaining.join(','))
+    cell.setAttribute('colspan', String(remaining.length * 4))
+  })
+
+  // (1-c) 単一曜日のセル(ヘッダー・集団行・本体)を除去。
+  table.querySelectorAll<HTMLElement>('[data-date-key]').forEach((cell) => {
+    if (!includedDays.has(cell.getAttribute('data-date-key') ?? '')) cell.remove()
+  })
+
+  // (3) 矩形内の未選択コマを空白化(列・行の構造は保つ)。席番号は目印として残し、講師・生徒だけ空にする。
+  for (const cellKey of selection.blankCellKeys) {
+    const parsed = parseBoardPrintCellKey(cellKey)
+    if (!parsed) continue
+    const selector = `[data-date-key="${parsed.dateKey}"][data-slot-number="${parsed.slotNumber}"]`
+    table.querySelectorAll<HTMLElement>(selector).forEach((cell) => {
+      if (!cell.classList.contains('sa-teacher') && !cell.classList.contains('sa-student')) return
+      cell.innerHTML = ''
+      cell.classList.remove('sa-warning')
+      cell.classList.remove('sa-student-picked')
+      // sa-print-blank: 空白化したセルを示す目印クラス。専用 CSS は無く(App.css に定義なし)、
+      // 見た目は上の innerHTML='' + 警告/選択クラス除去だけで成立している。将来デバッグ用の
+      // スタイルフックとして残す(現状は「印だけ付けて何もしない」で意図どおり)。
+      cell.classList.add('sa-print-blank')
+    })
+  }
+}
+
+// 盤面PDFの本体。selection が null のときは従来の「表示週まるごと」出力(exportBoardPdf)と完全に同じ。
+// selection を渡した場合だけ、クローン側の列/行を間引き・未選択セルを空白化し、解像度と生徒文字の
+// 上限を選択数に応じて上げる。⚠️ 全選択は selection を渡さない経路(exportBoardPdf)へ委譲すること。
+async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfParams, selection: BoardPrintSelection | null) {
   void title
+  const activeSelection = selection && !selection.isFullSelection && !selection.isEmpty ? selection : null
   const exportRoot = document.createElement('div')
   exportRoot.style.position = 'fixed'
   exportRoot.style.left = '-100000px'
@@ -271,6 +356,10 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   }
 
   if (cloneTable) {
+    // 列幅(colgroup)は残った曜日数で組み直す必要があるため、必ず間引いてから applyBoardPdfColumnWidths する。
+    if (activeSelection) {
+      pruneBoardTableForSelection(cloneTable, activeSelection)
+    }
     applyBoardPdfColumnWidths(cloneTable)
   }
 
@@ -451,11 +540,16 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   // Fit after final PDF table width is known; otherwise student text is measured
   // against the pre-expanded table and stays unnecessarily small.
   void exportRoot.offsetWidth
-  fitStudentTextForPdf(exportRoot)
+  fitStudentTextForPdf(exportRoot, activeSelection ? resolveBoardPrintStudentMaxFontSize(activeSelection) : PDF_STUDENT_MAX_FONT_SIZE)
 
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',
-    scale: 1.1,
+    scale: activeSelection
+      // 解像度の基準は「選択したコマ数」ではなく「間引き後に残る矩形の面積(曜日数 × 時限数)」。
+      // 対角選択(例: 5曜日×5時限を選ぶがコマ自体は5つ)でも出力される矩形は 25 コマ分あるため、
+      // selectedCellCount だと過剰に解像度を上げてしまう(参照: boardPrintSelection.test.ts)。
+      ? resolveBoardPrintCanvasScale(activeSelection.dateKeys.length * activeSelection.slotNumbers.length, false)
+      : BOARD_PRINT_FULL_CANVAS_SCALE,
     useCORS: true,
     logging: false,
     width: Math.ceil(exportRoot.scrollWidth),
@@ -476,6 +570,23 @@ export async function exportBoardPdf({ element, fileName, title }: ExportBoardPd
   pdf.addImage(imageData, 'PNG', offsetX, offsetY, renderWidth, renderHeight, undefined, 'FAST')
 
   pdf.save(fileName)
+}
+
+// 従来どおりの盤面PDF出力(表示週まるごと)。★無改変の入口として残す(全選択はここへ委譲する)。
+export async function exportBoardPdf(params: ExportBoardPdfParams) {
+  await runBoardPdfExport(params, null)
+}
+
+// コマ選択つきの盤面PDF出力。全選択は従来出力へ委譲するので「初期状態＝現状と同一」が保たれる。
+// 空選択は docs/spec-schedule-pdf.md §I-0 のとおり「出力不可」なので何もしない(no-op)。
+// ⚠️ 呼び出し側(UI)は空選択で「出力」ボタンを無効化する想定だが、防御的にここでも何も出力しない。
+export async function exportBoardPdfSelection(params: ExportBoardPdfParams, selection: BoardPrintSelection) {
+  if (selection.isEmpty) return
+  if (selection.isFullSelection) {
+    await exportBoardPdf(params)
+    return
+  }
+  await runBoardPdfExport(params, selection)
 }
 
 const dayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
