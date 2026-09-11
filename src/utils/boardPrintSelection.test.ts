@@ -155,6 +155,37 @@ describe('resolveBoardPrintCanvasScale', () => {
     expect(resolveBoardPrintCanvasScale(0)).toBe(BOARD_PRINT_FULL_CANVAS_SCALE)
     expect(resolveBoardPrintCanvasScale(Number.NaN)).toBe(BOARD_PRINT_FULL_CANVAS_SCALE)
   })
+
+  it('引数は選択コマ数ではなく「残る矩形サイズ」で渡す想定: 対角5コマ(5曜日×5時限が残る)は 1.1 になる(2.5 に跳ねない)', () => {
+    // 5 開校日 × 5 時限の盤面で、対角線上の 5 コマだけを選ぶ(各曜日・各時限に 1 つずつ)。
+    // 選択コマ数は 5 だが、間引き後に残る矩形は 5 曜日 × 5 時限 = 25 コマ分。
+    const days = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18']
+    const cells: SlotCell[] = []
+    for (const dateKey of days) {
+      for (let slotNumber = 1; slotNumber <= 5; slotNumber += 1) {
+        cells.push(makeCell(dateKey, slotNumber, true))
+      }
+    }
+    const diagonalGrid = buildBoardPrintGrid(cells)
+    const diagonalChecked = days.map((dateKey, index) => boardPrintCellKey(dateKey, index + 1))
+    const selection = resolveBoardPrintSelection(diagonalGrid, diagonalChecked)
+
+    expect(selection.selectedCellCount).toBe(5)
+    expect(selection.dateKeys).toHaveLength(5)
+    expect(selection.slotNumbers).toHaveLength(5)
+
+    const remainingRectCellCount = selection.dateKeys.length * selection.slotNumbers.length
+    expect(remainingRectCellCount).toBe(25)
+    // 選択コマ数(5)を渡すと誤って 2.5 になってしまうところ、矩形サイズ(25)を渡すと従来値 1.1 になる。
+    expect(resolveBoardPrintCanvasScale(remainingRectCellCount)).toBe(BOARD_PRINT_FULL_CANVAS_SCALE)
+    expect(resolveBoardPrintCanvasScale(selection.selectedCellCount)).not.toBe(BOARD_PRINT_FULL_CANVAS_SCALE)
+  })
+})
+
+describe('定数の二重定義解消ロック', () => {
+  it('BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE が pdf.ts の正本(34px)のまま(pdf.ts はここから import する)', () => {
+    expect(BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE).toBe(34)
+  })
 })
 
 describe('resolveBoardPrintStudentMaxFontSize', () => {

@@ -130,6 +130,8 @@
   （`resolveBoardPrintCanvasScale`・上限 3・**全選択は従来の 1.1 固定**）、生徒文字の上限 34px を残した曜日数の比で緩める
   （`resolveBoardPrintStudentMaxFontSize`・上限 72px・**全選択は 34px のまま**）。はみ出し判定は従来どおり効く。
 - 機能フラグ `boardPrintSelection`（`featureRollout.ts`）。**OFF の教室は従来どおりモーダルなしで即出力**する。開発用教室で先行検証。
+- **未選択の曜日は定休日列も含めて列ごと除去する**（1コマでも外すとその曜日列自体が消える。曜日単位で「残す/消す」が決まり、時限単位の間引きとは独立）。
+- **集団2行・特別講習帯行は時限の間引きに追従せず常に残る**（曜日の間引きのみ効く。行は `tr[data-slot-number]` を持たないため `pruneBoardTableForSelection` の時限フィルタの対象外）。テスト `pdfBoardPrint.test.ts`。
 
 ### I-1. 日程表ポップアップの派生印刷（PDFとは別経路）（2026-07-04 監査領域9 B5 確定・オーナー確認済み）
 

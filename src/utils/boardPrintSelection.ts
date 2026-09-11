@@ -162,15 +162,18 @@ export function resolveBoardPrintSelection(grid: BoardPrintGrid, checked: Iterab
 export const BOARD_PRINT_FULL_CANVAS_SCALE = 1.1
 export const BOARD_PRINT_MAX_CANVAS_SCALE = 3
 
-// 選択コマが少ないほど 1 コマが紙面で大きく引き伸ばされるため、解像度(html2canvas scale)を上げる。
+// 残る矩形(間引き後に紙面へ出る曜日数 × 時限数)が小さいほど 1 コマが紙面で大きく引き伸ばされるため、
+// 解像度(html2canvas scale)を上げる。⚠️ 引数は「選択コマ数」ではなく「残る矩形サイズ」で渡すこと
+// (対角選択のように選択コマ数は少なくても矩形が大きいケースで過剰に解像度を上げないため。
+// 呼び出し側は pdf.ts の `selection.dateKeys.length * selection.slotNumbers.length`)。
 // 全選択は従来どおり 1.1 固定(出力同一の保証)。
-export function resolveBoardPrintCanvasScale(cellCount: number, isFullSelection = false): number {
+export function resolveBoardPrintCanvasScale(remainingRectCellCount: number, isFullSelection = false): number {
   if (isFullSelection) return BOARD_PRINT_FULL_CANVAS_SCALE
-  if (!Number.isFinite(cellCount) || cellCount <= 0) return BOARD_PRINT_FULL_CANVAS_SCALE
-  if (cellCount <= 2) return BOARD_PRINT_MAX_CANVAS_SCALE
-  if (cellCount <= 6) return 2.5
-  if (cellCount <= 12) return 2
-  if (cellCount <= 24) return 1.5
+  if (!Number.isFinite(remainingRectCellCount) || remainingRectCellCount <= 0) return BOARD_PRINT_FULL_CANVAS_SCALE
+  if (remainingRectCellCount <= 2) return BOARD_PRINT_MAX_CANVAS_SCALE
+  if (remainingRectCellCount <= 6) return 2.5
+  if (remainingRectCellCount <= 12) return 2
+  if (remainingRectCellCount <= 24) return 1.5
   return BOARD_PRINT_FULL_CANVAS_SCALE
 }
 

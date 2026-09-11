@@ -3,6 +3,7 @@ import jsPDF from 'jspdf'
 import type { SlotCell } from '../components/schedule-board/types'
 import {
   BOARD_PRINT_FULL_CANVAS_SCALE,
+  BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE,
   parseBoardPrintCellKey,
   resolveBoardPrintCanvasScale,
   resolveBoardPrintStudentMaxFontSize,
@@ -19,7 +20,8 @@ const PDF_SEAT_COLUMN_WIDTH = 30
 const PDF_SEAT_FONT_SIZE = 22
 const PDF_TEACHER_COLUMN_WIDTH = 54
 const PDF_STUDENT_COLUMN_WIDTH = 115.5
-const PDF_STUDENT_MAX_FONT_SIZE = 34
+// ⚠️ 正本は boardPrintSelection.ts の BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE(定数二重定義の解消)。
+const PDF_STUDENT_MAX_FONT_SIZE = BOARD_PRINT_STUDENT_BASE_MAX_FONT_SIZE
 const PDF_STUDENT_MIN_FONT_SIZE = 4.8
 
 function resolveTargetExportWidth(currentWidth: number, currentHeight: number, targetAspectRatio: number) {
@@ -257,6 +259,9 @@ export function pruneBoardTableForSelection(table: HTMLElement, selection: Board
     .map((header) => header.getAttribute('data-date-key') ?? '')
 
   // (1-a) colgroup: 先頭 1 本が時間列、以降は曜日ごとに 4 本(席/講師/生徒/生徒)。
+  // ⚠️ 実経路では BoardGrid.tsx は colgroup を出力しない(列幅は runBoardPdfExport 内の
+  // applyBoardPdfColumnWidths がクローン後に組み直す)ため、この分岐は現状到達しない保険。
+  // (合成テーブルを使う pdfBoardPrint.test.ts の「既に colgroup がある場合」テストのために残す。)
   const columnGroup = table.querySelector('colgroup')
   if (columnGroup) {
     const columns = Array.from(columnGroup.children)
@@ -302,6 +307,9 @@ export function pruneBoardTableForSelection(table: HTMLElement, selection: Board
       cell.innerHTML = ''
       cell.classList.remove('sa-warning')
       cell.classList.remove('sa-student-picked')
+      // sa-print-blank: 空白化したセルを示す目印クラス。専用 CSS は無く(App.css に定義なし)、
+      // 見た目は上の innerHTML='' + 警告/選択クラス除去だけで成立している。将来デバッグ用の
+      // スタイルフックとして残す(現状は「印だけ付けて何もしない」で意図どおり)。
       cell.classList.add('sa-print-blank')
     })
   }
@@ -537,7 +545,10 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
   const canvas = await html2canvas(exportRoot, {
     backgroundColor: '#ffffff',
     scale: activeSelection
-      ? resolveBoardPrintCanvasScale(activeSelection.selectedCellCount, false)
+      // 解像度の基準は「選択したコマ数」ではなく「間引き後に残る矩形の面積(曜日数 × 時限数)」。
+      // 対角選択(例: 5曜日×5時限を選ぶがコマ自体は5つ)でも出力される矩形は 25 コマ分あるため、
+      // selectedCellCount だと過剰に解像度を上げてしまう(参照: boardPrintSelection.test.ts)。
+      ? resolveBoardPrintCanvasScale(activeSelection.dateKeys.length * activeSelection.slotNumbers.length, false)
       : BOARD_PRINT_FULL_CANVAS_SCALE,
     useCORS: true,
     logging: false,
@@ -566,9 +577,12 @@ export async function exportBoardPdf(params: ExportBoardPdfParams) {
   await runBoardPdfExport(params, null)
 }
 
-// コマ選択つきの盤面PDF出力。全選択/空選択は従来出力へ委譲するので「初期状態＝現状と同一」が保たれる。
+// コマ選択つきの盤面PDF出力。全選択は従来出力へ委譲するので「初期状態＝現状と同一」が保たれる。
+// 空選択は docs/spec-schedule-pdf.md §I-0 のとおり「出力不可」なので何もしない(no-op)。
+// ⚠️ 呼び出し側(UI)は空選択で「出力」ボタンを無効化する想定だが、防御的にここでも何も出力しない。
 export async function exportBoardPdfSelection(params: ExportBoardPdfParams, selection: BoardPrintSelection) {
-  if (selection.isFullSelection || selection.isEmpty) {
+  if (selection.isEmpty) return
+  if (selection.isFullSelection) {
     await exportBoardPdf(params)
     return
   }

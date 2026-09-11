@@ -1,13 +1,46 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest'
-import { pruneBoardTableForSelection } from './pdf'
-import {
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SlotCell } from '../components/schedule-board/types'
+
+// html2canvas / jsPDF は実際のキャンバス描画・PDF生成を行うため、DOMを見るだけのテストでは
+// スタブに差し替える(item 2/3 用)。トップレベルで mock を宣言し、対象モジュールは動的 import で
+// mock 適用後に読み込む(vi.mock は hoisted されるが、captured* の参照を後から差し替えるため関数経由にする)。
+const html2canvasMock = vi.fn(async (element: HTMLElement, _options?: { scale: number }) => {
+  return {
+    width: 100,
+    height: 100,
+    toDataURL: () => 'data:image/png;base64,',
+    __capturedElement: element,
+  } as unknown as HTMLCanvasElement
+})
+
+vi.mock('html2canvas', () => ({
+  default: function html2canvasStub(...args: Parameters<typeof html2canvasMock>) {
+    return html2canvasMock(...args)
+  },
+}))
+
+class JsPdfStub {
+  internal = { pageSize: { getWidth: () => 297, getHeight: () => 420 } }
+  addImage = vi.fn()
+  addPage = vi.fn()
+  save = vi.fn()
+}
+
+vi.mock('jspdf', () => ({
+  default: JsPdfStub,
+}))
+
+const {
+  pruneBoardTableForSelection,
+  exportBoardPdfSelection,
+} = await import('./pdf')
+const {
   boardPrintCellKey,
   buildBoardPrintGrid,
   createInitialBoardPrintChecked,
   resolveBoardPrintSelection,
-} from './boardPrintSelection'
-import type { SlotCell } from '../components/schedule-board/types'
+} = await import('./boardPrintSelection')
 
 // BoardGrid.tsx と同じクラス構造・data 属性の合成テーブルを作る。
 // (thead: 特別講習帯行 / 曜日ヘッダー colSpan=4 / 席・講師・生徒・生徒 の小見出し,
@@ -147,6 +180,22 @@ describe('pruneBoardTableForSelection', () => {
     expect(table.querySelectorAll('.sa-day-header')).toHaveLength(3)
   })
 
+  it('集団行は時限の間引きに追従せず常に残る(曜日の間引きのみ効く・docs §I-0)', () => {
+    const table = buildTable()
+    // 時限は 2 限だけを選ぶ(1・3限は行ごと消える)が、集団行(tr.sa-group-row)は slot を持たないので残る。
+    const selection = resolveBoardPrintSelection(grid, [
+      boardPrintCellKey('2026-09-14', 2),
+      boardPrintCellKey('2026-09-16', 2),
+      boardPrintCellKey('2026-09-17', 2),
+    ])
+    pruneBoardTableForSelection(table, selection)
+
+    const groupRows = table.querySelectorAll('tr.sa-group-row')
+    expect(groupRows).toHaveLength(1)
+    // 曜日の間引きは集団行にも効く(選択されなかった曜日のセルは消える)。
+    expect(groupRows[0].querySelectorAll('[data-date-key]')).toHaveLength(3 * 3)
+  })
+
   it('帯セル(特別講習)の colSpan を残った曜日数で組み直し、全部消えたら帯ごと消す', () => {
     const table = buildTable()
     // 帯にかかるのは 2026-09-14 / 2026-09-15(定休日)。14 日だけ残す。
@@ -209,5 +258,52 @@ describe('pruneBoardTableForSelection', () => {
       'c-seat-2026-09-16', 'c-teacher-2026-09-16', 'c-student1-2026-09-16', 'c-student2-2026-09-16',
       'c-seat-2026-09-17', 'c-teacher-2026-09-17', 'c-student1-2026-09-17', 'c-student2-2026-09-17',
     ])
+  })
+})
+
+// BoardGrid.tsx の描画先(`.slot-adjust-grid` > table)を模した要素を作る(exportBoardPdfSelection の入口)。
+function buildElement(options: { withColGroup?: boolean } = {}): HTMLElement {
+  const wrapper = document.createElement('div')
+  const gridEl = document.createElement('div')
+  gridEl.className = 'slot-adjust-grid'
+  gridEl.appendChild(buildTable(options))
+  wrapper.appendChild(gridEl)
+  return wrapper
+}
+
+describe('exportBoardPdfSelection (html2canvas/jsPDF はモック)', () => {
+  beforeEach(() => {
+    html2canvasMock.mockClear()
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('空選択は何も出力しない(html2canvas を呼ばない・no-op)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, [])
+    expect(selection.isEmpty).toBe(true)
+
+    await exportBoardPdfSelection({ element, fileName: 'blank.pdf', title: '盤面' }, selection)
+
+    expect(html2canvasMock).not.toHaveBeenCalled()
+  })
+
+  it('全選択は scale=1.1・間引きなし(DOM 不変)で従来の exportBoardPdf 経路と同一になる', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, createInitialBoardPrintChecked(grid))
+    expect(selection.isFullSelection).toBe(true)
+
+    await exportBoardPdfSelection({ element, fileName: 'full.pdf', title: '盤面' }, selection)
+
+    expect(html2canvasMock).toHaveBeenCalledTimes(1)
+    const [capturedElement, options] = html2canvasMock.mock.calls[0]
+
+    // ⚠️ 将来「全選択にも解像度アップ」を入れると赤くなる形(回帰防止)。
+    expect(options?.scale).toBe(1.1)
+    // pruneBoardTableForSelection が走っていないことを DOM で確認(全曜日のヘッダーが残り、空白化もされていない)。
+    expect(capturedElement.querySelectorAll('.sa-day-header')).toHaveLength(DAYS.length)
+    expect(capturedElement.querySelectorAll('.sa-print-blank')).toHaveLength(0)
   })
 })
