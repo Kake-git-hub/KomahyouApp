@@ -15,7 +15,10 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.503 (2026-09-12)
 - feat: 開発用教室だけに確認事項チェックリストのパネルを追加(操作しながら OK/要改善+メモを記録し、下書きは教室別・版別に localStorage 保持。「保存して送信」は既存の「要望・報告」経路 submitDeveloperReport へ 2000 字ごとに分割送信。本番教室には一切出さない・src/utils/verificationChecklist.ts / src/components/developer-report/VerificationChecklistPanel.tsx)
+- chore: 開発用教室から送られた「確認リスト」結果(要望・報告経路の note 先頭行マーカー `[確認リスト vX.Y.Z]`)を読み取り専用で集計する `tools/verification-checklist-report.mjs`(純関数は `tools/verification-checklist-report.lib.mjs`)を追加。Firestore への書き込みは行わない
 
 ## v1.5.502 (2026-09-12)
 - fix: 「戻す」「やり直し」と一段スナップショット復元の直後に盤面が「保存済み」扱いになり保存できず、リロードで戻す前の状態へ巻き戻る不具合を修正(undo/redo を純関数 applyHistoryEntry 経由で版数 bump ＋ userInitiated:true publish／restoreUndoSnapshot は clean 化しない・INV-02)
