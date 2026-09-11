@@ -970,6 +970,39 @@ export function hasPendingBoardSaveState(params: {
   return params.isDirty || params.isSavingNow || params.isRemoteSyncPending
 }
 
+export type RestoreFlagLifecycleEvent =
+  | 'undo-snapshot-restore'
+  | 'snapshot-load'
+  | 'classroom-switch'
+  | 'user-switch'
+  | 'board-publish'
+
+// U-0c / INV-02: ②一段スナップショット復元フラグ(pendingUnsavedUndoSnapshotRestoreRef)の寿命を決める。
+// 復元は盤面以外の画面(基本データの初期取込・開発者画面のバックアップ復元)からも起動でき、その場合は
+// 盤面が未マウントなので受動 publish が来ずフラグが立ちっぱなしになる。残留したまま教室切替/読込をすると、
+// 切替先の盤面マウント時の正当な userInitiated:false publish が clean 化をスキップし、開いただけの教室が
+// 未保存扱い(=自動保存が走る)になる。そこで明示 clean 化経路(読込/教室切替/ユーザー切替)では必ず落とす。
+export function resolveRestoreFlagLifecycle(params: {
+  event: RestoreFlagLifecycleEvent
+  pending: boolean
+  userInitiated?: boolean
+}): { pendingAfter: boolean; suppressCleanMarking: boolean } {
+  switch (params.event) {
+    case 'undo-snapshot-restore':
+      // 復元直後は「未保存の編集」。次の盤面 publish まで持ち越す。
+      return { pendingAfter: true, suppressCleanMarking: false }
+    case 'board-publish':
+      // 盤面 publish は必ずフラグを消費する。受動 publish のときだけ clean 化を抑止する。
+      return { pendingAfter: false, suppressCleanMarking: params.pending && !params.userInitiated }
+    case 'snapshot-load':
+    case 'classroom-switch':
+    case 'user-switch':
+    default:
+      // 明示 clean 化経路。復元の未保存状態はここで破棄され、切替先の受動 publish は通常どおり clean 化する。
+      return { pendingAfter: false, suppressCleanMarking: false }
+  }
+}
+
 // U-0b / INV-02(手動編集の永続化): 盤面 publish を受けたとき clean 署名を更新してよいかを決める。
 // userInitiated:false（ロード/教室切替/受動再計算/盤面の再マウント）は「読み込み直後＝保存済み」なので
 // clean 化してよい。ただし②一段スナップショット復元（黄バナー「戻す」）の直後だけは例外で、
@@ -979,8 +1012,13 @@ export function resolveBoardStateChangeCleanMarking(params: {
   userInitiated: boolean
   pendingUnsavedRestore: boolean
 }): { markClean: boolean; persist: boolean; consumePendingUnsavedRestore: boolean } {
+  const lifecycle = resolveRestoreFlagLifecycle({
+    event: 'board-publish',
+    pending: params.pendingUnsavedRestore,
+    userInitiated: params.userInitiated,
+  })
   if (params.userInitiated) return { markClean: false, persist: true, consumePendingUnsavedRestore: true }
-  return { markClean: !params.pendingUnsavedRestore, persist: false, consumePendingUnsavedRestore: true }
+  return { markClean: !lifecycle.suppressCleanMarking, persist: false, consumePendingUnsavedRestore: true }
 }
 
 
@@ -2129,7 +2167,13 @@ function AuthenticatedApp() {
 
   // 未保存判定は描画時に dataSignature !== cleanSignature で導出するため、専用の同期 effect は不要。
   // 保存/読込が完了したタイミングで cleanSignature を更新するだけでよい。
-  const markStateLoadedClean = useCallback((expectedCleanSignature?: string) => {
+  const markStateLoadedClean = useCallback((expectedCleanSignature?: string, lifecycleEvent: RestoreFlagLifecycleEvent = 'snapshot-load') => {
+    // U-0c(INV-02): 明示 clean 化(読込/教室切替/ユーザー切替)では②復元の未保存フラグを必ず落とす。
+    // 残すと切替先の教室で受動 publish が clean 化をスキップし、開いただけの教室が未保存扱いになる。
+    pendingUnsavedUndoSnapshotRestoreRef.current = resolveRestoreFlagLifecycle({
+      event: lifecycleEvent,
+      pending: pendingUnsavedUndoSnapshotRestoreRef.current,
+    }).pendingAfter
     const nextCleanSignature = expectedCleanSignature || buildCurrentDataSignature()
     lastPendingWorkspaceSnapshotWriteAtRef.current = 0
     setCleanSignature(nextCleanSignature)
@@ -2159,7 +2203,7 @@ function AuthenticatedApp() {
     setPersistenceMessage(successMessage)
     // ローカル単一教室の読込。編集 state の出所を現在の acting に合わせる。
     loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
-    markStateLoadedClean(buildClassroomDataSignature(sanitizedSnapshot))
+    markStateLoadedClean(buildClassroomDataSignature(sanitizedSnapshot), 'snapshot-load')
   }, [actingClassroomIdRef, buildClassroomDataSignature, markStateLoadedClean])
 
   const syncCurrentClassroomData = useCallback((targetClassroomId: string | null) => {
@@ -2246,7 +2290,10 @@ function AuthenticatedApp() {
     loadedEditingClassroomIdRef.current = actingClassroomIdRef.current
     // U-0b(INV-02): 戻した結果は「未保存の編集」。ここで clean 化すると保存できず、リロードで
     // 破壊的操作後の状態に戻ってしまう。盤面再マウント由来の false publish にも clean 化させない。
-    pendingUnsavedUndoSnapshotRestoreRef.current = true
+    pendingUnsavedUndoSnapshotRestoreRef.current = resolveRestoreFlagLifecycle({
+      event: 'undo-snapshot-restore',
+      pending: pendingUnsavedUndoSnapshotRestoreRef.current,
+    }).pendingAfter
     setPersistenceMessage(`「${undoSnapshot.label}」の実行前の状態に戻しました。`)
     setUndoSnapshot(null)
   }, [actingClassroomIdRef, undoSnapshot])
@@ -2293,7 +2340,7 @@ function AuthenticatedApp() {
     })
     writeWorkspaceToLocalStorageSync(navigationSnapshot)
     void saveWorkspaceSnapshot(navigationSnapshot).catch(() => {})
-    markStateLoadedClean(buildClassroomDataSignature(nextClassroom.data))
+    markStateLoadedClean(buildClassroomDataSignature(nextClassroom.data), 'classroom-switch')
   }, [actingClassroomId, buildClassroomDataSignature, buildWorkspaceSnapshot, currentUser?.role, markStateLoadedClean, syncCurrentClassroomData, workspaceClassrooms])
 
   const applyWorkspaceSnapshot = useCallback((workspaceSnapshot: WorkspaceSnapshot, successMessage: string) => {
@@ -2359,7 +2406,7 @@ function AuthenticatedApp() {
       setScreen(nextScreen)
       loadedEditingClassroomIdRef.current = null
     }
-    markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data))
+    markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data), 'user-switch')
   // currentUserIdRef is stable (ref object), so no need to include currentUserId in deps.
   // This prevents the load effect from re-running when currentUserId changes during initial load.
   // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -11409,6 +11409,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedMakeupStockKey(null)
     setSelectedLectureStockKey(null)
     setStudentMenu(null)
+    setTeacherMenu(null)
+    // U-0c(INV-03 兄弟): undo/redo は commitWeeks 等価の確定操作なので、丸ごと振替の選択モードも
+    // commitWeeks と同じく安全側で解除する(古い振替元のまま誤って振替先を選ぶ余地を残さない)。
+    setWholeDayTransferSourceDate(null)
     setEditStudentDraft(null)
     // U-0a(INV-02・回帰防止): 戻し/やり直しはユーザー起因の編集なので、commitWeeks と同じく
     // 版数を上げて userInitiated:true で publish する。これを外すと後追いの publish effect が
@@ -11463,6 +11467,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedMakeupStockKey(null)
     setSelectedLectureStockKey(null)
     setStudentMenu(null)
+    setTeacherMenu(null)
+    // U-0c(INV-03 兄弟): undo/redo は commitWeeks 等価の確定操作なので、丸ごと振替の選択モードも
+    // commitWeeks と同じく安全側で解除する(古い振替元のまま誤って振替先を選ぶ余地を残さない)。
+    setWholeDayTransferSourceDate(null)
     setEditStudentDraft(null)
     // U-0a(INV-02・回帰防止): 戻し/やり直しはユーザー起因の編集なので、commitWeeks と同じく
     // 版数を上げて userInitiated:true で publish する。これを外すと後追いの publish effect が

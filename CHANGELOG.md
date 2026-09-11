@@ -16,6 +16,7 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 - fix: 「戻す」「やり直し」と一段スナップショット復元の直後に盤面が「保存済み」扱いになり保存できず、リロードで戻す前の状態へ巻き戻る不具合を修正(undo/redo を純関数 applyHistoryEntry 経由で版数 bump ＋ userInitiated:true publish／restoreUndoSnapshot は clean 化しない・INV-02)
+- fix: 上記の追随(U-0c・INV-02/INV-03)。②一段スナップショット復元は盤面以外の画面からも起動でき、盤面未マウントだと未保存フラグが残留して**次に開いた教室が未保存扱いになり自動保存が走る**ため、明示 clean 化経路(読込/教室切替/ユーザー切替)で必ず落とすよう純関数 `resolveRestoreFlagLifecycle` に一元化(`src/App.tsx`)。あわせて undo/redo でも `commitWeeks` と同様に丸ごと振替の選択モード(`wholeDayTransferSourceDate`)と講師メニューを解除し、選択中の undo による古い振替元での誤実行を防止(INV-03 兄弟)
 
 ## v1.5.501 (2026-09-12)
 

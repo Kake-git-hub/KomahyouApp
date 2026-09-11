@@ -211,12 +211,23 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     クリア分岐は lesson も落とす）ことを確認。テンプレ足場講師のテンプレ追従は仕様（上記）。
     残る実害＝出勤不可テンプレ講師の赤置き直し（v1.5.435 は削除済み講師のみ対策）は別課題として Issue 起票。
 - **マトリクステストファイル**：`src/components/schedule-board/inv02-manual-edit-persistence.matrix.test.ts`
-  （**実装済み・29 テスト**。旧 `it.todo` 1 件は 2026-07-11 の仕様確定を受けて講師帰属境界の仕様ロック 4 件
+  （**実装済み・43 テスト**〔2026-09-12 時点の実数〕。旧 `it.todo` 1 件は 2026-07-11 の仕様確定を受けて講師帰属境界の仕様ロック 4 件
   ＝テンプレ足場は追従（クリア／再付与の両方向）・manual 配置は不可侵・QR 自動割当（schedule-registration）も
   不可侵、へ置換済み。2026-08-02 に「丸ごと振替で講習期間外へ移した提出講師を起動時自己修復が置き直さない」
   1 件を追加。2026-09-12 に U-0（戻す/やり直し/②一段スナップショット復元 × 保存済み扱い）
   7 件を追加＝undo の publish payload・休日戻し・handleUndo/handleRedo の版数 bump と `userInitiated:true`・
   `resolveBoardStateChangeCleanMarking`・`restoreUndoSnapshot` の非 clean 化・クロス教室汚染ガード温存）。
+  同日 U-0c で 6 件追加＝②復元フラグの寿命（教室切替/読込/ユーザー切替で必ず落ちる・盤面未マウント復元後の
+  最初の受動 publish だけ clean 化しない・切替先の受動 publish は clean 化する）と、`markStateLoadedClean` /
+  `handleBoardStateChange` の配線ロック、及び **INV-03 兄弟**として undo/redo が `commitWeeks` と同じく
+  丸ごと振替の選択モード（`wholeDayTransferSourceDate`）と講師メニューを解除すること（undo が commit 等価に
+  なったため、選択中の undo で古い振替元のまま誤実行されないよう安全側で解除する）。
+  - **違反履歴（2026-09-12・U-0c／②復元フラグの残留）**：②一段スナップショット復元は盤面以外の画面
+    （基本データの初期取込・開発者画面のバックアップ復元）からも起動でき、その場合は盤面が未マウントで
+    受動 publish が来ないため未保存フラグが残留する。残ったまま教室切替/読込を行うと、切替先の盤面マウント時の
+    正当な `userInitiated:false` publish が clean 化をスキップし、**開いただけの教室が未保存扱い**になって
+    自動保存が走る（他教室データへの書き戻しリスク）。明示 clean 化経路で必ず落とす
+    （`resolveRestoreFlagLifecycle`）。★フラグを持ち越す実装に戻すと mutation で 2 件落ちる。
   - **違反履歴（2026-08-02・丸ごと振替 Issue #40 の追随／オーナー確定）**：起動時の自己修復
     `reconcileSubmittedTeacherPlacements` の「配置済み」判定が**講習期間内のセルだけ**を走査していたため、
     丸ごと振替で QR 提出講師の机を期間外へ意図的に移すと「未配置」と誤判定し、起動毎に期間内へ置き直して

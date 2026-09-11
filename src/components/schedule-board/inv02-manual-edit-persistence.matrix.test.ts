@@ -14,7 +14,7 @@ import {
   applyHistoryEntry,
   type HistoryEntry,
 } from './ScheduleBoardScreen'
-import { resolveBoardStateChangeCleanMarking } from '../../App'
+import { resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 
 // ============================================================================
@@ -758,13 +758,99 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
 
     it('②一段スナップショット復元[兄弟]: restoreUndoSnapshot は clean 化せず未保存フラグを立てる', () => {
       const restore = sliceFunctionBody(appSource, 'const restoreUndoSnapshot = useCallback(', 'const dismissUndoSnapshot =')
-      expect(restore).not.toContain('markStateLoadedClean()')
-      expect(restore).toContain('pendingUnsavedUndoSnapshotRestoreRef.current = true')
+      // markStateLoadedClean(sig) の形で書き戻されてもすり抜けないよう、呼び出し自体を禁じる。
+      expect(restore).not.toMatch(/markStateLoadedClean\s*\(/)
+      expect(restore).toContain("event: 'undo-snapshot-restore'")
+      expect(restore).toMatch(/pendingUnsavedUndoSnapshotRestoreRef\.current = resolveRestoreFlagLifecycle\(/)
     })
 
     it('クロス教室汚染ガードは温存する（userInitiated:false では一切書き込まない）', () => {
       expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true }).persist).toBe(false)
       expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).persist).toBe(false)
+    })
+
+    // ======================================================================
+    // U-0c: ②復元フラグの寿命（盤面が未マウントのまま復元→教室切替した場合の残留）
+    //
+    // restoreUndoSnapshot は盤面以外（基本データの初期取込・開発者画面のバックアップ復元）からも
+    // 起動できる。その場合は受動 publish が来ないためフラグが消費されず、次に開いた教室の盤面の
+    // 正当な userInitiated:false publish が clean 化をスキップし、開いただけの教室が未保存扱いに
+    // なって自動保存が走る（他教室データへの書き戻しリスク）。明示 clean 化経路で必ず落とす。
+    // ======================================================================
+    type LifecycleStep =
+      | { type: 'undo-snapshot-restore' | 'snapshot-load' | 'classroom-switch' | 'user-switch' }
+      | { type: 'board-publish'; userInitiated: boolean }
+
+    function simulateRestoreFlag(steps: LifecycleStep[]): { pending: boolean; publishResults: Array<'clean' | 'dirty'> } {
+      let pending = false
+      const publishResults: Array<'clean' | 'dirty'> = []
+      for (const step of steps) {
+        if (step.type === 'board-publish') {
+          const marking = resolveBoardStateChangeCleanMarking({ userInitiated: step.userInitiated, pendingUnsavedRestore: pending })
+          publishResults.push(marking.markClean ? 'clean' : 'dirty')
+          pending = resolveRestoreFlagLifecycle({ event: 'board-publish', pending, userInitiated: step.userInitiated }).pendingAfter
+          continue
+        }
+        pending = resolveRestoreFlagLifecycle({ event: step.type, pending }).pendingAfter
+      }
+      return { pending, publishResults }
+    }
+
+    it('②復元[兄弟]: 教室切替・読込・ユーザー切替では復元フラグが消える（残留させない）', () => {
+      expect(simulateRestoreFlag([{ type: 'undo-snapshot-restore' }, { type: 'classroom-switch' }]).pending).toBe(false)
+      expect(simulateRestoreFlag([{ type: 'undo-snapshot-restore' }, { type: 'snapshot-load' }]).pending).toBe(false)
+      expect(simulateRestoreFlag([{ type: 'undo-snapshot-restore' }, { type: 'user-switch' }]).pending).toBe(false)
+    })
+
+    it('②復元[兄弟]: 盤面未マウントで復元→後から盤面を開いた最初の受動 publish は clean 化しない（未保存のまま）', () => {
+      const result = simulateRestoreFlag([
+        { type: 'undo-snapshot-restore' },
+        { type: 'board-publish', userInitiated: false },
+        { type: 'board-publish', userInitiated: false },
+      ])
+      expect(result.publishResults).toEqual(['dirty', 'clean'])
+      expect(result.pending).toBe(false)
+    })
+
+    it('②復元[兄弟]: 復元→教室切替のあと、切替先の盤面マウント publish は clean 化する（開いただけの教室を未保存にしない）', () => {
+      const result = simulateRestoreFlag([
+        { type: 'undo-snapshot-restore' },
+        { type: 'classroom-switch' },
+        { type: 'board-publish', userInitiated: false },
+      ])
+      expect(result.publishResults).toEqual(['clean'])
+      expect(result.pending).toBe(false)
+    })
+
+    it('②復元[兄弟]: markStateLoadedClean が明示経路でフラグを落とす配線になっている（App 本体ロック）', () => {
+      const markClean = sliceFunctionBody(appSource, 'const markStateLoadedClean = useCallback(', 'const applySnapshot = useCallback(')
+      expect(markClean).toMatch(/pendingUnsavedUndoSnapshotRestoreRef\.current = resolveRestoreFlagLifecycle\(/)
+      expect(markClean).toContain('event: lifecycleEvent')
+      // 教室切替・ユーザー切替・読込はライフサイクルイベントを明示して呼ぶ
+      expect(appSource).toContain("markStateLoadedClean(buildClassroomDataSignature(nextClassroom.data), 'classroom-switch')")
+      expect(appSource).toContain("markStateLoadedClean(buildClassroomDataSignature(targetClassroom?.data), 'user-switch')")
+      expect(appSource).toContain("markStateLoadedClean(buildClassroomDataSignature(sanitizedSnapshot), 'snapshot-load')")
+    })
+
+    it('handleBoardStateChange は resolveBoardStateChangeCleanMarking の裁定に従う（直書き分岐へ戻さない・App 本体ロック）', () => {
+      const handler = sliceFunctionBody(appSource, 'const handleBoardStateChange = useCallback(', 'writePendingWorkspaceSnapshotForRemoteSync()')
+      expect(handler).toContain('resolveBoardStateChangeCleanMarking({')
+      expect(handler).toContain('pendingUnsavedRestore: pendingUnsavedUndoSnapshotRestoreRef.current')
+      expect(handler).toContain('if (cleanMarking.markClean) markStateLoadedClean()')
+      // 旧実装（userInitiated だけで clean 化を決める直書き分岐）へ戻っていないこと
+      expect(handler).not.toMatch(/if \(!meta\.userInitiated\) \{[\s\S]*markStateLoadedClean\(\)/)
+    })
+
+    it('丸ごと振替[INV-03 兄弟]: 選択中に undo/redo すると振替元の選択モードが解除される', () => {
+      const handleUndo = sliceFunctionBody(boardSource, 'const handleUndo = () => {', 'const handleRedo = () => {')
+      const handleRedo = sliceFunctionBody(boardSource, 'const handleRedo = () => {', 'const handleBoardSort =')
+      for (const body of [handleUndo, handleRedo]) {
+        expect(body).toContain('setWholeDayTransferSourceDate(null)')
+        expect(body).toContain('setTeacherMenu(null)')
+      }
+      // commitWeeks と同じ安全側の解除（INV-03: 古い振替元での誤実行防止）であること
+      const commitWeeks = sliceFunctionBody(boardSource, 'const commitWeeks = (', 'committedBoardChangeVersionRef.current += 1')
+      expect(commitWeeks).toContain('setWholeDayTransferSourceDate(null)')
     })
   })
 })
