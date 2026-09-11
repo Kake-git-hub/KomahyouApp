@@ -8,6 +8,8 @@ import { getClassroomSnapshotVersion, setClassroomSnapshotVersion } from './clas
 import type { OperationEvent } from '../../utils/operationLog'
 import type { DeveloperReportRequestBody } from '../../utils/developerReport'
 import type { StudentLessonLedger } from '../../utils/studentLessonLedger'
+import type { StudentLessonHistoryResponse } from '../../utils/lessonHistory'
+import { normalizeStudentLessonHistoryResponse } from '../../utils/lessonHistoryMessage'
 
 export type GoogleDriveBackupStatus = 'disabled' | 'synced' | 'failed'
 
@@ -400,6 +402,41 @@ export async function submitDeveloperReportViaFunction(input: DeveloperReportReq
     snapshotPayload: input.snapshotPayload ? sanitizeForFirestore(input.snapshotPayload) : null,
   })
   return result.data
+}
+
+export type StudentLessonHistoryRequest = {
+  classroomId: string
+  studentId: string
+  /** `YYYY-MM-DD`。省略/空ならサーバー既定（終了日=JSTの今日・開始日=その1年前）。 */
+  from?: string
+  to?: string
+}
+
+/**
+ * 講習履歴（生徒1人の出席・休み・振替・予定・未消化の一覧）を Cloud Function
+ * `getStudentLessonHistory` から取る（docs/plan-2026-09-11-five-requests.md §6 / H-2〜H-3）。
+ *
+ * 台帳 `lessonLedgerDays` は firestore.rules に match が無く**クライアントから直接読めない**。
+ * ここを Firestore 直読みに「単純化」しないこと（読めずに常に空になる）。
+ * この callable は読み取り専用で、呼んでも Firestore へは何も書かない（本番データ保護ルール）。
+ */
+export async function fetchStudentLessonHistoryViaFunction(input: StudentLessonHistoryRequest): Promise<StudentLessonHistoryResponse> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string; classroomId: string; studentId: string; from?: string; to?: string }, StudentLessonHistoryResponse>(
+    functions,
+    'getStudentLessonHistory',
+    { timeout: 120_000 },
+  )
+  const result = await callable({
+    workspaceKey: config.workspaceKey,
+    classroomId: input.classroomId,
+    studentId: input.studentId,
+    ...(input.from ? { from: input.from } : {}),
+    ...(input.to ? { to: input.to } : {}),
+  })
+  return normalizeStudentLessonHistoryResponse(result.data)
 }
 
 export async function deleteFirebaseWorkspaceClassroom(input: Omit<DeleteWorkspaceClassroomRequest, 'workspaceKey'>) {

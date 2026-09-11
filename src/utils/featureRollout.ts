@@ -101,6 +101,14 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Board PDF export: choose which day x slot cells to print (defaults to the whole week = current output).',
   },
+  // 講習履歴(docs/plan-2026-09-11-five-requests.md §6 / H-1〜H-4): 生徒日程表タブに「講習履歴」ボタンを出し、
+  // 生徒授業台帳(lessonLedgerDays)から出席/休み/振替/予定/未消化を期間指定(最大366日)で一覧する。
+  // 台帳はクライアントから直接読めないため callable getStudentLessonHistory を本体が中継する(読み取りのみ)。
+  // 新機能はフラグ付きで作る方針(§計画 フラグ表)に従い、まず開発用教室のみで先行検証する。
+  lessonHistory: {
+    scope: 'development-only',
+    description: 'Student schedule tab: "講習履歴" button and overlay backed by the getStudentLessonHistory callable.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry
