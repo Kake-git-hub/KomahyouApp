@@ -1,5 +1,6 @@
 # 計画: オーナー要望6件（2026-09-11 起案・第2版・次セッション着手用）
 
+> **第3版（2026-09-12）**: 報告・要望・質問はすべて「蓄積 → 後から AI でまとめて読む」方針へ（API 不使用・§3）。
 > **作成**: 2026-09-11（主セッション＝計画審査役、Fable 5.1）。**第2版（同日）**: オーナー回答を反映
 > （戻るは再定義保留・現行バグのみ／盤面PDFは A3 縦固定のまま／質問種別は AI 提供者非依存・即答なし・費用規模を明記）
 > と、追加要望「**保護者向け固定QR**（通常日程の確認＋室長へのテキスト連絡）」を追加（§7）。
@@ -44,13 +45,13 @@
 | 3 | **H-1〜H-4** | 講習履歴（生徒の休み・振替・出席の一覧、期間指定・最大1年） | dev-fix（Opus）＋Sonnet | 2〜3 | 承知済み |
 | 4 | **P-1〜P-3** | 盤面PDF印刷（曜日×コマのグリッド選択 → 選択コマだけを **A3 縦**に最大化） | dev-fix（Opus）＋Sonnet | 1.5〜2 | A3 固定で確定 |
 | 5 | **K-1〜K-5** | 保護者向け固定QR（生徒別トークン → 通常＋振替の日程閲覧 ＋ 室長へテキスト連絡） | spec-curator→dev-fix（Opus）＋Sonnet | 5〜7 | §9-6（壁打ち済み 4 点＋残り） |
-| 6 | **Q-1〜Q-5** | 要望・報告に「質問」＋**AI 提供者非依存**の回答案フロー＋開発者承認＋返答通知（即答なし） | spec-curator→dev-fix（Opus）＋Sonnet | 3〜5 | §9-2（AI 契約は未定でも第1段は進められる） |
+| 6 | **Q-1〜Q-6** | 要望・報告・質問を**蓄積 → 後から AI でまとめて読む**（API 不使用）＋質問の開発者承認＋返答通知（即答なし） | spec-curator→dev-fix（Opus）＋Sonnet | 3〜5 | §9-2（AI 契約は不要） |
 | 7 | **O-2** | 容易度 A の機能を1件ずつオプション登録（量産・隙間で） | **Sonnet** | 各 0.2 | O-1 |
 | 保留 | U-1〜U-6 | 戻るボタンの再定義（統一 undo） | — | — | **オーナー判断 2026-09-11: 保留**（§2-4 に記録を残す） |
 
 理由: U-0 は小さく実害が大きい。O-1 は後続の新機能（T4/T5/T6/T2）を**教室ごとに段階公開**する土台。
 T5・T4 は読み取り専用で盤面状態を変えず回帰リスクが低い。T6（保護者QR）は利用者要望で価値が高いが
-公開エンドポイントと個人情報を扱うため仕様を先に固める。T2 は AI 契約が未定でも「プロンプト書き出し＋貼り戻し」の第1段は進められる。
+公開エンドポイントと個人情報を扱うため仕様を先に固める。T2 は API を使わず「蓄積→まとめ読み」で進めるため AI 契約が無くても着手できる。
 
 ---
 
@@ -104,63 +105,69 @@ I undo が無い画面が多い／J 別タブ日程表・QR提出ページに「
 
 ---
 
-## 3. テーマ2: 要望・報告に「質問」を追加（AI 提供者非依存の回答案 → 開発者承認 → 返答。即答なし）
+## 3. テーマ2: 要望・報告・質問を「蓄積 → 後から AI でまとめて読む」（API 不使用・即答なし）
 
-### 3-1. オーナー判断（2026-09-11）と設計の前提
+### 3-1. オーナー判断（2026-09-11〜12）と設計の前提
 
-- **Claude API の利用金額規模を知りたい** → §3-2。
 - **Claude を契約するか別の AI かは未定**。**AI を変えても回答案を作れる**こと。**即時でなくてよい**。
 - **利用者への即答（自動回答）はしない**。公開したくない回答が出る不安があり、「公開してよい内容」の定義も未了。
-  → 利用者に見えるのは**開発者が承認した回答だけ**。類似QAの即時提示も**定義ができるまで保留**（第2段）。
+  → 利用者に見えるのは**開発者が承認した回答だけ**。類似QAの即時提示も**定義ができるまで保留**。
+- **（2026-09-12 追加）報告・要望も含め、当面は API を使わない**。すべての種別（不具合／要望／質問）を Firestore に**蓄積**し、
+  開発者が**後から AI でまとめて読む**（仕分け・重複の束ね・既存 Issue との紐付け・優先度案・質問の回答案）。
+  API 自動処理（旧ルート C）は全種別で**将来オプション**として設計だけ残す。
 
-### 3-2. Claude API の費用規模（試算）
+### 3-2. 現状（変えないもの）
 
-前提: 1 質問あたり入力 ≈ 23K トークン（利用者マニュアル 20K ＋ 質問と画面文脈 1K ＋ 承認済み類似QA 2K）、出力 ≈ 1K トークン。
-日本語は「1文字 ≈ 1トークン」と仮置き（実測は `count_tokens` で要確認。実際は少し少なめになる見込み）。為替 ¥150/$。
-料金（2026-06 時点の一次料金）: Opus 5 ＝ 入力 $5／出力 $25 per 100万トークン。Sonnet 5 ＝ $2／$10。Batches API は 50% 引き。
+- 送信 → Cloud Function `submitDeveloperReport` → Firestore `workspaces/{ws}/developerReports/{id}`＋Storage（教室データ gzip）。
+- 即時の人手向け通知はそのまま: メール `notifyDeveloperReportByMail`（操作痕跡つき・私的経路）と、15 分毎の GitHub Issue 起票（公開リポのため生徒名なし）。
+- 「勝手に修正を始めない（オーナー許可後）」ルール（CLAUDE.md・spec §E）もそのまま。AI の読み取りは**整理まで**で、修正の着手判断は変えない。
+
+### 3-3. 「蓄積 → まとめ読み」の仕組み（推奨）
+
+| 部品 | 内容 |
+|---|---|
+| **書き出しツール** `tools/developer-report-digest.mjs` | 読み取り専用（gcloud トークンで Firestore REST を GET・`tools/lesson-ledger-report.mjs` と同じ作法）。指定期間（`--since YYYY-MM-DD`・既定は前回ダイジェスト以降）の報告を集め、**AI に渡してよい項目だけ**を 1 本の Markdown「ダイジェストパック」にする。Firestore へは**書かない**。 |
+| **パックに入れるもの** | 受付番号・日時・教室名・種別・本文（利用者の一言）・画面と表示条件（`scheduleContext`）・アプリ版数・Issue 番号・回答状況。 |
+| **パックに入れないもの** | 操作痕跡（生徒名を含む）・教室データのスナップショット・利用者のメール・UID。本文中の生徒名らしき語は**伏字化の対象**（名簿との一致で置換。§9-2 で最終確認）。 |
+| **置き場所** | `local/report-digests/`（**.gitignore に追加**。リポジトリは公開なのでダイジェストはコミットしない）。 |
+| **AI 用の読み方指示** | パックの先頭に固定の指示文（仕分け・重複の束ね・既知 Issue／既存仕様との照合・優先度案・質問なら回答案・**公開してよい回答の定義**）を同梱。`src/utils/reportDigestPrompt.ts` の純関数を正本にし、どの AI に貼っても同じ結果を狙う。 |
+| **ルート A（推奨）** Claude Code スキル `report-digest` | ツールを実行 → パックと `docs/`・未解決 Issue 一覧（`gh issue list`）を読んで**整理結果を画面に表示するだけ**。Issue へのコメント・ラベル変更・Firestore 書込は**しない**（行うならオーナー確認後）。仕分けと要約は Sonnet、原因の当たり付けや仕様照合が要る件は Opus（CLAUDE.md のモデル割当）。 |
+| **ルート B** 任意の AI に貼る | パックの Markdown を claude.ai／ChatGPT／Gemini などに貼り付けて読ませる。AI 提供者を問わない。 |
+| **質問への回答** | まとめ読みで作った回答案を、開発者承認画面（Q-3）の回答案欄に貼り付け → 編集 → 承認して返答。承認画面の各質問にも「AI用プロンプトをコピー」（1 件分のパック）を置く。 |
+
+**運用の目安**: 週 1 回、または件数がたまったとき（例: 未整理 10 件）に実行。メールで個別に届いた緊急の不具合は、従来どおりその場で人が判断する。
+
+### 3-4. 将来オプション: API 自動処理（旧ルート C・今は作らない）
+
+- Cloud Functions の `onDocumentCreated` → 提供者アダプタ `AnswerDraftProvider`（第1実装は `@anthropic-ai/sdk`・Node 22・既定 `claude-opus-5`・Batches 可）→
+  回答案や仕分け結果を保存しメールに同梱。**ダイジェストパックの純関数をそのまま流用**できる形にしておく（今回の設計で入口を揃える）。
+- 料金は月額契約とは別の**前払いクレジット（従量・固定費なし）**。Claude Console で購入し、月の上限と自動チャージの有無を設定できる。
+- 費用試算（1 件＝入力 23K・出力 1K トークン、日本語 1 文字 ≈ 1 トークンの仮置き、¥150/$。2026-06 時点の一次料金: Opus 5 ＝ $5／$25、Sonnet 5 ＝ $2／$10 per 100 万トークン、Batches 半額）:
 
 | 条件 | Opus 5 | Sonnet 5 |
 |---|---|---|
-| 1 件（即時・キャッシュなし） | ≈ $0.14 ≈ **¥21** | ≈ $0.056 ≈ **¥8** |
+| 1 件（即時） | ≈ ¥21 | ≈ ¥8 |
 | 1 件（Batches・非即時） | ≈ ¥11 | ≈ ¥4 |
-| 月 30 件 | ¥630（Batches ¥330） | ¥250（¥130） |
-| 月 100 件 | ¥2,100（¥1,050） | ¥840（¥420） |
-| 月 300 件 | ¥6,300（¥3,150） | ¥2,500（¥1,260） |
+| 月 100 件 | ¥2,100（Batches ¥1,050） | ¥840（¥420） |
 
-- **固定費なし**（従量・前払いクレジット。数ドル単位から）。Claude Code／claude.ai の契約とは**別枠**の API 契約。
-- 比較: Firebase の現状原価は 2 教室で約 ¥300/月（memory）。質問が月数十件なら同程度の規模。
-- prompt caching（マニュアルを system に固定）が効けば 1 件 ¥3〜8 に下がるが、質問が散発だとキャッシュ切れ（5 分／1 時間）が多く、上の「なし」を基準にするのが安全。
-- 類似QA検索を LLM 化しても入力が小さく 1 回 ¥1〜2。第1段は字句一致（無料）。
-- **API を使わないルート（下記 A/B）は追加費用ゼロ**。
+- まとめ読み（ルート A）を API で自動化する場合も、1 回のパックが大きくなるだけで桁は同じ（10 件まとめて 1 回 ≈ ¥30〜60）。
 
-### 3-3. AI 提供者非依存の設計（3 ルートを同じ「回答案パック」で束ねる）
-
-「質問文＋画面文脈＋マニュアル抜粋＋承認済み類似QA」を **1 つのプロンプト文字列（回答案パック）**に組み立てる純関数
-`buildAnswerDraftPrompt()` を正本にし、どのルートも同じパックを使う。
-
-| ルート | 仕組み | 即時性 | 費用 | 契約 |
-|---|---|---|---|---|
-| **B（第1段・推奨）** プロンプト書き出し | 開発者承認画面に「AI用プロンプトをコピー」ボタン。開発者が任意の AI（claude.ai／ChatGPT／Gemini／Claude Code）に貼り付け、返答を「回答案」欄に貼り戻して編集・承認。 | 非即時 | 0 | 不要（既存契約のまま） |
-| **A** Claude Code スキル | `.claude/skills/answer-question`：質問を読み取り専用 REST（gcloud トークン）で取得 → パックと `docs/` を読んで下書きを**画面に表示するだけ**（Firestore へは書かない。承認画面へ貼り付けるのは開発者）。 | 非即時 | 0（Claude Code の契約内） | 不要 |
-| **C** Cloud Functions 自動生成 | `onDocumentCreated` → 提供者アダプタ `AnswerDraftProvider`（第1実装は `@anthropic-ai/sdk`・Node 22・既定 `claude-opus-5`・Batches 可）→ `answerDraft` を保存しメールに同梱。他社 AI はアダプタ追加で対応（この計画では Anthropic 実装のみ）。 | 即時／Batches なら翌営業日 | §3-2 | API 契約が決まってから |
-
-**教室データ・操作痕跡（生徒名）はどのルートでも AI に送らない**（公開 Issue と同じ方針）。
-
-### 3-4. 段階計画
+### 3-5. 段階計画
 
 | ID | 内容 | 担当 | テスト |
 |---|---|---|---|
-| **Q-1** | `docs/spec-developer-report.md` に §G「質問」を追記: 種別・回答フロー（承認前は利用者に見せない）・**「公開してよい回答」の定義（教室固有情報／個人名／未リリース仕様／料金は不可 等）**・QA の公開範囲・AI に送らない情報。`docs/user-manual.md` の骨子（利用者語のマニュアル。AI の材料兼ヘルプ）。 | spec-curator（Opus） | — |
+| **Q-1** | `docs/spec-developer-report.md` に §G「質問」と §H「蓄積とまとめ読み」を追記: 種別・回答フロー（承認前は利用者に見せない）・**「公開してよい回答」の定義**（教室固有情報／個人名／未リリース仕様／料金は不可 等）・QA の公開範囲・**AI に渡さない情報**・ダイジェストの置き場所と非コミット。`docs/user-manual.md` の骨子（利用者語のマニュアル。AI の材料兼ヘルプ）。 | spec-curator（Opus） | — |
 | **Q-2** | 種別 `question` の追加（client 型 `developerReport.ts:22-23`・server `functions/src/developerReport.ts:24-25`・React モーダル・埋め込みモーダル `scheduleHtml.ts:7070-7093`・Issue ラベル `type:question`・メール件名【質問】）。 | **Sonnet** | 既存 5 テストへ `question` ケース追加（`developerReport.test.ts` / functions 側 / `scheduleHtml.test.ts:4430-4488` の構文検証 / `tools/developer-report-notify.test.mjs`）。 |
-| **Q-3** | 開発者承認画面（`DeveloperAdminScreen.tsx` に subPage `'questions'`）: 未回答／回答済み一覧・回答案パックのコピー（ルート B）・回答案欄・「承認して返答」・「QA として公開」チェック。確定は callable `answerDeveloperReport`（`requireDeveloperMember`）が `developerReports/{id}` に `answerFinal/answeredAt/answeredBy` を書き、公開時は `qaEntries/{id}` を作る。`buildAnswerDraftPrompt()` を `src/utils/answerDraftPrompt.ts` に純関数で。 | dev-fix（Opus） | パック組立て（含めない情報の除外を固定）・画面状態遷移の純関数・CF 入力検証。 |
-| **Q-4** | 返答通知: 軽量コレクション `reportAnswers/{id}`（classroomId・質問要約・回答・answeredAt・readAt）＋ルール（教室メンバー read・write は CF のみ）＋起動時／実行中モーダル（QR提出通知 `App.tsx:178-254, 1521-1597, 4195-4226` の同型）＋callable `markReportAnswerRead`。 | dev-fix（Opus） | `selectStartupSubmissionsToNotify` 同型の純関数テスト＋`npm run test:rules`。 |
-| **Q-5** | ルート A: Claude Code スキル `answer-question`（読み取り専用・下書き表示のみ）。 | dev-fix（Opus。手順化後は Sonnet） | スキルの読み取りスクリプトは `tools/*.test.mjs` の作法で。 |
-| **Q-6（契約後）** | ルート C: `functions/src/answerDraftProvider.ts`（アダプタ境界）＋ Anthropic 実装（`draftDeveloperReportAnswer` onDocumentCreated・Batches 選択・`stop_reason` 確認・失敗は `answerDraftError`）。API キーは `functions/.env`／repo secret `PROD_FUNCTIONS_ENV`（Claude は値を扱わない）。 | dev-fix（Opus） | SDK はモック。プロンプトはパック純関数を再利用。 |
-| **Q-7（定義後）** | 類似QA の即時提示（承認・公開済み `qaEntries` のみ。第1段は字句一致 2-gram・500ms デバウンス）。 | dev-fix（Opus）／UI は Sonnet | 類似度純関数テスト。 |
+| **Q-3** | 書き出しツール `tools/developer-report-digest.mjs`＋パック純関数 `src/utils/reportDigestPrompt.ts`（含める／含めない項目・伏字化・固定指示文）＋ `.gitignore` に `local/`。 | dev-fix（Opus） | **含めない項目が絶対に出ない**ことの固定（操作痕跡・メール・UID・スナップショット）／伏字化／`--since` の境界。`tools/*.test.mjs` の作法。 |
+| **Q-4** | Claude Code スキル `.claude/skills/report-digest/SKILL.md`（ツール実行 → 仕分け → 画面表示のみ・外向き操作はオーナー確認・モデル割当）。 | dev-fix（Opus。手順化後は Sonnet） | スキル手順の dry-run を開発用教室の報告で確認。 |
+| **Q-5** | 開発者承認画面（`DeveloperAdminScreen.tsx` に subPage `'questions'`）: 未回答／回答済み一覧・1 件分パックのコピー・回答案欄・「承認して返答」・「QA として公開」。確定は callable `answerDeveloperReport`（`requireDeveloperMember`）が `developerReports/{id}` に `answerFinal/answeredAt/answeredBy` を書き、公開時は `qaEntries/{id}` を作る。 | dev-fix（Opus） | 画面状態遷移の純関数・CF 入力検証。 |
+| **Q-6** | 返答通知: 軽量コレクション `reportAnswers/{id}`（classroomId・質問要約・回答・answeredAt・readAt）＋ルール（教室メンバー read・write は CF のみ）＋起動時／実行中モーダル（QR提出通知 `App.tsx:178-254, 1521-1597, 4195-4226` の同型）＋callable `markReportAnswerRead`。 | dev-fix（Opus） | `selectStartupSubmissionsToNotify` 同型の純関数テスト＋`npm run test:rules`。 |
+| （将来）**Q-7** | API 自動処理（§3-4）。契約と「公開してよい回答」の定義の後。 | dev-fix（Opus） | SDK はモック。パック純関数を再利用。 |
+| （将来）**Q-8** | 類似QA の即時提示（承認・公開済み `qaEntries` のみ。第1段は字句一致）。定義の後。 | dev-fix（Opus）／UI は Sonnet | 類似度純関数テスト。 |
 
 触るファイル: `src/utils/developerReport.ts`、`DeveloperReportModal.tsx`、`scheduleHtml.ts`、`App.tsx`（通知）、`DeveloperAdminScreen.tsx`、
-`functions/src/index.ts`／`developerReport.ts`、新規 `src/utils/answerDraftPrompt.ts`・`functions/src/reportAnswer.ts`、`firebase/firestore.rules`、
-`tools/developer-report-notify.mjs`、`.claude/skills/answer-question/`（Q-5）。
+`functions/src/index.ts`／`developerReport.ts`、新規 `src/utils/reportDigestPrompt.ts`・`tools/developer-report-digest.mjs`・`functions/src/reportAnswer.ts`、
+`firebase/firestore.rules`、`tools/developer-report-notify.mjs`、`.gitignore`、`.claude/skills/report-digest/`。
 
 ---
 
@@ -370,10 +377,11 @@ I undo が無い画面が多い／J 別タブ日程表・QR提出ページに「
 
 - **INV**: U-0 は INV-02。T6 は INV-08（教室分離: トークンの教室に生徒が実在し在籍）を関数側テストで固定。T2/T3/T4/T5 は盤面状態を変えない。
 - **回帰防止**: `scheduleHtml.ts` を触る段（H-4・Q-2）は new Function 構文検証が門番。T4 は「全選択＝現状と同一出力」をテストで保証。
-- **functions デプロイ**: T5（H-2）・T6（K-2/K-4/K-5）・T2（Q-3/Q-4/Q-6）。Actions「Deploy Cloud Functions」→ ライブ GET で実反映を検証（409 誤成功に注意）。
+- **functions デプロイ**: T5（H-2）・T6（K-2/K-4/K-5）・T2（Q-2/Q-5/Q-6）。Actions「Deploy Cloud Functions」→ ライブ GET で実反映を検証（409 誤成功に注意）。
+- **公開リポジトリ**: 報告ダイジェスト（`local/report-digests/`）は利用者の文面を含むのでコミットしない（`.gitignore`）。
 - **rules デプロイ**: T6（`studentPortalTokens`・`parentMessages`）・T2（`reportAnswers`・`qaEntries`）。`firebase deploy --only firestore:rules`。
 - **Hosting**: T6 は `firebase.json` に `/api/parent/**` rewrite 追加（main マージで反映）。
-- **秘密情報**: Anthropic API キーはルート C 採用時のみ。`functions/.env`／`PROD_FUNCTIONS_ENV`。Claude は値を扱わない。
+- **秘密情報**: Anthropic API キーは将来の API 自動処理（Q-7）採用時のみ。当面は不要。`functions/.env`／`PROD_FUNCTIONS_ENV`。Claude は値を扱わない。
 - **staging**: T4/T5/T6/T2 は staging で実機確認。開始前に「Deploy to Staging」で版を揃える。
 - **メモリ**: memory `komahyou-plan-2026-09-11-five-requests` を第2版に更新済み。
 
@@ -387,12 +395,14 @@ I undo が無い画面が多い／J 別タブ日程表・QR提出ページに「
 - 再定義は保留。U-0（現行バグの疑い）のみ修正。
 - [ ] U-0 の修正を main へ自動マージしてよいか（推奨: よい。回帰テスト同梱・開発用教室で確認後）: ______
 
-### 9-2. 質問種別＋AI回答案 — **一部回答済み**
-- 回答済み: AI 提供者非依存・即時不要／利用者への即答なし／費用規模は §3-2。
-- [ ] 第1段はルート B（プロンプト書き出し）でよいか。ルート A（Claude Code スキル）も足すか（推奨: B＋A）: ______
-- [ ] ルート C（API 自動）は契約決定後に着手（推奨: はい。モデル既定 `claude-opus-5`・Batches で半額）: ______
+### 9-2. 要望・報告・質問 — **一部回答済み**
+- 回答済み: AI 提供者非依存・即時不要／利用者への即答なし／**報告・要望も含め当面は API を使わず、蓄積したものを後から AI で読む**（2026-09-12）。
+- [ ] まとめ読みの入口はルート A（Claude Code スキル）＋ルート B（任意の AI に貼る）でよいか（推奨: はい）: ______
+- [ ] 実行の頻度（推奨: 週 1 回、または未整理 10 件で）: ______
+- [ ] AI に渡さない項目（推奨: 操作痕跡・教室データ・メール・UID。本文中の生徒名は名簿一致で伏字）: ______
 - [ ] 「公開してよい回答」の定義は spec-curator の叩き台をオーナーが確定（Q-1）: ______
 - [ ] QA の公開範囲の既定（推奨: 全教室共有・公開時に開発者が編集）: ______
+- [ ] API 自動処理（Q-7）は将来オプションのまま据え置き（推奨: はい）: ______
 
 ### 9-3. 教室別オプション
 - [ ] 既定＝全教室 ON・開発者が個別 OFF（推奨: はい）: ______
