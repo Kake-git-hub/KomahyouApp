@@ -221,6 +221,29 @@ export function summarizeLessonHistory(events: readonly LessonHistoryEvent[]): L
   return summary
 }
 
+/**
+ * callable `getStudentLessonHistory` の応答（H-2）。
+ * ⚠️ 正本は functions/src/lessonLedgerHistory.ts の同名型。**サーバーが増やしたらここも増やす**
+ *   （functions はアプリ側 src/ を import できないため型も二重に持つ）。
+ */
+export type StudentLessonHistoryResponse = {
+  classroomId: string
+  studentId: string
+  studentName: string
+  from: string
+  to: string
+  /** 366 日超で from を丸めたか。 */
+  clamped: boolean
+  /** 実際に読んだ台帳の日付（= その日の最終保存時点。当日の未保存編集は含まれない）。 */
+  ledgerDateKey: string | null
+  savedAt: string | null
+  computedAt: string | null
+  events: LessonHistoryEvent[]
+  summary: LessonHistorySummary
+  subjects: string[]
+  makeupBalanceBySubject: Array<{ subject: string; balance: number }>
+}
+
 // ---------------------------------------------------------------------------
 // 期間の丸め（最大 366 日）
 // ---------------------------------------------------------------------------

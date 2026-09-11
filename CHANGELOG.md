@@ -16,6 +16,7 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 - feat: 講習履歴(テーマ5)の土台。台帳トークンを日付順イベントへ展開する純関数 `src/utils/lessonHistory.ts` と、教室メンバー権限で `lessonLedgerDays` を読む callable `getStudentLessonHistory`(`functions/src/lessonLedgerHistory.ts`・期間は最大366日・読み取り専用)を追加(H-1/H-2)。
+- feat: 講習履歴を画面から使えるようにした(H-3/H-4)。生徒日程表タブ(別タブ)の「講習集計結果」の左に「講習履歴」ボタンを追加し、`schedule-lesson-history-request` → 本体が callable `getStudentLessonHistory` を中継 → `schedule-lesson-history-result` でタブ内オーバーレイに表示(期間指定・既定は終了日から1年・366日超は丸め、全授業種別のフィルタ、状態別集計、印刷)。台帳 `lessonLedgerDays` はクライアントから直接読めないため本体中継が唯一の経路(読み取りのみ)。表示は保存済みの記録のみである旨と保存時刻を画面に明記。機能フラグ `lessonHistory` は開発用教室のみ先行(`src/utils/lessonHistoryMessage.ts` / `src/utils/scheduleHtml.ts` / `ScheduleBoardScreen.tsx` / `adminFunctions.ts`)
 
 ## v1.5.501 (2026-09-12)
 

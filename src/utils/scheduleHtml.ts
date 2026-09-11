@@ -230,6 +230,9 @@ export type SchedulePayload = {
   // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。埋め込みJSがこのフラグで D&D を起動し、
   // true のときだけ各コマに pickerDesks(机選択モーダル用の全机レイアウト)が載る。
   scheduleDndEnabled?: boolean
+  // 講習履歴(H-4)のボタンを生徒日程表のツールバーに出すか(開発用教室のみ先行)。
+  // false のときはボタン自体を描かない(埋め込みJSの関数群は常に載る＝構文検証の対象に保つ)。
+  lessonHistoryEnabled?: boolean
 }
 
 type OpenScheduleHtmlParams = {
@@ -254,6 +257,8 @@ type OpenScheduleHtmlParams = {
   optionFieldEnabled?: boolean
   // 日程表コマ組み(別タブD&D)を有効化する(staging/開発用教室のみ)。生徒ペイロードにのみ渡す。
   scheduleDndEnabled?: boolean
+  // 講習履歴ボタン(H-4)を出すか。生徒ペイロードにのみ渡す(開発用教室のみ先行)。
+  lessonHistoryEnabled?: boolean
   // 【移行中・INV-05】盤面ベースの予定数。★盤面**全体**から算出したものを呼び出し側で作って渡す
   // （表示期間で絞った盤面から作ると、期間外へ置いた振替を消化できない）。
   outstandingAbsences?: SerializedOutstandingAbsence[]
@@ -675,6 +680,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     classroomName: params.classroomName || '',
     optionFieldEnabled: Boolean(params.optionFieldEnabled),
     scheduleDndEnabled: Boolean(params.scheduleDndEnabled),
+    lessonHistoryEnabled: Boolean(params.lessonHistoryEnabled),
   }
 }
 
@@ -1297,6 +1303,52 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .developer-report-actions .developer-report-cancel { background: #eef3fb; color: #36506d; }
       .developer-report-actions button[disabled] { opacity: 0.6; cursor: default; }
       .developer-report-result { margin: 0; white-space: pre-wrap; font-size: 17px; line-height: 1.7; color: #1f3350; }
+
+      /* 講習履歴(H-4): 「要望・報告」モーダルと同じ器を使い、中身だけ表(履歴)に差し替える。 */
+      .lesson-history-overlay,
+      .lesson-history-overlay.print-only-hidden {
+        position: fixed;
+        inset: 0;
+        background: rgba(16, 40, 70, 0.45);
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      }
+      .lesson-history-modal {
+        background: #fff;
+        border-radius: 20px;
+        padding: 24px 28px;
+        max-width: 1040px;
+        width: 100%;
+        display: grid;
+        gap: 14px;
+        box-shadow: 0 8px 32px rgba(16, 40, 70, 0.18);
+        max-height: 92vh;
+        overflow-y: auto;
+        box-sizing: border-box;
+      }
+      .lesson-history-title { font-weight: 600; font-size: 22px; color: #16314f; }
+      .lesson-history-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+      .lesson-history-control { display: grid; gap: 4px; font-size: 14px; color: #36506d; }
+      .lesson-history-control input[type="date"] { font: inherit; font-size: 16px; padding: 6px 10px; border: 1px solid #c7d3e3; border-radius: 10px; }
+      .lesson-history-types { display: flex; gap: 10px; flex-wrap: wrap; }
+      .lesson-history-type { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid #c7d3e3; border-radius: 10px; font-size: 14px; color: #36506d; background: #f8fafd; cursor: pointer; }
+      .lesson-history-note { margin: 0; color: #5b6f86; font-size: 14px; line-height: 1.6; }
+      .lesson-history-note-strong { color: #16314f; background: #f1f6ff; border-radius: 10px; padding: 8px 12px; }
+      .lesson-history-summary { display: flex; gap: 10px; flex-wrap: wrap; font-size: 15px; color: #16314f; }
+      .lesson-history-summary span { background: #eef3fb; border-radius: 999px; padding: 4px 12px; }
+      .lesson-history-table { border-collapse: collapse; width: 100%; font-size: 14px; }
+      .lesson-history-table th, .lesson-history-table td { border: 1px solid #c7d3e3; padding: 5px 8px; text-align: left; white-space: nowrap; }
+      .lesson-history-table th { background: #eef3fb; color: #16314f; }
+      .lesson-history-table-wrap { max-height: 46vh; overflow: auto; }
+      .lesson-history-empty { text-align: center; color: #5b6f86; }
+      .lesson-history-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+      .lesson-history-actions button { border: none; border-radius: 12px; padding: 10px 22px; font: inherit; font-size: 16px; cursor: pointer; height: auto; }
+      .lesson-history-actions .lesson-history-primary { background: #1a73e8; color: #fff; }
+      .lesson-history-actions .lesson-history-secondary { background: #eef3fb; color: #36506d; }
 
       .pages {
         display: grid;
@@ -2779,6 +2831,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         ${viewType === 'student' ? '<button type="button" id="schedule-empty-format-button" class="secondary">空フォーマット印刷</button>' : ''}
+        ${viewType === 'student' && payload.lessonHistoryEnabled ? '<button type="button" id="schedule-lesson-history-button" class="secondary" title="選んだ生徒の出席・休み・振替・未消化を、保存済みの記録から期間指定で一覧します">講習履歴</button>' : ''}
         ${viewType === 'student' || viewType === 'teacher' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
         <button type="button" id="schedule-show-all-button" class="secondary">印刷用全員表示</button>
       </div>
@@ -7178,6 +7231,345 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         developerReportOverlay = overlay;
         textarea.focus();
       }
+      // ---------------------------------------------------------------------
+      // 講習履歴(H-4・docs/plan-2026-09-11-five-requests.md §6)
+      // 本体(opener)へ期間を送り、callable getStudentLessonHistory の結果をこのタブ内へ表示する。
+      // ★表示は「保存済みの記録(生徒授業台帳 lessonLedgerDays)」のみ。当日の未保存編集は入らない。
+      //   利用者が「盤面と違う」と誤解しないよう、注記と台帳の保存時刻を必ず画面に出すこと。
+      // ★ここは文字列としての JS(テンプレートリテラル内)。\' のようなエスケープを足すと
+      //   ビルドをすり抜けて実行時に全停止する。文字列は基本シングルクォート＋連結で書く。
+      // ---------------------------------------------------------------------
+      const LESSON_HISTORY_MAX_DAYS = 366;
+      const LESSON_HISTORY_STATUS_ORDER = ['attended', 'absent', 'absentNoMakeup', 'placed', 'makeupRemaining'];
+      const LESSON_HISTORY_STATUS_LABELS = { attended: '出席', absent: '休み(振替あり)', absentNoMakeup: '振無休', placed: '予定', makeupRemaining: '未消化' };
+      // 種別フィルタは全授業種別を並べる(台帳に種別が無い未消化行は「種別なし」に入る)。
+      const LESSON_HISTORY_TYPE_OPTIONS = [
+        { value: 'regular', label: '通常' },
+        { value: 'makeup', label: '振替' },
+        { value: 'special', label: '講習' },
+        { value: 'extra', label: '増コマ' },
+        { value: 'trial', label: '体験' },
+        { value: '', label: '種別なし' }
+      ];
+      let lessonHistoryOverlay = null;
+      let lessonHistoryRequestId = '';
+      let lessonHistoryResultTimer = 0;
+      let lessonHistoryData = null;
+      let lessonHistoryErrorText = '';
+      let lessonHistoryLoading = false;
+      let lessonHistoryTypeFilter = LESSON_HISTORY_TYPE_OPTIONS.map(function(option) { return option.value; });
+
+      function shiftLessonHistoryDateKey(dateKey, days) {
+        const base = new Date(String(dateKey) + 'T00:00:00');
+        if (isNaN(base.getTime())) return String(dateKey || '');
+        base.setDate(base.getDate() + days);
+        return toDateKey(base);
+      }
+
+      function countLessonHistoryDays(fromKey, toKey) {
+        const from = new Date(String(fromKey) + 'T00:00:00');
+        const to = new Date(String(toKey) + 'T00:00:00');
+        if (isNaN(from.getTime()) || isNaN(to.getTime())) return 0;
+        return Math.floor((to.getTime() - from.getTime()) / 86400000) + 1;
+      }
+
+      // 期間の正規化: 逆転は入れ替え、366日超は「終了日から直近366日」へ丸める(エラーにしない)。
+      // サーバー(resolveLessonHistoryRange)と同じ規則。片方だけ変えないこと。
+      function clampLessonHistoryRange(fromValue, toValue) {
+        let to = toValue || toDateKey(new Date());
+        let from = fromValue || shiftLessonHistoryDateKey(to, -(LESSON_HISTORY_MAX_DAYS - 1));
+        if (from > to) { const swap = from; from = to; to = swap; }
+        if (countLessonHistoryDays(from, to) > LESSON_HISTORY_MAX_DAYS) {
+          return { from: shiftLessonHistoryDateKey(to, -(LESSON_HISTORY_MAX_DAYS - 1)), to: to, clamped: true };
+        }
+        return { from: from, to: to, clamped: false };
+      }
+
+      function buildLessonHistoryDefaultRange() {
+        const to = toDateKey(new Date());
+        return clampLessonHistoryRange(shiftLessonHistoryDateKey(to, -(LESSON_HISTORY_MAX_DAYS - 1)), to);
+      }
+
+      function formatLessonHistoryWeekday(dateKey) {
+        const date = new Date(String(dateKey) + 'T00:00:00');
+        if (isNaN(date.getTime())) return '';
+        return dayLabels[date.getDay()];
+      }
+
+      function formatLessonHistoryTimestamp(value) {
+        if (!value) return '—';
+        const date = new Date(String(value));
+        if (isNaN(date.getTime())) return String(value);
+        return date.getFullYear() + '/' + (date.getMonth() + 1) + '/' + date.getDate() + ' '
+          + String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+      }
+
+      function getLessonHistoryFilteredEvents() {
+        if (!lessonHistoryData || !Array.isArray(lessonHistoryData.events)) return [];
+        return lessonHistoryData.events.filter(function(event) {
+          return lessonHistoryTypeFilter.indexOf(String(event.lessonType || '')) >= 0;
+        });
+      }
+
+      function summarizeLessonHistoryEvents(events) {
+        const summary = { attended: 0, absent: 0, absentNoMakeup: 0, placed: 0, makeupRemaining: 0, total: 0 };
+        events.forEach(function(event) {
+          if (typeof summary[event.status] !== 'number') return;
+          summary[event.status] += 1;
+          summary.total += 1;
+        });
+        return summary;
+      }
+
+      function buildLessonHistorySummaryHtml(summary) {
+        return LESSON_HISTORY_STATUS_ORDER.map(function(status) {
+          return '<span>' + escapeHtml(LESSON_HISTORY_STATUS_LABELS[status]) + ' ' + summary[status] + '</span>';
+        }).join('') + '<span>合計 ' + summary.total + '</span>';
+      }
+
+      function buildLessonHistoryTableHtml(events) {
+        const head = '<thead><tr><th>日付</th><th>曜日</th><th>時限</th><th>種別</th><th>科目</th><th>状態</th><th>振替元</th></tr></thead>';
+        if (!events.length) {
+          return '<table class="lesson-history-table">' + head
+            + '<tbody><tr><td colspan="7" class="lesson-history-empty">この期間に保存済みの記録はありません。</td></tr></tbody></table>';
+        }
+        const rows = events.map(function(event) {
+          const typeLabel = event.lessonTypeLabel || event.lessonType || '—';
+          const reason = event.makeupSourceDate || event.reasonLabel || '';
+          return '<tr>'
+            + '<td>' + escapeHtml(event.date || '—') + '</td>'
+            + '<td>' + escapeHtml(formatLessonHistoryWeekday(event.date)) + '</td>'
+            + '<td>' + (typeof event.slot === 'number' ? escapeHtml(String(event.slot)) + '限' : '—') + '</td>'
+            + '<td>' + escapeHtml(typeLabel) + '</td>'
+            + '<td>' + escapeHtml(event.subject || '—') + '</td>'
+            + '<td>' + escapeHtml(event.statusLabel || LESSON_HISTORY_STATUS_LABELS[event.status] || '') + '</td>'
+            + '<td>' + escapeHtml(reason || '—') + '</td>'
+            + '</tr>';
+        }).join('');
+        return '<table class="lesson-history-table">' + head + '<tbody>' + rows + '</tbody></table>';
+      }
+
+      // 「保存済みの記録のみ」の注記は必ず出す(当日の未保存編集が入らないことの明示)。
+      function buildLessonHistoryNoteText() {
+        const savedLabel = lessonHistoryData ? formatLessonHistoryTimestamp(lessonHistoryData.savedAt) : '—';
+        const ledgerLabel = lessonHistoryData && lessonHistoryData.ledgerDateKey ? lessonHistoryData.ledgerDateKey : '—';
+        return '保存済みの記録のみを表示しています(当日の未保存編集は含まれません)。集計日: ' + ledgerLabel + ' / 保存: ' + savedLabel;
+      }
+
+      function renderLessonHistoryBody() {
+        if (!lessonHistoryOverlay) return;
+        const body = lessonHistoryOverlay.querySelector('.lesson-history-body');
+        if (!body) return;
+        if (lessonHistoryLoading) {
+          body.innerHTML = '<p class="lesson-history-note">読み込み中です…</p>';
+          return;
+        }
+        if (lessonHistoryErrorText) {
+          body.innerHTML = '<p class="lesson-history-note lesson-history-note-strong">' + escapeHtml(lessonHistoryErrorText) + '</p>';
+          return;
+        }
+        if (!lessonHistoryData) {
+          body.innerHTML = '<p class="lesson-history-note">期間を選んで「表示」を押してください。</p>';
+          return;
+        }
+        const events = getLessonHistoryFilteredEvents();
+        const summary = summarizeLessonHistoryEvents(events);
+        const clampedNote = lessonHistoryData.clamped
+          ? '<p class="lesson-history-note">指定期間が1年(366日)を超えたため、終了日から1年分に丸めました。</p>'
+          : '';
+        const balances = Array.isArray(lessonHistoryData.makeupBalanceBySubject) ? lessonHistoryData.makeupBalanceBySubject : [];
+        const balanceNote = balances.length
+          ? '<p class="lesson-history-note">台帳時点の未消化: ' + escapeHtml(balances.map(function(entry) { return (entry.subject || '—') + ' ' + entry.balance; }).join(' / ')) + '</p>'
+          : '';
+        body.innerHTML = '<p class="lesson-history-note lesson-history-note-strong">' + escapeHtml(buildLessonHistoryNoteText()) + '</p>'
+          + clampedNote
+          + '<div class="lesson-history-summary">' + buildLessonHistorySummaryHtml(summary) + '</div>'
+          + balanceNote
+          + '<div class="lesson-history-table-wrap">' + buildLessonHistoryTableHtml(events) + '</div>';
+      }
+
+      function buildLessonHistoryPrintHtml() {
+        const events = getLessonHistoryFilteredEvents();
+        const summary = summarizeLessonHistoryEvents(events);
+        const name = lessonHistoryData && lessonHistoryData.studentName ? lessonHistoryData.studentName : '';
+        const range = lessonHistoryData ? (lessonHistoryData.from + ' 〜 ' + lessonHistoryData.to) : '';
+        return '<!doctype html><html lang="ja"><head><meta charset="utf-8" /><title>講習履歴</title><style>'
+          + 'body{font-family:"Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif;padding:24px;color:#16314f;}'
+          + 'h1{font-size:20px;margin:0 0 8px;}p{margin:0 0 8px;font-size:13px;color:#36506d;}'
+          + 'table{border-collapse:collapse;width:100%;font-size:12px;}th,td{border:1px solid #9fb1c7;padding:4px 6px;text-align:left;}'
+          + 'th{background:#eef3fb;}@page{size:A4 portrait;margin:10mm;}'
+          + '</style></head><body>'
+          + '<h1>講習履歴' + (name ? ' — ' + escapeHtml(name) : '') + '</h1>'
+          + '<p>期間: ' + escapeHtml(range) + (DATA.classroomName ? ' / ' + escapeHtml(String(DATA.classroomName)) : '') + '</p>'
+          + '<p>' + escapeHtml(buildLessonHistoryNoteText()) + '</p>'
+          + '<p>' + LESSON_HISTORY_STATUS_ORDER.map(function(status) { return escapeHtml(LESSON_HISTORY_STATUS_LABELS[status]) + ' ' + summary[status]; }).join(' / ') + ' / 合計 ' + summary.total + '</p>'
+          + buildLessonHistoryTableHtml(events)
+          + '</body></html>';
+      }
+
+      function printLessonHistory() {
+        const printWindow = window.open('', 'lesson-history-print-' + Date.now());
+        if (!printWindow) return;
+        printWindow.document.open();
+        printWindow.document.write(buildLessonHistoryPrintHtml());
+        printWindow.document.close();
+      }
+
+      function requestLessonHistory(fromValue, toValue) {
+        if (!isOpenerAvailable()) return;
+        const range = clampLessonHistoryRange(fromValue, toValue);
+        const startField = lessonHistoryOverlay ? lessonHistoryOverlay.querySelector('.lesson-history-start') : null;
+        const endField = lessonHistoryOverlay ? lessonHistoryOverlay.querySelector('.lesson-history-end') : null;
+        if (startField) startField.value = range.from;
+        if (endField) endField.value = range.to;
+        lessonHistoryRequestId = 'lh-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        lessonHistoryLoading = true;
+        lessonHistoryErrorText = '';
+        renderLessonHistoryBody();
+        window.opener.postMessage({
+          type: 'schedule-lesson-history-request',
+          requestId: lessonHistoryRequestId,
+          personId: personSelect ? (personSelect.value || appliedPersonId || '') : (appliedPersonId || ''),
+          from: range.from,
+          to: range.to
+        }, '*');
+        if (lessonHistoryResultTimer) window.clearTimeout(lessonHistoryResultTimer);
+        // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即差し替わる。
+        lessonHistoryResultTimer = window.setTimeout(function() {
+          lessonHistoryLoading = false;
+          lessonHistoryErrorText = '本体(コマ表)から応答がありません。コマ表のタブを開いた状態で、もう一度お試しください。';
+          renderLessonHistoryBody();
+        }, 20000);
+      }
+
+      function handleLessonHistoryResult(message) {
+        // 古い要求の応答で新しい表示を上書きしない(requestId 照合)。
+        if (!message || (message.requestId && message.requestId !== lessonHistoryRequestId)) return;
+        if (lessonHistoryResultTimer) { window.clearTimeout(lessonHistoryResultTimer); lessonHistoryResultTimer = 0; }
+        lessonHistoryLoading = false;
+        if (message.ok) {
+          lessonHistoryData = message.history || null;
+          lessonHistoryErrorText = lessonHistoryData ? '' : '講習履歴を取得できませんでした。';
+        } else {
+          lessonHistoryErrorText = String(message.message || '講習履歴を取得できませんでした。');
+        }
+        renderLessonHistoryBody();
+      }
+
+      function closeLessonHistoryOverlay() {
+        if (lessonHistoryResultTimer) { window.clearTimeout(lessonHistoryResultTimer); lessonHistoryResultTimer = 0; }
+        if (lessonHistoryOverlay && lessonHistoryOverlay.parentNode) lessonHistoryOverlay.parentNode.removeChild(lessonHistoryOverlay);
+        lessonHistoryOverlay = null;
+      }
+
+      function openLessonHistoryOverlay() {
+        if (lessonHistoryOverlay) return;
+        const overlay = document.createElement('div');
+        overlay.className = 'lesson-history-overlay print-only-hidden';
+        overlay.id = 'schedule-lesson-history-modal';
+        const modal = document.createElement('div');
+        modal.className = 'lesson-history-modal';
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+        const personOption = personSelect && personSelect.options ? personSelect.options[personSelect.selectedIndex] : null;
+        const title = document.createElement('div');
+        title.className = 'lesson-history-title';
+        title.textContent = '講習履歴' + (personOption && personOption.textContent ? ' — ' + personOption.textContent : '');
+        const controls = document.createElement('div');
+        controls.className = 'lesson-history-controls';
+        const defaultRange = buildLessonHistoryDefaultRange();
+        const startControl = document.createElement('label');
+        startControl.className = 'lesson-history-control';
+        const startText = document.createElement('span');
+        startText.textContent = '開始日';
+        const startField = document.createElement('input');
+        startField.type = 'date';
+        startField.className = 'lesson-history-start';
+        startField.value = defaultRange.from;
+        startControl.appendChild(startText);
+        startControl.appendChild(startField);
+        const endControl = document.createElement('label');
+        endControl.className = 'lesson-history-control';
+        const endText = document.createElement('span');
+        endText.textContent = '終了日';
+        const endField = document.createElement('input');
+        endField.type = 'date';
+        endField.className = 'lesson-history-end';
+        endField.value = defaultRange.to;
+        endControl.appendChild(endText);
+        endControl.appendChild(endField);
+        const reloadButton = document.createElement('button');
+        reloadButton.type = 'button';
+        reloadButton.className = 'lesson-history-primary';
+        reloadButton.textContent = '表示';
+        reloadButton.addEventListener('click', function() { requestLessonHistory(startField.value, endField.value); });
+        const typesControl = document.createElement('div');
+        typesControl.className = 'lesson-history-control';
+        const typesText = document.createElement('span');
+        typesText.textContent = '種別';
+        const types = document.createElement('div');
+        types.className = 'lesson-history-types';
+        LESSON_HISTORY_TYPE_OPTIONS.forEach(function(option) {
+          const typeLabel = document.createElement('label');
+          typeLabel.className = 'lesson-history-type';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.value = option.value;
+          checkbox.checked = lessonHistoryTypeFilter.indexOf(option.value) >= 0;
+          checkbox.addEventListener('change', function() {
+            const next = lessonHistoryTypeFilter.filter(function(value) { return value !== option.value; });
+            if (checkbox.checked) next.push(option.value);
+            lessonHistoryTypeFilter = next;
+            renderLessonHistoryBody();
+          });
+          const optionText = document.createElement('span');
+          optionText.textContent = option.label;
+          typeLabel.appendChild(checkbox);
+          typeLabel.appendChild(optionText);
+          types.appendChild(typeLabel);
+        });
+        typesControl.appendChild(typesText);
+        typesControl.appendChild(types);
+        controls.appendChild(startControl);
+        controls.appendChild(endControl);
+        controls.appendChild(reloadButton);
+        controls.appendChild(typesControl);
+        const body = document.createElement('div');
+        body.className = 'lesson-history-body';
+        const actions = document.createElement('div');
+        actions.className = 'lesson-history-actions';
+        const printButton = document.createElement('button');
+        printButton.type = 'button';
+        printButton.className = 'lesson-history-secondary';
+        printButton.textContent = '印刷';
+        printButton.addEventListener('click', printLessonHistory);
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.className = 'lesson-history-secondary';
+        closeButton.textContent = '閉じる';
+        closeButton.addEventListener('click', closeLessonHistoryOverlay);
+        actions.appendChild(printButton);
+        actions.appendChild(closeButton);
+        modal.appendChild(title);
+        modal.appendChild(controls);
+        modal.appendChild(body);
+        modal.appendChild(actions);
+        overlay.appendChild(modal);
+        overlay.addEventListener('click', function(event) {
+          if (event.target === overlay) closeLessonHistoryOverlay();
+        });
+        document.body.appendChild(overlay);
+        lessonHistoryOverlay = overlay;
+        lessonHistoryData = null;
+        renderLessonHistoryBody();
+        requestLessonHistory(startField.value, endField.value);
+      }
+
+      const lessonHistoryButton = document.getElementById('schedule-lesson-history-button');
+      if (lessonHistoryButton) {
+        lessonHistoryButton.addEventListener('click', openLessonHistoryOverlay);
+      }
+
       const reportDeveloperButton = document.getElementById('schedule-report-developer-button');
       if (reportDeveloperButton) {
         reportDeveloperButton.addEventListener('click', openDeveloperReportModal);
@@ -7345,6 +7737,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           const resultText = String(message.message || (message.ok ? '開発者へ報告しました。' : '報告を送れませんでした。'));
           if (developerReportOverlay) showDeveloperReportResult(resultText);
           else window.alert(resultText);
+          return;
+        }
+        // 講習履歴(H-4)の結果(本体が callable を呼んで返す)。オーバーレイの表を差し替える。
+        if (message && message.type === 'schedule-lesson-history-result') {
+          handleLessonHistoryResult(message);
           return;
         }
         // 日程表コマ組みの結果ack: 成功=移動先コマを数秒ハイライト / 失敗=理由を大きく表示。

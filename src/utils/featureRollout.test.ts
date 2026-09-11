@@ -76,3 +76,15 @@ describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのま�
     expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(true)
   })
 })
+
+describe('featureRollout: lessonHistory（講習履歴）', () => {
+  it('開発用教室でのみ有効（本番3教室では出さない）', () => {
+    // 新機能はフラグ付きで作る方針(docs/plan-2026-09-11-five-requests.md)。まず開発用教室で先行検証する。
+    // 昇格(all-classrooms)はオーナー確認後。ここを勝手に広げないこと。
+    expect(featureRolloutRegistry.lessonHistory.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(false)
+  })
+})

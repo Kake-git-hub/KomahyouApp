@@ -42,6 +42,8 @@ import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, open
 import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
+import { buildScheduleLessonHistoryResultMessage, formatLessonHistoryErrorMessage, parseScheduleLessonHistoryRequestMessage, type ScheduleLessonHistoryResultMessage } from '../../utils/lessonHistoryMessage'
+import { fetchStudentLessonHistoryViaFunction } from '../../integrations/firebase/adminFunctions'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
 const calendarDayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -4968,6 +4970,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 別タブ日程表の自動同期(デバウンス)＋同期スピナーも staging/開発用教室のみ。本番3教室は従来どおり
   // 「最新表示」ボタン/開いた時のみ更新に保つ(オーナー確定 2026-07-09: メモリ負荷が本番大教室で未検証のため)。
   const scheduleAutoSyncEnabled = isFeatureEnabledForClassroom('schedulePopupAutoSync', { name: classroomName })
+  // 講習履歴(H-4・docs/plan-2026-09-11-five-requests.md §6)。生徒日程表タブの「講習集計結果」の左に
+  // 「講習履歴」ボタンを出すかどうか。OFF の教室ではボタン自体を描かない(開発用教室のみ先行)。
+  const lessonHistoryEnabled = isFeatureEnabledForClassroom('lessonHistory', { name: classroomName })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
@@ -5885,6 +5890,39 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     window.addEventListener('message', handleScheduleNoteMessage)
     return () => window.removeEventListener('message', handleScheduleNoteMessage)
   }, [onUpdateClassroomSettings])
+
+  // 【講習履歴 H-3】日程表タブ(別タブ)からの `schedule-lesson-history-request` を受けて callable を呼び、
+  // 送り主のタブへ `schedule-lesson-history-result` を返す。
+  // ★ 中継が必要な理由: 履歴の正本 lessonLedgerDays は firestore.rules に match が無く、別タブどころか
+  //   クライアントからは一切読めない。ここを消す/Firestore 直読みに変えると履歴が常に空になる。
+  // ★ 読み取り専用。ここから Firestore へ書き込む処理を足さないこと(本番データ保護ルール)。
+  useEffect(() => {
+    const handleLessonHistoryRequest = (event: MessageEvent) => {
+      const request = parseScheduleLessonHistoryRequestMessage(event.data)
+      if (!request) return
+      const replyTarget = event.source as Window | null
+      const reply = (message: ScheduleLessonHistoryResultMessage) => {
+        try {
+          replyTarget?.postMessage(message, '*')
+        } catch {
+          // 別タブが閉じられていれば何もしない(読み取りだけなので副作用は無い)。
+        }
+      }
+      const classroomId = classroomStorageKey ?? ''
+      if (!classroomId || !request.studentId) {
+        reply(buildScheduleLessonHistoryResultMessage({
+          requestId: request.requestId,
+          result: { ok: false, error: classroomId ? '生徒が選ばれていません。生徒を選んでからもう一度お試しください。' : '教室が特定できませんでした。コマ表を開き直してください。' },
+        }))
+        return
+      }
+      void fetchStudentLessonHistoryViaFunction({ classroomId, studentId: request.studentId, from: request.from, to: request.to })
+        .then((history) => reply(buildScheduleLessonHistoryResultMessage({ requestId: request.requestId, result: { ok: true, history } })))
+        .catch((error) => reply(buildScheduleLessonHistoryResultMessage({ requestId: request.requestId, result: { ok: false, error: formatLessonHistoryErrorMessage(error) } })))
+    }
+    window.addEventListener('message', handleLessonHistoryRequest)
+    return () => window.removeEventListener('message', handleLessonHistoryRequest)
+  }, [classroomStorageKey])
 
   const displayWeekDate = cells[0]?.dateKey ?? getReferenceDateKey(new Date())
   const currentGradeReferenceDate = getReferenceDateKey(new Date())
@@ -7147,6 +7185,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       outstandingAbsences: outstandingAbsenceEntries,
       boardBasedPlannedCountEnabled,
       scheduleDndEnabled: scheduleDndMoveEnabled,
+      lessonHistoryEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,
@@ -10461,6 +10500,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       outstandingAbsences: outstandingAbsenceEntries,
       boardBasedPlannedCountEnabled,
       scheduleDndEnabled: scheduleDndMoveEnabled,
+      lessonHistoryEnabled,
       periodBands: specialSessions,
       specialSessions,
       groupClassEntries,

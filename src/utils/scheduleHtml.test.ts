@@ -4497,3 +4497,150 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     vi.unstubAllGlobals()
   })
 })
+
+// 講習履歴(H-4・docs/plan-2026-09-11-five-requests.md §6): 生徒日程表のツールバーに「講習履歴」ボタンを出し、
+// opener(本体)へ期間を送って callable の結果をタブ内オーバーレイに表示する。
+// フラグ(lessonHistoryEnabled)が OFF の教室ではボタンを出さない。埋め込みJSの関数群は常に載せる
+// （new Function 構文検証の対象に保つため。ボタンが無ければ addEventListener が空振りするだけ）。
+describe('scheduleHtml 講習履歴', () => {
+  const stubPopup = () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    return { write, popup }
+  }
+
+  const baseParams = (popup: Window) => ({
+    cells: [],
+    students: [createStudent({ displayName: '山田' })],
+    regularLessons: [],
+    defaultStartDate: '2026-09-01',
+    defaultEndDate: '2026-09-07',
+    titleLabel: 'テスト',
+    classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+    targetWindow: popup,
+  })
+
+  it('フラグ ON の生徒日程表にだけボタンが出て、「講習集計結果」の左に置かれる', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+    const historyIndex = html.indexOf('id="schedule-lesson-history-button"')
+    const summaryIndex = html.indexOf('id="schedule-lecture-summary-button"')
+    expect(historyIndex).toBeGreaterThan(0)
+    expect(summaryIndex).toBeGreaterThan(0)
+    // 「講習集計結果」の左(＝前)に出す(オーナー要望の並び)。
+    expect(historyIndex).toBeLessThan(summaryIndex)
+    expect(html).toContain('>講習履歴</button>')
+
+    // 講師日程表は台帳が生徒×科目なので対象外(ボタンを出さない)。
+    write.mockClear()
+    openTeacherScheduleHtml({
+      cells: [],
+      teachers: [],
+      students: [],
+      regularLessons: [],
+      defaultStartDate: '2026-09-01',
+      defaultEndDate: '2026-09-07',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+      lessonHistoryEnabled: true,
+    })
+    const teacherHtml = write.mock.calls[0]?.[0] as string
+    expect(teacherHtml).not.toContain('id="schedule-lesson-history-button"')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('フラグ OFF ならボタンを出さないが、埋め込みJSの関数群は載る(構文検証の対象を落とさない)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml(baseParams(popup))
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).not.toContain('id="schedule-lesson-history-button"')
+    expect(html).not.toContain('>講習履歴</button>')
+    expect(html).toContain('function openLessonHistoryOverlay()')
+    expect(html).toContain('function clampLessonHistoryRange(fromValue, toValue)')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('往復のメッセージ種別・要求フィールド・オーバーレイの要素が埋め込まれる', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+    // 本体(ScheduleBoardScreen.tsx)/lessonHistoryMessage.ts の定数と一致させる。
+    expect(html).toContain("type: 'schedule-lesson-history-request'")
+    expect(html).toContain("message.type === 'schedule-lesson-history-result'")
+    // 要求に載せるフィールド(本体の parseScheduleLessonHistoryRequestMessage が読む)。
+    for (const field of ['requestId: lessonHistoryRequestId,', 'personId: personSelect', 'from: range.from,', 'to: range.to']) {
+      expect(html).toContain(field)
+    }
+    // 古い応答で新しい表示を上書きしない requestId 照合(回帰防止)。
+    expect(html).toContain('if (!message || (message.requestId && message.requestId !== lessonHistoryRequestId)) return;')
+    // オーバーレイ: 期間(date 入力2つ)・種別フィルタ・表・印刷・閉じる。
+    expect(html).toContain("overlay.id = 'schedule-lesson-history-modal'")
+    expect(html).toContain("className = 'lesson-history-start'")
+    expect(html).toContain("className = 'lesson-history-end'")
+    expect(html).toContain('<th>日付</th><th>曜日</th><th>時限</th><th>種別</th><th>科目</th><th>状態</th><th>振替元</th>')
+    expect(html).toContain("printButton.textContent = '印刷'")
+    expect(html).toContain("closeButton.textContent = '閉じる'")
+    // 全授業種別を種別フィルタに並べる(台帳に種別が無い未消化行は「種別なし」)。
+    for (const label of ['通常', '振替', '講習', '増コマ', '体験', '種別なし']) {
+      expect(html).toContain("label: '" + label + "'")
+    }
+    // 「保存済みの記録のみ」の明示は必須(当日の未保存編集が入らないことの説明)。savedAt も併記する。
+    expect(html).toContain('保存済みの記録のみを表示しています(当日の未保存編集は含まれません)。集計日: ')
+    expect(html).toContain("' / 保存: ' + savedLabel")
+
+    vi.unstubAllGlobals()
+  })
+
+  it('期間の丸め(最大366日・逆転は入れ替え)が埋め込みJSでもサーバーと同じ規則で効く', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+
+    const extractBody = (signature: string) => {
+      const escaped = signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const match = html.match(new RegExp('function ' + escaped + ' \\{([\\s\\S]*?)\\n {6}\\}'))
+      expect(match).toBeTruthy()
+      return match![1]
+    }
+
+    // 埋め込みJSの実体をそのまま評価する(テンプレートリテラルのエスケープ崩れも同時に検知する)。
+    const script = [
+      'const LESSON_HISTORY_MAX_DAYS = 366;',
+      'function toDateKey(date) {' + extractBody('toDateKey(date)') + '}',
+      'function shiftLessonHistoryDateKey(dateKey, days) {' + extractBody('shiftLessonHistoryDateKey(dateKey, days)') + '}',
+      'function countLessonHistoryDays(fromKey, toKey) {' + extractBody('countLessonHistoryDays(fromKey, toKey)') + '}',
+      'function clampLessonHistoryRange(fromValue, toValue) {' + extractBody('clampLessonHistoryRange(fromValue, toValue)') + '}',
+      'return { clampLessonHistoryRange, countLessonHistoryDays };',
+    ].join('\n')
+    const api = new Function(script)() as {
+      clampLessonHistoryRange: (from: string, to: string) => { from: string; to: string; clamped: boolean }
+      countLessonHistoryDays: (from: string, to: string) => number
+    }
+
+    // 両端を含む本数。366 日ちょうどは丸めない。
+    expect(api.countLessonHistoryDays('2026-09-12', '2026-09-12')).toBe(1)
+    expect(api.clampLessonHistoryRange('2025-09-12', '2026-09-12')).toEqual({ from: '2025-09-12', to: '2026-09-12', clamped: false })
+    // 366 日を超えたら終了日から直近 366 日へ丸める(エラーにしない)。
+    const clamped = api.clampLessonHistoryRange('2024-01-01', '2026-09-12')
+    expect(clamped.clamped).toBe(true)
+    expect(clamped.to).toBe('2026-09-12')
+    expect(api.countLessonHistoryDays(clamped.from, clamped.to)).toBe(366)
+    // 逆転入力は入れ替える。
+    expect(api.clampLessonHistoryRange('2026-09-12', '2026-09-01')).toEqual({ from: '2026-09-01', to: '2026-09-12', clamped: false })
+
+    vi.unstubAllGlobals()
+  })
+})
