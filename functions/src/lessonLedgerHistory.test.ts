@@ -7,11 +7,15 @@ import {
   parseLessonLedgerRows as appParseLessonLedgerRows,
   resolveLessonHistoryRange as appResolveLessonHistoryRange,
 } from '../../src/utils/lessonHistory'
+// 授業種別ラベルの正本（src/utils/scheduleViewData.ts）。functions 側の複製(LESSON_TYPE_LABELS)が
+// ズレたら（キー漏れ・値の文言差）このテストが落ちる。
+import { scheduleLessonTypeLabels } from '../../src/utils/scheduleViewData'
 import { encodeLessonLedgerBody, LESSON_LEDGER_ENCODING } from './lessonLedger'
 import {
   buildStudentLessonHistoryResponse,
   filterLessonHistory,
   handleGetStudentLessonHistory,
+  LESSON_TYPE_LABELS,
   normalizeStudentLessonHistoryRequest,
   parseLessonLedgerRows,
   readLessonLedgerRows,
@@ -40,8 +44,15 @@ function buildLedgerDoc(overrides: Partial<LessonLedgerDayDocLike> = {}): Lesson
 }
 
 describe('アプリ側パーサとのパリティ（複製がズレたら落ちる）', () => {
-  it('同じ台帳行から同じイベント配列を作る', () => {
+  it('授業種別ラベル表(LESSON_TYPE_LABELS)がキー・値ともに scheduleLessonTypeLabels と一致する', () => {
+    expect(LESSON_TYPE_LABELS).toEqual(scheduleLessonTypeLabels)
+  })
+
+  it('同じ台帳行から同じイベント配列を作る（extra/trial を含む全種別で検査）', () => {
     expect(parseLessonLedgerRows(lessonHistoryFixtureRows)).toEqual(appParseLessonLedgerRows(lessonHistoryFixtureRows))
+    // fixture に含まれる全種別トークンを実際に展開し、両実装のラベルが一致することを直接確認する。
+    const lessonTypes = new Set(parseLessonLedgerRows(lessonHistoryFixtureRows).map((event) => event.lessonType).filter(Boolean))
+    expect(Array.from(lessonTypes).sort()).toEqual(['extra', 'makeup', 'regular', 'special', 'trial'])
   })
 
   it('期間フィルタ・期間の丸めも同じ結果', () => {

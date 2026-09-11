@@ -3,10 +3,12 @@
 // ここが壊れると別タブは 20 秒沈黙してから「本体から応答がありません」になる（原因が見えない）。
 import { describe, expect, it } from 'vitest'
 import {
+  LESSON_HISTORY_CLASSROOM_MISMATCH_ERROR,
   SCHEDULE_LESSON_HISTORY_REQUEST_MESSAGE_TYPE,
   SCHEDULE_LESSON_HISTORY_RESULT_MESSAGE_TYPE,
   buildScheduleLessonHistoryResultMessage,
   formatLessonHistoryErrorMessage,
+  isLessonHistoryClassroomMismatch,
   normalizeStudentLessonHistoryResponse,
   parseScheduleLessonHistoryRequestMessage,
   resolveLessonHistoryStudentId,
@@ -20,30 +22,50 @@ describe('parseScheduleLessonHistoryRequestMessage', () => {
     expect(parseScheduleLessonHistoryRequestMessage({ type: 'schedule-range-update', personId: 'stu-1' })).toBeNull()
   })
 
-  it('requestId / personId / 期間を取り出す', () => {
+  it('requestId / personId / 期間 / classroomId を取り出す', () => {
     expect(parseScheduleLessonHistoryRequestMessage({
       type: SCHEDULE_LESSON_HISTORY_REQUEST_MESSAGE_TYPE,
       requestId: 'lh-1',
       personId: ' stu-1 ',
       from: '2026-01-01',
       to: '2026-09-12',
-    })).toEqual({ requestId: 'lh-1', studentId: 'stu-1', from: '2026-01-01', to: '2026-09-12' })
+      classroomId: 'c1',
+    })).toEqual({ requestId: 'lh-1', studentId: 'stu-1', from: '2026-01-01', to: '2026-09-12', classroomId: 'c1' })
   })
 
-  it('日付が `YYYY-MM-DD` でなければ未指定（空文字）にしてサーバー既定へ倒す', () => {
+  it('日付が `YYYY-MM-DD` でなければ未指定（空文字）にしてサーバー既定へ倒す・classroomId 欠落は空文字', () => {
     const parsed = parseScheduleLessonHistoryRequestMessage({
       type: SCHEDULE_LESSON_HISTORY_REQUEST_MESSAGE_TYPE,
       personId: 'stu-1',
       from: '2026/01/01',
       to: 42,
     })
-    expect(parsed).toEqual({ requestId: '', studentId: 'stu-1', from: '', to: '' })
+    expect(parsed).toEqual({ requestId: '', studentId: 'stu-1', from: '', to: '', classroomId: '' })
   })
 
   it('personId は名簿 id をそのまま渡す（在庫キー `name:`/`manual:` 形もサーバー側が引けるので素通し）', () => {
     expect(resolveLessonHistoryStudentId('stu-1')).toBe('stu-1')
     expect(resolveLessonHistoryStudentId('name:山田太郎')).toBe('name:山田太郎')
     expect(resolveLessonHistoryStudentId(undefined)).toBe('')
+  })
+})
+
+describe('isLessonHistoryClassroomMismatch', () => {
+  it('要求時点の教室と現在の教室が一致すれば false', () => {
+    expect(isLessonHistoryClassroomMismatch('c1', 'c1')).toBe(false)
+  })
+
+  it('教室が切り替わっていれば true（教室分離・INV-08）', () => {
+    expect(isLessonHistoryClassroomMismatch('c1', 'c2')).toBe(true)
+  })
+
+  it('どちらかが空（未特定）ならフェイルクローズで true', () => {
+    expect(isLessonHistoryClassroomMismatch('', 'c1')).toBe(true)
+    expect(isLessonHistoryClassroomMismatch('c1', '')).toBe(true)
+  })
+
+  it('エラー文は利用者に「開き直して」と促す', () => {
+    expect(LESSON_HISTORY_CLASSROOM_MISMATCH_ERROR).toContain('開き直して')
   })
 })
 

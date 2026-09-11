@@ -17,6 +17,7 @@
 <!-- ここに編集内容を1行ずつ追記する -->
 - feat: 講習履歴(テーマ5)の土台。台帳トークンを日付順イベントへ展開する純関数 `src/utils/lessonHistory.ts` と、教室メンバー権限で `lessonLedgerDays` を読む callable `getStudentLessonHistory`(`functions/src/lessonLedgerHistory.ts`・期間は最大366日・読み取り専用)を追加(H-1/H-2)。
 - feat: 講習履歴を画面から使えるようにした(H-3/H-4)。生徒日程表タブ(別タブ)の「講習集計結果」の左に「講習履歴」ボタンを追加し、`schedule-lesson-history-request` → 本体が callable `getStudentLessonHistory` を中継 → `schedule-lesson-history-result` でタブ内オーバーレイに表示(期間指定・既定は終了日から1年・366日超は丸め、全授業種別のフィルタ、状態別集計、印刷)。台帳 `lessonLedgerDays` はクライアントから直接読めないため本体中継が唯一の経路(読み取りのみ)。表示は保存済みの記録のみである旨と保存時刻を画面に明記。機能フラグ `lessonHistory` は開発用教室のみ先行(`src/utils/lessonHistoryMessage.ts` / `src/utils/scheduleHtml.ts` / `ScheduleBoardScreen.tsx` / `adminFunctions.ts`)
+- fix: 講習履歴のレビュー追修正(INV-08: 教室分離は callable 側のメンバー判定＋教室ID突き合わせの二段構え)。要求メッセージに要求元タブの教室(`DATA.classroomStorageKey`)を載せ、本体側で現在開いている教室と不一致なら callable を呼ばず「教室が切り替わっています」で弾く(`isLessonHistoryClassroomMismatch`)。応答受信側(別タブ)でも `history.classroomId` を突き合わせて不一致なら破棄。加えて (a) 授業種別ラベルの正本 `scheduleLessonTypeLabels` を functions 側複製・埋め込みJSの種別フィルタとパリティテストで一致保証し、フィルタは未知種別を無言で消さず常に表示、(b) 期間の逆転入力は「入れ替え」に統一(サーバー/埋め込みJS/純関数の3者で規則を揃える)、(c) 台帳日付キーのサーバークエリに `isLessonHistoryDateKey` の妥当性チェックを追加、(d) `lessonHistoryEnabled` フラグ OFF では中継 useEffect 自体を早期リターン、(e) 印刷タブは `document.close()` 後に `focus()/print()` を呼ぶ(`src/utils/lessonHistoryMessage.ts` / `functions/src/lessonLedgerHistory.ts` / `functions/src/index.ts` / `ScheduleBoardScreen.tsx` / `src/utils/scheduleHtml.ts`)
 
 ## v1.5.501 (2026-09-12)
 

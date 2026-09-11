@@ -23,7 +23,7 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, normalizeDeveloperReport, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
-import { handleGetStudentLessonHistory, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
+import { handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
   compressBackupJson,
   GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX,
@@ -1724,16 +1724,18 @@ export const getStudentLessonHistory = onCall({ invoker: 'public', timeoutSecond
     invalidArgument: (message) => new HttpsError('invalid-argument', message),
     todayJst: toJstDateKeyFromIso(new Date().toISOString()),
     loadLatestLedgerDoc: async ({ workspaceKey, classroomId, to }) => {
-      // 保存が無い日は文書が無いので「to 以前で最新」を 1 件だけ読む(文書 ID = YYYY-MM-DD)。
+      // 保存が無い日は文書が無いので「to 以前で最新」を読む(文書 ID = YYYY-MM-DD)。
+      // ★ selectLessonLedgerDateKey と同じ規則(isLessonHistoryDateKey で不正 ID を除外してから最新を選ぶ)。
+      //   通常は先頭が有効な日付キーのはずだが、念のため数件見て最初の有効な物を使う(捨てて null にしない)。
       const snapshot = await firestore
         .collection('workspaces').doc(workspaceKey)
         .collection('classroomSnapshots').doc(classroomId)
         .collection('lessonLedgerDays')
         .where(FieldPath.documentId(), '<=', to)
         .orderBy(FieldPath.documentId(), 'desc')
-        .limit(1)
+        .limit(5)
         .get()
-      const doc = snapshot.docs[0]
+      const doc = snapshot.docs.find((candidate) => isLessonHistoryDateKey(candidate.id))
       return doc ? ({ ...(doc.data() as LessonLedgerDayDocLike), dateKey: doc.id }) : null
     },
   })

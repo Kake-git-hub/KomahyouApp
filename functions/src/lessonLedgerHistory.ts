@@ -28,8 +28,12 @@ export const LESSON_HISTORY_STATUS_LABELS: Record<LessonHistoryStatus, string> =
   makeupRemaining: '未消化',
 }
 
-/** 授業種別ラベル（src/utils/scheduleViewData.ts の scheduleLessonTypeLabels と同値）。 */
-const LESSON_TYPE_LABELS: Record<string, string> = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習', trial: '体験' }
+/**
+ * 授業種別ラベル。正本は src/utils/scheduleViewData.ts の scheduleLessonTypeLabels（キー・値ともに同値）。
+ * ⚠️ functions は rootDir=src の別 TS プロジェクトでアプリ側 src/ を import できないため複製。
+ *   一致は functions/src/lessonLedgerHistory.test.ts のパリティテストが守る（片方だけ変えない）。
+ */
+export const LESSON_TYPE_LABELS: Record<string, string> = { extra: '増コマ', regular: '通常', makeup: '振替', special: '講習', trial: '体験' }
 
 export type LessonLedgerHistoryRow = {
   studentId?: string | null
@@ -206,13 +210,17 @@ export function countLessonHistoryDays(from: string, to: string): number {
   return Math.floor((toMs - fromMs) / (24 * 60 * 60 * 1000)) + 1
 }
 
-/** 期間の正規化（366 日超は終了日基準で丸める・逆転や不正日付は安全側へ）。 */
+/** 期間の正規化（366 日超は終了日基準で丸める・逆転は入れ替え・不正日付は安全側へ）。 */
 export function resolveLessonHistoryRange(params: { from?: string; to?: string; today: string; maxDays?: number }): { from: string; to: string; clamped: boolean } {
   const maxDays = params.maxDays ?? LESSON_HISTORY_MAX_DAYS
   const today = isLessonHistoryDateKey(params.today) ? params.today : ''
-  const to = isLessonHistoryDateKey(params.to) ? params.to : today
-  const requestedFrom = isLessonHistoryDateKey(params.from) ? params.from : addDaysToDateKey(to, -(maxDays - 1))
-  const from = requestedFrom > to ? to : requestedFrom
+  let to = isLessonHistoryDateKey(params.to) ? params.to : today
+  let from = isLessonHistoryDateKey(params.from) ? params.from : addDaysToDateKey(to, -(maxDays - 1))
+  if (from > to) {
+    const swap = from
+    from = to
+    to = swap
+  }
   if (countLessonHistoryDays(from, to) > maxDays) {
     return { from: addDaysToDateKey(to, -(maxDays - 1)), to, clamped: true }
   }

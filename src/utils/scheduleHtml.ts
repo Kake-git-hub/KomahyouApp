@@ -7258,6 +7258,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       let lessonHistoryErrorText = '';
       let lessonHistoryLoading = false;
       let lessonHistoryTypeFilter = LESSON_HISTORY_TYPE_OPTIONS.map(function(option) { return option.value; });
+      const LESSON_HISTORY_KNOWN_TYPES = LESSON_HISTORY_TYPE_OPTIONS.map(function(option) { return option.value; });
 
       function shiftLessonHistoryDateKey(dateKey, days) {
         const base = new Date(String(dateKey) + 'T00:00:00');
@@ -7307,7 +7308,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function getLessonHistoryFilteredEvents() {
         if (!lessonHistoryData || !Array.isArray(lessonHistoryData.events)) return [];
         return lessonHistoryData.events.filter(function(event) {
-          return lessonHistoryTypeFilter.indexOf(String(event.lessonType || '')) >= 0;
+          const type = String(event.lessonType || '');
+          // 未知の種別(このオーバーレイがまだ知らない将来の授業種別)は常に通す。
+          // 既知種別だけをチェックボックスで絞り込む(記録が無言で消えないため)。
+          if (LESSON_HISTORY_KNOWN_TYPES.indexOf(type) < 0) return true;
+          return lessonHistoryTypeFilter.indexOf(type) >= 0;
         });
       }
 
@@ -7413,6 +7418,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         printWindow.document.open();
         printWindow.document.write(buildLessonHistoryPrintHtml());
         printWindow.document.close();
+        try {
+          printWindow.focus();
+          printWindow.print();
+        } catch (error) {
+          // 印刷ダイアログを開けなくても、生成したタブ自体は残る(手動で印刷できる)。
+        }
       }
 
       function requestLessonHistory(fromValue, toValue) {
@@ -7431,7 +7442,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           requestId: lessonHistoryRequestId,
           personId: personSelect ? (personSelect.value || appliedPersonId || '') : (appliedPersonId || ''),
           from: range.from,
-          to: range.to
+          to: range.to,
+          classroomId: String(DATA.classroomStorageKey || '')
         }, '*');
         if (lessonHistoryResultTimer) window.clearTimeout(lessonHistoryResultTimer);
         // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即差し替わる。
@@ -7448,8 +7460,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         if (lessonHistoryResultTimer) { window.clearTimeout(lessonHistoryResultTimer); lessonHistoryResultTimer = 0; }
         lessonHistoryLoading = false;
         if (message.ok) {
-          lessonHistoryData = message.history || null;
-          lessonHistoryErrorText = lessonHistoryData ? '' : '講習履歴を取得できませんでした。';
+          const history = message.history || null;
+          // 教室が切り替わった後に届いた古い応答は表示しない(教室分離・INV-08)。
+          if (history && String(history.classroomId || '') !== String(DATA.classroomStorageKey || '')) {
+            lessonHistoryData = null;
+            lessonHistoryErrorText = '教室が切り替わっています。日程表を開き直してください。';
+          } else {
+            lessonHistoryData = history;
+            lessonHistoryErrorText = lessonHistoryData ? '' : '講習履歴を取得できませんでした。';
+          }
         } else {
           lessonHistoryErrorText = String(message.message || '講習履歴を取得できませんでした。');
         }

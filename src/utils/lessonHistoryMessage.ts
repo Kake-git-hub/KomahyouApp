@@ -29,6 +29,12 @@ export type ScheduleLessonHistoryRequest = {
   /** 期間（`YYYY-MM-DD` 以外は空文字＝未指定。既定期間はサーバーが決める）。 */
   from: string
   to: string
+  /**
+   * 別タブが日程表を開いた時点の教室（`DATA.classroomStorageKey`）。
+   * 本体側で「現在開いている教室」と突き合わせ、教室が切り替わっていたら callable を呼ばずに弾く
+   * （教室分離・INV-08）。
+   */
+  classroomId: string
 }
 
 /**
@@ -51,15 +57,27 @@ function readDateKey(value: unknown): string {
 /** 別タブからの要求メッセージを検証する。type が違えば null（他のメッセージを食わない）。 */
 export function parseScheduleLessonHistoryRequestMessage(message: unknown): ScheduleLessonHistoryRequest | null {
   if (!message || typeof message !== 'object') return null
-  const candidate = message as { type?: unknown; requestId?: unknown; personId?: unknown; from?: unknown; to?: unknown }
+  const candidate = message as { type?: unknown; requestId?: unknown; personId?: unknown; from?: unknown; to?: unknown; classroomId?: unknown }
   if (candidate.type !== SCHEDULE_LESSON_HISTORY_REQUEST_MESSAGE_TYPE) return null
   return {
     requestId: typeof candidate.requestId === 'string' ? candidate.requestId.slice(0, 80) : '',
     studentId: resolveLessonHistoryStudentId(candidate.personId),
     from: readDateKey(candidate.from),
     to: readDateKey(candidate.to),
+    classroomId: typeof candidate.classroomId === 'string' ? candidate.classroomId.trim() : '',
   }
 }
+
+/**
+ * 別タブが要求した教室と、本体が現在開いている教室が一致するか。
+ * ズレていれば教室が切り替わった後の要求＝別教室のデータを読ませない（教室分離・INV-08）。
+ * どちらか一方でも空（未特定）なら「一致しない」扱い（フェイルクローズ）。
+ */
+export function isLessonHistoryClassroomMismatch(requestClassroomId: string, currentClassroomId: string): boolean {
+  return !requestClassroomId || !currentClassroomId || requestClassroomId !== currentClassroomId
+}
+
+export const LESSON_HISTORY_CLASSROOM_MISMATCH_ERROR = '教室が切り替わっています。日程表を開き直してください。'
 
 export type ScheduleLessonHistoryResultMessage =
   | { type: typeof SCHEDULE_LESSON_HISTORY_RESULT_MESSAGE_TYPE; requestId: string; ok: true; history: StudentLessonHistoryResponse }

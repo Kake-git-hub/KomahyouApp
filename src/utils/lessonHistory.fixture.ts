@@ -54,4 +54,18 @@ export const lessonHistoryFixtureRows: LessonHistoryFixtureRow[] = [
     absentNoMakeup: [],
     placed: [],
   },
+  // 授業種別ラベル表(scheduleLessonTypeLabels)の全キーがパリティテストに含まれるよう、
+  // extra(増コマ)/trial(体験)のトークンを持つ行を別生徒で追加(既存生徒の期間・並びには影響させない)。
+  {
+    studentId: 's002',
+    studentKey: 's002',
+    name: '佐藤 次郎',
+    subject: '社',
+    makeupBalance: 0,
+    makeupRemaining: [],
+    attended: ['2026-10-15#2|extra', '2026-10-20#3|trial'],
+    absent: [],
+    absentNoMakeup: [],
+    placed: [],
+  },
 ]

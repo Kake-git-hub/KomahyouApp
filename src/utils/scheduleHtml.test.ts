@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml , resolveDisplayedOverlappingSession } from './scheduleHtml'
-import { buildTeacherAssignments, collectTeacherAssignmentEntries } from './scheduleViewData'
+import { buildTeacherAssignments, collectTeacherAssignmentEntries, scheduleLessonTypeLabels } from './scheduleViewData'
 import { computeTeacherMove } from '../components/schedule-board/ScheduleBoardScreen'
 import type { StudentRow, TeacherRow } from '../components/basic-data/basicDataModel'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
@@ -4640,6 +4640,50 @@ describe('scheduleHtml 講習履歴', () => {
     expect(api.countLessonHistoryDays(clamped.from, clamped.to)).toBe(366)
     // 逆転入力は入れ替える。
     expect(api.clampLessonHistoryRange('2026-09-12', '2026-09-01')).toEqual({ from: '2026-09-01', to: '2026-09-12', clamped: false })
+
+    vi.unstubAllGlobals()
+  })
+
+  it('種別フィルタの選択肢(value)は scheduleLessonTypeLabels の全キーを含む(未知種別なしの一元化)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+    const match = html.match(/const LESSON_HISTORY_TYPE_OPTIONS = (\[[\s\S]*?\]);/)
+    expect(match).toBeTruthy()
+    const optionValues = new Set(Array.from(match![1].matchAll(/value: '([^']*)'/g)).map((entry) => entry[1]))
+    for (const type of Object.keys(scheduleLessonTypeLabels)) {
+      expect(optionValues.has(type)).toBe(true)
+    }
+
+    vi.unstubAllGlobals()
+  })
+
+  it('未知の授業種別イベントはチェックボックス絞り込みに関わらず常に表示する(無言で消えない)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('if (LESSON_HISTORY_KNOWN_TYPES.indexOf(type) < 0) return true;')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('要求メッセージに開いている教室(classroomId)を載せ、応答の教室が食い違えば破棄する', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true, classroomStorageKey: 'classroom-1' })
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain("classroomId: String(DATA.classroomStorageKey || '')")
+    // 教室分離(INV-08): 応答の classroomId が現在の教室と違えば「開き直して」と表示し、履歴を捨てる。
+    expect(html).toContain("if (history && String(history.classroomId || '') !== String(DATA.classroomStorageKey || '')) {")
+    expect(html).toContain('教室が切り替わっています。日程表を開き直してください。')
+
+    vi.unstubAllGlobals()
+  })
+
+  it('印刷は生成タブの close 後に focus/print を呼ぶ(自動で印刷ダイアログを開く)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('printWindow.document.close();\n        try {\n          printWindow.focus();\n          printWindow.print();')
 
     vi.unstubAllGlobals()
   })

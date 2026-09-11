@@ -97,7 +97,8 @@ describe('filterLessonHistory / summarizeLessonHistory', () => {
   })
 
   it('件数を状態別に集計する', () => {
-    expect(summarizeLessonHistory(events)).toEqual({ attended: 4, absent: 2, absentNoMakeup: 1, placed: 4, makeupRemaining: 3, total: 14 })
+    // 佐藤次郎(extra/trial トークンの行)の attended 2 件を含む(全生徒・全科目の合算)。
+    expect(summarizeLessonHistory(events)).toEqual({ attended: 6, absent: 2, absentNoMakeup: 1, placed: 4, makeupRemaining: 3, total: 16 })
   })
 })
 
@@ -113,8 +114,9 @@ describe('resolveLessonHistoryRange', () => {
     })
   })
 
-  it('逆転・不正な日付は安全側へ倒す', () => {
-    expect(resolveLessonHistoryRange({ from: '2026-09-20', to: '2026-09-10', today: '2026-09-12' })).toEqual({ from: '2026-09-10', to: '2026-09-10', clamped: false })
+  it('逆転は入れ替え・不正な日付は安全側へ倒す', () => {
+    // 埋め込みJS(clampLessonHistoryRange)・サーバー(functions/src/lessonLedgerHistory.ts)と同じ規則。
+    expect(resolveLessonHistoryRange({ from: '2026-09-20', to: '2026-09-10', today: '2026-09-12' })).toEqual({ from: '2026-09-10', to: '2026-09-20', clamped: false })
     expect(resolveLessonHistoryRange({ from: 'いつか', to: '2026/09/10', today: '2026-09-12' })).toEqual({ from: '2025-09-12', to: '2026-09-12', clamped: false })
   })
 })

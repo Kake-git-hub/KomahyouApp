@@ -265,15 +265,20 @@ export function countLessonHistoryDays(from: string, to: string): number {
 /**
  * 入力された期間を正規化する。
  * - `to` が不正なら `today`、`from` が不正なら「to から 1 年前」。
- * - 逆転していたら `from = to`。
+ * - **逆転していたら入れ替える**（別タブ埋め込みJSの clampLessonHistoryRange と同じ規則。
+ *   片方だけ変えないこと）。
  * - **366 日を超えたら from を切り上げる**（終了日を基準に直近 366 日へ丸める・上限超過でエラーにしない）。
  */
 export function resolveLessonHistoryRange(params: { from?: string; to?: string; today: string; maxDays?: number }): { from: string; to: string; clamped: boolean } {
   const maxDays = params.maxDays ?? LESSON_HISTORY_MAX_DAYS
   const today = isLessonHistoryDateKey(params.today) ? params.today : ''
-  const to = isLessonHistoryDateKey(params.to) ? params.to : today
-  const requestedFrom = isLessonHistoryDateKey(params.from) ? params.from : addDaysToDateKey(to, -(maxDays - 1))
-  const from = requestedFrom > to ? to : requestedFrom
+  let to = isLessonHistoryDateKey(params.to) ? params.to : today
+  let from = isLessonHistoryDateKey(params.from) ? params.from : addDaysToDateKey(to, -(maxDays - 1))
+  if (from > to) {
+    const swap = from
+    from = to
+    to = swap
+  }
   const span = countLessonHistoryDays(from, to)
   if (span > maxDays) {
     return { from: addDaysToDateKey(to, -(maxDays - 1)), to, clamped: true }

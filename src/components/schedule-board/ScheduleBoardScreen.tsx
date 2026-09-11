@@ -42,7 +42,7 @@ import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, open
 import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
-import { buildScheduleLessonHistoryResultMessage, formatLessonHistoryErrorMessage, parseScheduleLessonHistoryRequestMessage, type ScheduleLessonHistoryResultMessage } from '../../utils/lessonHistoryMessage'
+import { buildScheduleLessonHistoryResultMessage, formatLessonHistoryErrorMessage, isLessonHistoryClassroomMismatch, LESSON_HISTORY_CLASSROOM_MISMATCH_ERROR, parseScheduleLessonHistoryRequestMessage, type ScheduleLessonHistoryResultMessage } from '../../utils/lessonHistoryMessage'
 import { fetchStudentLessonHistoryViaFunction } from '../../integrations/firebase/adminFunctions'
 
 const boardDayLabels = ['月', '火', '水', '木', '金', '土', '日'] as const
@@ -5897,6 +5897,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   //   クライアントからは一切読めない。ここを消す/Firestore 直読みに変えると履歴が常に空になる。
   // ★ 読み取り専用。ここから Firestore へ書き込む処理を足さないこと(本番データ保護ルール)。
   useEffect(() => {
+    // フラグ OFF の教室では中継自体を止める(ボタンは出ないが、念のため要求を受けても callable を呼ばない)。
+    if (!lessonHistoryEnabled) return
     const handleLessonHistoryRequest = (event: MessageEvent) => {
       const request = parseScheduleLessonHistoryRequestMessage(event.data)
       if (!request) return
@@ -5916,13 +5918,22 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         }))
         return
       }
+      // 別タブが要求した時点の教室 ≠ 現在開いている教室なら callable を呼ばずに弾く(教室分離・INV-08)。
+      // タブを開いたまま別教室へ切り替えた後の古い要求で、別教室のデータを読ませないためのガード。
+      if (isLessonHistoryClassroomMismatch(request.classroomId, classroomId)) {
+        reply(buildScheduleLessonHistoryResultMessage({
+          requestId: request.requestId,
+          result: { ok: false, error: LESSON_HISTORY_CLASSROOM_MISMATCH_ERROR },
+        }))
+        return
+      }
       void fetchStudentLessonHistoryViaFunction({ classroomId, studentId: request.studentId, from: request.from, to: request.to })
         .then((history) => reply(buildScheduleLessonHistoryResultMessage({ requestId: request.requestId, result: { ok: true, history } })))
         .catch((error) => reply(buildScheduleLessonHistoryResultMessage({ requestId: request.requestId, result: { ok: false, error: formatLessonHistoryErrorMessage(error) } })))
     }
     window.addEventListener('message', handleLessonHistoryRequest)
     return () => window.removeEventListener('message', handleLessonHistoryRequest)
-  }, [classroomStorageKey])
+  }, [classroomStorageKey, lessonHistoryEnabled])
 
   const displayWeekDate = cells[0]?.dateKey ?? getReferenceDateKey(new Date())
   const currentGradeReferenceDate = getReferenceDateKey(new Date())
