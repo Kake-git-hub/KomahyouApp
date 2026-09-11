@@ -42,8 +42,9 @@ import { readBackupFileText } from './utils/backupFileText'
 import { SERVER_AUTO_BACKUP_ESTIMATED_RETAINED_COUNT } from './utils/backupRetentionEstimate'
 import { clearOperationEvents, restoreOperationEvents, setOperationLogClassroomId, takeOperationEvents } from './utils/operationLog'
 import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, setOperationTraceClassroomId } from './utils/operationTrace'
-import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource } from './utils/developerReport'
+import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
+import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
@@ -1572,6 +1573,14 @@ function AuthenticatedApp() {
   const acknowledgeAllSubmissions = useCallback(() => {
     setSubmissionAcknowledgements([])
   }, [])
+  // 開発用教室の「確認リスト」パネルの送信口。submitDeveloperReport はこの下で定義されるため、
+  // ref 越しに呼ぶ(識別子は安定させ、パネルの再描画を増やさない)。本番教室ではパネル自体を描画しない。
+  const submitDeveloperReportRef = useRef<((input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => Promise<DeveloperReportSubmitResult>) | null>(null)
+  const submitVerificationChecklistNote = useCallback(async (note: string): Promise<DeveloperReportSubmitResult> => {
+    const submit = submitDeveloperReportRef.current
+    if (!submit) return { ok: false as const, error: '送信の準備ができていません。' }
+    return submit({ source: 'board', category: 'request', note })
+  }, [])
   const renderWithSubmissionAcknowledgement = useCallback((content: ReactNode) => {
     // A1: 版数衝突(別端末が先に更新)で停止中は、全画面共通の警告バナーで再読み込みを促す。
     const staleConflictBanner = hasRemoteStaleConflict ? (
@@ -1594,11 +1603,24 @@ function AuthenticatedApp() {
     // C1: 遅延読み込み画面(配布/開発者/請求/バックアップ復元)の解決待ちを Suspense で受ける。
     const suspendedContent = <Suspense fallback={<ScreenLoadingFallback />}>{content}</Suspense>
 
-    if (submissionAcknowledgements.length === 0 && !staleConflictBanner) return <>{suspendedContent}</>
+    // 開発用教室だけの確認リスト(2026-09-12)。本番教室では isActingDevelopmentClassroom が false なので
+    // VerificationChecklistPanel を一切マウントしない(source-scan テストで固定)。画面分岐の外側に置き、
+    // 盤面・基本データ・開発者画面など全画面の最前面に出す。
+    const verificationChecklistPanel = isActingDevelopmentClassroom ? (
+      <VerificationChecklistPanel
+        key={actingClassroomId ?? 'none'}
+        classroomId={actingClassroomId}
+        classroomName={actingClassroom?.name}
+        onSubmitNote={submitVerificationChecklistNote}
+      />
+    ) : null
+
+    if (submissionAcknowledgements.length === 0 && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}</>
 
     return (
       <>
         {suspendedContent}
+        {verificationChecklistPanel}
         {staleConflictBanner}
         {submissionAcknowledgements.length > 0 && (
         <div className="submission-acknowledgement-overlay" role="presentation">
@@ -1648,7 +1670,7 @@ function AuthenticatedApp() {
         )}
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
@@ -3704,6 +3726,10 @@ function AuthenticatedApp() {
       return { ok: false as const, error: message }
     }
   }, [actingClassroomId, autoAssignRulesRef, boardStateRef, classroomSettingsRef, cleanSignatureRef, dataSignature, groupLessonsRef, hasHydratedSnapshot, lastSavedAtRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef])
+  // 確認リストのパネル(上で定義)から最新の submitDeveloperReport を呼べるようにする。
+  useLayoutEffect(() => {
+    submitDeveloperReportRef.current = submitDeveloperReport
+  }, [submitDeveloperReport])
   const openDeveloperReportModal = useCallback(() => {
     recordOperationTrace('navigation', '要望・報告モーダルを開く(盤面)')
     setDeveloperReportModal({ sending: false, resultMessage: null })
