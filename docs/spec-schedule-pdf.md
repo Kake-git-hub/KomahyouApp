@@ -112,6 +112,25 @@
 - 時間列は**中央寄せの大きい文字**（太字20px基準、縦回転ラベル）。
 - 生徒セル2行目は詰めて全文表示優先（必要時のみ段階縮小、**下限4.8px**）。可読性優先で下限は 4.8px（`PDF_STUDENT_MIN_FONT_SIZE`）とする（旧記載 4.5px を実装値 4.8px に訂正。2026-07-04 監査領域9 A2 確定・オーナー確認済み）。
 
+### I-0. 盤面PDFのコマ選択（曜日×時限を選んで出す）（2026-09-12 追加・plan-2026-09-11-five-requests §5）
+
+- 「PDF出力」を押すと**コマ選択モーダル**（`BoardPrintSelectionModal`）が開く。行＝時限・列＝**表示週の営業日**のチェック表。
+  **定休日（`isOpenDay=false`）は選択対象外**（列に出さない）。行頭（時限）・列頭（曜日）で一括トグル、全選択／全解除ボタンつき。
+- **初期状態は全選択＝これまでの「1週間まるごと」出力と完全に同一**（間引きを一切しない）。⚠️ この「全選択＝現状と同一出力」は
+  回帰防止の要で、`resolveBoardPrintSelection` の `isFullSelection` と `exportBoardPdfSelection` の委譲（全選択時は無改変の
+  `exportBoardPdf` を呼ぶ）で保証する。テスト `boardPrintSelection.test.ts` / `pdfBoardPrint.test.ts` で固定。
+- **空選択は出力不可**（「出力」ボタンを無効化）。
+- 出力側（`exportBoardPdfSelection`）の間引きは表示ルールを二重に持たないため **BoardGrid の DOM クローンに対して**行う
+  （`pruneBoardTableForSelection`）：(1) 未選択曜日は `<col>` 4 本・ヘッダー・集団行・本体セルを列ごと除去し、特別講習の帯セルは
+  残った曜日数で `colSpan` を組み直す (2) 未選択時限は行ごと除去（時限ラベルの `rowSpan` セルも同時に消える）
+  (3) 残った矩形の中で未選択のコマは**構造を残したまま空白化**（席番号は残し、講師・生徒セルの中身と黄色警告を消す）。
+  判定に使う `data-date-key` / `data-slot-number` / `data-date-keys` は `BoardGrid.tsx` が付ける（**描画は不変**）。
+- **用紙は A3 縦固定のまま**（オーナー確定 2026-09-11。A4 化・縦横自動選択はしない）。選択コマが少ないほど既存の
+  `renderScale`（アスペクト比維持の最大化）で自然に拡大される。合わせて `html2canvas` の解像度を選択数に応じて上げ
+  （`resolveBoardPrintCanvasScale`・上限 3・**全選択は従来の 1.1 固定**）、生徒文字の上限 34px を残した曜日数の比で緩める
+  （`resolveBoardPrintStudentMaxFontSize`・上限 72px・**全選択は 34px のまま**）。はみ出し判定は従来どおり効く。
+- 機能フラグ `boardPrintSelection`（`featureRollout.ts`）。**OFF の教室は従来どおりモーダルなしで即出力**する。開発用教室で先行検証。
+
 ### I-1. 日程表ポップアップの派生印刷（PDFとは別経路）（2026-07-04 監査領域9 B5 確定・オーナー確認済み）
 
 上記 PDF（コマ表グリッド本体のみ）とは別に、日程表ポップアップは次の3つの派生印刷を持つ：

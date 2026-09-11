@@ -36,7 +36,9 @@ import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, 
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
-import { exportBoardPdf, exportTemplateOverwriteReport } from '../../utils/pdf'
+import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport } from '../../utils/pdf'
+import { buildBoardPrintGrid, type BoardPrintSelection } from '../../utils/boardPrintSelection'
+import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
@@ -4968,6 +4970,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 別タブ日程表の自動同期(デバウンス)＋同期スピナーも staging/開発用教室のみ。本番3教室は従来どおり
   // 「最新表示」ボタン/開いた時のみ更新に保つ(オーナー確定 2026-07-09: メモリ負荷が本番大教室で未検証のため)。
   const scheduleAutoSyncEnabled = isFeatureEnabledForClassroom('schedulePopupAutoSync', { name: classroomName })
+  // 盤面PDFのコマ選択(A3縦は据え置き)。OFF の教室は従来どおりモーダルなしで表示週まるごと即出力する。
+  const boardPrintSelectionEnabled = isFeatureEnabledForClassroom('boardPrintSelection', { name: classroomName })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
@@ -5076,6 +5080,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
+  const [isBoardPrintSelectionOpen, setIsBoardPrintSelectionOpen] = useState(false)
   const [distributionQrModal, setDistributionQrModal] = useState<{ url: string; svg: string; isLoading: boolean } | null>(null)
   const [isTemplateMode, setIsTemplateMode] = useState(false)
   // テンプレモードに入ったら丸ごと振替の選択モードは解除する(戻ったとき古い振替元で突然復活させない)。
@@ -10377,7 +10382,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       : `${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, studentMenu.deskIndex)} のメモを削除しました。`)
   }
 
-  const handlePrintPdf = async () => {
+  // selection = null は従来どおりの「表示週まるごと」出力(exportBoardPdf・無改変の経路)。
+  const runPrintPdf = async (selection: BoardPrintSelection | null) => {
     if (!boardExportRef.current) {
       setStatusMessage('PDF出力対象が見つかりませんでした。')
       return
@@ -10385,17 +10391,29 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     try {
       setIsPrintingPdf(true)
-      await exportBoardPdf({
+      const params = {
         element: boardExportRef.current,
         fileName: `${weekScheduleTitle}.pdf`,
         title: weekScheduleTitle,
-      })
-      setStatusMessage('コマ表を PDF 出力しました。')
+      }
+      if (selection) await exportBoardPdfSelection(params, selection)
+      else await exportBoardPdf(params)
+      setStatusMessage(selection && !selection.isFullSelection
+        ? `コマ表を PDF 出力しました（選択 ${selection.selectedCellCount} コマ）。`
+        : 'コマ表を PDF 出力しました。')
     } catch (error) {
       setStatusMessage(`PDF出力に失敗しました: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setIsPrintingPdf(false)
     }
+  }
+
+  const handlePrintPdf = async () => {
+    if (boardPrintSelectionEnabled) {
+      setIsBoardPrintSelectionOpen(true)
+      return
+    }
+    await runPrintPdf(null)
   }
 
   const handleCopyDistributionUrl = async () => {
@@ -11471,6 +11489,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   return (
     <div className="page-shell page-shell-board-only">
+      {isBoardPrintSelectionOpen ? (
+        <BoardPrintSelectionModal
+          grid={buildBoardPrintGrid(cells)}
+          weekLabel={weekScheduleTitle}
+          isPrinting={isPrintingPdf}
+          onCancel={() => setIsBoardPrintSelectionOpen(false)}
+          onSubmit={(selection) => {
+            setIsBoardPrintSelectionOpen(false)
+            void runPrintPdf(selection)
+          }}
+        />
+      ) : null}
       {distributionQrModal ? (
         <div className="distribution-qr-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setDistributionQrModal(null) }}>
           <div className="distribution-qr-modal" role="dialog" aria-modal="true" aria-label="講師日程共有 QR" data-testid="distribution-qr-modal">

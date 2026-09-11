@@ -356,6 +356,8 @@ function BoardGridComponent({
         data-cell-id={cell.id}
         data-desk-index={deskIndex}
         data-student-index={studentIndex}
+        data-date-key={cell.dateKey}
+        data-slot-number={cell.slotNumber}
         data-testid={`student-cell-${cell.id}-${deskIndex}-${studentIndex}`}
       >
         <div className="sa-student-inner">
@@ -465,9 +467,11 @@ function BoardGridComponent({
     .filter((period): period is { id: string; label: string; startIndex: number; endIndex: number } => period !== null)
     .sort((left, right) => left.startIndex - right.startIndex)
 
+  // 盤面PDFのコマ選択(docs/spec-schedule-pdf.md §I)で帯セルの colSpan を再計算できるよう、
+  // 各セグメントがまたぐ曜日キーを保持して data-date-keys 属性に出す(描画は不変)。
   const specialPeriodSegments: Array<
-    | { type: 'gap'; key: string; colSpan: number }
-    | { type: 'band'; key: string; colSpan: number; label: string }
+    | { type: 'gap'; key: string; colSpan: number; dateKeys: string[] }
+    | { type: 'band'; key: string; colSpan: number; label: string; dateKeys: string[] }
   > = []
   let dayCursor = 0
   for (const period of specialPeriodSpans) {
@@ -477,6 +481,7 @@ function BoardGridComponent({
         type: 'gap',
         key: `gap_${dayCursor}`,
         colSpan: (startIndex - dayCursor) * 4,
+        dateKeys: days.slice(dayCursor, startIndex).map((day) => day.dateKey),
       })
     }
 
@@ -488,6 +493,7 @@ function BoardGridComponent({
       key: period.id,
       colSpan: daySpan * 4,
       label: period.label,
+      dateKeys: days.slice(startIndex, period.endIndex + 1).map((day) => day.dateKey),
     })
     dayCursor = period.endIndex + 1
   }
@@ -497,6 +503,7 @@ function BoardGridComponent({
       type: 'gap',
       key: `gap_tail_${dayCursor}`,
       colSpan: (days.length - dayCursor) * 4,
+      dateKeys: days.slice(dayCursor).map((day) => day.dateKey),
     })
   }
 
@@ -513,9 +520,9 @@ function BoardGridComponent({
               <tr className="sa-period-row" data-testid="board-special-periods">
                 <th className="sa-time-col"></th>
                 {specialPeriodSegments.map((segment) => (segment.type === 'gap'
-                  ? <th key={segment.key} colSpan={segment.colSpan} className="sa-period-gap"></th>
+                  ? <th key={segment.key} colSpan={segment.colSpan} className="sa-period-gap" data-date-keys={segment.dateKeys.join(',')}></th>
                   : (
-                    <th key={segment.key} colSpan={segment.colSpan} className="sa-period-band" data-testid={`board-special-period-${segment.key}`}>
+                    <th key={segment.key} colSpan={segment.colSpan} className="sa-period-band" data-date-keys={segment.dateKeys.join(',')} data-testid={`board-special-period-${segment.key}`}>
                       <div className="sa-period-band-button">
                         <span className="sa-period-band-inner">{segment.label}</span>
                       </div>
@@ -530,6 +537,7 @@ function BoardGridComponent({
                   key={day.dateKey}
                   colSpan={4}
                   className={`sa-day-header sa-day-group-header${day.isOpenDay ? '' : ' sa-day-inactive'}${highlightedHolidayDate === day.dateKey ? ' sa-day-header-picked' : ''}`}
+                  data-date-key={day.dateKey}
                   data-testid={`day-header-${day.dateKey}`}
                   onClick={(e) => onDayHeaderClick(day.dateKey, e.clientX, e.clientY)}
                 >
@@ -540,10 +548,10 @@ function BoardGridComponent({
             <tr className={`sa-header-row2${specialPeriodSegments.length > 0 ? ' has-periods' : ''}`}>
               <th className="sa-time-sub-header"></th>
               {days.flatMap((day) => ([
-                <th key={`${day.dateKey}_seat`} className={`sa-sub-header sa-seat-header sa-day-group-start${day.isOpenDay ? '' : ' sa-day-inactive'}`}>席</th>,
-                <th key={`${day.dateKey}_teacher`} className={`sa-sub-header${day.isOpenDay ? '' : ' sa-day-inactive'}`}>講師</th>,
-                <th key={`${day.dateKey}_student1`} className={`sa-sub-header${day.isOpenDay ? '' : ' sa-day-inactive'}`}>生徒</th>,
-                <th key={`${day.dateKey}_student2`} className={`sa-sub-header sa-day-group-end${day.isOpenDay ? '' : ' sa-day-inactive'}`}>生徒</th>,
+                <th key={`${day.dateKey}_seat`} className={`sa-sub-header sa-seat-header sa-day-group-start${day.isOpenDay ? '' : ' sa-day-inactive'}`} data-date-key={day.dateKey}>席</th>,
+                <th key={`${day.dateKey}_teacher`} className={`sa-sub-header${day.isOpenDay ? '' : ' sa-day-inactive'}`} data-date-key={day.dateKey}>講師</th>,
+                <th key={`${day.dateKey}_student1`} className={`sa-sub-header${day.isOpenDay ? '' : ' sa-day-inactive'}`} data-date-key={day.dateKey}>生徒</th>,
+                <th key={`${day.dateKey}_student2`} className={`sa-sub-header sa-day-group-end${day.isOpenDay ? '' : ' sa-day-inactive'}`} data-date-key={day.dateKey}>生徒</th>,
               ]))}
             </tr>
           </thead>
@@ -560,15 +568,16 @@ function BoardGridComponent({
                   const baseKey = `group_${band}_${day.dateKey}`
                   const isSpecialDay = specialDayIndexSet.has(dayIndex) && day.isOpenDay
                   if (!isSpecialDay) {
-                    return [<td key={`${baseKey}_empty`} colSpan={4} className="sa-group-empty sa-inactive" />]
+                    return [<td key={`${baseKey}_empty`} colSpan={4} className="sa-group-empty sa-inactive" data-date-key={day.dateKey} />]
                   }
                   const entry = resolvedGroupClassEntries[groupClassEntryKey(day.dateKey, band)]
                   const hasSubject = Boolean(entry?.subject)
                   return [
-                    <td key={`${baseKey}_seat`} className="sa-seat-number sa-day-group-start sa-group-seat" />,
+                    <td key={`${baseKey}_seat`} className="sa-seat-number sa-day-group-start sa-group-seat" data-date-key={day.dateKey} />,
                     <td
                       key={`${baseKey}_teacher`}
                       className="sa-teacher sa-group-teacher"
+                      data-date-key={day.dateKey}
                       onClick={(event) => onGroupTeacherClick?.(day.dateKey, band, hasSubject, event.clientX, event.clientY)}
                       data-testid={`group-teacher-cell-${day.dateKey}-${band}`}
                     >
@@ -578,6 +587,7 @@ function BoardGridComponent({
                       key={`${baseKey}_subject`}
                       colSpan={2}
                       className={`sa-student sa-group-subject sa-day-group-end${hasSubject ? '' : ' sa-group-subject-empty'}`}
+                      data-date-key={day.dateKey}
                       onClick={(event) => onGroupSubjectClick?.(day.dateKey, band, hasSubject, event.clientX, event.clientY)}
                       data-testid={`group-subject-cell-${day.dateKey}-${band}`}
                     >
@@ -596,7 +606,7 @@ function BoardGridComponent({
                 const isLastDesk = deskIndex === deskCount - 1
 
                 return (
-                  <tr key={`${slotNumber}_${deskIndex}`} className={[isFirstDesk ? 'sa-slot-first' : '', isLastDesk ? 'sa-slot-last' : ''].filter(Boolean).join(' ')}>
+                  <tr key={`${slotNumber}_${deskIndex}`} className={[isFirstDesk ? 'sa-slot-first' : '', isLastDesk ? 'sa-slot-last' : ''].filter(Boolean).join(' ')} data-slot-number={slotNumber}>
                     {isFirstDesk ? (
                       <td className="sa-time-cell" rowSpan={deskCount}>
                         <div className="sa-time-cell-inner">
@@ -634,6 +644,8 @@ function BoardGridComponent({
                         <td
                           key={`${cell.id}_${deskIndex}_seat`}
                           className={`sa-seat-number sa-day-group-start${!cell.isOpenDay ? ' sa-inactive' : ''}`}
+                          data-date-key={cell.dateKey}
+                          data-slot-number={slotNumber}
                           data-testid={`seat-number-cell-${cell.id}-${deskIndex}`}
                         >
                           {cell.isOpenDay ? deskIndex + 1 : ''}
@@ -645,6 +657,8 @@ function BoardGridComponent({
                           onMouseDown={onTeacherMouseDown ? (event) => onTeacherMouseDown(cell.id, deskIndex, Boolean(cell.isOpenDay && desk.teacher.trim()), event.button, event.clientX, event.clientY) : undefined}
                           data-cell-id={cell.id}
                           data-desk-index={deskIndex}
+                          data-date-key={cell.dateKey}
+                          data-slot-number={slotNumber}
                           data-testid={`teacher-cell-${cell.id}-${deskIndex}`}
                         >
                           <div

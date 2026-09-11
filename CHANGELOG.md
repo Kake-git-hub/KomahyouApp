@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- feat: 盤面PDF出力に「コマ選択」を追加(曜日×時限のチェック表で選んだコマだけを A3 縦に最大化・初期状態は全選択＝従来と同一出力・定休日は選択不可・空選択は出力不可)。純関数 `src/utils/boardPrintSelection.ts` と DOM 間引き `pruneBoardTableForSelection`(`src/utils/pdf.ts`)を新設し、既存 `exportBoardPdf` は無改変の入口として残して全選択時はそこへ委譲する。機能フラグ `boardPrintSelection`(開発用教室のみ)・仕様は `docs/spec-schedule-pdf.md` §I-0
+- chore: 盤面PDFの DOM 間引き(`pruneBoardTableForSelection`)を合成テーブルで検証するため devDependency に `jsdom` を追加(対象テストのみ `// @vitest-environment jsdom`。既存のユニットは従来どおり node 環境)
 
 ## v1.5.501 (2026-09-12)
 
