@@ -190,6 +190,18 @@ GCP コンソール（プロジェクト `komahyouapp-prod`）で以下を付与
 - ロール **Cloud Scheduler 管理者**（`roles/cloudscheduler.admin`）… スケジュール関数（毎時/日次バックアップ・
   saveAttempts掃除）のジョブ更新に必要。2026-07-04 のデプロイで `cloudscheduler.jobs.update` の 403 が初出。
   **オーナーが付与するまで functions デプロイは赤になる**（付与後に Actions → Deploy Cloud Functions を再実行）。
+- ロール **ログ閲覧者**（`roles/logging.viewer`）… 関数の実行ログをスマホから読む手動ワークフロー
+  `.github/workflows/functions-logs.yml`（Actions →「Read Cloud Functions logs」）に必要。2026-09-12 の初回実行で
+  `PERMISSION_DENIED: Permission denied for all log views` を確認（**未付与**）。付与されるまで read-logs ジョブは赤。
+  同ワークフローの `diagnose_classroom` 入力（通常授業履歴のサーバー経路を Firestore 読み取りだけで再現する
+  `tools/lesson-history-diagnose.mjs`）は付与前でも動く。
+
+### 関数が「INTERNAL」しか返さないときの調べ方（2026-09-12 の教訓）
+- 画面の `INTERNAL` は「関数ハンドラが HttpsError 以外の例外を投げた」印。ログが読めないときは、まず**該当関数の
+  Firestore クエリを REST(runQuery)で同じ形に再現**する（`tools/lesson-history-diagnose.mjs` の作法）。
+  実例: `orderBy(FieldPath.documentId(), 'desc')` は複合インデックスが必要で `FAILED_PRECONDITION` になる
+  （単一フィールドの昇順/降順は自動索引があるので、並べ替えは `dateKey` などのフィールドで行う）。
+- callable では想定外の例外を原因文つきの `HttpsError('internal', …)` に包み、次回から画面に理由が出るようにする。
 
 ### 注意
 - デプロイ後は各端末で **ハードリロード（Ctrl+Shift+R）** を徹底（旧バンドルのキャッシュ事故防止）。

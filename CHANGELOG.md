@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.507 (2026-09-12)
+- docs: CLAUDE.md にサービスアカウントへの `roles/logging.viewer` 付与(未実施・関数ログ読み取りワークフロー用)と、関数が「INTERNAL」しか返さないときの調べ方(REST runQuery で再現・文書ID降順は複合インデックス必須)を追記(コード変更なし)
+
 ## v1.5.506 (2026-09-12)
 - fix(functions): 通常授業履歴が「取得できませんでした: INTERNAL」になる不具合を修正(確認リスト v1.5.504 h-2・Issue #63)。真因は callable `getStudentLessonHistory` の台帳クエリが文書 ID(`__name__`)の**降順**で並べていたこと。文書 ID の降順は Firestore の自動インデックスに無く、複合インデックス未作成のため FAILED_PRECONDITION「The query requires an index」で拒否され、firebase-functions が非 HttpsError を汎用「INTERNAL」に潰していた(`tools/lesson-history-diagnose.mjs` で再現・修正後は開発用教室の台帳 219 行/117 名で例外なしを確認)。並べ替えを台帳文書が必ず持つフィールド `dateKey`(単一フィールド索引は昇順・降順とも自動)に変更(`buildLatestLedgerQuery`・索引の追加デプロイ不要)。あわせて想定外の例外は原因文つきの `HttpsError('internal')` に包み、画面に理由が出るようにした(`toLessonHistoryHttpsError`・`functions/src/lessonLedgerHistory.ts` / `functions/src/index.ts`・回帰テスト追加)
 - fix: 盤面PDFコマ選択で「生徒のいる行だけ高く・空席の行は低い」と行高さが揃わない不具合を修正(確認リスト第2版 p-2/p-3・Issue #63)。緩めた文字上限(最大 72px)まで大きくなった生徒名 2 行が行を押し広げていたため、部分選択では生徒欄の内側(`.sa-student-inner`)を「机行の高さ − 上下 padding」に固定し(`lockStudentInnerHeightForPdf`)、生徒文字はその高さに収まるまで縮める。全選択(従来出力)は固定しない(`src/utils/pdf.ts` / `docs/spec-schedule-pdf.md`・回帰テスト追加)
