@@ -14,7 +14,7 @@
 // 出力には生徒名・科目などのデータを載せない(件数・例外・型だけ)。
 //
 // 使い方:
-//   FIRESTORE_ACCESS_TOKEN=... node tools/lesson-history-diagnose.mjs --classroom v8OZ7zH8vONNHjjYVcR1 [--student <id>] [--to YYYY-MM-DD]
+//   FIRESTORE_ACCESS_TOKEN=... node tools/lesson-history-diagnose.mjs --classroom v8OZ7zH8vONNHjjYVcR1 [--student <id>] [--to YYYY-MM-DD] [--legacy-name-order]
 //   (トークンが無ければ gcloud auth print-access-token を使う)
 import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
@@ -24,7 +24,7 @@ const DEFAULT_WORKSPACE_KEY = 'main'
 const DEFAULT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
 
 function parseArgs(argv) {
-  const options = { classroomId: DEFAULT_CLASSROOM_ID, studentId: '', from: '', to: '', project: DEFAULT_PROJECT_ID, workspaceKey: DEFAULT_WORKSPACE_KEY }
+  const options = { classroomId: DEFAULT_CLASSROOM_ID, studentId: '', from: '', to: '', project: DEFAULT_PROJECT_ID, workspaceKey: DEFAULT_WORKSPACE_KEY, legacyNameOrder: false }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (arg === '--classroom') { options.classroomId = argv[++index] ?? options.classroomId; continue }
@@ -33,6 +33,7 @@ function parseArgs(argv) {
     if (arg === '--to') { options.to = argv[++index] ?? ''; continue }
     if (arg === '--project') { options.project = argv[++index] ?? options.project; continue }
     if (arg === '--workspace') { options.workspaceKey = argv[++index] ?? options.workspaceKey; continue }
+    if (arg === '--legacy-name-order') { options.legacyNameOrder = true; continue }
   }
   return options
 }
@@ -66,20 +67,21 @@ export function findUnencodable(value, path = '$') {
   return [`${path}: 型 ${typeof value}`]
 }
 
-/** index.ts の loadLatestLedgerDoc と同じクエリ(REST 構造化クエリ表現)。 */
-export function buildLatestLedgerStructuredQuery({ project, workspaceKey, classroomId, to }) {
+/**
+ * index.ts の loadLatestLedgerDoc(= functions/src/lessonLedgerHistory.ts buildLatestLedgerQuery)と同じクエリの REST 表現。
+ * ★ 2026-09-12 の診断で、旧実装(文書 ID `__name__` の降順)は「The query requires an index」(FAILED_PRECONDITION)で
+ *   拒否されることを確認した(= 画面の INTERNAL の真因)。現行はフィールド dateKey の降順(単一フィールド索引は自動)。
+ *   `--legacy-name-order` を付けると旧クエリを投げて再現できる。
+ */
+export function buildLatestLedgerStructuredQuery({ project, workspaceKey, classroomId, to, legacyNameOrder = false }) {
   const snapshotPath = `projects/${project}/databases/(default)/documents/workspaces/${workspaceKey}/classroomSnapshots/${classroomId}`
+  const field = legacyNameOrder ? '__name__' : 'dateKey'
+  const value = legacyNameOrder ? { referenceValue: `${snapshotPath}/lessonLedgerDays/${to}` } : { stringValue: to }
   return {
     structuredQuery: {
       from: [{ collectionId: 'lessonLedgerDays' }],
-      where: {
-        fieldFilter: {
-          field: { fieldPath: '__name__' },
-          op: 'LESS_THAN_OR_EQUAL',
-          value: { referenceValue: `${snapshotPath}/lessonLedgerDays/${to}` },
-        },
-      },
-      orderBy: [{ field: { fieldPath: '__name__' }, direction: 'DESCENDING' }],
+      where: { fieldFilter: { field: { fieldPath: field }, op: 'LESS_THAN_OR_EQUAL', value } },
+      orderBy: [{ field: { fieldPath: field }, direction: 'DESCENDING' }],
       limit: 5,
     },
   }
@@ -96,7 +98,8 @@ async function main() {
   // 1. Firestore クエリの再現
   const parentPath = `workspaces/${options.workspaceKey}/classroomSnapshots/${options.classroomId}`
   const url = `https://firestore.googleapis.com/v1/projects/${options.project}/databases/(default)/documents/${parentPath}:runQuery`
-  const body = buildLatestLedgerStructuredQuery({ project: options.project, workspaceKey: options.workspaceKey, classroomId: options.classroomId, to: range.to })
+  const body = buildLatestLedgerStructuredQuery({ project: options.project, workspaceKey: options.workspaceKey, classroomId: options.classroomId, to: range.to, legacyNameOrder: options.legacyNameOrder })
+  console.log(`[query] ${options.legacyNameOrder ? '旧: __name__ 降順' : '現行: dateKey 降順'}`)
   const response = await fetch(url, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   const text = await response.text()
   if (!response.ok) {
