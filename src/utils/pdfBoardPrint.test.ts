@@ -34,6 +34,12 @@ vi.mock('jspdf', () => ({
 const {
   pruneBoardTableForSelection,
   exportBoardPdfSelection,
+  lockStudentInnerHeightForPdf,
+  studentInnerContentOverflows,
+  PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE,
+  singleLineTextOverflows,
+  clearGroupSubjectPlaceholdersForPdf,
+  PDF_GROUP_SUBJECT_EMPTY_CLASS,
 } = await import('./pdf')
 const {
   boardPrintCellKey,
@@ -109,7 +115,7 @@ function buildTable(options: { withColGroup?: boolean } = {}): HTMLElement {
     + dayKeys.map((dateKey) => [
       `<td class="sa-seat-number sa-day-group-start sa-group-seat" data-date-key="${dateKey}"></td>`,
       `<td class="sa-teacher sa-group-teacher" data-date-key="${dateKey}">集団講師</td>`,
-      `<td class="sa-student sa-group-subject sa-day-group-end" colspan="2" data-date-key="${dateKey}">理科</td>`,
+      `<td class="sa-student sa-group-subject sa-day-group-end${dateKey === '2026-09-14' ? '' : ' sa-group-subject-empty'}" colspan="2" data-date-key="${dateKey}"><div class="sa-group-subject-inner">${dateKey === '2026-09-14' ? '理科' : ''}</div></td>`,
     ].join('')).join('')
     + `</tr>`
 
@@ -305,5 +311,197 @@ describe('exportBoardPdfSelection (html2canvas/jsPDF はモック)', () => {
     // pruneBoardTableForSelection が走っていないことを DOM で確認(全曜日のヘッダーが残り、空白化もされていない)。
     expect(capturedElement.querySelectorAll('.sa-day-header')).toHaveLength(DAYS.length)
     expect(capturedElement.querySelectorAll('.sa-print-blank')).toHaveLength(0)
+  })
+
+  it('集団行の時限ラベル「集団」は横書き(回転しない)で出す・通常の時限ラベルは従来どおり縦回転(p-6)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, createInitialBoardPrintChecked(grid))
+
+    await exportBoardPdfSelection({ element, fileName: 'full.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const groupLabel = capturedElement.querySelector<HTMLElement>('.sa-group-time-cell .sa-group-time-label')
+    expect(groupLabel?.textContent).toBe('集団')
+    expect(groupLabel?.style.transform).toBe('')
+    const slotLabel = capturedElement.querySelector<HTMLElement>('tr[data-slot-number] .sa-time-cell > div')
+    expect(slotLabel?.style.transform).toBe('rotate(-90deg)')
+  })
+
+  it('講師名は nowrap + overflow hidden を付けてセルに収まるまで縮める前提を必ず作る(jsdom は寸法 0 なので初期値のまま・p-3)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, [boardPrintCellKey('2026-09-14', 1)])
+
+    await exportBoardPdfSelection({ element, fileName: 'one.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const names = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-teacher-name'))
+    expect(names.length).toBeGreaterThan(0)
+    expect(names.every((node) => node.style.whiteSpace === 'nowrap' && node.style.overflow === 'hidden')).toBe(true)
+  })
+
+  // 確認リスト第2版 p-2/p-3(Issue #63・2026-09-12): 生徒のいる行だけ文字に合わせて伸び、空席の行と高さが揃わなかった。
+  // 机行の生徒欄の内側を「机行の高さ − 上下 padding」に固定し、文字はその中に収まるまで縮める。
+  it('部分選択では机行の生徒欄の内側(.sa-student-inner)を行の高さに固定し overflow:hidden にする(集団行は据え置き)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, [boardPrintCellKey('2026-09-14', 1), boardPrintCellKey('2026-09-14', 2)])
+
+    await exportBoardPdfSelection({ element, fileName: 'partial.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const deskInners = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-student-inner'))
+    expect(deskInners.length).toBeGreaterThan(0)
+    // jsdom は寸法 0 → relief は {1,1,1} なので机行 62px − padding 4px = 58px。
+    expect(deskInners.every((node) => node.style.height === '58px' && node.style.maxHeight === '58px' && node.style.overflow === 'hidden' && node.style.boxSizing === 'border-box')).toBe(true)
+    // 集団行の生徒欄(理科など)は行の高さが違うので触らない。
+    const groupCells = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr.sa-group-row .sa-student'))
+    expect(groupCells.length).toBeGreaterThan(0)
+    expect(groupCells.every((node) => node.style.maxHeight === '')).toBe(true)
+  })
+
+  it('全選択(従来出力)では生徒欄の内側の高さを固定しない(p-1「従来と同じ」を保つ)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, createInitialBoardPrintChecked(grid))
+
+    await exportBoardPdfSelection({ element, fileName: 'full.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const inners = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-student-inner'))
+    expect(inners.length).toBeGreaterThan(0)
+    expect(inners.every((node) => node.style.height === '' && node.style.maxHeight === '')).toBe(true)
+  })
+
+  it('lockStudentInnerHeightForPdf は行の高さ(倍率適用後)から上下 padding を引いた高さにする', () => {
+    const table = buildTable()
+    lockStudentInnerHeightForPdf(table, 62 * 2)
+    const inner = table.querySelector<HTMLElement>('tr[data-slot-number] .sa-student-inner')
+    expect(inner?.style.height).toBe('120px')
+    lockStudentInnerHeightForPdf(table, 1)
+    expect(inner?.style.height).toBe('0px')
+  })
+
+  // 確認リスト第3版 p-2/p-3(v1.5.506 の結果・2026-09-13): 「文字が大きすぎてセルからはみ出ている」。
+  // 内側を固定高さにすると flex の子が押し潰されて scrollHeight が伸びず、はみ出し判定が一度も真にならなかった。
+  // 子の flex-shrink を 0 にし、判定は子の高さの合計 vs 固定高さで行う。
+  describe('固定した生徒欄の内側のはみ出し判定(第3版 p-2/p-3)', () => {
+    function buildInner(childHeights: number[], clientHeight: number, locked: boolean): HTMLElement {
+      const inner = document.createElement('div')
+      inner.className = 'sa-student-inner'
+      childHeights.forEach((height) => {
+        const child = document.createElement('div')
+        child.getBoundingClientRect = () => ({ height } as unknown as DOMRect)
+        inner.appendChild(child)
+      })
+      Object.defineProperty(inner, 'clientHeight', { value: clientHeight, configurable: true })
+      if (locked) inner.setAttribute(PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE, '1')
+      return inner
+    }
+
+    it('lockStudentInnerHeightForPdf は目印属性を付け、子の flex-shrink を 0 にする(押し潰されない)', () => {
+      const table = buildTable()
+      const inner = table.querySelector<HTMLElement>('tr[data-slot-number] .sa-student-inner')!
+      const nameRow = document.createElement('div')
+      nameRow.className = 'sa-student-name-row'
+      const detail = document.createElement('div')
+      detail.className = 'sa-student-detail'
+      inner.append(nameRow, detail)
+
+      lockStudentInnerHeightForPdf(table, 62)
+
+      expect(inner.getAttribute(PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE)).toBe('1')
+      expect(nameRow.style.flexShrink).toBe('0')
+      expect(detail.style.flexShrink).toBe('0')
+      // 集団行の生徒欄には目印を付けない。
+      expect(table.querySelectorAll(`tr.sa-group-row [${PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE}]`)).toHaveLength(0)
+      expect(table.querySelectorAll(`tr[data-slot-number] [${PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE}]`).length).toBeGreaterThan(0)
+    })
+
+    it('子の高さの合計が固定した高さを超えたら「はみ出し」(scrollHeight が伸びなくても検出する)', () => {
+      expect(studentInnerContentOverflows(buildInner([40, 40], 58, true))).toBe(true)
+      expect(studentInnerContentOverflows(buildInner([28, 28], 58, true))).toBe(false)
+      // 許容 1px 以内は収まっている扱い(従来判定と同じ閾値)。
+      expect(studentInnerContentOverflows(buildInner([30, 29], 58, true))).toBe(false)
+    })
+
+    it('固定していない内側(全選択の従来出力)では常に false(従来の判定だけを使う)', () => {
+      expect(studentInnerContentOverflows(buildInner([40, 40], 58, false))).toBe(false)
+      // 寸法 0(jsdom 等)でも false(初期値のまま・落ちない)。
+      expect(studentInnerContentOverflows(buildInner([40, 40], 0, true))).toBe(false)
+    })
+  })
+
+  // 確認リスト第4版 p-3(v1.5.508 の結果・2026-09-13): 「講師名が大きすぎて見切れている」。
+  // 従来は td(padding 込み)の幅と scrollWidth を比べていたため、中央寄せ flex の左側はみ出しが検出できず、
+  // 文字幅 65px がボックス 50px に「収まった」扱いになっていた。文字そのものの幅をボックス自身の幅と比べる。
+  describe('講師名(1 行テキスト)のはみ出し判定(第4版 p-3)', () => {
+    function buildNameNode(params: { textWidth: number; clientWidth: number; scrollWidth?: number; boxClientWidth?: number }) {
+      const box = document.createElement('td')
+      const node = document.createElement('div')
+      node.className = 'sa-teacher-name'
+      node.textContent = '白川智'
+      box.appendChild(node)
+      Object.defineProperty(node, 'clientWidth', { value: params.clientWidth, configurable: true })
+      Object.defineProperty(node, 'scrollWidth', { value: params.scrollWidth ?? params.clientWidth, configurable: true })
+      Object.defineProperty(node, 'scrollHeight', { value: 0, configurable: true })
+      Object.defineProperty(box, 'clientWidth', { value: params.boxClientWidth ?? params.clientWidth + 6, configurable: true })
+      Object.defineProperty(box, 'clientHeight', { value: 100, configurable: true })
+      const originalCreateRange = document.createRange
+      document.createRange = () => ({
+        selectNodeContents: () => {},
+        getBoundingClientRect: () => ({ width: params.textWidth } as DOMRect),
+      }) as unknown as Range
+      return { node, box, restore: () => { document.createRange = originalCreateRange } }
+    }
+
+    it('文字幅がボックス自身の幅を超えていれば、scrollWidth が td に収まっていても「はみ出し」(実測値の再現)', () => {
+      // 実測: 文字幅 65px / ボックス 50px / scrollWidth 57 / td 56px → 旧判定は false(見切れたまま)。
+      const { node, box, restore } = buildNameNode({ textWidth: 65, clientWidth: 50, scrollWidth: 57, boxClientWidth: 56 })
+      try {
+        expect(singleLineTextOverflows(node, box)).toBe(true)
+      } finally {
+        restore()
+      }
+    })
+
+    it('文字幅がボックスに収まっていれば「はみ出し」ではない(許容 1px)', () => {
+      const { node, box, restore } = buildNameNode({ textWidth: 50.9, clientWidth: 50, scrollWidth: 50, boxClientWidth: 56 })
+      try {
+        expect(singleLineTextOverflows(node, box)).toBe(false)
+      } finally {
+        restore()
+      }
+    })
+
+    it('寸法 0 の環境(jsdom)では false(初期値のまま・落ちない)', () => {
+      const box = document.createElement('td')
+      const node = document.createElement('div')
+      node.textContent = '白川智'
+      box.appendChild(node)
+      expect(singleLineTextOverflows(node, box)).toBe(false)
+    })
+  })
+
+  // 確認リスト第4版 p-3 メモ「講師未割り当ては空白でよい」(2026-09-13): 集団行の未設定科目セルは画面では
+  // CSS ::before の「＋ 科目を選択」ガイドが出る。紙には要らないので PDF クローンでは目印クラスを外す。
+  describe('集団行の「＋ 科目を選択」ガイドは PDF に出さない(第4版 p-3)', () => {
+    it('clearGroupSubjectPlaceholdersForPdf は目印クラスだけを外す(セル・内容は残す)', () => {
+      const table = buildTable()
+      expect(table.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`).length).toBeGreaterThan(0)
+      clearGroupSubjectPlaceholdersForPdf(table)
+      expect(table.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`)).toHaveLength(0)
+      expect(table.querySelectorAll('tr.sa-group-row .sa-group-subject')).toHaveLength(DAYS.length)
+      expect(table.querySelector('tr.sa-group-row .sa-group-subject')?.textContent).toBe('理科')
+    })
+
+    it('全選択・部分選択のどちらの出力でもガイドが消えている(盤面 DOM は不変)', async () => {
+      for (const keys of [createInitialBoardPrintChecked(grid), [boardPrintCellKey('2026-09-14', 1), boardPrintCellKey('2026-09-16', 1)]]) {
+        html2canvasMock.mockClear()
+        const element = buildElement()
+        expect(element.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`).length).toBeGreaterThan(0)
+        await exportBoardPdfSelection({ element, fileName: 'x.pdf', title: '盤面' }, resolveBoardPrintSelection(grid, keys))
+        const [capturedElement] = html2canvasMock.mock.calls[0]
+        expect(capturedElement.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`)).toHaveLength(0)
+        expect(element.querySelectorAll(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`).length).toBeGreaterThan(0)
+      }
+    })
   })
 })

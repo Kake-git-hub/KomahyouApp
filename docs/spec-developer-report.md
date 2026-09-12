@@ -74,6 +74,19 @@
 - Firestore ルール: `developerReports` は開発者のみ read、write は不可（Cloud Function は Admin SDK で書く）。
   ルールの反映は `firebase deploy --only firestore:rules`（main マージでは反映されない）。
 
+## E-2. 開発用教室の確認リスト（2026-09-12 オーナー指示）
+
+- 開発用教室（`isActingDevelopmentClassroom` が真の教室）でだけ、画面最前面に確認事項チェックリストの
+  パネルを出す。**本番教室には一切出さない**（`src/App.tsx` で条件付けし、source-scan テスト
+  `VerificationChecklistPanel.wiring.test.ts` で固定）。
+- 項目の正本は `src/utils/verificationChecklist.ts`（`VERIFICATION_CHECKLIST`）。各項目は 未確認／OK／要改善 の
+  3 択とメモを持ち、入力のたびに localStorage（`verification-checklist:<教室ID>:<版>`）へ下書き保存する。
+- **「保存して送信」は同じ経路で送る**: 既存の `submitDeveloperReport`（`source: board` / `category: request`）を
+  そのまま使い、developerReports に蓄積＋メール通知される。新しい保存先・別の送信口は作らない。
+- 本文は `buildVerificationChecklistReportNotes` が整形する。先頭行は目印 `[確認リスト <版>]`、未確認の項目は
+  省略、`- <id> OK` / `- <id> 要改善: <メモ>` の圧縮書式。`DEVELOPER_REPORT_NOTE_LIMIT`(2000字)を超える場合は
+  複数通に分け、各通の先頭に同じ目印と `(i/n)` を付ける。**送信本文に生徒名は入れない**（項目 id とメモだけ）。
+- 送信できないときの保険として「Markdown をコピー」も用意する。送信後も下書きは残る（再送できる）。
 ## F. 受け入れ条件（テストで固定）
 
 - 一言が空なら盤面・日程表とも送れない（`validateDeveloperReportNote`。本体側でも日程表経由の空文を弾く）。

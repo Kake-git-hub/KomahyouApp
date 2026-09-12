@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 
 import { lessonHistoryFixtureRows } from '../../src/utils/lessonHistory.fixture'
@@ -12,9 +13,11 @@ import {
 import { scheduleLessonTypeLabels } from '../../src/utils/scheduleViewData'
 import { encodeLessonLedgerBody, LESSON_LEDGER_ENCODING } from './lessonLedger'
 import {
+  buildLatestLedgerQuery,
   buildStudentLessonHistoryResponse,
   filterLessonHistory,
   handleGetStudentLessonHistory,
+  LATEST_LEDGER_CANDIDATE_LIMIT,
   LESSON_TYPE_LABELS,
   normalizeStudentLessonHistoryRequest,
   parseLessonLedgerRows,
@@ -188,5 +191,52 @@ describe('handleGetStudentLessonHistory', () => {
     const deps = baseDeps()
     const response = await handleGetStudentLessonHistory({ workspaceKey: 'main', classroomId: 'c1', studentId: 's001' }, deps)
     expect(response).toMatchObject({ from: '2025-09-12', to: '2026-09-12', clamped: false })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 確認リスト v1.5.504 h-2「通常授業履歴を取得できませんでした: INTERNAL」の回帰防止(2026-09-12)。
+// 真因: 文書 ID(__name__)の降順クエリは複合インデックスが必要で、未作成だと Firestore が
+// FAILED_PRECONDITION を返し、firebase-functions は非 HttpsError を汎用「INTERNAL」に潰していた。
+// 修正: フィールド dateKey(単一フィールド索引は両方向とも自動)で並べる＋想定外例外は原因文つき HttpsError に包む。
+// ---------------------------------------------------------------------------
+type RecordedCall = ['where', string, string, string] | ['orderBy', string, string] | ['limit', number]
+
+class FakeLedgerQuery {
+  calls: RecordedCall[] = []
+  where(field: string, op: '<=', value: string) { this.calls.push(['where', field, op, value]); return this }
+  orderBy(field: string, direction: 'desc') { this.calls.push(['orderBy', field, direction]); return this }
+  limit(count: number) { this.calls.push(['limit', count]); return this }
+}
+
+describe('buildLatestLedgerQuery（INTERNAL 回帰防止・h-2）', () => {
+  it('フィールド dateKey で「to 以前」を降順に数件読む（文書 ID __name__ では並べない）', () => {
+    const query = buildLatestLedgerQuery(new FakeLedgerQuery(), '2026-12-31')
+    expect(query.calls).toEqual([
+      ['where', 'dateKey', '<=', '2026-12-31'],
+      ['orderBy', 'dateKey', 'desc'],
+      ['limit', LATEST_LEDGER_CANDIDATE_LIMIT],
+    ])
+    expect(query.calls.some((call) => String(call[1]).includes('__name__'))).toBe(false)
+  })
+
+  it('候補件数は 1 件ではなく数件（先頭が不正 ID でも捨てて null にしない・従来の挙動を保つ）', () => {
+    expect(LATEST_LEDGER_CANDIDATE_LIMIT).toBeGreaterThan(1)
+  })
+})
+
+describe('index.ts の getStudentLessonHistory（ソース検査・h-2）', () => {
+  const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+  const body = source.slice(source.indexOf('export const getStudentLessonHistory'), source.indexOf('export const submitDeveloperReport'))
+
+  it('台帳の読み出しは buildLatestLedgerQuery を使い、FieldPath.documentId() の並べ替えへ戻していない', () => {
+    expect(body).toContain('buildLatestLedgerQuery(collection, to)')
+    expect(body).not.toContain('FieldPath.documentId()')
+  })
+
+  it('想定外の例外は toLessonHistoryHttpsError で原因文つきの HttpsError に包む（汎用 INTERNAL に潰さない）', () => {
+    expect(body).toContain('throw toLessonHistoryHttpsError(error)')
+    expect(body).toContain("if (error instanceof HttpsError) return error")
+    expect(body).toContain("new HttpsError('internal', `サーバーで履歴を読めませんでした(")
   })
 })

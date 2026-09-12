@@ -1338,6 +1338,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .lesson-history-type { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid #c7d3e3; border-radius: 10px; font-size: 14px; color: #36506d; background: #f8fafd; cursor: pointer; }
       .lesson-history-note { margin: 0; color: #5b6f86; font-size: 14px; line-height: 1.6; }
       .lesson-history-note-strong { color: #16314f; background: #f1f6ff; border-radius: 10px; padding: 8px 12px; }
+      .lesson-history-loading { display: inline-flex; align-items: center; gap: 10px; }
+      .lesson-history-spinner { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 3px solid rgba(26, 115, 232, 0.25); border-top-color: #1a73e8; animation: schedule-spin 0.8s linear infinite; }
       .lesson-history-summary { display: flex; gap: 10px; flex-wrap: wrap; font-size: 15px; color: #16314f; }
       .lesson-history-summary span { background: #eef3fb; border-radius: 999px; padding: 4px 12px; }
       .lesson-history-table { border-collapse: collapse; width: 100%; font-size: 14px; }
@@ -2831,7 +2833,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
         ${viewType === 'student' ? '<button type="button" id="schedule-empty-format-button" class="secondary">空フォーマット印刷</button>' : ''}
-        ${viewType === 'student' && payload.lessonHistoryEnabled ? '<button type="button" id="schedule-lesson-history-button" class="secondary" title="選んだ生徒の出席・休み・振替・未消化を、保存済みの記録から期間指定で一覧します">講習履歴</button>' : ''}
+        ${viewType === 'student' && payload.lessonHistoryEnabled ? '<button type="button" id="schedule-lesson-history-button" class="secondary" title="選んだ生徒の出席・休み・振替・未消化を、保存済みの記録から期間指定で一覧します">通常授業履歴</button>' : ''}
         ${viewType === 'student' || viewType === 'teacher' ? '<button type="button" id="schedule-lecture-summary-button" class="secondary" style="display:none;">講習集計結果</button>' : ''}
         <button type="button" id="schedule-show-all-button" class="secondary">印刷用全員表示</button>
       </div>
@@ -7358,7 +7360,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function buildLessonHistoryNoteText() {
         const savedLabel = lessonHistoryData ? formatLessonHistoryTimestamp(lessonHistoryData.savedAt) : '—';
         const ledgerLabel = lessonHistoryData && lessonHistoryData.ledgerDateKey ? lessonHistoryData.ledgerDateKey : '—';
-        return '保存済みの記録のみを表示しています(当日の未保存編集は含まれません)。集計日: ' + ledgerLabel + ' / 保存: ' + savedLabel;
+        // 実際に表示している期間(丸め後)を明示する。入力欄は書き換えないので、ここが「本当の期間」の正本(h-2)。
+        const rangeLabel = lessonHistoryData && lessonHistoryData.from && lessonHistoryData.to ? (lessonHistoryData.from + ' 〜 ' + lessonHistoryData.to) : '—';
+        return '保存済みの記録のみを表示しています(当日の未保存編集は含まれません)。集計日: ' + ledgerLabel + ' / 保存: ' + savedLabel + ' / 表示期間: ' + rangeLabel;
       }
 
       function renderLessonHistoryBody() {
@@ -7366,7 +7370,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const body = lessonHistoryOverlay.querySelector('.lesson-history-body');
         if (!body) return;
         if (lessonHistoryLoading) {
-          body.innerHTML = '<p class="lesson-history-note">読み込み中です…</p>';
+          // 読み込み中はスピナー(確認リスト v1.5.504 その他「操作受付ができないシーンはスピナー」・2026-09-12)。
+          body.innerHTML = '<p class="lesson-history-note lesson-history-loading"><span class="lesson-history-spinner" aria-hidden="true"></span>読み込み中です…</p>';
           return;
         }
         if (lessonHistoryErrorText) {
@@ -7398,13 +7403,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const summary = summarizeLessonHistoryEvents(events);
         const name = lessonHistoryData && lessonHistoryData.studentName ? lessonHistoryData.studentName : '';
         const range = lessonHistoryData ? (lessonHistoryData.from + ' 〜 ' + lessonHistoryData.to) : '';
-        return '<!doctype html><html lang="ja"><head><meta charset="utf-8" /><title>講習履歴</title><style>'
+        return '<!doctype html><html lang="ja"><head><meta charset="utf-8" /><title>通常授業履歴</title><style>'
           + 'body{font-family:"Segoe UI","Hiragino Sans","Yu Gothic UI",sans-serif;padding:24px;color:#16314f;}'
           + 'h1{font-size:20px;margin:0 0 8px;}p{margin:0 0 8px;font-size:13px;color:#36506d;}'
           + 'table{border-collapse:collapse;width:100%;font-size:12px;}th,td{border:1px solid #9fb1c7;padding:4px 6px;text-align:left;}'
           + 'th{background:#eef3fb;}@page{size:A4 portrait;margin:10mm;}'
           + '</style></head><body>'
-          + '<h1>講習履歴' + (name ? ' — ' + escapeHtml(name) : '') + '</h1>'
+          + '<h1>通常授業履歴' + (name ? ' — ' + escapeHtml(name) : '') + '</h1>'
           + '<p>期間: ' + escapeHtml(range) + (DATA.classroomName ? ' / ' + escapeHtml(String(DATA.classroomName)) : '') + '</p>'
           + '<p>' + escapeHtml(buildLessonHistoryNoteText()) + '</p>'
           + '<p>' + LESSON_HISTORY_STATUS_ORDER.map(function(status) { return escapeHtml(LESSON_HISTORY_STATUS_LABELS[status]) + ' ' + summary[status]; }).join(' / ') + ' / 合計 ' + summary.total + '</p>'
@@ -7426,13 +7431,30 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }
       }
 
+      // 期間入力の妥当性(確認リスト h-2・2026-09-12): 開始日 > 終了日 のときは黙って入れ替えて送らず、
+      // 入力欄も書き換えずに理由を表示する。従来は入れ替えた結果を入力欄へ書き戻していたため、
+      // 利用者には「表示を押すと開始日が終了日に書き換わる」と見えていた。
+      // 366 日超の丸めも入力欄は書き換えず、注記と「表示期間」で伝える。
+      function resolveLessonHistoryRangeInputError(fromValue, toValue) {
+        const from = String(fromValue || '');
+        const to = String(toValue || '');
+        if (from && to && from > to) {
+          return '開始日(' + from + ')が終了日(' + to + ')より後になっています。終了日を開始日以降にしてから「表示」を押してください。';
+        }
+        return '';
+      }
+
       function requestLessonHistory(fromValue, toValue) {
         if (!isOpenerAvailable()) return;
+        const inputError = resolveLessonHistoryRangeInputError(fromValue, toValue);
+        if (inputError) {
+          if (lessonHistoryResultTimer) { window.clearTimeout(lessonHistoryResultTimer); lessonHistoryResultTimer = 0; }
+          lessonHistoryLoading = false;
+          lessonHistoryErrorText = inputError;
+          renderLessonHistoryBody();
+          return;
+        }
         const range = clampLessonHistoryRange(fromValue, toValue);
-        const startField = lessonHistoryOverlay ? lessonHistoryOverlay.querySelector('.lesson-history-start') : null;
-        const endField = lessonHistoryOverlay ? lessonHistoryOverlay.querySelector('.lesson-history-end') : null;
-        if (startField) startField.value = range.from;
-        if (endField) endField.value = range.to;
         lessonHistoryRequestId = 'lh-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
         lessonHistoryLoading = true;
         lessonHistoryErrorText = '';
@@ -7467,10 +7489,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             lessonHistoryErrorText = '教室が切り替わっています。日程表を開き直してください。';
           } else {
             lessonHistoryData = history;
-            lessonHistoryErrorText = lessonHistoryData ? '' : '講習履歴を取得できませんでした。';
+            lessonHistoryErrorText = lessonHistoryData ? '' : '通常授業履歴を取得できませんでした。';
           }
         } else {
-          lessonHistoryErrorText = String(message.message || '講習履歴を取得できませんでした。');
+          lessonHistoryErrorText = String(message.message || '通常授業履歴を取得できませんでした。');
         }
         renderLessonHistoryBody();
       }
@@ -7493,7 +7515,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const personOption = personSelect && personSelect.options ? personSelect.options[personSelect.selectedIndex] : null;
         const title = document.createElement('div');
         title.className = 'lesson-history-title';
-        title.textContent = '講習履歴' + (personOption && personOption.textContent ? ' — ' + personOption.textContent : '');
+        title.textContent = '通常授業履歴' + (personOption && personOption.textContent ? ' — ' + personOption.textContent : '');
         const controls = document.createElement('div');
         controls.className = 'lesson-history-controls';
         const defaultRange = buildLessonHistoryDefaultRange();

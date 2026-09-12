@@ -96,9 +96,11 @@ export const featureRolloutRegistry = {
   // ON: 「PDF出力」でモーダルを開き、曜日×時限のチェック表で選んだコマだけを A3 縦に最大化して出す。
   // OFF: 従来どおりモーダルなしで表示週まるごと即出力する(入口の見え方も従来のまま)。
   // ★初期状態は全選択＝従来と同一出力なので、ON にしても手数が 1 つ増えるだけで結果は変わらない。
-  // 用紙は A3 縦固定のまま(オーナー確定 2026-09-11)。開発用教室で先行検証する。
+  // 用紙は A3 縦固定のまま(オーナー確定 2026-09-11)。開発用教室で先行検証(v1.5.500〜509・確認リスト第1〜5版で
+  // 行高さ/文字はみ出し/講師名見切れ/集団行ガイドを是正)したうえで、オーナー指示(2026-09-13「指定コマPDFは完了した
+  // ので全教室展開して」)で全教室へ昇格。回帰で development-only へ戻さない。
   boardPrintSelection: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Board PDF export: choose which day x slot cells to print (defaults to the whole week = current output).',
   },
   // 講習履歴(docs/plan-2026-09-11-five-requests.md §6 / H-1〜H-4): 生徒日程表タブに「講習履歴」ボタンを出し、

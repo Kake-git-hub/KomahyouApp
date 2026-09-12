@@ -92,7 +92,7 @@ describe('buildScheduleLessonHistoryResultMessage', () => {
 
   it('formatLessonHistoryErrorMessage は Error でも文字列でも 1 文にする', () => {
     expect(formatLessonHistoryErrorMessage(new Error('permission-denied'))).toContain('permission-denied')
-    expect(formatLessonHistoryErrorMessage('')).toBe('講習履歴を取得できませんでした。時間をおいて、もう一度お試しください。')
+    expect(formatLessonHistoryErrorMessage('')).toBe('通常授業履歴を取得できませんでした。時間をおいて、もう一度お試しください。')
   })
 })
 

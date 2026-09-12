@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { initializeApp } from 'firebase-admin/app'
 import { getAuth } from 'firebase-admin/auth'
-import { FieldPath, getFirestore, Timestamp } from 'firebase-admin/firestore'
+import { getFirestore, Timestamp } from 'firebase-admin/firestore'
 import { getStorage } from 'firebase-admin/storage'
 import { GoogleAuth, OAuth2Client } from 'google-auth-library'
 import { onDocumentCreated, onDocumentWritten } from 'firebase-functions/v2/firestore'
@@ -23,7 +23,7 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, normalizeDeveloperReport, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
-import { handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
+import { buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
   compressBackupJson,
   GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX,
@@ -1719,27 +1719,40 @@ export const saveDevelopmentClassroomSnapshot = onCall({ invoker: 'public', time
 // 台帳 lessonLedgerDays はクライアントから読めない(firestore.rules に match なし)ので、
 // 教室メンバー権限を確認したうえでサーバーが読み出す。★読み取り専用(Firestore へ書かない)。
 export const getStudentLessonHistory = onCall({ invoker: 'public', timeoutSeconds: 60, memory: '512MiB' }, async (request) => {
-  return handleGetStudentLessonHistory(request.data, {
-    requireAccess: (workspaceKey, classroomId) => requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId),
-    invalidArgument: (message) => new HttpsError('invalid-argument', message),
-    todayJst: toJstDateKeyFromIso(new Date().toISOString()),
-    loadLatestLedgerDoc: async ({ workspaceKey, classroomId, to }) => {
-      // 保存が無い日は文書が無いので「to 以前で最新」を読む(文書 ID = YYYY-MM-DD)。
-      // ★ selectLessonLedgerDateKey と同じ規則(isLessonHistoryDateKey で不正 ID を除外してから最新を選ぶ)。
-      //   通常は先頭が有効な日付キーのはずだが、念のため数件見て最初の有効な物を使う(捨てて null にしない)。
-      const snapshot = await firestore
-        .collection('workspaces').doc(workspaceKey)
-        .collection('classroomSnapshots').doc(classroomId)
-        .collection('lessonLedgerDays')
-        .where(FieldPath.documentId(), '<=', to)
-        .orderBy(FieldPath.documentId(), 'desc')
-        .limit(5)
-        .get()
-      const doc = snapshot.docs.find((candidate) => isLessonHistoryDateKey(candidate.id))
-      return doc ? ({ ...(doc.data() as LessonLedgerDayDocLike), dateKey: doc.id }) : null
-    },
-  })
+  try {
+    return await handleGetStudentLessonHistory(request.data, {
+      requireAccess: (workspaceKey, classroomId) => requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId),
+      invalidArgument: (message) => new HttpsError('invalid-argument', message),
+      todayJst: toJstDateKeyFromIso(new Date().toISOString()),
+      loadLatestLedgerDoc: async ({ workspaceKey, classroomId, to }) => {
+        // 保存が無い日は文書が無いので「to 以前で最新」を読む(文書 ID = dateKey = YYYY-MM-DD)。
+        // ★ 並べ替えはフィールド dateKey(buildLatestLedgerQuery)。文書 ID の降順は複合インデックスが必要で
+        //   FAILED_PRECONDITION → クライアントには INTERNAL になった(確認リスト v1.5.504 h-2)。__name__ に戻さない。
+        // ★ selectLessonLedgerDateKey と同じ規則(isLessonHistoryDateKey で不正 ID を除外してから最新を選ぶ)。
+        //   通常は先頭が有効な日付キーのはずだが、念のため数件見て最初の有効な物を使う(捨てて null にしない)。
+        const collection = firestore
+          .collection('workspaces').doc(workspaceKey)
+          .collection('classroomSnapshots').doc(classroomId)
+          .collection('lessonLedgerDays')
+        const snapshot = await buildLatestLedgerQuery(collection, to).get()
+        const doc = snapshot.docs.find((candidate) => isLessonHistoryDateKey(candidate.id))
+        return doc ? ({ ...(doc.data() as LessonLedgerDayDocLike), dateKey: doc.id }) : null
+      },
+    })
+  } catch (error) {
+    throw toLessonHistoryHttpsError(error)
+  }
 })
+
+// 想定外の例外(Firestore の索引不足・復号失敗など)を HttpsError('internal') に包み、原因文を画面まで届ける。
+// 包まないと firebase-functions が汎用の「INTERNAL」だけを返し、利用者にも開発者にも原因が分からない
+// (確認リスト v1.5.504 h-2 で実際に起きた)。HttpsError はそのまま通す(権限・入力エラーの種別を保つ)。
+export function toLessonHistoryHttpsError(error: unknown): HttpsError {
+  if (error instanceof HttpsError) return error
+  const message = error instanceof Error ? error.message : String(error)
+  logger.error('[getStudentLessonHistory] unexpected error', { message, stack: error instanceof Error ? error.stack : undefined })
+  return new HttpsError('internal', `サーバーで履歴を読めませんでした(${message.slice(0, 300)})`)
+}
 
 // 「開発者へ報告」(2026-09-04 オーナー指示): 利用者がボタン1つで、直近の操作痕跡と報告時点の教室データを
 // 開発者へ送る。メタ＋操作痕跡は Firestore(workspaces/{ws}/developerReports)、教室データ本体は Storage へ。
