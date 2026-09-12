@@ -37,8 +37,18 @@ const PDF_CELL_VERTICAL_PADDING = 4
 // コマ選択で拡大したとき、生徒欄の内側(.sa-student-inner)を机行の高さに固定する(確認リスト第2版 p-2/p-3・2026-09-12)。
 // 従来は内側の高さが内容任せだったため、緩めた文字上限(最大 72px)まで大きくなった生徒名 2 行が行を押し広げ、
 // 「生徒のいる行だけ高く・空席の行は低い」と行高さが揃わなかった。全選択(従来出力)と同じく行の高さは
-// 一定にし、生徒文字は fitStudentTextForPdf のはみ出し判定(inner.scrollHeight > clientHeight)で
-// その高さに収まる範囲まで縮める。⚠️ 全選択では呼ばない(従来出力と 1 ドットも変えないため)。
+// 一定にし、生徒文字は fitStudentTextForPdf のはみ出し判定で その高さに収まる範囲まで縮める。
+// ⚠️ 全選択では呼ばない(従来出力と 1 ドットも変えないため)。
+//
+// 確認リスト第3版 p-2/p-3(v1.5.506 の結果・2026-09-13)「文字が大きすぎてセルからはみ出ている」の真因:
+// `.sa-student-inner` は flex(column) なので、高さを固定すると子(名前行・学年科目)が flex-shrink で
+// 押し潰され、内側の scrollHeight が clientHeight を超えない(= はみ出し判定 `inner.scrollHeight > clientHeight`
+// が一度も真にならない)。結果、緩めた上限(最大 72px)のまま文字だけ描かれ、名前と学年科目が重なって見切れた。
+// 対策は 2 段: (1) 子の flex-shrink を 0 にして内容どおりの高さを保つ。(2) 判定側は子の高さの合計と
+// 固定した高さを直接比べる(`studentInnerContentOverflows`・justify-content:center で上側にはみ出た分が
+// scrollHeight に載らない問題も避ける)。data 属性 `data-pdf-locked-height` で「固定した内側」を目印にする。
+export const PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE = 'data-pdf-locked-height'
+
 export function lockStudentInnerHeightForPdf(root: HTMLElement, deskRowHeight: number) {
   const innerHeight = Math.max(0, Math.round(deskRowHeight) - PDF_CELL_VERTICAL_PADDING)
   root.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((node) => {
@@ -47,7 +57,30 @@ export function lockStudentInnerHeightForPdf(root: HTMLElement, deskRowHeight: n
     node.style.maxHeight = `${innerHeight}px`
     node.style.boxSizing = 'border-box'
     node.style.overflow = 'hidden'
+    node.setAttribute(PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE, '1')
+    Array.from(node.children).forEach((child) => {
+      if (child instanceof HTMLElement) {
+        child.style.flexShrink = '0'
+        child.style.minHeight = '0'
+      }
+    })
   })
+}
+
+/**
+ * 固定した生徒欄の内側で、子(名前行・メモ・学年科目)の高さの合計が内側の高さを超えているか。
+ * flex の子が押し潰されても、justify-content:center で上下両側にはみ出しても正しく検出する。
+ * 固定していない内側(全選択の従来出力)では常に false(= 従来のはみ出し判定だけを使う)。
+ */
+export function studentInnerContentOverflows(inner: HTMLElement): boolean {
+  if (inner.getAttribute(PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE) !== '1') return false
+  const available = inner.clientHeight
+  if (!(available > 0)) return false
+  let total = 0
+  Array.from(inner.children).forEach((child) => {
+    total += child.getBoundingClientRect().height
+  })
+  return total > available + 1
 }
 
 // 1 行テキスト(講師名・席番号)をセルに収まる最大の文字サイズにする。
@@ -161,8 +194,10 @@ function doesStudentTextEntryOverflow(entry: PreparedStudentTextEntry) {
   const memoOverflow = memoNode ? memoNode.scrollHeight > memoNode.clientHeight + 1 : false
   const detailOverflow = detail ? detail.scrollWidth > detail.clientWidth + 1 : false
   const heightOverflow = inner.scrollHeight > inner.clientHeight + 1
+  // 部分選択で内側の高さを固定したときは、子の高さの合計でも判定する(第3版 p-2/p-3・上記コメント参照)。
+  const lockedContentOverflow = studentInnerContentOverflows(inner)
 
-  return nameOverflow || memoOverflow || detailOverflow || heightOverflow
+  return nameOverflow || memoOverflow || detailOverflow || heightOverflow || lockedContentOverflow
 }
 
 function measureStudentTextEntryFontSize(entry: PreparedStudentTextEntry, initialFontSize: number, minimumFontSize: number) {
