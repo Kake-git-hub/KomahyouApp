@@ -1,0 +1,74 @@
+# Cloud Functions の実行ログを読む(読み取り専用・手動実行)。
+#
+# 目的: 画面に「INTERNAL」など汎用エラーしか出ないとき、関数側の例外(スタックトレース)を
+# PC・gcloud ログイン無しで確認する(スマホの GitHub アプリからでも実行できる)。
+# 認証はデプロイと同じサービスアカウント secret RE_FIREBASE_SERVICE_ACCOUNT を使う。
+# ⚠️ このワークフローは Cloud Logging を読むだけで、Firestore/Storage/関数には一切書き込まない。
+#
+# 使い方: Actions → 「Read Cloud Functions logs」→ Run workflow
+#   function … 関数名(例: getStudentLessonHistory)。空なら全関数。
+#   hours    … 何時間前まで遡るか(既定 24)。
+#   severity … 最低の重大度(既定 ERROR。INFO にすると console.log も出る)。
+#   limit    … 最大件数(既定 50)。
+# 結果はジョブのログ(「Read logs」ステップ)に JSON で出る。生徒名などが含まれ得るので Issue へ転記しない。
+name: Read Cloud Functions logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      function:
+        description: '関数名(空なら全関数)'
+        required: false
+        default: ''
+      hours:
+        description: '何時間前まで遡るか'
+        required: false
+        default: '24'
+      severity:
+        description: '最低の重大度(DEFAULT/INFO/WARNING/ERROR)'
+        required: false
+        default: 'ERROR'
+      limit:
+        description: '最大件数'
+        required: false
+        default: '50'
+
+permissions:
+  contents: read
+
+jobs:
+  read-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Read logs
+        env:
+          FUNCTION_NAME: ${{ github.event.inputs.function }}
+          HOURS: ${{ github.event.inputs.hours }}
+          SEVERITY: ${{ github.event.inputs.severity }}
+          LIMIT: ${{ github.event.inputs.limit }}
+        run: |
+          set -o pipefail
+          SINCE="$(date -u -d "-${HOURS:-24} hours" +%Y-%m-%dT%H:%M:%SZ)"
+          # gen2 関数は cloud_run_revision(service_name=小文字の関数名)と cloud_function(function_name)の両方に出る。
+          if [ -n "$FUNCTION_NAME" ]; then
+            LOWER="$(printf '%s' "$FUNCTION_NAME" | tr '[:upper:]' '[:lower:]')"
+            SCOPE="((resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$LOWER\") OR (resource.type=\"cloud_function\" AND resource.labels.function_name=\"$FUNCTION_NAME\"))"
+          else
+            SCOPE="(resource.type=\"cloud_run_revision\" OR resource.type=\"cloud_function\")"
+          fi
+          FILTER="$SCOPE AND severity>=${SEVERITY:-ERROR} AND timestamp>=\"$SINCE\""
+          echo "filter: $FILTER"
+          gcloud logging read "$FILTER" \
+            --project komahyouapp-prod \
+            --limit "${LIMIT:-50}" \
+            --order desc \
+            --format 'value(timestamp,severity,resource.labels.service_name,resource.labels.function_name,textPayload,jsonPayload.message,jsonPayload.error,protoPayload.status.message)' \
+            | sed 's/\t/  |  /g'
