@@ -1,16 +1,25 @@
-# Cloud Functions の実行ログを読む(読み取り専用・手動実行)。
+# Cloud Functions の実行ログを読む(読み取り専用・手動実行)＋通常授業履歴の経路診断。
 #
 # 目的: 画面に「INTERNAL」など汎用エラーしか出ないとき、関数側の例外(スタックトレース)を
 # PC・gcloud ログイン無しで確認する(スマホの GitHub アプリからでも実行できる)。
 # 認証はデプロイと同じサービスアカウント secret RE_FIREBASE_SERVICE_ACCOUNT を使う。
-# ⚠️ このワークフローは Cloud Logging を読むだけで、Firestore/Storage/関数には一切書き込まない。
+# ⚠️ このワークフローは Cloud Logging / Firestore を読むだけで、Firestore/Storage/関数には一切書き込まない。
+#
+# ⚠️ 前提(オーナー作業・2026-09-12 初回実行で PERMISSION_DENIED を確認):
+#   サービスアカウント firebase-adminsdk-fbsvc@komahyouapp-prod.iam.gserviceaccount.com に
+#   ロール **ログ閲覧者**(`roles/logging.viewer`)を GCP コンソール(IAM)で付与するまで、
+#   「read-logs」ジョブは "Permission denied for all log views" で赤になる。
+#   付与後にもう一度 Run workflow すればよい(付与前でも「diagnose-lesson-history」ジョブは動く)。
 #
 # 使い方: Actions → 「Read Cloud Functions logs」→ Run workflow
 #   function … 関数名(例: getStudentLessonHistory)。空なら全関数。
 #   hours    … 何時間前まで遡るか(既定 24)。
 #   severity … 最低の重大度(既定 ERROR。INFO にすると console.log も出る)。
 #   limit    … 最大件数(既定 50)。
-# 結果はジョブのログ(「Read logs」ステップ)に JSON で出る。生徒名などが含まれ得るので Issue へ転記しない。
+#   diagnose_classroom … 指定すると、その教室の通常授業履歴(getStudentLessonHistory)のサーバー経路を
+#                        tools/lesson-history-diagnose.mjs で再現する(Firestore 読み取りのみ)。
+#                        通常は開発用教室 v8OZ7zH8vONNHjjYVcR1 を指定する。空なら診断ジョブはスキップ。
+# 結果はジョブのログに出る。生徒名などが含まれ得るので Issue へ転記しない。
 name: Read Cloud Functions logs
 
 on:
@@ -32,6 +41,14 @@ on:
         description: '最大件数'
         required: false
         default: '50'
+      diagnose_classroom:
+        description: '通常授業履歴の経路診断を行う教室ID(空ならスキップ)'
+        required: false
+        default: ''
+      diagnose_student:
+        description: '診断で対象にする生徒ID(空なら台帳の全生徒)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -72,3 +89,34 @@ jobs:
             --order desc \
             --format 'value(timestamp,severity,resource.labels.service_name,resource.labels.function_name,textPayload,jsonPayload.message,jsonPayload.error,protoPayload.status.message)' \
             | sed 's/\t/  |  /g'
+
+  diagnose-lesson-history:
+    if: ${{ github.event.inputs.diagnose_classroom != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build functions (純関数を lib から使う)
+        run: npm --prefix functions ci && npm --prefix functions run build
+
+      - name: Authenticate to Google Cloud (Firestore access token)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Diagnose getStudentLessonHistory path (read-only)
+        env:
+          FIRESTORE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CLASSROOM_ID: ${{ github.event.inputs.diagnose_classroom }}
+          STUDENT_ID: ${{ github.event.inputs.diagnose_student }}
+        run: |
+          if [ -n "$STUDENT_ID" ]; then
+            node tools/lesson-history-diagnose.mjs --classroom "$CLASSROOM_ID" --student "$STUDENT_ID" --from 2026-01-01 --to 2026-12-31
+          else
+            node tools/lesson-history-diagnose.mjs --classroom "$CLASSROOM_ID" --from 2026-01-01 --to 2026-12-31
+          fi
