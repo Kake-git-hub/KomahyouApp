@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.510 (2026-09-13)
+- feat: 盤面PDF「コマ選択」(`boardPrintSelection`)を開発用教室限定から全教室へ昇格(オーナー指示 2026-09-13「指定コマPDFは完了したので全教室展開して」。確認リスト第1〜5版 v1.5.500〜509 で行高さ/文字はみ出し/講師名見切れ/集団行ガイドを是正済み)。本番教室でも「PDF出力」で曜日×時限の選択モーダルが開く(初期状態は全選択＝従来と同一出力)。回帰で development-only へ戻さない(`src/utils/featureRollout.ts` / `featureRollout.test.ts` / `docs/spec-schedule-pdf.md`)
+
 ## v1.5.509 (2026-09-13)
 - fix: 盤面PDFコマ選択で講師名が見切れる(2 文字は両端が欠け・3 文字は縮んでも左が欠ける)不具合を修正(確認リスト第4版 p-3・v1.5.508 の結果)。真因は講師名のはみ出し判定が td(padding 込み 56px)の幅と scrollWidth を比べていたこと。講師名ボックス自身は 50px で、しかも中央寄せ flex では左側にはみ出た分が scrollWidth に載らないため、文字幅 65px でも「収まった」扱いになっていた(実ブラウザで再現・修正後は 2 文字 25px/3 文字 17px に収束し html2canvas 描画でも欠けない)。Range の矩形で文字幅を測りボックス自身の幅と比べる `singleLineTextOverflows` に変更(`src/utils/pdf.ts`・回帰テスト3件)
 - fix: 盤面PDFで集団行の未設定科目セルに画面用の操作ガイド「＋ 科目を選択」(CSS ::before)が印字されていたのを空白にする(第4版 p-3 メモ「講師未割り当ては空白でよい」)。PDF クローンから目印クラス `sa-group-subject-empty` を外す `clearGroupSubjectPlaceholdersForPdf`(全選択・部分選択とも・盤面 DOM は不変・テスト2件・`docs/spec-schedule-pdf.md`)
