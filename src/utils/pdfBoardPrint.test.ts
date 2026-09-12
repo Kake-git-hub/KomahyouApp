@@ -35,6 +35,8 @@ const {
   pruneBoardTableForSelection,
   exportBoardPdfSelection,
   lockStudentInnerHeightForPdf,
+  studentInnerContentOverflows,
+  PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE,
 } = await import('./pdf')
 const {
   boardPrintCellKey,
@@ -372,5 +374,55 @@ describe('exportBoardPdfSelection (html2canvas/jsPDF はモック)', () => {
     expect(inner?.style.height).toBe('120px')
     lockStudentInnerHeightForPdf(table, 1)
     expect(inner?.style.height).toBe('0px')
+  })
+
+  // 確認リスト第3版 p-2/p-3(v1.5.506 の結果・2026-09-13): 「文字が大きすぎてセルからはみ出ている」。
+  // 内側を固定高さにすると flex の子が押し潰されて scrollHeight が伸びず、はみ出し判定が一度も真にならなかった。
+  // 子の flex-shrink を 0 にし、判定は子の高さの合計 vs 固定高さで行う。
+  describe('固定した生徒欄の内側のはみ出し判定(第3版 p-2/p-3)', () => {
+    function buildInner(childHeights: number[], clientHeight: number, locked: boolean): HTMLElement {
+      const inner = document.createElement('div')
+      inner.className = 'sa-student-inner'
+      childHeights.forEach((height) => {
+        const child = document.createElement('div')
+        child.getBoundingClientRect = () => ({ height } as unknown as DOMRect)
+        inner.appendChild(child)
+      })
+      Object.defineProperty(inner, 'clientHeight', { value: clientHeight, configurable: true })
+      if (locked) inner.setAttribute(PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE, '1')
+      return inner
+    }
+
+    it('lockStudentInnerHeightForPdf は目印属性を付け、子の flex-shrink を 0 にする(押し潰されない)', () => {
+      const table = buildTable()
+      const inner = table.querySelector<HTMLElement>('tr[data-slot-number] .sa-student-inner')!
+      const nameRow = document.createElement('div')
+      nameRow.className = 'sa-student-name-row'
+      const detail = document.createElement('div')
+      detail.className = 'sa-student-detail'
+      inner.append(nameRow, detail)
+
+      lockStudentInnerHeightForPdf(table, 62)
+
+      expect(inner.getAttribute(PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE)).toBe('1')
+      expect(nameRow.style.flexShrink).toBe('0')
+      expect(detail.style.flexShrink).toBe('0')
+      // 集団行の生徒欄には目印を付けない。
+      expect(table.querySelectorAll(`tr.sa-group-row [${PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE}]`)).toHaveLength(0)
+      expect(table.querySelectorAll(`tr[data-slot-number] [${PDF_LOCKED_INNER_HEIGHT_ATTRIBUTE}]`).length).toBeGreaterThan(0)
+    })
+
+    it('子の高さの合計が固定した高さを超えたら「はみ出し」(scrollHeight が伸びなくても検出する)', () => {
+      expect(studentInnerContentOverflows(buildInner([40, 40], 58, true))).toBe(true)
+      expect(studentInnerContentOverflows(buildInner([28, 28], 58, true))).toBe(false)
+      // 許容 1px 以内は収まっている扱い(従来判定と同じ閾値)。
+      expect(studentInnerContentOverflows(buildInner([30, 29], 58, true))).toBe(false)
+    })
+
+    it('固定していない内側(全選択の従来出力)では常に false(従来の判定だけを使う)', () => {
+      expect(studentInnerContentOverflows(buildInner([40, 40], 58, false))).toBe(false)
+      // 寸法 0(jsdom 等)でも false(初期値のまま・落ちない)。
+      expect(studentInnerContentOverflows(buildInner([40, 40], 0, true))).toBe(false)
+    })
   })
 })

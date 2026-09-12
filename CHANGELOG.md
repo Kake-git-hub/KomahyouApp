@@ -16,6 +16,10 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.508 (2026-09-13)
+- fix: 盤面PDFコマ選択で「文字が大きすぎてセルからはみ出ている」(生徒名と学年科目が重なって見切れる)不具合を修正(確認リスト第3版 p-2/p-3・v1.5.506 の結果)。真因は v1.5.506 で生徒欄の内側(`.sa-student-inner`)を固定高さにした際、flex(column) の子が flex-shrink で押し潰されて `scrollHeight` が伸びず、はみ出し判定が一度も真にならなかったこと(緩めた上限 72px のまま描画)。子の `flex-shrink` を 0 にし、固定した内側(目印 `data-pdf-locked-height`)は子の高さの合計と固定高さを直接比べて判定する(`studentInnerContentOverflows`)。全選択(従来出力)は固定しないので不変(`src/utils/pdf.ts` / `docs/spec-schedule-pdf.md`・回帰テスト3件、修正なしで落ちることを確認)
+- chore: 確認リストを第4版 `v1.5.508` へ。前回 OK の項目(c-1/p-11/h-2/h-8)は載せず、再確認 p-2/p-3 だけにした(`src/utils/verificationChecklist.ts`)
+
 ## v1.5.507 (2026-09-12)
 - docs: CLAUDE.md にサービスアカウントへの `roles/logging.viewer` 付与(未実施・関数ログ読み取りワークフロー用)と、関数が「INTERNAL」しか返さないときの調べ方(REST runQuery で再現・文書ID降順は複合インデックス必須)を追記(コード変更なし)
 
