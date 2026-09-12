@@ -34,6 +34,7 @@ vi.mock('jspdf', () => ({
 const {
   pruneBoardTableForSelection,
   exportBoardPdfSelection,
+  lockStudentInnerHeightForPdf,
 } = await import('./pdf')
 const {
   boardPrintCellKey,
@@ -331,5 +332,45 @@ describe('exportBoardPdfSelection (html2canvas/jsPDF はモック)', () => {
     const names = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-teacher-name'))
     expect(names.length).toBeGreaterThan(0)
     expect(names.every((node) => node.style.whiteSpace === 'nowrap' && node.style.overflow === 'hidden')).toBe(true)
+  })
+
+  // 確認リスト第2版 p-2/p-3(Issue #63・2026-09-12): 生徒のいる行だけ文字に合わせて伸び、空席の行と高さが揃わなかった。
+  // 机行の生徒欄の内側を「机行の高さ − 上下 padding」に固定し、文字はその中に収まるまで縮める。
+  it('部分選択では机行の生徒欄の内側(.sa-student-inner)を行の高さに固定し overflow:hidden にする(集団行は据え置き)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, [boardPrintCellKey('2026-09-14', 1), boardPrintCellKey('2026-09-14', 2)])
+
+    await exportBoardPdfSelection({ element, fileName: 'partial.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const deskInners = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-student-inner'))
+    expect(deskInners.length).toBeGreaterThan(0)
+    // jsdom は寸法 0 → relief は {1,1,1} なので机行 62px − padding 4px = 58px。
+    expect(deskInners.every((node) => node.style.height === '58px' && node.style.maxHeight === '58px' && node.style.overflow === 'hidden' && node.style.boxSizing === 'border-box')).toBe(true)
+    // 集団行の生徒欄(理科など)は行の高さが違うので触らない。
+    const groupCells = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr.sa-group-row .sa-student'))
+    expect(groupCells.length).toBeGreaterThan(0)
+    expect(groupCells.every((node) => node.style.maxHeight === '')).toBe(true)
+  })
+
+  it('全選択(従来出力)では生徒欄の内側の高さを固定しない(p-1「従来と同じ」を保つ)', async () => {
+    const element = buildElement()
+    const selection = resolveBoardPrintSelection(grid, createInitialBoardPrintChecked(grid))
+
+    await exportBoardPdfSelection({ element, fileName: 'full.pdf', title: '盤面' }, selection)
+
+    const [capturedElement] = html2canvasMock.mock.calls[0]
+    const inners = Array.from(capturedElement.querySelectorAll<HTMLElement>('tr[data-slot-number] .sa-student-inner'))
+    expect(inners.length).toBeGreaterThan(0)
+    expect(inners.every((node) => node.style.height === '' && node.style.maxHeight === '')).toBe(true)
+  })
+
+  it('lockStudentInnerHeightForPdf は行の高さ(倍率適用後)から上下 padding を引いた高さにする', () => {
+    const table = buildTable()
+    lockStudentInnerHeightForPdf(table, 62 * 2)
+    const inner = table.querySelector<HTMLElement>('tr[data-slot-number] .sa-student-inner')
+    expect(inner?.style.height).toBe('120px')
+    lockStudentInnerHeightForPdf(table, 1)
+    expect(inner?.style.height).toBe('0px')
   })
 })

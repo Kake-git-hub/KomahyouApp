@@ -1338,6 +1338,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .lesson-history-type { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid #c7d3e3; border-radius: 10px; font-size: 14px; color: #36506d; background: #f8fafd; cursor: pointer; }
       .lesson-history-note { margin: 0; color: #5b6f86; font-size: 14px; line-height: 1.6; }
       .lesson-history-note-strong { color: #16314f; background: #f1f6ff; border-radius: 10px; padding: 8px 12px; }
+      .lesson-history-loading { display: inline-flex; align-items: center; gap: 10px; }
+      .lesson-history-spinner { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 3px solid rgba(26, 115, 232, 0.25); border-top-color: #1a73e8; animation: schedule-spin 0.8s linear infinite; }
       .lesson-history-summary { display: flex; gap: 10px; flex-wrap: wrap; font-size: 15px; color: #16314f; }
       .lesson-history-summary span { background: #eef3fb; border-radius: 999px; padding: 4px 12px; }
       .lesson-history-table { border-collapse: collapse; width: 100%; font-size: 14px; }
@@ -7368,7 +7370,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const body = lessonHistoryOverlay.querySelector('.lesson-history-body');
         if (!body) return;
         if (lessonHistoryLoading) {
-          body.innerHTML = '<p class="lesson-history-note">読み込み中です…</p>';
+          // 読み込み中はスピナー(確認リスト v1.5.504 その他「操作受付ができないシーンはスピナー」・2026-09-12)。
+          body.innerHTML = '<p class="lesson-history-note lesson-history-loading"><span class="lesson-history-spinner" aria-hidden="true"></span>読み込み中です…</p>';
           return;
         }
         if (lessonHistoryErrorText) {

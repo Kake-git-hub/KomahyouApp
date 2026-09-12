@@ -39,6 +39,7 @@ import { resolvePairConstraintCategory } from '../../types/pairConstraint'
 import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport } from '../../utils/pdf'
 import { buildBoardPrintGrid, buildBoardPrintTitle, type BoardPrintSelection } from '../../utils/boardPrintSelection'
 import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
+import { BusyOverlay } from '../common/BusyOverlay'
 import { generateQrSvg } from '../../utils/qrcode'
 import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
@@ -5143,6 +5144,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
+  // 操作を受け付けない処理(PDF出力など)の間だけ画面全体にスピナーを出す(確認リスト v1.5.504 その他・2026-09-12)。
+  // null なら非表示。処理の開始/終了(finally)で必ず対にして更新する。
+  const [busyOverlayMessage, setBusyOverlayMessage] = useState<string | null>(null)
   const [isBoardPrintSelectionOpen, setIsBoardPrintSelectionOpen] = useState(false)
   const [distributionQrModal, setDistributionQrModal] = useState<{ url: string; svg: string; isLoading: boolean } | null>(null)
   const [isTemplateMode, setIsTemplateMode] = useState(false)
@@ -8293,6 +8297,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleTemplateSaveConfirm = async () => {
     if (!templateSaveConfirm) return
+    setBusyOverlayMessage('上書き内容のレポートを PDF 出力中… しばらくお待ちください')
     try {
       await exportTemplateOverwriteReport({
         weeks,
@@ -8301,6 +8306,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
     } catch {
       // PDF export failure should not block template save
+    } finally {
+      setBusyOverlayMessage(null)
     }
     handleSaveRegularLessonTemplate(templateSaveConfirm.template, true)
   }
@@ -10499,6 +10506,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
     try {
       setIsPrintingPdf(true)
+      setBusyOverlayMessage('PDF出力中… しばらくお待ちください')
       // 部分選択のときはタイトル(＝ファイル名)を残した曜日・時限で組む(確認リスト p-2・2026-09-12)。
       // 全選択・従来経路は週タイトルのまま。
       const printTitle = selection
@@ -10518,6 +10526,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage(`PDF出力に失敗しました: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       setIsPrintingPdf(false)
+      setBusyOverlayMessage(null)
     }
   }
 
@@ -11633,6 +11642,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   return (
     <div className="page-shell page-shell-board-only">
+      <BusyOverlay message={busyOverlayMessage} />
       {isBoardPrintSelectionOpen ? (
         <BoardPrintSelectionModal
           grid={buildBoardPrintGrid(cells)}

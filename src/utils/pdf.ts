@@ -31,6 +31,24 @@ const PDF_TEACHER_NAME_FONT_SIZE = 24
 const PDF_TEACHER_NAME_MIN_FONT_SIZE = 8
 const PDF_DESK_ROW_HEIGHT = 62
 const PDF_GROUP_ROW_HEIGHT = 40
+// セル padding '2px 3px' の上下ぶん。机行の高さを固定するとき、生徒欄の内側ボックスはこの分だけ低くする。
+const PDF_CELL_VERTICAL_PADDING = 4
+
+// コマ選択で拡大したとき、生徒欄の内側(.sa-student-inner)を机行の高さに固定する(確認リスト第2版 p-2/p-3・2026-09-12)。
+// 従来は内側の高さが内容任せだったため、緩めた文字上限(最大 72px)まで大きくなった生徒名 2 行が行を押し広げ、
+// 「生徒のいる行だけ高く・空席の行は低い」と行高さが揃わなかった。全選択(従来出力)と同じく行の高さは
+// 一定にし、生徒文字は fitStudentTextForPdf のはみ出し判定(inner.scrollHeight > clientHeight)で
+// その高さに収まる範囲まで縮める。⚠️ 全選択では呼ばない(従来出力と 1 ドットも変えないため)。
+export function lockStudentInnerHeightForPdf(root: HTMLElement, deskRowHeight: number) {
+  const innerHeight = Math.max(0, Math.round(deskRowHeight) - PDF_CELL_VERTICAL_PADDING)
+  root.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((node) => {
+    if (node.closest('tr.sa-group-row')) return
+    node.style.height = `${innerHeight}px`
+    node.style.maxHeight = `${innerHeight}px`
+    node.style.boxSizing = 'border-box'
+    node.style.overflow = 'hidden'
+  })
+}
 
 // 1 行テキスト(講師名・席番号)をセルに収まる最大の文字サイズにする。
 // 確認リスト p-3(2026-09-12): 従来は講師名を 24px 固定で overflow:hidden していたため、
@@ -599,6 +617,10 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
     clone.querySelectorAll<HTMLElement>('tr.sa-group-row td').forEach((node) => {
       node.style.height = groupRowHeight
     })
+  }
+  if (activeSelection) {
+    // 生徒欄の内側を机行の高さに固定し、行高さを空席の行と揃える(第2版 p-2/p-3)。
+    lockStudentInnerHeightForPdf(clone, PDF_DESK_ROW_HEIGHT * relief.rowScale)
   }
   if (relief.columnScale > 1) {
     // 列が横に伸びるときだけ席番号(本体セル)も拡大する(行だけ伸びるときは席列の幅が変わらないので据え置き)。

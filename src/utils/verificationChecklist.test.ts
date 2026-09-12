@@ -44,27 +44,26 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('初版の3領域(U-0 / PDF / 講習履歴)が入っている', () => {
+  it('第3版: 前回 OK だった項目は載せず、再確認 3 件と新規 3 件だけ(オーナー指摘 2026-09-12)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toContain('u0-1')
-    expect(ids).toContain('u0-5')
-    expect(ids).toContain('p-1')
-    expect(ids).toContain('p-7')
-    expect(ids).toContain('h-1')
-    expect(ids).toContain('h-7')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.504')
+    expect(ids).toEqual(['c-1', 'p-2', 'p-3', 'p-11', 'h-2', 'h-8'])
+    // v1.5.504 で OK だった項目(Issue #63)が残っていない。
+    for (const okId of ['u0-1', 'u0-2', 'u0-3', 'u0-4', 'u0-5', 'p-1', 'p-4', 'p-5', 'p-6', 'p-7', 'p-8', 'p-9', 'p-10', 'h-1', 'h-3', 'h-4', 'h-5', 'h-6', 'h-7']) {
+      expect(ids, okId).not.toContain(okId)
+    }
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.506')
   })
 })
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.504')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.504')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.506')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.506')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
   it('serialize → parse で内容が戻る', () => {
-    const draft = draftWith([['u0-1', 'ok'], ['p-2', 'needs-fix', '文字が細い']], 'ほかは問題なし')
+    const draft = draftWith([['c-1', 'ok'], ['p-2', 'needs-fix', '文字が細い']], 'ほかは問題なし')
     const restored = parseVerificationChecklistDraft(serializeVerificationChecklistDraft(draft))
     expect(restored).toEqual(draft)
   })
@@ -76,35 +75,35 @@ describe('下書きの保存キーと往復', () => {
     expect(parseVerificationChecklistDraft('null')).toEqual(empty)
     expect(parseVerificationChecklistDraft(null)).toEqual(empty)
     expect(parseVerificationChecklistDraft('')).toEqual(empty)
-    expect(parseVerificationChecklistDraft(JSON.stringify({ version: 'v0.0.1', entries: { 'u0-1': { status: 'ok', memo: '' } } }))).toEqual(empty)
+    expect(parseVerificationChecklistDraft(JSON.stringify({ version: 'v0.0.1', entries: { 'c-1': { status: 'ok', memo: '' } } }))).toEqual(empty)
   })
 
   it('想定外の status は未確認へ丸める(メモがなければ捨てる)', () => {
     const restored = parseVerificationChecklistDraft(JSON.stringify({
       version: VERIFICATION_CHECKLIST.version,
-      entries: { 'u0-1': { status: 'bogus', memo: '' }, 'u0-2': { status: 'bogus', memo: '気になる' }, 'u0-3': 'x' },
+      entries: { 'c-1': { status: 'bogus', memo: '' }, 'p-3': { status: 'bogus', memo: '気になる' }, 'h-2': 'x' },
       otherNotes: 5,
     }))
-    expect(restored.entries['u0-1']).toBeUndefined()
-    expect(restored.entries['u0-2']).toEqual({ status: 'unchecked', memo: '気になる' })
-    expect(restored.entries['u0-3']).toBeUndefined()
+    expect(restored.entries['c-1']).toBeUndefined()
+    expect(restored.entries['p-3']).toEqual({ status: 'unchecked', memo: '気になる' })
+    expect(restored.entries['h-2']).toBeUndefined()
     expect(restored.otherNotes).toBe('')
   })
 
   it('setVerificationChecklistEntry は元の下書きを壊さない(純関数)', () => {
     const base = createEmptyVerificationChecklistDraft()
-    const next = setVerificationChecklistEntry(base, 'u0-1', { status: 'ok' })
-    expect(base.entries['u0-1']).toBeUndefined()
-    expect(getVerificationChecklistEntry(next, 'u0-1')).toEqual({ status: 'ok', memo: '' })
+    const next = setVerificationChecklistEntry(base, 'c-1', { status: 'ok' })
+    expect(base.entries['c-1']).toBeUndefined()
+    expect(getVerificationChecklistEntry(next, 'c-1')).toEqual({ status: 'ok', memo: '' })
     // メモだけ足しても状態は保たれる。
-    const withMemo = setVerificationChecklistEntry(next, 'u0-1', { memo: 'いい感じ' })
-    expect(getVerificationChecklistEntry(withMemo, 'u0-1')).toEqual({ status: 'ok', memo: 'いい感じ' })
+    const withMemo = setVerificationChecklistEntry(next, 'c-1', { memo: 'いい感じ' })
+    expect(getVerificationChecklistEntry(withMemo, 'c-1')).toEqual({ status: 'ok', memo: 'いい感じ' })
   })
 })
 
 describe('進捗カウント', () => {
   it('OK / 要改善 / 未確認を数える', () => {
-    const draft = draftWith([['u0-1', 'ok'], ['u0-2', 'ok'], ['p-2', 'needs-fix', 'メモ']])
+    const draft = draftWith([['c-1', 'ok'], ['p-3', 'ok'], ['p-2', 'needs-fix', 'メモ']])
     const progress = countVerificationChecklistProgress(draft)
     expect(progress.total).toBe(VERIFICATION_CHECKLIST.items.length)
     expect(progress.ok).toBe(2)
@@ -121,30 +120,30 @@ describe('進捗カウント', () => {
 
 describe('送信本文の書式', () => {
   it('先頭行が固定マーカー・未確認は省略・要改善はメモ付き', () => {
-    const draft = draftWith([['u0-1', 'ok'], ['p-2', 'needs-fix', '文字が細い']], '全体的に良い')
+    const draft = draftWith([['c-1', 'ok'], ['p-2', 'needs-fix', '文字が細い']], '全体的に良い')
     const notes = buildVerificationChecklistReportNotes(draft)
     expect(notes).toHaveLength(1)
     expect(notes[0].split('\n')).toEqual([
       buildVerificationChecklistMarker(),
-      '- u0-1 OK',
+      '- c-1 OK',
       '- p-2 要改善: 文字が細い',
       '- その他: 全体的に良い',
     ])
-    expect(notes[0]).not.toContain('u0-2')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.504]')
+    expect(notes[0]).not.toContain('p-3')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.506]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
-    const draft = draftWith([['u0-1', 'ok', '問題なし'], ['u0-2', 'needs-fix', '1行目\n2行目']])
+    const draft = draftWith([['c-1', 'ok', '問題なし'], ['p-3', 'needs-fix', '1行目\n2行目']])
     const [note] = buildVerificationChecklistReportNotes(draft)
-    expect(note).toContain('- u0-1 OK: 問題なし')
-    expect(note).toContain('- u0-2 要改善: 1行目 / 2行目')
+    expect(note).toContain('- c-1 OK: 問題なし')
+    expect(note).toContain('- p-3 要改善: 1行目 / 2行目')
   })
 
   it('全部未確認なら空配列(= 送らない)', () => {
     expect(buildVerificationChecklistReportNotes(createEmptyVerificationChecklistDraft())).toEqual([])
     // メモだけ書いて状態が未確認のままの項目も送らない。
-    const memoOnly = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'u0-1', { memo: 'あとで見る' })
+    const memoOnly = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'c-1', { memo: 'あとで見る' })
     expect(buildVerificationChecklistReportNotes(memoOnly)).toEqual([])
   })
 
@@ -154,7 +153,7 @@ describe('送信本文の書式', () => {
   })
 
   it('2000字を超えると複数通に分かれ、各通の先頭に同じマーカーと (i/n) が付く', () => {
-    const draft = draftWith(VERIFICATION_CHECKLIST.items.map((item) => [item.id, 'needs-fix', 'あ'.repeat(300)] as [string, 'needs-fix', string]))
+    const draft = draftWith(VERIFICATION_CHECKLIST.items.map((item) => [item.id, 'needs-fix', 'あ'.repeat(600)] as [string, 'needs-fix', string]))
     const notes = buildVerificationChecklistReportNotes(draft)
     expect(notes.length).toBeGreaterThan(1)
     notes.forEach((note, index) => {
@@ -167,10 +166,10 @@ describe('送信本文の書式', () => {
   })
 
   it('1行だけで上限を超える長文メモは切り詰めて必ず収める', () => {
-    const draft = draftWith([['u0-1', 'needs-fix', 'い'.repeat(5000)]])
+    const draft = draftWith([['c-1', 'needs-fix', 'い'.repeat(5000)]])
     const notes = buildVerificationChecklistReportNotes(draft)
     for (const note of notes) expect(note.length).toBeLessThanOrEqual(DEVELOPER_REPORT_NOTE_LIMIT)
-    expect(notes[0]).toContain('- u0-1 要改善: ')
+    expect(notes[0]).toContain('- c-1 要改善: ')
   })
 
   it('項目一覧と上限は差し替えられる(将来の版でも同じ書式)', () => {
@@ -187,10 +186,10 @@ describe('送信本文の書式', () => {
 
 describe('Markdown コピー', () => {
   it('未確認も含めた全項目と、その他の気づきが出る', () => {
-    const draft = draftWith([['u0-1', 'ok'], ['p-2', 'needs-fix', '文字が細い']], '印刷が重い')
+    const draft = draftWith([['c-1', 'ok'], ['p-2', 'needs-fix', '文字が細い']], '印刷が重い')
     const markdown = buildVerificationChecklistMarkdown(draft)
     expect(markdown).toContain(`# ${buildVerificationChecklistMarker()}`)
-    expect(markdown).toContain('- [x] u0-1')
+    expect(markdown).toContain('- [x] c-1')
     expect(markdown).toContain('- [ ] p-2')
     expect(markdown).toContain('  - メモ: 文字が細い')
     expect(markdown).toContain('## その他の気づき')

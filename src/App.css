@@ -5216,3 +5216,45 @@ tr.sa-group-row td {
     display: none !important;
   }
 }
+
+/* 処理中オーバーレイ(PDF出力など操作を受け付けない間・確認リスト v1.5.504 その他・2026-09-12)。
+   モーダル(auto-assign-modal-overlay z-index 50 / QR 80)より前面、確認リスト(2000)よりは後ろ。 */
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: grid;
+  place-items: center;
+  background: rgba(16, 40, 70, 0.32);
+  pointer-events: auto;
+  cursor: progress;
+}
+
+.busy-overlay-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 14px 36px rgba(31, 51, 80, 0.28);
+  color: #16314f;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.busy-overlay-spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid rgba(26, 115, 232, 0.25);
+  border-top-color: #1a73e8;
+  animation: komahyou-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy-overlay-spinner {
+    animation-duration: 1.6s;
+  }
+}
