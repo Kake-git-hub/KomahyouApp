@@ -87,13 +87,39 @@ export function studentInnerContentOverflows(inner: HTMLElement): boolean {
 // 確認リスト p-3(2026-09-12): 従来は講師名を 24px 固定で overflow:hidden していたため、
 // 3 文字の講師名(72px)が講師列(54px)で見切れていた。画面側 fitTeacherTextForBoard と同じ発想で、
 // はみ出す間だけ縮める(収まっていれば初期値のまま＝従来出力は不変)。
+//
+// 確認リスト第4版 p-3(v1.5.508 の結果・2026-09-13)「講師名が大きすぎて見切れている」の真因:
+// 従来の判定 `node.scrollWidth > box.clientWidth` は (a) 比べる相手が td(padding 込み 56px)で、講師名ボックス
+// 自身の幅(50px)より広く、(b) 講師名は flex(justify-content:center)なので左側にはみ出た分が scrollWidth に
+// 載らない(実測: 文字幅 65px・ボックス 50px でも scrollWidth=57 ≤ 56+1 で「収まった」扱い)。
+// 結果、2 文字は両端が欠け、3 文字は縮めても左が欠けたまま出力された。
+// 対策: 文字そのものの幅(Range の矩形)をボックス自身の clientWidth と比べる(`singleLineTextOverflows`)。
+export function measureSingleLineTextWidth(node: HTMLElement): number {
+  try {
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    const width = range.getBoundingClientRect().width
+    return Number.isFinite(width) ? width : 0
+  } catch {
+    return 0
+  }
+}
+
+/** 1 行テキストがボックス(自身の内容幅・親セルの高さ)からはみ出しているか。寸法 0 の環境(jsdom)では false。 */
+export function singleLineTextOverflows(node: HTMLElement, box: HTMLElement = node.parentElement ?? node): boolean {
+  const textWidth = measureSingleLineTextWidth(node)
+  const ownWidthOverflow = node.clientWidth > 0 && textWidth > node.clientWidth + 1
+  const scrollOverflow = node.scrollWidth > box.clientWidth + 1 || node.scrollHeight > box.clientHeight + 1
+  return ownWidthOverflow || scrollOverflow
+}
+
 function fitSingleLineTextForPdf(node: HTMLElement, initialFontSize: number, minimumFontSize: number) {
   if (!node.textContent?.trim()) return
   const box = node.parentElement ?? node
   node.style.whiteSpace = 'nowrap'
   node.style.overflow = 'hidden'
   node.style.textOverflow = 'clip'
-  const overflows = () => node.scrollWidth > box.clientWidth + 1 || node.scrollHeight > box.clientHeight + 1
+  const overflows = () => singleLineTextOverflows(node, box)
   const apply = (fontSize: number) => {
     node.style.fontSize = `${fontSize}px`
   }
@@ -108,6 +134,17 @@ function fitSingleLineTextForPdf(node: HTMLElement, initialFontSize: number, min
     else low = candidate
   }
   apply(low)
+}
+
+// 集団行の科目セルは、未設定だと画面では CSS(::before)で「＋ 科目を選択」の操作ガイドを出す(.sa-group-subject-empty)。
+// 紙には要らない(確認リスト第4版 p-3 メモ「未割り当ては空白でよい」・2026-09-13)ので、PDF クローンでは
+// この目印クラスを外して空白にする。全選択・部分選択とも同じ(操作ガイドは印刷物に意味が無い)。
+export const PDF_GROUP_SUBJECT_EMPTY_CLASS = 'sa-group-subject-empty'
+
+export function clearGroupSubjectPlaceholdersForPdf(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>(`.${PDF_GROUP_SUBJECT_EMPTY_CLASS}`).forEach((node) => {
+    node.classList.remove(PDF_GROUP_SUBJECT_EMPTY_CLASS)
+  })
 }
 
 function fitTeacherTextForPdf(root: HTMLElement, maxFontSize: number) {
@@ -456,6 +493,8 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
     }
     applyBoardPdfColumnWidths(cloneTable)
   }
+
+  clearGroupSubjectPlaceholdersForPdf(clone)
 
   clone.querySelectorAll<HTMLElement>('thead th, .sa-time-cell').forEach((cell) => {
     cell.style.position = 'static'
