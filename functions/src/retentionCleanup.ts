@@ -70,7 +70,7 @@ export function chunkItems<T>(items: readonly T[], size: number): T[][] {
 // ★ここを取り違えると掃除が静かに0件になる(しかも operationEvents=1年 / lessonLedgerDays=2年 は
 //   実際に消え始めるのが1年以上先なので、誤りが1年間発覚しない)。
 //   対応表そのものをテストで固定するため、index.ts に直書きせずデータとしてここに置く。
-export type RetentionTargetKey = 'saveAttempts' | 'operationEvents' | 'lessonLedgerDays'
+export type RetentionTargetKey = 'saveAttempts' | 'operationEvents' | 'lessonLedgerDays' | 'parentMessages' | 'parentPortalRateLimits'
 
 export type RetentionTarget = {
   key: RetentionTargetKey
@@ -86,6 +86,10 @@ export function buildRetentionTargets(): RetentionTarget[] {
     { key: 'operationEvents', collectionId: 'operationEvents', timestampField: 'recordedAt' },
     // 生徒授業台帳。recordedAt = サーバー受領時刻。
     { key: 'lessonLedgerDays', collectionId: 'lessonLedgerDays', timestampField: 'recordedAt' },
+    // 保護者からの連絡(docs/spec-parent-portal.md §E-2・保持 365 日)。createdAt = 関数が採番した ISO 文字列。
+    { key: 'parentMessages', collectionId: 'parentMessages', timestampField: 'createdAt' },
+    // 保護者連絡の回数制限カウンタ(同 §E-1・保持 7 日)。createdAt = カウンタ初回作成時刻(加算では据え置く)。
+    { key: 'parentPortalRateLimits', collectionId: 'parentPortalRateLimits', timestampField: 'createdAt' },
   ]
 }
 

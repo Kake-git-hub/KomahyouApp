@@ -5267,3 +5267,129 @@ tr.sa-group-row td {
     animation-duration: 1.6s;
   }
 }
+
+/* 保護者からの連絡モーダル(docs/spec-parent-portal.md §E-2)。骨格は .submission-acknowledgement-* を流用し、
+   連絡固有の要素(送信者の未確認注記・URL 警告・本文)だけここで足す。既存規則は変更しない。 */
+.parent-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 4px;
+  color: #1c3a5c;
+  font-size: 16px;
+}
+
+.parent-message-meta strong {
+  color: #16314f;
+  font-weight: 800;
+}
+
+.parent-message-received-at {
+  color: #5a7391;
+  font-size: 13px;
+}
+
+.parent-message-sender {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin-bottom: 8px;
+  color: #36506d;
+  font-size: 14px;
+}
+
+.parent-message-sender strong {
+  color: #16314f;
+  font-weight: 800;
+}
+
+.parent-message-unverified {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fff1d6;
+  color: #7c4a00;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.parent-message-url-warning {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fdecea;
+  color: #8b1d16;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.parent-message-body {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #d7e2f1;
+  color: #16314f;
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.parent-message-actions {
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.parent-message-actions-hint {
+  color: #5a7391;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 基本データ画面の保護者用QRモーダル(docs/spec-parent-portal.md §K-6)。骨格は .distribution-qr-* を流用。 */
+.parent-portal-qr-student {
+  color: #16314f;
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.parent-portal-qr-guidance,
+.parent-portal-qr-caution {
+  margin: 0;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.parent-portal-qr-guidance {
+  color: #36506d;
+}
+
+.parent-portal-qr-caution {
+  color: #8b1d16;
+}
+
+.parent-portal-qr-error {
+  margin: 0;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fdecea;
+  color: #8b1d16;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.parent-portal-qr-actions {
+  flex-wrap: wrap;
+  gap: 10px;
+}

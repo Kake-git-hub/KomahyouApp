@@ -772,7 +772,12 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
       },
       managers: [],
       teachers: [],
-      students: [],
+      students: [
+        // 保護者用QRの写しトークン付きの生徒(他教室で発行済み)。コピーで剥がさないと、開発用教室の画面から
+        // **本番生徒の日程を返すQR**を表示・印刷できてしまう(2026-07-09 の提出トークン事故と同型・INV-08)。
+        { id: 's001', name: '青木 太郎', displayName: '青木', email: '', entryDate: '2026-04-01', withdrawDate: '未定', birthDate: '2012-05-05', parentPortalToken: 'parent-token-1', parentPortalTokenClassroomId: 'source-classroom' },
+        { id: 's002', name: '石川 花子', displayName: '石川', email: '', entryDate: '2026-04-01', withdrawDate: '未定', birthDate: '2013-05-05' },
+      ],
       regularLessons: [],
       groupLessons: [],
       specialSessions: [{
@@ -827,9 +832,17 @@ describe('buildDevelopmentClassroomCopyPayload', () => {
     // 混入防止(2026-07-09): 発行元教室タグも外す。開発用側で自教室のトークンを再発行させるため。
     expect(copied.specialSessions[0]?.studentInputs['student-1']?.submissionTokenClassroomId).toBeUndefined()
     expect(copied.specialSessions[0]?.teacherInputs['teacher-1']?.submissionTokenClassroomId).toBeUndefined()
+    // 保護者用QR(2026-09-13): 写しトークンと発行元教室タグの**両方**が消え、他のフィールドは残る。
+    expect(copied.students[0]?.parentPortalToken).toBeUndefined()
+    expect(copied.students[0]?.parentPortalTokenClassroomId).toBeUndefined()
+    expect(copied.students[0]?.name).toBe('青木 太郎')
+    expect(copied.students[1]).toEqual(sourcePayload.students[1])
+    expect(JSON.stringify(copied.students)).not.toContain('parent-token-1')
     expect(sourcePayload.classroomSettings.boardShareToken).toBe('board-share-token')
     expect(sourcePayload.specialSessions[0]?.studentInputs['student-1']?.submissionToken).toBe('student-token')
     expect(sourcePayload.specialSessions[0]?.teacherInputs['teacher-1']?.submissionToken).toBe('teacher-token')
+    // コピー元は不変(写しトークンが消えていない)。
+    expect(sourcePayload.students[0]?.parentPortalToken).toBe('parent-token-1')
   })
 
   // 【本番データ混入防止・回帰防止】コピー先(開発用)とコピー元(他教室)が参照を共有してはならない。

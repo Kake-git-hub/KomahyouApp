@@ -97,7 +97,19 @@ describe('buildRetentionTargets', () => {
       { key: 'saveAttempts', collectionId: 'saveAttempts', timestampField: 'createdAt' },
       { key: 'operationEvents', collectionId: 'operationEvents', timestampField: 'recordedAt' },
       { key: 'lessonLedgerDays', collectionId: 'lessonLedgerDays', timestampField: 'recordedAt' },
+      // 保護者向け固定QR(docs/spec-parent-portal.md §E-2): 連絡 365 日・回数制限カウンタ 7 日。
+      { key: 'parentMessages', collectionId: 'parentMessages', timestampField: 'createdAt' },
+      { key: 'parentPortalRateLimits', collectionId: 'parentPortalRateLimits', timestampField: 'createdAt' },
     ])
+  })
+
+  it('保護者連絡の保持日数は index.ts で 365 日(下限 30)・カウンタは 7 日(下限 1)に配線されている', () => {
+    const source = readIndexSource()
+    expect(source).toContain("const PARENT_MESSAGE_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.PARENT_MESSAGE_RETENTION_DAYS)) || 365)")
+    expect(source).toContain("const PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS = Math.max(1, Math.trunc(Number(process.env.PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS)) || 7)")
+    const body = source.slice(source.indexOf('async function runSaveAttemptCleanup'))
+    expect(body).toContain('parentMessages: resolveRetentionCutoffIso(startedAtMs, PARENT_MESSAGE_RETENTION_DAYS)')
+    expect(body).toContain('parentPortalRateLimits: resolveRetentionCutoffIso(startedAtMs, PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS)')
   })
 
   it('掃除の巡回が対応表を使っている(index.ts への直書きへ戻していない)', () => {

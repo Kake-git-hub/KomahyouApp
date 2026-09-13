@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 import { featureRolloutRegistry, isFeatureEnabledForClassroom, isFeatureScopeEnabled, isStagingEnvironment } from './featureRollout'
 
@@ -89,6 +92,32 @@ describe('featureRollout: boardPrintSelection（盤面PDFのコマ選択）', ()
   })
 })
 
+describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバーとの左右対称）', () => {
+  it('判定式はサーバー側 functions/src/parentPortal.ts と同じ形を保つ(片側だけ昇格させない)', () => {
+    // クライアント: scope 'staging-environment' = isStagingEnvironment() || isDevelopmentClassroom({ id, name })
+    expect(featureRolloutRegistry.parentPortalQr.scope).toBe('staging-environment')
+    // サーバー: isDevelopmentClassroomIdentity(id, name) || projectId === 'komahyouapp-staging'
+    // → 述語が一致していることを字面で固定する(両方を同時に変えないと落ちる)。
+    const serverSource = readFileSync(fileURLToPath(new URL('../../functions/src/parentPortal.ts', import.meta.url)), 'utf8')
+    const start = serverSource.indexOf('export function isParentPortalEnabledForClassroom')
+    expect(start).toBeGreaterThan(-1)
+    const body = serverSource.slice(start, start + 400)
+    expect(body).toContain('isDevelopmentClassroomIdentity(identity.id, identity.name)')
+    expect(body).toContain('PARENT_PORTAL_STAGING_PROJECT_ID')
+    // 本番教室 ID の直接許可(片側だけ広い形)を復活させていないこと。
+    expect(body).not.toContain('v8OZ7zH8vONNHjjYVcR1')
+  })
+
+  it('本番3教室では無効・開発用/テスト教室では有効', () => {
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'dev', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai', name: 'テスト教室' })).toBe(true)
+    for (const [id, name] of [['5w5OMueETerSKrSf14HC', 'スクールIE 日大前校'], ['KzFnOQoTFLsCxwUp1tvh', 'スクールIE 緑が丘校'], ['6xnnbSTbwgGrBLy0EJKb', 'スクールIE 薬円台校']]) {
+      expect(isFeatureEnabledForClassroom('parentPortalQr', { id, name }), id).toBe(false)
+    }
+    expect(isFeatureEnabledForClassroom('parentPortalQr', null)).toBe(false)
+  })
+})
+
 describe('featureRollout: lessonHistory（講習履歴）', () => {
   it('開発用教室でのみ有効（本番3教室では出さない）', () => {
     // 新機能はフラグ付きで作る方針(docs/plan-2026-09-11-five-requests.md)。まず開発用教室で先行検証する。
@@ -98,5 +127,25 @@ describe('featureRollout: lessonHistory（講習履歴）', () => {
     expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
     expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(false)
     expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(false)
+  })
+})
+
+describe('featureRollout: parentPortalQr（開発用教室・staging での有効範囲）', () => {
+  it('開発用/テスト教室では有効・本番3教室では無効(名前を変えれば両側同時に無効になる)', () => {
+    // docs/spec-parent-portal.md §H: 公開順は 開発用教室 → staging → 本番1教室 → 全教室。
+    // 昇格はサーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom と同時に、オーナー確認後に行う。
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'development', name: '開発用教室' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' })).toBe(true)
+    // ★本番の開発用教室は**名前**で一致する(ID 単独の許可は入れない = サーバーと同じ述語)。
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '名前を変えた教室' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '5w5OMueETerSKrSf14HC', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'KzFnOQoTFLsCxwUp1tvh', name: 'スクールIE 緑が丘校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '6xnnbSTbwgGrBLy0EJKb', name: 'スクールIE 薬円台校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', null)).toBe(false)
+  })
+
+  it('staging プロジェクトでは一般教室でも有効(§H の staging 実機確認ができる)', () => {
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.parentPortalQr.scope, { isStaging: true, isDevelopmentClassroom: false })).toBe(true)
+    expect(isFeatureScopeEnabled(featureRolloutRegistry.parentPortalQr.scope, { isStaging: false, isDevelopmentClassroom: false })).toBe(false)
   })
 })

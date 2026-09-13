@@ -2762,7 +2762,10 @@ function mergeManagedDeskLesson(currentLesson: DeskLesson, managedLesson: DeskLe
   return nextLesson
 }
 
-function buildManagedOccurrenceKey(student: StudentEntry, dateKey: string, slotNumber: number) {
+// ★export しているのは、保護者ポータルの写し(src/utils/parentSchedule.ts buildManagedOccurrenceKey)が
+//   同じ鍵の形を使っていることをテストで突き合わせるため。鍵の形を変えると、写し側の抑止だけが外れて
+//   「振替済みの通常授業が元の曜日にも湧く」(二重表示)になる。形を変えるときは両方直す。
+export function buildManagedOccurrenceKey(student: StudentEntry, dateKey: string, slotNumber: number) {
   return `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__${slotNumber}`
 }
 

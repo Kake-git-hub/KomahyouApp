@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionToken, stripForeignSubmissionTokensFromInputs, stripSubmissionToken, stripSubmissionTokensFromInputs } from './developmentClassroom'
+import type { StudentRow } from '../components/basic-data/basicDataModel'
+import { isDevelopmentClassroom, isParentPortalTokenOwnedByClassroom, isSubmissionTokenOwnedByClassroom, stripForeignParentPortalToken, stripForeignParentPortalTokensFromStudents, stripForeignSubmissionToken, stripForeignSubmissionTokensFromInputs, stripParentPortalToken, stripParentPortalTokensFromStudents, stripSubmissionToken, stripSubmissionTokensFromInputs } from './developmentClassroom'
 
 describe('isDevelopmentClassroom', () => {
   it('accepts exact and extended development classroom names', () => {
@@ -147,5 +148,108 @@ describe('stripForeignSubmissionTokensFromInputs (日程表へ渡す前の防波
     expect(result.legacy!.submissionToken).toBeUndefined()
     // 他フィールドは保持(登録状態などを壊さない)
     expect(result.foreign!.countSubmitted).toBe(false)
+  })
+})
+
+// ---- 保護者向け固定QR(docs/spec-parent-portal.md §B-3・2026-09-13) ----
+// 提出トークン b2e2048 / v1.5.415 と同型の事故(他教室コピーで本番生徒の QR が開発用教室に出る)を防ぐ剥がし。
+// StudentRow 全体で型付けする(`{ parentPortalToken?: ... }` の弱い型に対し、トークン無しの素の行を渡すと TS2559 になるため)。
+const studentBase: StudentRow = { id: 's001', name: '青木 太郎', displayName: '青木', email: '', entryDate: '2026-04-01', withdrawDate: '未定', birthDate: '2012-05-01' }
+
+describe('isParentPortalTokenOwnedByClassroom', () => {
+  it('発行元教室タグが一致するときだけ信用する', () => {
+    expect(isParentPortalTokenOwnedByClassroom({ parentPortalToken: 'tok', parentPortalTokenClassroomId: 'dev' }, 'dev')).toBe(true)
+  })
+  it('別教室タグ・タグ無し・トークン無し・教室未指定は信用しない', () => {
+    expect(isParentPortalTokenOwnedByClassroom({ parentPortalToken: 'tok', parentPortalTokenClassroomId: '5w5OMueETerSKrSf14HC' }, 'dev')).toBe(false)
+    expect(isParentPortalTokenOwnedByClassroom({ parentPortalToken: 'tok' }, 'dev')).toBe(false)
+    expect(isParentPortalTokenOwnedByClassroom({ parentPortalTokenClassroomId: 'dev' }, 'dev')).toBe(false)
+    expect(isParentPortalTokenOwnedByClassroom({ parentPortalToken: 'tok', parentPortalTokenClassroomId: 'dev' }, '')).toBe(false)
+    expect(isParentPortalTokenOwnedByClassroom(null, 'dev')).toBe(false)
+  })
+})
+
+describe('stripParentPortalToken (無条件・教室コピー用の唯一の権威)', () => {
+  it('発行元教室に関係なく token と発行元タグの両方を剥がし、他フィールドは保持する', () => {
+    const result = stripParentPortalToken({ ...studentBase, parentPortalToken: 'tok', parentPortalTokenClassroomId: 'dev', isExternal: true })
+    expect(result.parentPortalToken).toBeUndefined()
+    expect(result.parentPortalTokenClassroomId).toBeUndefined()
+    expect('parentPortalToken' in result).toBe(false) // undefined 代入ではなく delete(toEqual/Firestore payload を汚さない)
+    expect('parentPortalTokenClassroomId' in result).toBe(false)
+    expect(result).toEqual({ ...studentBase, isExternal: true })
+  })
+  it('タグだけ残った行・タグ無しトークンの行も剥がす(片方だけの状態を作らない)', () => {
+    expect('parentPortalTokenClassroomId' in stripParentPortalToken({ ...studentBase, parentPortalTokenClassroomId: 'dev' })).toBe(false)
+    expect('parentPortalToken' in stripParentPortalToken({ ...studentBase, parentPortalToken: 'tok' })).toBe(false)
+  })
+  it('トークンが無い行はそのまま返す(参照不変)', () => {
+    const row: StudentRow = { ...studentBase }
+    expect(stripParentPortalToken(row)).toBe(row)
+  })
+  it('元オブジェクトは破壊しない(純関数)', () => {
+    const row = { ...studentBase, parentPortalToken: 'tok', parentPortalTokenClassroomId: 'dev' }
+    stripParentPortalToken(row)
+    expect(row.parentPortalToken).toBe('tok')
+    expect(row.parentPortalTokenClassroomId).toBe('dev')
+  })
+})
+
+describe('stripParentPortalTokensFromStudents (配列単位・無条件)', () => {
+  it('自教室タグ付きも本番教室タグ付きもタグ無しも全て剥がす', () => {
+    const rows: StudentRow[] = [
+      { ...studentBase, id: 's001', parentPortalToken: 'a', parentPortalTokenClassroomId: 'dev' },
+      { ...studentBase, id: 's002', parentPortalToken: 'b', parentPortalTokenClassroomId: '5w5OMueETerSKrSf14HC' },
+      { ...studentBase, id: 's003', parentPortalToken: 'c' },
+      { ...studentBase, id: 's004' },
+    ]
+    const result = stripParentPortalTokensFromStudents(rows)
+    expect(result.map((row) => row.id)).toEqual(['s001', 's002', 's003', 's004']) // 順序と件数は不変
+    expect(result.every((row) => !('parentPortalToken' in row) && !('parentPortalTokenClassroomId' in row))).toBe(true)
+    expect(result[3]).toBe(rows[3]) // トークンの無い行は同一参照
+    expect(rows[0].parentPortalToken).toBe('a') // 入力は破壊しない
+  })
+  it('どの行も変わらなければ配列も同一参照を返す', () => {
+    const rows: StudentRow[] = [{ ...studentBase, id: 's001' }, { ...studentBase, id: 's002' }]
+    expect(stripParentPortalTokensFromStudents(rows)).toBe(rows)
+  })
+})
+
+describe('stripForeignParentPortalToken (開発用教室のみ・他教室由来だけ除去)', () => {
+  it('自教室が発行したトークンは残す(参照そのまま)', () => {
+    const row = { ...studentBase, parentPortalToken: 'tok', parentPortalTokenClassroomId: 'dev' }
+    expect(stripForeignParentPortalToken(row, 'dev')).toBe(row)
+  })
+  it('本番教室由来・タグ無しは剥がす', () => {
+    const foreign = stripForeignParentPortalToken({ ...studentBase, parentPortalToken: 'tok', parentPortalTokenClassroomId: '5w5OMueETerSKrSf14HC' }, 'dev')
+    expect('parentPortalToken' in foreign).toBe(false)
+    expect('parentPortalTokenClassroomId' in foreign).toBe(false)
+    expect('parentPortalToken' in stripForeignParentPortalToken({ ...studentBase, parentPortalToken: 'tok' }, 'dev')).toBe(false)
+  })
+})
+
+describe('stripForeignParentPortalTokensFromStudents (配列単位・開発用教室のみ)', () => {
+  it('自教室の行は残し、他教室由来・タグ無しの行だけ剥がす', () => {
+    const rows: StudentRow[] = [
+      { ...studentBase, id: 's001', parentPortalToken: 'a', parentPortalTokenClassroomId: 'dev' },
+      { ...studentBase, id: 's002', parentPortalToken: 'b', parentPortalTokenClassroomId: '5w5OMueETerSKrSf14HC' },
+      { ...studentBase, id: 's003', parentPortalToken: 'c' },
+    ]
+    const result = stripForeignParentPortalTokensFromStudents(rows, 'dev')
+    expect(result[0]).toBe(rows[0])
+    expect(result[0]!.parentPortalToken).toBe('a')
+    expect('parentPortalToken' in result[1]!).toBe(false)
+    expect('parentPortalToken' in result[2]!).toBe(false)
+  })
+  it('全行が自教室なら配列も同一参照', () => {
+    const rows: StudentRow[] = [{ ...studentBase, parentPortalToken: 'a', parentPortalTokenClassroomId: 'dev' }]
+    expect(stripForeignParentPortalTokensFromStudents(rows, 'dev')).toBe(rows)
+  })
+  // 本番3教室はサンドボックスではないので、そもそもこの剥がしは App 側(isActingDevelopmentClassroom)で呼ばれない。
+  // 判定関数の側でも本番IDが絶対にサンドボックス扱いにならないことを、保護者QR文脈でも固定する。
+  it('本番3教室の ID は保護者QR文脈でも決してサンドボックス扱いにならない', () => {
+    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC', name: 'スクールIE 日大前校' })).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh', name: 'スクールIE 緑が丘校' })).toBe(false)
+    expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb', name: 'スクールIE 薬円台校' })).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' })).toBe(true)
   })
 })

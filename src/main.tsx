@@ -59,8 +59,11 @@ function recoverFromChunkLoadError(error: unknown) {
 }
 
 import { applySubmissionViewport } from './components/submission/iosViewport'
+import { extractParentPortalToken } from './utils/parentPortalRoute'
 
 const SubmissionPage = lazy(() => import('./components/submission/SubmissionPage'))
+// 保護者向け固定QR(docs/spec-parent-portal.md §C)。/s/ と同じく App 本体を読み込まない軽量経路。
+const ParentPortalPage = lazy(() => import('./components/parent-portal/ParentPortalPage'))
 const BoardShareScreen = lazy(() => import('./components/board-share/BoardShareScreen').then((module) => ({ default: module.BoardShareScreen })))
 
 function extractSubmissionToken() {
@@ -92,6 +95,7 @@ function isSubmissionDebug() {
 }
 
 const submissionToken = extractSubmissionToken()
+const parentPortalToken = extractParentPortalToken(window.location.pathname, window.location.hash)
 const boardShareToken = extractBoardShareToken()
 
 if (isSubmissionDebug()) {
@@ -112,6 +116,17 @@ if (isSubmissionDebug()) {
     <StrictMode>
       <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>
         <SubmissionPage token={submissionToken} />
+      </Suspense>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </StrictMode>,
+  )
+} else if (parentPortalToken) {
+  // 保護者ポータルは applySubmissionViewport(width=520 + zoom 0.7 の対)を使わず device-width で描画する
+  // (片方だけ真似ると極小文字になる)。提出ページと同じく App 本体は読み込まない。
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <Suspense fallback={<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100dvh', fontFamily: 'sans-serif', color: '#666' }}>読み込み中...</div>}>
+        <ParentPortalPage token={parentPortalToken} />
       </Suspense>
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </StrictMode>,

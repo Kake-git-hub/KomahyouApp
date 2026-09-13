@@ -111,6 +111,19 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Student schedule tab: "講習履歴" button and overlay backed by the getStudentLessonHistory callable.',
   },
+  // 保護者向け固定QR(docs/spec-parent-portal.md §H / docs/plan-2026-09-11-five-requests.md §7 K-2〜K-6)。
+  // ON: 基本データ画面の在籍生徒に「QR」ボタン(表示・印刷・再発行)を出し、保護者からの連絡モーダルを購読する。
+  // 教室別オプション基盤(O-1)は保留中のため、まず開発用教室のみで先行検証する(§H 公開順: 開発用→staging→本番1教室→全教室)。
+  // ⚠️ サーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom が**同一の述語**を持つ
+  // (OFF の教室では parentPortalApi が 403)。昇格するときは**両側を同時に**変える(片方だけ広げると、QR は出るのに
+  // ページが開けない/ページは開けるのに QR が出ない、の非対称になる)。昇格はオーナー確認後。
+  // ★scope は `staging-environment`(= staging プロジェクト全教室 ＋ どの環境でも開発用/テスト教室)。
+  //   `development-only` だと staging の一般教室でボタンが出ず、サーバーだけ許可する非対称になって
+  //   §H の「staging 実機で確認」が実行できない(レビュー指摘 2026-09-13)。
+  parentPortalQr: {
+    scope: 'staging-environment',
+    description: 'Basic-data screen: per-student parent portal QR (issue/show/print/reissue) and the parent message notification modal.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

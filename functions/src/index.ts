@@ -11,6 +11,42 @@ import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
+// 保護者向け固定QR: 日程計算の権威は src/utils/parentSchedule.ts。functions へは prebuild(sync-shared)で複製した
+// generated/parentSchedule.ts を使う(手書きコピーの持ち込み禁止・docs/spec-parent-portal.md §D)。
+import {
+  buildParentScheduleView,
+  isParentStudentActiveOnDate,
+  resolveParentScheduleRange,
+  toJstDateKey as toParentPortalJstDateKey,
+} from './generated/parentSchedule'
+import {
+  buildParentMessageId,
+  buildParentPortalTokenFingerprint,
+  buildStudentPortalOwnerId,
+  decideParentPortalGetThrottle,
+  findParentPortalStudent,
+  generateStudentPortalToken,
+  handleParentPortalGet,
+  handleParentPortalPost,
+  isParentPortalEnabledForClassroom,
+  normalizeIssueRequest,
+  normalizeMarkNotifiedRequest,
+  normalizeRevokeRequest,
+  PARENT_PORTAL_ERROR_INTERNAL,
+  PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED,
+  PARENT_PORTAL_ERROR_TOO_MANY_REQUESTS,
+  pruneParentPortalGetThrottleKeys,
+  readStudentPortalOwnerDoc,
+  readStudentPortalTokenDoc,
+  resolveIssueDecision,
+  resolveParentMessageRateLimitOutcome,
+  resolveRevokeDecision,
+  selectParentMessageIdsToMarkNotified,
+  toParentPortalTokenPrefix,
+  type ParentPortalDeps,
+  type ParentPortalGetThrottleBucket,
+  type StudentPortalTokenWrite,
+} from './parentPortal'
 import {
   countActiveStudentsOnDate,
   isFutureSnapshotDate,
@@ -2133,6 +2169,11 @@ const SAVE_ATTEMPT_CLEANUP_SCHEDULE = process.env.SAVE_ATTEMPT_CLEANUP_SCHEDULE 
 const OPERATION_EVENT_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.OPERATION_EVENT_RETENTION_DAYS)) || 365)
 // 生徒授業台帳の保持期間。「1年分を振り返れる」(オーナー指示 2026-09-04)を年度末でも満たすよう **2 年**。
 const LESSON_LEDGER_RETENTION_DAYS = Math.max(400, Math.trunc(Number(process.env.LESSON_LEDGER_RETENTION_DAYS)) || 730)
+// 保護者からの連絡(classroomSnapshots/{id}/parentMessages)の保持期間。docs/spec-parent-portal.md §E-2 で **365 日**。
+// 下限 30 日は「室長が未確認のまま消える」事故を env の打ち間違いで起こさないため。
+const PARENT_MESSAGE_RETENTION_DAYS = Math.max(30, Math.trunc(Number(process.env.PARENT_MESSAGE_RETENTION_DAYS)) || 365)
+// 保護者連絡の回数制限カウンタ(parentPortalRateLimits)の保持期間。日・時単位のキーなので 7 日で十分(同 §E-1)。
+const PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS = Math.max(1, Math.trunc(Number(process.env.PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS)) || 7)
 
 // 復元前スナップショットの間引きを「消さずに件数だけ数える」空実行にするフラグ。
 // ★本番初回は 3,978 本 = 46.8GB を不可逆に消すことになるため、まず dry-run で
@@ -2232,8 +2273,10 @@ async function runSaveAttemptCleanup() {
     saveAttempts: resolveRetentionCutoffIso(startedAtMs, SAVE_ATTEMPT_RETENTION_DAYS),
     operationEvents: resolveRetentionCutoffIso(startedAtMs, OPERATION_EVENT_RETENTION_DAYS),
     lessonLedgerDays: resolveRetentionCutoffIso(startedAtMs, LESSON_LEDGER_RETENTION_DAYS),
+    parentMessages: resolveRetentionCutoffIso(startedAtMs, PARENT_MESSAGE_RETENTION_DAYS),
+    parentPortalRateLimits: resolveRetentionCutoffIso(startedAtMs, PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS),
   }
-  const deletedByTarget: Record<RetentionTargetKey, number> = { saveAttempts: 0, operationEvents: 0, lessonLedgerDays: 0 }
+  const deletedByTarget: Record<RetentionTargetKey, number> = { saveAttempts: 0, operationEvents: 0, lessonLedgerDays: 0, parentMessages: 0, parentPortalRateLimits: 0 }
 
   // ★Storage の間引きを先に行う(独立した時間予算)。Firestore 巡回の後ろに置くと滞留分が永久に減らない。
   let incidentPrune = { deleted: 0, failed: 0, pagesLoaded: 0, stoppedByBudget: false }
@@ -2279,7 +2322,7 @@ async function runSaveAttemptCleanup() {
     }
   }
 
-  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''})`
+  const summary = `[SaveAttemptCleanup] Deleted ${deletedByTarget.saveAttempts} saveAttempts (< ${cutoffIsoByTarget.saveAttempts}, retentionDays=${SAVE_ATTEMPT_RETENTION_DAYS}), ${deletedByTarget.operationEvents} operationEvents (< ${cutoffIsoByTarget.operationEvents}, retentionDays=${OPERATION_EVENT_RETENTION_DAYS}), ${deletedByTarget.lessonLedgerDays} lessonLedgerDays (< ${cutoffIsoByTarget.lessonLedgerDays}, retentionDays=${LESSON_LEDGER_RETENTION_DAYS}), ${deletedByTarget.parentMessages} parentMessages (< ${cutoffIsoByTarget.parentMessages}, retentionDays=${PARENT_MESSAGE_RETENTION_DAYS}), ${deletedByTarget.parentPortalRateLimits} parentPortalRateLimits (retentionDays=${PARENT_PORTAL_RATE_LIMIT_RETENTION_DAYS}), ${incidentPrune.deleted} incident backups (retentionDays=${WORKSPACE_INCIDENT_BACKUP_RETENTION_DAYS}${INCIDENT_BACKUP_PRUNE_DRY_RUN ? ', DRY RUN' : ''})`
   if (stoppedByBudget) {
     // ★予算で打ち切った = まだ滞留している。3ヶ月気づかなかった障害の再発を早く見つけるため error で出す。
     logger.error(`${summary} — 予算上限で打ち切りました(滞留が残っています)。翌日以降の実行で続きを消します。`)
@@ -2295,6 +2338,8 @@ async function runSaveAttemptCleanup() {
     operationEventCutoffIso: cutoffIsoByTarget.operationEvents,
     operationEventRetentionDays: OPERATION_EVENT_RETENTION_DAYS,
     deletedLessonLedgerDays: deletedByTarget.lessonLedgerDays,
+    deletedParentMessages: deletedByTarget.parentMessages,
+    deletedParentPortalRateLimits: deletedByTarget.parentPortalRateLimits,
     deletedIncidentBackups: incidentPrune.deleted,
     incidentBackupDryRun: INCIDENT_BACKUP_PRUNE_DRY_RUN,
     stoppedByBudget,
@@ -2839,4 +2884,309 @@ export const lectureSubmissionApi = onRequest({
   }
 
   res.status(405).json({ error: 'Method not allowed' })
+})
+
+// ---------------------------------------------------------------------------
+// 保護者向け固定QR(生徒別ポータル)。docs/spec-parent-portal.md(正本)。
+// 検証順・文言・回数制限の判定・文書の形は functions/src/parentPortal.ts(純ロジック・テスト済み)。
+// ここは Firestore の I/O 配線だけ(index.ts から新規 export しない = 関数トリガ以外を増やさない)。
+// ⚠️ スナップショット本体(classroomSnapshots/{id})は**読み取りのみ**。書くのは
+//   studentPortalTokens / studentPortalTokenOwners(トップレベル・CF 専用)と
+//   classroomSnapshots/{id}/parentMessages・parentPortalRateLimits(サブコレクション)だけ。
+//   盤面・在庫・出欠・提出には一切書かない(§J-1)。lectureSubmissionApi は無改変。
+// ---------------------------------------------------------------------------
+
+// 機能フラグの staging 判定に使う(isParentPortalEnabledForClassroom)。本番は 'komahyouapp-prod'。
+// gen2(Cloud Run 実行)では GCLOUD_PROJECT が入らないことがあるため、注入されうる名前を順に見る。
+// ここを取り違えると staging でも本番扱いになり、staging の教室が 403 になって実機検証ができない。
+const PARENT_PORTAL_PROJECT_ID = process.env.GCLOUD_PROJECT
+  ?? process.env.GOOGLE_CLOUD_PROJECT
+  ?? process.env.GCP_PROJECT
+  ?? 'komahyouapp-prod'
+
+function studentPortalTokenRef(token: string) {
+  return firestore.collection('studentPortalTokens').doc(token)
+}
+
+function studentPortalOwnerRef(ownerId: string) {
+  return firestore.collection('studentPortalTokenOwners').doc(ownerId)
+}
+
+function parentPortalClassroomSnapshotRef(workspaceKey: string, classroomId: string) {
+  return firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId)
+}
+
+// ハンドラへ差し込む I/O。読み取りはトークン doc → 教室 doc → スナップショットの順で、ハンドラが
+// 前段で落とした場合は後段を呼ばない(K-4「読んでから弾く実装にしない」はハンドラ側のテストで固定)。
+function buildParentPortalDeps(): ParentPortalDeps {
+  return {
+    loadToken: async (token) => {
+      const snapshot = await studentPortalTokenRef(token).get()
+      return snapshot.exists ? readStudentPortalTokenDoc(snapshot.data()) : null
+    },
+    loadClassroom: async (workspaceKey, classroomId) => {
+      const snapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(classroomId).get()
+      if (!snapshot.exists) return null
+      const data = snapshot.data() as FirebaseClassroomDoc | undefined
+      return { name: typeof data?.name === 'string' ? data.name : '' }
+    },
+    loadSnapshot: async (workspaceKey, classroomId) => {
+      const snapshot = await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).get()
+      if (!snapshot.exists) return null
+      const data = snapshot.data() as FirebaseClassroomSnapshotDoc
+      // inline data / gzip-base64 compressedData の両方をこの 1 関数が解く(lectureSubmissionApi と同じ)。
+      const payload = readStoredSnapshotPayload(data)
+      if (!payload) return null
+      return { payload, savedAt: typeof data.savedAt === 'string' && data.savedAt ? data.savedAt : null }
+    },
+    buildScheduleView: (payload, studentId, range) => buildParentScheduleView(payload, studentId, range),
+    resolveRange: (input, todayKey) => resolveParentScheduleRange(input, todayKey),
+    // 在籍判定は盤面・日程表と同じ isActiveOnDate の写し(§F。管理データ画面の入塾日不問規則は使わない)。
+    isStudentActive: (student, dateKey) => isParentStudentActiveOnDate(student, dateKey),
+    isEnabled: ({ id, name }) => isParentPortalEnabledForClassroom({ id, name, projectId: PARENT_PORTAL_PROJECT_ID }),
+    todayJst: () => toParentPortalJstDateKey(new Date()),
+    nowIso: () => new Date().toISOString(),
+    // 回数制限(§E-1): トークン×JST 日と教室×JST 時の 2 カウンタを 1 トランザクションで
+    // 「読む → 判定 → **許可のときだけ** +1」する。判定と書き込み内容は
+    // resolveParentMessageRateLimitOutcome(純関数)が決める。
+    // ★拒否のときは 1 件も書かない: 加算していた旧実装では、1 本の漏洩QRから連打すると教室×時カウンタが
+    //   上限を越え、同じ教室の他の保護者が 1 時間送れなくなった(＋書き込み課金が止まらない)。
+    consumeMessageQuota: async ({ workspaceKey, classroomId, tokenDayKey, classroomHourKey }) => {
+      const collection = parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentPortalRateLimits')
+      const tokenRef = collection.doc(tokenDayKey)
+      const classroomRef = collection.doc(classroomHourKey)
+      return firestore.runTransaction(async (transaction) => {
+        const [tokenSnapshot, classroomSnapshot] = await transaction.getAll(tokenRef, classroomRef)
+        const outcome = resolveParentMessageRateLimitOutcome({
+          tokenCounter: tokenSnapshot.exists ? tokenSnapshot.data() : null,
+          classroomCounter: classroomSnapshot.exists ? classroomSnapshot.data() : null,
+          nowIso: new Date().toISOString(),
+        })
+        if (outcome.writes) {
+          transaction.set(tokenRef, outcome.writes.token)
+          transaction.set(classroomRef, outcome.writes.classroom)
+        }
+        return { allowed: outcome.allowed, error: outcome.error }
+      })
+    },
+    saveMessage: async ({ workspaceKey, classroomId, doc }) => {
+      // 文書 ID は時系列に並ぶ形(developerReport と同じ作法)。create で既存 ID の上書きを防ぐ。
+      const messageId = buildParentMessageId(doc.createdAt, randomBytes(6).toString('hex'))
+      await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages').doc(messageId).create(doc)
+      return { id: messageId }
+    },
+  }
+}
+
+// GET のスロットル(§0-2・レビュー指摘 2026-09-13)。GET は Firestore へ書かないので、回数制限も
+// 「書かない」形にする: このインスタンスのメモリでトークン指紋ごとに件数を数える。1 GET はトークン doc +
+// 教室 doc + **教室スナップショット(gzip 解凍)** の読み取りなので、無制限だと漏洩QR 1 枚で読み取りと CPU を
+// 増幅できる。インスタンス単位なので厳密な上限ではない(maxInstances と合わせた歯止め)。
+const parentPortalGetThrottleBuckets = new Map<string, ParentPortalGetThrottleBucket>()
+
+function allowParentPortalGet(token: string): boolean {
+  const key = buildParentPortalTokenFingerprint(token)
+  const nowMs = Date.now()
+  const decision = decideParentPortalGetThrottle(parentPortalGetThrottleBuckets.get(key), nowMs)
+  parentPortalGetThrottleBuckets.set(key, decision.bucket)
+  pruneParentPortalGetThrottleKeys(parentPortalGetThrottleBuckets, nowMs)
+  return decision.allowed
+}
+
+// 公開 API `/api/parent/{token}`(Hosting rewrite → この関数)。GET = 日程、POST = 室長への連絡。認証なし(ベアラートークン)。
+// CORS は本番/staging のホスティングと開発(localhost)に限定する(§G-2「必要最小限」。ページは Hosting rewrite 経由
+// なので本来は同一オリジンで、全許可にする理由がない)。maxInstances で暴走コストを抑える。
+export const parentPortalApi = onRequest({
+  cors: [/^https:\/\/komahyouapp-prod\.web\.app$/, /^https:\/\/komahyouapp-staging\.web\.app$/, /^http:\/\/localhost(:\d+)?$/, /^http:\/\/127\.0\.0\.1(:\d+)?$/],
+  region: process.env.FUNCTION_REGION ?? 'asia-northeast1',
+  maxInstances: 10,
+}, async (req, res) => {
+  // 古い日程を端末キャッシュで見せない(§C)。エラー応答も含めて全応答に付ける。
+  res.set('Cache-Control', 'no-store')
+  const token = extractTokenFromPath(req.path)
+  const tokenPrefix = toParentPortalTokenPrefix(token)
+  try {
+    if (req.method === 'GET') {
+      if (!allowParentPortalGet(token)) {
+        logger.warn('[parentPortalApi] get throttled', { tokenPrefix })
+        res.status(429).json({ error: PARENT_PORTAL_ERROR_TOO_MANY_REQUESTS })
+        return
+      }
+      const result = await handleParentPortalGet({ token, from: req.query.from, to: req.query.to }, buildParentPortalDeps())
+      res.status(result.status).json(result.body)
+      return
+    }
+    if (req.method === 'POST') {
+      const result = await handleParentPortalPost({ token, rawBody: req.body }, buildParentPortalDeps())
+      if (result.status === 429) {
+        logger.warn('[parentPortalApi] rate limited', { tokenPrefix })
+      }
+      res.status(result.status).json(result.body)
+      return
+    }
+    res.status(405).json({ error: PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED })
+  } catch (error) {
+    // ★ログはトークン先頭 6 文字だけ。本文・生徒名・トークン全文を残さない(§G-1)。
+    // Firestore の例外メッセージは文書パスを含むことがあるため、トークン文字列が混じっていたら伏せる。
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    const message = token ? rawMessage.split(token).join(`${tokenPrefix}…`) : rawMessage
+    logger.error('[parentPortalApi] unexpected error', { tokenPrefix, method: req.method, message })
+    res.status(500).json({ error: PARENT_PORTAL_ERROR_INTERNAL })
+  }
+})
+
+// 想定外の例外を HttpsError('internal', 原因) に包む(getStudentLessonHistory と同じ理由: 包まないと画面に
+// 汎用の INTERNAL しか出ず原因が分からない・確認リスト v1.5.504 h-2)。HttpsError はそのまま通す。
+function toParentPortalHttpsError(functionName: string, error: unknown): HttpsError {
+  if (error instanceof HttpsError) return error
+  const message = error instanceof Error ? error.message : String(error)
+  logger.error(`[${functionName}] unexpected error`, { message, stack: error instanceof Error ? error.stack : undefined })
+  return new HttpsError('internal', `サーバーで処理できませんでした(${message.slice(0, 300)})`)
+}
+
+// 機能フラグ(§H)はサーバー側でも評価する(クライアントで隠すだけにしない)。教室 doc の name で開発用教室を判定。
+async function requireParentPortalEnabledClassroom(workspaceKey: string, classroomId: string) {
+  const snapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(classroomId).get()
+  const data = snapshot.data() as FirebaseClassroomDoc | undefined
+  const name = typeof data?.name === 'string' ? data.name : ''
+  if (!isParentPortalEnabledForClassroom({ id: classroomId, name, projectId: PARENT_PORTAL_PROJECT_ID })) {
+    throw new HttpsError('failed-precondition', '保護者用QRはこの教室ではまだ利用できません。')
+  }
+}
+
+// 名簿(保存済みスナップショット)にその生徒が実在するか。発行時のゴミ文書と、名簿から消えた生徒への
+// 発行を防ぐ。在籍(退塾・卒業)はここでは見ない: 閲覧可否は API 側が当日の日付で判定する(§G-2 4 段目)。
+async function requireParentPortalStudentExists(workspaceKey: string, classroomId: string, studentId: string) {
+  const snapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).get()
+  const payload = snapshot.exists ? readStoredSnapshotPayload(snapshot.data() as FirebaseClassroomSnapshotDoc) : null
+  if (!payload || !findParentPortalStudent(payload, studentId)) {
+    throw new HttpsError('not-found', 'この生徒が見つかりません。基本データを保存してからもう一度お試しください。')
+  }
+}
+
+// 索引(owner)とそれが指すトークン doc をトランザクション内で読む。索引が無ければ両方 null。
+async function loadStudentPortalOwnerAndToken(transaction: FirebaseFirestore.Transaction, classroomId: string, studentId: string) {
+  const ownerSnapshot = await transaction.get(studentPortalOwnerRef(buildStudentPortalOwnerId(classroomId, studentId)))
+  const existingOwner = ownerSnapshot.exists ? readStudentPortalOwnerDoc(ownerSnapshot.data()) : null
+  if (!existingOwner) return { existingOwner: null, existingToken: null }
+  const tokenSnapshot = await transaction.get(studentPortalTokenRef(existingOwner.token))
+  const existingToken = tokenSnapshot.exists ? readStudentPortalTokenDoc(tokenSnapshot.data()) : null
+  return { existingOwner, existingToken }
+}
+
+// resolveIssueDecision / resolveRevokeDecision が返した書き込みをそのまま適用する(判断はここでしない)。
+function applyStudentPortalTokenWrites(transaction: FirebaseFirestore.Transaction, writes: StudentPortalTokenWrite[]) {
+  for (const write of writes) {
+    switch (write.op) {
+      case 'revokeToken':
+        // 失効は不可逆(§B-2)。revokedAt を埋めるだけで doc は消さない(410 の根拠として残す)。
+        transaction.update(studentPortalTokenRef(write.token), { revokedAt: write.revokedAt, revokedReason: write.revokedReason })
+        break
+      case 'createToken':
+        // create = 同じトークンが既にあれば失敗(乱数衝突・再送の二重発行を防ぐ)。
+        transaction.create(studentPortalTokenRef(write.token), write.doc)
+        break
+      case 'setOwner':
+        transaction.set(studentPortalOwnerRef(write.ownerId), write.doc)
+        break
+      case 'deleteOwner':
+        transaction.delete(studentPortalOwnerRef(write.ownerId))
+        break
+    }
+  }
+}
+
+// 発行(getOrIssue・冪等)。基本データの「QR」ボタン初回押下で呼ばれ、有効トークンがあればそれを返す。
+// reissue=true で旧トークンを `revokedReason='reissue'` にしてから新規発行(有効は常に 1 本・§B-2)。
+export const issueStudentPortalToken = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  try {
+    const parsed = normalizeIssueRequest(request.data)
+    if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+    const { workspaceKey, classroomId, studentId, reissue } = parsed.value
+    const memberRef = await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+    await requireParentPortalEnabledClassroom(workspaceKey, classroomId)
+    // 名簿に居ない生徒のトークンを作らない(ゴミ文書と、名簿から消えた生徒への発行を防ぐ)。
+    // 在籍(退塾・卒業)まではここで見ない: 発行そのものは在籍判定の前でも起こりうる(未来入塾の生徒へ先に配る)。
+    // 閲覧可否は API 側の在籍検証(§G-2 4 段目)が当日の日付で決める。
+    await requireParentPortalStudentExists(workspaceKey, classroomId, studentId)
+
+    const nowIso = new Date().toISOString()
+    const newToken = generateStudentPortalToken()
+    const decision = await firestore.runTransaction(async (transaction) => {
+      const { existingOwner, existingToken } = await loadStudentPortalOwnerAndToken(transaction, classroomId, studentId)
+      const resolved = resolveIssueDecision({
+        existingOwner,
+        existingToken,
+        reissue,
+        nowIso,
+        newToken,
+        // createdByUid はサーバーが付ける(自己申告にしない・§B-1)。
+        issuer: { workspaceKey, classroomId, studentId, createdByUid: memberRef.id },
+      })
+      applyStudentPortalTokenWrites(transaction, resolved.writes)
+      return resolved
+    })
+
+    const tokenPrefix = toParentPortalTokenPrefix(decision.token)
+    logger.info('[issueStudentPortalToken] done', { classroomId, studentId, reissued: decision.reissued, writes: decision.writes.length, tokenPrefix })
+    return { token: decision.token, reissued: decision.reissued }
+  } catch (error) {
+    throw toParentPortalHttpsError('issueStudentPortalToken', error)
+  }
+})
+
+// 明示失効(manual)／名簿削除に伴う失効(studentDeleted)。不可逆(復活させない。必要なら再発行)。
+export const revokeStudentPortalToken = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  try {
+    const parsed = normalizeRevokeRequest(request.data)
+    if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+    const { workspaceKey, classroomId, studentId, reason } = parsed.value
+    await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+
+    const nowIso = new Date().toISOString()
+    const decision = await firestore.runTransaction(async (transaction) => {
+      const { existingOwner, existingToken } = await loadStudentPortalOwnerAndToken(transaction, classroomId, studentId)
+      const resolved = resolveRevokeDecision({ existingOwner, existingToken, reason, nowIso, classroomId, studentId })
+      applyStudentPortalTokenWrites(transaction, resolved.writes)
+      return resolved
+    })
+
+    logger.info('[revokeStudentPortalToken] done', { classroomId, studentId, reason, revoked: decision.revoked })
+    return { revoked: decision.revoked }
+  } catch (error) {
+    throw toParentPortalHttpsError('revokeStudentPortalToken', error)
+  }
+})
+
+// 室長がモーダルの「確認」を押したときの既読化(§E-2)。notifiedAt をサーバー時刻で**部分更新**する
+// (本文・送信者名は触らない。QR提出の markNotified と同じ作法)。既読済みは上書きしない。
+export const markParentMessagesNotified = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  try {
+    const parsed = normalizeMarkNotifiedRequest(request.data)
+    if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+    const { workspaceKey, classroomId, messageIds } = parsed.value
+    await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+
+    // 対象は必ず「その教室の」parentMessages(パスで教室分離。他教室の ID を渡しても存在しないので何もしない)。
+    const collection = parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages')
+    const snapshots = await firestore.getAll(...messageIds.map((messageId) => collection.doc(messageId)))
+    const targets = selectParentMessageIdsToMarkNotified(snapshots.map((snapshot) => ({
+      id: snapshot.id,
+      exists: snapshot.exists,
+      notifiedAt: snapshot.data()?.notifiedAt,
+    })))
+    if (targets.length > 0) {
+      const nowIso = new Date().toISOString()
+      const batch = firestore.batch()
+      for (const messageId of targets) {
+        batch.update(collection.doc(messageId), { notifiedAt: nowIso })
+      }
+      await batch.commit()
+    }
+
+    logger.info('[markParentMessagesNotified] done', { classroomId, requested: messageIds.length, updated: targets.length })
+    return { updated: targets.length }
+  } catch (error) {
+    throw toParentPortalHttpsError('markParentMessagesNotified', error)
+  }
 })

@@ -7,6 +7,8 @@
   },
   "scripts": {
     "build": "tsc",
+    "sync-shared": "node scripts/sync-shared.mjs",
+    "prebuild": "node scripts/sync-shared.mjs",
     "clean": "node -e \"require('fs').rmSync('lib', { recursive: true, force: true })\"",
     "drive:oauth-token": "node tools/google-drive-oauth-token.mjs"
   },

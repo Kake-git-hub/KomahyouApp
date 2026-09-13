@@ -87,6 +87,24 @@
             "value": "no-store, max-age=0, must-revalidate"
           }
         ]
+      },
+      {
+        "source": "/p/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store, max-age=0, must-revalidate"
+          }
+        ]
+      },
+      {
+        "source": "/api/parent/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-store, max-age=0, must-revalidate"
+          }
+        ]
       }
     ],
     "rewrites": [
@@ -94,6 +112,13 @@
         "source": "/api/submission/**",
         "function": {
           "functionId": "lectureSubmissionApi",
+          "region": "asia-northeast1"
+        }
+      },
+      {
+        "source": "/api/parent/**",
+        "function": {
+          "functionId": "parentPortalApi",
           "region": "asia-northeast1"
         }
       },

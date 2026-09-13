@@ -87,6 +87,20 @@ service cloud.firestore {
           allow read: if canAccessClassroom(workspaceKey, classroomId);
           allow create, update, delete: if isDeveloper(workspaceKey);
         }
+
+        // 保護者向け固定QR(docs/spec-parent-portal.md §E-2・2026-09-13): 保護者からの連絡。
+        // 書くのは Cloud Function parentPortalApi(POST)と markParentMessagesNotified(既読化)だけ。
+        // 教室メンバー(室長)は自教室ぶんを購読して通知モーダルに出す。write:false を緩めない
+        // (クライアントから既読を書けるようにすると「端末ごとの既読」に戻り、他端末で再通知される)。
+        match /parentMessages/{messageId} {
+          allow read: if canAccessClassroom(workspaceKey, classroomId);
+          allow write: if false;
+        }
+
+        // 同 §E-1: 保護者連絡の回数制限カウンタ。Cloud Function のトランザクション専用。クライアントは読めない。
+        match /parentPortalRateLimits/{limitKey} {
+          allow read, write: if false;
+        }
       }
 
       // classroomSettings は現在クライアントから書く経路が無い(読み取りのみの旧フォールバック)。
@@ -140,6 +154,18 @@ service cloud.firestore {
     // Lecture submissions: admin creates/deletes, Cloud Functions handle public access
     match /lectureSubmissions/{token} {
       allow read, write: if isSignedIn();
+    }
+
+    // 保護者向け固定QR(docs/spec-parent-portal.md §B-1): トークンの権威と「生徒 1 名＝有効トークン 1 本」の索引。
+    // 読み書きは Cloud Functions(issueStudentPortalToken / revokeStudentPortalToken / parentPortalApi)の
+    // Admin SDK のみ。開発者でもクライアントからは読めない(boardShares のような公開 read 文書を作らない・§J-2)。
+    // ※lectureSubmissions の isSignedIn() を写さないこと(あちらは既存仕様・無改変)。
+    match /studentPortalTokens/{token} {
+      allow read, write: if false;
+    }
+
+    match /studentPortalTokenOwners/{ownerId} {
+      allow read, write: if false;
     }
   }
 }

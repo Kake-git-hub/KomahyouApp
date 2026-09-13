@@ -34,7 +34,7 @@ import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubjec
 import { buildOccupiedSlotLabel } from './utils/occupiedSlotLabel'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
-import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
+import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripParentPortalTokensFromStudents, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
@@ -45,6 +45,9 @@ import { clearOperationTraceMemory, peekOperationTrace, recordOperationTrace, se
 import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, parseScheduleDeveloperReportMessage, SCHEDULE_DEVELOPER_REPORT_RESULT_MESSAGE_TYPE, validateDeveloperReportNote, type DeveloperReportCategory, type DeveloperReportScheduleContext, type DeveloperReportSource, type DeveloperReportSubmitResult } from './utils/developerReport'
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
+import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
+import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessages } from './integrations/firebase/parentPortal'
+import { buildParentMessageNotifications, chunkParentMessageIds, mergeParentMessageNotifications, selectUnnotifiedParentMessages, type ParentMessageNotification } from './utils/parentMessages'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
@@ -535,6 +538,10 @@ export function buildDevelopmentClassroomCopyPayload(sourcePayload: AppSnapshotP
       ...sanitizedSource.classroomSettings,
       boardShareToken: '',
     },
+    // 混入防止(INV-08): 保護者用QRの写しトークンと発行元教室タグも外す。残すと開発用教室の基本データから
+    // 本番生徒のQRを表示・印刷でき、そのQRは発行元(本番)教室の日程を返す(講習提出トークンの 2026-07-09 事故と同型)。
+    // 剥がすフィールドの定義は developmentClassroom の stripParentPortalToken に一本化(別実装を作らない)。
+    students: stripParentPortalTokensFromStudents(Array.isArray(sanitizedSource.students) ? sanitizedSource.students : []),
     specialSessions: sanitizedSource.specialSessions.map((session) => ({
       ...session,
       // 混入防止: 提出トークンと発行元教室タグの両方を外す。開発用側で自分の教室のトークンを再発行させる。
@@ -1532,6 +1539,10 @@ function AuthenticatedApp() {
   const [hasHydratedSnapshot, setHasHydratedSnapshot] = useState(false)
   const [undoSnapshot, setUndoSnapshot] = useState<{ label: string; data: AppSnapshotPayload } | null>(null)
   const [submissionAcknowledgements, setSubmissionAcknowledgements] = useState<SubmissionAcknowledgementEntry[]>([])
+  // 保護者からの連絡(docs/spec-parent-portal.md §E-2)。未読(notifiedAt==null)だけを購読し、「確認」で
+  // サーバーへ既読を記録できるまで画面に残す。既読は localStorage に持たない(別端末でも既読が保たれる)。
+  const [parentMessageNotifications, setParentMessageNotifications] = useState<ParentMessageNotification[]>([])
+  const [isParentMessageConfirming, setIsParentMessageConfirming] = useState(false)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
@@ -1546,6 +1557,14 @@ function AuthenticatedApp() {
   const manualFirebaseSaveStabilityEnabled = useMemo(
     () => isFeatureEnabledForClassroom('manualFirebaseSaveStability', actingClassroom),
     [actingClassroom],
+  )
+  // 保護者向け固定QR(docs/spec-parent-portal.md §H)。development-only フラグに加えてリモート(Firebase)が要る
+  // (発行・連絡はすべて callable / Cloud Functions 経由のため、ローカル環境では入口を出さない)。
+  // OFF の教室では QR ボタンも連絡の購読も一切行わない。昇格するときはサーバー側の
+  // isParentPortalEnabledForClassroom(functions/src/parentPortal.ts)と同時に変える。
+  const parentPortalQrEnabled = useMemo(
+    () => isRemoteBackendEnabled && isFeatureEnabledForClassroom('parentPortalQr', actingClassroom),
+    [actingClassroom, isRemoteBackendEnabled],
   )
   // Feature B: 開発用教室へ「他教室 × バックアップ時点」を読み込むための候補(サーバー由来)。
   // 旧「他教室コピー」(in-memory 参照)を廃止し、Storage の確定データのみを取り込む方式に置換。
@@ -1573,6 +1592,55 @@ function AuthenticatedApp() {
   const acknowledgeAllSubmissions = useCallback(() => {
     setSubmissionAcknowledgements([])
   }, [])
+  // 「あとで見る」(×)は画面から消すだけ。既読にしないので、次の起動・別端末では再通知される。
+  const dismissParentMessageNotification = useCallback((id: string) => {
+    setParentMessageNotifications((current) => current.filter((entry) => entry.id !== id))
+  }, [])
+  // 「確認」= 既読のサーバー記録(callable が notifiedAt を部分更新)。**成功した分だけ画面から消す**
+  // (失敗時に消すと、未読のまま二度と気付けない連絡が生まれる)。
+  // ★callable は 1 回 50 件までなので分割して送る。全件を 1 回で渡していた実装では、未読が 51 件に
+  //   なった時点で毎回 invalid-argument で丸ごと失敗し、全画面モーダルが毎起動で残った(レビュー指摘 2026-09-13)。
+  const confirmAllParentMessages = useCallback(() => {
+    const classroomId = actingClassroomIdRef.current
+    const messageIds = parentMessageNotifications.map((entry) => entry.id)
+    if (!classroomId || messageIds.length === 0) {
+      setParentMessageNotifications([])
+      return
+    }
+    const chunks = chunkParentMessageIds(messageIds)
+    setIsParentMessageConfirming(true)
+    void (async () => {
+      let failure: unknown = null
+      for (const chunk of chunks) {
+        try {
+          await markParentMessagesNotifiedViaFunction({ classroomId, messageIds: chunk })
+          const notified = new Set(chunk)
+          setParentMessageNotifications((current) => current.filter((entry) => !notified.has(entry.id)))
+        } catch (error) {
+          failure = error
+          break
+        }
+      }
+      setIsParentMessageConfirming(false)
+      if (failure) {
+        const message = failure instanceof Error ? failure.message : String(failure)
+        window.alert(`保護者からの連絡を「確認済み」にできませんでした: ${message}\n通信状態を確認して、もう一度お試しください。`)
+      }
+    })()
+  }, [actingClassroomIdRef, parentMessageNotifications])
+  // 基本データ画面から呼ぶ保護者用トークンの発行/失効(callable の薄い包み)。workspaceKey は wrapper が注入する。
+  // 画面側は「教室が選ばれていない」を知らないので、ここで日本語のエラーにして投げ返す。
+  const issueParentPortalToken = useCallback(async (studentId: string, options: { reissue: boolean }) => {
+    const classroomId = actingClassroomIdRef.current
+    if (!classroomId) throw new Error('教室が選択されていません。')
+    const result = await issueStudentPortalTokenViaFunction({ classroomId, studentId, reissue: options.reissue })
+    return { token: result.token }
+  }, [actingClassroomIdRef])
+  const revokeParentPortalToken = useCallback(async (studentId: string, reason: 'studentDeleted') => {
+    const classroomId = actingClassroomIdRef.current
+    if (!classroomId) return
+    await revokeStudentPortalTokenViaFunction({ classroomId, studentId, reason })
+  }, [actingClassroomIdRef])
   // 開発用教室の「確認リスト」パネルの送信口。submitDeveloperReport はこの下で定義されるため、
   // ref 越しに呼ぶ(識別子は安定させ、パネルの再描画を増やさない)。本番教室ではパネル自体を描画しない。
   const submitDeveloperReportRef = useRef<((input: { source: DeveloperReportSource; category: DeveloperReportCategory; note: unknown; scheduleContext?: DeveloperReportScheduleContext }) => Promise<DeveloperReportSubmitResult>) | null>(null)
@@ -1615,7 +1683,7 @@ function AuthenticatedApp() {
       />
     ) : null
 
-    if (submissionAcknowledgements.length === 0 && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}</>
+    if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}</>
 
     return (
       <>
@@ -1668,9 +1736,17 @@ function AuthenticatedApp() {
           </div>
         </div>
         )}
+        {/* 保護者からの連絡(docs/spec-parent-portal.md §E-2)。QR提出通知と同じ overlay 構造を流用するので、
+            両方同時に来たときは後ろ(こちら)が手前に重なる。件数 0 のときは何も描かない(モーダル側で null)。 */}
+        <ParentMessagesModal
+          notifications={parentMessageNotifications}
+          confirming={isParentMessageConfirming}
+          onDismiss={dismissParentMessageNotification}
+          onConfirmAll={confirmAllParentMessages}
+        />
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, parentMessageNotifications, isParentMessageConfirming, dismissParentMessageNotification, confirmAllParentMessages])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
@@ -3205,6 +3281,7 @@ function AuthenticatedApp() {
     syncCurrentClassroomData(actingClassroomId)
     const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence()
     setSubmissionAcknowledgements([])
+    setParentMessageNotifications([])
     // 【本番データ混入防止】アカウント切替で前セッションの「直前に戻す(undo)」が残ると、
     // 別教室にログインした画面にバナーが出て、押すと前教室のデータを現在の教室へ書き込んでしまう。
     // ログアウト時に必ず undo を破棄する(在庫の取り違えを断つ)。
@@ -3693,7 +3770,10 @@ function AuthenticatedApp() {
       classroomSettings: classroomSettingsRef.current,
       managers: managersRef.current,
       teachers: teachersRef.current,
-      students: studentsRef.current,
+      // ★保護者用QRの写しトークンは外す(レビュー指摘 2026-09-13)。報告は教室データを Storage へ上げ、
+      //   開発者が AI に読ませる前提の資料なので、**生きたベアラートークン**を持ち出し経路に載せない
+      //   (再現には不要。権威は studentPortalTokens 側にある)。
+      students: stripParentPortalTokensFromStudents<StudentRow>(studentsRef.current),
       regularLessons: regularLessonsRef.current,
       groupLessons: groupLessonsRef.current,
       specialSessions: specialSessionsRef.current,
@@ -4325,9 +4405,33 @@ function AuthenticatedApp() {
     return unsubscribe
   }, [actingClassroom?.name, actingClassroomId, isRemoteBackendEnabled, specialSessionsRef, studentsRef, teachersRef])
 
+  // 保護者からの連絡(docs/spec-parent-portal.md §E-2 の三点セット: 購読 → 選別 → モーダル → 既読のサーバー記録)。
+  // 未読のみを「開いている教室」で購読する(他教室の連絡は購読しない・INV-08)。教室切替・フラグ OFF・ログアウトでは
+  // cleanup で購読を切り、前の教室の通知を残さない(他教室の生徒名が画面に残るのを防ぐ)。
+  useEffect(() => {
+    if (!isRemoteBackendEnabled || !actingClassroomId || !parentPortalQrEnabled) return
+
+    const unsubscribe = subscribeParentMessages(actingClassroomId, (entries) => {
+      const unread = selectUnnotifiedParentMessages(entries)
+      if (unread.length === 0) return
+      // 生徒名は名簿の現在名を優先する。クロージャが古くならないよう ref から読む(既存の提出通知と同じ作法)。
+      const incoming = buildParentMessageNotifications(unread, {
+        students: studentsRef.current,
+        classroomName: actingClassroom?.name,
+      })
+      setParentMessageNotifications((current) => mergeParentMessageNotifications(current, incoming))
+    })
+
+    return () => {
+      unsubscribe()
+      setParentMessageNotifications([])
+    }
+  }, [actingClassroom?.name, actingClassroomId, isRemoteBackendEnabled, parentPortalQrEnabled, studentsRef])
+
   useEffect(() => {
     if (currentUserId) return
     setSubmissionAcknowledgements([])
+    setParentMessageNotifications([])
   }, [currentUserId])
 
   useEffect(() => {
@@ -5370,6 +5474,11 @@ function AuthenticatedApp() {
         studentDeletionStockSummary={studentDeletionStockSummary}
         requiresDeletePassword={isRemoteBackendEnabled}
         onVerifyDeletePassword={verifyDeletePassword}
+        classroomId={actingClassroomId}
+        classroomName={actingClassroom?.name}
+        parentPortalQrEnabled={parentPortalQrEnabled}
+        onIssueParentPortalToken={parentPortalQrEnabled ? issueParentPortalToken : undefined}
+        onRevokeParentPortalToken={parentPortalQrEnabled ? revokeParentPortalToken : undefined}
         onBackToBoard={() => navigateClassroomScreen('board')}
         onOpenSpecialData={() => navigateClassroomScreen('special-data')}
         onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
