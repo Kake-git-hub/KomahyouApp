@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.511 (2026-09-13)
 - feat: 「要望・報告」に種類「使い方の質問」(category = question)を追加(計画 docs/plan-2026-09-11-five-requests.md §3 Q-2・仕様 docs/spec-developer-report.md §G・オーナー指示 2026-09-13)。不具合/要望と同じ流れ(送信→developerReports にストック→メール通知→後で開発者が対応)で、利用者への自動回答はしない。盤面 React モーダルと日程表タブの埋め込みモーダルは同じ選択肢定数から描くので両方に 3 択が出て、質問を選んだときだけ「回答は開発者が確認してからお返しします(すぐには返りません)」の注意文が出る。メール件名は【質問】付き、GitHub Issue はラベル `type:question`(リポジトリに作成済み)・タイトル `[利用者質問]`(`src/utils/developerReport.ts` / `DeveloperReportModal.tsx` / `scheduleHtml.ts` / `functions/src/developerReport.ts` / `tools/developer-report-notify.mjs`・テストに question ケースと client↔server 種別一致テストを追加)。**functions の反映は Actions「Deploy Cloud Functions」(main マージで自動発火)**
 - docs: 仕様 §G 質問／§H 蓄積とまとめ読み／§I 受け入れ条件と `docs/user-manual.md` 骨子(2026-09-12 spec-curator 起草・feat/report-question)を main に取り込み。§G-3〜§G-6(承認画面・返答通知・QA 公開)と §H(ダイジェスト)は未実装(計画 Q-3〜Q-6)
 
