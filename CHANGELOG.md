@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.514 (2026-09-13)
+- feat: 基本データの生徒「削除」ボタンを「退塾」ボタンに置き換え。押した日を退塾日として記録し、名簿データは残して後から非在籍一覧で追えるようにした（オーナー指示・日付入力での退塾も従来どおり・講師の削除は変更なし）(basic-data/withdrawGuard.ts, BasicDataScreen.tsx, spec-basic-data §H)
+
 ## v1.5.513 (2026-09-13)
 - docs: 保護者向け固定QRの仕様に §0-3「デプロイ順の注意」を追記。新しい Hosting rewrite が指す関数がまだ無いと
   Hosting デプロイが 400(`Cloud Run service "parentportalapi" does not exist`)で落ちる(v1.5.512 で実際に発生。main マージは
