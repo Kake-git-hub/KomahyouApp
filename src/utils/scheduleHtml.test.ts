@@ -4466,8 +4466,14 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).toContain('>要望・報告</button>')
     expect(html).not.toContain('>開発者へ報告</button>')
     // 種類(不具合/要望)のラジオと #テスト の案内を盤面と同じ文言で埋め込む。
-    expect(html).toContain('"categoryOptions":[{"value":"bug","label":"不具合・おかしい"},{"value":"request","label":"追加してほしい・要望"}]')
+    // 使い方の質問(question)も盤面と同じ 3 択で埋め込む(2026-09-13)。
+    expect(html).toContain('"categoryOptions":[{"value":"bug","label":"不具合・おかしい"},{"value":"request","label":"追加してほしい・要望"},{"value":"question","label":"使い方の質問"}]')
     expect(html).toContain("name = 'schedule-developer-report-category'")
+    // 質問を選んだときだけ「すぐには返らない」注意文(盤面と同じ文言・spec §G-2)。既定(bug)では隠れている。
+    expect(html).toContain('"questionNotice":"回答は開発者が確認してからお返しします（すぐには返りません・自動返信はしません）。"')
+    expect(html).toContain("questionNotice.hidden = selectedCategory !== 'question';")
+    expect(html).toContain('modal.appendChild(questionNotice);')
+    expect(html).toContain('.developer-report-hint.developer-report-question-notice {')
     expect(html).toContain('category: selectedCategory,')
     expect(html).toContain('"testHint":"テスト送信のときは内容に「#テスト」と書いてください')
     // 入力のヒント(生徒名・日付・コマ・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04)。

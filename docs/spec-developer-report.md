@@ -32,7 +32,7 @@
 
 | 項目 | 内容 | 出どころ |
 |---|---|---|
-| 種類 | 不具合・おかしい(bug) ／ 追加してほしい・要望(request)。既定は bug | 同一モーダルのラジオ |
+| 種類 | 不具合・おかしい(bug) ／ 追加してほしい・要望(request) ／ 使い方の質問(question・2026-09-13 実装。§G)。既定は bug | 同一モーダルのラジオ |
 | 内容 | **必須**（2026-09-04 改定・空欄は送れない。上限 2000 字） | 盤面・日程表とも同一モーダルの textarea |
 | テスト扱い | 内容に `#テスト`（または `#test`）を含むと **Issue を起票しない**（`notifiedAt` を即時に埋める）。メールは【テスト】付きで届く | サーバーが判定 |
 | 直近の操作痕跡 | 端末内リングバッファの最新 300 件 | `operationTrace.ts`（§D） |
@@ -70,7 +70,8 @@
 - **公開リポジトリのため Issue 本文に操作痕跡（生徒名）・教室データは載せない。** メタ＋一言＋置き場所
   （Firestore 文書パス／Storage パスと取得コマンド）だけ。Issue 本文にも「勝手に修正を始めない・許可後に着手」を明記。
 - LINE 通知は **不採用**（オーナー判断 2026-09-04: Messaging API の取得条件が厳しくなったため。メール直送へ置換）。
-- Issue のラベルは種類で変える: bug → `type:bug`、request → `type:feature`（共通 `status:triage` / `source:user-report`）。
+- Issue のラベルは種類で変える: bug → `type:bug`、request → `type:feature`、question → `type:question`（共通 `status:triage` / `source:user-report`）。
+  Issue タイトルの種別は `[利用者報告]` / `[利用者要望]` / `[利用者質問]`。メール件名は質問のとき `【質問】` を先頭に付ける（テスト送信は `【テスト】【質問】` の順）。
 - Firestore ルール: `developerReports` は開発者のみ read、write は不可（Cloud Function は Admin SDK で書く）。
   ルールの反映は `firebase deploy --only firestore:rules`（main マージでは反映されない）。
 
@@ -95,6 +96,10 @@
 - サーバーは壊れた要素だけ捨てて残りを通し、`classroomId` は権限確認済みの値を使う。
 - Issue 本文に生徒名（操作痕跡）・メールアドレスが載らない。起票→記録の順で二重起票を防ぐ。
 - 日程表 HTML にボタンと送受信の両メッセージ種別が含まれ、埋め込みスクリプトが構文的に妥当。
+- 種類 `question`（§G・2026-09-13 実装）は client（`DEVELOPER_REPORT_CATEGORIES` / `categoryOptions`）・server（正規化・メール件名【質問】）・
+  Issue（ラベル `type:question`・タイトル `[利用者質問]`）の全経路で認識され、client と server の種別一覧はテストで一致を固定する
+  （`developerReport.test.ts` 両側 / `developer-report-notify.test.mjs` / `scheduleHtml.test.ts`）。質問を選んだときだけ
+  「回答は開発者が確認してからお返しします（すぐには返りません）」の注意文が盤面・日程表の両モーダルに出る（§G-2）。
 
 ---
 
@@ -140,7 +145,7 @@
 | 日程表の埋め込みモーダル（`scheduleHtml.ts`） | 同じ文言正本から生成されるため、ラジオが 3 つになるだけ。**盤面と日程表で同一の表示・文言**（§B の原則を維持） |
 | サーバー `functions/src/developerReport.ts` | 受け入れ種別に `question` を追加（二重管理はテストで一致を固定＝既存作法） |
 | GitHub Issue ラベル | bug → `type:bug`／request → `type:feature`／**question → `type:question`**（共通 `status:triage` / `source:user-report` は据え置き） |
-| メール件名 | 種別の接頭辞を付ける。質問は **【質問】**（テスト送信の【テスト】表記は既存どおり併記） |
+| メール件名 | 種別の接頭辞を付ける。質問は **【質問】**（テスト送信の【テスト】表記は既存どおり併記。実装: `【テスト】【質問】[コマ表アプリ 要望・報告] …` の順） |
 | `#テスト` 扱い | 3 種別共通で既存どおり（Issue 起票なし・メールは届く） |
 
 - 質問でも**操作痕跡・教室データのスナップショットは同じように添付**する（「どの画面を見て疑問に思ったか」が

@@ -4959,6 +4959,15 @@ tr.sa-group-row td {
   font-weight: 600;
 }
 
+/* 質問(question)を選んだときだけ出す注意文(spec-developer-report §G-2・2026-09-13)。複合セレクタで .developer-report-hint の色に勝たせる。 */
+.developer-report-hint.developer-report-question-notice {
+  color: #7a4a00;
+  background: #fff4e5;
+  padding: calc(10 * var(--developer-report-unit)) calc(14 * var(--developer-report-unit));
+  border-radius: calc(12 * var(--developer-report-unit));
+  line-height: 1.6;
+}
+
 .developer-report-hint {
   margin: 0;
   color: #5b6f86;

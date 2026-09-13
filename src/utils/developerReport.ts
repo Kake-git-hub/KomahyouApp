@@ -4,6 +4,8 @@
 // 忙しくても**ボタン1つ**で開発者へ知らせられるようにする。同日の改定で:
 //  - 一言は**必須**（空欄では送れない）。
 //  - ボタン名は「要望・報告」。不具合だけでなく**追加要望**も同じ導線で送れる（category = bug / request）。
+//  - 2026-09-13: **使い方の質問**（category = question）も同じ導線・同じ流れ（ストック → メール通知 → 後で開発者が対応）で
+//    送れる。利用者への自動回答はしない（開発者が承認した回答だけを返す。docs/spec-developer-report.md §G）。
 //  - 内容に `#テスト` を含めるとテスト扱い（サーバーが Issue 起票をしない。メールは【テスト】付きで届く）。
 //
 // 送るもの（サーバーの Cloud Function `submitDeveloperReport` が受ける）:
@@ -18,8 +20,8 @@ import type { AppSnapshotPayload } from '../types/appState'
 import type { OperationTraceEntry } from './operationTrace'
 
 export type DeveloperReportSource = 'board' | 'schedule'
-/** 種類: 不具合・おかしい(bug) / 追加要望(request)。サーバー functions/src/developerReport.ts と二重管理。 */
-export const DEVELOPER_REPORT_CATEGORIES = ['bug', 'request'] as const
+/** 種類: 不具合・おかしい(bug) / 追加要望(request) / 使い方の質問(question・2026-09-13)。サーバー functions/src/developerReport.ts と二重管理。 */
+export const DEVELOPER_REPORT_CATEGORIES = ['bug', 'request', 'question'] as const
 export type DeveloperReportCategory = (typeof DEVELOPER_REPORT_CATEGORIES)[number]
 
 /** 日程表タブから postMessage で届く、表示していた条件。文字列だけ（入れ子は受け付けない）。 */
@@ -59,17 +61,20 @@ export const DEVELOPER_REPORT_UI_TEXT = {
   /** ボタン名・モーダル題名（オーナー確定 2026-09-04: 「開発者へ報告」→「要望・報告」） */
   title: '要望・報告',
   description: (classroomName: string) =>
-    `「おかしいな」と思ったことも、「こうしてほしい」という要望も、そのまま送ってください。${classroomName ? `教室「${classroomName}」の` : ''}直近の操作履歴と、いまの画面のデータが開発者に届きます。`,
+    `「おかしいな」と思ったことも、「こうしてほしい」という要望も、使い方の質問も、そのまま送ってください。${classroomName ? `教室「${classroomName}」の` : ''}直近の操作履歴と、いまの画面のデータが開発者に届きます。`,
   categoryLabel: '種類',
   categoryOptions: [
     { value: 'bug', label: '不具合・おかしい' },
     { value: 'request', label: '追加してほしい・要望' },
+    { value: 'question', label: '使い方の質問' },
   ] as ReadonlyArray<{ value: DeveloperReportCategory; label: string }>,
   noteLabel: '内容（必須）',
-  placeholder: '例: 9/3(水) 3限、田中先生の机で、青木さんの振替(数学)を移動したら未消化に戻らなかった ／ 講師日程表にも電話番号の欄がほしい',
+  placeholder: '例: 9/3(水) 3限、田中先生の机で、青木さんの振替(数学)を移動したら未消化に戻らなかった ／ 講師日程表にも電話番号の欄がほしい ／ 休みにした生徒の振替先を後から変えるには？',
   /** 入力のヒント(オーナー指示 2026-09-04): 詳細を書いてもらうほど開発者の確認精度が上がることを伝える。 */
   inputHint: '生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか(期待した結果との違い)を具体的に書いていただくと、確認の精度が上がります。',
   testHint: `テスト送信のときは内容に「${DEVELOPER_REPORT_TEST_MARKER}」と書いてください（開発者への課題登録は行われません）。`,
+  /** 質問(question)を選んだときだけ出す注意文（spec §G-2・2026-09-13）: 即答の期待を作らない。自動返信はしない。 */
+  questionNotice: '回答は開発者が確認してからお返しします（すぐには返りません・自動返信はしません）。',
   requiredError: '内容を入力してください。何がおかしいか・何をしてほしいかが分からないと、開発者が調べられません。',
   cancel: 'キャンセル',
   submit: '送信する',
