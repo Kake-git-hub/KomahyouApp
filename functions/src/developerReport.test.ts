@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -6,6 +9,9 @@ import {
   buildDeveloperReportMail,
   isDeveloperReportTestNote,
   isMailTransportConfigured,
+  isVerificationChecklistNote,
+  isVerificationChecklistReport,
+  resolveDeveloperReportMailSkipReason,
   normalizeDeveloperReportCategory,
   DEVELOPER_REPORT_NOTE_LIMIT,
   DEVELOPER_REPORT_TRACE_KINDS,
@@ -190,5 +196,40 @@ describe('developerReport(server): メール即時通知の本文', () => {
     expect(isMailTransportConfigured('not a url', 'a@example.test')).toBe(false)
     expect(isMailTransportConfigured('smtps://u%40x.test:p@smtp.example.test:465', 'a@example.test')).toBe(true)
     expect(isMailTransportConfigured('smtp://u:p@smtp.example.test:587', 'a@example.test')).toBe(true)
+  })
+})
+
+describe('developerReport(server): 確認リストはメール・Issue の対象外(2026-09-13)', () => {
+  it('先頭行が [確認リスト vX.Y.Z](分割番号つき含む)なら確認リスト本文と判定する', () => {
+    expect(isVerificationChecklistNote('[確認リスト v1.5.512]\n- k-1 要改善: 直して')).toBe(true)
+    expect(isVerificationChecklistNote('[確認リスト v1.5.512] (2/3)\r\n- k-2 OK')).toBe(true)
+    expect(isVerificationChecklistNote('盤面がおかしい\n[確認リスト v1.5.512]')).toBe(false)
+    expect(isVerificationChecklistNote('[確認リスト] 何か')).toBe(false)
+    expect(isVerificationChecklistNote('')).toBe(false)
+  })
+
+  it('開発用教室の確認リストだけを対象にする(本番教室の利用者が同じ書式を書いても通知は止めない)', () => {
+    const note = '[確認リスト v1.5.512]\n- k-1 OK'
+    expect(isVerificationChecklistReport(note, true)).toBe(true)
+    expect(isVerificationChecklistReport(note, false)).toBe(false)
+    expect(isVerificationChecklistReport('普通の要望', true)).toBe(false)
+  })
+
+  it('記録済みの isVerificationChecklist が true ならメールを送らない理由を返し、それ以外は送る', () => {
+    expect(resolveDeveloperReportMailSkipReason({ isVerificationChecklist: true })).toBe('verification-checklist')
+    expect(resolveDeveloperReportMailSkipReason({ isVerificationChecklist: false })).toBeNull()
+    expect(resolveDeveloperReportMailSkipReason({})).toBeNull()
+  })
+
+  // 配線(source-scan): 記録時に Issue 起票を止め、メールトリガーでも送らない。片方だけだと通知が残る。
+  it('submitDeveloperReport は確認リストを notifiedAt 即時埋め＋記録し、メールトリガーは送信前に打ち切る', () => {
+    const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
+    expect(indexTs).toContain('const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity(classroomId, classroomName))')
+    expect(indexTs).toContain('notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,')
+    expect(indexTs).toMatch(/isVerificationChecklist,\s*\n\s*note: report\.note,/u)
+    const trigger = indexTs.slice(indexTs.indexOf('export const notifyDeveloperReportByMail'))
+    const skipIndex = trigger.indexOf('resolveDeveloperReportMailSkipReason(data)')
+    expect(skipIndex).toBeGreaterThan(0)
+    expect(skipIndex).toBeLessThan(trigger.indexOf('transport.sendMail'))
   })
 })

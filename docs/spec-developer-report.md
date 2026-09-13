@@ -83,7 +83,14 @@
 - 項目の正本は `src/utils/verificationChecklist.ts`（`VERIFICATION_CHECKLIST`）。各項目は 未確認／OK／要改善 の
   3 択とメモを持ち、入力のたびに localStorage（`verification-checklist:<教室ID>:<版>`）へ下書き保存する。
 - **「保存して送信」は同じ経路で送る**: 既存の `submitDeveloperReport`（`source: board` / `category: request`）を
-  そのまま使い、developerReports に蓄積＋メール通知される。新しい保存先・別の送信口は作らない。
+  そのまま使い、developerReports に蓄積する。新しい保存先・別の送信口は作らない。
+- **確認リストはメール通知も Issue 起票もしない（オーナー指示 2026-09-13）**: 要望・報告・質問と違い、開発者が
+  `tools/verification-checklist-report.mjs` で読んで必ず修正するため通知は不要。サーバーは「開発用教室（サンドボックス含む）
+  かつ本文先頭行が目印」のとき `isVerificationChecklist: true`・`notifiedAt` 即時・`notifySkipped: 'verification-checklist'`
+  で記録し、`notifyDeveloperReportByMail` は `mailSkipped: 'verification-checklist'` を付けて送らない
+  （`isVerificationChecklistReport` / `resolveDeveloperReportMailSkipReason`）。本番教室で同じ書式を書いても通知は止めない。
+- **メモ欄は結果に関わらず全項目に常に出す（2026-09-13）**。未確認のままメモを書くと要改善に切り替える
+  （未確認は送信本文に載らないため、書いたメモを黙って捨てない・`setVerificationChecklistMemo`）。
 - 本文は `buildVerificationChecklistReportNotes` が整形する。先頭行は目印 `[確認リスト <版>]`、未確認の項目は
   省略、`- <id> OK` / `- <id> 要改善: <メモ>` の圧縮書式。`DEVELOPER_REPORT_NOTE_LIMIT`(2000字)を超える場合は
   複数通に分け、各通の先頭に同じ目印と `(i/n)` を付ける。**送信本文に生徒名は入れない**（項目 id とメモだけ）。

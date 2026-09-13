@@ -212,6 +212,20 @@ export function setVerificationChecklistEntry(
   return { ...draft, entries: { ...draft.entries, [id]: next } }
 }
 
+/**
+ * メモ欄の入力を反映する(純関数)。メモ欄は結果に関わらず常に出すので、**未確認のままメモを書いたら要改善に切り替える**
+ * (未確認の行は送信本文に載らない＝書いたメモが黙って捨てられるのを防ぐ・2026-09-13)。OK/要改善はそのまま。
+ */
+export function setVerificationChecklistMemo(
+  draft: VerificationChecklistDraft,
+  id: string,
+  memo: string,
+): VerificationChecklistDraft {
+  const current = getVerificationChecklistEntry(draft, id)
+  const status: VerificationChecklistStatus = current.status === 'unchecked' && memo.trim() ? 'needs-fix' : current.status
+  return setVerificationChecklistEntry(draft, id, { status, memo })
+}
+
 export function setVerificationChecklistOtherNotes(
   draft: VerificationChecklistDraft,
   otherNotes: string,

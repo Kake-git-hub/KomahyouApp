@@ -1,8 +1,10 @@
 // 開発用教室だけに出す「確認事項チェックリスト」パネル(2026-09-12 オーナー指示)。
 //
 // 画面最前面(右下・fixed)に浮かび、操作しながら各項目を 未確認/OK/要改善 で記録し、
-// 要改善にはメモを書ける。入力のたびに localStorage へ下書き保存し、リロードしても残る。
+// どの項目にもメモを書ける(未確認で書くと要改善になる)。入力のたびに localStorage へ下書き保存し、リロードしても残る。
 // 「保存して送信」で既存の「要望・報告」経路(submitDeveloperReport)へ送る＝新しい保存先は作らない。
+// 送った結果は developerReports に記録されるだけで、要望・報告と違いメール通知も Issue 起票もしない
+// (サーバー側 isVerificationChecklistReport で判定・2026-09-13 オーナー指示)。
 //
 // ⚠️ 本番教室では**一切マウントしない**(App.tsx の isActingDevelopmentClassroom で条件付け)。
 // 書式・下書きの入出力・進捗計算はすべて src/utils/verificationChecklist.ts の純関数に委譲する
@@ -21,6 +23,7 @@ import {
   parseVerificationChecklistDraft,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
+  setVerificationChecklistMemo,
   setVerificationChecklistOtherNotes,
   verificationChecklistStorageKey,
   type VerificationChecklistDraft,
@@ -183,16 +186,16 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
                       </label>
                     ))}
                   </div>
-                  {entry.status === 'needs-fix' || entry.memo ? (
-                    <textarea
-                      className="verification-checklist-memo"
-                      value={entry.memo}
-                      rows={2}
-                      placeholder={entry.status === 'needs-fix' ? 'どう直してほしいか(必須ではないが書いてほしい)' : 'メモ'}
-                      onChange={(event) => updateDraft(setVerificationChecklistEntry(draft, item.id, { memo: event.target.value }))}
-                      data-testid={`verification-checklist-memo-${item.id}`}
-                    />
-                  ) : null}
+                  {/* メモ欄は結果に関わらず常に出す(2026-09-13 オーナー指摘「テキストが入力できない」:
+                      以前は要改善を選ぶまで入力欄が無く、OK/未確認のまま書けなかった)。未確認で書くと要改善になる。 */}
+                  <textarea
+                    className="verification-checklist-memo"
+                    value={entry.memo}
+                    rows={2}
+                    placeholder={entry.status === 'needs-fix' ? 'どう直してほしいか(必須ではないが書いてほしい)' : 'メモ(任意)'}
+                    onChange={(event) => updateDraft(setVerificationChecklistMemo(draft, item.id, event.target.value))}
+                    data-testid={`verification-checklist-memo-${item.id}`}
+                  />
                   {entry.status === 'needs-fix' && !entry.memo.trim() ? (
                     <p className="verification-checklist-memo-hint">改善内容を書くと、そのまま修正に取りかかれます。</p>
                   ) : null}
