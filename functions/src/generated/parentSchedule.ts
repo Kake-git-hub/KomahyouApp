@@ -64,6 +64,11 @@ export type ParentScheduleRange = { from: string; to: string }
 export type ParentScheduleView = {
   studentName: string
   days: ParentScheduleDay[]
+  /**
+   * 範囲内の開講日に、この生徒の講習コマ(special。配置・出欠記録の両方)が盤面にあったか。講習コマ自体は出さない。
+   * 講習だけの月が「休みしか無い」ように見えるのを注記で補うための印(確認リスト k-4・オーナー回答 2026-09-14)。件数・日付は出さない(§C)。
+   */
+  hasLectureLessons: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,6 +1014,26 @@ function extractBoardLessons(
   return lessons.sort(compareLessons)
 }
 
+// 講習コマ(special)がこのセル群にこの生徒の分としてあるか。表示はしない(注記の判定だけに使う)。
+function boardCellsHaveLectureLesson(
+  cells: ParentBoardCell[],
+  matches: (entry: { managedStudentId?: string; name: string }) => boolean,
+): boolean {
+  for (const cell of cells) {
+    for (const desk of cell.desks) {
+      for (const student of desk.studentSlots) {
+        if (student && student.lessonType === 'special' && matches(student)) return true
+      }
+      for (const statusEntry of desk.statusSlots) {
+        // moved は移動先側に出るので数えない(移動先が範囲外なら講習の印も付けない)。
+        if (!statusEntry || statusEntry.lessonType !== 'special' || statusEntry.status === 'moved') continue
+        if (matches(statusEntry)) return true
+      }
+    }
+  }
+  return false
+}
+
 // テンプレ補完(spec §D-2 4): buildManagedRegularLessonsRange の生徒部分を 1 日分だけ再現する。
 // 机数(deskCount)の枯渇と「同じセルに既に置かれた生徒」のスキップまで写す(盤面と同じ行が出るように)。
 function extractTemplateLessons(params: {
@@ -1094,7 +1119,7 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
   const student = parsed.students.find((row) => row.id === studentId)
   if (!student) return null
   if (!isValidDateKey(range.from) || !isValidDateKey(range.to) || range.to < range.from) {
-    return { studentName: getStudentDisplayName(student), days: [] }
+    return { studentName: getStudentDisplayName(student), days: [], hasLectureLessons: false }
   }
 
   const matches = createEntryMatcher(parsed.students, studentId)
@@ -1121,6 +1146,7 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
   const freezeBeforeDate = normalizeParentDateText(parsed.classroomSettings.templateFreezeBeforeDate)
 
   const days: ParentScheduleDay[] = []
+  let hasLectureLessons = false
   const totalDays = diffDays(range.from, range.to)
   for (let offset = 0; offset <= totalDays; offset += 1) {
     const dateKey = addDaysToDateKey(range.from, offset)
@@ -1136,6 +1162,7 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     // 講習期間の日も通常日と同じく「盤面優先 → テンプレ補完」で通常授業だけを出す(講習コマは抽出側で除外)。
     const cells = cellsByDateKey.get(dateKey)
     if (cells && cells.length > 0) {
+      if (!hasLectureLessons) hasLectureLessons = boardCellsHaveLectureLesson(cells, matches)
       const lessons = extractBoardLessons(cells, matches, linkedDestinationByStatusId)
       if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'board', lessons })
       continue
@@ -1147,5 +1174,5 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'template', lessons })
   }
 
-  return { studentName: getStudentDisplayName(student), days }
+  return { studentName: getStudentDisplayName(student), days, hasLectureLessons }
 }

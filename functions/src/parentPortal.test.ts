@@ -460,7 +460,9 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
     const result = await handleParentPortalGet({ token: TOKEN, from: '2026-09-06', to: '2026-10-11' }, deps)
     expect(result.status).toBe(200)
     const body = result.body as Record<string, unknown>
-    expect(Object.keys(body).sort()).toEqual(['bounds', 'classroomName', 'days', 'range', 'snapshotSavedAt', 'studentName', 'today'])
+    expect(Object.keys(body).sort()).toEqual(['bounds', 'classroomName', 'days', 'hasLectureLessons', 'range', 'snapshotSavedAt', 'studentName', 'today'])
+    // 講習の印は真偽値だけ(講習コマの中身・件数は出さない)。日程計算が印を返さなければ false。
+    expect(body.hasLectureLessons).toBe(false)
     expect(body.studentName).toBe('山田太')
     expect(body.classroomName).toBe('開発用教室')
     expect(body.snapshotSavedAt).toBe('2026-09-12T10:00:00.000Z')
@@ -487,6 +489,14 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
     await handleParentPortalGet({ token: TOKEN, from: '1999-01-01', to: ['bad'] }, deps)
     expect(resolveRange).toHaveBeenCalledWith({ from: '1999-01-01', to: ['bad'] }, '2026-09-13')
     expect(buildScheduleView).toHaveBeenCalledWith(snapshotPayload, STUDENT_ID, { from: '2026-09-06', to: '2026-10-11' })
+  })
+
+  it('日程計算が講習の印を返したら hasLectureLessons=true をそのまま返す(真偽値以外は false)', async () => {
+    const view = (flag: unknown) => () => ({ studentName: 'n', days: [], hasLectureLessons: flag as boolean })
+    const on = await handleParentPortalGet({ token: TOKEN }, createDeps({ buildScheduleView: view(true) }))
+    expect((on.body as Record<string, unknown>).hasLectureLessons).toBe(true)
+    const junk = await handleParentPortalGet({ token: TOKEN }, createDeps({ buildScheduleView: view('yes') }))
+    expect((junk.body as Record<string, unknown>).hasLectureLessons).toBe(false)
   })
 
   it('buildScheduleView が null(生徒無し)なら 410', async () => {

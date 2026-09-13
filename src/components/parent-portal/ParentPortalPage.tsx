@@ -7,7 +7,6 @@ import {
   PARENT_PORTAL_LOAD_FAILED_MESSAGE,
   PARENT_PORTAL_NETWORK_ERROR_MESSAGE,
   PARENT_PORTAL_NOTES,
-  PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE,
   PARENT_SCHEDULE_TENTATIVE_LABEL,
   buildParentPortalRequestUrl,
   canShiftParentScheduleMonth,
@@ -21,6 +20,7 @@ import {
   isParentScheduleDayTentative,
   resolveParentMessageSendError,
   resolveParentPortalLoadError,
+  resolveParentScheduleMonthNotice,
   shiftParentScheduleMonth,
   validateParentMessageInput,
   type ParentPortalScheduleResponse,
@@ -172,6 +172,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const schedule = loadState.data
   const canGoPrev = canShiftParentScheduleMonth(schedule.range, -1, schedule.bounds)
   const canGoNext = canShiftParentScheduleMonth(schedule.range, 1, schedule.bounds)
+  const monthNotice = resolveParentScheduleMonthNotice(schedule)
 
   return (
     <div className="pp-container">
@@ -205,7 +206,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
         {schedule.days.map((day) => (
           <ParentScheduleDayCard key={day.dateKey} day={day} isToday={day.dateKey === schedule.today} />
         ))}
-        {schedule.days.length === 0 ? <p className="pp-muted pp-days-empty">{PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE}</p> : null}
+        {monthNotice ? <p className="pp-muted pp-days-empty">{monthNotice}</p> : null}
       </section>
 
       <section className="pp-contact" aria-label="教室へ連絡">

@@ -503,7 +503,7 @@ export type ParentPortalDeps = {
   /** `workspaces/{ws}/classroomSnapshots/{classroomId}` を readStoredSnapshotPayload で展開したもの。無ければ null。 */
   loadSnapshot: (workspaceKey: string, classroomId: string) => Promise<{ payload: unknown; savedAt: string | null } | null>
   /** generated/parentSchedule の buildParentScheduleView。生徒が無ければ null。 */
-  buildScheduleView: (payload: unknown, studentId: string, range: ParentPortalRange) => { studentName: string; days: unknown[] } | null
+  buildScheduleView: (payload: unknown, studentId: string, range: ParentPortalRange) => { studentName: string; days: unknown[]; hasLectureLessons?: boolean } | null
   /** generated/parentSchedule の resolveParentScheduleRange。 */
   resolveRange: (input: { from?: unknown; to?: unknown }, todayKey: string) => ParentPortalResolvedRange
   /** generated/parentSchedule の isParentStudentActiveOnDate(盤面・日程表と同じ isActiveOnDate。§F)。 */
@@ -602,6 +602,8 @@ export async function handleParentPortalGet(
       range: { from: range.from, to: range.to },
       bounds: { minFrom: range.bounds.minFrom, maxTo: range.bounds.maxTo },
       days: view.days,
+      // 講習だけの月の注記用(講習コマの中身は出さない)。
+      hasLectureLessons: view.hasLectureLessons === true,
     },
   }
 }
