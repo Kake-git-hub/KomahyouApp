@@ -29,6 +29,11 @@ import {
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
 import { AppMenu } from '../navigation/AppMenu'
+import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
+import { generateQrSvg } from '../../utils/qrcode'
+import { isParentPortalTokenOwnedByClassroom } from '../../utils/developmentClassroom'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, openParentPortalQrPrint, resolveParentPortalQrRowState } from './parentPortalQr'
+import { ParentPortalQrModal } from './ParentPortalQrModal'
 
 type BasicDataScreenProps = {
   classroomSettings: ClassroomSettings
@@ -42,6 +47,15 @@ type BasicDataScreenProps = {
   // 削除時にログインアカウントのパスワード再認証を要求するか（本番=firebase のみ true）。
   requiresDeletePassword?: boolean
   onVerifyDeletePassword?: (password: string) => Promise<boolean>
+  // 保護者向け固定QR(docs/spec-parent-portal.md §K-6)。classroomId は写しトークンの発行元教室タグに使う。
+  classroomId?: string | null
+  classroomName?: string
+  // フラグ parentPortalQr(featureRollout)の評価結果。OFF の教室では QR ボタン・モーダルを一切出さない(§H)。
+  parentPortalQrEnabled?: boolean
+  // callable issueStudentPortalToken の薄い wrapper(App が workspaceKey を注入)。未指定=リモート無し(QR 非表示)。
+  onIssueParentPortalToken?: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
+  // 生徒削除の確定時に best-effort で失効させる(§B-2 revokedReason='studentDeleted')。
+  onRevokeParentPortalToken?: (studentId: string, reason: 'studentDeleted') => Promise<void>
   onBackToBoard: () => void
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
@@ -648,6 +662,15 @@ export function parseImportedBundle(xlsx: XlsxModule, workbook: import('xlsx').W
   }
 }
 
+// 一致行の保護者用トークン写し(parentPortalToken + 発行元教室タグ)だけを取り出す。未発行なら空オブジェクト
+// (undefined キーを作らない: 既存の toEqual 比較と Firestore 保存 payload を汚さない)。
+function pickParentPortalTokenFields(matched: StudentRow | null | undefined): Pick<StudentRow, 'parentPortalToken' | 'parentPortalTokenClassroomId'> {
+  if (!matched?.parentPortalToken) return {}
+  return matched.parentPortalTokenClassroomId
+    ? { parentPortalToken: matched.parentPortalToken, parentPortalTokenClassroomId: matched.parentPortalTokenClassroomId }
+    : { parentPortalToken: matched.parentPortalToken }
+}
+
 export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDataBundle): BasicDataBundle {
   const managers = fallback.managers.slice()
   for (const importedManager of imported.managers) {
@@ -679,7 +702,9 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
   const mergedStudentIdByImportedId = new Map<string, string>()
   for (const importedStudent of imported.students) {
     const matchedStudent = findStudentMatch(importedStudent, fallback.students)
-    const nextStudent = { ...importedStudent, id: matchedStudent?.id ?? importedStudent.id }
+    // 保護者用トークンの写し(spec-parent-portal.md §J-3)は Excel の列に無い(buildWorkbook にも出さない)ため、
+    // 差分取込で一致行を丸ごと置き換えると消える。一致行から発行元教室タグと対で引き継ぐ。
+    const nextStudent = { ...importedStudent, ...pickParentPortalTokenFields(matchedStudent), id: matchedStudent?.id ?? importedStudent.id }
     mergedStudentIdByImportedId.set(importedStudent.id, nextStudent.id)
     const targetIndex = students.findIndex((row) => row.id === nextStudent.id)
     if (targetIndex >= 0) {
@@ -866,9 +891,12 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
+  // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
+  // 権威はサーバー(getOrIssue で冪等)。発行後は手動保存で写しが永続化される(保存アーキテクチャ)。
+  const [parentQrModal, setParentQrModal] = useState<{ studentId: string; url: string; svg: string; isLoading: boolean; error: string | null; busy: boolean } | null>(null)
   // 削除確認モーダル（生徒/講師共通）。window.confirm を廃し、不可逆警告・退塾日での非表示案内・
   // 未消化ストック警告・ログインパスワード再認証を1画面にまとめる（オーナー指示 2026-07-08）。
   const [deleteModalState, setDeleteModalState] = useState<{ scope: DeleteScope; id: string; name: string; stock?: StudentDeletionStock } | null>(null)
@@ -991,6 +1019,93 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     onUpdateStudents((current) => current.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }
 
+  // --- 保護者用QR(spec-parent-portal.md §K-6) ---
+  const buildParentQrView = (token: string) => {
+    const url = buildParentPortalUrl(token)
+    if (!url) return null
+    return { url, svg: generateQrSvg(url, 220) }
+  }
+
+  const openParentPortalQr = async (row: StudentRow) => {
+    if (!onIssueParentPortalToken || !classroomId) {
+      setStatusMessage(PARENT_PORTAL_QR_TEXT.urlUnavailable)
+      return
+    }
+    // 発行元教室が一致する写しがあれば、待たせないよう先にそれで描く(オフライン時のフォールバックにもなる)。
+    // 他教室コピー由来・タグ無しの写しは信用しない(§B-3・b2e2048 同型の事故防止)。
+    const cached = row.parentPortalToken && isParentPortalTokenOwnedByClassroom(row, classroomId)
+      ? buildParentQrView(row.parentPortalToken)
+      : null
+    if (cached) {
+      setParentQrModal({ studentId: row.id, url: cached.url, svg: cached.svg, isLoading: false, error: null, busy: false })
+    } else {
+      setParentQrModal({ studentId: row.id, url: '', svg: '', isLoading: true, error: null, busy: false })
+    }
+    // ★写しがあっても必ずサーバーへ getOrIssue を投げ、権威のトークンで描き直す(冪等・新規書き込みなし)。
+    //   写しは**失効済みのトークンを指していることがある**(再発行のあとに「直前に戻す」やバックアップ復元で
+    //   名簿が戻った場合)。写しだけで描くと、読み込むと 410 になる死んだQRを印刷して配ってしまう
+    //   (レビュー指摘 2026-09-13)。
+    try {
+      const { token } = await onIssueParentPortalToken(row.id, { reissue: false })
+      if (token !== row.parentPortalToken || row.parentPortalTokenClassroomId !== classroomId) {
+        updateStudent(row.id, { parentPortalToken: token, parentPortalTokenClassroomId: classroomId })
+        setStatusMessage(PARENT_PORTAL_QR_TEXT.issued)
+      }
+      const view = buildParentQrView(token)
+      setParentQrModal((current) => (current && current.studentId === row.id
+        ? { studentId: row.id, url: view?.url ?? '', svg: view?.svg ?? '', isLoading: false, error: view ? null : PARENT_PORTAL_QR_TEXT.urlUnavailable, busy: false }
+        : current))
+    } catch (error) {
+      // 通信できないときは、写しで描けているならそれを残す(印刷は避けたいので注意文をエラー欄に出す)。
+      if (cached) {
+        const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+        setParentQrModal((current) => (current && current.studentId === row.id
+          ? { ...current, isLoading: false, busy: false, error: `${PARENT_PORTAL_QR_TEXT.verifyFailed}${detail}` }
+          : current))
+        return
+      }
+      const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+      setParentQrModal((current) => (current && current.studentId === row.id
+        ? { studentId: row.id, url: '', svg: '', isLoading: false, error: `${PARENT_PORTAL_QR_TEXT.issueFailed}${detail}`, busy: false }
+        : current))
+    }
+  }
+
+  const reissueParentPortalQr = async () => {
+    const modal = parentQrModal
+    if (!modal || modal.busy || modal.isLoading || !onIssueParentPortalToken || !classroomId) return
+    // 再発行は旧トークンの失効を伴う不可逆操作(§B-2)なので確認を挟む。
+    if (!window.confirm(PARENT_PORTAL_QR_TEXT.reissueConfirm)) return
+    setParentQrModal({ ...modal, busy: true, error: null })
+    try {
+      const { token } = await onIssueParentPortalToken(modal.studentId, { reissue: true })
+      updateStudent(modal.studentId, { parentPortalToken: token, parentPortalTokenClassroomId: classroomId })
+      const view = buildParentQrView(token)
+      setParentQrModal((current) => (current && current.studentId === modal.studentId
+        ? { ...current, url: view?.url ?? '', svg: view?.svg ?? '', busy: false, error: view ? null : PARENT_PORTAL_QR_TEXT.urlUnavailable }
+        : current))
+      setStatusMessage(PARENT_PORTAL_QR_TEXT.reissued)
+    } catch (error) {
+      const detail = error instanceof Error && error.message ? ` (${error.message})` : ''
+      setParentQrModal((current) => (current && current.studentId === modal.studentId
+        ? { ...current, busy: false, error: `${PARENT_PORTAL_QR_TEXT.issueFailed}${detail}` }
+        : current))
+    }
+  }
+
+  const printParentPortalQr = () => {
+    const modal = parentQrModal
+    if (!modal || !modal.svg || !modal.url) return
+    const student = students.find((row) => row.id === modal.studentId)
+    const html = buildParentPortalQrPrintHtml({
+      classroomName,
+      studentName: student ? getStudentDisplayName(student) : '',
+      url: modal.url,
+      svg: modal.svg,
+    })
+    if (!openParentPortalQrPrint(html)) setStatusMessage(PARENT_PORTAL_QR_TEXT.printBlocked)
+  }
+
   const teacherEditorModalConfig = (() => {
     if (!teacherEditorModalState) return null
 
@@ -1102,6 +1217,15 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
       onUpdateTeachers((current) => current.filter((row) => row.id !== id))
       setStatusMessage('講師を削除しました。')
     } else {
+      // 保護者用トークンの失効は best-effort(spec-parent-portal.md §B-2 revokedReason='studentDeleted')。
+      // 失敗しても削除は止めない。
+      // ★写し(parentPortalToken)の有無で条件付けしない: 写しが無くてもサーバーには有効トークンが
+      //   残っていることがある(別端末で発行・他教室コピーで剥がした後・保存前)。さらに生徒ID(sNNN)は
+      //   欠番を再利用するため、失効し忘れた古いQRが**後から入った別の生徒**に一致し、その子の日程が
+      //   旧家庭に見えてしまう(レビュー指摘 2026-09-13・INV-08)。サーバーは索引で引けるので写しは不要・冪等。
+      if (onRevokeParentPortalToken) {
+        void onRevokeParentPortalToken(id, 'studentDeleted').catch(() => { /* best-effort */ })
+      }
       onUpdateStudents((current) => current.filter((row) => row.id !== id))
       setStatusMessage('生徒を削除しました。')
     }
@@ -1378,6 +1502,10 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                   <td>
                     <div className="basic-data-row-actions">
                       <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
+                      {/* 保護者用QR: 在籍タブ・フラグ ON・リモート有り・在籍中(isActiveOnDate)の生徒だけ(spec-parent-portal.md §K-6)。 */}
+                      {studentRosterView === 'active' && resolveParentPortalQrRowState({ student: row, referenceDate: todayReferenceDate, enabled: parentPortalQrEnabled, remoteEnabled: Boolean(onIssueParentPortalToken), classroomId }) !== 'hidden' ? (
+                        <button className="secondary-button slim" type="button" onClick={() => { void openParentPortalQr(row) }} title={PARENT_PORTAL_QR_TEXT.title} data-testid={`basic-data-student-qr-${row.id}`}>{PARENT_PORTAL_QR_TEXT.buttonLabel}</button>
+                      ) : null}
                       <button className="secondary-button slim" type="button" onClick={() => removeStudent(row.id)}>削除</button>
                     </div>
                   </td>
@@ -1495,6 +1623,24 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
           </div>
         </div>
       ) : null}
+
+      {parentQrModal ? (() => {
+        const student = students.find((row) => row.id === parentQrModal.studentId)
+        return (
+          <ParentPortalQrModal
+            classroomName={classroomName}
+            studentName={student ? getStudentDisplayName(student) : ''}
+            url={parentQrModal.url}
+            svg={parentQrModal.svg}
+            isLoading={parentQrModal.isLoading}
+            error={parentQrModal.error}
+            busy={parentQrModal.busy}
+            onReissue={() => { void reissueParentPortalQr() }}
+            onPrint={printParentPortalQr}
+            onClose={() => setParentQrModal(null)}
+          />
+        )
+      })() : null}
       <section className="toolbar-panel" aria-label="基本データの操作バー">
         <div className="toolbar-row toolbar-row-primary">
           <div className="toolbar-group toolbar-group-compact">

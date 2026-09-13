@@ -27,6 +27,15 @@ export type StudentRow = {
   // INV-06(在庫整合)まで巻き込むため、ここを「実データの授業区分を書き換える」実装に変えてはいけない。
   // 後方互換のため optional(未設定=外部生でない)。
   isExternal?: boolean
+  // 保護者向け固定QR(docs/spec-parent-portal.md §B-1・2026-09-13)。
+  // parentPortalToken は QR 描画用の「写し」で、権威は Firestore `studentPortalTokens/{token}`(CF のみ読み書き)。
+  // 写しは表示のためだけに存在し、検証には使わない(検証は必ず権威 doc を読む。§G-2)。
+  // parentPortalTokenClassroomId は発行元教室タグ。他教室のデータを開発用教室へコピーしたとき、写しが残って
+  // 本番生徒の QR が開発用教室に出る事故(講習提出トークン b2e2048 / v1.5.415 と同型)を防ぐため、
+  // 剥がし(stripParentPortalToken*)は src/utils/developmentClassroom.ts の単一権威で行う(§B-3)。
+  // Excel 出力(buildWorkbook)には載せない(ベアラートークンの漏えい防止)。後方互換のため optional。
+  parentPortalToken?: string
+  parentPortalTokenClassroomId?: string
 }
 
 // 外部生判定の唯一の権威関数。呼び出し側で row.isExternal を直読みしない(判定の分散を防ぐ)。

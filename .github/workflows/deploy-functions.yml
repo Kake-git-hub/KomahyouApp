@@ -27,7 +27,9 @@ on:
       - main
     paths:
       - 'functions/**'
-      # staging 専用スクリプト(本番 functions には含まれない)は本番 functions デプロイを発火させない。
+      # functions/scripts/ のうち staging bootstrap/seed は本番 functions に含まれないのでデプロイを発火させない。
+      # ただし sync-shared.mjs は本番 functions の prebuild(共有純関数の複製)なので、変えたときは
+      # 生成物 functions/src/generated/** も一緒に変わり、そちら側で発火する(生成物のコミット漏れは CI のパリティテストが赤にする)。
       - '!functions/scripts/**'
       - '.github/workflows/deploy-functions.yml'
 

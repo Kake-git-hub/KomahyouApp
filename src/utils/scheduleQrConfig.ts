@@ -57,6 +57,18 @@ export function buildSubmissionUrl(token: string) {
   return `${origin}/#/submit/${encodeURIComponent(token)}`
 }
 
+// 保護者向け固定QR の URL(docs/spec-parent-portal.md §C)。本番は短縮パス `/p/{token}`(QR を小さくする)、
+// ローカル開発(loopback)はハッシュ経路 `/#/parent/{token}`。講習提出の `/s/{token}` とはプレフィックスで用途を分ける
+// (取り違え防止。§K-6)。判定側は src/utils/parentPortalRoute.ts extractParentPortalToken(こちらと対で保つ)。
+export function buildParentPortalUrl(token: string) {
+  const origin = getRuntimeOrigin()
+  if (!origin || !token) return undefined
+  if (!isLoopbackUrl(origin)) {
+    return `${origin}/p/${encodeURIComponent(token)}`
+  }
+  return `${origin}/#/parent/${encodeURIComponent(token)}`
+}
+
 export function buildLegacyLessonScheduleLongUrl(baseUrl: string, classroomId: string, sessionId: string, personType: ScheduleQrPersonType, personId: string) {
   const normalizedBaseUrl = trimTrailingSlashes(baseUrl)
   return `${normalizedBaseUrl}/#/c/${encodeURIComponent(classroomId)}/availability/${encodeURIComponent(sessionId)}/${personType}/${encodeURIComponent(personId)}`

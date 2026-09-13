@@ -89,3 +89,72 @@ export function stripForeignSubmissionTokensFromInputs<T extends SubmissionToken
     Object.entries(inputs).map(([id, input]) => [id, stripForeignSubmissionToken(input, classroomId)]),
   )
 }
+
+// ---- 保護者向け固定QR(docs/spec-parent-portal.md §B-3・2026-09-13) ----
+// StudentRow が持つ保護者ポータル用トークンの「写し」と発行元教室タグ。
+// 提出トークン(studentInputs の Record)とは持ち主の形が違う(StudentRow の配列)ため、上の stripSubmissionToken*
+// を流用せず兄弟関数を置く。剥がすフィールドの定義はこのファイル 1 か所に集約し、呼び出し側(App.tsx など)で
+// `delete row.parentPortalToken` を手書きしない(分散させると片方だけ剥がし忘れる)。
+export type ParentPortalTokenBearer = {
+  parentPortalToken?: string
+  parentPortalTokenClassroomId?: string
+}
+
+// この保護者用トークンが「今開いている教室で発行されたもの」か。タグ未設定・別教室IDなら false。
+// 判定の意味は isSubmissionTokenOwnedByClassroom と同じ(発行元不明は信用しない)。
+export function isParentPortalTokenOwnedByClassroom(
+  row: ParentPortalTokenBearer | null | undefined,
+  classroomId: string | null | undefined,
+): boolean {
+  if (!row?.parentPortalToken) return false
+  if (!classroomId) return false
+  return row.parentPortalTokenClassroomId === classroomId
+}
+
+// 保護者用トークンを構成するフィールドを「1か所」で剥がす唯一の権威関数(無条件)。
+// 発行元教室に関係なく parentPortalToken と発行元教室タグ parentPortalTokenClassroomId の両方を落とす
+// (片方だけ残すと「タグだけの行」や「タグ無しトークン」が生まれて判定が揺れる)。
+// 教室コピー(他教室→開発用: buildDevelopmentClassroomCopyPayload)で使う。変更が無ければ同一参照を返す。純関数。
+export function stripParentPortalToken<T extends ParentPortalTokenBearer>(row: T): T {
+  if (row.parentPortalToken === undefined && row.parentPortalTokenClassroomId === undefined) return row
+  const next = { ...row }
+  delete next.parentPortalToken
+  delete next.parentPortalTokenClassroomId
+  return next
+}
+
+// StudentRow[](配列)単位で無条件に保護者用トークンを剥がす。教室コピー時に使う。
+// どの行も変わらなければ配列も同一参照を返す(不要な再レンダー・差分検知の揺れを避ける)。
+export function stripParentPortalTokensFromStudents<T extends ParentPortalTokenBearer>(rows: T[]): T[] {
+  let changed = false
+  const next = rows.map((row) => {
+    const stripped = stripParentPortalToken(row)
+    if (stripped !== row) changed = true
+    return stripped
+  })
+  return changed ? next : rows
+}
+
+// 開発用教室でのみ使う: 「今開いている教室が発行したものではない」保護者用トークンを除去する。
+// 本番教室では呼び出さない(配布済みの紙の QR を黙って無効にしない)。除去は stripParentPortalToken に委譲。純関数。
+export function stripForeignParentPortalToken<T extends ParentPortalTokenBearer>(
+  row: T,
+  classroomId: string | null | undefined,
+): T {
+  if (isParentPortalTokenOwnedByClassroom(row, classroomId)) return row
+  return stripParentPortalToken(row)
+}
+
+// StudentRow[](配列)単位で他教室由来の保護者用トークンを除去する。開発用教室でのみ使う。
+export function stripForeignParentPortalTokensFromStudents<T extends ParentPortalTokenBearer>(
+  rows: T[],
+  classroomId: string | null | undefined,
+): T[] {
+  let changed = false
+  const next = rows.map((row) => {
+    const stripped = stripForeignParentPortalToken(row, classroomId)
+    if (stripped !== row) changed = true
+    return stripped
+  })
+  return changed ? next : rows
+}

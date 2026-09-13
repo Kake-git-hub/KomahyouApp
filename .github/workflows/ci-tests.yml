@@ -42,6 +42,13 @@ jobs:
       # 新規コードは error を増やさないこと(warning の exhaustive-deps/react-refresh は許容)。
       - name: Lint
         run: npm run lint
+      # functions は別 TS プロジェクトで、ルートの `npm run build`(tsc -b) も vitest も型検査しない。
+      # ここを見ないと functions のコンパイルエラーが「Deploy Cloud Functions が赤」になるまで分からず、
+      # ホスティングだけ先に緑でデプロイされて rewrite が存在しない関数を指す(404)状態が残る。
+      - name: Install functions dependencies
+        run: npm --prefix functions ci
+      - name: Typecheck functions
+        run: npx tsc --noEmit -p functions/tsconfig.json
       - name: Unit tests (vitest)
         run: npm run test:unit
       - name: Build

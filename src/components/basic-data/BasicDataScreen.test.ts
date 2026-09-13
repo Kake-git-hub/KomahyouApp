@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as xlsx from 'xlsx'
-import { createTemplateBundle, mergeImportedBundle, parseImportedBundle } from './BasicDataScreen'
+import { buildWorkbook, createTemplateBundle, mergeImportedBundle, parseImportedBundle } from './BasicDataScreen'
 
 describe('BasicDataScreen parseImportedBundle', () => {
   it('assigns sequential ids to imported rows without id columns', () => {
@@ -115,5 +115,92 @@ describe('BasicDataScreen parseImportedBundle', () => {
     expect(merged.students.find((row) => row.id === targetStudent?.id)).toEqual(expect.objectContaining({
       email: 'aoki-name-match@example.com',
     }))
+  })
+})
+
+// 保護者向け固定QR(docs/spec-parent-portal.md §J-3 / §K-2): 写しトークンは Excel の列に無いため、
+// 差分取込で一致行を丸ごと置き換えると消える。一致行から引き継ぐこと、Excel には出力しないことを固定する。
+describe('BasicDataScreen parentPortalToken と Excel 取込/出力 (2026-09-13)', () => {
+  const DEV_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
+
+  function createFallbackWithToken() {
+    const fallback = createTemplateBundle()
+    const [first, second, ...rest] = fallback.students
+    if (!first || !second) throw new Error('template students missing')
+    return {
+      ...fallback,
+      students: [
+        { ...first, parentPortalToken: 'tokenAAAAAAAAAAAAAAAAAAAAAAAAAAA', parentPortalTokenClassroomId: DEV_CLASSROOM_ID },
+        second,
+        ...rest,
+      ],
+    }
+  }
+
+  it('差分取込(ID 一致)で一致行の parentPortalToken と発行元教室タグを引き継ぐ', () => {
+    const fallback = createFallbackWithToken()
+    const target = fallback.students[0]
+    const workbook = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 生徒ID: target.id, 名前: target.name, 表示名: '改名後', メール: '', 入塾日: target.entryDate, 退塾日: '', 生年月日: target.birthDate, 表示: '表示' },
+    ]), '生徒')
+
+    const merged = mergeImportedBundle(parseImportedBundle(xlsx, workbook, fallback), fallback)
+    expect(merged.students.find((row) => row.id === target.id)).toEqual(expect.objectContaining({
+      displayName: '改名後',
+      parentPortalToken: 'tokenAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      parentPortalTokenClassroomId: DEV_CLASSROOM_ID,
+    }))
+  })
+
+  it('差分取込(名前一致・ID 列なし)でも引き継ぐ', () => {
+    const fallback = createFallbackWithToken()
+    const target = fallback.students[0]
+    const workbook = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: target.name, 表示名: target.displayName, メール: 'name-match@example.com', 入塾日: target.entryDate, 退塾日: '', 生年月日: target.birthDate, 表示: '表示' },
+    ]), '生徒')
+
+    const merged = mergeImportedBundle(parseImportedBundle(xlsx, workbook, fallback), fallback)
+    expect(merged.students.find((row) => row.id === target.id)).toEqual(expect.objectContaining({
+      email: 'name-match@example.com',
+      parentPortalToken: 'tokenAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      parentPortalTokenClassroomId: DEV_CLASSROOM_ID,
+    }))
+  })
+
+  it('未発行の一致行・新規行にはトークン系フィールドを作らない(undefined キーも作らない)', () => {
+    const fallback = createFallbackWithToken()
+    const untouched = fallback.students[1]
+    const workbook = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 生徒ID: untouched.id, 名前: untouched.name, 表示名: untouched.displayName, メール: '', 入塾日: untouched.entryDate, 退塾日: '', 生年月日: untouched.birthDate, 表示: '表示' },
+      { 名前: '新規 生徒', 表示名: '新規', メール: '', 入塾日: '2026-04-01', 退塾日: '', 生年月日: '2014-04-02', 表示: '表示' },
+    ]), '生徒')
+
+    const merged = mergeImportedBundle(parseImportedBundle(xlsx, workbook, fallback), fallback)
+    const mergedUntouched = merged.students.find((row) => row.id === untouched.id)
+    expect(mergedUntouched).toBeDefined()
+    expect(Object.keys(mergedUntouched ?? {})).not.toContain('parentPortalToken')
+    expect(Object.keys(mergedUntouched ?? {})).not.toContain('parentPortalTokenClassroomId')
+    const added = merged.students.find((row) => row.name === '新規 生徒')
+    expect(added).toBeDefined()
+    expect(Object.keys(added ?? {})).not.toContain('parentPortalToken')
+  })
+
+  it('Excel 出力(buildWorkbook)にはトークンを一切載せない(ベアラートークンの漏えい防止)', () => {
+    const fallback = createFallbackWithToken()
+    const workbook = buildWorkbook(xlsx, fallback)
+    const studentSheet = workbook.Sheets['生徒']
+    expect(studentSheet).toBeDefined()
+    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(studentSheet)
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) {
+      expect(Object.keys(row)).not.toContain('parentPortalToken')
+      expect(Object.keys(row)).not.toContain('parentPortalTokenClassroomId')
+    }
+    const serialized = JSON.stringify(rows)
+    expect(serialized).not.toContain('tokenAAAAAAAAAAAAAAAAAAAAAAAAAAA')
+    expect(serialized).not.toContain(DEV_CLASSROOM_ID)
   })
 })

@@ -10,7 +10,7 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore'
 
 const WORKSPACE = 'main'
 let testEnv: RulesTestEnvironment
@@ -19,6 +19,8 @@ let testEnv: RulesTestEnvironment
 const DEV = 'dev-uid'
 const MGR_A = 'mgrA-uid'
 const MGR_B = 'mgrB-uid'
+// 保護者向け固定QR(docs/spec-parent-portal.md §B-1)のトークン(32 文字・[A-Za-z0-9_-])。
+const PORTAL_TOKEN = 'AbCdEfGhIjKlMnOpQrStUvWxYz012345'
 
 beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
@@ -46,12 +48,20 @@ beforeEach(async () => {
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classrooms/A`), { name: '教室A' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classrooms/B`), { name: '教室B' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A`), { version: 1 })
+    // 保護者向け固定QR: 教室 A/B に未読の連絡を 1 件ずつ、トークン・索引・回数制限カウンタを 1 件ずつ(すべて CF が書く想定)。
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-A`), { classroomId: 'A', studentId: 's1', body: 'A', notifiedAt: null, createdAt: '2026-09-13T00:00:00.000Z' })
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/B/parentMessages/m-B`), { classroomId: 'B', studentId: 's9', body: 'B', notifiedAt: null, createdAt: '2026-09-13T00:00:00.000Z' })
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/parentPortalRateLimits/classroom__2026-09-13T10`), { count: 1, createdAt: '2026-09-13T01:00:00.000Z', updatedAt: '2026-09-13T01:00:00.000Z' })
+    await setDoc(doc(db, `studentPortalTokens/${PORTAL_TOKEN}`), { workspaceKey: WORKSPACE, classroomId: 'A', studentId: 's1', createdAt: '2026-09-13T00:00:00.000Z', createdByUid: MGR_A, revokedAt: null })
+    await setDoc(doc(db, `studentPortalTokenOwners/A__s1`), { workspaceKey: WORKSPACE, classroomId: 'A', studentId: 's1', token: PORTAL_TOKEN, updatedAt: '2026-09-13T00:00:00.000Z' })
   })
 })
 
 const dbFor = (uid: string, email: string) => testEnv.authenticatedContext(uid, { email }).firestore()
 const mgrAdb = () => dbFor(MGR_A, 'a@example.com')
+const mgrBdb = () => dbFor(MGR_B, 'b@example.com')
 const devdb = () => dbFor(DEV, 'bkkdmzn@gmail.com')
+const anondb = () => testEnv.unauthenticatedContext().firestore()
 
 describe('Firestore rules: 教室アクセスの分離', () => {
   it('マネージャーは自分の担当教室を読める', async () => {
@@ -132,5 +142,66 @@ describe('Firestore rules: studentCountLedger は読み取り専用', () => {
   it('billing開発者でも台帳へは書き込めない(恒久記録を画面操作で動かさない)', async () => {
     await assertFails(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15`), { studentCountTotal: 999 }))
     await assertFails(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/studentCountLedger/2026-06-15/classrooms/A`), { studentCount: 999 }))
+  })
+})
+
+// 保護者向け固定QR(docs/spec-parent-portal.md §B-1 / §E-2・受け入れ条件 K-2 / K-5)。
+// 連絡(parentMessages)は自教室のみ read・write は全員不可。トークン・索引・回数制限カウンタは開発者でも read/write 不可。
+describe('Firestore rules: 保護者向け固定QR(parentMessages は自教室のみ read・書き込みは CF のみ)', () => {
+  const messageA = () => `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-A`
+  const messageB = () => `workspaces/${WORKSPACE}/classroomSnapshots/B/parentMessages/m-B`
+
+  it('室長(mgrA)は自教室 A の連絡を読める(通知モーダルの購読)', async () => {
+    await assertSucceeds(getDoc(doc(mgrAdb(), messageA())))
+  })
+
+  it('室長(mgrA)は未読(notifiedAt == null)の一覧クエリを自教室で実行できる(クライアントの購読と同じ形)', async () => {
+    const unread = query(collection(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages`), where('notifiedAt', '==', null))
+    await assertSucceeds(getDocs(unread))
+  })
+
+  it('室長(mgrB)は教室 A の連絡を読めない(他教室の連絡は購読しない = 教室分離)', async () => {
+    await assertFails(getDoc(doc(mgrBdb(), messageA())))
+    const unreadOfA = query(collection(mgrBdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages`), where('notifiedAt', '==', null))
+    await assertFails(getDocs(unreadOfA))
+  })
+
+  it('開発者は任意の教室の連絡を読める', async () => {
+    await assertSucceeds(getDoc(doc(devdb(), messageB())))
+  })
+
+  it('未認証は連絡を読めない(保護者ページは Firestore を直読みしない)', async () => {
+    await assertFails(getDoc(doc(anondb(), messageA())))
+  })
+
+  it('連絡は誰も書けない(作成・既読化・削除は Cloud Function のみ)', async () => {
+    await assertFails(setDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-new`), { body: 'x', notifiedAt: null }))
+    await assertFails(updateDoc(doc(mgrAdb(), messageA()), { notifiedAt: '2026-09-13T01:00:00.000Z' }))
+    await assertFails(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-new`), { body: 'x', notifiedAt: null }))
+    await assertFails(updateDoc(doc(devdb(), messageA()), { notifiedAt: '2026-09-13T01:00:00.000Z' }))
+    await assertFails(setDoc(doc(anondb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-new`), { body: 'x' }))
+  })
+
+  it('studentPortalTokens は開発者・室長・未認証のいずれも read/write 不可(権威は CF のみ・公開 read 文書を作らない)', async () => {
+    for (const db of [devdb(), mgrAdb(), anondb()]) {
+      await assertFails(getDoc(doc(db, `studentPortalTokens/${PORTAL_TOKEN}`)))
+      await assertFails(setDoc(doc(db, `studentPortalTokens/${PORTAL_TOKEN}`), { revokedAt: null }))
+      await assertFails(setDoc(doc(db, `studentPortalTokens/${'x'.repeat(32)}`), { workspaceKey: WORKSPACE, classroomId: 'A', studentId: 's1', revokedAt: null }))
+    }
+  })
+
+  it('studentPortalTokenOwners(索引)は開発者でも read/write 不可', async () => {
+    for (const db of [devdb(), mgrAdb(), anondb()]) {
+      await assertFails(getDoc(doc(db, 'studentPortalTokenOwners/A__s1')))
+      await assertFails(setDoc(doc(db, 'studentPortalTokenOwners/A__s1'), { token: 'y'.repeat(32) }))
+    }
+  })
+
+  it('parentPortalRateLimits(回数制限カウンタ)は開発者でも read/write 不可', async () => {
+    const path = `workspaces/${WORKSPACE}/classroomSnapshots/A/parentPortalRateLimits/classroom__2026-09-13T10`
+    for (const db of [devdb(), mgrAdb(), anondb()]) {
+      await assertFails(getDoc(doc(db, path)))
+      await assertFails(setDoc(doc(db, path), { count: 0 }))
+    }
   })
 })
