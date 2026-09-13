@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.518 (2026-09-14)
+- fix: 保護者向け固定QRのページ(開発用教室限定)を確認リスト第6版の要改善 k-4/k-5 に合わせて改定。表示と移動を**暦の1か月単位**(「前の月／次の月」・先月〜来月だけ・見出し「2026年9月」)にし、**授業(通常・振替・お休み等)がある日だけ**行を出す。教室休みは**臨時・祝日休み(holidayDates)だけ**「教室休み」の1行(毎週の定休曜日は出さない)。講習期間の「別途ご案内」行を廃止し、講習期間中も**通常授業だけ**を出す(講習は講習提出QRで案内・オーナー回答 2026-09-14)。応答の kind から lecture-period/none と lectureLabel を削除。日程の権威 parentSchedule.ts を直し functions の生成物を再同期(パリティテスト緑)。回帰テスト: 月丸め(年またぎ・閏年・範囲外寄せ)/月移動の端/空行を出さない/定休曜日は行なし・臨時休みは行あり/講習期間でも通常授業。確認リストは第7版 v1.5.518(k-4/k-5 の再確認のみ)(src/utils/parentSchedule.ts, parent-portal/ParentPortalPage.tsx・parentPortalPageModel.ts, verificationChecklist.ts, docs/spec-parent-portal.md §0-4)
+
 ## v1.5.517 (2026-09-13)
 - fix: 開発用教室の確認リストで**メモ欄を全項目に常に出す**(オーナー指摘「テキストが入力できない」: 以前は要改善を選ぶまで入力欄が無かった)。未確認のままメモを書くと要改善に切り替え、送信本文から黙って落ちないようにした(`setVerificationChecklistMemo`)。あわせて確認リストの送信は**メール通知も Issue 起票もしない**(オーナー指示・開発者がツールで読んで必ず修正するため)。サーバーが開発用教室かつ先頭行 `[確認リスト vX.Y.Z]` のとき `isVerificationChecklist` で記録し `notifiedAt` 即時・メールトリガーは送信前に打ち切る。本番教室は対象外。回帰テスト(純関数3件・サーバー判定3件・配線 source-scan 2件)を追加し、メール打ち切りを外すと落ちることを確認(VerificationChecklistPanel.tsx, verificationChecklist.ts, functions/src/developerReport.ts, functions/src/index.ts, docs/spec-developer-report.md §E-2)
 

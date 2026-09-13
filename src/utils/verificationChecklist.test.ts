@@ -55,25 +55,25 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第6版: 前回 OK だった項目は載せず、保護者向け固定QR の新規項目だけ(オーナー指摘 2026-09-12 の運用)', () => {
+  it('第7版: 前回 OK だった項目は載せず、第6版で要改善だった k-4 / k-5 の再確認だけ(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['k-1', 'k-2', 'k-3', 'k-4', 'k-5', 'k-6', 'k-7', 'k-9', 'k-8'])
+    expect(ids).toEqual(['k-4', 'k-5'])
     // v1.5.504〜v1.5.509 で OK だった項目(Issue #63〜#66)が残っていない。p-3 / p-12 は Issue #66 で OK。
     for (const okId of ['u0-1', 'u0-2', 'u0-3', 'u0-4', 'u0-5', 'p-1', 'p-2', 'p-3', 'p-4', 'p-5', 'p-6', 'p-7', 'p-8', 'p-9', 'p-10', 'p-11', 'p-12', 'h-1', 'h-2', 'h-3', 'h-4', 'h-5', 'h-6', 'h-7', 'h-8', 'c-1']) {
       expect(ids, okId).not.toContain(okId)
     }
-    // 本番教室では入口が出ないこと(k-8)と、他教室コピー直後に本番生徒のQRが出ないこと(k-9)は
-    // どちらも INV-08 の実経路なので必ず含める。
-    expect(ids).toContain('k-8')
-    expect(ids).toContain('k-9')
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.512')
+    // 第6版で OK だった保護者QRの項目(k-8 本番で入口が出ない / k-9 他教室コピー直後 = INV-08 の実経路を含む)も載せない。
+    for (const okId of ['k-1', 'k-2', 'k-3', 'k-6', 'k-7', 'k-8', 'k-9']) {
+      expect(ids, okId).not.toContain(okId)
+    }
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.518')
   })
 })
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.512')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.512')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.518')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.518')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -145,7 +145,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.512]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.518]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
@@ -215,20 +215,23 @@ describe('Markdown コピー', () => {
 })
 
 describe('メモ欄の入力(常時表示・2026-09-13)', () => {
+  // 項目は版ごとに差し替わるので、現行版の先頭項目で検証する(特定 id に依存させない)。
+  const itemId = VERIFICATION_CHECKLIST.items[0].id
+
   it('未確認のままメモを書くと要改善に切り替わり、送信本文に載る(黙って捨てない)', () => {
-    const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), 'k-1', '文言を直して')
-    expect(draft.entries['k-1']).toEqual({ status: 'needs-fix', memo: '文言を直して' })
-    expect(buildVerificationChecklistReportNotes(draft).join('\n')).toContain('- k-1 要改善: 文言を直して')
+    const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), itemId, '文言を直して')
+    expect(draft.entries[itemId]).toEqual({ status: 'needs-fix', memo: '文言を直して' })
+    expect(buildVerificationChecklistReportNotes(draft).join('\n')).toContain(`- ${itemId} 要改善: 文言を直して`)
   })
 
   it('OK のままメモを書いても OK のまま(OK: メモ で送る)', () => {
-    const ok = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'k-1', { status: 'ok' })
-    const draft = setVerificationChecklistMemo(ok, 'k-1', '問題なし')
-    expect(draft.entries['k-1']).toEqual({ status: 'ok', memo: '問題なし' })
+    const ok = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), itemId, { status: 'ok' })
+    const draft = setVerificationChecklistMemo(ok, itemId, '問題なし')
+    expect(draft.entries[itemId]).toEqual({ status: 'ok', memo: '問題なし' })
   })
 
   it('空白だけのメモでは未確認のまま(入力途中で勝手に要改善にしない)', () => {
-    const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), 'k-1', '  ')
-    expect(draft.entries['k-1']?.status).toBe('unchecked')
+    const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), itemId, '  ')
+    expect(draft.entries[itemId]?.status).toBe('unchecked')
   })
 })

@@ -6,13 +6,10 @@ import {
   getWeekdayFromDateKey,
   isParentStudentActiveOnDate,
   normalizeParentDateText,
-  PARENT_SCHEDULE_DEFAULT_FUTURE_DAYS,
-  PARENT_SCHEDULE_DEFAULT_PAST_DAYS,
-  PARENT_SCHEDULE_MAX_FUTURE_DAYS,
-  PARENT_SCHEDULE_MAX_PAST_DAYS,
+  PARENT_SCHEDULE_MONTHS_AFTER,
+  PARENT_SCHEDULE_MONTHS_BEFORE,
   PARENT_BOARD_SLOT_TIMES,
   PARENT_DEFAULT_DESK_COUNT,
-  PARENT_SCHEDULE_MAX_SPAN_DAYS,
   SUBJECT_OPTIONS,
   TEMPLATE_DAY_OPTIONS,
   TEMPLATE_SLOT_NUMBERS,
@@ -71,6 +68,16 @@ function summarize(day: ParentScheduleDay) {
   return day.lessons.map((lesson) => `${lesson.slotNumber}:${lesson.subject}:${lesson.kind}${lesson.isTentative ? ':予定' : ''}`)
 }
 
+// 授業が無い日は行ごと出ない(オーナー指示 2026-09-14)。無い日は [] として扱う。
+function summarizeOn(view: ParentScheduleView, dateKey: string) {
+  const day = view.days.find((entry) => entry.dateKey === dateKey)
+  return day ? summarize(day) : []
+}
+
+function expectNoRow(view: ParentScheduleView, dateKey: string) {
+  expect(view.days.some((entry) => entry.dateKey === dateKey), `${dateKey} の行は出さない`).toBe(false)
+}
+
 function findCell(cells: SlotCell[], dateKey: string, slotNumber: number) {
   const cell = cells.find((entry) => entry.dateKey === dateKey && entry.slotNumber === slotNumber)
   if (!cell) throw new Error(`cell ${dateKey}_${slotNumber} missing`)
@@ -115,39 +122,33 @@ describe('parentSchedule 日付ユーティリティ', () => {
 describe('resolveParentScheduleRange', () => {
   const today = PARENT_SCHEDULE_FIXTURE_TODAY
 
-  it('既定は 今日−7〜+28 日、限界は 今日−56〜+84 日', () => {
-    const range = resolveParentScheduleRange({}, today)
-    expect(range).toEqual({
-      from: addDaysToDateKey(today, -PARENT_SCHEDULE_DEFAULT_PAST_DAYS),
-      to: addDaysToDateKey(today, PARENT_SCHEDULE_DEFAULT_FUTURE_DAYS),
-      bounds: { minFrom: addDaysToDateKey(today, -PARENT_SCHEDULE_MAX_PAST_DAYS), maxTo: addDaysToDateKey(today, PARENT_SCHEDULE_MAX_FUTURE_DAYS) },
-    })
-    expect(range).toEqual({ from: '2026-09-07', to: '2026-10-12', bounds: { minFrom: '2026-07-20', maxTo: '2026-12-07' } })
+  // オーナー指示 2026-09-14(確認リスト k-4/k-5): 表示も移動も暦の 1 か月単位・移動できるのは前後 1 か月だけ。
+  it('既定は今月の 1 日〜末日、限界は先月 1 日〜来月末日', () => {
+    expect(PARENT_SCHEDULE_MONTHS_BEFORE).toBe(1)
+    expect(PARENT_SCHEDULE_MONTHS_AFTER).toBe(1)
+    expect(resolveParentScheduleRange({}, today)).toEqual({ from: '2026-09-01', to: '2026-09-30', bounds: { minFrom: '2026-08-01', maxTo: '2026-10-31' } })
   })
 
-  it('from だけ / to だけ来たら既定の幅(36 日)で補う', () => {
-    expect(resolveParentScheduleRange({ from: '2026-10-05' }, today)).toMatchObject({ from: '2026-10-05', to: '2026-11-09' })
-    expect(resolveParentScheduleRange({ to: '2026-09-10' }, today)).toMatchObject({ from: '2026-08-06', to: '2026-09-10' })
+  it('from(無ければ to)が属する月の 1 日〜末日に丸める', () => {
+    expect(resolveParentScheduleRange({ from: '2026-10-05', to: '2026-11-09' }, today)).toMatchObject({ from: '2026-10-01', to: '2026-10-31' })
+    expect(resolveParentScheduleRange({ to: '2026-08-10' }, today)).toMatchObject({ from: '2026-08-01', to: '2026-08-31' })
   })
 
-  it('限界を超える要求はエラーにせず限界へ丸める', () => {
-    expect(resolveParentScheduleRange({ from: '2026-01-01', to: '2026-01-31' }, today)).toMatchObject({ from: '2026-07-20', to: '2026-07-20' })
-    expect(resolveParentScheduleRange({ from: '2026-12-01', to: '2027-03-01' }, today)).toMatchObject({ from: '2026-12-01', to: '2026-12-07' })
-    expect(resolveParentScheduleRange({ from: '2027-01-01' }, today)).toMatchObject({ from: '2026-12-07', to: '2026-12-07' })
+  it('前後 1 か月を超える要求はエラーにせず近い端の月へ寄せる', () => {
+    expect(resolveParentScheduleRange({ from: '2026-01-01', to: '2026-01-31' }, today)).toMatchObject({ from: '2026-08-01', to: '2026-08-31' })
+    expect(resolveParentScheduleRange({ from: '2027-01-01' }, today)).toMatchObject({ from: '2026-10-01', to: '2026-10-31' })
   })
 
-  it('1 回の応答は最大 42 日幅(to を切り詰める)', () => {
-    const range = resolveParentScheduleRange({ from: '2026-08-01', to: '2026-10-31' }, today)
-    expect(range.from).toBe('2026-08-01')
-    expect(range.to).toBe(addDaysToDateKey('2026-08-01', PARENT_SCHEDULE_MAX_SPAN_DAYS - 1))
-    expect(range.to).toBe('2026-09-11')
+  it('年またぎ・閏年の月末も正しく出す', () => {
+    expect(resolveParentScheduleRange({}, '2026-12-20')).toEqual({ from: '2026-12-01', to: '2026-12-31', bounds: { minFrom: '2026-11-01', maxTo: '2027-01-31' } })
+    expect(resolveParentScheduleRange({ from: '2028-02-10' }, '2028-01-15')).toMatchObject({ from: '2028-02-01', to: '2028-02-29' })
+    expect(resolveParentScheduleRange({}, '2027-01-05').bounds).toEqual({ minFrom: '2026-12-01', maxTo: '2027-02-28' })
   })
 
-  it('to < from なら to = from(1 日)、不正な値は無視して既定にする', () => {
-    expect(resolveParentScheduleRange({ from: '2026-09-20', to: '2026-09-10' }, today)).toMatchObject({ from: '2026-09-20', to: '2026-09-20' })
-    expect(resolveParentScheduleRange({ from: '2026/09/20', to: 123 }, today)).toMatchObject({ from: '2026-09-07', to: '2026-10-12' })
-    expect(resolveParentScheduleRange({ from: ['2026-09-20'], to: null }, today)).toMatchObject({ from: '2026-09-07', to: '2026-10-12' })
-    expect(resolveParentScheduleRange({ from: '2026-02-30' }, today)).toMatchObject({ from: '2026-09-07', to: '2026-10-12' })
+  it('不正な値は無視して今月にする', () => {
+    expect(resolveParentScheduleRange({ from: '2026/09/20', to: 123 }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
+    expect(resolveParentScheduleRange({ from: ['2026-09-20'], to: null }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
+    expect(resolveParentScheduleRange({ from: '2026-02-30' }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
   })
 })
 
@@ -244,13 +245,16 @@ describe('buildParentScheduleView 入力', () => {
     expect(buildParentScheduleView(payload, 's001', { from: 'bad', to: '2026-09-10' })).toEqual({ studentName: '青木', days: [] })
   })
 
-  it('範囲の全日を from→to 順に 1 日 1 件で返し、weekday は 0=日..6=土', () => {
+  it('授業のある日と臨時・祝日休みの日だけを from→to 順に返し、weekday は 0=日..6=土(k-4)', () => {
     const view = buildView('s001')
-    expect(view.days).toHaveLength(36)
+    const dateKeys = view.days.map((day) => day.dateKey)
+    expect([...dateKeys].sort()).toEqual(dateKeys)
+    expect(new Set(dateKeys).size).toBe(dateKeys.length)
     expect(view.days[0]).toMatchObject({ dateKey: '2026-09-07', weekday: 1 })
-    expect(view.days[35]).toMatchObject({ dateKey: '2026-10-12', weekday: 1 })
-    expect(dayOf(view, '2026-09-13').weekday).toBe(0)
-    expect(dayOf(view, '2026-09-19').weekday).toBe(6)
+    expect(dayOf(view, '2026-09-12').weekday).toBe(6)
+    expect(dayOf(view, '2026-09-20').weekday).toBe(0)
+    // 空の行(授業 0 件の board/template)は 1 件も出さない。
+    expect(view.days.every((day) => day.kind === 'closed' ? day.lessons.length === 0 : day.lessons.length > 0)).toBe(true)
   })
 
   it('boardState が無い / weeks が無い旧 payload でもテンプレ補完だけで組み立てる', () => {
@@ -260,7 +264,7 @@ describe('buildParentScheduleView 入力', () => {
     expect(dayOf(view, '2026-09-14')).toMatchObject({ kind: 'template' })
     expect(summarize(dayOf(view, '2026-09-14'))).toEqual(['1:数:regular:予定'])
     const legacy = { ...payload, boardState: null, specialSessions: undefined, classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 2 } }
-    expect(buildView('s001', { from: '2026-09-14', to: '2026-09-15' }, legacy).days.map((day) => day.kind)).toEqual(['template', 'template'])
+    expect(buildView('s001', { from: '2026-09-14', to: '2026-09-17' }, legacy).days.map((day) => `${day.dateKey}:${day.kind}`)).toEqual(['2026-09-14:template', '2026-09-16:template', '2026-09-17:template'])
   })
 })
 
@@ -269,13 +273,14 @@ describe('buildParentScheduleView 入力', () => {
 // ---------------------------------------------------------------------------
 
 describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () => {
-  it('盤面 weeks にある日はテンプレ展開で行が増えない(盤面に配置が無い日は「予定なし」)', () => {
+  it('盤面 weeks にある日はテンプレ展開で行が増えない(盤面に配置が無い日は行を出さない)', () => {
     const payload = clonePayload()
-    // 9/17(木) 3限 のテンプレ授業(英)を盤面から外す → 盤面は存在するので kind=board・lessons=[]。
+    // 9/17(木) 3限 のテンプレ授業(英)を盤面から外す → 盤面は存在するのでテンプレで補わず、行も出ない。
     const week = (payload.boardState?.weeks[1] as unknown as { cells: SlotCell[] }).cells
+    expect(summarize(dayOf(buildView('s001'), '2026-09-17'))).toEqual(['3:英:regular'])
     findCell(week, '2026-09-17', 3).desks[0].lesson = undefined
     const view = buildView('s001', DEFAULT_RANGE, payload)
-    expect(dayOf(view, '2026-09-17')).toMatchObject({ kind: 'board', lessons: [] })
+    expectNoRow(view, '2026-09-17')
     // Firestore 形 { cells } の週も盤面として扱われる。
     expect(dayOf(view, '2026-09-14').kind).toBe('board')
     expect(summarize(dayOf(view, '2026-09-14'))).toEqual(['1:数:regular'])
@@ -288,7 +293,7 @@ describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () =>
     expect(thursday.lessons).toEqual([{ slotNumber: 3, timeLabel: '16:20-17:50', subject: '英', kind: 'regular', isTentative: true }])
     expect(summarize(dayOf(view, '2026-10-07'))).toEqual(['1:理:regular:予定'])
     expect(summarize(dayOf(view, '2026-10-12'))).toEqual(['1:数:regular:予定'])
-    expect(dayOf(view, '2026-09-22')).toMatchObject({ kind: 'template', lessons: [] })
+    expectNoRow(view, '2026-09-22')
     for (const day of view.days) {
       for (const lesson of day.lessons) {
         expect(lesson.isTentative).toBe(day.kind === 'template')
@@ -296,22 +301,26 @@ describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () =>
     }
   })
 
-  it('templateFreezeBeforeDate より前の日付はテンプレ展開しない(kind=none)', () => {
+  it('templateFreezeBeforeDate より前の日付はテンプレ展開しない(行を出さない)。定休曜日の日曜も出さない', () => {
     const payload = clonePayload()
     payload.classroomSettings.templateFreezeBeforeDate = '2026-09-25'
     const view = buildView('s001', { from: '2026-09-21', to: '2026-09-27' }, payload)
-    expect(view.days.map((day) => `${day.dateKey}:${day.kind}`)).toEqual([
-      '2026-09-21:none', '2026-09-22:none', '2026-09-23:closed', '2026-09-24:none', '2026-09-25:template', '2026-09-26:template', '2026-09-27:closed',
-    ])
-    expect(view.days.every((day) => day.kind !== 'none' || day.lessons.length === 0)).toBe(true)
+    const withoutFreeze = buildView('s001', { from: '2026-09-21', to: '2026-09-27' })
+    expect(summarizeOn(withoutFreeze, '2026-09-24')).toEqual(['3:英:regular:予定'])
+    expect(view.days.map((day) => `${day.dateKey}:${day.kind}`)).toEqual(
+      withoutFreeze.days.filter((day) => day.kind === 'closed' || day.dateKey >= '2026-09-25').map((day) => `${day.dateKey}:${day.kind}`),
+    )
+    expect(view.days.map((day) => day.dateKey)).toContain('2026-09-23')
+    expectNoRow(view, '2026-09-24')
+    expectNoRow(view, '2026-09-27')
   })
 
   it('置かれた振替(暗黙鍵)と suppressedRegularLessonOccurrences(明示鍵)に一致するテンプレ行は出ない', () => {
     const view = buildView('s001')
     // 9/29 5限 数 は 9/21 1限 からの振替 → 9/21 のテンプレ 数 は湧かない。
-    expect(dayOf(view, '2026-09-21')).toMatchObject({ kind: 'template', lessons: [] })
+    expectNoRow(view, '2026-09-21')
     // 明示鍵 s001__英__2026-10-08__3。
-    expect(dayOf(view, '2026-10-08')).toMatchObject({ kind: 'template', lessons: [] })
+    expectNoRow(view, '2026-10-08')
     // 抑止を外せば湧く(鍵が効いていることの対照)。
     const payload = clonePayload()
     payload.boardState!.suppressedRegularLessonOccurrences = []
@@ -321,9 +330,9 @@ describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () =>
   it('テンプレ履歴: 新テンプレ反映日以降は旧テンプレの行が出ず、反映日前は旧テンプレの行が出る', () => {
     const before = buildView('s001', { from: '2026-08-24', to: '2026-08-30' })
     expect(summarize(dayOf(before, '2026-08-24'))).toEqual(['2:数:regular:予定'])
-    expect(dayOf(before, '2026-08-25').lessons).toEqual([])
+    expectNoRow(before, '2026-08-25')
     const after = buildView('s001')
-    expect(dayOf(after, '2026-09-21').lessons.some((lesson) => lesson.slotNumber === 2)).toBe(false)
+    expect(summarizeOn(after, '2026-09-21').some((entry) => entry.startsWith('2:'))).toBe(false)
     expect(summarize(dayOf(after, '2026-10-12'))).toEqual(['1:数:regular:予定'])
   })
 
@@ -338,26 +347,33 @@ describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () =>
 })
 
 describe('buildParentScheduleView K-3: 休講日と講習期間', () => {
-  it('休講日(holidayDates / closedWeekdays)は授業行が 0 件、forceOpenDates の日は通常どおり出る', () => {
+  // オーナー指示 2026-09-14(k-4): 教室休みは臨時・祝日(holidayDates)だけ 1 行出す。毎週の定休曜日は出さない。
+  it('臨時・祝日休み(holidayDates)は closed の 1 行、定休曜日(closedWeekdays)は行なし、forceOpenDates の日は通常どおり出る', () => {
     const view = buildView('s001')
     expect(dayOf(view, '2026-09-23')).toEqual({ dateKey: '2026-09-23', weekday: 3, kind: 'closed', lessons: [] })
-    expect(dayOf(view, '2026-09-13')).toMatchObject({ kind: 'closed', lessons: [] })
-    expect(dayOf(view, '2026-09-27')).toMatchObject({ kind: 'closed', lessons: [] })
+    expectNoRow(view, '2026-09-13')
+    expectNoRow(view, '2026-09-27')
     const forceOpen = dayOf(view, '2026-09-20')
     expect(forceOpen.kind).toBe('board')
     expect(summarize(forceOpen)).toEqual(['2:英:makeup'])
+    // 定休曜日と重なる臨時休み(holidayDates に日曜)は closed の行が出る。
+    const payload = clonePayload()
+    payload.classroomSettings.holidayDates = [...payload.classroomSettings.holidayDates, '2026-09-27']
+    expect(dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-27').kind).toBe('closed')
   })
 
-  it('講習期間(startDate ≤ 日 ≤ endDate)の日は配置があっても行が出ず「講習期間」1 行になる(両端含む)', () => {
+  // オーナー指示 2026-09-14(k-4): 講習は講習提出QRで案内する。このページは講習期間中も通常授業(振替・休みを含む)だけを出す。
+  it('講習期間の日も「講習期間」の行にせず通常授業を出し、講習コマは出さない', () => {
     const view = buildView('s001')
-    for (const dateKey of ['2026-10-01', '2026-10-02', '2026-10-03', '2026-10-05']) {
-      expect(dayOf(view, dateKey), dateKey).toMatchObject({ kind: 'lecture-period', lectureLabel: '秋期講習', lessons: [] })
-    }
-    // 10/04 は日曜=休講が先に決まる(D-2 の順序)。
-    expect(dayOf(view, '2026-10-04').kind).toBe('closed')
-    // 前日(9/30)は盤面どおり、翌日(10/06)はテンプレ補完。
+    expect(view.days.some((day) => (day.kind as string) === 'lecture-period')).toBe(false)
+    // 10/01 3限: 通常の英＋休みの数(盤面)。
+    expect(summarize(dayOf(view, '2026-10-01'))).toEqual(['3:英:regular', '3:数:absent'])
+    // 10/02 1限は講習コマだけ → 出さない。
+    expect(summarizeOn(view, '2026-10-02').some((entry) => entry.startsWith('1:'))).toBe(false)
+    // 10/04 は日曜(定休)なので行なし。前日(9/30)は盤面どおり。
+    expectNoRow(view, '2026-10-04')
     expect(dayOf(view, '2026-09-30').kind).toBe('board')
-    expect(dayOf(view, '2026-10-06')).toMatchObject({ kind: 'template', lessons: [] })
+    expect(JSON.stringify(view)).not.toContain('秋期講習')
   })
 
   it('special(講習コマ)は講習期間外に置かれていても出ない', () => {
@@ -421,7 +437,7 @@ describe('buildParentScheduleView K-3: 生徒同一性・在籍・科目', () =>
   it('同名の別生徒がいても managedStudentId が一致する生徒の予定だけが出る', () => {
     expect(summarize(dayOf(buildView('s001'), '2026-09-07'))).toEqual(['1:数:regular'])
     expect(summarize(dayOf(buildView('s003'), '2026-09-07'))).toEqual(['1:英:regular'])
-    expect(summarize(dayOf(buildView('s003'), '2026-09-24'))).toEqual([])
+    expect(summarizeOn(buildView('s003'), '2026-09-24')).toEqual([])
     expect(summarize(dayOf(buildView('s003'), '2026-09-21'))).toEqual(['1:英:regular:予定'])
   })
 
@@ -437,23 +453,23 @@ describe('buildParentScheduleView K-3: 生徒同一性・在籍・科目', () =>
     delete aokiEntry.managedStudentId
     aokiEntry.name = '青木 太郎'
     expect(summarize(dayOf(buildView('s002', DEFAULT_RANGE, payload), '2026-09-12'))).toEqual(['1:算:regular'])
-    expect(summarize(dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-07'))).toEqual([])
+    expect(summarizeOn(buildView('s001', DEFAULT_RANGE, payload), '2026-09-07')).toEqual([])
     expect(summarize(dayOf(buildView('s003', DEFAULT_RANGE, payload), '2026-09-07'))).toEqual(['1:英:regular'])
     // 体験生(9/12 1限 机2・同名・managedStudentId なし)は s001 にも s003 にも出ない。
     expect(summarize(dayOf(buildView('s001'), '2026-09-12'))).toEqual(['3:数:extra'])
-    expect(summarize(dayOf(buildView('s003'), '2026-09-12'))).toEqual([])
+    expect(summarizeOn(buildView('s003'), '2026-09-12')).toEqual([])
   })
 
   it('退塾した生徒: 盤面の日はそのまま出るが、退塾後のテンプレ補完では出ない', () => {
     const view = buildView('s004')
     expect(summarize(dayOf(view, '2026-09-08'))).toEqual(['1:国:regular'])
-    expect(dayOf(view, '2026-09-22')).toMatchObject({ kind: 'template', lessons: [] })
-    expect(dayOf(view, '2026-10-06')).toMatchObject({ kind: 'template', lessons: [] })
+    expectNoRow(view, '2026-09-22')
+    expectNoRow(view, '2026-10-06')
   })
 
   it('入塾前の生徒は入塾日からテンプレ補完に出る。高3卒業済みは非在籍', () => {
     const view = buildView('s006')
-    expect(dayOf(view, '2026-09-25')).toMatchObject({ kind: 'template', lessons: [] })
+    expectNoRow(view, '2026-09-25')
     expect(summarize(dayOf(view, '2026-10-09'))).toEqual(['2:算:regular:予定'])
     expect(isParentStudentActiveOnDate(parentScheduleFixtureStudents[4], PARENT_SCHEDULE_FIXTURE_TODAY)).toBe(false)
     expect(buildView('s005').days.every((day) => day.lessons.length === 0)).toBe(true)
@@ -483,12 +499,12 @@ describe('buildParentScheduleView K-3: 生徒同一性・在籍・科目', () =>
     }
     const range = { from: '2026-09-14', to: '2026-09-14' }
     const oneDesk = buildView('b', range, { ...base, classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 1 } })
-    expect(summarize(oneDesk.days[0])).toEqual([])
+    expect(summarizeOn(oneDesk, '2026-09-14')).toEqual([])
     const twoDesks = buildView('b', range, { ...base, classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2 } })
-    expect(summarize(twoDesks.days[0])).toEqual(['1:英:regular:予定'])
+    expect(summarizeOn(twoDesks, '2026-09-14')).toEqual(['1:英:regular:予定'])
     // 同じセル(月2限)に a が 2 行 → 2 行目は「既に置かれている」でスキップ。
     const dup = buildView('a', range, { ...base, classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 3 } })
-    expect(summarize(dup.days[0])).toEqual(['1:数:regular:予定', '2:国:regular:予定'])
+    expect(summarizeOn(dup, '2026-09-14')).toEqual(['1:数:regular:予定', '2:国:regular:予定'])
   })
 
   it('講師だけの行は開講日に机を消費する(盤面と同じ)', () => {
@@ -501,7 +517,7 @@ describe('buildParentScheduleView K-3: 生徒同一性・在籍・科目', () =>
       classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 1 },
       boardState: null,
     }
-    expect(summarize(buildView('a', { from: '2026-09-14', to: '2026-09-14' }, payload).days[0])).toEqual([])
+    expect(buildView('a', { from: '2026-09-14', to: '2026-09-14' }, payload).days).toEqual([])
   })
 })
 
@@ -521,7 +537,7 @@ describe('buildParentScheduleView K-3: 出力に載せない情報', () => {
   it('lesson オブジェクトのキーは契約どおり(余計なフィールドを増やさない)', () => {
     const view = buildView('s001')
     for (const day of view.days) {
-      expect(Object.keys(day).sort()).toEqual(day.kind === 'lecture-period' ? ['dateKey', 'kind', 'lectureLabel', 'lessons', 'weekday'] : ['dateKey', 'kind', 'lessons', 'weekday'])
+      expect(Object.keys(day).sort()).toEqual(['dateKey', 'kind', 'lessons', 'weekday'])
       for (const lesson of day.lessons) {
         const expected = ['isTentative', 'kind', 'slotNumber', 'subject', 'timeLabel']
         if (lesson.kind === 'absent') expected.push('makeupDestination')
@@ -552,7 +568,7 @@ describe('PARITY: 権威関数との一致', () => {
         const view = buildView('a', { from: dateKey, to: dateKey }, payload)
         const expectedActive = isActiveOnDate('', '', birthDate, dateKey)
         const expectedSubject = resolveDisplayedSubjectForGrade('数', resolveGradeLabelFromBirthDate(birthDate, dateKey))
-        expect(summarize(view.days[0]), `${birthDate}@${dateKey}`).toEqual(expectedActive ? [`1:${expectedSubject}:regular:予定`] : [])
+        expect(summarizeOn(view, dateKey), `${birthDate}@${dateKey}`).toEqual(expectedActive ? [`1:${expectedSubject}:regular:予定`] : [])
       }
     }
   })
@@ -618,9 +634,9 @@ describe('PARITY: 権威関数との一致', () => {
       }
       const view = buildView(student.id, { from: '2026-09-21', to: '2026-10-11' })
       for (const dateKey of templateDates) {
-        const day = dayOf(view, dateKey)
-        expect(day.kind, `${student.id}@${dateKey}`).toBe('template')
-        expect(summarize(day), `${student.id}@${dateKey}`).toEqual((expected.get(dateKey) ?? []).sort())
+        const day = view.days.find((entry) => entry.dateKey === dateKey)
+        if (day) expect(day.kind, `${student.id}@${dateKey}`).toBe('template')
+        expect(summarizeOn(view, dateKey), `${student.id}@${dateKey}`).toEqual((expected.get(dateKey) ?? []).sort())
       }
     }
     // 期待値が空ばかりではない(テストが実質を持つ)ことを固定。
@@ -677,9 +693,8 @@ describe('レビュー指摘の穴埋め(2026-09-13)', () => {
         studentSlots: [{ id: 'sunday-entry', name: '青木', managedStudentId: 's001', grade: '中3', subject: '数', lessonType: 'regular', teacherType: 'normal' }, null],
       },
     }
-    const day = dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-13')
-    expect(day.kind).toBe('closed')
-    expect(day.lessons).toEqual([])
+    // 定休曜日なので行ごと出ない(盤面の配置に引きずられて授業行が出ないこと)。
+    expectNoRow(buildView('s001', DEFAULT_RANGE, payload), '2026-09-13')
   })
 
   it('statusSlots の体験・講習は出さない(studentSlots 側と同じ除外)', () => {
@@ -694,8 +709,7 @@ describe('レビュー指摘の穴埋め(2026-09-13)', () => {
         { id: 'status-trial', studentId: 'x2', sourceManagedLesson: false, name: '青木', managedStudentId: 's001', grade: '中3', subject: '英', lessonType: 'trial', teacherType: 'normal', teacherName: '田中', dateKey: '2026-09-08', slotNumber: 3, recordedAt: '', status: 'attended', sourceLessonId: '' },
       ],
     }
-    const day = dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-08')
-    expect(day.lessons.filter((lesson) => lesson.slotNumber === 3)).toEqual([])
+    expect(summarizeOn(buildView('s001', DEFAULT_RANGE, payload), '2026-09-08').filter((entry) => entry.startsWith('3:'))).toEqual([])
   })
 
   it('deskCount が欠けていてもアプリ既定(14 机)で扱い、テンプレ補完の 2 行目以降を落とさない', () => {

@@ -7,20 +7,21 @@ import {
   PARENT_PORTAL_LOAD_FAILED_MESSAGE,
   PARENT_PORTAL_NETWORK_ERROR_MESSAGE,
   PARENT_PORTAL_NOTES,
-  PARENT_PORTAL_RANGE_STEP_DAYS,
+  PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE,
   PARENT_SCHEDULE_TENTATIVE_LABEL,
   buildParentPortalRequestUrl,
-  canShiftParentScheduleRange,
+  canShiftParentScheduleMonth,
   describeParentScheduleDayStatus,
   describeParentScheduleLesson,
   formatParentScheduleDayLabel,
+  formatParentScheduleMonthLabel,
   formatParentSnapshotSavedAtLabel,
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
   isParentScheduleDayTentative,
   resolveParentMessageSendError,
   resolveParentPortalLoadError,
-  shiftParentScheduleRange,
+  shiftParentScheduleMonth,
   validateParentMessageInput,
   type ParentPortalScheduleResponse,
   type ParentScheduleDay,
@@ -53,7 +54,7 @@ type LoadState =
 export default function ParentPortalPage({ token }: { token: string }) {
   const apiBase = useMemo(() => resolveApiBase(), [])
   const [loadState, setLoadState] = useState<LoadState>({ status: 'loading' })
-  // 「前の4週／次の4週」で要求した範囲。null=サーバー既定(今日−7〜+28)。
+  // 「前の月／次の月」で要求した範囲。null=サーバー既定(今月の 1 日〜末日)。
   const [requestedRange, setRequestedRange] = useState<ParentScheduleRange | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [inlineError, setInlineError] = useState('')
@@ -70,7 +71,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
       try {
         const response = await fetch(buildParentPortalRequestUrl(apiBase, token, requestedRange), { cache: 'no-store' })
         if (cancelled) return
-        // requestedRange が null なのは初回だけ(「前の4週／次の4週」は data 到着後にしか押せない)。
+        // requestedRange が null なのは初回だけ(「前の月／次の月」は data 到着後にしか押せない)。
         // 初回の失敗は全面エラー、範囲移動の失敗は表示中の日程を残してインラインで知らせる。
         const isRefresh = requestedRange !== null
         const fail = (message: string) => {
@@ -107,12 +108,13 @@ export default function ParentPortalPage({ token }: { token: string }) {
 
   const data = loadState.status === 'ready' ? loadState.data : null
 
-  const shiftRange = useCallback((deltaDays: number) => {
+  const shiftMonth = useCallback((deltaMonths: number) => {
     if (!data || refreshing) return
-    if (!canShiftParentScheduleRange(data.range, deltaDays, data.bounds)) return
+    const next = shiftParentScheduleMonth(data.range, deltaMonths, data.bounds)
+    if (!next) return
     setInlineError('')
     setRefreshing(true)
-    setRequestedRange(shiftParentScheduleRange(data.range, deltaDays, data.bounds))
+    setRequestedRange(next)
   }, [data, refreshing])
 
   const handleSend = useCallback(async () => {
@@ -168,8 +170,8 @@ export default function ParentPortalPage({ token }: { token: string }) {
   }
 
   const schedule = loadState.data
-  const canGoPrev = canShiftParentScheduleRange(schedule.range, -PARENT_PORTAL_RANGE_STEP_DAYS, schedule.bounds)
-  const canGoNext = canShiftParentScheduleRange(schedule.range, PARENT_PORTAL_RANGE_STEP_DAYS, schedule.bounds)
+  const canGoPrev = canShiftParentScheduleMonth(schedule.range, -1, schedule.bounds)
+  const canGoNext = canShiftParentScheduleMonth(schedule.range, 1, schedule.bounds)
 
   return (
     <div className="pp-container">
@@ -191,19 +193,19 @@ export default function ParentPortalPage({ token }: { token: string }) {
       ) : null}
 
       <nav className="pp-range-nav" aria-label="表示期間">
-        <button type="button" className="pp-range-button" onClick={() => shiftRange(-PARENT_PORTAL_RANGE_STEP_DAYS)} disabled={!canGoPrev || refreshing}>前の4週</button>
+        <button type="button" className="pp-range-button" onClick={() => shiftMonth(-1)} disabled={!canGoPrev || refreshing}>前の月</button>
         <div className="pp-range-label">
-          {formatParentScheduleDayLabel(schedule.range.from, weekdayOf(schedule.days, schedule.range.from))}〜{formatParentScheduleDayLabel(schedule.range.to, weekdayOf(schedule.days, schedule.range.to))}
+          {formatParentScheduleMonthLabel(schedule.range.from)}
           {refreshing ? <span className="pp-range-refreshing">更新中…</span> : null}
         </div>
-        <button type="button" className="pp-range-button" onClick={() => shiftRange(PARENT_PORTAL_RANGE_STEP_DAYS)} disabled={!canGoNext || refreshing}>次の4週</button>
+        <button type="button" className="pp-range-button" onClick={() => shiftMonth(1)} disabled={!canGoNext || refreshing}>次の月</button>
       </nav>
 
       <section className="pp-days" aria-label="授業予定">
         {schedule.days.map((day) => (
           <ParentScheduleDayCard key={day.dateKey} day={day} isToday={day.dateKey === schedule.today} />
         ))}
-        {schedule.days.length === 0 ? <p className="pp-muted pp-days-empty">表示できる予定がありません。</p> : null}
+        {schedule.days.length === 0 ? <p className="pp-muted pp-days-empty">{PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE}</p> : null}
       </section>
 
       <section className="pp-contact" aria-label="教室へ連絡">
@@ -258,15 +260,6 @@ export default function ParentPortalPage({ token }: { token: string }) {
   )
 }
 
-function weekdayOf(days: ParentScheduleDay[], dateKey: string): number {
-  const found = days.find((day) => day.dateKey === dateKey)
-  if (found) return found.weekday
-  // 応答に無い端の日付(通常は無い)は UTC で曜日を出す。
-  const parsed = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey)
-  if (!parsed) return 0
-  return new Date(Date.UTC(Number(parsed[1]), Number(parsed[2]) - 1, Number(parsed[3]))).getUTCDay()
-}
-
 function ParentScheduleDayCard({ day, isToday }: { day: ParentScheduleDay; isToday: boolean }) {
   const status = describeParentScheduleDayStatus(day)
   const tentative = isParentScheduleDayTentative(day)
@@ -279,7 +272,7 @@ function ParentScheduleDayCard({ day, isToday }: { day: ParentScheduleDay; isTod
         {tentative ? <span className="pp-day-tentative">{PARENT_SCHEDULE_TENTATIVE_LABEL}</span> : null}
       </div>
       {status ? (
-        <p className={`pp-day-status${day.kind === 'lecture-period' ? ' pp-day-status-lecture' : ''}`}>{status}</p>
+        <p className="pp-day-status">{status}</p>
       ) : (
         <ul className="pp-lessons">
           {day.lessons.map((lesson, index) => {
@@ -348,8 +341,6 @@ const baseStyles = `
   .pp-day-today-badge { font-size: 12px; font-weight: 700; color: #fff; background: #1f5d96; border-radius: 999px; padding: 2px 8px; }
   .pp-day-tentative { font-size: 12px; color: #7a5b00; background: #f9e79f; border-radius: 999px; padding: 2px 8px; }
   .pp-day-status { font-size: 15px; color: #666; padding: 2px 0; }
-  .pp-day-status-lecture { color: #7c3a00; font-weight: 700; }
-
   .pp-lessons { list-style: none; display: grid; gap: 6px; }
   .pp-lesson { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; padding: 8px 10px; border-radius: 8px; background: #f7faff; font-size: 17px; }
   .pp-lesson-slot { flex: none; font-weight: 700; color: #16314f; min-width: 64px; }
