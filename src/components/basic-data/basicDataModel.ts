@@ -36,6 +36,17 @@ export type StudentRow = {
   // Excel 出力(buildWorkbook)には載せない(ベアラートークンの漏えい防止)。後方互換のため optional。
   parentPortalToken?: string
   parentPortalTokenClassroomId?: string
+  // 非在籍一覧の「削除」(オーナー指示 2026-09-13・spec-basic-data §H)。行は物理削除せず、削除した日時(ISO)を
+  // 記録して基本データ画面(在籍/非在籍の両一覧・Excel 出力・差分取込の一致判定)からだけ外す。
+  // 盤面・日程表・請求などは従来どおり日付ベースの在籍判定で扱う(削除できるのは退塾済みの生徒だけなので
+  // 現在日付では既に対象外・過去の記録や名前解決は残る)。判定は isStudentDeletedFromApp に一元化する。
+  // 後方互換のため optional(未設定=削除されていない)。
+  deletedAt?: string
+}
+
+// 基本データ画面から削除済みかの唯一の判定。呼び出し側で row.deletedAt を直読みしない。
+export function isStudentDeletedFromApp(student: Pick<StudentRow, 'deletedAt'> | null | undefined) {
+  return Boolean(student?.deletedAt?.trim())
 }
 
 // 外部生判定の唯一の権威関数。呼び出し側で row.isExternal を直読みしない(判定の分散を防ぐ)。

@@ -36,6 +36,9 @@ export const DELETE_IRREVERSIBLE_WARNING = '削除したデータは元に戻せ
 export const DELETE_HIDE_ALTERNATIVE_HINT =
   'データを残したまま名簿・盤面・日程表から外したいだけなら、削除せず「退塾日」を設定してください（在籍者一覧や集計から自動的に外れます）。'
 
+// 生徒の削除は「非在籍一覧からアプリ上だけ消す」(データは deletedAt 付きで残る・2026-09-13)。
+export const STUDENT_DELETE_APP_ONLY_WARNING = 'アプリ上から消え、画面から元に戻すことはできません（データ自体は削除日時とともに記録として残ります）。'
+
 export type DeleteConfirmation = {
   title: string
   irreversibleWarning: string
@@ -60,14 +63,15 @@ export function buildDeleteConfirmation(params: {
     if (stock.lecture > 0) parts.push(`未消化の講習 ${stock.lecture} 件`)
     if (stock.makeup > 0) parts.push(`未消化の振替 ${stock.makeup} 件`)
     if (parts.length > 0) {
-      stockWarning = `${safeName} には ${parts.join(' と ')} が残っています。削除するとこれらも消え、復元できません。`
+      stockWarning = `${safeName} には ${parts.join(' と ')} が残っています。削除すると画面からは確認できなくなります。`
     }
   }
 
   return {
     title: `${safeName} を削除します`,
-    irreversibleWarning: DELETE_IRREVERSIBLE_WARNING,
-    hideHint: DELETE_HIDE_ALTERNATIVE_HINT,
+    irreversibleWarning: scope === 'student' ? STUDENT_DELETE_APP_ONLY_WARNING : DELETE_IRREVERSIBLE_WARNING,
+    // 生徒は既に退塾済み(非在籍一覧からだけ削除できる)なので「退塾日で隠せる」案内は出さない。
+    hideHint: scope === 'student' ? '' : DELETE_HIDE_ALTERNATIVE_HINT,
     stockWarning,
     requiresPassword,
   }
