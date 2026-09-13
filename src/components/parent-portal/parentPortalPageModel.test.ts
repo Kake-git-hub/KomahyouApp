@@ -8,18 +8,19 @@ import {
   PARENT_PORTAL_UNAVAILABLE_MESSAGE,
   PARENT_SCHEDULE_NO_LESSON_MESSAGE,
   buildParentPortalRequestUrl,
-  canShiftParentScheduleRange,
+  canShiftParentScheduleMonth,
   describeParentScheduleDayStatus,
   describeParentScheduleLesson,
   formatJstDateTimeLabel,
   formatParentScheduleDayLabel,
+  formatParentScheduleMonthLabel,
   formatParentSnapshotSavedAtLabel,
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
   isParentScheduleDayTentative,
   resolveParentMessageSendError,
   resolveParentPortalLoadError,
-  shiftParentScheduleRange,
+  shiftParentScheduleMonth,
   validateParentMessageInput,
   type ParentScheduleDay,
   type ParentScheduleLesson,
@@ -98,34 +99,33 @@ describe('formatJstDateTimeLabel / formatParentSnapshotSavedAtLabel', () => {
   })
 })
 
-describe('shiftParentScheduleRange', () => {
-  const bounds = { minFrom: '2026-07-19', maxTo: '2026-12-06' }
+describe('shiftParentScheduleMonth (k-5: 月単位・前後 1 か月だけ)', () => {
+  const bounds = { minFrom: '2026-08-01', maxTo: '2026-10-31' }
+  const september = { from: '2026-09-01', to: '2026-09-30' }
 
-  it('28 日ずつ前後へ動かす', () => {
-    const range = { from: '2026-09-06', to: '2026-10-11' }
-    expect(shiftParentScheduleRange(range, 28, bounds)).toEqual({ from: '2026-10-04', to: '2026-11-08' })
-    expect(shiftParentScheduleRange(range, -28, bounds)).toEqual({ from: '2026-08-09', to: '2026-09-13' })
+  it('表示中の月の 1 日〜末日を 1 か月ずつ前後へ動かす', () => {
+    expect(shiftParentScheduleMonth(september, 1, bounds)).toEqual({ from: '2026-10-01', to: '2026-10-31' })
+    expect(shiftParentScheduleMonth(september, -1, bounds)).toEqual({ from: '2026-08-01', to: '2026-08-31' })
   })
 
-  it('下限を割ったら幅を保ったまま minFrom に寄せる', () => {
-    const range = { from: '2026-08-09', to: '2026-09-13' }
-    expect(shiftParentScheduleRange(range, -28, bounds)).toEqual({ from: '2026-07-19', to: '2026-08-23' })
+  it('前後 1 か月の外へは動かない(null)・canShift は false', () => {
+    expect(shiftParentScheduleMonth({ from: '2026-08-01', to: '2026-08-31' }, -1, bounds)).toBeNull()
+    expect(shiftParentScheduleMonth({ from: '2026-10-01', to: '2026-10-31' }, 1, bounds)).toBeNull()
+    expect(canShiftParentScheduleMonth({ from: '2026-08-01', to: '2026-08-31' }, -1, bounds)).toBe(false)
+    expect(canShiftParentScheduleMonth({ from: '2026-10-01', to: '2026-10-31' }, 1, bounds)).toBe(false)
+    expect(canShiftParentScheduleMonth(september, 1, bounds)).toBe(true)
+    expect(canShiftParentScheduleMonth(september, -1, bounds)).toBe(true)
   })
 
-  it('上限を超えたら幅を保ったまま maxTo に寄せる', () => {
-    const range = { from: '2026-10-04', to: '2026-11-08' }
-    expect(shiftParentScheduleRange(range, 28, bounds)).toEqual({ from: '2026-11-01', to: '2026-12-06' })
+  it('年またぎ・閏年の月末', () => {
+    const wide = { minFrom: '2026-01-01', maxTo: '2028-12-31' }
+    expect(shiftParentScheduleMonth({ from: '2026-12-01', to: '2026-12-31' }, 1, wide)).toEqual({ from: '2027-01-01', to: '2027-01-31' })
+    expect(shiftParentScheduleMonth({ from: '2028-01-01', to: '2028-01-31' }, 1, wide)).toEqual({ from: '2028-02-01', to: '2028-02-29' })
+    expect(shiftParentScheduleMonth({ from: 'bad', to: 'bad' }, 1, wide)).toBeNull()
   })
 
-  it('端に達していれば canShift は false', () => {
-    expect(canShiftParentScheduleRange({ from: '2026-07-19', to: '2026-08-23' }, -28, bounds)).toBe(false)
-    expect(canShiftParentScheduleRange({ from: '2026-11-01', to: '2026-12-06' }, 28, bounds)).toBe(false)
-    expect(canShiftParentScheduleRange({ from: '2026-09-06', to: '2026-10-11' }, 28, bounds)).toBe(true)
-  })
-
-  it('幅が上下限より広いときも下限を割らない', () => {
-    const narrow = { minFrom: '2026-09-01', maxTo: '2026-09-10' }
-    expect(shiftParentScheduleRange({ from: '2026-09-01', to: '2026-09-30' }, 28, narrow)).toEqual({ from: '2026-09-01', to: '2026-09-10' })
+  it('見出しは「2026年9月」', () => {
+    expect(formatParentScheduleMonthLabel('2026-09-01')).toBe('2026年9月')
   })
 })
 
@@ -156,11 +156,9 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
 })
 
 describe('describeParentScheduleDayStatus / isParentScheduleDayTentative', () => {
-  it('休講・講習期間・情報なし', () => {
-    expect(describeParentScheduleDayStatus(day({ kind: 'closed' }))).toBe('お休み（教室休講）')
-    expect(describeParentScheduleDayStatus(day({ kind: 'lecture-period', lectureLabel: '冬期講習' }))).toBe('冬期講習（別途ご案内）')
-    expect(describeParentScheduleDayStatus(day({ kind: 'lecture-period' }))).toBe('講習期間（別途ご案内）')
-    expect(describeParentScheduleDayStatus(day({ kind: 'none' }))).toBe('予定の情報がありません')
+  it('臨時・祝日休みは「教室休み」。講習期間の「別途ご案内」は出さない(k-4)', () => {
+    expect(describeParentScheduleDayStatus(day({ kind: 'closed' }))).toBe('教室休み')
+    expect(describeParentScheduleDayStatus(day({ kind: 'board', lessons: [lesson()] }))).toBeNull()
   })
 
   it('盤面にある日で配置 0 件は「授業の予定はありません」(テンプレで補わない・§D-2)', () => {

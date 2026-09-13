@@ -17,13 +17,13 @@ export type ParentScheduleLesson = {
   isTentative: boolean
 }
 
-export type ParentScheduleDayKind = 'closed' | 'lecture-period' | 'board' | 'template' | 'none'
+// closed=臨時・祝日の休み。授業の無い日・定休曜日は応答に含まれない(オーナー指示 2026-09-14)。
+export type ParentScheduleDayKind = 'closed' | 'board' | 'template'
 
 export type ParentScheduleDay = {
   dateKey: string
   weekday: number // 0=日..6=土
   kind: ParentScheduleDayKind
-  lectureLabel?: string
   lessons: ParentScheduleLesson[]
 }
 
@@ -40,8 +40,6 @@ export type ParentPortalScheduleResponse = {
 export type ParentScheduleRange = { from: string; to: string }
 export type ParentScheduleBounds = { minFrom: string; maxTo: string }
 
-// 「前の4週／次の4週」の移動幅(spec §0 P-1)。
-export const PARENT_PORTAL_RANGE_STEP_DAYS = 28
 // 送信フォームの上限(spec §E-1・サーバー側 PARENT_MESSAGE_BODY_LIMIT / SENDER_NAME_LIMIT と同値。権威はサーバー)。
 export const PARENT_MESSAGE_BODY_LIMIT = 500
 export const PARENT_MESSAGE_SENDER_NAME_LIMIT = 30
@@ -65,8 +63,8 @@ export const PARENT_MESSAGE_NETWORK_ERROR_MESSAGE = '通信エラーが発生し
 export const PARENT_MESSAGE_SENT_MESSAGE = '受け付けました（返信はこのページには届きません。教室から電話・アプリでご連絡します）'
 export const PARENT_SCHEDULE_TENTATIVE_LABEL = '予定（変更の可能性あり）'
 export const PARENT_SCHEDULE_NO_LESSON_MESSAGE = '授業の予定はありません'
-export const PARENT_SCHEDULE_CLOSED_MESSAGE = 'お休み（教室休講）'
-export const PARENT_SCHEDULE_UNKNOWN_MESSAGE = '予定の情報がありません'
+export const PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE = 'この月の授業の予定はありません。'
+export const PARENT_SCHEDULE_CLOSED_MESSAGE = '教室休み'
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const
 
@@ -158,35 +156,30 @@ export function formatParentSnapshotSavedAtLabel(iso: string | null | undefined)
   return `${label} 時点`
 }
 
-// 表示期間の移動(前の4週／次の4週)。上限(bounds)に当たったら幅を保ったまま端に寄せる。
-export function shiftParentScheduleRange(range: ParentScheduleRange, deltaDays: number, bounds: ParentScheduleBounds): ParentScheduleRange {
-  let from = addDays(range.from, deltaDays)
-  let to = addDays(range.to, deltaDays)
-  if (from < bounds.minFrom) {
-    const overshoot = diffDays(bounds.minFrom, from)
-    from = bounds.minFrom
-    to = addDays(to, overshoot)
-  }
-  if (to > bounds.maxTo) {
-    const overshoot = diffDays(to, bounds.maxTo)
-    to = bounds.maxTo
-    from = addDays(from, -overshoot)
-    if (from < bounds.minFrom) from = bounds.minFrom
-  }
+// 表示期間の移動(前の月／次の月・spec §0 P-1)。表示中の月の 1 日〜末日を delta か月ずらす。
+// 上限(bounds=今月の前後 1 か月)の外へ出るなら null(=移動しない)。権威はサーバーの丸め。
+export function shiftParentScheduleMonth(range: ParentScheduleRange, deltaMonths: number, bounds: ParentScheduleBounds): ParentScheduleRange | null {
+  const parsed = parseDateKey(range.from)
+  if (!parsed) return null
+  const start = new Date(Date.UTC(parsed.year, parsed.month - 1 + deltaMonths, 1))
+  const nextStart = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1))
+  const from = `${start.getUTCFullYear()}-${pad2(start.getUTCMonth() + 1)}-01`
+  const to = addDays(`${nextStart.getUTCFullYear()}-${pad2(nextStart.getUTCMonth() + 1)}-01`, -1)
+  if (from < bounds.minFrom || to > bounds.maxTo) return null
+  if (from === range.from && to === range.to) return null
   return { from, to }
 }
 
-function diffDays(later: string, earlier: string): number {
-  const a = parseDateKey(later)
-  const b = parseDateKey(earlier)
-  if (!a || !b) return 0
-  return Math.round((Date.UTC(a.year, a.month - 1, a.day) - Date.UTC(b.year, b.month - 1, b.day)) / 86_400_000)
+// 移動ボタンを押せるか(端に達していたら無効化する)。
+export function canShiftParentScheduleMonth(range: ParentScheduleRange, deltaMonths: number, bounds: ParentScheduleBounds): boolean {
+  return shiftParentScheduleMonth(range, deltaMonths, bounds) !== null
 }
 
-// 移動ボタンを押せるか(端に達していたら無効化する)。
-export function canShiftParentScheduleRange(range: ParentScheduleRange, deltaDays: number, bounds: ParentScheduleBounds): boolean {
-  const next = shiftParentScheduleRange(range, deltaDays, bounds)
-  return next.from !== range.from || next.to !== range.to
+// 表示中の月の見出し('2026-09-01' → '2026年9月')。
+export function formatParentScheduleMonthLabel(dateKey: string): string {
+  const parsed = parseDateKey(dateKey)
+  if (!parsed) return dateKey
+  return `${parsed.year}年${parsed.month}月`
 }
 
 // 授業 1 行の表示(spec §D-3 の表)。講師名・机番号は受け取っても出さない(型に無い)。
@@ -215,23 +208,11 @@ export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { ma
   }
 }
 
-// 授業行が無い日に出す 1 行(null なら授業行を並べる)。
+// 授業行の代わりに出す 1 行(null なら授業行を並べる)。
+// 講習期間の「別途ご案内」は廃止(講習は講習提出QRで案内し、このページは通常授業だけ・オーナー指示 2026-09-14)。
 export function describeParentScheduleDayStatus(day: ParentScheduleDay): string | null {
-  switch (day.kind) {
-    case 'closed':
-      return PARENT_SCHEDULE_CLOSED_MESSAGE
-    case 'lecture-period': {
-      const label = String(day.lectureLabel ?? '').trim()
-      return label ? `${label}（別途ご案内）` : '講習期間（別途ご案内）'
-    }
-    case 'none':
-      return PARENT_SCHEDULE_UNKNOWN_MESSAGE
-    case 'board':
-    case 'template':
-      return day.lessons.length === 0 ? PARENT_SCHEDULE_NO_LESSON_MESSAGE : null
-    default:
-      return PARENT_SCHEDULE_UNKNOWN_MESSAGE
-  }
+  if (day.kind === 'closed') return PARENT_SCHEDULE_CLOSED_MESSAGE
+  return day.lessons.length === 0 ? PARENT_SCHEDULE_NO_LESSON_MESSAGE : null
 }
 
 // その日に「予定(変更の可能性あり)」バッジを出すか。

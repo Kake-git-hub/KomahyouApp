@@ -28,11 +28,9 @@
 // 公開定数・型(k_contract §1/§2 と一致させる)
 // ---------------------------------------------------------------------------
 
-export const PARENT_SCHEDULE_DEFAULT_PAST_DAYS = 7
-export const PARENT_SCHEDULE_DEFAULT_FUTURE_DAYS = 28
-export const PARENT_SCHEDULE_MAX_PAST_DAYS = 56
-export const PARENT_SCHEDULE_MAX_FUTURE_DAYS = 84
-export const PARENT_SCHEDULE_MAX_SPAN_DAYS = 42
+// 表示は暦の 1 か月単位(オーナー指示 2026-09-14・確認リスト k-4/k-5)。移動できるのは今月の前後 1 か月だけ。
+export const PARENT_SCHEDULE_MONTHS_BEFORE = 1
+export const PARENT_SCHEDULE_MONTHS_AFTER = 1
 
 export type ParentScheduleLessonKind = 'regular' | 'makeup' | 'extra' | 'absent' | 'absent-no-makeup' | 'attended'
 
@@ -47,16 +45,16 @@ export type ParentScheduleLesson = {
   isTentative: boolean
 }
 
-export type ParentScheduleDayKind = 'closed' | 'lecture-period' | 'board' | 'template' | 'none'
+// 'closed' は臨時・祝日の休み(holidayDates)だけ。定休曜日・授業の無い日・データの無い日は行を出さない。
+// 講習期間という区別は持たない(講習は講習提出QRで案内し、このページは通常授業だけを出す)。
+export type ParentScheduleDayKind = 'closed' | 'board' | 'template'
 
 export type ParentScheduleDay = {
   dateKey: string
   /** 0=日..6=土 */
   weekday: number
   kind: ParentScheduleDayKind
-  /** kind==='lecture-period' のときの講習名 */
-  lectureLabel?: string
-  /** kind が board/template のとき(0 件も可)。それ以外は常に [] */
+  /** kind が board/template のときは 1 件以上。closed は常に [] */
   lessons: ParentScheduleLesson[]
 }
 
@@ -130,8 +128,6 @@ type ParentBoardCell = {
   desks: ParentBoardDesk[]
 }
 
-type ParentSpecialSession = { label: string; startDate: string; endDate: string }
-
 type ParentClassroomSettings = {
   closedWeekdays: number[]
   holidayDates: string[]
@@ -145,7 +141,6 @@ type ParentClassroomSettings = {
 type ParentPayload = {
   students: ParentStudentRow[]
   regularLessons: ParentRegularLessonRow[]
-  specialSessions: ParentSpecialSession[]
   classroomSettings: ParentClassroomSettings
   weeks: ParentBoardCell[][]
   suppressedRegularLessonOccurrences: string[]
@@ -228,35 +223,39 @@ function clampDateKey(dateKey: string, minKey: string, maxKey: string) {
   return dateKey
 }
 
+function monthStartOf(dateKey: string) {
+  return `${dateKey.slice(0, 7)}-01`
+}
+
+/** 'YYYY-MM-01' に月数を足す(負も可)。 */
+function addMonthsToMonthStart(monthStartKey: string, months: number) {
+  const year = Number(monthStartKey.slice(0, 4))
+  const monthIndex = Number(monthStartKey.slice(5, 7)) - 1 + months
+  const date = new Date(Date.UTC(year, monthIndex, 1))
+  return `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-01`
+}
+
+function monthEndOf(monthStartKey: string) {
+  return addDaysToDateKey(addMonthsToMonthStart(monthStartKey, 1), -1)
+}
+
 /**
- * 表示期間の丸め(spec §D-1 / §0 P-1)。上限を超える要求はエラーにせず上限へ丸める。
- * - 既定: 今日−7〜+28 日。`from` だけ来たら既定の幅(36 日)で `to` を補い、`to` だけ来たら同様に `from` を補う。
- * - 限界: 今日−56〜+84 日。1 回の応答は最大 42 日幅(超えたら `to` を切り詰める)。
- * - `to < from` になったら `to = from`(1 日)。
+ * 表示期間の丸め(spec §D-1 / §0 P-1)。**暦の 1 か月単位**で、エラーにせず丸める。
+ * - `from`(無ければ `to`、どちらも無ければ今日)が属する月の 1 日〜末日を返す。
+ * - 限界は今月の前後 1 か月(先月 1 日〜来月末日)。範囲外の月は近い端の月へ寄せる。
  */
 export function resolveParentScheduleRange(
   input: { from?: unknown; to?: unknown },
   todayKey: string,
 ): { from: string; to: string; bounds: { minFrom: string; maxTo: string } } {
-  const minFrom = addDaysToDateKey(todayKey, -PARENT_SCHEDULE_MAX_PAST_DAYS)
-  const maxTo = addDaysToDateKey(todayKey, PARENT_SCHEDULE_MAX_FUTURE_DAYS)
-  const defaultSpan = PARENT_SCHEDULE_DEFAULT_PAST_DAYS + PARENT_SCHEDULE_DEFAULT_FUTURE_DAYS
+  const currentMonthStart = monthStartOf(todayKey)
+  const minFrom = addMonthsToMonthStart(currentMonthStart, -PARENT_SCHEDULE_MONTHS_BEFORE)
+  const maxMonthStart = addMonthsToMonthStart(currentMonthStart, PARENT_SCHEDULE_MONTHS_AFTER)
+  const maxTo = monthEndOf(maxMonthStart)
 
-  const requestedFrom = isValidDateKey(input.from) ? input.from : null
-  const requestedTo = isValidDateKey(input.to) ? input.to : null
-
-  let from = requestedFrom
-    ?? (requestedTo ? addDaysToDateKey(requestedTo, -defaultSpan) : addDaysToDateKey(todayKey, -PARENT_SCHEDULE_DEFAULT_PAST_DAYS))
-  let to = requestedTo ?? addDaysToDateKey(from, defaultSpan)
-
-  from = clampDateKey(from, minFrom, maxTo)
-  to = clampDateKey(to, minFrom, maxTo)
-  if (to < from) to = from
-  if (diffDays(from, to) + 1 > PARENT_SCHEDULE_MAX_SPAN_DAYS) {
-    to = addDaysToDateKey(from, PARENT_SCHEDULE_MAX_SPAN_DAYS - 1)
-  }
-
-  return { from, to, bounds: { minFrom, maxTo } }
+  const anchor = isValidDateKey(input.from) ? input.from : isValidDateKey(input.to) ? input.to : todayKey
+  const from = clampDateKey(monthStartOf(anchor), minFrom, maxMonthStart)
+  return { from, to: monthEndOf(from), bounds: { minFrom, maxTo } }
 }
 
 // ---------------------------------------------------------------------------
@@ -532,10 +531,6 @@ function readPayload(payload: unknown): ParentPayload | null {
       const parsed = readRegularLessonRow(row)
       return parsed ? [parsed] : []
     }),
-    specialSessions: readArray(payload.specialSessions).flatMap((session) => {
-      if (!isRecord(session)) return []
-      return [{ label: readString(session.label), startDate: readString(session.startDate), endDate: readString(session.endDate) }]
-    }),
     classroomSettings: {
       closedWeekdays: readNumberArray(settings.closedWeekdays),
       holidayDates: readStringArray(settings.holidayDates),
@@ -561,7 +556,7 @@ function readPayload(payload: unknown): ParentPayload | null {
 }
 
 // ---------------------------------------------------------------------------
-// 休講・講習期間の判定(spec §D-2 1〜2)
+// 休講の判定(spec §D-2 1)
 // ---------------------------------------------------------------------------
 
 // 開講判定の優先順位は forceOpenDates > holidayDates > closedWeekdays(scheduleViewData.isOpenDayByRules /
@@ -572,10 +567,6 @@ function isOpenDay(settings: ParentClassroomSettings, dateKey: string) {
   return !settings.closedWeekdays.includes(getWeekdayFromDateKey(dateKey))
 }
 
-// 講習期間は startDate ≤ 日 ≤ endDate の両端含む文字列比較(scheduleViewData.getSpecialSessionsForDate と同じ)。
-function findLectureSession(sessions: ParentSpecialSession[], dateKey: string) {
-  return sessions.find((session) => session.startDate && session.endDate && dateKey >= session.startDate && dateKey <= session.endDate) ?? null
-}
 
 // ---------------------------------------------------------------------------
 // 生徒同一性(spec §D-3・k_contract §2-5)
@@ -1092,7 +1083,8 @@ function extractTemplateLessons(params: {
 // ---------------------------------------------------------------------------
 
 /**
- * 保護者ページの日程を組み立てる(spec §D-2 の順序を変えない: 休講 → 講習期間 → 盤面優先 → テンプレ補完)。
+ * 保護者ページの日程を組み立てる(spec §D-2 の順序を変えない: 休講 → 盤面優先 → テンプレ補完)。
+ * 出すのは授業(休み・振替を含む)がある日と臨時・祝日の休みの日だけ。講習期間の区別はしない(講習コマは出さない)。
  * 生徒が payload に無ければ null。出力に講師名・机・他生徒・在庫数・内部 ID は含めない(§C)。
  */
 export function buildParentScheduleView(payload: unknown, studentId: string, range: ParentScheduleRange): ParentScheduleView | null {
@@ -1134,31 +1126,24 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     const weekday = getWeekdayFromDateKey(dateKey)
 
     if (!isOpenDay(parsed.classroomSettings, dateKey)) {
-      days.push({ dateKey, weekday, kind: 'closed', lessons: [] })
+      // 臨時・祝日の休み(holidayDates)だけ 1 行出す。毎週の定休曜日は出さない(一覧が休みの行で埋まるため)。
+      if (parsed.classroomSettings.holidayDates.includes(dateKey)) {
+        days.push({ dateKey, weekday, kind: 'closed', lessons: [] })
+      }
       continue
     }
-    const lecture = findLectureSession(parsed.specialSessions, dateKey)
-    if (lecture) {
-      days.push({ dateKey, weekday, kind: 'lecture-period', lectureLabel: lecture.label, lessons: [] })
-      continue
-    }
+    // 講習期間の日も通常日と同じく「盤面優先 → テンプレ補完」で通常授業だけを出す(講習コマは抽出側で除外)。
     const cells = cellsByDateKey.get(dateKey)
     if (cells && cells.length > 0) {
-      days.push({ dateKey, weekday, kind: 'board', lessons: extractBoardLessons(cells, matches, linkedDestinationByStatusId) })
+      const lessons = extractBoardLessons(cells, matches, linkedDestinationByStatusId)
+      if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'board', lessons })
       continue
     }
-    // templateFreezeBeforeDate より前(テンプレ再マージ凍結済み)の日は補完しない = データなし。
-    if (freezeBeforeDate && dateKey < freezeBeforeDate) {
-      days.push({ dateKey, weekday, kind: 'none', lessons: [] })
-      continue
-    }
+    // templateFreezeBeforeDate より前(テンプレ再マージ凍結済み)の日は補完しない = 出す行なし。
+    if (freezeBeforeDate && dateKey < freezeBeforeDate) continue
     const context = resolveTemplateContext()
-    days.push({
-      dateKey,
-      weekday,
-      kind: 'template',
-      lessons: extractTemplateLessons({ dateKey, studentId, payload: parsed, regularLessons: context.regularLessons, suppressedKeys: context.suppressedKeys }),
-    })
+    const lessons = extractTemplateLessons({ dateKey, studentId, payload: parsed, regularLessons: context.regularLessons, suppressedKeys: context.suppressedKeys })
+    if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'template', lessons })
   }
 
   return { studentName: getStudentDisplayName(student), days }

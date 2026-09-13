@@ -40,8 +40,8 @@ describe('functions/src/generated/parentSchedule.ts は src/utils/parentSchedule
   it('生成物を動的 import しても同じ export を持ち、同じ fixture で同じ結果を返す(二重実装のドリフト検出)', async () => {
     const generatedModule = await import('./generated/parentSchedule') as typeof appModule
     expect(Object.keys(generatedModule).sort()).toEqual(Object.keys(appModule).sort())
-    expect(generatedModule.PARENT_SCHEDULE_DEFAULT_PAST_DAYS).toBe(appModule.PARENT_SCHEDULE_DEFAULT_PAST_DAYS)
-    expect(generatedModule.PARENT_SCHEDULE_MAX_SPAN_DAYS).toBe(appModule.PARENT_SCHEDULE_MAX_SPAN_DAYS)
+    expect(generatedModule.PARENT_SCHEDULE_MONTHS_BEFORE).toBe(appModule.PARENT_SCHEDULE_MONTHS_BEFORE)
+    expect(generatedModule.PARENT_SCHEDULE_MONTHS_AFTER).toBe(appModule.PARENT_SCHEDULE_MONTHS_AFTER)
 
     const today = PARENT_SCHEDULE_FIXTURE_TODAY
     const ranges = [
@@ -70,7 +70,8 @@ describe('functions/src/generated/parentSchedule.ts は src/utils/parentSchedule
         }
       }
     }
-    expect(comparedDays).toBeGreaterThan(100)
+    // 授業のある日・臨時休みの日だけが行になる(2026-09-14〜)ので、比較日数は全日展開だった頃より少ない。
+    expect(comparedDays).toBeGreaterThan(50)
     expect(generatedModule.buildParentScheduleView(cloneParentScheduleFixturePayload(), 'missing', ranges[0])).toBeNull()
   })
 })
