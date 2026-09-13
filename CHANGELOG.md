@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.513 (2026-09-13)
 - docs: 保護者向け固定QRの仕様に §0-3「デプロイ順の注意」を追記。新しい Hosting rewrite が指す関数がまだ無いと
   Hosting デプロイが 400(`Cloud Run service "parentportalapi" does not exist`)で落ちる(v1.5.512 で実際に発生。main マージは
   Hosting と Functions を並行に起こすため順序保証が無い)。対処は「Functions が緑になってから Hosting を再実行」＋
