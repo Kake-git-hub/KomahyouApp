@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canWithdrawStudentToday } from './withdrawGuard'
+import { isStudentDeletedFromApp } from './basicDataModel'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, markStudentDeletedFromApp } from './withdrawGuard'
 
 const TODAY = '2026-09-13'
 
@@ -67,12 +68,49 @@ describe('buildStudentWithdrawConfirmation', () => {
   })
 })
 
+describe('非在籍一覧の削除（アプリ上から消す・データは残す／オーナー指示 2026-09-13）', () => {
+  it('削除ボタンは非在籍(退塾済み・高3卒業後)で未削除の生徒だけ', () => {
+    expect(canDeleteStudentFromApp({ withdrawDate: '2026-08-31', birthDate: '2012-05-01' }, TODAY)).toBe(true)
+    expect(canDeleteStudentFromApp({ withdrawDate: '', birthDate: '2000-05-01' }, TODAY)).toBe(true)
+    // 在籍中(未定・今日付け退塾・将来の退塾日)は削除できない
+    expect(canDeleteStudentFromApp({ withdrawDate: '', birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    expect(canDeleteStudentFromApp({ withdrawDate: TODAY, birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    expect(canDeleteStudentFromApp({ withdrawDate: '2026-10-31', birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    // 削除済みは二度出さない
+    expect(canDeleteStudentFromApp({ withdrawDate: '2026-08-31', birthDate: '2012-05-01', deletedAt: '2026-09-13T01:00:00.000Z' }, TODAY)).toBe(false)
+  })
+
+  it('削除しても行は残り、削除日時だけが記録される（最初の削除日時は上書きしない）', () => {
+    const students: Array<{ id: string; name: string; withdrawDate: string; birthDate: string; deletedAt?: string }> = [
+      { id: 's001', name: 'A', withdrawDate: '2026-08-31', birthDate: '2012-05-01' },
+      { id: 's002', name: 'B', withdrawDate: '2026-08-31', birthDate: '2012-05-01' },
+    ]
+    const next = markStudentDeletedFromApp(students, 's001', '2026-09-13T01:00:00.000Z')
+    expect(next).toHaveLength(2)
+    expect(next[0]).toEqual({ ...students[0], deletedAt: '2026-09-13T01:00:00.000Z' })
+    expect(next[1]).toBe(students[1])
+    const again = markStudentDeletedFromApp(next, 's001', '2026-09-20T01:00:00.000Z')
+    expect(again[0].deletedAt).toBe('2026-09-13T01:00:00.000Z')
+  })
+
+  it('基本データ画面の一覧からは削除済みを外す（空白だけの deletedAt は未削除扱い）', () => {
+    const rows = [{ id: 's001' }, { id: 's002', deletedAt: '2026-09-13T01:00:00.000Z' }, { id: 's003', deletedAt: '  ' }]
+    expect(filterStudentsVisibleInBasicData(rows).map((row) => row.id)).toEqual(['s001', 's003'])
+    expect(isStudentDeletedFromApp(undefined)).toBe(false)
+  })
+})
+
 describe('基本データ画面: 生徒は削除せず退塾ボタン（オーナー指示 2026-09-13）', () => {
   const source = readFileSync(fileURLToPath(new URL('./BasicDataScreen.tsx', import.meta.url)), 'utf8')
 
-  it('生徒名簿から行を取り除く削除経路が無い', () => {
+  it('生徒名簿から行を取り除く削除経路が無い（削除は deletedAt の記録）', () => {
     expect(source).not.toMatch(/onUpdateStudents\(\(current\) => current\.filter\(/)
-    expect(source).not.toContain('removeStudent(')
+    expect(source).toContain('markStudentDeletedFromApp(current, id, new Date().toISOString())')
+  })
+
+  it('削除ボタンは非在籍一覧だけに出し、在籍/非在籍の両一覧から削除済みを外す', () => {
+    expect(source).toContain("studentRosterView === 'withdrawn' && canDeleteStudentFromApp(row, todayReferenceDate)")
+    expect(source.match(/filterStudentsVisibleInBasicData\(students\)\.filter\(/g)).toHaveLength(2)
   })
 
   it('退塾ボタンが applyStudentWithdrawToday で退塾日を記録する', () => {

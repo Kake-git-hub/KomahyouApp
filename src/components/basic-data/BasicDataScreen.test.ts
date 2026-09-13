@@ -204,3 +204,48 @@ describe('BasicDataScreen parentPortalToken と Excel 取込/出力 (2026-09-13)
     expect(serialized).not.toContain(DEV_CLASSROOM_ID)
   })
 })
+
+describe('削除済み(deletedAt)の生徒と Excel 入出力（オーナー指示 2026-09-13）', () => {
+  function createFallbackWithDeleted() {
+    const fallback = createTemplateBundle()
+    const [first, ...rest] = fallback.students
+    if (!first) throw new Error('template students missing')
+    return { ...fallback, students: [{ ...first, withdrawDate: '2026-08-31', deletedAt: '2026-09-13T01:00:00.000Z' }, ...rest] }
+  }
+
+  it('Excel 出力に削除済みの生徒を載せない', () => {
+    const fallback = createFallbackWithDeleted()
+    const rows = xlsx.utils.sheet_to_json<Record<string, unknown>>(buildWorkbook(xlsx, fallback).Sheets['生徒'])
+    expect(rows.map((row) => row['生徒ID'])).not.toContain(fallback.students[0].id)
+    expect(rows).toHaveLength(fallback.students.length - 1)
+  })
+
+  it('同じ名前の行を取り込んでも削除済みの行は上書き・復活せず、新しい ID の別生徒として追加される', () => {
+    const fallback = createFallbackWithDeleted()
+    const deleted = fallback.students[0]
+    const workbook = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 名前: deleted.name, 表示名: deleted.displayName, メール: '', 入塾日: '2026-09-01', 退塾日: '', 生年月日: deleted.birthDate },
+    ]), '生徒')
+    const merged = mergeImportedBundle(parseImportedBundle(xlsx, workbook, fallback), fallback)
+    expect(merged.students.find((row) => row.id === deleted.id)).toEqual(deleted)
+    const added = merged.students.filter((row) => row.name === deleted.name && row.id !== deleted.id)
+    expect(added).toHaveLength(1)
+    expect(added[0].deletedAt).toBeUndefined()
+  })
+
+  it('削除済みの行と同じ生徒IDで取り込んでも、その ID を再利用せず新しい ID を振る', () => {
+    const fallback = createFallbackWithDeleted()
+    const deleted = fallback.students[0]
+    const workbook = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 生徒ID: deleted.id, 名前: '別人 生徒', 表示名: '別人', メール: '', 入塾日: '2026-09-01', 退塾日: '', 生年月日: '2014-04-02' },
+    ]), '生徒')
+    const merged = mergeImportedBundle(parseImportedBundle(xlsx, workbook, fallback), fallback)
+    expect(merged.students.find((row) => row.id === deleted.id)).toEqual(deleted)
+    const added = merged.students.find((row) => row.name === '別人 生徒')
+    expect(added).toBeDefined()
+    expect(added?.id).not.toBe(deleted.id)
+    expect(new Set(merged.students.map((row) => row.id)).size).toBe(merged.students.length)
+  })
+})

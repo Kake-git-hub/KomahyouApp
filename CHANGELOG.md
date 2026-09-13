@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.515 (2026-09-13)
+- feat: 非在籍生徒一覧にだけ「削除」ボタンを残す。押すとアプリ上（基本データの両一覧・Excel 出力・取込一致）から消えるが、行は物理削除せず削除日時 `deletedAt` を記録してデータに残す（オーナー指示）。取込で削除済みを復活させず、同名・同IDは新しいIDで別生徒として追加 (basicDataModel.isStudentDeletedFromApp, withdrawGuard.ts, BasicDataScreen.tsx, deleteGuard.ts, spec-basic-data §H)
+
 ## v1.5.514 (2026-09-13)
 - feat: 基本データの生徒「削除」ボタンを「退塾」ボタンに置き換え。押した日を退塾日として記録し、名簿データは残して後から非在籍一覧で追えるようにした（オーナー指示・日付入力での退塾も従来どおり・講師の削除は変更なし）(basic-data/withdrawGuard.ts, BasicDataScreen.tsx, spec-basic-data §H)
 

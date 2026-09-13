@@ -4,6 +4,7 @@ import {
   deriveStudentDeletionStockSummary,
   DELETE_HIDE_ALTERNATIVE_HINT,
   DELETE_IRREVERSIBLE_WARNING,
+  STUDENT_DELETE_APP_ONLY_WARNING,
 } from './deleteGuard'
 
 describe('deriveStudentDeletionStockSummary', () => {
@@ -26,10 +27,18 @@ describe('deriveStudentDeletionStockSummary', () => {
 })
 
 describe('buildDeleteConfirmation', () => {
-  it('always includes the irreversible warning and the 退塾日 hide hint', () => {
-    const confirmation = buildDeleteConfirmation({ scope: 'student', name: '富樫應佑', requiresPassword: false })
+  it('講師は不可逆警告と退塾日の案内を出す', () => {
+    const confirmation = buildDeleteConfirmation({ scope: 'teacher', name: '山田先生', requiresPassword: false })
     expect(confirmation.irreversibleWarning).toBe(DELETE_IRREVERSIBLE_WARNING)
     expect(confirmation.hideHint).toBe(DELETE_HIDE_ALTERNATIVE_HINT)
+    expect(confirmation.title).toContain('山田先生')
+  })
+
+  it('生徒(非在籍一覧からの削除)は「アプリ上から消えるがデータは残る」警告で、退塾日の案内は出さない(2026-09-13)', () => {
+    const confirmation = buildDeleteConfirmation({ scope: 'student', name: '富樫應佑', requiresPassword: false })
+    expect(confirmation.irreversibleWarning).toBe(STUDENT_DELETE_APP_ONLY_WARNING)
+    expect(confirmation.irreversibleWarning).toContain('記録として残ります')
+    expect(confirmation.hideHint).toBe('')
     expect(confirmation.title).toContain('富樫應佑')
   })
 

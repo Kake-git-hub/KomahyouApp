@@ -28,7 +28,7 @@ import {
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canWithdrawStudentToday } from './withdrawGuard'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, markStudentDeletedFromApp } from './withdrawGuard'
 import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
@@ -482,7 +482,8 @@ export function buildWorkbook(xlsx: XlsxModule, bundle: BasicDataBundle) {
     担当科目: serializeSubjectCapabilities(row.subjectCapabilities),
   })), ['入塾日', '退塾日']), '講師')
 
-  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, bundle.students.map((row) => ({
+  // 削除済み(deletedAt)の生徒はアプリ上から消した扱いなので Excel にも出さない(データは保存側に残る)。
+  xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, filterStudentsVisibleInBasicData(bundle.students).map((row) => ({
     生徒ID: row.id,
     名前: row.name,
     表示名: row.displayName,
@@ -701,11 +702,17 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
 
   const students = fallback.students.slice()
   const mergedStudentIdByImportedId = new Map<string, string>()
+  // 削除済み(deletedAt)の生徒は取込で一致させない・上書きしない(アプリ上から消した行を復活させない)。
+  // 取込行の ID が削除済みの行と同じなら、新しい ID を振って別の生徒として追加する(ID は再利用しない)。
+  const matchableStudents = filterStudentsVisibleInBasicData(fallback.students)
+  const deletedStudentIds = new Set(fallback.students.filter((row) => !matchableStudents.includes(row)).map((row) => row.id))
+  const studentIdAllocator = createManagedIdAllocator('student', [...fallback.students, ...imported.students].map((row) => row.id))
   for (const importedStudent of imported.students) {
-    const matchedStudent = findStudentMatch(importedStudent, fallback.students)
+    const matchedStudent = findStudentMatch(importedStudent, matchableStudents)
     // 保護者用トークンの写し(spec-parent-portal.md §J-3)は Excel の列に無い(buildWorkbook にも出さない)ため、
     // 差分取込で一致行を丸ごと置き換えると消える。一致行から発行元教室タグと対で引き継ぐ。
-    const nextStudent = { ...importedStudent, ...pickParentPortalTokenFields(matchedStudent), id: matchedStudent?.id ?? importedStudent.id }
+    const candidateId = matchedStudent?.id ?? importedStudent.id
+    const nextStudent = { ...importedStudent, ...pickParentPortalTokenFields(matchedStudent), id: deletedStudentIds.has(candidateId) ? studentIdAllocator.next() : candidateId }
     mergedStudentIdByImportedId.set(importedStudent.id, nextStudent.id)
     const targetIndex = students.findIndex((row) => row.id === nextStudent.id)
     if (targetIndex >= 0) {
@@ -892,7 +899,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, onIssueParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
@@ -943,13 +950,14 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   })
 
   const todayReferenceDate = useMemo(() => getReferenceDateKey(new Date()), [])
+  // 削除済み(deletedAt)の生徒は在籍/非在籍どちらの一覧にも出さない(データは残る)。
   const activeStudentRows = useMemo(
-    () => students.filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) === '在籍')
+    () => filterStudentsVisibleInBasicData(students).filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) === '在籍')
       .slice().sort((left, right) => compareManagedStudentsByGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const withdrawnStudentRows = useMemo(
-    () => students.filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) !== '在籍')
+    () => filterStudentsVisibleInBasicData(students).filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) !== '在籍')
       .slice().sort((left, right) => compareManagedStudentsByGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
@@ -1185,6 +1193,13 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     setDeleteModalState({ scope: 'teacher', id, name: teacher ? getTeacherDisplayName(teacher) : '' })
   }
 
+  const removeStudent = (id: string) => {
+    const student = students.find((row) => row.id === id)
+    setDeletePassword('')
+    setDeleteError('')
+    setDeleteModalState({ scope: 'student', id, name: student ? getStudentDisplayName(student) : '', stock: studentDeletionStockSummary?.[id] })
+  }
+
   const openStudentWithdraw = (id: string) => {
     const student = students.find((row) => row.id === id)
     setWithdrawModalState({ id, name: student ? getStudentDisplayName(student) : '', currentWithdrawDate: student?.withdrawDate ?? '', stock: studentDeletionStockSummary?.[id] })
@@ -1209,7 +1224,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     setDeleteModalState(null)
     setDeletePassword('')
     setDeleteError('')
-    setStatusMessage(scope === 'teacher' ? '講師の削除をキャンセルしました。' : '削除をキャンセルしました。')
+    setStatusMessage(scope === 'teacher' ? '講師の削除をキャンセルしました。' : '生徒の削除をキャンセルしました。')
   }
 
   const confirmDelete = async () => {
@@ -1228,10 +1243,19 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
         return
       }
     }
-    // 生徒は削除しない(「退塾」ボタンへ置換・オーナー指示 2026-09-13)。削除の確定は講師だけ。
     if (scope === 'teacher') {
       onUpdateTeachers((current) => current.filter((row) => row.id !== id))
       setStatusMessage('講師を削除しました。')
+    } else {
+      // 生徒は物理削除しない(オーナー指示 2026-09-13): 非在籍一覧からだけ削除でき、行は残して削除日時を記録する。
+      // ★onUpdateStudents で current.filter して行を消す実装に戻さない(withdrawGuard.test.ts が検査)。
+      // 保護者用トークンの失効は best-effort(spec-parent-portal.md §B-2 revokedReason='studentDeleted')。
+      // 退塾済みなのでサーバーの在籍判定でも閲覧不可だが、アプリ上から消した生徒の QR は明示的に失効させる。
+      if (onRevokeParentPortalToken) {
+        void onRevokeParentPortalToken(id, 'studentDeleted').catch(() => { /* best-effort */ })
+      }
+      onUpdateStudents((current) => markStudentDeletedFromApp(current, id, new Date().toISOString()))
+      setStatusMessage('生徒を削除しました（データは記録として残ります）。')
     }
     setDeleteModalState(null)
     setDeletePassword('')
@@ -1514,6 +1538,10 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       {canWithdrawStudentToday(row, todayReferenceDate) ? (
                         <button className="secondary-button slim" type="button" onClick={() => openStudentWithdraw(row.id)} data-testid={`basic-data-withdraw-student-${row.id}`}>退塾</button>
                       ) : null}
+                      {/* 削除は非在籍一覧の退塾済み生徒だけ(アプリ上から消える・データは deletedAt 付きで残る)。 */}
+                      {studentRosterView === 'withdrawn' && canDeleteStudentFromApp(row, todayReferenceDate) ? (
+                        <button className="secondary-button slim" type="button" onClick={() => removeStudent(row.id)} data-testid={`basic-data-delete-student-${row.id}`}>削除</button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -1588,7 +1616,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
               {confirmation.stockWarning ? (
                 <p className="basic-data-delete-stock-warning" data-testid="basic-data-delete-stock-warning">{confirmation.stockWarning}</p>
               ) : null}
-              <p className="basic-data-delete-hint">{confirmation.hideHint}</p>
+              {confirmation.hideHint ? <p className="basic-data-delete-hint">{confirmation.hideHint}</p> : null}
               {confirmation.requiresPassword ? (
                 <label className="basic-data-delete-password">
                   <span>ログイン中アカウントのパスワード</span>

@@ -6,7 +6,7 @@
 //   ・名簿から物理削除しないため、生徒ID(sNNN)は欠番にならず再利用もされない（保護者QR・台帳の取り違え防止）。
 //   ・表示上は既存の在籍判定どおり「退塾日当日は在籍・翌日から退塾済み一覧」へ移る（spec-basic-data.md）。
 //   ・退塾日を消せば在籍に戻せる（可逆）ため、削除時のパスワード再認証は求めない。
-import { resolveEffectiveManagedWithdrawDate, resolveManagedRosterStatus } from './basicDataModel'
+import { isStudentDeletedFromApp, resolveEffectiveManagedWithdrawDate, resolveManagedRosterStatus } from './basicDataModel'
 import type { StudentDeletionStock } from './deleteGuard'
 
 type WithdrawTarget = { withdrawDate: string; birthDate: string }
@@ -59,4 +59,22 @@ export function buildStudentWithdrawConfirmation(params: {
     overwriteNote,
     stockWarning,
   }
+}
+
+// ── 非在籍一覧の「削除」(オーナー指示 2026-09-13) ──
+// 退塾済み(非在籍)の生徒だけを、アプリ上から消す。データ上は行を残し deletedAt(削除日時)を記録する。
+// 在籍中の生徒は削除できない(先に「退塾」)。削除済みを二度削除しない。
+export function canDeleteStudentFromApp(student: WithdrawTarget & { deletedAt?: string }, today: string): boolean {
+  if (isStudentDeletedFromApp(student)) return false
+  return resolveManagedRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍'
+}
+
+// 行は消さずに deletedAt を記録する。既に記録済みなら最初の削除日時を保つ。
+export function markStudentDeletedFromApp<T extends { id: string; deletedAt?: string }>(students: T[], id: string, nowIso: string): T[] {
+  return students.map((row) => (row.id === id && !isStudentDeletedFromApp(row) ? { ...row, deletedAt: nowIso } : row))
+}
+
+// 基本データ画面に出す生徒(削除済みを除く)。
+export function filterStudentsVisibleInBasicData<T extends { deletedAt?: string }>(students: T[]): T[] {
+  return students.filter((row) => !isStudentDeletedFromApp(row))
 }
