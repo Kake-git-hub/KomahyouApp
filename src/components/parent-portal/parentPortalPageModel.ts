@@ -35,6 +35,8 @@ export type ParentPortalScheduleResponse = {
   range: { from: string; to: string }
   bounds: { minFrom: string; maxTo: string }
   days: ParentScheduleDay[]
+  // その月にこの生徒の講習コマがあったか(講習コマ自体は出ない)。旧 functions の応答には無いので省略可。
+  hasLectureLessons?: boolean
 }
 
 export type ParentScheduleRange = { from: string; to: string }
@@ -64,6 +66,8 @@ export const PARENT_MESSAGE_SENT_MESSAGE = '受け付けました（返信はこ
 export const PARENT_SCHEDULE_TENTATIVE_LABEL = '予定（変更の可能性あり）'
 export const PARENT_SCHEDULE_NO_LESSON_MESSAGE = '授業の予定はありません'
 export const PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE = 'この月の授業の予定はありません。'
+// 講習だけの月(通常授業の日が無く、講習コマはあった)に出す注記(確認リスト k-4・オーナー回答 2026-09-14)。
+export const PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE = 'この月は通常授業がありません（講習の日程はこのページには表示されません）。'
 export const PARENT_SCHEDULE_CLOSED_MESSAGE = '教室休み'
 
 const WEEKDAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -281,6 +285,15 @@ export function resolveParentMessageSendError(status: number, serverError?: unkn
     default:
       return fromServer ?? PARENT_MESSAGE_SEND_FAILED_MESSAGE
   }
+}
+
+// 一覧の下に出す一言。講習だけの月は講習の注記、授業も休みも無い月は従来どおりの「予定はありません」。
+// 講習が無く臨時休みだけの月は何も出さない(オーナー回答 2026-09-14「今のまま」)。
+export function resolveParentScheduleMonthNotice(schedule: Pick<ParentPortalScheduleResponse, 'days' | 'hasLectureLessons'>): string | null {
+  const hasLessonDay = schedule.days.some((day) => day.kind !== 'closed')
+  if (!hasLessonDay && schedule.hasLectureLessons === true) return PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE
+  if (schedule.days.length === 0) return PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE
+  return null
 }
 
 // GET 応答の最低限の形チェック(壊れた JSON を画面に流さない)。

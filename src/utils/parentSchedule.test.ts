@@ -241,8 +241,8 @@ describe('buildParentScheduleView 入力', () => {
     const payload = clonePayload()
     payload.students[0].displayName = ''
     expect(buildView('s001', DEFAULT_RANGE, payload).studentName).toBe('青木')
-    expect(buildParentScheduleView(payload, 's001', { from: '2026-09-20', to: '2026-09-10' })).toEqual({ studentName: '青木', days: [] })
-    expect(buildParentScheduleView(payload, 's001', { from: 'bad', to: '2026-09-10' })).toEqual({ studentName: '青木', days: [] })
+    expect(buildParentScheduleView(payload, 's001', { from: '2026-09-20', to: '2026-09-10' })).toEqual({ studentName: '青木', days: [], hasLectureLessons: false })
+    expect(buildParentScheduleView(payload, 's001', { from: 'bad', to: '2026-09-10' })).toEqual({ studentName: '青木', days: [], hasLectureLessons: false })
   })
 
   it('授業のある日と臨時・祝日休みの日だけを from→to 順に返し、weekday は 0=日..6=土(k-4)', () => {
@@ -379,6 +379,35 @@ describe('buildParentScheduleView K-3: 休講日と講習期間', () => {
   it('special(講習コマ)は講習期間外に置かれていても出ない', () => {
     const view = buildView('s001')
     expect(summarize(dayOf(view, '2026-09-30'))).toEqual(['1:理:regular'])
+  })
+
+  // 確認リスト k-4 再報告(2026-09-14): 講習だけの月が「休みしか出ない」ように見える。講習コマは出さず、あった印だけ返して注記にする。
+  it('範囲内にこの生徒の講習コマがあれば hasLectureLessons=true(講習コマ自体は出さない)。無い範囲・他の生徒は false', () => {
+    expect(buildView('s001').hasLectureLessons).toBe(true)
+    expect(buildView('s001', { from: '2026-09-07', to: '2026-09-13' }).hasLectureLessons).toBe(false)
+    expect(buildView('s003').hasLectureLessons).toBe(false)
+    expect(buildParentScheduleView(cloneParentScheduleFixturePayload(), 's001', { from: '2026-09-20', to: '2026-09-10' })?.hasLectureLessons).toBe(false)
+  })
+
+  it('出欠記録(statusSlots)の講習も印に数え、moved の講習は数えない', () => {
+    const range = { from: '2026-09-07', to: '2026-09-13' }
+    const withStatus = (status: string) => {
+      const payload = clonePayload()
+      const week = (payload.boardState?.weeks[0] ?? []) as SlotCell[]
+      const target = week.find((cell) => cell.id === '2026-09-08_3')
+      target!.desks[0] = {
+        ...target!.desks[0],
+        statusSlots: [
+          { id: 'status-special', studentId: 'x1', sourceManagedLesson: false, name: '青木', managedStudentId: 's001', grade: '中3', subject: '数', lessonType: 'special', teacherType: 'normal', teacherName: '田中', dateKey: '2026-09-08', slotNumber: 3, recordedAt: '', status, sourceLessonId: '' } as never,
+          null,
+        ],
+      }
+      return buildView('s001', range, payload)
+    }
+    expect(withStatus('attended').hasLectureLessons).toBe(true)
+    expect(withStatus('absent').hasLectureLessons).toBe(true)
+    expect(withStatus('moved').hasLectureLessons).toBe(false)
+    expect(JSON.stringify(withStatus('attended').days)).not.toContain('special')
   })
 })
 

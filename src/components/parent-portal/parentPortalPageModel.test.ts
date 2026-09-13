@@ -6,6 +6,8 @@ import {
   PARENT_PORTAL_DISABLED_MESSAGE,
   PARENT_PORTAL_NOTES,
   PARENT_PORTAL_UNAVAILABLE_MESSAGE,
+  PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE,
+  PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE,
   PARENT_SCHEDULE_NO_LESSON_MESSAGE,
   buildParentPortalRequestUrl,
   canShiftParentScheduleMonth,
@@ -20,6 +22,7 @@ import {
   isParentScheduleDayTentative,
   resolveParentMessageSendError,
   resolveParentPortalLoadError,
+  resolveParentScheduleMonthNotice,
   shiftParentScheduleMonth,
   validateParentMessageInput,
   type ParentScheduleDay,
@@ -235,6 +238,27 @@ describe('isParentPortalScheduleResponse', () => {
     expect(isParentPortalScheduleResponse('<!doctype html>')).toBe(false)
     expect(isParentPortalScheduleResponse({ studentName: 'x' })).toBe(false)
     expect(isParentPortalScheduleResponse(null)).toBe(false)
+  })
+})
+
+// 確認リスト k-4 再報告(2026-09-14・オーナー回答): 講習だけの月は注記、講習も無い月は従来どおり。
+describe('resolveParentScheduleMonthNotice', () => {
+  const closed: ParentScheduleDay = { dateKey: '2026-08-10', weekday: 1, kind: 'closed', lessons: [] }
+  const lessonDay: ParentScheduleDay = { dateKey: '2026-08-03', weekday: 1, kind: 'board', lessons: [{ slotNumber: 1, timeLabel: '16:00', subject: '数', kind: 'attended', isTentative: false }] }
+
+  it('通常授業の日が無く講習があった月は講習の注記(臨時休みの行があっても出す)', () => {
+    expect(resolveParentScheduleMonthNotice({ days: [closed], hasLectureLessons: true })).toBe(PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE)
+    expect(resolveParentScheduleMonthNotice({ days: [], hasLectureLessons: true })).toBe(PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE)
+  })
+
+  it('通常授業の日があれば講習があっても注記しない', () => {
+    expect(resolveParentScheduleMonthNotice({ days: [lessonDay, closed], hasLectureLessons: true })).toBeNull()
+  })
+
+  it('講習が無い月は従来どおり: 行が無ければ「予定はありません」、休みだけなら何も出さない。印の無い旧応答も同じ', () => {
+    expect(resolveParentScheduleMonthNotice({ days: [], hasLectureLessons: false })).toBe(PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE)
+    expect(resolveParentScheduleMonthNotice({ days: [] })).toBe(PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE)
+    expect(resolveParentScheduleMonthNotice({ days: [closed] })).toBeNull()
   })
 })
 
