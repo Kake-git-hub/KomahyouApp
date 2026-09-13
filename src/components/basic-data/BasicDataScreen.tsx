@@ -28,6 +28,7 @@ import {
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canWithdrawStudentToday } from './withdrawGuard'
 import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
@@ -891,7 +892,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, onIssueParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
@@ -900,6 +901,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   // 削除確認モーダル（生徒/講師共通）。window.confirm を廃し、不可逆警告・退塾日での非表示案内・
   // 未消化ストック警告・ログインパスワード再認証を1画面にまとめる（オーナー指示 2026-07-08）。
   const [deleteModalState, setDeleteModalState] = useState<{ scope: DeleteScope; id: string; name: string; stock?: StudentDeletionStock } | null>(null)
+  // 生徒は削除せず「退塾」(押した日を退塾日として記録・データは残す)。オーナー指示 2026-09-13・withdrawGuard.ts。
+  const [withdrawModalState, setWithdrawModalState] = useState<{ id: string; name: string; currentWithdrawDate: string; stock?: StudentDeletionStock } | null>(null)
   const [deletePassword, setDeletePassword] = useState('')
   const [deleteError, setDeleteError] = useState('')
   const [deleteBusy, setDeleteBusy] = useState(false)
@@ -1182,11 +1185,23 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     setDeleteModalState({ scope: 'teacher', id, name: teacher ? getTeacherDisplayName(teacher) : '' })
   }
 
-  const removeStudent = (id: string) => {
+  const openStudentWithdraw = (id: string) => {
     const student = students.find((row) => row.id === id)
-    setDeletePassword('')
-    setDeleteError('')
-    setDeleteModalState({ scope: 'student', id, name: student ? getStudentDisplayName(student) : '', stock: studentDeletionStockSummary?.[id] })
+    setWithdrawModalState({ id, name: student ? getStudentDisplayName(student) : '', currentWithdrawDate: student?.withdrawDate ?? '', stock: studentDeletionStockSummary?.[id] })
+  }
+
+  const cancelStudentWithdraw = () => {
+    setWithdrawModalState(null)
+    setStatusMessage('退塾をキャンセルしました。')
+  }
+
+  const confirmStudentWithdraw = () => {
+    if (!withdrawModalState) return
+    // 記録する日は「押した日」。画面を開いたまま日付をまたいでも正しい日になるよう、確定時に取り直す。
+    const today = getReferenceDateKey(new Date())
+    onUpdateStudents((current) => applyStudentWithdrawToday(current, withdrawModalState.id, today))
+    setStatusMessage(`${withdrawModalState.name || '生徒'} を ${today} 付けで退塾にしました。`)
+    setWithdrawModalState(null)
   }
 
   const cancelDelete = () => {
@@ -1194,7 +1209,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     setDeleteModalState(null)
     setDeletePassword('')
     setDeleteError('')
-    setStatusMessage(scope === 'teacher' ? '講師の削除をキャンセルしました。' : '生徒の削除をキャンセルしました。')
+    setStatusMessage(scope === 'teacher' ? '講師の削除をキャンセルしました。' : '削除をキャンセルしました。')
   }
 
   const confirmDelete = async () => {
@@ -1213,21 +1228,10 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
         return
       }
     }
+    // 生徒は削除しない(「退塾」ボタンへ置換・オーナー指示 2026-09-13)。削除の確定は講師だけ。
     if (scope === 'teacher') {
       onUpdateTeachers((current) => current.filter((row) => row.id !== id))
       setStatusMessage('講師を削除しました。')
-    } else {
-      // 保護者用トークンの失効は best-effort(spec-parent-portal.md §B-2 revokedReason='studentDeleted')。
-      // 失敗しても削除は止めない。
-      // ★写し(parentPortalToken)の有無で条件付けしない: 写しが無くてもサーバーには有効トークンが
-      //   残っていることがある(別端末で発行・他教室コピーで剥がした後・保存前)。さらに生徒ID(sNNN)は
-      //   欠番を再利用するため、失効し忘れた古いQRが**後から入った別の生徒**に一致し、その子の日程が
-      //   旧家庭に見えてしまう(レビュー指摘 2026-09-13・INV-08)。サーバーは索引で引けるので写しは不要・冪等。
-      if (onRevokeParentPortalToken) {
-        void onRevokeParentPortalToken(id, 'studentDeleted').catch(() => { /* best-effort */ })
-      }
-      onUpdateStudents((current) => current.filter((row) => row.id !== id))
-      setStatusMessage('生徒を削除しました。')
     }
     setDeleteModalState(null)
     setDeletePassword('')
@@ -1506,7 +1510,10 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       {studentRosterView === 'active' && resolveParentPortalQrRowState({ student: row, referenceDate: todayReferenceDate, enabled: parentPortalQrEnabled, remoteEnabled: Boolean(onIssueParentPortalToken), classroomId }) !== 'hidden' ? (
                         <button className="secondary-button slim" type="button" onClick={() => { void openParentPortalQr(row) }} title={PARENT_PORTAL_QR_TEXT.title} data-testid={`basic-data-student-qr-${row.id}`}>{PARENT_PORTAL_QR_TEXT.buttonLabel}</button>
                       ) : null}
-                      <button className="secondary-button slim" type="button" onClick={() => removeStudent(row.id)}>削除</button>
+                      {/* 生徒は削除せず退塾(押した日を退塾日に記録・データは残る)。在籍中かつ今日付けの退塾日が未設定のときだけ出す。 */}
+                      {canWithdrawStudentToday(row, todayReferenceDate) ? (
+                        <button className="secondary-button slim" type="button" onClick={() => openStudentWithdraw(row.id)} data-testid={`basic-data-withdraw-student-${row.id}`}>退塾</button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
@@ -1598,6 +1605,31 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
               <div className="auto-assign-modal-actions">
                 <button className="secondary-button" type="button" onClick={cancelDelete} disabled={deleteBusy}>キャンセル</button>
                 <button className="primary-button basic-data-delete-confirm" type="button" onClick={confirmDelete} disabled={deleteBusy} data-testid="basic-data-delete-confirm-button">{deleteBusy ? '確認中…' : '削除する'}</button>
+              </div>
+            </div>
+          </div>
+        )
+      })() : null}
+
+      {withdrawModalState ? (() => {
+        const confirmation = buildStudentWithdrawConfirmation({
+          name: withdrawModalState.name,
+          today: getReferenceDateKey(new Date()),
+          currentWithdrawDate: withdrawModalState.currentWithdrawDate,
+          stock: withdrawModalState.stock,
+        })
+        return (
+          <div className="auto-assign-modal-overlay" role="presentation">
+            <div className="auto-assign-modal basic-data-delete-modal" role="dialog" aria-modal="true" aria-label={confirmation.title}>
+              <div className="auto-assign-modal-title">{confirmation.title}</div>
+              <p className="basic-data-delete-hint">{confirmation.message}</p>
+              {confirmation.overwriteNote ? <p className="basic-data-delete-warning">{confirmation.overwriteNote}</p> : null}
+              {confirmation.stockWarning ? (
+                <p className="basic-data-delete-stock-warning" data-testid="basic-data-withdraw-stock-warning">{confirmation.stockWarning}</p>
+              ) : null}
+              <div className="auto-assign-modal-actions">
+                <button className="secondary-button" type="button" onClick={cancelStudentWithdraw}>キャンセル</button>
+                <button className="primary-button" type="button" onClick={confirmStudentWithdraw} data-testid="basic-data-withdraw-confirm-button">退塾にする</button>
               </div>
             </div>
           </div>
