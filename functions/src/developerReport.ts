@@ -87,6 +87,32 @@ export function normalizeDeveloperReportCategory(raw: unknown): DeveloperReportC
   return typeof raw === 'string' && (DEVELOPER_REPORT_CATEGORIES as readonly string[]).includes(raw) ? raw as DeveloperReportCategory : 'bug'
 }
 
+/**
+ * 開発用教室の「確認リスト」パネルの送信本文か(先頭行が `[確認リスト vX.Y.Z]` または `... (1/2)`)。
+ * クライアント src/utils/verificationChecklist.ts の buildVerificationChecklistMarker と
+ * tools/verification-checklist-report.lib.mjs の MARKER_PATTERN と同じ書式。
+ */
+const VERIFICATION_CHECKLIST_MARKER_PATTERN = /^\[確認リスト\s+v[0-9]+\.[0-9]+\.[0-9]+\](?:\s*\(\d+\/\d+\))?\s*$/u
+
+export function isVerificationChecklistNote(note: string): boolean {
+  const firstLine = String(note ?? '').split(/\r?\n/u)[0]?.trim() ?? ''
+  return VERIFICATION_CHECKLIST_MARKER_PATTERN.test(firstLine)
+}
+
+/**
+ * 確認リストの送信は**メールも Issue 起票もしない**(オーナー指示 2026-09-13: 要望・報告・質問と違い、
+ * 開発者が tools/verification-checklist-report.mjs で読んで必ず修正するので通知は不要)。
+ * 本番教室の利用者が偶然マーカーを書いても通知が止まらないよう、開発用教室(サンドボックス含む)に限る。
+ */
+export function isVerificationChecklistReport(note: string, isDevelopmentClassroom: boolean): boolean {
+  return isDevelopmentClassroom && isVerificationChecklistNote(note)
+}
+
+/** メール即時通知を送らない理由(送るなら null)。記録時に保存した isVerificationChecklist を見る。 */
+export function resolveDeveloperReportMailSkipReason(report: { isVerificationChecklist?: boolean }): string | null {
+  return report.isVerificationChecklist === true ? 'verification-checklist' : null
+}
+
 /** 内容に「#テスト」(または #test) が含まれればテスト扱い。クライアント側 isDeveloperReportTestNote と同じ判定。 */
 export function isDeveloperReportTestNote(note: string): boolean {
   return note.includes(DEVELOPER_REPORT_TEST_MARKER) || /#test\b/iu.test(note)
@@ -200,6 +226,7 @@ export type DeveloperReportMailSource = {
   source?: string
   category?: string
   isTest?: boolean
+  isVerificationChecklist?: boolean
   note?: string
   reportedAt?: string
   recordedAt?: string

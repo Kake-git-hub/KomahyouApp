@@ -56,7 +56,7 @@ import {
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
-import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, normalizeDeveloperReport, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
+import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
@@ -1837,6 +1837,8 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     }
   }
 
+  // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
+  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity(classroomId, classroomName))
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,
@@ -1846,6 +1848,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     source: report.source,
     category: report.category,
     isTest: report.isTest,
+    isVerificationChecklist,
     note: report.note,
     reportedAt: report.reportedAt,
     recordedAt,
@@ -1865,8 +1868,9 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     snapshotStoragePath: report.hasSnapshotPayload && snapshotByteLength >= 0 ? storagePath : '',
     snapshotByteLength,
     // テスト扱い(#テスト)は Issue 起票をしない: 通知ワークフローは notifiedAt==null だけを拾うので、ここで埋めておく。
-    notifiedAt: report.isTest ? recordedAt : null,
-    notifySkipped: report.isTest ? 'test' : null,
+    // 確認リストも同様に Issue を作らない(開発者がツールで読んで修正する)。
+    notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,
+    notifySkipped: report.isTest ? 'test' : isVerificationChecklist ? 'verification-checklist' : null,
     issueNumber: null,
   })
   logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
@@ -1891,6 +1895,11 @@ export const notifyDeveloperReportByMail = onDocumentCreated({
   const data = snapshot.data() as DeveloperReportMailSource
   const workspaceKey = String(event.params.workspaceKey ?? '')
   const reportId = String(event.params.reportId ?? data.reportId ?? '')
+  const mailSkipReason = resolveDeveloperReportMailSkipReason(data)
+  if (mailSkipReason) {
+    await snapshot.ref.set({ mailSkipped: mailSkipReason }, { merge: true })
+    return
+  }
   if (!isMailTransportConfigured(REPORT_MAIL_SMTP_URL, REPORT_MAIL_TO)) {
     logger.warn(`[DeveloperReportMail] Mail is not configured (REPORT_MAIL_SMTP_URL / REPORT_MAIL_TO). report=${reportId}`)
     await snapshot.ref.set({ mailSkipped: 'not-configured' }, { merge: true })

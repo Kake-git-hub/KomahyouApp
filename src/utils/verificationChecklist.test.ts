@@ -16,6 +16,7 @@ import {
   parseVerificationChecklistDraft,
   serializeVerificationChecklistDraft,
   setVerificationChecklistEntry,
+  setVerificationChecklistMemo,
   setVerificationChecklistOtherNotes,
   verificationChecklistStorageKey,
   type VerificationChecklistItem,
@@ -210,5 +211,24 @@ describe('Markdown コピー', () => {
     expect(markdown).toContain('- 印刷が重い')
     // 全項目が載る(未確認も含む)。
     for (const item of FIXTURE_ITEMS) expect(markdown).toContain(item.id)
+  })
+})
+
+describe('メモ欄の入力(常時表示・2026-09-13)', () => {
+  it('未確認のままメモを書くと要改善に切り替わり、送信本文に載る(黙って捨てない)', () => {
+    const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), 'k-1', '文言を直して')
+    expect(draft.entries['k-1']).toEqual({ status: 'needs-fix', memo: '文言を直して' })
+    expect(buildVerificationChecklistReportNotes(draft).join('\n')).toContain('- k-1 要改善: 文言を直して')
+  })
+
+  it('OK のままメモを書いても OK のまま(OK: メモ で送る)', () => {
+    const ok = setVerificationChecklistEntry(createEmptyVerificationChecklistDraft(), 'k-1', { status: 'ok' })
+    const draft = setVerificationChecklistMemo(ok, 'k-1', '問題なし')
+    expect(draft.entries['k-1']).toEqual({ status: 'ok', memo: '問題なし' })
+  })
+
+  it('空白だけのメモでは未確認のまま(入力途中で勝手に要改善にしない)', () => {
+    const draft = setVerificationChecklistMemo(createEmptyVerificationChecklistDraft(), 'k-1', '  ')
+    expect(draft.entries['k-1']?.status).toBe('unchecked')
   })
 })

@@ -52,4 +52,9 @@ describe('確認リストパネル本体', () => {
     expect(PANEL_TSX).toContain('buildVerificationChecklistReportNotes')
     expect(PANEL_TSX).toContain('countVerificationChecklistProgress')
   })
+
+  it('メモ欄は結果(要改善)に関わらず常に描画し、入力は setVerificationChecklistMemo を通す(2026-09-13)', () => {
+    expect(PANEL_TSX).not.toContain("entry.status === 'needs-fix' || entry.memo ? (")
+    expect(PANEL_TSX).toContain('updateDraft(setVerificationChecklistMemo(draft, item.id, event.target.value))')
+  })
 })
