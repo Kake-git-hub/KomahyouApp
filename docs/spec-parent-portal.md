@@ -58,6 +58,19 @@
 
 ---
 
+### 0-3. デプロイ順の注意（2026-09-13 に実際に踏んだ）
+
+`firebase.json` の rewrite が**まだ存在しない関数**を指していると、Hosting のデプロイが
+`Cloud Run service "parentportalapi" does not exist in region "asia-northeast1"` で **400 になって失敗する**。
+main へのマージは Hosting と Cloud Functions のワークフローを**並行**で起こし順序保証が無いため、
+新しい rewrite を追加した回は Hosting が先に走ると必ずこれで落ちる（本番は旧版のまま無傷＝fail-closed）。
+
+- 対処: **Cloud Functions のデプロイが緑になってから Hosting を再実行**する（Actions → Deploy to Firebase Hosting → Re-run）。
+- 実反映の確認: `GET https://komahyouapp-prod.web.app/api/parent/xxxxxxxxxxxxxxxx` が `410`＋
+  「このリンクは現在ご利用いただけません。」の JSON を返すこと（409 誤成功対策として関数の live 応答で確かめる）。
+- Firestore ルールは main マージでは反映されないので `firebase deploy --only firestore:rules` を別途実行する
+  （未反映だと `parentMessages` の購読が permission-denied になり、室長に連絡が届かない）。
+
 ## A. 目的と範囲
 
 - 目的: 生徒ごとの固定QRから、保護者が **(a) 通常授業＋振替の予定を確認** し、**(b) 室長へテキストで連絡** できる。

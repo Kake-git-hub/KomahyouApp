@@ -15,6 +15,10 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- docs: 保護者向け固定QRの仕様に §0-3「デプロイ順の注意」を追記。新しい Hosting rewrite が指す関数がまだ無いと
+  Hosting デプロイが 400(`Cloud Run service "parentportalapi" does not exist`)で落ちる(v1.5.512 で実際に発生。main マージは
+  Hosting と Functions を並行に起こすため順序保証が無い)。対処は「Functions が緑になってから Hosting を再実行」＋
+  `/api/parent/x` の live GET で実反映を確認、ルールは `firebase deploy --only firestore:rules` を別途実行(`docs/spec-parent-portal.md`)
 
 ## v1.5.512 (2026-09-13)
 - feat: **保護者向け固定QR(第1段・開発用教室限定)** を実装(オーナー指示 2026-09-13「保護者からのQR読み込みによる室長連絡機能を開発用教室のみで実装して」。仕様 `docs/spec-parent-portal.md`・計画 §7 K-2〜K-6・INV-08/INV-07)。生徒ごとの固定QR(`/p/{トークン}`)から保護者が **通常＋振替の日程を閲覧**し、**室長へ一方向でテキスト連絡**できる。内訳: ①日程計算の権威純関数 `src/utils/parentSchedule.ts`(自己完結・盤面優先→無い日だけテンプレ補完・講習期間は一律非表示・休み→振替先は出席済みでもリンクを切らない(P-10)・講師名/机/他生徒/在庫は一切返さない)を新設し、`functions/scripts/sync-shared.mjs`(prebuild)で `functions/src/generated/parentSchedule.ts` へ複製＋パリティテストでドリフト検出 ②サーバー `parentPortalApi`(GET/POST・検証順=書式→失効→フラグ→在籍で、落ちたら教室データを読まない・回数制限はトークン1日5件/教室1時間60件・応答は no-store・ログはトークン先頭6文字だけ)と callable `issueStudentPortalToken`/`revokeStudentPortalToken`/`markParentMessagesNotified` ③トークンの権威 `studentPortalTokens`＋有効1本の索引 `studentPortalTokenOwners`(どちらもクライアント read/write 不可)・写しは `StudentRow.parentPortalToken`＋発行元教室タグ ④保護者連絡 `parentMessages`(教室メンバー read・write は CF のみ・保持365日)と室長への通知モーダル(「送信者は本人確認をしていません」注記・「確認」で既読をサーバー記録) ⑤基本データ画面の「QR」ボタン(表示・印刷1生徒1枚・再発行)。他教室コピーでは写しトークンを `stripParentPortalTokensFromStudents` で剥がす(単一権威・2026-07-09 の提出トークン混入事故と同型の穴を作らない)。テスト約250件追加。**⚠️ Firestore ルールは main マージでは反映されない → `firebase deploy --only firestore:rules` を別途実行**。functions は Actions「Deploy Cloud Functions」(main マージで自動発火・409 誤成功に注意し `/api/parent/x` の GET で実反映を確認)
