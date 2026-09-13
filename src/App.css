@@ -3659,6 +3659,15 @@ tr.sa-group-row td {
   cursor: pointer;
 }
 
+/* 定休日の列も選べる(p-1・2026-09-12)。選べることは変えず、見た目だけ薄くして「定休日」と分かるようにする。 */
+.board-print-selection-head.is-closed-day {
+  color: #8a97a8;
+}
+
+.board-print-selection-table td.is-closed-day {
+  background: #f7f8fa;
+}
+
 /* 基本データ削除確認モーダル（生徒/講師）: 不可逆・未消化ストック・退塾日での非表示案内を強調する。 */
 .basic-data-delete-modal .basic-data-delete-warning {
   margin: 0;
@@ -4950,6 +4959,15 @@ tr.sa-group-row td {
   font-weight: 600;
 }
 
+/* 質問(question)を選んだときだけ出す注意文(spec-developer-report §G-2・2026-09-13)。複合セレクタで .developer-report-hint の色に勝たせる。 */
+.developer-report-hint.developer-report-question-notice {
+  color: #7a4a00;
+  background: #fff4e5;
+  padding: calc(10 * var(--developer-report-unit)) calc(14 * var(--developer-report-unit));
+  border-radius: calc(12 * var(--developer-report-unit));
+  line-height: 1.6;
+}
+
 .developer-report-hint {
   margin: 0;
   color: #5b6f86;
@@ -4984,4 +5002,268 @@ tr.sa-group-row td {
   font-size: calc(17 * var(--developer-report-unit));
   line-height: 1.7;
   color: #1f3350;
+}
+
+/* 開発用教室だけに出す確認リスト(2026-09-12)。画面最前面(右下)に固定。
+   本番教室では App.tsx がマウントしないので、このスタイルも出番がない。
+   z-index は既存の最前面(QR提出通知 1002 / 丸ごと振替バナー 1002)より上に置く。 */
+.verification-checklist-toggle {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2000;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #1d4ed8;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(31, 51, 80, 0.18);
+}
+
+.verification-checklist-toggle:hover {
+  background: #eef4ff;
+}
+
+.verification-checklist-toggle-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.verification-checklist-panel {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  max-width: calc(100vw - 24px);
+  max-height: 70vh;
+  border: 1px solid #d7e2f1;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 36px rgba(31, 51, 80, 0.24);
+  overflow: hidden;
+}
+
+.verification-checklist-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e4ebf5;
+  background: #f5f8ff;
+}
+
+.verification-checklist-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #1f3350;
+}
+
+.verification-checklist-subtitle {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #5b7390;
+}
+
+.verification-checklist-collapse {
+  border: 1px solid #c9d8ec;
+  border-radius: 6px;
+  background: #fff;
+  color: #36506d;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.verification-checklist-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 12px;
+}
+
+.verification-checklist-group + .verification-checklist-group {
+  margin-top: 10px;
+}
+
+.verification-checklist-area {
+  position: sticky;
+  top: 0;
+  padding: 4px 0;
+  background: rgba(255, 255, 255, 0.98);
+  font-size: 12px;
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.verification-checklist-item {
+  border: 1px solid #e4ebf5;
+  border-left: 3px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 8px;
+  margin-top: 6px;
+  background: #fff;
+}
+
+.verification-checklist-item.is-ok {
+  border-left-color: #16a34a;
+  background: #f3fbf5;
+}
+
+.verification-checklist-item.is-needs-fix {
+  border-left-color: #dc2626;
+  background: #fff5f5;
+}
+
+.verification-checklist-item-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #1f3350;
+}
+
+.verification-checklist-item-id {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: #eef4ff;
+  color: #36506d;
+  font-size: 11px;
+}
+
+.verification-checklist-steps {
+  margin: 4px 0 6px;
+  padding-left: 18px;
+  color: #36506d;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.verification-checklist-status {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.verification-checklist-status-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid #d7e2f1;
+  border-radius: 999px;
+  font-size: 11px;
+  color: #36506d;
+  cursor: pointer;
+}
+
+.verification-checklist-status-option.is-selected {
+  border-color: #1d4ed8;
+  background: #eef4ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.verification-checklist-memo {
+  width: 100%;
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid #d7e2f1;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.verification-checklist-memo-hint {
+  margin: 4px 0 0;
+  color: #b91c1c;
+  font-size: 11px;
+}
+
+.verification-checklist-footer {
+  border-top: 1px solid #e4ebf5;
+  padding: 8px 12px;
+  background: #f9fbff;
+}
+
+.verification-checklist-result {
+  margin: 0 0 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #1f3350;
+  white-space: pre-wrap;
+}
+
+.verification-checklist-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.verification-checklist-actions button {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+@media print {
+  .verification-checklist-panel,
+  .verification-checklist-toggle {
+    display: none !important;
+  }
+}
+
+/* 処理中オーバーレイ(PDF出力など操作を受け付けない間・確認リスト v1.5.504 その他・2026-09-12)。
+   モーダル(auto-assign-modal-overlay z-index 50 / QR 80)より前面、確認リスト(2000)よりは後ろ。 */
+.busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: grid;
+  place-items: center;
+  background: rgba(16, 40, 70, 0.32);
+  pointer-events: auto;
+  cursor: progress;
+}
+
+.busy-overlay-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 14px 36px rgba(31, 51, 80, 0.28);
+  color: #16314f;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.busy-overlay-spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 3px solid rgba(26, 115, 232, 0.25);
+  border-top-color: #1a73e8;
+  animation: komahyou-spin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .busy-overlay-spinner {
+    animation-duration: 1.6s;
+  }
 }

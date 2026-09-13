@@ -3,7 +3,8 @@
 //
 // 何をするか:
 //   1. Firestore REST で workspaces/{ws}/developerReports のうち notifiedAt が null の報告を取る
-//   2. 報告ごとに GitHub Issue を起票する(ラベル type:bug / status:triage / source:user-report)
+//   2. 報告ごとに GitHub Issue を起票する(ラベル type:bug / status:triage / source:user-report。種類が要望なら type:feature、
+//      使い方の質問(2026-09-13)なら type:question)
 //   3. 起票できた報告の notifiedAt / issueNumber / issueUrl を埋める(二重起票防止)
 //
 // ⚠️ リポジトリは公開なので、Issue 本文には**個人情報になり得る操作痕跡(生徒名を含む)や教室データは載せない**。
@@ -22,6 +23,7 @@ export const ISSUE_LABELS = ['type:bug', 'status:triage', 'source:user-report']
 export const ISSUE_LABELS_BY_CATEGORY = {
   bug: ['type:bug', 'status:triage', 'source:user-report'],
   request: ['type:feature', 'status:triage', 'source:user-report'],
+  question: ['type:question', 'status:triage', 'source:user-report'],
 }
 export function resolveIssueLabels(report) {
   return ISSUE_LABELS_BY_CATEGORY[report?.category] ?? ISSUE_LABELS
@@ -81,13 +83,13 @@ function toJstLabel(iso) {
 }
 
 const SOURCE_LABELS = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
-const CATEGORY_LABELS = { bug: '不具合・おかしい', request: '追加してほしい・要望' }
+const CATEGORY_LABELS = { bug: '不具合・おかしい', request: '追加してほしい・要望', question: '使い方の質問' }
 
 export function buildIssueTitle(report) {
   const classroom = report.classroomName || report.classroomId || '教室不明'
   const noteHead = String(report.note ?? '').split('\n')[0].trim()
   const suffix = noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''
-  const kind = report.category === 'request' ? '利用者要望' : '利用者報告'
+  const kind = report.category === 'request' ? '利用者要望' : report.category === 'question' ? '利用者質問' : '利用者報告'
   return `📣 [${kind}] ${classroom}${suffix}`
 }
 
@@ -149,6 +151,9 @@ export function buildIssueBody(report, options = {}) {
     '1. 開発者が Firestore 文書の操作痕跡と Storage の教室データを確認し、バグ／仕様の誤解／勘違いを切り分ける。',
     '2. 必要なら `bug-triage` の手順で再現手順・影響範囲・優先度をこの Issue に追記する(整理のみ)。',
     '3. 開発者の許可が出たら `dev-fix` で修正＋回帰防止テスト。仕様の誤解なら室長へ説明し、必要なら改善 Issue を切る。',
+    ...(report.category === 'question'
+      ? ['4. 使い方の質問(2026-09-13): 利用者への自動回答はしない。開発者が内容を確認・承認した回答だけを返す(`docs/spec-developer-report.md` §G)。']
+      : []),
     '',
     `Run: ${process.env.GITHUB_SERVER_URL ?? 'https://github.com'}/${process.env.GITHUB_REPOSITORY ?? 'Kake-git-hub/KomahyouApp'}/actions/runs/${process.env.GITHUB_RUN_ID ?? '(local)'}`,
   )

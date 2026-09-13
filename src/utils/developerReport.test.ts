@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEVELOPER_REPORT_CATEGORIES,
   DEVELOPER_REPORT_UI_TEXT,
   isDeveloperReportTestNote,
   normalizeDeveloperReportCategory,
@@ -35,18 +39,36 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
     // ボタン名・題名は「要望・報告」(オーナー確定 2026-09-04)。要望も同じ導線で送れることを本文で示す。
     expect(DEVELOPER_REPORT_UI_TEXT.title).toBe('要望・報告')
     expect(DEVELOPER_REPORT_UI_TEXT.description('')).toContain('要望')
-    expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.map((o) => o.value)).toEqual(['bug', 'request'])
+    // 使い方の質問(question)も同じ導線(2026-09-13)。3 種別は同じ流れ(ストック→メール→後で開発者が対応)。
+    expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.map((o) => o.value)).toEqual(['bug', 'request', 'question'])
+    expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.find((o) => o.value === 'question')?.label).toBe('使い方の質問')
+    expect(DEVELOPER_REPORT_UI_TEXT.description('')).toContain('質問')
     // 入力ヒント: 修正しやすい情報(生徒名・日付・コマ・何が起きたか)を促す(オーナー指示 2026-09-04)。
     for (const keyword of ['生徒名', '日付', 'コマ', '何が起きたか', '精度']) {
       expect(DEVELOPER_REPORT_UI_TEXT.inputHint).toContain(keyword)
     }
   })
 
-  it('種類は bug/request だけを受け付け、不明なら bug', () => {
+  it('種類は bug/request/question だけを受け付け、不明なら bug', () => {
     expect(normalizeDeveloperReportCategory('request')).toBe('request')
+    expect(normalizeDeveloperReportCategory('question')).toBe('question')
+    // サーバー側(functions/src/developerReport.ts)の受け付け種別と二重管理。片方だけに足すとサーバーが bug に丸めるので、
+    // 期待一覧を両方のテストに同じ形で固定する(operationLog.test.ts と同じ作法)。
+    expect([...DEVELOPER_REPORT_CATEGORIES]).toEqual(['bug', 'request', 'question'])
     expect(normalizeDeveloperReportCategory('bug')).toBe('bug')
     expect(normalizeDeveloperReportCategory('other')).toBe('bug')
     expect(normalizeDeveloperReportCategory(undefined)).toBe('bug')
+  })
+
+  it('質問を選んだときだけ「すぐには返らない」注意文を出す(spec §G-2・盤面 React モーダル)', () => {
+    // 即答の期待を作らない(利用者への自動回答はしない・オーナー確定 2026-09-12)。
+    expect(DEVELOPER_REPORT_UI_TEXT.questionNotice).toContain('すぐには返りません')
+    expect(DEVELOPER_REPORT_UI_TEXT.questionNotice).toContain('自動返信はしません')
+    // React モーダルは question 選択時だけ注意文を描く(source-scan: コンポーネントは jsdom なしで描かないため文面の配線を固定)。
+    const modalSource = readFileSync(fileURLToPath(new URL('../components/developer-report/DeveloperReportModal.tsx', import.meta.url)), 'utf8')
+    expect(modalSource).toContain("{category === 'question' ? (")
+    expect(modalSource).toContain('{DEVELOPER_REPORT_UI_TEXT.questionNotice}')
+    expect(modalSource).toContain('developer-report-question-notice')
   })
 
   it('内容に #テスト(または #test) があればテスト扱いと先読みできる', () => {

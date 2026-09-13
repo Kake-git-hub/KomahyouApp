@@ -253,6 +253,32 @@ export function selectLessonLedgerDateKey(availableDateKeys: readonly string[], 
   return candidates.length > 0 ? candidates[candidates.length - 1] : null
 }
 
+/** 「to 以前で最新」を探すときに読む候補件数（先頭が不正な ID でも数件見て最初の有効な物を使う）。 */
+export const LATEST_LEDGER_CANDIDATE_LIMIT = 5
+
+/** Firestore の Query が持つ連鎖 API のうち、ここで使う 2 つだけを表す（CollectionReference.where は Query を返す）。 */
+export type LedgerQueryChain<Q> = {
+  orderBy(field: string, direction: 'desc'): Q
+  limit(count: number): Q
+}
+export type LedgerCollectionLike<Q> = {
+  where(field: string, op: '<=', value: string): Q
+}
+
+/**
+ * 「`to` 以前で最新の台帳文書」を読むクエリを組む（index.ts の loadLatestLedgerDoc が使う・テスト可能な純関数）。
+ *
+ * ★ 並べ替え・絞り込みは**フィールド `dateKey`**で行う（文書 ID = dateKey と同値・buildLessonLedgerDayDoc が必ず書く）。
+ *   文書 ID（`FieldPath.documentId()` = `__name__`）の**降順**は Firestore の自動インデックスに無く、
+ *   複合インデックス未作成だと FAILED_PRECONDITION「The query requires an index」で失敗し、クライアントには
+ *   汎用の INTERNAL しか届かない（確認リスト v1.5.504 h-2「通常授業履歴を取得できませんでした: INTERNAL」の真因。
+ *   2026-09-12 に tools/lesson-history-diagnose.mjs で再現）。単一フィールドは昇順・降順とも自動作成されるので
+ *   `dateKey` なら索引の追加デプロイ無しに動く。`__name__` へ戻さないこと（テストで固定）。
+ */
+export function buildLatestLedgerQuery<Q extends LedgerQueryChain<Q>>(collection: LedgerCollectionLike<Q>, to: string): Q {
+  return collection.where('dateKey', '<=', to).orderBy('dateKey', 'desc').limit(LATEST_LEDGER_CANDIDATE_LIMIT)
+}
+
 /** 台帳文書の本文を取り出す（gzip+base64 は解凍。壊れていれば空配列）。 */
 export function readLessonLedgerRows(doc: LessonLedgerDayDocLike | null | undefined): LessonLedgerHistoryRow[] {
   if (!doc) return []

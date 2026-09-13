@@ -16,6 +16,43 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.511 (2026-09-13)
+- feat: 「要望・報告」に種類「使い方の質問」(category = question)を追加(計画 docs/plan-2026-09-11-five-requests.md §3 Q-2・仕様 docs/spec-developer-report.md §G・オーナー指示 2026-09-13)。不具合/要望と同じ流れ(送信→developerReports にストック→メール通知→後で開発者が対応)で、利用者への自動回答はしない。盤面 React モーダルと日程表タブの埋め込みモーダルは同じ選択肢定数から描くので両方に 3 択が出て、質問を選んだときだけ「回答は開発者が確認してからお返しします(すぐには返りません)」の注意文が出る。メール件名は【質問】付き、GitHub Issue はラベル `type:question`(リポジトリに作成済み)・タイトル `[利用者質問]`(`src/utils/developerReport.ts` / `DeveloperReportModal.tsx` / `scheduleHtml.ts` / `functions/src/developerReport.ts` / `tools/developer-report-notify.mjs`・テストに question ケースと client↔server 種別一致テストを追加)。**functions の反映は Actions「Deploy Cloud Functions」(main マージで自動発火)**
+- docs: 仕様 §G 質問／§H 蓄積とまとめ読み／§I 受け入れ条件と `docs/user-manual.md` 骨子(2026-09-12 spec-curator 起草・feat/report-question)を main に取り込み。§G-3〜§G-6(承認画面・返答通知・QA 公開)と §H(ダイジェスト)は未実装(計画 Q-3〜Q-6)
+
+## v1.5.510 (2026-09-13)
+- feat: 盤面PDF「コマ選択」(`boardPrintSelection`)を開発用教室限定から全教室へ昇格(オーナー指示 2026-09-13「指定コマPDFは完了したので全教室展開して」。確認リスト第1〜5版 v1.5.500〜509 で行高さ/文字はみ出し/講師名見切れ/集団行ガイドを是正済み)。本番教室でも「PDF出力」で曜日×時限の選択モーダルが開く(初期状態は全選択＝従来と同一出力)。回帰で development-only へ戻さない(`src/utils/featureRollout.ts` / `featureRollout.test.ts` / `docs/spec-schedule-pdf.md`)
+
+## v1.5.509 (2026-09-13)
+- fix: 盤面PDFコマ選択で講師名が見切れる(2 文字は両端が欠け・3 文字は縮んでも左が欠ける)不具合を修正(確認リスト第4版 p-3・v1.5.508 の結果)。真因は講師名のはみ出し判定が td(padding 込み 56px)の幅と scrollWidth を比べていたこと。講師名ボックス自身は 50px で、しかも中央寄せ flex では左側にはみ出た分が scrollWidth に載らないため、文字幅 65px でも「収まった」扱いになっていた(実ブラウザで再現・修正後は 2 文字 25px/3 文字 17px に収束し html2canvas 描画でも欠けない)。Range の矩形で文字幅を測りボックス自身の幅と比べる `singleLineTextOverflows` に変更(`src/utils/pdf.ts`・回帰テスト3件)
+- fix: 盤面PDFで集団行の未設定科目セルに画面用の操作ガイド「＋ 科目を選択」(CSS ::before)が印字されていたのを空白にする(第4版 p-3 メモ「講師未割り当ては空白でよい」)。PDF クローンから目印クラス `sa-group-subject-empty` を外す `clearGroupSubjectPlaceholdersForPdf`(全選択・部分選択とも・盤面 DOM は不変・テスト2件・`docs/spec-schedule-pdf.md`)
+- chore: 確認リストを第5版 `v1.5.509` へ(p-3 の再確認と、集団行ガイドが空白になっていることの確認 p-12 のみ)(`src/utils/verificationChecklist.ts`)
+
+## v1.5.508 (2026-09-13)
+- fix: 盤面PDFコマ選択で「文字が大きすぎてセルからはみ出ている」(生徒名と学年科目が重なって見切れる)不具合を修正(確認リスト第3版 p-2/p-3・v1.5.506 の結果)。真因は v1.5.506 で生徒欄の内側(`.sa-student-inner`)を固定高さにした際、flex(column) の子が flex-shrink で押し潰されて `scrollHeight` が伸びず、はみ出し判定が一度も真にならなかったこと(緩めた上限 72px のまま描画)。子の `flex-shrink` を 0 にし、固定した内側(目印 `data-pdf-locked-height`)は子の高さの合計と固定高さを直接比べて判定する(`studentInnerContentOverflows`)。全選択(従来出力)は固定しないので不変(`src/utils/pdf.ts` / `docs/spec-schedule-pdf.md`・回帰テスト3件、修正なしで落ちることを確認)
+- chore: 確認リストを第4版 `v1.5.508` へ。前回 OK の項目(c-1/p-11/h-2/h-8)は載せず、再確認 p-2/p-3 だけにした(`src/utils/verificationChecklist.ts`)
+
+## v1.5.507 (2026-09-12)
+- docs: CLAUDE.md にサービスアカウントへの `roles/logging.viewer` 付与(未実施・関数ログ読み取りワークフロー用)と、関数が「INTERNAL」しか返さないときの調べ方(REST runQuery で再現・文書ID降順は複合インデックス必須)を追記(コード変更なし)
+
+## v1.5.506 (2026-09-12)
+- fix(functions): 通常授業履歴が「取得できませんでした: INTERNAL」になる不具合を修正(確認リスト v1.5.504 h-2・Issue #63)。真因は callable `getStudentLessonHistory` の台帳クエリが文書 ID(`__name__`)の**降順**で並べていたこと。文書 ID の降順は Firestore の自動インデックスに無く、複合インデックス未作成のため FAILED_PRECONDITION「The query requires an index」で拒否され、firebase-functions が非 HttpsError を汎用「INTERNAL」に潰していた(`tools/lesson-history-diagnose.mjs` で再現・修正後は開発用教室の台帳 219 行/117 名で例外なしを確認)。並べ替えを台帳文書が必ず持つフィールド `dateKey`(単一フィールド索引は昇順・降順とも自動)に変更(`buildLatestLedgerQuery`・索引の追加デプロイ不要)。あわせて想定外の例外は原因文つきの `HttpsError('internal')` に包み、画面に理由が出るようにした(`toLessonHistoryHttpsError`・`functions/src/lessonLedgerHistory.ts` / `functions/src/index.ts`・回帰テスト追加)
+- fix: 盤面PDFコマ選択で「生徒のいる行だけ高く・空席の行は低い」と行高さが揃わない不具合を修正(確認リスト第2版 p-2/p-3・Issue #63)。緩めた文字上限(最大 72px)まで大きくなった生徒名 2 行が行を押し広げていたため、部分選択では生徒欄の内側(`.sa-student-inner`)を「机行の高さ − 上下 padding」に固定し(`lockStudentInnerHeightForPdf`)、生徒文字はその高さに収まるまで縮める。全選択(従来出力)は固定しない(`src/utils/pdf.ts` / `docs/spec-schedule-pdf.md`・回帰テスト追加)
+- feat: 操作を受け付けない処理中に画面全体へスピナーを出す `BusyOverlay` を追加(確認リスト v1.5.504 その他)。盤面 PDF 出力(全選択・コマ選択)とテンプレ上書き保存のレポート PDF に適用し、日程表タブの通常授業履歴の読み込み中にもスピナーを表示(`src/components/common/BusyOverlay.tsx` / `ScheduleBoardScreen.tsx` / `src/utils/scheduleHtml.ts` / `App.css`・テスト追加)
+- chore: 確認リストを第3版 `v1.5.506` へ。前回 OK だった項目は載せず(オーナー指摘「以前確認し終わったものが残っている」)、再確認 3 件(p-2/p-3/h-2)と新規 3 件(c-1 リスト整理・p-11 PDF 出力中スピナー・h-8 履歴読み込み中スピナー)だけにした(`src/utils/verificationChecklist.ts`)
+- chore: ログ読み取りワークフロー `functions-logs.yml` に通常授業履歴の経路診断ジョブ(`tools/lesson-history-diagnose.mjs`・Firestore 読み取りのみ)を追加。**「read-logs」ジョブはサービスアカウントに `roles/logging.viewer` が無く PERMISSION_DENIED になる(オーナーが GCP IAM で付与するまで赤)**
+
+## v1.5.505 (2026-09-12)
+- chore: Cloud Functions の実行ログを読む手動ワークフロー `.github/workflows/functions-logs.yml` を追加(読み取り専用・gcloud ログイン無しで関数の例外を確認できる。確認リスト v1.5.504 h-2「通常授業履歴を取得できませんでした: INTERNAL」の原因調査用。アプリのコード変更なし)
+
+## v1.5.504 (2026-09-12)
+- fix: 開発用教室の確認リスト(v1.5.502・受付 2026-09-11)の要改善 6 件を修正。**盤面PDFコマ選択** (p-1) 定休日(日曜)も選択候補に含める(`buildBoardPrintGrid` の isOpenDay フィルタ撤廃・モーダルは薄く表示)／出力した選択を曜日×時限のパターンとして教室ごとに `localStorage`(`board-print-selection:<教室>`)へ記憶し次回の初期状態にする(`serializeBoardPrintPattern` / `applyBoardPrintPattern`・記憶なし/壊れは全選択)。(p-2/p-3) 間引き後の表を A3 縦いっぱいに使う倍率を `resolveBoardPrintLayoutRelief` に一元化: 曜日を絞ると列が伸び(従来)、**時限を絞ると行が縦に伸びる**(従来は下半分が白紙)。文字上限は生徒 34px→最大 72px・講師名 24px→relief 倍・席番号 22px→列が伸びるときだけ relief 倍で揃えて拡大し、**講師名は列幅に収まるまで縮める**(`fitSingleLineTextForPdf`・従来は 24px 固定で 3 文字が見切れた)。PDF タイトル(=ファイル名)を選択に応じて `予定表9月14日(月)-9月16日(水) 1限-3限` の形で組む(`buildBoardPrintTitle`・全選択は従来の週タイトル)。(p-6) 集団行の時限ラベル「集団」を横書きに(縦回転 36px は 40px 行で見切れていた)。**通常授業履歴(旧・講習履歴)** (h-1) ボタン名・見出し・印刷タイトル・エラー文を「通常授業履歴」へ改名(id・メッセージ種別は不変)。(h-2) 「表示」で期間を正規化した結果を入力欄へ書き戻していたため「開始日が終了日に書き換わる」と見えていた不具合を修正: 開始日 > 終了日 は入れ替えずに理由を表示して送らず、入力欄は一切書き換えない。実際の表示期間(366日超の丸め後)は注記「表示期間」に出す(`src/utils/boardPrintSelection.ts` / `src/utils/pdf.ts` / `BoardPrintSelectionModal.tsx` / `ScheduleBoardScreen.tsx` / `src/utils/scheduleHtml.ts` / `lessonHistoryMessage.ts` / `docs/spec-schedule-pdf.md`・回帰テスト追加)
+- chore: 確認リストを第2版 `v1.5.504` へ(p-8 定休日選択・p-9 選択の記憶・p-10 ファイル名を追加、p-1/p-2/p-3/p-6/h-1/h-2/h-3 の手順を修正確認用に差し替え。下書きは版別なので旧版の下書きは引き継がない)
+
+## v1.5.503 (2026-09-12)
+- feat: 開発用教室だけに確認事項チェックリストのパネルを追加(操作しながら OK/要改善+メモを記録し、下書きは教室別・版別に localStorage 保持。「保存して送信」は既存の「要望・報告」経路 submitDeveloperReport へ 2000 字ごとに分割送信。本番教室には一切出さない・src/utils/verificationChecklist.ts / src/components/developer-report/VerificationChecklistPanel.tsx)
+- chore: 開発用教室から送られた「確認リスト」結果(要望・報告経路の note 先頭行マーカー `[確認リスト vX.Y.Z]`)を読み取り専用で集計する `tools/verification-checklist-report.mjs`(純関数は `tools/verification-checklist-report.lib.mjs`)を追加。Firestore への書き込みは行わない
+
 ## v1.5.502 (2026-09-12)
 - fix: 「戻す」「やり直し」と一段スナップショット復元の直後に盤面が「保存済み」扱いになり保存できず、リロードで戻す前の状態へ巻き戻る不具合を修正(undo/redo を純関数 applyHistoryEntry 経由で版数 bump ＋ userInitiated:true publish／restoreUndoSnapshot は clean 化しない・INV-02)
 - fix: 上記の追随(U-0c・INV-02/INV-03)。②一段スナップショット復元は盤面以外の画面からも起動でき、盤面未マウントだと未保存フラグが残留して**次に開いた教室が未保存扱いになり自動保存が走る**ため、明示 clean 化経路(読込/教室切替/ユーザー切替)で必ず落とすよう純関数 `resolveRestoreFlagLifecycle` に一元化(`src/App.tsx`)。あわせて undo/redo でも `commitWeeks` と同様に丸ごと振替の選択モード(`wholeDayTransferSourceDate`)と講師メニューを解除し、選択中の undo による古い振替元での誤実行を防止(INV-03 兄弟)

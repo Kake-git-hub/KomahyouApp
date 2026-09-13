@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEVELOPER_REPORT_CATEGORIES,
   DEVELOPER_REPORT_MAIL_TRACE_LINES,
   buildDeveloperReportMail,
   isDeveloperReportTestNote,
@@ -82,8 +83,11 @@ describe('developerReport(server): 報告本体の正規化', () => {
     expect(report.hasSnapshotPayload).toBe(true)
   })
 
-  it('種類は bug/request のみ、#テスト を含む内容はテスト扱い', () => {
+  it('種類は bug/request/question のみ、#テスト を含む内容はテスト扱い', () => {
     expect(normalizeDeveloperReportCategory('request')).toBe('request')
+    expect(normalizeDeveloperReportCategory('question')).toBe('question')
+    // クライアント側(src/utils/developerReport.ts)と二重管理。期待一覧を両方のテストに同じ形で固定する(ドリフト検知)。
+    expect([...DEVELOPER_REPORT_CATEGORIES]).toEqual(['bug', 'request', 'question'])
     expect(normalizeDeveloperReportCategory('zzz')).toBe('bug')
     expect(isDeveloperReportTestNote('#テスト 動作確認')).toBe(true)
     expect(isDeveloperReportTestNote('確認 #TEST')).toBe(true)
@@ -155,6 +159,20 @@ describe('developerReport(server): メール即時通知の本文', () => {
     expect(mail.text).toContain('workspaces/main/developerReports/r1')
     expect(mail.text).toContain('gsutil cp "gs://komahyouapp-prod.firebasestorage.app/developer-reports/main/KzFnOQoTFLsCxwUp1tvh/r1.json.gz"')
     expect(mail.text).not.toContain('【テスト】')
+  })
+
+  it('質問(question・2026-09-13)は件名に【質問】が付き、本文に「自動回答しない・承認した回答だけ返す」が載る', () => {
+    const mail = buildDeveloperReportMail({ ...base, category: 'question', note: '休みにした生徒の振替先を後から変えるには？' }, options)
+    expect(mail.subject).toBe('【質問】[コマ表アプリ 要望・報告] スクールIE 緑が丘校 / 使い方の質問: 休みにした生徒の振替先を後から変えるには？')
+    expect(mail.text).toContain('種類: 使い方の質問')
+    expect(mail.text).toContain('自動回答はしない')
+    expect(mail.text).toContain('承認したものだけ')
+    // 不具合/要望には質問向けの行は出ない(件名も【質問】なし)。
+    const bugMail = buildDeveloperReportMail({ ...base, category: 'bug' }, options)
+    expect(bugMail.subject.startsWith('[コマ表アプリ 要望・報告]')).toBe(true)
+    expect(bugMail.text).not.toContain('自動回答はしない')
+    // テスト送信の質問は【テスト】【質問】の順。
+    expect(buildDeveloperReportMail({ ...base, category: 'question', isTest: true }, options).subject.startsWith('【テスト】【質問】[コマ表アプリ 要望・報告]')).toBe(true)
   })
 
   it('#テスト の報告は件名・本文にテスト扱いを明示し、内容なし・教室データなしでも成立する', () => {

@@ -20,8 +20,8 @@ export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_KEY_LIMIT = 12
 export const DEVELOPER_REPORT_SCHEDULE_CONTEXT_VALUE_LIMIT = 200
 export const DEVELOPER_REPORT_SOURCES = ['board', 'schedule'] as const
 export type DeveloperReportSource = (typeof DEVELOPER_REPORT_SOURCES)[number]
-/** 種類: 不具合・おかしい(bug) / 追加要望(request)。クライアント src/utils/developerReport.ts と二重管理。 */
-export const DEVELOPER_REPORT_CATEGORIES = ['bug', 'request'] as const
+/** 種類: 不具合・おかしい(bug) / 追加要望(request) / 使い方の質問(question・2026-09-13)。クライアント src/utils/developerReport.ts と二重管理。 */
+export const DEVELOPER_REPORT_CATEGORIES = ['bug', 'request', 'question'] as const
 export type DeveloperReportCategory = (typeof DEVELOPER_REPORT_CATEGORIES)[number]
 /** テスト扱いの目印。内容に含まれていれば Issue 起票をしない(メールは【テスト】付きで送る)。 */
 export const DEVELOPER_REPORT_TEST_MARKER = '#テスト'
@@ -215,7 +215,7 @@ export type DeveloperReportMailSource = {
 }
 
 const SOURCE_LABELS: Record<string, string> = { board: 'コマ表(盤面)', schedule: '日程表(別タブ)' }
-const CATEGORY_LABELS: Record<string, string> = { bug: '不具合・おかしい', request: '追加してほしい・要望' }
+const CATEGORY_LABELS: Record<string, string> = { bug: '不具合・おかしい', request: '追加してほしい・要望', question: '使い方の質問' }
 /** メールに載せる操作痕跡の件数(新しい方から)。全件は Firestore 文書で読む。 */
 export const DEVELOPER_REPORT_MAIL_TRACE_LINES = 60
 
@@ -231,7 +231,8 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
   const classroom = report.classroomName || report.classroomId || '教室不明'
   const category = CATEGORY_LABELS[report.category ?? ''] ?? report.category ?? '(不明)'
   const noteHead = (report.note ?? '').split('\n')[0].trim()
-  const subject = `${report.isTest ? '【テスト】' : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
+  // 質問(2026-09-13)は件名に【質問】を付けて、不具合/要望と受信箱で見分けられるようにする(流れは同じ: ストック→メール→後で対応)。
+  const subject = `${report.isTest ? '【テスト】' : ''}${report.category === 'question' ? '【質問】' : ''}[コマ表アプリ 要望・報告] ${classroom} / ${category}${noteHead ? `: ${noteHead.slice(0, 40)}${noteHead.length > 40 ? '…' : ''}` : ''}`
   const docPath = `workspaces/${options.workspaceKey}/developerReports/${report.reportId}`
   const consoleUrl = `https://console.firebase.google.com/project/${options.projectId}/firestore/databases/-default-/data/~2F${encodeURIComponent(docPath).replace(/%2F/g, '~2F')}`
   const contextLines = Object.entries(report.scheduleContext ?? {})
@@ -257,6 +258,9 @@ export function buildDeveloperReportMail(report: DeveloperReportMailSource, opti
     '',
     '■ 進め方(オーナー指示 2026-09-04)',
     '勝手に修正を始めない。切り分け・整理までにとどめ、修正の着手は開発者(オーナー)が確認して許可してから。',
+    ...(report.category === 'question'
+      ? ['質問(2026-09-13): 利用者への自動回答はしない。回答は開発者が内容を確認・承認したものだけを返す(返答の仕組みは docs/spec-developer-report.md §G)。']
+      : []),
     '',
     `■ 直近の操作痕跡(新しい方から ${shownOperations.length} 件 / 全 ${report.recentOperationCount ?? operations.length} 件は Firestore 文書で)`,
     ...(shownOperations.length > 0

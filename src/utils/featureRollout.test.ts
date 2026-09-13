@@ -78,12 +78,14 @@ describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのま�
 })
 
 describe('featureRollout: boardPrintSelection（盤面PDFのコマ選択）', () => {
-  it('開発用教室のみ先行（本番3教室は従来どおりモーダルなしの即出力）', () => {
-    expect(featureRolloutRegistry.boardPrintSelection.scope).toBe('development-only')
+  it('全教室で有効（開発用教室で先行検証後に昇格・戻さない）', () => {
+    // 開発用教室で先行検証後、オーナー指示(2026-09-13)で全教室へ昇格。回帰で development-only へ戻さない
+    // (戻すと本番教室の「PDF出力」がコマ選択モーダルなしの即出力に退行する)。
+    expect(featureRolloutRegistry.boardPrintSelection.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'development', name: '開発用教室' })).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(false)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(false)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(false)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-1', name: 'スクールIE 日大前校' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-2', name: 'スクールIE 緑が丘校' })).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-3', name: 'スクールIE 薬円台校' })).toBe(true)
   })
 })
 

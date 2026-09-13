@@ -4466,8 +4466,14 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).toContain('>要望・報告</button>')
     expect(html).not.toContain('>開発者へ報告</button>')
     // 種類(不具合/要望)のラジオと #テスト の案内を盤面と同じ文言で埋め込む。
-    expect(html).toContain('"categoryOptions":[{"value":"bug","label":"不具合・おかしい"},{"value":"request","label":"追加してほしい・要望"}]')
+    // 使い方の質問(question)も盤面と同じ 3 択で埋め込む(2026-09-13)。
+    expect(html).toContain('"categoryOptions":[{"value":"bug","label":"不具合・おかしい"},{"value":"request","label":"追加してほしい・要望"},{"value":"question","label":"使い方の質問"}]')
     expect(html).toContain("name = 'schedule-developer-report-category'")
+    // 質問を選んだときだけ「すぐには返らない」注意文(盤面と同じ文言・spec §G-2)。既定(bug)では隠れている。
+    expect(html).toContain('"questionNotice":"回答は開発者が確認してからお返しします（すぐには返りません・自動返信はしません）。"')
+    expect(html).toContain("questionNotice.hidden = selectedCategory !== 'question';")
+    expect(html).toContain('modal.appendChild(questionNotice);')
+    expect(html).toContain('.developer-report-hint.developer-report-question-notice {')
     expect(html).toContain('category: selectedCategory,')
     expect(html).toContain('"testHint":"テスト送信のときは内容に「#テスト」と書いてください')
     // 入力のヒント(生徒名・日付・コマ・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04)。
@@ -4539,7 +4545,7 @@ describe('scheduleHtml 講習履歴', () => {
     expect(summaryIndex).toBeGreaterThan(0)
     // 「講習集計結果」の左(＝前)に出す(オーナー要望の並び)。
     expect(historyIndex).toBeLessThan(summaryIndex)
-    expect(html).toContain('>講習履歴</button>')
+    expect(html).toContain('>通常授業履歴</button>')
 
     // 講師日程表は台帳が生徒×科目なので対象外(ボタンを出さない)。
     write.mockClear()
@@ -4566,7 +4572,7 @@ describe('scheduleHtml 講習履歴', () => {
     openStudentScheduleHtml(baseParams(popup))
     const html = write.mock.calls[0]?.[0] as string
     expect(html).not.toContain('id="schedule-lesson-history-button"')
-    expect(html).not.toContain('>講習履歴</button>')
+    expect(html).not.toContain('>通常授業履歴</button>')
     expect(html).toContain('function openLessonHistoryOverlay()')
     expect(html).toContain('function clampLessonHistoryRange(fromValue, toValue)')
 
@@ -4640,6 +4646,44 @@ describe('scheduleHtml 講習履歴', () => {
     expect(api.countLessonHistoryDays(clamped.from, clamped.to)).toBe(366)
     // 逆転入力は入れ替える。
     expect(api.clampLessonHistoryRange('2026-09-12', '2026-09-01')).toEqual({ from: '2026-09-01', to: '2026-09-12', clamped: false })
+
+    vi.unstubAllGlobals()
+  })
+
+  it('開始日 > 終了日 は入れ替えずに理由を表示し、入力欄を書き換えない(確認リスト h-2・2026-09-12)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+
+    const match = html.match(/function resolveLessonHistoryRangeInputError\(fromValue, toValue\) \{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const resolveError = new Function('fromValue', 'toValue', match![1]) as (from: string, to: string) => string
+    expect(resolveError('2026-10-01', '2026-09-12')).toContain('開始日(2026-10-01)が終了日(2026-09-12)より後')
+    expect(resolveError('2026-09-01', '2026-09-12')).toBe('')
+    expect(resolveError('', '2026-09-12')).toBe('')
+    expect(resolveError('2026-09-12', '')).toBe('')
+
+    // 「表示」で要求する前にこの判定を通し、エラーなら送らない。
+    const requestBody = html.match(/function requestLessonHistory\(fromValue, toValue\) \{([\s\S]*?)\n {6}\}/)?.[1] ?? ''
+    expect(requestBody).toContain('const inputError = resolveLessonHistoryRangeInputError(fromValue, toValue);')
+    expect(requestBody.indexOf('inputError')).toBeLessThan(requestBody.indexOf("type: 'schedule-lesson-history-request'"))
+    // ⚠️ 入力欄への書き戻し(startField.value = range.from 等)を復活させると赤くなる(回帰防止)。
+    expect(requestBody).not.toContain('startField.value = range.from')
+    expect(requestBody).not.toContain('endField.value = range.to')
+    // 実際に表示している期間は注記に出す(入力欄は書き換えないので、ここが正本)。
+    expect(html).toContain("' / 表示期間: ' + rangeLabel")
+
+    vi.unstubAllGlobals()
+  })
+
+  it('ボタン名・見出し・印刷タイトルは「通常授業履歴」(確認リスト h-1・2026-09-12)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+    expect(html).toContain('>通常授業履歴</button>')
+    expect(html).toContain("title.textContent = '通常授業履歴'")
+    expect(html).toContain('<title>通常授業履歴</title>')
+    expect(html).not.toContain('>講習履歴</button>')
 
     vi.unstubAllGlobals()
   })
