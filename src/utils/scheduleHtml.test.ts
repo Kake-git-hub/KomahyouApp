@@ -4287,6 +4287,79 @@ describe('teacher schedule A4 layout adjustments', () => {
     expect(grandPos).toBeGreaterThan(secStart)
   })
 
+  // 給与の小計手入力(オーナー指示 2026-09-13): 手入力した小計が正、空欄なら単価×コマ数(日数)を表示。
+  it('salary subtotal: resolveSalaryRowSubtotal は手入力を優先し、空なら自動計算する', () => {
+    const html = renderTeacherHtml()
+    const match = html.match(/function resolveSalaryRowSubtotal\(countText, unitValue, isFixed, manualValue\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(match).toBeTruthy()
+    const resolve = new Function('countText', 'unitValue', 'isFixed', 'manualValue', match![1]) as (
+      countText: string, unitValue: string, isFixed: boolean, manualValue: string,
+    ) => { value: number; manual: boolean }
+    expect(resolve('3日', '1000', false, '')).toEqual({ value: 3000, manual: false })
+    expect(resolve('3日', '1000', false, '2500')).toEqual({ value: 2500, manual: true })
+    expect(resolve('3日', '1000', false, '12,000円')).toEqual({ value: 12000, manual: true })
+    expect(resolve('3日', '1000', false, '0')).toEqual({ value: 0, manual: true })
+    expect(resolve('3日', '1000', false, '  ')).toEqual({ value: 3000, manual: false })
+    expect(resolve('-', '5000', true, '')).toEqual({ value: 5000, manual: false })
+    expect(resolve('2', '', false, '')).toEqual({ value: 0, manual: false })
+  })
+
+  it('salary subtotal: 実DOMで 単価入力→小計に計算表示、小計手入力→合計はそちら、空にすると自動に戻る', async () => {
+    // jsdom は型定義を入れていないので、モジュール名を変数にして any として読み込む(型検査を通すため)。
+    const jsdomModuleName = 'jsdom'
+    const { JSDOM } = await import(/* @vite-ignore */ jsdomModuleName)
+    const html = renderTeacherHtml()
+    const pick = (name: string, params: string) => {
+      const start = html.indexOf('function ' + name + '(' + params + ') {')
+      const end = start < 0 ? -1 : html.indexOf('\n      }', start)
+      const m = start < 0 || end < 0 ? null : [html.slice(start, end + 8), html.slice(html.indexOf('{', start) + 1, end)]
+      expect(m).toBeTruthy()
+      return m![1]
+    }
+    const dom = new JSDOM('<!doctype html><body></body>')
+    const doc = dom.window.document
+    const renderBody = pick('renderSalarySection', 'salaryData')
+    const render = new Function('salaryData', 'escapeHtml', renderBody) as (d: unknown, e: (v: unknown) => string) => string
+    doc.body.innerHTML = render({ teacherId: 't-1', attendanceDays: 3, counts: { A90: 2 } }, (v) => String(v ?? ''))
+    const factory = new Function('document', 'getSharedStorage', 'STORAGE_SCOPE', 'BASE_VIEW_TYPE',
+      'function resolveSalaryRowSubtotal(countText, unitValue, isFixed, manualValue) {' + pick('resolveSalaryRowSubtotal', 'countText, unitValue, isFixed, manualValue') + '}\n' +
+      'function recalcSalary(changedElement) {' + pick('recalcSalary', 'changedElement') + '}\n' +
+      'function bindSalaryInputs() {' + pick('bindSalaryInputs', '') + '}\n' +
+      'return bindSalaryInputs;')
+    const bind = factory(doc, () => null, 'scope', 'teacher') as () => void
+    bind()
+    const q = (sel: string) => doc.querySelector(sel) as HTMLInputElement
+    const fire = (el: HTMLInputElement, value: string) => {
+      el.value = value
+      el.dispatchEvent(new dom.window.Event('input'))
+    }
+    const total = () => doc.querySelector('.salary-grand-total')!.textContent
+    const subA90 = q('[data-salary-sub-input="A90"]')
+    const subCommute = q('[data-salary-sub-input="commute"]')
+    // 単価未入力は小計・合計とも空
+    expect(subA90.value).toBe('')
+    // 空欄の小計には 単価×コマ数 を表示
+    fire(q('[data-salary-unit="A90"]'), '2000')
+    fire(q('[data-salary-unit="commute"]'), '500')
+    expect(subA90.value).toBe((4000).toLocaleString())
+    expect(subCommute.value).toBe((1500).toLocaleString())
+    expect(total()).toBe((5500).toLocaleString() + ' 円')
+    // 小計の手入力が正。単価を変えても手入力は上書きされない
+    fire(subCommute, '1000')
+    expect(subCommute.classList.contains('is-manual')).toBe(true)
+    expect(total()).toBe((5000).toLocaleString() + ' 円')
+    fire(q('[data-salary-unit="commute"]'), '900')
+    expect(subCommute.value).toBe('1000')
+    expect(total()).toBe((5000).toLocaleString() + ' 円')
+    // 空にすると自動計算へ戻る(900×3日)
+    fire(subCommute, '')
+    expect(subCommute.classList.contains('is-manual')).toBe(false)
+    expect(subCommute.value).toBe((2700).toLocaleString())
+    expect(total()).toBe((6700).toLocaleString() + ' 円')
+    // 小計は端末に記憶しない(data-salary-key を持たない)
+    expect(doc.querySelectorAll('.salary-subtotal-input[data-salary-key]').length).toBe(0)
+  })
+
   // 密度向上(A3飛び出し対策): 講師セルの状態ラベルは1文字'出'、科目/種別/状態は空白なしで詰める。
   it('density: compact attended label is 出 and teacher meta joins without spaces', () => {
     const html = renderTeacherHtml()

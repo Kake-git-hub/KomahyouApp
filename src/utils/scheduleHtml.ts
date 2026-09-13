@@ -2347,6 +2347,23 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         font-weight: 600;
         background: #fafafa;
       }
+      /* 小計は手入力できる(特別な事情の調整・オーナー指示 2026-09-13)。空欄なら単価×コマ数(日数)を表示し、
+         手入力した値は合計でそちらを正とする。手入力の小計は画面だけ薄い黄色で見分ける(印刷では色なし)。 */
+      .salary-subtotal-input {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+        border: 1px solid transparent;
+        background: transparent;
+        padding: 1px 2px;
+        font: inherit;
+        text-align: right;
+      }
+      .salary-subtotal-input:hover,
+      .salary-subtotal-input:focus { border-color: var(--line); background: #fff; }
+      .salary-subtotal-input.is-manual,
+      .salary-subtotal-input.is-manual:hover,
+      .salary-subtotal-input.is-manual:focus { background: #fff3b0; }
 
       /* 給与計算の行が多くA4横では見切れる講師ページは A3 縦へ自動切替して全行を表示する。
          A3縦は幅がA4横と同じ(297mm)なので週グリッドの横レイアウトは保ったまま縦だけ伸ばせる。 */
@@ -2682,6 +2699,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       @media print {
+        .salary-subtotal-input,
+        .salary-subtotal-input.is-manual { background: transparent !important; border-color: transparent !important; }
         *,
         *::before,
         *::after {
@@ -5262,11 +5281,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function renderSalarySection(salaryData) {
         var tid = escapeHtml(salaryData.teacherId);
         var counts = salaryData.counts || {};
+        // 小計セル。data-salary-key を持たせない＝端末に記憶しない(オーナー選択 2026-09-13: 開き直すと自動計算に戻る)。
+        function subtotalCell(cat) {
+          return '<td class="salary-subtotal" data-salary-sub="' + cat + '"><input class="salary-subtotal-input" type="text" inputmode="numeric" aria-label="小計" data-salary-sub-input="' + cat + '" /></td>';
+        }
         function lessonRow(cat, label) {
           var count = counts[cat] || 0;
           return '<tr><td class="salary-label">' + label + '</td><td class="salary-count" data-salary-cat="' + cat + '">' + count + '</td>' +
             '<td><input class="salary-input" type="number" min="0" data-salary-unit="' + cat + '" data-salary-key="salary-unit-' + cat + '-' + tid + '" /></td>' +
-            '<td class="salary-subtotal" data-salary-sub="' + cat + '">0</td></tr>';
+            subtotalCell(cat) + '</tr>';
         }
         var pairs = ['90-90', '90-60', '90-45', '60-60', '60-45', '45-45'];
         var lessonDefs = [];
@@ -5277,11 +5300,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         // spec-group-lesson §F: 集団授業の専用カテゴリ(1コマ単位・単価1種)。
         lessonDefs.push({ cat: 'G', label: '集団 (1コマ)' });
         var visible = lessonDefs.filter(function(d) { return (counts[d.cat] || 0) >= 1; });
-        var commuteRow = '<tr><td class="salary-label">交通費</td><td class="salary-count" data-salary-cat="commute">' + salaryData.attendanceDays + '日</td><td><input class="salary-input" type="number" min="0" data-salary-unit="commute" data-salary-key="salary-unit-commute-' + tid + '" /></td><td class="salary-subtotal" data-salary-sub="commute">0</td></tr>';
-        var officeRow = '<tr><td class="salary-label">事務給</td><td class="salary-count salary-count-fixed" data-salary-cat="office">-</td><td><input class="salary-input" type="number" min="0" data-salary-unit="office" data-salary-key="salary-unit-office-' + tid + '" data-salary-fixed="1" /></td><td class="salary-subtotal" data-salary-sub="office">0</td></tr>';
+        var commuteRow = '<tr><td class="salary-label">交通費</td><td class="salary-count" data-salary-cat="commute">' + salaryData.attendanceDays + '日</td><td><input class="salary-input" type="number" min="0" data-salary-unit="commute" data-salary-key="salary-unit-commute-' + tid + '" /></td>' + subtotalCell('commute') + '</tr>';
+        var officeRow = '<tr><td class="salary-label">事務給</td><td class="salary-count salary-count-fixed" data-salary-cat="office">-</td><td><input class="salary-input" type="number" min="0" data-salary-unit="office" data-salary-key="salary-unit-office-' + tid + '" data-salary-fixed="1" /></td>' + subtotalCell('office') + '</tr>';
         var totalRow = '<tr class="salary-total-row"><td class="salary-label">合計</td><td></td><td></td><td class="salary-grand-total">0</td></tr>';
         // Part3: 振替欄削除で空いた横幅を使い、給与のレッスン行を左右2列に振り分けて縦幅を節約する(常に2列)。
-        // 交通費/事務給/合計は下段に全幅で置く。合計は .salary-section 内の全 .salary-input を集計する
+        // 交通費/事務給/合計は下段に全幅で置く。合計は .salary-section 内の全小計(.salary-subtotal-input)を集計する
         // recalcSalary が担うため、テーブルを分割しても集計は不変(inputは data-salary-key で一意)。
         var salaryColgroup = '<colgroup><col class="salary-col-label"/><col class="salary-col-count"/><col class="salary-col-unit"/><col class="salary-col-sub"/></colgroup>';
         var half = Math.ceil(visible.length / 2);
@@ -6396,30 +6419,51 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             recalcSalary(element);
           });
         });
+        // 小計の手入力: 何か入っていれば手入力(合計ではこちらが正)、空にすると自動計算へ戻る。
+        document.querySelectorAll('.salary-subtotal-input').forEach(function(element) {
+          element.addEventListener('input', function() {
+            if (String(element.value || '').trim()) element.setAttribute('data-manual', '1');
+            else element.removeAttribute('data-manual');
+            recalcSalary(element);
+          });
+        });
+      }
+
+      // 給与の1行の小計を決める純関数。手入力(manualValue が空でない)なら手入力値が正。
+      // 空なら 事務給(isFixed)=単価そのまま / それ以外=単価×コマ数(日数)。
+      // 手入力は「12,000」「12000円」のような表記も受け、数字として読めなければ 0 として合計する。
+      function resolveSalaryRowSubtotal(countText, unitValue, isFixed, manualValue) {
+        // 埋め込みJS(テンプレートリテラル内)ではバックスラッシュ入りの正規表現を使わない。全角スペースは文字コードで除く。
+        var manualText = String(manualValue == null ? '' : manualValue).replace(/[,，円 ]/g, '').split(String.fromCharCode(12288)).join('').trim();
+        if (manualText) {
+          var manualNumber = parseInt(manualText, 10);
+          return { value: isFinite(manualNumber) ? manualNumber : 0, manual: true };
+        }
+        var unitPrice = parseInt(unitValue, 10) || 0;
+        var value = isFixed ? unitPrice : (parseInt(countText, 10) || 0) * unitPrice;
+        return { value: value, manual: false };
       }
 
       function recalcSalary(changedElement) {
         var section = changedElement.closest('.salary-section');
         if (!section) return;
         var grand = 0;
-        section.querySelectorAll('.salary-input[data-salary-key]').forEach(function(inp) {
-          var row = inp.closest('tr');
+        section.querySelectorAll('.salary-subtotal-input').forEach(function(subInput) {
+          var row = subInput.closest('tr');
           if (!row) return;
-          var subtotalCell = row.querySelector('.salary-subtotal');
-          if (!subtotalCell) return;
-          var unitPrice = parseInt(inp.value, 10) || 0;
-          var subtotal;
-          if (inp.getAttribute('data-salary-fixed') === '1') {
-            // 事務給: コマ数を考慮せず単価そのものを小計に
-            subtotal = unitPrice;
+          var unitInput = row.querySelector('.salary-input[data-salary-key]');
+          var countCell = row.querySelector('.salary-count');
+          var isFixed = Boolean(unitInput && unitInput.getAttribute('data-salary-fixed') === '1');
+          var isManual = subInput.getAttribute('data-manual') === '1';
+          var result = resolveSalaryRowSubtotal(countCell ? countCell.textContent : '', unitInput ? unitInput.value : '', isFixed, isManual ? subInput.value : '');
+          if (result.manual) {
+            subInput.classList.add('is-manual');
           } else {
-            var countCell = row.querySelector('.salary-count');
-            if (!countCell) return;
-            var count = parseInt(countCell.textContent, 10) || 0;
-            subtotal = count * unitPrice;
+            // 自動計算の表示。手入力中の欄は result.manual なので上書きしない。
+            subInput.classList.remove('is-manual');
+            subInput.value = result.value ? result.value.toLocaleString() : '';
           }
-          subtotalCell.textContent = subtotal ? subtotal.toLocaleString() : '';
-          grand += subtotal;
+          grand += result.value;
         });
         var totalCell = section.querySelector('.salary-grand-total');
         if (totalCell) totalCell.textContent = grand ? grand.toLocaleString() + ' 円' : '';
