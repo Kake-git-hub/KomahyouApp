@@ -1,5 +1,6 @@
 // 「要望・報告」モーダル(2026-09-04 オーナー指示)。
-// 内容は**必須**(空欄送信は不可)。種類(不具合・おかしい／追加要望)を選べる。送信内容の組み立てと送信は App 側。
+// 内容は**必須**(空欄送信は不可)。種類(不具合・おかしい／追加要望／使い方の質問)を選べる。質問を選んだときだけ
+// 「すぐには返らない」注意文を出す(spec-developer-report §G-2・2026-09-13)。送信内容の組み立てと送信は App 側。
 // 文言は日程表タブ側の同一モーダル(src/utils/scheduleHtml.ts)と共通化するため developerReport.ts の定数を使う。
 // このコンポーネントは入力と結果表示だけを担う。
 
@@ -69,6 +70,9 @@ export function DeveloperReportModal({ classroomName, sending, resultMessage, on
                 ))}
               </div>
             </fieldset>
+            {category === 'question' ? (
+              <p className="developer-report-hint developer-report-question-notice" role="note" data-testid="developer-report-question-notice">{DEVELOPER_REPORT_UI_TEXT.questionNotice}</p>
+            ) : null}
             <label className="developer-report-note-label" htmlFor="developer-report-note">{DEVELOPER_REPORT_UI_TEXT.noteLabel}</label>
             <textarea
               id="developer-report-note"

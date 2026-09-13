@@ -24,7 +24,7 @@ description: コマ表アプリのバグ報告・ユーザー要望を GitHub Is
 - `severity:s1` / `severity:s2` / `severity:s3`
 - `area:盤面` / `area:QR` / `area:自動割振` / `area:保存` / `area:集団` / `area:生徒日程表` / `area:その他`
 - `status:triage`（起票直後） → `status:in-progress` → `status:staging-verified` → close
-- `type:bug` / `type:feature`
+- `type:bug` / `type:feature` / `type:question`（利用者からの使い方の質問。「要望・報告」ボタンの種別 question 由来・2026-09-13）
 
 ## 起票
 ```bash

@@ -1289,6 +1289,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .developer-report-category-option.is-selected { border-color: #1a73e8; background: #e8f0fe; color: #16314f; font-weight: 600; }
       .developer-report-hint { margin: 0; color: #5b6f86; font-size: 14px; }
       .developer-report-hint-primary { color: #16314f; font-size: 16px; line-height: 1.6; padding: 10px 14px; border-radius: 12px; background: #f1f6ff; }
+      .developer-report-hint.developer-report-question-notice { color: #7a4a00; font-size: 15px; line-height: 1.6; padding: 10px 14px; border-radius: 12px; background: #fff4e5; }
+      .developer-report-hint.developer-report-question-notice[hidden] { display: none; }
       .developer-report-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
       .developer-report-actions button {
         border: none;
@@ -7054,6 +7056,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         descriptionNoClassroom: DEVELOPER_REPORT_UI_TEXT.description(''),
         categoryLabel: DEVELOPER_REPORT_UI_TEXT.categoryLabel,
         categoryOptions: DEVELOPER_REPORT_UI_TEXT.categoryOptions,
+        questionNotice: DEVELOPER_REPORT_UI_TEXT.questionNotice,
         inputHint: DEVELOPER_REPORT_UI_TEXT.inputHint,
         testHint: DEVELOPER_REPORT_UI_TEXT.testHint,
         noteLabel: DEVELOPER_REPORT_UI_TEXT.noteLabel,
@@ -7121,6 +7124,11 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const categoryOptions = document.createElement('div');
         categoryOptions.className = 'developer-report-category-options';
         let selectedCategory = 'bug';
+        // 質問(2026-09-13・spec §G-2): 選んだときだけ「すぐには返らない」注意文を出す(即答の期待を作らない)。盤面モーダルと同じ文言。
+        const questionNotice = document.createElement('p');
+        questionNotice.className = 'developer-report-hint developer-report-question-notice';
+        questionNotice.textContent = DEVELOPER_REPORT_TEXT.questionNotice;
+        questionNotice.hidden = selectedCategory !== 'question';
         const categoryLabels = [];
         DEVELOPER_REPORT_TEXT.categoryOptions.forEach(function(option) {
           const optionLabel = document.createElement('label');
@@ -7133,6 +7141,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           radio.addEventListener('change', function() {
             if (!radio.checked) return;
             selectedCategory = option.value;
+            questionNotice.hidden = selectedCategory !== 'question';
             categoryLabels.forEach(function(item) { item.label.classList.toggle('is-selected', item.value === selectedCategory); });
           });
           const optionText = document.createElement('span');
@@ -7179,6 +7188,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         modal.appendChild(title);
         modal.appendChild(description);
         modal.appendChild(categoryField);
+        modal.appendChild(questionNotice);
         modal.appendChild(label);
         modal.appendChild(textarea);
         modal.appendChild(error);
