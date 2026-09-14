@@ -1336,6 +1336,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       .lesson-history-controls { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
       .lesson-history-control { display: grid; gap: 4px; font-size: 14px; color: #36506d; }
       .lesson-history-control input[type="date"] { font: inherit; font-size: 16px; padding: 6px 10px; border: 1px solid #c7d3e3; border-radius: 10px; }
+      .lesson-history-controls .lesson-history-primary { border: none; border-radius: 10px; padding: 8px 20px; font: inherit; font-size: 16px; background: #1a73e8; color: #fff; cursor: pointer; }
       .lesson-history-types { display: flex; gap: 10px; flex-wrap: wrap; }
       .lesson-history-type { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px solid #c7d3e3; border-radius: 10px; font-size: 14px; color: #36506d; background: #f8fafd; cursor: pointer; }
       .lesson-history-note { margin: 0; color: #5b6f86; font-size: 14px; line-height: 1.6; }
@@ -7342,9 +7343,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return { from: from, to: to, clamped: false };
       }
 
-      function buildLessonHistoryDefaultRange() {
-        const to = toDateKey(new Date());
-        return clampLessonHistoryRange(shiftLessonHistoryDateKey(to, -(LESSON_HISTORY_MAX_DAYS - 1)), to);
+      // 既定の期間は「今月の1日〜末日」(確認リスト その他 2026-09-14 オーナー指示。旧: 今日から1年分)。
+      function buildLessonHistoryDefaultRange(now) {
+        const base = now instanceof Date && !isNaN(now.getTime()) ? now : new Date();
+        const first = new Date(base.getFullYear(), base.getMonth(), 1);
+        const last = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+        return { from: toDateKey(first), to: toDateKey(last), clamped: false };
       }
 
       function formatLessonHistoryWeekday(dateKey) {
@@ -7572,7 +7576,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         title.textContent = '通常授業履歴' + (personOption && personOption.textContent ? ' — ' + personOption.textContent : '');
         const controls = document.createElement('div');
         controls.className = 'lesson-history-controls';
-        const defaultRange = buildLessonHistoryDefaultRange();
+        const defaultRange = buildLessonHistoryDefaultRange(new Date());
         const startControl = document.createElement('label');
         startControl.className = 'lesson-history-control';
         const startText = document.createElement('span');
@@ -7598,6 +7602,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         reloadButton.className = 'lesson-history-primary';
         reloadButton.textContent = '表示';
         reloadButton.addEventListener('click', function() { requestLessonHistory(startField.value, endField.value); });
+        // 期間を変えたら「表示」を押さなくても、その期間で読み直す(確認リスト その他 2026-09-14「設定した範囲を表示して」)。
+        // 以前は「表示」を押すまで前の期間(既定の1年分)の結果が残り、範囲設定が効いていないように見えた。
+        // 入力途中の連続変更で要求を連打しないよう少し待つ(古い応答は requestId 照合で捨てる)。
+        let lessonHistoryRangeChangeTimer = 0;
+        const scheduleLessonHistoryRangeReload = function() {
+          if (lessonHistoryRangeChangeTimer) window.clearTimeout(lessonHistoryRangeChangeTimer);
+          lessonHistoryRangeChangeTimer = window.setTimeout(function() {
+            lessonHistoryRangeChangeTimer = 0;
+            if (!lessonHistoryOverlay) return;
+            requestLessonHistory(startField.value, endField.value);
+          }, 400);
+        };
+        startField.addEventListener('change', scheduleLessonHistoryRangeReload);
+        endField.addEventListener('change', scheduleLessonHistoryRangeReload);
         const typesControl = document.createElement('div');
         typesControl.className = 'lesson-history-control';
         const typesText = document.createElement('span');

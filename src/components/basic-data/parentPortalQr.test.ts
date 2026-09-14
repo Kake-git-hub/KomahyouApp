@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from './basicDataModel'
-import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, resolveParentPortalQrRowState } from './parentPortalQr'
+import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, resolveParentPortalQrRowState, resolveSavedStudentIds } from './parentPortalQr'
 
 const DEV_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
 const REFERENCE_DATE = '2026-09-13'
@@ -19,6 +19,38 @@ function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
 }
 
 const enabledParams = { referenceDate: REFERENCE_DATE, enabled: true, remoteEnabled: true, classroomId: DEV_CLASSROOM_ID }
+
+describe('保存前の生徒は QR を保存待ちにする(確認リスト その他 2026-09-13)', () => {
+  it('発行が要る生徒が保存済みデータに居なければ pending-save、居れば issue', () => {
+    expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: new Set(['s999']), student: createStudent() })).toBe('pending-save')
+    expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: new Set(['s001']), student: createStudent() })).toBe('issue')
+    // 保存状態が未確定(null)なら従来どおり。
+    expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: null, student: createStudent() })).toBe('issue')
+    // 他教室の写しトークン(発行が要る)も保存前なら待たせる。
+    expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: new Set(), student: createStudent({ parentPortalToken: 'tok' }) })).toBe('pending-save')
+  })
+
+  it('発行済み(show)・非表示(hidden)の判定は保存状態に左右されない', () => {
+    const shown = createStudent({ parentPortalToken: 'tok', parentPortalTokenClassroomId: DEV_CLASSROOM_ID })
+    expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: new Set(), student: shown })).toBe('show')
+    expect(resolveParentPortalQrRowState({ ...enabledParams, enabled: false, savedStudentIds: new Set(), student: createStudent() })).toBe('hidden')
+    expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: new Set(), student: createStudent({ withdrawDate: '2026-09-12' }) })).toBe('hidden')
+  })
+
+  it('resolveSavedStudentIds: 未保存の変更があるあいだは直前の保存済み集合を保ち、保存が終わったら現在の名簿で作り直す', () => {
+    const students = [{ id: 's001' }, { id: 's002' }]
+    expect(resolveSavedStudentIds({ hydrated: false, isClean: true, students, previous: null })).toBeNull()
+    const saved = resolveSavedStudentIds({ hydrated: true, isClean: true, students, previous: null })!
+    expect([...saved].sort()).toEqual(['s001', 's002'])
+    // 生徒を追加した(未保存) → 追加した生徒は含めない。
+    const added = [...students, { id: 's003' }]
+    expect(resolveSavedStudentIds({ hydrated: true, isClean: false, students: added, previous: saved })).toBe(saved)
+    // 保存が終わった → 含める。
+    expect(resolveSavedStudentIds({ hydrated: true, isClean: true, students: added, previous: saved })!.has('s003')).toBe(true)
+    // 中身が同じなら同じ参照(再描画を増やさない)。
+    expect(resolveSavedStudentIds({ hydrated: true, isClean: true, students: [{ id: 's002' }, { id: 's001' }], previous: saved })).toBe(saved)
+  })
+})
 
 describe('resolveParentPortalQrRowState (spec-parent-portal §K-6)', () => {
   it('在籍中で未発行なら issue、発行元教室が一致する写しがあれば show', () => {

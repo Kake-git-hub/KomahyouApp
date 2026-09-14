@@ -436,6 +436,29 @@ describe('buildParentScheduleView K-3: 休み・振替・出欠', () => {
     expect(summarize(dayOf(view, '2026-09-29'))).toEqual(['5:数:makeup'])
   })
 
+  it('振替コマには振替元(日付＋元コマ)が付く。出席済みにした振替も同じ。通常授業・休みには付かない(確認リスト その他 2026-09-14)', () => {
+    const view = buildView('s001')
+    // 配置の振替(studentSlots)。
+    expect(dayOf(view, '2026-09-29').lessons[0].makeupOrigin).toEqual({ dateKey: '2026-09-21', slotNumber: 1 })
+    // 振替を出席にした(statusSlots の attended・lessonType=makeup)。
+    const attendedMakeup = dayOf(view, '2026-09-10').lessons.find((lesson) => lesson.subject === '理')
+    expect(attendedMakeup?.makeupOrigin).toEqual({ dateKey: '2026-09-09', slotNumber: 1 })
+    // 通常授業・休み・通常授業の出席には付けない(キー自体を持たない)。
+    expect('makeupOrigin' in dayOf(view, '2026-09-14').lessons[0]).toBe(false)
+    expect('makeupOrigin' in dayOf(view, '2026-09-09').lessons[0]).toBe(false)
+    expect('makeupOrigin' in dayOf(view, '2026-09-10').lessons.find((lesson) => lesson.subject === '英')!).toBe(false)
+  })
+
+  it('振替元のラベルから元コマが読めないときは slotNumber=null、振替元が同じ日なら付けない', () => {
+    const payload = clonePayload()
+    const week = payload.boardState!.weeks[2]
+    const student = findCell(week, '2026-09-29', 5).desks[0].lesson!.studentSlots[0]!
+    student.makeupSourceLabel = '2026/9/21(月)'
+    expect(dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-29').lessons[0].makeupOrigin).toEqual({ dateKey: '2026-09-21', slotNumber: null })
+    student.makeupSourceDate = '2026-09-29'
+    expect('makeupOrigin' in dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-29').lessons[0]).toBe(false)
+  })
+
   it('moved の行は出ない(移動先だけが 1 回出る=同じ授業が 2 回出ない)', () => {
     const view = buildView('s001')
     expect(summarize(dayOf(view, '2026-09-14'))).toEqual(['1:数:regular'])
@@ -570,6 +593,7 @@ describe('buildParentScheduleView K-3: 出力に載せない情報', () => {
       for (const lesson of day.lessons) {
         const expected = ['isTentative', 'kind', 'slotNumber', 'subject', 'timeLabel']
         if (lesson.kind === 'absent') expected.push('makeupDestination')
+        if (lesson.makeupOrigin) expected.push('makeupOrigin')
         expect(Object.keys(lesson).sort()).toEqual(expected.sort())
       }
     }

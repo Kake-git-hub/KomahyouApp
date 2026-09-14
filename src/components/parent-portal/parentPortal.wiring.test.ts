@@ -25,6 +25,12 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     expect(APP_TSX).toContain("from './utils/parentMessages'")
   })
 
+  it('保存済みの生徒 id を基本データ画面へ渡す(追加直後の生徒の QR を保存待ちにする・2026-09-13)', () => {
+    expect(APP_TSX).toContain("import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'")
+    expect(APP_TSX).toContain('isClean: dataSignature === cleanSignature,')
+    expect(APP_TSX).toContain('savedStudentIds={savedStudentIds}')
+  })
+
   it('フラグはリモート有効 ＋ parentPortalQr の両方で判定する(ローカル/本番教室では無効)', () => {
     expect(APP_TSX).toContain("isRemoteBackendEnabled && isFeatureEnabledForClassroom('parentPortalQr', actingClassroom)")
   })

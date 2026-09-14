@@ -59,7 +59,7 @@ import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperation
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
-import { buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
+import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
   compressBackupJson,
   GOOGLE_DRIVE_BACKUP_COMPRESSED_SUFFIX,
@@ -1771,6 +1771,16 @@ export const getStudentLessonHistory = onCall({ invoker: 'public', timeoutSecond
           .collection('classroomSnapshots').doc(classroomId)
           .collection('lessonLedgerDays')
         const snapshot = await buildLatestLedgerQuery(collection, to).get()
+        const doc = snapshot.docs.find((candidate) => isLessonHistoryDateKey(candidate.id))
+        return doc ? ({ ...(doc.data() as LessonLedgerDayDocLike), dateKey: doc.id }) : null
+      },
+      loadEarliestLedgerDocAfter: async ({ workspaceKey, classroomId, to }) => {
+        // to 以前の台帳が無い(記録開始より前の期間)ときだけ呼ばれる。読み取りのみ。
+        const collection = firestore
+          .collection('workspaces').doc(workspaceKey)
+          .collection('classroomSnapshots').doc(classroomId)
+          .collection('lessonLedgerDays')
+        const snapshot = await buildEarliestLedgerAfterQuery(collection, to).get()
         const doc = snapshot.docs.find((candidate) => isLessonHistoryDateKey(candidate.id))
         return doc ? ({ ...(doc.data() as LessonLedgerDayDocLike), dateKey: doc.id }) : null
       },

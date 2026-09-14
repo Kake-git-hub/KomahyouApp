@@ -9,7 +9,7 @@
 import { isActiveOnDate, type StudentRow } from './basicDataModel'
 import { isParentPortalTokenOwnedByClassroom } from '../../utils/developmentClassroom'
 
-export type ParentPortalQrRowState = 'hidden' | 'issue' | 'show'
+export type ParentPortalQrRowState = 'hidden' | 'issue' | 'show' | 'pending-save'
 
 export const PARENT_PORTAL_QR_TEXT = {
   title: '保護者用QR',
@@ -24,25 +24,50 @@ export const PARENT_PORTAL_QR_TEXT = {
   issueFailed: '保護者用QRの発行に失敗しました。',
   urlUnavailable: '保護者用URLを作成できません。',
   printBlocked: '印刷ウィンドウを開けませんでした。ポップアップのブロックを解除してください。',
+  /** 追加したばかりでまだ保存されていない生徒(サーバーの名簿に居ないので発行できない)。 */
+  pendingSave: 'データの保存が終わるとQRを発行できます。',
 } as const
 
 // 行操作に「QR」ボタンを出すか。
 //   hidden: フラグ OFF／リモート(Cloud Functions)無し／非在籍(入塾前・退塾後・高3卒業後)
 //   show  : 発行元教室が一致する写しトークンがある(押すと表示)
 //   issue : 未発行 or 他教室のトークン(押すと getOrIssue で発行して表示)
+//   pending-save: 発行が要るが、その生徒がまだ保存済みデータに居ない(押せない・保存中のスピナーを出す)
+//     ★ 確認リスト その他(2026-09-13): 生徒を追加してすぐ押すと、サーバーの名簿(保存済みスナップショット)に
+//       まだ居ないので発行が失敗していた(requireParentPortalStudentExists)。保存が終わるまで待たせる。
+//       savedStudentIds が null(保存状態が未確定)のときは従来どおり判定しない。
 export function resolveParentPortalQrRowState(params: {
   student: StudentRow
   referenceDate: string
   enabled: boolean
   remoteEnabled: boolean
   classroomId?: string | null
+  savedStudentIds?: ReadonlySet<string> | null
 }): ParentPortalQrRowState {
-  const { student, referenceDate, enabled, remoteEnabled, classroomId } = params
+  const { student, referenceDate, enabled, remoteEnabled, classroomId, savedStudentIds } = params
   if (!enabled || !remoteEnabled) return 'hidden'
   if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, referenceDate)) return 'hidden'
-  if (!student.parentPortalToken) return 'issue'
-  if (classroomId && !isParentPortalTokenOwnedByClassroom(student, classroomId)) return 'issue'
-  return 'show'
+  const needsIssue = !student.parentPortalToken || Boolean(classroomId && !isParentPortalTokenOwnedByClassroom(student, classroomId))
+  if (!needsIssue) return 'show'
+  if (savedStudentIds && !savedStudentIds.has(student.id)) return 'pending-save'
+  return 'issue'
+}
+
+// 保存済みデータに含まれる生徒 id。未保存の変更が無い(データ署名 = 保存済み署名)ときだけ現在の名簿から作り直し、
+// 未保存の変更があるあいだは直前の保存済み集合を保つ(追加したばかりの生徒を含めない)。
+// 読み込み前(hydrated=false)は null(=判定しない)。前回と同じ中身なら同じ参照を返す(再描画を増やさない)。
+export function resolveSavedStudentIds(params: {
+  hydrated: boolean
+  isClean: boolean
+  students: readonly Pick<StudentRow, 'id'>[]
+  previous: ReadonlySet<string> | null
+}): ReadonlySet<string> | null {
+  if (!params.hydrated) return null
+  if (!params.isClean) return params.previous
+  const next = new Set(params.students.map((student) => student.id))
+  const previous = params.previous
+  if (previous && previous.size === next.size && [...next].every((id) => previous.has(id))) return previous
+  return next
 }
 
 function escapeHtml(value: string): string {

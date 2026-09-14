@@ -53,6 +53,8 @@ type BasicDataScreenProps = {
   classroomName?: string
   // フラグ parentPortalQr(featureRollout)の評価結果。OFF の教室では QR ボタン・モーダルを一切出さない(§H)。
   parentPortalQrEnabled?: boolean
+  // 保存済みデータに居る生徒 id(App が保存完了のたびに更新)。居ない生徒の QR は保存待ちのスピナーにする。null=判定しない。
+  savedStudentIds?: ReadonlySet<string> | null
   // callable issueStudentPortalToken の薄い wrapper(App が workspaceKey を注入)。未指定=リモート無し(QR 非表示)。
   onIssueParentPortalToken?: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
   // 生徒削除の確定時に best-effort で失効させる(§B-2 revokedReason='studentDeleted')。
@@ -899,7 +901,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
@@ -1531,9 +1533,20 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                     <div className="basic-data-row-actions">
                       <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
                       {/* 保護者用QR: 在籍タブ・フラグ ON・リモート有り・在籍中(isActiveOnDate)の生徒だけ(spec-parent-portal.md §K-6)。 */}
-                      {studentRosterView === 'active' && resolveParentPortalQrRowState({ student: row, referenceDate: todayReferenceDate, enabled: parentPortalQrEnabled, remoteEnabled: Boolean(onIssueParentPortalToken), classroomId }) !== 'hidden' ? (
-                        <button className="secondary-button slim" type="button" onClick={() => { void openParentPortalQr(row) }} title={PARENT_PORTAL_QR_TEXT.title} data-testid={`basic-data-student-qr-${row.id}`}>{PARENT_PORTAL_QR_TEXT.buttonLabel}</button>
-                      ) : null}
+                      {(() => {
+                        if (studentRosterView !== 'active') return null
+                        const qrState = resolveParentPortalQrRowState({ student: row, referenceDate: todayReferenceDate, enabled: parentPortalQrEnabled, remoteEnabled: Boolean(onIssueParentPortalToken), classroomId, savedStudentIds })
+                        if (qrState === 'hidden') return null
+                        if (qrState === 'pending-save') {
+                          // 追加直後でまだ保存されていない生徒は発行できない(サーバーの名簿に居ない)。保存が終わるまでスピナー。
+                          return (
+                            <button className="secondary-button slim" type="button" disabled aria-busy="true" title={PARENT_PORTAL_QR_TEXT.pendingSave} data-testid={`basic-data-student-qr-pending-${row.id}`}>
+                              <span className="button-spinner" aria-hidden="true" />{PARENT_PORTAL_QR_TEXT.buttonLabel}
+                            </button>
+                          )
+                        }
+                        return <button className="secondary-button slim" type="button" onClick={() => { void openParentPortalQr(row) }} title={PARENT_PORTAL_QR_TEXT.title} data-testid={`basic-data-student-qr-${row.id}`}>{PARENT_PORTAL_QR_TEXT.buttonLabel}</button>
+                      })()}
                       {/* 生徒は削除せず退塾(押した日を退塾日に記録・データは残る)。在籍中かつ今日付けの退塾日が未設定のときだけ出す。 */}
                       {canWithdrawStudentToday(row, todayReferenceDate) ? (
                         <button className="secondary-button slim" type="button" onClick={() => openStudentWithdraw(row.id)} data-testid={`basic-data-withdraw-student-${row.id}`}>退塾</button>

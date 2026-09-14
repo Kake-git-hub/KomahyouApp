@@ -55,9 +55,11 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第8版: 前回 OK だった項目は載せず、第7版で要改善だった k-4 の再確認だけ(オーナー指摘 2026-09-12 の運用)', () => {
+  it('第9版: 前回 OK だった項目は載せず、その他欄の要望 5 件の確認だけ(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['k-4'])
+    expect(ids).toEqual(['k-10', 'k-11', 'k-12', 'h-9', 'b-1'])
+    // 第8版で k-4 は OK。
+    expect(ids).not.toContain('k-4')
     // 第7版で k-5(月の移動)は OK。
     expect(ids).not.toContain('k-5')
     // v1.5.504〜v1.5.509 で OK だった項目(Issue #63〜#66)が残っていない。p-3 / p-12 は Issue #66 で OK。
@@ -68,14 +70,14 @@ describe('確認リストの項目定義', () => {
     for (const okId of ['k-1', 'k-2', 'k-3', 'k-6', 'k-7', 'k-8', 'k-9']) {
       expect(ids, okId).not.toContain(okId)
     }
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.519')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.521')
   })
 })
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.519')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.519')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.521')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.521')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -147,7 +149,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.519]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.521]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {

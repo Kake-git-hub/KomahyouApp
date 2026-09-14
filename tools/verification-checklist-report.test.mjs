@@ -125,6 +125,26 @@ describe('parseChecklistBody', () => {
   })
 })
 
+describe('parseChecklistBody: アプリが送る「- その他: …」1 行形式(回帰防止 2026-09-14)', () => {
+  it('結果行と区別して その他 のメモとして拾う(以前は黙って落ちていた)', () => {
+    const body = ['- k-4 OK', '- その他: QRボタンはローディングスピンにして / 2つ目の要望'].join('\n')
+    const { items, otherNotes } = parseChecklistBody(body)
+    expect(items).toEqual([{ itemId: 'k-4', result: 'ok', memo: '' }])
+    expect(otherNotes).toBe('QRボタンはローディングスピンにして / 2つ目の要望')
+  })
+
+  it('アプリの送信本文(buildVerificationChecklistReportNotes)をそのまま読める', async () => {
+    const lib = await import('../src/utils/verificationChecklist.ts')
+    const item = { id: 'x-1', area: 'A', title: 't', steps: ['s'], introducedIn: 'v1.5.0' }
+    const draft = { ...lib.createEmptyVerificationChecklistDraft('v1.5.0'), entries: { 'x-1': { status: 'ok', memo: '' } }, otherNotes: 'ボタンの位置を左へ' }
+    const notes = lib.buildVerificationChecklistReportNotes(draft, { items: [item] })
+    expect(notes).toHaveLength(1)
+    const body = notes[0].split('\n').slice(1).join('\n')
+    expect(parseChecklistBody(body).items).toEqual([{ itemId: 'x-1', result: 'ok', memo: '' }])
+    expect(parseChecklistBody(body).otherNotes).toBe('ボタンの位置を左へ')
+  })
+})
+
 describe('summarizeChecklistResults', () => {
   it('項目 id ごとに最新結果だけを残す(後勝ち)', () => {
     const merged = [
