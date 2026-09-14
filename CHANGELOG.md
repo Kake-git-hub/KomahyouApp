@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.523 (2026-09-14)
 - feat: 「要望・報告」ボタンを「質問・要望」へ改名し、種類の並びを 質問 → 要望 → 不具合（開いたときの既定は質問）に変更。「#テスト と書いてください」の案内文を削除（テスト判定自体は残す）。盤面・日程表タブで同一（オーナー指示 2026-09-14・developerReport.ts / DeveloperReportModal.tsx / BoardToolbar.tsx / scheduleHtml.ts・spec-developer-report §B）
 - feat: 質問への AI 即時回答を**開発用教室だけ**試験実装。質問を送ると記録・通知は従来どおり行ったうえで、利用者マニュアル＋質問文＋直近操作を Claude Sonnet 最新へ渡し、結果画面に「AI の自動回答（試験中）」を表示。API キー（functions env `ANTHROPIC_API_KEY`）未設定なら AI を呼ばず理由だけ出す。featureRollout `questionAiAnswer`＝development-only（functions/src/questionAiAnswer.ts・sync-shared でマニュアルを同梱・spec-developer-report §G-7）
 
