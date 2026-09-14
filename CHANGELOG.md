@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.522 (2026-09-14)
+- feat: 未消化のまま退塾した生徒が「未消化講習／未消化振替」の一覧に残り続けていたので、**退塾済み(退塾日の翌日以降・高3卒業後)の生徒を一覧とツールバーのバッジ数から外した**(オーナー指示)。表示だけの絞り込みで在庫・台帳・保存データは変えない(退塾日を消せば再表示)。入塾前の生徒・名簿に居ない生徒は従来どおり表示。削除確認の残数警告と自動割振は絞り込み前の一覧のまま。回帰テスト: 退塾/当日/卒業/入塾前/ID無しの判定と配線(schedule-board/lectureStock.ts `excludeWithdrawnStudentStockEntries`, ScheduleBoardScreen.tsx, lectureStockWithdrawnVisibility.test.ts)
+
 ## v1.5.521 (2026-09-14)
 - fix: 確認リストの読み取りツールが、アプリの送る「- その他: …」行を読めず**その他欄の要望を黙って落としていた**(v1.5.512/v1.5.518 のその他要望が未対応のまま残った真因)。1 行形式も拾うようにし、アプリの送信本文をそのまま読む回帰テストを追加(修正を外すと2件落ちる)(tools/verification-checklist-report.lib.mjs)
 - feat: 保護者QRページの日程を**1コマ1行**の一覧にしてスクロール量を減らした(日付は同じ日の先頭行だけ・時限と開始時刻・テンプレ由来は「予定」印)。純関数 `buildParentScheduleRows` に切り出してテスト(確認リスト その他 2026-09-14・第9版 k-10)(parent-portal/parentPortalPageModel.ts・ParentPortalPage.tsx)

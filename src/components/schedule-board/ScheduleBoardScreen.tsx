@@ -22,6 +22,7 @@ import {
   buildLecturePendingItemsByEntryKey,
   parseLectureStockKey,
   sumLectureStockRequestedCount,
+  excludeWithdrawnStudentStockEntries,
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
@@ -6214,9 +6215,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       })
   }, [currentGradeReferenceDate, rawMakeupStockEntries, students])
 
+  // 一覧・バッジ用: 退塾済み生徒を表示から外す(データは残す)。詳細は excludeWithdrawnStudentStockEntries。
+  const visibleMakeupStockEntries = useMemo(
+    () => excludeWithdrawnStudentStockEntries(makeupStockEntries, students, currentGradeReferenceDate),
+    [currentGradeReferenceDate, makeupStockEntries, students],
+  )
+
   const makeupStockTotalCount = useMemo(
-    () => makeupStockEntries.reduce((total, entry) => total + Math.max(0, entry.balance), 0),
-    [makeupStockEntries],
+    () => visibleMakeupStockEntries.reduce((total, entry) => total + Math.max(0, entry.balance), 0),
+    [visibleMakeupStockEntries],
   )
 
   // 残数計算本体は純関数へ切り出し（spec-lecture-stock データモデル・ゴールデンは lecturePendingItems.test.ts）
@@ -6287,9 +6294,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   // 手動テスト No.119(2026-08-29): 「未消化講習」バッジを行数(entries.length)から未消化コマ数の合計へ。
   // 「未消化振替」バッジ(makeupStockTotalCount=balance 合計=コマ数)と単位を揃える。詳細は sumLectureStockRequestedCount。
+  const visibleLectureStockEntries = useMemo(
+    () => excludeWithdrawnStudentStockEntries(lectureStockEntries, students, currentGradeReferenceDate),
+    [currentGradeReferenceDate, lectureStockEntries, students],
+  )
   const lectureStockTotalCount = useMemo(
-    () => sumLectureStockRequestedCount(lectureStockEntries),
-    [lectureStockEntries],
+    () => sumLectureStockRequestedCount(visibleLectureStockEntries),
+    [visibleLectureStockEntries],
   )
 
   // 未消化の講習/振替が残る生徒ID→残数を親(App)へ持ち上げる（盤面の残数と一致させるため盤面側で算出）。
@@ -12019,10 +12030,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 <div className="stock-select-list">
                   {(() => {
                     const query = stockStudentSearch.trim().toLowerCase()
-                    if (lectureStockEntries.length === 0) {
+                    if (visibleLectureStockEntries.length === 0) {
                       return <div className="makeup-stock-empty">現在の未消化講習はありません。</div>
                     }
-                    const filtered = query ? lectureStockEntries.filter((entry) => entry.displayName.toLowerCase().includes(query)) : lectureStockEntries
+                    const filtered = query ? visibleLectureStockEntries.filter((entry) => entry.displayName.toLowerCase().includes(query)) : visibleLectureStockEntries
                     if (filtered.length === 0) {
                       return <div className="makeup-stock-empty">「{stockStudentSearch}」に一致する生徒はいません。</div>
                     }
@@ -12067,10 +12078,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 <div className="stock-select-list">
                   {(() => {
                     const query = stockStudentSearch.trim().toLowerCase()
-                    if (makeupStockEntries.length === 0) {
+                    if (visibleMakeupStockEntries.length === 0) {
                       return <div className="makeup-stock-empty">現在の未消化振替はありません。</div>
                     }
-                    const filtered = query ? makeupStockEntries.filter((entry) => entry.displayName.toLowerCase().includes(query)) : makeupStockEntries
+                    const filtered = query ? visibleMakeupStockEntries.filter((entry) => entry.displayName.toLowerCase().includes(query)) : visibleMakeupStockEntries
                     if (filtered.length === 0) {
                       return <div className="makeup-stock-empty">「{stockStudentSearch}」に一致する生徒はいません。</div>
                     }
