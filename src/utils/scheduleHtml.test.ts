@@ -4749,6 +4749,39 @@ describe('scheduleHtml 講習履歴', () => {
     vi.unstubAllGlobals()
   })
 
+  it('既定の期間は今月の1日〜末日で、期間を変えたら「表示」を押さなくても読み直す(確認リスト その他 2026-09-14)', () => {
+    const { write, popup } = stubPopup()
+    openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })
+    const html = write.mock.calls[0]?.[0] as string
+
+    const extractBody = (signature: string) => {
+      const escaped = signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const match = html.match(new RegExp('function ' + escaped + ' \\{([\\s\\S]*?)\\n {6}\\}'))
+      expect(match).toBeTruthy()
+      return match![1]
+    }
+    const api = new Function([
+      'function toDateKey(date) {' + extractBody('toDateKey(date)') + '}',
+      'function buildLessonHistoryDefaultRange(now) {' + extractBody('buildLessonHistoryDefaultRange(now)') + '}',
+      'return buildLessonHistoryDefaultRange;',
+    ].join('\n'))() as (now: Date) => { from: string; to: string; clamped: boolean }
+    expect(api(new Date(2026, 8, 14, 10, 0))).toEqual({ from: '2026-09-01', to: '2026-09-30', clamped: false })
+    expect(api(new Date(2028, 1, 3))).toEqual({ from: '2028-02-01', to: '2028-02-29', clamped: false })
+    expect(api(new Date(2026, 11, 31, 23, 59))).toEqual({ from: '2026-12-01', to: '2026-12-31', clamped: false })
+    // 旧既定(今日から1年分)に戻していないこと。
+    expect(extractBody('buildLessonHistoryDefaultRange(now)')).not.toContain('LESSON_HISTORY_MAX_DAYS')
+
+    // 開いたときの期間はこの関数から取り、日付を変えたら読み直す。
+    expect(html).toContain('const defaultRange = buildLessonHistoryDefaultRange(new Date());')
+    expect(html).toContain("startField.addEventListener('change', scheduleLessonHistoryRangeReload);")
+    expect(html).toContain("endField.addEventListener('change', scheduleLessonHistoryRangeReload);")
+    expect(html).toContain('requestLessonHistory(startField.value, endField.value);')
+    // 「表示」ボタンは期間欄の横でも押せる見た目にする(以前は操作欄のスタイルが当たらず素のボタンだった)。
+    expect(html).toContain('.lesson-history-controls .lesson-history-primary {')
+
+    vi.unstubAllGlobals()
+  })
+
   it('ボタン名・見出し・印刷タイトルは「通常授業履歴」(確認リスト h-1・2026-09-12)', () => {
     const { write, popup } = stubPopup()
     openStudentScheduleHtml({ ...baseParams(popup), lessonHistoryEnabled: true })

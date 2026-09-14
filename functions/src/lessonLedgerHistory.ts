@@ -279,6 +279,26 @@ export function buildLatestLedgerQuery<Q extends LedgerQueryChain<Q>>(collection
   return collection.where('dateKey', '<=', to).orderBy('dateKey', 'desc').limit(LATEST_LEDGER_CANDIDATE_LIMIT)
 }
 
+/** 「`to` より後で最も古い台帳文書」を読むときの Query 連鎖（フォールバック用・昇順）。 */
+export type EarliestLedgerQueryChain<Q> = {
+  orderBy(field: string, direction: 'asc'): Q
+  limit(count: number): Q
+}
+export type EarliestLedgerCollectionLike<Q> = {
+  where(field: string, op: '>', value: string): Q
+}
+
+/**
+ * 「`to` より後で最も古い台帳文書」を読むクエリ（`to` 以前の台帳が 1 件も無いときのフォールバック）。
+ * ★ 回帰防止(確認リスト その他 2026-09-14「範囲設定してもしなくても無関係」): 台帳は記録開始日より前の文書が無いので、
+ *   過去の月（例: 6 月）を指定すると「to 以前で最新」が見つからず、中身があるのに 0 件になっていた。
+ *   台帳文書は各日の時点までの記録を丸ごと持つので、直後の文書から期間で絞れば指定期間の記録が出る。
+ *   buildLatestLedgerQuery と同じくフィールド dateKey（単一フィールド索引）で並べる。
+ */
+export function buildEarliestLedgerAfterQuery<Q extends EarliestLedgerQueryChain<Q>>(collection: EarliestLedgerCollectionLike<Q>, to: string): Q {
+  return collection.where('dateKey', '>', to).orderBy('dateKey', 'asc').limit(LATEST_LEDGER_CANDIDATE_LIMIT)
+}
+
 /** 台帳文書の本文を取り出す（gzip+base64 は解凍。壊れていれば空配列）。 */
 export function readLessonLedgerRows(doc: LessonLedgerDayDocLike | null | undefined): LessonLedgerHistoryRow[] {
   if (!doc) return []
@@ -396,6 +416,8 @@ export type StudentLessonHistoryDeps = {
   requireAccess: (workspaceKey: string, classroomId: string) => Promise<unknown>
   /** `to` 以前で最新の台帳文書を返す（無ければ null）。読み取りのみ。 */
   loadLatestLedgerDoc: (params: { workspaceKey: string; classroomId: string; to: string }) => Promise<LessonLedgerDayDocLike | null>
+  /** `to` 以前が無いときに読む「`to` より後で最も古い台帳文書」（無ければ null）。読み取りのみ。 */
+  loadEarliestLedgerDocAfter?: (params: { workspaceKey: string; classroomId: string; to: string }) => Promise<LessonLedgerDayDocLike | null>
   /** 入力エラーの投げ方（index.ts で HttpsError に変換）。 */
   invalidArgument: (message: string) => Error
   /** JST の今日（既定期間の基準）。 */
@@ -409,6 +431,9 @@ export async function handleGetStudentLessonHistory(rawData: unknown, deps: Stud
   const { workspaceKey, classroomId, studentId, from, to } = parsed.value
   await deps.requireAccess(workspaceKey, classroomId)
   const range = resolveLessonHistoryRange({ from, to, today: deps.todayJst })
-  const doc = await deps.loadLatestLedgerDoc({ workspaceKey, classroomId, to: range.to })
+  const ledgerParams = { workspaceKey, classroomId, to: range.to }
+  // 過去の期間で「to 以前」の台帳が無ければ、直後の台帳から期間で絞る（記録開始前の月が 0 件にならないように）。
+  const doc = (await deps.loadLatestLedgerDoc(ledgerParams))
+    ?? (deps.loadEarliestLedgerDocAfter ? await deps.loadEarliestLedgerDocAfter(ledgerParams) : null)
   return buildStudentLessonHistoryResponse({ classroomId, studentId, range, doc })
 }

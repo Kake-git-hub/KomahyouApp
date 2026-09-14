@@ -16,6 +16,15 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.521 (2026-09-14)
+- fix: 確認リストの読み取りツールが、アプリの送る「- その他: …」行を読めず**その他欄の要望を黙って落としていた**(v1.5.512/v1.5.518 のその他要望が未対応のまま残った真因)。1 行形式も拾うようにし、アプリの送信本文をそのまま読む回帰テストを追加(修正を外すと2件落ちる)(tools/verification-checklist-report.lib.mjs)
+- feat: 保護者QRページの日程を**1コマ1行**の一覧にしてスクロール量を減らした(日付は同じ日の先頭行だけ・時限と開始時刻・テンプレ由来は「予定」印)。純関数 `buildParentScheduleRows` に切り出してテスト(確認リスト その他 2026-09-14・第9版 k-10)(parent-portal/parentPortalPageModel.ts・ParentPortalPage.tsx)
+- feat: 保護者QRページで**振替の行に振替元**(「振替（振替元: 9月15日 4限）」)、休みの行に振替先(表記を「振替先:」に)を月日コマで出す。日程計算の権威 parentSchedule.ts が振替コマに `makeupOrigin` を付ける(配置の振替と、振替を出席/振無休にしたもの)。functions 生成物を再同期(パリティ緑)。回帰テスト: 付く/付かない/元コマ不明/同じ日(第9版 k-11)(src/utils/parentSchedule.ts, docs/spec-parent-portal.md §D-5)
+- fix: 生徒日程表の「通常授業履歴」で、期間を変えても前の結果(既定の1年分)が残り範囲設定が効かないように見えた。既定を**今月の1日〜末日**にし、日付を変えたら「表示」を押さなくても読み直す(「表示」ボタンにもスタイルが当たっていなかった)。あわせて**記録開始より前の月を指定すると0件**になっていた(「to 以前で最新」の台帳文書が無い)ので、直後の台帳から期間で絞るフォールバックを追加(読み取りのみ・dateKey 単一フィールド索引)。回帰テスト: 既定期間の算出(月末・閏年)/変更で読み直す配線/フォールバックの呼び分けとクエリ形/index.ts の配線(第9版 h-9)(src/utils/scheduleHtml.ts, functions/src/lessonLedgerHistory.ts, functions/src/index.ts)
+- fix: 基本データで生徒を追加してすぐ「QR」を押すと、サーバーの名簿(保存済みデータ)にまだ居ないため発行に失敗した。保存済みデータに居ない生徒の QR ボタンは**保存が終わるまでスピナーで押せない**ようにした(`resolveParentPortalQrRowState` の `pending-save`・保存済み id は `resolveSavedStudentIds` がデータ署名=保存済み署名のときだけ更新)。発行済み・既存生徒は影響なし(第9版 k-12)(basic-data/parentPortalQr.ts, BasicDataScreen.tsx, App.tsx)
+- style: 盤面の「通常授業テンプレ作成」ボタンを「未消化講習」の左へ移動(オーナー指示・第9版 b-1)(BoardToolbar.tsx)
+- chore: 確認リストを第9版 v1.5.521 に差し替え(k-10/k-11/k-12/h-9/b-1)(verificationChecklist.ts)
+
 ## v1.5.520 (2026-09-14)
 - feat: 自動割当ルール画面から「登校日集約/分散」を非表示にした(分かりづらいとの意見・オーナー指示)。見えない設定が効き続けないよう、自動割振/警告でも対象設定の有無にかかわらず適用しない(`isAutoAssignRuleApplicable` で除外=「対象ルールなし」と同じスコア)。Excel出力からも外す(取込時は未記載ルール=現設定維持なので消えない)。保存データの行・対象設定は削除しないので非表示リストから外せば復帰。回帰テスト: 非表示判定・全員対象でも不適用(他ルールは適用)・Excel出力除外(src/components/auto-assign-rules/autoAssignRuleModel.ts・AutoAssignRuleScreen.tsx・hiddenAutoAssignRules.test.ts, ScheduleBoardScreen.tsx, docs/spec-auto-assign-rules.md §C)
 

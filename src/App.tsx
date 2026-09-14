@@ -46,6 +46,7 @@ import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, pa
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
+import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessages } from './integrations/firebase/parentPortal'
 import { buildParentMessageNotifications, chunkParentMessageIds, mergeParentMessageNotifications, selectUnnotifiedParentMessages, type ParentMessageNotification } from './utils/parentMessages'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
@@ -2006,6 +2007,17 @@ function AuthenticatedApp() {
   // 最後に保存/読込が完了した時点のデータ署名。state なので更新で再描画され、
   // ref (useLatestState が同期更新) なので各コールバックから常に最新値を読める。
   const [cleanSignature, setCleanSignature, cleanSignatureRef] = useLatestState<string>('')
+  // 保存済みデータに居る生徒 id(保護者用QRの発行可否に使う・確認リスト その他 2026-09-13)。
+  // 追加直後で未保存の生徒はサーバーの名簿に居ないので発行が失敗する → 保存が終わるまで QR ボタンをスピナーにする。
+  const [savedStudentIds, setSavedStudentIds] = useState<ReadonlySet<string> | null>(null)
+  useEffect(() => {
+    setSavedStudentIds((previous) => resolveSavedStudentIds({
+      hydrated: hasHydratedSnapshot,
+      isClean: dataSignature === cleanSignature,
+      students,
+      previous,
+    }))
+  }, [cleanSignature, dataSignature, hasHydratedSnapshot, students])
 
   const buildClassroomDataSignature = useCallback((payload: AppSnapshotPayload | null | undefined) => combineDataSignature(
     stringifySignaturePart(buildBoardDataForSignature(payload?.boardState ?? null)),
@@ -5477,6 +5489,7 @@ function AuthenticatedApp() {
         classroomId={actingClassroomId}
         classroomName={actingClassroom?.name}
         parentPortalQrEnabled={parentPortalQrEnabled}
+        savedStudentIds={savedStudentIds}
         onIssueParentPortalToken={parentPortalQrEnabled ? issueParentPortalToken : undefined}
         onRevokeParentPortalToken={parentPortalQrEnabled ? revokeParentPortalToken : undefined}
         onBackToBoard={() => navigateClassroomScreen('board')}

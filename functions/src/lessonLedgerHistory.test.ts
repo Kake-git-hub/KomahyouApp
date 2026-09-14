@@ -13,6 +13,7 @@ import {
 import { scheduleLessonTypeLabels } from '../../src/utils/scheduleViewData'
 import { encodeLessonLedgerBody, LESSON_LEDGER_ENCODING } from './lessonLedger'
 import {
+  buildEarliestLedgerAfterQuery,
   buildLatestLedgerQuery,
   buildStudentLessonHistoryResponse,
   filterLessonHistory,
@@ -169,6 +170,26 @@ describe('handleGetStudentLessonHistory', () => {
     expect(deps.loadLatestLedgerDoc).toHaveBeenCalledWith({ workspaceKey: 'main', classroomId: 'c1', to: '2026-09-15' })
   })
 
+  it('to 以前の台帳が無い過去の期間は、直後の台帳から期間で絞る(記録開始前の月が 0 件にならない・2026-09-14)', async () => {
+    const deps = {
+      ...baseDeps(),
+      loadLatestLedgerDoc: vi.fn(async () => null),
+      loadEarliestLedgerDocAfter: vi.fn(async () => buildLedgerDoc({ dateKey: '2026-09-20' })),
+    }
+    const result = await handleGetStudentLessonHistory({ workspaceKey: 'main', classroomId: 'c1', studentId: 's001', from: '2026-09-01', to: '2026-09-15' }, deps)
+    expect(deps.loadEarliestLedgerDocAfter).toHaveBeenCalledWith({ workspaceKey: 'main', classroomId: 'c1', to: '2026-09-15' })
+    expect(result.ledgerDateKey).toBe('2026-09-20')
+    expect(result.events.length).toBeGreaterThan(0)
+    expect(result.events.every((event) => event.date >= '2026-09-01' && event.date <= '2026-09-15')).toBe(true)
+  })
+
+  it('to 以前の台帳があればフォールバックは読まない', async () => {
+    const deps = { ...baseDeps(), loadEarliestLedgerDocAfter: vi.fn(async () => buildLedgerDoc({ dateKey: '2026-09-20' })) }
+    const result = await handleGetStudentLessonHistory({ workspaceKey: 'main', classroomId: 'c1', studentId: 's001', from: '2026-09-01', to: '2026-09-15' }, deps)
+    expect(deps.loadEarliestLedgerDocAfter).not.toHaveBeenCalled()
+    expect(result.ledgerDateKey).toBe('2026-09-12')
+  })
+
   it('権限エラーはそのまま伝播し、台帳を読まない', async () => {
     const deps = { ...baseDeps(), requireAccess: vi.fn(async () => { throw new Error('permission-denied') }) }
     await expect(handleGetStudentLessonHistory({ workspaceKey: 'main', classroomId: 'c1', studentId: 's001' }, deps)).rejects.toThrow('permission-denied')
@@ -225,6 +246,23 @@ describe('buildLatestLedgerQuery（INTERNAL 回帰防止・h-2）', () => {
   })
 })
 
+describe('buildEarliestLedgerAfterQuery（過去期間のフォールバック・2026-09-14）', () => {
+  it('フィールド dateKey で「to より後」を昇順に数件読む', () => {
+    const calls: RecordedCall[] = []
+    const fake = {
+      where(field: string, op: '>', value: string) { calls.push(['where', field, op, value]); return fake },
+      orderBy(field: string, direction: 'asc') { calls.push(['orderBy', field, direction]); return fake },
+      limit(count: number) { calls.push(['limit', count]); return fake },
+    }
+    buildEarliestLedgerAfterQuery(fake, '2026-06-30')
+    expect(calls).toEqual([
+      ['where', 'dateKey', '>', '2026-06-30'],
+      ['orderBy', 'dateKey', 'asc'],
+      ['limit', LATEST_LEDGER_CANDIDATE_LIMIT],
+    ])
+  })
+})
+
 describe('index.ts の getStudentLessonHistory（ソース検査・h-2）', () => {
   const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
   const body = source.slice(source.indexOf('export const getStudentLessonHistory'), source.indexOf('export const submitDeveloperReport'))
@@ -232,6 +270,9 @@ describe('index.ts の getStudentLessonHistory（ソース検査・h-2）', () =
   it('台帳の読み出しは buildLatestLedgerQuery を使い、FieldPath.documentId() の並べ替えへ戻していない', () => {
     expect(body).toContain('buildLatestLedgerQuery(collection, to)')
     expect(body).not.toContain('FieldPath.documentId()')
+    // 過去期間のフォールバックも配線されていること(外すと記録開始前の月が 0 件に戻る)。
+    expect(body).toContain('loadEarliestLedgerDocAfter:')
+    expect(body).toContain('buildEarliestLedgerAfterQuery(collection, to)')
   })
 
   it('想定外の例外は toLessonHistoryHttpsError で原因文つきの HttpsError に包む（汎用 INTERNAL に潰さない）', () => {

@@ -7,24 +7,22 @@ import {
   PARENT_PORTAL_LOAD_FAILED_MESSAGE,
   PARENT_PORTAL_NETWORK_ERROR_MESSAGE,
   PARENT_PORTAL_NOTES,
-  PARENT_SCHEDULE_TENTATIVE_LABEL,
+  PARENT_SCHEDULE_TENTATIVE_LEGEND,
   buildParentPortalRequestUrl,
+  buildParentScheduleRows,
   canShiftParentScheduleMonth,
-  describeParentScheduleDayStatus,
-  describeParentScheduleLesson,
-  formatParentScheduleDayLabel,
   formatParentScheduleMonthLabel,
+  formatParentScheduleRowDateLabel,
   formatParentSnapshotSavedAtLabel,
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
-  isParentScheduleDayTentative,
   resolveParentMessageSendError,
   resolveParentPortalLoadError,
   resolveParentScheduleMonthNotice,
   shiftParentScheduleMonth,
   validateParentMessageInput,
   type ParentPortalScheduleResponse,
-  type ParentScheduleDay,
+  type ParentScheduleRow,
   type ParentScheduleRange,
 } from './parentPortalPageModel'
 
@@ -173,6 +171,8 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const canGoPrev = canShiftParentScheduleMonth(schedule.range, -1, schedule.bounds)
   const canGoNext = canShiftParentScheduleMonth(schedule.range, 1, schedule.bounds)
   const monthNotice = resolveParentScheduleMonthNotice(schedule)
+  const scheduleRows = buildParentScheduleRows(schedule.days, schedule.today)
+  const hasTentativeRow = scheduleRows.some((row) => row.isTentative)
 
   return (
     <div className="pp-container">
@@ -203,9 +203,12 @@ export default function ParentPortalPage({ token }: { token: string }) {
       </nav>
 
       <section className="pp-days" aria-label="授業予定">
-        {schedule.days.map((day) => (
-          <ParentScheduleDayCard key={day.dateKey} day={day} isToday={day.dateKey === schedule.today} />
-        ))}
+        {hasTentativeRow ? <p className="pp-rows-legend">{PARENT_SCHEDULE_TENTATIVE_LEGEND}</p> : null}
+        {scheduleRows.length > 0 ? (
+          <ul className="pp-rows">
+            {scheduleRows.map((row) => <ParentScheduleRowItem key={row.key} row={row} />)}
+          </ul>
+        ) : null}
         {monthNotice ? <p className="pp-muted pp-days-empty">{monthNotice}</p> : null}
       </section>
 
@@ -261,37 +264,26 @@ export default function ParentPortalPage({ token }: { token: string }) {
   )
 }
 
-function ParentScheduleDayCard({ day, isToday }: { day: ParentScheduleDay; isToday: boolean }) {
-  const status = describeParentScheduleDayStatus(day)
-  const tentative = isParentScheduleDayTentative(day)
-  const weekdayClass = day.weekday === 0 ? ' pp-day-sun' : day.weekday === 6 ? ' pp-day-sat' : ''
+// 1 コマ 1 行(確認リスト その他 2026-09-14)。日付は同じ日の先頭行だけに出す。
+function ParentScheduleRowItem({ row }: { row: ParentScheduleRow }) {
+  const weekdayClass = row.weekday === 0 ? ' pp-row-sun' : row.weekday === 6 ? ' pp-row-sat' : ''
+  const kindClass = row.rowKind === 'lesson' ? ` pp-lesson-${row.lessonKind}` : ` pp-row-${row.rowKind}`
   return (
-    <article className={`pp-day${weekdayClass}${isToday ? ' pp-day-today' : ''}${day.kind === 'closed' ? ' pp-day-closed' : ''}`}>
-      <div className="pp-day-head">
-        <span className="pp-day-label">{formatParentScheduleDayLabel(day.dateKey, day.weekday)}</span>
-        {isToday ? <span className="pp-day-today-badge">今日</span> : null}
-        {tentative ? <span className="pp-day-tentative">{PARENT_SCHEDULE_TENTATIVE_LABEL}</span> : null}
-      </div>
-      {status ? (
-        <p className="pp-day-status">{status}</p>
-      ) : (
-        <ul className="pp-lessons">
-          {day.lessons.map((lesson, index) => {
-            const described = describeParentScheduleLesson(lesson)
-            return (
-              <li key={`${lesson.slotNumber}-${lesson.kind}-${index}`} className={`pp-lesson pp-lesson-${lesson.kind}`}>
-                <span className="pp-lesson-slot">
-                  {lesson.slotNumber}限
-                  {lesson.timeLabel ? <span className="pp-lesson-time">{lesson.timeLabel}</span> : null}
-                </span>
-                <span className="pp-lesson-main">{described.main}</span>
-                {described.sub ? <span className="pp-lesson-sub">{described.sub}</span> : null}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </article>
+    <li className={`pp-row${weekdayClass}${kindClass}${row.isFirstOfDay ? ' pp-row-first' : ''}${row.isToday ? ' pp-row-today' : ''}`}>
+      <span className="pp-row-date">
+        {row.isFirstOfDay ? formatParentScheduleRowDateLabel(row.dateKey, row.weekday) : ''}
+      </span>
+      <span className="pp-row-slot">
+        {row.slotLabel}
+        {row.timeLabel ? <span className="pp-lesson-time">{row.timeLabel}</span> : null}
+      </span>
+      <span className="pp-row-body">
+        <span className="pp-lesson-main">{row.main}</span>
+        {row.sub ? <span className="pp-lesson-sub">{row.sub}</span> : null}
+        {row.isTentative ? <span className="pp-row-tentative">予定</span> : null}
+        {row.isFirstOfDay && row.isToday ? <span className="pp-day-today-badge">今日</span> : null}
+      </span>
+    </li>
   )
 }
 
@@ -330,29 +322,29 @@ const baseStyles = `
   .pp-range-label { flex: 1; min-width: 0; text-align: center; font-size: 13px; color: #444; line-height: 1.3; }
   .pp-range-refreshing { display: block; font-size: 12px; color: #888; }
 
-  .pp-days { display: grid; gap: 8px; margin: 12px 12px 0; }
+  .pp-days { margin: 12px 12px 0; }
   .pp-days-empty { text-align: center; padding: 16px; }
-  .pp-day { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 10px 12px; }
-  .pp-day-closed { background: #f3f3f3; }
-  .pp-day-today { border-color: #1f5d96; box-shadow: 0 0 0 2px rgba(31, 93, 150, .15); }
-  .pp-day-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
-  .pp-day-label { font-size: 17px; font-weight: 700; }
-  .pp-day-sun .pp-day-label { color: #d00; }
-  .pp-day-sat .pp-day-label { color: #00c; }
-  .pp-day-today-badge { font-size: 12px; font-weight: 700; color: #fff; background: #1f5d96; border-radius: 999px; padding: 2px 8px; }
-  .pp-day-tentative { font-size: 12px; color: #7a5b00; background: #f9e79f; border-radius: 999px; padding: 2px 8px; }
-  .pp-day-status { font-size: 15px; color: #666; padding: 2px 0; }
-  .pp-lessons { list-style: none; display: grid; gap: 6px; }
-  .pp-lesson { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 10px; padding: 8px 10px; border-radius: 8px; background: #f7faff; font-size: 17px; }
-  .pp-lesson-slot { flex: none; font-weight: 700; color: #16314f; min-width: 64px; }
-  .pp-lesson-time { display: block; font-size: 12px; font-weight: 400; color: #666; }
+  .pp-rows-legend { font-size: 12px; color: #666; margin: 0 0 6px; }
+  .pp-rows { list-style: none; background: #fff; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; }
+  .pp-row { display: grid; grid-template-columns: 5.4em 5.2em minmax(0, 1fr); align-items: baseline; column-gap: 8px; padding: 6px 10px; font-size: 15px; line-height: 1.35; }
+  .pp-row + .pp-row { border-top: 1px solid #eee; }
+  .pp-row + .pp-row-first { border-top-color: #cfd8e3; }
+  .pp-row-date { font-weight: 700; white-space: nowrap; }
+  .pp-row-sun .pp-row-date { color: #d00; }
+  .pp-row-sat .pp-row-date { color: #00c; }
+  .pp-row-today { background: #eef4fb; box-shadow: inset 3px 0 0 #1f5d96; }
+  .pp-day-today-badge { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: #1f5d96; border-radius: 999px; padding: 0 5px; vertical-align: middle; }
+  .pp-row-slot { font-weight: 700; color: #16314f; white-space: nowrap; }
+  .pp-lesson-time { margin-left: 3px; font-size: 11px; font-weight: 400; color: #777; }
+  .pp-row-body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
   .pp-lesson-main { font-weight: 700; }
-  .pp-lesson-sub { font-size: 14px; color: #444; }
-  .pp-lesson-makeup { background: #e8f0ff; }
+  .pp-lesson-sub { font-size: 13px; color: #444; }
+  .pp-row-tentative { font-size: 11px; color: #7a5b00; background: #f9e79f; border-radius: 999px; padding: 0 6px; }
+  .pp-row-closed, .pp-row-status { color: #666; background: #f6f6f6; }
+  .pp-row-closed .pp-lesson-main, .pp-row-status .pp-lesson-main { font-weight: 400; }
   .pp-lesson-makeup .pp-lesson-sub { color: #1f5d96; font-weight: 700; }
-  .pp-lesson-absent, .pp-lesson-absent-no-makeup { background: #fff0f0; }
   .pp-lesson-absent .pp-lesson-main, .pp-lesson-absent-no-makeup .pp-lesson-main { color: #b00020; }
-  .pp-lesson-attended { background: #eef7ee; }
+  .pp-lesson-absent .pp-lesson-sub { color: #1f5d96; font-weight: 700; }
   .pp-lesson-attended .pp-lesson-sub { color: #2a7e2a; }
 
   .pp-contact { margin: 20px 12px 0; background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 14px 12px; }

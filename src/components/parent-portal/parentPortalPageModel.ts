@@ -13,6 +13,9 @@ export type ParentScheduleLesson = {
   kind: ParentScheduleLessonKind
   // kind==='absent' のとき。null=振替日は調整中(在庫数は出さない・§D-5)。
   makeupDestination?: { dateKey: string; slotNumber: number } | null
+  // 振替コマ(振替・振替を出席済み/振無休にしたもの)の振替元。slotNumber=null は元コマ不明(日付だけ出す)。
+  // 旧 functions の応答には無いので省略可。
+  makeupOrigin?: { dateKey: string; slotNumber: number | null }
   // テンプレ補完由来(=「予定(変更の可能性あり)」・§D-6)。
   isTentative: boolean
 }
@@ -64,6 +67,8 @@ export const PARENT_MESSAGE_SEND_FAILED_MESSAGE = '送信に失敗しました�
 export const PARENT_MESSAGE_NETWORK_ERROR_MESSAGE = '通信エラーが発生しました。再度お試しください。'
 export const PARENT_MESSAGE_SENT_MESSAGE = '受け付けました（返信はこのページには届きません。教室から電話・アプリでご連絡します）'
 export const PARENT_SCHEDULE_TENTATIVE_LABEL = '予定（変更の可能性あり）'
+// 1 コマ 1 行の一覧では行ごとに短い「予定」印を付け、意味は一覧の上に 1 回だけ出す。
+export const PARENT_SCHEDULE_TENTATIVE_LEGEND = '「予定」印の授業は、変更になる可能性があります。'
 export const PARENT_SCHEDULE_NO_LESSON_MESSAGE = '授業の予定はありません'
 export const PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE = 'この月の授業の予定はありません。'
 // 講習だけの月(通常授業の日が無く、講習コマはあった)に出す注記(確認リスト k-4・オーナー回答 2026-09-14)。
@@ -186,24 +191,32 @@ export function formatParentScheduleMonthLabel(dateKey: string): string {
   return `${parsed.year}年${parsed.month}月`
 }
 
+// 振替元/振替先の「月日コマ」表記('9月21日 1限'。元コマ不明なら日付だけ)。
+export function formatParentScheduleLinkedSlot(link: { dateKey: string; slotNumber: number | null }): string {
+  const date = formatParentScheduleDateShort(link.dateKey)
+  return typeof link.slotNumber === 'number' && Number.isInteger(link.slotNumber) ? `${date} ${link.slotNumber}限` : date
+}
+
 // 授業 1 行の表示(spec §D-3 の表)。講師名・机番号は受け取っても出さない(型に無い)。
+// 振替元に振替先、振替先に振替元を「月日コマ」で出す(確認リスト その他 2026-09-14)。
 export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { main: string; sub?: string } {
   const subject = String(lesson.subject ?? '').trim() || '授業'
+  const originText = lesson.makeupOrigin ? `振替元: ${formatParentScheduleLinkedSlot(lesson.makeupOrigin)}` : ''
   switch (lesson.kind) {
     case 'regular':
     case 'extra':
       // 通常授業・増コマは科目のみ(種別ラベルなし・P-9)。
       return { main: subject }
     case 'makeup':
-      return { main: subject, sub: '振替' }
+      return { main: subject, sub: originText ? `振替（${originText}）` : '振替' }
     case 'attended':
-      return { main: subject, sub: '出席済み' }
+      return { main: subject, sub: originText ? `出席済み（${originText}）` : '出席済み' }
     case 'absent-no-makeup':
-      return { main: 'お休み（振替なし）' }
+      return originText ? { main: 'お休み（振替なし）', sub: originText } : { main: 'お休み（振替なし）' }
     case 'absent': {
       const destination = lesson.makeupDestination
       if (destination) {
-        return { main: 'お休み', sub: `振替: ${formatParentScheduleDateShort(destination.dateKey)} ${destination.slotNumber}限` }
+        return { main: 'お休み', sub: `振替先: ${formatParentScheduleLinkedSlot(destination)}` }
       }
       return { main: 'お休み', sub: '振替日は調整中です' }
     }
@@ -217,6 +230,81 @@ export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { ma
 export function describeParentScheduleDayStatus(day: ParentScheduleDay): string | null {
   if (day.kind === 'closed') return PARENT_SCHEDULE_CLOSED_MESSAGE
   return day.lessons.length === 0 ? PARENT_SCHEDULE_NO_LESSON_MESSAGE : null
+}
+
+// 一覧は 1 コマ 1 行(確認リスト その他 2026-09-14「スクロール量が短くなるように」)。
+// 日付は同じ日の先頭行だけに出し、教室休み・授業の無い日は 1 行にまとめる。
+export type ParentScheduleRow = {
+  key: string
+  dateKey: string
+  weekday: number
+  // 同じ日の 2 行目以降は false(日付欄を空ける)。
+  isFirstOfDay: boolean
+  isToday: boolean
+  // 'closed'=教室休み / 'status'=授業の無い日 / 'lesson'=授業 1 コマ
+  rowKind: 'closed' | 'status' | 'lesson'
+  slotLabel: string
+  timeLabel: string
+  main: string
+  sub?: string
+  lessonKind?: ParentScheduleLessonKind
+  isTentative: boolean
+}
+
+// '2026-09-14' + 1 → '14日(月)'(月は見出しに出ているので省く)。
+export function formatParentScheduleRowDateLabel(dateKey: string, weekday: number): string {
+  const parsed = parseDateKey(dateKey)
+  const weekdayLabel = WEEKDAY_LABELS[weekday] ?? ''
+  const head = parsed ? `${parsed.day}日` : dateKey
+  return `${head}${weekdayLabel ? `(${weekdayLabel})` : ''}`
+}
+
+// 時限の開始時刻だけ('19:40-21:10' → '19:40')。形が違えばそのまま。
+function formatLessonStartTime(timeLabel: string): string {
+  const text = String(timeLabel ?? '').trim()
+  const matched = /^(\d{1,2}:\d{2})\s*[-〜~]/.exec(text)
+  return matched ? matched[1] : text
+}
+
+export function buildParentScheduleRows(days: readonly ParentScheduleDay[], today: string): ParentScheduleRow[] {
+  const rows: ParentScheduleRow[] = []
+  for (const day of days) {
+    const isToday = day.dateKey === today
+    const status = describeParentScheduleDayStatus(day)
+    if (status) {
+      rows.push({
+        key: `${day.dateKey}-${day.kind}`,
+        dateKey: day.dateKey,
+        weekday: day.weekday,
+        isFirstOfDay: true,
+        isToday,
+        rowKind: day.kind === 'closed' ? 'closed' : 'status',
+        slotLabel: '',
+        timeLabel: '',
+        main: status,
+        isTentative: false,
+      })
+      continue
+    }
+    day.lessons.forEach((lesson, index) => {
+      const described = describeParentScheduleLesson(lesson)
+      rows.push({
+        key: `${day.dateKey}-${lesson.slotNumber}-${lesson.kind}-${index}`,
+        dateKey: day.dateKey,
+        weekday: day.weekday,
+        isFirstOfDay: index === 0,
+        isToday,
+        rowKind: 'lesson',
+        slotLabel: `${lesson.slotNumber}限`,
+        timeLabel: formatLessonStartTime(lesson.timeLabel),
+        main: described.main,
+        ...(described.sub ? { sub: described.sub } : {}),
+        lessonKind: lesson.kind,
+        isTentative: lesson.isTentative,
+      })
+    })
+  }
+  return rows
 }
 
 // その日に「予定(変更の可能性あり)」バッジを出すか。

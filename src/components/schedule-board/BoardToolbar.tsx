@@ -260,6 +260,10 @@ function BoardToolbarComponent({
             </>
           ) : (
             <>
+              {/* 通常授業テンプレ作成は未消化講習の左(確認リスト その他 2026-09-13 オーナー指示) */}
+              <button className="secondary-button slim" type="button" onClick={onOpenRegularTemplate} data-testid="board-regular-template-button">
+                通常授業テンプレ作成
+              </button>
               <button className={`secondary-button slim${isLectureStockOpen ? ' active' : ''}`} type="button" onClick={onToggleLectureStock} data-testid="lecture-stock-chip">
                 未消化講習
                 {lectureStockTotalCount > 0 ? <span className="toolbar-inline-count">{lectureStockTotalCount}</span> : null}
@@ -276,9 +280,6 @@ function BoardToolbarComponent({
               </button>
               <button className="secondary-button slim" type="button" onClick={onPrintPdf} disabled={isPrintingPdf} data-testid="board-print-pdf-button">
                 {isPrintingPdf ? 'PDF出力中...' : 'PDF出力'}
-              </button>
-              <button className="secondary-button slim" type="button" onClick={onOpenRegularTemplate} data-testid="board-regular-template-button">
-                通常授業テンプレ作成
               </button>
               <div className="toolbar-segmented">
                 <button className="segment-button" type="button" onClick={onGoPrevWeek} disabled={!canGoPrevWeek} data-testid="prev-week-button">◀ 前週</button>

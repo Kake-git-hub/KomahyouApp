@@ -41,6 +41,11 @@ export type ParentScheduleLesson = {
   kind: ParentScheduleLessonKind
   /** kind==='absent' のときだけ付く。null=振替日は調整中(在庫数は出さない) */
   makeupDestination?: { dateKey: string; slotNumber: number } | null
+  /**
+   * 振替コマ(配置の makeup・振替を出席/振無休にしたもの)のときだけ付く振替元(確認リスト その他 2026-09-14)。
+   * slotNumber は元コマのラベルから読めないとき null(日付だけ出す)。
+   */
+  makeupOrigin?: { dateKey: string; slotNumber: number | null }
   /** テンプレ補完由来(=「予定(変更の可能性あり)」) */
   isTentative: boolean
 }
@@ -612,6 +617,14 @@ function parseOriginSlotNumber(makeupSourceLabel?: string) {
   return matched ? Number(matched[1]) : null
 }
 
+// 振替コマの振替元(日付＋元コマ)。振替元が同じ日(=移動ではなく当日内)や日付が壊れているときは付けない。
+function resolveMakeupOrigin(entry: { lessonType: string; makeupSourceDate?: string; makeupSourceLabel?: string }, cellDateKey: string) {
+  if (entry.lessonType !== 'makeup') return null
+  const dateKey = entry.makeupSourceDate ?? ''
+  if (!isValidDateKey(dateKey) || dateKey === cellDateKey) return null
+  return { dateKey, slotNumber: parseOriginSlotNumber(entry.makeupSourceLabel) }
+}
+
 function formatLinkKey(stockKind: string, studentKey: string, subject: string, dateKey: string, slotNumber: number | null) {
   return [stockKind, studentKey, subject, dateKey, String(slotNumber ?? '')].join('__')
 }
@@ -980,13 +993,16 @@ function extractBoardLessons(
         // 体験(trial)は同名でも既存生徒として扱わない。講習(special)は期間外に置かれていても出さない。
         if (student.lessonType !== 'regular' && student.lessonType !== 'makeup' && student.lessonType !== 'extra') continue
         if (!matches(student)) continue
-        lessons.push({
+        const placed: ParentScheduleLesson = {
           slotNumber: cell.slotNumber,
           timeLabel,
           subject: resolveDisplayedSubjectForGrade(student.subject, student.grade),
           kind: student.lessonType === 'makeup' ? 'makeup' : student.lessonType === 'extra' ? 'extra' : 'regular',
           isTentative: false,
-        })
+        }
+        const placedOrigin = resolveMakeupOrigin(student, cell.dateKey)
+        if (placedOrigin) placed.makeupOrigin = placedOrigin
+        lessons.push(placed)
       }
       for (const statusEntry of desk.statusSlots) {
         if (!statusEntry) continue
@@ -1005,6 +1021,10 @@ function extractBoardLessons(
           // id が空の status が複数あると Map のキー '' を共有し、**別人・別コマの振替先**が付きうる。
           // 保護者に他人の日付を見せないため、id が無いときはリンクを引かない(§C)。
           lesson.makeupDestination = statusEntry.id ? linkedDestinationByStatusId.get(statusEntry.id) ?? null : null
+        } else {
+          // 振替コマを出席・振無休にしたもの(statusSlots 側)も振替元を出す(配置のときと同じ表示を保つ)。
+          const statusOrigin = resolveMakeupOrigin(statusEntry, cell.dateKey)
+          if (statusOrigin) lesson.makeupOrigin = statusOrigin
         }
         lessons.push(lesson)
       }
