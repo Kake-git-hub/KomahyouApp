@@ -16,6 +16,10 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.525 (2026-09-14)
+- fix: 講師を削除して別画面へ行き盤面に戻る(またはリロード)と、削除した講師が同コマの別の机に再出する不具合を修正(INV-02)。真因は盤面マウント時の自己修復 reconcileSubmittedTeacherPlacements が削除tombstoneを数えず、QR提出済み講師の「その講習での最後の登録机」を消すと未配置と誤判定して空き机へ置き直していたこと(バックアップ書き出しは無関係・画面切替で盤面が再マウントされるのが引き金)。講師メニューで講習登録の机を削除したときだけ tombstone に講習IDを残し(applyUserDeletedTeacherTombstone)、その講習IDの tombstone がある講師は置き直さない。講習IDの無い tombstone(通常授業机の削除・丸ごと振替・旧データ)は数えず揮発した提出配置の自己修復は従来どおり(名前/期間一致だと自己修復まで止まる経路があるため講習IDに限定・regression-reviewer 指摘)。旧データの tombstone しか残っていない講師は次の再マウントで1回だけ置き直され、それを削除すれば以後出ない。実例: 開発用教室 9/22 1・2限の能勢(ScheduleBoardScreen.tsx・inv02 マトリクスに回帰6件・spec-invariants INV-02 違反履歴)
+- style: 右上の保存ボタンを状態で色分け。保存・保存中… = 赤／最新データ = 緑(オーナー指示 2026-09-14・旧「青固定」2026-08-29 を改定。saveButtonState.ts / BoardToolbar.tsx / App.css・spec-save-restore §1)
+
 ## v1.5.524 (2026-09-14)
 - refactor: 質問への AI 即時回答(開発用教室のみ)の呼び出し先を Claude API 直(API キー)から **Claude on Google Cloud(Vertex AI)** へ変更。請求先を GCP にまとめるため(オーナー指示 2026-09-14)。API キーは不要になり、Cloud Functions の実行サービスアカウントで認証・リージョン既定 global。権限不足/モデル未有効化は結果画面に短い理由で出す(functions/src/questionAiAnswer.ts・@anthropic-ai/vertex-sdk・spec-developer-report §G-7)
 

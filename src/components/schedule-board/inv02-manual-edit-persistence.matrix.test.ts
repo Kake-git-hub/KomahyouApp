@@ -10,6 +10,7 @@ import {
   packSortCellDesks,
   repackTeacherOnlyDesks,
   reconcileSubmittedTeacherPlacements,
+  applyUserDeletedTeacherTombstone,
   computeStudentMove,
   applyHistoryEntry,
   type HistoryEntry,
@@ -254,6 +255,90 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
     it('×詰め直し(repack): 削除tombstoneは詰め直しで消えない', () => {
       const out = repackTeacherOnlyDesks([tombstoneDesk(), createDesk({ id: 'b-1', teacher: '永山講師' })])
       expect(out.some((desk) => desk.teacherAssignmentSource === 'deleted' && desk.teacherAssignmentTeacherId === '落合講師')).toBe(true)
+    })
+
+    // 回帰防止(2026-09-14・案A): 提出済み講師の「その講習での最後の登録机」を削除すると、reconcile が
+    // tombstone を数えず「未配置」と誤判定し、盤面の再マウント(画面切替・リロード)毎に同コマの別の空き机へ
+    // 置き直していた(開発用教室 9/22 1・2限の能勢: 消すたびに tombstone が増え別机に再出)。
+    // 判定は tombstone の講習ID一致に限定(講習IDはユーザーが登録机を削除したときだけ残る)。
+    describe('×講習自動割当(reconcile): 提出済み講師の最後の登録机を削除しても再マウントで別机に再出しない', () => {
+      const noseTeacher = { id: 't039', name: '能勢　大和', displayName: '能勢', entryDate: '', withdrawDate: '' } as TeacherRow
+      // 実データ(9/22)と同形: 1限・2限とも能勢の講習登録机があり、他の机は空き。
+      function registeredWeeks(): SlotCell[][] {
+        const makeSlot = (slotNumber: number) => createCell({
+          id: `2026-06-01_${slotNumber}`,
+          slotNumber,
+          slotLabel: `${slotNumber}限`,
+          desks: [
+            createDesk({ id: `b${slotNumber}-0`, teacher: '能勢', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'sess1', teacherAssignmentTeacherId: 't039' }),
+            createDesk({ id: `b${slotNumber}-1` }),
+            createDesk({ id: `b${slotNumber}-2` }),
+          ],
+        })
+        return [[makeSlot(1), makeSlot(2)]]
+      }
+      // 講師メニューの「削除」(handleDeleteTeacher)と同じ処理で全登録机を消す。
+      function deleteAllRegisteredDesks(weeks: SlotCell[][]) {
+        for (const cell of weeks.flat()) applyUserDeletedTeacherTombstone(cell.desks[0])
+        return weeks
+      }
+      // 旧データ/通常授業の机の削除/丸ごと振替と同形: 講習IDの無い tombstone。
+      function legacyTombstoneWeeks(tombstoneTeacherId = '能勢'): SlotCell[][] {
+        const weeks = registeredWeeks()
+        for (const cell of weeks.flat()) {
+          cell.desks[0] = createDesk({ id: cell.desks[0].id, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: tombstoneTeacherId })
+        }
+        return weeks
+      }
+      const noseOnBoard = (weeks: SlotCell[][]) => weeks.flat().flatMap((cell) => cell.desks).some((desk) => desk.teacher === '能勢')
+      const run = (weeks: SlotCell[][], sessionId = 'sess1') => reconcileSubmittedTeacherPlacements({
+        weeks,
+        specialSessions: [makeSession({ id: sessionId, startDate: '2026-06-01', endDate: '2026-06-01', teacherInputs: { t039: { unavailableSlots: [], countSubmitted: true, updatedAt: '' } } })],
+        teachers: [noseTeacher], students: [], regularLessons: [], classroomSettings,
+      })
+
+      it('ユーザー削除の tombstone は講習登録の講習IDを保持する(通常の机の削除では持たない)', () => {
+        const [registered] = registeredWeeks()[0][0].desks
+        applyUserDeletedTeacherTombstone(registered)
+        expect(registered).toMatchObject({ teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentSessionId: 'sess1', teacherAssignmentTeacherId: '能勢' })
+
+        const regularDesk = createDesk({ teacher: '能勢', manualTeacher: false, teacherAssignmentTeacherId: 't039' })
+        applyUserDeletedTeacherTombstone(regularDesk)
+        expect(regularDesk.teacherAssignmentSessionId).toBeUndefined()
+        expect(regularDesk.teacherAssignmentSource).toBe('deleted')
+      })
+
+      it('全登録机を削除した講師は再マウント(reconcile)で置き直さない', () => {
+        // 修正前: placedCount=1 / 1限・2限の空き机に「能勢」が再出して落ちる。
+        const result = run(deleteAllRegisteredDesks(registeredWeeks()))
+        expect(result.hasChanges).toBe(false)
+        expect(result.placedCount).toBe(0)
+        expect(noseOnBoard(result.nextWeeks)).toBe(false)
+      })
+
+      it('再マウントを繰り返しても(保存往復＋reconcile 2回)再出しない', () => {
+        const once = run(deleteAllRegisteredDesks(registeredWeeks()))
+        const twice = run(reloadRoundTrip(once.nextWeeks))
+        expect(noseOnBoard(twice.nextWeeks)).toBe(false)
+      })
+
+      it('tombstone の講習IDはテンプレ再マージ(overlay)を通っても保持される', () => {
+        const weeks = deleteAllRegisteredDesks(registeredWeeks())
+        const merged = overlayBoardWeeksOnScheduleCells(weeks[0].map(silentManagedCell), weeks)
+        expect(merged[0].desks[0]).toMatchObject({ teacherAssignmentSource: 'deleted', teacherAssignmentSessionId: 'sess1' })
+        expect(noseOnBoard(run([merged]).nextWeeks)).toBe(false)
+      })
+
+      it('兄弟: 講習IDの無い tombstone(通常授業の机の削除・丸ごと振替・旧データ)は数えず、揮発した提出配置は従来どおり自己修復する', () => {
+        const result = run(legacyTombstoneWeeks())
+        expect(result.placedCount).toBe(1)
+        expect(noseOnBoard(result.nextWeeks)).toBe(true)
+      })
+
+      it('兄弟: 別講習の講習IDを持つ tombstone は数えない', () => {
+        const result = run(deleteAllRegisteredDesks(registeredWeeks()), 'sess2')
+        expect(result.placedCount).toBe(1)
+      })
     })
 
     it('×リロード相当(serialize往復): 削除tombstoneはスナップショット往復後も残る', () => {

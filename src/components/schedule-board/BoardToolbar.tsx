@@ -9,6 +9,7 @@ import {
   shiftMonth,
   todayDateKey,
 } from './weekJumpCalendar'
+import { resolveSaveBoardButtonState } from './saveButtonState'
 
 type BoardToolbarProps = {
   weekLabel: string
@@ -173,8 +174,8 @@ function BoardToolbarComponent({
     setSavePressed(false)
   }
   const isSavingInProgress = savePressed || Boolean(isBoardSaving) || Boolean(isBoardSaveDisabled)
-  // 常時クリック可能(グレーアウトしない)。色は青固定で、状態はラベルで表す(保存/最新データ/保存中…)。
-  // 旧仕様「常に緑」は 2026-08-29 オーナー確定で撤回済み(.primary-button.is-clean は死蔵)。
+  // 常時クリック可能(グレーアウトしない)。状態はラベル＋色で表す(2026-09-14 オーナー指示で色を追加):
+  // 保存/保存中… = 赤、最新データ = 緑。色は data-state ごとに App.css の .save-board-button が当てる。
   // 保存中だけ無効化して二重実行を防ぐ。未保存が無いとき(=「最新データ」表示)は押しても no-op。spec-save-restore.md §1。
   const isSaveButtonDisabled = isSavingInProgress
   const handleSaveBoardClick = () => {
@@ -331,12 +332,12 @@ function BoardToolbarComponent({
                 <button className="segment-button" type="button" onClick={onGoNextWeek} disabled={!canGoNextWeek} data-testid="next-week-button">次週 ▶</button>
               </div>
               <button
-                className="primary-button slim"
+                className="primary-button slim save-board-button"
                 type="button"
                 onClick={handleSaveBoardClick}
                 disabled={isSaveButtonDisabled}
                 data-testid="save-board-button"
-                data-state={isSavingInProgress ? 'saving' : (hasPendingSave ? 'dirty' : 'clean')}
+                data-state={resolveSaveBoardButtonState({ isSavingInProgress, hasPendingSave: Boolean(hasPendingSave) })}
                 title={hasPendingSave ? '保存してデータベースへ同期します。' : 'データベースと同期済みです。'}
               >
                 {isSavingInProgress ? (

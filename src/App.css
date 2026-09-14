@@ -1837,6 +1837,28 @@
   transform: none;
 }
 
+/* 右上の保存ボタン: 保存(未保存あり)・保存中 = 赤 / 最新データ = 緑 (2026-09-14 オーナー指示・spec-save-restore.md §1)。
+   data-state は BoardToolbar.tsx の resolveSaveBoardButtonState が付ける。 */
+.primary-button.save-board-button[data-state='dirty'] {
+  background: #d93025;
+  box-shadow: 0 6px 18px rgba(217, 48, 37, 0.24);
+}
+
+.primary-button.save-board-button[data-state='saving'] {
+  background: #d93025;
+  animation: komahyou-save-pulse-red 1.2s ease-in-out infinite;
+}
+
+.primary-button.save-board-button[data-state='clean'] {
+  background: #2e7d32;
+  box-shadow: 0 6px 18px rgba(46, 125, 50, 0.24);
+}
+
+@keyframes komahyou-save-pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(217, 48, 37, 0.40), 0 6px 18px rgba(217, 48, 37, 0.28); }
+  50% { box-shadow: 0 0 0 6px rgba(217, 48, 37, 0.08), 0 6px 18px rgba(217, 48, 37, 0.28); }
+}
+
 @keyframes komahyou-spin {
   to { transform: rotate(360deg); }
 }
@@ -1854,7 +1876,8 @@
 @media (prefers-reduced-motion: reduce) {
   .button-spinner,
   .toolbar-sync-progress-track.is-indeterminate::after,
-  .primary-button[data-state='saving'] {
+  .primary-button[data-state='saving'],
+  .primary-button.save-board-button[data-state='saving'] {
     animation: none;
   }
 }
