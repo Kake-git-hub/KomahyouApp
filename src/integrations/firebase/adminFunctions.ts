@@ -385,6 +385,9 @@ export type SubmitDeveloperReportResponse = {
   recordedAt: string
   /** 内容に #テスト を含みテスト扱いになった(Issue 起票なし)。旧関数は返さない。 */
   isTest?: boolean
+  /** 質問への AI 即時回答(開発用教室の質問のみ・spec-developer-report §G-7)。成功時は回答文、失敗時は理由。 */
+  aiAnswer?: string
+  aiAnswerError?: string
 }
 
 /**
@@ -395,7 +398,7 @@ export async function submitDeveloperReportViaFunction(input: DeveloperReportReq
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<DeveloperReportRequestBody & { workspaceKey: string }, SubmitDeveloperReportResponse>(functions, 'submitDeveloperReport', { timeout: 120_000 })
+  const callable = httpsCallable<DeveloperReportRequestBody & { workspaceKey: string }, SubmitDeveloperReportResponse>(functions, 'submitDeveloperReport', { timeout: 190_000 })
   const result = await callable({
     workspaceKey: config.workspaceKey,
     ...input,

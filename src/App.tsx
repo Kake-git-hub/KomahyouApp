@@ -3810,11 +3810,12 @@ function AuthenticatedApp() {
     })
     try {
       const result = await submitDeveloperReportViaFunction(body)
-      recordOperationTrace('navigation', `要望・報告を送信 source=${input.source} category=${input.category} reportId=${result.reportId}${result.isTest ? ' (テスト)' : ''}`)
-      return { ok: true as const, reportId: result.reportId, isTest: result.isTest === true }
+      recordOperationTrace('navigation', `質問・要望を送信 source=${input.source} category=${input.category} reportId=${result.reportId}${result.isTest ? ' (テスト)' : ''}`)
+      if (result.aiAnswer || result.aiAnswerError) recordOperationTrace('navigation', `質問への AI 自動回答 reportId=${result.reportId} ${result.aiAnswer ? '回答あり' : `失敗: ${result.aiAnswerError}`}`)
+      return { ok: true as const, reportId: result.reportId, isTest: result.isTest === true, ...(result.aiAnswer ? { aiAnswer: result.aiAnswer } : {}), ...(result.aiAnswerError ? { aiAnswerError: result.aiAnswerError } : {}) }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      recordOperationTrace('navigation', `要望・報告の送信に失敗 source=${input.source}: ${message}`)
+      recordOperationTrace('navigation', `質問・要望の送信に失敗 source=${input.source}: ${message}`)
       return { ok: false as const, error: message }
     }
   }, [actingClassroomId, autoAssignRulesRef, boardStateRef, classroomSettingsRef, cleanSignatureRef, dataSignature, groupLessonsRef, hasHydratedSnapshot, lastSavedAtRef, managersRef, pairConstraintsRef, regularLessonsRef, screenRef, specialSessionsRef, studentsRef, teachersRef])
@@ -3823,7 +3824,7 @@ function AuthenticatedApp() {
     submitDeveloperReportRef.current = submitDeveloperReport
   }, [submitDeveloperReport])
   const openDeveloperReportModal = useCallback(() => {
-    recordOperationTrace('navigation', '要望・報告モーダルを開く(盤面)')
+    recordOperationTrace('navigation', '質問・要望モーダルを開く(盤面)')
     setDeveloperReportModal({ sending: false, resultMessage: null })
   }, [])
   const handleDeveloperReportSubmit = useCallback(async (note: string, category: DeveloperReportCategory) => {
@@ -5634,6 +5635,7 @@ function AuthenticatedApp() {
     {developerReportModal ? (
       <DeveloperReportModal
         classroomName={actingClassroom?.name ?? ''}
+        aiAnswerEnabled={isFeatureEnabledForClassroom('questionAiAnswer', actingClassroom)}
         sending={developerReportModal.sending}
         resultMessage={developerReportModal.resultMessage}
         onSubmit={(note, category) => { void handleDeveloperReportSubmit(note, category) }}

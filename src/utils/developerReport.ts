@@ -1,4 +1,4 @@
-// 「要望・報告」の送信内容（クライアント側の純粋ロジック）。
+// 「質問・要望」（旧「要望・報告」）の送信内容（クライアント側の純粋ロジック）。
 //
 // 背景（2026-09-04 オーナー指示）: 室長が「バグがあったが忙しくて自分で対処した」と後から言い、何が起きたか追えなかった。
 // 忙しくても**ボタン1つ**で開発者へ知らせられるようにする。同日の改定で:
@@ -7,6 +7,10 @@
 //  - 2026-09-13: **使い方の質問**（category = question）も同じ導線・同じ流れ（ストック → メール通知 → 後で開発者が対応）で
 //    送れる。利用者への自動回答はしない（開発者が承認した回答だけを返す。docs/spec-developer-report.md §G）。
 //  - 内容に `#テスト` を含めるとテスト扱い（サーバーが Issue 起票をしない。メールは【テスト】付きで届く）。
+//    2026-09-14: モーダルの案内文(testHint)は削除（オーナー指示）。判定そのものは残す。
+//  - 2026-09-14: ボタン名を「質問・要望」へ、種類の並びを 質問 → 要望 → 不具合 へ、モーダルの既定を質問へ（オーナー指示）。
+//    `normalizeDeveloperReportCategory` の既定(不正値の丸め先)は bug のまま＝サーバーと同じ。
+//  - 2026-09-14: **開発用教室だけ**、質問に AI がその場で回答する試験実装（spec §G-7・featureRollout `questionAiAnswer`）。
 //
 // 送るもの（サーバーの Cloud Function `submitDeveloperReport` が受ける）:
 //  - 教室・報告元(盤面/日程表)・種類(不具合/要望)・内容・アプリ版数・UA・報告時刻
@@ -58,29 +62,48 @@ export const DEVELOPER_REPORT_TEST_MARKER = '#テスト'
  * 内容は**必須**（「空欄のままでも送れます」は撤回）。
  */
 export const DEVELOPER_REPORT_UI_TEXT = {
-  /** ボタン名・モーダル題名（オーナー確定 2026-09-04: 「開発者へ報告」→「要望・報告」） */
-  title: '要望・報告',
+  /** ボタン名・モーダル題名（オーナー確定 2026-09-04: 「開発者へ報告」→「要望・報告」／2026-09-14: →「質問・要望」） */
+  title: '質問・要望',
+  /** ボタンのツールチップ（盤面ツールバーと日程表タブで共用） */
+  buttonTooltip: '使い方の質問も、追加してほしい要望も、「おかしいな」と思ったことも、そのまま開発者へ送れます',
   description: (classroomName: string) =>
-    `「おかしいな」と思ったことも、「こうしてほしい」という要望も、使い方の質問も、そのまま送ってください。${classroomName ? `教室「${classroomName}」の` : ''}直近の操作履歴と、いまの画面のデータが開発者に届きます。`,
+    `使い方の質問も、「こうしてほしい」という要望も、「おかしいな」と思ったことも、そのまま送ってください。${classroomName ? `教室「${classroomName}」の` : ''}直近の操作履歴と、いまの画面のデータが開発者に届きます。`,
   categoryLabel: '種類',
+  /** 並びは 質問 → 要望 → 不具合（オーナー指示 2026-09-14）。モーダルを開いたときは先頭(質問)が選ばれている。 */
   categoryOptions: [
-    { value: 'bug', label: '不具合・おかしい' },
-    { value: 'request', label: '追加してほしい・要望' },
     { value: 'question', label: '使い方の質問' },
+    { value: 'request', label: '追加してほしい・要望' },
+    { value: 'bug', label: '不具合・おかしい' },
   ] as ReadonlyArray<{ value: DeveloperReportCategory; label: string }>,
   noteLabel: '内容（必須）',
   placeholder: '例: 9/3(水) 3限、田中先生の机で、青木さんの振替(数学)を移動したら未消化に戻らなかった ／ 講師日程表にも電話番号の欄がほしい ／ 休みにした生徒の振替先を後から変えるには？',
   /** 入力のヒント(オーナー指示 2026-09-04): 詳細を書いてもらうほど開発者の確認精度が上がることを伝える。 */
   inputHint: '生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか(期待した結果との違い)を具体的に書いていただくと、確認の精度が上がります。',
-  testHint: `テスト送信のときは内容に「${DEVELOPER_REPORT_TEST_MARKER}」と書いてください（開発者への課題登録は行われません）。`,
   /** 質問(question)を選んだときだけ出す注意文（spec §G-2・2026-09-13）: 即答の期待を作らない。自動返信はしない。 */
   questionNotice: '回答は開発者が確認してからお返しします（すぐには返りません・自動返信はしません）。',
+  /** AI 即時回答が有効な教室(開発用教室のみ・spec §G-7)で、質問を選んだときに出す注意文。 */
+  questionNoticeAi: '【試験中】送信すると、AI がマニュアルをもとにその場で回答します（誤りがあり得ます）。質問は開発者にも届きます。',
   requiredError: '内容を入力してください。何がおかしいか・何をしてほしいかが分からないと、開発者が調べられません。',
   cancel: 'キャンセル',
   submit: '送信する',
   sending: '送信中…',
+  /** AI 即時回答を待っている間の送信ボタン文言 */
+  sendingAi: '送信中…（AI が回答を作成しています）',
   close: '閉じる',
 } as const
+
+/** モーダルを開いたときに選ばれている種類（並びの先頭＝質問。オーナー指示 2026-09-14）。盤面・日程表タブ共通。 */
+export const DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY: DeveloperReportCategory = DEVELOPER_REPORT_UI_TEXT.categoryOptions[0].value
+
+/** 質問を選んだときの注意文。AI 即時回答が有効な教室(開発用教室のみ)では「その場で AI が回答する」旨に差し替える。 */
+export function resolveDeveloperReportQuestionNotice(aiAnswerEnabled: boolean): string {
+  return aiAnswerEnabled ? DEVELOPER_REPORT_UI_TEXT.questionNoticeAi : DEVELOPER_REPORT_UI_TEXT.questionNotice
+}
+
+/** 送信中の文言。AI 即時回答を待つ(有効な教室で質問を送った)ときだけ長く待つことを伝える。 */
+export function resolveDeveloperReportSendingLabel(category: DeveloperReportCategory, aiAnswerEnabled: boolean): string {
+  return aiAnswerEnabled && category === 'question' ? DEVELOPER_REPORT_UI_TEXT.sendingAi : DEVELOPER_REPORT_UI_TEXT.sending
+}
 
 export function normalizeDeveloperReportNote(raw: unknown): string {
   if (typeof raw !== 'string') return ''
@@ -177,14 +200,21 @@ export function buildDeveloperReportRequestBody(input: {
 }
 
 export type DeveloperReportSubmitResult =
-  | { ok: true; reportId: string; isTest?: boolean }
+  /** aiAnswer / aiAnswerError は AI 即時回答(開発用教室の質問のみ・spec §G-7)の結果。それ以外では付かない。 */
+  | { ok: true; reportId: string; isTest?: boolean; aiAnswer?: string; aiAnswerError?: string }
   | { ok: false; error: string }
+
+export const DEVELOPER_REPORT_AI_ANSWER_HEADING = '――― AI の自動回答（試験中・誤りがあり得ます）―――'
 
 /** 送信結果を利用者向けの1文にする（盤面モーダル・日程表タブのモーダルで共用）。 */
 export function formatDeveloperReportResultMessage(result: DeveloperReportSubmitResult): string {
   if (result.ok) {
-    if (result.isTest) return `テストとして受け付けました（受付番号 ${result.reportId}）。開発者への課題登録は行いません。`
-    return `開発者へ送りました（受付番号 ${result.reportId}）。ありがとうございます。`
+    const head = result.isTest
+      ? `テストとして受け付けました（受付番号 ${result.reportId}）。開発者への課題登録は行いません。`
+      : `開発者へ送りました（受付番号 ${result.reportId}）。ありがとうございます。`
+    if (result.aiAnswer) return `${head}\n\n${DEVELOPER_REPORT_AI_ANSWER_HEADING}\n${result.aiAnswer}\n\n解決しない場合は、開発者が確認してから改めて回答します。`
+    if (result.aiAnswerError) return `${head}\n\n（AI の自動回答は作れませんでした: ${result.aiAnswerError}。開発者が確認してから回答します）`
+    return head
   }
   return `送れませんでした: ${result.error}\n時間をおいて再度お試しください。`
 }

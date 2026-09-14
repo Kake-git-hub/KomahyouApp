@@ -58,6 +58,7 @@ import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from '.
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
+import { generateQuestionAiAnswer, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
@@ -1804,7 +1805,11 @@ export function toLessonHistoryHttpsError(error: unknown): HttpsError {
 // 開発者へ送る。メタ＋操作痕跡は Firestore(workspaces/{ws}/developerReports)、教室データ本体は Storage へ。
 // 通知(GitHub Issue 起票)は .github/workflows/developer-reports.yml が notifiedAt==null を拾って行う。
 // 本番データ(classroomSnapshots 等)には一切書かない＝読み取り専用の安全な機能。
-export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 120, memory: '512MiB' }, async (request) => {
+// 質問への AI 即時回答(試験・開発用教室のみ。spec-developer-report §G-7)の API キー。functions runtime env
+// (functions/.env・CI では secret PROD_FUNCTIONS_ENV)の ANTHROPIC_API_KEY。未設定なら AI を呼ばない。
+const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY ?? '').trim()
+
+export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 180, memory: '512MiB' }, async (request) => {
   const rawData = readPayloadObject(request.data, 'request.data')
   const workspaceKey = readString(rawData.workspaceKey, 'workspaceKey')
   const classroomId = readString(rawData.classroomId, 'classroomId')
@@ -1884,7 +1889,28 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     issueNumber: null,
   })
   logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
-  return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt, isTest: report.isTest }
+
+  // 質問への AI 即時回答(試験・開発用教室のみ)。報告の記録が済んでから呼ぶ(AI が失敗しても報告は残る)。
+  // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
+  let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
+  if (shouldAnswerQuestionWithAi({ category: report.category, isDevelopmentClassroom: isDevelopmentClassroomIdentity(classroomId, classroomName), isVerificationChecklist })) {
+    const aiResult = await generateQuestionAiAnswer({
+      note: report.note,
+      screen: report.screen,
+      scheduleContext: report.scheduleContext,
+      recentOperations: report.recentOperations,
+    }, { apiKey: ANTHROPIC_API_KEY })
+    const answeredAt = new Date().toISOString()
+    if (aiResult.ok) {
+      aiAnswerFields = { aiAnswer: aiResult.answer }
+      await reportRef.set({ aiAnswer: aiResult.answer, aiAnswerModel: aiResult.model, aiAnsweredAt: answeredAt, aiAnswerInputTokens: aiResult.inputTokens, aiAnswerOutputTokens: aiResult.outputTokens }, { merge: true })
+    } else {
+      aiAnswerFields = { aiAnswerError: aiResult.error }
+      await reportRef.set({ aiAnswerError: aiResult.error, aiAnswerModel: QUESTION_AI_MODEL, aiAnsweredAt: answeredAt }, { merge: true })
+    }
+    logger.info(`[DeveloperReport] AI answer report=${reportId} ok=${aiResult.ok}${aiResult.ok ? ` in=${aiResult.inputTokens} out=${aiResult.outputTokens}` : ` error=${aiResult.error}`}`)
+  }
+  return { reportId, storagePath: snapshotByteLength >= 0 && report.hasSnapshotPayload ? storagePath : '', recordedAt, isTest: report.isTest, ...aiAnswerFields }
 })
 
 // 「要望・報告」のメール即時通知(オーナー要望 2026-09-04: LINE ではなくメールへ直接、15分待たずに)。

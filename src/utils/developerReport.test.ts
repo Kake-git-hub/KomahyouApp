@@ -4,8 +4,12 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 import {
+  DEVELOPER_REPORT_AI_ANSWER_HEADING,
   DEVELOPER_REPORT_CATEGORIES,
+  DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY,
   DEVELOPER_REPORT_UI_TEXT,
+  resolveDeveloperReportQuestionNotice,
+  resolveDeveloperReportSendingLabel,
   isDeveloperReportTestNote,
   normalizeDeveloperReportCategory,
   validateDeveloperReportNote,
@@ -36,11 +40,18 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
       expect(value).not.toContain('空欄')
     }
     expect(DEVELOPER_REPORT_UI_TEXT.description('緑が丘校')).toContain('教室「緑が丘校」')
-    // ボタン名・題名は「要望・報告」(オーナー確定 2026-09-04)。要望も同じ導線で送れることを本文で示す。
-    expect(DEVELOPER_REPORT_UI_TEXT.title).toBe('要望・報告')
+    // ボタン名・題名は「質問・要望」(オーナー確定 2026-09-04「要望・報告」→ 2026-09-14 改名)。要望も同じ導線で送れることを本文で示す。
+    expect(DEVELOPER_REPORT_UI_TEXT.title).toBe('質問・要望')
     expect(DEVELOPER_REPORT_UI_TEXT.description('')).toContain('要望')
-    // 使い方の質問(question)も同じ導線(2026-09-13)。3 種別は同じ流れ(ストック→メール→後で開発者が対応)。
-    expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.map((o) => o.value)).toEqual(['bug', 'request', 'question'])
+    // 使い方の質問(question)も同じ導線(2026-09-13)。並びは 質問 → 要望 → 不具合、モーダルの既定は質問(オーナー指示 2026-09-14)。
+    expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.map((o) => o.value)).toEqual(['question', 'request', 'bug'])
+    expect(DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY).toBe('question')
+    // 「#テスト と書いてください」の案内文は削除(オーナー指示 2026-09-14)。テスト判定そのものは残す(下のテスト)。
+    expect(Object.keys(DEVELOPER_REPORT_UI_TEXT)).not.toContain('testHint')
+    for (const text of Object.values(DEVELOPER_REPORT_UI_TEXT)) {
+      const value = typeof text === 'function' ? text('教室') : text
+      expect(JSON.stringify(value)).not.toContain('#テスト')
+    }
     expect(DEVELOPER_REPORT_UI_TEXT.categoryOptions.find((o) => o.value === 'question')?.label).toBe('使い方の質問')
     expect(DEVELOPER_REPORT_UI_TEXT.description('')).toContain('質問')
     // 入力ヒント: 修正しやすい情報(生徒名・日付・コマ・何が起きたか)を促す(オーナー指示 2026-09-04)。
@@ -67,8 +78,38 @@ describe('developerReport: 一言は必須(2026-09-04 改定)', () => {
     // React モーダルは question 選択時だけ注意文を描く(source-scan: コンポーネントは jsdom なしで描かないため文面の配線を固定)。
     const modalSource = readFileSync(fileURLToPath(new URL('../components/developer-report/DeveloperReportModal.tsx', import.meta.url)), 'utf8')
     expect(modalSource).toContain("{category === 'question' ? (")
-    expect(modalSource).toContain('{DEVELOPER_REPORT_UI_TEXT.questionNotice}')
+    expect(modalSource).toContain('{resolveDeveloperReportQuestionNotice(aiAnswerEnabled)}')
     expect(modalSource).toContain('developer-report-question-notice')
+    // 既定の種類は並びの先頭(質問)。#テスト の案内文は描かない(2026-09-14)。
+    expect(modalSource).toContain('useState<DeveloperReportCategory>(DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY)')
+    expect(modalSource).not.toContain('testHint')
+  })
+
+  it('AI 即時回答が有効な教室(開発用教室のみ・spec §G-7)だけ、質問の注意文と送信中文言を切り替える', () => {
+    expect(resolveDeveloperReportQuestionNotice(false)).toBe(DEVELOPER_REPORT_UI_TEXT.questionNotice)
+    expect(resolveDeveloperReportQuestionNotice(true)).toBe(DEVELOPER_REPORT_UI_TEXT.questionNoticeAi)
+    expect(DEVELOPER_REPORT_UI_TEXT.questionNoticeAi).toContain('AI')
+    expect(DEVELOPER_REPORT_UI_TEXT.questionNoticeAi).toContain('誤りがあり得ます')
+    expect(resolveDeveloperReportSendingLabel('question', true)).toBe(DEVELOPER_REPORT_UI_TEXT.sendingAi)
+    // AI を呼ばない組み合わせでは従来の文言(要望・不具合は AI 対象外／無効な教室は質問でも従来)。
+    expect(resolveDeveloperReportSendingLabel('request', true)).toBe(DEVELOPER_REPORT_UI_TEXT.sending)
+    expect(resolveDeveloperReportSendingLabel('bug', true)).toBe(DEVELOPER_REPORT_UI_TEXT.sending)
+    expect(resolveDeveloperReportSendingLabel('question', false)).toBe(DEVELOPER_REPORT_UI_TEXT.sending)
+  })
+
+  it('送信結果に AI の回答(または作れなかった理由)を受付文の後ろへ添える', () => {
+    const answered = formatDeveloperReportResultMessage({ ok: true, reportId: 'r1', aiAnswer: '基本データ画面で生徒を選びます。' })
+    expect(answered.startsWith('開発者へ送りました（受付番号 r1）。')).toBe(true)
+    expect(answered).toContain(`
+
+${DEVELOPER_REPORT_AI_ANSWER_HEADING}
+基本データ画面で生徒を選びます。`)
+    const failed = formatDeveloperReportResultMessage({ ok: true, reportId: 'r2', aiAnswerError: 'AI が混み合っています' })
+    expect(failed).toContain('AI の自動回答は作れませんでした: AI が混み合っています')
+    expect(failed).toContain('開発者が確認してから回答します')
+    // AI 結果が無い(本番教室・要望/不具合)ときは従来と同一の文。
+    expect(formatDeveloperReportResultMessage({ ok: true, reportId: 'r3' })).toBe('開発者へ送りました（受付番号 r3）。ありがとうございます。')
+    expect(formatDeveloperReportResultMessage({ ok: true, reportId: 'r4', isTest: true, aiAnswer: 'x' })).toContain('テストとして受け付けました')
   })
 
   it('内容に #テスト(または #test) があればテスト扱いと先読みできる', () => {

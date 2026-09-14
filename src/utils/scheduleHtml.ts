@@ -4,7 +4,8 @@
 // 自動修正で外すと埋め込みスクリプトが壊れて実行時に全停止する(memory: komahyou-schedulehtml-embedded-script)。
 // そのためこのルールはファイル単位で無効化する。エスケープは絶対に変更しない。
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
-import { DEVELOPER_REPORT_UI_TEXT } from './developerReport'
+import { DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_UI_TEXT } from './developerReport'
+import { isFeatureEnabledForClassroom } from './featureRollout'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
@@ -233,6 +234,9 @@ export type SchedulePayload = {
   // 講習履歴(H-4)のボタンを生徒日程表のツールバーに出すか(開発用教室のみ先行)。
   // false のときはボタン自体を描かない(埋め込みJSの関数群は常に載る＝構文検証の対象に保つ)。
   lessonHistoryEnabled?: boolean
+  // 「質問・要望」モーダルで質問に AI 即時回答するか(開発用教室のみ・spec-developer-report §G-7)。
+  // 表示(注意文・送信中文言・応答待ち時間)だけを切り替える。AI を呼ぶかの権威はサーバー。
+  questionAiAnswerEnabled?: boolean
 }
 
 type OpenScheduleHtmlParams = {
@@ -681,6 +685,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     optionFieldEnabled: Boolean(params.optionFieldEnabled),
     scheduleDndEnabled: Boolean(params.scheduleDndEnabled),
     lessonHistoryEnabled: Boolean(params.lessonHistoryEnabled),
+    // 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)。表示の切り替えだけ(AI を呼ぶ権威はサーバー)。
+    questionAiAnswerEnabled: isFeatureEnabledForClassroom('questionAiAnswer', { name: params.classroomName }),
   }
 }
 
@@ -2850,7 +2856,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         </select>
       </div>
       <div class="toolbar-actions">
-        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="「おかしいな」と思ったことも、追加してほしい要望も、そのまま開発者へ送れます">要望・報告</button>
+        <button type="button" id="schedule-report-developer-button" class="secondary report-developer" title="${DEVELOPER_REPORT_UI_TEXT.buttonTooltip}">${DEVELOPER_REPORT_UI_TEXT.title}</button>
       </div>
       <div class="toolbar-spacer"></div>
       <div class="toolbar-actions">
@@ -7102,14 +7108,16 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         categoryLabel: DEVELOPER_REPORT_UI_TEXT.categoryLabel,
         categoryOptions: DEVELOPER_REPORT_UI_TEXT.categoryOptions,
         questionNotice: DEVELOPER_REPORT_UI_TEXT.questionNotice,
+        questionNoticeAi: DEVELOPER_REPORT_UI_TEXT.questionNoticeAi,
+        defaultCategory: DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY,
         inputHint: DEVELOPER_REPORT_UI_TEXT.inputHint,
-        testHint: DEVELOPER_REPORT_UI_TEXT.testHint,
         noteLabel: DEVELOPER_REPORT_UI_TEXT.noteLabel,
         placeholder: DEVELOPER_REPORT_UI_TEXT.placeholder,
         requiredError: DEVELOPER_REPORT_UI_TEXT.requiredError,
         cancel: DEVELOPER_REPORT_UI_TEXT.cancel,
         submit: DEVELOPER_REPORT_UI_TEXT.submit,
         sending: DEVELOPER_REPORT_UI_TEXT.sending,
+        sendingAi: DEVELOPER_REPORT_UI_TEXT.sendingAi,
         close: DEVELOPER_REPORT_UI_TEXT.close,
       })};
       let developerReportOverlay = null;
@@ -7160,7 +7168,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         description.textContent = DATA.classroomName
           ? DEVELOPER_REPORT_TEXT.description.replace('__CLASSROOM__', String(DATA.classroomName))
           : DEVELOPER_REPORT_TEXT.descriptionNoClassroom;
-        // 種類(不具合・おかしい／追加要望)。盤面モーダルと同じ選択肢・既定は不具合。
+        // 種類(使い方の質問／追加要望／不具合・おかしい)。盤面モーダルと同じ選択肢・並び・既定(質問)。
         const categoryField = document.createElement('fieldset');
         categoryField.className = 'developer-report-category';
         const categoryLegend = document.createElement('legend');
@@ -7168,11 +7176,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         categoryLegend.textContent = DEVELOPER_REPORT_TEXT.categoryLabel;
         const categoryOptions = document.createElement('div');
         categoryOptions.className = 'developer-report-category-options';
-        let selectedCategory = 'bug';
+        let selectedCategory = DEVELOPER_REPORT_TEXT.defaultCategory;
+        // AI 即時回答(開発用教室のみ・spec §G-7)が有効なら、質問の注意文・送信中文言・応答待ち時間を切り替える。
+        const aiAnswerEnabled = Boolean(DATA.questionAiAnswerEnabled);
         // 質問(2026-09-13・spec §G-2): 選んだときだけ「すぐには返らない」注意文を出す(即答の期待を作らない)。盤面モーダルと同じ文言。
         const questionNotice = document.createElement('p');
         questionNotice.className = 'developer-report-hint developer-report-question-notice';
-        questionNotice.textContent = DEVELOPER_REPORT_TEXT.questionNotice;
+        questionNotice.textContent = aiAnswerEnabled ? DEVELOPER_REPORT_TEXT.questionNoticeAi : DEVELOPER_REPORT_TEXT.questionNotice;
         questionNotice.hidden = selectedCategory !== 'question';
         const categoryLabels = [];
         DEVELOPER_REPORT_TEXT.categoryOptions.forEach(function(option) {
@@ -7215,9 +7225,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const inputHint = document.createElement('p');
         inputHint.className = 'developer-report-hint developer-report-hint-primary';
         inputHint.textContent = DEVELOPER_REPORT_TEXT.inputHint;
-        const hint = document.createElement('p');
-        hint.className = 'developer-report-hint';
-        hint.textContent = DEVELOPER_REPORT_TEXT.testHint;
         const actions = document.createElement('div');
         actions.className = 'developer-report-actions';
         const cancelButton = document.createElement('button');
@@ -7238,7 +7245,6 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         modal.appendChild(textarea);
         modal.appendChild(error);
         modal.appendChild(inputHint);
-        modal.appendChild(hint);
         modal.appendChild(actions);
         overlay.appendChild(modal);
         overlay.addEventListener('click', function(event) {
@@ -7264,7 +7270,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           submitButton.disabled = true;
           cancelButton.disabled = true;
           textarea.disabled = true;
-          submitButton.textContent = DEVELOPER_REPORT_TEXT.sending;
+          const waitingForAi = aiAnswerEnabled && selectedCategory === 'question';
+          submitButton.textContent = waitingForAi ? DEVELOPER_REPORT_TEXT.sendingAi : DEVELOPER_REPORT_TEXT.sending;
           window.opener.postMessage({
             type: 'schedule-developer-report',
             note: note,
@@ -7282,7 +7289,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
           // 結果が返らない(本体が固まっている等)場合の保険。通常は結果メッセージで即差し替わる。
           developerReportResultTimer = window.setTimeout(function() {
             showDeveloperReportResult('本体(コマ表)から応答がありません。コマ表のタブを開いた状態で、もう一度お試しください。');
-          }, 20000);
+          }, waitingForAi ? 200000 : 20000);
         });
         document.body.appendChild(overlay);
         developerReportOverlay = overlay;

@@ -1,15 +1,18 @@
-// 「要望・報告」モーダル(2026-09-04 オーナー指示)。
-// 内容は**必須**(空欄送信は不可)。種類(不具合・おかしい／追加要望／使い方の質問)を選べる。質問を選んだときだけ
-// 「すぐには返らない」注意文を出す(spec-developer-report §G-2・2026-09-13)。送信内容の組み立てと送信は App 側。
+// 「質問・要望」モーダル(2026-09-04 オーナー指示・旧「要望・報告」→ 2026-09-14 改名)。
+// 内容は**必須**(空欄送信は不可)。種類(使い方の質問／追加要望／不具合・おかしい。この順・既定は質問)を選べる。質問を選んだときだけ
+// 「すぐには返らない」注意文を出す(spec-developer-report §G-2・2026-09-13)。AI 即時回答が有効な教室(開発用教室のみ・§G-7)では
+// 注意文を「その場で AI が回答」に差し替える。送信内容の組み立てと送信は App 側。
 // 文言は日程表タブ側の同一モーダル(src/utils/scheduleHtml.ts)と共通化するため developerReport.ts の定数を使う。
 // このコンポーネントは入力と結果表示だけを担う。
 
 import { useEffect, useRef, useState } from 'react'
 
-import { DEVELOPER_REPORT_UI_TEXT, validateDeveloperReportNote, type DeveloperReportCategory } from '../../utils/developerReport'
+import { DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_UI_TEXT, resolveDeveloperReportQuestionNotice, resolveDeveloperReportSendingLabel, validateDeveloperReportNote, type DeveloperReportCategory } from '../../utils/developerReport'
 
 export type DeveloperReportModalProps = {
   classroomName: string
+  /** 質問への AI 即時回答が有効か(featureRollout `questionAiAnswer`・開発用教室のみ)。表示の切り替えだけに使う。 */
+  aiAnswerEnabled?: boolean
   sending: boolean
   /** 送信後の結果文。null のうちは入力フォームを表示する。 */
   resultMessage: string | null
@@ -17,9 +20,9 @@ export type DeveloperReportModalProps = {
   onClose: () => void
 }
 
-export function DeveloperReportModal({ classroomName, sending, resultMessage, onSubmit, onClose }: DeveloperReportModalProps) {
+export function DeveloperReportModal({ classroomName, aiAnswerEnabled = false, sending, resultMessage, onSubmit, onClose }: DeveloperReportModalProps) {
   const [note, setNote] = useState('')
-  const [category, setCategory] = useState<DeveloperReportCategory>('bug')
+  const [category, setCategory] = useState<DeveloperReportCategory>(DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY)
   const [validationError, setValidationError] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -71,7 +74,7 @@ export function DeveloperReportModal({ classroomName, sending, resultMessage, on
               </div>
             </fieldset>
             {category === 'question' ? (
-              <p className="developer-report-hint developer-report-question-notice" role="note" data-testid="developer-report-question-notice">{DEVELOPER_REPORT_UI_TEXT.questionNotice}</p>
+              <p className="developer-report-hint developer-report-question-notice" role="note" data-testid="developer-report-question-notice">{resolveDeveloperReportQuestionNotice(aiAnswerEnabled)}</p>
             ) : null}
             <label className="developer-report-note-label" htmlFor="developer-report-note">{DEVELOPER_REPORT_UI_TEXT.noteLabel}</label>
             <textarea
@@ -89,11 +92,10 @@ export function DeveloperReportModal({ classroomName, sending, resultMessage, on
             />
             {validationError ? <p className="developer-report-error" role="alert" data-testid="developer-report-error">{validationError}</p> : null}
             <p className="developer-report-hint developer-report-hint-primary" data-testid="developer-report-input-hint">{DEVELOPER_REPORT_UI_TEXT.inputHint}</p>
-            <p className="developer-report-hint">{DEVELOPER_REPORT_UI_TEXT.testHint}</p>
             <div className="auto-assign-modal-actions developer-report-actions">
               <button type="button" className="secondary-button" onClick={onClose} disabled={sending} data-testid="developer-report-cancel">{DEVELOPER_REPORT_UI_TEXT.cancel}</button>
               <button type="button" className="primary-button" onClick={handleSubmit} disabled={sending} data-testid="developer-report-submit">
-                {sending ? DEVELOPER_REPORT_UI_TEXT.sending : DEVELOPER_REPORT_UI_TEXT.submit}
+                {sending ? resolveDeveloperReportSendingLabel(category, aiAnswerEnabled) : DEVELOPER_REPORT_UI_TEXT.submit}
               </button>
             </div>
           </>

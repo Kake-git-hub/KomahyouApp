@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
+import { DEVELOPER_REPORT_UI_TEXT } from '../../utils/developerReport'
 import {
   buildMonthMatrix,
   formatMonthLabel,
@@ -35,7 +36,7 @@ type BoardToolbarProps = {
   onRedo: () => void
   onOpenSortMenu: () => void
   onCopyDistributionUrl?: () => void
-  /** 「要望・報告」(2026-09-04・旧「開発者へ報告」): 講師日程共有の右に配置。未指定なら出さない。 */
+  /** 「質問・要望」(2026-09-04「要望・報告」→ 2026-09-14 改名・旧「開発者へ報告」): 講師日程共有の右に配置。未指定なら出さない。 */
   onReportToDeveloper?: () => void
   onGoPrevWeek: () => void
   onGoNextWeek: () => void
@@ -233,7 +234,7 @@ function BoardToolbarComponent({
             <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">講師日程共有</button>
           ) : null}
           {!isTemplateMode && onReportToDeveloper ? (
-            <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title="「おかしいな」と思ったことも、追加してほしい要望も、そのまま開発者へ送れます">要望・報告</button>
+            <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title={DEVELOPER_REPORT_UI_TEXT.buttonTooltip}>{DEVELOPER_REPORT_UI_TEXT.title}</button>
           ) : null}
         </div>
         <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}${syncProgressPercent !== null && syncProgressPercent !== undefined ? ' is-syncing' : ''}`} data-testid="toolbar-status">

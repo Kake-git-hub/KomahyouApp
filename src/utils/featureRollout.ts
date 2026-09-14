@@ -124,6 +124,14 @@ export const featureRolloutRegistry = {
     scope: 'staging-environment',
     description: 'Basic-data screen: per-student parent portal QR (issue/show/print/reissue) and the parent message notification modal.',
   },
+  // 質問への AI 即時回答(docs/spec-developer-report.md §G-7・オーナー指示 2026-09-14「開発用教室にだけ実装」)。
+  // ON: 「質問・要望」モーダルで質問を選ぶと注意文が「その場で AI が回答」に変わり、送信後の結果に AI の回答を出す。
+  // ★AI を呼ぶかどうかの権威はサーバー(functions/src/questionAiAnswer.ts shouldAnswerQuestionWithAi = 開発用教室判定)。
+  //   このフラグは表示(注意文・送信中文言・日程表タブの待ち時間)だけを切り替える。昇格するときは**両側を同時に**変える。
+  questionAiAnswer: {
+    scope: 'development-only',
+    description: 'Question/request modal: instant AI answer to questions (Claude API via submitDeveloperReport), development classroom only.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

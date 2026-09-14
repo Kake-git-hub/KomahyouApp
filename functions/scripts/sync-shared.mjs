@@ -35,10 +35,25 @@ export function buildGeneratedContent(sourceText) {
   return `${SHARED_HEADER}\n${source}`
 }
 
+// 質問への AI 即時回答(functions/src/questionAiAnswer.ts・開発用教室のみ試験)が根拠にする利用者マニュアル。
+// functions のデプロイには docs/ が含まれないため、文字列定数として複製する。
+// ズレは functions/src/questionAiAnswer.test.ts が「生成物 = buildUserManualModuleContent(元ファイル)」で検出する。
+export const USER_MANUAL_SOURCE_PATH = 'docs/user-manual.md'
+export const USER_MANUAL_OUTPUT_PATH = 'functions/src/generated/userManual.ts'
+export const USER_MANUAL_HEADER = '// GENERATED FROM docs/user-manual.md — 手で編集しない。npm --prefix functions run sync-shared で再生成。'
+
+export function buildUserManualModuleContent(sourceText) {
+  return `${USER_MANUAL_HEADER}\nexport const USER_MANUAL_MARKDOWN = ${JSON.stringify(normalizeToLf(sourceText))}\n`
+}
+
 export function syncShared() {
-  const sourcePath = resolve(repoRoot, SHARED_SOURCE_PATH)
-  const outputPath = resolve(repoRoot, SHARED_OUTPUT_PATH)
-  const generated = buildGeneratedContent(readFileSync(sourcePath, 'utf8'))
+  const manualChanged = writeIfChanged(USER_MANUAL_OUTPUT_PATH, buildUserManualModuleContent(readFileSync(resolve(repoRoot, USER_MANUAL_SOURCE_PATH), 'utf8')))
+  const scheduleChanged = writeIfChanged(SHARED_OUTPUT_PATH, buildGeneratedContent(readFileSync(resolve(repoRoot, SHARED_SOURCE_PATH), 'utf8')))
+  return manualChanged || scheduleChanged
+}
+
+function writeIfChanged(outputRelativePath, generated) {
+  const outputPath = resolve(repoRoot, outputRelativePath)
   mkdirSync(dirname(outputPath), { recursive: true })
   let current = null
   try {
@@ -47,11 +62,11 @@ export function syncShared() {
     current = null
   }
   if (current === generated) {
-    console.log(`[sync-shared] up to date: ${SHARED_OUTPUT_PATH}`)
+    console.log(`[sync-shared] up to date: ${outputRelativePath}`)
     return false
   }
   writeFileSync(outputPath, generated, 'utf8')
-  console.log(`[sync-shared] wrote ${SHARED_OUTPUT_PATH} (${generated.length} chars)`)
+  console.log(`[sync-shared] wrote ${outputRelativePath} (${generated.length} chars)`)
   return true
 }
 

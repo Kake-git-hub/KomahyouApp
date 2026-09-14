@@ -4503,6 +4503,37 @@ describe('reopenedSlots (後から出席可能に変更) の日程表配線', ()
 // 「開発者へ報告」(2026-09-04・docs/spec-developer-report.md §B/§E): 日程表は表示だけ見て「おかしい」と思うことがあるので、
 // 別タブのツールバー(講習期間表示の右)にもボタンを出し、本体(opener)へ postMessage で報告を依頼する。
 describe('scheduleHtml 開発者へ報告ボタン', () => {
+  it('質問への AI 即時回答フラグは開発用教室だけ true(本番教室名では false・spec-developer-report §G-7)', () => {
+    const renderFor = (classroomName: string) => {
+      const write = vi.fn()
+      const popup = {
+        closed: false,
+        document: { open() {}, write, close() {} },
+        focus() {},
+        postMessage() {},
+      } as unknown as Window
+      vi.stubGlobal('window', {
+        open: () => popup,
+        setTimeout: (callback: () => void) => { callback(); return 0 },
+      })
+      openStudentScheduleHtml({
+        cells: [],
+        students: [createStudent({ displayName: '山田' })],
+        regularLessons: [],
+        defaultStartDate: '2026-09-01',
+        defaultEndDate: '2026-09-07',
+        titleLabel: 'テスト',
+        classroomName,
+        classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+        targetWindow: popup,
+      })
+      return write.mock.calls[0]?.[0] as string
+    }
+    expect(renderFor('開発用教室')).toContain('"questionAiAnswerEnabled":true')
+    expect(renderFor('スクールIE 日大前校')).toContain('"questionAiAnswerEnabled":false')
+    expect(renderFor('スクールIE 緑が丘校')).toContain('"questionAiAnswerEnabled":false')
+  })
+
   it('生徒日程表のツールバーにボタンがあり、送信・結果の両メッセージ種別が埋め込みスクリプトに含まれる', () => {
     const write = vi.fn()
     const popup = {
@@ -4535,12 +4566,16 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(buttonIndex).toBeGreaterThan(periodIndex)
     expect(buttonIndex).toBeLessThan(showAllIndex)
     expect(html).toContain('class="secondary report-developer"')
-    // ボタン名は「要望・報告」(オーナー確定 2026-09-04・旧「開発者へ報告」)。
-    expect(html).toContain('>要望・報告</button>')
+    // ボタン名は「質問・要望」(オーナー確定 2026-09-04「要望・報告」→ 2026-09-14 改名・旧「開発者へ報告」)。
+    expect(html).toContain('>質問・要望</button>')
+    expect(html).not.toContain('>要望・報告</button>')
     expect(html).not.toContain('>開発者へ報告</button>')
     // 種類(不具合/要望)のラジオと #テスト の案内を盤面と同じ文言で埋め込む。
     // 使い方の質問(question)も盤面と同じ 3 択で埋め込む(2026-09-13)。
-    expect(html).toContain('"categoryOptions":[{"value":"bug","label":"不具合・おかしい"},{"value":"request","label":"追加してほしい・要望"},{"value":"question","label":"使い方の質問"}]')
+    // 並びは 質問 → 要望 → 不具合、既定は質問(オーナー指示 2026-09-14)。
+    expect(html).toContain('"categoryOptions":[{"value":"question","label":"使い方の質問"},{"value":"request","label":"追加してほしい・要望"},{"value":"bug","label":"不具合・おかしい"}]')
+    expect(html).toContain('"defaultCategory":"question"')
+    expect(html).toContain('let selectedCategory = DEVELOPER_REPORT_TEXT.defaultCategory;')
     expect(html).toContain("name = 'schedule-developer-report-category'")
     // 質問を選んだときだけ「すぐには返らない」注意文(盤面と同じ文言・spec §G-2)。既定(bug)では隠れている。
     expect(html).toContain('"questionNotice":"回答は開発者が確認してからお返しします（すぐには返りません・自動返信はしません）。"')
@@ -4548,7 +4583,13 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
     expect(html).toContain('modal.appendChild(questionNotice);')
     expect(html).toContain('.developer-report-hint.developer-report-question-notice {')
     expect(html).toContain('category: selectedCategory,')
-    expect(html).toContain('"testHint":"テスト送信のときは内容に「#テスト」と書いてください')
+    // 「#テスト と書いてください」の案内文は削除(オーナー指示 2026-09-14)。
+    expect(html).not.toContain('testHint')
+    expect(html).not.toContain('テスト送信のときは内容に')
+    // AI 即時回答(開発用教室のみ・spec §G-7): 既定(教室名なし)では無効。有効時だけ注意文・待ち時間を切り替える。
+    expect(html).toContain('"questionAiAnswerEnabled":false')
+    expect(html).toContain('const aiAnswerEnabled = Boolean(DATA.questionAiAnswerEnabled);')
+    expect(html).toContain("const waitingForAi = aiAnswerEnabled && selectedCategory === 'question';")
     // 入力のヒント(生徒名・日付・コマ・何が起きたか)を盤面と同じ文言で出す(オーナー指示 2026-09-04)。
     expect(html).toContain('"inputHint":"生徒名・日付・コマ(何限)・どの操作をしたら何が起きたか')
     expect(html).toContain("inputHint.className = 'developer-report-hint developer-report-hint-primary'")
