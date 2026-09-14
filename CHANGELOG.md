@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.520 (2026-09-14)
+- feat: 自動割当ルール画面から「登校日集約/分散」を非表示にした(分かりづらいとの意見・オーナー指示)。見えない設定が効き続けないよう、自動割振/警告でも対象設定の有無にかかわらず適用しない(`isAutoAssignRuleApplicable` で除外=「対象ルールなし」と同じスコア)。Excel出力からも外す(取込時は未記載ルール=現設定維持なので消えない)。保存データの行・対象設定は削除しないので非表示リストから外せば復帰。回帰テスト: 非表示判定・全員対象でも不適用(他ルールは適用)・Excel出力除外(src/components/auto-assign-rules/autoAssignRuleModel.ts・AutoAssignRuleScreen.tsx・hiddenAutoAssignRules.test.ts, ScheduleBoardScreen.tsx, docs/spec-auto-assign-rules.md §C)
+
 ## v1.5.519 (2026-09-14)
 - fix: 保護者QRのページ(開発用教室限定)で、講習だけだった月(夏期講習中に入塾した生徒の8月など)が「教室休み」しか出ず出席データが消えたように見えた(確認リスト第7版 k-4 要改善)。実データ(開発用教室を読み取りのみ)で原因を確認: 講習コマは仕様どおり出さないため。オーナー回答で講習コマは出さず、日程計算が真偽値 `hasLectureLessons`(範囲内の開講日に講習コマ=配置 or 出欠記録(moved除く)があったか・件数日付は出さない)を返し、通常授業の日が0日でこの印が真の月だけ「この月は通常授業がありません（講習の日程はこのページには表示されません）。」を出す。講習も無い月は従来どおり。旧functions応答(印なし)は偽扱い。functions 生成物を再同期。回帰テスト: 印の真偽(範囲/他生徒/statusSlots/moved除外)・応答キー・注記の出し分け。確認リスト第8版 v1.5.519(k-4 のみ)(src/utils/parentSchedule.ts, functions/src/parentPortal.ts, parent-portal/parentPortalPageModel.ts・ParentPortalPage.tsx, verificationChecklist.ts, docs/spec-parent-portal.md §0-4-5)
 

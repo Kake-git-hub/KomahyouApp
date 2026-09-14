@@ -6,6 +6,7 @@ import {
   autoAssignRuleDefinitions,
   createAutoAssignTargetId,
   getAllowedRuleCategories,
+  isHiddenAutoAssignRule,
   listAutoAssignTargetGrades,
   resolveForbiddenPeriods,
   resolvePeriodPriorityOrder,
@@ -251,7 +252,8 @@ export function buildAutoAssignWorkbook(
 ) {
   const workbook = xlsx.utils.book_new()
 
-  const knownRuleKeys = new Set(autoAssignRuleDefinitions.map((definition) => definition.key))
+  // 非表示ルールは出力しない（取込時は未記載ルール=現在の設定を維持するので消えない）。
+  const knownRuleKeys = new Set(autoAssignRuleDefinitions.map((definition) => definition.key).filter((key) => !isHiddenAutoAssignRule(key)))
   xlsx.utils.book_append_sheet(workbook, createWorkbookSheet(xlsx, rules.filter((rule) => knownRuleKeys.has(rule.key)).map((rule, index) => ({
     並び順: index + 1,
     ルールキー: rule.key,
@@ -418,6 +420,7 @@ export function AutoAssignRuleScreen({
   const forcedRules = useMemo(() => normalizedRules.filter((rule) => resolveRuleCategory(rule) === 'constraint'), [normalizedRules])
   // ⑧TODO1: 優先事項グループは区分=優先のルールだけを表示し、全て制約事項へ移ったグループは隠す。
   const orderedRuleGroups = useMemo(() => ruleGroupDefinitions
+    .filter((group) => !group.ruleKeys.every(isHiddenAutoAssignRule))
     .map((group) => ({
       ...group,
       rules: group.ruleKeys

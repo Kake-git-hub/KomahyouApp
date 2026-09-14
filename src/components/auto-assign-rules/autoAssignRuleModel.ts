@@ -59,6 +59,18 @@ const defaultConstraintRuleKeys = new Set<AutoAssignRuleKey>([
   'forbidFirstPeriod',
 ])
 
+// 非表示ルール（オーナー指示 2026-09-14：「登校日集約/分散」は分かりづらいとの意見で画面から外す）。
+// 画面・Excel出力に出さず、自動割振/警告でも「対象ルールなし」として扱う（見えない設定が効き続けないように）。
+// 保存データの行と対象設定は消さない（ここから外せば元の設定のまま復帰する）。
+const hiddenAutoAssignRuleKeys = new Set<AutoAssignRuleKey>([
+  'preferDateConcentration',
+  'preferNextDayOrLater',
+])
+
+export function isHiddenAutoAssignRule(key: AutoAssignRuleKey): boolean {
+  return hiddenAutoAssignRuleKeys.has(key)
+}
+
 // ルールごとに選べる区分（許可リスト）。成立しない組合せ（優先専用ルールを制約に）を作れないようにする。
 export function getAllowedRuleCategories(key: AutoAssignRuleKey): AutoAssignRuleCategory[] {
   return constraintCapableRuleKeys.has(key) ? ['constraint', 'priority'] : ['priority']
