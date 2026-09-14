@@ -69,6 +69,28 @@ describe('isLessonHistoryClassroomMismatch', () => {
   })
 })
 
+describe('normalizeStudentLessonHistoryResponse: 状態欄のまとめ(確認リスト その他 2026-09-14)', () => {
+  it('サーバーの statusText・振替元・振替先・未消化を落とさず別タブへ渡す(落とすと状態欄が素のラベルに戻る)', () => {
+    const history = normalizeStudentLessonHistoryResponse({
+      events: [{
+        date: '2026-09-02', slot: 2, status: 'absent', subject: '数', lessonType: 'regular', token: 't',
+        makeupDestination: { date: '2026-09-09', slot: 1 }, makeupOrigin: { date: 'bad', slot: 1 }, makeupPending: true,
+        statusText: '休み（振替先 9/9 1限）',
+      }],
+    })
+    expect(history.events[0]).toMatchObject({
+      statusText: '休み（振替先 9/9 1限）',
+      makeupDestination: { date: '2026-09-09', slot: 1 },
+      makeupOrigin: null,
+      makeupPending: true,
+    })
+    // 旧サーバー(フィールド無し)でも壊れない。
+    expect(normalizeStudentLessonHistoryResponse({ events: [{ date: '2026-09-02', status: 'absent' }] }).events[0]).toMatchObject({
+      statusText: '', makeupOrigin: null, makeupDestination: null, makeupPending: false,
+    })
+  })
+})
+
 describe('buildScheduleLessonHistoryResultMessage', () => {
   const history = normalizeStudentLessonHistoryResponse({ classroomId: 'c1', studentId: 'stu-1', events: [] })
 

@@ -62,6 +62,11 @@ export type ParentScheduleDay = {
   kind: ParentScheduleDayKind
   /** kind が board/template のときは 1 件以上。closed は常に [] */
   lessons: ParentScheduleLesson[]
+  /**
+   * closed(臨時・祝日の休み)の日から出ていった振替の振替先(確認リスト k-11)。無ければ省略。
+   * 休講日の授業を振替に回したとき「教室休み」の行に振替先を添えるため。
+   */
+  makeupDestinations?: Array<{ dateKey: string; slotNumber: number }>
 }
 
 export type ParentScheduleRange = { from: string; to: string }
@@ -1034,6 +1039,88 @@ function extractBoardLessons(
   return lessons.sort(compareLessons)
 }
 
+type ParentMakeupOriginLink = {
+  slotNumber: number
+  subject: string
+  destination: { dateKey: string; slotNumber: number }
+}
+
+// 振替元の日 → その日から出ていった振替(振替先)の一覧(確認リスト k-11 2026-09-14「休みとなった日が行表示されない」)。
+// 丸ごと振替は振替元の机を空にするだけ、生徒のドラッグ移動は振替元に moved(非表示)を残すだけで、どちらも振替元に
+// absent が無い。振替先の配置(makeupSourceDate)から逆に引いて、振替元の日に「お休み＋振替先」を補うための索引。
+// 対象は振替コマの配置と、振替を出席/振無休/休みにしたもの。振替コマ自体を休みにした absent も含める
+// (丸ごと振替・移動の振替先を休みにすると振替元に何も残らず、k-11 と同じ症状が再発するため・レビュー指摘 A-3)。
+// その振替先の日には別に「お休み(振替日は調整中)」が出る。元コマ(限)が読めない振替は行を作れないので含めない。
+function buildMakeupOriginLinksByDate(
+  cells: ParentBoardCell[],
+  matches: (entry: { managedStudentId?: string; name: string }) => boolean,
+): Map<string, ParentMakeupOriginLink[]> {
+  const linksByDate = new Map<string, ParentMakeupOriginLink[]>()
+  const register = (entry: ParentBoardStudentEntry, cell: ParentBoardCell) => {
+    if (!matches(entry)) return
+    const origin = resolveMakeupOrigin(entry, cell.dateKey)
+    if (!origin || origin.slotNumber === null) return
+    const list = linksByDate.get(origin.dateKey) ?? []
+    list.push({
+      slotNumber: origin.slotNumber,
+      subject: resolveDisplayedSubjectForGrade(entry.subject, entry.grade),
+      destination: { dateKey: cell.dateKey, slotNumber: cell.slotNumber },
+    })
+    linksByDate.set(origin.dateKey, list)
+  }
+  for (const cell of sortCells(cells)) {
+    for (const desk of cell.desks) {
+      for (const student of desk.studentSlots) {
+        if (student) register(student, cell)
+      }
+      for (const statusEntry of desk.statusSlots) {
+        if (!statusEntry) continue
+        if (statusEntry.status !== 'attended' && statusEntry.status !== 'absent-no-makeup' && statusEntry.status !== 'absent') continue
+        register(statusEntry, cell)
+      }
+    }
+  }
+  return linksByDate
+}
+
+// その日の授業行に、振替元として出ていった分の「お休み＋振替先」を足す。
+// 同じ限・同じ科目の「その日本来の授業」の行が既にあれば足さない(absent は振替先の欠けだけ埋める・通常/出席は授業があった扱い)。
+// 振替元を持つ行(別の日から来た振替を出席/振無休にしたもの)や振替・増コマはその日本来の授業ではないので数えない(レビュー指摘 A-2)。
+function appendMakeupOriginAbsences(
+  lessons: ParentScheduleLesson[],
+  links: readonly ParentMakeupOriginLink[] | undefined,
+  cells?: readonly ParentBoardCell[],
+): ParentScheduleLesson[] {
+  if (!links || links.length === 0) return lessons
+  const next = [...lessons]
+  for (const link of links) {
+    const existing = next.find((lesson) => (
+      lesson.slotNumber === link.slotNumber && lesson.subject === link.subject
+      && lesson.kind !== 'makeup' && lesson.kind !== 'extra' && !lesson.makeupOrigin
+    ))
+    if (existing) {
+      if (existing.kind === 'absent' && !existing.makeupDestination) existing.makeupDestination = link.destination
+      continue
+    }
+    next.push({
+      slotNumber: link.slotNumber,
+      timeLabel: resolveSlotTimeLabel(link.slotNumber, cells?.find((cell) => cell.slotNumber === link.slotNumber)?.timeLabel),
+      subject: link.subject,
+      kind: 'absent',
+      makeupDestination: link.destination,
+      isTentative: false,
+    })
+  }
+  return next.sort(compareLessons)
+}
+
+// 休講日の行に添える振替先(重複を除き、日付・限の順)。
+function buildClosedDayMakeupDestinations(links: readonly ParentMakeupOriginLink[] | undefined) {
+  const byKey = new Map<string, { dateKey: string; slotNumber: number }>()
+  for (const link of links ?? []) byKey.set(`${link.destination.dateKey}#${link.destination.slotNumber}`, link.destination)
+  return [...byKey.values()].sort((left, right) => (left.dateKey !== right.dateKey ? (left.dateKey < right.dateKey ? -1 : 1) : left.slotNumber - right.slotNumber))
+}
+
 // 講習コマ(special)がこのセル群にこの生徒の分としてあるか。表示はしない(注記の判定だけに使う)。
 function boardCellsHaveLectureLesson(
   cells: ParentBoardCell[],
@@ -1151,6 +1238,8 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     cellsByDateKey.set(cell.dateKey, list)
   }
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(allCells)
+  // 振替先は表示期間の内外を問わず全週から引く(§D-5 と同じ)。
+  const originLinksByDate = buildMakeupOriginLinksByDate(allCells, matches)
 
   // テンプレ補完は必要になった日に初めて計算する(盤面が全日そろっていれば不要)。
   let templateContext: { regularLessons: ParentRegularLessonRow[]; suppressedKeys: Set<string> } | null = null
@@ -1175,7 +1264,10 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     if (!isOpenDay(parsed.classroomSettings, dateKey)) {
       // 臨時・祝日の休み(holidayDates)だけ 1 行出す。毎週の定休曜日は出さない(一覧が休みの行で埋まるため)。
       if (parsed.classroomSettings.holidayDates.includes(dateKey)) {
-        days.push({ dateKey, weekday, kind: 'closed', lessons: [] })
+        const closedDay: ParentScheduleDay = { dateKey, weekday, kind: 'closed', lessons: [] }
+        const destinations = buildClosedDayMakeupDestinations(originLinksByDate.get(dateKey))
+        if (destinations.length > 0) closedDay.makeupDestinations = destinations
+        days.push(closedDay)
       }
       continue
     }
@@ -1183,14 +1275,17 @@ export function buildParentScheduleView(payload: unknown, studentId: string, ran
     const cells = cellsByDateKey.get(dateKey)
     if (cells && cells.length > 0) {
       if (!hasLectureLessons) hasLectureLessons = boardCellsHaveLectureLesson(cells, matches)
-      const lessons = extractBoardLessons(cells, matches, linkedDestinationByStatusId)
+      const lessons = appendMakeupOriginAbsences(extractBoardLessons(cells, matches, linkedDestinationByStatusId), originLinksByDate.get(dateKey), cells)
       if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'board', lessons })
       continue
     }
     // templateFreezeBeforeDate より前(テンプレ再マージ凍結済み)の日は補完しない = 出す行なし。
     if (freezeBeforeDate && dateKey < freezeBeforeDate) continue
     const context = resolveTemplateContext()
-    const lessons = extractTemplateLessons({ dateKey, studentId, payload: parsed, regularLessons: context.regularLessons, suppressedKeys: context.suppressedKeys })
+    const lessons = appendMakeupOriginAbsences(
+      extractTemplateLessons({ dateKey, studentId, payload: parsed, regularLessons: context.regularLessons, suppressedKeys: context.suppressedKeys }),
+      originLinksByDate.get(dateKey),
+    )
     if (lessons.length > 0) days.push({ dateKey, weekday, kind: 'template', lessons })
   }
 

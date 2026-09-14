@@ -322,11 +322,12 @@ const baseStyles = `
   .pp-range-label { flex: 1; min-width: 0; text-align: center; font-size: 13px; color: #444; line-height: 1.3; }
   .pp-range-refreshing { display: block; font-size: 12px; color: #888; }
 
-  .pp-days { margin: 12px 12px 0; }
+  .pp-days { margin: 12px 8px 0; }
   .pp-days-empty { text-align: center; padding: 16px; }
   .pp-rows-legend { font-size: 12px; color: #666; margin: 0 0 6px; }
   .pp-rows { list-style: none; background: #fff; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; }
-  .pp-row { display: grid; grid-template-columns: 5.4em 5.2em minmax(0, 1fr); align-items: baseline; column-gap: 8px; padding: 6px 10px; font-size: 15px; line-height: 1.35; }
+  /* 列幅は「14日(月)」「5限19:40」がちょうど入る幅に詰め、補足(振替の月日コマ)まで 1 行に収める(確認リスト k-11)。 */
+  .pp-row { display: grid; grid-template-columns: 4.7em 4.5em minmax(0, 1fr); align-items: baseline; column-gap: 6px; padding: 6px 8px; font-size: 15px; line-height: 1.35; }
   .pp-row + .pp-row { border-top: 1px solid #eee; }
   .pp-row + .pp-row-first { border-top-color: #cfd8e3; }
   .pp-row-date { font-weight: 700; white-space: nowrap; }
@@ -335,10 +336,15 @@ const baseStyles = `
   .pp-row-today { background: #eef4fb; box-shadow: inset 3px 0 0 #1f5d96; }
   .pp-day-today-badge { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: #1f5d96; border-radius: 999px; padding: 0 5px; vertical-align: middle; }
   .pp-row-slot { font-weight: 700; color: #16314f; white-space: nowrap; }
-  .pp-lesson-time { margin-left: 3px; font-size: 11px; font-weight: 400; color: #777; }
-  .pp-row-body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 8px; min-width: 0; }
-  .pp-lesson-main { font-weight: 700; }
-  .pp-lesson-sub { font-size: 13px; color: #444; }
+  .pp-lesson-time { margin-left: 2px; font-size: 11px; font-weight: 400; color: #777; }
+  .pp-row-body { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; }
+  .pp-lesson-main { font-weight: 700; white-space: nowrap; }
+  .pp-lesson-sub { font-size: 12px; color: #444; white-space: nowrap; }
+  /* 教室休み・授業の無い日は時限欄が空なので、本文を時限欄まで広げて 1 行に収める(k-11)。 */
+  .pp-row-closed .pp-row-slot, .pp-row-status .pp-row-slot { display: none; }
+  .pp-row-closed .pp-row-body, .pp-row-status .pp-row-body { grid-column: 2 / -1; }
+  /* 教室休みから複数コマを振替に回すと振替先が長くなるので、この行だけは折り返して切らない(レビュー指摘 A-4)。 */
+  .pp-row-closed .pp-lesson-sub { white-space: normal; }
   .pp-row-tentative { font-size: 11px; color: #7a5b00; background: #f9e79f; border-radius: 999px; padding: 0 6px; }
   .pp-row-closed, .pp-row-status { color: #666; background: #f6f6f6; }
   .pp-row-closed .pp-lesson-main, .pp-row-status .pp-lesson-main { font-weight: 400; }

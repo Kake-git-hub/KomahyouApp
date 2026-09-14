@@ -145,24 +145,32 @@ describe('describeParentScheduleLesson (spec §D-3)', () => {
   })
 
   it('お休みは振替先(日付+限)か「調整中」', () => {
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent', makeupDestination: { dateKey: '2026-09-20', slotNumber: 2 } }))).toEqual({ main: 'お休み', sub: '振替先: 9月20日 2限' })
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent', makeupDestination: null }))).toEqual({ main: 'お休み', sub: '振替日は調整中です' })
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent' }))).toEqual({ main: 'お休み', sub: '振替日は調整中です' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent', makeupDestination: { dateKey: '2026-09-20', slotNumber: 2 } }))).toEqual({ main: 'お休み', sub: '9/20 2限に振替' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent', makeupDestination: null }))).toEqual({ main: 'お休み', sub: '振替日は調整中' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent' }))).toEqual({ main: 'お休み', sub: '振替日は調整中' })
   })
 
-  it('振替コマは振替元を、休みは振替先を「月日コマ」で出す(確認リスト その他 2026-09-14)', () => {
+  // 1 コマ 1 行に収まる短い言い回し(確認リスト k-11 2026-09-14「振替日付も含めて1行表示」)。
+  it('振替コマは振替元を、休みは振替先を「月日コマ」の短い形で出す(確認リスト その他 2026-09-14 / k-11)', () => {
     const origin = { dateKey: '2026-09-21', slotNumber: 1 }
-    expect(describeParentScheduleLesson(lesson({ kind: 'makeup', subject: '英語', makeupOrigin: origin }))).toEqual({ main: '英語', sub: '振替（振替元: 9月21日 1限）' })
-    expect(describeParentScheduleLesson(lesson({ kind: 'attended', makeupOrigin: origin }))).toEqual({ main: '数学', sub: '出席済み（振替元: 9月21日 1限）' })
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup', makeupOrigin: origin }))).toEqual({ main: 'お休み（振替なし）', sub: '振替元: 9月21日 1限' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'makeup', subject: '英語', makeupOrigin: origin }))).toEqual({ main: '英語', sub: '9/21 1限の振替' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'attended', makeupOrigin: origin }))).toEqual({ main: '数学', sub: '出席（9/21 1限の振替）' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup', makeupOrigin: origin }))).toEqual({ main: 'お休み', sub: '9/21 1限分 振替なし' })
     // 元コマ不明なら日付だけ。
-    expect(describeParentScheduleLesson(lesson({ kind: 'makeup', makeupOrigin: { dateKey: '2026-09-21', slotNumber: null } })).sub).toBe('振替（振替元: 9月21日）')
+    expect(describeParentScheduleLesson(lesson({ kind: 'makeup', makeupOrigin: { dateKey: '2026-09-21', slotNumber: null } })).sub).toBe('9/21の振替')
+    // 補足は 12 文字以内(スマホ幅で日付・時限の列と並べて 1 行に収まる長さ)。
+    for (const described of [
+      describeParentScheduleLesson(lesson({ kind: 'absent', makeupDestination: { dateKey: '2026-12-31', slotNumber: 5 } })),
+      describeParentScheduleLesson(lesson({ kind: 'makeup', makeupOrigin: { dateKey: '2026-12-31', slotNumber: 5 } })),
+    ]) {
+      expect(described.sub!.length).toBeLessThanOrEqual(12)
+    }
     // 通常授業は振替元を持っていても出さない(応答には来ない前提の保険)。
     expect(describeParentScheduleLesson(lesson({ kind: 'regular', makeupOrigin: origin }))).toEqual({ main: '数学' })
   })
 
   it('振替なし欠席・出席済み', () => {
-    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' }))).toEqual({ main: 'お休み（振替なし）' })
+    expect(describeParentScheduleLesson(lesson({ kind: 'absent-no-makeup' }))).toEqual({ main: 'お休み', sub: '振替なし' })
     expect(describeParentScheduleLesson(lesson({ kind: 'attended' }))).toEqual({ main: '数学', sub: '出席済み' })
   })
 
@@ -197,7 +205,7 @@ describe('buildParentScheduleRows: 1 コマ 1 行(確認リスト その他 2026
     ], '2026-09-15')
     expect(rows.map((row) => [row.dateKey, row.isFirstOfDay, row.slotLabel, row.timeLabel, row.main, row.sub ?? '', row.isTentative, row.isToday])).toEqual([
       ['2026-09-14', true, '4限', '18:00', '英', '', false, false],
-      ['2026-09-14', false, '5限', '19:40', 'お休み', '振替先: 9月20日 2限', false, false],
+      ['2026-09-14', false, '5限', '19:40', 'お休み', '9/20 2限に振替', false, false],
       ['2026-09-15', true, '3限', '16:20', '数学', '', true, true],
     ])
     expect(new Set(rows.map((row) => row.key)).size).toBe(rows.length)
@@ -213,6 +221,13 @@ describe('buildParentScheduleRows: 1 コマ 1 行(確認リスト その他 2026
       ['status', PARENT_SCHEDULE_NO_LESSON_MESSAGE, '', true],
     ])
     expect(buildParentScheduleRows([], '2026-09-01')).toEqual([])
+  })
+
+  it('教室休みの日から出した振替は、教室休みの行に振替先を添える(確認リスト k-11)', () => {
+    const rows = buildParentScheduleRows([
+      day({ dateKey: '2026-09-23', weekday: 3, kind: 'closed', lessons: [], makeupDestinations: [{ dateKey: '2026-09-30', slotNumber: 1 }, { dateKey: '2026-10-02', slotNumber: 3 }] }),
+    ], '2026-09-01')
+    expect(rows.map((row) => [row.rowKind, row.main, row.sub ?? ''])).toEqual([['closed', '教室休み', '9/30 1限・10/2 3限に振替']])
   })
 
   it('行の日付は「14日(月)」(月は見出しにある)', () => {

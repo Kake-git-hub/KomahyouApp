@@ -28,6 +28,8 @@ export type ParentScheduleDay = {
   weekday: number // 0=日..6=土
   kind: ParentScheduleDayKind
   lessons: ParentScheduleLesson[]
+  // closed の日から出ていった振替の振替先(確認リスト k-11)。旧 functions の応答には無いので省略可。
+  makeupDestinations?: Array<{ dateKey: string; slotNumber: number }>
 }
 
 export type ParentPortalScheduleResponse = {
@@ -191,34 +193,38 @@ export function formatParentScheduleMonthLabel(dateKey: string): string {
   return `${parsed.year}年${parsed.month}月`
 }
 
-// 振替元/振替先の「月日コマ」表記('9月21日 1限'。元コマ不明なら日付だけ)。
+// 振替元/振替先の「月日コマ」表記('9/21 1限'。元コマ不明なら日付だけ)。
+// 1 コマ 1 行に収めるため月日は「9/21」の短い形にする(確認リスト k-11 2026-09-14「振替日付も含めて1行表示」)。
 export function formatParentScheduleLinkedSlot(link: { dateKey: string; slotNumber: number | null }): string {
-  const date = formatParentScheduleDateShort(link.dateKey)
+  const parsed = parseDateKey(link.dateKey)
+  const date = parsed ? `${parsed.month}/${parsed.day}` : link.dateKey
   return typeof link.slotNumber === 'number' && Number.isInteger(link.slotNumber) ? `${date} ${link.slotNumber}限` : date
 }
 
 // 授業 1 行の表示(spec §D-3 の表)。講師名・机番号は受け取っても出さない(型に無い)。
 // 振替元に振替先、振替先に振替元を「月日コマ」で出す(確認リスト その他 2026-09-14)。
+// 補足は 1 行に収まる短い言い回しにする(k-11): 休み「9/30 5限に振替」／振替「9/23 5限の振替」／振無休「9/19 2限分 振替なし」。
 export function describeParentScheduleLesson(lesson: ParentScheduleLesson): { main: string; sub?: string } {
   const subject = String(lesson.subject ?? '').trim() || '授業'
-  const originText = lesson.makeupOrigin ? `振替元: ${formatParentScheduleLinkedSlot(lesson.makeupOrigin)}` : ''
+  const originSlot = lesson.makeupOrigin ? formatParentScheduleLinkedSlot(lesson.makeupOrigin) : ''
+  const originText = originSlot ? `${originSlot}の振替` : ''
   switch (lesson.kind) {
     case 'regular':
     case 'extra':
       // 通常授業・増コマは科目のみ(種別ラベルなし・P-9)。
       return { main: subject }
     case 'makeup':
-      return { main: subject, sub: originText ? `振替（${originText}）` : '振替' }
+      return { main: subject, sub: originText || '振替' }
     case 'attended':
-      return { main: subject, sub: originText ? `出席済み（${originText}）` : '出席済み' }
+      return { main: subject, sub: originText ? `出席（${originText}）` : '出席済み' }
     case 'absent-no-makeup':
-      return originText ? { main: 'お休み（振替なし）', sub: originText } : { main: 'お休み（振替なし）' }
+      return { main: 'お休み', sub: originSlot ? `${originSlot}分 振替なし` : '振替なし' }
     case 'absent': {
       const destination = lesson.makeupDestination
       if (destination) {
-        return { main: 'お休み', sub: `振替先: ${formatParentScheduleLinkedSlot(destination)}` }
+        return { main: 'お休み', sub: `${formatParentScheduleLinkedSlot(destination)}に振替` }
       }
-      return { main: 'お休み', sub: '振替日は調整中です' }
+      return { main: 'お休み', sub: '振替日は調整中' }
     }
     default:
       return { main: subject }
@@ -282,6 +288,9 @@ export function buildParentScheduleRows(days: readonly ParentScheduleDay[], toda
         slotLabel: '',
         timeLabel: '',
         main: status,
+        ...(day.kind === 'closed' && day.makeupDestinations && day.makeupDestinations.length > 0
+          ? { sub: `${day.makeupDestinations.map((destination) => formatParentScheduleLinkedSlot(destination)).join('・')}に振替` }
+          : {}),
         isTentative: false,
       })
       continue

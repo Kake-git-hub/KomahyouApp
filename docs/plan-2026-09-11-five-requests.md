@@ -277,7 +277,10 @@ I undo が無い画面が多い／J 別タブ日程表・QR提出ページに「
 
 - 「講習集計結果」は `scheduleHtml.ts:2782` のボタン（左が「空フォーマット印刷」:2781）。別タブに自己完結 HTML を開く（:6736-6812）。「開いている生徒」は `#schedule-person-select` の `appliedPersonId`（本体側 `studentScheduleRange.personId`、`ScheduleBoardScreen.tsx:5820-5849`）。
 - 履歴の正本は **`lessonLedgerDays`**（`classroomSnapshots/{id}/lessonLedgerDays/{YYYY-MM-DD}`、保存のたび生成・**直近 400 日分を 1 文書に保持**・保持 2 年。`src/utils/studentLessonLedger.ts:1-13`）。
-  トークン `YYYY-MM-DD#限|授業種別|振替元日` で `attended / absent / absentNoMakeup / placed / makeupRemaining` を生徒×科目ごとに持つ（講師名は持たない）。
+  トークン `YYYY-MM-DD#限|授業種別|振替元日`（2026-09-14 から `|振替元限` を追加し 4 状態とも振替元を持つ）で `attended / absent / absentNoMakeup / placed / makeupRemaining` を生徒×科目ごとに持つ（講師名は持たない）。
+- **2026-09-14 改定（確認リスト その他）**: 表の「振替元」列を廃止し、**状態欄に振替元・振替先・未消化をまとめる**（例「休み（振替先 9/30 5限）」
+  「出席（振替元 9/23 5限）」「休み（未消化）」）。突き合わせは台帳 1 行（生徒×科目）内で期間フィルタ前に行う
+  （`linkLessonHistoryMakeups`・振替を休んだら次の振替先へ連鎖・同日 2 コマは限で振り分け）。表示文字列 `statusText` はサーバーが作る。
 - **クライアントからは読めない**（`firestore.rules` に match が無い）。盤面 `weeks` だけでは不十分（過去週はトリム `boardWeekTrim.ts:56-57`・再合成はテンプレ由来）。
 
 ### 6-2. 設計（推奨案で確定扱い）
