@@ -16,6 +16,7 @@ import {
   QUESTION_AI_ANSWER_CHAR_LIMIT,
   QUESTION_AI_MODEL,
   QUESTION_AI_TRACE_LIMIT,
+  QUESTION_AI_VERTEX_DEFAULT_REGION,
   shouldAnswerQuestionWithAi,
   type CreateQuestionAiMessage,
 } from './questionAiAnswer'
@@ -78,7 +79,7 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
 
   it('Sonnet 最新で呼び、テキストだけを回答にする', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>(async () => fakeMessage())
-    const result = await generateQuestionAiAnswer(baseInput, { apiKey: 'test-key', createMessage })
+    const result = await generateQuestionAiAnswer(baseInput, { projectId: 'komahyouapp-prod', createMessage })
     expect(result).toEqual({ ok: true, answer: '基本データ画面で生徒を選びます。', model: QUESTION_AI_MODEL, inputTokens: 1200, outputTokens: 80 })
     const params = createMessage.mock.calls[0][0]
     expect(params.model).toBe('claude-sonnet-5')
@@ -86,16 +87,32 @@ describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ�
     expect(params.system).toBe(buildQuestionAiSystemPrompt())
   })
 
-  it('API キー未設定なら AI を呼ばずに理由を返す(報告本体は成功のまま)', async () => {
+  it('GCP プロジェクトが分からなければ AI を呼ばずに理由を返す(報告本体は成功のまま)', async () => {
     const createMessage = vi.fn<CreateQuestionAiMessage>()
-    expect(await generateQuestionAiAnswer(baseInput, { apiKey: '', createMessage })).toEqual({ ok: false, error: 'AI 回答の設定(API キー)がまだありません' })
+    expect(await generateQuestionAiAnswer(baseInput, { projectId: '', createMessage })).toEqual({ ok: false, error: 'AI 回答の設定(GCP プロジェクト)が分かりません' })
     expect(createMessage).not.toHaveBeenCalled()
   })
 
-  it('拒否・空応答・例外は利用者向けの短い理由に丸める(鍵やスタックを出さない)', async () => {
-    expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'k', createMessage: async () => fakeMessage({ stop_reason: 'refusal' }) })).toEqual({ ok: false, error: 'AI がこの質問への回答を控えました' })
-    expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'k', createMessage: async () => fakeMessage({ content: [] }) })).toEqual({ ok: false, error: 'AI から回答文が返りませんでした' })
-    expect(await generateQuestionAiAnswer(baseInput, { apiKey: 'k', createMessage: async () => { throw new Error('secret sk-ant-xxx') } })).toEqual({ ok: false, error: 'AI の呼び出しに失敗しました' })
+  it('Claude on Google Cloud(Vertex AI)経由で呼ぶ(API キーを使わない・請求は GCP)。既定リージョンは global', () => {
+    const source = readFileSync(resolve(repoRoot, 'functions/src/questionAiAnswer.ts'), 'utf8')
+    expect(source).toContain("import { AnthropicVertex } from '@anthropic-ai/vertex-sdk'")
+    expect(source).toContain('new AnthropicVertex({')
+    expect(source).not.toContain('apiKey')
+    expect(QUESTION_AI_VERTEX_DEFAULT_REGION).toBe('global')
+    const indexSource = readFileSync(resolve(repoRoot, 'functions/src/index.ts'), 'utf8')
+    expect(indexSource).not.toContain('ANTHROPIC_API_KEY')
+  })
+
+  it('Vertex AI 特有の失敗(権限不足・モデル未有効化)は設定の手がかりになる短い理由にする', () => {
+    const headers = new Headers()
+    expect(describeQuestionAiError(new Anthropic.PermissionDeniedError(403, undefined, 'denied', headers))).toContain('Vertex AI の権限')
+    expect(describeQuestionAiError(new Anthropic.NotFoundError(404, undefined, 'not found', headers))).toContain('Model Garden')
+  })
+
+  it('拒否・空応答・例外は利用者向けの短い理由に丸める(内部情報やスタックを出さない)', async () => {
+    expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => fakeMessage({ stop_reason: 'refusal' }) })).toEqual({ ok: false, error: 'AI がこの質問への回答を控えました' })
+    expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => fakeMessage({ content: [] }) })).toEqual({ ok: false, error: 'AI から回答文が返りませんでした' })
+    expect(await generateQuestionAiAnswer(baseInput, { projectId: 'p', createMessage: async () => { throw new Error('secret sk-ant-xxx') } })).toEqual({ ok: false, error: 'AI の呼び出しに失敗しました' })
     expect(describeQuestionAiError(new Error('sk-ant-xxx'))).not.toContain('sk-ant')
   })
 

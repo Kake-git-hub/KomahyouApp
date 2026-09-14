@@ -130,7 +130,7 @@ export const featureRolloutRegistry = {
   //   このフラグは表示(注意文・送信中文言・日程表タブの待ち時間)だけを切り替える。昇格するときは**両側を同時に**変える。
   questionAiAnswer: {
     scope: 'development-only',
-    description: 'Question/request modal: instant AI answer to questions (Claude API via submitDeveloperReport), development classroom only.',
+    description: 'Question/request modal: instant AI answer to questions (Claude on Vertex AI via submitDeveloperReport), development classroom only.',
   },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 

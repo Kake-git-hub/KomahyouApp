@@ -15,6 +15,7 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- refactor: 質問への AI 即時回答(開発用教室のみ)の呼び出し先を Claude API 直(API キー)から **Claude on Google Cloud(Vertex AI)** へ変更。請求先を GCP にまとめるため(オーナー指示 2026-09-14)。API キーは不要になり、Cloud Functions の実行サービスアカウントで認証・リージョン既定 global。権限不足/モデル未有効化は結果画面に短い理由で出す(functions/src/questionAiAnswer.ts・@anthropic-ai/vertex-sdk・spec-developer-report §G-7)
 
 ## v1.5.523 (2026-09-14)
 - feat: 「要望・報告」ボタンを「質問・要望」へ改名し、種類の並びを 質問 → 要望 → 不具合（開いたときの既定は質問）に変更。「#テスト と書いてください」の案内文を削除（テスト判定自体は残す）。盤面・日程表タブで同一（オーナー指示 2026-09-14・developerReport.ts / DeveloperReportModal.tsx / BoardToolbar.tsx / scheduleHtml.ts・spec-developer-report §B）

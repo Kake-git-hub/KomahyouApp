@@ -5,19 +5,24 @@
 //  - 質問は従来どおり developerReports へ記録・メール通知される(AI 回答は「上乗せ」。記録を置き換えない)。
 //  - AI に渡すのは **利用者マニュアル(docs/user-manual.md)＋質問文＋直近の操作履歴** だけ。
 //    教室データ(スナップショット)は渡さない(オーナー確定 2026-09-14)。
-//  - モデルは Claude Sonnet 最新(オーナー確定 2026-09-14)。API キーは functions runtime env の ANTHROPIC_API_KEY。
-//    未設定なら AI を呼ばず「設定がまだ」とだけ返す(報告本体は成功のまま)。
+//  - モデルは Claude Sonnet 最新(オーナー確定 2026-09-14)。**Claude on Google Cloud(Vertex AI)経由**で呼ぶ
+//    (オーナー指示 2026-09-14「請求先を増やしたくない」＝GCP の請求にまとめる)。API キーは使わない:
+//    Cloud Functions の実行サービスアカウント(ADC)で認証し、プロジェクトは実行中の GCP プロジェクト。
+//    Vertex AI API 未有効・モデル未有効化・権限不足のときは、その旨を短く返す(報告本体は成功のまま)。
 //  - 回答文の制約は §G-4 の基準に合わせる(個別教室の中身・約束・料金・不可逆操作の指示・個人情報を書かない)。
 //
-// この 1 ファイルは Anthropic SDK 呼び出し以外を純関数に保ち、テストで固定する。
+// この 1 ファイルは SDK 呼び出し以外を純関数に保ち、テストで固定する。
 
 import Anthropic from '@anthropic-ai/sdk'
+import { AnthropicVertex } from '@anthropic-ai/vertex-sdk'
 
 import type { DeveloperReportCategory, NormalizedDeveloperReportTraceEntry } from './developerReport'
 import { USER_MANUAL_MARKDOWN } from './generated/userManual'
 
-/** 回答に使うモデル(Sonnet 最新。オーナー確定 2026-09-14)。 */
+/** 回答に使うモデル(Sonnet 最新。オーナー確定 2026-09-14)。Vertex AI でも同じ ID(接頭辞・日付なし)。 */
 export const QUESTION_AI_MODEL = 'claude-sonnet-5'
+/** Vertex AI のリージョン。既定は `global` エンドポイント(推奨)。env QUESTION_AI_VERTEX_REGION で上書き可。 */
+export const QUESTION_AI_VERTEX_DEFAULT_REGION = 'global'
 /** AI に渡す操作履歴の件数(新しい方から)。質問の文脈が分かれば足りるので絞る。 */
 export const QUESTION_AI_TRACE_LIMIT = 40
 /** 利用者へ返す回答文の上限(異常に長い出力で画面が埋まらないように)。 */
@@ -92,8 +97,10 @@ export type QuestionAiAnswerResult =
 
 /** 利用者へ見せてよい失敗理由に丸める(内部のスタックや鍵の断片を出さない)。 */
 export function describeQuestionAiError(error: unknown): string {
-  if (error instanceof Anthropic.AuthenticationError) return 'AI の認証に失敗しました(API キーを確認してください)'
-  if (error instanceof Anthropic.RateLimitError) return 'AI が混み合っています'
+  if (error instanceof Anthropic.AuthenticationError) return 'AI(Vertex AI)の認証に失敗しました'
+  if (error instanceof Anthropic.PermissionDeniedError) return 'Vertex AI の権限がありません(API の有効化・実行サービスアカウントの権限を確認してください)'
+  if (error instanceof Anthropic.NotFoundError) return 'Vertex AI で Claude のモデルが見つかりません(Model Garden でモデルを有効化してください)'
+  if (error instanceof Anthropic.RateLimitError) return 'AI が混み合っています(Vertex AI の割り当て上限)'
   if (error instanceof Anthropic.APIConnectionTimeoutError) return 'AI の応答が時間内に返りませんでした'
   if (error instanceof Anthropic.APIError) return `AI の呼び出しに失敗しました(${error.status ?? '不明'})`
   return 'AI の呼び出しに失敗しました'
@@ -103,11 +110,17 @@ export type CreateQuestionAiMessage = (params: Anthropic.MessageCreateParamsNonS
 
 export async function generateQuestionAiAnswer(
   input: Parameters<typeof buildQuestionAiUserMessage>[0],
-  deps: { apiKey: string; createMessage?: CreateQuestionAiMessage },
+  deps: { projectId: string; region?: string; createMessage?: CreateQuestionAiMessage },
 ): Promise<QuestionAiAnswerResult> {
-  if (!deps.apiKey) return { ok: false, error: 'AI 回答の設定(API キー)がまだありません' }
+  if (!deps.projectId) return { ok: false, error: 'AI 回答の設定(GCP プロジェクト)が分かりません' }
   const createMessage: CreateQuestionAiMessage = deps.createMessage ?? ((params) => {
-    const client = new Anthropic({ apiKey: deps.apiKey, timeout: QUESTION_AI_TIMEOUT_MS, maxRetries: 1 })
+    // 認証は実行サービスアカウントの ADC(google-auth-library)。キーは持たない。
+    const client = new AnthropicVertex({
+      projectId: deps.projectId,
+      region: deps.region || QUESTION_AI_VERTEX_DEFAULT_REGION,
+      timeout: QUESTION_AI_TIMEOUT_MS,
+      maxRetries: 1,
+    })
     return client.messages.create(params)
   })
   try {

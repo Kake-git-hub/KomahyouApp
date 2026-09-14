@@ -232,7 +232,7 @@
 | 対象 | 種別 `question` × 開発用教室（`isDevelopmentClassroomIdentity`＝開発用教室・テスト教室）。確認リスト送信は対象外 |
 | 見せ方 | 送信の流れは従来と同じ（記録 → メール通知）。**送信後の結果画面**に受付文に続けて「AI の自動回答（試験中・誤りがあり得ます）」を表示。盤面モーダル・日程表タブで同一 |
 | AI に渡すもの | **利用者マニュアル `docs/user-manual.md` 全文＋質問文＋表示条件＋直近の操作履歴（新しい方 40 件）**。教室データ（スナップショット）は渡さない |
-| モデル | Claude API・**Sonnet 最新**（`claude-sonnet-5`・effort medium） |
+| モデル | **Claude on Google Cloud（Vertex AI）**の **Sonnet 最新**（`claude-sonnet-5`・effort medium）。当初の Claude API 直（API キー）はオーナー指示で Vertex へ変更（2026-09-14） |
 | 回答文の制約 | §G-4 の禁止事項（個別教室の中身・他教室・約束・料金・不可逆操作の手順・内部情報）をシステム指示に同梱。マニュアルに無い内容は「開発者が確認してから回答」と返す |
 | 失敗時 | 報告本体は成功のまま。結果画面に「AI の自動回答は作れませんでした: 理由」を添える（理由は短文化し、鍵やスタックを出さない） |
 | 記録 | `developerReports/{id}` に `aiAnswer` / `aiAnswerError` / `aiAnswerModel` / `aiAnsweredAt` / `aiAnswerInputTokens` / `aiAnswerOutputTokens` を追記（開発者が後から確認できる）。メール本文には載らない（メールは作成時に送るため） |
@@ -242,8 +242,14 @@
   **表示（注意文・送信中文言・日程表タブの応答待ち時間）だけ**を変える。昇格するときはサーバー判定と**同時に**変える。
 - マニュアルは functions のデプロイに含まれないため `functions/scripts/sync-shared.mjs` が
   `functions/src/generated/userManual.ts` へ複製する（ズレは `questionAiAnswer.test.ts` が検出）。
-- API キー: functions runtime env の `ANTHROPIC_API_KEY`（ローカル `functions/.env`・CI では secret `PROD_FUNCTIONS_ENV` に 1 行追加）。
-  **未設定なら AI を呼ばず「設定がまだ」とだけ返す**（デプロイは失敗しない）。
+- **呼び出し経路: Claude on Google Cloud（Vertex AI）**（オーナー指示 2026-09-14「請求先を増やしたくない」＝請求を GCP にまとめる）。
+  `@anthropic-ai/vertex-sdk` の `AnthropicVertex`・プロジェクトは実行中の GCP プロジェクト（`GCLOUD_PROJECT`）・
+  リージョン既定 `global`（runtime env `QUESTION_AI_VERTEX_REGION` で上書き可）。**API キーは持たない**（実行サービスアカウント
+  `<プロジェクト番号>-compute@developer.gserviceaccount.com` の ADC で認証）。
+- 使えるようにする前提（プロジェクトごと・オーナーが GCP コンソールで行う）: ①Vertex AI API（`aiplatform.googleapis.com`）を有効化
+  ②Model Garden で Claude Sonnet 5 を有効化（利用規約への同意） ③実行サービスアカウントに Vertex AI の呼び出し権限
+  （本番は 2026-09-14 時点で `roles/editor` を持つので追加不要。最小権限にするなら `roles/aiplatform.user`）。
+  **未整備のうちは AI を呼んでも失敗し、結果画面に「Vertex AI の権限がありません／モデルが見つかりません」と出るだけ**（報告本体は成功・デプロイも失敗しない）。
 
 ### G-6. QA 公開（任意・既定 OFF）
 
