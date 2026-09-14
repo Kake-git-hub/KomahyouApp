@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.520 (2026-09-14)
 - feat: 自動割当ルール画面から「登校日集約/分散」を非表示にした(分かりづらいとの意見・オーナー指示)。見えない設定が効き続けないよう、自動割振/警告でも対象設定の有無にかかわらず適用しない(`isAutoAssignRuleApplicable` で除外=「対象ルールなし」と同じスコア)。Excel出力からも外す(取込時は未記載ルール=現設定維持なので消えない)。保存データの行・対象設定は削除しないので非表示リストから外せば復帰。回帰テスト: 非表示判定・全員対象でも不適用(他ルールは適用)・Excel出力除外(src/components/auto-assign-rules/autoAssignRuleModel.ts・AutoAssignRuleScreen.tsx・hiddenAutoAssignRules.test.ts, ScheduleBoardScreen.tsx, docs/spec-auto-assign-rules.md §C)
 
 ## v1.5.519 (2026-09-14)
