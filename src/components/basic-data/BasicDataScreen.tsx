@@ -28,7 +28,7 @@ import {
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, markStudentDeletedFromApp } from './withdrawGuard'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, markStudentDeletedFromApp } from './withdrawGuard'
 import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
@@ -954,12 +954,12 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
   const todayReferenceDate = useMemo(() => getReferenceDateKey(new Date()), [])
   // 削除済み(deletedAt)の生徒は在籍/非在籍どちらの一覧にも出さない(データは残る)。
   const activeStudentRows = useMemo(
-    () => filterStudentsVisibleInBasicData(students).filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) === '在籍')
+    () => filterStudentsVisibleInBasicData(students).filter((student) => !isStudentInWithdrawnRosterList(student, todayReferenceDate))
       .slice().sort((left, right) => compareManagedStudentsByGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )
   const withdrawnStudentRows = useMemo(
-    () => filterStudentsVisibleInBasicData(students).filter((student) => resolveManagedRosterStatus(student.withdrawDate, student.birthDate, todayReferenceDate) !== '在籍')
+    () => filterStudentsVisibleInBasicData(students).filter((student) => isStudentInWithdrawnRosterList(student, todayReferenceDate))
       .slice().sort((left, right) => compareManagedStudentsByGradeThenName(left, right, todayReferenceDate)),
     [students, todayReferenceDate],
   )

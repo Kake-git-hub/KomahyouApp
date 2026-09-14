@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { isStudentDeletedFromApp } from './basicDataModel'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, markStudentDeletedFromApp } from './withdrawGuard'
+import { isActiveOnDate, isStudentDeletedFromApp, resolveManagedRosterStatus } from './basicDataModel'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, markStudentDeletedFromApp } from './withdrawGuard'
 
 const TODAY = '2026-09-13'
 
@@ -23,6 +23,34 @@ describe('canWithdrawStudentToday（退塾ボタンを出す条件）', () => {
   it('退塾日を過ぎた非在籍の生徒・高3卒業後の生徒には出さない', () => {
     expect(canWithdrawStudentToday({ withdrawDate: '2026-08-31', birthDate: '2012-05-01' }, TODAY)).toBe(false)
     expect(canWithdrawStudentToday({ withdrawDate: '', birthDate: '2000-05-01' }, TODAY)).toBe(false)
+  })
+})
+
+describe('isStudentInWithdrawnRosterList（退塾ボタンを押したらすぐ一覧から外す・2026-09-15）', () => {
+  it('退塾日が今日の生徒は、押した直後から非在籍一覧に入る（在籍一覧に残らない）', () => {
+    const [withdrawn] = applyStudentWithdrawToday([{ id: 's001', withdrawDate: '', birthDate: '2012-05-01' }], 's001', TODAY)
+    expect(isStudentInWithdrawnRosterList(withdrawn, TODAY)).toBe(true)
+  })
+
+  it('退塾日は今日のまま記録し、共有の在籍判定(当日は在籍)は変えない＝前日付けにしない', () => {
+    const [withdrawn] = applyStudentWithdrawToday([{ id: 's001', withdrawDate: '', birthDate: '2012-05-01' }], 's001', TODAY)
+    expect(withdrawn.withdrawDate).toBe(TODAY)
+    expect(resolveManagedRosterStatus(withdrawn.withdrawDate, withdrawn.birthDate, TODAY)).toBe('在籍')
+    expect(isActiveOnDate('', withdrawn.withdrawDate, withdrawn.birthDate, TODAY)).toBe(true)
+  })
+
+  it('未定・将来の退塾日は在籍一覧、過去の退塾日・高3卒業後は非在籍一覧', () => {
+    expect(isStudentInWithdrawnRosterList({ withdrawDate: '', birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    expect(isStudentInWithdrawnRosterList({ withdrawDate: '未定', birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    expect(isStudentInWithdrawnRosterList({ withdrawDate: '2026-09-14', birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    expect(isStudentInWithdrawnRosterList({ withdrawDate: '2026-08-31', birthDate: '2012-05-01' }, TODAY)).toBe(true)
+    expect(isStudentInWithdrawnRosterList({ withdrawDate: '', birthDate: '2000-05-01' }, TODAY)).toBe(true)
+  })
+
+  it('基本データ画面の在籍/非在籍一覧はこの判定で振り分ける（当日在籍の判定に戻さない）', () => {
+    const source = readFileSync(fileURLToPath(new URL('./BasicDataScreen.tsx', import.meta.url)), 'utf8')
+    expect(source).toContain('filterStudentsVisibleInBasicData(students).filter((student) => !isStudentInWithdrawnRosterList(student, todayReferenceDate))')
+    expect(source).toContain('filterStudentsVisibleInBasicData(students).filter((student) => isStudentInWithdrawnRosterList(student, todayReferenceDate))')
   })
 })
 
@@ -52,6 +80,7 @@ describe('buildStudentWithdrawConfirmation', () => {
     expect(confirmation.title).toBe('生徒A を退塾にします')
     expect(confirmation.message).toContain(TODAY)
     expect(confirmation.message).toContain('削除されず残ります')
+    expect(confirmation.message).toContain('一覧からはすぐ')
     expect(confirmation.overwriteNote).toBeNull()
     expect(confirmation.stockWarning).toBeNull()
   })
