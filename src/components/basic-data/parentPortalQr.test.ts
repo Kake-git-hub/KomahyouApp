@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from './basicDataModel'
 import { PARENT_PORTAL_QR_TEXT, buildParentPortalQrPrintHtml, resolveParentPortalQrRowState, resolveSavedStudentIds } from './parentPortalQr'
@@ -28,6 +30,19 @@ describe('保存前の生徒は QR を保存待ちにする(確認リスト そ�
     expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: null, student: createStudent() })).toBe('issue')
     // 他教室の写しトークン(発行が要る)も保存前なら待たせる。
     expect(resolveParentPortalQrRowState({ ...enabledParams, savedStudentIds: new Set(), student: createStudent({ parentPortalToken: 'tok' }) })).toBe('pending-save')
+  })
+
+  it('保存待ちのボタンは「QR準備中」と出し、スピナーは白いボタンでも見える色で描く(確認リスト k-12 2026-09-14)', () => {
+    expect(PARENT_PORTAL_QR_TEXT.pendingLabel).toBe('QR準備中')
+    const screen = readFileSync(fileURLToPath(new URL('./BasicDataScreen.tsx', import.meta.url)), 'utf8')
+    const pendingButton = screen.slice(screen.indexOf('basic-data-student-qr-pending-'), screen.indexOf('</button>', screen.indexOf('basic-data-student-qr-pending-')))
+    expect(pendingButton).toContain('PARENT_PORTAL_QR_TEXT.pendingLabel')
+    expect(screen).toContain('secondary-button slim basic-data-qr-pending')
+    // 全体の .button-spinner は白(塗りボタン用)なので、QR準備中だけ後勝ちで上書きする。
+    const css = readFileSync(fileURLToPath(new URL('../../App.css', import.meta.url)), 'utf8')
+    const overrideIndex = css.indexOf('.basic-data-qr-pending .button-spinner')
+    expect(overrideIndex).toBeGreaterThan(css.lastIndexOf('border-top-color: #ffffff;'))
+    expect(css.slice(overrideIndex, css.indexOf('}', overrideIndex))).toContain('border-top-color: #1f5d96')
   })
 
   it('発行済み(show)・非表示(hidden)の判定は保存状態に左右されない', () => {

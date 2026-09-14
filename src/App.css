@@ -4001,6 +4001,21 @@ tr.sa-group-row td {
   animation: button-spin 0.7s linear infinite;
 }
 
+/* 基本データの「QR準備中」(白いボタン)。上の白い .button-spinner だと見えないので文字色で描く(確認リスト k-12)。 */
+.basic-data-qr-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #1f5d96;
+  opacity: 1;
+}
+
+.basic-data-qr-pending .button-spinner {
+  flex: none;
+  border: 2px solid rgba(31, 93, 150, 0.25);
+  border-top-color: #1f5d96;
+}
+
 @keyframes button-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }

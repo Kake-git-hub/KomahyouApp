@@ -7400,22 +7400,23 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function buildLessonHistoryTableHtml(events) {
-        const head = '<thead><tr><th>日付</th><th>曜日</th><th>時限</th><th>種別</th><th>科目</th><th>状態</th><th>振替元</th></tr></thead>';
+        // 「振替元」列は廃止し、振替元・振替先・未消化は状態欄にまとめる(確認リスト その他 2026-09-14)。
+        // statusText はサーバーが組み立てる(linkLessonHistoryMakeups)。旧サーバーの応答には無いので状態ラベルへ倒す。
+        const head = '<thead><tr><th>日付</th><th>曜日</th><th>時限</th><th>種別</th><th>科目</th><th>状態</th></tr></thead>';
         if (!events.length) {
           return '<table class="lesson-history-table">' + head
-            + '<tbody><tr><td colspan="7" class="lesson-history-empty">この期間に保存済みの記録はありません。</td></tr></tbody></table>';
+            + '<tbody><tr><td colspan="6" class="lesson-history-empty">この期間に保存済みの記録はありません。</td></tr></tbody></table>';
         }
         const rows = events.map(function(event) {
           const typeLabel = event.lessonTypeLabel || event.lessonType || '—';
-          const reason = event.makeupSourceDate || event.reasonLabel || '';
+          const statusText = event.statusText || event.statusLabel || LESSON_HISTORY_STATUS_LABELS[event.status] || '';
           return '<tr>'
             + '<td>' + escapeHtml(event.date || '—') + '</td>'
             + '<td>' + escapeHtml(formatLessonHistoryWeekday(event.date)) + '</td>'
             + '<td>' + (typeof event.slot === 'number' ? escapeHtml(String(event.slot)) + '限' : '—') + '</td>'
             + '<td>' + escapeHtml(typeLabel) + '</td>'
             + '<td>' + escapeHtml(event.subject || '—') + '</td>'
-            + '<td>' + escapeHtml(event.statusLabel || LESSON_HISTORY_STATUS_LABELS[event.status] || '') + '</td>'
-            + '<td>' + escapeHtml(reason || '—') + '</td>'
+            + '<td>' + escapeHtml(statusText) + '</td>'
             + '</tr>';
         }).join('');
         return '<table class="lesson-history-table">' + head + '<tbody>' + rows + '</tbody></table>';

@@ -110,6 +110,22 @@ function buildPayload(weeks: SlotCell[][], boardOverrides: Record<string, unknow
 const NOW = new Date('2026-09-04T12:00:00+09:00')
 
 describe('buildStudentLessonLedger', () => {
+  it('出席・振無休・休みにした振替も振替元の日付と限をトークンに持つ(通常授業履歴の状態欄・確認リスト その他 2026-09-14)', () => {
+    const makeupSource = { lessonType: 'makeup', makeupSourceDate: '2026-09-02', makeupSourceLabel: '2026/9/2(水) 2限' }
+    const weeks: SlotCell[][] = [[
+      cell('2026-09-09', 1, [{ id: 'd1', teacher: '講師A', statusSlots: [statusEntry('attended', '2026-09-09', 1, makeupSource), null] }]),
+      cell('2026-09-10', 2, [{ id: 'd2', teacher: '講師A', statusSlots: [statusEntry('absent-no-makeup', '2026-09-10', 2, makeupSource), null] }]),
+      cell('2026-09-11', 3, [{ id: 'd3', teacher: '講師A', statusSlots: [statusEntry('absent', '2026-09-11', 3, { ...makeupSource, makeupSourceLabel: '' }), null] }]),
+      // 振替元の無い通常授業は従来どおり(末尾が付かない)。
+      cell('2026-09-12', 4, [{ id: 'd4', teacher: '講師A', statusSlots: [statusEntry('attended', '2026-09-12', 4), null] }]),
+    ]]
+    const row = buildStudentLessonLedger({ payload: buildPayload(weeks), now: NOW })!.rows[0]
+    expect(row.attended).toEqual(['2026-09-09#1|makeup|2026-09-02|2', '2026-09-12#4|regular'])
+    expect(row.absentNoMakeup).toEqual(['2026-09-10#2|makeup|2026-09-02|2'])
+    // 限が読めないラベルは振替元日だけ(末尾の空欄は落ちる)。
+    expect(row.absent).toEqual(['2026-09-11#3|makeup|2026-09-02'])
+  })
+
   it('出席・休み・配置済み振替・未消化の元コマを生徒×科目の1行にまとめる(画面の未消化と同じ計算)', () => {
     const weeks: SlotCell[][] = [[
       // 9/1 出席
@@ -133,7 +149,8 @@ describe('buildStudentLessonLedger', () => {
     expect(row.subject).toBe('数')
     expect(row.attended).toEqual(['2026-09-01#1|regular'])
     expect(row.absent).toEqual(['2026-09-02#2|regular', '2026-09-03#3|regular'])
-    expect(row.placed).toEqual(['2026-09-10#4|makeup|2026-09-02'])
+    // 振替元は日付と限(ラベルの「2限」)を持つ(通常授業履歴で「振替元 9/2 2限」と出すため・2026-09-14)。
+    expect(row.placed).toEqual(['2026-09-10#4|makeup|2026-09-02|2'])
     // 9/2 は配置で消化済み、9/3 だけ未消化として残る
     expect(row.makeupBalance).toBe(1)
     expect(row.makeupRemaining).toEqual(['2026-09-03#|手動調整'])

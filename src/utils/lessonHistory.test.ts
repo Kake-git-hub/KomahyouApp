@@ -18,25 +18,25 @@ import type { AppSnapshotPayload, ClassroomSettings } from '../types/appState'
 describe('parseLessonLedgerToken', () => {
   it('出席トークン `日付#限|授業種別` を展開する', () => {
     expect(parseLessonLedgerToken('2026-09-01#1|regular', 'attended')).toEqual({
-      date: '2026-09-01', slot: 1, lessonType: 'regular', makeupSourceDate: null, reasonLabel: null,
+      date: '2026-09-01', slot: 1, lessonType: 'regular', makeupSourceDate: null, makeupSourceSlot: null, reasonLabel: null,
     })
   })
 
   it('配置トークンの 3 番目は振替元日', () => {
     expect(parseLessonLedgerToken('2026-09-10#4|makeup|2026-09-02', 'placed')).toEqual({
-      date: '2026-09-10', slot: 4, lessonType: 'makeup', makeupSourceDate: '2026-09-02', reasonLabel: null,
+      date: '2026-09-10', slot: 4, lessonType: 'makeup', makeupSourceDate: '2026-09-02', makeupSourceSlot: null, reasonLabel: null,
     })
   })
 
   it('未消化トークンの 2 番目は授業種別ではなく理由ラベル(限が空のこともある)', () => {
     expect(parseLessonLedgerToken('2026-09-03#|手動調整', 'makeupRemaining')).toEqual({
-      date: '2026-09-03', slot: null, lessonType: '', makeupSourceDate: null, reasonLabel: '手動調整',
+      date: '2026-09-03', slot: null, lessonType: '', makeupSourceDate: null, makeupSourceSlot: null, reasonLabel: '手動調整',
     })
   })
 
   it('末尾の空欄が落ちたトークン(授業種別なし)も壊れない', () => {
     expect(parseLessonLedgerToken('2026-09-05#3', 'placed')).toEqual({
-      date: '2026-09-05', slot: 3, lessonType: '', makeupSourceDate: null, reasonLabel: null,
+      date: '2026-09-05', slot: 3, lessonType: '', makeupSourceDate: null, makeupSourceSlot: null, reasonLabel: null,
     })
   })
 })
@@ -79,6 +79,117 @@ describe('parseLessonLedgerTokens', () => {
     expect(parseLessonLedgerRows(null)).toEqual([])
     expect(parseLessonLedgerRows([null as never, { subject: '数', attended: 'x' as never }])).toEqual([])
     expect(parseLessonLedgerTokens({ attended: [''] })).toEqual([])
+  })
+})
+
+// 確認リスト その他 2026-09-14「通常授業履歴の振替元列はなくして、状態に振替元日付コマ、振替先日付コマ、未消化をくっつけて表示」。
+describe('linkLessonHistoryMakeups / statusText(状態欄に振替元・振替先・未消化をまとめる)', () => {
+  const statusTexts = (row: Parameters<typeof parseLessonLedgerTokens>[0]) => (
+    parseLessonLedgerTokens(row).map((event) => `${event.date}#${event.slot ?? ''} ${event.statusText}`)
+  )
+
+  it('休みには振替先、振替(予定・出席)には振替元、振替が置かれていない休みには未消化が付く', () => {
+    expect(statusTexts({
+      subject: '数',
+      absent: ['2026-09-02#2|regular', '2026-09-03#3|regular'],
+      attended: ['2026-09-01#1|regular', '2026-09-09#1|makeup|2026-09-02|2'],
+      makeupRemaining: ['2026-09-03#3|手動調整'],
+    })).toEqual([
+      '2026-09-01#1 出席',
+      '2026-09-02#2 休み（振替先 9/9 1限）',
+      '2026-09-03#3 休み（未消化）',
+      '2026-09-03#3 未消化（手動調整）',
+      '2026-09-09#1 出席（振替元 9/2 2限）',
+    ])
+  })
+
+  it('振替先が期間の外でも付く(期間で絞る前に突き合わせる)', () => {
+    const events = filterLessonHistory(parseLessonLedgerTokens({
+      subject: '英', absent: ['2026-09-30#5|regular'], placed: ['2026-10-07#5|makeup|2026-09-30|5'],
+    }), { from: '2026-09-01', to: '2026-09-30' })
+    expect(events.map((event) => event.statusText)).toEqual(['休み（振替先 10/7 5限）'])
+    expect(events[0].makeupDestination).toEqual({ date: '2026-10-07', slot: 5 })
+  })
+
+  it('振替をさらに休んだら、最初の休みは最初の振替先・振替の休みは次の振替先(無ければ未消化)', () => {
+    expect(statusTexts({
+      subject: '理',
+      absent: ['2026-09-02#2|regular', '2026-09-10#4|makeup|2026-09-02|2'],
+      placed: ['2026-09-17#4|makeup|2026-09-02|2'],
+    })).toEqual([
+      '2026-09-02#2 休み（振替先 9/10 4限）',
+      '2026-09-10#4 休み（振替元 9/2 2限・振替先 9/17 4限）',
+      '2026-09-17#4 予定（振替元 9/2 2限）',
+    ])
+    expect(statusTexts({
+      subject: '理',
+      absent: ['2026-09-02#2|regular', '2026-09-10#4|makeup|2026-09-02|2'],
+      makeupRemaining: ['2026-09-02#2|休み'],
+    })).toContain('2026-09-10#4 休み（振替元 9/2 2限・未消化）')
+  })
+
+  it('同じ日に 2 コマ休んだら限で振り分ける。旧トークン(振替元の限なし)は日付で照合し、休みの限で補う', () => {
+    expect(statusTexts({
+      subject: '国',
+      absent: ['2026-09-02#1|regular', '2026-09-02#2|regular'],
+      placed: ['2026-09-08#3|makeup|2026-09-02|2', '2026-09-09#3|makeup|2026-09-02|1'],
+    })).toEqual([
+      '2026-09-02#1 休み（振替先 9/9 3限）',
+      '2026-09-02#2 休み（振替先 9/8 3限）',
+      '2026-09-08#3 予定（振替元 9/2 2限）',
+      '2026-09-09#3 予定（振替元 9/2 1限）',
+    ])
+    expect(statusTexts({ subject: '国', absent: ['2026-09-02#2|regular'], placed: ['2026-09-08#3|makeup|2026-09-02'] })).toEqual([
+      '2026-09-02#2 休み（振替先 9/8 3限）',
+      '2026-09-08#3 予定（振替元 9/2 2限）',
+    ])
+  })
+
+  it('休みの無い振替元(丸ごと振替・移動)も振替元は出る。振替元が自分と同じ日なら出さない。振無休はそのまま', () => {
+    expect(statusTexts({
+      subject: '算',
+      placed: ['2026-09-30#5|makeup|2026-09-23|5', '2026-09-24#1|regular|2026-09-24'],
+      absentNoMakeup: ['2026-09-25#2|regular'],
+    })).toEqual([
+      '2026-09-24#1 予定',
+      '2026-09-25#2 振無休',
+      '2026-09-30#5 予定（振替元 9/23 5限）',
+    ])
+  })
+
+  it('振替元に休みの記録が無い振替(丸ごと振替・移動)を休みにして置き直したら、振替先・未消化がつながる(レビュー指摘 A-3)', () => {
+    expect(statusTexts({
+      subject: '理',
+      absent: ['2026-09-30#5|makeup|2026-09-23|5'],
+      placed: ['2026-10-07#5|makeup|2026-09-23|5'],
+    })).toEqual([
+      '2026-09-30#5 休み（振替元 9/23 5限・振替先 10/7 5限）',
+      '2026-10-07#5 予定（振替元 9/23 5限）',
+    ])
+    expect(statusTexts({
+      subject: '理', absent: ['2026-09-30#5|makeup|2026-09-23|5'], makeupRemaining: ['2026-09-23#5|休み'],
+    })).toContain('2026-09-30#5 休み（振替元 9/23 5限・未消化）')
+  })
+
+  it('同じ科目でも講習(special)と通常の振替はつながない(限が不明な旧トークンでも・レビュー指摘 A-6)', () => {
+    const texts = statusTexts({
+      subject: '数',
+      absent: ['2026-08-03#2|special'],
+      placed: ['2026-08-10#4|makeup|2026-08-03', '2026-08-12#1|special|2026-08-03'],
+      makeupRemaining: ['2026-08-03#|休み'],
+    })
+    // 講習の休みは講習の振替(8/12)へ。通常の振替(8/10)は講習の休みの限で補わない。講習の休みに「未消化」は付けない。
+    expect(texts).toContain('2026-08-03#2 休み（振替先 8/12 1限）')
+    expect(texts).toContain('2026-08-10#4 予定（振替元 8/3）')
+    expect(texts).toContain('2026-08-12#1 予定（振替元 8/3 2限）')
+  })
+
+  it('別の科目(=別の台帳行)の振替は付けない', () => {
+    const events = parseLessonLedgerRows([
+      { studentId: 's001', subject: '数', absent: ['2026-09-02#2|regular'] },
+      { studentId: 's001', subject: '英', placed: ['2026-09-08#3|makeup|2026-09-02|2'] },
+    ])
+    expect(events.map((event) => `${event.subject} ${event.statusText}`)).toEqual(['数 休み', '英 予定（振替元 9/2 2限）'])
   })
 })
 

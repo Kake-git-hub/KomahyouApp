@@ -4710,7 +4710,10 @@ describe('scheduleHtml 講習履歴', () => {
     expect(html).toContain("overlay.id = 'schedule-lesson-history-modal'")
     expect(html).toContain("className = 'lesson-history-start'")
     expect(html).toContain("className = 'lesson-history-end'")
-    expect(html).toContain('<th>日付</th><th>曜日</th><th>時限</th><th>種別</th><th>科目</th><th>状態</th><th>振替元</th>')
+    // 「振替元」列は廃止して状態欄へまとめた(確認リスト その他 2026-09-14)。状態欄はサーバーの statusText を出す。
+    expect(html).toContain('<th>日付</th><th>曜日</th><th>時限</th><th>種別</th><th>科目</th><th>状態</th></tr>')
+    expect(html).not.toContain('<th>振替元</th>')
+    expect(html).toContain("const statusText = event.statusText || event.statusLabel")
     expect(html).toContain("printButton.textContent = '印刷'")
     expect(html).toContain("closeButton.textContent = '閉じる'")
     // 全授業種別を種別フィルタに並べる(台帳に種別が無い未消化行は「種別なし」)。

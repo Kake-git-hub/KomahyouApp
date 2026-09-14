@@ -34,13 +34,15 @@ export type StudentLessonLedgerRow = {
   makeupBalance: number
   /** 未消化振替の元コマ一覧 `YYYY-MM-DD#限|理由ラベル`（限が不明なら `#` の後は空） */
   makeupRemaining: string[]
-  /** 出席済みのコマ `YYYY-MM-DD#限|授業種別` */
+  // ★ 2026-09-14(確認リスト その他・通常授業履歴): 4 状態とも `|振替元日|振替元限` を持つ形にそろえた
+  //   (旧: 出席・振無休は振替元日なし／どれも振替元限なし)。末尾に足しただけなので旧トークンもそのまま読める。
+  /** 出席済みのコマ `YYYY-MM-DD#限|授業種別|振替元日|振替元限` */
   attended: string[]
-  /** 休み（振替あり）のコマ `YYYY-MM-DD#限|授業種別|振替元日` */
+  /** 休み（振替あり）のコマ `YYYY-MM-DD#限|授業種別|振替元日|振替元限` */
   absent: string[]
-  /** 振無休のコマ `YYYY-MM-DD#限|授業種別` */
+  /** 振無休のコマ `YYYY-MM-DD#限|授業種別|振替元日|振替元限` */
   absentNoMakeup: string[]
-  /** 未出欠の配置コマ `YYYY-MM-DD#限|授業種別|振替元日`（振替・講習は元日／元コマを持つ） */
+  /** 未出欠の配置コマ `YYYY-MM-DD#限|授業種別|振替元日|振替元限`（振替・講習は元日／元コマを持つ） */
   placed: string[]
 }
 
@@ -72,6 +74,13 @@ export type StudentLessonLedger = {
 
 function buildToken(dateKey: string, slotNumber: number | null | undefined, ...extra: Array<string | null | undefined>) {
   return [`${dateKey}#${slotNumber ?? ''}`, ...extra.map((value) => value ?? '')].join('|').replace(/\|+$/, '')
+}
+
+// 振替元の「日付・限」の付帯情報。限は振替元ラベル('2026/9/23(水) 5限')から読む(元日が無ければ付けない)。
+function buildMakeupSourceFields(entry: { makeupSourceDate?: string; makeupSourceLabel?: string }): string[] {
+  if (!entry.makeupSourceDate) return []
+  const slot = String(entry.makeupSourceLabel ?? '').match(/(\d+)限/)?.[1] ?? ''
+  return [entry.makeupSourceDate, slot]
 }
 
 // 盤面画面 resolveBoardStudentStockId と同じ規則（tools/vanishedMakeupReportEntry.ts と同じ複製）。
@@ -163,17 +172,17 @@ export function buildStudentLessonLedger(params: { payload: AppSnapshotPayload; 
         for (const student of desk.lesson?.studentSlots ?? []) {
           if (!student) continue
           const row = ensureRow(resolveStudentKey(student), student.subject, resolveDisplayName(student.name))
-          row.placed.push(buildToken(cell.dateKey, cell.slotNumber, student.lessonType ?? '', student.makeupSourceDate))
+          row.placed.push(buildToken(cell.dateKey, cell.slotNumber, student.lessonType ?? '', ...buildMakeupSourceFields(student)))
         }
         for (const status of desk.statusSlots ?? []) {
           if (!status) continue
           const row = ensureRow(resolveStudentKey(status), status.subject, resolveDisplayName(status.name))
           if (status.status === 'attended') {
-            row.attended.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? ''))
+            row.attended.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? '', ...buildMakeupSourceFields(status)))
           } else if (status.status === 'absent') {
-            row.absent.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? '', status.makeupSourceDate))
+            row.absent.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? '', ...buildMakeupSourceFields(status)))
           } else if (status.status === 'absent-no-makeup') {
-            row.absentNoMakeup.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? ''))
+            row.absentNoMakeup.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? '', ...buildMakeupSourceFields(status)))
           }
           // moved（移動元マーカー）は授業でも在庫でもないので載せない（移動先の配置が載る）。
         }

@@ -1540,8 +1540,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                         if (qrState === 'pending-save') {
                           // 追加直後でまだ保存されていない生徒は発行できない(サーバーの名簿に居ない)。保存が終わるまでスピナー。
                           return (
-                            <button className="secondary-button slim" type="button" disabled aria-busy="true" title={PARENT_PORTAL_QR_TEXT.pendingSave} data-testid={`basic-data-student-qr-pending-${row.id}`}>
-                              <span className="button-spinner" aria-hidden="true" />{PARENT_PORTAL_QR_TEXT.buttonLabel}
+                            <button className="secondary-button slim basic-data-qr-pending" type="button" disabled aria-busy="true" title={PARENT_PORTAL_QR_TEXT.pendingSave} data-testid={`basic-data-student-qr-pending-${row.id}`}>
+                              <span className="button-spinner" aria-hidden="true" />{PARENT_PORTAL_QR_TEXT.pendingLabel}
                             </button>
                           )
                         }

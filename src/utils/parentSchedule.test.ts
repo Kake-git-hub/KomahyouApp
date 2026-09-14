@@ -296,7 +296,8 @@ describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () =>
     expectNoRow(view, '2026-09-22')
     for (const day of view.days) {
       for (const lesson of day.lessons) {
-        expect(lesson.isTentative).toBe(day.kind === 'template')
+        // 振替元として補った「お休み」は盤面の振替から決まった事実なので予定印を付けない(k-11)。
+        expect(lesson.isTentative).toBe(day.kind === 'template' && lesson.kind !== 'absent')
       }
     }
   })
@@ -318,7 +319,8 @@ describe('buildParentScheduleView K-3: 盤面優先とテンプレ補完', () =>
   it('置かれた振替(暗黙鍵)と suppressedRegularLessonOccurrences(明示鍵)に一致するテンプレ行は出ない', () => {
     const view = buildView('s001')
     // 9/29 5限 数 は 9/21 1限 からの振替 → 9/21 のテンプレ 数 は湧かない。
-    expectNoRow(view, '2026-09-21')
+    // (代わりに振替元として「お休み＋振替先」だけが出る・確認リスト k-11)
+    expect(summarizeOn(view, '2026-09-21')).toEqual(['1:数:absent'])
     // 明示鍵 s001__英__2026-10-08__3。
     expectNoRow(view, '2026-10-08')
     // 抑止を外せば湧く(鍵が効いていることの対照)。
@@ -481,7 +483,143 @@ describe('buildParentScheduleView K-3: 休み・振替・出欠', () => {
       { slotNumber: 5, timeLabel: '19:40-21:10', subject: '数', kind: 'absent', makeupDestination: null, isTentative: false },
     ])
     // 振替が studentSlots から消えたので 9/21 の暗黙抑止も消え、テンプレ行が戻る(盤面の再マージと同じ)。
+    // 在庫へ戻った振替(absent)からは振替元の「お休み」を補わない(k-11)。
     expect(summarize(dayOf(view, '2026-09-21'))).toEqual(['1:数:regular:予定'])
+  })
+})
+
+// 確認リスト k-11(2026-09-14「休みとなった日が行表示されない」): 丸ごと振替は振替元の机を空にするだけ、生徒のドラッグ移動は
+// 振替元に moved(非表示)を残すだけで、振替元の日に何も出なかった。振替先の配置から逆に引いて「お休み＋振替先」を補う。
+describe('buildParentScheduleView k-11: 振替元の日にお休み＋振替先を出す', () => {
+  // 保存形式によって週は SlotCell[] か { cells } のどちらか。
+  function weekCells(payload: AppSnapshotPayload, index: number): SlotCell[] {
+    const week = payload.boardState!.weeks[index] as SlotCell[] | { cells: SlotCell[] }
+    return Array.isArray(week) ? week : week.cells
+  }
+
+  function makeupEntry(base: NonNullable<SlotCell['desks'][number]['lesson']>['studentSlots'][number], sourceDate: string, sourceLabel: string) {
+    return { ...base!, lessonType: 'makeup' as const, makeupSourceDate: sourceDate, makeupSourceLabel: sourceLabel }
+  }
+
+  it('丸ごと振替(振替元の机が空・振替先に振替)でも、振替元の日に「お休み＋振替先」が出る。生徒ごとに混ざらない', () => {
+    const payload = clonePayload()
+    const origin = findCell(weekCells(payload, 1), '2026-09-14', 1)
+    const [aoki, other] = origin.desks[0].lesson!.studentSlots
+    origin.desks[0].lesson = undefined
+    const destination = findCell(weekCells(payload, 2), '2026-09-30', 1)
+    destination.desks[0].lesson = {
+      id: 'daymove_2026-09-14_1_0',
+      studentSlots: [makeupEntry(aoki, '2026-09-14', '2026/9/14(月) 1限'), makeupEntry(other, '2026-09-14', '2026/9/14(月) 1限')],
+    }
+
+    const view = buildView('s001', DEFAULT_RANGE, payload)
+    expect(dayOf(view, '2026-09-14').lessons).toEqual([
+      { slotNumber: 1, timeLabel: '13:00-14:30', subject: '数', kind: 'absent', makeupDestination: { dateKey: '2026-09-30', slotNumber: 1 }, isTentative: false },
+    ])
+    expect(dayOf(view, '2026-09-30').lessons.find((lesson) => lesson.kind === 'makeup')?.makeupOrigin).toEqual({ dateKey: '2026-09-14', slotNumber: 1 })
+    // 同じ机の別生徒(s003 英)の振替は s001 の行に付かず、s003 側にだけ出る。
+    expect(summarizeOn(buildView('s003', DEFAULT_RANGE, payload), '2026-09-14')).toEqual(['1:英:absent'])
+  })
+
+  it('ドラッグ移動(振替元に moved)でも振替元にお休み＋振替先が出て、移動先の振替と合わせて 1 回ずつ', () => {
+    const payload = clonePayload()
+    const destinationCell = findCell(weekCells(payload, 1), '2026-09-16', 2)
+    const movedLesson = destinationCell.desks.find((desk) => desk.lesson?.studentSlots.some((student) => student?.managedStudentId === 's001'))!.lesson!
+    movedLesson.studentSlots = movedLesson.studentSlots.map((student) => (
+      student?.managedStudentId === 's001' ? makeupEntry(student, '2026-09-14', '2026/9/14(月) 2限') : student
+    )) as typeof movedLesson.studentSlots
+    const view = buildView('s001', DEFAULT_RANGE, payload)
+    expect(summarize(dayOf(view, '2026-09-14'))).toEqual(['1:数:regular', '2:数:absent'])
+    expect(dayOf(view, '2026-09-14').lessons[1].makeupDestination).toEqual({ dateKey: '2026-09-16', slotNumber: 2 })
+    expect(summarize(dayOf(view, '2026-09-16'))).toEqual(['1:理:absent', '2:数:makeup'])
+  })
+
+  it('振替先が表示範囲の外でも振替元の日に出る。休みの記録が既にある日は重ねない', () => {
+    // 9/29 5限 数 は 9/21 1限 からの振替(9/21 はテンプレの日)。範囲を 9/21 だけにしても振替先が付く。
+    const view = buildView('s001', { from: '2026-09-21', to: '2026-09-21' })
+    expect(dayOf(view, '2026-09-21').lessons).toEqual([
+      { slotNumber: 1, timeLabel: '13:00-14:30', subject: '数', kind: 'absent', makeupDestination: { dateKey: '2026-09-29', slotNumber: 5 }, isTentative: false },
+    ])
+    // 9/09 は休み(absent)の記録＋振替(9/10 出席済み)。補った行と二重にならない。
+    expect(summarize(dayOf(buildView('s001'), '2026-09-09'))).toEqual(['1:理:absent'])
+  })
+
+  function statusSlot(overrides: Record<string, unknown>) {
+    return {
+      id: 'status-x', studentId: 'x', sourceManagedLesson: false, name: '青木', managedStudentId: 's001', grade: '中3',
+      subject: '数', lessonType: 'regular', teacherType: 'normal', teacherName: '田中', dateKey: '2026-09-14', slotNumber: 1,
+      recordedAt: '2026-09-13T00:00:00.000Z', status: 'absent', sourceLessonId: 'l',
+      ...overrides,
+    } as unknown as NonNullable<SlotCell['desks'][number]['statusSlots']>[number]
+  }
+
+  it('別の生徒が同じ科目・同じ限・同じ振替元日の振替を持っていても、本人の行には付かない(レビュー指摘 A-1)', () => {
+    const payload = clonePayload()
+    const origin = findCell(weekCells(payload, 1), '2026-09-14', 1)
+    const aoki = origin.desks[0].lesson!.studentSlots[0]!
+    // 別生徒 s003 の「数」を 9/14 1限からの振替として 9/30 1限に置く(本人 s001 は 9/14 に通常のまま)。
+    const otherMakeup = makeupEntry({ ...aoki, id: 'other', name: '別生徒', managedStudentId: 's003' }, '2026-09-14', '2026/9/14(月) 1限')
+    findCell(weekCells(payload, 2), '2026-09-30', 1).desks[0].lesson = { id: 'other-makeup', studentSlots: [otherMakeup, null] }
+    expect(summarize(dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-14'))).toEqual(['1:数:regular'])
+    // 本人の通常を「休み(id 空・振替先なし)」にしても、別生徒の振替先では埋めない。
+    origin.desks[0].lesson = undefined
+    origin.desks[0].statusSlots = [statusSlot({ id: '', grade: aoki.grade }), null]
+    const lessons = dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-14').lessons
+    expect(lessons.map((lesson) => [lesson.kind, lesson.makeupDestination])).toEqual([['absent', null]])
+  })
+
+  it('振替元の同じ限に、別の日から来た振替(出席済み)があっても、お休み＋振替先は出る(レビュー指摘 A-2)', () => {
+    const payload = clonePayload()
+    const origin = findCell(weekCells(payload, 1), '2026-09-14', 1)
+    const aoki = origin.desks[0].lesson!.studentSlots[0]!
+    // 9/14 1限の本人の通常を 9/30 1限へ移し、空いた 9/14 1限に 9/07 1限分の振替を出席済みで置く。
+    findCell(weekCells(payload, 2), '2026-09-30', 1).desks[0].lesson = { id: 'moved', studentSlots: [makeupEntry(aoki, '2026-09-14', '2026/9/14(月) 1限'), null] }
+    origin.desks[0].lesson = undefined
+    origin.desks[0].statusSlots = [statusSlot({
+      id: 'status-0914-attended-makeup', grade: aoki.grade, lessonType: 'makeup', status: 'attended',
+      makeupSourceDate: '2026-09-07', makeupSourceLabel: '2026/9/7(月) 1限',
+    }), null]
+    const lessons = dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-14').lessons
+    expect(lessons.map((lesson) => lesson.kind)).toEqual(['attended', 'absent'])
+    expect(lessons[1].makeupDestination).toEqual({ dateKey: '2026-09-30', slotNumber: 1 })
+  })
+
+  it('丸ごと振替の振替先を休みにしても(在庫へ戻っても)、振替元の日にお休みの行が残る(レビュー指摘 A-3)', () => {
+    const payload = clonePayload()
+    const origin = findCell(weekCells(payload, 1), '2026-09-14', 1)
+    const aoki = origin.desks[0].lesson!.studentSlots[0]!
+    origin.desks[0].lesson = undefined
+    const destination = findCell(weekCells(payload, 2), '2026-09-30', 1)
+    destination.desks[0].lesson = undefined
+    destination.desks[0].statusSlots = [statusSlot({
+      id: 'status-0930-absent', grade: aoki.grade, lessonType: 'makeup', dateKey: '2026-09-30',
+      makeupSourceDate: '2026-09-14', makeupSourceLabel: '2026/9/14(月) 1限',
+    }), null]
+    const view = buildView('s001', DEFAULT_RANGE, payload)
+    expect(dayOf(view, '2026-09-14').lessons.map((lesson) => [lesson.kind, lesson.makeupDestination])).toEqual([['absent', { dateKey: '2026-09-30', slotNumber: 1 }]])
+    expect(dayOf(view, '2026-09-30').lessons.find((lesson) => lesson.slotNumber === 1)).toMatchObject({ kind: 'absent', makeupDestination: null })
+  })
+
+  it('講習(special)のコマは振替元を持っていても、振替元のお休みを補わない', () => {
+    const payload = clonePayload()
+    const aoki = findCell(weekCells(payload, 1), '2026-09-14', 1).desks[0].lesson!.studentSlots[0]!
+    findCell(weekCells(payload, 2), '2026-09-30', 1).desks[0].lesson = {
+      id: 'lecture', studentSlots: [{ ...aoki, lessonType: 'special', makeupSourceDate: '2026-09-15', makeupSourceLabel: '2026/9/15(火) 3限' }, null],
+    }
+    expect(summarizeOn(buildView('s001', DEFAULT_RANGE, payload), '2026-09-15').some((entry) => entry.startsWith('3:'))).toBe(false)
+  })
+
+  it('臨時休み(教室休み)の日から出した振替は、教室休みの行に振替先として添える', () => {
+    const payload = clonePayload()
+    const destination = findCell(weekCells(payload, 2), '2026-09-30', 1)
+    const base = findCell(weekCells(payload, 1), '2026-09-14', 1).desks[0].lesson!.studentSlots[0]
+    destination.desks[0].lesson = { id: 'holiday-makeup', studentSlots: [makeupEntry(base, '2026-09-23', '2026/9/23(水) 3限'), null] }
+    const closed = dayOf(buildView('s001', DEFAULT_RANGE, payload), '2026-09-23')
+    expect(closed.kind).toBe('closed')
+    expect(closed.lessons).toEqual([])
+    expect(closed.makeupDestinations).toEqual([{ dateKey: '2026-09-30', slotNumber: 1 }])
+    // 振替が無い教室休みにはキー自体を付けない(応答を増やさない)。
+    expect('makeupDestinations' in dayOf(buildView('s001'), '2026-09-23')).toBe(false)
   })
 })
 
@@ -689,7 +827,12 @@ describe('PARITY: 権威関数との一致', () => {
       for (const dateKey of templateDates) {
         const day = view.days.find((entry) => entry.dateKey === dateKey)
         if (day) expect(day.kind, `${student.id}@${dateKey}`).toBe('template')
-        expect(summarizeOn(view, dateKey), `${student.id}@${dateKey}`).toEqual((expected.get(dateKey) ?? []).sort())
+        // 振替元として補う「お休み＋振替先」(k-11)は盤面の週生成には無いので比較から外す(振替先を持つ休みだけ・レビュー指摘 B-3)。
+        const templateOnly = (day?.lessons ?? [])
+          .filter((lesson) => !(lesson.kind === 'absent' && lesson.makeupDestination))
+          .map((lesson) => `${lesson.slotNumber}:${lesson.subject}:${lesson.kind}${lesson.isTentative ? ':予定' : ''}`)
+          .sort()
+        expect(templateOnly, `${student.id}@${dateKey}`).toEqual((expected.get(dateKey) ?? []).sort())
       }
     }
     // 期待値が空ばかりではない(テストが実質を持つ)ことを固定。
@@ -791,11 +934,13 @@ describe('レビュー指摘の穴埋め(2026-09-13)', () => {
     cell0916!.desks[0].statusSlots = [{ ...status0916!, id: '' }, null]
 
     const view = buildView('s001', DEFAULT_RANGE, payload)
-    for (const dateKey of ['2026-09-09', '2026-09-16']) {
-      const absent = dayOf(view, dateKey).lessons.find((lesson) => lesson.kind === 'absent')
-      expect(absent, dateKey).toBeTruthy()
-      expect(absent?.makeupDestination, dateKey).toBeNull()
-    }
+    // 9/16 には他の日の振替先が付かない(空キー共有のガード)。
+    const absent0916 = dayOf(view, '2026-09-16').lessons.find((lesson) => lesson.kind === 'absent')
+    expect(absent0916).toBeTruthy()
+    expect(absent0916?.makeupDestination).toBeNull()
+    // 9/09 は id 経由では引かないが、この生徒自身の振替(makeupSourceDate=9/09・同じ限と科目)から振替先を補う(k-11)。
+    const absent0909 = dayOf(view, '2026-09-09').lessons.find((lesson) => lesson.kind === 'absent')
+    expect(absent0909?.makeupDestination).toEqual({ dateKey: '2026-09-10', slotNumber: 4 })
   })
 })
 

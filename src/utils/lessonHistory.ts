@@ -7,8 +7,8 @@
 // （docs/plan-2026-09-11-five-requests.md §6 テーマ5 / H-1）。
 //
 // ⚠️ トークン書式は studentLessonLedger.ts の buildToken が正本。片方だけ変えないこと。
-//   attended / absentNoMakeup … `YYYY-MM-DD#限|授業種別`
-//   absent / placed           … `YYYY-MM-DD#限|授業種別|振替元日`
+//   attended / absent / absentNoMakeup / placed … `YYYY-MM-DD#限|授業種別|振替元日|振替元限`
+//     （2026-09-14 から。旧トークンは attended / absentNoMakeup に振替元日が無く、どれも振替元限が無い＝どちらも読める）
 //   makeupRemaining           … `YYYY-MM-DD#限|理由ラベル`（3番目は授業種別ではなく理由）
 //   末尾の空欄は buildToken が落とすため、`|` 以降が無いこともある（限も空になり得る）。
 //
@@ -63,12 +63,20 @@ export type LessonHistoryEvent = {
   studentId: string | null
   studentKey: string
   name: string
-  /** 振替元日（absent / placed のみ・無ければ null） */
+  /** 振替元日（振替元を持つコマのみ・無ければ null）。★2026-09-14 から出席・振無休にも付く */
   makeupSourceDate: string | null
   /** 未消化の理由ラベル（makeupRemaining のみ・無ければ null） */
   reasonLabel: string | null
   /** 元トークン（デバッグ・重複判定用） */
   token: string
+  /** 振替元（日付・限）。振替元日が自分の日と違うコマだけ。限は台帳に無ければ突き合わせた休みの限・それも無ければ null */
+  makeupOrigin: { date: string; slot: number | null } | null
+  /** 休み → 振替先（日付・限）。振替をさらに休んだら、その休みには次の振替先が付く */
+  makeupDestination: { date: string; slot: number | null } | null
+  /** 休みの振替がまだ置かれず、未消化に残っている */
+  makeupPending: boolean
+  /** 状態欄の表示（例: 「休み（振替先 9/30 5限）」）。振替元・振替先・未消化を 1 つにまとめた文字列 */
+  statusText: string
 }
 
 export type LessonHistorySummary = {
@@ -103,21 +111,24 @@ export function parseLessonLedgerToken(token: string, status: LessonHistoryStatu
   slot: number | null
   lessonType: string
   makeupSourceDate: string | null
+  makeupSourceSlot: number | null
   reasonLabel: string | null
 } {
-  const [head = '', second = '', third = ''] = String(token ?? '').split('|')
+  const [head = '', second = '', third = '', fourth = ''] = String(token ?? '').split('|')
   const hashIndex = head.indexOf('#')
   const date = hashIndex >= 0 ? head.slice(0, hashIndex) : head
   const slot = toSlotNumber(hashIndex >= 0 ? head.slice(hashIndex + 1) : '')
   if (status === 'makeupRemaining') {
     // 未消化の元コマは `日付#限|理由ラベル`。授業種別は台帳に無い。
-    return { date, slot, lessonType: '', makeupSourceDate: null, reasonLabel: second || null }
+    return { date, slot, lessonType: '', makeupSourceDate: null, makeupSourceSlot: null, reasonLabel: second || null }
   }
   return {
     date,
     slot,
     lessonType: second,
-    makeupSourceDate: status === 'absent' || status === 'placed' ? (third || null) : null,
+    // 振替元日・振替元限は 4 状態とも（旧トークンは出席・振無休に振替元日が無く、どれも限が無い）。
+    makeupSourceDate: third || null,
+    makeupSourceSlot: third ? toSlotNumber(fourth) : null,
     reasonLabel: null,
   }
 }
@@ -155,9 +166,16 @@ export function parseLessonLedgerTokens(row: LessonLedgerHistoryRow): LessonHist
         makeupSourceDate: parsed.makeupSourceDate,
         reasonLabel: parsed.reasonLabel,
         token,
+        makeupOrigin: parsed.makeupSourceDate && parsed.makeupSourceDate !== parsed.date
+          ? { date: parsed.makeupSourceDate, slot: parsed.makeupSourceSlot }
+          : null,
+        makeupDestination: null,
+        makeupPending: false,
+        statusText: '',
       })
     }
   }
+  linkLessonHistoryMakeups(events)
   return sortLessonHistoryEvents(events)
 }
 
@@ -210,6 +228,88 @@ export function filterLessonHistory(events: readonly LessonHistoryEvent[], filte
     return true
   })
   return sortLessonHistoryEvents(filtered)
+}
+
+// ---------------------------------------------------------------------------
+// 休み ⇄ 振替先・振替元・未消化の突き合わせ（確認リスト その他 2026-09-14「状態に振替元日付コマ、振替先日付コマ、
+// 未消化をくっつけて表示」）。台帳 1 行＝生徒×科目なので、行の中だけで引く（期間で絞る前に行う＝振替先が期間外でも出る）。
+// ★ src/utils/lessonHistory.ts と functions/src/lessonLedgerHistory.ts で同じ実装（パリティテストが守る）。
+// ---------------------------------------------------------------------------
+
+function formatLessonHistorySlotLink(link: { date: string; slot: number | null }): string {
+  const matched = /^\d{4}-(\d{2})-(\d{2})$/.exec(link.date)
+  const date = matched ? `${Number(matched[1])}/${Number(matched[2])}` : link.date
+  return link.slot === null ? date : `${date} ${link.slot}限`
+}
+
+const LESSON_HISTORY_STATUS_TEXT_BASES: Record<LessonHistoryStatus, string> = {
+  attended: '出席',
+  absent: '休み',
+  absentNoMakeup: '振無休',
+  placed: '予定',
+  makeupRemaining: '未消化',
+}
+
+/** 状態欄の表示文字列（例: 「休み（振替先 9/30 5限）」「出席（振替元 9/23 5限）」「休み（未消化）」）。 */
+export function formatLessonHistoryStatusText(event: Pick<LessonHistoryEvent, 'status' | 'makeupOrigin' | 'makeupDestination' | 'makeupPending' | 'reasonLabel'>): string {
+  const parts: string[] = []
+  if (event.makeupOrigin) parts.push(`振替元 ${formatLessonHistorySlotLink(event.makeupOrigin)}`)
+  if (event.makeupDestination) parts.push(`振替先 ${formatLessonHistorySlotLink(event.makeupDestination)}`)
+  if (event.makeupPending) parts.push('未消化')
+  if (event.status === 'makeupRemaining' && event.reasonLabel) parts.push(event.reasonLabel)
+  const base = LESSON_HISTORY_STATUS_TEXT_BASES[event.status]
+  return parts.length > 0 ? `${base}（${parts.join('・')}）` : base
+}
+
+/**
+ * 同じ生徒×科目のイベント列に、休み→振替先（連鎖: 振替をさらに休んだら次の振替先）・振替→振替元の限・休み→未消化を付ける。
+ * - 起点は「振替元を持たない休み」。振替元日（と限）が一致する振替を日付順に 1 対 1 で割り当てる（限が不明なら日付だけで照合）。
+ * - 割り当てた振替の振替元の限が台帳に無ければ（旧トークン）、起点の休みの限で補う。
+ * - 連鎖の最後が休みで終わり、未消化の元コマ（makeupRemaining）に同じ日付（と限）があれば「未消化」。
+ * 渡した配列の要素をその場で書き換える。
+ */
+export function linkLessonHistoryMakeups(events: readonly LessonHistoryEvent[]): void {
+  const sorted = sortLessonHistoryEvents(events)
+  const slotMatches = (left: number | null, right: number | null) => left === null || right === null || left === right
+  // 講習(special)の在庫と振替の在庫は別物。同じ科目の行に同居するので、種別の系統が同じものだけをつなぐ(レビュー指摘 A-6)。
+  const isLecture = (event: LessonHistoryEvent) => event.lessonType === 'special'
+  const consumers = sorted.filter((event) => event.makeupOrigin !== null && event.status !== 'makeupRemaining')
+  const remaining = sorted.filter((event) => event.status === 'makeupRemaining')
+  const usedConsumers = new Set<LessonHistoryEvent>()
+  const usedRemaining = new Set<LessonHistoryEvent>()
+  const followChain = (start: LessonHistoryEvent, key: { date: string; slot: number | null; lecture: boolean }) => {
+    let tail: LessonHistoryEvent | null = start
+    while (tail) {
+      const next = consumers.find((event) => (
+        !usedConsumers.has(event) && isLecture(event) === key.lecture
+        && event.makeupOrigin!.date === key.date && slotMatches(event.makeupOrigin!.slot, key.slot)
+      ))
+      if (!next) break
+      usedConsumers.add(next)
+      tail.makeupDestination = { date: next.date, slot: next.slot }
+      if (next.makeupOrigin!.slot === null && key.slot !== null) next.makeupOrigin = { date: key.date, slot: key.slot }
+      tail = next.status === 'absent' ? next : null
+    }
+    // 未消化の元コマ一覧は振替の在庫だけ(講習の未消化は台帳の別の表)。
+    if (!tail || key.lecture) return
+    const pending = remaining.find((event) => !usedRemaining.has(event) && event.date === key.date && slotMatches(event.slot, key.slot))
+    if (pending) {
+      usedRemaining.add(pending)
+      tail.makeupPending = true
+    }
+  }
+  for (const origin of sorted) {
+    if (origin.status !== 'absent' || origin.makeupOrigin !== null) continue
+    followChain(origin, { date: origin.date, slot: origin.slot, lecture: isLecture(origin) })
+  }
+  // 振替元に休みの記録が無い振替(丸ごと振替・移動)も、振替先を休みにしたら次の振替先・未消化へつなぐ(レビュー指摘 A-3)。
+  for (const consumer of consumers) {
+    if (usedConsumers.has(consumer)) continue
+    usedConsumers.add(consumer)
+    if (consumer.status !== 'absent') continue
+    followChain(consumer, { date: consumer.makeupOrigin!.date, slot: consumer.makeupOrigin!.slot, lecture: isLecture(consumer) })
+  }
+  for (const event of events) event.statusText = formatLessonHistoryStatusText(event)
 }
 
 export function summarizeLessonHistory(events: readonly LessonHistoryEvent[]): LessonHistorySummary {

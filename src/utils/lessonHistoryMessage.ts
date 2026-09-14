@@ -136,7 +136,19 @@ function normalizeEvent(raw: unknown): LessonHistoryEvent | null {
     makeupSourceDate: toNullableText(entry.makeupSourceDate),
     reasonLabel: toNullableText(entry.reasonLabel),
     token: toText(entry.token),
+    makeupOrigin: toSlotLink(entry.makeupOrigin),
+    makeupDestination: toSlotLink(entry.makeupDestination),
+    makeupPending: entry.makeupPending === true,
+    // 旧 functions の応答には無い(=状態ラベルだけ出す)。
+    statusText: toText(entry.statusText),
   }
+}
+
+function toSlotLink(value: unknown): { date: string; slot: number | null } | null {
+  if (!value || typeof value !== 'object') return null
+  const link = value as Record<string, unknown>
+  if (!isLessonHistoryDateKey(link.date)) return null
+  return { date: link.date, slot: typeof link.slot === 'number' && Number.isFinite(link.slot) ? link.slot : null }
 }
 
 function normalizeSummary(raw: unknown, events: LessonHistoryEvent[]): LessonHistorySummary {
