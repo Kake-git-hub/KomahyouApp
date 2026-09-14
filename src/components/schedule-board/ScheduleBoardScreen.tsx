@@ -3982,6 +3982,7 @@ export function applyTeacherAutoAssignRequest(params: {
 // 出席可能コマに名前が出ない」状態でスタックした。countSubmitted=true は「盤面に居るべき」を意味する
 // ので、未配置の講師だけを起動毎に冪等に配置し直す(リロードでも自己修復)。
 // 既に一部でも schedule-registration で配置済みの講師は触らない(室長の手動調整・部分削除を尊重)。
+// この講習の登録机を室長が削除した tombstone(講習ID付き)がある講師も触らない(2026-09-14)。
 // 全コマから外したい場合は登録解除(countSubmitted=false)で対応する設計と整合する。
 export function reconcileSubmittedTeacherPlacements(params: {
   weeks: SlotCell[][]
@@ -4004,6 +4005,14 @@ export function reconcileSubmittedTeacherPlacements(params: {
     //   移動先にも残るため同じ講師が2か所に見える)。この関数が直したい不具合は「配置が揮発してどこにも居ない」
     //   ケースなので、盤面のどこかに居るなら再配置しないのが正しい(揮発ケースの復旧は従来どおり効く)。
     const placedTeacherIds = new Set<string>()
+    // ★室長がこの講習の登録机を削除した tombstone を「配置済み(=室長が手動で外した)」として数える
+    //   (回帰防止 2026-09-14・INV-02 / 案A)。数えないと、その講習での最後の登録机を消した講師が
+    //   「提出済みなのに未配置」と誤判定され、盤面の再マウント(画面切替・リロード)毎に同コマの別の空き机へ
+    //   置き直されていた(開発用教室 9/22 1・2限の能勢: 消すたびに tombstone が増え別机に再出)。
+    //   判定は tombstone の講習ID一致に限定する(applyUserDeletedTeacherTombstone が登録机の削除時だけ残す)。
+    //   講習IDの無い tombstone(通常授業の机の削除・丸ごと振替・旧データ)は数えない。講師名や期間だけで数えると、
+    //   期間内に同講師の通常授業机を消しただけで「揮発した提出配置の自己修復」まで止まり、提出したのに出ない状態に戻る。
+    const deletedTeacherKeysInSession = new Set<string>()
     for (const week of workingWeeks) {
       for (const cell of week) {
         for (const desk of cell.desks) {
@@ -4011,6 +4020,11 @@ export function reconcileSubmittedTeacherPlacements(params: {
             && desk.teacherAssignmentSessionId === session.id
             && desk.teacherAssignmentTeacherId) {
             placedTeacherIds.add(desk.teacherAssignmentTeacherId)
+          }
+          if (isDeletedTeacherTombstone(desk)
+            && desk.teacherAssignmentSessionId === session.id
+            && desk.teacherAssignmentTeacherId) {
+            deletedTeacherKeysInSession.add(desk.teacherAssignmentTeacherId.trim())
           }
         }
       }
@@ -4021,6 +4035,7 @@ export function reconcileSubmittedTeacherPlacements(params: {
       if (placedTeacherIds.has(teacherId)) continue
       const teacher = params.teachers.find((entry) => entry.id === teacherId)
       if (!teacher) continue
+      if ([teacher.id, getTeacherDisplayName(teacher), teacher.name.trim()].some((key) => key && deletedTeacherKeysInSession.has(key))) continue
 
       const result = autoAssignTeacherToSpecialSession({
         weeks: workingWeeks,
@@ -4570,6 +4585,16 @@ function applyDeletedTeacherTombstone(desk: DeskCell, deletedTeacherName: string
   desk.teacherAssignmentSource = 'deleted'
   desk.teacherAssignmentSessionId = undefined
   desk.teacherAssignmentTeacherId = deletedTeacherName || undefined
+}
+
+// ユーザーが講師メニューで講師を削除したときの tombstone(handleDeleteTeacher)。
+// 講習登録(schedule-registration)の机を消した場合だけ講習IDを tombstone に残し、
+// reconcileSubmittedTeacherPlacements が「室長が外した」と判別できるようにする(2026-09-14・INV-02)。
+// 丸ごと振替の tombstone は講師ブロックごと移動先へ運ぶので対象外(applyDeletedTeacherTombstone のまま)。
+export function applyUserDeletedTeacherTombstone(desk: DeskCell) {
+  const deletedSessionId = desk.teacherAssignmentSource === 'schedule-registration' ? desk.teacherAssignmentSessionId : undefined
+  applyDeletedTeacherTombstone(desk, desk.teacher)
+  desk.teacherAssignmentSessionId = deletedSessionId
 }
 
 // 「その日の既存コマを処分する」机1つ分の共通処理（オーナー確定 2026-08-02 の裁定を1か所に集約）。
@@ -8646,7 +8671,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!targetCell || !targetDesk) return
 
     // tombstone の正準表現は applyDeletedTeacherTombstone(丸ごと振替と共有)へ一本化。
-    applyDeletedTeacherTombstone(targetDesk, targetDesk.teacher)
+    // ユーザー削除だけは講習登録の講習IDを残す(起動時の自己修復が置き直さないため・2026-09-14)。
+    applyUserDeletedTeacherTombstone(targetDesk)
     commitWeeks(nextWeeks, weekIndex, currentTeacherMenu.cellId, currentTeacherMenu.deskIndex)
     setTeacherMenu(null)
     setStatusMessage(`${targetCell.dateLabel} ${targetCell.slotLabel} / ${resolveDeskLabel(targetDesk, currentTeacherMenu.deskIndex)} の講師を削除しました。`)
