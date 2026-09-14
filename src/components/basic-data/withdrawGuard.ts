@@ -18,6 +18,15 @@ export function canWithdrawStudentToday(student: WithdrawTarget, today: string):
   return resolveEffectiveManagedWithdrawDate(student.withdrawDate, student.birthDate, today) !== today
 }
 
+// 基本データの生徒一覧の振り分け(オーナー指示 2026-09-15・確認リスト その他「退塾ボタンは押した瞬間に非表示に」)。
+// 退塾日が「今日」の生徒も、一覧だけはすぐ「非在籍生徒表示」側へ移す。退塾日は今日のまま記録するので、
+// 盤面・請求・保護者QR など共有の在籍判定(当日は在籍)は変えない(前日付けにする案はオーナーが不採用)。
+// ★resolveManagedRosterStatus 自体は変えない(講師一覧・削除可否・学年列は従来どおり当日在籍)。
+export function isStudentInWithdrawnRosterList(student: WithdrawTarget, today: string): boolean {
+  if (resolveManagedRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍') return true
+  return resolveEffectiveManagedWithdrawDate(student.withdrawDate, student.birthDate, today) === today
+}
+
 // 押した日を退塾日として記録する。他の項目・他の生徒は変えない（行を消さない）。
 export function applyStudentWithdrawToday<T extends { id: string; withdrawDate: string }>(students: T[], id: string, today: string): T[] {
   return students.map((row) => (row.id === id ? { ...row, withdrawDate: today } : row))
@@ -55,7 +64,7 @@ export function buildStudentWithdrawConfirmation(params: {
 
   return {
     title: `${safeName} を退塾にします`,
-    message: `本日（${today}）を退塾日として記録します。本日までは在籍扱いで、明日から「非在籍生徒表示」の一覧に移ります。生徒のデータは削除されず残ります。取り消すときは「編集」から退塾日を消してください。`,
+    message: `本日（${today}）を退塾日として記録します。一覧からはすぐ「非在籍生徒表示」に移りますが、本日の授業・請求などは本日まで在籍扱いです。生徒のデータは削除されず残ります。取り消すときは「編集」から退塾日を消してください。`,
     overwriteNote,
     stockWarning,
   }
