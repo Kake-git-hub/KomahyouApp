@@ -47,6 +47,21 @@ describe('isStudentInWithdrawnRosterList（退塾ボタンを押したらすぐ�
     expect(isStudentInWithdrawnRosterList(withdrawn, '2026-09-14')).toBe(true)
   })
 
+  // オーナー決定(2026-09-15): 高3卒業の自動補完退塾日は表示 3/31 のまま・3/31 まで在籍。一覧振り分け・削除・退塾ボタンも 3/31 は在籍側。
+  it('高3卒業生(退塾日なし)は 3/31 まで在籍側・4/1 から非在籍側(自動補完日だけは「その日まで在籍」)', () => {
+    const graduate = { withdrawDate: '', birthDate: '2007-05-20' } // 高3 学年度末 2026-03-31
+    expect(isStudentInWithdrawnRosterList(graduate, '2026-03-31')).toBe(false)
+    expect(canWithdrawStudentToday(graduate, '2026-03-31')).toBe(true)
+    expect(canDeleteStudentFromApp(graduate, '2026-03-31')).toBe(false)
+    expect(isStudentInWithdrawnRosterList(graduate, '2026-04-01')).toBe(true)
+    expect(canWithdrawStudentToday(graduate, '2026-04-01')).toBe(false)
+    expect(canDeleteStudentFromApp(graduate, '2026-04-01')).toBe(true)
+    // 手入力の退塾日 3/31 は新定義どおり当日から非在籍。
+    const typed = { withdrawDate: '2026-03-31', birthDate: '2007-05-20' }
+    expect(isStudentInWithdrawnRosterList(typed, '2026-03-31')).toBe(true)
+    expect(canDeleteStudentFromApp(typed, '2026-03-31')).toBe(true)
+  })
+
   it('講師用の判定(退職日当日は在籍)は変えていない＝生徒の一覧振り分けを講師用へ戻すと当日在籍一覧に残る', () => {
     expect(resolveManagedRosterStatus(TODAY, '', TODAY)).toBe('在籍')
   })

@@ -1,7 +1,7 @@
 // 対話用日程表(別タブ・生成HTML)の表示算出(scheduleViewData)の回帰防止テスト。
 // 埋め込みJS(生成HTML)と同じ入力(SchedulePayload)から同じ表示データが出ることを代表ケースで固定する
 // (docs/handoff-popup-sync-and-dnd.md §6 Phase 0)。
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SchedulePayload, SerializedCell, SerializedStudent, SerializedStudentEntry, SerializedStudentStatusEntry, SerializedTeacher } from './scheduleHtml'
 import {
   buildCountRows,
@@ -10,6 +10,7 @@ import {
   buildTeacherSheetViewModel,
   getVisibleStudents,
   getVisibleTeachers,
+  getScheduleTodayJstKey,
   hasCountMismatch,
   isStudentVisibleInRange,
   isVisibleInRange,
@@ -537,5 +538,26 @@ describe('日程表の表示対象: 生徒は退塾日当日から外す・講�
     } as unknown as SchedulePayload
     expect(getVisibleStudents(payload, '2026-07-01', '2026-07-31', TODAY).map((student) => student.id)).toEqual(['stu-tomorrow'])
     expect(getVisibleTeachers(payload, '2026-07-01', '2026-07-31', TODAY).map((teacher) => teacher.id)).toEqual(['tea-today'])
+  })
+})
+
+describe('日程表の「今日」は JST(2026-09-15・UTC だと JST 0:00〜8:59 に前日になっていた)', () => {
+  it('getScheduleTodayJstKey は日本時間の日付を返す', () => {
+    expect(getScheduleTodayJstKey(new Date('2026-09-14T15:00:00Z'))).toBe('2026-09-15')
+    expect(getScheduleTodayJstKey(new Date('2026-09-14T14:59:59Z'))).toBe('2026-09-14')
+    expect(getScheduleTodayJstKey(new Date('2026-09-15T14:59:59Z'))).toBe('2026-09-15')
+  })
+
+  it('todayKey 省略時も JST の今日で判定する(生徒: JST 9/15 0:30 に 9/15 退塾は非表示・講師: 9/14 退職は非表示)', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-09-14T15:30:00Z'))
+      expect(isStudentVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, '2026-09-01', '2026-09-30')).toBe(false)
+      expect(isStudentVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-16' }, '2026-09-01', '2026-09-30')).toBe(true)
+      expect(isVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, '2026-09-01', '2026-09-30')).toBe(false)
+      expect(isVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, '2026-09-01', '2026-09-30')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -3199,15 +3199,20 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
+      // 日程表の「今日」は日本時間(JST)の日付(scheduleViewData.ts getScheduleTodayJstKey と同じ規則・2026-09-15)。
+      function getScheduleTodayJstKey() {
+        return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      }
+
       function isVisibleInRange(item, startDate, endDate) {
-        var today = new Date().toISOString().slice(0, 10);
+        var today = getScheduleTodayJstKey();
         if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate < today) return false;
         return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate >= startDate);
       }
 
       // 生徒は退塾日の当日から非在籍(2026-09-15 改定・scheduleViewData.ts isStudentVisibleInRange と同じ)。講師は上の isVisibleInRange のまま。
       function isStudentVisibleInRange(item, startDate, endDate) {
-        var today = new Date().toISOString().slice(0, 10);
+        var today = getScheduleTodayJstKey();
         if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate <= today) return false;
         return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate > startDate);
       }

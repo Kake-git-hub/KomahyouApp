@@ -268,13 +268,13 @@ export function resolveScheduledStatus(entryDate: string, withdrawDate: string, 
 // ── 管理データ画面(BasicDataScreen)専用の在籍表示(オーナー指示 2026-07-10) ──
 // 方針: 入塾日は在籍判定に使わない(未来入塾でも在籍として名簿に出す)。生徒は退塾日の当日から非在籍
 // (2026-09-15 改定・isStudentWithdrawnOnDate)。講師は従来どおり退職日の翌日から非在籍(当日在籍)。
-// 高3卒業は「卒業で在籍でなくなる最初の日(高3学年度末の翌日=4/1)を退塾日として自動補完」して扱う
-// (明示の退塾日があればそれを優先)。盤面/請求/日程表は isActiveOnDate / resolveScheduledStatus を使い、
+// 高3卒業は「卒業日(高3学年度末=3/31)を退塾日として自動補完」して表示する(明示の退塾日があればそれを優先)。
+// ★自動補完の卒業日だけは「その日まで在籍」(hasGraduatedHighSchool の境界どおり 4/1 から非在籍)。
+//   手入力の退塾日は「その日から非在籍」(2026-09-15 オーナー決定)。盤面/請求/日程表は isActiveOnDate / resolveScheduledStatus を使い、
 // 入塾日前・高3卒業を尊重する(入塾日不問はこの画面限定)。
 
-// 高3卒業による自動補完の退塾日を返す。生年月日が無効なら空文字。
-// ★2026-09-15: 退塾日=「その日から非在籍」に揃えたため、学年度末(3/31)ではなく翌日の 4/1 を返す。
-//   hasGraduatedHighSchool の境界(4/1 から卒業扱い)は変えていないので、在籍の最終日は従来どおり 3/31。
+// 高3卒業日(=高3学年度末の翌3/31)を返す。生年月日が無効なら空文字。
+// ★表示用。卒業生は 3/31 まで在籍(2026-09-15 オーナー決定で 4/1 案は取り消し)。在籍判定は hasGraduatedHighSchool で行う。
 export function resolveGraduationWithdrawDate(birthDate: string): string {
   const normalized = normalizeDateText(birthDate)
   if (!normalized) return ''
@@ -283,8 +283,8 @@ export function resolveGraduationWithdrawDate(birthDate: string): string {
   const birthMonth = Number(monthText)
   if (Number.isNaN(birthYear) || Number.isNaN(birthMonth)) return ''
   const enrollmentYear = resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
-  // 高3(学年番号12)の学年度は schoolYear=enrollmentYear+11。その年度末=翌年3/31、非在籍の初日=(enrollmentYear+12)-04-01。
-  return `${enrollmentYear + 12}-04-01`
+  // 高3(学年番号12)の学年度は schoolYear=enrollmentYear+11。その年度末=翌年3/31=(enrollmentYear+12)-03-31。
+  return `${enrollmentYear + 12}-03-31`
 }
 
 // 管理データ表示上の実効退塾日: 明示退塾日を最優先。無ければ高3卒業済みのとき卒業日を自動補完。
@@ -305,11 +305,13 @@ export function resolveManagedRosterStatus(withdrawDate: string, birthDate: stri
   return '在籍'
 }
 
-// 管理データの【生徒】在籍/非在籍(入塾日は不問・退塾日の当日から非在籍・高3卒業は自動補完の退塾日)。
+// 管理データの【生徒】在籍/非在籍(入塾日は不問)。
+//   - 手入力の退塾日: その日から非在籍(isStudentWithdrawnOnDate)。
+//   - 退塾日が無い高3卒業生: hasGraduatedHighSchool の境界どおり 3/31 まで在籍・4/1 から非在籍
+//     (表示上の自動補完日 3/31 を isStudentWithdrawnOnDate に通すと 3/31 が非在籍になるので通さない)。
 export function resolveManagedStudentRosterStatus(withdrawDate: string, birthDate: string, referenceDate: string): '在籍' | '非在籍' {
-  const effectiveWithdraw = resolveEffectiveManagedWithdrawDate(withdrawDate, birthDate, referenceDate)
-  if (isStudentWithdrawnOnDate(effectiveWithdraw, referenceDate)) return '非在籍'
-  return '在籍'
+  if (normalizeDateText(withdrawDate)) return isStudentWithdrawnOnDate(withdrawDate, referenceDate) ? '非在籍' : '在籍'
+  return hasGraduatedHighSchool(birthDate, referenceDate) ? '非在籍' : '在籍'
 }
 
 // 管理データの生徒ステータス列: 在籍中は学年ラベル(未来入塾でも生年月日から算出)、非在籍は '非在籍'。

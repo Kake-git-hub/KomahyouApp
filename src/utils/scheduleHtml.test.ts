@@ -4933,9 +4933,14 @@ describe('生徒の退塾日は当日から非在籍: 日程表(回数表の予�
     const teacherMatch = html.match(/function isVisibleInRange\(item, startDate, endDate\)\s*\{([\s\S]*?)\n {6}\}/)
     expect(studentMatch).toBeTruthy()
     expect(teacherMatch).toBeTruthy()
+    const todayMatch = html.match(/function getScheduleTodayJstKey\(\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(todayMatch).toBeTruthy()
     type Visible = (item: { entryDate: string; withdrawDate: string }, startDate: string, endDate: string) => boolean
-    const studentVisible = new Function('item', 'startDate', 'endDate', studentMatch![1]) as Visible
-    const teacherVisible = new Function('item', 'startDate', 'endDate', teacherMatch![1]) as Visible
+    const getToday = new Function(todayMatch![1]) as () => string
+    const studentVisibleRaw = new Function('getScheduleTodayJstKey', 'item', 'startDate', 'endDate', studentMatch![1])
+    const teacherVisibleRaw = new Function('getScheduleTodayJstKey', 'item', 'startDate', 'endDate', teacherMatch![1])
+    const studentVisible: Visible = (item, startDate, endDate) => studentVisibleRaw(getToday, item, startDate, endDate)
+    const teacherVisible: Visible = (item, startDate, endDate) => teacherVisibleRaw(getToday, item, startDate, endDate)
 
     vi.useFakeTimers()
     try {
@@ -4948,6 +4953,16 @@ describe('生徒の退塾日は当日から非在籍: 日程表(回数表の予�
       // 講師は退職日当日も表示(今回変えない)
       expect(teacherVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, ...range)).toBe(true)
       expect(teacherVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, ...range)).toBe(false)
+
+      // 「今日」は JST。UTC 2026-09-14 15:30 = JST 9/15 0:30 → 9/15 退塾の生徒はもう出ない(旧 UTC 実装では 9/14 扱いで出ていた)。
+      vi.setSystemTime(new Date('2026-09-14T15:30:00Z'))
+      expect(getToday()).toBe('2026-09-15')
+      expect(studentVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, ...range)).toBe(false)
+      // 講師も同じ JST の今日(9/14 退職の講師は JST 9/15 0:30 には出ない)。
+      expect(teacherVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, ...range)).toBe(false)
+      // JST 8:59(UTC 23:59 前日)も JST の日付のまま。
+      vi.setSystemTime(new Date('2026-09-15T23:59:00Z'))
+      expect(getToday()).toBe('2026-09-16')
     } finally {
       vi.useRealTimers()
     }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import { compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, isExternalStudentRow, isStudentWithdrawnOnDate, resolveCurrentStudentGradeLabel, resolveScheduledStatus, resolveTeacherRosterStatus, type GradeCeiling, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { getJstTodayDateKey } from '../../utils/billing'
 import type { AutoAssignRuleKey, AutoAssignRuleRow, AutoAssignTarget } from '../auto-assign-rules/autoAssignRuleModel'
 import { isHiddenAutoAssignRule, resolveForbiddenPeriods, resolvePeriodPriorityOrder, resolveRuleCategory } from '../auto-assign-rules/autoAssignRuleModel'
 import { isRegularLessonParticipantActiveOnDate, normalizeRegularLessonNote, resolveOperationalSchoolYear, type RegularLessonRow } from '../basic-data/regularLessonModel'
@@ -1947,6 +1948,48 @@ function createInitialBoardWeeks(
   ], classroomSettings.deskCount)
 }
 
+// 盤面の 1 週を名簿・テンプレと突き合わせ直す(読込時と、名簿/テンプレ/設定変更時の effect で共通)。
+// 旧実装は同じ処理が 2 か所に複製されていた。挙動は同一のまま関数へ寄せ、退塾生徒の剥がしを先頭に足した(2026-09-15)。
+//   1. stripWithdrawnStudentsFromBoardWeek: 今日[JST]以降の退塾生徒のテンプレ由来通常授業を外す(固定日前の週も対象)。
+//   2. テンプレ固定日(templateFreezeBeforeDate)より前のセルは再マージしない(INV-10 禁忌: テンプレ反映日以前のコマ表は不変)。
+//   3. 固定日以降のセルだけ overlayBoardWeeksOnScheduleCells で再マージする。
+export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  suppressedRegularLessonOccurrences: string[]
+  todayKey: string
+}): SlotCell[] {
+  const week = stripWithdrawnStudentsFromBoardWeek(rawWeek, params.students, params.todayKey)
+  const freezeDate = params.classroomSettings.templateFreezeBeforeDate ?? ''
+  // Pre-freeze week: 全セルが freezeDate 未満なら managed overlay を完全スキップ（禁忌: テンプレ反映日以前のコマ表は不変）
+  const lastDateKey = week[week.length - 1]?.dateKey ?? ''
+  if (freezeDate && lastDateKey < freezeDate) return week
+
+  const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
+  const weekStart = getWeekStart(parseDateKey(firstDateKey))
+  const managedWeek = createBoardWeek(weekStart, {
+    classroomSettings: params.classroomSettings,
+    teachers: params.teachers,
+    students: params.students,
+    regularLessons: params.regularLessons,
+  })
+  const suppressedKeys = params.suppressedRegularLessonOccurrences
+  if (!freezeDate) {
+    return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedKeys)
+  }
+  // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
+  const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
+  const postFreezeBoard = week.filter((c) => c.dateKey >= freezeDate)
+  const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= freezeDate)
+  const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], suppressedKeys)
+  return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
+    if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
+    return a.slotNumber - b.slotNumber
+  })
+}
+
 function createInitialBoardSnapshot(params: {
   classroomSettings: ClassroomSettings
   teachers: TeacherRow[]
@@ -1962,34 +2005,14 @@ function createInitialBoardSnapshot(params: {
   )
   const weeks = params.initialBoardState?.weeks?.length
     ? normalizeWeeksDeskCount(
-      params.initialBoardState.weeks.map((week) => {
-        const freezeDate = params.classroomSettings.templateFreezeBeforeDate ?? ''
-        // Pre-freeze week: 全セルが freezeDate 未満なら managed overlay を完全スキップ
-        const lastDateKey = week[week.length - 1]?.dateKey ?? ''
-        if (freezeDate && lastDateKey < freezeDate) return week
-
-        const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
-        const weekStart = getWeekStart(parseDateKey(firstDateKey))
-        const managedWeek = createBoardWeek(weekStart, {
-          classroomSettings: params.classroomSettings,
-          teachers: params.teachers,
-          students: params.students,
-          regularLessons: params.regularLessons,
-        })
-        const suppressedKeys = params.initialBoardState?.suppressedRegularLessonOccurrences ?? []
-        if (!freezeDate) {
-          return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedKeys, params.students)
-        }
-        // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
-        const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
-        const postFreezeBoard = week.filter((c) => c.dateKey >= freezeDate)
-        const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= freezeDate)
-        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], suppressedKeys, params.students)
-        return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
-          if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
-          return a.slotNumber - b.slotNumber
-        })
-      }),
+      params.initialBoardState.weeks.map((week) => remergeBoardWeekWithManagedData(week, {
+        classroomSettings: params.classroomSettings,
+        teachers: params.teachers,
+        students: params.students,
+        regularLessons: params.regularLessons,
+        suppressedRegularLessonOccurrences: params.initialBoardState?.suppressedRegularLessonOccurrences ?? [],
+        todayKey: getJstTodayDateKey(),
+      })),
       params.classroomSettings.deskCount,
     )
     : fallbackWeeks
@@ -2955,17 +2978,24 @@ function overlayManualRegularAdditionsOnPlannedCells(scheduleCells: SlotCell[], 
 
 // 確認リスト v1.5.527 b-2(オーナー決定 2026-09-15): 生徒の退塾日は「その日から非在籍」。
 // テンプレ生成(buildManagedRegularLessonsRange)は isActiveOnDate で退塾日以降を作らないが、既に盤面へ
-// 実体化済みの週(今日を含む)は「テンプレ沈黙セルの盤面授業を保持する」分岐(Issue #28)で残り続けるため、
-// 再マージの前に、退塾日を迎えた生徒の**テンプレ由来の通常授業**だけを盤面セルから外す。
+// 実体化済みの週(今日を含む)は「テンプレ沈黙セルの盤面授業を保持する」分岐(Issue #28)で残り続け、
+// テンプレ固定日(templateFreezeBeforeDate)より前の週はそもそも再マージされない。そこで盤面の週に対して、
+// **max(退塾日, 今日[JST]) 以降**の日付だけ、退塾生徒の**テンプレ由来の通常授業**を外す(固定日の前後を問わない)。
+//   - ★昨日以前の盤面には触れない(過去の週を遡って削らない・オーナー決定 2026-09-15)。
 //   - 対象: 管理授業(isManagedLesson)の lessonType==='regular' かつ manualAdded でなく、元日付へ戻した移動でもない生徒。
 //     managedStudentId が名簿にあり、その日が退塾日以降(isStudentWithdrawnOnDate)のときだけ。
 //   - 対象外(消さない): 手置きの講習・振替・手動追加・移動授業、名簿で引けない生徒、出欠記録(statusSlots)。
+//   - 机が空になったとき: 講師が manualTeacher、または机に出欠記録があれば講師を残す。そうでなければ
+//     mergeManagedWeek の空き机と同じく講師を外す(INV-01: 今日以降に限りオーナー許容・盤面=講師日程表)。
+//   - これはテンプレの再マージではない(固定日前の週でも剥がしだけを行い、テンプレから講師・授業を足さない=INV-10)。
 //   - 講師の退職日・高3卒業・入塾日前は、この剥がしの対象にしない(今回は生徒の退塾日だけの改定)。
 export function stripWithdrawnStudentsFromTemplateRegularLessons(
   cell: SlotCell,
   students: ReadonlyArray<Pick<StudentRow, 'id' | 'withdrawDate'>>,
+  todayKey: string,
 ): SlotCell {
   if (students.length === 0) return cell
+  if (cell.dateKey < todayKey) return cell
   const withdrawDateById = new Map(students.map((student) => [student.id, student.withdrawDate]))
   const shouldStrip = (student: StudentEntry | null) => Boolean(
     student
@@ -2983,20 +3013,38 @@ export function stripWithdrawnStudentsFromTemplateRegularLessons(
   nextCell.desks = nextCell.desks.map((desk) => {
     if (!desk.lesson || !isManagedLesson(desk.lesson) || !desk.lesson.studentSlots.some(shouldStrip)) return desk
     const nextStudentSlots = desk.lesson.studentSlots.map((student) => (shouldStrip(student) ? null : student)) as [StudentEntry | null, StudentEntry | null]
-    if (!nextStudentSlots[0] && !nextStudentSlots[1]) return { ...desk, lesson: undefined }
-    return { ...desk, lesson: { ...desk.lesson, studentSlots: nextStudentSlots } }
+    if (nextStudentSlots[0] || nextStudentSlots[1]) return { ...desk, lesson: { ...desk.lesson, studentSlots: nextStudentSlots } }
+    if (desk.manualTeacher || hasRecordedStatusSlots(desk)) return { ...desk, lesson: undefined }
+    return {
+      ...desk,
+      teacher: '',
+      manualTeacher: false,
+      teacherAssignmentSource: undefined,
+      teacherAssignmentSessionId: undefined,
+      teacherAssignmentTeacherId: undefined,
+      lesson: undefined,
+    }
   })
   return nextCell
 }
 
-export function overlayBoardWeeksOnScheduleCells(
-  scheduleCells: SlotCell[],
-  boardWeeks: SlotCell[][],
-  explicitlySuppressedManagedKeys: string[] = [],
-  // 渡されたときだけ、退塾日を迎えた生徒のテンプレ由来通常授業を盤面セルから外してから再マージする
-  // (stripWithdrawnStudentsFromTemplateRegularLessons)。盤面の再マージ経路(読込・名簿/テンプレ変更・テンプレ上書き)は必ず渡す。
-  students?: ReadonlyArray<Pick<StudentRow, 'id' | 'withdrawDate'>>,
-) {
+// 盤面の 1 週(または任意のセル列)に剥がしを適用する。変化が無ければ同じ配列を返す。
+export function stripWithdrawnStudentsFromBoardWeek(
+  week: SlotCell[],
+  students: ReadonlyArray<Pick<StudentRow, 'id' | 'withdrawDate'>>,
+  todayKey: string,
+): SlotCell[] {
+  if (students.length === 0) return week
+  let changed = false
+  const next = week.map((cell) => {
+    const stripped = stripWithdrawnStudentsFromTemplateRegularLessons(cell, students, todayKey)
+    if (stripped !== cell) changed = true
+    return stripped
+  })
+  return changed ? next : week
+}
+
+export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
   const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys)
   const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
   const managedCellIds = new Set(scheduleCells.map((cell) => cell.id))
@@ -3015,10 +3063,9 @@ export function overlayBoardWeeksOnScheduleCells(
     const adjustedManagedCell = templateTeacherSuppressedDates.has(managedCell.dateKey)
       ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
       : suppressedStudentsCell
-    const matchedBoardCell = findMatchingBoardCell(managedCell, boardCellMaps)
-    if (!matchedBoardCell) return adjustedManagedCell
+    const boardCell = findMatchingBoardCell(managedCell, boardCellMaps)
+    if (!boardCell) return adjustedManagedCell
     if (!adjustedManagedCell.isOpenDay) return adjustedManagedCell
-    const boardCell = students ? stripWithdrawnStudentsFromTemplateRegularLessons(matchedBoardCell, students) : matchedBoardCell
     // 第3引数は**素の**管理セル（テンプレの沈黙判定に使う）。抑止で書き換えた側を渡すと判定が狂う。
     return mergeManagedWeek([boardCell], [adjustedManagedCell], [managedCell])[0] ?? adjustedManagedCell
   })
@@ -3168,13 +3215,17 @@ export function buildScheduleCellsForRange(params: {
   // 呼び出し側は必ず ensureWeeksCoverDateRange 済みの boardWeeks を渡すこと(未生成週はそこで
   // テンプレから生成されるため、再マージを外しても未来週が空白にならない前提が崩れる)。
   boardOnly?: boolean
+  // 退塾生徒の剥がし(stripWithdrawnStudentsFromBoardWeek)の「今日」。省略時は JST の今日。テスト用に注入できる。
+  todayKey?: string
 }) {
   // 盤面をそのまま描く = 盤面と日程表がズレる余地が構造的に無くなる。
   if (params.boardOnly) return params.boardWeeks.flat().map((cell) => cloneSlotCell(cell))
 
   const managedCells = buildBaseManagedScheduleCellsForRange(params)
+  const todayKey = params.todayKey ?? getJstTodayDateKey()
+  const boardWeeks = params.boardWeeks.map((week) => stripWithdrawnStudentsFromBoardWeek(week, params.students, todayKey))
 
-  return overlayBoardWeeksOnScheduleCells(managedCells, params.boardWeeks, params.suppressedRegularLessonOccurrences ?? [], params.students)
+  return overlayBoardWeeksOnScheduleCells(managedCells, boardWeeks, params.suppressedRegularLessonOccurrences ?? [])
 }
 
 // 出欠を記録済みの机は「実績が入った机」＝ユーザー操作の結果であり、空き机ではない。
@@ -5550,7 +5601,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         const preFreezeBoard = week.filter((c) => c.dateKey < effectiveStart)
         const postFreezeBoard = week.filter((c) => c.dateKey >= effectiveStart)
         const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= effectiveStart)
-        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], nextSuppressedRegularLessonOccurrences, students)
+        const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], nextSuppressedRegularLessonOccurrences)
         return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
           if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
           return a.slotNumber - b.slotNumber
@@ -5650,28 +5701,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   useEffect(() => {
     bumpMemCounter('overlay-recompute')
-    const freezeDate = classroomSettings.templateFreezeBeforeDate ?? ''
-    setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => {
-      // Pre-freeze week: 全セルが freezeDate 未満なら managed overlay を完全スキップ（禁忌: テンプレ反映日以前のコマ表は不変）
-      const lastDateKey = week[week.length - 1]?.dateKey ?? ''
-      if (freezeDate && lastDateKey < freezeDate) return week
-
-      const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
-      const weekStart = getWeekStart(parseDateKey(firstDateKey))
-      const managedWeek = createBoardWeek(weekStart, { classroomSettings, teachers, students, regularLessons })
-      if (!freezeDate) {
-        return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedRegularLessonOccurrences, students)
-      }
-      // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
-      const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
-      const postFreezeBoard = week.filter((c) => c.dateKey >= freezeDate)
-      const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= freezeDate)
-      const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], suppressedRegularLessonOccurrences, students)
-      return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
-        if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
-        return a.slotNumber - b.slotNumber
-      })
-    }), classroomSettings.deskCount))
+    const todayJstKey = getJstTodayDateKey()
+    // 退塾ボタン/編集での退塾日入力はどちらも students を更新するので、この effect でその場に盤面へ反映される。
+    setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => remergeBoardWeekWithManagedData(week, {
+      classroomSettings,
+      teachers,
+      students,
+      regularLessons,
+      suppressedRegularLessonOccurrences,
+      todayKey: todayJstKey,
+    })), classroomSettings.deskCount))
   }, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])
 
   useEffect(() => {
