@@ -1,6 +1,7 @@
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import { formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, type BillingInvoiceRow } from './billing'
+import { getJstTodayDateKey } from './jstDate'
 
 export type InvoiceIssuerInfo = {
   name: string
@@ -35,9 +36,10 @@ function optionalLine(label: string, value: string) {
   return `<div><span>${escapeHtmlText(label)}</span>${escapeHtmlText(normalizedValue)}</div>`
 }
 
-export function buildInvoiceHtml(row: BillingInvoiceRow, issuerInfo: Partial<InvoiceIssuerInfo> = {}) {
+export function buildInvoiceHtml(row: BillingInvoiceRow, issuerInfo: Partial<InvoiceIssuerInfo> = {}, now: Date = new Date()) {
   const issuer = { ...defaultIssuerInfo, ...issuerInfo }
-  const issuedAt = formatJapaneseDate(new Date().toISOString().slice(0, 10))
+  // 発行日は日本時間。UTC の日付だと JST 0:00〜8:59 に発行すると前日付になる(2026-09-16 修正)。
+  const issuedAt = formatJapaneseDate(getJstTodayDateKey(now))
   const dueDate = formatJapaneseDate(getBillingDueDate(row.monthKey))
 
   return `<div class="billing-invoice-pdf">

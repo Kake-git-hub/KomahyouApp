@@ -6,6 +6,7 @@ import { AppMenu } from '../navigation/AppMenu'
 import type { ClassroomSettings, InitialSetupMakeupStockRow, InitialSetupLectureStockRow } from '../../types/appState'
 import type { SubjectLabel } from '../schedule-board/types'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
+import { getJstTodayDateKey } from '../../utils/jstDate'
 
 // spec-save-restore §4: 教室画面の復元は「JSONバックアップを読み込む」一本。
 // rollback／サーバーバックアップ／ローカル自動バックアップの復元UIは削除済み（サーバー復元は開発者画面のみ）。
@@ -65,6 +66,13 @@ function formatSavedAt(savedAt: string) {
   return parsed.toLocaleString('ja-JP')
 }
 
+// 初期在庫登録の生徒選択肢 = 今日(JST)在籍の生徒。
+// UTC の日付だと JST 0:00〜8:59 は前日扱いになり、当日入塾の生徒が出ない/当日退塾扱いの生徒が残る(2026-09-16 修正)。
+export function listInitialSetupActiveStudents(students: StudentRow[], now: Date = new Date()) {
+  const referenceDate = getJstTodayDateKey(now)
+  return students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.birthDate, referenceDate)).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
+}
+
 function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
@@ -92,8 +100,7 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const makeupStockRows = classroomSettings.initialSetupMakeupStocks ?? []
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
 
-  const referenceDate = new Date().toISOString().slice(0, 10)
-  const activeStudents = students.filter((s) => isActiveOnDate(s.entryDate, s.withdrawDate, s.birthDate, referenceDate)).sort((a, b) => compareStudentsByCurrentGradeThenName(a, b))
+  const activeStudents = listInitialSetupActiveStudents(students)
   const selectedDevelopmentLoadClassroomId = developmentBackupSources.classrooms.some((classroom) => classroom.id === developmentLoadClassroomId)
     ? developmentLoadClassroomId
     : (developmentBackupSources.classrooms[0]?.id ?? '')

@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.531 (2026-09-16)
+- fix: UTC の日付(toISOString().slice(0,10))のせいで JST 0:00〜8:59 に前日になっていた残り3か所を getJstTodayDateKey へ寄せた(請求書PDFの発行日 / 初期在庫登録の生徒選択肢の在籍判定 / 開発者管理画面の教室在籍数と教室追加の契約開始日初期値)。バックアップの日付キーはサーバー側で既に JST で、この3か所とは無関係と確認 (invoicePdf.ts, BackupRestoreScreen.tsx, DeveloperAdminScreen.tsx, jstDateRemainingSites.test.ts)
+
 ## v1.5.530 (2026-09-15)
 - docs: 複数会社展開に向けた構成見直しの計画を起案(会社=workspace で DB は1つのまま・フロントは上流フォーク方式・共通/会社固有の判定基準・現行の問題点15件・Phase 0〜4・オーナー回答欄) (docs/plan-2026-09-15-multi-company-architecture.md)
 

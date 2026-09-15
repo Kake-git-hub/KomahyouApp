@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { isActiveOnDate } from '../basic-data/basicDataModel'
+import { getJstTodayDateKey } from '../../utils/jstDate'
 import type { GoogleDriveBackupDiagnostic, ServerAutoBackupSummary } from '../../integrations/firebase/adminFunctions'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 
@@ -103,7 +104,20 @@ function countSnapshotRows(snapshot: AppSnapshotPayload) {
   }
 }
 
-function countActiveStudents(snapshot: AppSnapshotPayload, referenceDate: string) {
+// 教室追加フォームの初期値。契約開始日は今日(JST)。
+// UTC の日付だと JST 0:00〜8:59 に開くと前日が入る(2026-09-16 修正)。
+export function buildInitialProvisionDraft(classroomCount: number, now: Date = new Date()) {
+  return {
+    classroomName: `新規教室 ${classroomCount + 1}`,
+    managerName: `教室管理者 ${classroomCount + 1}`,
+    managerUserId: '',
+    contractStartDate: getJstTodayDateKey(now),
+    contractEndDate: '',
+  }
+}
+
+// 在籍数の基準日は呼び出し側で今日(JST)を渡す(請求の在籍台帳も JST 基準)。
+export function countActiveStudents(snapshot: AppSnapshotPayload, referenceDate: string) {
   return snapshot.students.filter((student) => isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, referenceDate)).length
 }
 
@@ -162,17 +176,11 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
   const [subPage, setSubPage] = useState<'main' | 'classrooms'>('main')
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
   const [managerEmailDrafts, setManagerEmailDrafts] = useState<Record<string, string>>({})
-  const [provisionDraft, setProvisionDraft] = useState(() => ({
-    classroomName: `新規教室 ${classrooms.length + 1}`,
-    managerName: `教室管理者 ${classrooms.length + 1}`,
-    managerUserId: '',
-    contractStartDate: new Date().toISOString().slice(0, 10),
-    contractEndDate: '',
-  }))
+  const [provisionDraft, setProvisionDraft] = useState(() => buildInitialProvisionDraft(classrooms.length))
   const managerById = useMemo(() => new Map(users.filter((user) => user.role === 'manager').map((user) => [user.id, user])), [users])
   const firebaseSummary = 'Firebase Hosting / Auth / Firestore / Functions で運用します。教室追加と削除は Functions が処理し、管理者 UID 差し替え時は旧 Authentication ユーザーも自動削除します。教室追加で UID を指定した場合は、その既存 Auth アカウントと既存パスワードをそのまま使います。'
   const firebaseAuthUrl = buildFirebaseConsoleUrl(firebaseProjectId, '/authentication/users')
-  const todayDateKey = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const todayDateKey = useMemo(() => getJstTodayDateKey(), [])
   const todayLabel = useMemo(() => {
     const now = new Date()
     return `${now.getFullYear()}年${now.getMonth() + 1}月現在`
