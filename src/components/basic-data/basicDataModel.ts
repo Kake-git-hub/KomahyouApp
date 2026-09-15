@@ -208,13 +208,23 @@ export function getReferenceDateKey(date: Date) {
   return `${year}-${month}-${day}`
 }
 
-// 在籍判定(spec-basic-data.md): 入塾日前・退塾日後・高3卒業後は非在籍。手動の非表示(isHidden)は廃止。
-// 生徒は birthDate で高3卒業を判定。講師は birthDate を持たない(空文字)ため日付のみで判定する。
+// ★生徒の退塾日の意味(オーナー決定 2026-09-15・確認リスト v1.5.527 b-2):
+//   退塾日は「その日から非在籍」(在籍は退塾日の前日まで)。退塾日当日の盤面・日程表・請求・保護者QRからも外す。
+//   生徒の在籍判定(isActiveOnDate / resolveScheduledStatus / resolveManagedStudentRosterStatus)はすべてこの述語を通す。
+//   ⚠️講師の退職日は変えない(resolveTeacherRosterStatus / resolveManagedRosterStatus は従来どおり当日在籍)。
+//   写し: functions/src/monthlyStudentCount.ts isStudentActiveOnDate・src/utils/parentSchedule.ts isParentStudentActiveOnDate
+//   ・src/utils/scheduleViewData.ts isVisibleInRange(生徒)・scheduleHtml.ts 埋め込み isVisibleInRange(生徒)。片方だけ変えない。
+export function isStudentWithdrawnOnDate(withdrawDate: string, referenceDate: string) {
+  const normalizedWithdrawDate = normalizeDateText(withdrawDate)
+  return Boolean(normalizedWithdrawDate) && referenceDate >= normalizedWithdrawDate
+}
+
+// 生徒の在籍判定(spec-basic-data.md): 入塾日前・退塾日当日以降・高3卒業後は非在籍。手動の非表示(isHidden)は廃止。
+// 生徒は birthDate で高3卒業を判定する。★呼び出し元は生徒のみ(講師は resolveTeacherRosterStatus を使う)。
 export function isActiveOnDate(entryDate: string, withdrawDate: string, birthDate: string, referenceDate: string) {
   const normalizedEntryDate = normalizeDateText(entryDate)
   if (normalizedEntryDate && referenceDate < normalizedEntryDate) return false
-  const normalizedWithdrawDate = normalizeDateText(withdrawDate)
-  if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return false
+  if (isStudentWithdrawnOnDate(withdrawDate, referenceDate)) return false
   if (hasGraduatedHighSchool(birthDate, referenceDate)) return false
   return true
 }
@@ -236,7 +246,7 @@ export function isTeacherVisibleInManagement(teacher: TeacherRow, referenceDate:
 }
 
 export function isStudentVisibleInManagement(student: StudentRow, referenceDate: string) {
-  return resolveManagedRosterStatus(student.withdrawDate, student.birthDate, referenceDate) === '在籍'
+  return resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, referenceDate) === '在籍'
 }
 
 export function resolveManagementRosterStatusLabel(status: string) {
@@ -245,24 +255,26 @@ export function resolveManagementRosterStatusLabel(status: string) {
   return '非在籍'
 }
 
-// 生徒/講師の在籍状態(spec-basic-data.md): 手動の非表示(isHidden)は廃止。入塾前・退塾・高3卒業後で判定する。
-// 講師は birthDate を持たない(空文字)ため、卒業判定はスキップされ日付のみで判定される。
+// 生徒の在籍状態(spec-basic-data.md): 手動の非表示(isHidden)は廃止。入塾前・退塾(退塾日当日から)・高3卒業後で判定する。
+// ★呼び出し元は生徒のみ(講師は resolveTeacherRosterStatus を使う)。
 export function resolveScheduledStatus(entryDate: string, withdrawDate: string, birthDate: string, referenceDate: string) {
   const normalizedEntryDate = normalizeDateText(entryDate)
   if (normalizedEntryDate && referenceDate < normalizedEntryDate) return '入塾前'
-  const normalizedWithdrawDate = normalizeDateText(withdrawDate)
-  if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return '退塾'
+  if (isStudentWithdrawnOnDate(withdrawDate, referenceDate)) return '退塾'
   if (hasGraduatedHighSchool(birthDate, referenceDate)) return '退塾'
   return '在籍'
 }
 
 // ── 管理データ画面(BasicDataScreen)専用の在籍表示(オーナー指示 2026-07-10) ──
-// 方針: 入塾日は在籍判定に使わない(未来入塾でも在籍として名簿に出す)。退塾日以降=退塾日の翌日から
-// 非在籍(退塾日当日は在籍=strictly after)。高3卒業は「卒業日(高3学年度末=翌3/31)を退塾日として
-// 自動補完」して扱う(明示の退塾日があればそれを優先)。盤面/請求/日程表は従来の isActiveOnDate /
-// resolveScheduledStatus を使い続け、入塾日前・高3卒業を尊重する(この画面限定の変更)。
+// 方針: 入塾日は在籍判定に使わない(未来入塾でも在籍として名簿に出す)。生徒は退塾日の当日から非在籍
+// (2026-09-15 改定・isStudentWithdrawnOnDate)。講師は従来どおり退職日の翌日から非在籍(当日在籍)。
+// 高3卒業は「卒業で在籍でなくなる最初の日(高3学年度末の翌日=4/1)を退塾日として自動補完」して扱う
+// (明示の退塾日があればそれを優先)。盤面/請求/日程表は isActiveOnDate / resolveScheduledStatus を使い、
+// 入塾日前・高3卒業を尊重する(入塾日不問はこの画面限定)。
 
-// 高3卒業日(=高3学年度末の翌3/31)を返す。生年月日が無効なら空文字。
+// 高3卒業による自動補完の退塾日を返す。生年月日が無効なら空文字。
+// ★2026-09-15: 退塾日=「その日から非在籍」に揃えたため、学年度末(3/31)ではなく翌日の 4/1 を返す。
+//   hasGraduatedHighSchool の境界(4/1 から卒業扱い)は変えていないので、在籍の最終日は従来どおり 3/31。
 export function resolveGraduationWithdrawDate(birthDate: string): string {
   const normalized = normalizeDateText(birthDate)
   if (!normalized) return ''
@@ -271,8 +283,8 @@ export function resolveGraduationWithdrawDate(birthDate: string): string {
   const birthMonth = Number(monthText)
   if (Number.isNaN(birthYear) || Number.isNaN(birthMonth)) return ''
   const enrollmentYear = resolveEnrollmentYearFromBirthDateParts(birthYear, birthMonth)
-  // 高3(学年番号12)の学年度は schoolYear=enrollmentYear+11。その年度末=翌年3/31=(enrollmentYear+12)-03-31。
-  return `${enrollmentYear + 12}-03-31`
+  // 高3(学年番号12)の学年度は schoolYear=enrollmentYear+11。その年度末=翌年3/31、非在籍の初日=(enrollmentYear+12)-04-01。
+  return `${enrollmentYear + 12}-04-01`
 }
 
 // 管理データ表示上の実効退塾日: 明示退塾日を最優先。無ければ高3卒業済みのとき卒業日を自動補完。
@@ -284,16 +296,25 @@ export function resolveEffectiveManagedWithdrawDate(withdrawDate: string, birthD
   return ''
 }
 
-// 管理データの在籍/非在籍(入塾日は不問・退塾日当日は在籍・翌日以降は非在籍)。
+// 管理データの【講師】在籍/非在籍(入塾日は不問・退職日当日は在籍・翌日以降は非在籍)。
+// ⚠️2026-09-15 の「退塾日当日から非在籍」は生徒だけの改定。講師はこの関数のまま変えない。生徒は下の
+// resolveManagedStudentRosterStatus を使うこと(ここへ生徒を通すと当日在籍に戻る)。
 export function resolveManagedRosterStatus(withdrawDate: string, birthDate: string, referenceDate: string): '在籍' | '非在籍' {
   const effectiveWithdraw = resolveEffectiveManagedWithdrawDate(withdrawDate, birthDate, referenceDate)
   if (effectiveWithdraw && referenceDate > effectiveWithdraw) return '非在籍'
   return '在籍'
 }
 
+// 管理データの【生徒】在籍/非在籍(入塾日は不問・退塾日の当日から非在籍・高3卒業は自動補完の退塾日)。
+export function resolveManagedStudentRosterStatus(withdrawDate: string, birthDate: string, referenceDate: string): '在籍' | '非在籍' {
+  const effectiveWithdraw = resolveEffectiveManagedWithdrawDate(withdrawDate, birthDate, referenceDate)
+  if (isStudentWithdrawnOnDate(effectiveWithdraw, referenceDate)) return '非在籍'
+  return '在籍'
+}
+
 // 管理データの生徒ステータス列: 在籍中は学年ラベル(未来入塾でも生年月日から算出)、非在籍は '非在籍'。
 export function resolveManagedStudentGradeLabel(student: StudentRow, referenceDate: string): string {
-  if (resolveManagedRosterStatus(student.withdrawDate, student.birthDate, referenceDate) === '非在籍') return '非在籍'
+  if (resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, referenceDate) === '非在籍') return '非在籍'
   const [yearText, monthText, dayText] = referenceDate.split('-')
   const referenceDateValue = new Date(Number(yearText), Number(monthText) - 1, Number(dayText))
   return resolveSchoolGradeLabelFromBirthDate(student.birthDate, referenceDateValue)

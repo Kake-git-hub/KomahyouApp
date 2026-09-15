@@ -2,6 +2,7 @@
 // k_contract §1 の検証順を固定する。index.ts は import しない(initializeApp が走る)。配線は文字列走査で検査する。
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
+import { isParentStudentActiveOnDate } from './generated/parentSchedule'
 
 import {
   buildParentMessageDoc,
@@ -106,10 +107,8 @@ function createDeps(overrides: Partial<ParentPortalDeps> = {}): ParentPortalDeps
       to: typeof input.to === 'string' ? input.to : todayKey,
       bounds: { minFrom: '2026-07-19', maxTo: '2026-12-06' },
     }),
-    isStudentActive: (student, dateKey) => {
-      const withdraw = typeof student.withdrawDate === 'string' ? student.withdrawDate : ''
-      return !withdraw || withdraw >= dateKey
-    },
+    // 本番配線(index.ts)と同じ生成物の在籍判定を使う(2026-09-15: 生徒は退塾日当日から非在籍)。
+    isStudentActive: (student, dateKey) => isParentStudentActiveOnDate(student, dateKey),
     isEnabled: ({ id, name }) => isParentPortalEnabledForClassroom({ id, name, projectId: 'komahyouapp-prod' }),
     todayJst: () => '2026-09-13',
     nowIso: () => '2026-09-13T01:23:45.000Z',
@@ -447,10 +446,13 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
     expect(result).toEqual({ status: 410, body: { error: PARENT_PORTAL_ERROR_GONE } })
   })
 
-  it('在籍判定は deps.todayJst の日付で行う(退塾日当日は可・翌日は不可 = P-6)', async () => {
+  // 2026-09-15 改定(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。保護者QRも退塾日当日から 410。
+  it('在籍判定は deps.todayJst の日付で行う(退塾日の前日は可・当日と翌日は不可 = P-6)', async () => {
     const anyStudentView = () => ({ studentName: '佐藤', days: [] })
+    const dayBefore = createDeps({ loadToken: async () => ({ ...activeTokenDoc, studentId: 's002' }), todayJst: () => '2026-08-30', buildScheduleView: anyStudentView })
+    expect((await handleParentPortalGet({ token: TOKEN }, dayBefore)).status).toBe(200)
     const onWithdrawDay = createDeps({ loadToken: async () => ({ ...activeTokenDoc, studentId: 's002' }), todayJst: () => '2026-08-31', buildScheduleView: anyStudentView })
-    expect((await handleParentPortalGet({ token: TOKEN }, onWithdrawDay)).status).toBe(200)
+    expect((await handleParentPortalGet({ token: TOKEN }, onWithdrawDay)).status).toBe(410)
     const nextDay = createDeps({ loadToken: async () => ({ ...activeTokenDoc, studentId: 's002' }), todayJst: () => '2026-09-01', buildScheduleView: anyStudentView })
     expect((await handleParentPortalGet({ token: TOKEN }, nextDay)).status).toBe(410)
   })

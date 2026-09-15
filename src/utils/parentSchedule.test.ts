@@ -172,11 +172,13 @@ describe('normalizeParentDateText', () => {
 })
 
 describe('isParentStudentActiveOnDate', () => {
-  it('入塾日前は非在籍、退塾日当日は在籍、翌日から非在籍(P-6)', () => {
+  // 2026-09-15 改定(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。保護者QRも退塾日当日から閲覧不可。
+  it('入塾日前は非在籍、退塾日の前日まで在籍、退塾日当日から非在籍(P-6)', () => {
     const student = { entryDate: '2026-09-01', withdrawDate: '2026-09-10', birthDate: '2011-06-15' }
     expect(isParentStudentActiveOnDate(student, '2026-08-31')).toBe(false)
     expect(isParentStudentActiveOnDate(student, '2026-09-01')).toBe(true)
-    expect(isParentStudentActiveOnDate(student, '2026-09-10')).toBe(true)
+    expect(isParentStudentActiveOnDate(student, '2026-09-09')).toBe(true)
+    expect(isParentStudentActiveOnDate(student, '2026-09-10')).toBe(false)
     expect(isParentStudentActiveOnDate(student, '2026-09-11')).toBe(false)
   })
 
@@ -191,8 +193,8 @@ describe('isParentStudentActiveOnDate', () => {
   })
 
   it("スラッシュ日付・'未定'・欠損を受け、生年月日が空/不正なら卒業判定しない", () => {
-    expect(isParentStudentActiveOnDate({ entryDate: '2024/4/1', withdrawDate: '2026/9/10', birthDate: '' }, '2026-09-10')).toBe(true)
-    expect(isParentStudentActiveOnDate({ entryDate: '2024/4/1', withdrawDate: '2026/9/10', birthDate: '' }, '2026-09-11')).toBe(false)
+    expect(isParentStudentActiveOnDate({ entryDate: '2024/4/1', withdrawDate: '2026/9/10', birthDate: '' }, '2026-09-09')).toBe(true)
+    expect(isParentStudentActiveOnDate({ entryDate: '2024/4/1', withdrawDate: '2026/9/10', birthDate: '' }, '2026-09-10')).toBe(false)
     expect(isParentStudentActiveOnDate({}, '2026-09-11')).toBe(true)
     expect(isParentStudentActiveOnDate({ birthDate: '2007/8/1' }, '2026-09-11')).toBe(true)
     expect(isParentStudentActiveOnDate({ birthDate: 20070801 }, '2026-09-11')).toBe(true)

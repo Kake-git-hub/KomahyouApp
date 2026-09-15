@@ -3205,6 +3205,13 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate >= startDate);
       }
 
+      // 生徒は退塾日の当日から非在籍(2026-09-15 改定・scheduleViewData.ts isStudentVisibleInRange と同じ)。講師は上の isVisibleInRange のまま。
+      function isStudentVisibleInRange(item, startDate, endDate) {
+        var today = new Date().toISOString().slice(0, 10);
+        if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate <= today) return false;
+        return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate > startDate);
+      }
+
       function getGradeLabel(birthDate, referenceDate) {
         if (!birthDate) return '';
         const birthParts = birthDate.split('-').map(Number);
@@ -5784,7 +5791,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       }
 
       function getVisibleStudents(startDate, endDate) {
-        return DATA.students.filter((student) => isVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);
+        return DATA.students.filter((student) => isStudentVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);
       }
 
       function getVisibleTeachers(startDate, endDate) {

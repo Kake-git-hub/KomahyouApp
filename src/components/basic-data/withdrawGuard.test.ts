@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { isActiveOnDate, isStudentDeletedFromApp, resolveManagedRosterStatus } from './basicDataModel'
+import { isActiveOnDate, isStudentDeletedFromApp, resolveManagedRosterStatus, resolveManagedStudentRosterStatus } from './basicDataModel'
 import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, markStudentDeletedFromApp } from './withdrawGuard'
 
 const TODAY = '2026-09-13'
@@ -16,7 +16,7 @@ describe('canWithdrawStudentToday（退塾ボタンを出す条件）', () => {
     expect(canWithdrawStudentToday({ withdrawDate: '2026-10-31', birthDate: '2012-05-01' }, TODAY)).toBe(true)
   })
 
-  it('今日付けで退塾済み（当日はまだ在籍表示）の生徒には出さない＝二度押し防止', () => {
+  it('今日付けで退塾済み（当日から非在籍）の生徒には出さない＝二度押し防止', () => {
     expect(canWithdrawStudentToday({ withdrawDate: TODAY, birthDate: '2012-05-01' }, TODAY)).toBe(false)
   })
 
@@ -32,11 +32,23 @@ describe('isStudentInWithdrawnRosterList（退塾ボタンを押したらすぐ�
     expect(isStudentInWithdrawnRosterList(withdrawn, TODAY)).toBe(true)
   })
 
-  it('退塾日は今日のまま記録し、共有の在籍判定(当日は在籍)は変えない＝前日付けにしない', () => {
+  // 2026-09-15 改定(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。退塾日は今日のまま記録し(前日付けにしない)、
+  // 共有の生徒在籍判定(盤面/請求/保護者QR が使う isActiveOnDate)も今日から非在籍になる＝一覧の特別扱いと食い違わない。
+  it('退塾日は今日のまま記録し、共有の生徒在籍判定でも今日から非在籍になる（前日=在籍/当日=非在籍/翌日=非在籍）', () => {
     const [withdrawn] = applyStudentWithdrawToday([{ id: 's001', withdrawDate: '', birthDate: '2012-05-01' }], 's001', TODAY)
     expect(withdrawn.withdrawDate).toBe(TODAY)
-    expect(resolveManagedRosterStatus(withdrawn.withdrawDate, withdrawn.birthDate, TODAY)).toBe('在籍')
-    expect(isActiveOnDate('', withdrawn.withdrawDate, withdrawn.birthDate, TODAY)).toBe(true)
+    expect(isActiveOnDate('', withdrawn.withdrawDate, withdrawn.birthDate, '2026-09-12')).toBe(true)
+    expect(isActiveOnDate('', withdrawn.withdrawDate, withdrawn.birthDate, TODAY)).toBe(false)
+    expect(isActiveOnDate('', withdrawn.withdrawDate, withdrawn.birthDate, '2026-09-14')).toBe(false)
+    expect(resolveManagedStudentRosterStatus(withdrawn.withdrawDate, withdrawn.birthDate, '2026-09-12')).toBe('在籍')
+    expect(resolveManagedStudentRosterStatus(withdrawn.withdrawDate, withdrawn.birthDate, TODAY)).toBe('非在籍')
+    expect(isStudentInWithdrawnRosterList(withdrawn, '2026-09-12')).toBe(false)
+    expect(isStudentInWithdrawnRosterList(withdrawn, TODAY)).toBe(true)
+    expect(isStudentInWithdrawnRosterList(withdrawn, '2026-09-14')).toBe(true)
+  })
+
+  it('講師用の判定(退職日当日は在籍)は変えていない＝生徒の一覧振り分けを講師用へ戻すと当日在籍一覧に残る', () => {
+    expect(resolveManagedRosterStatus(TODAY, '', TODAY)).toBe('在籍')
   })
 
   it('未定・将来の退塾日は在籍一覧、過去の退塾日・高3卒業後は非在籍一覧', () => {
@@ -80,7 +92,11 @@ describe('buildStudentWithdrawConfirmation', () => {
     expect(confirmation.title).toBe('生徒A を退塾にします')
     expect(confirmation.message).toContain(TODAY)
     expect(confirmation.message).toContain('削除されず残ります')
-    expect(confirmation.message).toContain('一覧からはすぐ')
+    expect(confirmation.message).toContain('非在籍生徒表示')
+    // 2026-09-15 改定: 「本日まで在籍扱い」とは言わず、本日から盤面の通常授業などから外れ、手置きの講習・振替は残ると伝える。
+    expect(confirmation.message).not.toContain('本日まで在籍')
+    expect(confirmation.message).toContain('本日から非在籍')
+    expect(confirmation.message).toContain('講習・振替のコマは残ります')
     expect(confirmation.overwriteNote).toBeNull()
     expect(confirmation.stockWarning).toBeNull()
   })
@@ -101,9 +117,11 @@ describe('非在籍一覧の削除（アプリ上から消す・データは残�
   it('削除ボタンは非在籍(退塾済み・高3卒業後)で未削除の生徒だけ', () => {
     expect(canDeleteStudentFromApp({ withdrawDate: '2026-08-31', birthDate: '2012-05-01' }, TODAY)).toBe(true)
     expect(canDeleteStudentFromApp({ withdrawDate: '', birthDate: '2000-05-01' }, TODAY)).toBe(true)
-    // 在籍中(未定・今日付け退塾・将来の退塾日)は削除できない
+    // 確認リスト v1.5.527 b-2(2026-09-15): 今日付けで退塾した生徒は当日から非在籍なので、非在籍一覧で当日から削除できる
+    expect(canDeleteStudentFromApp({ withdrawDate: TODAY, birthDate: '2012-05-01' }, TODAY)).toBe(true)
+    // 在籍中(未定・明日以降の退塾日)は削除できない
     expect(canDeleteStudentFromApp({ withdrawDate: '', birthDate: '2012-05-01' }, TODAY)).toBe(false)
-    expect(canDeleteStudentFromApp({ withdrawDate: TODAY, birthDate: '2012-05-01' }, TODAY)).toBe(false)
+    expect(canDeleteStudentFromApp({ withdrawDate: '2026-09-14', birthDate: '2012-05-01' }, TODAY)).toBe(false)
     expect(canDeleteStudentFromApp({ withdrawDate: '2026-10-31', birthDate: '2012-05-01' }, TODAY)).toBe(false)
     // 削除済みは二度出さない
     expect(canDeleteStudentFromApp({ withdrawDate: '2026-08-31', birthDate: '2012-05-01', deletedAt: '2026-09-13T01:00:00.000Z' }, TODAY)).toBe(false)

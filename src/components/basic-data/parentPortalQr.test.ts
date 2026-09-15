@@ -84,8 +84,9 @@ describe('resolveParentPortalQrRowState (spec-parent-portal §K-6)', () => {
 
   it('非在籍(退塾後・入塾前・高3卒業後)は hidden — 在籍判定は盤面と同じ isActiveOnDate', () => {
     expect(resolveParentPortalQrRowState({ ...enabledParams, student: createStudent({ withdrawDate: '2026-09-12' }) })).toBe('hidden')
-    // 退塾日当日は在籍(isActiveOnDate は strictly greater)
-    expect(resolveParentPortalQrRowState({ ...enabledParams, student: createStudent({ withdrawDate: '2026-09-13' }) })).toBe('issue')
+    // 2026-09-15 改定: 生徒の退塾日は「その日から非在籍」。退塾日当日は hidden、翌日退塾(=今日は前日)は在籍
+    expect(resolveParentPortalQrRowState({ ...enabledParams, student: createStudent({ withdrawDate: '2026-09-13' }) })).toBe('hidden')
+    expect(resolveParentPortalQrRowState({ ...enabledParams, student: createStudent({ withdrawDate: '2026-09-14' }) })).toBe('issue')
     // 入塾日前は hidden(基本データのタブ判定 resolveManagedRosterStatus は入塾日不問だが、ここでは使わない)
     expect(resolveParentPortalQrRowState({ ...enabledParams, student: createStudent({ entryDate: '2026-10-01' }) })).toBe('hidden')
     // 2007-04-02 生まれ → 2026-03-31 に高3卒業済み

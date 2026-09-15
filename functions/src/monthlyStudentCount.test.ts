@@ -55,8 +55,10 @@ describe('isStudentActiveOnDate の個別境界', () => {
     expect(isStudentActiveOnDate('2026-08-16', '未定', '', '2026-08-15')).toBe(false)
   })
 
-  it('退塾日当日は在籍、翌日は非在籍', () => {
-    expect(isStudentActiveOnDate('2024-04-01', '2026-08-15', '', '2026-08-15')).toBe(true)
+  // 2026-09-15 改定(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。15日退塾の生徒は15日の記録に数えない。
+  it('退塾日の前日は在籍、当日と翌日は非在籍', () => {
+    expect(isStudentActiveOnDate('2024-04-01', '2026-08-16', '', '2026-08-15')).toBe(true)
+    expect(isStudentActiveOnDate('2024-04-01', '2026-08-15', '', '2026-08-15')).toBe(false)
     expect(isStudentActiveOnDate('2024-04-01', '2026-08-14', '', '2026-08-15')).toBe(false)
   })
 
@@ -86,13 +88,14 @@ describe('countActiveStudentsOnDate', () => {
     { id: 's002', entryDate: '2024-04-01', withdrawDate: '2026-08-14', birthDate: '2011-05-20' }, // 前日退塾=非在籍
     { id: 's003', entryDate: '2026-09-01', withdrawDate: '未定', birthDate: '2012-01-10' }, // 未来入塾=非在籍
     { id: 's004', entryDate: '2020-04-01', withdrawDate: '未定', birthDate: '2007-05-20' }, // 高3卒業=非在籍
-    { id: 's005', entryDate: '2024-04-01', withdrawDate: '2026-08-15', birthDate: '2010-11-11' }, // 当日退塾=在籍
+    { id: 's005', entryDate: '2024-04-01', withdrawDate: '2026-08-15', birthDate: '2010-11-11' }, // 当日退塾=非在籍(2026-09-15 改定)
+    { id: 's006', entryDate: '2024-04-01', withdrawDate: '2026-08-16', birthDate: '2010-11-11' }, // 翌日退塾=在籍
   ]
 
   it('指定日に在籍している生徒だけを数え、内訳IDを返す', () => {
     const result = countActiveStudentsOnDate(students, '2026-08-15')
     expect(result.studentCount).toBe(2)
-    expect(result.studentIds).toEqual(['s001', 's005'])
+    expect(result.studentIds).toEqual(['s001', 's006'])
   })
 
   it('集計日が変われば人数も変わる(日付で判定している証明)', () => {

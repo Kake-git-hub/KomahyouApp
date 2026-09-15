@@ -91,12 +91,12 @@ export function hasGraduatedHighSchoolOnDate(birthDate: string | undefined, refe
 }
 
 // 鏡像: basicDataModel.ts の isActiveOnDate。請求の在籍判定はこの3条件だけ
-// (入塾日前は非在籍 / 退塾日当日は在籍・翌日から非在籍 / 高3卒業後は非在籍)。
+// (入塾日前は非在籍 / 退塾日の当日から非在籍(2026-09-15 改定・isStudentWithdrawnOnDate) / 高3卒業後は非在籍)。
 export function isStudentActiveOnDate(entryDate: string, withdrawDate: string, birthDate: string, referenceDate: string) {
   const normalizedEntryDate = normalizeRosterDateText(entryDate)
   if (normalizedEntryDate && referenceDate < normalizedEntryDate) return false
   const normalizedWithdrawDate = normalizeRosterDateText(withdrawDate)
-  if (normalizedWithdrawDate && referenceDate > normalizedWithdrawDate) return false
+  if (normalizedWithdrawDate && referenceDate >= normalizedWithdrawDate) return false
   if (hasGraduatedHighSchoolOnDate(birthDate, referenceDate)) return false
   return true
 }

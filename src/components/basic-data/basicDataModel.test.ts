@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildManagedStudentNameSortValue, compareManagedStudentsByGradeThenName, compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isActiveOnDate, isStudentVisibleInManagement, isTeacherVisibleInManagement, resolveCurrentStudentGradeLabel, resolveEffectiveManagedWithdrawDate, resolveGraduationWithdrawDate, resolveManagedRosterStatus, resolveManagedStudentGradeLabel, resolveManagedStudentGradeSortValue, resolveManagementRosterStatusLabel, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from './basicDataModel'
+import { buildManagedStudentNameSortValue, compareManagedStudentsByGradeThenName, compareStudentsByCurrentGradeThenName, formatStudentSelectionLabel, isActiveOnDate, isStudentVisibleInManagement, isStudentWithdrawnOnDate, isTeacherVisibleInManagement, resolveCurrentStudentGradeLabel, resolveEffectiveManagedWithdrawDate, resolveGraduationWithdrawDate, resolveManagedRosterStatus, resolveManagedStudentGradeLabel, resolveManagedStudentRosterStatus, resolveScheduledStatus, resolveManagedStudentGradeSortValue, resolveManagementRosterStatusLabel, resolveTeacherRosterStatus, type StudentRow, type TeacherRow } from './basicDataModel'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -86,42 +86,76 @@ describe('basicDataModel student labels and sorting', () => {
   })
 
   // 退塾日当日は在籍・翌日以降は非在籍(オーナー指示 Q3)。
-  it('treats the withdraw date itself as 在籍 and the day after as 非在籍 in management', () => {
+  // 2026-09-15 改定(確認リスト v1.5.527 b-2・オーナー決定): 生徒の退塾日は「その日から非在籍」(在籍は前日まで)。
+  it('treats a student as 在籍 until the day before the withdraw date and 非在籍 from the withdraw date in management', () => {
     const student = createStudent({ withdrawDate: '2026-03-31' })
 
-    expect(resolveManagedRosterStatus(student.withdrawDate, student.birthDate, '2026-03-31')).toBe('在籍')
-    expect(isStudentVisibleInManagement(student, '2026-03-31')).toBe(true)
-    expect(resolveManagedRosterStatus(student.withdrawDate, student.birthDate, '2026-04-01')).toBe('非在籍')
+    expect(resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, '2026-03-30')).toBe('在籍')
+    expect(isStudentVisibleInManagement(student, '2026-03-30')).toBe(true)
+    expect(resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, '2026-03-31')).toBe('非在籍')
+    expect(isStudentVisibleInManagement(student, '2026-03-31')).toBe(false)
+    expect(resolveManagedStudentGradeLabel(student, '2026-03-31')).toBe('非在籍')
+    expect(resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, '2026-04-01')).toBe('非在籍')
     expect(resolveManagedStudentGradeLabel(student, '2026-04-01')).toBe('非在籍')
   })
 
-  // 高3卒業は「卒業日(高3学年度末=翌3/31)を退塾日として自動補完」して非在籍にする(Q2)。
-  it('auto-fills the graduation date as the effective withdraw date for graduated students', () => {
-    const graduated = createStudent({ birthDate: '2006-05-01', withdrawDate: '' }) // 高3卒業済み(卒業=2025-03-31)
+  // 講師の退職日は今回変えない(当日在籍・翌日から非在籍)。生徒の改定が講師へ波及したら落ちる。
+  it('keeps the teacher withdraw date itself as 在籍 (teacher rule unchanged on 2026-09-15)', () => {
+    expect(resolveManagedRosterStatus('2026-03-31', '', '2026-03-31')).toBe('在籍')
+    expect(resolveManagedRosterStatus('2026-03-31', '', '2026-04-01')).toBe('非在籍')
+    const teacher = { id: 't1', name: '講師', email: '', entryDate: '2024-04-01', withdrawDate: '2026-03-31', subjectCapabilities: [] } as TeacherRow
+    expect(isTeacherVisibleInManagement(teacher, '2026-03-31')).toBe(true)
+    expect(resolveTeacherRosterStatus(teacher, '2026-03-31')).toBe('在籍')
+    expect(resolveTeacherRosterStatus(teacher, '2026-04-01')).toBe('退塾')
+  })
 
-    expect(resolveGraduationWithdrawDate('2006-05-01')).toBe('2025-03-31')
-    expect(resolveEffectiveManagedWithdrawDate('', '2006-05-01', '2026-04-22')).toBe('2025-03-31')
-    expect(resolveManagedRosterStatus('', '2006-05-01', '2026-04-22')).toBe('非在籍')
+  it('isStudentWithdrawnOnDate: 前日=false/当日=true/翌日=true、未定・空は false', () => {
+    expect(isStudentWithdrawnOnDate('2026-09-15', '2026-09-14')).toBe(false)
+    expect(isStudentWithdrawnOnDate('2026-09-15', '2026-09-15')).toBe(true)
+    expect(isStudentWithdrawnOnDate('2026-09-15', '2026-09-16')).toBe(true)
+    expect(isStudentWithdrawnOnDate('2026/9/15', '2026-09-15')).toBe(true)
+    expect(isStudentWithdrawnOnDate('未定', '2026-09-15')).toBe(false)
+    expect(isStudentWithdrawnOnDate('', '2026-09-15')).toBe(false)
+  })
+
+  // 高3卒業は「卒業で在籍でなくなる最初の日(高3学年度末の翌日=4/1)を退塾日として自動補完」して非在籍にする(Q2)。
+  // 2026-09-15: 退塾日=その日から非在籍 に揃えて 3/31→4/1 に変更(hasGraduatedHighSchool の境界は不変)。
+  it('auto-fills the graduation date as the effective withdraw date for graduated students', () => {
+    const graduated = createStudent({ birthDate: '2006-05-01', withdrawDate: '' }) // 高3卒業済み(在籍最終日=2025-03-31)
+
+    expect(resolveGraduationWithdrawDate('2006-05-01')).toBe('2025-04-01')
+    expect(resolveEffectiveManagedWithdrawDate('', '2006-05-01', '2026-04-22')).toBe('2025-04-01')
+    expect(resolveManagedStudentRosterStatus('', '2006-05-01', '2026-04-22')).toBe('非在籍')
     expect(isStudentVisibleInManagement(graduated, '2026-04-22')).toBe(false)
+    // 卒業の境界そのもの: 3/31 は在籍(補完しない)、4/1(=補完された退塾日)から非在籍。盤面側の判定と一致する。
+    expect(resolveEffectiveManagedWithdrawDate('', '2006-05-01', '2025-03-31')).toBe('')
+    expect(resolveManagedStudentRosterStatus('', '2006-05-01', '2025-03-31')).toBe('在籍')
+    expect(resolveManagedStudentRosterStatus('', '2006-05-01', '2025-04-01')).toBe('非在籍')
+    expect(isActiveOnDate('2020-04-01', '', '2006-05-01', '2025-03-31')).toBe(true)
+    expect(isActiveOnDate('2020-04-01', '', '2006-05-01', '2025-04-01')).toBe(false)
 
     // 在籍中の高3(卒業前)は退塾日を自動補完しない=在籍のまま。
     const current3rd = createStudent({ birthDate: '2008-05-01', withdrawDate: '' })
     expect(resolveEffectiveManagedWithdrawDate('', '2008-05-01', '2026-04-22')).toBe('')
-    expect(resolveManagedRosterStatus('', '2008-05-01', '2026-04-22')).toBe('在籍')
+    expect(resolveManagedStudentRosterStatus('', '2008-05-01', '2026-04-22')).toBe('在籍')
     expect(resolveManagedStudentGradeLabel(current3rd, '2026-04-22')).toBe('高3')
 
     // 明示の退塾日があればそれを優先(卒業日で上書きしない)。
     expect(resolveEffectiveManagedWithdrawDate('2024-06-30', '2006-05-01', '2026-04-22')).toBe('2024-06-30')
   })
 
-  // ★共有判定(盤面/請求/日程表)は入塾日前・退塾翌日・高3卒業で非在籍のまま固定する。
+  // ★共有判定(盤面/請求/日程表)は入塾日前・退塾日当日(2026-09-15 改定)・高3卒業で非在籍のまま固定する。
   // 管理画面の入塾日不問ルールを将来ここへ"統一"すると落ちるようにして、意図しない波及を捕捉する。
   it('locks the shared isActiveOnDate: entry date and graduation still gate the board/billing', () => {
     // 入塾日前は非在籍(管理画面と違い共有側は隠す)。
     expect(isActiveOnDate('2027-04-01', '', '2013-05-01', '2026-04-22')).toBe(false)
-    // 退塾日当日は在籍・翌日は非在籍。
-    expect(isActiveOnDate('2020-04-01', '2026-03-31', '2013-05-01', '2026-03-31')).toBe(true)
+    // 退塾日の前日は在籍・当日と翌日は非在籍(2026-09-15 改定)。
+    expect(isActiveOnDate('2020-04-01', '2026-03-31', '2013-05-01', '2026-03-30')).toBe(true)
+    expect(isActiveOnDate('2020-04-01', '2026-03-31', '2013-05-01', '2026-03-31')).toBe(false)
     expect(isActiveOnDate('2020-04-01', '2026-03-31', '2013-05-01', '2026-04-01')).toBe(false)
+    expect(resolveScheduledStatus('2020-04-01', '2026-03-31', '2013-05-01', '2026-03-30')).toBe('在籍')
+    expect(resolveScheduledStatus('2020-04-01', '2026-03-31', '2013-05-01', '2026-03-31')).toBe('退塾')
+    expect(resolveScheduledStatus('2020-04-01', '2026-03-31', '2013-05-01', '2026-04-01')).toBe('退塾')
     // 高3卒業(翌4/1以降)は非在籍・卒業日当日(3/31)は在籍。
     expect(isActiveOnDate('2020-04-01', '', '2008-05-01', '2027-03-31')).toBe(true)
     expect(isActiveOnDate('2020-04-01', '', '2008-05-01', '2027-04-01')).toBe(false)
