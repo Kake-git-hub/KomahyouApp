@@ -6,7 +6,9 @@ import {
   resolveLectureStockStudentKey,
 } from './ScheduleBoardScreen'
 import { buildLectureStockKey } from './lectureStock'
-import { buildMakeupStockKey } from './makeupStock'
+import { buildMakeupStockKey, computeAutomaticShortageOrigins } from './makeupStock'
+import type { RegularLessonRow } from '../basic-data/regularLessonModel'
+import type { ClassroomSettings } from '../../types/appState'
 
 // ============================================================================
 // INV-06 操作マトリクス（休日化 handleToggleHolidayDate の在庫会計）
@@ -239,5 +241,40 @@ describe('resolveLectureStockStudentKey（在庫キーの正準化）', () => {
     const roster = makeRoster([['在籍名', 's099']])
     expect(resolveLectureStockStudentKey({ name: '在籍名' }, roster, resolveDisplayName)).toBe('s099')
     expect(resolveLectureStockStudentKey({ name: '不在名' }, roster, resolveDisplayName)).toBe('name:不在名')
+  })
+})
+
+// ============================================================================
+// 行: 退塾日 × 休日(自動の振替の元 computeAutomaticShortageOrigins)
+//   オーナー決定 2026-09-15(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。
+//   休日の通常授業から自動で生まれる振替の元は在籍判定(isActiveOnDate)に従うため、
+//   退塾日の前日までの休日には元が生まれ、退塾日当日(以降)の休日には生まれない。
+//   旧定義(当日在籍)では退塾日当日の休日にも 1 件生まれていた＝新しい定義として受け入れた在庫の差(INV-06)。
+// ============================================================================
+describe('INV-06 退塾日 × 休日の自動振替元(前日=生まれる/当日=生まれない)', () => {
+  const HOLIDAY = '2025-04-07' // 月曜
+  const lesson: RegularLessonRow = {
+    id: 'regular-1', schoolYear: 2025, teacherId: 't1', student1Id: 's028', subject1: '数', startDate: '', endDate: '',
+    student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '',
+    dayOfWeek: 1, slotNumber: 1,
+  }
+  const settings: ClassroomSettings = { closedWeekdays: [], holidayDates: [HOLIDAY], forceOpenDates: [], deskCount: 1 }
+  const originsFor = (withdrawDate: string) => computeAutomaticShortageOrigins(
+    [lesson],
+    [{ id: 's028', name: '犬飼 凜', displayName: '犬飼', email: '', entryDate: '2025-04-01', withdrawDate, birthDate: '2012-05-01' }],
+    settings,
+    new Date('2025-04-10T00:00:00'),
+  ).origins
+
+  it('退塾日が休日の翌日(=休日は在籍最終日)なら、その休日の振替元が 1 件生まれる', () => {
+    expect(originsFor('2025-04-08')).toEqual({ [buildMakeupStockKey('s028', '数')]: [`${HOLIDAY}#1`] })
+  })
+
+  it('退塾日が休日当日なら、その休日の振替元は生まれない(当日から非在籍)', () => {
+    expect(originsFor(HOLIDAY)).toEqual({})
+  })
+
+  it('退塾日が休日より前でも生まれない', () => {
+    expect(originsFor('2025-04-06')).toEqual({})
   })
 })

@@ -29,8 +29,17 @@ describe('billing utilities', () => {
       student({ entryDate: '2026-05-16' }),
       student({ withdrawDate: '2026-05-14' }),
       student({ birthDate: '2005-04-02' }), // 高3卒業済み → 非在籍（旧 isHidden 廃止の代替検証）
-      student({ withdrawDate: '2026-05-15' }),
+      student({ withdrawDate: '2026-05-15' }), // 集計日当日の退塾 → 非在籍(2026-09-15 改定)
+      student({ withdrawDate: '2026-05-16' }), // 集計日翌日の退塾 → 在籍
     ], '2026-05')).toBe(2)
+  })
+
+  // 確認リスト v1.5.527 b-2(2026-09-15): 生徒の退塾日は「その日から非在籍」。請求の在籍数も同じ境界。
+  it('counts a student withdrawing on the snapshot date as not enrolled (前日=在籍/当日=非在籍/翌日=非在籍)', () => {
+    const count = (withdrawDate: string) => countActiveStudentsForBilling([student({ withdrawDate })], '2026-05')
+    expect(count('2026-05-16')).toBe(1)
+    expect(count('2026-05-15')).toBe(0)
+    expect(count('2026-05-14')).toBe(0)
   })
 
   it('allows choosing an arbitrary snapshot day and clamps it to the month bounds', () => {

@@ -4882,3 +4882,89 @@ describe('scheduleHtml 講習履歴', () => {
     vi.unstubAllGlobals()
   })
 })
+
+// 確認リスト v1.5.527 b-2(2026-09-15): 生徒の退塾日は「その日から非在籍」。
+// 回数表の予定数(buildExpectedRegularOccurrences)と、別タブ日程表の埋め込み JS の生徒一覧を退塾日当日から外す。
+describe('生徒の退塾日は当日から非在籍: 日程表(回数表の予定数・埋め込みJSの生徒一覧)', () => {
+  it('予定数の通常授業は退塾日の前日まで数え、当日以降は数えない', () => {
+    // 2026-03 の火曜: 3/3, 3/10, 3/17, 3/24, 3/31。3/17 退塾 → 3/3, 3/10 だけ。
+    const dates = (withdrawDate: string) => buildExpectedRegularOccurrences({
+      students: [createStudent({ withdrawDate })],
+      regularLessons: [createRegularLesson()],
+      startDate: '2026-03-01',
+      endDate: '2026-03-31',
+    }).filter((entry) => entry.dateKey >= '2026-03-01' && entry.dateKey <= '2026-03-31').map((entry) => entry.dateKey)
+    expect(dates('2026-03-17')).toEqual(['2026-03-03', '2026-03-10'])
+    expect(dates('2026-03-18')).toEqual(['2026-03-03', '2026-03-10', '2026-03-17'])
+  })
+
+  it('埋め込み JS: 生徒は isStudentVisibleInRange(当日から非表示)、講師は isVisibleInRange(当日表示)を使う', () => {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', {
+      open: () => popup,
+      setTimeout: (callback: () => void) => { callback(); return 0 },
+    })
+    try {
+      openStudentScheduleHtml({
+        cells: [],
+        students: [createStudent({ displayName: '山田' })],
+        regularLessons: [],
+        defaultStartDate: '2026-03-24',
+        defaultEndDate: '2026-03-24',
+        titleLabel: 'テスト',
+        classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+        targetWindow: popup,
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    const html = write.mock.calls[0]?.[0] as string
+
+    expect(html).toContain('return DATA.students.filter((student) => isStudentVisibleInRange(student, startDate, endDate)).sort(compareStudentOrder);')
+    expect(html).toContain('return DATA.teachers.filter((teacher) => isVisibleInRange(teacher, startDate, endDate))')
+
+    const studentMatch = html.match(/function isStudentVisibleInRange\(item, startDate, endDate\)\s*\{([\s\S]*?)\n {6}\}/)
+    const teacherMatch = html.match(/function isVisibleInRange\(item, startDate, endDate\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(studentMatch).toBeTruthy()
+    expect(teacherMatch).toBeTruthy()
+    const todayMatch = html.match(/function getScheduleTodayJstKey\(\)\s*\{([\s\S]*?)\n {6}\}/)
+    expect(todayMatch).toBeTruthy()
+    type Visible = (item: { entryDate: string; withdrawDate: string }, startDate: string, endDate: string) => boolean
+    const getToday = new Function(todayMatch![1]) as () => string
+    const studentVisibleRaw = new Function('getScheduleTodayJstKey', 'item', 'startDate', 'endDate', studentMatch![1])
+    const teacherVisibleRaw = new Function('getScheduleTodayJstKey', 'item', 'startDate', 'endDate', teacherMatch![1])
+    const studentVisible: Visible = (item, startDate, endDate) => studentVisibleRaw(getToday, item, startDate, endDate)
+    const teacherVisible: Visible = (item, startDate, endDate) => teacherVisibleRaw(getToday, item, startDate, endDate)
+
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-09-15T12:00:00Z'))
+      const range = ['2026-09-01', '2026-09-30'] as const
+      expect(studentVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-16' }, ...range)).toBe(true)
+      expect(studentVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, ...range)).toBe(false)
+      expect(studentVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, ...range)).toBe(false)
+      expect(studentVisible({ entryDate: '2024-04-01', withdrawDate: '未定' }, ...range)).toBe(true)
+      // 講師は退職日当日も表示(今回変えない)
+      expect(teacherVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, ...range)).toBe(true)
+      expect(teacherVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, ...range)).toBe(false)
+
+      // 「今日」は JST。UTC 2026-09-14 15:30 = JST 9/15 0:30 → 9/15 退塾の生徒はもう出ない(旧 UTC 実装では 9/14 扱いで出ていた)。
+      vi.setSystemTime(new Date('2026-09-14T15:30:00Z'))
+      expect(getToday()).toBe('2026-09-15')
+      expect(studentVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, ...range)).toBe(false)
+      // 講師も同じ JST の今日(9/14 退職の講師は JST 9/15 0:30 には出ない)。
+      expect(teacherVisible({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, ...range)).toBe(false)
+      // JST 8:59(UTC 23:59 前日)も JST の日付のまま。
+      vi.setSystemTime(new Date('2026-09-15T23:59:00Z'))
+      expect(getToday()).toBe('2026-09-16')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

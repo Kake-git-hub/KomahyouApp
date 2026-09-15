@@ -13,6 +13,8 @@ import {
   applyUserDeletedTeacherTombstone,
   computeStudentMove,
   applyHistoryEntry,
+  remergeBoardWeekWithManagedData,
+  stripWithdrawnStudentsFromBoardWeek,
   type HistoryEntry,
 } from './ScheduleBoardScreen'
 import { resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
@@ -937,5 +939,149 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       const commitWeeks = sliceFunctionBody(boardSource, 'const commitWeeks = (', 'committedBoardChangeVersionRef.current += 1')
       expect(commitWeeks).toContain('setWholeDayTransferSourceDate(null)')
     })
+  })
+})
+
+// ============================================================================
+// 行: 退塾生徒の剥がし(stripWithdrawnStudentsFromBoardWeek / remergeBoardWeekWithManagedData)
+//   × 手動編集(出欠記録・manualTeacher・席入替/同日移動・振替元 tombstone・テンプレ固定日前の週)
+//   オーナー決定 2026-09-15(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。
+//   テンプレ由来の通常授業だけを max(退塾日, 今日[JST]) 以降で外す。手動編集の結果は巻き戻さない・消さない。
+//   各行は「剥がすべき退塾生徒のテンプレ授業が外れる」assert を必ず含む(剥がしを外すと落ちる)。
+// ============================================================================
+describe('INV-02 × 退塾生徒の剥がし(手動編集は消さない・テンプレ由来だけ外す)', () => {
+  const TODAY = '2026-06-01'
+  const withdrawn = [{ id: 'sW', withdrawDate: TODAY }, { id: 'sB', withdrawDate: '' }]
+  const managedLesson = (id: string, slots: [StudentEntry | null, StudentEntry | null]) => ({ id, note: '管理データ反映', studentSlots: slots })
+  const regularOf = (managedStudentId: string, dateKey = TODAY, extra: Partial<StudentEntry> = {}) =>
+    createStudent({ id: `${managedStudentId}_${dateKey}_数`, managedStudentId, name: managedStudentId, ...extra })
+  const regularIn = (cells: SlotCell[], managedStudentId: string) => {
+    const found: Array<{ cellId: string; deskId: string; student: StudentEntry }> = []
+    for (const cell of cells) {
+      for (const desk of cell.desks) {
+        for (const student of desk.lesson?.studentSlots ?? []) {
+          if (student && student.managedStudentId === managedStudentId) found.push({ cellId: cell.id, deskId: desk.id, student })
+        }
+      }
+    }
+    return found
+  }
+
+  it('出欠記録のある机で片側に退塾生徒の通常授業: 通常授業だけ外れ、出欠記録と講師は残る(再マージ後も)', () => {
+    const board = [createCell({
+      id: `${TODAY}_1`,
+      desks: [createDesk({
+        id: 'd0',
+        teacher: '講師A',
+        lesson: managedLesson(`managed_rW_${TODAY}`, [regularOf('sW'), null]),
+        statusSlots: [null, createAttendedStatus({ id: 'status-sB', studentId: 'sB', managedStudentId: 'sB', name: 'sB' })],
+      })],
+    })]
+    const stripped = stripWithdrawnStudentsFromBoardWeek(board, withdrawn, TODAY)
+    expect(regularIn(stripped, 'sW')).toEqual([])
+    expect(stripped[0].desks[0].statusSlots?.[1]?.managedStudentId).toBe('sB')
+    expect(stripped[0].desks[0].teacher).toBe('講師A')
+    const [merged] = overlayBoardWeeksOnScheduleCells([silentManagedCell(stripped[0])], [stripped])
+    expect(regularIn([merged], 'sW')).toEqual([])
+    expect(merged.desks[0].statusSlots?.[1]?.managedStudentId).toBe('sB')
+    expect(merged.desks[0].teacher).toBe('講師A')
+  })
+
+  it('manualTeacher の机が退塾で空になっても講師は残る(非 manual の机は講師も外れる=INV-01 今日以降のみ)', () => {
+    const board = [createCell({
+      id: `${TODAY}_1`,
+      desks: [
+        createDesk({ id: 'd0', teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: managedLesson(`managed_rW_${TODAY}`, [regularOf('sW'), null]) }),
+        createDesk({ id: 'd1', teacher: '講師T', teacherAssignmentTeacherId: 'tT', lesson: managedLesson(`managed_rW2_${TODAY}`, [regularOf('sW', TODAY, { id: 'sW_2', subject: '英' }), null]) }),
+      ],
+    })]
+    const stripped = stripWithdrawnStudentsFromBoardWeek(board, withdrawn, TODAY)
+    expect(regularIn(stripped, 'sW')).toEqual([])
+    expect(stripped[0].desks[0]).toMatchObject({ teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual' })
+    expect(stripped[0].desks[1].teacher).toBe('')
+    const [merged] = overlayBoardWeeksOnScheduleCells([silentManagedCell(stripped[0])], [stripped])
+    expect(merged.desks[0]).toMatchObject({ teacher: '講師M', manualTeacher: true })
+  })
+
+  it('同じコマ内の席入替・同日移動の後: 手で動かした退塾生徒は消さず、動かしていないテンプレ授業だけ外す', () => {
+    const cell1 = createCell({
+      id: `${TODAY}_1`,
+      desks: [
+        createDesk({ id: 'd0', teacher: '講師A', lesson: managedLesson(`managed_rW_${TODAY}`, [regularOf('sW'), null]) }),
+        createDesk({ id: 'd1', teacher: '講師B', lesson: managedLesson(`managed_rB_${TODAY}`, [regularOf('sB'), null]) }),
+        createDesk({ id: 'd2' }),
+      ],
+    })
+    // 2 限: 退塾生徒の別科目のテンプレ授業(動かしていない＝剥がす対象)。
+    const cell2 = createCell({
+      id: `${TODAY}_2`, slotNumber: 2, slotLabel: '2限',
+      desks: [createDesk({ id: 'e0', teacher: '講師C', lesson: managedLesson(`managed_rW3_${TODAY}`, [regularOf('sW', TODAY, { id: 'sW_eng', subject: '英' }), null]) }), createDesk({ id: 'e1' })],
+    })
+    for (const [label, deskIndex] of [['席入替', 1], ['同コマ空き机へ移動', 2]] as const) {
+      const moved = computeStudentMove({
+        weeks: [[cell1, cell2]], weekIndex: 0, cells: [cell1, cell2],
+        movingStudentId: `sW_${TODAY}_数`, cellId: `${TODAY}_1`, deskIndex, studentIndex: 0, ...moveDefaults,
+      })
+      if (moved.status !== 'moved') throw new Error(`${label}: expected moved, got ${moved.status}`)
+      const stripped = stripWithdrawnStudentsFromBoardWeek(moved.nextWeeks[0], withdrawn, TODAY)
+      const remaining = regularIn(stripped, 'sW')
+      // 手で動かした数学(sameDayMoveSourceDate 付き)は残り、動かしていない 2 限の英語テンプレ授業は外れる。
+      expect(remaining.map((entry) => entry.student.subject), label).toEqual(['数'])
+      expect(remaining[0].student.sameDayMoveSourceDate, label).toBe(TODAY)
+      // 在籍生徒 B は入替/移動の結果どおり残る。
+      expect(regularIn(stripped, 'sB'), label).toHaveLength(1)
+    }
+    // 同日の別コマ(3 限の空き机)へ移動した後も同じ。
+    const cell3 = createCell({ id: `${TODAY}_3`, slotNumber: 3, slotLabel: '3限', desks: [createDesk({ id: 'f0' }), createDesk({ id: 'f1' })] })
+    const movedOtherSlot = computeStudentMove({
+      weeks: [[cell1, cell2, cell3]], weekIndex: 0, cells: [cell1, cell2, cell3],
+      movingStudentId: `sW_${TODAY}_数`, cellId: `${TODAY}_3`, deskIndex: 0, studentIndex: 0, ...moveDefaults,
+    })
+    if (movedOtherSlot.status !== 'moved') throw new Error(`expected moved, got ${movedOtherSlot.status}`)
+    const strippedOther = stripWithdrawnStudentsFromBoardWeek(movedOtherSlot.nextWeeks[0], withdrawn, TODAY)
+    expect(regularIn(strippedOther, 'sW').map((entry) => `${entry.cellId}:${entry.student.subject}`)).toEqual([`${TODAY}_3:数`])
+  })
+
+  it('振替元 tombstone(suppressedRegularLessonOccurrences)がある日: 休の記録と抑止キーは残し、テンプレ授業は外し、再マージで湧かない', () => {
+    const suppressedKey = `sW__数__${TODAY}__1`
+    const board = [
+      createCell({
+        id: `${TODAY}_1`,
+        desks: [createDesk({ id: 'd0', teacher: '講師A', statusSlots: [createAttendedStatus({ id: 'status-sW', studentId: 'sW', managedStudentId: 'sW', name: 'sW', status: 'absent' }), null] })],
+      }),
+      createCell({
+        id: `${TODAY}_2`, slotNumber: 2, slotLabel: '2限',
+        desks: [createDesk({ id: 'e0', teacher: '講師C', lesson: managedLesson(`managed_rW3_${TODAY}`, [regularOf('sW', TODAY, { id: 'sW_eng', subject: '英' }), null]) })],
+      }),
+    ]
+    const stripped = stripWithdrawnStudentsFromBoardWeek(board, withdrawn, TODAY)
+    expect(regularIn(stripped, 'sW')).toEqual([])
+    expect(stripped[0].desks[0].statusSlots?.[0]).toMatchObject({ managedStudentId: 'sW', status: 'absent' })
+    expect(stripped[0].desks[0].teacher).toBe('講師A')
+    const merged = overlayBoardWeeksOnScheduleCells(stripped.map(silentManagedCell), [stripped], [suppressedKey])
+    expect(regularIn(merged, 'sW')).toEqual([])
+    expect(merged[0].desks[0].statusSlots?.[0]).toMatchObject({ managedStudentId: 'sW', status: 'absent' })
+  })
+
+  it('テンプレ固定日より前の週: 今日以降だけ外れ、昨日以前は残る(テンプレ再マージはしない=INV-10)', () => {
+    const frozen: ClassroomSettings = { ...classroomSettings, templateFreezeBeforeDate: '2026-10-01' }
+    // 月(6/1)〜土(6/6)。今日=6/3(水)、退塾日=6/2(火)。
+    const days = ['2026-06-01', '2026-06-02', '2026-06-03', '2026-06-04', '2026-06-05', '2026-06-06']
+    const week = days.map((dateKey) => createCell({
+      id: `${dateKey}_1`, dateKey,
+      desks: [createDesk({ id: `${dateKey}-d0`, teacher: '講師A', lesson: managedLesson(`managed_rW_${dateKey}`, [regularOf('sW', dateKey), null]) })],
+    }))
+    const result = remergeBoardWeekWithManagedData(week, {
+      classroomSettings: frozen,
+      teachers: [],
+      students: [{ id: 'sW', name: 'sW', displayName: 'sW', email: '', entryDate: '2024-04-01', withdrawDate: '2026-06-02', birthDate: '2012-05-01' }],
+      regularLessons: [],
+      suppressedRegularLessonOccurrences: [],
+      todayKey: '2026-06-03',
+    })
+    expect(regularIn(result, 'sW').map((entry) => entry.student.id.split('_')[1])).toEqual(['2026-06-01', '2026-06-02'])
+    // 昨日以前のセルは同じ参照(触っていない)。
+    expect(result[0]).toBe(week[0])
+    expect(result[1]).toBe(week[1])
   })
 })

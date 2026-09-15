@@ -26,14 +26,16 @@ describe('excludeWithdrawnStudentStockEntries', () => {
     { key: 'g', studentId: 's999' },
   ]
 
-  it('退塾日を過ぎた生徒と高3卒業生だけを外し、それ以外は残す', () => {
+  // 2026-09-15 改定(確認リスト v1.5.527 b-2): 生徒の退塾日は「その日から非在籍」。s003(9/14 退塾)は 9/14 から外れる。
+  it('退塾日を迎えた(当日含む)生徒と高3卒業生だけを外し、それ以外は残す', () => {
     const result = excludeWithdrawnStudentStockEntries(entries, students, '2026-09-14')
-    expect(result.map((entry) => entry.key)).toEqual(['a', 'c', 'd', 'f', 'g'])
+    expect(result.map((entry) => entry.key)).toEqual(['a', 'd', 'f', 'g'])
   })
 
-  it('退塾日当日はまだ在籍として一覧に残る', () => {
-    const result = excludeWithdrawnStudentStockEntries(entries, students, '2026-09-10')
-    expect(result.map((entry) => entry.key)).toContain('b')
+  it('退塾日の前日までは一覧に残り、退塾日当日から外れる', () => {
+    expect(excludeWithdrawnStudentStockEntries(entries, students, '2026-09-09').map((entry) => entry.key)).toContain('b')
+    expect(excludeWithdrawnStudentStockEntries(entries, students, '2026-09-10').map((entry) => entry.key)).not.toContain('b')
+    expect(excludeWithdrawnStudentStockEntries(entries, students, '2026-09-13').map((entry) => entry.key)).toContain('c')
   })
 
   it('元の配列(データ)は変更しない', () => {

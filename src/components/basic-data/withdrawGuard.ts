@@ -4,27 +4,26 @@
 //   生徒の「削除」ボタンを廃止し「退塾」ボタンに置き換える。押した日を退塾日(withdrawDate)として記録し、
 //   名簿データ自体は残す（後から退塾済み一覧で追える）。日付入力での退塾日設定も従来どおり残す。
 //   ・名簿から物理削除しないため、生徒ID(sNNN)は欠番にならず再利用もされない（保護者QR・台帳の取り違え防止）。
-//   ・表示上は既存の在籍判定どおり「退塾日当日は在籍・翌日から退塾済み一覧」へ移る（spec-basic-data.md）。
+//   ・2026-09-15 改定: 生徒の退塾日は「その日から非在籍」。押した瞬間に一覧は非在籍側へ移り、今日の盤面・日程表・
+//     請求・保護者QRからも外れる（spec-basic-data.md §B/§H・isStudentWithdrawnOnDate）。
 //   ・退塾日を消せば在籍に戻せる（可逆）ため、削除時のパスワード再認証は求めない。
-import { isStudentDeletedFromApp, resolveEffectiveManagedWithdrawDate, resolveManagedRosterStatus } from './basicDataModel'
+import { isStudentDeletedFromApp, resolveManagedStudentRosterStatus } from './basicDataModel'
 import type { StudentDeletionStock } from './deleteGuard'
 
 type WithdrawTarget = { withdrawDate: string; birthDate: string }
 
-// 在籍表示中で、まだ今日付けの退塾日が入っていない生徒にだけ「退塾」ボタンを出す。
+// 在籍表示中の生徒にだけ「退塾」ボタンを出す。今日付けの退塾日が入った生徒は当日から非在籍なので出ない。
 // 将来の退塾日が入っている生徒には出す（押すと今日付けに上書き＝確認画面で明示）。
 export function canWithdrawStudentToday(student: WithdrawTarget, today: string): boolean {
-  if (resolveManagedRosterStatus(student.withdrawDate, student.birthDate, today) !== '在籍') return false
-  return resolveEffectiveManagedWithdrawDate(student.withdrawDate, student.birthDate, today) !== today
+  return resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, today) === '在籍'
 }
 
-// 基本データの生徒一覧の振り分け(オーナー指示 2026-09-15・確認リスト その他「退塾ボタンは押した瞬間に非表示に」)。
-// 退塾日が「今日」の生徒も、一覧だけはすぐ「非在籍生徒表示」側へ移す。退塾日は今日のまま記録するので、
-// 盤面・請求・保護者QR など共有の在籍判定(当日は在籍)は変えない(前日付けにする案はオーナーが不採用)。
-// ★resolveManagedRosterStatus 自体は変えない(講師一覧・削除可否・学年列は従来どおり当日在籍)。
+// 基本データの生徒一覧の振り分け(v1.5.527「退塾ボタンは押した瞬間に非表示に」)。
+// 2026-09-15 改定(確認リスト v1.5.527 b-2): 生徒の在籍判定そのものを「退塾日当日から非在籍」に変えたため、
+// v1.5.527 の「今日付けだけ一覧で特別扱い」は不要になり、共有の生徒判定 resolveManagedStudentRosterStatus と同一。
+// ★講師用の resolveManagedRosterStatus(当日在籍)へ戻さない(押した直後に在籍一覧へ残る回帰になる)。
 export function isStudentInWithdrawnRosterList(student: WithdrawTarget, today: string): boolean {
-  if (resolveManagedRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍') return true
-  return resolveEffectiveManagedWithdrawDate(student.withdrawDate, student.birthDate, today) === today
+  return resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍'
 }
 
 // 押した日を退塾日として記録する。他の項目・他の生徒は変えない（行を消さない）。
@@ -64,7 +63,7 @@ export function buildStudentWithdrawConfirmation(params: {
 
   return {
     title: `${safeName} を退塾にします`,
-    message: `本日（${today}）を退塾日として記録します。一覧からはすぐ「非在籍生徒表示」に移りますが、本日の授業・請求などは本日まで在籍扱いです。生徒のデータは削除されず残ります。取り消すときは「編集」から退塾日を消してください。`,
+    message: `本日（${today}）を退塾日として記録します。本日から非在籍となり、一覧は「非在籍生徒表示」に移り、本日の盤面の通常授業・日程表・請求・保護者用QRからも外れます（手で置いた講習・振替のコマは残ります）。生徒のデータは削除されず残ります。取り消すときは「編集」から退塾日を消してください。`,
     overwriteNote,
     stockWarning,
   }
@@ -75,7 +74,7 @@ export function buildStudentWithdrawConfirmation(params: {
 // 在籍中の生徒は削除できない(先に「退塾」)。削除済みを二度削除しない。
 export function canDeleteStudentFromApp(student: WithdrawTarget & { deletedAt?: string }, today: string): boolean {
   if (isStudentDeletedFromApp(student)) return false
-  return resolveManagedRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍'
+  return resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍'
 }
 
 // 行は消さずに deletedAt を記録する。既に記録済みなら最初の削除日時を保つ。

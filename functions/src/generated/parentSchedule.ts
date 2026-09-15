@@ -356,8 +356,8 @@ function resolveDisplayedSubjectForGrade(subject: string, gradeLabel: string) {
 }
 
 /**
- * basicDataModel.isActiveOnDate の写し(spec §F): 入塾日前・退塾日の翌日以降・高3卒業後は非在籍。
- * 退塾日当日は在籍(P-6)。管理画面用の「入塾日不問」規則(resolveManagedRosterStatus)は使わない。
+ * basicDataModel.isActiveOnDate の写し(spec §F): 入塾日前・退塾日の当日以降・高3卒業後は非在籍。
+ * 2026-09-15 改定で退塾日当日から閲覧不可(P-6)。管理画面用の「入塾日不問」規則は使わない。
  */
 export function isParentStudentActiveOnDate(
   student: { entryDate?: unknown; withdrawDate?: unknown; birthDate?: unknown },
@@ -366,7 +366,7 @@ export function isParentStudentActiveOnDate(
   const entryDate = normalizeParentDateText(student.entryDate)
   if (entryDate && dateKey < entryDate) return false
   const withdrawDate = normalizeParentDateText(student.withdrawDate)
-  if (withdrawDate && dateKey > withdrawDate) return false
+  if (withdrawDate && dateKey >= withdrawDate) return false
   if (hasGraduatedHighSchool(String(student.birthDate ?? ''), dateKey)) return false
   return true
 }

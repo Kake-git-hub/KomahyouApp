@@ -235,7 +235,7 @@ export function sumLectureStockRequestedCount(entries: Array<{ requestedCount: n
 
 // オーナー指示(2026-09-14): 未消化のまま退塾した生徒を「未消化講習/未消化振替」の一覧とバッジから外す。
 // **表示だけ**の絞り込みで、在庫・台帳・保存データは一切変えない(退塾日を消せば再び一覧に出る)。
-// 退塾の判定は盤面と同じ resolveScheduledStatus(退塾日の翌日から/高3卒業後)。入塾前は外さない。
+// 退塾の判定は盤面と同じ resolveScheduledStatus(生徒は退塾日の当日から=2026-09-15 改定/高3卒業後)。入塾前は外さない。
 // 名簿に居ない生徒(studentId なし・削除済み)は判定できないので従来どおり残す。
 // ⚠️ 削除確認の残数警告(deriveStudentDeletionStockSummary)や自動割振は絞り込み前の一覧を使うこと。
 export function excludeWithdrawnStudentStockEntries<T extends { studentId: string | null | undefined }>(

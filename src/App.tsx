@@ -3442,7 +3442,8 @@ function AuthenticatedApp() {
     // 選択規則(resolveDisplayedOverlappingSession=表示開始日を含む講習を優先)で1つを選んで続行する。
     const session = resolveDisplayedOverlappingSession(specialSessions, scheduleStartDate, scheduleEndDate)
     if (!session) return
-    const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate >= session.startDate))
+    // 生徒は退塾日の当日から非在籍(2026-09-15 改定)なので、講習開始日が退塾日以降なら対象外(>)。講師は当日在籍のまま(>=)。
+    const activeStudents = students.filter((s) => s.entryDate <= session.endDate && (!s.withdrawDate || s.withdrawDate === '未定' || s.withdrawDate > session.startDate))
     const activeTeachers = teachers.filter((t) => t.entryDate <= session.endDate && (!t.withdrawDate || t.withdrawDate === '未定' || t.withdrawDate >= session.startDate))
 
     // 混入防止(2026-07-09): 検証用教室(開発用教室・テスト教室)では、自教室が発行したものでない(他教室由来/タグ未設定)トークンを

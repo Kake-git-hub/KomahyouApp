@@ -1,14 +1,19 @@
 // 対話用日程表(別タブ・生成HTML)の表示算出(scheduleViewData)の回帰防止テスト。
 // 埋め込みJS(生成HTML)と同じ入力(SchedulePayload)から同じ表示データが出ることを代表ケースで固定する
 // (docs/handoff-popup-sync-and-dnd.md §6 Phase 0)。
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SchedulePayload, SerializedCell, SerializedStudent, SerializedStudentEntry, SerializedStudentStatusEntry, SerializedTeacher } from './scheduleHtml'
 import {
   buildCountRows,
   buildDateHeaders,
   buildStudentSheetViewModel,
   buildTeacherSheetViewModel,
+  getVisibleStudents,
+  getVisibleTeachers,
+  getScheduleTodayJstKey,
   hasCountMismatch,
+  isStudentVisibleInRange,
+  isVisibleInRange,
   resolveDefaultPersonId,
 } from './scheduleViewData'
 import { resolveDeletedStudentCountAccounting } from '../components/schedule-board/ScheduleBoardScreen'
@@ -500,5 +505,59 @@ describe('scheduleViewData: 共通ヘルパ', () => {
     expect(resolveDefaultPersonId(payload, 'student', '2026-07-06', '2026-07-12', 'stu-2', TODAY)).toBe('stu-2')
     // 指定なし → 配置のある stu-1 を優先(50音順先頭の stu-2 ではなく)
     expect(resolveDefaultPersonId(payload, 'student', '2026-07-06', '2026-07-12', '', TODAY)).toBe('stu-1')
+  })
+})
+
+// 確認リスト v1.5.527 b-2(2026-09-15): 生徒の退塾日は「その日から非在籍」。日程表の生徒一覧も退塾日当日から出さない。
+// 講師の退職日は変えない(当日在籍)。scheduleHtml.ts の埋め込み isStudentVisibleInRange と対。
+describe('日程表の表示対象: 生徒は退塾日当日から外す・講師は当日在籍のまま', () => {
+  it('isStudentVisibleInRange: 今日との比較 前日=表示/当日=非表示/翌日以降=非表示', () => {
+    const student = { entryDate: '2025-04-01', withdrawDate: TODAY }
+    expect(isStudentVisibleInRange(student, '2026-07-01', '2026-07-31', '2026-07-07')).toBe(true)
+    expect(isStudentVisibleInRange(student, '2026-07-01', '2026-07-31', TODAY)).toBe(false)
+    expect(isStudentVisibleInRange(student, '2026-07-01', '2026-07-31', '2026-07-09')).toBe(false)
+  })
+
+  it('isStudentVisibleInRange: 表示範囲の開始日が退塾日以降なら範囲外(退塾日の前日までが在籍)', () => {
+    const student = { entryDate: '2025-04-01', withdrawDate: '2026-08-10' }
+    expect(isStudentVisibleInRange(student, '2026-08-09', '2026-08-15', TODAY)).toBe(true)
+    expect(isStudentVisibleInRange(student, '2026-08-10', '2026-08-15', TODAY)).toBe(false)
+    expect(isStudentVisibleInRange({ entryDate: '2025-04-01', withdrawDate: '未定' }, '2026-08-10', '2026-08-15', TODAY)).toBe(true)
+  })
+
+  it('講師(isVisibleInRange)は退職日当日も表示のまま', () => {
+    const teacher = { entryDate: '2024-04-01', withdrawDate: TODAY }
+    expect(isVisibleInRange(teacher, '2026-07-01', '2026-07-31', TODAY)).toBe(true)
+    expect(isVisibleInRange(teacher, '2026-07-01', '2026-07-31', '2026-07-09')).toBe(false)
+  })
+
+  it('getVisibleStudents は生徒用・getVisibleTeachers は講師用の判定を使う', () => {
+    const payload = {
+      students: [makeStudent({ id: 'stu-today', withdrawDate: TODAY }), makeStudent({ id: 'stu-tomorrow', withdrawDate: '2026-07-09' })],
+      teachers: [makeTeacher({ id: 'tea-today', withdrawDate: TODAY })],
+    } as unknown as SchedulePayload
+    expect(getVisibleStudents(payload, '2026-07-01', '2026-07-31', TODAY).map((student) => student.id)).toEqual(['stu-tomorrow'])
+    expect(getVisibleTeachers(payload, '2026-07-01', '2026-07-31', TODAY).map((teacher) => teacher.id)).toEqual(['tea-today'])
+  })
+})
+
+describe('日程表の「今日」は JST(2026-09-15・UTC だと JST 0:00〜8:59 に前日になっていた)', () => {
+  it('getScheduleTodayJstKey は日本時間の日付を返す', () => {
+    expect(getScheduleTodayJstKey(new Date('2026-09-14T15:00:00Z'))).toBe('2026-09-15')
+    expect(getScheduleTodayJstKey(new Date('2026-09-14T14:59:59Z'))).toBe('2026-09-14')
+    expect(getScheduleTodayJstKey(new Date('2026-09-15T14:59:59Z'))).toBe('2026-09-15')
+  })
+
+  it('todayKey 省略時も JST の今日で判定する(生徒: JST 9/15 0:30 に 9/15 退塾は非表示・講師: 9/14 退職は非表示)', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-09-14T15:30:00Z'))
+      expect(isStudentVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, '2026-09-01', '2026-09-30')).toBe(false)
+      expect(isStudentVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-16' }, '2026-09-01', '2026-09-30')).toBe(true)
+      expect(isVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-14' }, '2026-09-01', '2026-09-30')).toBe(false)
+      expect(isVisibleInRange({ entryDate: '2024-04-01', withdrawDate: '2026-09-15' }, '2026-09-01', '2026-09-30')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
