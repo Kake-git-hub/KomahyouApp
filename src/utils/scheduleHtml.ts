@@ -3199,7 +3199,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         });
       }
 
-      // 日程表の「今日」は日本時間(JST)の日付(scheduleViewData.ts getScheduleTodayJstKey と同じ規則・2026-09-15)。
+      // 日程表の「今日」は日本時間(JST)の日付(jstDate.ts getJstTodayDateKey と同じ規則・2026-09-15・jstDate.test.ts で突き合わせ)。
       function getScheduleTodayJstKey() {
         return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
       }

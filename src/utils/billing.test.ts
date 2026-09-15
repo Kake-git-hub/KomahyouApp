@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, getJstTodayDateKey, isBillingAllowedEmail, isFutureBillingSnapshotDate, resolveBillingStudentCount } from './billing'
+import { getJstTodayDateKey } from './jstDate'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, formatBillingMonthLabel, formatJapaneseDate, getBillingDueDate, getBillingMonthDateRange, getBillingSnapshotDate, isBillingAllowedEmail, isFutureBillingSnapshotDate, resolveBillingStudentCount } from './billing'
 import type { StudentRow } from '../components/basic-data/basicDataModel'
 
 function student(overrides: Partial<StudentRow>): StudentRow {

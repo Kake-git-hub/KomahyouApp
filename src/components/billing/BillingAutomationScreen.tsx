@@ -4,7 +4,8 @@ import { downloadBlob, openGmailCompose, openGmailDraft } from '../../integratio
 import { loadFirebaseBillingMonth, markFirebaseBillingDraftCreated, saveFirebaseBillingRow, saveFirebaseBillingRows, type BillingClassroomRecord } from '../../integrations/firebase/billingStore'
 import { loadStudentCountLedgerEntry, recordStudentCountLedgerEntry, type StudentCountLedgerEntry } from '../../integrations/firebase/studentCountLedger'
 import type { WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
-import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, getJstTodayDateKey, isBillingAllowedEmail, isFutureBillingSnapshotDate, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
+import { buildInvoiceNumber, calculateBillingAmounts, countActiveStudentsForBilling, DEFAULT_BILLING_SNAPSHOT_DAY, formatBillingMonthLabel, formatJapaneseDate, formatYen, getBillingDueDate, getBillingSnapshotDate, getCurrentBillingMonthKey, isBillingAllowedEmail, isFutureBillingSnapshotDate, normalizeBillingMonthKey, resolveBillingStudentCount, type BillingInvoiceRow, type BillingMonthKey, type BillingStudentCountSource } from '../../utils/billing'
+import { getJstTodayDateKey } from '../../utils/jstDate'
 import { buildInvoicePdfFileName, createInvoicePdfBlob, type InvoiceIssuerInfo } from '../../utils/invoicePdf'
 
 type BillingAutomationScreenProps = {

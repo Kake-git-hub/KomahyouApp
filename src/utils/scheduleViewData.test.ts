@@ -10,12 +10,12 @@ import {
   buildTeacherSheetViewModel,
   getVisibleStudents,
   getVisibleTeachers,
-  getScheduleTodayJstKey,
   hasCountMismatch,
   isStudentVisibleInRange,
   isVisibleInRange,
   resolveDefaultPersonId,
 } from './scheduleViewData'
+import { getJstTodayDateKey } from './jstDate'
 import { resolveDeletedStudentCountAccounting } from '../components/schedule-board/ScheduleBoardScreen'
 
 const TODAY = '2026-07-08'
@@ -542,10 +542,10 @@ describe('日程表の表示対象: 生徒は退塾日当日から外す・講�
 })
 
 describe('日程表の「今日」は JST(2026-09-15・UTC だと JST 0:00〜8:59 に前日になっていた)', () => {
-  it('getScheduleTodayJstKey は日本時間の日付を返す', () => {
-    expect(getScheduleTodayJstKey(new Date('2026-09-14T15:00:00Z'))).toBe('2026-09-15')
-    expect(getScheduleTodayJstKey(new Date('2026-09-14T14:59:59Z'))).toBe('2026-09-14')
-    expect(getScheduleTodayJstKey(new Date('2026-09-15T14:59:59Z'))).toBe('2026-09-15')
+  it('日程表が使う getJstTodayDateKey(jstDate.ts) は日本時間の日付を返す', () => {
+    expect(getJstTodayDateKey(new Date('2026-09-14T15:00:00Z'))).toBe('2026-09-15')
+    expect(getJstTodayDateKey(new Date('2026-09-14T14:59:59Z'))).toBe('2026-09-14')
+    expect(getJstTodayDateKey(new Date('2026-09-15T14:59:59Z'))).toBe('2026-09-15')
   })
 
   it('todayKey 省略時も JST の今日で判定する(生徒: JST 9/15 0:30 に 9/15 退塾は非表示・講師: 9/14 退職は非表示)', () => {
