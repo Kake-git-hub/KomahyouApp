@@ -15,6 +15,7 @@ import type {
   SerializedTeacherSpecialSessionInput,
 } from './scheduleHtml'
 import type { GroupClassEntry } from '../components/schedule-board/groupClass'
+import { getJstTodayDateKey } from './jstDate'
 
 export type ScheduleViewType = 'student' | 'teacher'
 
@@ -381,15 +382,12 @@ export function collectTeacherAssignmentEntries(assignmentMap: Map<string, Teach
   return entries
 }
 
-// 日程表の「今日」は日本時間(JST)の日付。旧実装の toISOString()(UTC)は JST 0:00〜8:59 に前日になっていた(2026-09-15)。
-// ⚠️scheduleHtml.ts の埋め込み getScheduleTodayJstKey と同じ規則。
-export function getScheduleTodayJstKey(now: Date = new Date()) {
-  return new Date(now.getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)
-}
+// 日程表の「今日」は日本時間(JST)の日付(jstDate.ts getJstTodayDateKey)。旧実装の toISOString()(UTC)は JST 0:00〜8:59 に前日になっていた(2026-09-15)。
+// ⚠️scheduleHtml.ts の埋め込み getScheduleTodayJstKey と同じ規則(jstDate.test.ts で突き合わせ)。
 
 // 講師の表示範囲判定(退職日当日は在籍＝退職日が今日より前なら隠す)。講師は 2026-09-15 の改定対象外(今日の JST 化のみ揃えた)。
 export function isVisibleInRange(item: { entryDate: string; withdrawDate: string }, startDate: string, endDate: string, todayKey?: string) {
-  const today = todayKey ?? getScheduleTodayJstKey()
+  const today = todayKey ?? getJstTodayDateKey()
   if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate < today) return false
   return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate >= startDate)
 }
@@ -398,7 +396,7 @@ export function isVisibleInRange(item: { entryDate: string; withdrawDate: string
 // 退塾日は「その日から非在籍」なので、退塾日が今日以前なら隠し、表示範囲の開始日が退塾日以降なら範囲外。
 // ⚠️scheduleHtml.ts の埋め込み isStudentVisibleInRange と対で直すこと。
 export function isStudentVisibleInRange(item: { entryDate: string; withdrawDate: string }, startDate: string, endDate: string, todayKey?: string) {
-  const today = todayKey ?? getScheduleTodayJstKey()
+  const today = todayKey ?? getJstTodayDateKey()
   if (item.withdrawDate && item.withdrawDate !== '未定' && item.withdrawDate <= today) return false
   return item.entryDate <= endDate && (!item.withdrawDate || item.withdrawDate === '未定' || item.withdrawDate > startDate)
 }

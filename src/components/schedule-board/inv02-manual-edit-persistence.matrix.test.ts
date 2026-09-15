@@ -1042,6 +1042,40 @@ describe('INV-02 × 退塾生徒の剥がし(手動編集は消さない・テ�
     expect(regularIn(strippedOther, 'sW').map((entry) => `${entry.cellId}:${entry.student.subject}`)).toEqual([`${TODAY}_3:数`])
   })
 
+  it('別の日から移動してきた生徒(prepareStudentForMove で makeup 扱い)は、退塾日以降の日付にあっても外さない', () => {
+    // 退塾日=TODAY(6/1)。5/30 のテンプレ授業を手で 6/3 の在籍生徒 B の机へ移動する(＝振替扱い)。
+    const sourceDate = '2026-05-30'
+    const targetDate = '2026-06-03'
+    const sourceCell = createCell({
+      id: `${sourceDate}_1`, dateKey: sourceDate, dayLabel: '土', dateLabel: '5/30',
+      desks: [createDesk({ id: 's0', teacher: '講師A', lesson: managedLesson(`managed_rW_${sourceDate}`, [regularOf('sW', sourceDate), null]) })],
+    })
+    // 6/2: 動かしていない退塾生徒のテンプレ授業(剥がす対象＝剥がしが効いていることの確認)。
+    const untouchedCell = createCell({
+      id: '2026-06-02_1', dateKey: '2026-06-02', dayLabel: '火', dateLabel: '6/2',
+      desks: [createDesk({ id: 'u0', teacher: '講師C', lesson: managedLesson('managed_rW_2026-06-02', [regularOf('sW', '2026-06-02', { id: 'sW_2026-06-02_英', subject: '英' }), null]) })],
+    })
+    const targetCell = createCell({
+      id: `${targetDate}_1`, dateKey: targetDate, dayLabel: '水', dateLabel: '6/3',
+      desks: [createDesk({ id: 't0', teacher: '講師B', lesson: managedLesson(`managed_rB_${targetDate}`, [regularOf('sB', targetDate), null]) })],
+    })
+    const cells = [sourceCell, untouchedCell, targetCell]
+    const moved = computeStudentMove({
+      weeks: [cells], weekIndex: 0, cells,
+      movingStudentId: `sW_${sourceDate}_数`, cellId: `${targetDate}_1`, deskIndex: 0, studentIndex: 1, ...moveDefaults,
+    })
+    if (moved.status !== 'moved') throw new Error(`expected moved, got ${moved.status}`)
+    const before = regularIn(moved.nextWeeks[0], 'sW').find((entry) => entry.cellId === `${targetDate}_1`)
+    // 前提: 移動先では makeup(振替元=5/30)として置かれている。
+    expect(before?.student).toMatchObject({ lessonType: 'makeup', makeupSourceDate: sourceDate })
+
+    const stripped = stripWithdrawnStudentsFromBoardWeek(moved.nextWeeks[0], withdrawn, TODAY)
+    const remaining = regularIn(stripped, 'sW')
+    // 移動してきた 6/3 の振替は残り、動かしていない 6/2 のテンプレ授業は外れる。
+    expect(remaining.map((entry) => `${entry.cellId}:${entry.student.lessonType}`)).toEqual([`${targetDate}_1:makeup`])
+    expect(regularIn(stripped, 'sB').map((entry) => entry.cellId)).toEqual([`${targetDate}_1`])
+  })
+
   it('振替元 tombstone(suppressedRegularLessonOccurrences)がある日: 休の記録と抑止キーは残し、テンプレ授業は外し、再マージで湧かない', () => {
     const suppressedKey = `sW__数__${TODAY}__1`
     const board = [

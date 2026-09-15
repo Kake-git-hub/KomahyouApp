@@ -144,15 +144,6 @@ export function resolveBillingStudentCount(params: {
   }
 }
 
-// 今日(JST)の日付キー。閲覧端末の TZ に依らず日本時間で判定する。
-export function getJstTodayDateKey(now: Date = new Date()) {
-  const jst = new Date(now.getTime() + 9 * 60 * 60 * 1000)
-  const year = jst.getUTCFullYear()
-  const month = `${jst.getUTCMonth() + 1}`.padStart(2, '0')
-  const day = `${jst.getUTCDate()}`.padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 // 未来日は恒久記録の対象外。台帳は write-once なので、当月15日などを先回りして記録すると
 // その日の定期実行が「既に記録あり」でスキップし、本当の当日時点の在籍数が永久に残らなくなる。
 // 請求画面の既定の集計日は当月15日＝月の前半は未来日になるため、実際に踏み得る。
