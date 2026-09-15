@@ -15,6 +15,7 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- docs: 複数会社展開に向けた構成見直しの計画を起案(会社=workspace で DB は1つのまま・フロントは上流フォーク方式・共通/会社固有の判定基準・現行の問題点15件・Phase 0〜4・オーナー回答欄) (docs/plan-2026-09-15-multi-company-architecture.md)
 
 ## v1.5.529 (2026-09-15)
 - chore: v1.5.528 退塾改定のレビュー残課題3件を解消(INV-02/INV-10・オーナー承認済み)。(1) 台帳 INV-10 節に「テンプレ固定日前の週も生徒の退塾では max(退塾日, 今日[JST]) 以降のテンプレ由来通常授業だけ剥がれる」例外を追記し詳細は INV-02 節へ参照(保証文は不変)。(2) JST の「今日」を返す TS 関数の重複(billing.ts `getJstTodayDateKey`＝盤面/請求・scheduleViewData.ts `getScheduleTodayJstKey`＝日程表)を新設 `src/utils/jstDate.ts` の `getJstTodayDateKey` 1 つに統合(挙動不変・UTC 15:00 境界)。埋め込み JS 写しとの一致を境界7時点で突き合わせる jstDate.test.ts を追加。(3) INV-02 マトリクスに「別の日から移動してきた生徒(makeup 扱い)は退塾日以降でも剥がさない」行を追加(剥がし判定が makeup も対象にすると落ちることを確認)。(jstDate.ts, billing.ts, scheduleViewData.ts, ScheduleBoardScreen.tsx, BillingAutomationScreen.tsx, scheduleHtml.ts コメント, inv02-manual-edit-persistence.matrix.test.ts, docs/spec-invariants.md INV-02/INV-10)
