@@ -15,6 +15,7 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- docs: マルチテナント(会社=workspace)の境界仕様を新設(会社の壁/開発用教室レジストリ/越境ガード/ツールの棟指定必須・Phase 0 T0-1) (docs/spec-multi-tenant.md, docs/spec-index.md)
 - docs: 複数会社展開計画の残判断点を確定(方式B 上流フォーク・複製は2社目の要望を見てから／Phase 0→1 を今から着手) (docs/plan-2026-09-15-multi-company-architecture.md §9)
 
 ## v1.5.532 (2026-09-16)
