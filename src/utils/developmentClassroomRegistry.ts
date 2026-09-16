@@ -21,7 +21,14 @@
 //   ここへ 1 行足すだけでよい(クライアント・サーバーの両方に効く)。足したら
 //   `npm --prefix functions run sync-shared` を実行して生成物もコミットする。
 
-/** development = その会社の開発用教室(1 会社 1 教室) / sandbox = 追加の検証用教室(テスト教室など)。 */
+/**
+ * development = その会社の開発用教室(1 会社 1 教室) / sandbox = 追加の検証用教室(テスト教室など)。
+ *
+ * ★オーナー確定 2026-09-16:「テスト教室は開発用教室と同じ扱いでいい」。
+ *   よって **機能の解放・混入防止ガードのどちらも kind で区別しない**(登録されていれば検証用教室)。
+ *   kind を見てよいのは `resolveDevelopmentClassroomId`(会社に 1 つの宛先を決める)だけ。
+ *   判定関数に kind の分岐を足さない(docs/spec-multi-tenant.md §4-2-11)。
+ */
 export type DevelopmentClassroomKind = 'development' | 'sandbox'
 
 export type DevelopmentClassroomRegistryEntry = {

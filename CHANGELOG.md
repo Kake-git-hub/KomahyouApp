@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.537 (2026-09-16)
+- docs(INV-08): オーナー確定「テスト教室(石川先生)は開発用教室と同じ扱い」を仕様本文へ(kind=development/sandbox で機能解放も混入防止ガードも分けない・kind を見てよいのは会社ごとの開発用教室を 1 件決める resolveDevelopmentClassroomId だけ)。挙動の変更なし(v1.5.534 時点の実装がそのまま正となる) (docs/spec-multi-tenant.md §4-2-11・§10-7 を解決済みへ, src/utils/developmentClassroomRegistry.ts, functions/src/generated/developmentClassroomRegistry.ts, src/utils/featureRollout.test.ts)
+
 ## v1.5.536 (2026-09-16)
 - test: `tools/invoked-directly.test.mjs` のバックスラッシュ相対パス検証を Windows 限定に(Linux の CI Tests で落ちていた・v1.5.535 のデプロイ自体は成功) (tools/invoked-directly.test.mjs)
 

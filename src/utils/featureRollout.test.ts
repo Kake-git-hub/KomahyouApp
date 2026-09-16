@@ -146,11 +146,12 @@ describe('featureRollout: 教室の識別は ID（名前だけでは判定しな
 })
 
 describe('featureRollout: テスト教室(sandbox)は development-only 機能の対象に含める', () => {
-  // 主セッション判断 2026-09-16(複数会社展開 Phase 0・regression-reviewer 所見 B-1):
-  // 旧配線(盤面側が教室名だけを渡していた)ではテスト教室 test_classroom_20260507_dai で盤面ベース予定数・
-  // 講習履歴が偶然 OFF だった。台帳化により kind=sandbox も検証用教室として扱い ON になる。
-  // これは CLAUDE.md「テスト教室は開発用に準じて扱う」とサーバー側の既存判定(AI 即答)に揃える意図的な決定。
-  // 戻すときは台帳の kind で絞る(この期待値を黙って反転させない・CHANGELOG に記録あり)。
+  // ★オーナー確定 2026-09-16: 「テスト教室(石川先生)は開発用教室と同じ扱いでいい」。
+  //   したがって kind(development / sandbox)で機能の解放を分けない(docs/spec-multi-tenant.md §4-2-11)。
+  //   kind の用途は resolveDevelopmentClassroomId(会社に 1 つの開発用教室を決める)だけ。
+  // 経緯: 旧配線(盤面側が教室名だけを渡していた)ではテスト教室 test_classroom_20260507_dai で
+  //   盤面ベース予定数・講習履歴が偶然 OFF だった(regression-reviewer 所見 B-1)。台帳化で ON になり、
+  //   オーナー確定によりこれが正となった。**この期待値を kind で絞る方向へ黙って反転させない。**
   it('テスト教室でも development-only 機能(盤面ベース予定数・講習履歴)が有効', () => {
     const sandbox = { id: 'test_classroom_20260507_dai' }
     expect(isFeatureEnabledForClassroom('boardBasedPlannedCount', sandbox, 'main')).toBe(true)
