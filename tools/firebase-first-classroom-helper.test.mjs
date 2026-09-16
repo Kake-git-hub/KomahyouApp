@@ -2,13 +2,31 @@
 // このツールは .env(.local) の VITE_FIREBASE_WORKSPACE_KEY を読む経路は維持しつつ、
 // 環境変数も引数も無いときに黙って 'main' を補う挙動だけを廃止した。
 // import しても main() は走らない(invokedDirectly ガード)。
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { parseArgs, readWorkspaceKeyFromEnvFile, validateNonInteractiveConfig } from './firebase-first-classroom-helper.mjs'
 
 describe('readWorkspaceKeyFromEnvFile', () => {
-  it('.env(.local) に一致行が無ければ空文字を返す(旧: 既定値 main へフォールバックしていた)', () => {
-    // このプロセスの cwd(worktree ルート)には VITE_FIREBASE_WORKSPACE_KEY を含む .env.local/.env が無い前提。
-    expect(readWorkspaceKeyFromEnvFile()).toBe('')
+  // 実リポの cwd には .env.local(VITE_FIREBASE_WORKSPACE_KEY=main)が実在するため、cwd 依存にせず
+  // 一時ディレクトリを baseDir に渡して判定する(worktree では通り本体リポでは落ちる、を防ぐ)。
+  const tempDir = () => mkdtempSync(join(tmpdir(), 'komahyou-env-'))
+
+  it('.env(.local) が無ければ空文字を返す(旧: 既定値 main へフォールバックしていた)', () => {
+    expect(readWorkspaceKeyFromEnvFile(tempDir())).toBe('')
+  })
+
+  it('.env(.local) に一致行が無ければ空文字を返す', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, '.env.local'), 'VITE_FIREBASE_PROJECT_ID=x\n')
+    expect(readWorkspaceKeyFromEnvFile(dir)).toBe('')
+  })
+
+  it('.env.local に VITE_FIREBASE_WORKSPACE_KEY があればその値を返す(引用符は外す)', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, '.env.local'), 'VITE_FIREBASE_WORKSPACE_KEY="companyB"\n')
+    expect(readWorkspaceKeyFromEnvFile(dir)).toBe('companyB')
   })
 })
 

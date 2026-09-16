@@ -88,10 +88,11 @@ function toDateKey(date) {
 
 // 既定値 'main' へのフォールバックは廃止済み（2026-09-16 複数会社展開 Phase 0 T0-4）。
 // env に無ければ空文字を返し、呼び出し側（対話プロンプト／--non-interactive の必須値検査）に委ねる。
-export function readWorkspaceKeyFromEnvFile() {
+// baseDir: .env(.local) を探すディレクトリ（既定は cwd）。テストは一時ディレクトリを渡し、実リポの .env.local に依存しない。
+export function readWorkspaceKeyFromEnvFile(baseDir = process.cwd()) {
   for (const fileName of ['.env.local', '.env']) {
     try {
-      const text = readFileSync(resolve(fileName), 'utf8')
+      const text = readFileSync(resolve(baseDir, fileName), 'utf8')
       const match = text.match(/^VITE_FIREBASE_WORKSPACE_KEY=(.*)$/m)
       if (match?.[1]) return match[1].trim().replace(/^['"]|['"]$/g, '')
     } catch {
