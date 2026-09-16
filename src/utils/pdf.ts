@@ -806,6 +806,7 @@ function collectOverwriteReportRows(
     if (status === 'absent') return '欠席(振替あり)'
     if (status === 'absent-no-makeup') return '振無休'
     if (status === 'moved') return '移動元'
+    if (status === 'holiday') return '休日' // 休日設定で消えたコマの表示専用記録(在庫は返却済み)
     return status
   }
   const lessonTypeLabel = (type: string) => {

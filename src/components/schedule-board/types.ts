@@ -18,7 +18,14 @@ export type GradeLabel =
 
 export type SubjectLabel = '英' | '数' | '算' | '算国' | '国' | '理' | '生' | '物' | '化' | '社' | '理社'
 
-export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended' | 'moved'
+// 出欠記録の種別。
+// ★'holiday'(2026-09-16・INV-06): 休日設定で授業が消えたコマの**表示専用**記録。在庫は休日設定の時点で
+//   台帳/振替先へ返却済みなので、**会計上は 'moved' と完全に同じ扱い(=無視)** にすること。
+//   在庫戻し(HOLIDAY_STOCK_RETURNABLE_STATUSES)・消化(collectMakeupUsageByKey)・義務
+//   (computeOutstandingAbsenceOrigins)・台帳確定(resolveMakeupStatusOriginToMaterialize)・日程表の回数表の
+//   どれかで absent/attended と同じ側に入れると二重計上になる(INV-06 違反)。status の分岐を足すときは
+//   必ず 'moved' と同じ側へ入れる。
+export type StudentStatusKind = 'absent' | 'absent-no-makeup' | 'attended' | 'moved' | 'holiday'
 
 export type StudentEntry = {
   id: string

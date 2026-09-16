@@ -185,6 +185,8 @@ export function buildStudentLessonLedger(params: { payload: AppSnapshotPayload; 
             row.absentNoMakeup.push(buildToken(cell.dateKey, cell.slotNumber, status.lessonType ?? '', ...buildMakeupSourceFields(status)))
           }
           // moved（移動元マーカー）は授業でも在庫でもないので載せない（移動先の配置が載る）。
+          // holiday（休日設定で消えたコマの表示専用記録）も同じ理由で載せない（在庫は返却済み・
+          // 別日に置き直したコマが載る）。★ここを else で拾うと台帳に実績が湧く（INV-06 と同型の誤増）。
         }
       }
     }

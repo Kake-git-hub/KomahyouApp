@@ -70,6 +70,9 @@ export type SerializedStudentEntry = {
   teacherType: string
   manualAdded: boolean
   makeupSourceLabel?: string
+  // 振替元の日付(YYYY-MM-DD)。振替欄の行を「元コマ」で重ね合わせる(元起点の行と重複排除する)ために使う。
+  // ラベル(makeupSourceLabel)だけだと年が無く日付として比較できない(2026-09-16 追加)。
+  makeupSourceDate?: string
   warning?: string
   // 授業時間サフィックス('60'/'45'/''=90分)。手動テスト No.250: statusEntry 側には元からあるのに
   // こちらだけ欠けており、日程表セルで講習の 60/45 分が表示されなかった(2026-08-29 追加)。
@@ -88,10 +91,17 @@ export type SerializedStudentStatusEntry = {
   makeupSourceDate?: string
   makeupSourceLabel?: string
   recordedAt: string
-  status: 'absent' | 'absent-no-makeup' | 'attended'
+  // ★'moved'(移動元マーカー)と 'holiday'(休日設定で消えたコマの表示専用記録)は 2026-09-16 から載る。
+  //   moved は機能フラグ transferSourceRestDisplay が ON の教室だけ(OFF では従来どおり日程表へ渡さない)。
+  //   **どちらも会計を持たない**。回数表・講師日程・給与・交通費では必ず除外すること(INV-05/INV-06)。
+  status: 'absent' | 'absent-no-makeup' | 'attended' | 'moved' | 'holiday'
   noteSuffix?: string
   linkedDestinationDateKey?: string
   linkedDestinationSlotNumber?: number
+  // 移動元マーカー(moved)が指す移動先。盤面の「移)日付」と同じ値。リンク解決が効かない
+  // (移動先が表示範囲外など)ときの振替先表示に使う。
+  moveDestinationDateKey?: string
+  moveDestinationSlotNumber?: number
 }
 
 export type SerializedCell = {
@@ -188,6 +198,22 @@ export type SerializedOutstandingAbsence = {
   dateKey: string
 }
 
+/**
+ * 未消化振替一覧(`buildMakeupStockEntries` = 在庫の正本)に残っている「元コマ」1 件 1 行。
+ * 生徒日程表の振替欄が「振替先がまだ決まっていない＝**未定**」と出す唯一の根拠。
+ * ★盤面の在庫一覧と同じ関数から作ること。日程表側で在庫を作り直すと、一覧と振替欄が食い違う。
+ * ★`slotNumber` は元コマの時限。旧データで不明なときは省略し、照合ではワイルドカードとして扱う。
+ */
+export type SerializedOutstandingMakeupOrigin = {
+  /** 名簿の生徒ID(managedStudentId)。名簿外の生徒は空文字。 */
+  studentKey: string
+  /** 表示名。ID を持たない生徒の照合に使う(回数表の生徒照合と同じ規則)。 */
+  studentName: string
+  subject: string
+  dateKey: string
+  slotNumber?: number
+}
+
 export type SchedulePayload = {
   titleLabel: string
   defaultStartDate: string
@@ -216,6 +242,14 @@ export type SchedulePayload = {
   outstandingAbsences: SerializedOutstandingAbsence[]
   // true のとき通常回数の予定数を「実績＋未振替の休み」で出す（false ならテンプレ由来＋表示調整の旧方式）。
   boardBasedPlannedCountEnabled?: boolean
+  // 振替欄で「未定」を出すための未消化振替 origin 一覧(全教室で載せる・軽量)。
+  // ★optional: 旧ペイロード(この項目が無い保存済み/テスト用データ)でも埋め込みJSが空配列として扱えるように。
+  outstandingMakeupOrigins?: SerializedOutstandingMakeupOrigin[]
+  // 振替元「休)」表示(2026-09-16・機能フラグ transferSourceRestDisplay)。ON のとき:
+  //   - cells に moved(移動元マーカー)も載る＝生徒日程表のセルに「休 M/D」が出る
+  //   - 振替欄を「元コマ起点」に統一し、振替先が未配置なら「未定」と出す
+  // OFF では payload に moved が載らず、振替欄も従来の「配置済み振替コマ起点」のままになる。
+  transferSourceRestDisplayEnabled?: boolean
   specialSessions: SerializedSpecialSession[]
   // spec-group-lesson §A/§E: 盤面の集団授業割当(key=`${dateKey}_${band}`)。生徒/講師日程表の集団行・回数・給与に使う。
   groupClassEntries: GroupClassEntryMap
@@ -267,6 +301,11 @@ type OpenScheduleHtmlParams = {
   // （表示期間で絞った盤面から作ると、期間外へ置いた振替を消化できない）。
   outstandingAbsences?: SerializedOutstandingAbsence[]
   boardBasedPlannedCountEnabled?: boolean
+  /**
+   * 振替欄の「未定」判定に使う未消化振替 origin(盤面の未消化一覧と同じ `buildMakeupStockEntries` から作る)。
+   * ★盤面**全体**から作ること(表示期間で絞ると期間外に置いた振替を消化できず「未定」が誤って出る)。
+   */
+  outstandingMakeupOrigins?: SerializedOutstandingMakeupOrigin[]
 }
 
 type ScheduleQrRuntimeWindow = Window & typeof globalThis & {
@@ -368,7 +407,16 @@ function serializeCells(
   cells: SlotCell[],
   resolveLinkedStudentId?: (studentName: string) => string | undefined,
   resolveRegularTeacherIds?: (student: StudentEntry, cell: SlotCell) => string[],
-  options?: { includeDeskPicker?: boolean },
+  options?: {
+    includeDeskPicker?: boolean
+    /**
+     * 移動元マーカー(status='moved')も日程表へ渡すか(機能フラグ transferSourceRestDisplay)。
+     * ★OFF では従来どおり**捨てる**。日程表は移動元を知らないままにする(挙動不変)。
+     * ★休日記録(status='holiday')はフラグに依らず常に渡す。会計を持たない表示専用の記録なので
+     *   渡しても回数・給与は動かず、渡さないと「休日にした日の記録」が日程表から消える。
+     */
+    includeMovedSourceRecords?: boolean
+  },
   resolveRosterDisplayName?: (managedStudentId: string) => string | undefined,
 ): SerializedCell[] {
   const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(cells)
@@ -393,7 +441,11 @@ function serializeCells(
       ...(options?.includeDeskPicker && cell.isOpenDay ? { pickerDesks: buildDeskPickerDesks(cell) } : {}),
       desks: cell.desks.map((desk) => {
         const statuses = desk.statusSlots
-          ?.filter((entry): entry is Exclude<NonNullable<typeof entry>, { status: 'moved' }> => !!entry && entry.status !== 'moved')
+          ?.filter((entry): entry is NonNullable<typeof entry> => {
+            if (!entry) return false
+            if (entry.status === 'moved') return Boolean(options?.includeMovedSourceRecords)
+            return true
+          })
           .map((entry) => {
             const linkedDestination = linkedDestinationByStatusId.get(entry.id)
             return {
@@ -412,6 +464,9 @@ function serializeCells(
               noteSuffix: entry.noteSuffix,
               linkedDestinationDateKey: linkedDestination?.dateKey,
               linkedDestinationSlotNumber: linkedDestination?.slotNumber,
+              // 移動元マーカーが自分で持つ移動先(リンク解決が効かないときの振替先表示に使う)。
+              moveDestinationDateKey: entry.moveDestinationDateKey,
+              moveDestinationSlotNumber: entry.moveDestinationSlotNumber,
             }
           })
         const lesson = desk.lesson
@@ -430,6 +485,8 @@ function serializeCells(
                   teacherType: student.teacherType,
                   manualAdded: Boolean(student.manualAdded),
                   makeupSourceLabel: student.makeupSourceLabel,
+                  // 振替欄の重複排除(元コマ単位)と並べ替えに使う。ラベルだけだと年が無く比較できない。
+                  makeupSourceDate: student.makeupSourceDate,
                   warning: student.warning,
                   noteSuffix: student.noteSuffix,
                 })),
@@ -615,7 +672,15 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     rosterDisplayNameById.set(student.id, getStudentDisplayName(student))
   }
   const resolveRosterDisplayName = (managedStudentId: string) => rosterDisplayNameById.get(managedStudentId)
-  const serializedCells = serializeCells(params.cells, resolveLinkedStudentId, resolveRegularTeacherIds, { includeDeskPicker: Boolean(params.scheduleDndEnabled) }, resolveRosterDisplayName)
+  // 振替元「休)」表示(2026-09-16)。教室判定は【教室ID】(登録台帳)。questionAiAnswerEnabled と同じ形。
+  const transferSourceRestDisplayEnabled = isFeatureEnabledForClassroom('transferSourceRestDisplay', { id: params.classroomStorageKey })
+  const serializedCells = serializeCells(
+    params.cells,
+    resolveLinkedStudentId,
+    resolveRegularTeacherIds,
+    { includeDeskPicker: Boolean(params.scheduleDndEnabled), includeMovedSourceRecords: transferSourceRestDisplayEnabled },
+    resolveRosterDisplayName,
+  )
   const availableStartDate = serializedCells[0]?.dateKey ?? params.defaultStartDate
   const availableEndDate = serializedCells[serializedCells.length - 1]?.dateKey ?? params.defaultEndDate
 
@@ -643,6 +708,8 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     expectedRegularOccurrences: [],
     outstandingAbsences: [],
     boardBasedPlannedCountEnabled: false,
+    outstandingMakeupOrigins: (params.outstandingMakeupOrigins ?? []).map((origin) => ({ ...origin })),
+    transferSourceRestDisplayEnabled,
     highlightedStudentSlot: undefined,
     highlightedTeacherId: undefined,
     showSubmittedQr: Boolean(params.showSubmittedQr),
@@ -764,7 +831,8 @@ export function buildSerializedScheduleCountAdjustments(params: {
         // 盤面ベースの予定数では増コマも盤面から直接数えるので、ここで +1 しない（二重計上防止）。
         if (params.boardBasedPlannedCountEnabled && entry.lessonType === 'extra') return
         const status = 'status' in entry ? entry.status : undefined
-        if (status === 'absent' || status === 'moved') return
+        // holiday(休日設定で消えたコマの表示専用記録)は実績に数えないので +1 もしない(moved と同じ側)。
+        if (status === 'absent' || status === 'moved' || status === 'holiday') return
         appendEntry({
           studentKey: entry.managedStudentId ?? entry.name,
           subject: entry.subject,
@@ -3470,6 +3538,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         return keys;
       }
 
+      // 「授業が実施されない/実施済みとして数えない」表示専用の出欠記録。
+      // moved   … 別日へ移した通常授業の移動元(会計は移動先のコマが持つ)
+      // holiday … 休日設定で消えたコマ(在庫は休日設定の時点で返却済み)
+      // ★回数表(実績/予定)・講師日程のセル/ツールチップ・給与・交通費・講師回数からは**必ず除外**する。
+      //   生徒日程表のセルにだけ「休 M/D」として描く(spec-schedule-pdf / INV-05・INV-06)。
+      function isRestRecordStatus(status) {
+        return status === 'moved' || status === 'holiday';
+      }
+
       function buildStudentAssignments(cells) {
         const map = new Map();
         cells.forEach((cell) => {
@@ -3487,7 +3564,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
             (Array.isArray(desk.statuses) ? desk.statuses : []).forEach((statusEntry) => {
               if (!statusEntry) return;
               if (statusEntry.lessonType === 'trial') return;
-              if (statusEntry.status === 'moved') return;
+              // moved(移動元マーカー)は振替元「休)」表示が ON の教室でだけ載せる。OFF ではそもそも
+              // payload に入らないが、二重の歯止めとしてここでも弾く(挙動不変)。
+              // holiday(休日記録)は常に載せる＝休日にした日のセルにも「休」を描く。
+              if (statusEntry.status === 'moved' && !DATA.transferSourceRestDisplayEnabled) return;
               const studentKey = statusEntry.linkedStudentId || getNameAssignmentKey(statusEntry.name);
               if (!studentKey) return;
               if (!map.has(studentKey)) map.set(studentKey, []);
@@ -3506,7 +3586,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const map = new Map();
         cells.forEach((cell) => {
           cell.desks.forEach((desk) => {
-            const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(Boolean);
+            // ★講師日程表は moved/holiday を一切見ない(セル・ツールチップ・振替欄・給与・交通費・回数)。
+            // ここで落とすことで、下流(renderTeacherCellCard / collectTeacherMakeupNotes / 給与集計)の
+            // すべてが自動的に除外される。個別の下流に条件を足して回すと必ず漏れる。
+            const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter(function(entry) {
+              return entry && !isRestRecordStatus(entry.status);
+            });
             if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return;
             const entry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' };
             const teacherKeys = [];
@@ -3560,7 +3645,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
             const statuses = Array.isArray(desk.statuses) ? desk.statuses : [];
             for (const statusEntry of statuses) {
-              if (!statusEntry || statusEntry.lessonType === 'trial' || statusEntry.status === 'moved') continue;
+              // moved/holiday は「その生徒の授業がある日」ではないので、初期表示の生徒選びには使わない。
+              if (!statusEntry || statusEntry.lessonType === 'trial' || isRestRecordStatus(statusEntry.status)) continue;
               if (statusEntry.linkedStudentId && visibleStudentById.has(statusEntry.linkedStudentId)) return statusEntry.linkedStudentId;
               const ownerId = ownerByName.get(getNameAssignmentKey(statusEntry.name));
               if (ownerId && visibleStudentById.has(ownerId)) return ownerId;
@@ -3587,7 +3673,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
               : visibleTeachers.find((teacher) => teacher.name === teacherName || teacher.fullName === teacherName || normalizeTeacherAssignmentName(teacher.name) === teacherNameKey || normalizeTeacherAssignmentName(teacher.fullName) === teacherNameKey);
             if (!matchedTeacher) continue;
             const hasLesson = Boolean(desk.lesson && Array.isArray(desk.lesson.students) && desk.lesson.students.some((student) => student && student.lessonType !== 'trial'));
-            const hasStatus = Array.isArray(desk.statuses) && desk.statuses.some((statusEntry) => statusEntry && statusEntry.lessonType !== 'trial' && statusEntry.status !== 'moved');
+            const hasStatus = Array.isArray(desk.statuses) && desk.statuses.some((statusEntry) => statusEntry && statusEntry.lessonType !== 'trial' && !isRestRecordStatus(statusEntry.status));
             if (hasLesson || hasStatus) return matchedTeacher.id;
           }
         }
@@ -3720,6 +3806,10 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       // 対象は通常/振替/講習/増コマ(集団は別行・体験や出欠済みの記録カードは対象外)。scheduleDndEnabled 時だけ有効。
       function buildLessonCardDragAttrs(entry) {
         if (!DATA.scheduleDndEnabled) return '';
+        // 出欠記録のカード(休/出席/振無休/移動元/休日記録)は掴めない。renderStudentCellCard 側で
+        // 記録カードは先に return するので通常ここへは来ないが、種別を1つ足した時に黙って
+        // ドラッグ可能へ化けないよう二重に止める(spec-student-schedule-dnd)。
+        if (entry.status) return '';
         var type = entry.lessonType;
         if (type !== 'regular' && type !== 'makeup' && type !== 'special' && type !== 'extra') return '';
         if (!entry.id) return '';
@@ -3733,9 +3823,14 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function renderStudentCellCard(entry) {
         var subjectWithMinutes = entry.subject + formatScheduleMinutesSuffix(entry.noteSuffix);
-        if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended') {
+        if (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended' || isRestRecordStatus(entry.status)) {
+          // moved(移動元)/holiday(休日記録)は生徒から見れば「その日は休み」なので休みと同じ「休」表示。
           var statusLabel = entry.status === 'attended' ? '出席' : entry.status === 'absent-no-makeup' ? '振無休' : '休';
           var linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : '';
+          // 移動元マーカーはリンク解決が効かないとき(移動先が表示範囲外など)に自分が持つ移動先を使う。
+          if (!linkedDestinationLabel && entry.status === 'moved' && entry.moveDestinationDateKey) {
+            linkedDestinationLabel = formatMonthDay(entry.moveDestinationDateKey);
+          }
           return '<div class="lesson-card"><div class="lesson-main">' + escapeHtml([statusLabel, linkedDestinationLabel].filter(Boolean).join(' ')) + '</div><div class="lesson-sub">' + escapeHtml([subjectWithMinutes, lessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / ')) + '</div></div>';
         }
         var dragAttrs = buildLessonCardDragAttrs(entry);
@@ -5473,6 +5568,111 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         }, []);
       }
 
+      // ==== 振替欄(生徒日程表・D2 オーナー確定 2026-09-16) ===================================
+      // 「科目 元 → 先」を **元コマ起点**に統一する。
+      //   ①元起点 … 表示範囲内の 休み(absent) / 移動元(moved) / 休日記録(holiday) から1行ずつ。
+      //              先は「リンク解決 → 未消化振替に残っていれば『未定』 → 移動元マーカー自身の移動先」の順。
+      //   ②先起点 … 従来どおり、表示範囲内に**配置済みの振替コマ**から1行ずつ(元は makeupSourceLabel)。
+      // ①②は同じ1件を逆から見たものなので **元コマ(科目+元日付+元時限)で重複排除**し、元日付昇順に並べる。
+      // ★振替元も振替先も表示範囲外の行は出ない(どちらも表示範囲の cells からしか作らないため)。
+      // ★講習(special)・体験(trial)は従来どおり振替欄に出さない。
+      // ★この関数は機能フラグ ON のときだけ使う。OFF は従来の collectStudentMakeupNotes(=②だけ)のまま。
+      var MAKEUP_DESTINATION_UNDECIDED = '未定';
+
+      // 元コマの表記が同じか。時限が判らない旧ラベル('4/1')は同じ日付の行('4/1 1限')へ吸収する
+      // (別物として2行出すより、重複を1行に寄せる側へ倒す)。
+      function isSameMakeupOriginText(left, right) {
+        if (left === right) return true;
+        return left.indexOf(right + ' ') === 0 || right.indexOf(left + ' ') === 0;
+      }
+
+      // 振替先の表記。時限が判れば '4/8 3限'、判らなければ '4/8'(振替欄は枠が狭いので年・曜日は出さない)。
+      function compactMakeupDestination(dateKey, slotNumber) {
+        if (!dateKey) return '';
+        if (slotNumber === 0 || slotNumber) return compactMakeupDateSlot(dateKey, slotNumber);
+        var date = new Date(dateKey + 'T00:00:00');
+        return (date.getMonth() + 1) + '/' + date.getDate();
+      }
+
+      // 未消化振替一覧(盤面の在庫の正本)にその元コマが残っているか＝振替先がまだ決まっていないか。
+      // 生徒の照合規則は回数表(buildOutstandingAbsenceCountMap)と揃える。科目は学年による表記ゆれ
+      // (数/算・理/理社)を normalizeSubjectForStudent で吸収してから比べる。
+      function hasOutstandingMakeupOrigin(student, subject, dateKey, slotNumber, referenceDate) {
+        var origins = Array.isArray(DATA.outstandingMakeupOrigins) ? DATA.outstandingMakeupOrigins : [];
+        var normalizedSubject = normalizeSubjectForStudent(subject, student, referenceDate);
+        for (var index = 0; index < origins.length; index += 1) {
+          var origin = origins[index];
+          if (!origin || origin.dateKey !== dateKey) continue;
+          if (!(origin.studentKey === student.id || origin.studentName === student.name || origin.studentName === student.fullName)) continue;
+          if (normalizeSubjectForStudent(origin.subject, student, referenceDate) !== normalizedSubject) continue;
+          // 時限が判らない側はワイルドカード(日付だけで一致とみなす)。
+          if (origin.slotNumber != null && slotNumber != null && origin.slotNumber !== slotNumber) continue;
+          return true;
+        }
+        return false;
+      }
+
+      function collectStudentMakeupRows(entries, student, referenceDate) {
+        var rows = [];
+        var pushRow = function(row) {
+          for (var index = 0; index < rows.length; index += 1) {
+            var current = rows[index];
+            if (current.subject !== row.subject) continue;
+            if (!isSameMakeupOriginText(current.originText, row.originText)) continue;
+            // 同じ元コマ。行き先が確定している方を残す(「未定」で上書きしない)。
+            if (current.destinationText === MAKEUP_DESTINATION_UNDECIDED && row.destinationText !== MAKEUP_DESTINATION_UNDECIDED) rows[index] = row;
+            return;
+          }
+          rows.push(row);
+        };
+
+        (entries || []).forEach(function(entry) {
+          var lesson = entry.lesson;
+          if (!lesson) return;
+          if (lesson.lessonType === 'special' || lesson.lessonType === 'trial') return;
+          if (lesson.status !== 'absent' && !isRestRecordStatus(lesson.status)) return;
+          // 元が振替コマの記録(組んだ振替コマ自体を休んだ等)は、元の通常授業日の記録が行を出すのでここでは出さない。
+          if (lesson.makeupSourceDate && lesson.makeupSourceDate !== entry.dateKey) return;
+          var destinationText = compactMakeupDestination(lesson.linkedDestinationDateKey, lesson.linkedDestinationSlotNumber);
+          if (!destinationText && hasOutstandingMakeupOrigin(student, lesson.subject, entry.dateKey, entry.slotNumber, referenceDate)) {
+            destinationText = MAKEUP_DESTINATION_UNDECIDED;
+          }
+          if (!destinationText && lesson.status === 'moved') {
+            destinationText = compactMakeupDestination(lesson.moveDestinationDateKey, lesson.moveDestinationSlotNumber);
+          }
+          if (!destinationText) destinationText = MAKEUP_DESTINATION_UNDECIDED;
+          pushRow({
+            subject: lesson.subject,
+            originText: compactMakeupDateSlot(entry.dateKey, entry.slotNumber),
+            originSortKey: entry.dateKey + '#' + String(entry.slotNumber),
+            destinationText: destinationText,
+          });
+        });
+
+        (entries || []).forEach(function(entry) {
+          var lesson = entry.lesson;
+          if (!lesson || lesson.lessonType !== 'makeup') return;
+          if (lesson.status === 'absent' || lesson.status === 'absent-no-makeup') return;
+          if (isRestRecordStatus(lesson.status)) return;
+          if (!lesson.makeupSourceLabel) return;
+          pushRow({
+            subject: lesson.subject,
+            originText: compactMakeupSourceLabel(lesson.makeupSourceLabel),
+            // 元日付を持たない旧データは先頭に寄せる(並べ替えのためだけのキー)。
+            originSortKey: (lesson.makeupSourceDate || '') + '#',
+            destinationText: compactMakeupDateSlot(entry.dateKey, entry.slotNumber),
+          });
+        });
+
+        rows.sort(function(left, right) {
+          if (left.originSortKey !== right.originSortKey) return left.originSortKey < right.originSortKey ? -1 : 1;
+          return String(left.subject).localeCompare(String(right.subject), 'ja');
+        });
+        return rows.map(function(row) {
+          return [row.subject, row.originText, '→', row.destinationText].filter(Boolean).join(' ');
+        });
+      }
+
       function collectTeacherMakeupNotes(entries) {
         return entries.reduce((notes, entry) => {
           entry.students.forEach((student) => {
@@ -5941,9 +6141,15 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const regularCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'regular');
         const lectureCountAdjustments = buildStudentCountAdjustmentMap(student, startDate, endDate, 'special');
         const absenceNotes = collectStudentAbsenceNotes(filteredCells, student);
-        const makeupNotes = collectStudentMakeupNotes(entries);
+        // 振替欄: フラグ ON は元コマ起点に統一した新方式(①元起点+②先起点を重複排除)、OFF は従来どおり②だけ。
+        const makeupNotes = DATA.transferSourceRestDisplayEnabled
+          ? collectStudentMakeupRows(entries, student, startDate)
+          : collectStudentMakeupNotes(entries);
         entries.forEach((entry) => {
           if (entry.lesson.status === 'absent') return;
+          // ★moved(移動元)/holiday(休日記録)は実績ではない。数えると「移動したのに実績が増える」
+          //   「休日にしたのに授業をやったことになる」になる(INV-05: 回数表示の実配置一致)。
+          if (isRestRecordStatus(entry.lesson.status)) return;
           if (entry.lesson.lessonType === 'special') {
             lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1;
             const normalizedSubject = normalizeSubjectForStudent(entry.lesson.subject, student, startDate);

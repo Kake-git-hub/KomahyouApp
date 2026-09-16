@@ -39,14 +39,25 @@ type LessonLinkSlotCell = Pick<SlotCell, 'dateKey' | 'slotNumber'> & {
   }>
 }
 
+// 「この記録が指す元コマ」のリンクキー。元コマを起点に振替先(destination)を引くために使う。
+// ★起点になるのは **absent / moved / holiday** の3種(2026-09-16・振替元「休)」表示):
+//   - absent  … 休んだ元コマ(従来どおり)。
+//   - moved   … 別日へ移動した通常授業の**移動元**コマ。元コマは「その記録が載っているコマ自身」。
+//               makeupSourceDate は「元々どの通常授業か」を指すだけなので、ここで使うと起点がズレる。
+//   - holiday … 休日設定で消えたコマの表示専用記録。absent と同じ規則(makeupSourceDate があり当日と違う
+//               =元が振替コマなら起点にしない。元の absent 記録側が既にリンクを持つため)。
+// ★attended / absent-no-makeup は「実施済み/振替なしで処理済み」なので起点にしない(従来どおり)。
 function resolveStatusLinkKeys(statusEntry: LessonLinkStatusEntry, cell: LessonLinkSlotCell) {
-  if (statusEntry.status !== 'absent') return []
-  if (statusEntry.makeupSourceDate && statusEntry.makeupSourceDate !== cell.dateKey) return []
+  if (statusEntry.status !== 'absent' && statusEntry.status !== 'moved' && statusEntry.status !== 'holiday') return []
+  const isMovedSourceMarker = statusEntry.status === 'moved'
+  if (!isMovedSourceMarker && statusEntry.makeupSourceDate && statusEntry.makeupSourceDate !== cell.dateKey) return []
 
   const stockKind: LinkedStockKind = statusEntry.lessonType === 'special' ? 'special' : 'makeup'
   const subject = statusEntry.subject
-  const dateKey = statusEntry.makeupSourceDate ?? cell.dateKey
-  const slotNumber = parseOriginSlotNumber(statusEntry.makeupSourceLabel) ?? cell.slotNumber
+  const dateKey = isMovedSourceMarker ? cell.dateKey : (statusEntry.makeupSourceDate ?? cell.dateKey)
+  const slotNumber = isMovedSourceMarker
+    ? cell.slotNumber
+    : (parseOriginSlotNumber(statusEntry.makeupSourceLabel) ?? cell.slotNumber)
   const slotCandidates: Array<number | null> = [slotNumber, null]
 
   const keys: string[] = []
@@ -108,6 +119,8 @@ export function buildLinkedLessonDestinationMap(cells: LessonLinkSlotCell[]) {
       // 在庫会計(makeupStock.ts collectMakeupUsageByKey)はこれらを消化として数えるので、表示も同じ扱いにする。
       // ★absent(振替コマ自体を休みにした＝在庫へ戻った)と moved(会計は移動先が持つ・移動先の配置が別途リンクする)は
       //   振替先にしない。ここを緩めると「戻った振替」や移動元マーカーへ誤ってリンクする。
+      // ★holiday(休日設定で消えたコマの表示専用記録・2026-09-16)も同じ理由で振替先にしない
+      //   (在庫は休日設定の時点で返却済み＝このコマは何も消化していない)。
       for (const statusEntry of desk.statusSlots ?? []) {
         if (!statusEntry) continue
         if (statusEntry.status !== 'attended' && statusEntry.status !== 'absent-no-makeup') continue
@@ -160,6 +173,11 @@ export function resolveVisibleSlotDateLabel(params: {
   const { hasStudent, hasContent, resolvedLessonType, effectiveMakeupSourceDate, statusEntry, linkedDestinationDateKey } = params
   const makeupSourceDateLabel = hasContent && resolvedLessonType === 'makeup' ? formatShortDateLabel(effectiveMakeupSourceDate) : ''
   const moveDestinationDateLabel = !hasStudent && statusEntry?.status === 'moved' ? formatShortDateLabel(statusEntry.moveDestinationDateKey) : ''
-  const linkedDestinationDateLabel = !hasStudent && statusEntry ? formatShortDateLabel(linkedDestinationDateKey) : ''
+  // 回帰防止(2026-09-16): moved は**自分が持つ移動先日付だけ**を出す。振替元「休)」表示のために moved も
+  // buildLinkedLessonDestinationMap の起点にしたので、ここでリンク先へフォールバックさせると
+  // 「移動先日付を持たない古い moved 記録」の表示が変わってしまう(=機能フラグ OFF で挙動が変わる)。
+  const linkedDestinationDateLabel = !hasStudent && statusEntry && statusEntry.status !== 'moved'
+    ? formatShortDateLabel(linkedDestinationDateKey)
+    : ''
   return makeupSourceDateLabel || moveDestinationDateLabel || linkedDestinationDateLabel
 }

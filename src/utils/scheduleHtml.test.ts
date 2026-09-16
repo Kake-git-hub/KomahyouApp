@@ -430,6 +430,23 @@ describe('scheduleHtml buildExpectedRegularOccurrences', () => {
       expect(noMakeup).toHaveLength(1)
       expect(noMakeup[0]?.delta).toBe(1)
     })
+
+    // 【2026-09-16】休日設定で残る表示専用の記録(holiday)も実績に数えない＝moved と同じ側。
+    // +1 したままだと「休日にしたのに予定数/希望数が増える」(INV-05 回数表示の実配置一致に反する)。
+    it('★休日記録(holiday)は実績に数えないので +1 しない（増コマ・講習とも）', () => {
+      for (const lessonType of ['extra', 'special'] as const) {
+        const adjustments = buildSerializedScheduleCountAdjustments({
+          cells: [createManualBoardCell([null, null], [manualStatusEntry({ status: 'holiday', lessonType }), null])],
+        })
+        expect(adjustments, lessonType).toEqual([])
+      }
+      // 対照: 同じ手動追加コマでも出席なら従来どおり +1（ガードを広げすぎていない）。
+      const attended = buildSerializedScheduleCountAdjustments({
+        cells: [createManualBoardCell([null, null], [manualStatusEntry({ status: 'attended', lessonType: 'special' }), null])],
+      })
+      expect(attended).toHaveLength(1)
+      expect(attended[0]?.countKind).toBe('special')
+    })
   })
 
   it('links board-visible lessons by managed student id even when the stored display name is stale', () => {
@@ -4975,5 +4992,319 @@ describe('生徒の退塾日は当日から非在籍: 日程表(回数表の予�
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ============================================================================
+// 振替元「休)」表示 / 振替欄の元起点統一（オーナー確定 2026-09-16・機能フラグ transferSourceRestDisplay）
+//
+// - payload: moved(移動元マーカー)はフラグ ON の教室だけ載せる。holiday(休日記録)は常に載せる。
+// - 生徒日程表のセル: moved/holiday は absent と同じ「休 M月D日」カード（掴めない）。
+// - 振替欄: 元コマ起点に統一し、振替先が未配置なら「未定」。元起点と先起点は元コマで重複排除する。
+// - ★回数表・講師日程表・給与・交通費には moved/holiday を**一切**流さない（INV-05 / INV-06）。
+// ★修正なしでは「ON でも moved が payload に出ない」「振替欄が元起点にならない」で落ちる。
+// ============================================================================
+describe('transferSourceRestDisplay: payload と埋め込みスクリプト', () => {
+  const DEVELOPMENT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
+
+  function stubRestPopup() {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', { open: () => popup, setTimeout: (callback: () => void) => { callback(); return 0 } })
+    return { write, popup }
+  }
+
+  function restStatusEntry(overrides: Partial<StudentStatusEntry> = {}): StudentStatusEntry {
+    return {
+      id: 'status-moved',
+      studentId: 'student-1',
+      sourceManagedLesson: true,
+      name: '山田 太郎',
+      managedStudentId: 'student-1',
+      grade: '中3',
+      subject: '数',
+      lessonType: 'regular',
+      teacherType: 'normal',
+      teacherName: '田中講師',
+      dateKey: '2026-04-01',
+      slotNumber: 1,
+      recordedAt: '2026-04-01T00:00:00.000Z',
+      status: 'moved',
+      sourceLessonId: 'lesson-1',
+      moveDestinationDateKey: '2026-04-08',
+      moveDestinationSlotNumber: 2,
+      ...overrides,
+    }
+  }
+
+  function restCell(dateKey: string, slotNumber: number, statuses: Array<StudentStatusEntry | null>): SlotCell {
+    return {
+      id: `${dateKey}_${slotNumber}`,
+      dateKey,
+      dayLabel: '水',
+      dateLabel: dateKey.slice(5),
+      slotLabel: `${slotNumber}限`,
+      slotNumber,
+      timeLabel: '17:00-18:20',
+      isOpenDay: true,
+      desks: [{
+        id: `${dateKey}_${slotNumber}_desk-1`,
+        teacher: '田中講師',
+        statusSlots: [statuses[0] ?? null, statuses[1] ?? null],
+      }],
+    }
+  }
+
+  function renderStudentHtml(cells: SlotCell[], classroomStorageKey?: string) {
+    const { write, popup } = stubRestPopup()
+    openStudentScheduleHtml({
+      cells,
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-04-01',
+      defaultEndDate: '2026-04-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      classroomStorageKey,
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+    return html
+  }
+
+  function readPayload(html: string) {
+    const match = html.match(/<script id="schedule-data" type="application\/json">([\s\S]*?)<\/script>/)
+    expect(match).toBeTruthy()
+    return JSON.parse(match![1]) as {
+      transferSourceRestDisplayEnabled?: boolean
+      outstandingMakeupOrigins?: unknown[]
+      cells: Array<{ desks: Array<{ statuses?: Array<Record<string, unknown>> }> }>
+    }
+  }
+
+  it('OFF(本番教室): 移動元マーカーは payload に載らない(従来どおり日程表は移動元を知らない)', () => {
+    const payload = readPayload(renderStudentHtml([restCell('2026-04-01', 1, [restStatusEntry()])], '5w5OMueETerSKrSf14HC'))
+    expect(payload.transferSourceRestDisplayEnabled).toBe(false)
+    // 記録が 1 つも残らない机は payload から落ちる（既存仕様）。
+    expect(payload.cells[0]?.desks?.length ?? 0).toBe(0)
+  })
+
+  it('ON(開発用教室): 移動元マーカーが移動先の日付/時限つきで載る', () => {
+    const payload = readPayload(renderStudentHtml([restCell('2026-04-01', 1, [restStatusEntry()])], DEVELOPMENT_CLASSROOM_ID))
+    expect(payload.transferSourceRestDisplayEnabled).toBe(true)
+    const statusEntry = payload.cells[0]?.desks?.[0]?.statuses?.[0]
+    expect(statusEntry?.status).toBe('moved')
+    expect(statusEntry?.moveDestinationDateKey).toBe('2026-04-08')
+    expect(statusEntry?.moveDestinationSlotNumber).toBe(2)
+  })
+
+  it('★休日記録(holiday)はフラグ OFF の教室でも載る(会計を持たない表示専用の記録は常に正しく扱う)', () => {
+    const payload = readPayload(renderStudentHtml(
+      [restCell('2026-04-01', 1, [restStatusEntry({ id: 'status-holiday', status: 'holiday', moveDestinationDateKey: undefined, moveDestinationSlotNumber: undefined })])],
+      '5w5OMueETerSKrSf14HC',
+    ))
+    expect(payload.transferSourceRestDisplayEnabled).toBe(false)
+    expect(payload.cells[0]?.desks?.[0]?.statuses?.[0]?.status).toBe('holiday')
+  })
+
+  it('payload に未消化振替 origin(振替欄の「未定」判定の根拠)を載せられる', () => {
+    const { write, popup } = stubRestPopup()
+    openStudentScheduleHtml({
+      cells: [],
+      students: [createStudent()],
+      regularLessons: [],
+      defaultStartDate: '2026-04-01',
+      defaultEndDate: '2026-04-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      outstandingMakeupOrigins: [{ studentKey: 'student-1', studentName: '山田', subject: '数', dateKey: '2026-04-01', slotNumber: 1 }],
+      targetWindow: popup,
+    })
+    const payload = readPayload(write.mock.calls[0]?.[0] as string)
+    vi.unstubAllGlobals()
+    expect(payload.outstandingMakeupOrigins).toEqual([
+      { studentKey: 'student-1', studentName: '山田', subject: '数', dateKey: '2026-04-01', slotNumber: 1 },
+    ])
+  })
+
+  it('★出荷スクリプトは構文的に妥当なまま(テンプレートリテラル内のエスケープ崩れ検出)', () => {
+    const html = renderStudentHtml([restCell('2026-04-01', 1, [restStatusEntry()])], DEVELOPMENT_CLASSROOM_ID)
+    const scriptMatch = html.match(/<script>([\s\S]*)<\/script>\s*<\/body>/)
+    expect(scriptMatch).toBeTruthy()
+    expect(() => new Function(scriptMatch![1])).not.toThrow()
+  })
+
+  it('★moved/holiday は講師日程表と回数表へ流さない(除外ガードが出荷スクリプトに入っている)', () => {
+    const html = renderStudentHtml([restCell('2026-04-01', 1, [restStatusEntry()])], DEVELOPMENT_CLASSROOM_ID)
+    // 共通述語(1か所で定義し、講師集計・回数・初期表示の全部がこれを使う)
+    expect(html).toContain("return status === 'moved' || status === 'holiday';")
+    // 講師側: buildTeacherAssignments の時点で落とす(下流の給与・交通費・振替欄・セルすべてに効く)
+    expect(html).toContain('return entry && !isRestRecordStatus(entry.status);')
+    // 生徒側の回数表(実績/講習回数)
+    expect(html).toContain('if (isRestRecordStatus(entry.lesson.status)) return;')
+    // 掴める授業カードにしない(出欠記録は D&D 対象外)
+    expect(html).toContain("if (entry.status) return '';")
+  })
+
+  it('★フラグ ON のときだけ振替欄を元起点の新方式に切り替える(OFF は従来関数のまま)', () => {
+    const html = renderStudentHtml([], DEVELOPMENT_CLASSROOM_ID)
+    expect(html).toContain('const makeupNotes = DATA.transferSourceRestDisplayEnabled')
+    expect(html).toContain('? collectStudentMakeupRows(entries, student, startDate)')
+    expect(html).toContain(': collectStudentMakeupNotes(entries);')
+  })
+})
+
+describe('transferSourceRestDisplay: 振替欄の行づくり(出荷スクリプトの実体を評価)', () => {
+  function extractMakeupRowsApi() {
+    const write = vi.fn()
+    const popup = {
+      closed: false,
+      document: { open() {}, write, close() {} },
+      focus() {},
+      postMessage() {},
+    } as unknown as Window
+    vi.stubGlobal('window', { open: () => popup, setTimeout: (callback: () => void) => { callback(); return 0 } })
+    openStudentScheduleHtml({
+      cells: [],
+      students: [],
+      regularLessons: [],
+      defaultStartDate: '2026-04-01',
+      defaultEndDate: '2026-04-30',
+      titleLabel: 'テスト',
+      classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
+      targetWindow: popup,
+    })
+    const html = write.mock.calls[0]?.[0] as string
+    vi.unstubAllGlobals()
+
+    const extractBody = (signature: string) => {
+      const escaped = signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const match = html.match(new RegExp('function ' + escaped + ' \\{([\\s\\S]*?)\\n {6}\\}'))
+      expect(match, signature).toBeTruthy()
+      return match![1]
+    }
+    const source = [
+      "var DATA = {};",
+      "var MAKEUP_DESTINATION_UNDECIDED = '未定';",
+      // 学年による科目の表記ゆれ吸収は別テストの担当。ここでは素通しにして行づくりだけを見る。
+      'function normalizeSubjectForStudent(subject) { return subject; }',
+      'function isRestRecordStatus(status) {' + extractBody('isRestRecordStatus(status)') + '}',
+      'function compactMakeupDateSlot(dateKey, slotNumber) {' + extractBody('compactMakeupDateSlot(dateKey, slotNumber)') + '}',
+      'function compactMakeupSourceLabel(label) {' + extractBody('compactMakeupSourceLabel(label)') + '}',
+      'function isSameMakeupOriginText(left, right) {' + extractBody('isSameMakeupOriginText(left, right)') + '}',
+      'function compactMakeupDestination(dateKey, slotNumber) {' + extractBody('compactMakeupDestination(dateKey, slotNumber)') + '}',
+      'function hasOutstandingMakeupOrigin(student, subject, dateKey, slotNumber, referenceDate) {'
+        + extractBody('hasOutstandingMakeupOrigin(student, subject, dateKey, slotNumber, referenceDate)') + '}',
+      'function collectStudentMakeupRows(entries, student, referenceDate) {'
+        + extractBody('collectStudentMakeupRows(entries, student, referenceDate)') + '}',
+      'return function(entries, student, outstandingMakeupOrigins) {',
+      '  DATA = { outstandingMakeupOrigins: outstandingMakeupOrigins || [] };',
+      "  return collectStudentMakeupRows(entries, student, '2026-04-01');",
+      '};',
+    ].join('\n')
+    return new Function(source)() as (
+      entries: unknown[],
+      student: { id: string; name: string; fullName?: string },
+      outstandingMakeupOrigins?: unknown[],
+    ) => string[]
+  }
+
+  const student = { id: 'student-1', name: '山田', fullName: '山田 太郎' }
+  const absentOrigin = {
+    dateKey: '2026-04-01',
+    slotNumber: 1,
+    lesson: { status: 'absent', lessonType: 'regular', subject: '数' },
+  }
+
+  it('①元だけ範囲内・振替先が組まれている: 「科目 元 → 先」を出す', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([{
+      ...absentOrigin,
+      lesson: { ...absentOrigin.lesson, linkedDestinationDateKey: '2026-04-08', linkedDestinationSlotNumber: 3 },
+    }], student)
+    expect(rows).toEqual(['数 4/1 1限 → 4/8 3限'])
+  })
+
+  it('②元だけ範囲内・振替先が未配置(未消化に残っている): 「未定」を出す', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([absentOrigin], student, [{ studentKey: 'student-1', studentName: '山田', subject: '数', dateKey: '2026-04-01', slotNumber: 1 }])
+    expect(rows).toEqual(['数 4/1 1限 → 未定'])
+  })
+
+  it('③先だけ範囲内(元は範囲外): 従来どおり配置済み振替コマから1行出す', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([{
+      dateKey: '2026-04-20',
+      slotNumber: 5,
+      lesson: { lessonType: 'makeup', subject: '数', makeupSourceDate: '2026-03-10', makeupSourceLabel: '2026/3/10(火) 4限' },
+    }], student)
+    expect(rows).toEqual(['数 3/10 4限 → 4/20 5限'])
+  })
+
+  it('★④元も先も範囲内: 同じ1件なので重複排除して1行だけ', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([
+      { ...absentOrigin, lesson: { ...absentOrigin.lesson, linkedDestinationDateKey: '2026-04-08', linkedDestinationSlotNumber: 3 } },
+      {
+        dateKey: '2026-04-08',
+        slotNumber: 3,
+        lesson: { lessonType: 'makeup', subject: '数', makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' },
+      },
+    ], student)
+    expect(rows).toEqual(['数 4/1 1限 → 4/8 3限'])
+  })
+
+  it('★移動元マーカー(moved)はリンクが無くても自分の移動先を出す(振替先が表示範囲外のとき)', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([{
+      dateKey: '2026-04-01',
+      slotNumber: 1,
+      lesson: { status: 'moved', lessonType: 'regular', subject: '数', moveDestinationDateKey: '2026-05-08', moveDestinationSlotNumber: 2 },
+    }], student)
+    expect(rows).toEqual(['数 4/1 1限 → 5/8 2限'])
+  })
+
+  it('休日記録(holiday)も元起点の行になる(未消化に残っていれば未定)', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run(
+      [{ dateKey: '2026-04-01', slotNumber: 1, lesson: { status: 'holiday', lessonType: 'regular', subject: '数' } }],
+      student,
+      [{ studentKey: 'student-1', studentName: '山田', subject: '数', dateKey: '2026-04-01' }],
+    )
+    expect(rows).toEqual(['数 4/1 1限 → 未定'])
+  })
+
+  it('講習(special)・体験(trial)の記録は振替欄に出さない(従来どおり)', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([
+      { dateKey: '2026-04-01', slotNumber: 1, lesson: { status: 'absent', lessonType: 'special', subject: '数' } },
+      { dateKey: '2026-04-02', slotNumber: 1, lesson: { status: 'holiday', lessonType: 'trial', subject: '英' } },
+    ], student)
+    expect(rows).toEqual([])
+  })
+
+  it('元が振替コマの休みは行にしない(元の通常授業日の記録が1行出すので二重にならない)', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([{
+      dateKey: '2026-04-08',
+      slotNumber: 3,
+      lesson: { status: 'absent', lessonType: 'makeup', subject: '数', makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' },
+    }], student)
+    expect(rows).toEqual([])
+  })
+
+  it('元日付の昇順に並べる', () => {
+    const run = extractMakeupRowsApi()
+    const rows = run([
+      { dateKey: '2026-04-15', slotNumber: 2, lesson: { status: 'absent', lessonType: 'regular', subject: '数' } },
+      { dateKey: '2026-04-01', slotNumber: 1, lesson: { status: 'absent', lessonType: 'regular', subject: '英' } },
+    ], student)
+    expect(rows).toEqual(['英 4/1 1限 → 未定', '数 4/15 2限 → 未定'])
   })
 })

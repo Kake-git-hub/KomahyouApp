@@ -984,6 +984,10 @@ function compareLessons(left: ParentScheduleLesson, right: ParentScheduleLesson)
 // 盤面優先(spec §D-2 3・§D-3): その日のセルがあれば盤面の内容だけを使い、テンプレで足さない。
 // studentSlots(regular/makeup/extra のみ)と statusSlots(absent/absent-no-makeup/attended のみ)の **両方** を読む
 // (休みは statusSlots にしか無い。片方だけ読むと休み or 配置が丸ごと消える。INV-06 と同じ「両走査」)。
+// ★moved(移動元マーカー)と holiday(休日設定で消えたコマの表示専用記録・2026-09-16)は**行にしない**
+//   (moved は移動先の行が出る／holiday はその日が「教室休み」行で出る。出すと同じ1コマが二重に見える)。
+//   下の status ホワイトリストが両方を自然に弾く。ホワイトリストを「moved 以外」のような否定形へ
+//   書き換えないこと(新種別が黙って保護者ページに出る)。
 function extractBoardLessons(
   cells: ParentBoardCell[],
   matches: (entry: { managedStudentId?: string; name: string }) => boolean,
@@ -1132,7 +1136,8 @@ function boardCellsHaveLectureLesson(
       }
       for (const statusEntry of desk.statusSlots) {
         // moved は移動先側に出るので数えない(移動先が範囲外なら講習の印も付けない)。
-        if (!statusEntry || statusEntry.lessonType !== 'special' || statusEntry.status === 'moved') continue
+        // holiday(休日設定で消えたコマの表示専用記録)も同じ扱い＝数えない(在庫へ返却済みで実施されない)。
+        if (!statusEntry || statusEntry.lessonType !== 'special' || statusEntry.status === 'moved' || statusEntry.status === 'holiday') continue
         if (matches(statusEntry)) return true
       }
     }

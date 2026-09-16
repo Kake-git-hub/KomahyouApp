@@ -27,7 +27,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
@@ -43,7 +43,7 @@ import { buildBoardPrintGrid, buildBoardPrintTitle, type BoardPrintSelection } f
 import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
 import { BusyOverlay } from '../common/BusyOverlay'
 import { generateQrSvg } from '../../utils/qrcode'
-import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml } from '../../utils/scheduleHtml'
+import { buildCombinedRegularLessonsFromHistory, formatWeeklyScheduleTitle, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml, syncStudentScheduleHtml, syncTeacherScheduleHtml, type SerializedOutstandingMakeupOrigin } from '../../utils/scheduleHtml'
 import { findScheduleViewMoveSource, findScheduleViewTargetCell, resolveScheduleViewTargetSeat, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from '../schedule-view/scheduleViewMove'
 import { allStudentSubjectOptions, getSelectableStudentSubjectsForGrade, resolveDisplayedSubjectForGrade, resolveEnrollmentYearFromBirthDateParts, resolveGradeLabelFromBirthDate } from '../../utils/studentGradeSubject'
 import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
@@ -1490,7 +1490,7 @@ type HolidayStockLedgers = {
 // 台帳へ確定(materialize)する唯一の共通関数。休日設定・全コマ削除(reconcileHolidayDeskStockReturns)と、
 // 生徒移動での上書き(computeStudentMove の moved マーカー)・出欠付与の上書き(handleMarkStudent*)が共有する。
 // 判定は resolveMakeupStatusOriginToMaterialize へ委譲(在庫由来=積まない・再浮上に任せる/移動由来=振替元日で積む/
-// moved・手動追加の出席等=対象外)。同じ元コマを指す記録が複数あっても台帳へは1件だけ確定する
+// moved・holiday・手動追加の出席等=対象外)。同じ元コマを指す記録が複数あっても台帳へは1件だけ確定する
 // (時限不明はワイルドカード＝過大計上しない側に倒す)。
 export function materializeDisplacedStatusEntryIntoLedgers(params: {
   statusEntry: StudentStatusEntry
@@ -1536,8 +1536,15 @@ export function materializeDisplacedStatusEntryIntoLedgers(params: {
 //   通常も振替 origin 未追加）。休日で授業が消えるので在庫へ戻さないと消化が孤児化＝過少計上（INV-06 違反）。
 // - **戻さない**: absent … mark-absent が既に +1/振替 origin を積み済み（再度戻すと二重計上＝Issue #49）。
 //   moved … 消化(-1)/振替は移動「先」のコマが保持（元の moved マーカーは会計を持たない）。
+//   holiday … 休日設定で作った**表示専用**の記録（既に在庫へ返し終えた印）。再度戻すと二重計上。
 // ※この集合は handleMarkStudent* 各ハンドラの在庫会計と1:1で対応する。ハンドラ側の会計を変えたらここも見直す。
 const HOLIDAY_STOCK_RETURNABLE_STATUSES: ReadonlySet<StudentStatusKind> = new Set(['attended', 'absent-no-makeup'])
+
+// 休日設定で「在庫へ返した＝会計を持たなくなった」出欠記録を、表示専用の holiday へ変換する集合。
+// ★`HOLIDAY_STOCK_RETURNABLE_STATUSES` と**同じ集合であることが仕様**（在庫へ返した記録＝もう会計を
+//   持たない記録＝表示専用にしてよい記録）。片方だけ足すと「在庫は返したのに会計つき記録が残る」
+//   （＝二重計上）か「会計を持つ記録を表示専用にしてしまう」（＝在庫が消える）のどちらかになる。
+const HOLIDAY_RECORD_CONVERTED_STATUSES: ReadonlySet<StudentStatusKind> = HOLIDAY_STOCK_RETURNABLE_STATUSES
 
 // spec-lecture-stock / INV-06 (Issue #49): ある日を休日にするときの、机1つ分の「未消化在庫へ戻す」会計。
 // - **studentSlots(未出欠の配置授業)** = 授業が消えるので必ず在庫へ戻す（session講習=+1/通常=振替 origin）。
@@ -1663,6 +1670,49 @@ export function reconcileHolidayDeskStockReturns(params: {
     movedStudentCount,
     returnedEntryIds,
   }
+}
+
+// 休日設定(D5・オーナー確定 2026-09-16)で、机1つ分の中身を**記録として残す**純関数。
+// 従来は `desk.statusSlots = undefined; desk.lesson = undefined` で全部消していたため、
+// 「誰がその日に何を予定していたか」「誰が休んだ/出席していたか」が盤面からも日程表からも消えていた。
+//
+// ⚠️ **この関数は在庫台帳(ledgers)を一切触らない。** 在庫会計は必ず先に
+//    `reconcileHolidayDeskStockReturns` が済ませ、この関数はその結果を「表示」へ写すだけ。
+//    ここで会計を足すと INV-06(在庫の実態一致)違反になる。呼ぶ順序は「在庫戻し → 記録変換」で固定。
+//
+// 変換規則(§2-4):
+//   - 既存の出欠記録 moved / absent … **そのまま残す**(会計済み。moved は移動先が、absent は台帳が持つ)。
+//   - 既存の出欠記録 attended / absent-no-makeup … 在庫へ返し終えた＝会計を持たないので `holiday` へ変換
+//     (id は保持。解除・監査で同一性を追えるようにするため)。
+//   - 配置(lesson.studentSlots)の生徒 … `holiday` の表示専用記録を作る。ただし**同じ index に既存の
+//     出欠記録があるときは既存を優先**する(会計を持つ記録を表示専用の記録で上書きしない)。
+//   - 体験(trial) … 記録を作らない(日程表に載らず在庫も持たないため)。
+//   - `enabled=false`(機能フラグ OFF) … 従来どおり全消去。既存の挙動と完全に一致させる。
+export function convertHolidayDeskEntriesToRecords(params: { desk: DeskCell; cell: SlotCell; enabled: boolean }) {
+  const { desk, cell, enabled } = params
+  if (!enabled) {
+    desk.statusSlots = undefined
+    desk.lesson = undefined
+    return
+  }
+
+  const nextStatusSlots: [StudentStatusEntry | null, StudentStatusEntry | null] = [null, null]
+  for (let studentIndex = 0; studentIndex < 2; studentIndex += 1) {
+    const existing = desk.statusSlots?.[studentIndex] ?? null
+    if (existing) {
+      nextStatusSlots[studentIndex] = HOLIDAY_RECORD_CONVERTED_STATUSES.has(existing.status)
+        ? { ...existing, status: 'holiday' }
+        : { ...existing }
+      continue
+    }
+    const student = desk.lesson?.studentSlots[studentIndex] ?? null
+    if (!student) continue
+    if (student.lessonType === 'trial') continue
+    nextStatusSlots[studentIndex] = buildStudentStatusEntry(student, cell, desk, 'holiday')
+  }
+
+  desk.statusSlots = nextStatusSlots.some((entry) => entry) ? nextStatusSlots : undefined
+  desk.lesson = undefined
 }
 
 // spec-lecture-stock §6 / spec-schedule-pdf §D: ストック由来(session)講習の配置時、提出された授業時間を
@@ -2317,6 +2367,26 @@ function buildStudentStatusEntry(student: StudentEntry, cell: SlotCell, desk: De
   }
 }
 
+// 「別日へ移した通常授業の**移動元**に残す記録(moved マーカー)」を作る唯一の場所。
+// 別日D&D(computeStudentMove)と丸ごと振替(computeWholeDayTransfer・D4/2026-09-16)が共有する。
+// ★形を分散させない: 移動先の日付・時限(moveDestinationDateKey / moveDestinationSlotNumber)まで含めて
+//   1か所で組む。盤面の「移)日付」・振替元の「休)」表示・生徒日程表の振替欄が、この2つに依存している。
+// ★会計は持たない(移動先の振替コマが持つ)。ここで在庫台帳を触ってはいけない(INV-06)。
+export function buildMovedSourceStatusEntry(params: {
+  student: StudentEntry
+  sourceCell: SlotCell
+  sourceDesk: DeskCell
+  destinationDateKey: string
+  destinationSlotNumber: number
+}): StudentStatusEntry {
+  const { student, sourceCell, sourceDesk, destinationDateKey, destinationSlotNumber } = params
+  return {
+    ...buildStudentStatusEntry(student, sourceCell, sourceDesk, 'moved'),
+    moveDestinationDateKey: destinationDateKey,
+    moveDestinationSlotNumber: destinationSlotNumber,
+  }
+}
+
 function buildStudentEntryFromStatus(statusEntry: StudentStatusEntry): StudentEntry {
   return {
     id: statusEntry.studentId,
@@ -2356,7 +2426,11 @@ function restoreStudentToDesk(desk: DeskCell, studentIndex: number, statusEntry:
 }
 
 export function clearStudentStatusFromDesk(desk: DeskCell, studentIndex: number, statusEntry: StudentStatusEntry) {
-  if (statusEntry.status === 'moved') {
+  // moved(移動元マーカー)と holiday(休日設定で消えたコマの表示専用記録)は「配置の退避」ではないので、
+  // 解除しても生徒を戻さない＝記録を消すだけ。
+  // ★holiday を戻すと二重計上になる(INV-06): 休日設定の時点でその1コマは未消化在庫/台帳へ返却済みで、
+  //   配置として戻すと在庫から出さずにコマだけ増える。戻すのは「未消化から置き直す」操作の仕事。
+  if (statusEntry.status === 'moved' || statusEntry.status === 'holiday') {
     setDeskStudentStatus(desk, studentIndex, null)
     return null
   }
@@ -2371,6 +2445,7 @@ function getStudentStatusActionLabel(status: StudentStatusKind) {
   if (status === 'attended') return '出席'
   if (status === 'absent-no-makeup') return '振無休'
   if (status === 'moved') return '移動元表示'
+  if (status === 'holiday') return '休日記録表示'
   return '休み'
 }
 
@@ -4360,17 +4435,13 @@ export function computeStudentMove(params: {
       // 消える分を呼び出し側へ返し、振替コマの記録なら台帳へ確定(materialize)させる(INV-06「破棄する側で確定」)。
       const displacedByMovedMarker = sourceDesk.statusSlots?.[sourceSlotIndex]
       if (displacedByMovedMarker) displacedStatusEntries.push({ ...displacedByMovedMarker })
-      const movedStatusEntry = buildStudentStatusEntry(
-        movedStatusStudent,
+      setDeskStudentStatus(sourceDesk, sourceSlotIndex, buildMovedSourceStatusEntry({
+        student: movedStatusStudent,
         sourceCell,
-        { ...sourceDesk, lesson: sourceLessonSnapshot },
-        'moved',
-      )
-      setDeskStudentStatus(sourceDesk, sourceSlotIndex, {
-        ...movedStatusEntry,
-        moveDestinationDateKey: targetCell.dateKey,
-        moveDestinationSlotNumber: targetCell.slotNumber,
-      })
+        sourceDesk: { ...sourceDesk, lesson: sourceLessonSnapshot },
+        destinationDateKey: targetCell.dateKey,
+        destinationSlotNumber: targetCell.slotNumber,
+      }))
     }
   }
 
@@ -4758,6 +4829,7 @@ export function collectClearedDayMakeupSuppressions(params: {
       if (!statusEntry || statusEntry.lessonType !== 'regular') continue
       if (statusEntry.status === 'absent') continue // mark-absent が台帳へ確定済み(抑制すると立っている在庫が消える)
       if (statusEntry.status === 'moved') continue // 会計は移動先の振替コマが持つ(抑制すると移動先を休みにした算出 origin まで消える)
+      if (statusEntry.status === 'holiday') continue // 休日設定で在庫へ返却済みの表示専用記録(抑制すると返した在庫が消える)
       appendSuppression(buildStudentEntryFromStatus(statusEntry))
     }
   }
@@ -4824,7 +4896,17 @@ export function disposeDayDeskEntries(params: {
     if (student) entries.push(student)
   }
   for (const statusEntry of desk.statusSlots ?? []) {
-    if (statusEntry) entries.push(statusEntry)
+    if (!statusEntry) continue
+    // 【INV-05/INV-06・2026-09-16 監査で是正・moved も対象】**会計を持たない表示専用の記録は処分対象にしない**。
+    //   holiday … 休日設定の時点で在庫へ返却済み。ここで更に「削除された授業」として希望回数 −1 すると、
+    //             同じ1コマが二重に処分される（休日設定 → 休日解除 → 全コマ削除 で再現）。
+    //   moved   … 会計は移動先の振替コマが持つ。移動元マーカーを −1 すると、移動しただけで予定数が減る
+    //             （D4 で振替元日の全机に moved が並ぶため露出が増えるが、**機能フラグ OFF の経路にも
+    //             元からあったバグ**＝別日D&D後にその日を全コマ削除すると同じことが起きていた）。
+    // ★counts(件数)にも adjustments(予定/希望数)にも suppressed(再マージ抑止)にも入れない。
+    //   記録そのものは下の `desk.statusSlots = undefined` で消える（処分操作の従来どおりの挙動）。
+    if (statusEntry.status === 'holiday' || statusEntry.status === 'moved') continue
+    entries.push(statusEntry)
   }
 
   for (const entry of entries) {
@@ -4889,10 +4971,21 @@ export function computeWholeDayTransfer(params: {
   resolveStockId: (student: StudentEntry) => string
   /** 台帳 origin（collectMakeupOriginDatesByKey・includeAbsentMakeupOrigins:false 版）。全コマ削除と同じものを渡す。 */
   ledgerOriginDatesByKey: Record<string, string[]>
+  /**
+   * D4(オーナー確定 2026-09-16・機能フラグ transferSourceRestDisplay): 振替元の**通常授業**の生徒ごとに
+   * 移動元記録(moved マーカー)を残すか。別日D&D(computeStudentMove)と**同じ形・同じ範囲**
+   * (通常授業だけ。振替/講習/増コマ/体験は残さない)。
+   * ★在庫会計は不変（moved は会計を持たない＝「移送側は在庫中立」の INV-06 マトリクスがそのまま通る）。
+   * ★既知の副作用(仕様): 記録が残った日は cellsHaveStatusEntries で再度の丸ごと振替がブロックされる。
+   *   解除は記録ごとの「休)表示解除」。
+   * 既定 false ＝ 従来どおり振替元に何も残さない。
+   */
+  leaveSourceRestMarkers?: boolean
 }): ComputeWholeDayTransferResult {
   const {
     weeks, sourceDateKey, targetDateKey, students, teachers, regularLessons,
     managedStudentByAnyName, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey,
+    leaveSourceRestMarkers = false,
   } = params
 
   if (sourceDateKey === targetDateKey) {
@@ -5035,15 +5128,35 @@ export function computeWholeDayTransfer(params: {
         summary.movedMemoCount += srcDesk.memoSlots.filter((memo) => memo != null && memo !== '').length
       }
 
+      // D4: 振替元に残す移動元記録(moved)。**講師 tombstone を打つ前**に作る(記録の teacherName は
+      // 「振替元でその授業を担当していた講師」＝移送前の名前でなければならない)。
+      const sourceRestMarkers: Array<{ studentIndex: number; entry: StudentStatusEntry }> = []
+
       // 生徒のいない空 lesson シェルは移送しない(daymove_* の空 lesson を振替先に作らない)。
       if (srcDesk.lesson?.studentSlots.some((student) => student != null)) {
         const srcLesson = srcDesk.lesson
-        const movedSlots = srcLesson.studentSlots.map((student) => {
+        const movedSlots = srcLesson.studentSlots.map((student, studentIndex) => {
           if (!student) return null
           // 移送した通常の元コマは抑止（computeStudentMove と同じ。変換前の student で判定する）。
           const suppressedKey = resolveSuppressedRegularLessonOccurrenceKey(student, sourceCell.dateKey, sourceCell.slotNumber)
           if (suppressedKey) nextSuppressed = appendSuppressedRegularLessonOccurrence(nextSuppressed, suppressedKey)
           summary.movedStudentCount += 1
+          // D4(2026-09-16): 振替元に「休)→ 先」を出すための移動元記録。**通常授業だけ**(D3 と同じ範囲。
+          // 振替/講習/増コマ/体験の別日移動は元に何も残さないのが従来からの仕様)。
+          // ★事前ブロック(cellsHaveStatusEntries)により振替元の statusSlots は必ず空なので、
+          //   Issue #57 の「上書きで出欠記録が消える(displaced)」はここでは起きない。
+          if (leaveSourceRestMarkers && student.lessonType === 'regular') {
+            sourceRestMarkers.push({
+              studentIndex,
+              entry: buildMovedSourceStatusEntry({
+                student,
+                sourceCell,
+                sourceDesk: srcDesk,
+                destinationDateKey: targetCell.dateKey,
+                destinationSlotNumber: targetCell.slotNumber,
+              }),
+            })
+          }
           // 通常→振替変換（元日+時限を焼く）。元の通常授業日へ戻る振替は通常へ復帰。他種別は素通し。
           return prepareStudentForMove(student, sourceCell.dateKey, sourceCell.slotNumber, targetCell.dateKey)
         }) as [StudentEntry | null, StudentEntry | null]
@@ -5060,6 +5173,11 @@ export function computeWholeDayTransfer(params: {
       // 振替元の机は空にする。講師がいた机は tombstone（空の営業日のまま残す仕様・復活防止）。
       srcDesk.lesson = undefined
       srcDesk.memoSlots = undefined
+      // D4: 空にしたあとで移動元記録を置く(lesson を消す前に置くと setDeskStudentStatus の結果が
+      // 直後の lesson=undefined と噛み合わず読みにくいため、順序をここに固定する)。
+      for (const marker of sourceRestMarkers) {
+        setDeskStudentStatus(srcDesk, marker.studentIndex, marker.entry)
+      }
       if (srcTeacherName) {
         applyDeletedTeacherTombstone(srcDesk, srcTeacherName)
       }
@@ -5165,6 +5283,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 講習履歴(H-4・docs/plan-2026-09-11-five-requests.md §6)。生徒日程表タブの「講習集計結果」の左に
   // 「講習履歴」ボタンを出すかどうか。OFF の教室ではボタン自体を描かない(開発用教室のみ先行)。
   const lessonHistoryEnabled = isFeatureEnabledForClassroom('lessonHistory', { id: classroomStorageKey })
+  // 振替元「休)」表示・丸ごと振替/休日設定の記録保持・生徒日程表の振替欄の元起点統一(オーナー確定 2026-09-16)。
+  // OFF の教室は従来どおり(移動元は「移」表示・丸ごと振替は振替元に何も残さない・休日設定は記録を全消去)。
+  // ★表示と記録の保持だけを切り替えるフラグ。在庫会計(INV-06)は ON/OFF で同一。
+  const transferSourceRestDisplayEnabled = isFeatureEnabledForClassroom('transferSourceRestDisplay', { id: classroomStorageKey })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
@@ -6247,6 +6369,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     resolveStudentKey: resolveBoardStudentStockId,
   }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, teachers])
 
+  // 生徒日程表の振替欄が「未定」(＝振替先がまだ決まっていない)を出すための未消化振替 origin。
+  // ★未消化一覧と**同じ算出結果**(rawMakeupStockEntries)から作る。日程表側で在庫を作り直すと
+  //   「一覧には残っているのに振替欄は未定と言わない」のような食い違いが起きる(INV-06/INV-05)。
+  // ★射影は権威 toOutstandingMakeupOriginEntries に一本化する(App.tsx の別タブ同期も同じ関数を使う。
+  //   片方だけ別実装にすると、どちらの同期が最後に走ったかで振替欄の「未定」が変わる)。
+  const outstandingMakeupOriginEntries = useMemo<SerializedOutstandingMakeupOrigin[]>(
+    () => toOutstandingMakeupOriginEntries(rawMakeupStockEntries),
+    [rawMakeupStockEntries],
+  )
+
   // INV-06: 盤面操作（格納）で「この振替コマは台帳に origin を持つか」を判定するための有効 origin 一覧。
   // 未消化残の算出(buildMakeupStockEntries)と同じ発生源・同じ権威関数を使う。
   const makeupOriginDatesByKey = useMemo(() => collectMakeupOriginDatesByKey({
@@ -7251,6 +7383,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomName: classroomName ?? '',
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
       outstandingAbsences: outstandingAbsenceEntries,
+      outstandingMakeupOrigins: outstandingMakeupOriginEntries,
       boardBasedPlannedCountEnabled,
       periodBands: specialSessions,
       specialSessions,
@@ -7388,6 +7521,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomName: classroomName ?? '',
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
       outstandingAbsences: outstandingAbsenceEntries,
+      outstandingMakeupOrigins: outstandingMakeupOriginEntries,
       boardBasedPlannedCountEnabled,
       scheduleDndEnabled: scheduleDndMoveEnabled,
       lessonHistoryEnabled,
@@ -8899,8 +9033,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           })
           ledgers = result.ledgers
           movedStudentCount += result.movedStudentCount
-          desk.statusSlots = undefined
-          desk.lesson = undefined
+          // D5(2026-09-16): 机の中身の破棄は convertHolidayDeskEntriesToRecords へ集約する。
+          // フラグ ON なら「在庫へ返し終えた記録」を表示専用(holiday)に変換して残し、
+          // OFF なら従来どおり全消去する。★在庫会計はこの上の reconcile が唯一の担当(この関数は触らない)。
+          convertHolidayDeskEntriesToRecords({ desk, cell, enabled: transferSourceRestDisplayEnabled })
         }
       }
     }
@@ -8984,6 +9120,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       resolveDisplayName: resolveBoardStudentDisplayName,
       resolveStockId: resolveBoardStudentStockId,
       ledgerOriginDatesByKey: ledgerMakeupOriginDatesByKey,
+      // D4: 振替元の通常授業に「休) → 先」の移動元記録を残す(機能フラグ有効時のみ)。
+      leaveSourceRestMarkers: transferSourceRestDisplayEnabled,
     })
     if (result.status === 'blocked') {
       setStatusMessage(result.message)
@@ -9955,7 +10093,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     if (!selectedStudentId) {
-      if (targetCell && !targetCell.isOpenDay) {
+      // 休日記録(holiday)は休日セルの上にしか存在しない。ここで一律に弾くと「休日記録の表示解除」へ
+      // 辿り着けなくなるため、holiday 記録があるセルだけはメニューを開く(2026-09-16)。
+      // ★それ以外の休校セルは従来どおりメモも配置も不可(挙動不変)。
+      if (targetCell && !targetCell.isOpenDay && currentStatus?.status !== 'holiday') {
         setStudentMenu(null)
         setStatusMessage('休校セルにはメモを保存できません。営業日の空欄セルを選んでください。')
         return
@@ -10727,6 +10868,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       classroomName: classroomName ?? '',
       optionFieldEnabled: studentScheduleOptionFieldEnabled,
       outstandingAbsences: outstandingAbsenceEntries,
+      outstandingMakeupOrigins: outstandingMakeupOriginEntries,
       boardBasedPlannedCountEnabled,
       scheduleDndEnabled: scheduleDndMoveEnabled,
       lessonHistoryEnabled,
@@ -12062,6 +12204,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onTeacherMouseDown={isTemplateMode ? undefined : stableHandleTeacherMouseDown}
             onGroupSubjectClick={stableHandleGroupSubjectClick}
             onGroupTeacherClick={stableHandleGroupTeacherClick}
+            transferSourceRestDisplayEnabled={transferSourceRestDisplayEnabled}
           />
           {wholeDayTransferSourceDate && !isTemplateMode ? (
             <div className="whole-day-transfer-banner" data-testid="whole-day-transfer-banner">
@@ -12666,13 +12809,19 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                         <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-no-makeup-button">振無休解除</button>
                       </div>
                     </>
+                  ) : emptyMenuContext?.statusEntry?.status === 'holiday' ? (
+                    // 休日記録(表示専用)は休日セルにしか存在しない。休日セルへは配置もメモも不可なので、
+                    // 解除ボタンだけを出す(解除＝記録を消すだけ。台帳は触らない)。
+                    <div className="student-menu-button-row">
+                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-holiday-button">休日記録の表示解除</button>
+                    </div>
                   ) : emptyMenuContext?.statusEntry?.status === 'moved' ? (
                     <>
                       <div className="student-menu-button-row student-menu-button-row-three-up">
                         <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
                         <button type="button" className="menu-link-button" onClick={handleOpenTrialStudent} data-testid="menu-open-trial-button">体験授業</button>
                         <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
-                        <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-moved-button">移動元表示解除</button>
+                        <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-moved-button">{transferSourceRestDisplayEnabled ? '休)表示解除(移動元)' : '移動元表示解除'}</button>
                       </div>
                     </>
                   ) : (

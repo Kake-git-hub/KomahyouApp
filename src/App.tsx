@@ -11,6 +11,7 @@ import { buildSpecialSessionWorkbook, buildTemplateSpecialSessions, parseSpecial
 import { appendReopenedSlots, groupClassSubmissionSubjects, initialSpecialSessions, removedDefaultSpecialSessionIds, resolveSavedGroupClassParticipation, type ReopenSlotTarget, type SpecialSessionRow } from './components/special-data/specialSessionModel'
 import { ScheduleBoardScreen, buildScheduleCellsForRange, consumeStudentScheduleRequest, consumeTeacherAutoAssignRequest, createPackedInitialBoardState, ensureWeeksCoverDateRange, normalizeScheduleRange, readStoredScheduleRange, type ScheduleRangePreference } from './components/schedule-board/ScheduleBoardScreen'
 import { parseScheduleViewMoveMessage, type ScheduleViewMoveSeat, type ScheduleViewMoveSource } from './components/schedule-view/scheduleViewMove'
+import { buildMakeupStockEntries, createBoardStudentStockIdResolver, toOutstandingMakeupOriginEntries } from './components/schedule-board/makeupStock'
 // C1: 初回読み込みを軽くするため、起動直後に出ない画面は遅延読み込みにする(コンポーネントのみ・補助関数は持たない)。
 // 配布画面(BoardShareScreen)はそれ自体が重いチャンク。開発者画面/請求/バックアップ復元も初期経路外。
 const BackupRestoreScreen = lazy(() => import('./components/backup-restore/BackupRestoreScreen').then((m) => ({ default: m.BackupRestoreScreen })))
@@ -3620,6 +3621,26 @@ function AuthenticatedApp() {
     }).weeks
   }, [boardStateRef, classroomSettings, displayRegularLessons, students, teachers])
 
+  // 生徒日程表の振替欄が「未定」(振替先が未配置)を出すための未消化 origin。
+  // ★盤面画面(ScheduleBoardScreen)にも同じ同期があるが、基本データ等へ移動して盤面が unmount された
+  //   状態でも別タブは開いたまま更新される(この経路が唯一の同期になる)。片方だけ渡さないと
+  //   「どちらの同期が最後に走ったか」で振替欄の表示が変わるので、同じ権威関数で同じものを渡す。
+  const buildPopupOutstandingMakeupOrigins = useCallback(() => {
+    const latestBoardState = boardStateRef.current
+    if (!latestBoardState) return []
+    return toOutstandingMakeupOriginEntries(buildMakeupStockEntries({
+      students,
+      teachers,
+      regularLessons: displayRegularLessons,
+      classroomSettings,
+      weeks: latestBoardState.weeks ?? [],
+      manualAdjustments: latestBoardState.manualMakeupAdjustments ?? {},
+      suppressedOrigins: latestBoardState.suppressedMakeupOrigins ?? {},
+      fallbackStudents: latestBoardState.fallbackMakeupStudents ?? {},
+      resolveStudentKey: createBoardStudentStockIdResolver(students),
+    }))
+  }, [boardStateRef, classroomSettings, displayRegularLessons, students, teachers])
+
   const getHighlightedTeacherIdFromBoardState = useCallback((nextBoardState: PersistedBoardState | null | undefined) => {
     const selectedCellId = nextBoardState?.selectedCellId
     const selectedDeskIndex = nextBoardState?.selectedDeskIndex
@@ -3691,11 +3712,12 @@ function AuthenticatedApp() {
       classroomName: actingClassroom?.name ?? '',
       periodBands: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
       specialSessions: applyDevelopmentScheduleTokenGuard(latestSpecialSessions),
+      outstandingMakeupOrigins: buildPopupOutstandingMakeupOrigins(),
       lazyQrLoading: true,
       showSubmittedQr: true,
       targetWindow: studentPopup,
     })
-  }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
+  }, [actingClassroom?.name, actingClassroomId, applyDevelopmentScheduleTokenGuard, boardStateRef, buildPopupBoardWeeksForRange, buildPopupOutstandingMakeupOrigins, classroomSettings, displayRegularLessons, specialSessionsRef, studentScheduleRange, students, teachers])
 
   // syncStudentSchedulePopup と同様に force=true の明示パスのみ同期する(自動再生成の停止)。
   const syncTeacherSchedulePopup = useCallback((force = false, rangeOverride: ScheduleRangePreference | null = null) => {
