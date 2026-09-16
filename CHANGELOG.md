@@ -16,6 +16,11 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.539 (2026-09-16)
+- fix(INV-06/INV-02): 休日セルに残した出欠記録(v1.5.538 の休日記録・丸ごと振替の移動元記録、および休み等)が、盤面の再マージ(読込時・名簿/テンプレ/設定変更時)で消えていたのを是正。休日分岐(8559c28「休日に盤面の授業を持ち込まない」)はテンプレ側セルを土台に保ったまま、机ごとの出欠記録を引き継ぐ(`carryBoardStatusRecordsOntoClosedDayCell`)。記録のある机に限り講師ブロックも引き継ぎ、休日解除後に講師が空のまま戻らない(記録の講師名と机の講師がずれ講師日程表・給与から落ちる INV-01)状態を防ぐ(regression-reviewer 監査)。本番3教室の保存データで対象セルは0件(読み取り実測)。フラグ OFF でも「定休日の曜日を後から追加」「臨時営業日を定休日に戻す」で記録が消え、振替コマの休みが未消化から無言で減っていた経路も同時に塞がる (src/components/schedule-board/ScheduleBoardScreen.tsx)
+- feat(INV-06): 休日解除後、休日記録の席は移動元記録の席と同じメニュー(生徒追加/体験/メモ/表示解除)。休日中のセルの休日記録・移動元記録は解除ボタンだけ(移動元記録は従来クリックで弾かれ解除できなかった)。移動/入替で着地した席の休日記録は移動元記録と同じく消える(休み/振無休の保持=Issue #57 は不変) (`isStaleSeatMarkerStatus`・`resolveEmptySeatMenuVariant`・`resolveDisplayRecordClearButton`)
+- test(INV-06): 上記の回帰固定 +16 件(inv06-holiday-record-retention.matrix)。docs: spec-makeup-stock §B-2-2c/§3-1・spec-invariants INV-06 補記のガード一覧
+
 ## v1.5.538 (2026-09-16)
 - feat(INV-06/INV-05): 振替元「休)」表示・振替欄の元起点統一・丸ごと振替/休日設定の記録保持(スクールIE要望・オーナー確定 2026-09-16・機能フラグ `transferSourceRestDisplay`=**development-only**)。①別日移動の移動元マーカー(moved)を「休)→先」表示(内部は moved のまま・在庫会計不変) ②丸ごと振替が振替元の通常授業の生徒ごとに moved 記録を残す(`computeWholeDayTransfer.leaveSourceRestMarkers`・台帳不触・記録が残る日は再実行ブロック) ③休日設定が記録を消さず、在庫へ返した配置/出席/振無休を新種別 `holiday`(表示専用・会計は moved と同じ無視)へ変換(`convertHolidayDeskEntriesToRecords`) ④生徒日程表の振替欄を元コマ起点「科目 元 → 先/未定」に統一(先起点の行と重複排除・「未定」の根拠は未消化一覧の正本 `rawMakeupStockEntries` から payload `outstandingMakeupOrigins`) ⑤moved/holiday を日程表 payload に載せるのは初めてなので講師日程表・回数表・給与/交通費・別タブD&D・保護者ページから除外するガードを追加。OFF の教室は既存テスト 1963 件を無改変で緑=挙動不変 (src/utils/featureRollout.ts, src/components/schedule-board/types.ts・ScheduleBoardScreen.tsx・makeupStock.ts・lessonLinks.ts・BoardGrid.tsx, src/components/board-share/BoardShareScreen.tsx, src/utils/scheduleHtml.ts・scheduleViewData.ts・parentSchedule.ts(+functions/src/generated)・studentLessonLedger.ts・pdf.ts, src/components/schedule-view/scheduleViewMove.ts)
 - test(INV-06): 上記の回帰固定 +71 件(inv06-whole-day-transfer.matrix 拡張・inv06-holiday-record-retention.matrix 新設・transferSourceRestDisplay.test 新設・lessonLinks/makeupStock/scheduleHtml/scheduleViewData/parentSchedule/studentLessonLedger)。mutation 16 件で「修正なしで落ちる」を確認

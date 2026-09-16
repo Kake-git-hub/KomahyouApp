@@ -417,7 +417,9 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     `resolveMakeupStatusOriginToMaterialize`（確定対象外）・`materializeDisplacedStatusEntryIntoLedgers`
     （触らない）・`handleClearStudentStatus`（記録を消すだけで台帳を触らない）・
     `computeOutstandingAbsenceOrigins`（数えない）・`collectClearedDayMakeupSuppressions`（抑制を積まない）・
-    `disposeDayDeskEntries`（**処分対象にしない**＝件数にも希望回数 −1 にも入れない。`moved` も同じ）。
+    `disposeDayDeskEntries`（**処分対象にしない**＝件数にも希望回数 −1 にも入れない。`moved` も同じ）・
+    `isStaleSeatMarkerStatus`（着地で消す「前の人の印」＝`moved`/`holiday` のみ）・
+    `carryBoardStatusRecordsOntoClosedDayCell`（休日セルの再マージで記録を消さない＝absent の算出 origin を守る）。
     - `operationTrace.ts` は**表示のみ・変更不要**（盤面差分の要約に名前を出すだけで会計に触れない）。
   - ★`holiday` の**会計ガードと表示は機能フラグ（`transferSourceRestDisplay`）に依らず常に有効**にする。
     フラグが切り替えるのは「記録を作るか・どう見せるか」だけで、**既に存在するデータの扱いは切り替えない**

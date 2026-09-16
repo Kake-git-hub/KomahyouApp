@@ -2430,7 +2430,7 @@ export function clearStudentStatusFromDesk(desk: DeskCell, studentIndex: number,
   // 解除しても生徒を戻さない＝記録を消すだけ。
   // ★holiday を戻すと二重計上になる(INV-06): 休日設定の時点でその1コマは未消化在庫/台帳へ返却済みで、
   //   配置として戻すと在庫から出さずにコマだけ増える。戻すのは「未消化から置き直す」操作の仕事。
-  if (statusEntry.status === 'moved' || statusEntry.status === 'holiday') {
+  if (isStaleSeatMarkerStatus(statusEntry.status)) {
     setDeskStudentStatus(desk, studentIndex, null)
     return null
   }
@@ -2439,6 +2439,38 @@ export function clearStudentStatusFromDesk(desk: DeskCell, studentIndex: number,
   restoreStudentToDesk(desk, studentIndex, statusEntry)
   setDeskStudentStatus(desk, studentIndex, null)
   return restoredStudent
+}
+
+// 席に生徒を置いたとき「前の人の印」として消す表示専用マーカーか。
+// moved(移動元マーカー・ee5728c)と holiday(休日設定で消えたコマの表示専用記録・2026-09-16 オーナー要望)が該当する。
+// ★どちらも会計を持たない(INV-06)。absent / 振無休は会計の根拠なので**含めない**(Issue #57: 上書きで消さず保持)。
+// ★attended は配置自体がブロックされる(computeStudentMove 冒頭)ので含めない。
+export function isStaleSeatMarkerStatus(status: StudentStatusKind | null | undefined) {
+  return status === 'moved' || status === 'holiday'
+}
+
+// 空き席(生徒のいない席)メニューの出し分け。JSX の分岐をここへ寄せてテストで固定する(2026-09-16)。
+//   'display-record'    … 生徒追加・体験授業・メモ・記録の表示解除(moved と、**営業日の holiday**)
+//   'holiday-clear-only'… 休日記録の表示解除だけ(休日中のセルの holiday。休日セルへは配置もメモも不可)
+// ★オーナー要望(2026-09-16): 休日解除した日の holiday 記録の席は、moved 記録の席と同じ操作ができる。
+export type EmptySeatMenuVariant = 'attended' | 'absent' | 'absent-no-makeup' | 'holiday-clear-only' | 'display-record' | 'empty'
+export function resolveEmptySeatMenuVariant(status: StudentStatusKind | null | undefined, isOpenDay: boolean): EmptySeatMenuVariant {
+  if (status === 'attended') return 'attended'
+  if (status === 'absent') return 'absent'
+  if (status === 'absent-no-makeup') return 'absent-no-makeup'
+  // 休日中のセルの表示専用記録(holiday / 丸ごと振替→休日設定で残った moved)は解除ボタンだけ。
+  // 休日セルへは配置もメモも不可なので、moved も holiday と揃える(2026-09-16・休日解除後は同じ 4 ボタン)。
+  if (isStaleSeatMarkerStatus(status)) return isOpenDay ? 'display-record' : 'holiday-clear-only'
+  return 'empty'
+}
+
+// 'display-record' メニューの解除ボタン(文言・testid)。moved は従来の文言/testid を変えない。
+export function resolveDisplayRecordClearButton(status: StudentStatusKind | null | undefined, transferSourceRestDisplayEnabled: boolean) {
+  if (status === 'holiday') return { label: '休日記録の表示解除', testId: 'menu-clear-holiday-button' }
+  return {
+    label: transferSourceRestDisplayEnabled ? '休)表示解除(移動元)' : '移動元表示解除',
+    testId: 'menu-clear-moved-button',
+  }
 }
 
 function getStudentStatusActionLabel(status: StudentStatusKind) {
@@ -3119,6 +3151,43 @@ export function stripWithdrawnStudentsFromBoardWeek(
   return changed ? next : week
 }
 
+// 休日(閉じた日)のセルを再マージするときの規則。overlayBoardWeeksOnScheduleCells の休日分岐だけが使う。
+// ★8559c28(2026-05-30)の意図を維持: 休日には盤面側の授業(lesson)・講師・メモを**持ち込まない**
+//   (休日に授業が湧く/講師が座る状態を作らない)。戻り値の土台は常に管理側(テンプレ)セル。
+// ★2026-09-16(休日設定の記録保持 D5・INV-06): 盤面セルの**机ごとの statusSlots だけ**は机 index で引き継ぐ。
+//   従来はこの分岐がセルを丸ごと管理側に差し替えていたため、休日設定で残した holiday/moved/absent 記録と、
+//   丸ごと振替→休日設定の振替元 moved 記録が、読込(リロード)や名簿/テンプレ/設定変更の再マージで全部消えていた。
+//   absent は会計を持つ(collectAbsentMakeupOrigins が非営業日も走査して算出 origin を復元する)ので、
+//   消えると未消化振替が無言で減る(INV-06 誤減)。定休日を後から追加した日など、機能フラグ OFF でも同じ経路に乗る。
+// ★記録を引き継ぐ机に限り、盤面側の講師ブロック(teacher・manualTeacher・teacherAssignment*)も一緒に引き継ぐ
+//   (INV-01・2026-09-16 監査指摘)。テンプレ側の机(講師空)に記録だけ載せると、休日解除後の再マージで
+//   mergeManagedWeek の v1.5.471 保護(hasRecordedStatusSlots: 記録のある机の講師は触らない/足場講師も置かない)により
+//   講師が空のまま固定され、記録の teacherName と机の講師がずれて講師日程表・給与から落ちていた。
+//   休日中は BoardGrid/配布用盤面が非営業日の講師名を隠すので、見た目は従来どおり。
+//   移し方は丸ごと振替と同じ extractDeskTeacherBlock / applyDeskTeacherBlock に一本化する(フィールドの取りこぼし防止)。
+//   記録の無い机は従来どおりテンプレ側(講師を持ち込まない=8559c28)。
+// 管理側の机数を超える盤面の机は引き継がない(normalizeWeeksDeskCount と同じく机数設定が正)。
+// 記録が1件も無ければ管理側セルをそのまま(参照同一で)返す。
+export function carryBoardStatusRecordsOntoClosedDayCell(closedManagedCell: SlotCell, boardCell: SlotCell): SlotCell {
+  let changed = false
+  const desks = closedManagedCell.desks.map((managedDesk, deskIndex) => {
+    const boardDesk = boardCell.desks[deskIndex]
+    const boardStatusSlots = boardDesk?.statusSlots
+    if (!boardDesk || !boardStatusSlots || !boardStatusSlots.some((entry) => entry != null)) return managedDesk
+    changed = true
+    const nextDesk: DeskCell = {
+      ...managedDesk,
+      statusSlots: [
+        boardStatusSlots[0] ? { ...boardStatusSlots[0] } : null,
+        boardStatusSlots[1] ? { ...boardStatusSlots[1] } : null,
+      ] as [StudentStatusEntry | null, StudentStatusEntry | null],
+    }
+    applyDeskTeacherBlock(nextDesk, extractDeskTeacherBlock(boardDesk))
+    return nextDesk
+  })
+  return changed ? { ...closedManagedCell, desks } : closedManagedCell
+}
+
 export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
   const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys)
   const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
@@ -3140,7 +3209,9 @@ export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boar
       : suppressedStudentsCell
     const boardCell = findMatchingBoardCell(managedCell, boardCellMaps)
     if (!boardCell) return adjustedManagedCell
-    if (!adjustedManagedCell.isOpenDay) return adjustedManagedCell
+    // 休日(閉じた日)は盤面の授業・講師・メモを持ち込まない(8559c28)。ただし出欠記録だけは引き継ぐ(2026-09-16)。
+    // 理由と規則は carryBoardStatusRecordsOntoClosedDayCell を参照。
+    if (!adjustedManagedCell.isOpenDay) return carryBoardStatusRecordsOntoClosedDayCell(adjustedManagedCell, boardCell)
     // 第3引数は**素の**管理セル（テンプレの沈黙判定に使う）。抑止で書き換えた側を渡すと判定が狂う。
     return mergeManagedWeek([boardCell], [adjustedManagedCell], [managedCell])[0] ?? adjustedManagedCell
   })
@@ -4400,7 +4471,8 @@ export function computeStudentMove(params: {
   // ★Issue #57: 消すのは moved だけ。absent/振無休(前の生徒の欠席記録)は**保持**する——生徒日程表の「休」表示と、
   // 移動由来振替の在庫算出(collectAbsentMakeupOrigins が statusSlots から復元する)の両方の根拠のため。
   // 一律 null 化すると「休」が消え、移動由来の振替では未消化振替が1件無言で消滅していた(INV-06)。
-  if (targetDesk.statusSlots?.[studentIndex]?.status === 'moved') {
+  // 2026-09-16: 休日解除後の holiday 記録も moved と同じ側(表示専用・会計を持たない)。isStaleSeatMarkerStatus 参照。
+  if (isStaleSeatMarkerStatus(targetDesk.statusSlots?.[studentIndex]?.status)) {
     setDeskStudentStatus(targetDesk, studentIndex, null)
   }
 
@@ -4421,7 +4493,8 @@ export function computeStudentMove(params: {
       }
       // 回帰防止: 入れ替え先(=元スロット)に滞留した「移)日付」マーカーも消し、移動日付の引き継ぎを防ぐ。
       // ★Issue #57: こちらも moved だけ。absent 系(前の生徒の欠席記録)は保持する(上の移動先側と同じ理由)。
-      if (sourceDesk.statusSlots?.[sourceSlotIndex]?.status === 'moved') {
+      // 2026-09-16: holiday も moved と同じ側(isStaleSeatMarkerStatus)。
+      if (isStaleSeatMarkerStatus(sourceDesk.statusSlots?.[sourceSlotIndex]?.status)) {
         setDeskStudentStatus(sourceDesk, sourceSlotIndex, null)
       }
     }
@@ -7667,6 +7740,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
   }, [cells, studentMenu])
 
+  const emptyMenuVariant = resolveEmptySeatMenuVariant(emptyMenuContext?.statusEntry?.status, emptyMenuContext?.cell.isOpenDay ?? true)
+  const displayRecordClearButton = resolveDisplayRecordClearButton(emptyMenuContext?.statusEntry?.status, transferSourceRestDisplayEnabled)
+
   const addableStudents = useMemo(() => {
     if (!emptyMenuContext) return []
     return students
@@ -10093,10 +10169,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
 
     if (!selectedStudentId) {
-      // 休日記録(holiday)は休日セルの上にしか存在しない。ここで一律に弾くと「休日記録の表示解除」へ
-      // 辿り着けなくなるため、holiday 記録があるセルだけはメニューを開く(2026-09-16)。
+      // 休日セル上の休日記録(holiday)をここで一律に弾くと「休日記録の表示解除」へ辿り着けなくなるため、
+      // holiday 記録があるセルだけはメニューを開く(2026-09-16)。休日解除後(営業日)の holiday はこの分岐に来ない。
       // ★それ以外の休校セルは従来どおりメモも配置も不可(挙動不変)。
-      if (targetCell && !targetCell.isOpenDay && currentStatus?.status !== 'holiday') {
+      // moved も同じ(丸ごと振替→休日設定の日に残る移動元の記録を解除できるように)。
+      if (targetCell && !targetCell.isOpenDay && !isStaleSeatMarkerStatus(currentStatus?.status)) {
         setStudentMenu(null)
         setStatusMessage('休校セルにはメモを保存できません。営業日の空欄セルを選んでください。')
         return
@@ -12789,9 +12866,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 </div>
               ) : studentMenu?.mode === 'empty' ? (
                 <div className="student-menu-section">
-                  {emptyMenuContext?.statusEntry?.status === 'attended' ? (
+                  {emptyMenuVariant === 'attended' ? (
                     <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-attendance-button">出席解除</button>
-                  ) : emptyMenuContext?.statusEntry?.status === 'absent' ? (
+                  ) : emptyMenuVariant === 'absent' ? (
                     <>
                       <div className="student-menu-button-row student-menu-button-row-three-up">
                         <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
@@ -12800,7 +12877,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                         <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-button">休み解除</button>
                       </div>
                     </>
-                  ) : emptyMenuContext?.statusEntry?.status === 'absent-no-makeup' ? (
+                  ) : emptyMenuVariant === 'absent-no-makeup' ? (
                     <>
                       <div className="student-menu-button-row student-menu-button-row-three-up">
                         <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
@@ -12809,19 +12886,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                         <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-absence-no-makeup-button">振無休解除</button>
                       </div>
                     </>
-                  ) : emptyMenuContext?.statusEntry?.status === 'holiday' ? (
-                    // 休日記録(表示専用)は休日セルにしか存在しない。休日セルへは配置もメモも不可なので、
+                  ) : emptyMenuVariant === 'holiday-clear-only' ? (
+                    // 休日中のセルの休日記録(表示専用)。休日セルへは配置もメモも不可なので、
                     // 解除ボタンだけを出す(解除＝記録を消すだけ。台帳は触らない)。
+                    // 休日解除後(営業日)の holiday は下の display-record(moved と同じメニュー)へ行く(2026-09-16)。
                     <div className="student-menu-button-row">
-                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-holiday-button">休日記録の表示解除</button>
+                      <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid={resolveDisplayRecordClearButton(emptyMenuContext?.statusEntry?.status, transferSourceRestDisplayEnabled).testId}>{resolveDisplayRecordClearButton(emptyMenuContext?.statusEntry?.status, transferSourceRestDisplayEnabled).label}</button>
                     </div>
-                  ) : emptyMenuContext?.statusEntry?.status === 'moved' ? (
+                  ) : emptyMenuVariant === 'display-record' ? (
                     <>
                       <div className="student-menu-button-row student-menu-button-row-three-up">
                         <button type="button" className="menu-link-button" onClick={handleOpenAddExistingStudent} data-testid="menu-open-add-existing-student-button">生徒追加</button>
                         <button type="button" className="menu-link-button" onClick={handleOpenTrialStudent} data-testid="menu-open-trial-button">体験授業</button>
                         <button type="button" className="menu-link-button" onClick={() => setStudentMenu((current) => (current ? { ...current, mode: 'memo' } : current))} data-testid="menu-open-memo-button">メモ</button>
-                        <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid="menu-clear-moved-button">{transferSourceRestDisplayEnabled ? '休)表示解除(移動元)' : '移動元表示解除'}</button>
+                        <button type="button" className="menu-link-button" onClick={handleClearStudentStatus} data-testid={displayRecordClearButton.testId}>{displayRecordClearButton.label}</button>
                       </div>
                     </>
                   ) : (
