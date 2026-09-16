@@ -18,7 +18,7 @@
   バージョンは CI が自動で上げるので **`package.json` は手動で書き換えない**。
 - **新機能追加・修正のたびに確認リストを必ず更新(オーナー指示 2026-09-17)**: オーナーは開発用教室の確認リストパネルで
   全チェックする。`src/utils/verificationChecklist.ts` の `VERIFICATION_CHECKLIST` に、その変更を実機で確かめる手順つき項目を
-  足し、`VERIFICATION_CHECKLIST_VERSION` を次にデプロイされる版へ上げる(テストも追随)。結果待ちの項目は残し、OK 済みは載せない。
+  足し、`VERIFICATION_CHECKLIST_VERSION` を次にデプロイされる版へ上げる(テストも追随。下書きは版ごとに保存されるので、確認中の版へ項目を足すだけなら版は据え置く)。結果待ちの項目は残し、OK 済みは載せない。
   結果は `node tools/verification-checklist-report.mjs --workspace main` で読む(「その他」欄も必ず見る)。
 - **コミット〜main マージは Claude の判断で自動実行(常時許可・オーナー指示 2026-06-27)**:
   毎回の明示指示なしに、回帰確認(build/テスト/`git diff`)を通したうえでコミット →

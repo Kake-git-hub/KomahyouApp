@@ -55,10 +55,11 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第13版: 結果待ちの b-2 と、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8(オーナー指摘 2026-09-12 の運用)', () => {
+  it('第14版: 結果待ちの b-2、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8、開発用教室での予行 y-1〜y-4(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8'])
-    for (const item of VERIFICATION_CHECKLIST.items.slice(1)) expect(item.introducedIn, item.id).toBe('v1.5.540')
+    expect(ids).toEqual(['b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-1', 'y-2', 'y-3', 'y-4'])
+    for (const item of VERIFICATION_CHECKLIST.items.slice(1, 9)) expect(item.introducedIn, item.id).toBe('v1.5.540')
+    for (const item of VERIFICATION_CHECKLIST.items.slice(9)) expect(item.introducedIn, item.id).toBe('v1.5.541')
     const b2 = VERIFICATION_CHECKLIST.items[0]!
     expect(b2.introducedIn).toBe('v1.5.528')
     const steps = b2.steps.join(' / ')
