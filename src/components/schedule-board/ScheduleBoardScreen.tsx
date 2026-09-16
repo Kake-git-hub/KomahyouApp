@@ -5140,27 +5140,31 @@ export function resolvePostLectureAutoAssignView(params: {
 export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
+  // ⚠️ 機能フラグの教室判定は【教室ID】(会社ごとの登録台帳 src/utils/developmentClassroomRegistry.ts・2026-09-16)。
+  //   `classroomStorageKey` は App.tsx が `actingClassroomId` を渡している値＝開いている教室の Firestore ドキュメントID。
+  //   教室名だけを渡す形(2026-09-16 まで)に戻すと、開発用教室で development-only 機能が丸ごと無効になる。
+  //   App 側の受け渡しは ScheduleBoardScreen.featureFlags.wiring.test.ts が字面で固定している。
   // 生徒日程表のオプション欄(休み欄を置き換え・振替左詰め)は開発用教室のみ有効。
-  const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { name: classroomName })
+  const studentScheduleOptionFieldEnabled = isFeatureEnabledForClassroom('studentScheduleOptionField', { id: classroomStorageKey, name: classroomName })
   // 【移行中・INV-05】通常の予定数を盤面ベース（実績＋未振替の休み）で出すか。開発用教室から段階導入。
-  const boardBasedPlannedCountEnabled = isFeatureEnabledForClassroom('boardBasedPlannedCount', { name: classroomName })
+  const boardBasedPlannedCountEnabled = isFeatureEnabledForClassroom('boardBasedPlannedCount', { id: classroomStorageKey, name: classroomName })
   // 【INV-01/INV-02】日程表を盤面そのままで描く(テンプレ再マージを行わない)。全教室で有効(2026-08-07)。
-  const scheduleBoardOnlyEnabled = isFeatureEnabledForClassroom('boardOnlyScheduleCells', { name: classroomName })
+  const scheduleBoardOnlyEnabled = isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: classroomStorageKey, name: classroomName })
   // 生徒名の長押しD&D移動は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
-  const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { name: classroomName })
+  const studentDragMoveEnabled = isFeatureEnabledForClassroom('studentDragAndDropMove', { id: classroomStorageKey, name: classroomName })
   // 講師の長押しD&D移動/入れ替え(同一コマ内限定)は開発用教室のみ先行有効(検証後に全教室へ昇格予定)。
-  const teacherDragMoveEnabled = isFeatureEnabledForClassroom('teacherDragAndDropMove', { name: classroomName })
+  const teacherDragMoveEnabled = isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: classroomStorageKey, name: classroomName })
   // 日程表コマ組み(別タブD&D・spec-student-schedule-dnd)は staging/開発用教室のみ先行有効。生徒ペイロードに
   // scheduleDndEnabled として渡し、埋め込みJSのD&D起動と各コマの pickerDesks(机選択モーダル用)の載せ分けに使う。
-  const scheduleDndMoveEnabled = isFeatureEnabledForClassroom('studentScheduleDndMove', { name: classroomName })
+  const scheduleDndMoveEnabled = isFeatureEnabledForClassroom('studentScheduleDndMove', { id: classroomStorageKey, name: classroomName })
   // 別タブ日程表の自動同期(デバウンス)＋同期スピナーも staging/開発用教室のみ。本番3教室は従来どおり
   // 「最新表示」ボタン/開いた時のみ更新に保つ(オーナー確定 2026-07-09: メモリ負荷が本番大教室で未検証のため)。
-  const scheduleAutoSyncEnabled = isFeatureEnabledForClassroom('schedulePopupAutoSync', { name: classroomName })
+  const scheduleAutoSyncEnabled = isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: classroomStorageKey, name: classroomName })
   // 盤面PDFのコマ選択(A3縦は据え置き)。OFF の教室は従来どおりモーダルなしで表示週まるごと即出力する。
-  const boardPrintSelectionEnabled = isFeatureEnabledForClassroom('boardPrintSelection', { name: classroomName })
+  const boardPrintSelectionEnabled = isFeatureEnabledForClassroom('boardPrintSelection', { id: classroomStorageKey, name: classroomName })
   // 講習履歴(H-4・docs/plan-2026-09-11-five-requests.md §6)。生徒日程表タブの「講習集計結果」の左に
   // 「講習履歴」ボタンを出すかどうか。OFF の教室ではボタン自体を描かない(開発用教室のみ先行)。
-  const lessonHistoryEnabled = isFeatureEnabledForClassroom('lessonHistory', { name: classroomName })
+  const lessonHistoryEnabled = isFeatureEnabledForClassroom('lessonHistory', { id: classroomStorageKey, name: classroomName })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。

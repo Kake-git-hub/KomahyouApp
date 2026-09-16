@@ -102,8 +102,9 @@ export function isStudentPortalTokenActive(doc: StudentPortalTokenDoc | null | u
 export const PARENT_PORTAL_STAGING_PROJECT_ID = 'komahyouapp-staging'
 
 export type ParentPortalClassroomIdentity = {
+  /** 会社 = workspace のキー。教室IDは会社ごとに登録台帳で引くので必須(2026-09-16)。 */
+  workspaceKey: string | null | undefined
   id: string | null | undefined
-  name: string | null | undefined
   projectId: string | null | undefined
 }
 
@@ -112,13 +113,14 @@ export type ParentPortalClassroomIdentity = {
  * ⚠️ 昇格するときはクライアント側 `featureRolloutRegistry.parentPortalQr` と**同時に**変える
  *   (サーバーだけ ON にしてもボタンが出ず、クライアントだけ ON にしても API が 403 を返す)。
  * ⚠️ 述語はクライアントの `staging-environment` スコープ
- *   (`isStagingEnvironment() || isDevelopmentClassroom({ id, name })`)と**同一**にしてある。
- *   ID 単独の許可(旧 `PARENT_PORTAL_DEVELOPMENT_CLASSROOM_ID`)は入れない: クライアント側の
- *   `SANDBOX_CLASSROOM_IDS` に本番の開発用教室 ID は無く、片側だけ広いと「QR は出ないのに API は答える」
- *   (またはその逆)の非対称になる。教室名が変われば両側同時に無効化される(fail-closed)。
+ *   (`isStagingEnvironment() || isDevelopmentClassroom({ id }, workspaceKey)`)と**同一**にしてある。
+ *   判定の権威は登録台帳 `src/utils/developmentClassroomRegistry.ts`(の複製)1 か所だけで、
+ *   ここに教室ID の直書きを足さない: 片側だけ広いと「QR は出ないのに API は答える」(またはその逆)の
+ *   非対称になる。台帳から外せば両側同時に無効化される(fail-closed)。
+ *   ★2026-09-16 以前は教室名「開発用教室」でも有効だったが、他社が同名教室を作ると誤って有効になるため廃止。
  */
 export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroomIdentity): boolean {
-  return isDevelopmentClassroomIdentity(identity.id, identity.name)
+  return isDevelopmentClassroomIdentity(identity.workspaceKey, identity.id)
     || (identity.projectId ?? '').trim() === PARENT_PORTAL_STAGING_PROJECT_ID
 }
 
@@ -508,8 +510,8 @@ export type ParentPortalDeps = {
   resolveRange: (input: { from?: unknown; to?: unknown }, todayKey: string) => ParentPortalResolvedRange
   /** generated/parentSchedule の isParentStudentActiveOnDate(盤面・日程表と同じ isActiveOnDate。§F)。 */
   isStudentActive: (student: { entryDate?: unknown; withdrawDate?: unknown; birthDate?: unknown }, dateKey: string) => boolean
-  /** 機能フラグ(§H)。index.ts が projectId を補う。 */
-  isEnabled: (identity: { id: string; name: string }) => boolean
+  /** 機能フラグ(§H)。index.ts が projectId を補う。教室は (workspaceKey, id) の組で判定する。 */
+  isEnabled: (identity: { workspaceKey: string; id: string }) => boolean
   /** JST の今日 `YYYY-MM-DD`。 */
   todayJst: () => string
   nowIso: () => string
@@ -537,7 +539,8 @@ type ParentPortalVerifiedContext = {
  * GET/POST 共通の検証(§G-2・順序を変えない。1 つ落ちたら以降を実行しない):
  *  (1) トークン文字列の形 → 400
  *  (2) `studentPortalTokens/{token}` が無い／失効済み → 410
- *  (3) 教室 doc から name を得て機能フラグを評価 → OFF なら 403(教室 doc が無ければ 410)
+ *  (3) 教室 doc の実在を確かめ(無ければ 410)、機能フラグを (workspaceKey, 教室ID) で評価 → OFF なら 403
+ *      ※教室名は表示用に読むだけで、機能フラグの判定には使わない(2026-09-16・登録台帳へ一本化)
  *  (4) スナップショットを読み、生徒が実在し当日(JST)在籍 → でなければ 410
  * ★(1)(2)(3) で落ちた場合はスナップショットを読まない(K-4「読んでから弾く実装にしない」)。
  */
@@ -556,7 +559,7 @@ async function verifyParentPortalRequest(token: string, deps: ParentPortalDeps):
   if (!classroom) {
     return { ok: false, result: { status: 410, body: { error: PARENT_PORTAL_ERROR_GONE } } }
   }
-  if (!deps.isEnabled({ id: tokenDoc.classroomId, name: classroom.name })) {
+  if (!deps.isEnabled({ workspaceKey: tokenDoc.workspaceKey, id: tokenDoc.classroomId })) {
     return { ok: false, result: { status: 403, body: { error: PARENT_PORTAL_ERROR_DISABLED } } }
   }
 

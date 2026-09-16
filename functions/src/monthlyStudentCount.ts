@@ -7,7 +7,8 @@
 // ⚠️ 在籍判定はクライアントの権威関数を**意図的に写した鏡像**:
 //   - src/components/basic-data/basicDataModel.ts の isActiveOnDate / normalizeDateText
 //   - src/utils/studentGradeSubject.ts の hasGraduatedHighSchool / resolveGradeNumberFromBirthDate
-// 片方だけ変えないこと(functions/src/developmentClassroomIdentity.ts と同じ運用)。
+// 片方だけ変えないこと(検証用教室の登録台帳 src/utils/developmentClassroomRegistry.ts を
+// functions/src/generated/ へ複製する sync-shared と同じ「正本は 1 つ・ズレはテストで検出」の運用)。
 // ズレは functions/src/monthlyStudentCount.test.ts のパリティテストが検出する。
 // Date の組み立て方(ローカルTZの `T00:00:00` / `new Date(y, 3, 1)`)まで写してあるのは、
 // 実行環境の TZ が違っても両者が必ず同じ答えを出すようにするため。書き換えない。

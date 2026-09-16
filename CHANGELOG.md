@@ -16,6 +16,10 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 - docs: 複数会社展開計画の残判断点を確定(方式B 上流フォーク・複製は2社目の要望を見てから／Phase 0→1 を今から着手) (docs/plan-2026-09-15-multi-company-architecture.md §9)
+- fix: 検証用(開発用・テスト)教室の判定を「教室名/曖昧ID」から**会社(workspaceKey)ごとの教室ID登録台帳**へ是正(計画 §6-2)。他社が「開発用教室」という名前の教室を作っても検証用特権(Feature B・先行機能・保護者QR・AI即答)が付かない (src/utils/developmentClassroomRegistry.ts 新設・src/utils/developmentClassroom.ts・src/utils/featureRollout.ts)
+- refactor: クライアント/サーバーの二重実装(手書きコピー)を解消し、functions は sync-shared の生成物を読む薄いラッパへ。ズレはパリティテストが検出(計画 §6-3) (functions/scripts/sync-shared.mjs・functions/src/generated/developmentClassroomRegistry.ts・functions/src/developmentClassroomIdentity.ts・functions/src/developmentClassroomRegistry.parity.test.ts)
+- fix: 機能フラグの教室判定に教室ID を渡すよう配線を修正(教室名だけ渡す旧形が残ると開発用教室で development-only 機能が無効化される) (src/components/schedule-board/ScheduleBoardScreen.tsx・src/utils/scheduleHtml.ts・ScheduleBoardScreen.featureFlags.wiring.test.ts)
+- fix: 開発用教室限定の保存実験(saveDevelopmentClassroomSnapshot)の教室ID直書き定数を廃し、会社ごとに台帳から解決(未登録の会社は failed-precondition) (functions/src/index.ts)
 
 ## v1.5.532 (2026-09-16)
 

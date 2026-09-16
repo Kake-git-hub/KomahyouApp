@@ -10,7 +10,7 @@ import { HttpsError, onCall, onRequest, type CallableRequest } from 'firebase-fu
 import { setGlobalOptions } from 'firebase-functions/v2/options'
 import { onSchedule } from 'firebase-functions/v2/scheduler'
 import * as logger from 'firebase-functions/logger'
-import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
+import { isDevelopmentClassroomIdentity, resolveDevelopmentClassroomId } from './developmentClassroomIdentity'
 // 保護者向け固定QR: 日程計算の権威は src/utils/parentSchedule.ts。functions へは prebuild(sync-shared)で複製した
 // generated/parentSchedule.ts を使う(手書きコピーの持ち込み禁止・docs/spec-parent-portal.md §D)。
 import {
@@ -102,7 +102,6 @@ const WORKSPACE_QUARTER_HOURLY_AUTO_BACKUP_SCHEDULE = process.env.WORKSPACE_QUAR
 const WORKSPACE_AUTO_BACKUP_TIME_ZONE = 'Asia/Tokyo'
 const WORKSPACE_INCIDENT_BACKUP_PREFIX = 'workspace-incident-backups'
 const WORKSPACE_LATEST_ROLLBACK_PREFIX = 'workspace-latest-rollbacks'
-const DEVELOPMENT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
 const FIREBASE_INLINE_SNAPSHOT_JSON_BYTE_LIMIT = 700_000
 const FIREBASE_COMPRESSED_SNAPSHOT_ENCODING = 'gzip-base64'
 const GOOGLE_DRIVE_API_SCOPE = 'https://www.googleapis.com/auth/drive'
@@ -1578,8 +1577,16 @@ async function saveClassroomSnapshotFromCallable(request: CallableRequest, optio
   // 生徒授業台帳(相乗り・任意)。旧クライアントは送らない。壊れていれば null(保存本体は通す)。
   const incomingLessonLedger = normalizeLessonLedger(rawData.lessonLedger, { fallbackIso: savedAt })
 
-  if (options?.developmentOnly && classroomId !== DEVELOPMENT_CLASSROOM_ID) {
-    throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
+  // 開発用教室限定の保存実験。教室IDの直書き定数はやめ、会社(workspaceKey)ごとの登録台帳から解決する
+  // (docs/spec-multi-tenant.md。他社の workspace では「登録されていません」で必ず止まる)。
+  if (options?.developmentOnly) {
+    const developmentClassroomId = resolveDevelopmentClassroomId(workspaceKey)
+    if (!developmentClassroomId) {
+      throw new HttpsError('failed-precondition', 'このワークスペースには開発用教室が登録されていません。')
+    }
+    if (classroomId !== developmentClassroomId) {
+      throw new HttpsError('failed-precondition', 'この保存実験は開発用教室だけで利用できます。')
+    }
   }
 
   const memberRef = await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
@@ -1854,7 +1861,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   }
 
   // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
-  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity(classroomId, classroomName))
+  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity(workspaceKey, classroomId))
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,
@@ -1894,7 +1901,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   // 質問への AI 即時回答(試験・開発用教室のみ)。報告の記録が済んでから呼ぶ(AI が失敗しても報告は残る)。
   // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
   let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
-  if (shouldAnswerQuestionWithAi({ category: report.category, isDevelopmentClassroom: isDevelopmentClassroomIdentity(classroomId, classroomName), isVerificationChecklist })) {
+  if (shouldAnswerQuestionWithAi({ category: report.category, isDevelopmentClassroom: isDevelopmentClassroomIdentity(workspaceKey, classroomId), isVerificationChecklist })) {
     const aiResult = await generateQuestionAiAnswer({
       note: report.note,
       screen: report.screen,
@@ -2036,8 +2043,8 @@ export const downloadServerAutoBackup = onCall({ invoker: 'public', timeoutSecon
   return { snapshotGzipBase64: compressed.toString('base64') }
 })
 
-// 検証用(サンドボックス)教室の判定は ./developmentClassroomIdentity へ切り出し済み。
-// 本番の開発用教室は id=v8OZ7zH8vONNHjjYVcR1・name=「開発用教室」なので name 判定が要。
+// 検証用(サンドボックス)教室の判定は ./developmentClassroomIdentity(登録台帳の複製を読む薄いラッパ)。
+// 判定は (workspaceKey, classroomId) の完全一致。教室名は見ない(2026-09-16・docs/spec-multi-tenant.md)。
 
 // 「他教室のバックアップを検証用教室(開発用教室・テスト教室)へ読み込む(Feature B)」のアクセス判定。
 // 許可: 開発者、または【検証用教室の室長】(サンドボックスのため任意教室を読み込める)。
@@ -2048,10 +2055,9 @@ async function resolveDevelopmentBackupAccess(authUid: string | undefined, works
   const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc
   if (member.role === 'developer') return { member, isDeveloper: true as const }
   const assignedId = typeof member.assignedClassroomId === 'string' ? member.assignedClassroomId.trim() : ''
-  if (assignedId) {
-    const classroomSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(assignedId).get()
-    const name = (classroomSnapshot.data() as FirebaseClassroomDoc | undefined)?.name ?? ''
-    if (isDevelopmentClassroomIdentity(assignedId, name)) return { member, isDeveloper: false as const, developmentClassroomId: assignedId }
+  // 教室名は判定に使わないので、教室 doc は読まない(登録台帳に (workspaceKey, 教室ID) があるかだけ)。
+  if (assignedId && isDevelopmentClassroomIdentity(workspaceKey, assignedId)) {
+    return { member, isDeveloper: false as const, developmentClassroomId: assignedId }
   }
   throw new HttpsError('permission-denied', 'この操作には開発者または検証用教室(開発用教室・テスト教室)の権限が必要です。')
 }
@@ -2083,7 +2089,7 @@ export const listDevelopmentClassroomBackupSources = onCall({ invoker: 'public',
   // 読み込み元候補は検証用教室(開発用教室・テスト教室)を除いた全教室。サンドボックス同士のコピーはしない。
   const classrooms = classroomsSnapshot.docs
     .map((entry) => ({ id: entry.id, name: (entry.data() as FirebaseClassroomDoc).name ?? entry.id }))
-    .filter((classroom) => !isDevelopmentClassroomIdentity(classroom.id, classroom.name))
+    .filter((classroom) => !isDevelopmentClassroomIdentity(workspaceKey, classroom.id))
     .sort((left, right) => left.name.localeCompare(right.name, 'ja'))
 
   return { backups, classrooms }
@@ -2108,10 +2114,9 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
   // 許可: 開発者 / 自分の担当教室 / 検証用教室(開発用教室・テスト教室)の室長(任意教室を自教室へ読み込むため)。
   const member = memberSnapshot.data() as FirebaseWorkspaceMemberDoc | undefined
   let allowed = member?.role === 'developer' || member?.assignedClassroomId === classroomId
+  // 自分の担当教室が「その会社で登録済みの検証用教室」かだけを見る(教室名は判定に使わないので doc は読まない)。
   if (!allowed && typeof member?.assignedClassroomId === 'string' && member.assignedClassroomId) {
-    const ownClassroomSnapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(member.assignedClassroomId).get()
-    const ownName = (ownClassroomSnapshot.data() as FirebaseClassroomDoc | undefined)?.name ?? ''
-    if (isDevelopmentClassroomIdentity(member.assignedClassroomId, ownName)) allowed = true
+    if (isDevelopmentClassroomIdentity(workspaceKey, member.assignedClassroomId)) allowed = true
   }
   if (!allowed) {
     throw new HttpsError('permission-denied', 'この教室のバックアップにアクセスする権限がありません。')
@@ -2989,7 +2994,7 @@ function buildParentPortalDeps(): ParentPortalDeps {
     resolveRange: (input, todayKey) => resolveParentScheduleRange(input, todayKey),
     // 在籍判定は盤面・日程表と同じ isActiveOnDate の写し(§F。管理データ画面の入塾日不問規則は使わない)。
     isStudentActive: (student, dateKey) => isParentStudentActiveOnDate(student, dateKey),
-    isEnabled: ({ id, name }) => isParentPortalEnabledForClassroom({ id, name, projectId: PARENT_PORTAL_PROJECT_ID }),
+    isEnabled: ({ workspaceKey, id }) => isParentPortalEnabledForClassroom({ workspaceKey, id, projectId: PARENT_PORTAL_PROJECT_ID }),
     todayJst: () => toParentPortalJstDateKey(new Date()),
     nowIso: () => new Date().toISOString(),
     // 回数制限(§E-1): トークン×JST 日と教室×JST 時の 2 カウンタを 1 トランザクションで
@@ -3090,12 +3095,10 @@ function toParentPortalHttpsError(functionName: string, error: unknown): HttpsEr
   return new HttpsError('internal', `サーバーで処理できませんでした(${message.slice(0, 300)})`)
 }
 
-// 機能フラグ(§H)はサーバー側でも評価する(クライアントで隠すだけにしない)。教室 doc の name で開発用教室を判定。
+// 機能フラグ(§H)はサーバー側でも評価する(クライアントで隠すだけにしない)。
+// 判定は登録台帳の (workspaceKey, 教室ID)。教室名は見ない(2026-09-16・docs/spec-multi-tenant.md)。
 async function requireParentPortalEnabledClassroom(workspaceKey: string, classroomId: string) {
-  const snapshot = await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(classroomId).get()
-  const data = snapshot.data() as FirebaseClassroomDoc | undefined
-  const name = typeof data?.name === 'string' ? data.name : ''
-  if (!isParentPortalEnabledForClassroom({ id: classroomId, name, projectId: PARENT_PORTAL_PROJECT_ID })) {
+  if (!isParentPortalEnabledForClassroom({ workspaceKey, id: classroomId, projectId: PARENT_PORTAL_PROJECT_ID })) {
     throw new HttpsError('failed-precondition', '保護者用QRはこの教室ではまだ利用できません。')
   }
 }
