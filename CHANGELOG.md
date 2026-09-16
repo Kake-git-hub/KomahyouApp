@@ -15,6 +15,7 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- docs: 複数会社展開計画を第2版へ(§6 問題点15件のオーナー質疑結果を §10 に記録・機能スイッチは当面2段/開発用教室は会社ごとにID固定/請求は会社宛合算+教室宛/会社リポは私有/版はコア版+会社識別子/想定10〜30教室) (docs/plan-2026-09-15-multi-company-architecture.md)
 
 ## v1.5.531 (2026-09-16)
 - fix: UTC の日付(toISOString().slice(0,10))のせいで JST 0:00〜8:59 に前日になっていた残り3か所を getJstTodayDateKey へ寄せた(請求書PDFの発行日 / 初期在庫登録の生徒選択肢の在籍判定 / 開発者管理画面の教室在籍数と教室追加の契約開始日初期値)。バックアップの日付キーはサーバー側で既に JST で、この3か所とは無関係と確認 (invoicePdf.ts, BackupRestoreScreen.tsx, DeveloperAdminScreen.tsx, jstDateRemainingSites.test.ts)
