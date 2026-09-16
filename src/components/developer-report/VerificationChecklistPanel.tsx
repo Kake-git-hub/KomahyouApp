@@ -169,9 +169,19 @@ export function VerificationChecklistPanel({ classroomId, classroomName, onSubmi
                     <span className="verification-checklist-item-id">{item.id}</span>
                     {item.title}
                   </div>
+                  {item.prep ? <p className="verification-checklist-prep"><span className="verification-checklist-label">前提</span>{item.prep}</p> : null}
+                  <div className="verification-checklist-label">操作</div>
                   <ol className="verification-checklist-steps">
                     {item.steps.map((step) => <li key={step}>{step}</li>)}
                   </ol>
+                  {item.check && item.check.length > 0 ? (
+                    <>
+                      <div className="verification-checklist-label">見るところ</div>
+                      <ul className="verification-checklist-check">
+                        {item.check.map((line) => <li key={line}>{line}</li>)}
+                      </ul>
+                    </>
+                  ) : null}
                   <div className="verification-checklist-status" role="group" aria-label={`${item.title} の結果`}>
                     {STATUS_OPTIONS.map((option) => (
                       <label key={option.value} className={`verification-checklist-status-option${entry.status === option.value ? ' is-selected' : ''}`}>

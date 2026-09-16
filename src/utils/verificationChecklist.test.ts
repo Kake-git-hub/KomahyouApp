@@ -50,6 +50,11 @@ describe('確認リストの項目定義', () => {
     for (const item of VERIFICATION_CHECKLIST.items) {
       expect(item.introducedIn, item.id).toMatch(/^v\d+\.\d+\.\d+$/u)
       expect(item.steps.length, item.id).toBeGreaterThan(0)
+      // 第16版(オーナー指示 2026-09-17「手順が多すぎて大変」): 操作は 1〜2 個・見るところは最大 4 つ・前提は1行。
+      expect(item.steps.length, `${item.id} の操作が多すぎる`).toBeLessThanOrEqual(2)
+      expect(item.check?.length ?? 0, `${item.id} の見るところが多すぎる`).toBeLessThanOrEqual(4)
+      if (item.prep !== undefined) expect(item.prep, item.id).not.toContain('\n')
+      for (const line of [...item.steps, ...(item.check ?? [])]) expect(line.trim(), item.id).not.toBe('')
       expect(item.title.trim(), item.id).not.toBe('')
       expect(item.area.trim(), item.id).not.toBe('')
     }
@@ -57,17 +62,25 @@ describe('確認リストの項目定義', () => {
 
   it('第14版: 結果待ちの b-2、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8、開発用教室での予行 y-1〜y-4(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-1', 'y-2', 'y-3', 'y-4', 'c-2'])
-    for (const item of VERIFICATION_CHECKLIST.items.slice(1, 9)) expect(item.introducedIn, item.id).toBe('v1.5.540')
-    for (const item of VERIFICATION_CHECKLIST.items.slice(9, 13)) expect(item.introducedIn, item.id).toBe('v1.5.541')
+    // 第16版: 準備 y-1 を先頭に置き、以降は読み込んだ日大前データの上で行う(項目ごとの準備を減らすため)。
+    expect(ids).toEqual(['y-1', 'b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3'])
+    const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    for (const id of ['r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.540')
+    for (const id of ['y-1', 'y-2', 'y-3', 'y-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.541')
     // 第15版(v1.5.542): 確認リストの文字拡大の確認項目。版は据え置き(第13版の結果待ちを消さない)。
-    const c2 = VERIFICATION_CHECKLIST.items[13]!
-    expect(c2.id).toBe('c-2')
+    const c2 = byId.get('c-2')!
     expect(c2.introducedIn).toBe('v1.5.542')
-    expect(c2.steps.join(' / ')).toContain('15px')
-    const b2 = VERIFICATION_CHECKLIST.items[0]!
+    expect((c2.check ?? []).join(' / ')).toContain('15px')
+    // 第16版(v1.5.543): 前提／操作／見るところ の3段の確認項目。
+    const c3 = byId.get('c-3')!
+    expect(c3.introducedIn).toBe('v1.5.543')
+    expect((c3.check ?? []).join(' / ')).toContain('前提')
+    // y-1 は準備なので前提を持ち、以降の予行項目は y-1 の控えと比べる。
+    expect(byId.get('y-1')!.prep).toContain('上書き')
+    for (const id of ['y-2', 'y-3', 'y-4']) expect((byId.get(id)!.check ?? []).join(' / '), id).toContain('y-1 の控え')
+    const b2 = byId.get('b-2')!
     expect(b2.introducedIn).toBe('v1.5.528')
-    const steps = b2.steps.join(' / ')
+    const steps = [b2.prep ?? '', ...b2.steps, ...(b2.check ?? [])].join(' / ')
     // 旧定義(今日までは在籍・削除ボタンは翌日から)の手順を残さない。
     expect(steps).not.toContain('今日までは在籍')
     expect(steps).not.toContain('翌日から出る')
