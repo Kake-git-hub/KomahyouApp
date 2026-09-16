@@ -15,8 +15,9 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.534 (2026-09-16)
 - docs: マルチテナント(会社=workspace)の境界仕様を新設(会社の壁/開発用教室レジストリ/越境ガード/ツールの棟指定必須・Phase 0 T0-1) (docs/spec-multi-tenant.md, docs/spec-index.md)
-- docs: 複数会社展開計画の残判断点を確定(方式B 上流フォーク・複製は2社目の要望を見てから／Phase 0→1 を今から着手) (docs/plan-2026-09-15-multi-company-architecture.md §9)
 - chore: 複数会社展開 Phase 0 T0-4・運用ツール(tools/*.mjs)の workspace 既定値 'main' を廃止し `--workspace` を必須化(6-1/6-12 の是正)。`copy-prod-classroom-to-staging.mjs` は既定教室(日大前)も廃止し `--classroom` 必須に。vitest の import で main() が走らないよう shebang を除去し invokedDirectly ガードを追加、呼び出し側(functions-logs.yml・docs)も追随 (tools/copy-prod-classroom-to-staging.mjs, tools/lesson-history-diagnose.mjs, tools/lesson-ledger-report.mjs, tools/verification-checklist-report.mjs, tools/firebase-first-classroom-helper.mjs, .github/workflows/functions-logs.yml, docs/handoff-popup-sync-and-dnd.md, docs/spec-save-restore.md)
 - fix(INV-08): テナント(会社=workspace)越境ガードを追加 — 開発者会員の callable は教室 doc の実在を確認してから通す(別会社/存在しない教室 ID の素通りを封鎖・functions/src/classroomAccess.ts・functions/src/index.ts requireClassroomAccessMember)。配布用盤面の共有ドキュメントに workspaceKey を書き足し(読みは無改変・src/integrations/firebase/boardShare.ts)、Firestore ルールに会社越境の遮断テストを追加(firebase/rules/firestore.rules.test.ts)
 - fix(INV-08): 検証用(開発用・テスト)教室の判定を「教室名/曖昧ID」から**会社(workspaceKey)ごとの教室ID登録台帳**へ是正(計画 §6-2)。他社が「開発用教室」という名前の教室を作っても検証用特権(Feature B・先行機能・保護者QR・AI即答)が付かない (src/utils/developmentClassroomRegistry.ts 新設・src/utils/developmentClassroom.ts・src/utils/featureRollout.ts)
@@ -24,9 +25,10 @@
 - fix(INV-05/INV-08): 機能フラグの教室判定に教室ID を渡すよう配線を修正(教室名だけ渡す旧形が残ると開発用教室で development-only 機能が無効化される)。副作用として**テスト教室(test_classroom_20260507_dai)でも盤面側の development-only 機能(盤面ベース予定数・講習履歴・AI即答表示)が有効化**される(旧配線は教室名だけで判定していたため偶然 OFF だった。CLAUDE.md「テスト教室は開発用に準じて扱う」とサーバー側の既存判定に揃える。戻す場合は台帳の kind で絞る) (src/components/schedule-board/ScheduleBoardScreen.tsx・src/utils/scheduleHtml.ts・ScheduleBoardScreen.featureFlags.wiring.test.ts)
 - fix: 開発用教室限定の保存実験(saveDevelopmentClassroomSnapshot)の教室ID直書き定数を廃し、会社ごとに台帳から解決(未登録の会社は failed-precondition) (functions/src/index.ts)
 
-## v1.5.532 (2026-09-16)
+## v1.5.533 (2026-09-16)
+- docs: 複数会社展開計画の残判断点を確定(方式B 上流フォーク・複製は2社目の要望を見てから／Phase 0→1 を今から着手) (docs/plan-2026-09-15-multi-company-architecture.md §9)
 
-## v1.5.531 (2026-09-16)
+## v1.5.532 (2026-09-16)
 - docs: 複数会社展開計画を第2版へ(§6 問題点15件のオーナー質疑結果を §10 に記録・機能スイッチは当面2段/開発用教室は会社ごとにID固定/請求は会社宛合算+教室宛/会社リポは私有/版はコア版+会社識別子/想定10〜30教室) (docs/plan-2026-09-15-multi-company-architecture.md)
 
 ## v1.5.531 (2026-09-16)
