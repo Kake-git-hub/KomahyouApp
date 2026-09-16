@@ -55,9 +55,10 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第12版: 第11版で要改善だった b-2 を「退塾日当日から非在籍」の確認手順に差し替えて再確認(オーナー指摘 2026-09-12 の運用)', () => {
+  it('第13版: 結果待ちの b-2 と、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2'])
+    expect(ids).toEqual(['b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8'])
+    for (const item of VERIFICATION_CHECKLIST.items.slice(1)) expect(item.introducedIn, item.id).toBe('v1.5.540')
     const b2 = VERIFICATION_CHECKLIST.items[0]!
     expect(b2.introducedIn).toBe('v1.5.528')
     const steps = b2.steps.join(' / ')
@@ -85,14 +86,14 @@ describe('確認リストの項目定義', () => {
     for (const okId of ['k-1', 'k-2', 'k-3', 'k-6', 'k-7', 'k-8', 'k-9']) {
       expect(ids, okId).not.toContain(okId)
     }
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.528')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.540')
   })
 })
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.528')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.528')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.540')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.540')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -164,7 +165,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.528]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.540]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
