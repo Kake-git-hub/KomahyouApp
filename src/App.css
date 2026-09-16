@@ -5053,12 +5053,12 @@ tr.sa-group-row td {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 8px 16px;
   border: 1px solid #1d4ed8;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.96);
   color: #1d4ed8;
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
   box-shadow: 0 6px 18px rgba(31, 51, 80, 0.18);
@@ -5073,7 +5073,7 @@ tr.sa-group-row td {
   border-radius: 999px;
   background: #fee2e2;
   color: #b91c1c;
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .verification-checklist-panel {
@@ -5083,9 +5083,9 @@ tr.sa-group-row td {
   z-index: 2000;
   display: flex;
   flex-direction: column;
-  width: 360px;
+  width: 560px;
   max-width: calc(100vw - 24px);
-  max-height: 70vh;
+  max-height: 85vh;
   border: 1px solid #d7e2f1;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.98);
@@ -5104,14 +5104,14 @@ tr.sa-group-row td {
 }
 
 .verification-checklist-title {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 700;
   color: #1f3350;
 }
 
 .verification-checklist-subtitle {
   margin-top: 2px;
-  font-size: 11px;
+  font-size: 14px;
   color: #5b7390;
 }
 
@@ -5120,8 +5120,9 @@ tr.sa-group-row td {
   border-radius: 6px;
   background: #fff;
   color: #36506d;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
 }
@@ -5142,7 +5143,7 @@ tr.sa-group-row td {
   top: 0;
   padding: 4px 0;
   background: rgba(255, 255, 255, 0.98);
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 700;
   color: #1d4ed8;
 }
@@ -5151,8 +5152,8 @@ tr.sa-group-row td {
   border: 1px solid #e4ebf5;
   border-left: 3px solid #cbd5e1;
   border-radius: 8px;
-  padding: 8px;
-  margin-top: 6px;
+  padding: 10px 12px;
+  margin-top: 8px;
   background: #fff;
 }
 
@@ -5167,7 +5168,8 @@ tr.sa-group-row td {
 }
 
 .verification-checklist-item-title {
-  font-size: 12px;
+  font-size: 16px;
+  line-height: 1.5;
   font-weight: 700;
   color: #1f3350;
 }
@@ -5179,15 +5181,15 @@ tr.sa-group-row td {
   border-radius: 4px;
   background: #eef4ff;
   color: #36506d;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .verification-checklist-steps {
-  margin: 4px 0 6px;
-  padding-left: 18px;
+  margin: 6px 0 8px;
+  padding-left: 22px;
   color: #36506d;
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.7;
 }
 
 .verification-checklist-status {
@@ -5200,10 +5202,10 @@ tr.sa-group-row td {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
+  padding: 4px 12px;
   border: 1px solid #d7e2f1;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: 15px;
   color: #36506d;
   cursor: pointer;
 }
@@ -5221,7 +5223,7 @@ tr.sa-group-row td {
   padding: 6px;
   border: 1px solid #d7e2f1;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 15px;
   font-family: inherit;
   resize: vertical;
 }
@@ -5229,7 +5231,7 @@ tr.sa-group-row td {
 .verification-checklist-memo-hint {
   margin: 4px 0 0;
   color: #b91c1c;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .verification-checklist-footer {
@@ -5240,7 +5242,7 @@ tr.sa-group-row td {
 
 .verification-checklist-result {
   margin: 0 0 6px;
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.6;
   color: #1f3350;
   white-space: pre-wrap;
@@ -5253,8 +5255,8 @@ tr.sa-group-row td {
 }
 
 .verification-checklist-actions button {
-  font-size: 12px;
-  padding: 6px 12px;
+  font-size: 15px;
+  padding: 8px 16px;
 }
 
 @media print {
