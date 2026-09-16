@@ -9,69 +9,81 @@ import { isDevelopmentClassroom, isParentPortalTokenOwnedByClassroom, isSubmissi
 // workspaceKey は既定が env(テストでは空)なので、ここでは必ず第2引数で明示する。
 describe('isDevelopmentClassroom', () => {
   it('登録済みの開発用教室・テスト教室だけ true(会社 main)', () => {
-    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
+    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
     // オーナー確定 2026-07-28(commit 020cd46): テスト教室も検証用教室。名前を変えても効き続ける。
-    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai', name: 'テスト教室' }, 'main')).toBe(true)
-    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai', name: '石川先生 検証用' }, 'main')).toBe(true)
-    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai', name: '' }, 'main')).toBe(true)
+    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
+  })
+
+  // ★2026-09-16(型でも固定): 識別子の型 DevelopmentClassroomIdentity は **教室ID だけ**を持つ。
+  //   教室名フィールドを型に戻すと `{ name: classroomName }` だけを渡す呼び出しがコンパイルを通り、
+  //   その画面の development-only 機能が開発用教室でも静かに無効化される(レビュー指摘 2026-09-16)。
+  //   (下の) `@ts-expect-error` は「型エラーが出なくなったら tsc -b が落ちる」ので、name 復活をビルドで検出できる。
+  it('教室名だけの識別子は型で拒否する(実行時も false)', () => {
+    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止・name は型に存在しない)
+    expect(isDevelopmentClassroom({ name: '開発用教室' }, 'main')).toBe(false)
+    // 教室オブジェクトを丸ごと渡す形(App.tsx の actingClassroom)は従来どおり通る＝変数経由なら余剰プロパティ可。
+    const actingClassroom = { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }
+    expect(isDevelopmentClassroom(actingClassroom, 'main')).toBe(true)
   })
 
   // ★回帰防止(6-2 の本丸): 教室名が「開発用教室」でも、台帳に無い教室IDなら false。
   //   旧実装(name === '開発用教室' / name.includes('開発用教室'))ではここが true になり、
   //   他社が同名教室を作るだけで Feature B・先行機能・混入防止ガードの対象になっていた。
   it('名前が「開発用教室」でも未登録の教室IDなら false', () => {
-    expect(isDevelopmentClassroom({ id: 'classroom-1', name: '開発用教室' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'classroom-1', name: '開発用教室（検証用）' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'other-company-room', name: '開発用教室' }, 'company-b')).toBe(false)
+    // 教室名は判定に使わない(型からも落とした)ので、名前付きの教室オブジェクトを渡しても ID だけを見る。
+    expect(isDevelopmentClassroom({ id: 'classroom-1' }, 'main')).toBe(false)
+    const renamedToDevelopment = { id: 'classroom-1', name: '開発用教室' }
+    expect(isDevelopmentClassroom(renamedToDevelopment, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'other-company-room' }, 'company-b')).toBe(false)
   })
 
   // ★回帰防止(会社の壁): 教室IDが登録済みでも、別の会社(workspace)なら false。
   it('登録済みの教室IDでも workspaceKey が違えば false', () => {
-    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'company-b')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai', name: 'テスト教室' }, 'company-b')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1' }, 'company-b')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai' }, 'company-b')).toBe(false)
   })
 
   // 2026-09-16 廃止した曖昧一致。復活させない(他社の 'dev_*' 教室を巻き込む)。
   it('dev / development などの曖昧な教室IDは通さない', () => {
     for (const id of ['development', 'dev', 'development_classroom', 'dev_room_001']) {
-      expect(isDevelopmentClassroom({ id, name: '検証教室' }, 'main'), id).toBe(false)
+      expect(isDevelopmentClassroom({ id }, 'main'), id).toBe(false)
     }
   })
 
   // 名前判定は廃止済み。教室名を「テスト教室」にしただけの別教室は絶対に通さない
   // (本番教室を改名して他教室データを読み込めてしまう穴を塞ぐ・オーナー指示 2026-07-28)。
   it('never accepts a classroom just because it is named テスト教室', () => {
-    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC', name: 'テスト教室' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'test_classroom_2', name: 'テスト教室2' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'test_classroom_2' }, 'main')).toBe(false)
   })
 
   it('does not match normal classrooms', () => {
-    expect(isDevelopmentClassroom({ id: 'classroom_001', name: '本校' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'classroom_001' }, 'main')).toBe(false)
   })
 
   // 本番3教室が誤ってサンドボックス扱いにならないこと(混入防止ガードの適用先が広がらないため
   // ではなく、本番から他教室データを読み込めてしまわないための最重要ロック)。
   it('never matches the production classrooms', () => {
-    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC', name: 'スクールIE 日大前校' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh', name: 'スクールIE 緑が丘校' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb', name: 'スクールIE 薬円台校' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
   })
 
   it('does not match names that merely contain テスト', () => {
-    expect(isDevelopmentClassroom({ id: 'classroom_002', name: 'テスト前対策校' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'classroom_002' }, 'main')).toBe(false)
   })
 
   // 台帳は完全一致。似たIDや大小差では通さない。
   it('matches the registered id exactly (no prefix / case slack)', () => {
-    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai_2', name: '' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'TEST_CLASSROOM_20260507_DAI', name: '' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: ' test_classroom_20260507_dai ', name: '' }, 'main')).toBe(true)
+    expect(isDevelopmentClassroom({ id: 'test_classroom_20260507_dai_2' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'TEST_CLASSROOM_20260507_DAI' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: ' test_classroom_20260507_dai ' }, 'main')).toBe(true)
   })
 
   it('教室・workspaceKey が無ければ false(ローカルモードは workspaceKey が空なので常に false)', () => {
     expect(isDevelopmentClassroom(null, 'main')).toBe(false)
     expect(isDevelopmentClassroom(undefined, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, '')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1' }, '')).toBe(false)
   })
 })
 
@@ -269,9 +281,9 @@ describe('stripForeignParentPortalTokensFromStudents (配列単位・開発用�
   // 本番3教室はサンドボックスではないので、そもそもこの剥がしは App 側(isActingDevelopmentClassroom)で呼ばれない。
   // 判定関数の側でも本番IDが絶対にサンドボックス扱いにならないことを、保護者QR文脈でも固定する。
   it('本番3教室の ID は保護者QR文脈でも決してサンドボックス扱いにならない', () => {
-    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC', name: 'スクールIE 日大前校' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh', name: 'スクールIE 緑が丘校' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb', name: 'スクールIE 薬円台校' }, 'main')).toBe(false)
-    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
+    expect(isDevelopmentClassroom({ id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
+    expect(isDevelopmentClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
   })
 })

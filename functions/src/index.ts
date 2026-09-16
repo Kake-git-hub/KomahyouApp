@@ -1873,7 +1873,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   }
 
   // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
-  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity(workspaceKey, classroomId))
+  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity({ workspaceKey, classroomId }))
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,
@@ -1913,7 +1913,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   // 質問への AI 即時回答(試験・開発用教室のみ)。報告の記録が済んでから呼ぶ(AI が失敗しても報告は残る)。
   // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
   let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
-  if (shouldAnswerQuestionWithAi({ category: report.category, isDevelopmentClassroom: isDevelopmentClassroomIdentity(workspaceKey, classroomId), isVerificationChecklist })) {
+  if (shouldAnswerQuestionWithAi({ category: report.category, isDevelopmentClassroom: isDevelopmentClassroomIdentity({ workspaceKey, classroomId }), isVerificationChecklist })) {
     const aiResult = await generateQuestionAiAnswer({
       note: report.note,
       screen: report.screen,
@@ -2068,7 +2068,7 @@ async function resolveDevelopmentBackupAccess(authUid: string | undefined, works
   if (member.role === 'developer') return { member, isDeveloper: true as const }
   const assignedId = typeof member.assignedClassroomId === 'string' ? member.assignedClassroomId.trim() : ''
   // 教室名は判定に使わないので、教室 doc は読まない(登録台帳に (workspaceKey, 教室ID) があるかだけ)。
-  if (assignedId && isDevelopmentClassroomIdentity(workspaceKey, assignedId)) {
+  if (assignedId && isDevelopmentClassroomIdentity({ workspaceKey, classroomId: assignedId })) {
     return { member, isDeveloper: false as const, developmentClassroomId: assignedId }
   }
   throw new HttpsError('permission-denied', 'この操作には開発者または検証用教室(開発用教室・テスト教室)の権限が必要です。')
@@ -2101,7 +2101,7 @@ export const listDevelopmentClassroomBackupSources = onCall({ invoker: 'public',
   // 読み込み元候補は検証用教室(開発用教室・テスト教室)を除いた全教室。サンドボックス同士のコピーはしない。
   const classrooms = classroomsSnapshot.docs
     .map((entry) => ({ id: entry.id, name: (entry.data() as FirebaseClassroomDoc).name ?? entry.id }))
-    .filter((classroom) => !isDevelopmentClassroomIdentity(workspaceKey, classroom.id))
+    .filter((classroom) => !isDevelopmentClassroomIdentity({ workspaceKey, classroomId: classroom.id }))
     .sort((left, right) => left.name.localeCompare(right.name, 'ja'))
 
   return { backups, classrooms }
@@ -2128,7 +2128,7 @@ export const downloadClassroomFromServerAutoBackup = onCall({ invoker: 'public',
   let allowed = member?.role === 'developer' || member?.assignedClassroomId === classroomId
   // 自分の担当教室が「その会社で登録済みの検証用教室」かだけを見る(教室名は判定に使わないので doc は読まない)。
   if (!allowed && typeof member?.assignedClassroomId === 'string' && member.assignedClassroomId) {
-    if (isDevelopmentClassroomIdentity(workspaceKey, member.assignedClassroomId)) allowed = true
+    if (isDevelopmentClassroomIdentity({ workspaceKey, classroomId: member.assignedClassroomId })) allowed = true
   }
   if (!allowed) {
     throw new HttpsError('permission-denied', 'この教室のバックアップにアクセスする権限がありません。')

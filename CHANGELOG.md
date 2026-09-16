@@ -15,6 +15,11 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- refactor(INV-08): 検証用教室の識別子型 `DevelopmentClassroomIdentity` から `name` を削除し、`{ id }` だけにした。教室名だけを渡す旧形(`{ name: classroomName }`)が**コンパイルエラー**になり、development-only 機能が開発用教室で静かに無効化される回帰を型で止める (src/utils/developmentClassroom.ts・src/components/schedule-board/ScheduleBoardScreen.tsx・src/utils/scheduleHtml.ts)
+- refactor(INV-08): サーバー側 `isDevelopmentClassroomIdentity` を同型 string 2 引数から名前付き引数 `{ workspaceKey, classroomId }` に変更(順序を取り違えても型が通り静かに false になるのを防ぐ)。呼び出し 6 か所を追随 (functions/src/developmentClassroomIdentity.ts・functions/src/index.ts・functions/src/parentPortal.ts)
+- test(INV-08): `isDevelopmentClassroom` / `isFeatureEnabledForClassroom` の呼び出しを **src 全体走査**で固定する兄弟テストを追加(2 ファイル限定だった字面テストが新規ファイルの呼び出しを見逃す穴を塞ぐ・App.tsx の CRLF も正規化して走査) (src/utils/developmentClassroom.callSites.test.ts)
+- test(INV-08): `requireClassroomAccessMember` の配線(developer のときだけ教室 doc を読み、その結果を `resolveClassroomAccessDecision` に渡す)と、`saveDevelopmentClassroomSnapshot` の developmentOnly 分岐(未登録の会社は failed-precondition)を字面スキャンで固定 (functions/src/classroomAccess.test.ts・functions/src/developmentClassroomIdentity.test.ts)
+- refactor: CLI ツールの「直接実行されたときだけ動かす」判定が 3 方式に分かれていたのを共通ヘルパ 1 方式へ統一(`node:fs.realpathSync` で実体比較。ジャンクション/シンボリックリンク越しや相対パス起動で無言 exit 0 しない) (tools/invoked-directly.mjs 新設・tools/*.mjs 7 本・functions/scripts/sync-shared.mjs)
 
 ## v1.5.534 (2026-09-16)
 - docs: マルチテナント(会社=workspace)の境界仕様を新設(会社の壁/開発用教室レジストリ/越境ガード/ツールの棟指定必須・Phase 0 T0-1) (docs/spec-multi-tenant.md, docs/spec-index.md)

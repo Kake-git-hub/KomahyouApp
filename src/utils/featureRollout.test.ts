@@ -9,34 +9,34 @@ describe('featureRollout', () => {
     // 開発用教室で検証後、全教室へ展開済み。開発用教室も通常教室と同じ保存経路を使う。
     expect(featureRolloutRegistry.manualFirebaseSaveStability.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('manualFirebaseSaveStability', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('manualFirebaseSaveStability', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('manualFirebaseSaveStability', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 
   it('keeps all-classroom rollouts enabled everywhere', () => {
     expect(featureRolloutRegistry.scheduleQrPopupBehavior.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('scheduleQrPopupBehavior', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('scheduleQrPopupBehavior', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('scheduleQrPopupBehavior', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('scheduleQrPopupBehavior', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 
   it('enables the student schedule option field in every classroom', () => {
     // 開発用教室で検証後、全教室へ展開済み(オーナー指示 2026-06-27)。回帰で development-only へ戻さない。
     expect(featureRolloutRegistry.studentScheduleOptionField.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('studentScheduleOptionField', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('studentScheduleOptionField', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentScheduleOptionField', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentScheduleOptionField', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 
   it('enables long-press drag-and-drop move in every classroom', () => {
     // 開発用教室で先行後、全教室へ展開済み(オーナー指示 2026-06-28)。回帰で development-only へ戻さない。
     expect(featureRolloutRegistry.studentDragAndDropMove.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentDragAndDropMove', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 
   it('enables teacher drag-and-drop move in every classroom', () => {
     // 開発用教室で先行検証後、オーナー確定(2026-07-09)で全教室へ昇格。回帰で development-only へ戻さない。
     expect(featureRolloutRegistry.teacherDragAndDropMove.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('teacherDragAndDropMove', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 
   it('judges the staging environment by Firebase project id', () => {
@@ -56,15 +56,15 @@ describe('featureRollout', () => {
   it('enables schedule drag-and-drop (日程表コマ組み) in every classroom', () => {
     // staging→本番の開発用教室で段階検証後、オーナー確定(2026-07-09)で全教室へ展開。回帰で staging-environment へ戻さない。
     expect(featureRolloutRegistry.studentScheduleDndMove.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentScheduleDndMove', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 
   it('enables schedule popup auto-sync (自動同期+スピナー) in every classroom', () => {
     // コマ組みの移動結果反映に必要。コマ組みと同時に全教室へ展開(オーナー確定 2026-07-09)。回帰で戻さない。
     expect(featureRolloutRegistry.schedulePopupAutoSync.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('schedulePopupAutoSync', { id: 'classroom-1' }, 'main')).toBe(true)
   })
 })
 
@@ -73,10 +73,10 @@ describe('featureRollout: boardOnlyScheduleCells（日程表を盤面そのま�
     // 開発用教室で先行(v1.5.472)→ オーナー確定で全教室へ昇格(2026-08-07)。
     // 回帰で development-only へ戻さない。戻すと「盤面にあるのに日程表に無い」が再発する。
     expect(featureRolloutRegistry.boardOnlyScheduleCells.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-2', name: 'スクールIE 緑が丘校' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3', name: 'スクールIE 薬円台校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-2' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { id: 'classroom-3' }, 'main')).toBe(true)
   })
 })
 
@@ -85,10 +85,10 @@ describe('featureRollout: boardPrintSelection（盤面PDFのコマ選択）', ()
     // 開発用教室で先行検証後、オーナー指示(2026-09-13)で全教室へ昇格。回帰で development-only へ戻さない
     // (戻すと本番教室の「PDF出力」がコマ選択モーダルなしの即出力に退行する)。
     expect(featureRolloutRegistry.boardPrintSelection.scope).toBe('all-classrooms')
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-2', name: 'スクールIE 緑が丘校' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-3', name: 'スクールIE 薬円台校' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-2' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: 'classroom-3' }, 'main')).toBe(true)
   })
 })
 
@@ -103,7 +103,7 @@ describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバ�
     const start = serverSource.indexOf('export function isParentPortalEnabledForClassroom')
     expect(start).toBeGreaterThan(-1)
     const body = serverSource.slice(start, start + 400)
-    expect(body).toContain('isDevelopmentClassroomIdentity(identity.workspaceKey, identity.id)')
+    expect(body).toContain('isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })')
     expect(body).toContain('PARENT_PORTAL_STAGING_PROJECT_ID')
     // 本番教室 ID の直接許可(片側だけ広い形)を復活させていないこと。
     expect(body).not.toContain('v8OZ7zH8vONNHjjYVcR1')
@@ -112,10 +112,10 @@ describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバ�
   })
 
   it('本番3教室では無効・開発用/テスト教室では有効', () => {
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai', name: 'テスト教室' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
     for (const [id, name] of [['5w5OMueETerSKrSf14HC', 'スクールIE 日大前校'], ['KzFnOQoTFLsCxwUp1tvh', 'スクールIE 緑が丘校'], ['6xnnbSTbwgGrBLy0EJKb', 'スクールIE 薬円台校']]) {
-      expect(isFeatureEnabledForClassroom('parentPortalQr', { id, name }, 'main'), id).toBe(false)
+      expect(isFeatureEnabledForClassroom('parentPortalQr', { id }, 'main'), `${id} (${name})`).toBe(false)
     }
     expect(isFeatureEnabledForClassroom('parentPortalQr', null, 'main')).toBe(false)
   })
@@ -126,13 +126,19 @@ describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバ�
 // (講習履歴ボタンが消える・盤面ベース予定数が旧方式に戻る・AI 即答の表示が出ない)。
 describe('featureRollout: 教室の識別は ID（名前だけでは判定しない）', () => {
   it('名前だけを渡すと development-only 機能は無効・ID を渡せば有効', () => {
+    // ★`{ name: ... }` だけを渡す旧形は **型エラー**(DevelopmentClassroomIdentity に name は無い・2026-09-16)。
+    //   (下の) `@ts-expect-error` は「エラーが出なくなったら tsc が落ちる」ので、型に name を戻す回帰をここで検出する。
+    //   実行時の意味(名前一致では有効にならない)も同じ行で担保する。
+    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止)
     expect(isFeatureEnabledForClassroom('lessonHistory', { name: '開発用教室' }, 'main')).toBe(false)
     expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止)
     expect(isFeatureEnabledForClassroom('questionAiAnswer', { name: '開発用教室' }, 'main')).toBe(false)
     expect(isFeatureEnabledForClassroom('questionAiAnswer', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
   })
 
   it('all-classrooms の機能は教室・会社に関係なく有効のまま(昇格済みを巻き戻さない)', () => {
+    // @ts-expect-error 教室名だけの識別子は受け付けない(型で禁止・all-classrooms は識別子に関係なく true)
     expect(isFeatureEnabledForClassroom('boardOnlyScheduleCells', { name: 'スクールIE 日大前校' }, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('boardPrintSelection', { id: '5w5OMueETerSKrSf14HC' }, 'company-b')).toBe(true)
     expect(isFeatureEnabledForClassroom('studentDragAndDropMove', null, '')).toBe(true)
@@ -146,7 +152,7 @@ describe('featureRollout: テスト教室(sandbox)は development-only 機能の
   // これは CLAUDE.md「テスト教室は開発用に準じて扱う」とサーバー側の既存判定(AI 即答)に揃える意図的な決定。
   // 戻すときは台帳の kind で絞る(この期待値を黙って反転させない・CHANGELOG に記録あり)。
   it('テスト教室でも development-only 機能(盤面ベース予定数・講習履歴)が有効', () => {
-    const sandbox = { id: 'test_classroom_20260507_dai', name: 'テスト教室' }
+    const sandbox = { id: 'test_classroom_20260507_dai' }
     expect(isFeatureEnabledForClassroom('boardBasedPlannedCount', sandbox, 'main')).toBe(true)
     expect(isFeatureEnabledForClassroom('lessonHistory', sandbox, 'main')).toBe(true)
     // 別会社(workspaceKey 違い)では同じ ID でも無効(会社の壁)。
@@ -159,10 +165,10 @@ describe('featureRollout: lessonHistory（講習履歴）', () => {
     // 新機能はフラグ付きで作る方針(docs/plan-2026-09-11-five-requests.md)。まず開発用教室で先行検証する。
     // 昇格(all-classrooms)はオーナー確認後。ここを勝手に広げないこと。
     expect(featureRolloutRegistry.lessonHistory.scope).toBe('development-only')
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-1', name: 'スクールIE 日大前校' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-2', name: 'スクールIE 緑が丘校' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-3', name: 'スクールIE 薬円台校' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-1' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-2' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('lessonHistory', { id: 'classroom-3' }, 'main')).toBe(false)
   })
 })
 
@@ -170,16 +176,16 @@ describe('featureRollout: parentPortalQr（開発用教室・staging での有�
   it('開発用/テスト教室では有効・本番3教室では無効(台帳から外せば両側同時に無効になる)', () => {
     // docs/spec-parent-portal.md §H: 公開順は 開発用教室 → staging → 本番1教室 → 全教室。
     // 昇格はサーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom と同時に、オーナー確認後に行う。
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai', name: 'テスト教室' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
     // ★2026-09-16 仕様変更: 判定は【教室ID】。教室名を変えても有効のまま(逆に、名前だけ合わせても有効にならない)。
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '名前を変えた教室' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
     // ★他社(別 workspace)の同じ教室ID・同じ名前では有効にならない(会社の壁)。
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室' }, 'company-b')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'classroom-9', name: '開発用教室' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '5w5OMueETerSKrSf14HC', name: 'スクールIE 日大前校' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'KzFnOQoTFLsCxwUp1tvh', name: 'スクールIE 緑が丘校' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '6xnnbSTbwgGrBLy0EJKb', name: 'スクールIE 薬円台校' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'company-b')).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'classroom-9' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('parentPortalQr', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
     expect(isFeatureEnabledForClassroom('parentPortalQr', null, 'main')).toBe(false)
   })
 

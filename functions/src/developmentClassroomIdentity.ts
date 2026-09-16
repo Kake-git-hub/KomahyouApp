@@ -19,12 +19,24 @@
 // (片方だけ広げると 2026-07-09 のQR混入事故が再発する)。
 import { isRegisteredDevelopmentClassroom, resolveDevelopmentClassroomId } from './generated/developmentClassroomRegistry'
 
+/**
+ * 判定に渡す識別情報。**名前付き引数(オブジェクト)**にしてある(2026-09-16 レビュー指摘の是正)。
+ *
+ * ★なぜオブジェクトか(回帰防止): 旧シグネチャは `(workspaceKey: string, id: string)` の同型 2 引数で、
+ *   呼び出し側が順序を取り違えても**型エラーにならず静かに false** を返した(＝検証用教室の特権・
+ *   開発用教室限定機能・保護者ポータルが理由不明のまま無効になり、原因追跡が難しい)。
+ *   キー名を必須にして、取り違えをコンパイル時に落とす。位置引数へ戻さない。
+ */
+export type DevelopmentClassroomLookup = {
+  /** 会社 = workspace のキー(`workspaces/{workspaceKey}`)。 */
+  workspaceKey: string | null | undefined
+  /** Firestore の教室ドキュメントID。 */
+  classroomId: string | null | undefined
+}
+
 /** その会社(workspaceKey)で登録済みの検証用教室か。未登録・別会社・空文字は false(fail-closed)。 */
-export function isDevelopmentClassroomIdentity(
-  workspaceKey: string | null | undefined,
-  id: string | null | undefined,
-): boolean {
-  return isRegisteredDevelopmentClassroom(workspaceKey, id)
+export function isDevelopmentClassroomIdentity({ workspaceKey, classroomId }: DevelopmentClassroomLookup): boolean {
+  return isRegisteredDevelopmentClassroom(workspaceKey, classroomId)
 }
 
 /** その会社の「開発用教室」の教室ID(kind='development')。未登録の会社は null。 */

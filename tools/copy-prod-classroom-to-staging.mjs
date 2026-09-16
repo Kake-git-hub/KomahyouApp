@@ -23,8 +23,7 @@
 // 1件ずつ逐次リクエストになり、数分〜十数分「無出力で止まって見える」原因になっていた。
 
 import { execSync } from 'node:child_process'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 const SOURCE_PROJECT = 'komahyouapp-prod'
 const DEST_PROJECT = 'komahyouapp-staging'
@@ -242,7 +241,7 @@ async function main() {
   console.log(`== 完了: copied=${stats.copied} deleted=${stats.deleted} skipped(saveAttempts等)=${stats.skipped} ==`)
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = isInvokedDirectly(import.meta.url)
 if (invokedDirectly) {
   const options = parseArgs(process.argv.slice(2))
   const errors = validateArgs(options)

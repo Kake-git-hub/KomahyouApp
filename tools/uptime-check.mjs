@@ -14,7 +14,7 @@
 // GITHUB_STEP_SUMMARY / GITHUB_OUTPUT(report) に書く。
 
 import { appendFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 const TARGETS = [
   { name: 'prod', base: 'https://komahyouapp-prod.web.app' },
@@ -128,6 +128,6 @@ async function main() {
 }
 
 // CLI として直接実行されたときだけ監視を走らせる(テストから import しても実行されない)。
-if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isInvokedDirectly(import.meta.url)) {
   await main()
 }

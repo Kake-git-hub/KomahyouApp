@@ -14,6 +14,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from '../../tools/invoked-directly.mjs'
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDir, '..', '..')
@@ -94,7 +95,7 @@ function writeIfChanged(outputRelativePath, generated) {
   return true
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = isInvokedDirectly(import.meta.url)
 if (invokedDirectly) {
   try {
     syncShared()
