@@ -18,6 +18,7 @@
 - docs: マルチテナント(会社=workspace)の境界仕様を新設(会社の壁/開発用教室レジストリ/越境ガード/ツールの棟指定必須・Phase 0 T0-1) (docs/spec-multi-tenant.md, docs/spec-index.md)
 - docs: 複数会社展開計画の残判断点を確定(方式B 上流フォーク・複製は2社目の要望を見てから／Phase 0→1 を今から着手) (docs/plan-2026-09-15-multi-company-architecture.md §9)
 - chore: 複数会社展開 Phase 0 T0-4・運用ツール(tools/*.mjs)の workspace 既定値 'main' を廃止し `--workspace` を必須化(6-1/6-12 の是正)。`copy-prod-classroom-to-staging.mjs` は既定教室(日大前)も廃止し `--classroom` 必須に。vitest の import で main() が走らないよう shebang を除去し invokedDirectly ガードを追加、呼び出し側(functions-logs.yml・docs)も追随 (tools/copy-prod-classroom-to-staging.mjs, tools/lesson-history-diagnose.mjs, tools/lesson-ledger-report.mjs, tools/verification-checklist-report.mjs, tools/firebase-first-classroom-helper.mjs, .github/workflows/functions-logs.yml, docs/handoff-popup-sync-and-dnd.md, docs/spec-save-restore.md)
+- fix: テナント(会社=workspace)越境ガードを追加 — 開発者会員の callable は教室 doc の実在を確認してから通す(別会社/存在しない教室 ID の素通りを封鎖・functions/src/classroomAccess.ts・functions/src/index.ts requireClassroomAccessMember)。配布用盤面の共有ドキュメントに workspaceKey を書き足し(読みは無改変・src/integrations/firebase/boardShare.ts)、Firestore ルールに会社越境の遮断テストを追加(firebase/rules/firestore.rules.test.ts)
 
 ## v1.5.532 (2026-09-16)
 

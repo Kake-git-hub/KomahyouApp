@@ -55,6 +55,7 @@ import {
   toMonthKeyFromDateKey,
 } from './monthlyStudentCount'
 import { resolveOptimisticVersionDecision, STALE_SNAPSHOT_ERROR_MARKER } from './optimisticVersion'
+import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
@@ -1261,7 +1262,18 @@ async function requireClassroomAccessMember(authUid: string | undefined, workspa
   }
 
   const member = memberSnapshot.data() as { role?: string; assignedClassroomId?: string | null } | undefined
-  if (member?.role !== 'developer' && member?.assignedClassroomId !== classroomId) {
+  // ⚠️ テナント(会社=workspace)越境ガード(2026-09-16・Phase 0 / T0-3): developer は以前 classroomId を
+  // まったく検証していなかったため、別会社の教室 ID・存在しない ID でも通過していた。developer 経路だけ
+  // 教室ドキュメントの存在を確認する(manager 経路は assignedClassroomId で既に会社内に束縛されており、
+  // 読み取りを増やすと全教室の保存コストが上がるので無改変)。判定規則は classroomAccess.ts(純関数)。
+  const classroomExists = requiresClassroomExistenceCheck(member)
+    ? (await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(classroomId).get()).exists
+    : undefined
+  const decision = resolveClassroomAccessDecision(member, classroomId, classroomExists)
+  if (!decision.allowed) {
+    if (decision.reason === 'classroom-not-found') {
+      throw new HttpsError('not-found', 'この教室はこのワークスペースに存在しません。')
+    }
     throw new HttpsError('permission-denied', 'この教室を保存する権限がありません。')
   }
 

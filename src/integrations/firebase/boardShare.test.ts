@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SlotCell } from '../../components/schedule-board/types'
-import { compactBoardSharePayload } from './boardShare'
+import { buildBoardShareDocBase, compactBoardSharePayload, type BoardSharePayload } from './boardShare'
 
 describe('compactBoardSharePayload', () => {
   it('keeps board-share display fields and removes bulky board-only data', () => {
@@ -103,5 +103,41 @@ describe('compactBoardSharePayload', () => {
     const compactJson = JSON.stringify(compactPayload)
     expect(compactJson).not.toContain(largeText)
     expect(compactJson.length).toBeLessThan(JSON.stringify({ cells: [sourceCell] }).length / 4)
+  })
+})
+describe('buildBoardShareDocBase(配布用盤面ドキュメントの土台)', () => {
+  const compacted: BoardSharePayload = {
+    schemaVersion: 1,
+    token: 'share-token',
+    classroomId: 'classroom-1',
+    classroomName: 'スクールIE 緑が丘校',
+    sharedAt: '2026-09-16T00:00:00.000Z',
+    cells: [],
+    externalStudentIds: ['s2', 's1', 's1', ''],
+  }
+
+  // boardShares はワークスペース外のトップレベルコレクション。会社を跨いで教室 ID が衝突しうるため
+  // 「どの会社の共有か」を書き残す(複数会社展開 Phase 0 / T0-3)。読みは無改変。
+  it('workspaceKey を書き足す', () => {
+    expect(buildBoardShareDocBase(compacted, 'main')).toMatchObject({ workspaceKey: 'main', classroomId: 'classroom-1' })
+  })
+
+  it('workspaceKey が空(env 未設定)なら書かない(空文字を保存しない)', () => {
+    expect('workspaceKey' in buildBoardShareDocBase(compacted, '')).toBe(false)
+    expect('workspaceKey' in buildBoardShareDocBase(compacted, '   ')).toBe(false)
+  })
+
+  it('既存フィールド(識別子と正規化)を落とさない', () => {
+    const base = buildBoardShareDocBase(compacted, ' other ')
+    expect(base).toMatchObject({
+      schemaVersion: 1,
+      token: 'share-token',
+      classroomId: 'classroom-1',
+      classroomName: 'スクールIE 緑が丘校',
+      sharedAt: '2026-09-16T00:00:00.000Z',
+      workspaceKey: 'other',
+      externalStudentIds: ['s1', 's2'],
+    })
+    expect(base.groupClassEntries).toEqual({})
   })
 })
