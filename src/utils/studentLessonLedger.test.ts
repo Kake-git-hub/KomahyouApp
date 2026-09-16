@@ -204,3 +204,20 @@ describe('台帳の送信間引き', () => {
     expect(toJstDateKey('2026-09-03T14:59:00.000Z')).toBe('2026-09-03')
   })
 })
+
+// 休日設定で残る表示専用の記録(status='holiday'・2026-09-16)は、授業でも在庫でもないので台帳に載せない
+// (載せると実績が湧き、請求・通常授業履歴が実配置とズレる＝INV-06 と同型の誤増)。
+// ★修正なし(else-if の外に落ちる)でも通るように見えるが、else で拾う「改善」を入れた瞬間に落ちる番人。
+describe('buildStudentLessonLedger: 休日記録(holiday)は台帳に載せない', () => {
+  it('holiday は出席・休み・振無休のどれにも入らない(moved と同じ側)', () => {
+    const weeks: SlotCell[][] = [[
+      cell('2026-09-01', 1, [{ id: 'd1', teacher: '講師A', statusSlots: [statusEntry('attended', '2026-09-01', 1), null] }]),
+      cell('2026-09-02', 2, [{ id: 'd2', teacher: '講師A', statusSlots: [statusEntry('holiday', '2026-09-02', 2), null] }]),
+      cell('2026-09-03', 3, [{ id: 'd3', teacher: '講師A', statusSlots: [statusEntry('moved', '2026-09-03', 3), null] }]),
+    ]]
+    const row = buildStudentLessonLedger({ payload: buildPayload(weeks), now: NOW })!.rows[0]
+    expect(row.attended).toEqual(['2026-09-01#1|regular'])
+    expect(row.absent).toEqual([])
+    expect(row.absentNoMakeup).toEqual([])
+  })
+})

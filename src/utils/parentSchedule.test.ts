@@ -953,3 +953,38 @@ describe('parentSchedule.ts の自己完結', () => {
     expect(first).toBe(second)
   })
 })
+
+// 休日設定で残る表示専用の記録(status='holiday'・2026-09-16)。保護者ページは moved と同じく
+// **行として出さない**(その日は holidayDates 由来の「教室休み」行が出る)。出すと「授業がある」と誤解させる。
+// ★修正なし(holiday を special の除外に足さない)では講習の印(hasLectureLessons)が true になって落ちる。
+describe('buildParentScheduleView: 休日記録(holiday)は保護者ページに出さない', () => {
+  const range = { from: '2026-09-07', to: '2026-09-13' }
+  const withStatus = (status: string, lessonType: string) => {
+    const payload = clonePayload()
+    const week = (payload.boardState?.weeks[0] ?? []) as SlotCell[]
+    const target = week.find((cell) => cell.id === '2026-09-08_3')
+    target!.desks[0] = {
+      ...target!.desks[0],
+      lesson: undefined,
+      statusSlots: [
+        { id: 'status-holiday', studentId: 'x1', sourceManagedLesson: false, name: '青木', managedStudentId: 's001', grade: '中3', subject: '数', lessonType, teacherType: 'normal', teacherName: '田中', dateKey: '2026-09-08', slotNumber: 3, recordedAt: '', status, sourceLessonId: '' } as never,
+        null,
+      ],
+    }
+    return buildView('s001', range, payload)
+  }
+
+  it('通常授業の休日記録は行にならない(moved と同じ扱い)', () => {
+    const holidayLessons = withStatus('holiday', 'regular').days.find((day) => day.dateKey === '2026-09-08')?.lessons ?? []
+    expect(holidayLessons.some((lesson) => lesson.slotNumber === 3)).toBe(false)
+    // 比較: 休み(absent)なら同じ場所に「お休み」の行が出る(ガードを広げすぎていない)。
+    const absentLessons = withStatus('absent', 'regular').days.find((day) => day.dateKey === '2026-09-08')?.lessons ?? []
+    expect(absentLessons.some((lesson) => lesson.slotNumber === 3)).toBe(true)
+  })
+
+  it('講習の休日記録は「講習あり」の印にも数えない(在庫へ返却済み＝実施されない)', () => {
+    expect(withStatus('holiday', 'special').hasLectureLessons).toBe(false)
+    // 比較: 出席/休みは従来どおり数える(ガードを広げすぎていない)
+    expect(withStatus('attended', 'special').hasLectureLessons).toBe(true)
+  })
+})

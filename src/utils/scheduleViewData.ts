@@ -301,8 +301,18 @@ export type StudentScheduleEntry = {
   lesson: SerializedStudentEntry | SerializedStudentStatusEntry
 }
 
-// 注: 埋め込みJS版は statuses の status==='moved' を再度除外するが、SerializedCell は
-// serializeCells の時点で moved を除外済みのため、payload 入力のここでは再チェック不要。
+// 「授業が実施されない/実施済みとして数えない」表示専用の出欠記録(埋め込みJS版 isRestRecordStatus と同じ)。
+// moved   … 別日へ移した通常授業の移動元(会計は移動先のコマが持つ)
+// holiday … 休日設定で消えたコマ(在庫は休日設定の時点で返却済み)
+// ★回数表(実績/予定)・講師日程のセル/ツールチップ/振替欄/給与・交通費からは**必ず除外**する。
+//   生徒日程表のセルにだけ「休 M/D」として描く(INV-05・INV-06)。
+export function isRestRecordStatus(status: string | undefined) {
+  return status === 'moved' || status === 'holiday'
+}
+
+// 注: 2026-09-16 から、機能フラグ transferSourceRestDisplay が ON の教室では statuses に moved が、
+// どの教室でも holiday が載る(serializeCells)。生徒側は**セルに「休」を描くために拾う**ので、
+// ここでは落とさない。回数に数えない責任は呼び出し側(buildStudentSheetViewModel)にある。
 export function buildStudentAssignments(cells: SerializedCell[]) {
   const map = new Map<string, StudentScheduleEntry[]>()
   cells.forEach((cell) => {
@@ -347,7 +357,10 @@ export function buildTeacherAssignments(cells: SerializedCell[]) {
   const map = new Map<string, TeacherScheduleEntry[]>()
   cells.forEach((cell) => {
     cell.desks.forEach((desk) => {
-      const statuses = (Array.isArray(desk.statuses) ? desk.statuses : []).filter((entry): entry is SerializedStudentStatusEntry => Boolean(entry))
+      // ★講師日程表は moved/holiday を一切見ない(セル・ツールチップ・振替欄・給与・交通費・回数)。
+      // ここで落とすことで下流すべてが自動的に除外される(個別の下流に条件を足して回すと必ず漏れる)。
+      const statuses = (Array.isArray(desk.statuses) ? desk.statuses : [])
+        .filter((entry): entry is SerializedStudentStatusEntry => Boolean(entry) && !isRestRecordStatus(entry?.status))
       if (!desk.teacher || (!desk.lesson && statuses.length === 0)) return
       const entry: TeacherScheduleEntry = { dateKey: cell.dateKey, slotNumber: cell.slotNumber, timeLabel: cell.timeLabel, students: desk.lesson ? desk.lesson.students : [], statuses, note: desk.lesson ? desk.lesson.note || '' : '' }
       const teacherKeys: string[] = []
@@ -616,9 +629,15 @@ function isStatusEntry(entry: SerializedStudentEntry | SerializedStudentStatusEn
 export function buildStudentCellCard(entry: SerializedStudentEntry | SerializedStudentStatusEntry): StudentCellCardData {
   const noteSuffix = 'noteSuffix' in entry ? entry.noteSuffix : undefined
   const subjectWithMinutes = entry.subject + formatScheduleMinutesSuffix(noteSuffix)
-  if (isStatusEntry(entry) && (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended')) {
+  // ★出欠記録のカードは **draggable にしない**(spec-student-schedule-dnd §C-1)。
+  //   moved(移動元)/holiday(休日記録)もここで記録カードとして返す。落とすと lessonType が 'regular' の
+  //   ため下の「掴める授業カード」側へ流れ、存在しない授業を掴めてしまう。
+  if (isStatusEntry(entry) && (entry.status === 'absent' || entry.status === 'absent-no-makeup' || entry.status === 'attended' || isRestRecordStatus(entry.status))) {
     const statusLabel = entry.status === 'attended' ? '出席' : entry.status === 'absent-no-makeup' ? '振無休' : '休'
-    const linkedDestinationLabel = entry.linkedDestinationDateKey ? formatMonthDay(entry.linkedDestinationDateKey) : ''
+    // 行き先は リンク解決 → 移動元マーカー自身の移動先 の順(リンクは移動先が表示範囲外だと付かない)。
+    const destinationDateKey = entry.linkedDestinationDateKey
+      || (entry.status === 'moved' ? entry.moveDestinationDateKey : '')
+    const linkedDestinationLabel = destinationDateKey ? formatMonthDay(destinationDateKey) : ''
     return {
       main: [statusLabel, linkedDestinationLabel].filter(Boolean).join(' '),
       sub: [subjectWithMinutes, scheduleLessonTypeLabels[entry.lessonType] || entry.lessonType].filter(Boolean).join(' / '),
@@ -918,6 +937,117 @@ export function collectStudentMakeupNotes(entries: StudentScheduleEntry[]) {
     if (note) notes.push(note)
     return notes
   }, [])
+}
+
+// ==== 振替欄(生徒日程表・D2 オーナー確定 2026-09-16) =========================================
+// 「科目 元 → 先」を **元コマ起点**に統一する(埋め込みJS版 collectStudentMakeupRows と同じ規則)。
+//   ①元起点 … 表示範囲内の 休み(absent) / 移動元(moved) / 休日記録(holiday) から1行ずつ。
+//              先は「リンク解決 → 未消化振替に残っていれば『未定』 → 移動元マーカー自身の移動先」の順。
+//   ②先起点 … 従来どおり、表示範囲内に**配置済みの振替コマ**から1行ずつ(元は makeupSourceLabel)。
+// ①②は同じ1件を逆から見たものなので **元コマ(科目+元日付+元時限)で重複排除**し、元日付昇順に並べる。
+// ★機能フラグ ON のときだけ使う。OFF は従来の collectStudentMakeupNotes(=②だけ)のまま。
+export const MAKEUP_DESTINATION_UNDECIDED = '未定'
+
+// 元コマの表記が同じか。時限が判らない旧ラベル('4/1')は同じ日付の行('4/1 1限')へ吸収する。
+function isSameMakeupOriginText(left: string, right: string) {
+  if (left === right) return true
+  return left.indexOf(`${right} `) === 0 || right.indexOf(`${left} `) === 0
+}
+
+// 振替先の表記。時限が判れば '4/8 3限'、判らなければ '4/8'(振替欄は枠が狭いので年・曜日は出さない)。
+function compactMakeupDestination(dateKey: string | undefined, slotNumber: number | undefined) {
+  if (!dateKey) return ''
+  if (slotNumber === 0 || slotNumber) return compactMakeupDateSlot(dateKey, slotNumber)
+  const date = new Date(`${dateKey}T00:00:00`)
+  return `${date.getMonth() + 1}/${date.getDate()}`
+}
+
+// 未消化振替一覧(盤面の在庫の正本)にその元コマが残っているか＝振替先がまだ決まっていないか。
+// 生徒の照合規則は回数表(buildOutstandingAbsenceCountMap)と揃える。科目は学年による表記ゆれを吸収する。
+export function hasOutstandingMakeupOrigin(
+  payload: SchedulePayload,
+  student: SerializedStudent,
+  subject: string,
+  dateKey: string,
+  slotNumber: number | null | undefined,
+  referenceDate: string,
+) {
+  const origins = Array.isArray(payload.outstandingMakeupOrigins) ? payload.outstandingMakeupOrigins : []
+  const normalizedSubject = normalizeSubjectForStudent(subject, student, referenceDate)
+  return origins.some((origin) => {
+    if (!origin || origin.dateKey !== dateKey) return false
+    if (!(origin.studentKey === student.id || origin.studentName === student.name || origin.studentName === student.fullName)) return false
+    if (normalizeSubjectForStudent(origin.subject, student, referenceDate) !== normalizedSubject) return false
+    // 時限が判らない側はワイルドカード(日付だけで一致とみなす)。
+    if (origin.slotNumber != null && slotNumber != null && origin.slotNumber !== slotNumber) return false
+    return true
+  })
+}
+
+type MakeupRow = { subject: string; originText: string; originSortKey: string; destinationText: string }
+
+export function collectStudentMakeupRows(
+  payload: SchedulePayload,
+  entries: StudentScheduleEntry[],
+  student: SerializedStudent,
+  referenceDate: string,
+) {
+  const rows: MakeupRow[] = []
+  const pushRow = (row: MakeupRow) => {
+    for (let index = 0; index < rows.length; index += 1) {
+      const current = rows[index]!
+      if (current.subject !== row.subject) continue
+      if (!isSameMakeupOriginText(current.originText, row.originText)) continue
+      // 同じ元コマ。行き先が確定している方を残す(「未定」で上書きしない)。
+      if (current.destinationText === MAKEUP_DESTINATION_UNDECIDED && row.destinationText !== MAKEUP_DESTINATION_UNDECIDED) rows[index] = row
+      return
+    }
+    rows.push(row)
+  }
+
+  ;(entries || []).forEach((entry) => {
+    const lesson = entry.lesson
+    if (!lesson || !isStatusEntry(lesson)) return
+    if (lesson.lessonType === 'special' || lesson.lessonType === 'trial') return
+    if (lesson.status !== 'absent' && !isRestRecordStatus(lesson.status)) return
+    // 元が振替コマの記録は、元の通常授業日の記録が行を出すのでここでは出さない。
+    if (lesson.makeupSourceDate && lesson.makeupSourceDate !== entry.dateKey) return
+    let destinationText = compactMakeupDestination(lesson.linkedDestinationDateKey, lesson.linkedDestinationSlotNumber)
+    if (!destinationText && hasOutstandingMakeupOrigin(payload, student, lesson.subject, entry.dateKey, entry.slotNumber, referenceDate)) {
+      destinationText = MAKEUP_DESTINATION_UNDECIDED
+    }
+    if (!destinationText && lesson.status === 'moved') {
+      destinationText = compactMakeupDestination(lesson.moveDestinationDateKey, lesson.moveDestinationSlotNumber)
+    }
+    if (!destinationText) destinationText = MAKEUP_DESTINATION_UNDECIDED
+    pushRow({
+      subject: lesson.subject,
+      originText: compactMakeupDateSlot(entry.dateKey, entry.slotNumber),
+      originSortKey: `${entry.dateKey}#${entry.slotNumber}`,
+      destinationText,
+    })
+  })
+
+  ;(entries || []).forEach((entry) => {
+    const lesson = entry.lesson
+    if (!lesson || lesson.lessonType !== 'makeup') return
+    if (isStatusEntry(lesson) && (lesson.status === 'absent' || lesson.status === 'absent-no-makeup')) return
+    if (isStatusEntry(lesson) && isRestRecordStatus(lesson.status)) return
+    if (!lesson.makeupSourceLabel) return
+    pushRow({
+      subject: lesson.subject,
+      originText: compactMakeupSourceLabel(lesson.makeupSourceLabel),
+      // 元日付を持たない旧データは先頭に寄せる(並べ替えのためだけのキー)。
+      originSortKey: `${lesson.makeupSourceDate || ''}#`,
+      destinationText: compactMakeupDateSlot(entry.dateKey, entry.slotNumber),
+    })
+  })
+
+  rows.sort((left, right) => {
+    if (left.originSortKey !== right.originSortKey) return left.originSortKey < right.originSortKey ? -1 : 1
+    return String(left.subject).localeCompare(String(right.subject), 'ja')
+  })
+  return rows.map((row) => [row.subject, row.originText, '→', row.destinationText].filter(Boolean).join(' '))
 }
 
 export function collectTeacherMakeupNotes(entries: TeacherScheduleEntry[]) {
@@ -1327,9 +1457,14 @@ export function buildStudentSheetViewModel(payload: SchedulePayload, options: Bu
   const regularCountAdjustments = buildStudentCountAdjustmentMap(payload, student, startDate, endDate, 'regular')
   const lectureCountAdjustments = buildStudentCountAdjustmentMap(payload, student, startDate, endDate, 'special')
   const absenceNotes = collectStudentAbsenceNotes(filteredCells, student)
-  const makeupNotes = collectStudentMakeupNotes(entries)
+  // 振替欄: フラグ ON は元コマ起点に統一した新方式、OFF は従来どおり配置済み振替コマ起点だけ。
+  const makeupNotes = payload.transferSourceRestDisplayEnabled
+    ? collectStudentMakeupRows(payload, entries, student, startDate)
+    : collectStudentMakeupNotes(entries)
   entries.forEach((entry) => {
     if (isStatusEntry(entry.lesson) && entry.lesson.status === 'absent') return
+    // ★moved(移動元)/holiday(休日記録)は実績ではない(INV-05: 回数表示の実配置一致)。
+    if (isStatusEntry(entry.lesson) && isRestRecordStatus(entry.lesson.status)) return
     if (entry.lesson.lessonType === 'special') {
       lectureCounts[entry.lesson.subject] = (lectureCounts[entry.lesson.subject] || 0) + 1
       const normalizedSubject = normalizeSubjectForStudent(entry.lesson.subject, student, startDate)

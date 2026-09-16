@@ -19,10 +19,16 @@ export function shouldHighlightStudentName(params: {
   return Boolean((params.warningUnavailableHighlight && params.warning) || params.missingTeacherWarning)
 }
 
-function getStudentStatusLabel(status: StudentStatusKind) {
+// 出欠記録の短縮ラベル(セル内の「氏名(◯」の◯)。
+// ★moved は機能フラグ transferSourceRestDisplay が ON の教室で「休」と出す(オーナー確定 2026-09-16:
+//   室長・講師にとって移動元は「その日は休み」なので、内部種別(moved)ではなく体験で揃える)。
+//   **表示だけの置き換え**で、記録の種別・在庫会計は moved のまま(INV-06)。OFF の教室は従来の「移」。
+// ★holiday(休日設定で消えたコマの表示専用記録)はフラグに依らず常に「休」。
+export function getStudentStatusLabel(status: StudentStatusKind, transferSourceRestDisplayEnabled = false) {
   if (status === 'attended') return '出'
   if (status === 'absent-no-makeup') return '振無休'
-  if (status === 'moved') return '移'
+  if (status === 'holiday') return '休'
+  if (status === 'moved') return transferSourceRestDisplayEnabled ? '休' : '移'
   return '休'
 }
 
@@ -213,6 +219,9 @@ type BoardGridProps = {
   // spec-group-lesson §A: 集団行のセル操作。空の科目セル→科目ピッカー、科目入り→メニュー(出席者一覧/削除)、講師セル→講師ピッカー。
   onGroupSubjectClick?: (dateKey: string, band: GroupClassBand, hasSubject: boolean, x: number, y: number) => void
   onGroupTeacherClick?: (dateKey: string, band: GroupClassBand, hasEntry: boolean, x: number, y: number) => void
+  // 振替元「休)」表示(2026-09-16・機能フラグ transferSourceRestDisplay)。ON のとき移動元マーカー(moved)を
+  // 「移」ではなく「休」と表示する。表示だけの切り替えで記録・在庫会計は不変。
+  transferSourceRestDisplayEnabled?: boolean
 }
 
 function BoardGridComponent({
@@ -236,6 +245,7 @@ function BoardGridComponent({
   onTeacherMouseDown,
   onGroupSubjectClick,
   onGroupTeacherClick,
+  transferSourceRestDisplayEnabled = false,
 }: BoardGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null)
   const linkedLessonDestinationByStatusId = useMemo(
@@ -296,7 +306,7 @@ function BoardGridComponent({
     const effectiveTeacherType = studentName ? teacherType : (statusEntry?.teacherType ?? teacherType)
     const effectiveMakeupSourceDate = studentName ? makeupSourceDate : (statusEntry?.makeupSourceDate ?? makeupSourceDate)
     const effectiveMakeupSourceLabel = studentName ? makeupSourceLabel : (statusEntry?.makeupSourceLabel ?? makeupSourceLabel)
-    const statusLabel = statusEntry ? getStudentStatusLabel(statusEntry.status) : ''
+    const statusLabel = statusEntry ? getStudentStatusLabel(statusEntry.status, transferSourceRestDisplayEnabled) : ''
     const resolvedLessonType = effectiveName ? resolveDisplayedLessonType(effectiveName, effectiveSubject, effectiveLessonType, cell.dateKey, cell.slotNumber) : effectiveLessonType
     const isExternalStudent = Boolean(effectiveName) && Boolean(isExternalStudentName?.(effectiveName))
     const lessonPrefix = resolvedLessonType ? getLessonPrefix(resolvedLessonType, isExternalStudent) : null
@@ -329,7 +339,7 @@ function BoardGridComponent({
     const memoText = hasMemo ? (memoLabel ?? '').replace(/\r/g, '').split('\n').slice(0, 2).join('\n') : ''
     const memoNotice = hasMemo ? '手入力メモのため注意' : undefined
     const statusNotice = statusEntry
-      ? [getStudentStatusLabel(statusEntry.status), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
+      ? [getStudentStatusLabel(statusEntry.status, transferSourceRestDisplayEnabled), lessonTypeLabels[statusEntry.lessonType], resolveDisplayedSubjectForGrade(statusEntry.subject, statusEntry.grade), statusEntry.teacherName].filter(Boolean).join(' / ')
       : undefined
     const originalLessonLabel = effectiveMakeupSourceLabel && (
       resolvedLessonType === 'makeup'

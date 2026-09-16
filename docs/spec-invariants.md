@@ -400,6 +400,33 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
 - **層**：強制。
 - **明示操作の定義**：配置・登録による**消化＝正**。リロード／ロールバック／テンプレ上書き／凍結境界による
   増減は**違反**。誤増（消化済みの再出現）も違反。
+- **会計を持たない記録種別（2026-09-16 オーナー確定・補記）**：`statusSlots` の `moved`（別日へ移動した元コマの
+  マーカー）と `holiday`（休日設定で消えた授業の**表示専用**記録・2026-09-16 新設）は、**在庫会計の対象外**。
+  `moved` の会計は移動先の振替コマが持ち、`holiday` は休日設定時の `reconcileHolidayDeskStockReturns` で
+  会計が済んでいる。**`holiday` は `moved` と完全に同じ側**に置く。
+  - ★**表示だけ「休)」にして記録種別を `absent` に作り替えない理由**：本物の欠席にすると、同じ 1 コマが
+    「移動先の振替コマ」「休日設定で返した在庫」と**二重計上**になる（誤増）。オーナー要望は「移動元・
+    丸ごと振替した日・休日設定した日も休みとして見えること」なので、**表示ラベルの差し替えで満たす**
+    （仕様本文は `docs/spec-makeup-stock.md` §3-1 / §B-2-2c / §B-2-3）。
+  - **`holiday` を `moved` と同じ側に入れるガード箇所**（追加・変更時はこの一覧を更新する）：
+    `makeupStock.ts`（origin 収集・消化・格納・確定判定）／`lessonLinks.ts`（**振替先にしない**・起点には使う）／
+    `studentLessonLedger.ts`（台帳に載せない）／`parentSchedule.ts` ＋ `functions/src/generated/` の複製
+    （行に出さない・parity テストが門番）／`scheduleHtml.ts`・`scheduleViewData.ts`（回数表・講師日程表・
+    給与／交通費・「出欠済み」判定から除外）／`pdf.ts`／`BoardGrid`・`BoardShareScreen`
+    （表示ラベルのみ）／`ScheduleBoardScreen.tsx` の `HOLIDAY_STOCK_RETURNABLE_STATUSES`（**入れない**）・
+    `resolveMakeupStatusOriginToMaterialize`（確定対象外）・`materializeDisplacedStatusEntryIntoLedgers`
+    （触らない）・`handleClearStudentStatus`（記録を消すだけで台帳を触らない）・
+    `computeOutstandingAbsenceOrigins`（数えない）・`collectClearedDayMakeupSuppressions`（抑制を積まない）・
+    `disposeDayDeskEntries`（**処分対象にしない**＝件数にも希望回数 −1 にも入れない。`moved` も同じ）。
+    - `operationTrace.ts` は**表示のみ・変更不要**（盤面差分の要約に名前を出すだけで会計に触れない）。
+  - ★`holiday` の**会計ガードと表示は機能フラグ（`transferSourceRestDisplay`）に依らず常に有効**にする。
+    フラグが切り替えるのは「記録を作るか・どう見せるか」だけで、**既に存在するデータの扱いは切り替えない**
+    （フラグを戻した教室で在庫・回数が狂わないため）。
+  - **この改定の回帰固定**：丸ごと振替の記録保持は `inv06-whole-day-transfer.matrix.test.ts`、休日設定の記録変換は
+    新設の `inv06-holiday-record-retention.matrix.test.ts`（変換規則を 1 行ずつ・`ledgers` が ON/OFF で完全一致・
+    holiday 解除は配置を戻さない）で固定し、既存の `inv06-holiday-stock-reconciliation.matrix.test.ts` は改変しない。
+    **どちらも「台帳（`ledgers`）が不変であること」を既存 assert のまま維持**する（記録を残す改定で在庫が動いたら
+    それ自体が INV-06 違反）。表示ラベル・フラグ scope は `transferSourceRestDisplay.test.ts` で固定。
 - **違反履歴**（transcribe）：
   - makeup-stock-miscount 群（残数が実態と食い違う）：
     - `a12ee32` / v1.5.65 … stale closure 二重減算。

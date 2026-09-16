@@ -158,6 +158,8 @@ const resolveStudentKey = (entry: StudentEntry) => entry.managedStudentId ?? ent
 function runTransferWeeks(weeks: SlotCell[][], params: {
   settings?: ClassroomSettings
   manualAdjustments?: Record<string, ManualMakeupOrigin[]>
+  /** D4(2026-09-16): 振替元の通常授業に移動元記録(moved)を残すか。既定 false＝機能フラグ OFF の従来動作。 */
+  leaveSourceRestMarkers?: boolean
 } = {}) {
   const settings = params.settings ?? createSettings()
   const manualAdjustments = params.manualAdjustments ?? {}
@@ -190,6 +192,7 @@ function runTransferWeeks(weeks: SlotCell[][], params: {
     resolveDisplayName: (name: string) => name,
     resolveStockId: resolveStudentKey,
     ledgerOriginDatesByKey,
+    leaveSourceRestMarkers: params.leaveSourceRestMarkers ?? false,
   })
   if (result.status !== 'transferred') return { result, balance: null, sourceDesk: null, targetDesk: null }
   const balanceEntries = buildMakeupStockEntries({
@@ -217,10 +220,11 @@ function runTransfer(params: {
   targetDesk: DeskCell
   settings?: ClassroomSettings
   manualAdjustments?: Record<string, ManualMakeupOrigin[]>
+  leaveSourceRestMarkers?: boolean
 }) {
   return runTransferWeeks(
     [[dayCell(SOURCE_DATE, params.sourceDesk), dayCell(TARGET_DATE, params.targetDesk)]],
-    { settings: params.settings, manualAdjustments: params.manualAdjustments },
+    { settings: params.settings, manualAdjustments: params.manualAdjustments, leaveSourceRestMarkers: params.leaveSourceRestMarkers },
   )
 }
 
@@ -774,6 +778,49 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       expect(result.nextScheduleCountAdjustments).toHaveLength(1)
       expect(result.nextScheduleCountAdjustments[0]?.delta).toBe(-1)
     })
+
+    // 【INV-05/INV-06・2026-09-16 監査で是正】会計を持たない**表示専用の記録**は処分対象ではない。
+    //   holiday … 休日設定の時点で在庫へ返却済み。ここで更に「削除された授業」として希望回数 −1 すると
+    //             同じ1コマが二重処分になる(休日設定 → 休日解除 → 全コマ削除 で再現)。
+    //   moved   … 会計は移動先の振替コマが持つ。−1 すると「移動しただけで予定数が減る」。
+    //             ★これは機能フラグ OFF の経路にも元からあったバグ(別日D&D → その日を全コマ削除)。
+    // ★丸ごと振替 Phase A(振替先の処分)と「その日の生徒を全コマ削除」が共有する関数なので、
+    //   ここが崩れると両方の操作で在庫/回数がズレる。
+    it('★表示専用の記録(holiday / moved)は処分対象にしない（counts・希望回数・抑止のどれにも入れない）', () => {
+      for (const status of ['holiday', 'moved'] as const) {
+        const desk: DeskCell = {
+          id: 'desk-1',
+          teacher: '田中講師',
+          statusSlots: [boardStatus({ status, lessonType: 'regular', dateKey: TARGET_DATE }), null],
+        }
+        const result = disposeDayDeskEntries({ ...baseParams, desk, suppressClearedRegularOccurrences: true })
+        expect(result.counts.clearedEntryCount, status).toBe(0)
+        expect(result.counts.clearedRegularCount, status).toBe(0)
+        expect(result.counts.returnedEntryCount, status).toBe(0)
+        expect(result.nextScheduleCountAdjustments, status).toEqual([])
+        expect(result.nextSuppressedRegularLessonOccurrences, status).toEqual([])
+        expect(result.ledgers, status).toEqual(baseParams.ledgers)
+        // 記録そのものは処分操作で消える(従来どおり)。
+        expect(desk.statusSlots, status).toBeUndefined()
+      }
+    })
+
+    it('対照: 休み(absent)・出席(attended)の通常授業は従来どおり処分される（ガードを広げすぎていない）', () => {
+      for (const status of ['absent', 'attended'] as const) {
+        const desk: DeskCell = {
+          id: 'desk-1',
+          teacher: '田中講師',
+          statusSlots: [boardStatus({ status, lessonType: 'regular', dateKey: TARGET_DATE }), null],
+        }
+        const result = disposeDayDeskEntries({ ...baseParams, desk, suppressClearedRegularOccurrences: true })
+        expect(result.counts.clearedEntryCount, status).toBe(1)
+        expect(result.counts.clearedRegularCount, status).toBe(1)
+        expect(result.nextScheduleCountAdjustments, status).toEqual([
+          { studentKey: 'student-1', subject: '数', countKind: 'regular', dateKey: TARGET_DATE, delta: -1 },
+        ])
+        expect(result.nextSuppressedRegularLessonOccurrences, status).toContain(`student-1__数__${TARGET_DATE}__5`)
+      }
+    })
   })
 
   describe('確認ダイアログ文面', () => {
@@ -871,5 +918,102 @@ describe('INV-06 マトリクス: 丸ごと振替', () => {
       if (outcome.result.status !== 'transferred') return
       expect(Object.keys(outcome.result.nextSuppressedMakeupOrigins)).toHaveLength(0)
     })
+  })
+})
+
+// ============================================================================
+// D4(オーナー確定 2026-09-16・機能フラグ transferSourceRestDisplay): 丸ごと振替は
+// **振替元の通常授業の生徒ごとに移動元記録(moved)を残す**。振替元の日を見たときに
+// 「休) → 先」で誰がどこへ移ったのかが分かるようにするための表示専用の記録。
+//
+// INV-06 との関係: moved は会計を持たない(消化・義務・台帳のいずれにも入らない)ので、
+// 上の「移送側は在庫中立」列はそのまま成立する。ここではそれを**記録を残した状態でも**固定する。
+// ★フラグ OFF(既定)では 1 件も記録を作らない＝この機能を入れる前と完全に同じ盤面になる。
+// ============================================================================
+describe('INV-06 マトリクス: 丸ごと振替の移動元記録(D4・振替元「休)」表示)', () => {
+  it('ON: 通常授業は振替元に moved 記録(移動先の日付/時限・移送前の講師名)が残る', () => {
+    const outcome = transferredOrThrow(runTransfer({
+      sourceDesk: deskWithStudent(boardStudent({ lessonType: 'regular' })),
+      targetDesk: emptyDesk(),
+      leaveSourceRestMarkers: true,
+    }))
+    const marker = outcome.sourceDesk.statusSlots?.[0]
+    expect(marker?.status).toBe('moved')
+    expect(marker?.managedStudentId).toBe('student-1')
+    expect(marker?.subject).toBe('数')
+    expect(marker?.lessonType).toBe('regular')
+    expect(marker?.dateKey).toBe(SOURCE_DATE)
+    expect(marker?.slotNumber).toBe(5)
+    expect(marker?.moveDestinationDateKey).toBe(TARGET_DATE)
+    expect(marker?.moveDestinationSlotNumber).toBe(5)
+    // ★講師名は「振替元でその授業を担当していた講師」。tombstone を打った後の空文字にしない。
+    expect(marker?.teacherName).toBe('田中講師')
+    // 机自体は従来どおり空(lesson なし・tombstone)。記録は statusSlots にだけ残る。
+    expect(outcome.sourceDesk.lesson).toBeUndefined()
+    expect(outcome.sourceDesk.teacher).toBe('')
+    expect(outcome.sourceDesk.teacherAssignmentSource).toBe('deleted')
+  })
+
+  it('OFF(既定): 振替元には何も残らない(従来の挙動と完全一致)', () => {
+    const outcome = transferredOrThrow(runTransfer({
+      sourceDesk: deskWithStudent(boardStudent({ lessonType: 'regular' })),
+      targetDesk: emptyDesk(),
+    }))
+    expect(outcome.sourceDesk.statusSlots).toBeUndefined()
+    expect(outcome.sourceDesk.lesson).toBeUndefined()
+  })
+
+  it('★ON でも在庫は中立: 台帳・希望回数・残数が 1 つも動かない(moved は会計を持たない)', () => {
+    const outcome = transferredOrThrow(runTransfer({
+      sourceDesk: deskWithStudent(boardStudent({ lessonType: 'regular' })),
+      targetDesk: emptyDesk(),
+      leaveSourceRestMarkers: true,
+    }))
+    expect(outcome.result.nextManualMakeupAdjustments).toEqual({})
+    expect(outcome.result.nextManualLectureStockCounts).toEqual({})
+    expect(outcome.result.nextManualLectureStockOrigins).toEqual({})
+    expect(outcome.result.nextScheduleCountAdjustments).toEqual([])
+    expect(outcome.balance).toBe(0)
+    // 確認ダイアログの件数(summary)も変えない
+    expect(outcome.result.summary.movedStudentCount).toBe(1)
+  })
+
+  it('★記録を残すのは通常授業だけ(D3 と同じ範囲): 振替・講習・増コマ・体験には残さない', () => {
+    const cases: Array<[string, StudentEntry]> = [
+      ['振替', boardStudent({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '2026/7/29(水) 5限' })],
+      ['講習', boardStudent({ lessonType: 'special', specialStockSource: 'session', specialSessionId: 'sess-1' })],
+      ['増コマ', boardStudent({ lessonType: 'extra', manualAdded: true })],
+      ['体験', boardStudent({ name: '体験生', managedStudentId: undefined, lessonType: 'trial', manualAdded: true })],
+    ]
+    for (const [label, entry] of cases) {
+      const outcome = transferredOrThrow(runTransfer({
+        sourceDesk: deskWithStudent(entry),
+        targetDesk: emptyDesk(),
+        leaveSourceRestMarkers: true,
+      }))
+      expect(outcome.sourceDesk.statusSlots, label).toBeUndefined()
+    }
+  })
+
+  it('2人席は席番号(index)どおりに残る(1人目=通常/2人目=体験なら 0 番だけ)', () => {
+    const regular = boardStudent({ id: 'entry-regular', lessonType: 'regular' })
+    const trial = boardStudent({ id: 'entry-trial', name: '体験生', managedStudentId: undefined, lessonType: 'trial', manualAdded: true })
+    const outcome = transferredOrThrow(runTransfer({
+      sourceDesk: teacherDesk({ lesson: { id: 'lesson-1', studentSlots: [regular, trial] } }),
+      targetDesk: emptyDesk(),
+      leaveSourceRestMarkers: true,
+    }))
+    expect(outcome.sourceDesk.statusSlots?.[0]?.status).toBe('moved')
+    expect(outcome.sourceDesk.statusSlots?.[1]).toBeNull()
+  })
+
+  it('★既知の副作用(仕様): 記録が残った日は再度の丸ごと振替がブロックされる', () => {
+    const outcome = transferredOrThrow(runTransfer({
+      sourceDesk: deskWithStudent(boardStudent({ lessonType: 'regular' })),
+      targetDesk: emptyDesk(),
+      leaveSourceRestMarkers: true,
+    }))
+    const sourceCells = outcome.result.nextWeeks.flat().filter((cell) => cell.dateKey === SOURCE_DATE)
+    expect(resolveWholeDayTransferSourceBlockReason(sourceCells)).toContain('出欠記録')
   })
 })

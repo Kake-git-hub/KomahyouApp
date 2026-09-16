@@ -16,6 +16,14 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.538 (2026-09-16)
+- feat(INV-06/INV-05): 振替元「休)」表示・振替欄の元起点統一・丸ごと振替/休日設定の記録保持(スクールIE要望・オーナー確定 2026-09-16・機能フラグ `transferSourceRestDisplay`=**development-only**)。①別日移動の移動元マーカー(moved)を「休)→先」表示(内部は moved のまま・在庫会計不変) ②丸ごと振替が振替元の通常授業の生徒ごとに moved 記録を残す(`computeWholeDayTransfer.leaveSourceRestMarkers`・台帳不触・記録が残る日は再実行ブロック) ③休日設定が記録を消さず、在庫へ返した配置/出席/振無休を新種別 `holiday`(表示専用・会計は moved と同じ無視)へ変換(`convertHolidayDeskEntriesToRecords`) ④生徒日程表の振替欄を元コマ起点「科目 元 → 先/未定」に統一(先起点の行と重複排除・「未定」の根拠は未消化一覧の正本 `rawMakeupStockEntries` から payload `outstandingMakeupOrigins`) ⑤moved/holiday を日程表 payload に載せるのは初めてなので講師日程表・回数表・給与/交通費・別タブD&D・保護者ページから除外するガードを追加。OFF の教室は既存テスト 1963 件を無改変で緑=挙動不変 (src/utils/featureRollout.ts, src/components/schedule-board/types.ts・ScheduleBoardScreen.tsx・makeupStock.ts・lessonLinks.ts・BoardGrid.tsx, src/components/board-share/BoardShareScreen.tsx, src/utils/scheduleHtml.ts・scheduleViewData.ts・parentSchedule.ts(+functions/src/generated)・studentLessonLedger.ts・pdf.ts, src/components/schedule-view/scheduleViewMove.ts)
+- test(INV-06): 上記の回帰固定 +71 件(inv06-whole-day-transfer.matrix 拡張・inv06-holiday-record-retention.matrix 新設・transferSourceRestDisplay.test 新設・lessonLinks/makeupStock/scheduleHtml/scheduleViewData/parentSchedule/studentLessonLedger)。mutation 16 件で「修正なしで落ちる」を確認
+- fix(INV-05/INV-06): 全コマ削除(丸ごと振替 Phase A と共通の `disposeDayDeskEntries`)が表示専用の出欠記録(`holiday`・`moved`)を「削除された授業」として予定数/希望数 −1・抑止キー・件数に数えていたのを処分対象外に是正(regression-reviewer 監査 H1。moved 分は OFF 経路の既存バグで、別日移動元の日を全コマ削除すると移動先に置いた授業と二重処分になっていた)。回帰テスト +対照 (src/components/schedule-board/ScheduleBoardScreen.tsx・inv06-whole-day-transfer.matrix.test.ts)
+- test: 新設した scheduleHtml の payload テスト(ON=開発用教室)が `.env.local` の `VITE_FIREBASE_WORKSPACE_KEY` に依存し CI(env なし)で赤になっていたのを `vi.stubEnv` で固定(同ファイル既存テストと同じ作法) (src/utils/scheduleHtml.test.ts)
+- refactor: 「未定」判定に使う未消化 origin の射影 `toOutstandingMakeupOriginEntries` と盤面の在庫キー解決 `createBoardStudentStockIdResolver` を makeupStock.ts に一本化し、盤面と App.tsx の別タブ同期(盤面 unmount 中の唯一の同期経路)の両方から同じ権威で `outstandingMakeupOrigins` を渡す(監査 M4) (src/components/schedule-board/makeupStock.ts・src/App.tsx)
+- docs: 仕様正本を先行改定(spec-makeup-stock §1-B/§B-2-2b/§B-2-2c/§B-2-3/§3-1・spec-lecture-stock §4-2①②・spec-schedule-pdf §E-1(「開発用教室のみ」は誤りで all-classrooms 昇格済み(2026-06-27)に訂正)/§E-1-1・spec-invariants INV-06 補記・spec-parent-portal §D-3/§K-3・spec-student-schedule-dnd §C-1/§E)
+
 ## v1.5.537 (2026-09-16)
 - docs(INV-08): オーナー確定「テスト教室(石川先生)は開発用教室と同じ扱い」を仕様本文へ(kind=development/sandbox で機能解放も混入防止ガードも分けない・kind を見てよいのは会社ごとの開発用教室を 1 件決める resolveDevelopmentClassroomId だけ)。挙動の変更なし(v1.5.534 時点の実装がそのまま正となる) (docs/spec-multi-tenant.md §4-2-11・§10-7 を解決済みへ, src/utils/developmentClassroomRegistry.ts, functions/src/generated/developmentClassroomRegistry.ts, src/utils/featureRollout.test.ts)
 

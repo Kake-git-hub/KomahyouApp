@@ -1,5 +1,5 @@
 import type { ClassroomSettings } from '../../types/appState'
-import { formatStudentSelectionLabel, isActiveOnDate, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import { formatStudentSelectionLabel, getStudentDisplayName, isActiveOnDate, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
 
@@ -36,6 +36,66 @@ export type MakeupStockEntry = {
   nextOriginLabel: string | null
   nextOriginReasonLabel: string | null
   negativeReason: string | null
+}
+
+/**
+ * 生徒日程表の振替欄が「未定」(＝振替先がまだ決まっていない)を判定するための未消化 origin 1 件 1 行。
+ * ★必ず `buildMakeupStockEntries`(未消化一覧の正本)の結果から作る。日程表側で在庫を作り直すと
+ *   「一覧には残っているのに振替欄は未定と言わない」食い違いが出る(INV-05 / INV-06)。
+ */
+export type OutstandingMakeupOriginEntry = {
+  /** 名簿の生徒ID(managedStudentId)。名簿外の生徒は空文字。 */
+  studentKey: string
+  /** 表示名。ID を持たない生徒の照合に使う。 */
+  studentName: string
+  subject: string
+  dateKey: string
+  /** 元コマの時限。旧データで不明なときは省略し、照合ではワイルドカードとして扱う。 */
+  slotNumber?: number
+}
+
+/**
+ * 未消化在庫(生徒×科目)の明細を、日程表 payload 用の 1 件 1 行へ落とす**唯一の射影**。
+ * 盤面(ScheduleBoardScreen)と別タブ同期(App.tsx)の両方がこれを使う。片方だけ別実装にすると、
+ * どちらの同期が最後に走ったかで振替欄の「未定」が変わる。
+ * ★グループ化後(GroupedMakeupStockEntry)ではなく生徒×科目の明細を渡すこと(グループは元コマを持たない)。
+ */
+export function toOutstandingMakeupOriginEntries(entries: MakeupStockEntry[]): OutstandingMakeupOriginEntry[] {
+  return entries.flatMap((entry) => entry.remainingOriginDates.map((dateKey, index) => {
+    const slotNumber = entry.remainingOriginSlots[index]
+    return {
+      studentKey: entry.studentId ?? '',
+      studentName: entry.displayName,
+      subject: entry.subject,
+      dateKey,
+      ...(slotNumber == null ? {} : { slotNumber }),
+    }
+  }))
+}
+
+/**
+ * 盤面の在庫キー解決(`ScheduleBoardScreen` の `resolveBoardStudentStockId`)と**同じ規則**のキー解決を
+ * 名簿から組み立てる。盤面を持たない側(App.tsx の別タブ日程表同期)が同じ在庫キーを得るために使う。
+ * ★式は盤面側と 1:1 (登録名/表示名のどちらからも名簿を引き、無ければ `name:表示名`、
+ *   手動追加は `manual:` 前置)。**どちらかを変えるときは必ず両方そろえる**
+ *   (キーがズレると同じ生徒の在庫が別人扱いで分裂する)。
+ */
+export function createBoardStudentStockIdResolver(students: StudentRow[]) {
+  const studentByAnyName = new Map<string, StudentRow>()
+  const displayNameByAnyName = new Map<string, string>()
+  for (const student of students) {
+    const displayName = getStudentDisplayName(student)
+    studentByAnyName.set(student.name, student)
+    studentByAnyName.set(displayName, student)
+    displayNameByAnyName.set(student.name, displayName)
+    displayNameByAnyName.set(displayName, displayName)
+  }
+  return (entry: Pick<StudentEntry, 'managedStudentId' | 'name' | 'manualAdded'>) => {
+    const managedId = entry.managedStudentId ?? studentByAnyName.get(entry.name)?.id
+    if (managedId) return managedId
+    const fallbackId = `name:${displayNameByAnyName.get(entry.name) ?? entry.name}`
+    return entry.manualAdded ? `manual:${fallbackId}` : fallbackId
+  }
 }
 
 const DAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'] as const
@@ -399,6 +459,9 @@ export function countPlannedMakeupsByKey(weeks: SlotCell[][], resolveStudentKey:
         for (const statusEntry of desk.statusSlots ?? []) {
           if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup') continue
           if (statusEntry.status === 'absent') continue
+          // ★holiday(休日設定で消えたコマの表示専用記録・2026-09-16)は配置ではないので数えない。
+          // 数えると「休日設定で在庫へ返した1コマ」を同時に消化済みとも数えて在庫が消える(INV-06 誤減)。
+          if (statusEntry.status === 'holiday') continue
           const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
           const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
           counts[key] = (counts[key] ?? 0) + 1
@@ -436,6 +499,8 @@ export function parseOriginSlotNumberFromLabel(label?: string) {
  *                   ★片方だけだと出席を付けた瞬間に消化が消え、振替済みの休みが未振替へ復活する
  *                     （INV-06 で繰り返し踏んでいる「両走査」規則と同じ）。
  *                   status='moved'（移動元マーカー）は移動先のコマが会計を持つので数えない。
+ *                   status='holiday'（休日設定で消えたコマの表示専用記録）も数えない＝**moved と同じ側**。
+ *                   在庫は休日設定の時点で台帳/振替先へ返却済みなので、ここで消化に数えると返した分が消える。
  *                   休み(absent)の振替コマは**消化に数える**（同時に義務も1件立つので差し引き1件残る＝
  *                   「振替したがまた休んだ」を二重に数えないための要）。
  *   講習(special)と体験(trial)は対象外（講習の括弧内は提出データが正本・体験は日程表に載らない）。
@@ -459,7 +524,7 @@ export function computeOutstandingAbsenceOrigins(params: {
         }
 
         for (const statusEntry of desk.statusSlots ?? []) {
-          if (!statusEntry || !isCountedLessonType(statusEntry.lessonType) || statusEntry.status === 'moved') continue
+          if (!statusEntry || !isCountedLessonType(statusEntry.lessonType) || statusEntry.status === 'moved' || statusEntry.status === 'holiday') continue
           // ★同ファイルの他経路と同じシムを噛ませる（キー解決が将来 id を見るようになっても割れないように）。
           const key = buildMakeupStockKey(params.resolveStudentKey({ ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry), statusEntry.subject)
 
@@ -588,7 +653,8 @@ function collectAbsentMakeupOrigins(weeks: SlotCell[][], resolveStudentKey: (stu
           // 休みにすれば実績から外れるので、在庫へ戻さないと1コマ消える（手動追加した振替コマを休みにすると
           // 台帳にも積まれず算出でも拾われず消滅していた）。消化(plannedMakeups)側が manualAdded を数えない
           // 非対称は仕様どおり（手動追加＝在庫を消費せずに足したコマ）で、その結果の在庫純増は許容する。
-          // absent 限定。absent-no-makeup(振無休)は振替を出さない仕様、attended/moved は消化済み。
+          // absent 限定。absent-no-makeup(振無休)は振替を出さない仕様、attended/moved は消化済み、
+          // holiday(休日設定で消えたコマの表示専用記録)は休日設定時に在庫へ返却済み(=moved と同じ側)。
           if (statusEntry.status !== 'absent') continue
           if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) continue
           const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
@@ -659,6 +725,9 @@ function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (studen
         for (const statusEntry of desk.statusSlots ?? []) {
           if (!statusEntry || statusEntry.manualAdded || statusEntry.lessonType !== 'makeup') continue
           if (statusEntry.status === 'absent') continue
+          // ★holiday は消化に数えない(2026-09-16)。休日設定で在庫へ返した1コマを同時に消化とも数えると、
+          // 返したはずの在庫が即座に打ち消されて消える(INV-06 誤減)。moved と同じ扱い。
+          if (statusEntry.status === 'holiday') continue
           const studentLike = { ...statusEntry, id: statusEntry.studentId } as unknown as StudentEntry
           const key = buildMakeupStockKey(resolveStudentKey(studentLike), statusEntry.subject)
           counts[key] = (counts[key] ?? 0) + 1
@@ -953,6 +1022,7 @@ export function ledgerOriginsIncludeDate(ledgerOriginDates: string[], dateKey: s
 //   （2026-08-02 の対称性監査で出席済みの振替コマに実在した非対称。在庫由来=残2／移動由来=残1）。
 // - 通常授業 / 講習 / 振替元日を持たないコマ … null（mark 時に在庫会計済み・講習は講習在庫へ返す）。
 // - 移動マーカー(moved) … null（会計は移動先のコマが持つ）。
+// - 休日記録(holiday) … null（休日設定の時点で在庫へ返却済みの**表示専用**記録。ここで積むと二重計上）。
 // - 手動追加(manualAdded) … 在庫を消費していないので返す先が無く null。ただし **「休み」だけは例外的に返す**
 //   （日程表の実績カウントが manualAdded を除外せず、休みにすると実績だけ −1 になって1コマ宙に浮くため。
 //   spec-makeup-stock §B-3・2026-07-31 オーナー確定）。
@@ -968,7 +1038,7 @@ export function resolveMakeupStatusOriginToMaterialize(params: {
 }): { dateKey: string; slotNumber: number | null } | null {
   const { statusEntry, ledgerOriginDates } = params
   if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) return null
-  if (statusEntry.status === 'moved') return null
+  if (statusEntry.status === 'moved' || statusEntry.status === 'holiday') return null
   if (statusEntry.manualAdded && statusEntry.status !== 'absent') return null
   if (ledgerOriginsIncludeDate(ledgerOriginDates, statusEntry.makeupSourceDate)) return null
   return {

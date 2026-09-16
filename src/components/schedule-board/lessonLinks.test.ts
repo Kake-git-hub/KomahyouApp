@@ -128,3 +128,121 @@ describe('resolveVisibleSlotDateLabel 移動日付の引き継ぎ防止', () => 
     expect(label).toBe('')
   })
 })
+
+// ============================================================================
+// 振替元「休)」表示(INV-06 / オーナー確定 2026-09-16・機能フラグ transferSourceRestDisplay)
+//
+// 生徒日程表の振替欄を「元コマ起点」に統一するため、リンク解決の**起点**を absent だけから
+// absent / moved / holiday の 3 種へ広げた。ここが起点にならないと、移動元・休日記録の行に
+// 振替先が出ず全部「未定」になる(＝修正なしでは下の 3 件が落ちる)。
+// ★振替先(destination)側は従来どおり「配置 + 出席/振無休」だけ。moved/holiday を振替先にすると
+//   「戻った振替」「移動元マーカー」「休日で消えたコマ」へ誤ってリンクする(既存ガードの維持)。
+// ============================================================================
+describe('buildLinkedLessonDestinationMap 移動元(moved)・休日記録(holiday)を起点にする', () => {
+  const restStatus = (status: StudentStatusKind, id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    managedStudentId: 'student-1',
+    name: '青木 太郎',
+    subject: '数' as const,
+    lessonType: 'regular' as LessonType,
+    status,
+    ...overrides,
+  })
+  const placedMakeup = {
+    managedStudentId: 'student-1',
+    name: '青木 太郎',
+    subject: '数' as const,
+    lessonType: 'makeup' as LessonType,
+    makeupSourceDate: '2026-04-01',
+    makeupSourceLabel: '2026/4/1(水) 1限',
+  }
+  const destinationCell = { dateKey: '2026-04-15', slotNumber: 4, desks: [{ lesson: { studentSlots: [placedMakeup, null] } }] }
+
+  it('移動元マーカー(moved)から、その授業が置かれた振替コマへリンクする', () => {
+    const cells = [
+      { dateKey: '2026-04-01', slotNumber: 1, desks: [{ statusSlots: [restStatus('moved', 'status-moved', { moveDestinationDateKey: '2026-04-15', moveDestinationSlotNumber: 4 }), null] }] },
+      destinationCell,
+    ]
+    expect(buildLinkedLessonDestinationMap(cells).get('status-moved')).toEqual({ dateKey: '2026-04-15', slotNumber: 4 })
+  })
+
+  it('休日記録(holiday)からも、その授業が置かれた振替コマへリンクする', () => {
+    const cells = [
+      { dateKey: '2026-04-01', slotNumber: 1, desks: [{ statusSlots: [restStatus('holiday', 'status-holiday'), null] }] },
+      destinationCell,
+    ]
+    expect(buildLinkedLessonDestinationMap(cells).get('status-holiday')).toEqual({ dateKey: '2026-04-15', slotNumber: 4 })
+  })
+
+  it('★元が振替コマの休日記録は起点にしない(元の通常授業日の記録が既にリンクを持つため二重になる)', () => {
+    // 4/8 に置いた振替コマ(元=4/1)を休日設定で消した記録。absent と同じ規則で起点にしない。
+    const cells = [
+      {
+        dateKey: '2026-04-08',
+        slotNumber: 2,
+        desks: [{ statusSlots: [restStatus('holiday', 'status-holiday-makeup', { lessonType: 'makeup' as LessonType, makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' }), null] }],
+      },
+      destinationCell,
+    ]
+    expect(buildLinkedLessonDestinationMap(cells).has('status-holiday-makeup')).toBe(false)
+  })
+
+  it('★moved は自分のコマ(記録が載っている日)を元コマとして引く(makeupSourceDate に引っ張られない)', () => {
+    // 元の通常授業日(makeupSourceDate=4/1)を持つ生徒を 4/8 から別日へ動かしたケース。
+    // 起点は「4/8 の 2 限」であって 4/1 ではない(4/1 を起点にすると別の休みのリンクを横取りする)。
+    const cells = [
+      {
+        dateKey: '2026-04-08',
+        slotNumber: 2,
+        desks: [{ statusSlots: [restStatus('moved', 'status-moved-makeup', { lessonType: 'makeup' as LessonType, makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' }), null] }],
+      },
+      {
+        dateKey: '2026-04-20',
+        slotNumber: 5,
+        desks: [{ lesson: { studentSlots: [{ ...placedMakeup, makeupSourceDate: '2026-04-08', makeupSourceLabel: '2026/4/8(水) 2限' }, null] } }],
+      },
+    ]
+    expect(buildLinkedLessonDestinationMap(cells).get('status-moved-makeup')).toEqual({ dateKey: '2026-04-20', slotNumber: 5 })
+  })
+
+  it('moved / holiday は振替先(destination)にはならない(既存ガードの維持)', () => {
+    const absentOrigin = restStatus('absent', 'status-absent')
+    const cells = [
+      { dateKey: '2026-04-01', slotNumber: 1, desks: [{ statusSlots: [absentOrigin, null] }] },
+      // 4/8 は移動マーカー、4/10 は休日記録。どちらも「振替を実施したコマ」ではない。
+      { dateKey: '2026-04-08', slotNumber: 2, desks: [{ statusSlots: [restStatus('moved', 'm1', { lessonType: 'makeup' as LessonType, makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' }), null] }] },
+      { dateKey: '2026-04-10', slotNumber: 3, desks: [{ statusSlots: [restStatus('holiday', 'h1', { lessonType: 'makeup' as LessonType, makeupSourceDate: '2026-04-01', makeupSourceLabel: '2026/4/1(水) 1限' }), null] }] },
+    ]
+    expect(buildLinkedLessonDestinationMap(cells).has('status-absent')).toBe(false)
+  })
+})
+
+describe('resolveVisibleSlotDateLabel 移動元マーカーは自分の移動先だけを出す', () => {
+  // 回帰防止(2026-09-16): moved もリンク解決の起点になったため、moved にリンク先が付く。
+  // 盤面の「移)日付」は従来どおり **moveDestinationDateKey だけ** を出す(機能フラグ OFF で挙動が変わらないように)。
+  it('moveDestinationDateKey が無い古い moved 記録はリンク先があっても日付を出さない', () => {
+    const label = resolveVisibleSlotDateLabel({
+      hasStudent: false,
+      hasContent: true,
+      resolvedLessonType: 'regular',
+      effectiveMakeupSourceDate: undefined,
+      statusEntry: { status: 'moved', moveDestinationDateKey: undefined },
+      linkedDestinationDateKey: '2026-04-12',
+    })
+
+    expect(label).toBe('')
+  })
+
+  it('休日記録(holiday)はリンク先日付を出す(振替先が決まっていれば盤面にも出る)', () => {
+    const label = resolveVisibleSlotDateLabel({
+      hasStudent: false,
+      hasContent: true,
+      resolvedLessonType: 'regular',
+      effectiveMakeupSourceDate: undefined,
+      statusEntry: { status: 'holiday', moveDestinationDateKey: undefined },
+      linkedDestinationDateKey: '2026-04-12',
+    })
+
+    expect(label).toBe('4/12')
+  })
+})

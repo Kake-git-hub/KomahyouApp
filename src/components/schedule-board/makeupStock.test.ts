@@ -3,7 +3,7 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { buildMakeupStockEntries, computeAutomaticShortageOrigins, computeOutstandingAbsenceOrigins, countPlannedMakeupsByKey } from './makeupStock'
+import { buildMakeupStockEntries, computeAutomaticShortageOrigins, computeOutstandingAbsenceOrigins, countPlannedMakeupsByKey, resolveMakeupStatusOriginToMaterialize } from './makeupStock'
 
 function createStudent(overrides: Partial<StudentRow> = {}): StudentRow {
   return {
@@ -1445,5 +1445,112 @@ describe('computeOutstandingAbsenceOrigins', () => {
       cellWith('2026-07-03', 1, { statusSlots: [absentStatus({ id: 'status-3', managedStudentId: 'student-2', studentId: 'student-2' }), null] }),
     ]]
     expect(Object.keys(run(weeks)).sort()).toEqual(['student-1__数', 'student-1__英', 'student-2__数'])
+  })
+})
+
+// ============================================================================
+// INV-06: 休日記録(status='holiday')は在庫会計に一切影響しない
+//
+// 休日設定(D5・オーナー確定 2026-09-16)は出欠記録を消さずに残すようになった。在庫は休日設定の
+// その瞬間に reconcileHolidayDeskStockReturns が台帳へ返し終えているので、残した記録を
+// **消化・義務・台帳確定のどれかに数えると必ず二重に効く**(返した在庫が即消える/在庫が増える)。
+// ここは「holiday は moved と同じ側」を在庫の権威関数ごとに固定する兄弟テスト。
+// ★修正なし(holiday ガードなし)ではこの describe の 4 件すべてが落ちる。
+// ============================================================================
+describe('INV-06 休日記録(holiday)は在庫に影響しない', () => {
+  const resolveStudentKey = (entry: { managedStudentId?: string; name: string }) => entry.managedStudentId ?? entry.name
+
+  function status(overrides: Partial<StudentStatusEntry> = {}): StudentStatusEntry {
+    return {
+      id: 'status-h1',
+      studentId: 'student-1',
+      sourceManagedLesson: true,
+      name: '山田',
+      managedStudentId: 'student-1',
+      grade: '中1',
+      subject: '数',
+      lessonType: 'regular',
+      teacherType: 'normal',
+      teacherName: '田中講師',
+      dateKey: '2026-07-08',
+      slotNumber: 2,
+      recordedAt: '2026-07-08T00:00:00.000Z',
+      status: 'holiday',
+      sourceLessonId: 'lesson-1',
+      ...overrides,
+    }
+  }
+
+  function cellWith(dateKey: string, slotNumber: number, desk: Partial<SlotCell['desks'][number]>, isOpenDay = true): SlotCell {
+    return {
+      id: `${dateKey}_${slotNumber}`,
+      dateKey,
+      dayLabel: '水',
+      dateLabel: dateKey.slice(5),
+      slotLabel: `${slotNumber}限`,
+      slotNumber,
+      timeLabel: '17:00-18:20',
+      isOpenDay,
+      desks: [{ id: `${dateKey}_${slotNumber}_desk_1`, teacher: '田中講師', ...desk }],
+    }
+  }
+
+  const holidayMakeupRecord = status({
+    id: 'status-holiday-makeup',
+    lessonType: 'makeup',
+    makeupSourceDate: '2026-07-01',
+    makeupSourceLabel: '2026/7/1(水) 1限',
+  })
+
+  it('休日記録は義務(owed)にならない', () => {
+    const weeks = [[cellWith('2026-07-08', 2, { statusSlots: [status(), null] }, false)]]
+    expect(computeOutstandingAbsenceOrigins({ weeks, resolveStudentKey })).toEqual({})
+  })
+
+  it('★休日にした振替コマの記録は消化(settled)に数えない(休みが未振替へ戻る)', () => {
+    // 7/1 を休み → 7/8 へ振替 → 7/8 を休日設定。振替は実施されていないので 7/1 の休みは未振替のまま。
+    const weeks = [[
+      cellWith('2026-07-01', 1, {
+        statusSlots: [status({ id: 'status-absent', dateKey: '2026-07-01', slotNumber: 1, status: 'absent' }), null],
+      }),
+      cellWith('2026-07-08', 2, { statusSlots: [holidayMakeupRecord, null] }, false),
+    ]]
+    expect(computeOutstandingAbsenceOrigins({ weeks, resolveStudentKey })['student-1__数']).toEqual(['2026-07-01#1'])
+  })
+
+  it('★休日記録は「配置済みの振替」として数えない(未消化在庫を打ち消さない)', () => {
+    // 台帳に 7/1 の origin が 1 件ある状態で、7/8 の振替コマが休日記録として残っている。
+    // 数えてしまうと在庫が 0 になり「未消化に戻したはずの振替」が消える(INV-06 誤減)。
+    // ★**営業日の盤面**で固定する(休日解除で営業日に戻っても記録は残る=仕様)。非営業日のセルは
+    //   消化側の走査が isOpenDay で丸ごと飛ばすため、holiday ガードの有無を検出できない。
+    const weeks = [[cellWith('2026-07-08', 2, { statusSlots: [holidayMakeupRecord, null] })]]
+    const entries = buildMakeupStockEntries({
+      students: [createStudent()],
+      teachers: [createTeacher()],
+      regularLessons: [],
+      classroomSettings: { closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 1 },
+      weeks,
+      manualAdjustments: { 'student-1__数': [{ dateKey: '2026-07-01', slotNumber: 1 }] },
+      resolveStudentKey,
+      today: new Date('2026-07-10T00:00:00'),
+    })
+    expect(entries.find((entry) => entry.key === 'student-1__数')?.balance).toBe(1)
+    expect(countPlannedMakeupsByKey(weeks, resolveStudentKey)['student-1__数']).toBeUndefined()
+  })
+
+  it('休日記録は台帳確定(materialize)の対象外＝moved と同じ側', () => {
+    expect(resolveMakeupStatusOriginToMaterialize({
+      statusEntry: { status: 'holiday', lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限' },
+      ledgerOriginDates: [],
+    })).toBeNull()
+    // 比較対象(moved も null)。absent は従来どおり確定する＝ガードが広がりすぎていないこと。
+    expect(resolveMakeupStatusOriginToMaterialize({
+      statusEntry: { status: 'moved', lessonType: 'makeup', makeupSourceDate: '2026-07-01' },
+      ledgerOriginDates: [],
+    })).toBeNull()
+    expect(resolveMakeupStatusOriginToMaterialize({
+      statusEntry: { status: 'absent', lessonType: 'makeup', makeupSourceDate: '2026-07-01', makeupSourceLabel: '2026/7/1(水) 1限' },
+      ledgerOriginDates: [],
+    })).toEqual({ dateKey: '2026-07-01', slotNumber: 1 })
   })
 })

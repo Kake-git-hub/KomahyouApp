@@ -133,6 +133,21 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Question/request modal: instant AI answer to questions (Claude on Vertex AI via submitDeveloperReport), development classroom only.',
   },
+  // 振替元「休)」表示・振替欄の元起点統一・丸ごと振替/休日設定の記録保持(オーナー確定 2026-09-16)。
+  // ON のとき:
+  //   - 盤面/配布用盤面の移動元マーカー(moved)のラベルが「移」→「休」になる(記録の中身は moved のまま=INV-06)。
+  //   - 別日 D&D に加えて**丸ごと振替**でも振替元の通常授業に移動元記録(moved)を残す。
+  //   - **休日設定**が出欠記録を消さず、在庫へ返した配置/出席/振無休を新種別 'holiday'(表示専用)へ変換して残す。
+  //   - 生徒日程表が moved/holiday を payload に載せ、振替欄を「元コマ起点」に統一して未配置は「未定」と出す。
+  // ★このフラグは**表示と記録の保持**だけを切り替える。在庫会計(INV-06)は ON/OFF で同一(moved/holiday は
+  //   どちらも会計対象外)。OFF では payload にも盤面にも新しい記録が生まれないため挙動は従来と完全一致する。
+  // ★'holiday' 記録の**会計ガードと表示はフラグに依らず常に有効**(一度 ON で作った記録を OFF に戻しても
+  //   正しく無視・表示される)。ここを「フラグ OFF なら holiday を absent と同じに扱う」へ変えてはいけない。
+  // 開発用教室 → staging → 全教室の順に昇格する(昇格はオーナー確認後)。
+  transferSourceRestDisplay: {
+    scope: 'development-only',
+    description: 'Show moved-source / holiday records as 休) with destination, source-origin makeup box with 未定, keep records on whole-day transfer and holiday setting.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

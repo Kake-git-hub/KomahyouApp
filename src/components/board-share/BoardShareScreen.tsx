@@ -6,6 +6,7 @@ import { buildLinkedLessonDestinationMap, formatShortDateLabel } from '../schedu
 import { getBoardSlotTimeLabel } from '../schedule-board/slotTimes'
 import type { LessonType, StudentStatusKind, TeacherType } from '../schedule-board/types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
+import { isFeatureEnabledForClassroom } from '../../utils/featureRollout'
 
 type BoardShareScreenProps = {
   token: string
@@ -40,10 +41,16 @@ function writeStoredSelection(token: string, selection: BoardShareSelection) {
   }
 }
 
-function getStudentStatusLabel(status: StudentStatusKind) {
+// 盤面(BoardGrid の getStudentStatusLabel)と同じ規則。移動元マーカー(moved)は機能フラグ
+// transferSourceRestDisplay が ON の教室で「休」と出す(オーナー確定 2026-09-16・表示だけの置き換え)。
+// ★配布用盤面は公開ページなので教室設定を読めない。判定は共有ドキュメントの classroomId で行う
+//   (盤面側と同じ登録台帳・同じ関数)。両側がズレると同じ記録が盤面では「休」・共有では「移」になる。
+// ★holiday(休日設定で消えたコマの表示専用記録)はフラグに依らず常に「休」。
+function getStudentStatusLabel(status: StudentStatusKind, transferSourceRestDisplayEnabled = false) {
   if (status === 'attended') return '出'
   if (status === 'absent-no-makeup') return '振無休'
-  if (status === 'moved') return '移'
+  if (status === 'holiday') return '休'
+  if (status === 'moved') return transferSourceRestDisplayEnabled ? '休' : '移'
   return '休'
 }
 
@@ -206,6 +213,8 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
   const linkedLessonDestinationByStatusId = useMemo(() => buildLinkedLessonDestinationMap(sortedCells), [sortedCells])
   // 外部生の managedStudentId 集合。旧ドキュメント(未設定)は空集合＝全員通常表示になる(後方互換)。
   const externalStudentIds = useMemo(() => new Set(payload?.externalStudentIds ?? []), [payload])
+  // 振替元「休)」表示(2026-09-16)。公開ページは教室設定を持たないため、共有ドキュメントの教室IDで判定する。
+  const transferSourceRestDisplayEnabled = isFeatureEnabledForClassroom('transferSourceRestDisplay', { id: payload?.classroomId })
   const currentCell = sortedCells.find((cell) => cell.dateKey === selectedDateKey && cell.slotNumber === selectedSlotNumber) ?? null
   // spec-group-lesson §A: 選択日の集団授業(2バンド)。デスク一覧の上に表示する。
   const groupEntriesForDate = useMemo<GroupClassEntry[]>(() => {
@@ -298,7 +307,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                         return (
                         <div className={`board-share-student${status ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`}>
                           <span className="board-share-student-label">
-                            {formatStudentLabel(visibleStudent, isExternalStudent)}{status ? `(${getStudentStatusLabel(status.status)}` : ''}
+                            {formatStudentLabel(visibleStudent, isExternalStudent)}{status ? `(${getStudentStatusLabel(status.status, transferSourceRestDisplayEnabled)}` : ''}
                           </span>
                           {visibleDateLabel ? <span className="board-share-origin-date">{visibleDateLabel}</span> : null}
                           {visibleStudent ? <span className="board-share-lesson-type">{getLessonTypeLabel(visibleStudent.lessonType, isExternalStudent)}</span> : null}

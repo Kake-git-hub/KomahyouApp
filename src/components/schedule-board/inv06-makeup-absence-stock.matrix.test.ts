@@ -886,6 +886,17 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
       }
     })
 
+    it('★休日記録(holiday)にも抑制を積まない(休日設定で在庫へ返した1コマが消える・2026-09-16)', () => {
+      // holiday は「休日設定の時点で在庫へ返し終えた」表示専用の記録。抑制を積むと、
+      // 返したはずの origin が全コマ削除の抑制で落とされて在庫から消える(INV-06 誤減)。moved と同じ側。
+      const holidaySuppressions = collectClearedDayMakeupSuppressions({
+        cell: cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'regular', status: 'holiday' }))),
+        suppressedMakeupOrigins: {},
+        resolveStockId: resolveStudentKey,
+      })
+      expect(Object.keys(holidaySuppressions)).toHaveLength(0)
+    })
+
     it('移動済み(moved)マーカーには抑制を積まない(移動先を休みにした算出 origin を消さない・INV監査 2026-08-29)', () => {
       // moved の会計は移動先の振替コマが持つ。移動元日に抑制を積むと、
       // 「移動先の振替を休み→移動元日を全コマ削除」の順で算出復元 origin が消える(誤減)。

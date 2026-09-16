@@ -8,6 +8,7 @@ import {
   buildDateHeaders,
   buildStudentSheetViewModel,
   buildTeacherSheetViewModel,
+  collectStudentMakeupRows,
   getVisibleStudents,
   getVisibleTeachers,
   hasCountMismatch,
@@ -559,5 +560,143 @@ describe('日程表の「今日」は JST(2026-09-15・UTC だと JST 0:00〜8:5
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// ============================================================================
+// 振替元「休)」表示（オーナー確定 2026-09-16・機能フラグ transferSourceRestDisplay）
+//
+// moved(移動元マーカー) / holiday(休日設定で消えたコマの表示専用記録)は payload に載るようになったが、
+// **会計は持たない**。生徒日程表のセルにだけ「休」カードとして描き、回数表・講師日程表・給与へは
+// 一切流さない（INV-05 回数表示の実配置一致 / INV-06 在庫の実態一致）。
+// ★掴めない(draggable でない)ことも固定する。lessonType は 'regular' のままなので、記録カードとして
+//   分岐しないと「存在しない授業」を D&D で動かせてしまう（spec-student-schedule-dnd §C-1）。
+// ★修正なしでは「draggable=true になる」「回数が 1 増える」「講師セルに人が増える」で落ちる。
+// ============================================================================
+describe('scheduleViewData: 移動元(moved)・休日記録(holiday)の扱い', () => {
+  const restCases = [
+    ['moved', '移動元マーカー'],
+    ['holiday', '休日記録'],
+  ] as const
+
+  for (const [status, label] of restCases) {
+    it(`${label}(${status})は「休」カードで掴めない`, () => {
+      const payload = makePayload({
+        cells: [makeCell('2026-07-06', 1, [{
+          teacher: '佐藤',
+          statuses: [makeStatusEntry({ status, linkedDestinationDateKey: '2026-07-20', linkedDestinationSlotNumber: 5 })],
+        }])],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      const cell = vm.rows.find((row) => row.slotNumber === 1)!.cells.find((entry) => entry.dateKey === '2026-07-06')!
+      expect(cell.cards).toHaveLength(1)
+      expect(cell.cards[0]!.main).toBe('休 7月20日')
+      expect(cell.cards[0]!.draggable).toBeUndefined()
+      expect(cell.cards[0]!.entryId).toBeUndefined()
+    })
+
+    it(`${label}(${status})は通常回数の実績に数えない`, () => {
+      const payload = makePayload({
+        cells: [
+          makeCell('2026-07-06', 1, [{ teacher: '佐藤', lesson: { students: [makeLessonStudent()] } }]),
+          makeCell('2026-07-07', 1, [{ teacher: '佐藤', statuses: [makeStatusEntry({ id: 'status-rest', status })] }]),
+        ],
+      })
+      const vm = buildStudentSheetViewModel(payload, vmOptions)!
+      // 実配置は 7/6 の 1 コマだけ。記録カードを数えると 2 になる。
+      expect(vm.regularCountRows.map((row) => [row.label, row.count])).toEqual([['英', 1]])
+    })
+
+    it(`${label}(${status})は講師日程表に出さない(セル・振替欄・回数のすべて)`, () => {
+      const cells = [makeCell('2026-07-06', 1, [{
+        teacher: '佐藤',
+        teacherId: 'tea-1',
+        statuses: [makeStatusEntry({
+          id: 'status-rest',
+          status,
+          lessonType: 'makeup',
+          makeupSourceLabel: '2026/7/1(水) 2限',
+        })],
+      }])]
+      const payload = makePayload({ teachers: [makeTeacher()], cells })
+      const vm = buildTeacherSheetViewModel(payload, { startDate: '2026-07-06', endDate: '2026-07-12', teacherId: 'tea-1', todayKey: TODAY })!
+      const cell = vm.rows.find((row) => row.slotNumber === 1)!.cells.find((entry) => entry.dateKey === '2026-07-06')!
+      expect(cell.people).toEqual([])
+      expect(vm.makeupNotes).toEqual([])
+    })
+  }
+
+  it('moved はリンク解決が無ければ自分の移動先日付を出す(振替先が表示範囲外のとき)', () => {
+    const payload = makePayload({
+      cells: [makeCell('2026-07-06', 1, [{
+        teacher: '佐藤',
+        statuses: [makeStatusEntry({ status: 'moved', moveDestinationDateKey: '2026-08-03', moveDestinationSlotNumber: 2 })],
+      }])],
+    })
+    const vm = buildStudentSheetViewModel(payload, vmOptions)!
+    const cell = vm.rows.find((row) => row.slotNumber === 1)!.cells.find((entry) => entry.dateKey === '2026-07-06')!
+    expect(cell.cards[0]!.main).toBe('休 8月3日')
+  })
+})
+
+describe('scheduleViewData: 振替欄の元起点統一(collectStudentMakeupRows)', () => {
+  const student = makeStudent()
+
+  function run(entries: Parameters<typeof collectStudentMakeupRows>[1], outstanding: SchedulePayload['outstandingMakeupOrigins'] = []) {
+    return collectStudentMakeupRows(makePayload({ outstandingMakeupOrigins: outstanding }), entries, student, '2026-07-06')
+  }
+
+  const absentOrigin = {
+    dateKey: '2026-07-06',
+    slotNumber: 1,
+    teacher: '佐藤',
+    timeLabel: '16:20-17:50',
+    lesson: makeStatusEntry({ status: 'absent' }),
+  }
+
+  it('①元だけ範囲内・振替先が組まれている: 「科目 元 → 先」', () => {
+    expect(run([{ ...absentOrigin, lesson: makeStatusEntry({ status: 'absent', linkedDestinationDateKey: '2026-07-20', linkedDestinationSlotNumber: 5 }) }]))
+      .toEqual(['英 7/6 1限 → 7/20 5限'])
+  })
+
+  it('②元だけ範囲内・未消化に残っている: 「未定」', () => {
+    expect(run([absentOrigin], [{ studentKey: 'stu-1', studentName: '山田太', subject: '英', dateKey: '2026-07-06', slotNumber: 1 }]))
+      .toEqual(['英 7/6 1限 → 未定'])
+  })
+
+  it('③先だけ範囲内: 従来どおり配置済み振替コマから1行', () => {
+    expect(run([{
+      dateKey: '2026-07-09',
+      slotNumber: 4,
+      teacher: '佐藤',
+      timeLabel: '16:20-17:50',
+      lesson: makeLessonStudent({ lessonType: 'makeup', makeupSourceDate: '2026-06-24', makeupSourceLabel: '2026/6/24(水) 2限' }),
+    }])).toEqual(['英 6/24 2限 → 7/9 4限'])
+  })
+
+  it('★④元も先も範囲内: 重複排除して1行', () => {
+    expect(run([
+      { ...absentOrigin, lesson: makeStatusEntry({ status: 'absent', linkedDestinationDateKey: '2026-07-09', linkedDestinationSlotNumber: 4 }) },
+      {
+        dateKey: '2026-07-09',
+        slotNumber: 4,
+        teacher: '佐藤',
+        timeLabel: '16:20-17:50',
+        lesson: makeLessonStudent({ lessonType: 'makeup', makeupSourceDate: '2026-07-06', makeupSourceLabel: '2026/7/6(月) 1限' }),
+      },
+    ])).toEqual(['英 7/6 1限 → 7/9 4限'])
+  })
+
+  it('★振替先も未消化も無ければ「未定」に倒す(行ごと消さない)', () => {
+    expect(run([absentOrigin])).toEqual(['英 7/6 1限 → 未定'])
+  })
+
+  it('生徒日程表の振替欄はフラグ ON のときだけ新方式に切り替わる', () => {
+    const cells = [makeCell('2026-07-06', 1, [{ teacher: '佐藤', statuses: [makeStatusEntry({ status: 'absent' })] }])]
+    const off = buildStudentSheetViewModel(makePayload({ cells }), vmOptions)!
+    // OFF: 従来どおり「配置済み振替コマ」起点のみ＝休みだけでは1行も出ない
+    expect(off.makeupNotes).toEqual([])
+    const on = buildStudentSheetViewModel(makePayload({ cells, transferSourceRestDisplayEnabled: true }), vmOptions)!
+    expect(on.makeupNotes).toEqual(['英 7/6 1限 → 未定'])
   })
 })

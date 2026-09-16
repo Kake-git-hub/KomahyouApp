@@ -181,7 +181,9 @@ export function buildDeskPickerDesks(cell: SlotCell, resolveDisplayName?: (name:
       // 出席済みの席は studentSlots が空(名前は statusSlots に退避)でも配置不可(2026-07-09 修正)。
       // 欠席/振無休は物理的空席として選択可のまま(既存仕様)。
       const isAttended = status?.status === 'attended'
-      const statusLabel = !student && status && status.status !== 'moved'
+      // moved(移動元マーカー)と holiday(休日設定の表示専用記録)は「その席に人がいる」印ではないので
+      // 机選択モーダルには出さない(出すと空席なのに埋まって見える)。
+      const statusLabel = !student && status && status.status !== 'moved' && status.status !== 'holiday'
         ? `${status.status === 'attended' ? '出席' : status.status === 'absent-no-makeup' ? '振無休' : '休'} ${displayName(status.name)}`
         : ''
       return {
