@@ -1,27 +1,31 @@
-// 検証用(サンドボックス)教室として明示的に許可する【教室ID】(サーバー側)。
-// クライアント src/utils/developmentClassroom.ts の SANDBOX_CLASSROOM_IDS と**必ず同じ内容**にする。
-// オーナー指示 2026-07-28: 教室名での判定は不安なので ID で固定する(教室名を変えても揺れない)。
-//  - test_classroom_20260507_dai = テスト教室(管理者 石川 / dai.in.the.mood@gmail.com /
-//    UID 6HptuGOIqHcuEAqlXxZFb7Nv3Yu1。workspaces/main/members から確認済み)
-// ID は大文字小文字を区別する Firestore のドキュメントIDなので、正規化せず完全一致で比べる。
-export const SANDBOX_CLASSROOM_IDS: readonly string[] = ['test_classroom_20260507_dai']
-
-// 検証用(サンドボックス)教室の判定(サーバー側)。
-// クライアント側の `isDevelopmentClassroom` と同一規則。
-// **片方だけ変えない**(サーバーが許可しないとクライアントを解放しても機能しない/その逆も同じ)。
+// 検証用(開発用・サンドボックス)教室の判定(サーバー側)。
 //
-// 対象: 開発用教室 と 上の ID 許可リストの教室(テスト教室)。
-// この判定は「他教室のバックアップをこの教室へ読み込む(Feature B)」のアクセス許可と、
-// 読み込み元候補からサンドボックス教室自身を外すために使う。
-export function isDevelopmentClassroomIdentity(id: string | null | undefined, name: string | null | undefined) {
-  const rawId = (id ?? '').trim()
-  const normalizedId = rawId.toLowerCase()
-  const normalizedName = (name ?? '').trim()
-  return SANDBOX_CLASSROOM_IDS.includes(rawId)
-    || normalizedId === 'development'
-    || normalizedId === 'dev'
-    || normalizedId.includes('development')
-    || normalizedId.startsWith('dev_')
-    || normalizedName === '開発用教室'
-    || normalizedName.includes('開発用教室')
+// ★実装は持たない。正本は **クライアント側の登録台帳** `src/utils/developmentClassroomRegistry.ts` で、
+//   functions/scripts/sync-shared.mjs がビルド前に ./generated/developmentClassroomRegistry.ts へ複製する。
+//   このファイルはその生成物へ委譲するだけの薄いラッパ(サーバーに二度目の規則を書かない)。
+//   ズレは developmentClassroomRegistry.parity.test.ts が検出する。
+//
+// ★2026-09-16 の是正(docs/spec-multi-tenant.md・計画 §6-2/§6-3)
+//   旧実装は教室名「開発用教室」や ID の dev/development 曖昧一致で判定していた。複数会社(workspace)に
+//   広げると他社が同名教室を作るだけで検証用教室の特権(Feature B・先行機能)が付くため、
+//   **(workspaceKey, classroomId) の完全一致**へ変更した。呼び出し側は必ず workspaceKey を渡す。
+//   オーナー指示 2026-07-28「名前判定じゃ不安・ID で固定する」(commit 020cd46)の延長で、
+//   テスト教室 test_classroom_20260507_dai も台帳に登録済み。
+//
+// この判定の用途:
+//  - 「他教室のバックアップをこの教室へ読み込む(Feature B)」のアクセス許可と、読み込み元候補からの自教室除外
+//  - 開発用教室限定の機能(確認リストの通知抑止・質問への AI 即時回答・保護者ポータル第1段)
+// クライアント側の混入防止ガード(自教室が発行していないトークンを剥がす)と**必ずセット**で効かせる
+// (片方だけ広げると 2026-07-09 のQR混入事故が再発する)。
+import { isRegisteredDevelopmentClassroom, resolveDevelopmentClassroomId } from './generated/developmentClassroomRegistry'
+
+/** その会社(workspaceKey)で登録済みの検証用教室か。未登録・別会社・空文字は false(fail-closed)。 */
+export function isDevelopmentClassroomIdentity(
+  workspaceKey: string | null | undefined,
+  id: string | null | undefined,
+): boolean {
+  return isRegisteredDevelopmentClassroom(workspaceKey, id)
 }
+
+/** その会社の「開発用教室」の教室ID(kind='development')。未登録の会社は null。 */
+export { resolveDevelopmentClassroomId }

@@ -117,6 +117,7 @@ export const featureRolloutRegistry = {
   // ⚠️ サーバー側 functions/src/parentPortal.ts の isParentPortalEnabledForClassroom が**同一の述語**を持つ
   // (OFF の教室では parentPortalApi が 403)。昇格するときは**両側を同時に**変える(片方だけ広げると、QR は出るのに
   // ページが開けない/ページは開けるのに QR が出ない、の非対称になる)。昇格はオーナー確認後。
+  // ★検証用教室の判定は登録台帳(workspaceKey + 教室ID)。2026-09-16 までの「教室名が開発用教室」は廃止。
   // ★scope は `staging-environment`(= staging プロジェクト全教室 ＋ どの環境でも開発用/テスト教室)。
   //   `development-only` だと staging の一般教室でボタンが出ず、サーバーだけ許可する非対称になって
   //   §H の「staging 実機で確認」が実行できない(レビュー指摘 2026-09-13)。
@@ -148,13 +149,18 @@ export function isFeatureScopeEnabled(
   return context.isDevelopmentClassroom
 }
 
+// ⚠️ 2026-09-16 以降、検証用教室の判定は **教室ID**(会社=workspace ごとの登録台帳
+// src/utils/developmentClassroomRegistry.ts)で行う。呼び出し側は必ず `id` を渡すこと
+// (`{ name }` だけを渡すと development-only 機能が開発用教室でも無効になる)。
+// workspaceKey は既定で現在の接続先。テストからは第3引数で明示する。
 export function isFeatureEnabledForClassroom(
   featureKey: FeatureRolloutKey,
   classroom: DevelopmentClassroomIdentity | null | undefined,
+  workspaceKey: string = getFirebaseBackendConfig().workspaceKey,
 ) {
   const feature = featureRolloutRegistry[featureKey]
   return isFeatureScopeEnabled(feature.scope, {
     isStaging: isStagingEnvironment(),
-    isDevelopmentClassroom: isDevelopmentClassroom(classroom),
+    isDevelopmentClassroom: isDevelopmentClassroom(classroom, workspaceKey),
   })
 }

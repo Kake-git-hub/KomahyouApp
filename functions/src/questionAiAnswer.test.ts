@@ -46,13 +46,15 @@ const baseInput = {
 
 describe('questionAiAnswer: 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)', () => {
   it('AI を呼ぶのは 質問 × 開発用教室 × 確認リストでない ときだけ(本番教室・要望・不具合では呼ばない)', () => {
-    const devClassroom = isDevelopmentClassroomIdentity('v8OZ7zH8vONNHjjYVcR1', '開発用教室')
+    // 2026-09-16: 開発用教室の判定は登録台帳の (workspaceKey, 教室ID)。教室名では判定しない。
+    const devClassroom = isDevelopmentClassroomIdentity('main', 'v8OZ7zH8vONNHjjYVcR1')
     expect(devClassroom).toBe(true)
     expect(shouldAnswerQuestionWithAi({ category: 'question', isDevelopmentClassroom: devClassroom, isVerificationChecklist: false })).toBe(true)
-    // 本番3教室は ID/名前とも開発用教室判定に当たらない＝AI を呼ばない。
-    for (const [id, name] of [['5w5OMueETerSKrSf14HC', 'スクールIE 日大前校'], ['KzFnOQoTFLsCxwUp1tvh', 'スクールIE 緑が丘校'], ['6xnnbSTbwgGrBLy0EJKb', 'スクールIE 薬円台校']]) {
-      expect(shouldAnswerQuestionWithAi({ category: 'question', isDevelopmentClassroom: isDevelopmentClassroomIdentity(id, name), isVerificationChecklist: false })).toBe(false)
+    // 本番3教室は台帳に無い＝AI を呼ばない。別会社(workspace)の同じ教室IDも呼ばない。
+    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
+      expect(shouldAnswerQuestionWithAi({ category: 'question', isDevelopmentClassroom: isDevelopmentClassroomIdentity('main', id), isVerificationChecklist: false })).toBe(false)
     }
+    expect(shouldAnswerQuestionWithAi({ category: 'question', isDevelopmentClassroom: isDevelopmentClassroomIdentity('company-b', 'v8OZ7zH8vONNHjjYVcR1'), isVerificationChecklist: false })).toBe(false)
     expect(shouldAnswerQuestionWithAi({ category: 'request', isDevelopmentClassroom: true, isVerificationChecklist: false })).toBe(false)
     expect(shouldAnswerQuestionWithAi({ category: 'bug', isDevelopmentClassroom: true, isVerificationChecklist: false })).toBe(false)
     expect(shouldAnswerQuestionWithAi({ category: 'question', isDevelopmentClassroom: true, isVerificationChecklist: true })).toBe(false)

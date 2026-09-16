@@ -1,7 +1,8 @@
 // 「質問・要望」の質問に AI がその場で回答する(試験実装・開発用教室のみ。オーナー指示 2026-09-14)。
 //
 // 位置づけ: docs/spec-developer-report.md §G-7。§G-1「AI 即答は作らない」を**開発用教室に限って**試す例外。
-//  - 対象は category=question かつ 開発用教室(isDevelopmentClassroomIdentity)だけ。本番教室では呼ばない。
+//  - 対象は category=question かつ 検証用教室だけ(isDevelopmentClassroomIdentity(workspaceKey, classroomId) =
+//    登録台帳 src/utils/developmentClassroomRegistry.ts に (会社, 教室ID) があるか)。本番教室では呼ばない。
 //  - 質問は従来どおり developerReports へ記録・メール通知される(AI 回答は「上乗せ」。記録を置き換えない)。
 //  - AI に渡すのは **利用者マニュアル(docs/user-manual.md)＋質問文＋直近の操作履歴** だけ。
 //    教室データ(スナップショット)は渡さない(オーナー確定 2026-09-14)。
