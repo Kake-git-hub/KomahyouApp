@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.535 (2026-09-16)
 - refactor(INV-08): 検証用教室の識別子型 `DevelopmentClassroomIdentity` から `name` を削除し、`{ id }` だけにした。教室名だけを渡す旧形(`{ name: classroomName }`)が**コンパイルエラー**になり、development-only 機能が開発用教室で静かに無効化される回帰を型で止める (src/utils/developmentClassroom.ts・src/components/schedule-board/ScheduleBoardScreen.tsx・src/utils/scheduleHtml.ts)
 - refactor(INV-08): サーバー側 `isDevelopmentClassroomIdentity` を同型 string 2 引数から名前付き引数 `{ workspaceKey, classroomId }` に変更(順序を取り違えても型が通り静かに false になるのを防ぐ)。呼び出し 6 か所を追随 (functions/src/developmentClassroomIdentity.ts・functions/src/index.ts・functions/src/parentPortal.ts)
 - test(INV-08): `isDevelopmentClassroom` / `isFeatureEnabledForClassroom` の呼び出しを **src 全体走査**で固定する兄弟テストを追加(2 ファイル限定だった字面テストが新規ファイルの呼び出しを見逃す穴を塞ぐ・App.tsx の CRLF も正規化して走査) (src/utils/developmentClassroom.callSites.test.ts)
