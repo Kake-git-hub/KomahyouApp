@@ -687,7 +687,7 @@ function createBasePayload(params: OpenScheduleHtmlParams, linkedStudents: Stude
     lessonHistoryEnabled: Boolean(params.lessonHistoryEnabled),
     // 質問への AI 即時回答(開発用教室のみ・spec-developer-report §G-7)。表示の切り替えだけ(AI を呼ぶ権威はサーバー)。
     // 教室判定は【教室ID】(登録台帳・2026-09-16)。classroomStorageKey は App.tsx が渡す actingClassroomId。
-    questionAiAnswerEnabled: isFeatureEnabledForClassroom('questionAiAnswer', { id: params.classroomStorageKey, name: params.classroomName }),
+    questionAiAnswerEnabled: isFeatureEnabledForClassroom('questionAiAnswer', { id: params.classroomStorageKey }),
   }
 }
 

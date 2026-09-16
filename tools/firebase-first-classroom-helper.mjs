@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { stdin as input, stdout as output } from 'node:process'
 import { createInterface } from 'node:readline/promises'
-import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 const defaultSpecialSessions = [
   {
@@ -252,7 +252,7 @@ async function main() {
   output.write(`${markdown}\n`)
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = isInvokedDirectly(import.meta.url)
 if (invokedDirectly) {
   main().catch((error) => {
     const message = error instanceof Error ? error.message : String(error)

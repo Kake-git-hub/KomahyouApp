@@ -11,8 +11,7 @@
 //   - --json で復号した台帳をそのまま出す（他ツールへ渡す用）。
 import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 export const USAGE = '使い方: node tools/lesson-ledger-report.mjs <classroomId> --workspace <key> [--date YYYY-MM-DD] [--student 氏名] [--list] [--json]'
 
@@ -149,7 +148,7 @@ async function main() {
   }
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = isInvokedDirectly(import.meta.url)
 if (invokedDirectly) {
   await main()
 }

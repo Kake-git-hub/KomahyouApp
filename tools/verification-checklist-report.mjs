@@ -16,8 +16,7 @@
 //   - --version でマーカーの版を絞る（例: v1.5.502。先頭の v は付けても付けなくてもよい）。
 //   - --json で集約結果をそのまま出す（他ツールへ渡す用）。
 import { execFileSync, execSync } from 'node:child_process'
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 import { mergeChecklistReports, summarizeChecklistResults, buildChecklistMarkdown, toChecklistReport } from './verification-checklist-report.lib.mjs'
 
 const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
@@ -151,7 +150,7 @@ async function main() {
   console.log(buildChecklistMarkdown(summary, { heading }))
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+const invokedDirectly = isInvokedDirectly(import.meta.url)
 if (invokedDirectly) {
   await main()
 }

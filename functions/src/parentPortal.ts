@@ -120,7 +120,7 @@ export type ParentPortalClassroomIdentity = {
  *   ★2026-09-16 以前は教室名「開発用教室」でも有効だったが、他社が同名教室を作ると誤って有効になるため廃止。
  */
 export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroomIdentity): boolean {
-  return isDevelopmentClassroomIdentity(identity.workspaceKey, identity.id)
+  return isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })
     || (identity.projectId ?? '').trim() === PARENT_PORTAL_STAGING_PROJECT_ID
 }
 

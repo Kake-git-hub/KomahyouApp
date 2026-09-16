@@ -225,7 +225,7 @@ describe('developerReport(server): 確認リストはメール・Issue の対象
   it('submitDeveloperReport は確認リストを notifiedAt 即時埋め＋記録し、メールトリガーは送信前に打ち切る', () => {
     const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
     // 2026-09-16: 検証用教室の判定は (workspaceKey, classroomId) の登録台帳。教室名は渡さない。
-    expect(indexTs).toContain('const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity(workspaceKey, classroomId))')
+    expect(indexTs).toContain('const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity({ workspaceKey, classroomId }))')
     expect(indexTs).toContain('notifiedAt: report.isTest || isVerificationChecklist ? recordedAt : null,')
     expect(indexTs).toMatch(/isVerificationChecklist,\s*\n\s*note: report\.note,/u)
     const trigger = indexTs.slice(indexTs.indexOf('export const notifyDeveloperReportByMail'))

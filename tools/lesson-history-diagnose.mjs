@@ -18,6 +18,7 @@
 //   --workspace は必須（会社＝workspace のキー。既定値は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
 import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
 const DEFAULT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
@@ -182,7 +183,7 @@ async function main() {
   if (failures > 0) process.exitCode = 4
 }
 
-const isDirectRun = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href
+const isDirectRun = isInvokedDirectly(import.meta.url)
 if (isDirectRun) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.stack : String(error))

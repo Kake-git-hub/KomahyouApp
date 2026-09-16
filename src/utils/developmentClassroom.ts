@@ -1,14 +1,18 @@
 import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 import { isRegisteredDevelopmentClassroom } from './developmentClassroomRegistry'
 
+/**
+ * 検証用教室の判定に渡す教室の識別情報。**教室ID だけ**を持つ(2026-09-16・docs/spec-multi-tenant.md)。
+ *
+ * ★`name` を意図的に持たない(回帰防止・型で固定): 2026-09-16 までは教室名「開発用教室」でも検証用教室と
+ * 見なしていたが、複数会社(workspace)展開で他社が同名の教室を作ると誤発火するため廃止した(オーナー確定)。
+ * 名前フィールドを型に残しておくと `{ name: classroomName }` だけを渡す呼び出しが**コンパイルを通ってしまい**、
+ * その画面の development-only 機能が開発用教室でも静かに無効化される(2026-09-16 レビュー指摘)。
+ * ここに `name` を戻さない。教室オブジェクト(`actingClassroom` など)は余剰プロパティ検査の対象外
+ * (変数経由の代入)なので、そのまま渡せる。
+ */
 export type DevelopmentClassroomIdentity = {
   id?: string | null
-  /**
-   * 判定には**使わない**(呼び出し元が持っている教室オブジェクトをそのまま渡せるように型だけ残す)。
-   * 2026-09-16 までは教室名「開発用教室」でも検証用教室と見なしていたが、複数会社(workspace)展開で
-   * 他社が同名の教室を作ると誤発火するため廃止した(オーナー確定・docs/spec-multi-tenant.md)。
-   */
-  name?: string | null
 }
 
 // 検証用(サンドボックス)教室の判定。**登録台帳 src/utils/developmentClassroomRegistry.ts が唯一の正本**で、

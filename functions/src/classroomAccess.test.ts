@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { describe, expect, it } from 'vitest'
 import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'
 
@@ -38,5 +41,46 @@ describe('resolveClassroomAccessDecision(テナント越境ガード)', () => {
     expect(requiresClassroomExistenceCheck({ role: 'developer' })).toBe(true)
     expect(requiresClassroomExistenceCheck({ role: 'manager', assignedClassroomId: 'A' })).toBe(false)
     expect(requiresClassroomExistenceCheck(undefined)).toBe(false)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// 配線(source-scan): 純関数が正しくても、index.ts の呼び出し側が事実を取り違えるとガードは死ぬ。
+// 作法は developerReport.test.ts と同じ字面スキャン(functions には実行/描画テスト環境が無い)。
+// ここが落ちる代表的な改悪:
+//  - classroomExists に定数 true を渡す(＝ developer が常に通り、会社の壁＝越境ガードが消える)
+//  - developer 以外にも教室 doc の読みを常に走らせる(＝室長の保存ごとに Firestore 読み取りが 1 回増える)
+// ───────────────────────────────────────────────────────────────────────────
+describe('requireClassroomAccessMember の配線(index.ts・2026-09-16 Phase 0 / T0-3)', () => {
+  const indexTs = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8')
+  const start = indexTs.indexOf('async function requireClassroomAccessMember')
+  const body = indexTs.slice(start, indexTs.indexOf('function buildTemporaryPassword', start))
+
+  it('判定は純関数 resolveClassroomAccessDecision に委譲する(index.ts 側に規則を書き戻さない)', () => {
+    expect(start).toBeGreaterThan(-1)
+    expect(indexTs).toContain("import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from './classroomAccess'")
+    expect(body).toContain('const decision = resolveClassroomAccessDecision(member, classroomId, classroomExists)')
+  })
+
+  it('教室 doc の存在は「実際に読んだ結果」を渡す(定数 true を渡さない)', () => {
+    expect(body).toContain("? (await firestore.collection('workspaces').doc(workspaceKey).collection('classrooms').doc(classroomId).get()).exists")
+    expect(body).not.toMatch(/resolveClassroomAccessDecision\(member, classroomId, (true|false)\)/u)
+    expect(body).not.toMatch(/const classroomExists = (true|false)\b/u)
+  })
+
+  it('読みは developer のときだけ(条件は requiresClassroomExistenceCheck・未確認は undefined で fail closed)', () => {
+    expect(body).toContain('const classroomExists = requiresClassroomExistenceCheck(member)')
+    expect(body).toContain(': undefined')
+    // 教室 doc の読みはこの三項の中に 1 回だけ。無条件の読み(常時 await)へ広げない。
+    const classroomReads = body.match(/collection\('classrooms'\)\.doc\(classroomId\)\.get\(\)/gu) ?? []
+    expect(classroomReads.length).toBe(1)
+    const readLine = body.split(/\r?\n/u).find((line) => line.includes("collection('classrooms').doc(classroomId).get()")) ?? ''
+    expect(readLine.trimStart().startsWith('? '), readLine).toBe(true)
+  })
+
+  it('拒否理由の出し分け(not-found / permission-denied)を保つ', () => {
+    expect(body).toContain("if (decision.reason === 'classroom-not-found')")
+    expect(body).toContain("throw new HttpsError('not-found'")
+    expect(body).toContain("throw new HttpsError('permission-denied'")
   })
 })

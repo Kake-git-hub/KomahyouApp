@@ -14,7 +14,7 @@
 // 実ネットワークを使う部分は fetchImpl を注入できるようにし、整形ロジックはテスト(developer-report-notify.test.mjs)で固定する。
 
 import { appendFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { isInvokedDirectly } from './invoked-directly.mjs'
 
 export const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
 export const DEFAULT_WORKSPACE_KEY = 'main'
@@ -245,6 +245,6 @@ async function main() {
 }
 
 // CLI として直接実行されたときだけ動かす(テストから import しても実行されない)。
-if (process.argv[1] && process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isInvokedDirectly(import.meta.url)) {
   await main()
 }
