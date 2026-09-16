@@ -116,7 +116,7 @@ jobs:
           STUDENT_ID: ${{ github.event.inputs.diagnose_student }}
         run: |
           if [ -n "$STUDENT_ID" ]; then
-            node tools/lesson-history-diagnose.mjs --classroom "$CLASSROOM_ID" --student "$STUDENT_ID" --from 2026-01-01 --to 2026-12-31
+            node tools/lesson-history-diagnose.mjs --workspace main --classroom "$CLASSROOM_ID" --student "$STUDENT_ID" --from 2026-01-01 --to 2026-12-31
           else
-            node tools/lesson-history-diagnose.mjs --classroom "$CLASSROOM_ID" --from 2026-01-01 --to 2026-12-31
+            node tools/lesson-history-diagnose.mjs --workspace main --classroom "$CLASSROOM_ID" --from 2026-01-01 --to 2026-12-31
           fi

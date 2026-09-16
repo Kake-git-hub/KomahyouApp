@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { stdin as input, stdout as output } from 'node:process'
 import { createInterface } from 'node:readline/promises'
+import { fileURLToPath } from 'node:url'
 
 const defaultSpecialSessions = [
   {
@@ -85,7 +86,9 @@ function toDateKey(date) {
   return `${year}-${month}-${day}`
 }
 
-function readWorkspaceKeyFromEnvFile() {
+// 既定値 'main' へのフォールバックは廃止済み（2026-09-16 複数会社展開 Phase 0 T0-4）。
+// env に無ければ空文字を返し、呼び出し側（対話プロンプト／--non-interactive の必須値検査）に委ねる。
+export function readWorkspaceKeyFromEnvFile() {
   for (const fileName of ['.env.local', '.env']) {
     try {
       const text = readFileSync(resolve(fileName), 'utf8')
@@ -95,7 +98,7 @@ function readWorkspaceKeyFromEnvFile() {
       // ignore missing env files
     }
   }
-  return 'main'
+  return ''
 }
 
 function sanitizeClassroomId(value) {
@@ -104,7 +107,7 @@ function sanitizeClassroomId(value) {
   return trimmed.replace(/[^A-Za-z0-9_-]+/g, '_')
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const result = {}
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]
@@ -175,6 +178,13 @@ function buildMarkdown(config) {
   return `# Firebase 初回教室作成メモ\n\n## 入力値\n\n- workspaceKey: ${config.workspaceKey}\n- classroomId: ${config.classroomId}\n- classroomName: ${config.classroomName}\n- managerUid: ${config.managerUid}\n- managerName: ${config.managerName}\n- managerEmail: ${config.managerEmail}\n- developerUid: ${config.developerUid}\n- contractStartDate: ${config.contractStartDate}\n\n## 作成先\n\n1. Authentication で Email/Password ユーザーを作成済みにする\n2. Firestore に以下を追加する\n\n### members\n\nパス: workspaces/${config.workspaceKey}/members/${config.managerUid}\n\n\`\`\`json\n${JSON.stringify(membersDoc, null, 2)}\n\`\`\`\n\n### classrooms\n\nパス: workspaces/${config.workspaceKey}/classrooms/${config.classroomId}\n\n\`\`\`json\n${JSON.stringify(classroomDoc, null, 2)}\n\`\`\`\n\n### classroomSnapshots\n\nパス: workspaces/${config.workspaceKey}/classroomSnapshots/${config.classroomId}\n\n\`\`\`json\n${JSON.stringify(snapshotDoc, null, 2)}\n\`\`\`\n\n## 確認\n\n- 管理者でログインできること\n- 開発者でログインすると教室一覧に表示されること\n- 保存後に classroomSnapshots/${config.classroomId} の savedAt が更新されること\n`
 }
 
+// --non-interactive のときだけ厳密に検査する必須値。workspaceKey は
+// 既定値 'main' 廃止（Phase 0 T0-4）に伴い明示指定を必須にした。
+export function validateNonInteractiveConfig(config) {
+  const required = ['workspaceKey', 'classroomName', 'managerUid', 'managerName', 'managerEmail', 'developerUid']
+  return required.filter((key) => !config[key])
+}
+
 async function promptForMissingConfig(initialConfig) {
   const rl = createInterface({ input, output })
   try {
@@ -223,8 +233,9 @@ async function main() {
     ? initialConfig
     : await promptForMissingConfig(initialConfig)
 
-  if (!config.classroomName || !config.managerUid || !config.managerName || !config.managerEmail || !config.developerUid) {
-    throw new Error('必須値が不足しています。`npm run firebase:first-classroom` を対話形式で実行するか、必要な `--classroom-name` などを指定してください。')
+  const missing = validateNonInteractiveConfig(config)
+  if (missing.length > 0) {
+    throw new Error('必須値が不足しています。`npm run firebase:first-classroom` を対話形式で実行するか、必要な `--workspace-key` `--classroom-name` などを指定してください。')
   }
 
   const markdown = buildMarkdown(config)
@@ -240,8 +251,11 @@ async function main() {
   output.write(`${markdown}\n`)
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error)
-  console.error(message)
-  process.exitCode = 1
-})
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    console.error(message)
+    process.exitCode = 1
+  })
+}
