@@ -163,8 +163,10 @@ React 化により、`ScheduleView` は盤面 state を直接参照するので*
 **チェック合格まで main（＝本番）へマージしない。** 実装は feature ブランチ上で完結させる。
 
 1. **staging のテストデータ準備**：日大前の現状データ（出席込み）を
-   `node tools/copy-prod-classroom-to-staging.mjs`（`--promote-staging-member` で staging
-   ログインから教室を選択可能にする）でコピーする。再実行すれば最新を取り直せる。
+   `node tools/copy-prod-classroom-to-staging.mjs --workspace main --classroom 5w5OMueETerSKrSf14HC`
+   （`--promote-staging-member` で staging ログインから教室を選択可能にする）でコピーする。
+   再実行すれば最新を取り直せる。`--workspace`/`--classroom` は必須（既定値は廃止済み・
+   2026-09-16 複数会社展開 Phase 0 T0-4）。
    ⚠️ Claude の自動実行は Firestore 書き込み系の権限ルールでブロックされるため、
    **オーナーがターミナルで実行**（gcloud 認証済みPC・数分で完了）。
 2. **staging での有効化**：staging 環境判定（`isStagingEnvironment()`）で React 対話ビュー・

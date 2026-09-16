@@ -10,6 +10,29 @@ import {
   summarizeChecklistResults,
   buildChecklistMarkdown,
 } from './verification-checklist-report.lib.mjs'
+import { parseArgs, validateArgs } from './verification-checklist-report.mjs'
+
+// --workspace 必須化(2026-09-16 複数会社展開 Phase 0 T0-4)の回帰防止テスト。
+// 既定 workspace='main' への暗黙フォールバックが復活していないことを固定する。
+// import しても await main() が走らない(invokedDirectly ガード)前提。
+describe('parseArgs/validateArgs (--workspace 必須化)', () => {
+  it('--workspace を読み取る(既定値は無い)', () => {
+    expect(parseArgs(['--workspace', 'main']).workspaceKey).toBe('main')
+  })
+
+  it('未指定なら workspaceKey は空文字のまま', () => {
+    expect(parseArgs([]).workspaceKey).toBe('')
+  })
+
+  it('classroomId は既定の開発用教室のまま(こちらは変更対象外)', () => {
+    expect(parseArgs([]).classroomId).toBe('v8OZ7zH8vONNHjjYVcR1')
+  })
+
+  it('--workspace 無しはエラー、有りはエラー無し', () => {
+    expect(validateArgs({ workspaceKey: '' })).toEqual(['--workspace <key> は必須です。'])
+    expect(validateArgs({ workspaceKey: 'main' })).toEqual([])
+  })
+})
 
 describe('parseChecklistMarker', () => {
   it('単一送信のマーカーを認識する', () => {
