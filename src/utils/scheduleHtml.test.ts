@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildCombinedRegularLessonsFromHistory, buildExpectedRegularOccurrences, buildSerializedScheduleCountAdjustments, computeDeskPickerFitScale, openAllScheduleHtml, openStudentScheduleHtml, openTeacherScheduleHtml , resolveDisplayedOverlappingSession } from './scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries, scheduleLessonTypeLabels } from './scheduleViewData'
 import { computeTeacherMove } from '../components/schedule-board/ScheduleBoardScreen'
@@ -5006,6 +5006,10 @@ describe('生徒の退塾日は当日から非在籍: 日程表(回数表の予�
 // ============================================================================
 describe('transferSourceRestDisplay: payload と埋め込みスクリプト', () => {
   const DEVELOPMENT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
+  // 開発用教室の判定は登録台帳の (workspaceKey, 教室ID)。workspaceKey は env 由来なので、.env.local の無い
+  // CI でも同じ結果になるよう固定する(同ファイル「開発者へ報告ボタン」と同じ作法・2026-09-16 CI 赤の是正)。
+  beforeEach(() => { vi.stubEnv('VITE_FIREBASE_WORKSPACE_KEY', 'main') })
+  afterEach(() => { vi.unstubAllEnvs() })
 
   function stubRestPopup() {
     const write = vi.fn()
