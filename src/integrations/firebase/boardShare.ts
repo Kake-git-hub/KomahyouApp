@@ -116,7 +116,8 @@ async function gunzipBase64ToText(value: string) {
   return new TextDecoder().decode(buffer)
 }
 
-async function hydrateBoardShareDoc(data: StoredBoardShareDoc | null | undefined): Promise<BoardSharePayload | null> {
+// 読み取り側は無改変(後方互換: workspaceKey を持たない旧ドキュメントもそのまま復元する)。export はテスト用。
+export async function hydrateBoardShareDoc(data: StoredBoardShareDoc | null | undefined): Promise<BoardSharePayload | null> {
   if (!data) return null
   const base = {
     schemaVersion: data.schemaVersion,

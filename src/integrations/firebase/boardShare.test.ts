@@ -1,6 +1,41 @@
 import { describe, expect, it } from 'vitest'
 import type { SlotCell } from '../../components/schedule-board/types'
-import { buildBoardShareDocBase, compactBoardSharePayload, type BoardSharePayload } from './boardShare'
+import { buildBoardShareDocBase, compactBoardSharePayload, hydrateBoardShareDoc, type BoardSharePayload } from './boardShare'
+
+describe('hydrateBoardShareDoc(読み取りの後方互換・spec-multi-tenant §5-3-2)', () => {
+  // workspaceKey は「書くだけ」。旧ドキュメント(workspaceKey 無し・cells 直載せ)は従来どおり復元できること。
+  // ここを「workspaceKey 必須」にすると、配布済みの共有 URL が一斉に壊れる(読みの無改変が仕様)。
+  it('workspaceKey を持たない旧ドキュメントを従来どおり復元する', async () => {
+    const legacyDoc = {
+      schemaVersion: 1 as const,
+      token: 'legacy-token',
+      classroomId: 'classroom-1',
+      classroomName: 'スクールIE 緑が丘校',
+      sharedAt: '2026-06-01T00:00:00.000Z',
+      cells: [{ id: 'cell-1', slotIndex: 0, dayIndex: 0 } as never],
+    }
+    const payload = await hydrateBoardShareDoc(legacyDoc)
+    expect(payload).not.toBeNull()
+    expect(payload?.token).toBe('legacy-token')
+    expect(payload?.classroomId).toBe('classroom-1')
+    expect(payload?.cells).toHaveLength(1)
+    expect('workspaceKey' in (payload ?? {})).toBe(false)
+  })
+
+  it('workspaceKey 付きの新ドキュメントも同じ形で復元する(読みは workspaceKey を見ない)', async () => {
+    const payload = await hydrateBoardShareDoc({
+      schemaVersion: 1,
+      token: 'new-token',
+      classroomId: 'classroom-1',
+      classroomName: 'スクールIE 緑が丘校',
+      sharedAt: '2026-09-16T00:00:00.000Z',
+      workspaceKey: 'main',
+      cells: [],
+    })
+    expect(payload?.token).toBe('new-token')
+    expect(payload?.cells).toEqual([])
+  })
+})
 
 describe('compactBoardSharePayload', () => {
   it('keeps board-share display fields and removes bulky board-only data', () => {
