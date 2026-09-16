@@ -16,6 +16,7 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 - docs: 複数会社展開計画の残判断点を確定(方式B 上流フォーク・複製は2社目の要望を見てから／Phase 0→1 を今から着手) (docs/plan-2026-09-15-multi-company-architecture.md §9)
+- fix: テナント(会社=workspace)越境ガードを追加 — 開発者会員の callable は教室 doc の実在を確認してから通す(別会社/存在しない教室 ID の素通りを封鎖・functions/src/classroomAccess.ts・functions/src/index.ts requireClassroomAccessMember)。配布用盤面の共有ドキュメントに workspaceKey を書き足し(読みは無改変・src/integrations/firebase/boardShare.ts)、Firestore ルールに会社越境の遮断テストを追加(firebase/rules/firestore.rules.test.ts)
 
 ## v1.5.532 (2026-09-16)
 
