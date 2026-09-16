@@ -250,7 +250,8 @@ QR 提出（講師/生徒）を盤面へ反映する機能には**永続化経�
 - 実績・配置のコマ一覧は**直近 400 日分**に絞る（盤面は週を無期限保持するため、何年も経つと肥大化する。
   未消化の元コマ一覧はこの制限を受けない）。容量の目安は生徒 100 名規模で圧縮後 1 日 50〜100KB。
 - 保存本体より優先度が低い: 計算・書き込みに失敗しても保存は成功のまま（操作ログと同じ方針）。
-- 閲覧は `node tools/lesson-ledger-report.mjs <classroomId> [--date YYYY-MM-DD] [--student 氏名]`（読み取り専用・gcloud ログイン済み PC）。
+- 閲覧は `node tools/lesson-ledger-report.mjs <classroomId> --workspace main [--date YYYY-MM-DD] [--student 氏名]`（読み取り専用・
+  gcloud ログイン済み PC。`--workspace` は必須・既定値は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
   画面表示は無し（2026-09-04 時点）。
 
 ### 8-2. 自動バックアップの段階間引き（#7・#8 共通）

@@ -1,19 +1,23 @@
-#!/usr/bin/env node
 // 生徒授業台帳（classroomSnapshots/{id}/lessonLedgerDays）を読み取り専用で表示するレポート。
 //
 // 「ある日時点で、各生徒の授業数・未消化数（元コマ一覧つき）がどうだったか」を後から確認するための道具。
 // Firestore へは GET しかしない（書き込み API は一切呼ばない・本番データ保護ルール準拠）。
 //
 // 使い方（gcloud にログイン済みの PC で）:
-//   node tools/lesson-ledger-report.mjs <classroomId> [--date YYYY-MM-DD] [--student 氏名の一部] [--project komahyouapp-prod] [--json]
+//   node tools/lesson-ledger-report.mjs <classroomId> --workspace <key> [--date YYYY-MM-DD] [--student 氏名の一部] [--project komahyouapp-prod] [--json]
+//   - --workspace は必須（会社＝workspace のキー。既定値は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
 //   - --date 省略時は最新の台帳。指定日の台帳が無ければ「その日以前で最新」を使う（保存が無い日はドキュメントが無い）。
 //   - --student で生徒を絞る（部分一致）。
 //   - --json で復号した台帳をそのまま出す（他ツールへ渡す用）。
 import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-function parseArgs(argv) {
-  const options = { classroomId: '', date: '', student: '', project: 'komahyouapp-prod', workspaceKey: 'main', json: false, list: false }
+export const USAGE = '使い方: node tools/lesson-ledger-report.mjs <classroomId> --workspace <key> [--date YYYY-MM-DD] [--student 氏名] [--list] [--json]'
+
+export function parseArgs(argv) {
+  const options = { classroomId: '', date: '', student: '', project: 'komahyouapp-prod', workspaceKey: '', json: false, list: false }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (arg === '--date') { options.date = argv[++index] ?? ''; continue }
@@ -26,6 +30,12 @@ function parseArgs(argv) {
     if (!options.classroomId) options.classroomId = arg
   }
   return options
+}
+
+export function validateArgs(options) {
+  const errors = []
+  if (!options.workspaceKey) errors.push('--workspace <key> は必須です。')
+  return errors
 }
 
 function accessToken() {
@@ -60,9 +70,15 @@ function decodeDoc(doc) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
-  if (options.help || !options.classroomId) {
-    console.log('使い方: node tools/lesson-ledger-report.mjs <classroomId> [--date YYYY-MM-DD] [--student 氏名] [--list] [--json]')
-    process.exitCode = options.help ? 0 : 1
+  if (options.help) {
+    console.log(USAGE)
+    return
+  }
+  const errors = [...(options.classroomId ? [] : ['<classroomId> は必須です。']), ...validateArgs(options)]
+  if (errors.length > 0) {
+    console.error(USAGE)
+    for (const error of errors) console.error(`  - ${error}`)
+    process.exitCode = 1
     return
   }
   const token = accessToken()
@@ -133,4 +149,7 @@ async function main() {
   }
 }
 
-await main()
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
+  await main()
+}

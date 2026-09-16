@@ -1,10 +1,10 @@
-#!/usr/bin/env node
 // 本番教室の Firestore データを staging へコピーする（オーナー明示指示 2026-07-08）。
 // 用途: staging のテストデータを「スクールIE 日大前の現状データ(出席状況込み)」にする。
 //
-//   node tools/copy-prod-classroom-to-staging.mjs [classroomId] [--promote-staging-member]
+//   node tools/copy-prod-classroom-to-staging.mjs --workspace <key> --classroom <classroomId> [--promote-staging-member]
 //
-//   classroomId 省略時: 5w5OMueETerSKrSf14HC (スクールIE 日大前校)
+//   --workspace 必須（会社＝workspace のキー。本番は main）。
+//   --classroom 必須（既定教室は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
 //   --promote-staging-member: staging の members 全員を role=developer に昇格して
 //     全教室を選択可能にする(assignedClassroomId は外す)。推奨。
 //   --assign-staging-member: role は manager のまま、assignedClassroomId をコピーした
@@ -23,25 +23,46 @@
 // 1件ずつ逐次リクエストになり、数分〜十数分「無出力で止まって見える」原因になっていた。
 
 import { execSync } from 'node:child_process'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const SOURCE_PROJECT = 'komahyouapp-prod'
 const DEST_PROJECT = 'komahyouapp-staging'
-const WORKSPACE_KEY = 'main'
 
 if (DEST_PROJECT !== 'komahyouapp-staging') {
   throw new Error('DEST_PROJECT は komahyouapp-staging 固定。書き込み先の変更は禁止。')
 }
 
-const args = process.argv.slice(2)
-const classroomId = args.find((a) => !a.startsWith('--')) ?? '5w5OMueETerSKrSf14HC'
-const promoteMember = args.includes('--promote-staging-member')
-const assignMember = args.includes('--assign-staging-member')
+export const USAGE = '使い方: node tools/copy-prod-classroom-to-staging.mjs --workspace <key> --classroom <classroomId> [--promote-staging-member] [--assign-staging-member]'
+
+export function parseArgs(argv) {
+  const options = { workspaceKey: '', classroomId: '', promoteMember: false, assignMember: false }
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index]
+    if (arg === '--workspace') { options.workspaceKey = argv[++index] ?? ''; continue }
+    if (arg === '--classroom') { options.classroomId = argv[++index] ?? ''; continue }
+    if (arg === '--promote-staging-member') { options.promoteMember = true; continue }
+    if (arg === '--assign-staging-member') { options.assignMember = true; continue }
+  }
+  return options
+}
+
+export function validateArgs(options) {
+  const errors = []
+  if (!options.workspaceKey) errors.push('--workspace <key> は必須です。')
+  if (!options.classroomId) errors.push('--classroom <classroomId> は必須です。')
+  return errors
+}
+
+// main() から使う実行時の値。invokedDirectly のときだけ埋める(import 時にネットワークへ出ないため)。
+let WORKSPACE_KEY = ''
+let classroomId = ''
+let promoteMember = false
+let assignMember = false
+let token = ''
 
 const SRC_BASE = `https://firestore.googleapis.com/v1/projects/${SOURCE_PROJECT}/databases/(default)/documents`
 const DST_BASE = `https://firestore.googleapis.com/v1/projects/${DEST_PROJECT}/databases/(default)/documents`
-
-const token = execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim()
-if (!token) throw new Error('gcloud auth print-access-token が空。gcloud にログインしてください。')
 
 const READ_ONLY_POST_SUFFIXES = [':runQuery', ':listCollectionIds']
 
@@ -221,7 +242,24 @@ async function main() {
   console.log(`== 完了: copied=${stats.copied} deleted=${stats.deleted} skipped(saveAttempts等)=${stats.skipped} ==`)
 }
 
-main().catch((err) => {
-  console.error(err)
-  process.exit(1)
-})
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
+  const options = parseArgs(process.argv.slice(2))
+  const errors = validateArgs(options)
+  if (errors.length > 0) {
+    console.error(USAGE)
+    for (const error of errors) console.error(`  - ${error}`)
+    process.exit(1)
+  }
+  WORKSPACE_KEY = options.workspaceKey
+  classroomId = options.classroomId
+  promoteMember = options.promoteMember
+  assignMember = options.assignMember
+  token = execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim()
+  if (!token) throw new Error('gcloud auth print-access-token が空。gcloud にログインしてください。')
+
+  main().catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
+}

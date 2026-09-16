@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // 通常授業履歴(callable getStudentLessonHistory)のサーバー経路を読み取り専用で再現する診断ツール。
 //
 // 画面に「通常授業履歴を取得できませんでした: INTERNAL」しか出ないとき(確認リスト v1.5.504 h-2)、
@@ -14,17 +13,19 @@
 // 出力には生徒名・科目などのデータを載せない(件数・例外・型だけ)。
 //
 // 使い方:
-//   FIRESTORE_ACCESS_TOKEN=... node tools/lesson-history-diagnose.mjs --classroom v8OZ7zH8vONNHjjYVcR1 [--student <id>] [--to YYYY-MM-DD] [--legacy-name-order]
+//   FIRESTORE_ACCESS_TOKEN=... node tools/lesson-history-diagnose.mjs --workspace main --classroom v8OZ7zH8vONNHjjYVcR1 [--student <id>] [--to YYYY-MM-DD] [--legacy-name-order]
 //   (トークンが無ければ gcloud auth print-access-token を使う)
+//   --workspace は必須（会社＝workspace のキー。既定値は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
 import { execFileSync } from 'node:child_process'
 import { gunzipSync } from 'node:zlib'
 
 const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
-const DEFAULT_WORKSPACE_KEY = 'main'
 const DEFAULT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1'
 
-function parseArgs(argv) {
-  const options = { classroomId: DEFAULT_CLASSROOM_ID, studentId: '', from: '', to: '', project: DEFAULT_PROJECT_ID, workspaceKey: DEFAULT_WORKSPACE_KEY, legacyNameOrder: false }
+export const USAGE = '使い方: node tools/lesson-history-diagnose.mjs --workspace <key> [--classroom v8OZ7zH8vONNHjjYVcR1] [--student <id>] [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--legacy-name-order]'
+
+export function parseArgs(argv) {
+  const options = { classroomId: DEFAULT_CLASSROOM_ID, studentId: '', from: '', to: '', project: DEFAULT_PROJECT_ID, workspaceKey: '', legacyNameOrder: false }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
     if (arg === '--classroom') { options.classroomId = argv[++index] ?? options.classroomId; continue }
@@ -36,6 +37,12 @@ function parseArgs(argv) {
     if (arg === '--legacy-name-order') { options.legacyNameOrder = true; continue }
   }
   return options
+}
+
+export function validateArgs(options) {
+  const errors = []
+  if (!options.workspaceKey) errors.push('--workspace <key> は必須です。')
+  return errors
 }
 
 function accessToken() {
@@ -89,6 +96,13 @@ export function buildLatestLedgerStructuredQuery({ project, workspaceKey, classr
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
+  const errors = validateArgs(options)
+  if (errors.length > 0) {
+    console.error(USAGE)
+    for (const error of errors) console.error(`  - ${error}`)
+    process.exitCode = 1
+    return
+  }
   const token = accessToken()
   const lib = await import('../functions/lib/lessonLedgerHistory.js')
   const today = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10)

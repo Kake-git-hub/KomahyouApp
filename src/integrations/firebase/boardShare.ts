@@ -2,6 +2,7 @@ import { doc, getDoc, onSnapshot, setDoc, type Unsubscribe } from 'firebase/fire
 import type { SlotCell, StudentEntry, StudentStatusEntry } from '../../components/schedule-board/types'
 import { normalizeGroupClassEntryMap, type GroupClassEntryMap } from '../../components/schedule-board/groupClass'
 import { getFirebaseFirestoreInstance } from './client'
+import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
 
 export type BoardShareStudentEntry = Pick<
@@ -59,6 +60,10 @@ type StoredBoardShareDoc = {
   classroomId: string
   classroomName: string
   sharedAt: string
+  // 会社(workspace)識別子。boardShares はワークスペースの外にあるトップレベルコレクションなので、
+  // classroomId だけでは「どの会社の教室か」が決まらない(複数会社展開 Phase 0 / T0-3)。
+  // ★書くだけ・読みは無改変(旧ドキュメントには無いので optional。公開画面の表示条件に使わない)。
+  workspaceKey?: string
   cells?: BoardShareCell[]
   cellsEncoding?: typeof BOARD_SHARE_GZIP_ENCODING
   compressedCells?: string
@@ -111,7 +116,8 @@ async function gunzipBase64ToText(value: string) {
   return new TextDecoder().decode(buffer)
 }
 
-async function hydrateBoardShareDoc(data: StoredBoardShareDoc | null | undefined): Promise<BoardSharePayload | null> {
+// 読み取り側は無改変(後方互換: workspaceKey を持たない旧ドキュメントもそのまま復元する)。export はテスト用。
+export async function hydrateBoardShareDoc(data: StoredBoardShareDoc | null | undefined): Promise<BoardSharePayload | null> {
   if (!data) return null
   const base = {
     schemaVersion: data.schemaVersion,
@@ -192,18 +198,29 @@ function requireFirestore() {
   return firestore
 }
 
-export async function publishBoardShare(payload: BoardSharePayloadInput) {
-  const firestore = requireFirestore()
-  const compacted = compactBoardSharePayload(payload)
-  const base = {
+// 共有ドキュメントの「本体以外」を組み立てる純関数(publishBoardShare の唯一の書き込み形)。
+// workspaceKey は会社(workspace)の識別子。空のとき(ローカル開発など env 未設定)は書かない
+// ＝旧ドキュメントと同じ形にする(空文字を保存して「会社不明」と「会社=空」を混同させない)。
+// ⚠️ 圧縮(cellsEncoding/compressedCells)と externalStudentIds/groupClassEntries の正規化は
+// 過去の修正(1MiB 超えでの共有失敗・外部生表示)。ここを「単純化」して落とさないこと。
+export function buildBoardShareDocBase(compacted: BoardSharePayload, workspaceKey: string) {
+  const normalizedWorkspaceKey = typeof workspaceKey === 'string' ? workspaceKey.trim() : ''
+  return {
     schemaVersion: compacted.schemaVersion,
     token: compacted.token,
     classroomId: compacted.classroomId,
     classroomName: compacted.classroomName,
     sharedAt: compacted.sharedAt,
+    ...(normalizedWorkspaceKey ? { workspaceKey: normalizedWorkspaceKey } : {}),
     groupClassEntries: normalizeGroupClassEntryMap(compacted.groupClassEntries),
     externalStudentIds: normalizeExternalStudentIds(compacted.externalStudentIds),
   }
+}
+
+export async function publishBoardShare(payload: BoardSharePayloadInput) {
+  const firestore = requireFirestore()
+  const compacted = compactBoardSharePayload(payload)
+  const base = buildBoardShareDocBase(compacted, getFirebaseBackendConfig().workspaceKey)
   // 圧縮して Firestore 1MiB 上限を回避する。CompressionStream 非対応環境では従来どおり
   // 非圧縮で保存（小さい盤面はそのまま通る）。
   const compressedCells = await gzipTextToBase64(JSON.stringify(compacted.cells)).catch(() => null)

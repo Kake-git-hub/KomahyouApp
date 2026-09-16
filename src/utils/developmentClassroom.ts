@@ -1,32 +1,33 @@
+import { getFirebaseBackendConfig } from '../integrations/firebase/config'
+import { isRegisteredDevelopmentClassroom } from './developmentClassroomRegistry'
+
 export type DevelopmentClassroomIdentity = {
   id?: string | null
+  /**
+   * 判定には**使わない**(呼び出し元が持っている教室オブジェクトをそのまま渡せるように型だけ残す)。
+   * 2026-09-16 までは教室名「開発用教室」でも検証用教室と見なしていたが、複数会社(workspace)展開で
+   * 他社が同名の教室を作ると誤発火するため廃止した(オーナー確定・docs/spec-multi-tenant.md)。
+   */
   name?: string | null
 }
 
-// 検証用(サンドボックス)教室として明示的に許可する【教室ID】。
-// オーナー指示 2026-07-28: 教室名での判定は不安なので、ID で固定する(教室名を変えても揺れない)。
-//  - test_classroom_20260507_dai = テスト教室(管理者 石川 / dai.in.the.mood@gmail.com /
-//    UID 6HptuGOIqHcuEAqlXxZFb7Nv3Yu1。workspaces/main/members から確認済み)
-// ID は大文字小文字を区別する Firestore のドキュメントIDなので、正規化せず完全一致で比べる。
-// 追加するときは必ずサーバー側(functions/src/developmentClassroomIdentity.ts)も同じ内容にする。
-export const SANDBOX_CLASSROOM_IDS: readonly string[] = ['test_classroom_20260507_dai']
-
-// 検証用(サンドボックス)教室の判定。開発用教室と、上の ID 許可リストの教室が対象。
+// 検証用(サンドボックス)教室の判定。**登録台帳 src/utils/developmentClassroomRegistry.ts が唯一の正本**で、
+// (workspaceKey, classroomId) の完全一致だけを見る。教室名・ID の曖昧一致(dev/development)は 2026-09-16 に廃止。
+//
 // この判定は「他教室のバックアップをこの教室へ読み込む(Feature B)」の解放だけでなく、
 // 混入防止ガード(自教室が発行していない提出トークンはQRを出さない・コピー時に剥がす)にも
 // 使われる。**両者は必ずセット**で、片方だけ有効にすると 2026-07-09 のQR混入事故が再発する。
-// サーバー側にも同じ判定がある(functions/src/developmentClassroomIdentity.ts)。片方だけ変えない。
-export function isDevelopmentClassroom(classroom: DevelopmentClassroomIdentity | null | undefined) {
-  const rawId = classroom?.id?.trim() ?? ''
-  const id = rawId.toLowerCase()
-  const name = classroom?.name?.trim() ?? ''
-  return SANDBOX_CLASSROOM_IDS.includes(rawId)
-    || id === 'development'
-    || id === 'dev'
-    || id.includes('development')
-    || id.startsWith('dev_')
-    || name === '開発用教室'
-    || name.includes('開発用教室')
+//
+// サーバー側 functions/src/developmentClassroomIdentity.ts は同じ台帳の**複製**(sync-shared)を読む薄いラッパで、
+// ズレは functions/src/developmentClassroomRegistry.parity.test.ts が検出する。台帳を直せば両側に効く。
+//
+// workspaceKey は既定で現在の接続先(env VITE_FIREBASE_WORKSPACE_KEY)。ローカルモードでは空文字なので
+// 常に false(fail-closed)。テストからは第2引数で明示する。
+export function isDevelopmentClassroom(
+  classroom: DevelopmentClassroomIdentity | null | undefined,
+  workspaceKey: string = getFirebaseBackendConfig().workspaceKey,
+) {
+  return isRegisteredDevelopmentClassroom(workspaceKey, classroom?.id)
 }
 
 type SubmissionTokenBearer = {

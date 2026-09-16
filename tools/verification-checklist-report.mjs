@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // 開発用教室から送られた「確認リスト」結果を読み取る読み取り専用ツール。
 //
 // 開発用教室(v8OZ7zH8vONNHjjYVcR1)の画面に出す確認チェックリストは、「保存して送信」で
@@ -10,26 +9,30 @@
 // マーカー付きの報告だけを集め、分割を受付順に結合し、項目 id ごとに最新の結果を Markdown へ整形する。
 //
 // 使い方（gcloud にログイン済みの PC で）:
-//   node tools/verification-checklist-report.mjs [--since YYYY-MM-DD] [--classroom <id>] [--version vX.Y.Z] [--json]
+//   node tools/verification-checklist-report.mjs --workspace <key> [--since YYYY-MM-DD] [--classroom <id>] [--version vX.Y.Z] [--json]
+//   - --workspace は必須（会社＝workspace のキー。既定値は廃止済み・2026-09-16 複数会社展開 Phase 0 T0-4）。
 //   - --since 省略時は 14 日前から。
 //   - --classroom 省略時は開発用教室 v8OZ7zH8vONNHjjYVcR1。
 //   - --version でマーカーの版を絞る（例: v1.5.502。先頭の v は付けても付けなくてもよい）。
 //   - --json で集約結果をそのまま出す（他ツールへ渡す用）。
 import { execFileSync, execSync } from 'node:child_process'
+import { resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { mergeChecklistReports, summarizeChecklistResults, buildChecklistMarkdown, toChecklistReport } from './verification-checklist-report.lib.mjs'
 
 const DEFAULT_PROJECT_ID = 'komahyouapp-prod'
-const DEFAULT_WORKSPACE_KEY = 'main'
 const DEFAULT_CLASSROOM_ID = 'v8OZ7zH8vONNHjjYVcR1' // 開発用教室（書き込み可能な唯一の教室・読み取りのみ使用）
 const DEFAULT_SINCE_DAYS = 14
 
-function parseArgs(argv) {
+export const USAGE = '使い方: node tools/verification-checklist-report.mjs --workspace <key> [--since YYYY-MM-DD] [--classroom <id>] [--version vX.Y.Z] [--json]'
+
+export function parseArgs(argv) {
   const options = {
     since: '',
     classroomId: DEFAULT_CLASSROOM_ID,
     version: '',
     project: DEFAULT_PROJECT_ID,
-    workspaceKey: DEFAULT_WORKSPACE_KEY,
+    workspaceKey: '',
     json: false,
     help: false,
   }
@@ -44,6 +47,12 @@ function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') { options.help = true; continue }
   }
   return options
+}
+
+export function validateArgs(options) {
+  const errors = []
+  if (!options.workspaceKey) errors.push('--workspace <key> は必須です。')
+  return errors
 }
 
 function defaultSinceIso(days) {
@@ -110,7 +119,14 @@ function parseRunQueryResponse(rows) {
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   if (options.help) {
-    console.log('使い方: node tools/verification-checklist-report.mjs [--since YYYY-MM-DD] [--classroom <id>] [--version vX.Y.Z] [--json]')
+    console.log(USAGE)
+    return
+  }
+  const errors = validateArgs(options)
+  if (errors.length > 0) {
+    console.error(USAGE)
+    for (const error of errors) console.error(`  - ${error}`)
+    process.exitCode = 1
     return
   }
   const sinceIso = options.since ? new Date(`${options.since}T00:00:00.000Z`).toISOString() : defaultSinceIso(DEFAULT_SINCE_DAYS)
@@ -135,4 +151,7 @@ async function main() {
   console.log(buildChecklistMarkdown(summary, { heading }))
 }
 
-await main()
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (invokedDirectly) {
+  await main()
+}

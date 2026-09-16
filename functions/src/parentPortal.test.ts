@@ -109,7 +109,7 @@ function createDeps(overrides: Partial<ParentPortalDeps> = {}): ParentPortalDeps
     }),
     // 本番配線(index.ts)と同じ生成物の在籍判定を使う(2026-09-15: 生徒は退塾日当日から非在籍)。
     isStudentActive: (student, dateKey) => isParentStudentActiveOnDate(student, dateKey),
-    isEnabled: ({ id, name }) => isParentPortalEnabledForClassroom({ id, name, projectId: 'komahyouapp-prod' }),
+    isEnabled: ({ workspaceKey, id }) => isParentPortalEnabledForClassroom({ workspaceKey, id, projectId: 'komahyouapp-prod' }),
     todayJst: () => '2026-09-13',
     nowIso: () => '2026-09-13T01:23:45.000Z',
     consumeMessageQuota,
@@ -172,25 +172,30 @@ describe('トークンの形(§B-1)', () => {
 })
 
 describe('機能フラグ(§H・第1段 = 開発用教室限定)', () => {
-  it('開発用教室・テスト教室で有効(判定はクライアントの staging-environment スコープと同一)', () => {
-    expect(isParentPortalEnabledForClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '開発用教室', projectId: 'komahyouapp-prod' })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ id: 'xxx', name: '開発用教室', projectId: 'komahyouapp-prod' })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ id: 'development', name: '', projectId: 'komahyouapp-prod' })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ id: 'test_classroom_20260507_dai', name: 'テスト教室', projectId: 'komahyouapp-prod' })).toBe(true)
-    // ★本番の開発用教室 ID 単独では有効にしない: クライアントの SANDBOX_CLASSROOM_IDS に無く、
-    //   片側だけ広いと「QR は出ないのに API は答える」非対称になる(教室名で両側同時に判定する)。
-    expect(isParentPortalEnabledForClassroom({ id: 'v8OZ7zH8vONNHjjYVcR1', name: '名前を変えた教室', projectId: 'komahyouapp-prod' })).toBe(false)
+  // 【2026-09-16】判定は登録台帳の (workspaceKey, 教室ID)。教室名は引数から外した
+  // (他社が「開発用教室」という名前の教室を作っただけで保護者QR API が答えてしまうため)。
+  it('登録済みの開発用教室・テスト教室で有効(判定はクライアントの staging-environment スコープと同一)', () => {
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(true)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'test_classroom_20260507_dai', projectId: 'komahyouapp-prod' })).toBe(true)
+  })
+
+  // ★回帰防止: 名前や曖昧IDでは通らない/別会社では通らない(台帳＝両側同じ 1 か所で決まる)。
+  it('未登録の教室・別会社の同名教室では無効(名前判定は廃止・2026-09-16)', () => {
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'xxx', projectId: 'komahyouapp-prod' })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: 'development', projectId: 'komahyouapp-prod' })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'company-b', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: '', id: 'v8OZ7zH8vONNHjjYVcR1', projectId: 'komahyouapp-prod' })).toBe(false)
   })
 
   it('本番教室(日大前/緑が丘/薬円台)は無効(昇格はクライアント側フラグと同時に行う)', () => {
-    for (const [id, name] of [['5w5OMueETerSKrSf14HC', 'スクールIE 日大前校'], ['KzFnOQoTFLsCxwUp1tvh', 'スクールIE 緑が丘校'], ['6xnnbSTbwgGrBLy0EJKb', 'スクールIE 薬円台校']]) {
-      expect(isParentPortalEnabledForClassroom({ id, name, projectId: 'komahyouapp-prod' }), id).toBe(false)
+    for (const id of ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']) {
+      expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id, projectId: 'komahyouapp-prod' }), id).toBe(false)
     }
   })
 
   it('staging プロジェクトでは全教室で有効', () => {
-    expect(isParentPortalEnabledForClassroom({ id: '5w5OMueETerSKrSf14HC', name: '本番相当', projectId: 'komahyouapp-staging' })).toBe(true)
-    expect(isParentPortalEnabledForClassroom({ id: '5w5OMueETerSKrSf14HC', name: '本番相当', projectId: undefined })).toBe(false)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: 'komahyouapp-staging' })).toBe(true)
+    expect(isParentPortalEnabledForClassroom({ workspaceKey: 'main', id: '5w5OMueETerSKrSf14HC', projectId: undefined })).toBe(false)
   })
 })
 

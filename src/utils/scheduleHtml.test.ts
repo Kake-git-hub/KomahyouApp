@@ -4503,8 +4503,12 @@ describe('reopenedSlots (後から出席可能に変更) の日程表配線', ()
 // 「開発者へ報告」(2026-09-04・docs/spec-developer-report.md §B/§E): 日程表は表示だけ見て「おかしい」と思うことがあるので、
 // 別タブのツールバー(講習期間表示の右)にもボタンを出し、本体(opener)へ postMessage で報告を依頼する。
 describe('scheduleHtml 開発者へ報告ボタン', () => {
-  it('質問への AI 即時回答フラグは開発用教室だけ true(本番教室名では false・spec-developer-report §G-7)', () => {
-    const renderFor = (classroomName: string) => {
+  // 【2026-09-16】検証用教室の判定は登録台帳の (workspaceKey, 教室ID)。教室名では判定しない
+  // (他社が「開発用教室」という名前の教室を作っても AI 即答の表示が出ないようにするため)。
+  // 別タブへ渡す classroomStorageKey は App.tsx の actingClassroomId ＝ 開いている教室のドキュメントID。
+  it('質問への AI 即時回答フラグは登録済み開発用教室の【教室ID】だけ true(教室名では true にならない)', () => {
+    vi.stubEnv('VITE_FIREBASE_WORKSPACE_KEY', 'main')
+    const renderFor = (classroomName: string, classroomStorageKey?: string) => {
       const write = vi.fn()
       const popup = {
         closed: false,
@@ -4524,14 +4528,19 @@ describe('scheduleHtml 開発者へ報告ボタン', () => {
         defaultEndDate: '2026-09-07',
         titleLabel: 'テスト',
         classroomName,
+        classroomStorageKey,
         classroomSettings: { closedWeekdays: [0], holidayDates: [], forceOpenDates: [] },
         targetWindow: popup,
       })
       return write.mock.calls[0]?.[0] as string
     }
-    expect(renderFor('開発用教室')).toContain('"questionAiAnswerEnabled":true')
-    expect(renderFor('スクールIE 日大前校')).toContain('"questionAiAnswerEnabled":false')
-    expect(renderFor('スクールIE 緑が丘校')).toContain('"questionAiAnswerEnabled":false')
+    expect(renderFor('開発用教室', 'v8OZ7zH8vONNHjjYVcR1')).toContain('"questionAiAnswerEnabled":true')
+    // ★回帰防止: 教室名が「開発用教室」でも、教室IDが台帳に無ければ false。
+    expect(renderFor('開発用教室')).toContain('"questionAiAnswerEnabled":false')
+    expect(renderFor('開発用教室', 'classroom-9')).toContain('"questionAiAnswerEnabled":false')
+    expect(renderFor('スクールIE 日大前校', '5w5OMueETerSKrSf14HC')).toContain('"questionAiAnswerEnabled":false')
+    expect(renderFor('スクールIE 緑が丘校', 'KzFnOQoTFLsCxwUp1tvh')).toContain('"questionAiAnswerEnabled":false')
+    vi.unstubAllEnvs()
   })
 
   it('生徒日程表のツールバーにボタンがあり、送信・結果の両メッセージ種別が埋め込みスクリプトに含まれる', () => {

@@ -1,0 +1,120 @@
+import { describe, expect, it } from 'vitest'
+import {
+  DEVELOPMENT_CLASSROOM_REGISTRY,
+  findDevelopmentClassroomEntry,
+  isRegisteredDevelopmentClassroom,
+  resolveDevelopmentClassroomId,
+} from './developmentClassroomRegistry'
+
+// 検証用(開発用・サンドボックス)教室の登録台帳。2026-09-16 の是正(docs/spec-multi-tenant.md・
+// 計画 §6-2/§6-3)で「教室名『開発用教室』」「教室ID に dev/development を含む」の曖昧一致を廃止し、
+// **(workspaceKey, classroomId) の完全一致**にした。ここが両側(クライアント/サーバー)の唯一の正本。
+describe('developmentClassroomRegistry: 登録台帳の引き当て', () => {
+  it('登録済みの開発用教室・テスト教室だけ true(会社=main)', () => {
+    expect(isRegisteredDevelopmentClassroom('main', 'v8OZ7zH8vONNHjjYVcR1')).toBe(true)
+    // オーナー確定 2026-07-28(commit 020cd46): テスト教室も検証用教室に含める。台帳から落とさない。
+    expect(isRegisteredDevelopmentClassroom('main', 'test_classroom_20260507_dai')).toBe(true)
+  })
+
+  // ★6-2 の本丸。他社(あるいは同じ会社の別教室)が教室名を「開発用教室」にしても、
+  //   台帳に無い教室IDである限り検証用教室にはならない。名前は判定に一切関与しない。
+  it('教室名は判定に使わない: 未登録の教室IDは(名前が何であれ)false', () => {
+    expect(isRegisteredDevelopmentClassroom('main', 'classroom-1')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', 'renamed_to_kaihatsuyou')).toBe(false)
+  })
+
+  // ★会社(workspace)の壁。同じ教室IDでも別会社なら他人の教室。
+  it('登録済みの教室IDでも workspaceKey が違えば false', () => {
+    expect(isRegisteredDevelopmentClassroom('company-b', 'v8OZ7zH8vONNHjjYVcR1')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('company-b', 'test_classroom_20260507_dai')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('MAIN', 'v8OZ7zH8vONNHjjYVcR1')).toBe(false)
+  })
+
+  // 本番3教室が検証用扱いになると、その室長が他教室のバックアップを読み込めてしまう(最重要ロック)。
+  it('本番3教室は決して検証用教室にならない', () => {
+    expect(isRegisteredDevelopmentClassroom('main', '5w5OMueETerSKrSf14HC')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', 'KzFnOQoTFLsCxwUp1tvh')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', '6xnnbSTbwgGrBLy0EJKb')).toBe(false)
+  })
+
+  // 2026-09-16 廃止した曖昧一致(id === 'dev' / 'development' / 部分一致 / 'dev_' 前方一致)。復活させない。
+  it('dev / development などの曖昧な教室IDは通さない', () => {
+    for (const id of ['dev', 'development', 'development_classroom', 'dev_room_001', 'my-development-room']) {
+      expect(isRegisteredDevelopmentClassroom('main', id), id).toBe(false)
+    }
+  })
+
+  it('教室IDは完全一致(前方一致・大文字小文字の緩さを入れない)', () => {
+    expect(isRegisteredDevelopmentClassroom('main', 'test_classroom_20260507_dai_2')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', 'TEST_CLASSROOM_20260507_DAI')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', 'v8OZ7zH8vONNHjjYVcR')).toBe(false)
+    // 前後の空白だけは落とす(手入力・コピペ由来)。
+    expect(isRegisteredDevelopmentClassroom(' main ', ' v8OZ7zH8vONNHjjYVcR1 ')).toBe(true)
+  })
+
+  it('空・null・undefined は false(fail-closed)', () => {
+    expect(isRegisteredDevelopmentClassroom('', 'v8OZ7zH8vONNHjjYVcR1')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', '')).toBe(false)
+    expect(isRegisteredDevelopmentClassroom(null, null)).toBe(false)
+    expect(isRegisteredDevelopmentClassroom(undefined, undefined)).toBe(false)
+    expect(isRegisteredDevelopmentClassroom('main', '   ')).toBe(false)
+  })
+
+  it('findDevelopmentClassroomEntry は kind とラベルまで返す', () => {
+    expect(findDevelopmentClassroomEntry('main', 'v8OZ7zH8vONNHjjYVcR1')?.kind).toBe('development')
+    expect(findDevelopmentClassroomEntry('main', 'test_classroom_20260507_dai')?.kind).toBe('sandbox')
+    expect(findDevelopmentClassroomEntry('main', 'unknown')).toBeNull()
+  })
+})
+
+describe('developmentClassroomRegistry: 会社ごとの開発用教室の解決', () => {
+  it("resolveDevelopmentClassroomId('main') は本番の開発用教室ID", () => {
+    expect(resolveDevelopmentClassroomId('main')).toBe('v8OZ7zH8vONNHjjYVcR1')
+  })
+
+  it('未登録の会社・空文字は null(呼び出し側は failed-precondition にする)', () => {
+    expect(resolveDevelopmentClassroomId('company-b')).toBeNull()
+    expect(resolveDevelopmentClassroomId('')).toBeNull()
+    expect(resolveDevelopmentClassroomId(null)).toBeNull()
+  })
+
+  it('sandbox は「その会社の開発用教室」にはならない(kind の区別)', () => {
+    expect(resolveDevelopmentClassroomId('main')).not.toBe('test_classroom_20260507_dai')
+  })
+})
+
+describe('developmentClassroomRegistry: 台帳の不変条件', () => {
+  it('(workspaceKey, classroomId) の重複が無い', () => {
+    const keys = DEVELOPMENT_CLASSROOM_REGISTRY.map((entry) => `${entry.workspaceKey}__${entry.classroomId}`)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  it("kind==='development' は会社ごとに高々 1 件(1 社 1 開発用教室)", () => {
+    const counts = new Map<string, number>()
+    for (const entry of DEVELOPMENT_CLASSROOM_REGISTRY) {
+      if (entry.kind !== 'development') continue
+      counts.set(entry.workspaceKey, (counts.get(entry.workspaceKey) ?? 0) + 1)
+    }
+    for (const [workspaceKey, count] of counts) {
+      expect(count, workspaceKey).toBe(1)
+    }
+  })
+
+  it('workspaceKey / classroomId は空でなく、前後に空白を含まない', () => {
+    for (const entry of DEVELOPMENT_CLASSROOM_REGISTRY) {
+      expect(entry.workspaceKey, entry.label).toBe(entry.workspaceKey.trim())
+      expect(entry.classroomId, entry.label).toBe(entry.classroomId.trim())
+      expect(entry.workspaceKey.length, entry.label).toBeGreaterThan(0)
+      expect(entry.classroomId.length, entry.label).toBeGreaterThan(0)
+      expect(entry.label.length, entry.classroomId).toBeGreaterThan(0)
+    }
+  })
+
+  // 本番3教室を誤って台帳へ足したら即座に落とす(レビューで見逃しても CI で止める)。
+  it('本番教室のIDは台帳に載っていない', () => {
+    const productionIds = ['5w5OMueETerSKrSf14HC', 'KzFnOQoTFLsCxwUp1tvh', '6xnnbSTbwgGrBLy0EJKb']
+    for (const entry of DEVELOPMENT_CLASSROOM_REGISTRY) {
+      expect(productionIds, entry.label).not.toContain(entry.classroomId)
+    }
+  })
+})
