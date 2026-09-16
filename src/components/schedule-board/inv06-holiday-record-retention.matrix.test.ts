@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
+import type { ClassroomSettings } from '../../types/appState'
 import {
+  carryBoardStatusRecordsOntoClosedDayCell,
   clearStudentStatusFromDesk,
+  computeStudentMove,
   convertHolidayDeskEntriesToRecords,
+  isStaleSeatMarkerStatus,
+  materializeDisplacedStatusEntryIntoLedgers,
   reconcileHolidayDeskStockReturns,
+  remergeBoardWeekWithManagedData,
+  resolveDisplayRecordClearButton,
+  resolveEmptySeatMenuVariant,
 } from './ScheduleBoardScreen'
+import { collectMakeupOriginDatesByKey } from './makeupStock'
 
 // ============================================================================
 // INV-06 操作マトリクス（休日設定の「記録保持」・D5 オーナー確定 2026-09-16）
@@ -227,5 +236,387 @@ describe('INV-06 マトリクス: 記録保持は在庫会計を変えない', (
     const restored = clearStudentStatusFromDesk(target, 0, record)
     expect(restored?.managedStudentId).toBe('student-1')
     expect(target.lesson?.studentSlots[0]?.managedStudentId).toBe('student-1')
+  })
+})
+
+// ============================================================================
+// 行: 休日セルの記録 × 盤面の再マージ(remergeBoardWeekWithManagedData = 読込時と、名簿/テンプレ/設定変更の effect)
+//
+// 不具合(2026-09-16 再現): overlayBoardWeeksOnScheduleCells の「休日セルは管理側セルを返す」分岐(8559c28)が
+// 盤面セルの statusSlots まで捨てていたため、休日設定で残した holiday/moved/absent 記録が**リロードで全部消えた**
+// (営業日セルでは残る)。absent が消えると collectAbsentMakeupOrigins の算出 origin が減る＝INV-06 誤減。
+// 修正: 休日セルは従来どおり管理側セル(=盤面の授業・講師・メモは持ち込まない)に、机ごとの statusSlots だけ引き継ぐ
+// (carryBoardStatusRecordsOntoClosedDayCell)。
+// ============================================================================
+describe('INV-06 マトリクス: 休日セルの記録は再マージ(リロード相当)で消えない', () => {
+  const HOLIDAY = '2026-10-07' // 水
+  const OPEN_DAY = '2026-10-06' // 火
+  const baseSettings: ClassroomSettings = {
+    closedWeekdays: [0],
+    holidayDates: [HOLIDAY],
+    forceOpenDates: [],
+    deskCount: 3,
+  }
+
+  function stubCell(dateKey: string, slotNumber = 1): SlotCell {
+    const id = `${dateKey}_${slotNumber}`
+    // 机数設定(3)ぶんの空き机。盤面側が空配列だと mergeManagedWeek の結果も机 0 本になり足場講師が置けない。
+    const desks: DeskCell[] = Array.from({ length: 3 }, (_, index) => ({ id: `${id}_desk_${index + 1}`, teacher: '' }))
+    return { ...CELL, id, dateKey, slotNumber, slotLabel: `${slotNumber}限`, desks }
+  }
+
+  function remerge(week: SlotCell[], settings: ClassroomSettings) {
+    return remergeBoardWeekWithManagedData(week, {
+      classroomSettings: settings,
+      teachers: [],
+      students: [],
+      regularLessons: [],
+      suppressedRegularLessonOccurrences: [],
+      todayKey: '2026-09-16',
+    })
+  }
+
+  // 1 回目の再マージで週を作り、対象セルの机 0 に記録(＋持ち込まれてはいけない授業・講師・メモ)を載せる。
+  function buildWeekWithRecords(dateKey: string, settings: ClassroomSettings) {
+    const week = remerge([stubCell(dateKey)], settings)
+    const target = week.find((cell) => cell.id === `${dateKey}_1`)
+    if (!target) throw new Error('target cell not found')
+    target.desks[0] = {
+      ...target.desks[0],
+      teacher: '田中講師',
+      manualTeacher: true,
+      lesson: { id: 'lesson-board', studentSlots: [null, student({ id: 'entry-board', name: '別の子', managedStudentId: 'student-2' })] },
+      memoSlots: [null, 'メモ'],
+      statusSlots: [
+        statusEntry({ id: 'status-holiday', status: 'holiday', dateKey, slotNumber: 1 }),
+        statusEntry({ id: 'status-moved', status: 'moved', dateKey, slotNumber: 1, moveDestinationDateKey: '2026-10-09', moveDestinationSlotNumber: 2 }),
+      ],
+    }
+    target.desks[1] = {
+      ...target.desks[1],
+      statusSlots: [statusEntry({ id: 'status-absent', status: 'absent', dateKey, slotNumber: 1 }), null],
+    }
+    // 記録の無い机(講師・授業・メモだけ)。休日セルへは何も持ち込まない対照。
+    target.desks[2] = {
+      ...target.desks[2],
+      teacher: '講師Z',
+      manualTeacher: true,
+      teacherAssignmentSource: 'manual',
+      lesson: { id: 'lesson-board-z', studentSlots: [student({ id: 'entry-z', name: 'Zの子', managedStudentId: 'student-z' }), null] },
+      memoSlots: ['Zメモ', null],
+    }
+    return week
+  }
+
+  function findCell(week: SlotCell[], dateKey: string) {
+    const cell = week.find((entry) => entry.id === `${dateKey}_1`)
+    if (!cell) throw new Error('cell not found')
+    return cell
+  }
+
+  it('★休日セル: holiday / moved / absent 記録が机 index ごとに残る', () => {
+    const week = buildWeekWithRecords(HOLIDAY, baseSettings)
+    const reloaded = findCell(remerge(week, baseSettings), HOLIDAY)
+    expect(reloaded.isOpenDay).toBe(false)
+    expect(reloaded.desks[0].statusSlots?.[0]).toMatchObject({ id: 'status-holiday', status: 'holiday' })
+    expect(reloaded.desks[0].statusSlots?.[1]).toMatchObject({ id: 'status-moved', status: 'moved', moveDestinationDateKey: '2026-10-09', moveDestinationSlotNumber: 2 })
+    expect(reloaded.desks[1].statusSlots?.[0]).toMatchObject({ id: 'status-absent', status: 'absent' })
+    expect(reloaded.desks[2].statusSlots).toBeUndefined()
+  })
+
+  it('★休日セル: 盤面の授業・メモは持ち込まない。講師は記録のある机に限り引き継ぐ(8559c28 の意図を維持・INV-01)', () => {
+    const week = buildWeekWithRecords(HOLIDAY, baseSettings)
+    const reloaded = findCell(remerge(week, baseSettings), HOLIDAY)
+    // 記録のある机: 授業・メモは持ち込まず、講師ブロックだけ一緒に引き継ぐ。
+    expect(reloaded.desks[0].lesson).toBeUndefined()
+    expect(reloaded.desks[0].memoSlots).toBeUndefined()
+    expect(reloaded.desks[0]).toMatchObject({ teacher: '田中講師', manualTeacher: true })
+    // 記録の無い机: 講師・授業・メモのどれも持ち込まない(従来どおり)。
+    expect(reloaded.desks[2].lesson).toBeUndefined()
+    expect(reloaded.desks[2].memoSlots).toBeUndefined()
+    expect(reloaded.desks[2].teacher).toBe('')
+    expect(reloaded.desks[2].manualTeacher).toBeFalsy()
+    expect(reloaded.desks[2].teacherAssignmentSource).toBeUndefined()
+  })
+
+  it('★休日 → 再マージ → 休日解除 → 再マージ: 記録のある机の講師が元のまま戻り、足場講師は二重に置かれない(INV-01)', () => {
+    const teachers = [
+      { id: 'tA', name: '講師A', email: '', entryDate: '2020-04-01', withdrawDate: '', subjectCapabilities: [] },
+      { id: 'tB', name: '講師B', email: '', entryDate: '2020-04-01', withdrawDate: '', subjectCapabilities: [] },
+    ]
+    const scaffoldRow = (id: string, teacherId: string) => ({
+      id, schoolYear: 2026, teacherId, student1Id: '', subject1: '', startDate: '', endDate: '',
+      student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '',
+      nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 1,
+    })
+    const regularLessons = [scaffoldRow('row-a', 'tA'), scaffoldRow('row-b', 'tB')]
+    const openSettings: ClassroomSettings = { ...baseSettings, holidayDates: [] }
+    const run = (week: SlotCell[], settings: ClassroomSettings) => remergeBoardWeekWithManagedData(week, {
+      classroomSettings: settings, teachers, students: [], regularLessons, suppressedRegularLessonOccurrences: [], todayKey: '2026-09-16',
+    })
+
+    // 営業日の盤面: テンプレ足場講師 A/B の机に、出欠記録(holiday は休日設定で作られた記録・attended は OFF 経路でも残る記録)。
+    const openWeek = run([stubCell(HOLIDAY)], openSettings)
+    const openCell = findCell(openWeek, HOLIDAY)
+    const deskIndexOf = (cell: SlotCell, name: string) => cell.desks.findIndex((desk) => desk.teacher === name)
+    const indexA = deskIndexOf(openCell, '講師A')
+    const indexB = deskIndexOf(openCell, '講師B')
+    expect(indexA).toBeGreaterThanOrEqual(0)
+    expect(indexB).toBeGreaterThanOrEqual(0)
+    openCell.desks[indexA] = { ...openCell.desks[indexA], statusSlots: [statusEntry({ id: 'rec-a', status: 'holiday', teacherName: '講師A', dateKey: HOLIDAY, slotNumber: 1 }), null] }
+    openCell.desks[indexB] = { ...openCell.desks[indexB], statusSlots: [statusEntry({ id: 'rec-b', status: 'attended', teacherName: '講師B', dateKey: HOLIDAY, slotNumber: 1, managedStudentId: 'student-2', studentId: 'student-2' }), null] }
+
+    const closed = findCell(run(openWeek, baseSettings), HOLIDAY)
+    expect(closed.isOpenDay).toBe(false)
+    const reopenedWeek = run(run([closed], baseSettings), openSettings)
+    const reopened = findCell(reopenedWeek, HOLIDAY)
+    expect(reopened.isOpenDay).toBe(true)
+    for (const [index, recordId, teacherName] of [[indexA, 'rec-a', '講師A'], [indexB, 'rec-b', '講師B']] as const) {
+      const desk = reopened.desks[index]
+      expect(desk.statusSlots?.[0]?.id).toBe(recordId)
+      expect(desk.teacher).toBe(teacherName)
+      // 記録の teacherName と机の講師が一致(講師日程表・給与の帰属がずれない)。
+      expect(desk.statusSlots?.[0]?.teacherName).toBe(desk.teacher)
+    }
+    expect(reopened.desks.filter((desk) => desk.teacher === '講師A')).toHaveLength(1)
+    expect(reopened.desks.filter((desk) => desk.teacher === '講師B')).toHaveLength(1)
+  })
+
+  it('机数を減らした(盤面 3 机・管理側 2 机)ときの 3 机目の記録は引き継がない(現挙動の固定)', () => {
+    // 営業日側でも normalizeWeeksDeskCount が机数設定で切り詰める既存挙動と同じ(机数設定が正)。
+    // 変えるなら営業日側と同時に仕様改定すること。
+    const closedManaged: SlotCell = { ...stubCell(HOLIDAY), isOpenDay: false, desks: [{ id: 'm-0', teacher: '' }, { id: 'm-1', teacher: '' }] }
+    const board: SlotCell = {
+      ...stubCell(HOLIDAY),
+      isOpenDay: false,
+      desks: [
+        { id: 'b-0', teacher: '講師A', statusSlots: [statusEntry({ id: 'rec-0', status: 'holiday' }), null] },
+        { id: 'b-1', teacher: '' },
+        { id: 'b-2', teacher: '講師C', statusSlots: [statusEntry({ id: 'rec-2', status: 'absent' }), null] },
+      ],
+    }
+    const carried = carryBoardStatusRecordsOntoClosedDayCell(closedManaged, board)
+    expect(carried.desks).toHaveLength(2)
+    expect(carried.desks[0].statusSlots?.[0]?.id).toBe('rec-0')
+    expect(carried.desks[1].statusSlots).toBeUndefined()
+    expect(carried.desks.flatMap((desk) => desk.statusSlots ?? []).some((entry) => entry?.id === 'rec-2')).toBe(false)
+  })
+
+  it('★再マージの前後で未消化振替の origin(休みにした振替コマの算出 origin)が変わらない', () => {
+    const roster = [{ id: 'student-1', name: '大槻 太郎', displayName: '大槻 太郎', email: '', entryDate: '2020-04-01', withdrawDate: '', birthDate: '2013-05-01' } as StudentRow]
+    const week = remerge([stubCell(HOLIDAY)], baseSettings)
+    const cell = findCell(week, HOLIDAY)
+    cell.desks[0] = {
+      ...cell.desks[0],
+      statusSlots: [statusEntry({
+        id: 'rec-absent-makeup', status: 'absent', lessonType: 'makeup', dateKey: HOLIDAY, slotNumber: 1,
+        makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限',
+      }), null],
+    }
+    const origins = (weeks: SlotCell[][]) => collectMakeupOriginDatesByKey({
+      students: roster,
+      regularLessons: [],
+      classroomSettings: baseSettings,
+      weeks,
+      manualAdjustments: {},
+      resolveStudentKey: (entry: StudentEntry) => entry.managedStudentId ?? entry.name,
+      today: new Date(2026, 8, 16),
+    })
+    const before = origins([week])
+    expect(Object.values(before).flat()).toContain('2026-09-30#1')
+    expect(origins([remerge(week, baseSettings)])).toEqual(before)
+  })
+
+  it('★再マージを 2 回通しても記録は残る(読込 → 設定変更 effect の連続)', () => {
+    const week = buildWeekWithRecords(HOLIDAY, baseSettings)
+    const twice = findCell(remerge(remerge(week, baseSettings), baseSettings), HOLIDAY)
+    expect(twice.desks[0].statusSlots?.map((entry) => entry?.id)).toEqual(['status-holiday', 'status-moved'])
+    expect(twice.desks[1].statusSlots?.[0]?.id).toBe('status-absent')
+  })
+
+  it('対照: 営業日セルでも記録は残る(従来どおり)', () => {
+    const week = buildWeekWithRecords(OPEN_DAY, baseSettings)
+    const reloaded = findCell(remerge(week, baseSettings), OPEN_DAY)
+    expect(reloaded.isOpenDay).toBe(true)
+    expect(reloaded.desks[0].statusSlots?.map((entry) => entry?.id)).toEqual(['status-holiday', 'status-moved'])
+    expect(reloaded.desks[1].statusSlots?.[0]?.id).toBe('status-absent')
+  })
+
+  it('★定休日(closedWeekdays)へ後から変えたセルでも記録は残る(フラグ OFF でも通る経路)', () => {
+    const week = buildWeekWithRecords(OPEN_DAY, baseSettings)
+    const tuesdayClosed: ClassroomSettings = { ...baseSettings, closedWeekdays: [0, 2] }
+    const reloaded = findCell(remerge(week, tuesdayClosed), OPEN_DAY)
+    expect(reloaded.isOpenDay).toBe(false)
+    expect(reloaded.desks[0].statusSlots?.map((entry) => entry?.id)).toEqual(['status-holiday', 'status-moved'])
+    expect(reloaded.desks[1].statusSlots?.[0]?.id).toBe('status-absent')
+    expect(reloaded.desks[0].lesson).toBeUndefined()
+  })
+
+  it('★テンプレ固定日をまたぐ週(Mixed week): 固定日以降の休日セルでも記録が残り、授業は持ち込まない', () => {
+    const mixed: ClassroomSettings = { ...baseSettings, templateFreezeBeforeDate: OPEN_DAY }
+    const week = buildWeekWithRecords(HOLIDAY, mixed)
+    const reloaded = findCell(remerge(week, mixed), HOLIDAY)
+    expect(reloaded.desks[0].statusSlots?.map((entry) => entry?.id)).toEqual(['status-holiday', 'status-moved'])
+    expect(reloaded.desks[1].statusSlots?.[0]?.id).toBe('status-absent')
+    expect(reloaded.desks[0].lesson).toBeUndefined()
+  })
+
+  it('テンプレ固定日より前の週: 再マージしない(盤面そのまま)ので記録も残る', () => {
+    const frozen: ClassroomSettings = { ...baseSettings, templateFreezeBeforeDate: '2026-12-01' }
+    const week = buildWeekWithRecords(HOLIDAY, baseSettings)
+    const reloaded = findCell(remerge(week, frozen), HOLIDAY)
+    expect(reloaded.desks[0].statusSlots?.map((entry) => entry?.id)).toEqual(['status-holiday', 'status-moved'])
+    expect(reloaded.desks[1].statusSlots?.[0]?.id).toBe('status-absent')
+  })
+
+  it('純関数: 記録の無い休日セルは管理側セルをそのまま返す(参照同一)', () => {
+    const managed = findCell(remerge([stubCell(HOLIDAY)], baseSettings), HOLIDAY)
+    const board = findCell(remerge([stubCell(HOLIDAY)], baseSettings), HOLIDAY)
+    expect(carryBoardStatusRecordsOntoClosedDayCell(managed, board)).toBe(managed)
+  })
+})
+
+// ============================================================================
+// 行: 休日解除後の holiday 記録の席 × 席操作(オーナー要望 2026-09-16)
+//   「休日解除したら、その席はできるだけ休日設定前と同じ操作ができる」。
+//   holiday 記録の席は moved 記録の席と同じ扱い: 営業日ならメニューは 生徒追加/体験/メモ/表示解除、
+//   生徒を移動/入替で着地させると前の人の印として(moved と同じく)消える。
+//   ★在庫会計は不変(holiday は表示専用)。absent/振無休の保持(Issue #57)は変えない。
+// ============================================================================
+describe('INV-06 マトリクス: 休日解除後の holiday 記録の席は moved 記録の席と同じ操作ができる', () => {
+  const SOURCE_DATE = '2026-10-05'
+  const TARGET_DATE = '2026-10-07'
+  const moveDefaults = {
+    suppressedRegularLessonOccurrences: [] as string[],
+    managedStudentByAnyName: new Map<string, never>(),
+    resolveBoardStudentDisplayName: (name: string) => name,
+  }
+
+  function slotCell(dateKey: string, desks: DeskCell[]): SlotCell {
+    return { ...CELL, id: `${dateKey}_1`, dateKey, slotNumber: 1, slotLabel: '1限', isOpenDay: true, desks }
+  }
+
+  function movingStudent(overrides: Partial<StudentEntry> = {}) {
+    return student({ id: `sA_${SOURCE_DATE}_数`, name: '生徒A', managedStudentId: 'sA', ...overrides })
+  }
+
+  function holidayRecord(id: string) {
+    return statusEntry({ id, status: 'holiday', dateKey: TARGET_DATE, slotNumber: 1, name: '休日の子', managedStudentId: 'sH', studentId: 'sH' })
+  }
+
+  function absentRecord(id: string) {
+    return statusEntry({ id, status: 'absent', dateKey: TARGET_DATE, slotNumber: 1, name: '休んだ子', managedStudentId: 'sX', studentId: 'sX' })
+  }
+
+  function runMove(cells: SlotCell[], movingStudentId: string, target: { cellId: string; deskIndex: number; studentIndex: number }) {
+    const result = computeStudentMove({ weeks: [cells], weekIndex: 0, cells, movingStudentId, ...target, ...moveDefaults })
+    if (result.status !== 'moved') throw new Error(`expected moved, got ${result.status}`)
+    return result
+  }
+
+  it('★別日の holiday 記録の席へ移動すると holiday 記録は消える(moved と同じ)。隣の席の absent は保持', () => {
+    const cells = [
+      slotCell(SOURCE_DATE, [{ id: 'src-0', teacher: '講師S', lesson: { id: 'l-src', studentSlots: [movingStudent(), null] } }]),
+      slotCell(TARGET_DATE, [{ id: 'tgt-0', teacher: '講師T', statusSlots: [holidayRecord('status-holiday'), absentRecord('status-absent')] }]),
+    ]
+    const result = runMove(cells, `sA_${SOURCE_DATE}_数`, { cellId: `${TARGET_DATE}_1`, deskIndex: 0, studentIndex: 0 })
+    const targetDesk = result.nextWeeks[0].find((cell) => cell.dateKey === TARGET_DATE)?.desks[0]
+    expect(targetDesk?.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect(targetDesk?.statusSlots?.[0] ?? null).toBeNull()
+    expect(targetDesk?.statusSlots?.[1]).toMatchObject({ id: 'status-absent', status: 'absent' })
+    // 着地側の印の消去は「上書きで消えた会計記録」ではないので displaced に出さない(moved と同じ)。
+    expect(result.displacedStatusEntries).toEqual([])
+  })
+
+  it('対照(Issue #57 不変): absent 記録の席へ移動しても absent は保持される', () => {
+    const cells = [
+      slotCell(SOURCE_DATE, [{ id: 'src-0', teacher: '講師S', lesson: { id: 'l-src', studentSlots: [movingStudent(), null] } }]),
+      slotCell(TARGET_DATE, [{ id: 'tgt-0', teacher: '講師T', statusSlots: [absentRecord('status-absent'), null] }]),
+    ]
+    const result = runMove(cells, `sA_${SOURCE_DATE}_数`, { cellId: `${TARGET_DATE}_1`, deskIndex: 0, studentIndex: 0 })
+    const targetDesk = result.nextWeeks[0].find((cell) => cell.dateKey === TARGET_DATE)?.desks[0]
+    expect(targetDesk?.statusSlots?.[0]).toMatchObject({ id: 'status-absent', status: 'absent' })
+  })
+
+  it('★入替: 着地側と入替で戻る側の両方で holiday 記録が消える(moved と同じ)', () => {
+    const partner = student({ id: `sB_${TARGET_DATE}_英`, name: '生徒B', managedStudentId: 'sB', subject: '英' })
+    const cells = [
+      slotCell(TARGET_DATE, [
+        { id: 'a-0', teacher: '講師S', lesson: { id: 'l-a', studentSlots: [movingStudent({ id: `sA_${TARGET_DATE}_数` }), null] }, statusSlots: [holidayRecord('status-holiday-src'), null] },
+        { id: 'b-0', teacher: '講師T', lesson: { id: 'l-b', studentSlots: [partner, null] }, statusSlots: [holidayRecord('status-holiday-tgt'), null] },
+      ]),
+    ]
+    const result = runMove(cells, `sA_${TARGET_DATE}_数`, { cellId: `${TARGET_DATE}_1`, deskIndex: 1, studentIndex: 0 })
+    const [deskA, deskB] = result.nextWeeks[0][0].desks
+    expect(deskB.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect(deskA.lesson?.studentSlots[0]?.managedStudentId).toBe('sB')
+    expect(deskB.statusSlots?.[0] ?? null).toBeNull()
+    expect(deskA.statusSlots?.[0] ?? null).toBeNull()
+  })
+
+  it('対照: 入替でも absent は両側で保持される', () => {
+    const partner = student({ id: `sB_${TARGET_DATE}_英`, name: '生徒B', managedStudentId: 'sB', subject: '英' })
+    const cells = [
+      slotCell(TARGET_DATE, [
+        { id: 'a-0', teacher: '講師S', lesson: { id: 'l-a', studentSlots: [movingStudent({ id: `sA_${TARGET_DATE}_数` }), null] }, statusSlots: [absentRecord('status-absent-src'), null] },
+        { id: 'b-0', teacher: '講師T', lesson: { id: 'l-b', studentSlots: [partner, null] }, statusSlots: [absentRecord('status-absent-tgt'), null] },
+      ]),
+    ]
+    const result = runMove(cells, `sA_${TARGET_DATE}_数`, { cellId: `${TARGET_DATE}_1`, deskIndex: 1, studentIndex: 0 })
+    const [deskA, deskB] = result.nextWeeks[0][0].desks
+    expect(deskA.statusSlots?.[0]?.id).toBe('status-absent-src')
+    expect(deskB.statusSlots?.[0]?.id).toBe('status-absent-tgt')
+  })
+
+  it('★holiday 記録が上書きで消えても台帳は動かない(materialize 対象外・振替コマの holiday でも)', () => {
+    const makeupHoliday = statusEntry({
+      id: 'status-holiday-makeup',
+      status: 'holiday',
+      lessonType: 'makeup',
+      makeupSourceDate: '2026-09-30',
+      makeupSourceLabel: '2026/9/30(水) 1限',
+    })
+    const result = materializeDisplacedStatusEntryIntoLedgers({
+      statusEntry: makeupHoliday,
+      manualMakeupAdjustments: {},
+      fallbackMakeupStudents: {},
+      ledgerOriginDatesByKey: {},
+      managedStudentByAnyName: new Map(),
+      resolveDisplayName: (name: string) => name,
+      resolveStockId: (entry: StudentEntry) => entry.managedStudentId ?? entry.name,
+    })
+    expect(result.materialized).toBe(false)
+    expect(result.manualMakeupAdjustments).toEqual({})
+    expect(result.fallbackMakeupStudents).toEqual({})
+  })
+
+  it('isStaleSeatMarkerStatus: moved と holiday だけが「前の人の印」(absent/振無休/出席は含めない)', () => {
+    expect(isStaleSeatMarkerStatus('moved')).toBe(true)
+    expect(isStaleSeatMarkerStatus('holiday')).toBe(true)
+    expect(isStaleSeatMarkerStatus('absent')).toBe(false)
+    expect(isStaleSeatMarkerStatus('absent-no-makeup')).toBe(false)
+    expect(isStaleSeatMarkerStatus('attended')).toBe(false)
+    expect(isStaleSeatMarkerStatus(null)).toBe(false)
+  })
+
+  it('★空き席メニュー: 営業日の holiday は moved と同じメニュー、休日中の holiday は解除だけ', () => {
+    expect(resolveEmptySeatMenuVariant('holiday', true)).toBe('display-record')
+    expect(resolveEmptySeatMenuVariant('moved', true)).toBe('display-record')
+    expect(resolveEmptySeatMenuVariant('holiday', false)).toBe('holiday-clear-only')
+    // 休日中のセルの moved(丸ごと振替→休日設定で残る移動元)も解除だけ。従来はクリック時に弾かれ到達しなかった分岐。
+    expect(resolveEmptySeatMenuVariant('moved', false)).toBe('holiday-clear-only')
+    // 既存の分岐は不変。
+    expect(resolveEmptySeatMenuVariant('attended', true)).toBe('attended')
+    expect(resolveEmptySeatMenuVariant('absent', true)).toBe('absent')
+    expect(resolveEmptySeatMenuVariant('absent-no-makeup', true)).toBe('absent-no-makeup')
+    expect(resolveEmptySeatMenuVariant(null, true)).toBe('empty')
+    expect(resolveEmptySeatMenuVariant(undefined, false)).toBe('empty')
+  })
+
+  it('空き席メニューの解除ボタン: holiday は「休日記録の表示解除」、moved は従来の文言/testid(フラグ ON/OFF)', () => {
+    expect(resolveDisplayRecordClearButton('holiday', true)).toEqual({ label: '休日記録の表示解除', testId: 'menu-clear-holiday-button' })
+    expect(resolveDisplayRecordClearButton('holiday', false)).toEqual({ label: '休日記録の表示解除', testId: 'menu-clear-holiday-button' })
+    expect(resolveDisplayRecordClearButton('moved', true)).toEqual({ label: '休)表示解除(移動元)', testId: 'menu-clear-moved-button' })
+    expect(resolveDisplayRecordClearButton('moved', false)).toEqual({ label: '移動元表示解除', testId: 'menu-clear-moved-button' })
   })
 })
