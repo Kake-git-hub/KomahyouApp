@@ -44,7 +44,10 @@ describe('isInvokedDirectly', () => {
     process.chdir(REPO_ROOT)
     try {
       expect(isInvokedDirectly(HELPER_URL, relativeFromRepoRoot)).toBe(true)
-      expect(isInvokedDirectly(HELPER_URL, `.\\${relativeFromRepoRoot.replace('/', '\\')}`)).toBe(true)
+      // バックスラッシュ区切りは Windows だけの表記(Linux の CI ではファイル名の一部になり不一致が正)。
+      if (process.platform === 'win32') {
+        expect(isInvokedDirectly(HELPER_URL, `.\\${relativeFromRepoRoot.replace('/', '\\')}`)).toBe(true)
+      }
     } finally {
       process.chdir(previousCwd)
     }
