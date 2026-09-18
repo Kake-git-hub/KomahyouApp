@@ -14,6 +14,11 @@
   `src/utils/developmentClassroom.ts`／`functions/src/developmentClassroomIdentity.ts` ＋ `functions/src/generated/`／
   `functions/src/index.ts`（`requireClassroomAccessMember`・T0-3）／`src/integrations/firebase/boardShare.ts`／
   `firebase/rules/firestore.rules.test.ts`／`tools/*.mjs`（T0-4）。
+- **実装との対応**（Phase 1・2026-09-18・§11）: `src/company/profile.ts`（新設・T1-1）／
+  `src/utils/companyFeatureDefaults.ts`（新設・T1-2）＋ `functions/src/generated/companyFeatureDefaults.ts`／
+  `src/utils/featureRollout.ts`・`functions/src/parentPortal.ts`・`functions/src/questionAiAnswer.ts`（T1-2）／
+  `src/App.tsx`・`src/utils/scheduleHtml.ts`（T1-3・T1-4）／`src/components/schedule-board/BoardToolbar.tsx`・
+  `src/components/navigation/AppMenu.tsx`（T1-5）。
 
 ---
 
@@ -457,9 +462,105 @@ CLAUDE.md の「本番データ保護ルール」は 1 社前提（教室 ID の
 
 ---
 
+## 11. Phase 1 追補：会社レイヤ（2026-09-18 実装・§7-1〜§7-5 の詳細化）
+
+> §7 の確定値（オーナー 2026-09-16）を実装できる粒度に詳細化したもの。**既定値（既存運営会社 = `main`）では
+> 画面・帳票・API の出力が Phase 1 の前後で完全に同じ**（出力不変）。ここに書いた形以外の会社差を
+> 出したくなったら、まず §2-1 で「差し込み口で足りるか／コアの機能にすべきか」を判定する。
+
+### 11-1. 会社プロファイル（T1-1・§7-5）
+
+- 置き場は **`src/company/profile.ts`** 1 ファイル（フォークが差し替えてよい唯一の入口。§2-2 L3）。コア本体からは
+  alias **`@company/profile`**（vite / vitest / tsconfig で同一定義）で読む。
+- `CompanyProfile` の項目: `companyKey`（= workspaceKey。接続先 env と一致させる）／`displayName`（会社の表示名・
+  Phase 1 では画面に出さない）／`appName`（タブ名・ログイン題名）／`logoDefault`（帳票の既定ロゴ・null = なし）／
+  `roleLabels`（§11-3）／`featureDefaults`（§11-2 の台帳からの**派生値**・手書き禁止）／`companyVersion`（§7-7・
+  Phase 1 では値だけ持ち表示への配線は Phase 2）／`reportHooks`（§11-4）／`screenExtensions`（§11-5）。
+- 既定値 = スクールIE の現行値。プロファイルは `Object.freeze` し実行時に書き換えない。
+- **会社の壁とは無関係**: プロファイルを別会社のキーにしても他社データは見えない・書けない（壁は §1 の
+  workspaceKey・rules・callable 検査が担う）。プロファイルは見た目と差し込み口だけを決める。
+
+### 11-2. 機能スイッチの 2 段解決（T1-2・§7-1）
+
+- 解決順は **(1) 基本スコープ → (2) 会社既定 → [(3) 教室別上書き = 予約のみ・未再開]** で、純関数
+  `resolveFeatureEnabledByLayers` 1 か所に集約する（`src/utils/companyFeatureDefaults.ts`）。
+  - (1) は従来の `featureRolloutRegistry[key].scope`（development-only / staging-environment / all-classrooms）。
+  - (2) は **コア台帳 `COMPANY_FEATURE_DEFAULTS`** を `(workspaceKey, featureKey)` で引いた `'on' | 'off' | null`。
+    `'on'` = その会社の**全教室**で有効（開発用教室限定の機能を会社全体へ出す）、`'off'` = **全教室**で無効
+    （開発用教室でも無効）、行なし = (1) のとおり。**既存運営会社 `main` は行なし**（= 従来どおり）。
+  - (3) は `FeatureLayerInput.classroomOverride` を `null` 固定で予約。O-1 を再開するときはここを `boolean | null`
+    に広げ (2) の後に適用する（順序を入れ替えない）。
+- **会社既定の置き場はコア**（フォークの `src/company/` ではない）。理由: 保護者ポータル（`parentPortalQr`）・
+  質問 AI（`questionAiAnswer`）はサーバー側にも同じ述語があり、クライアントだけ会社既定を変えると
+  「QR は出るのに API は 403」の非対称になる。台帳は `sync-shared` で `functions/src/generated/` へ複製し、
+  サーバー述語 `isParentPortalEnabledForClassroom` / `isQuestionAiAnswerEnabledForClassroom` も同じ関数・
+  同じキーで解決する（パリティテスト `functions/src/companyFeatureDefaults.parity.test.ts`・
+  `functions/src/featureCompanyLayer.test.ts`・`src/utils/featureRollout.test.ts` の字面固定）。
+  会社プロファイルの `featureDefaults` は台帳から `companyKey` で引いた派生値（`src/company/profile.test.ts`）。
+- 台帳の `featureKey` は文字列（自己完結の制約）。`featureRolloutRegistry` に実在することを
+  `src/utils/companyFeatureDefaults.test.ts` が検査する。
+
+### 11-3. 呼称（役割名）辞書（T1-3・§7-2）
+
+- 辞書は `CompanyProfile.roleLabels`（`manager` = 室長／`classroomAdmin` = 教室管理者／`developer` = 開発者）。
+  読み取りは `roleLabel(key)`、アプリ名は `appName()`。**役割名だけ**を辞書化し、授業用語（講習・振替・コマ…）は
+  辞書化しない（オーナー確定）。
+- 辞書経由に置き換えた箇所（**全域置換はしない**。この一覧が対象の正本）:
+
+  | 箇所 | 画面／印刷 | 内容 |
+  |---|---|---|
+  | `src/App.tsx` アカウント一覧 | 画面 | 役割表示「開発者」「教室管理者」 |
+  | `src/App.tsx` `document.title` ×3 | 画面 | 「コマ表アプリ」「開発者画面 \| コマ表アプリ」「<教室名> \| コマ表アプリ」 |
+  | `src/App.tsx` ログイン題名 | 画面 | 「コマ表アプリログイン」 |
+  | `src/utils/scheduleHtml.ts` 講習集計結果の提出方法 | 印刷・画面 | 「室長登録」（`resolveSubmissionMethodLabel`） |
+  | `src/utils/scheduleHtml.ts` 本体タブ未検出の警告 ×2 | 画面 | 「コマ表アプリ本体のタブが…」 |
+
+- 埋め込み JS へは `escapeForEmbeddedJsString` で差し込む（辞書値に引用符・改行があってもスクリプトが壊れない・
+  `src/company/roleLabels.wiring.test.ts`）。既定辞書で「室長登録」等の出力が不変であることを同テストと
+  既存 `scheduleHtml.test.ts` が固定する。
+- 対象外（意図的）: コメント・ログ文言・エラー文の中の「室長」「開発者」、サーバー（functions）の AI プロンプト、
+  請求書の「コマ表アプリ運営事務局」（請求は Phase 3 で会社名を棟の文書に持つ・§7-10）。
+
+### 11-4. 帳票フック（T1-4・§7-3）
+
+- 差し込み口は `CompanyReportHooks`（6 項目・**すべて空文字が既定 = 出力不変**）。帳票は別タブの埋め込み JS が
+  描くため、関数ではなく**静的 HTML 文字列**を `createScheduleHtml` が `COMPANY_REPORT_HOOKS` として **1 回だけ**
+  埋め込む（payload とは別。別タブ同期 `schedule-data-update` で payload が入れ替わっても差し込みは不変）。
+
+  | 項目 | 効く場所 | 挙動 |
+  |---|---|---|
+  | `studentHeaderHtml` / `teacherHeaderHtml` | 生徒／講師日程表 1 枚の上部ブロック（`buildHeaderHtml`） | 空でなければ**丸ごと置換**。トークン `{{period}}` `{{nameLabel}}` `{{name}}` `{{page}}` は HTML エスケープ、`{{qr}}` は QR SVG をそのまま。空フォーマットは生徒側ヘッダ |
+  | `studentNoteHtml` / `teacherNoteHtml` | 各 1 枚の末尾（回数表の下） | 空でなければ `<div class="company-note">` で包んで挿入 |
+  | `emptyFormatNoteHtml` | 空フォーマット | 生徒側の注記の代わりに使う |
+  | `logoDefaultUrl`（`logoDefault` から補完） | ロゴ欄（日程表・空フォーマット） | 利用者ロゴが未設定のときだけ表示。利用者ロゴが常に優先 |
+
+- ロゴ欄の中身の決定は `renderLogoBoxInner(src)` 1 か所（既定ヘッダ・`syncLogo`・空フォーマットの置換が共有）。
+  既定ロゴなし・利用者ロゴなしのときは従来どおり「ロゴ欄」。
+- テスト: `src/company/reportHooks.wiring.test.ts`（既定で空・ヘッダ差替のトークン展開・ロゴ優先順・注記・
+  埋め込みの `\u003c` 逃がし）。埋め込みスクリプト全体の構文妥当性は既存 `scheduleHtml.test.ts` が固定する。
+
+### 11-5. 画面フック（T1-5・§7-4）
+
+- 登録口は `CompanyScreenExtensions`（`boardToolbarButtons` / `appMenuItems`・**既定は空配列 = DOM 不変**）。
+  - 追加ボタンは盤面ツールバーの「質問・要望」の右に `data-company-button="<id>"` で並ぶ。テンプレート編集モードでは出さない。
+  - 追加メニュー項目は既存 5 項目の下・「ログアウト」の上に `data-company-menu-item="<id>"` で並ぶ。
+- 押したときに渡す文脈は `CompanyScreenActionContext = { classroomName, weekStartDate }` だけ（コアの内部 state・
+  盤面データは渡さない。フォークがコアの形に依存しないため）。メニューからは `weekStartDate` は空文字。
+- テスト: `src/company/screenExtensions.wiring.test.ts`（jsdom・既定で `data-company-*` が 0 件・登録時の位置と文脈）。
+
+### 11-6. Phase 1 完了時の判断（§7-9）
+
+- Phase 1 で **単一リポジトリのまま**会社差（呼称・帳票の注記／ヘッダ・追加ボタン／メニュー・機能の会社既定）を
+  表現できる状態になった。**フォーク（方式 B）を切るかは、2 社目の要望の大きさを見てオーナーが判断**する。
+- §10-6（`boardShares` の書き込み条件）は Phase 1 でも未決のまま（読みは無改変）。Phase 2 の Hosting multi-site
+  と併せて判断する。
+
+---
+
 ## 変更履歴
 
 | 日付 | 内容 |
 |---|---|
 | 2026-09-16 | 初版（Phase 0 T0-1）。計画 `plan-2026-09-15-multi-company-architecture.md` の §2 / §4 / §9 / §10 の確定値を仕様として固定。§7 は Phase 1〜3 の確定値要約のみ。§9 の INV 候補と §10 の未決 5 件はオーナー確認待ち。 |
 | 2026-09-16 | オーナー確定「テスト教室は開発用教室と同じ扱い」を §4-2-11 に本文化（§10-7 は経緯の記録として解決済みに変更）。 |
+| 2026-09-18 | §11 Phase 1 追補（会社レイヤ T1-1〜T1-5 の詳細化: プロファイル・機能スイッチ 2 段解決とコア台帳・役割名辞書の対象一覧・帳票フック 6 項目・画面フック）。§7 の確定値は不変。既定値で出力不変。 |

@@ -37,6 +37,7 @@ import { useClassroomTabLock } from './utils/useClassroomTabLock'
 import { useAppVersionMonitor } from './utils/useAppVersionMonitor'
 import { isDevelopmentClassroom, isSubmissionTokenOwnedByClassroom, stripForeignSubmissionTokensFromInputs, stripParentPortalTokensFromStudents, stripSubmissionTokensFromInputs } from './utils/developmentClassroom'
 import { isFeatureEnabledForClassroom } from './utils/featureRollout'
+import { appName, roleLabel } from '@company/profile'
 import { reflectParentOwnedSubmissionFields } from './utils/submissionReflection'
 import { bumpMemCounter } from './utils/memoryDiagnostics'
 import { readBackupFileText } from './utils/backupFileText'
@@ -4778,7 +4779,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     if (typeof document === 'undefined') return
     if (!currentUser) {
-      document.title = 'コマ表アプリ'
+      document.title = appName()
       return
     }
 
@@ -4786,11 +4787,11 @@ function AuthenticatedApp() {
     if (screen === 'developer') {
       // 開発者画面は開発者専用で特定の校舎に紐づかないため、タブ名に校舎名は出さない。
       // (acting 教室名を出すと、前に開いていた教室名が残って混乱を招く)
-      document.title = '開発者画面 | コマ表アプリ'
+      document.title = `${roleLabel('developer')}画面 | ${appName()}`
       return
     }
 
-    document.title = classroomName ? `${classroomName} | コマ表アプリ` : 'コマ表アプリ'
+    document.title = classroomName ? `${classroomName} | ${appName()}` : appName()
   }, [actingClassroom?.name, currentUser, screen])
 
   useEffect(() => {
@@ -5327,7 +5328,7 @@ function AuthenticatedApp() {
       return renderWithSubmissionAcknowledgement(
         <div className="workspace-auth-shell">
           <div className="workspace-auth-card" data-testid="firebase-login-card">
-            <h1>コマ表アプリログイン</h1>
+            <h1>{appName()}ログイン</h1>
             <form className="workspace-auth-form" onSubmit={(event) => {
               event.preventDefault()
               void submitRemoteLogin()
@@ -5367,7 +5368,7 @@ function AuthenticatedApp() {
               return (
                 <button key={user.id} className="workspace-account-card" type="button" onClick={() => loginAsUser(user.id)}>
                   <strong>{user.name}</strong>
-                  <span>{user.role === 'developer' ? '開発者' : '教室管理者'}</span>
+                  <span>{user.role === 'developer' ? roleLabel('developer') : roleLabel('classroomAdmin')}</span>
                   <span>{user.email}</span>
                   <span>対象: {assignedClassroomName}</span>
                 </button>

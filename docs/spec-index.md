@@ -46,7 +46,8 @@
 - **正本**：[`spec-multi-tenant.md`](spec-multi-tenant.md) — Phase 0 起案 2026-09-16。計画 `plan-2026-09-15-multi-company-architecture.md`
   のオーナー確定値（§2 / §4 / §9 / §10）を仕様として固定。管理者＝spec-curator。
 - **効く範囲**：本番データ保護ルールの全 workspace 適用（§3）・開発用教室レジストリ（§4）・越境ガード（§5）・
-  運用ツールの `--workspace` 必須化（§6）。Phase 1〜3 の確定値は §7 に要約のみ（詳細は各 Phase で確定）。
+  運用ツールの `--workspace` 必須化（§6）。Phase 1〜3 の確定値は §7 に要約（Phase 1 の会社レイヤ＝プロファイル・
+  機能スイッチ 2 段解決・役割名辞書・帳票／画面フックは §11 で詳細化済み 2026-09-18。Phase 2〜3 は各 Phase で確定）。
 - **INV との関係**：越境遮断は **INV 候補（`spec-multi-tenant.md` §9・オーナー承認待ち）**。承認されるまで
   `spec-invariants.md` には追加しない。
 

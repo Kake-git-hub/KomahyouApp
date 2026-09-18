@@ -85,8 +85,9 @@ describe('isDevelopmentClassroomIdentity の引数は名前付き(オブジェ�
     expect(source).not.toMatch(/export function isDevelopmentClassroomIdentity\(\s*\r?\n?\s*workspaceKey:/u)
   })
 
-  it('呼び出し側(index.ts・parentPortal.ts)はすべて名前付きで渡す', () => {
-    for (const [relativePath, expectedCalls] of [['./index.ts', 5], ['./parentPortal.ts', 1]] as const) {
+  it('呼び出し側(index.ts・parentPortal.ts・questionAiAnswer.ts)はすべて名前付きで渡す', () => {
+    // 2026-09-18(Phase 1 T1-2): 質問 AI の判定は index.ts から questionAiAnswer.ts の isQuestionAiAnswerEnabledForClassroom へ移動(index 5→4・questionAiAnswer 1)。
+    for (const [relativePath, expectedCalls] of [['./index.ts', 4], ['./parentPortal.ts', 1], ['./questionAiAnswer.ts', 1]] as const) {
       const calls = readSource(relativePath).match(/isDevelopmentClassroomIdentity\([^)]*\)/gu) ?? []
       expect(calls.length, relativePath).toBe(expectedCalls)
       for (const call of calls) {

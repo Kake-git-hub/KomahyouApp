@@ -15,6 +15,14 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- feat: 複数会社展開 Phase 1 T1-1・会社レイヤの入口 `src/company/profile.ts` を新設(CompanyProfile: 会社キー=main・アプリ名・既定ロゴ・役割名辞書・機能の会社既定(派生値)・会社版番号・帳票フック・画面フック。既定値=スクールIEの現行値で全項目が出力不変)。コア本体は alias `@company/profile`(vite/vitest/tsconfig で同一定義)で読む。フォークが触ってよいのは src/company/ だけ (src/company/profile.ts・test, vite.config.ts, vitest.config.ts, tsconfig.app.json, docs/spec-multi-tenant.md §11)
+- feat: Phase 1 T1-2・機能フラグを「基本スコープ → 会社既定」の 2 段解決へ(オーナー確定 2026-09-16・教室別上書きは 3 段目として予約のみ)。会社既定はコア台帳 `src/utils/companyFeatureDefaults.ts`(自己完結・sync-shared で functions へ複製)に置き、`isFeatureEnabledForClassroom` とサーバー述語(保護者ポータル `isParentPortalEnabledForClassroom`・質問 AI `isQuestionAiAnswerEnabledForClassroom` 新設)が同じ関数 `resolveFeatureEnabledByLayers`・同じキーで解決(片側だけ会社既定を見る非対称を構造で防ぐ)。台帳は空=既存運営会社は従来どおり。パリティ/配線テスト追加 (src/utils/featureRollout.ts・companyLayer.test, functions/src/parentPortal.ts・questionAiAnswer.ts・index.ts・generated/companyFeatureDefaults.ts・companyFeatureDefaults.parity.test・featureCompanyLayer.test, functions/scripts/sync-shared.mjs)
+- refactor: Phase 1 T1-3・役割名(室長・教室管理者・開発者)とアプリ名を辞書経由に(役割名だけ・全域置換はしない・オーナー確定 2026-09-16)。対象=App.tsx のタブ名/ログイン題名/アカウント一覧の役割表示、日程表の「室長登録」と本体タブ未検出の警告文。埋め込み JS へは引用符・改行をエスケープして差し込む。既定辞書で出力不変(テストで固定・対象一覧は spec-multi-tenant §11-3) (src/App.tsx, src/utils/scheduleHtml.ts, src/company/roleLabels.wiring.test.ts)
+- feat: Phase 1 T1-4・生徒/講師日程表・空フォーマットに会社レイヤの差し込み口(ヘッダ差替 `{{period}}{{nameLabel}}{{name}}{{page}}{{qr}}`・追加注記・既定ロゴ)を埋め込み JS に追加。payload とは別に `COMPANY_REPORT_HOOKS` を 1 回だけ埋め込む(別タブ同期で消えない)。ロゴ欄の中身は `renderLogoBoxInner` 1 か所に集約し、空フォーマットのロゴ置換を placeholder 一致から logo-box 全体の置換へ(既定ロゴがあっても利用者ロゴが優先)。既定は全項目空=従来の出力と同一 (src/utils/scheduleHtml.ts, src/company/reportHooks.wiring.test.ts)
+- feat: Phase 1 T1-5・盤面ツールバー(質問・要望の右)とメニュー(既存 5 項目の下・ログアウトの上)に会社プロファイルの追加ボタン/項目の登録口。押したときに渡すのは { classroomName, weekStartDate } だけ(コア内部 state は渡さない)。既定は空=DOM 不変(jsdom テストで固定) (src/components/schedule-board/BoardToolbar.tsx, src/components/navigation/AppMenu.tsx, src/components/schedule-board/ScheduleBoardScreen.tsx, src/company/screenExtensions.wiring.test.ts)
+- test: `isDevelopmentClassroomIdentity` 呼び出し数の字面テストを、質問 AI の判定が questionAiAnswer.ts へ移った配置に追随(index 5→4・questionAiAnswer 1) (functions/src/developmentClassroomIdentity.test.ts)
+- docs: spec-multi-tenant に §11 Phase 1 追補(プロファイル・2 段解決とコア台帳の理由・役割名の対象一覧・帳票フック 6 項目・画面フック・完了時の判断)。計画 §7 Phase 1 に状況を追記、spec-index を更新 (docs/spec-multi-tenant.md, docs/plan-2026-09-15-multi-company-architecture.md, docs/spec-index.md)
+- chore: 確認リストに Phase 1 の「見た目が変わっていないこと」を確かめる m-1〜m-3 を追加(版 v1.5.540 は据え置き) (src/utils/verificationChecklist.ts・test)
 
 ## v1.5.543 (2026-09-17)
 - feat: 確認リストの項目を「前提(任意1行)／操作(1〜2個)／見るところ(最大4)」の3段に分け、全15項目を短く書き直した(オーナー指摘「手順が多すぎて大変」。ナビゲート機能ではなく書き方を軽くする案を選択)。準備 y-1 を先頭に移し、以降は読み込んだ日大前データの上で行う前提にして項目ごとの準備を削減。上限はテストで固定。id・版(v1.5.540)は据え置きで下書きは生きる。確認項目 c-3 追加 (src/utils/verificationChecklist.ts・test, VerificationChecklistPanel.tsx, App.css)

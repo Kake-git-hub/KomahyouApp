@@ -59,7 +59,7 @@ import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from 
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
-import { generateQuestionAiAnswer, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
+import { generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
 import {
@@ -1913,7 +1913,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   // 質問への AI 即時回答(試験・開発用教室のみ)。報告の記録が済んでから呼ぶ(AI が失敗しても報告は残る)。
   // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
   let aiAnswerFields: { aiAnswer?: string; aiAnswerError?: string } = {}
-  if (shouldAnswerQuestionWithAi({ category: report.category, isDevelopmentClassroom: isDevelopmentClassroomIdentity({ workspaceKey, classroomId }), isVerificationChecklist })) {
+  if (shouldAnswerQuestionWithAi({ category: report.category, isFeatureEnabled: isQuestionAiAnswerEnabledForClassroom({ workspaceKey, classroomId }), isVerificationChecklist })) {
     const aiResult = await generateQuestionAiAnswer({
       note: report.note,
       screen: report.screen,

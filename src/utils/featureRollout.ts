@@ -1,5 +1,6 @@
 import type { DevelopmentClassroomIdentity } from './developmentClassroom'
 import { isDevelopmentClassroom } from './developmentClassroom'
+import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './companyFeatureDefaults'
 import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 
 // staging 検証環境(komahyouapp-staging)の判定。staging 先行機能は教室IDではなく環境(プロジェクトID)で
@@ -168,14 +169,23 @@ export function isFeatureScopeEnabled(
 // src/utils/developmentClassroomRegistry.ts)で行う。呼び出し側は必ず `id` を渡すこと
 // (`{ name }` だけを渡すと development-only 機能が開発用教室でも無効になる)。
 // workspaceKey は既定で現在の接続先。テストからは第3引数で明示する。
+//
+// ★2 段解決(2026-09-18・Phase 1 T1-2・docs/spec-multi-tenant.md §11): 基本スコープ → 会社既定。
+//   会社既定はコア台帳 src/utils/companyFeatureDefaults.ts を (workspaceKey, featureKey) で引く(行が無ければ
+//   基本スコープのとおり = 従来と同じ)。段の適用順は resolveFeatureEnabledByLayers 1 か所に集約し、
+//   サーバー側述語(functions/src/parentPortal.ts・questionAiAnswer.ts)も同じ関数(sync-shared の複製)で解決する。
+//   3 段目(教室別上書き O-1)は再開しない(FeatureLayerInput.classroomOverride は予約のみ)。
 export function isFeatureEnabledForClassroom(
   featureKey: FeatureRolloutKey,
   classroom: DevelopmentClassroomIdentity | null | undefined,
   workspaceKey: string = getFirebaseBackendConfig().workspaceKey,
 ) {
   const feature = featureRolloutRegistry[featureKey]
-  return isFeatureScopeEnabled(feature.scope, {
-    isStaging: isStagingEnvironment(),
-    isDevelopmentClassroom: isDevelopmentClassroom(classroom, workspaceKey),
+  return resolveFeatureEnabledByLayers({
+    scopeEnabled: isFeatureScopeEnabled(feature.scope, {
+      isStaging: isStagingEnvironment(),
+      isDevelopmentClassroom: isDevelopmentClassroom(classroom, workspaceKey),
+    }),
+    companyDefault: resolveCompanyFeatureDefault(workspaceKey, featureKey),
   })
 }
