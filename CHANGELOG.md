@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.552 (2026-09-19)
+
+- feat: 盤面ツールバー「通常授業テンプレ作成」の右に「保護者連絡」ボタンを追加(オーナー指示 2026-09-19)。保護者QRからの休み連絡の履歴を受信日時の新しい順に一覧し、モーダルで処理したものに「確認済」(保存前は「確認済(保存待ち)」)を表示。確認済は直近 10 件まで(古いものは見た目上だけ消す)。未確認の行を押すと既存の休み連絡モーダル(四択)が開く=処理経路は増やさない(INV-06)。履歴は別購読(createdAt 降順・limit 50・複合インデックス不要)で読み、未処理の権威は従来の購読のまま。教室の絞り込み・cleanup は既存と同じ(INV-08)。フラグ parentPortalQr(開発用教室＋staging)限定。functions/ルール変更なし。確認リスト q-6 (parentMessages.ts buildParentContactHistory / parentPortal.ts subscribeParentMessageHistory / ParentContactHistoryModal.tsx / BoardToolbar.tsx / App.tsx)
+
 <!-- ここに編集内容を1行ずつ追記する -->
 
 ## v1.5.551 (2026-09-19)

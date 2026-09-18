@@ -4,7 +4,7 @@
 //   (lectureSubmissions のような「誰でも書ける」経路を作ると 2026-07-09 型の教室越え混入が再発する)。
 // - 連絡 parentMessages は教室メンバーのみ read(write は CF のみ)。購読は自教室のパスに限定する(§E-2 1.・INV-08)。
 // ⚠️ トークン全文・本文・生徒名をログに出さない。
-import { collection, onSnapshot, query, where } from 'firebase/firestore'
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
@@ -177,4 +177,42 @@ export function subscribeParentMessages(
   })
 
   return unsubscribe
+}
+
+/** 履歴の購読で読む件数。確認済 10 件＋旧形式(自由記述)の doc が混ざる分の余裕。 */
+export const PARENT_MESSAGE_HISTORY_FETCH_LIMIT = 50
+
+/**
+ * 「保護者連絡」ボタンの履歴用に、自教室の休み連絡を**処理済みも含めて**新しい順に購読する(2026-09-19)。
+ * - 未処理の購読(subscribeParentMessages)とは別に持つ。未処理は件数制限なしで全件が要る(モーダルの権威)が、
+ *   履歴は直近だけでよい。ここを未処理の権威に使わない(limit で古い未処理が落ちる)。
+ * - orderBy は単一フィールド(createdAt)だけ = 自動索引で足りる。where と組み合わせない(複合インデックスが要る)。
+ * - 読み取りだけ。教室分離・旧形式の除外は subscribeParentMessages と同じ(INV-08)。
+ */
+export function subscribeParentMessageHistory(
+  classroomId: string,
+  onChange: (entries: ParentMessageEntry[]) => void,
+): () => void {
+  const db = getFirebaseFirestoreInstance()
+  const config = getFirebaseBackendConfig()
+  if (!db || !classroomId || !config.workspaceKey) return () => {}
+
+  const q = query(
+    collection(db, 'workspaces', config.workspaceKey, 'classroomSnapshots', classroomId, 'parentMessages'),
+    orderBy('createdAt', 'desc'),
+    limit(PARENT_MESSAGE_HISTORY_FETCH_LIMIT),
+  )
+
+  return onSnapshot(q, (snapshot) => {
+    const entries: ParentMessageEntry[] = []
+    for (const doc of snapshot.docs) {
+      const entry = parseParentMessageEntry(doc.id, doc.data())
+      if (!entry) continue
+      if (entry.classroomId !== classroomId) continue
+      entries.push(entry)
+    }
+    onChange(entries)
+  }, (error) => {
+    console.error('[parentMessages] history subscribe failed', error.code)
+  })
 }

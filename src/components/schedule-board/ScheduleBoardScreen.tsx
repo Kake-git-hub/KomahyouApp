@@ -968,6 +968,9 @@ type ScheduleBoardScreenProps = {
   onCopyDistributionUrl?: () => Promise<string>
   /** 「開発者へ報告」(2026-09-04): モーダルは App 側が持つ。ツールバーの講師日程共有の右に出す。 */
   onReportToDeveloper?: () => void
+  // 「保護者連絡」ボタン(休み連絡の履歴)。未指定なら出さない。
+  onOpenParentContactHistory?: () => void
+  parentContactUnconfirmedCount?: number
   onSaveBoard?: () => void
   isBoardDirty?: boolean
   isBoardSaving?: boolean
@@ -5360,7 +5363,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, onParentAbsencePlacementSettled, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, onParentAbsencePlacementSettled, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // ⚠️ 機能フラグの教室判定は【教室ID】(会社ごとの登録台帳 src/utils/developmentClassroomRegistry.ts・2026-09-16)。
@@ -12241,6 +12244,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onOpenSortMenu={tbOnOpenSortMenu}
             onCopyDistributionUrl={tbOnCopyDistributionUrl}
             onReportToDeveloper={onReportToDeveloper}
+            onOpenParentContactHistory={onOpenParentContactHistory}
+            parentContactUnconfirmedCount={parentContactUnconfirmedCount}
             onGoPrevWeek={tbOnGoPrevWeek}
             onGoNextWeek={tbOnGoNextWeek}
             onJumpToDate={tbOnJumpToDate}

@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow } from '../components/basic-data/basicDataModel'
 import {
+  PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT,
+  buildParentContactHistory,
+  mergeParentMessageEntries,
   PARENT_ABSENCE_CHOICES,
   PARENT_MESSAGE_STUDENT_NAME_FALLBACK,
   addPendingParentAbsenceFinalize,
@@ -289,5 +292,88 @@ describe('chunkParentMessageIds(処理済み化の分割)', () => {
     expect(PARENT_MESSAGE_MARK_NOTIFIED_CHUNK_SIZE).toBeLessThanOrEqual(50)
     const serverSource = readFileSync(fileURLToPath(new URL('../../functions/src/parentPortal.ts', import.meta.url)), 'utf8')
     expect(serverSource).toContain('PARENT_MESSAGE_MARK_NOTIFIED_MAX_IDS = 50')
+  })
+})
+
+// 盤面ツールバー「保護者連絡」ボタンの履歴(2026-09-19 オーナー指示)。
+describe('buildParentContactHistory(保護者連絡の履歴)', () => {
+  const at = (n: number) => `2026-09-${String(n).padStart(2, '0')}T01:00:00.000Z`
+
+  it('新しい連絡が上。処理済み=確認済 / 保存待ち / 未確認 を付け、確認済と保存待ちには選んだ処理を添える', () => {
+    const rows = buildParentContactHistory([
+      createEntry({ id: 'old', createdAt: at(1), notifiedAt: at(2), acknowledgedAt: at(2), resolution: 'absent' }),
+      createEntry({ id: 'new', createdAt: at(5) }),
+      createEntry({ id: 'mid', createdAt: at(3), acknowledgedAt: at(4), resolution: 'absent-no-makeup' }),
+    ], { students: [], pendingIds: new Set(['mid']) })
+    expect(rows.map((row) => [row.id, row.status, row.resolution])).toEqual([
+      ['new', 'unconfirmed', null],
+      ['mid', 'pending-save', 'absent-no-makeup'],
+      ['old', 'confirmed', 'absent'],
+    ])
+  })
+
+  it('前回四択を押したが保存されなかった連絡(acknowledgedAt だけある)は未確認 = モーダルに再表示される集合と同じ', () => {
+    const entries = [createEntry({ id: 'm1', acknowledgedAt: at(2), resolution: 'absent' })]
+    expect(buildParentContactHistory(entries, { students: [] })[0]).toMatchObject({ status: 'unconfirmed', resolution: null })
+    expect(selectUnnotifiedParentMessages(entries).map((entry) => entry.id)).toEqual(['m1'])
+  })
+
+  it('処理済み化を送った直後(hiddenIds)は購読が追いつく前でも確認済にする(クリックしてもモーダルに居ない行を作らない)', () => {
+    const rows = buildParentContactHistory([createEntry({ id: 'm1' })], { students: [], hiddenIds: new Set(['m1']) })
+    expect(rows[0]!.status).toBe('confirmed')
+  })
+
+  it('確認済は新しい順に 10 件まで。古い確認済は見た目上消えるが、未確認は古くても残る', () => {
+    expect(PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT).toBe(10)
+    const confirmed = Array.from({ length: 12 }, (_, index) => createEntry({ id: `c${index + 1}`, createdAt: at(index + 2), notifiedAt: at(index + 2) }))
+    const rows = buildParentContactHistory([createEntry({ id: 'u-old', createdAt: at(1) }), ...confirmed], { students: [] })
+    expect(rows.filter((row) => row.status === 'confirmed').map((row) => row.id)).toEqual(['c12', 'c11', 'c10', 'c9', 'c8', 'c7', 'c6', 'c5', 'c4', 'c3'])
+    expect(rows[rows.length - 1]!.id).toBe('u-old')
+    expect(rows).toHaveLength(11)
+  })
+
+  it('生徒名は名簿の現在名を優先する(モーダルと同じ解決)', () => {
+    const rows = buildParentContactHistory([createEntry({ studentId: 's001', studentName: '旧名' })], { students: [createStudent({ id: 's001', name: '新名', displayName: '新名' })] })
+    expect(rows[0]!.studentName).toBe('新名')
+  })
+})
+
+// ★履歴の「未確認」とモーダルの一覧は同じ集合でなければならない(食い違うと、押してもモーダルに居ない行ができる)。
+describe('履歴の未確認 = モーダルの一覧(集合の同値性)', () => {
+  it('処理済み / 四択だけ押した / 保存待ち / hidden / 他教室 / 履歴だけ・未処理購読だけ を混ぜても id が完全一致する', () => {
+    const unnotified = [
+      createEntry({ id: 'plain', createdAt: '2026-09-10T01:00:00.000Z' }),
+      createEntry({ id: 'acked', createdAt: '2026-09-11T01:00:00.000Z', acknowledgedAt: '2026-09-11T02:00:00.000Z', resolution: 'absent' }),
+      createEntry({ id: 'pending', createdAt: '2026-09-12T01:00:00.000Z' }),
+      createEntry({ id: 'hidden', createdAt: '2026-09-13T01:00:00.000Z' }),
+      createEntry({ id: 'foreign', classroomId: 'other', createdAt: '2026-09-14T01:00:00.000Z' }),
+    ]
+    const history = [
+      createEntry({ id: 'plain', createdAt: '2026-09-10T01:00:00.000Z' }),
+      createEntry({ id: 'done', createdAt: '2026-09-09T01:00:00.000Z', notifiedAt: '2026-09-09T03:00:00.000Z' }),
+    ]
+    const pendingIds = new Set(['pending'])
+    const hiddenIds = new Set(['hidden'])
+    const modalIds = buildParentMessageNotifications(
+      selectUnnotifiedParentMessages(selectParentMessagesForClassroom(unnotified, 'dev'), new Set([...pendingIds, ...hiddenIds])),
+      { students: [] },
+    ).map((item) => item.id).sort()
+    const historyUnconfirmedIds = buildParentContactHistory(
+      selectParentMessagesForClassroom(mergeParentMessageEntries(unnotified, history), 'dev'),
+      { students: [], pendingIds, hiddenIds },
+    ).filter((row) => row.status === 'unconfirmed').map((row) => row.id).sort()
+    expect(historyUnconfirmedIds).toEqual(modalIds)
+    expect(modalIds).toEqual(['acked', 'plain'])
+  })
+})
+
+describe('mergeParentMessageEntries(未処理の購読と履歴の購読の合流)', () => {
+  it('id で重複を除き、同じ id は未処理の購読側を採る。履歴にしか無い処理済みも残す', () => {
+    const merged = mergeParentMessageEntries(
+      [createEntry({ id: 'm1', studentName: '未処理側' }), createEntry({ id: 'm-old-unread' })],
+      [createEntry({ id: 'm1', studentName: '履歴側' }), createEntry({ id: 'm2', notifiedAt: '2026-09-13T02:00:00.000Z' })],
+    )
+    expect(merged.map((entry) => entry.id).sort()).toEqual(['m-old-unread', 'm1', 'm2'])
+    expect(merged.find((entry) => entry.id === 'm1')!.studentName).toBe('未処理側')
   })
 })

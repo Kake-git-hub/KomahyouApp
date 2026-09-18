@@ -40,6 +40,10 @@ type BoardToolbarProps = {
   onCopyDistributionUrl?: () => void
   /** 「質問・要望」(2026-09-04「要望・報告」→ 2026-09-14 改名・旧「開発者へ報告」): 講師日程共有の右に配置。未指定なら出さない。 */
   onReportToDeveloper?: () => void
+  /** 「保護者連絡」(2026-09-19): 保護者QRの休み連絡の履歴を開く。通常授業テンプレ作成の右。未指定(機能フラグOFF)なら出さない。 */
+  onOpenParentContactHistory?: () => void
+  /** 未確認の休み連絡の件数(ボタンのバッジ)。 */
+  parentContactUnconfirmedCount?: number
   /** 会社レイヤの追加ボタン/メニュー項目へ渡す文脈(Phase 1 T1-5)。いま開いている教室名。 */
   classroomName?: string
   onGoPrevWeek: () => void
@@ -100,6 +104,8 @@ function BoardToolbarComponent({
   onOpenSortMenu,
   onCopyDistributionUrl,
   onReportToDeveloper,
+  onOpenParentContactHistory,
+  parentContactUnconfirmedCount,
   classroomName,
   onGoPrevWeek,
   onGoNextWeek,
@@ -288,6 +294,12 @@ function BoardToolbarComponent({
               <button className="secondary-button slim" type="button" onClick={onOpenRegularTemplate} data-testid="board-regular-template-button">
                 通常授業テンプレ作成
               </button>
+              {onOpenParentContactHistory ? (
+                <button className="secondary-button slim" type="button" onClick={onOpenParentContactHistory} data-testid="board-parent-contact-button" title="保護者QRからの休み連絡の履歴">
+                  保護者連絡
+                  {parentContactUnconfirmedCount && parentContactUnconfirmedCount > 0 ? <span className="toolbar-inline-count">{parentContactUnconfirmedCount}</span> : null}
+                </button>
+              ) : null}
               <button className={`secondary-button slim${isLectureStockOpen ? ' active' : ''}`} type="button" onClick={onToggleLectureStock} data-testid="lecture-stock-chip">
                 未消化講習
                 {lectureStockTotalCount > 0 ? <span className="toolbar-inline-count">{lectureStockTotalCount}</span> : null}

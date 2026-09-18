@@ -161,7 +161,7 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     expect(wrapperIndex).toBeGreaterThan(0)
     expect(modalIndex).toBeGreaterThan(wrapperIndex)
     // 早期 return の条件に保護者連絡が入っていないと、連絡だけが来たときモーダルが出ない。
-    expect(APP_TSX).toContain('if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !staleConflictBanner)')
+    expect(APP_TSX).toContain('if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !isParentContactHistoryOpen && !staleConflictBanner)')
     // useCallback の deps に通知・畳み状態・処理中・エラー・四択ハンドラが入っていないと、再描画されない。
     const depsIndex = APP_TSX.indexOf('}, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry')
     expect(depsIndex).toBeGreaterThan(modalIndex)
@@ -189,6 +189,60 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     expect(props).toContain('parentPortalQrEnabled={parentPortalQrEnabled}')
     expect(props).toContain('onIssueParentPortalToken={parentPortalQrEnabled ? issueParentPortalToken : undefined}')
     expect(props).toContain('onRevokeParentPortalToken={parentPortalQrEnabled ? revokeParentPortalToken : undefined}')
+  })
+})
+
+// 盤面ツールバー「保護者連絡」ボタン(休み連絡の履歴・2026-09-19 オーナー指示)。
+describe('「保護者連絡」ボタンの配線', () => {
+  const TOOLBAR_TSX = readFileSync(fileURLToPath(new URL('../schedule-board/BoardToolbar.tsx', import.meta.url)), 'utf8')
+  const BOARD_TSX = readFileSync(fileURLToPath(new URL('../schedule-board/ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+  const HISTORY_MODAL_TSX = readFileSync(fileURLToPath(new URL('./ParentContactHistoryModal.tsx', import.meta.url)), 'utf8')
+
+  it('ボタンは「通常授業テンプレ作成」のすぐ右(未消化講習の左)にあり、入口が渡されないとき(フラグOFF)は出ない', () => {
+    const templateIndex = TOOLBAR_TSX.indexOf('data-testid="board-regular-template-button"')
+    const contactIndex = TOOLBAR_TSX.indexOf('data-testid="board-parent-contact-button"')
+    const lectureIndex = TOOLBAR_TSX.indexOf('data-testid="lecture-stock-chip"')
+    expect(templateIndex).toBeGreaterThan(0)
+    expect(contactIndex).toBeGreaterThan(templateIndex)
+    expect(lectureIndex).toBeGreaterThan(contactIndex)
+    expect(TOOLBAR_TSX).toContain('{onOpenParentContactHistory ? (')
+    expect(BOARD_TSX).toContain('onOpenParentContactHistory={onOpenParentContactHistory}')
+    // 本番教室では入口ごと出さない(フラグ parentPortalQr と同じ範囲・INV-08)。
+    expect(APP_TSX).toContain('onOpenParentContactHistory={parentPortalQrEnabled ? openParentContactHistory : undefined}')
+  })
+
+  it('履歴は別購読で読み、購読の cleanup と状態の全捨てに含める(他教室の履歴を残さない)', () => {
+    expect(APP_TSX).toContain('const unsubscribeHistory = subscribeParentMessageHistory(actingClassroomId,')
+    expect(APP_TSX).toContain('unsubscribeHistory()')
+    const resetIndex = APP_TSX.indexOf('const resetParentAbsenceNoticeState = useCallback')
+    const resetBody = APP_TSX.slice(resetIndex, resetIndex + 700)
+    expect(resetBody).toContain('setParentMessageHistoryEntries([])')
+    expect(resetBody).toContain('setIsParentContactHistoryOpen(false)')
+  })
+
+  it('行は開いている教室に絞ってから組み立て、未確認の集合はモーダルの一覧と同じ除外(保存待ち・hidden)で決める', () => {
+    expect(APP_TSX).toContain('selectParentMessagesForClassroom(mergeParentMessageEntries(parentMessageEntries, parentMessageHistoryEntries), actingClassroomId)')
+    expect(APP_TSX).toContain('pendingIds: new Set(pendingParentAbsenceFinalize.map((item) => item.messageId)), hiddenIds: new Set(hiddenParentMessageIds)')
+  })
+
+  it('未確認の行は既存の休み連絡モーダルを開くだけ(履歴側に処理経路を作らない・INV-06)', () => {
+    const openIndex = APP_TSX.indexOf('const openParentMessagesFromHistory = useCallback')
+    const body = APP_TSX.slice(openIndex, openIndex + 350)
+    // 出せる連絡が無い・振替先を選んでいる最中は開かない(空クリックで履歴だけ消える/盤面を覆う、を作らない)。
+    expect(body).toContain('if (parentMessageNotifications.length === 0 || isParentAbsencePlacementActiveRef.current) return')
+    expect(body).toContain('setIsParentContactHistoryOpen(false)')
+    expect(body).toContain('setIsParentMessagesModalCollapsed(false)')
+    expect(HISTORY_MODAL_TSX).not.toContain('markParentMessagesNotified')
+    expect(HISTORY_MODAL_TSX).not.toContain('onChoose')
+    // 押せるのは未確認の行だけ。
+    expect(HISTORY_MODAL_TSX).toContain("row.status === 'unconfirmed' ? (")
+  })
+
+  it('履歴モーダルは件数 0 の早期 return を抜けて描画され、deps に入っている', () => {
+    expect(APP_TSX).toContain('<ParentContactHistoryModal rows={parentContactHistoryRows}')
+    const depsIndex = APP_TSX.indexOf('}, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry')
+    const deps = APP_TSX.slice(depsIndex, depsIndex + 700)
+    for (const dep of ['isParentContactHistoryOpen', 'parentContactHistoryRows', 'openParentMessagesFromHistory']) expect(deps).toContain(dep)
   })
 })
 
