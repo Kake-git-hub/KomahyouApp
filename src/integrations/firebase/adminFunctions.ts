@@ -1,4 +1,4 @@
-import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, where, writeBatch } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { type AppSnapshotPayload, type WorkspaceClassroom } from '../../types/appState'
 import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
@@ -518,6 +518,28 @@ export async function listFirebaseServerAutoBackupSummaries(): Promise<ServerAut
       googleDriveBackupAuthSource: String(data.googleDriveBackupAuthSource ?? ''),
       googleDriveBackupServiceAccountEmail: String(data.googleDriveBackupServiceAccountEmail ?? ''),
       googleDriveBackupFolderIdMasked: String(data.googleDriveBackupFolderIdMasked ?? ''),
+    }
+  })
+}
+
+// 室長の自教室復元(docs/spec-save-restore.md §4-1)用: 指定時刻以降のバックアップ時点だけを新しい順に取る。
+// 一覧は Firestore ルールでワークスペースのメンバーなら読める(書き込みは不可)。日次 400 日分まで読まないよう
+// savedAt(ISO 文字列)の範囲で絞る。範囲と並べ替えが同じ単一フィールドなので複合インデックスは要らない。
+export async function listRecentFirebaseServerAutoBackupSummaries(sinceIso: string): Promise<Array<Pick<ServerAutoBackupSummary, 'backupDateKey' | 'backupKind' | 'displayLabel' | 'savedAt' | 'sourceSavedAt'>>> {
+  await ensureFirebaseAuthenticatedUser()
+  const firestore = requireFirestore()
+  const config = getFirebaseBackendConfig()
+  const summariesRef = collection(doc(firestore, 'workspaces', config.workspaceKey), 'workspaceAutoBackupSummaries')
+  const snapshot = await getDocs(query(summariesRef, where('savedAt', '>=', sinceIso), orderBy('savedAt', 'desc')))
+  return snapshot.docs.map((entry) => {
+    const data = entry.data()
+    const backupDateKey = String(data.backupDateKey ?? entry.id)
+    return {
+      backupDateKey,
+      backupKind: data.backupKind === 'quarterHourly' ? 'quarterHourly' : data.backupKind === 'hourly' ? 'hourly' : 'daily',
+      displayLabel: String(data.displayLabel ?? backupDateKey),
+      savedAt: String(data.savedAt ?? ''),
+      sourceSavedAt: String(data.sourceSavedAt ?? ''),
     }
   })
 }

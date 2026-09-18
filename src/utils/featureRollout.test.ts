@@ -176,6 +176,17 @@ describe('featureRollout: lessonHistory（講習履歴）', () => {
   })
 })
 
+describe('featureRollout: managerSelfRestore（室長の自教室復元）', () => {
+  it('開発用教室でのみ有効（本番教室へはオーナー確認後に昇格）', () => {
+    // オーナー確定 2026-09-18: 開発用教室 → 全教室の段階公開。復元は最重要の慎重操作なので勝手に広げないこと。
+    expect(featureRolloutRegistry.managerSelfRestore.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
+  })
+})
+
 describe('featureRollout: parentPortalQr（開発用教室・staging での有効範囲）', () => {
   it('開発用/テスト教室では有効・本番3教室では無効(台帳から外せば両側同時に無効になる)', () => {
     // docs/spec-parent-portal.md §H: 公開順は 開発用教室 → staging → 本番1教室 → 全教室。

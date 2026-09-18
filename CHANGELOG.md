@@ -16,6 +16,11 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.548 (2026-09-18)
+- feat: 室長が自教室だけをサーバーバックアップ(15分毎・直近7日)から復元できる入口をバックアップ/復元画面に追加(オーナー要望 2026-09-18・フラグ `managerSelfRestore`=開発用教室限定で先行)。ログインパスワードの再認証 → 自教室の時点データを取得 → 規模を見せて最終確認 → **画面へ読込のみ**で、確定は室長の「保存」(サーバーへ直接書く復元関数は作らない・保存前は Undo 可)。教室取り違え防止(2026-06-06 事故)として、ハンドラは教室IDを引数に取らず、室長は「担当=開いている=復元対象」の3者一致・応答の教室ID照合・取得中の教室切替検知を通す。Cloud Functions/ルールの変更なし(`downloadClassroomFromServerAutoBackup` は元から担当教室のみ許可)。(src/components/backup-restore/managerSelfRestore.ts・BackupRestoreScreen.tsx・App.tsx `restoreOwnClassroomFromServerBackup`・adminFunctions.ts `listRecentFirebaseServerAutoBackupSummaries`・テスト managerSelfRestore.test.ts / managerSelfRestore.wiring.test.ts / featureRollout.test.ts)
+- fix: 【INV-08 教室分離】「直前の状態に戻す」(Undo)が教室を開き直しても残り、別教室の盤面で押すと前の教室のデータが入る穴を塞いだ(8316830 / v1.5.300 は applyWorkspaceSnapshot と logout でしか破棄しておらず `openClassroom` が漏れていた・2026-06-13 再発と同型。室長復元が Undo を安全弁にするためレビューで発見)。Undo に取得元の教室IDを持たせて戻す前に照合(権威=`src/utils/classroomScopedUndo.ts` `canApplyUndoSnapshotToClassroom`)＋`openClassroom` でも破棄。兄弟監査: 同じ callable を使う「他教室バックアップ読込(Feature B)」にも応答の教室ID照合と取得中の教室切替検知を追加(INV-08)。QR 提出は復元で不変(INV-07・読込後の盤面再マウントで自己修復が走る)。(src/App.tsx・テスト classroomScopedUndo.test.ts / managerSelfRestore.wiring.test.ts)
+- docs: `docs/spec-save-restore.md` §4-1 を新設(2026-06-10 の「室長への開放は見送り」を、自教室・直近7日・パスワード再認証・読込→保存確定の条件で改定)。確認リストに s-1〜s-3 を追加(版は v1.5.540 据え置き)。
+
 ## v1.5.547 (2026-09-18)
 - docs: 2 社目受け入れ計画を第 3 版へ(§2-A 確認 1〜3 のオーナー回答=タブ名は「コマ表アプリ_教室名」・薬円台削除と請求許可者切替は了承・会社登録は専用コマンド。実装は次セッションから、§8 に着手順) (docs/plan-2026-09-18-second-company-onboarding.md)
 
