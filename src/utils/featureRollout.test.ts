@@ -102,9 +102,12 @@ describe('featureRollout: parentPortalQr（保護者向け固定QR・サーバ�
     const serverSource = readFileSync(fileURLToPath(new URL('../../functions/src/parentPortal.ts', import.meta.url)), 'utf8')
     const start = serverSource.indexOf('export function isParentPortalEnabledForClassroom')
     expect(start).toBeGreaterThan(-1)
-    const body = serverSource.slice(start, start + 400)
+    const body = serverSource.slice(start, start + 800)
     expect(body).toContain('isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })')
     expect(body).toContain('PARENT_PORTAL_STAGING_PROJECT_ID')
+    // ★2026-09-18(Phase 1 T1-2): 2 段解決(基本スコープ → 会社既定)もクライアントと同じ関数・同じ台帳キーで行う。
+    expect(body).toContain('resolveFeatureEnabledByLayers({')
+    expect(body).toContain("resolveCompanyFeatureDefault(identity.workspaceKey, 'parentPortalQr')")
     // 本番教室 ID の直接許可(片側だけ広い形)を復活させていないこと。
     expect(body).not.toContain('v8OZ7zH8vONNHjjYVcR1')
     // 教室名による判定を復活させていないこと(他社の同名教室で誤って有効になる)。

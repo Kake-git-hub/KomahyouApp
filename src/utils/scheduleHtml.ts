@@ -6,6 +6,7 @@
 import { compareStudentsByCurrentGradeThenName, getReferenceDateKey, getStudentDisplayName, getTeacherDisplayName, isActiveOnDate, resolveCurrentStudentGradeLabel, type StudentRow, type TeacherRow } from '../components/basic-data/basicDataModel'
 import { DEVELOPER_REPORT_DEFAULT_MODAL_CATEGORY, DEVELOPER_REPORT_UI_TEXT } from './developerReport'
 import { isFeatureEnabledForClassroom } from './featureRollout'
+import { appName, resolveCompanyReportHooks, roleLabel } from '@company/profile'
 import { isRegularLessonParticipantActiveOnDate, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import { buildRegularLessonsFromTemplate, type RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
@@ -1133,8 +1134,22 @@ export function computeDeskPickerFitScale(
   return Math.min(1, ...scales)
 }
 
+// 埋め込み JS の '...'(単一引用符)文字列へ差し込む文言のエスケープ(会社レイヤの呼称・アプリ名は
+// 設定値なので、引用符・バックスラッシュ・改行を含んでもスクリプトが壊れないようにする)。
+function escapeForEmbeddedJsString(value: string): string {
+  // '<' も逃がす(値に '</script>' が入っても <script> ブロックを閉じない)。
+  return JSON.stringify(value).slice(1, -1).replace(/'/g, "\\'").replace(/</g, '\\u003c')
+}
+
 function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'teacher' | 'all-student' | 'all-teacher') {
   const serializedPayload = JSON.stringify(payload).replace(/</g, '\\u003c')
+  // 会社レイヤ(Phase 1 T1-3・docs/spec-multi-tenant.md §11): 役割名「室長」とアプリ名は辞書経由。既定辞書では出力不変。
+  const managerLabelJs = escapeForEmbeddedJsString(roleLabel('manager'))
+  const appNameJs = escapeForEmbeddedJsString(appName())
+  // 帳票フック(Phase 1 T1-4・docs/spec-multi-tenant.md §11): ヘッダ差替・追加注記・既定ロゴ。payload とは別に
+  // 1 回だけ埋め込む(別タブ同期 schedule-data-update で payload が入れ替わっても差し込みは変わらない)。
+  // 既定は全項目が空文字 = 従来の出力と完全に同じ。
+  const serializedCompanyReportHooks = JSON.stringify(resolveCompanyReportHooks()).replace(/</g, '\\u003c')
   const isAllView = viewType === 'all-student' || viewType === 'all-teacher'
   const viewLabel = viewType === 'student' ? '生徒日程表' : viewType === 'teacher' ? '講師日程表' : viewType === 'all-student' ? '印刷用生徒日程表' : '印刷用講師日程表'
 
@@ -1488,6 +1503,12 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         cursor: pointer;
       }
 
+      /* 会社レイヤ(Phase 1 T1-4)の追加注記。既定は空で要素自体が出ない。 */
+      .company-note {
+        margin-top: 6px;
+        font-size: 11px;
+        line-height: 1.4;
+      }
       .logo-placeholder {
         font-size: 11px;
         color: var(--muted);
@@ -2957,6 +2978,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       const VIEW_LABEL = '${viewLabel}';
       const BASE_VIEW_TYPE = VIEW_TYPE === 'all-student' ? 'student' : VIEW_TYPE === 'all-teacher' ? 'teacher' : VIEW_TYPE;
       const IS_ALL_VIEW = VIEW_TYPE === 'all-student' || VIEW_TYPE === 'all-teacher';
+      // 会社レイヤの帳票フック(src/company/profile.ts reportHooks)。空文字の項目は「差し込みなし」。
+      const COMPANY_REPORT_HOOKS = ${serializedCompanyReportHooks};
       const scheduleDataElement = document.getElementById('schedule-data');
       let DATA = JSON.parse(scheduleDataElement ? scheduleDataElement.textContent || '{}' : '{}');
       if (scheduleDataElement) scheduleDataElement.remove();
@@ -4191,7 +4214,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         try {
           if (!window.opener || window.opener.closed) {
             // No.210: 移動系は理由オーバーレイで知らせる(alert より既存の move-error UI に合わせる)。
-            showScheduleMoveError('コマ表アプリ本体のタブが見つからないため移動できません。コマ表(盤面)を開いた状態で、この日程表を開き直してからお試しください。');
+            showScheduleMoveError('${appNameJs}本体のタブが見つからないため移動できません。コマ表(盤面)を開いた状態で、この日程表を開き直してからお試しください。');
             return;
           }
           // 盤面編集→反映の間の同期中スピナーを即時に出す(移動は反映を待つのでスピナーを出す=抑制窓を解除)。
@@ -4860,7 +4883,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       // 無言 return をやめ、反映されないことをその場で知らせる。
       function isOpenerAvailable() {
         if (window.opener && !window.opener.closed) return true;
-        window.alert('コマ表アプリ本体のタブが見つからないため、この操作は反映されていません。\\nコマ表(盤面)を開いた状態で、盤面の「生徒日程」「講師日程」ボタンからこの日程表を開き直して、もう一度操作してください。');
+        window.alert('${appNameJs}本体のタブが見つからないため、この操作は反映されていません。\\nコマ表(盤面)を開いた状態で、盤面の「生徒日程」「講師日程」ボタンからこの日程表を開き直して、もう一度操作してください。');
         return false;
       }
 
@@ -5961,13 +5984,41 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         periodSelect.value = matchedBand ? buildPeriodValue(matchedBand) : '';
       }
 
-      function buildHeaderHtml(title, nameLabel, subLabel, pageIndex, periodLabel, qrHtml) {
+      // 会社レイヤ(Phase 1 T1-4): ヘッダ差替テンプレートのトークン展開。{{period}} {{nameLabel}} {{name}} {{page}} は
+      // HTML エスケープして差し込み、{{qr}} だけ QR の SVG(HTML)をそのまま入れる。未知のトークンはそのまま残す。
+      // (scheduleHtml.test.ts が new Function で抽出して固定する)
+      function applyCompanyHeaderTemplate(template, values) {
+        var escapeValue = function (value) {
+          return String(value == null ? '' : value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        };
+        return String(template || '').replace(/\\{\\{(period|nameLabel|name|page|qr)\\}\\}/g, function (_match, token) {
+          if (token === 'qr') return values.qr || '';
+          return escapeValue(values[token]);
+        });
+      }
+
+      // 会社レイヤ(Phase 1 T1-4): 追加注記。空なら何も足さない(出力不変)。
+      function renderCompanyNoteHtml(noteHtml) {
+        return noteHtml ? '<div class="company-note" data-role="company-note">' + noteHtml + '</div>' : '';
+      }
+
+      // 会社レイヤ(Phase 1 T1-4): 既定ロゴ。利用者がロゴ未設定(src が空)のときだけ会社の既定ロゴ、それも無ければ「ロゴ欄」。
+      function renderLogoBoxInner(src) {
+        var effective = src || COMPANY_REPORT_HOOKS.logoDefaultUrl || '';
+        return effective ? '<img class="logo-image" src="' + effective + '" alt="logo" />' : '<span class="logo-placeholder">ロゴ欄</span>';
+      }
+
+      function buildHeaderHtml(title, nameLabel, subLabel, pageIndex, periodLabel, qrHtml, companyHeaderHtml) {
+        // 会社レイヤ(Phase 1 T1-4): ヘッダ差替が指定されていれば上部ブロックを丸ごと置き換える。空なら従来どおり。
+        if (companyHeaderHtml) {
+          return applyCompanyHeaderTemplate(companyHeaderHtml, { period: periodLabel, nameLabel: nameLabel, name: subLabel, page: pageIndex + 1, qr: qrHtml || '' });
+        }
         var qrBlock = '';
         if (qrHtml) {
           qrBlock = '<div class="meta-qr-block">' + qrHtml + '</div>';
         }
         return '<div class="sheet-top">'
-          + '<div class="logo-box" data-shared-image="logo"><span class="logo-placeholder">ロゴ欄</span></div>'
+          + '<div class="logo-box" data-shared-image="logo">' + renderLogoBoxInner('') + '</div>'
           + '<div class="school-box"><textarea class="school-input shared-input" data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等"></textarea></div>'
           + '<div class="title-box"><input class="title-input shared-input" data-shared-input="sheet-title" value="" placeholder="授業日程表" /></div>'
           + '<div class="meta-box">' + qrBlock + '<div class="meta-info"><div class="meta-row"><span class="meta-label">期間:</span> ' + escapeHtml(periodLabel) + '</div><div class="meta-row person-meta-row"><span><span class="meta-label">' + escapeHtml(nameLabel) + ':</span> ' + escapeHtml(subLabel) + '</span></div><div class="meta-row"><span class="page-count print-only-hidden">' + (pageIndex + 1) + 'ページ目</span></div></div></div>'
@@ -6236,7 +6287,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var bottomSectionHtml = renderBottomSection(gradeCommonKey, 'student-' + student.id, absenceRows, makeupRows, regularCountRows, lectureCountRows, emptyFormat ? '' : regularCountWarningHtml, emptyFormat ? '' : lectureCountWarningHtml, { absenceTestId: 'student-schedule-absence-table-' + student.id, emptyFormat: emptyFormat, optionGradeLabel: (student.currentGradeLabel || '未設定'), optionChecks: (emptyFormat ? undefined : student.optionChecks) });
         // spec-group-lesson §E: 中3は1限の上に集団行(2バンド)を差し込む。空フォーマットは中3想定で盤面の集団コマを反映する。
         var groupRowsHtml = emptyFormat ? buildEmptyFormatGroupRowsHtml(startDate, endDate, dateHeaders) : buildStudentGroupRowsHtml(student, startDate, endDate, dateHeaders);
-        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + bottomSectionHtml + '</section>';
+        // 会社レイヤ(Phase 1 T1-4): 生徒日程表のヘッダ差替と追加注記。空フォーマットは注記だけ専用(emptyFormatNoteHtml)。
+        var companyNoteHtml = renderCompanyNoteHtml(emptyFormat ? COMPANY_REPORT_HOOKS.emptyFormatNoteHtml : COMPANY_REPORT_HOOKS.studentNoteHtml);
+        var html = '<section class="sheet" data-role="student-sheet" data-student-id="' + student.id + '">' + buildHeaderHtml('授業日程表', '生徒名', headerNameLabel, studentIndex, formatRangeLabel(startDate, endDate), qrHtml, COMPANY_REPORT_HOOKS.studentHeaderHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + dateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + bottomSectionHtml + companyNoteHtml + '</section>';
         return { html: html, student: student };
       }
 
@@ -6289,7 +6342,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var nextHtml = sheetHtml;
         var schoolValue = readSharedValueForEmptyFormat('school-info');
         var titleValue = readSharedValueForEmptyFormat('sheet-title') || '授業日程表';
-        var logoValue = readStoredLogoForEmptyFormat();
+        // 会社レイヤ(Phase 1 T1-4): 利用者ロゴが無ければ会社の既定ロゴ(既定ロゴも無ければ従来どおり「ロゴ欄」)。
+        var logoValue = readStoredLogoForEmptyFormat() || COMPANY_REPORT_HOOKS.logoDefaultUrl || '';
         var schoolAnchor = ' data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等"></textarea>';
         var schoolReplacement = ' data-shared-input="school-info" rows="2" placeholder="校舎名&#10;TEL等">' + escapeHtml(schoolValue) + '</textarea>';
         nextHtml = nextHtml.replace(schoolAnchor, schoolReplacement);
@@ -6297,9 +6351,9 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         var titleReplacement = 'data-shared-input="sheet-title" value="' + escapeHtml(titleValue) + '"';
         nextHtml = nextHtml.replace(titleAnchor, titleReplacement);
         if (logoValue) {
-          var logoAnchor = '<span class="logo-placeholder">ロゴ欄</span>';
+          // ロゴ欄の中身(「ロゴ欄」placeholder または会社の既定ロゴ)を利用者ロゴ/既定ロゴで置き換える。
           var logoReplacement = '<img class="logo-image" src="' + logoValue + '" alt="logo" />';
-          nextHtml = nextHtml.replace(logoAnchor, logoReplacement);
+          nextHtml = nextHtml.replace(/(<div class="logo-box" data-shared-image="logo">)[\\s\\S]*?(<\\/div>)/, function (_m, open, close) { return open + logoReplacement + close; });
         }
         return nextHtml;
       }
@@ -6418,7 +6472,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
         const periodRowHtml = periodSegments.length ? '<tr class="period-row"><th class="time-col"></th>' + periodSegments.map((segment) => renderTeacherPeriodBandCell(teacher.id, segment)).join('') + '</tr>' : '';
         const qrHtml = buildScheduleQrHtml(teacher, showQr);
         const teacherDateHeaderHtml = dateHeaders.map((header) => renderTeacherDateHeaderCell(teacher.id, header, slotNumbers, cellMap)).join('');
-        var html = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + '</section>';
+        // 会社レイヤ(Phase 1 T1-4): 講師日程表のヘッダ差替と追加注記(空なら従来どおり)。
+        var html = '<section class="sheet" data-role="teacher-sheet" data-teacher-id="' + teacher.id + '">' + buildHeaderHtml('授業日程表', '講師名', formatTeacherHeaderName(teacher), teacherIndex, formatRangeLabel(startDate, endDate), qrHtml, COMPANY_REPORT_HOOKS.teacherHeaderHtml) + '<table class="schedule-table ' + tableDensityClass + '"><thead>' + periodRowHtml + '<tr class="month-row"><th class="time-col time-corner" rowspan="3"><div class="time-corner-box">' + cornerYearHtml + '</div></th>' + monthHeaderHtml + '</tr><tr class="date-row">' + teacherDateHeaderHtml + '</tr><tr class="weekday-row">' + weekdayHeaderHtml + '</tr></thead><tbody>' + groupRowsHtml + rows + '</tbody></table>' + renderBottomSection('teacher-common', 'teacher-' + teacher.id, '', makeupRows, toCountRows(regularCounts), toCountRows(lectureCounts), '', '', { isTeacher: true, salaryData: salaryData }) + renderCompanyNoteHtml(COMPANY_REPORT_HOOKS.teacherNoteHtml) + '</section>';
         return { html: html, teacher: teacher };
       }
 
@@ -6907,7 +6962,8 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
 
       function syncLogo(src) {
         document.querySelectorAll('[data-shared-image="logo"]').forEach((element) => {
-          element.innerHTML = src ? '<img class="logo-image" src="' + src + '" alt="logo" />' : '<span class="logo-placeholder">ロゴ欄</span>';
+          // 利用者のロゴが空なら会社の既定ロゴ(無ければ「ロゴ欄」)。renderLogoBoxInner に集約。
+          element.innerHTML = renderLogoBoxInner(src);
         });
       }
 
@@ -7037,7 +7093,7 @@ function createScheduleHtml(payload: SchedulePayload, viewType: 'student' | 'tea
       function resolveSubmissionMethodLabel(input) {
         if (!input || !input.countSubmitted) return '—';
         if (input.submissionMethod === 'qr') return 'QR提出';
-        if (input.submissionMethod === 'manual') return '室長登録';
+        if (input.submissionMethod === 'manual') return '${managerLabelJs}登録';
         return '—';
       }
 

@@ -18,6 +18,13 @@ export default defineConfig({
   plugins: [
     react(),
   ],
+  // 会社レイヤ(docs/spec-multi-tenant.md §11・Phase 1): コア本体は `@company/profile` で会社プロファイルを読む。
+  // フォーク(会社リポジトリ)が差し替えてよいのは src/company/ 配下だけ。vitest.config.ts・tsconfig.app.json と同じ定義。
+  resolve: {
+    alias: {
+      '@company': resolve('src/company'),
+    },
+  },
   define: {
     __APP_BUILD_STAMP__: JSON.stringify(buildStamp),
     __APP_VERSION__: JSON.stringify(pkg.version ?? '0.0.0'),

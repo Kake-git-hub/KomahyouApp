@@ -1,5 +1,6 @@
 import type { DevelopmentClassroomIdentity } from './developmentClassroom'
 import { isDevelopmentClassroom } from './developmentClassroom'
+import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './companyFeatureDefaults'
 import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 
 // staging 検証環境(komahyouapp-staging)の判定。staging 先行機能は教室IDではなく環境(プロジェクトID)で
@@ -127,7 +128,8 @@ export const featureRolloutRegistry = {
   },
   // 質問への AI 即時回答(docs/spec-developer-report.md §G-7・オーナー指示 2026-09-14「開発用教室にだけ実装」)。
   // ON: 「質問・要望」モーダルで質問を選ぶと注意文が「その場で AI が回答」に変わり、送信後の結果に AI の回答を出す。
-  // ★AI を呼ぶかどうかの権威はサーバー(functions/src/questionAiAnswer.ts shouldAnswerQuestionWithAi = 開発用教室判定)。
+  // ★AI を呼ぶかどうかの権威はサーバー(functions/src/questionAiAnswer.ts isQuestionAiAnswerEnabledForClassroom =
+  //   検証用教室判定 → 会社既定の 2 段解決。shouldAnswerQuestionWithAi はその結果と「質問 × 確認リスト外」の合成)。
   //   このフラグは表示(注意文・送信中文言・日程表タブの待ち時間)だけを切り替える。昇格するときは**両側を同時に**変える。
   questionAiAnswer: {
     scope: 'development-only',
@@ -168,14 +170,23 @@ export function isFeatureScopeEnabled(
 // src/utils/developmentClassroomRegistry.ts)で行う。呼び出し側は必ず `id` を渡すこと
 // (`{ name }` だけを渡すと development-only 機能が開発用教室でも無効になる)。
 // workspaceKey は既定で現在の接続先。テストからは第3引数で明示する。
+//
+// ★2 段解決(2026-09-18・Phase 1 T1-2・docs/spec-multi-tenant.md §11): 基本スコープ → 会社既定。
+//   会社既定はコア台帳 src/utils/companyFeatureDefaults.ts を (workspaceKey, featureKey) で引く(行が無ければ
+//   基本スコープのとおり = 従来と同じ)。段の適用順は resolveFeatureEnabledByLayers 1 か所に集約し、
+//   サーバー側述語(functions/src/parentPortal.ts・questionAiAnswer.ts)も同じ関数(sync-shared の複製)で解決する。
+//   3 段目(教室別上書き O-1)は再開しない(FeatureLayerInput.classroomOverride は予約のみ)。
 export function isFeatureEnabledForClassroom(
   featureKey: FeatureRolloutKey,
   classroom: DevelopmentClassroomIdentity | null | undefined,
   workspaceKey: string = getFirebaseBackendConfig().workspaceKey,
 ) {
   const feature = featureRolloutRegistry[featureKey]
-  return isFeatureScopeEnabled(feature.scope, {
-    isStaging: isStagingEnvironment(),
-    isDevelopmentClassroom: isDevelopmentClassroom(classroom, workspaceKey),
+  return resolveFeatureEnabledByLayers({
+    scopeEnabled: isFeatureScopeEnabled(feature.scope, {
+      isStaging: isStagingEnvironment(),
+      isDevelopmentClassroom: isDevelopmentClassroom(classroom, workspaceKey),
+    }),
+    companyDefault: resolveCompanyFeatureDefault(workspaceKey, featureKey),
   })
 }

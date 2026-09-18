@@ -10,6 +10,7 @@ import {
   todayDateKey,
 } from './weekJumpCalendar'
 import { resolveSaveBoardButtonState } from './saveButtonState'
+import { companyProfile, type CompanyScreenActionContext } from '@company/profile'
 
 type BoardToolbarProps = {
   weekLabel: string
@@ -39,6 +40,8 @@ type BoardToolbarProps = {
   onCopyDistributionUrl?: () => void
   /** 「質問・要望」(2026-09-04「要望・報告」→ 2026-09-14 改名・旧「開発者へ報告」): 講師日程共有の右に配置。未指定なら出さない。 */
   onReportToDeveloper?: () => void
+  /** 会社レイヤの追加ボタン/メニュー項目へ渡す文脈(Phase 1 T1-5)。いま開いている教室名。 */
+  classroomName?: string
   onGoPrevWeek: () => void
   onGoNextWeek: () => void
   onJumpToDate: (dateKey: string) => void
@@ -97,6 +100,7 @@ function BoardToolbarComponent({
   onOpenSortMenu,
   onCopyDistributionUrl,
   onReportToDeveloper,
+  classroomName,
   onGoPrevWeek,
   onGoNextWeek,
   onJumpToDate,
@@ -178,6 +182,10 @@ function BoardToolbarComponent({
   // 保存/保存中… = 赤、最新データ = 緑。色は data-state ごとに App.css の .save-board-button が当てる。
   // 保存中だけ無効化して二重実行を防ぐ。未保存が無いとき(=「最新データ」表示)は押しても no-op。spec-save-restore.md §1。
   const isSaveButtonDisabled = isSavingInProgress
+  // 会社レイヤ(Phase 1 T1-5・docs/spec-multi-tenant.md §11): 会社プロファイルに登録された追加ボタン/メニュー項目。
+  // 既定は空配列なので DOM は従来と同じ。文脈にはコアの内部 state を渡さない(教室名と表示週の開始日だけ)。
+  const companyToolbarButtons = companyProfile.screenExtensions.boardToolbarButtons
+  const companyActionContext: CompanyScreenActionContext = { classroomName: classroomName ?? '', weekStartDate }
   const handleSaveBoardClick = () => {
     if (!hasPendingSave) return
     setSavePressed(true)
@@ -216,6 +224,7 @@ function BoardToolbarComponent({
               footerActionLabel="ログアウト"
               onFooterActionClick={onLogout}
               footerActionTestId="menu-logout-button"
+              classroomName={classroomName}
             />
           )}
           <button className="icon-action-button" type="button" onClick={onUndo} disabled={!canUndo} data-testid="undo-button" aria-label="元に戻す" title="元に戻す">
@@ -237,6 +246,19 @@ function BoardToolbarComponent({
           {!isTemplateMode && onReportToDeveloper ? (
             <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title={DEVELOPER_REPORT_UI_TEXT.buttonTooltip}>{DEVELOPER_REPORT_UI_TEXT.title}</button>
           ) : null}
+          {!isTemplateMode ? companyToolbarButtons.map((button) => (
+            <button
+              key={button.id}
+              className="secondary-button slim company-toolbar-button"
+              type="button"
+              onClick={() => button.onClick(companyActionContext)}
+              title={button.title}
+              data-company-button={button.id}
+              data-testid={`company-toolbar-button-${button.id}`}
+            >
+              {button.label}
+            </button>
+          )) : null}
         </div>
         <div className={`toolbar-status toolbar-status-centered${isMakeupMoveActive ? ' is-emphasis' : ''}${syncProgressPercent !== null && syncProgressPercent !== undefined ? ' is-syncing' : ''}`} data-testid="toolbar-status">
           {syncProgressPercent !== null && syncProgressPercent !== undefined ? (

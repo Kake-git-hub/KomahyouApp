@@ -16,6 +16,11 @@
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
+    /* 会社レイヤ alias(vite.config.ts / vitest.config.ts と同じ定義) */
+    "baseUrl": ".",
+    "paths": {
+      "@company/*": ["src/company/*"]
+    },
 
     /* Linting */
     "strict": true,

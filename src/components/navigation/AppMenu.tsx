@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { companyProfile } from '@company/profile'
 
 export type AppMenuScreen = 'board' | 'basic-data' | 'special-data' | 'auto-assign-rules' | 'backup-restore'
 
@@ -17,6 +18,8 @@ type AppMenuProps = {
   footerActionLabel?: string
   onFooterActionClick?: () => void
   footerActionTestId?: string
+  /** 会社レイヤの追加メニュー項目へ渡す文脈(Phase 1 T1-5)。いま開いている教室名(不明なら省略)。 */
+  classroomName?: string
 }
 
 const menuItems: Array<{ screen: AppMenuScreen; label: string }> = [
@@ -42,7 +45,11 @@ export function AppMenu({
   footerActionLabel,
   onFooterActionClick,
   footerActionTestId,
+  classroomName,
 }: AppMenuProps) {
+  // 会社レイヤ(Phase 1 T1-5・docs/spec-multi-tenant.md §11): 会社プロファイルに登録された追加項目。
+  // 既存項目の下・ログアウトの上に出す。既定は空配列なので DOM は従来と同じ。
+  const companyMenuItems = companyProfile.screenExtensions.appMenuItems
   const [isOpen, setIsOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const testIdByScreen: Partial<Record<AppMenuScreen, string>> = {
@@ -115,6 +122,21 @@ export function AppMenu({
               disabled={currentScreen === item.screen}
               onClick={() => handleNavigate(item.screen)}
               data-testid={testIdByScreen[item.screen]}
+            >
+              {item.label}
+            </button>
+          ))}
+          {companyMenuItems.map((item) => (
+            <button
+              key={item.id}
+              className="menu-link-button company-menu-item"
+              type="button"
+              onClick={() => {
+                setIsOpen(false)
+                item.onClick({ classroomName: classroomName ?? '', weekStartDate: '' })
+              }}
+              data-company-menu-item={item.id}
+              data-testid={`company-menu-item-${item.id}`}
             >
               {item.label}
             </button>

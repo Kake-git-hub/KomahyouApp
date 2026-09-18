@@ -12049,6 +12049,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           <BoardToolbar
             weekLabel={weekLabel}
             weekStartDate={weekDates[0]?.dateKey ?? displayWeekDate}
+            classroomName={classroomName}
             statusMessage={statusMessage}
             lectureStockTotalCount={lectureStockTotalCount}
             isLectureStockOpen={isLectureStockOpen}

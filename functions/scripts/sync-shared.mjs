@@ -5,6 +5,7 @@
 // - 複製対象は下の SHARED_TS_FILES の一覧(ファイルを増やすときはここへ 1 行足す)。
 //   - src/utils/parentSchedule.ts          → functions/src/generated/parentSchedule.ts
 //   - src/utils/developmentClassroomRegistry.ts → functions/src/generated/developmentClassroomRegistry.ts
+//   - src/utils/companyFeatureDefaults.ts       → functions/src/generated/companyFeatureDefaults.ts
 // - 出力はヘッダ 1 行 + 元ファイル(LF・決定的)。
 // - 生成物は **コミットする**(CI の vitest は functions build 前に走る)。
 //   ズレは `functions/src/<name>.parity.test.ts` が「生成物 = 元ファイル + ヘッダ」の文字列比較で検出する。
@@ -34,10 +35,17 @@ export const DEVELOPMENT_CLASSROOM_REGISTRY_SOURCE_PATH = 'src/utils/development
 export const DEVELOPMENT_CLASSROOM_REGISTRY_OUTPUT_PATH = 'functions/src/generated/developmentClassroomRegistry.ts'
 export const DEVELOPMENT_CLASSROOM_REGISTRY_HEADER = buildSharedHeader(DEVELOPMENT_CLASSROOM_REGISTRY_SOURCE_PATH)
 
+// 会社(workspace)ごとの機能既定の台帳と 2 段解決(2026-09-18・docs/spec-multi-tenant.md §11 Phase 1 T1-2)。
+// 保護者ポータル・質問 AI のようにサーバー側にも述語がある機能で、クライアントと同じ台帳・同じ解決順を使うための複製。
+export const COMPANY_FEATURE_DEFAULTS_SOURCE_PATH = 'src/utils/companyFeatureDefaults.ts'
+export const COMPANY_FEATURE_DEFAULTS_OUTPUT_PATH = 'functions/src/generated/companyFeatureDefaults.ts'
+export const COMPANY_FEATURE_DEFAULTS_HEADER = buildSharedHeader(COMPANY_FEATURE_DEFAULTS_SOURCE_PATH)
+
 /** そのまま複製する TypeScript 権威モジュールの一覧(増やすときはここへ足す)。 */
 export const SHARED_TS_FILES = [
   { sourcePath: SHARED_SOURCE_PATH, outputPath: SHARED_OUTPUT_PATH },
   { sourcePath: DEVELOPMENT_CLASSROOM_REGISTRY_SOURCE_PATH, outputPath: DEVELOPMENT_CLASSROOM_REGISTRY_OUTPUT_PATH },
+  { sourcePath: COMPANY_FEATURE_DEFAULTS_SOURCE_PATH, outputPath: COMPANY_FEATURE_DEFAULTS_OUTPUT_PATH },
 ]
 
 export function normalizeToLf(text) {

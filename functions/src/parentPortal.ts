@@ -12,6 +12,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
+import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
 
 // ───────────────────────────────────────────────────────────────────────────
 // トークン(§B-1)
@@ -120,8 +121,13 @@ export type ParentPortalClassroomIdentity = {
  *   ★2026-09-16 以前は教室名「開発用教室」でも有効だったが、他社が同名教室を作ると誤って有効になるため廃止。
  */
 export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroomIdentity): boolean {
-  return isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })
-    || (identity.projectId ?? '').trim() === PARENT_PORTAL_STAGING_PROJECT_ID
+  // 2 段解決(2026-09-18・Phase 1 T1-2): 基本スコープ(下の 2 項)→ 会社既定(コア台帳 companyFeatureDefaults の複製)。
+  // 段の順序・台帳はクライアント `isFeatureEnabledForClassroom('parentPortalQr', …)` と同一(パリティテストで固定)。
+  return resolveFeatureEnabledByLayers({
+    scopeEnabled: isDevelopmentClassroomIdentity({ workspaceKey: identity.workspaceKey, classroomId: identity.id })
+      || (identity.projectId ?? '').trim() === PARENT_PORTAL_STAGING_PROJECT_ID,
+    companyDefault: resolveCompanyFeatureDefault(identity.workspaceKey, 'parentPortalQr'),
+  })
 }
 
 // ───────────────────────────────────────────────────────────────────────────
