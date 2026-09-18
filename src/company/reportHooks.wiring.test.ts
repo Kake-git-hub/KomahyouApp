@@ -135,6 +135,52 @@ describe('帳票フック(scheduleHtml)', () => {
     expect(html).toContain("readStoredLogoForEmptyFormat() || COMPANY_REPORT_HOOKS.logoDefaultUrl || ''")
   })
 
+  // regression-reviewer 指摘(2026-09-18): 空フォーマットのロゴ置換を旧 placeholder アンカー方式へ戻すと
+  // 「会社の既定ロゴがある会社で、利用者が自分のロゴを設定しても空フォーマットに反映されない」不具合が
+  // テストに検出されず入るため、置換の**挙動**を埋め込み JS の実体で固定する。
+  it('空フォーマットのロゴ差し替え: 利用者ロゴ > 会社既定ロゴ > 「ロゴ欄」の順で、校舎名/題名の差し込みと併存する', () => {
+    const html = renderStudentScheduleHtml()
+    const headerSource = [
+      extractFunctionSource(html, 'applyCompanyHeaderTemplate'),
+      extractFunctionSource(html, 'renderCompanyNoteHtml'),
+      extractFunctionSource(html, 'renderLogoBoxInner'),
+      extractFunctionSource(html, 'buildHeaderHtml'),
+      extractFunctionSource(html, 'applyEmptyFormatBranding'),
+      'return { buildHeaderHtml: buildHeaderHtml, applyEmptyFormatBranding: applyEmptyFormatBranding };',
+    ].join('\n')
+    const escapeHtml = (value: unknown) => String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    type Runtime = { buildHeaderHtml: HeaderBuilder; applyEmptyFormatBranding: (sheetHtml: string) => string }
+    const build = (hooks: CompanyReportHooks, userLogo: string): Runtime =>
+      new Function(
+        'COMPANY_REPORT_HOOKS', 'escapeHtml', 'readSharedValueForEmptyFormat', 'readStoredLogoForEmptyFormat', headerSource,
+      )(hooks, escapeHtml, (key: string) => (key === 'school-info' ? '日大前校\nTEL 000' : key === 'sheet-title' ? '春期日程表' : ''), () => userLogo) as Runtime
+    const sheetFor = (runtime: Runtime) => '<section class="sheet">' + runtime.buildHeaderHtml('授業日程表', '生徒名', '', 0, '期間', '', '') + '<div>本文</div></section>'
+    const userImg = '<img class="logo-image" src="data:image/png;base64,USER" alt="logo" />'
+    const defaultImg = '<img class="logo-image" src="/company-logo.png" alt="logo" />'
+
+    // 1. 既定ロゴあり × 利用者ロゴあり → 利用者ロゴ(旧 placeholder アンカー方式だとヘッダが既定ロゴ <img> なので置換されず落ちる)
+    const withBoth = build({ ...EMPTY_COMPANY_REPORT_HOOKS, logoDefaultUrl: '/company-logo.png' }, 'data:image/png;base64,USER')
+    const brandedBoth = withBoth.applyEmptyFormatBranding(sheetFor(withBoth))
+    expect(brandedBoth).toContain('<div class="logo-box" data-shared-image="logo">' + userImg + '</div>')
+    expect(brandedBoth).not.toContain('/company-logo.png')
+    // 校舎名・題名の差し込みと併存し、本文は壊れない
+    expect(brandedBoth).toContain('placeholder="校舎名&#10;TEL等">日大前校\nTEL 000</textarea>')
+    expect(brandedBoth).toContain('data-shared-input="sheet-title" value="春期日程表"')
+    expect(brandedBoth).toContain('<div>本文</div></section>')
+
+    // 2. 既定ロゴあり × 利用者ロゴなし → 既定ロゴが残る
+    const withDefaultOnly = build({ ...EMPTY_COMPANY_REPORT_HOOKS, logoDefaultUrl: '/company-logo.png' }, '')
+    expect(withDefaultOnly.applyEmptyFormatBranding(sheetFor(withDefaultOnly))).toContain('<div class="logo-box" data-shared-image="logo">' + defaultImg + '</div>')
+
+    // 3. 既定なし × 利用者ロゴあり → 従来どおり利用者ロゴに置換(出力不変)
+    const userOnly = build(EMPTY_COMPANY_REPORT_HOOKS, 'data:image/png;base64,USER')
+    expect(userOnly.applyEmptyFormatBranding(sheetFor(userOnly))).toContain('<div class="logo-box" data-shared-image="logo">' + userImg + '</div>')
+
+    // 4. 既定なし × 利用者ロゴなし → 「ロゴ欄」のまま(出力不変)
+    const none = build(EMPTY_COMPANY_REPORT_HOOKS, '')
+    expect(none.applyEmptyFormatBranding(sheetFor(none))).toContain('<div class="logo-box" data-shared-image="logo"><span class="logo-placeholder">ロゴ欄</span></div>')
+  })
+
   it('プロファイルのフックが埋め込みへそのまま渡り、"<" は JSON 内で \\u003c に逃がされる', () => {
     vi.mocked(resolveCompanyReportHooks).mockReturnValue({
       ...EMPTY_COMPANY_REPORT_HOOKS,

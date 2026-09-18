@@ -128,7 +128,8 @@ export const featureRolloutRegistry = {
   },
   // 質問への AI 即時回答(docs/spec-developer-report.md §G-7・オーナー指示 2026-09-14「開発用教室にだけ実装」)。
   // ON: 「質問・要望」モーダルで質問を選ぶと注意文が「その場で AI が回答」に変わり、送信後の結果に AI の回答を出す。
-  // ★AI を呼ぶかどうかの権威はサーバー(functions/src/questionAiAnswer.ts shouldAnswerQuestionWithAi = 開発用教室判定)。
+  // ★AI を呼ぶかどうかの権威はサーバー(functions/src/questionAiAnswer.ts isQuestionAiAnswerEnabledForClassroom =
+  //   検証用教室判定 → 会社既定の 2 段解決。shouldAnswerQuestionWithAi はその結果と「質問 × 確認リスト外」の合成)。
   //   このフラグは表示(注意文・送信中文言・日程表タブの待ち時間)だけを切り替える。昇格するときは**両側を同時に**変える。
   questionAiAnswer: {
     scope: 'development-only',

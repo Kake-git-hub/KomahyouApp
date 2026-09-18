@@ -4,8 +4,9 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
+import { getFirebaseBackendConfig } from '../integrations/firebase/config'
 import { resolveCompanyFeatureDefaults } from '../utils/companyFeatureDefaults'
 import {
   appName,
@@ -88,6 +89,17 @@ describe('companyProfile(既存運営会社 = スクールIE の既定値)', () 
     expect(formatAppVersionLabel('1.5.543')).toBe('1.5.543')
     expect(formatAppVersionLabel('1.5.543', 'companyB.12')).toBe('1.5.543+companyB.12')
     expect(formatAppVersionLabel('1.5.543', '  ')).toBe('1.5.543')
+  })
+
+  it('接続先 workspaceKey(env)が設定されているときは companyKey と一致する(プロファイル上は会社B・機能解決は会社A のドリフト防止)', () => {
+    const workspaceKey = getFirebaseBackendConfig().workspaceKey
+    if (workspaceKey) expect(companyProfile.companyKey).toBe(workspaceKey)
+    vi.stubEnv('VITE_FIREBASE_WORKSPACE_KEY', 'main')
+    try {
+      expect(companyProfile.companyKey).toBe(getFirebaseBackendConfig().workspaceKey)
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('プロファイルは凍結されている(実行時に書き換えて会社差を出さない)', () => {

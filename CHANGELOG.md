@@ -15,6 +15,8 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+
+## v1.5.544 (2026-09-18)
 - feat: 複数会社展開 Phase 1 T1-1・会社レイヤの入口 `src/company/profile.ts` を新設(CompanyProfile: 会社キー=main・アプリ名・既定ロゴ・役割名辞書・機能の会社既定(派生値)・会社版番号・帳票フック・画面フック。既定値=スクールIEの現行値で全項目が出力不変)。コア本体は alias `@company/profile`(vite/vitest/tsconfig で同一定義)で読む。フォークが触ってよいのは src/company/ だけ (src/company/profile.ts・test, vite.config.ts, vitest.config.ts, tsconfig.app.json, docs/spec-multi-tenant.md §11)
 - feat: Phase 1 T1-2・機能フラグを「基本スコープ → 会社既定」の 2 段解決へ(オーナー確定 2026-09-16・教室別上書きは 3 段目として予約のみ)。会社既定はコア台帳 `src/utils/companyFeatureDefaults.ts`(自己完結・sync-shared で functions へ複製)に置き、`isFeatureEnabledForClassroom` とサーバー述語(保護者ポータル `isParentPortalEnabledForClassroom`・質問 AI `isQuestionAiAnswerEnabledForClassroom` 新設)が同じ関数 `resolveFeatureEnabledByLayers`・同じキーで解決(片側だけ会社既定を見る非対称を構造で防ぐ)。台帳は空=既存運営会社は従来どおり。パリティ/配線テスト追加 (src/utils/featureRollout.ts・companyLayer.test, functions/src/parentPortal.ts・questionAiAnswer.ts・index.ts・generated/companyFeatureDefaults.ts・companyFeatureDefaults.parity.test・featureCompanyLayer.test, functions/scripts/sync-shared.mjs)
 - refactor: Phase 1 T1-3・役割名(室長・教室管理者・開発者)とアプリ名を辞書経由に(役割名だけ・全域置換はしない・オーナー確定 2026-09-16)。対象=App.tsx のタブ名/ログイン題名/アカウント一覧の役割表示、日程表の「室長登録」と本体タブ未検出の警告文。埋め込み JS へは引用符・改行をエスケープして差し込む。既定辞書で出力不変(テストで固定・対象一覧は spec-multi-tenant §11-3) (src/App.tsx, src/utils/scheduleHtml.ts, src/company/roleLabels.wiring.test.ts)
@@ -23,6 +25,7 @@
 - test: `isDevelopmentClassroomIdentity` 呼び出し数の字面テストを、質問 AI の判定が questionAiAnswer.ts へ移った配置に追随(index 5→4・questionAiAnswer 1) (functions/src/developmentClassroomIdentity.test.ts)
 - docs: spec-multi-tenant に §11 Phase 1 追補(プロファイル・2 段解決とコア台帳の理由・役割名の対象一覧・帳票フック 6 項目・画面フック・完了時の判断)。計画 §7 Phase 1 に状況を追記、spec-index を更新 (docs/spec-multi-tenant.md, docs/plan-2026-09-15-multi-company-architecture.md, docs/spec-index.md)
 - chore: 確認リストに Phase 1 の「見た目が変わっていないこと」を確かめる m-1〜m-3 を追加(版 v1.5.540 は据え置き) (src/utils/verificationChecklist.ts・test)
+- test/docs: regression-reviewer 監査の反映。空フォーマットのロゴ置換の挙動(利用者ロゴ > 会社既定ロゴ > ロゴ欄・校舎名/題名の差し込みと併存)を埋め込み JS の実体で固定(旧 placeholder アンカー方式へ戻すと落ちる)、会社既定 'on' を段階公開機能(parentPortalQr)に書かない歯止めテスト、companyKey と env workspaceKey の一致テスト、featureRollout.ts の questionAiAnswer コメント追随、spec-multi-tenant §11 の注記(index.html の宿題・'on' の制約・辞書の対象外・ヘッダ差替の副作用)と §9 件数訂正 (src/company/reportHooks.wiring.test.ts・profile.test.ts, src/utils/companyFeatureDefaults.test.ts・featureRollout.ts, docs/spec-multi-tenant.md)
 
 ## v1.5.543 (2026-09-17)
 - feat: 確認リストの項目を「前提(任意1行)／操作(1〜2個)／見るところ(最大4)」の3段に分け、全15項目を短く書き直した(オーナー指摘「手順が多すぎて大変」。ナビゲート機能ではなく書き方を軽くする案を選択)。準備 y-1 を先頭に移し、以降は読み込んだ日大前データの上で行う前提にして項目ごとの準備を削減。上限はテストで固定。id・版(v1.5.540)は据え置きで下書きは生きる。確認項目 c-3 追加 (src/utils/verificationChecklist.ts・test, VerificationChecklistPanel.tsx, App.css)
