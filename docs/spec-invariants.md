@@ -257,6 +257,13 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   **丸ごと振替（2026-08-02・Issue #40）× 再マージ**〔振替元に通常・講師が復活しない／振替先の移送結果が
   巻き戻らない／テンプレ足場講師が両日とも湧かない〕は `inv06-whole-day-transfer.matrix.test.ts` 側で固定
   ＝本ファイルとは重複させない）。
+- **「保存前の反映を外部状態が跨ぐ」型の注記（2026-09-19・オーナー承認・v1.5.550）**：盤面へ反映した結果に対応する**盤面の外の状態**
+  （Firestore の別 doc 等）を、保存より先に確定させない。先に確定させると、保存せず閉じたとき「外の状態は処理済みなのに盤面は
+  元のまま」になる（QR 提出反映の保存非対称 v1.5.357 と同型）。保護者からの休み連絡は「保存待ち」に積み、保存の成功点で
+  **保存した盤面に休みの記録が実在する分だけ**処理済みにする（`hasParentAbsenceRecord`・`splitPendingParentAbsenceFinalize`）。
+  このため盤面の「元に戻す」や休み解除を**個別に追う必要は無い**（記録が無ければ連絡は一覧へ戻る）＝ undo 用の破棄フックを
+  二重に足さないこと。詳細は `spec-parent-portal.md` §0-5。担保: `parentMessages.test.ts` / `parentAbsenceTarget.test.ts` /
+  `parentPortal.wiring.test.ts`（保存の成功点でだけ `notified` を送る配線ロック）。
 
 ---
 
@@ -277,7 +284,13 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   `ScheduleBoardScreen.test.ts`（`shouldProcess*` / `consume*` で「処理後 state を null 化消費・
   再マウントをまたいで 1 回だけ処理」を純関数で固定。修正なし＝3 回／修正あり＝1 回）で暫定担保。
   **次の違反時にマトリクス化**する。
-- **担保状況：○**（生徒・講師の両一過性リクエストを純関数で固定済み。処理後に state を消費(null 化)＋
+- **一過性コマンドは 3 種（2026-09-19・オーナー承認・v1.5.550）**：`studentScheduleRequest` / `teacherAutoAssignRequest` に、保護者からの
+  休み連絡の四択を盤面へ反映する **`parentAbsenceRequest`** が加わった（違反ではなく新経路の登録）。同じ 2 点で守る:
+  `shouldProcessParentAbsenceRequest` / `consumeParentAbsenceRequest`（`parentAbsenceTarget.ts`）。この種が持ち込んだ新しい形は
+  **「週ジャンプ待ちの 2 段階」**＝ 1 回目は対象日の週へ移るだけで**盤面を何も変えず**に return し、次のレンダーで適用する
+  （ジャンプ段で再マウントされて再実行されても 1 適用のまま）。結果は成功・失敗とも**必ず** App へ返し App が消費する
+  （返さない早期 return を作らない＝ `parentAbsenceRequest.wiring.test.ts` が固定）。マトリクス化するときはこの 3 種を行にする。
+- **担保状況：○**（生徒・講師・保護者連絡の 3 つの一過性リクエストを純関数で固定済み。処理後に state を消費(null 化)＋
   判定純関数化で再発火を封じている）。
 
 ---
@@ -642,6 +655,14 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   追加・変更するときは必ず確定（materialize）の要否を判断する。既知の消す経路＝休日設定／全コマ削除／
   生徒移動・入れ替え（v1.5.481 で moved 限定クリア＋確定に対応）／出欠付与の上書き（同・確定に対応）。
   確定判定は `materializeDisplacedStatusEntryIntoLedgers` に一本化済み＝新しい経路もこの関数を通すこと）。
+- **出欠を自動で付ける経路（2026-09-19・オーナー承認・v1.5.550）**：保護者からの休み連絡の自動処理（`parentAbsenceRequest`）は、
+  席を純関数 `resolveParentAbsenceTarget` で探したうえで、**メニューの「休み」「振無休」と同じ 1 本の本体**
+  （`markStudentAbsentAt` / `markStudentAbsentNoMakeupAt`）を呼ぶだけで、**独自の会計経路を持たない**。今後、出欠を自動で付ける
+  トリガ（外部連携など）を足すときも同じ委譲にすること（本体を複製しない）。「振替先を今決める」の振替元は
+  `resolveRemainingOriginToken`（在庫行自身の値でトークンを作る。素朴な `日付#限` は時限なしで積まれた台帳 origin に一致せず
+  最古へフォールバックする＝ INV-11）、配置モードへ入る判定は科目別の在庫行で行う（`resolveParentMakeupPlacement`）。
+  担保: `parentAbsenceRequest.wiring.test.ts`（「本体は 1 つずつ・メニューは席を渡すだけ」＝**この assert を薄めない**）/
+  `parentMakeupPlacement.test.ts`。会計本体は既存マトリクスが覆うので行は足さない。
 
 ---
 
