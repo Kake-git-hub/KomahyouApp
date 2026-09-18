@@ -16,6 +16,9 @@
 
 <!-- ここに編集内容を1行ずつ追記する -->
 
+## v1.5.545 (2026-09-18)
+- docs: 2 社目の受け入れ計画を起案(既存運営会社=株式会社アーチ(緑が丘・日大前)・フォークを切らず会社別プロファイル＋会社別ビルドで受け入れる方針・事前準備 P-1〜P-10・当日手順・要望対応手順・フォーク切替基準・判断点 D-1〜D-8)。上位計画 §7 Phase 1 から参照 (docs/plan-2026-09-18-second-company-onboarding.md, docs/plan-2026-09-15-multi-company-architecture.md)
+
 ## v1.5.544 (2026-09-18)
 - feat: 複数会社展開 Phase 1 T1-1・会社レイヤの入口 `src/company/profile.ts` を新設(CompanyProfile: 会社キー=main・アプリ名・既定ロゴ・役割名辞書・機能の会社既定(派生値)・会社版番号・帳票フック・画面フック。既定値=スクールIEの現行値で全項目が出力不変)。コア本体は alias `@company/profile`(vite/vitest/tsconfig で同一定義)で読む。フォークが触ってよいのは src/company/ だけ (src/company/profile.ts・test, vite.config.ts, vitest.config.ts, tsconfig.app.json, docs/spec-multi-tenant.md §11)
 - feat: Phase 1 T1-2・機能フラグを「基本スコープ → 会社既定」の 2 段解決へ(オーナー確定 2026-09-16・教室別上書きは 3 段目として予約のみ)。会社既定はコア台帳 `src/utils/companyFeatureDefaults.ts`(自己完結・sync-shared で functions へ複製)に置き、`isFeatureEnabledForClassroom` とサーバー述語(保護者ポータル `isParentPortalEnabledForClassroom`・質問 AI `isQuestionAiAnswerEnabledForClassroom` 新設)が同じ関数 `resolveFeatureEnabledByLayers`・同じキーで解決(片側だけ会社既定を見る非対称を構造で防ぐ)。台帳は空=既存運営会社は従来どおり。パリティ/配線テスト追加 (src/utils/featureRollout.ts・companyLayer.test, functions/src/parentPortal.ts・questionAiAnswer.ts・index.ts・generated/companyFeatureDefaults.ts・companyFeatureDefaults.parity.test・featureCompanyLayer.test, functions/scripts/sync-shared.mjs)
