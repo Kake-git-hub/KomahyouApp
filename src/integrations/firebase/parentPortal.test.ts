@@ -99,22 +99,32 @@ describe('revokeStudentPortalTokenViaFunction', () => {
 })
 
 describe('markParentMessagesNotifiedViaFunction', () => {
-  it('callable markParentMessagesNotified に教室と messageIds(重複・空白除去)を送り updated を返す', async () => {
+  it('callable markParentMessagesNotified に教室・messageIds(重複・空白除去)・stage を送り updated を返す', async () => {
     callableInvoke.mockResolvedValue({ data: { updated: 2 } })
-    const result = await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['m1', ' m2 ', 'm1', ''] })
+    const result = await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['m1', ' m2 ', 'm1', ''], stage: 'notified' })
     expect(callableFactory).toHaveBeenCalledWith({ functions: true }, 'markParentMessagesNotified', { timeout: 60_000 })
-    expect(callableInvoke).toHaveBeenCalledWith({ workspaceKey: 'main', classroomId: 'dev', messageIds: ['m1', 'm2'] })
+    expect(callableInvoke).toHaveBeenCalledWith({ workspaceKey: 'main', classroomId: 'dev', messageIds: ['m1', 'm2'], stage: 'notified' })
     expect(result).toEqual({ updated: 2 })
   })
+  it("'acknowledged'(四択を押した=保護者ページの「教室確認済」)は resolution を添えて送る", async () => {
+    callableInvoke.mockResolvedValue({ data: { updated: 1 } })
+    await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['m1'], stage: 'acknowledged', resolution: 'makeup-now' })
+    expect(callableInvoke).toHaveBeenCalledWith({ workspaceKey: 'main', classroomId: 'dev', messageIds: ['m1'], stage: 'acknowledged', resolution: 'makeup-now' })
+  })
+  it('resolution を渡さないときは resolution キー自体を送らない(サーバー側で既存値を上書きさせない)', async () => {
+    callableInvoke.mockResolvedValue({ data: { updated: 1 } })
+    await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['m1'], stage: 'notified' })
+    expect(Object.keys(callableInvoke.mock.calls[0]![0] as object)).not.toContain('resolution')
+  })
   it('messageIds が空なら callable を呼ばずに updated:0(無駄な往復と権限エラーを避ける)', async () => {
-    expect(await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: [] })).toEqual({ updated: 0 })
-    expect(await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['  '] })).toEqual({ updated: 0 })
+    expect(await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: [], stage: 'notified' })).toEqual({ updated: 0 })
+    expect(await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['  '], stage: 'notified' })).toEqual({ updated: 0 })
     expect(callableInvoke).not.toHaveBeenCalled()
     expect(ensureAuth).not.toHaveBeenCalled()
   })
   it('updated が数値でなければ 0 に丸める', async () => {
     callableInvoke.mockResolvedValue({ data: { updated: 'x' } })
-    expect(await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['m1'] })).toEqual({ updated: 0 })
+    expect(await markParentMessagesNotifiedViaFunction({ classroomId: 'dev', messageIds: ['m1'], stage: 'notified' })).toEqual({ updated: 0 })
   })
 })
 
@@ -126,11 +136,12 @@ describe('subscribeParentMessages', () => {
         classroomId: 'dev',
         studentId: 's001',
         studentName: '青木',
-        body: '欠席します',
-        senderName: '母',
+        kind: 'absence',
+        absence: { dateKey: '2026-09-20', slotNumber: 3, subject: '英', lessonKind: 'regular', isTentative: false },
         createdAt: '2026-09-13T01:00:00.000Z',
+        acknowledgedAt: null,
+        resolution: null,
         notifiedAt: null,
-        containsUrl: false,
         ...overrides,
       }),
     }
@@ -146,42 +157,46 @@ describe('subscribeParentMessages', () => {
     expect(onSnapshotCallback).toBeTypeOf('function')
   })
 
-  it('初回スナップショットは isInitial=true、以降は false で added/modified を配る', () => {
-    const calls: Array<{ ids: string[]; isInitial: boolean }> = []
-    subscribeParentMessages('dev', (entries, isInitial) => calls.push({ ids: entries.map((entry) => entry.id), isInitial }))
-    onSnapshotCallback?.({ docChanges: () => [{ type: 'added', doc: messageDoc('m1') }] })
-    onSnapshotCallback?.({ docChanges: () => [{ type: 'modified', doc: messageDoc('m1', { body: '訂正' }) }, { type: 'added', doc: messageDoc('m2') }] })
-    expect(calls).toEqual([
-      { ids: ['m1'], isInitial: true },
-      { ids: ['m1', 'm2'], isInitial: false },
-    ])
+  // 2026-09-18: 差分(docChanges)ではなく毎回「未処理の全件」を渡す。保存待ちを捨てたとき(教室データの読み直し・復元)に
+  // その連絡を一覧へ戻せるようにするため。処理済みになった doc はクエリから外れるので、次の全件から自動で消える。
+  it('毎回、未処理の全件(snapshot.docs)を渡す。処理済みで外れた doc は次の配信に含まれない', () => {
+    const calls: string[][] = []
+    subscribeParentMessages('dev', (entries) => { calls.push(entries.map((entry) => entry.id)) })
+    onSnapshotCallback?.({ docs: [messageDoc('m1'), messageDoc('m2')] })
+    onSnapshotCallback?.({ docs: [messageDoc('m2')] })
+    expect(calls).toEqual([['m1', 'm2'], ['m2']])
   })
 
-  it('removed(既読化でクエリから外れた doc)は無視し、配る件数が 0 なら onChange を呼ばない', () => {
+  it('0 件になったときも空配列で知らせる(知らせないと最後の 1 件が画面に残り続ける)', () => {
     const onChange = vi.fn()
     subscribeParentMessages('dev', onChange)
-    onSnapshotCallback?.({ docChanges: () => [{ type: 'removed', doc: messageDoc('m1') }] })
-    expect(onChange).not.toHaveBeenCalled()
-    // 初回が空でも isInitial は消費される(次の配信は false)
-    onSnapshotCallback?.({ docChanges: () => [{ type: 'added', doc: messageDoc('m2') }] })
+    onSnapshotCallback?.({ docs: [] })
     expect(onChange).toHaveBeenCalledTimes(1)
-    expect(onChange.mock.calls[0]![1]).toBe(false)
+    expect(onChange).toHaveBeenCalledWith([])
   })
 
-  it('doc.classroomId が購読教室と違う doc は捨てる(パスに加えて doc 側タグでも教室分離・INV-08)', () => {
+  it('doc.classroomId が購読教室と違う doc・壊れた doc・旧形式(自由記述)の doc は捨てる(INV-08)', () => {
     const received: ParentMessageEntry[][] = []
-    subscribeParentMessages('dev', (entries) => received.push(entries))
+    subscribeParentMessages('dev', (entries) => { received.push(entries) })
     onSnapshotCallback?.({
-      docChanges: () => [
-        { type: 'added', doc: messageDoc('own') },
-        { type: 'added', doc: messageDoc('foreign', { classroomId: '5w5OMueETerSKrSf14HC' }) },
-        { type: 'added', doc: messageDoc('untagged', { classroomId: '' }) },
-        { type: 'added', doc: messageDoc('broken', { createdAt: undefined }) },
+      docs: [
+        messageDoc('own'),
+        messageDoc('foreign', { classroomId: '5w5OMueETerSKrSf14HC' }),
+        messageDoc('untagged', { classroomId: '' }),
+        messageDoc('broken', { createdAt: undefined }),
+        messageDoc('legacy', { kind: undefined, absence: undefined, body: '欠席します', senderName: '母' }),
       ],
     })
     expect(received).toHaveLength(1)
     expect(received[0]!.map((entry) => entry.id)).toEqual(['own'])
-    expect(received[0]![0]).toMatchObject({ classroomId: 'dev', studentId: 's001', body: '欠席します', notifiedAt: null, containsUrl: false })
+    expect(received[0]![0]).toMatchObject({
+      classroomId: 'dev',
+      studentId: 's001',
+      absence: { dateKey: '2026-09-20', slotNumber: 3, subject: '英', lessonKind: 'regular', isTentative: false },
+      acknowledgedAt: null,
+      resolution: null,
+      notifiedAt: null,
+    })
   })
 
   // ルール未反映(permission-denied)や索引不足が「連絡 0 件」と区別できず無音で壊れるのを防ぐ

@@ -27,13 +27,14 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
 export { packSortCellDesks } from './deskSort'
 import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
+import { PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
@@ -941,6 +942,12 @@ type ScheduleBoardScreenProps = {
   studentScheduleRequest?: StudentScheduleRequest | null
   // Issue #46: 一過性 unassign を処理し終えたら App 側の state を消費済み(null)にさせる。
   onStudentScheduleRequestProcessed?: (requestId: number) => void
+  // 保護者からの休み連絡の四択(休み/振無休/振替先を今決める)を盤面へ反映する一過性コマンド(spec-parent-portal §0-5)。
+  // Issue #46 同型: 処理し終えたら必ず結果を返し、App 側が state を消費(null)する。
+  parentAbsenceRequest?: ParentAbsenceRequest | null
+  onParentAbsenceRequestProcessed?: (result: ParentAbsenceRequestResult) => void
+  // 「振替先を今決める」で入った振替配置モードが終わった(配置した/キャンセルした)ことを App へ知らせる。
+  onParentAbsencePlacementSettled?: () => void
   initialBoardState?: PersistedBoardState | null
   onBoardStateChange?: (state: PersistedBoardState, meta?: { userInitiated: boolean }) => void
   onReplaceRegularLessons?: Dispatch<SetStateAction<RegularLessonRow[]>>
@@ -2267,6 +2274,31 @@ function buildGroupedLectureStockTitle(params: {
 
 function getStockStudentKeyFromEntryKey(entryKey: string) {
   return entryKey.split('__')[0] ?? entryKey
+}
+
+/**
+ * 保護者からの休み連絡「振替先を今決める」(spec-parent-portal §0-5): 休みにした直後のコマを振替元として、
+ * 既存の振替配置モードへ入ってよいか・どの在庫行とどの振替元を選ぶかを決める。
+ * - 判定は**その科目の在庫行(raw)**の残数で行う。生徒単位のグループ残数で見ると、「英は先取り済み(残 0)・数は残 2」の生徒の
+ *   英コマで配置モードへ入ってしまい、在庫の裏付けが無い英の振替が盤面に置かれる(未消化振替一覧の選択は raw.balance > 0 で絞っている)。
+ * - 振替元の選択トークンは在庫行自身の値で作る(resolveRemainingOriginToken)。その日付が残っていない(先取りとの相殺など)ときは
+ *   配置モードへ入らない = 休みの記録だけで終える。最古の振替元へ黙って付け替えない(INV-11)。
+ */
+export function resolveParentMakeupPlacement<Grouped extends { stockStudentKey: string }>(params: {
+  groupedEntries: readonly Grouped[]
+  rawEntries: ReadonlyArray<Pick<MakeupStockEntry, 'key' | 'balance' | 'remainingOriginDates'> & Partial<Pick<MakeupStockEntry, 'remainingOriginSlots'>>>
+  stockKey: string
+  originDate: string
+  originSlotNumber: number | null
+}): { entry: Grouped; rawKey: string; originToken: string } | null {
+  const rawEntry = params.rawEntries.find((raw) => raw.key === params.stockKey)
+  if (!rawEntry || rawEntry.balance <= 0) return null
+  const originToken = resolveRemainingOriginToken(rawEntry, params.originDate, params.originSlotNumber)
+  if (!originToken) return null
+  const stockStudentKey = getStockStudentKeyFromEntryKey(params.stockKey)
+  const entry = params.groupedEntries.find((candidate) => candidate.stockStudentKey === stockStudentKey)
+  if (!entry) return null
+  return { entry, rawKey: params.stockKey, originToken }
 }
 
 function resolveStockComparableStudentKey(student: StudentEntry, managedStudentByAnyName: Map<string, StudentRow>, resolveBoardStudentDisplayName: (name: string) => string) {
@@ -5328,7 +5360,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, onParentAbsencePlacementSettled, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // ⚠️ 機能フラグの教室判定は【教室ID】(会社ごとの登録台帳 src/utils/developmentClassroomRegistry.ts・2026-09-16)。
@@ -5521,6 +5553,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // マウント(=教室ロード/リロード毎)で1回だけ、提出済み未配置の講師を自己修復するためのガード。
   const didReconcileSubmittedTeachersRef = useRef(false)
   const processedStudentScheduleRequestIdRef = useRef<number | null>(null)
+  // 保護者からの休み連絡の自動処理(spec-parent-portal §0-5)。processed = 重複ガード(再マウントで消えるので App 側の消費と対)、
+  // jumped = 対象日の週へジャンプ済みの requestId(ジャンプしても週が無いときに無限に待たないため)。
+  const processedParentAbsenceRequestIdRef = useRef<number | null>(null)
+  const parentAbsenceJumpedRequestIdRef = useRef<number | null>(null)
+  // 「振替先を今決める」: 休みで在庫へ戻した直後、在庫一覧が更新されたレンダーで配置モードへ入るための受け渡し。
+  const [pendingParentMakeupPlacement, setPendingParentMakeupPlacement] = useState<{ stockKey: string; originDate: string; originSlotNumber: number | null } | null>(null)
+  // 配置モードの終了を App へ知らせるための印。selected=選択(selectedMakeupStockKey)が実際に立ったのを見たか。
+  const parentAbsencePlacementActiveRef = useRef(false)
+  const parentAbsencePlacementSelectedSeenRef = useRef(false)
   // null = 基準未取り込み(初回/再マウント直後)。初回は除去せず基準記録のみ行う(resolveNewlyUnsubmittedSessionStudents)。
   // 基準は「提出済み集合」。提出→未提出へ実遷移した生徒だけを除去対象にし、トークン発行等で新規に
   // 現れた『初めから未提出』の生徒を誤除去しない(2026-07-06 厳密化)。空 Set 初期化は初回評価で
@@ -11187,20 +11228,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
   }
 
-  const handleMarkStudentAbsent = () => {
-    if (!studentMenu || !menuStudent) return
-
+  // 「休み」の本体。席(セル・机・生徒枠)を引数で受ける: メニュー(handleMarkStudentAbsent)と、保護者からの休み連絡の
+  // 自動処理(parentAbsenceRequest)が**同じ 1 本**を通る(会計 INV-06 の経路を分散させない)。表示中の週(weekIndex)が対象。
+  // 戻り値: 席が見つからなければ null。makeupStock は未消化振替へ戻したときの在庫キーと振替元日付(講習コマは null)。
+  const markStudentAbsentAt = (seat: ParentAbsenceTarget): { makeupStock: { stockKey: string; originDate: string; originSlotNumber: number | null } | null } | null => {
     const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
-    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
-    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === seat.cellId)
+    const targetDesk = targetCell?.desks[seat.deskIndex]
     const targetLesson = targetDesk?.lesson
-    const targetStudent = targetLesson?.studentSlots[studentMenu.studentIndex]
-    if (!targetCell || !targetDesk || !targetStudent) return
+    const targetStudent = targetLesson?.studentSlots[seat.studentIndex]
+    if (!targetCell || !targetDesk || !targetStudent) return null
 
     const absentStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent')
     // Issue #57(INV-06): このスロットに保持されている前の生徒の出欠記録(移動時に保持されたもの)を
     // 上書きで消す前に、振替コマの記録なら台帳へ確定する(「破棄する側で確定」)。
-    const displacedStatusEntry = targetDesk.statusSlots?.[studentMenu.studentIndex] ?? null
+    const displacedStatusEntry = targetDesk.statusSlots?.[seat.studentIndex] ?? null
     const displacedLedgers = displacedStatusEntry
       ? materializeDisplacedStatusEntryIntoLedgers({
           statusEntry: displacedStatusEntry,
@@ -11212,16 +11254,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           resolveStockId: resolveBoardStudentStockId,
         })
       : { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
-    removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
-    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentStatusEntry)
+    removeStudentFromDeskLesson(targetDesk, seat.studentIndex)
+    setDeskStudentStatus(targetDesk, seat.studentIndex, absentStatusEntry)
 
     if (targetStudent.lessonType === 'special') {
       if (!shouldReturnLectureStockOnAbsence(targetStudent)) {
         commitWeeks(
           nextWeeks,
           weekIndex,
-          studentMenu.cellId,
-          studentMenu.deskIndex,
+          seat.cellId,
+          seat.deskIndex,
           classroomSettings.holidayDates,
           classroomSettings.forceOpenDates,
           displacedLedgers.manualMakeupAdjustments,
@@ -11233,7 +11275,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         )
         recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: false })
         setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにしました。講習期間が特定できないため未消化講習には戻していません。`)
-        return
+        return { makeupStock: null }
       }
 
       const lectureStudentKey = resolveLectureStockStudentKey(targetStudent, managedStudentByAnyName, resolveBoardStudentDisplayName)
@@ -11258,8 +11300,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       commitWeeks(
         nextWeeks,
         weekIndex,
-        studentMenu.cellId,
-        studentMenu.deskIndex,
+        seat.cellId,
+        seat.deskIndex,
         classroomSettings.holidayDates,
         classroomSettings.forceOpenDates,
         displacedLedgers.manualMakeupAdjustments,
@@ -11271,7 +11313,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       )
       recordOperationEvent('status-mark', { ...buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry), lectureStockReturned: true })
       setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化講習へ戻しました。`)
-      return
+      return { makeupStock: null }
     }
 
     const stockKey = buildMakeupStockKey(resolveBoardStudentStockId(targetStudent), targetStudent.subject)
@@ -11312,8 +11354,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     commitWeeks(
       nextWeeks,
       weekIndex,
-      studentMenu.cellId,
-      studentMenu.deskIndex,
+      seat.cellId,
+      seat.deskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       nextManualMakeupAdjustments,
@@ -11326,21 +11368,35 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
     recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化振替へ戻しました。`)
+    // 振替元は日付と**時限**の両方を返す。素の日付だけだと、同じ日に同じ科目の元コマが 2 つあるとき先頭の時限に当たり、
+    // 置いた振替の「元の通常授業」表示と lessonLinks の紐付けが別コマを指す(2026-07-31 の時限単位化・INV-06/INV-11)。
+    // 選択トークンへの変換は、在庫行自身の値で作る resolveRemainingOriginToken に任せる(ここで buildOriginToken しない)。
+    return {
+      makeupStock: {
+        stockKey,
+        originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+        originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+      },
+    }
   }
 
-  const handleMarkStudentAbsentNoMakeup = () => {
+  const handleMarkStudentAbsent = () => {
     if (!studentMenu || !menuStudent) return
+    markStudentAbsentAt(studentMenu)
+  }
 
+  // 「振無休」の本体(markStudentAbsentAt と同じ理由で席を引数に取る)。席が見つからなければ false。
+  const markStudentAbsentNoMakeupAt = (seat: ParentAbsenceTarget): boolean => {
     const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
-    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === studentMenu.cellId)
-    const targetDesk = targetCell?.desks[studentMenu.deskIndex]
+    const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === seat.cellId)
+    const targetDesk = targetCell?.desks[seat.deskIndex]
     const targetLesson = targetDesk?.lesson
-    const targetStudent = targetLesson?.studentSlots[studentMenu.studentIndex]
-    if (!targetCell || !targetDesk || !targetStudent) return
+    const targetStudent = targetLesson?.studentSlots[seat.studentIndex]
+    if (!targetCell || !targetDesk || !targetStudent) return false
 
     const absentNoMakeupStatusEntry = buildStudentStatusEntry(targetStudent, targetCell, targetDesk, 'absent-no-makeup')
     // Issue #57(INV-06): 上書きで消える前の生徒の出欠記録を台帳へ確定(handleMarkStudentAbsent と同じ防御)。
-    const displacedStatusEntry = targetDesk.statusSlots?.[studentMenu.studentIndex] ?? null
+    const displacedStatusEntry = targetDesk.statusSlots?.[seat.studentIndex] ?? null
     const displacedLedgers = displacedStatusEntry
       ? materializeDisplacedStatusEntryIntoLedgers({
           statusEntry: displacedStatusEntry,
@@ -11352,8 +11408,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           resolveStockId: resolveBoardStudentStockId,
         })
       : { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
-    removeStudentFromDeskLesson(targetDesk, studentMenu.studentIndex)
-    setDeskStudentStatus(targetDesk, studentMenu.studentIndex, absentNoMakeupStatusEntry)
+    removeStudentFromDeskLesson(targetDesk, seat.studentIndex)
+    setDeskStudentStatus(targetDesk, seat.studentIndex, absentNoMakeupStatusEntry)
 
     const suppressedOccurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(targetStudent, targetCell.dateKey, targetCell.slotNumber)
     const nextSuppressedRegularLessonOccurrences = suppressedOccurrenceKey
@@ -11363,8 +11419,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     commitWeeks(
       nextWeeks,
       weekIndex,
-      studentMenu.cellId,
-      studentMenu.deskIndex,
+      seat.cellId,
+      seat.deskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       displacedLedgers.manualMakeupAdjustments,
@@ -11377,7 +11433,120 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
     recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'absent-no-makeup', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を振無休にしました。`)
+    return true
   }
+
+  const handleMarkStudentAbsentNoMakeup = () => {
+    if (!studentMenu || !menuStudent) return
+    markStudentAbsentNoMakeupAt(studentMenu)
+  }
+
+  // --- 保護者からの休み連絡の自動処理(spec-parent-portal §0-5) -------------------------------------
+  // App のモーダルで四択(休み/振無休/振替先を今決める)が選ばれると parentAbsenceRequest が届く。
+  // 1) 対象日の週が表示中でなければ先にジャンプし(週が無ければ生成される)、次のレンダーで続きを行う。
+  // 2) 席を純関数で探し、メニューと**同じ出欠処理**(markStudentAbsentAt / markStudentAbsentNoMakeupAt)を呼ぶ。
+  // 3) 結果を必ず App へ返す(成功でも失敗でも)。App は結果を受けて一過性 state を消費(null)する(Issue #46 同型)。
+  useEffect(() => {
+    if (!shouldProcessParentAbsenceRequest(parentAbsenceRequest, processedParentAbsenceRequestIdRef.current)) return
+    const request = parentAbsenceRequest!
+    const finish = (ok: boolean, message: string) => {
+      processedParentAbsenceRequestIdRef.current = request.requestId
+      onParentAbsenceRequestProcessed?.({ requestId: request.requestId, messageId: request.messageId, action: request.action, studentId: request.studentId, dateKey: request.dateKey, slotNumber: request.slotNumber, ok, message })
+    }
+    // テンプレ編集中の cells はテンプレ用で、実日付の盤面ではない。出欠を書き込まない。
+    if (isTemplateMode) {
+      finish(false, 'テンプレート編集中は処理できません。編集を終了してから、もう一度選んでください。')
+      return
+    }
+    const activeWeekCells = weeks[weekIndex] ?? []
+    if (!activeWeekCells.some((cell) => cell.dateKey === request.dateKey)) {
+      // ジャンプ済みなのに対象日が表示週に無い(休校日でセルが無い等)なら、無限に待たず失敗で返す。
+      if (parentAbsenceJumpedRequestIdRef.current === request.requestId) {
+        finish(false, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
+        return
+      }
+      parentAbsenceJumpedRequestIdRef.current = request.requestId
+      // 移れたら、週が変わった次のレンダーでこの effect がもう一度走って続きを行う。移れなければ state が何も変わらず
+      // 再実行されないので、ここで失敗として返す(返さないと App の保険タイマーまで「処理中…」のままになる)。
+      if (!jumpToWeekByDate(request.dateKey)) finish(false, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
+      return
+    }
+
+    const resolution = resolveParentAbsenceTarget({
+      cells: activeWeekCells,
+      students,
+      studentId: request.studentId,
+      dateKey: request.dateKey,
+      slotNumber: request.slotNumber,
+      subject: request.subject,
+    })
+    if (!resolution.ok) {
+      finish(false, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
+      return
+    }
+
+    if (request.action === 'absent-no-makeup') {
+      const applied = markStudentAbsentNoMakeupAt(resolution.target)
+      finish(applied, applied ? '' : PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
+      return
+    }
+    const applied = markStudentAbsentAt(resolution.target)
+    if (!applied) {
+      finish(false, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
+      return
+    }
+    // 「振替先を今決める」: 休みで在庫へ戻したあと、在庫一覧(makeupStockEntries)が更新されたレンダーで配置モードへ入る。
+    // 途中でキャンセルしても「休み＋未消化振替あり」で残る(連絡が消えない・オーナー確定 2026-09-18)。
+    if (request.action === 'makeup-now' && applied.makeupStock) {
+      setPendingParentMakeupPlacement(applied.makeupStock)
+    }
+    finish(true, '')
+    // markStudentAbsentAt などは毎レンダー作り直されるクロージャ。deps に入れると毎レンダー再実行になるだけで、
+    // 二重処理は processedParentAbsenceRequestIdRef と App 側の消費で防いでいる(teacherAutoAssignRequest と同じ作法)。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTemplateMode, onParentAbsenceRequestProcessed, parentAbsenceRequest, students, weekIndex, weeks])
+
+  // 「振替先を今決める」の続き: 在庫一覧にその生徒の残数が現れたら、その振替元日付を選んだ状態で配置モードへ入る。
+  useEffect(() => {
+    if (!pendingParentMakeupPlacement) return
+    const placement = resolveParentMakeupPlacement({
+      groupedEntries: makeupStockEntries,
+      rawEntries: rawMakeupStockEntries,
+      stockKey: pendingParentMakeupPlacement.stockKey,
+      originDate: pendingParentMakeupPlacement.originDate,
+      originSlotNumber: pendingParentMakeupPlacement.originSlotNumber,
+    })
+    setPendingParentMakeupPlacement(null)
+    if (!placement) {
+      // その科目の残数が無い(先取りを休みで相殺した等)。休みの記録は済んでいるので、配置モードに入らないだけ。
+      setStatusMessage('休みにしました。この科目の未消化振替の残数が無いため、振替先の選択には進みません。')
+      onParentAbsencePlacementSettled?.()
+      return
+    }
+    parentAbsencePlacementActiveRef.current = true
+    handleSelectMakeupStockEntry(placement.entry, {
+      hidePanelsDuringPlacement: true,
+      rawKey: placement.rawKey,
+      originDate: placement.originToken,
+    })
+    setStatusMessage(`${placement.entry.displayName} を休みにしました。振替先の空欄セルを左クリックしてください(やめるときはキャンセル)。`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [makeupStockEntries, pendingParentMakeupPlacement, rawMakeupStockEntries])
+
+  // 振替配置モードが終わった(配置した/キャンセルした)ら App へ知らせ、残りの休み連絡のモーダルを開き直させる。
+  // ★選択が実際に立った(selectedSeen)あとで null に戻ったときだけ「終わった」とみなす。配置モードへ入る setState が
+  //   反映される前のレンダーでこの effect が走っても(コールバックの作り直し等)、終了と誤判定しない。
+  useEffect(() => {
+    if (!parentAbsencePlacementActiveRef.current) return
+    if (selectedMakeupStockKey !== null) {
+      parentAbsencePlacementSelectedSeenRef.current = true
+      return
+    }
+    if (!parentAbsencePlacementSelectedSeenRef.current) return
+    parentAbsencePlacementActiveRef.current = false
+    parentAbsencePlacementSelectedSeenRef.current = false
+    onParentAbsencePlacementSettled?.()
+  }, [onParentAbsencePlacementSettled, selectedMakeupStockKey])
 
   const handleMarkStudentAttended = () => {
     if (!studentMenu || !menuStudent) return
@@ -11767,8 +11936,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
   }
 
-  const jumpToWeekByDate = (dateKey: string) => {
-    if (!dateKey) return
+  // 戻り値: 対象週へ移れたか。保護者からの休み連絡の自動処理が「移れなかった」を即座に失敗として返すのに使う。
+  const jumpToWeekByDate = (dateKey: string): boolean => {
+    if (!dateKey) return false
     const targetWeekStart = getWeekStart(parseDateKey(dateKey))
     const targetWeekStartKey = toDateKey(targetWeekStart)
     const targetWeekEndKey = toDateKey(shiftDate(targetWeekStart, 6))
@@ -11785,7 +11955,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const resolvedIndex = nextWeeks.findIndex((week) => week[0]?.dateKey === targetWeekStartKey)
     const nextWeekIndex = resolvedIndex >= 0 ? resolvedIndex : weekIndex + coveredWeeks.weekIndexOffset
     const nextWeek = nextWeeks[nextWeekIndex]
-    if (!nextWeek?.length) return
+    if (!nextWeek?.length) return false
 
     if (coveredWeeks.weekIndexOffset > 0 || nextWeeks.length !== weeks.length) setWeeks(nextWeeks)
     setWeekIndex(nextWeekIndex)
@@ -11793,6 +11963,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedDeskIndex(0)
     setStudentMenu(null)
     setStatusMessage(`${nextWeek[0].dateLabel} 週へジャンプしました。`)
+    return true
   }
 
   const handleUndo = () => {

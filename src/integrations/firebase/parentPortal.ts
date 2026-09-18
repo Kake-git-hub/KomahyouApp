@@ -8,7 +8,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { ensureFirebaseAuthenticatedUser, getFirebaseFirestoreInstance, getFirebaseFunctionsInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
-import { parseParentMessageEntry, type ParentMessageEntry } from '../../utils/parentMessages'
+import { parseParentMessageEntry, type ParentAbsenceResolution, type ParentMessageEntry } from '../../utils/parentMessages'
 
 // adminFunctions.ts の requireFunctions と同じ(そちらは非公開なので同型を置く)。region 束縛済みの instance を要求する。
 function requireFunctions() {
@@ -97,12 +97,20 @@ export async function revokeStudentPortalTokenViaFunction(input: RevokeStudentPo
 export type MarkParentMessagesNotifiedRequest = {
   classroomId: string
   messageIds: string[]
+  /**
+   * 'acknowledged' = 室長が四択を押した(保護者ページに「教室確認済」を出す。未読購読からは外さない)。
+   * 'notified'     = 処理完了(盤面を保存できた or 何もしない)。未読購読から外れ、次回起動で再通知されない。
+   */
+  stage: 'acknowledged' | 'notified'
+  /** 四択のどれを選んだか。'acknowledged' では必須、'notified' では「何もしない」のときだけ渡す。 */
+  resolution?: ParentAbsenceResolution
 }
 
 /**
- * 保護者からの連絡の既読化(callable `markParentMessagesNotified`)。室長がモーダルの「確認」を押したときに呼ぶ
- * (表示時ではない)。notifiedAt はサーバー時刻で部分更新され、別端末で開いても再通知されない(§E-2 4.)。
- * localStorage に既読を持たない。
+ * 休み連絡の状態更新(callable `markParentMessagesNotified`。§0-5)。時刻はサーバーが付け、doc を部分更新する。
+ * localStorage に状態を持たない(別端末で開いても同じ状態になる)。
+ * ★'notified' を盤面を変える選択(休み/振無休/振替先)の直後に呼ばない。盤面を保存できた時点で呼ぶ
+ *   (呼ぶのは App の finalizeParentAbsenceNoticesAfterSave だけ)。
  */
 export async function markParentMessagesNotifiedViaFunction(input: MarkParentMessagesNotifiedRequest): Promise<{ updated: number }> {
   const messageIds = Array.from(new Set(input.messageIds.map((id) => id.trim()).filter(Boolean)))
@@ -110,7 +118,7 @@ export async function markParentMessagesNotifiedViaFunction(input: MarkParentMes
   await ensureFirebaseAuthenticatedUser()
   const functions = requireFunctions()
   const config = getFirebaseBackendConfig()
-  const callable = httpsCallable<{ workspaceKey: string; classroomId: string; messageIds: string[] }, unknown>(
+  const callable = httpsCallable<{ workspaceKey: string; classroomId: string; messageIds: string[]; stage: MarkParentMessagesNotifiedRequest['stage']; resolution?: ParentAbsenceResolution }, unknown>(
     functions,
     'markParentMessagesNotified',
     { timeout: PARENT_PORTAL_CALLABLE_TIMEOUT_MS },
@@ -119,25 +127,29 @@ export async function markParentMessagesNotifiedViaFunction(input: MarkParentMes
     workspaceKey: config.workspaceKey,
     classroomId: input.classroomId,
     messageIds,
+    stage: input.stage,
+    ...(input.resolution ? { resolution: input.resolution } : {}),
   })
   const updated = readRecord(result.data).updated
   return { updated: typeof updated === 'number' && Number.isFinite(updated) ? updated : 0 }
 }
 
 /**
- * 自教室の未読連絡を購読する(§E-2 1.〜2.)。
+ * 自教室の未処理の休み連絡を購読する(§E-2 1.〜2.)。
  * - パスは `workspaces/{ws}/classroomSnapshots/{classroomId}/parentMessages`(教室分離はパスで担保。他教室は購読しない)。
  * - 条件は `where('notifiedAt', '==', null)` の等値 1 つだけ。orderBy を足すと複合インデックスが要る
  *   (FAILED_PRECONDITION が画面では空/INTERNAL に見える・CLAUDE.md 2026-09-12 の教訓)。並べ替えは
  *   mergeParentMessageNotifications がクライアント側で行う。
- * - docChanges の added/modified だけ拾う。既読化で notifiedAt が埋まると doc はクエリから外れて 'removed' で届くため無視する。
- * - isInitial=true は購読直後の初回スナップショット(=未読の一括配信)。lectureSubmissions のような lastSavedAt
- *   ウォーターマークは使わない(保存前に届いた連絡を落としてしまう)。
+ * - **毎回、未処理の全件(snapshot.docs)を渡す**(2026-09-18)。差分(docChanges)だけを渡していた頃は、保存待ち
+ *   (pending)を捨てたとき(教室データの読み直し・復元)にその連絡をモーダルへ戻す手段が無かった。全件を持てば
+ *   「全件 − 保存待ち」で導出でき、処理済みになった doc はクエリから外れて自動で消える。0 件でも渡す。
+ * - lectureSubmissions のような lastSavedAt ウォーターマークは使わない(保存前に届いた連絡を落としてしまう)。
  * - doc.classroomId が購読教室と違う doc は捨てる(パスが正しくても doc 側の教室タグを権威として二重に守る・INV-08)。
+ * - 旧形式(自由記述)の doc は parseParentMessageEntry が null を返すので渡らない。
  */
 export function subscribeParentMessages(
   classroomId: string,
-  onChange: (entries: ParentMessageEntry[], isInitial: boolean) => void,
+  onChange: (entries: ParentMessageEntry[]) => void,
 ): () => void {
   const db = getFirebaseFirestoreInstance()
   const config = getFirebaseBackendConfig()
@@ -148,19 +160,15 @@ export function subscribeParentMessages(
     where('notifiedAt', '==', null),
   )
 
-  let isInitialSnapshot = true
   const unsubscribe = onSnapshot(q, (snapshot) => {
-    const isInitial = isInitialSnapshot
-    isInitialSnapshot = false
     const entries: ParentMessageEntry[] = []
-    for (const change of snapshot.docChanges()) {
-      if (change.type !== 'added' && change.type !== 'modified') continue
-      const entry = parseParentMessageEntry(change.doc.id, change.doc.data())
+    for (const doc of snapshot.docs) {
+      const entry = parseParentMessageEntry(doc.id, doc.data())
       if (!entry) continue
       if (entry.classroomId !== classroomId) continue
       entries.push(entry)
     }
-    if (entries.length > 0) onChange(entries, isInitial)
+    onChange(entries)
   }, (error) => {
     // ★エラーコールバックを省くと、ルール未反映(permission-denied)や索引不足が「連絡 0 件」と
     //   見分けられず**無音で機能しない**。Firestore ルールは main マージでは反映されないので、
