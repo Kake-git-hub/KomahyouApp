@@ -1,26 +1,34 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import {
-  PARENT_MESSAGE_BODY_LIMIT,
+  PARENT_ABSENCE_CONFIRM_CANCEL_LABEL,
+  PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL,
+  PARENT_ABSENCE_LIST_HINT,
+  PARENT_ABSENCE_SENT_MESSAGE,
   PARENT_MESSAGE_NETWORK_ERROR_MESSAGE,
-  PARENT_MESSAGE_SENDER_NAME_LIMIT,
-  PARENT_MESSAGE_SENT_MESSAGE,
   PARENT_PORTAL_LOAD_FAILED_MESSAGE,
   PARENT_PORTAL_NETWORK_ERROR_MESSAGE,
   PARENT_PORTAL_NOTES,
   PARENT_SCHEDULE_TENTATIVE_LEGEND,
+  buildParentAbsenceRowAriaLabel,
   buildParentPortalRequestUrl,
   buildParentScheduleRows,
   canShiftParentScheduleMonth,
+  describeParentAbsenceBadge,
+  describeParentAbsenceConfirm,
   formatParentScheduleMonthLabel,
   formatParentScheduleRowDateLabel,
   formatParentSnapshotSavedAtLabel,
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
-  resolveParentMessageSendError,
+  readParentAbsenceNotices,
+  resolveParentAbsenceSendError,
   resolveParentPortalLoadError,
   resolveParentScheduleMonthNotice,
   shiftParentScheduleMonth,
-  validateParentMessageInput,
+  shouldReloadParentScheduleAfterSendError,
+  toParentAbsenceTarget,
+  type ParentAbsenceNotice,
+  type ParentAbsenceTarget,
   type ParentPortalScheduleResponse,
   type ParentScheduleRow,
   type ParentScheduleRange,
@@ -35,6 +43,9 @@ import {
 // - 内部 ID(studentId 等)は応答に含まれず、DOM にも出さない。
 // index.css は全ルートで読み込まれ PC 向けの min-width:1280px / #root{padding:20px} を当てるため、
 // すべての描画分岐で baseStyles(上書きブロック)を必ず含める。
+//
+// ★2026-09-18(オーナー指示): 自由記述の「教室へ連絡」フォームを廃止し、**授業行をタップ → 確認モーダル →
+//   休み連絡**の 1 経路だけにした。本文・お名前の入力欄は復活させない(サーバーも受け付けない)。
 
 function resolveApiBase() {
   if (typeof window === 'undefined') return ''
@@ -54,14 +65,17 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const [loadState, setLoadState] = useState<LoadState>({ status: 'loading' })
   // 「前の月／次の月」で要求した範囲。null=サーバー既定(今月の 1 日〜末日)。
   const [requestedRange, setRequestedRange] = useState<ParentScheduleRange | null>(null)
+  // 409 のあとに同じ範囲で引き直すための世代カウンタ(requestedRange だけだと同値で再取得されない)。
+  const [reloadToken, setReloadToken] = useState(0)
   const [refreshing, setRefreshing] = useState(false)
   const [inlineError, setInlineError] = useState('')
 
-  const [messageBody, setMessageBody] = useState('')
-  const [senderName, setSenderName] = useState('')
+  // 送信直後に「休み連絡済」を出すための楽観的な上乗せ(次の GET で正式な値に置き換わる)。
+  const [optimisticNotices, setOptimisticNotices] = useState<ParentAbsenceNotice[]>([])
+  const [absenceTarget, setAbsenceTarget] = useState<ParentAbsenceTarget | null>(null)
   const [sending, setSending] = useState(false)
-  const [sent, setSent] = useState(false)
   const [sendError, setSendError] = useState('')
+  const [sentMessage, setSentMessage] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -71,7 +85,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
         if (cancelled) return
         // requestedRange が null なのは初回だけ(「前の月／次の月」は data 到着後にしか押せない)。
         // 初回の失敗は全面エラー、範囲移動の失敗は表示中の日程を残してインラインで知らせる。
-        const isRefresh = requestedRange !== null
+        const isRefresh = requestedRange !== null || reloadToken > 0
         const fail = (message: string) => {
           if (isRefresh) setInlineError(message)
           else setLoadState({ status: 'error', message })
@@ -90,9 +104,11 @@ export default function ParentPortalPage({ token }: { token: string }) {
         }
         setLoadState({ status: 'ready', data: result })
         setInlineError('')
+        // サーバーの値が来たら楽観的な上乗せは捨てる(重複表示・取り消された連絡の残留を防ぐ)。
+        setOptimisticNotices([])
       } catch {
         if (cancelled) return
-        if (requestedRange !== null) setInlineError(PARENT_PORTAL_NETWORK_ERROR_MESSAGE)
+        if (requestedRange !== null || reloadToken > 0) setInlineError(PARENT_PORTAL_NETWORK_ERROR_MESSAGE)
         else setLoadState({ status: 'error', message: PARENT_PORTAL_NETWORK_ERROR_MESSAGE })
       } finally {
         if (!cancelled) setRefreshing(false)
@@ -102,7 +118,7 @@ export default function ParentPortalPage({ token }: { token: string }) {
     return () => {
       cancelled = true
     }
-  }, [apiBase, token, requestedRange])
+  }, [apiBase, token, requestedRange, reloadToken])
 
   const data = loadState.status === 'ready' ? loadState.data : null
 
@@ -111,37 +127,50 @@ export default function ParentPortalPage({ token }: { token: string }) {
     const next = shiftParentScheduleMonth(data.range, deltaMonths, data.bounds)
     if (!next) return
     setInlineError('')
+    setSentMessage('')
     setRefreshing(true)
     setRequestedRange(next)
   }, [data, refreshing])
 
-  const handleSend = useCallback(async () => {
-    if (sending || sent) return
-    const validationError = validateParentMessageInput({ body: messageBody, senderName })
-    if (validationError) {
-      setSendError(validationError)
-      return
-    }
+  const reloadSchedule = useCallback(() => {
+    setRefreshing(true)
+    setReloadToken((current) => current + 1)
+  }, [])
+
+  const openAbsenceModal = useCallback((row: ParentScheduleRow) => {
+    const target = toParentAbsenceTarget(row)
+    if (!target) return
+    setSendError('')
+    setSentMessage('')
+    setAbsenceTarget(target)
+  }, [])
+
+  const submitAbsence = useCallback(async () => {
+    if (!absenceTarget || sending) return
     setSendError('')
     setSending(true)
     try {
       const response = await fetch(buildParentPortalRequestUrl(apiBase, token), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body: messageBody, senderName: senderName.trim() }),
+        body: JSON.stringify({ dateKey: absenceTarget.dateKey, slotNumber: absenceTarget.slotNumber }),
       })
       if (!response.ok) {
         const result: unknown = await response.json().catch(() => null)
-        setSendError(resolveParentMessageSendError(response.status, result))
+        setSendError(resolveParentAbsenceSendError(response.status, result))
+        // 画面の日程が古いために弾かれた(409)ときは取り直して、押せる行・バッジを最新にする。
+        if (shouldReloadParentScheduleAfterSendError(response.status)) reloadSchedule()
         return
       }
-      setSent(true)
+      setOptimisticNotices((current) => [...current, { dateKey: absenceTarget.dateKey, slotNumber: absenceTarget.slotNumber, acknowledged: false }])
+      setAbsenceTarget(null)
+      setSentMessage(PARENT_ABSENCE_SENT_MESSAGE)
     } catch {
       setSendError(PARENT_MESSAGE_NETWORK_ERROR_MESSAGE)
     } finally {
       setSending(false)
     }
-  }, [apiBase, token, messageBody, senderName, sending, sent])
+  }, [absenceTarget, apiBase, reloadSchedule, sending, token])
 
   if (loadState.status === 'loading') {
     return (
@@ -171,8 +200,11 @@ export default function ParentPortalPage({ token }: { token: string }) {
   const canGoPrev = canShiftParentScheduleMonth(schedule.range, -1, schedule.bounds)
   const canGoNext = canShiftParentScheduleMonth(schedule.range, 1, schedule.bounds)
   const monthNotice = resolveParentScheduleMonthNotice(schedule)
-  const scheduleRows = buildParentScheduleRows(schedule.days, schedule.today)
+  const notices = [...readParentAbsenceNotices(schedule), ...optimisticNotices]
+  const scheduleRows = buildParentScheduleRows(schedule.days, schedule.today, notices)
   const hasTentativeRow = scheduleRows.some((row) => row.isTentative)
+  const hasReportableRow = scheduleRows.some((row) => row.canReportAbsence)
+  const confirm = absenceTarget ? describeParentAbsenceConfirm(absenceTarget, schedule.today) : null
 
   return (
     <div className="pp-container">
@@ -185,6 +217,14 @@ export default function ParentPortalPage({ token }: { token: string }) {
       <ul className="pp-notes">
         {PARENT_PORTAL_NOTES.map((note) => <li key={note}>{note}</li>)}
       </ul>
+
+      {sentMessage ? (
+        <div className="pp-sent-banner" role="status">
+          <span className="pp-sent-icon" aria-hidden="true">✓</span>
+          <span>{sentMessage}</span>
+          <button type="button" className="pp-dismiss" onClick={() => setSentMessage('')} aria-label="閉じる">✕</button>
+        </div>
+      ) : null}
 
       {inlineError ? (
         <div className="pp-inline-error" role="alert">
@@ -203,73 +243,76 @@ export default function ParentPortalPage({ token }: { token: string }) {
       </nav>
 
       <section className="pp-days" aria-label="授業予定">
+        {hasReportableRow ? <p className="pp-rows-hint">{PARENT_ABSENCE_LIST_HINT}</p> : null}
         {hasTentativeRow ? <p className="pp-rows-legend">{PARENT_SCHEDULE_TENTATIVE_LEGEND}</p> : null}
         {scheduleRows.length > 0 ? (
           <ul className="pp-rows">
-            {scheduleRows.map((row) => <ParentScheduleRowItem key={row.key} row={row} />)}
+            {scheduleRows.map((row) => <ParentScheduleRowItem key={row.key} row={row} onReportAbsence={openAbsenceModal} />)}
           </ul>
         ) : null}
         {monthNotice ? <p className="pp-muted pp-days-empty">{monthNotice}</p> : null}
       </section>
 
-      <section className="pp-contact" aria-label="教室へ連絡">
-        <h2 className="pp-section-title">教室へ連絡</h2>
-        {sent ? (
-          <div className="pp-sent" role="status">
-            <div className="pp-sent-icon" aria-hidden="true">✓</div>
-            <p className="pp-sent-text">{PARENT_MESSAGE_SENT_MESSAGE}</p>
-          </div>
-        ) : (
-          <div className="pp-form">
-            <p className="pp-form-hint">欠席・変更のご連絡や質問をお送りください。返信はこのページには届きません。</p>
-            <label className="pp-field">
-              <span className="pp-field-label">ご連絡内容（必須・{PARENT_MESSAGE_BODY_LIMIT}字まで）</span>
-              <textarea
-                className="pp-textarea"
-                value={messageBody}
-                onChange={(event) => { setMessageBody(event.target.value); setSendError('') }}
-                rows={5}
-                maxLength={PARENT_MESSAGE_BODY_LIMIT * 2}
-                disabled={sending}
-                placeholder="例: 9月20日は学校行事のためお休みします。"
-              />
-              <span className="pp-field-count">{messageBody.length} / {PARENT_MESSAGE_BODY_LIMIT}</span>
-            </label>
-            <label className="pp-field">
-              <span className="pp-field-label">お名前（任意・{PARENT_MESSAGE_SENDER_NAME_LIMIT}字まで）</span>
-              <input
-                className="pp-input"
-                type="text"
-                value={senderName}
-                onChange={(event) => { setSenderName(event.target.value); setSendError('') }}
-                maxLength={PARENT_MESSAGE_SENDER_NAME_LIMIT * 2}
-                disabled={sending}
-                placeholder="例: 保護者 太郎"
-                autoComplete="name"
-              />
-            </label>
-            {sendError ? <p className="pp-send-error" role="alert">{sendError}</p> : null}
-            <button type="button" className={`pp-send-button${sending ? ' pp-disabled' : ''}`} onClick={handleSend} disabled={sending}>
-              {sending ? '送信中...' : '送信する'}
-            </button>
-          </div>
-        )}
-      </section>
-
       <footer className="pp-footer">
         <p className="pp-muted">このページは教室から配布されたQRコード専用です。第三者に共有しないでください。</p>
       </footer>
+
+      {confirm ? (
+        <div className="pp-modal-backdrop" role="dialog" aria-modal="true" aria-label="お休みの連絡">
+          <div className="pp-modal">
+            <div className="pp-modal-target">{confirm.target}</div>
+            <p className="pp-modal-question">{confirm.question}</p>
+            <ul className="pp-modal-notes">
+              {confirm.notes.map((note) => <li key={note}>{note}</li>)}
+            </ul>
+            {sendError ? <p className="pp-send-error" role="alert">{sendError}</p> : null}
+            <div className="pp-modal-actions">
+              <button
+                type="button"
+                className={`pp-send-button${sending ? ' pp-disabled' : ''}`}
+                onClick={submitAbsence}
+                disabled={sending}
+              >
+                {sending ? '送信中...' : PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL}
+              </button>
+              <button type="button" className="pp-modal-cancel" onClick={() => setAbsenceTarget(null)} disabled={sending}>
+                {PARENT_ABSENCE_CONFIRM_CANCEL_LABEL}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <style>{baseStyles}</style>
     </div>
   )
 }
 
 // 1 コマ 1 行(確認リスト その他 2026-09-14)。日付は同じ日の先頭行だけに出す。
-function ParentScheduleRowItem({ row }: { row: ParentScheduleRow }) {
+// 休み連絡できる行だけボタン相当にする(role/tabIndex/キーボード操作・aria-label を付ける)。
+// ★li のままボタンを内側に足すと 1 行(幅 390px)に収まらなくなるので、行そのものを押せるようにしている。
+function ParentScheduleRowItem({ row, onReportAbsence }: { row: ParentScheduleRow; onReportAbsence: (row: ParentScheduleRow) => void }) {
   const weekdayClass = row.weekday === 0 ? ' pp-row-sun' : row.weekday === 6 ? ' pp-row-sat' : ''
   const kindClass = row.rowKind === 'lesson' ? ` pp-lesson-${row.lessonKind}` : ` pp-row-${row.rowKind}`
+  const badge = describeParentAbsenceBadge(row.absenceStatus)
+  const ariaLabel = buildParentAbsenceRowAriaLabel(row)
+  const tappable = row.canReportAbsence
   return (
-    <li className={`pp-row${weekdayClass}${kindClass}${row.isFirstOfDay ? ' pp-row-first' : ''}${row.isToday ? ' pp-row-today' : ''}`}>
+    <li
+      className={`pp-row${weekdayClass}${kindClass}${row.isFirstOfDay ? ' pp-row-first' : ''}${row.isToday ? ' pp-row-today' : ''}${tappable ? ' pp-row-tappable' : ''}`}
+      {...(tappable
+        ? {
+          role: 'button',
+          tabIndex: 0,
+          'aria-label': ariaLabel ?? undefined,
+          onClick: () => onReportAbsence(row),
+          onKeyDown: (event: KeyboardEvent<HTMLLIElement>) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return
+            event.preventDefault()
+            onReportAbsence(row)
+          },
+        }
+        : {})}
+    >
       <span className="pp-row-date">
         {row.isFirstOfDay ? formatParentScheduleRowDateLabel(row.dateKey, row.weekday) : ''}
       </span>
@@ -281,8 +324,10 @@ function ParentScheduleRowItem({ row }: { row: ParentScheduleRow }) {
         <span className="pp-lesson-main">{row.main}</span>
         {row.sub ? <span className="pp-lesson-sub">{row.sub}</span> : null}
         {row.isTentative ? <span className="pp-row-tentative">予定</span> : null}
+        {badge ? <span className={`pp-row-absence pp-row-absence-${row.absenceStatus}`}>{badge}</span> : null}
         {row.isFirstOfDay && row.isToday ? <span className="pp-day-today-badge">今日</span> : null}
       </span>
+      {tappable ? <span className="pp-row-chevron" aria-hidden="true">›</span> : null}
     </li>
   )
 }
@@ -314,6 +359,9 @@ const baseStyles = `
   .pp-notes li::before { content: '・'; }
 
   .pp-inline-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 12px 0; padding: 10px 12px; background: #fee; color: #c00; font-size: 14px; border-radius: 8px; }
+  .pp-sent-banner { display: flex; align-items: center; gap: 8px; margin: 10px 12px 0; padding: 10px 12px; background: #e8f5e8; border: 1px solid #cfe6cf; color: #1f5d1f; font-size: 15px; font-weight: 700; border-radius: 8px; }
+  .pp-sent-banner .pp-dismiss { margin-left: auto; color: #1f5d1f; }
+  .pp-sent-icon { flex: none; width: 24px; height: 24px; line-height: 24px; text-align: center; border-radius: 50%; background: #2a7e2a; color: #fff; font-size: 14px; font-weight: 700; }
   .pp-dismiss { background: none; border: none; color: #c00; font-size: 18px; cursor: pointer; padding: 0 4px; }
 
   .pp-range-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 12px 0; }
@@ -324,10 +372,16 @@ const baseStyles = `
 
   .pp-days { margin: 12px 8px 0; }
   .pp-days-empty { text-align: center; padding: 16px; }
+  .pp-rows-hint { font-size: 13px; color: #1f5d96; font-weight: 700; margin: 0 0 6px; }
   .pp-rows-legend { font-size: 12px; color: #666; margin: 0 0 6px; }
   .pp-rows { list-style: none; background: #fff; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; }
-  /* 列幅は「14日(月)」「5限19:40」がちょうど入る幅に詰め、補足(振替の月日コマ)まで 1 行に収める(確認リスト k-11)。 */
+  /* 列幅は「14日(月)」「5限19:40」がちょうど入る幅に詰め、補足(振替の月日コマ)まで 1 行に収める(確認リスト k-11)。
+     タップできる行だけ末尾に「›」の列を足す(幅は 0.8em で、1 行表示を崩さない)。 */
   .pp-row { display: grid; grid-template-columns: 4.7em 4.5em minmax(0, 1fr); align-items: baseline; column-gap: 6px; padding: 6px 8px; font-size: 15px; line-height: 1.35; }
+  .pp-row-tappable { grid-template-columns: 4.7em 4.5em minmax(0, 1fr) 0.8em; cursor: pointer; touch-action: manipulation; }
+  .pp-row-tappable:active { background: #eef4fb; }
+  .pp-row-tappable:focus-visible { outline: 2px solid #1f5d96; outline-offset: -2px; }
+  .pp-row-chevron { color: #1f5d96; font-weight: 700; text-align: right; }
   .pp-row + .pp-row { border-top: 1px solid #eee; }
   .pp-row + .pp-row-first { border-top-color: #cfd8e3; }
   .pp-row-date { font-weight: 700; white-space: nowrap; }
@@ -346,6 +400,10 @@ const baseStyles = `
   /* 教室休みから複数コマを振替に回すと振替先が長くなるので、この行だけは折り返して切らない(レビュー指摘 A-4)。 */
   .pp-row-closed .pp-lesson-sub { white-space: normal; }
   .pp-row-tentative { font-size: 11px; color: #7a5b00; background: #f9e79f; border-radius: 999px; padding: 0 6px; }
+  /* 休み連絡のバッジ。行が折り返してもよい(バッジが付く行だけの例外・オーナー了承 2026-09-18)。 */
+  .pp-row-absence { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 0 6px; white-space: nowrap; }
+  .pp-row-absence-reported { color: #7a3b00; background: #ffe0b2; }
+  .pp-row-absence-acknowledged { color: #fff; background: #2a7e2a; }
   .pp-row-closed, .pp-row-status { color: #666; background: #f6f6f6; }
   .pp-row-closed .pp-lesson-main, .pp-row-status .pp-lesson-main { font-weight: 400; }
   .pp-lesson-makeup .pp-lesson-sub { color: #1f5d96; font-weight: 700; }
@@ -353,21 +411,17 @@ const baseStyles = `
   .pp-lesson-absent .pp-lesson-sub { color: #1f5d96; font-weight: 700; }
   .pp-lesson-attended .pp-lesson-sub { color: #2a7e2a; }
 
-  .pp-contact { margin: 20px 12px 0; background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 14px 12px; }
-  .pp-section-title { font-size: 19px; font-weight: 700; margin-bottom: 8px; }
-  .pp-form { display: grid; gap: 12px; }
-  .pp-form-hint { font-size: 13px; color: #666; }
-  .pp-field { display: grid; gap: 4px; }
-  .pp-field-label { font-size: 14px; font-weight: 700; color: #333; }
-  .pp-field-count { font-size: 12px; color: #888; text-align: right; }
-  .pp-textarea, .pp-input { width: 100%; font-size: 16px; padding: 10px; border: 1px solid #bbb; border-radius: 8px; background: #fff; font-family: inherit; }
-  .pp-textarea { resize: vertical; min-height: 120px; line-height: 1.5; }
+  .pp-modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 50; }
+  .pp-modal { width: 100%; max-width: 420px; background: #fff; border-radius: 12px; padding: 18px 16px; display: grid; gap: 10px; max-height: 90dvh; overflow-y: auto; }
+  .pp-modal-target { font-size: 19px; font-weight: 700; line-height: 1.4; }
+  .pp-modal-question { font-size: 16px; line-height: 1.5; }
+  .pp-modal-notes { list-style: none; display: grid; gap: 4px; font-size: 13px; color: #555; line-height: 1.5; }
+  .pp-modal-notes li::before { content: '・'; }
+  .pp-modal-actions { display: grid; gap: 8px; margin-top: 4px; }
   .pp-send-error { font-size: 14px; color: #c00; }
   .pp-send-button { display: block; width: 100%; padding: 14px; border: none; border-radius: 8px; background: #111; color: #fff; font-size: 18px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
+  .pp-modal-cancel { display: block; width: 100%; padding: 12px; border: 1px solid #bbb; border-radius: 8px; background: #fff; color: #222; font-size: 16px; font-weight: 700; cursor: pointer; touch-action: manipulation; }
   .pp-disabled { opacity: .5; cursor: not-allowed; }
-  .pp-sent { display: flex; align-items: flex-start; gap: 12px; background: #e8f5e8; border: 1px solid #cfe6cf; border-radius: 8px; padding: 12px; }
-  .pp-sent-icon { flex: none; width: 36px; height: 36px; line-height: 36px; text-align: center; border-radius: 50%; background: #2a7e2a; color: #fff; font-size: 20px; font-weight: 700; }
-  .pp-sent-text { font-size: 15px; color: #1f5d1f; line-height: 1.5; }
 
   .pp-footer { padding: 20px 16px 28px; text-align: center; }
 `

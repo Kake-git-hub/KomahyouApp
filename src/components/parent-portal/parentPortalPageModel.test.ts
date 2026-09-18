@@ -1,20 +1,29 @@
 import { describe, expect, it } from 'vitest'
 import {
-  PARENT_MESSAGE_BODY_LIMIT,
+  PARENT_ABSENCE_BADGE_ACKNOWLEDGED,
+  PARENT_ABSENCE_BADGE_REPORTED,
+  PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE,
+  PARENT_ABSENCE_CONFIRM_NOTE_CANCEL,
+  PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY,
+  PARENT_ABSENCE_CONFIRM_QUESTION,
+  PARENT_ABSENCE_CONFLICT_MESSAGE,
   PARENT_MESSAGE_RATE_LIMIT_MESSAGE,
-  PARENT_MESSAGE_SENDER_NAME_LIMIT,
   PARENT_PORTAL_DISABLED_MESSAGE,
   PARENT_PORTAL_NOTES,
   PARENT_PORTAL_UNAVAILABLE_MESSAGE,
   PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE,
   PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE,
   PARENT_SCHEDULE_NO_LESSON_MESSAGE,
+  buildParentAbsenceRowAriaLabel,
   buildParentPortalRequestUrl,
   buildParentScheduleRows,
   canShiftParentScheduleMonth,
+  describeParentAbsenceBadge,
+  describeParentAbsenceConfirm,
   describeParentScheduleDayStatus,
   describeParentScheduleLesson,
   formatJstDateTimeLabel,
+  formatParentAbsenceTargetLabel,
   formatParentScheduleDayLabel,
   formatParentScheduleMonthLabel,
   formatParentScheduleRowDateLabel,
@@ -22,11 +31,13 @@ import {
   getParentPortalApiBaseUrl,
   isParentPortalScheduleResponse,
   isParentScheduleDayTentative,
-  resolveParentMessageSendError,
+  readParentAbsenceNotices,
+  resolveParentAbsenceSendError,
   resolveParentPortalLoadError,
   resolveParentScheduleMonthNotice,
   shiftParentScheduleMonth,
-  validateParentMessageInput,
+  shouldReloadParentScheduleAfterSendError,
+  toParentAbsenceTarget,
   type ParentScheduleDay,
   type ParentScheduleLesson,
 } from './parentPortalPageModel'
@@ -104,7 +115,9 @@ describe('formatJstDateTimeLabel / formatParentSnapshotSavedAtLabel', () => {
   })
 })
 
-describe('shiftParentScheduleMonth (k-5: 月単位・前後 1 か月だけ)', () => {
+// 移動は暦の 1 か月単位(k-5)。どこまで動けるかの権威は**サーバーが返す bounds**
+// (2026-09-18 に来月を閉じた = 実際の bounds は先月 1 日〜今月末日になる)。ここでは bounds を明示して境界を固定する。
+describe('shiftParentScheduleMonth (月単位・bounds の端で止まる)', () => {
   const bounds = { minFrom: '2026-08-01', maxTo: '2026-10-31' }
   const september = { from: '2026-09-01', to: '2026-09-30' }
 
@@ -113,7 +126,7 @@ describe('shiftParentScheduleMonth (k-5: 月単位・前後 1 か月だけ)', ()
     expect(shiftParentScheduleMonth(september, -1, bounds)).toEqual({ from: '2026-08-01', to: '2026-08-31' })
   })
 
-  it('前後 1 か月の外へは動かない(null)・canShift は false', () => {
+  it('bounds の外へは動かない(null)・canShift は false', () => {
     expect(shiftParentScheduleMonth({ from: '2026-08-01', to: '2026-08-31' }, -1, bounds)).toBeNull()
     expect(shiftParentScheduleMonth({ from: '2026-10-01', to: '2026-10-31' }, 1, bounds)).toBeNull()
     expect(canShiftParentScheduleMonth({ from: '2026-08-01', to: '2026-08-31' }, -1, bounds)).toBe(false)
@@ -236,37 +249,11 @@ describe('buildParentScheduleRows: 1 コマ 1 行(確認リスト その他 2026
   })
 })
 
-describe('validateParentMessageInput (spec §E-1 P-3)', () => {
-  it('本文 1〜500 字・送信者名 0〜30 字は通る', () => {
-    expect(validateParentMessageInput({ body: 'あ', senderName: '' })).toBeNull()
-    expect(validateParentMessageInput({ body: 'あ'.repeat(PARENT_MESSAGE_BODY_LIMIT), senderName: 'あ'.repeat(PARENT_MESSAGE_SENDER_NAME_LIMIT) })).toBeNull()
-  })
-
-  it('本文 0 字・空白のみ・制御文字のみは拒否', () => {
-    expect(validateParentMessageInput({ body: '', senderName: '' })).toBe('本文を入力してください。')
-    expect(validateParentMessageInput({ body: '   ', senderName: '' })).toBe('本文を入力してください。')
-    expect(validateParentMessageInput({ body: String.fromCharCode(7) + String.fromCharCode(0), senderName: '' })).toBe('本文を入力してください。')
-  })
-
-  it('改行・タブは本文として残る', () => {
-    expect(validateParentMessageInput({ body: '\n\tあ', senderName: '' })).toBeNull()
-  })
-
-  it('501 字は拒否・制御文字を除いて数える', () => {
-    expect(validateParentMessageInput({ body: 'あ'.repeat(PARENT_MESSAGE_BODY_LIMIT + 1), senderName: '' })).toBe('本文は500字以内で入力してください。')
-    expect(validateParentMessageInput({ body: 'あ'.repeat(PARENT_MESSAGE_BODY_LIMIT) + String.fromCharCode(7), senderName: '' })).toBeNull()
-  })
-
-  it('送信者名 31 字は拒否(前後の空白は数えない)', () => {
-    expect(validateParentMessageInput({ body: 'あ', senderName: 'あ'.repeat(31) })).toBe('お名前は30字以内で入力してください。')
-    expect(validateParentMessageInput({ body: 'あ', senderName: ` ${'あ'.repeat(30)} ` })).toBeNull()
-  })
-})
-
-describe('resolveParentPortalLoadError / resolveParentMessageSendError', () => {
+describe('resolveParentPortalLoadError / resolveParentAbsenceSendError', () => {
   it('サーバーの { error } を優先して表示する', () => {
     expect(resolveParentPortalLoadError(410, { error: 'サーバー文言' })).toBe('サーバー文言')
-    expect(resolveParentMessageSendError(429, { error: '本日の上限' })).toBe('本日の上限')
+    expect(resolveParentAbsenceSendError(429, { error: '本日の上限' })).toBe('本日の上限')
+    expect(resolveParentAbsenceSendError(409, { error: 'このコマはすでにお休みの連絡を受け付けています。' })).toBe('このコマはすでにお休みの連絡を受け付けています。')
   })
 
   it('410 は理由を出し分けない共通文言、403 は利用停止、400 は無効リンク', () => {
@@ -277,12 +264,21 @@ describe('resolveParentPortalLoadError / resolveParentMessageSendError', () => {
     expect(resolveParentPortalLoadError(500)).toBe('データの読み込みに失敗しました。')
   })
 
-  it('POST: 429 は回数制限文言、400 は入力確認、410/403 は GET と同じ', () => {
-    expect(resolveParentMessageSendError(429)).toBe(PARENT_MESSAGE_RATE_LIMIT_MESSAGE)
-    expect(resolveParentMessageSendError(400)).toBe('入力内容をご確認ください。')
-    expect(resolveParentMessageSendError(410)).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
-    expect(resolveParentMessageSendError(403)).toBe(PARENT_PORTAL_DISABLED_MESSAGE)
-    expect(resolveParentMessageSendError(503)).toBe('送信に失敗しました。時間をおいて再度お試しください。')
+  it('休み連絡 POST: 409/400 は連絡できない案内、429 は回数制限、410/403 は GET と同じ', () => {
+    expect(resolveParentAbsenceSendError(409)).toBe(PARENT_ABSENCE_CONFLICT_MESSAGE)
+    expect(resolveParentAbsenceSendError(400)).toBe(PARENT_ABSENCE_CONFLICT_MESSAGE)
+    expect(resolveParentAbsenceSendError(429)).toBe(PARENT_MESSAGE_RATE_LIMIT_MESSAGE)
+    expect(resolveParentAbsenceSendError(410)).toBe(PARENT_PORTAL_UNAVAILABLE_MESSAGE)
+    expect(resolveParentAbsenceSendError(403)).toBe(PARENT_PORTAL_DISABLED_MESSAGE)
+    expect(resolveParentAbsenceSendError(503)).toBe('送信に失敗しました。時間をおいて再度お試しください。')
+  })
+
+  // ★409 = 画面の日程が古い。取り直さないと「押せるのに必ず失敗する行」が残る。
+  it('409 のときだけ日程を取り直す', () => {
+    expect(shouldReloadParentScheduleAfterSendError(409)).toBe(true)
+    for (const status of [400, 403, 410, 429, 500]) {
+      expect(shouldReloadParentScheduleAfterSendError(status), String(status)).toBe(false)
+    }
   })
 })
 
@@ -298,6 +294,148 @@ describe('isParentPortalScheduleResponse', () => {
     expect(isParentPortalScheduleResponse('<!doctype html>')).toBe(false)
     expect(isParentPortalScheduleResponse({ studentName: 'x' })).toBe(false)
     expect(isParentPortalScheduleResponse(null)).toBe(false)
+  })
+})
+
+// 2026-09-18: 休み連絡(自由記述の廃止)。
+describe('readParentAbsenceNotices', () => {
+  it('応答の absenceNotices を読み、壊れた行は捨てる', () => {
+    expect(readParentAbsenceNotices({
+      absenceNotices: [
+        { dateKey: '2026-09-20', slotNumber: 3, acknowledged: false },
+        { dateKey: '2026-09-21', slotNumber: 1, acknowledged: true },
+        { dateKey: '2026-09-22' },
+        { slotNumber: 2, acknowledged: true },
+        { dateKey: '2026-09-23', slotNumber: '2' },
+        null,
+      ],
+    })).toEqual([
+      { dateKey: '2026-09-20', slotNumber: 3, acknowledged: false },
+      { dateKey: '2026-09-21', slotNumber: 1, acknowledged: true },
+    ])
+  })
+
+  // ★Hosting が先に出て旧 functions が応答している間でも壊れない(k-4 の hasLectureLessons と同じ作法)。
+  it('フィールドが無い旧応答・壊れた値は空配列', () => {
+    expect(readParentAbsenceNotices({ days: [] })).toEqual([])
+    expect(readParentAbsenceNotices({ absenceNotices: 'x' })).toEqual([])
+    expect(readParentAbsenceNotices(null)).toEqual([])
+  })
+
+  it('acknowledged は真偽値 true のときだけ真(安全側 = 未確認扱い)', () => {
+    expect(readParentAbsenceNotices({ absenceNotices: [{ dateKey: '2026-09-20', slotNumber: 3, acknowledged: 'yes' }] }))
+      .toEqual([{ dateKey: '2026-09-20', slotNumber: 3, acknowledged: false }])
+  })
+})
+
+describe('休み連絡できる行とバッジ(buildParentScheduleRows + notices)', () => {
+  const days = [day({
+    dateKey: '2026-09-20',
+    weekday: 0,
+    kind: 'board',
+    lessons: [
+      lesson({ slotNumber: 1, timeLabel: '13:00-14:30', subject: '英', kind: 'regular' }),
+      lesson({ slotNumber: 2, timeLabel: '14:40-16:10', subject: '数', kind: 'regular' }),
+      lesson({ slotNumber: 3, timeLabel: '16:20-17:50', subject: '国', kind: 'attended' }),
+      lesson({ slotNumber: 4, timeLabel: '18:00-19:30', subject: '理', kind: 'absent' }),
+    ],
+  })]
+
+  it('これから受ける授業で、まだ連絡していない行だけタップできる', () => {
+    const rows = buildParentScheduleRows(days, '2026-09-13', [])
+    expect(rows.map((row) => [row.slotNumber, row.canReportAbsence, row.absenceStatus])).toEqual([
+      [1, true, 'none'],
+      [2, true, 'none'],
+      // 出席済み・お休みのコマは連絡できない(サーバーの 409 と同じ判定)。
+      [3, false, 'none'],
+      [4, false, 'none'],
+    ])
+  })
+
+  it('連絡済みの行はタップ不可で、未確認なら「休み連絡済」・確認済みなら「教室確認済」', () => {
+    const rows = buildParentScheduleRows(days, '2026-09-13', [
+      { dateKey: '2026-09-20', slotNumber: 1, acknowledged: false },
+      { dateKey: '2026-09-20', slotNumber: 2, acknowledged: true },
+    ])
+    expect(rows.map((row) => [row.slotNumber, row.canReportAbsence, row.absenceStatus])).toEqual([
+      [1, false, 'reported'],
+      [2, false, 'acknowledged'],
+      [3, false, 'none'],
+      [4, false, 'none'],
+    ])
+    expect(describeParentAbsenceBadge('reported')).toBe(PARENT_ABSENCE_BADGE_REPORTED)
+    expect(describeParentAbsenceBadge('acknowledged')).toBe(PARENT_ABSENCE_BADGE_ACKNOWLEDGED)
+    expect(describeParentAbsenceBadge('none')).toBeNull()
+  })
+
+  it('別の日・別の限の連絡はこの行のバッジにしない', () => {
+    const rows = buildParentScheduleRows(days, '2026-09-13', [
+      { dateKey: '2026-09-21', slotNumber: 1, acknowledged: true },
+      { dateKey: '2026-09-20', slotNumber: 5, acknowledged: true },
+    ])
+    expect(rows.every((row) => row.absenceStatus === 'none')).toBe(true)
+  })
+
+  it('当日のコマもタップできる・過去の日はできない(オーナー確定 3)', () => {
+    expect(buildParentScheduleRows(days, '2026-09-20', [])[0].canReportAbsence).toBe(true)
+    expect(buildParentScheduleRows(days, '2026-09-21', [])[0].canReportAbsence).toBe(false)
+  })
+
+  it('教室休み・授業の無い日の行はタップできない', () => {
+    const rows = buildParentScheduleRows([
+      day({ dateKey: '2026-09-23', kind: 'closed', lessons: [] }),
+      day({ dateKey: '2026-09-24', kind: 'board', lessons: [] }),
+    ], '2026-09-13', [])
+    expect(rows.every((row) => !row.canReportAbsence && row.absenceStatus === 'none')).toBe(true)
+  })
+
+  it('テンプレ補完(予定)のコマもタップできる(盤面がまだ無い先の予定こそ事前連絡が要る)', () => {
+    const rows = buildParentScheduleRows([
+      day({ dateKey: '2026-09-28', kind: 'template', lessons: [lesson({ slotNumber: 2, kind: 'regular', isTentative: true })] }),
+    ], '2026-09-13', [])
+    expect(rows[0].canReportAbsence).toBe(true)
+    expect(rows[0].isTentative).toBe(true)
+  })
+
+  it('連絡先の特定に必要な値(限・科目)を行が持つ', () => {
+    const rows = buildParentScheduleRows(days, '2026-09-13', [])
+    expect(toParentAbsenceTarget(rows[0])).toEqual({ dateKey: '2026-09-20', weekday: 0, slotNumber: 1, timeLabel: '13:00', subject: '英' })
+    // タップできない行からは対象を作らない(押せない行が押されても送らない)。
+    expect(toParentAbsenceTarget(rows[2])).toBeNull()
+    expect(buildParentAbsenceRowAriaLabel(rows[2])).toBeNull()
+    expect(buildParentAbsenceRowAriaLabel(rows[0])).toBe('9月20日(日) 1限 13:00〜 英 のお休みを連絡する')
+  })
+
+  it('既定の notices 引数は空(旧応答でもバッジが出ない・タップ判定は変わらない)', () => {
+    expect(buildParentScheduleRows(days, '2026-09-13').map((row) => row.absenceStatus)).toEqual(['none', 'none', 'none', 'none'])
+  })
+})
+
+describe('休み連絡の確認モーダル', () => {
+  const target = { dateKey: '2026-09-20', weekday: 6, slotNumber: 3, timeLabel: '16:20', subject: '英' }
+
+  it('対象は「9月20日(土) 3限 16:20〜 英」の形', () => {
+    expect(formatParentAbsenceTargetLabel(target)).toBe('9月20日(土) 3限 16:20〜 英')
+    // 科目・時刻が欠けても空白だけの見出しにしない。
+    expect(formatParentAbsenceTargetLabel({ ...target, subject: '', timeLabel: '' })).toBe('9月20日(土) 3限')
+  })
+
+  it('確認文と注意書き(確認済み表示・取り消しは電話)を出す', () => {
+    const described = describeParentAbsenceConfirm(target, '2026-09-13')
+    expect(described.target).toBe('9月20日(土) 3限 16:20〜 英')
+    expect(described.question).toBe(PARENT_ABSENCE_CONFIRM_QUESTION)
+    expect(described.notes).toEqual([PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE, PARENT_ABSENCE_CONFIRM_NOTE_CANCEL])
+    expect(described.notes[0]).toContain(PARENT_ABSENCE_BADGE_ACKNOWLEDGED)
+    expect(described.notes[1]).toContain('お電話')
+  })
+
+  // ★当日は教室が気づくのが遅れる恐れがあるので電話併用を促す(オーナー指示 2026-09-18)。
+  it('当日のコマだけ「電話でも連絡を」の注意を足す', () => {
+    const sameDay = describeParentAbsenceConfirm(target, '2026-09-20')
+    expect(sameDay.notes).toHaveLength(3)
+    expect(sameDay.notes[2]).toBe(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY)
+    expect(sameDay.notes[2]).toContain('お電話')
+    expect(describeParentAbsenceConfirm(target, '2026-09-19').notes).toHaveLength(2)
   })
 })
 
@@ -327,6 +465,9 @@ describe('PARENT_PORTAL_NOTES', () => {
     expect(PARENT_PORTAL_NOTES).toHaveLength(3)
     expect(PARENT_PORTAL_NOTES[0]).toContain('保存された時点')
     expect(PARENT_PORTAL_NOTES[1]).toContain('変更になる')
+    // ★2026-09-18: 導線は「ページ下部のフォーム」ではなく「授業の行をタップ」(フォームは廃止)。
+    expect(PARENT_PORTAL_NOTES[2]).toContain('授業の行をタップ')
     expect(PARENT_PORTAL_NOTES[2]).toContain('お電話')
+    expect(PARENT_PORTAL_NOTES[2]).not.toContain('ページ下部')
   })
 })

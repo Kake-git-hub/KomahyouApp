@@ -28,9 +28,13 @@
 // 公開定数・型(k_contract §1/§2 と一致させる)
 // ---------------------------------------------------------------------------
 
-// 表示は暦の 1 か月単位(オーナー指示 2026-09-14・確認リスト k-4/k-5)。移動できるのは今月の前後 1 か月だけ。
+// 表示は暦の 1 か月単位(オーナー指示 2026-09-14・確認リスト k-4/k-5)。動かせるのは先月と今月だけ。
+// ★来月は開かない(MONTHS_AFTER = 0・オーナー指示 2026-09-18「保護者ページの来月分は削除」)。
+//   ページを休み連絡専用にしたため、来月を開けると盤面が未作成(テンプレ補完)のコマにまで休み連絡が付く。
+//   月またぎの休み連絡は電話運用。1 に戻すと bounds.maxTo が来月末まで広がり、サーバーの POST 検証
+//   (today <= dateKey <= bounds.maxTo)も同時に広がるので、戻すときは両方の影響を確認する。
 export const PARENT_SCHEDULE_MONTHS_BEFORE = 1
-export const PARENT_SCHEDULE_MONTHS_AFTER = 1
+export const PARENT_SCHEDULE_MONTHS_AFTER = 0
 
 export type ParentScheduleLessonKind = 'regular' | 'makeup' | 'extra' | 'absent' | 'absent-no-makeup' | 'attended'
 
@@ -257,7 +261,7 @@ function monthEndOf(monthStartKey: string) {
 /**
  * 表示期間の丸め(spec §D-1 / §0 P-1)。**暦の 1 か月単位**で、エラーにせず丸める。
  * - `from`(無ければ `to`、どちらも無ければ今日)が属する月の 1 日〜末日を返す。
- * - 限界は今月の前後 1 か月(先月 1 日〜来月末日)。範囲外の月は近い端の月へ寄せる。
+ * - 限界は先月 1 日〜**今月末日**(来月は開かない・2026-09-18)。範囲外の月は近い端の月へ寄せる。
  */
 export function resolveParentScheduleRange(
   input: { from?: unknown; to?: unknown },
@@ -271,6 +275,23 @@ export function resolveParentScheduleRange(
   const anchor = isValidDateKey(input.from) ? input.from : isValidDateKey(input.to) ? input.to : todayKey
   const from = clampDateKey(monthStartOf(anchor), minFrom, maxMonthStart)
   return { from, to: monthEndOf(from), bounds: { minFrom, maxTo } }
+}
+
+/**
+ * その授業コマに保護者ページから「お休みの連絡」ができるか(2026-09-18 オーナー指示・休み連絡専用化)。
+ * - これから受ける予定の授業(`regular` / `makeup` / `extra`)で、
+ * - 日付が**今日以降**(＝当日のコマも受け付ける・オーナー確定 3)なら真。
+ * すでに結果が付いたコマ(`absent` / `absent-no-makeup` / `attended`)は偽。
+ * テンプレ補完(`isTentative`)でも真にする(盤面がまだ無い先の予定こそ事前連絡が要る)。
+ *
+ * ★サーバーの POST 検証(functions/src/parentPortal.ts)と公開ページの「タップできる行」は
+ *   **必ずこの 1 関数**を使う(判定を分散させない)。片側だけ条件を足すと
+ *   「押せるのに 409 で弾かれる」「押せないのに送れてしまう」の非対称になる。
+ */
+export function isParentLessonAbsenceReportable(kind: ParentScheduleLessonKind, dateKey: string, todayKey: string): boolean {
+  if (kind !== 'regular' && kind !== 'makeup' && kind !== 'extra') return false
+  if (!isValidDateKey(dateKey) || !isValidDateKey(todayKey)) return false
+  return dateKey >= todayKey
 }
 
 // ---------------------------------------------------------------------------
