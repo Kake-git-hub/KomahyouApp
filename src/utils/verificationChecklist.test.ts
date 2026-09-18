@@ -63,7 +63,7 @@ describe('確認リストの項目定義', () => {
   it('第14版: 結果待ちの b-2、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8、開発用教室での予行 y-1〜y-4(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     // 第16版: 準備 y-1 を先頭に置き、以降は読み込んだ日大前データの上で行う(項目ごとの準備を減らすため)。
-    expect(ids).toEqual(['y-1', 'b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3'])
+    expect(ids).toEqual(['y-1', 'b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5'])
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 複数会社展開 Phase 1(会社レイヤ): 既定値で見た目が変わらないことの確認 m-1〜m-3(版 v1.5.540 は据え置き)。
     for (const id of ['m-1', 'm-2', 'm-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.544')
@@ -71,6 +71,12 @@ describe('確認リストの項目定義', () => {
     // v1.5.549: s-1/s-2 は「パスワード → 確認モーダル」「7日 → 3日」の変更に合わせて手順を差し替えた。
     for (const id of ['s-1', 's-2']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.549')
     expect(byId.get('s-3')!.introducedIn).toBe('v1.5.548')
+    // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
+    for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
+    expect(byId.get('q-1')!.check!.join(' / ')).toContain('来月へは進めない')
+    expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
+    // オーナー確定: 処理済みは盤面を保存できた時点。保存せず閉じたら再通知されることを確かめる項目を必ず持つ。
+    expect(byId.get('q-5')!.steps.join(' / ')).toContain('保存せずにPCをリロード')
     expect(byId.get('s-1')!.title).not.toContain('パスワードは弾かれる')
     expect(byId.get('s-1')!.check!.join('\n')).toContain('復元しても戻らないもの')
     expect(byId.get('s-2')!.prep).toContain('保存はしない')

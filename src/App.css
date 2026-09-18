@@ -5426,8 +5426,21 @@ tr.sa-group-row td {
   }
 }
 
-/* 保護者からの連絡モーダル(docs/spec-parent-portal.md §E-2)。骨格は .submission-acknowledgement-* を流用し、
-   連絡固有の要素(送信者の未確認注記・URL 警告・本文)だけここで足す。既存規則は変更しない。 */
+/* 保護者からの休み連絡モーダル(docs/spec-parent-portal.md §0-5・§E-2)。骨格は .submission-acknowledgement-* を流用し、
+   休み連絡固有の要素(対象コマ・四択・畳んだときの入口)だけここで足す。既存規則は変更しない。 */
+.parent-message-modal {
+  width: min(640px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+}
+
+.parent-message-lead {
+  margin: 0;
+  color: #36506d;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
 .parent-message-meta {
   display: flex;
   flex-wrap: wrap;
@@ -5449,31 +5462,38 @@ tr.sa-group-row td {
   font-size: 13px;
 }
 
-.parent-message-sender {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 10px;
-  margin-bottom: 8px;
-  color: #36506d;
-  font-size: 14px;
+.parent-message-lesson {
+  margin: 0 0 8px;
+  color: #16314f;
+  font-size: 17px;
+  line-height: 1.5;
 }
 
-.parent-message-sender strong {
-  color: #16314f;
+.parent-message-lesson strong {
   font-weight: 800;
 }
 
-.parent-message-unverified {
+.parent-message-tentative {
+  margin-left: 8px;
   padding: 1px 8px;
   border-radius: 999px;
-  background: #fff1d6;
-  color: #7c4a00;
+  background: #f9e79f;
+  color: #7a5b00;
   font-size: 12px;
   font-weight: 700;
 }
 
-.parent-message-url-warning {
+.parent-message-unsaved-note {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #fff1d6;
+  color: #7c4a00;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.parent-message-error {
   margin: 0 0 8px;
   padding: 6px 10px;
   border-radius: 8px;
@@ -5483,17 +5503,47 @@ tr.sa-group-row td {
   font-weight: 700;
 }
 
-.parent-message-body {
-  margin: 0;
+.parent-message-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.parent-message-choice {
+  display: grid;
+  gap: 2px;
   padding: 10px 12px;
+  border: 1px solid #1f5d96;
   border-radius: 10px;
   background: #fff;
-  border: 1px solid #d7e2f1;
   color: #16314f;
+  text-align: left;
+  cursor: pointer;
+}
+
+.parent-message-choice:hover:not(:disabled) {
+  background: #eef4fb;
+}
+
+.parent-message-choice:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.parent-message-choice.is-manual {
+  border-color: #9aa9bb;
+  color: #36506d;
+}
+
+.parent-message-choice-label {
   font-size: 16px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font-weight: 800;
+}
+
+.parent-message-choice-description {
+  color: #5a7391;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .parent-message-actions {
@@ -5504,9 +5554,31 @@ tr.sa-group-row td {
 }
 
 .parent-message-actions-hint {
+  flex: 1 1 260px;
   color: #5a7391;
   font-size: 12px;
   line-height: 1.4;
+}
+
+/* 畳んだときの入口。盤面の操作を邪魔しない右下に固定し、QR提出通知の overlay(z-index:240)より下に置く。 */
+.parent-message-pill {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 230;
+  padding: 10px 18px;
+  border: none;
+  border-radius: 999px;
+  background: #b3541e;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  box-shadow: 0 8px 20px rgba(31, 53, 82, 0.3);
+  cursor: pointer;
+}
+
+.parent-message-pill:hover {
+  background: #9a4414;
 }
 
 /* 基本データ画面の保護者用QRモーダル(docs/spec-parent-portal.md §K-6)。骨格は .distribution-qr-* を流用。 */

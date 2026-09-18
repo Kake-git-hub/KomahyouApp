@@ -46,29 +46,100 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     expect(copyFnBody).toContain('stripSubmissionTokensFromInputs(session.studentInputs)')
   })
 
-  it('購読はフラグ ON かつ教室が開いているときだけ動き、cleanup で通知を捨てる(他教室の残留を防ぐ)', () => {
+  it('購読はフラグ ON かつ教室が開いているときだけ動き、cleanup で休み連絡の状態をすべて捨てる(他教室の残留を防ぐ)', () => {
     const subscribeIndex = APP_TSX.indexOf('subscribeParentMessages(actingClassroomId')
     expect(subscribeIndex).toBeGreaterThan(0)
-    const effect = APP_TSX.slice(Math.max(0, subscribeIndex - 600), subscribeIndex + 900)
+    const effect = APP_TSX.slice(Math.max(0, subscribeIndex - 600), subscribeIndex + 600)
     expect(effect).toContain('if (!isRemoteBackendEnabled || !actingClassroomId || !parentPortalQrEnabled) return')
+    expect(effect).toContain('setParentMessageEntries(entries)')
     expect(effect).toContain('unsubscribe()')
-    expect(effect).toContain('setParentMessageNotifications([])')
-    // 生徒名は ref から読む(クロージャが古いと改名・教室切替で他人の名前が出る)。
-    expect(effect).toContain('students: studentsRef.current')
+    expect(effect).toContain('resetParentAbsenceNoticeState()')
+    // 捨てる中身: 連絡の全件・保存待ち・盤面への一過性コマンド・エラー(前の教室の生徒名と保存待ちを持ち越さない・INV-08)。
+    const resetIndex = APP_TSX.indexOf('const resetParentAbsenceNoticeState = useCallback')
+    expect(resetIndex).toBeGreaterThan(0)
+    const reset = APP_TSX.slice(resetIndex, resetIndex + 700)
+    for (const call of ['setParentMessageEntries([])', 'setHiddenParentMessageIds([])', 'setPendingParentAbsenceFinalize([])', 'setParentAbsenceRequest(null)', 'setParentAbsenceErrors({})']) {
+      expect(reset).toContain(call)
+    }
   })
 
-  it('「確認」は 50 件ずつに分けて送り、成功した分だけ通知を消す(失敗時は残して再試行できる)', () => {
-    const confirmIndex = APP_TSX.indexOf('const confirmAllParentMessages = useCallback')
-    expect(confirmIndex).toBeGreaterThan(0)
-    const body = APP_TSX.slice(confirmIndex, confirmIndex + 1800)
-    // ★分割せずに全件渡すと、未読 51 件でサーバーが invalid-argument で丸ごと拒否し、モーダルが詰む。
-    expect(body).toContain('chunkParentMessageIds(messageIds)')
-    expect(body).toContain('markParentMessagesNotifiedViaFunction({ classroomId, messageIds: chunk })')
-    const awaitIndex = body.indexOf('await markParentMessagesNotifiedViaFunction')
-    const filterIndex = body.indexOf('setParentMessageNotifications((current) => current.filter')
-    expect(awaitIndex).toBeGreaterThan(0)
-    expect(filterIndex).toBeGreaterThan(awaitIndex)
-    expect(body).toContain('} catch (error) {')
+  it('一覧は「未処理の全件 − 保存待ち − 画面から外した分」で導出し、生徒名は名簿の現在名で組み立てる', () => {
+    const memoIndex = APP_TSX.indexOf('const parentMessageNotifications = useMemo')
+    expect(memoIndex).toBeGreaterThan(0)
+    const memo = APP_TSX.slice(memoIndex, memoIndex + 900)
+    expect(memo).toContain('pendingParentAbsenceFinalize.map((item) => item.messageId)')
+    expect(memo).toContain('hiddenParentMessageIds')
+    expect(memo).toContain('selectUnnotifiedParentMessages(parentMessageEntries, excludedIds)')
+    expect(memo).toContain('buildParentMessageNotifications(unread, { students, classroomName: actingClassroom?.name })')
+  })
+
+  // オーナー確定(2026-09-18): 盤面を変える選択(休み/振無休/振替先)は、盤面を保存できた時点で処理済みにする。
+  // 選んだ瞬間に 'notified' を送ると、保存し忘れて閉じたとき「連絡は処理済みなのに盤面は休みになっていない」が起きる。
+  it("四択: 'manual' だけその場で 'notified' を送る。盤面を変える 3 種は盤面へ一過性コマンドを送るだけ", () => {
+    const chooseIndex = APP_TSX.indexOf('const handleParentAbsenceChoice = useCallback')
+    expect(chooseIndex).toBeGreaterThan(0)
+    const body = APP_TSX.slice(chooseIndex, chooseIndex + 2200)
+    const manualIndex = body.indexOf("if (resolution === 'manual') {")
+    const requestIndex = body.indexOf('setParentAbsenceRequest({')
+    expect(manualIndex).toBeGreaterThan(0)
+    expect(requestIndex).toBeGreaterThan(manualIndex)
+    const notifiedCalls = [...body.matchAll(/stage: 'notified'/gu)]
+    expect(notifiedCalls).toHaveLength(1)
+    expect(notifiedCalls[0]!.index).toBeGreaterThan(manualIndex)
+    expect(notifiedCalls[0]!.index).toBeLessThan(requestIndex)
+    // 盤面以外の画面で押されたら盤面へ移ってから処理する。二重実行は busy で止める。
+    expect(body).toContain("if (screenRef.current !== 'board') navigateClassroomScreenRef.current('board')")
+    expect(body).toContain('if (!classroomId || parentAbsenceBusyId !== null) return')
+  })
+
+  it('盤面の処理結果: 必ず一過性コマンドを消費し、成功なら保存待ちへ積んで acknowledged を送る(notified は送らない)', () => {
+    const processedIndex = APP_TSX.indexOf('const handleParentAbsenceRequestProcessed = useCallback')
+    expect(processedIndex).toBeGreaterThan(0)
+    const body = APP_TSX.slice(processedIndex, processedIndex + 1900)
+    // Issue #46 同型: 成功でも失敗でも最初に消費する(消費しないと盤面の再マウントで再発火する)。
+    const consumeIndex = body.indexOf('setParentAbsenceRequest((current) => consumeParentAbsenceRequest(current, result.requestId))')
+    const failIndex = body.indexOf('if (!result.ok) {')
+    expect(consumeIndex).toBeGreaterThan(0)
+    expect(failIndex).toBeGreaterThan(consumeIndex)
+    expect(body).toContain('addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString() })')
+    expect(body).toContain("stage: 'acknowledged', resolution: result.action")
+    expect(body).not.toContain("stage: 'notified'")
+  })
+
+  it('保存の成功点(saveClassroomSnapshotViaFunction の直後)でだけ、保存待ちを処理済みにする', () => {
+    const saveIndex = APP_TSX.indexOf('result = await saveClassroomSnapshotViaFunction({')
+    expect(saveIndex).toBeGreaterThan(0)
+    const afterSave = APP_TSX.slice(saveIndex, saveIndex + 1400)
+    expect(afterSave).toContain('finalizeParentAbsenceNoticesAfterSaveRef.current(targetClassroom.id, nextItem.snapshot.savedAt)')
+    const finalizeIndex = APP_TSX.indexOf('const finalizeParentAbsenceNoticesAfterSave = useCallback')
+    expect(finalizeIndex).toBeGreaterThan(0)
+    const finalize = APP_TSX.slice(finalizeIndex, finalizeIndex + 1700)
+    // 保存した教室・その保存に含まれる分だけ(INV-08・保存の通信中に処理した分は次の保存へ)。
+    expect(finalize).toContain('splitPendingParentAbsenceFinalize(pendingBefore, { classroomId: savedClassroomId, snapshotSavedAt })')
+    // ★分割せずに全件渡すと、51 件でサーバーが invalid-argument で丸ごと拒否する。
+    expect(finalize).toContain('chunkParentMessageIds(toFinalize)')
+    expect(finalize).toContain("markParentMessagesNotifiedViaFunction({ classroomId: savedClassroomId, messageIds: chunk, stage: 'notified' })")
+    // 失敗した分は保存待ちへ戻す(次の保存で再送)。
+    expect(finalize).toContain('reduce(addPendingParentAbsenceFinalize, current)')
+    // 'notified' を送るのは「何もしない」とここの 2 か所だけ。
+    expect([...APP_TSX.matchAll(/stage: 'notified'/gu)]).toHaveLength(2)
+  })
+
+  it('教室データが丸ごと差し替わったら(boardMountKey)保存待ちと一過性コマンドを捨てる(休みが消えたのに処理済みにしない)', () => {
+    const effectIndex = APP_TSX.indexOf('}, [boardMountKey, setPendingParentAbsenceFinalize])')
+    expect(effectIndex).toBeGreaterThan(0)
+    const effect = APP_TSX.slice(effectIndex - 400, effectIndex)
+    expect(effect).toContain('setPendingParentAbsenceFinalize([])')
+    expect(effect).toContain('setParentAbsenceRequest(null)')
+  })
+
+  it('盤面へ一過性コマンドと結果・配置終了のコールバックを渡す', () => {
+    const mountIndex = APP_TSX.indexOf('<ScheduleBoardScreen')
+    expect(mountIndex).toBeGreaterThan(0)
+    const props = APP_TSX.slice(mountIndex, mountIndex + 1600)
+    expect(props).toContain('parentAbsenceRequest={parentAbsenceRequest}')
+    expect(props).toContain('onParentAbsenceRequestProcessed={handleParentAbsenceRequestProcessed}')
+    expect(props).toContain('onParentAbsencePlacementSettled={handleParentAbsencePlacementSettled}')
   })
 
   it('通知モーダルは全画面共通のラッパーに置かれ、件数 0 の早期 return にも含まれている', () => {
@@ -80,22 +151,22 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     expect(modalIndex).toBeGreaterThan(wrapperIndex)
     // 早期 return の条件に保護者連絡が入っていないと、連絡だけが来たときモーダルが出ない。
     expect(APP_TSX).toContain('if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !staleConflictBanner)')
-    // useCallback の deps に通知と確認中フラグが入っていないと、新着で再描画されない。
+    // useCallback の deps に通知・畳み状態・処理中・エラー・四択ハンドラが入っていないと、再描画されない。
     const depsIndex = APP_TSX.indexOf('}, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry')
     expect(depsIndex).toBeGreaterThan(modalIndex)
-    const deps = APP_TSX.slice(depsIndex, depsIndex + 400)
-    expect(deps).toContain('parentMessageNotifications')
-    expect(deps).toContain('isParentMessageConfirming')
-    expect(deps).toContain('confirmAllParentMessages')
+    const deps = APP_TSX.slice(depsIndex, depsIndex + 500)
+    for (const dep of ['parentMessageNotifications', 'isParentMessagesModalCollapsed', 'parentAbsenceBusyId', 'parentAbsenceErrors', 'handleParentAbsenceChoice']) {
+      expect(deps).toContain(dep)
+    }
   })
 
-  it('ログアウト・ユーザー不在で通知を捨てる(別アカウントに他教室の生徒名を見せない)', () => {
+  it('ログアウト・ユーザー不在で休み連絡の状態を捨てる(別アカウントに他教室の生徒名を見せない)', () => {
     const logoutIndex = APP_TSX.indexOf('const logout = useCallback')
     expect(logoutIndex).toBeGreaterThan(0)
-    expect(APP_TSX.slice(logoutIndex, logoutIndex + 1200)).toContain('setParentMessageNotifications([])')
+    expect(APP_TSX.slice(logoutIndex, logoutIndex + 1200)).toContain('resetParentAbsenceNoticeState()')
     const userEffectIndex = APP_TSX.indexOf('if (currentUserId) return')
     expect(userEffectIndex).toBeGreaterThan(0)
-    expect(APP_TSX.slice(userEffectIndex, userEffectIndex + 200)).toContain('setParentMessageNotifications([])')
+    expect(APP_TSX.slice(userEffectIndex, userEffectIndex + 200)).toContain('resetParentAbsenceNoticeState()')
   })
 
   it('基本データ画面へ教室ID・教室名・フラグ・発行/失効を渡し、OFF のときは発行口を渡さない', () => {

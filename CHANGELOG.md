@@ -15,6 +15,10 @@
 ## 未リリース
 
 <!-- ここに編集内容を1行ずつ追記する -->
+- feat: 保護者QRを**「休み連絡」専用**へ作り替え(オーナー指示 2026-09-18・開発用教室＋staging 限定のまま・docs/spec-parent-portal.md §0-5)。着手前に懸案 4 点をオーナーと確定: ①来月は出さない(先月・今月だけ。月またぎは電話) ②当日も受け付け、室長が四択を押したら保護者ページに「教室確認済」を出す ③「振替先を今決める」= 休みにして未消化振替へ戻してから振替配置モードへ(途中でやめても休みは残る) ④処理済みにするのは**盤面を保存できた時点**(「何もしない」だけ即時。保存前に閉じたら次回もう一度通知)。
+  - 盤面側: 文面モーダルを四択モーダル(休み／振無休／振替先を今決める／何もしない)へ置換。盤面を変える 3 種は App→盤面の一過性コマンド `parentAbsenceRequest`(Issue #46 同型: 結果を必ず返し App が消費)になり、盤面は対象日の週へ移動 → 純関数 `resolveParentAbsenceTarget` で本人の席を特定 → **メニューの「休み」「振無休」と同じ 1 本の処理**(`markStudentAbsentAt` / `markStudentAbsentNoMakeupAt` へ切り出し・INV-06 の会計経路を増やさない)を呼ぶ。席が無い・テンプレ編集中は盤面を変えず理由を表示。「振替先を今決める」は続けて既存の `handleSelectMakeupStockEntry`(振替元日付つき)へ入る。
+  - 保存非対称の防止(QR提出反映と同型の穴を作らない): 四択で反映した連絡は「保存待ち」に積み、保存の成功点(`saveClassroomSnapshotViaFunction` 直後)で**保存した教室・その保存のスナップショット作成時刻以前の分だけ** `stage:'notified'` を送る(50 件分割・失敗分は戻す)。教室切替/ログアウト/フラグ OFF と、教室データの丸ごと差し替え(`boardMountKey`=開き直し・復元・直前に戻す)で保存待ちを捨て、連絡を一覧へ戻す(INV-08)。購読は毎回「未処理の全件」を受け取る形へ変更。
+  - (src/utils/parentMessages.ts・src/components/schedule-board/parentAbsenceTarget.ts(新規)・ScheduleBoardScreen.tsx・src/components/parent-portal/ParentMessagesModal.tsx・src/integrations/firebase/parentPortal.ts・src/App.tsx・src/App.css・テスト parentMessages.test.ts / parentAbsenceTarget.test.ts / parentAbsenceRequest.wiring.test.ts / parentPortal.wiring.test.ts / integrations parentPortal.test.ts・確認リスト q-1〜q-5 追加(版 v1.5.540 据え置き))
 
 ## v1.5.549 (2026-09-18)
 - feat: 室長の自教室復元(フラグ `managerSelfRestore`・開発用教室限定)をオーナー指示で変更。(1) **パスワード要求をやめ、画面中央の大きな確認モーダル**(alertdialog・幅760px・文字17px〜)を必ず挟む。(2) そのモーダルに**「復元しても戻らないもの」**を表示し、内部用語をアプリ上の呼び名へ置換(授業台帳→生徒日程表の「通常授業履歴」に出る記録／操作ログ→操作の記録。内部語の混入はテストで禁止)。(3) 対象を**直近7日→3日**へ短縮。(4) 開発者の入口が開発者画面と二重になる点はオーナー了承。実装は「取得(準備)」と「読込(確定操作)」を別ハンドラに分け、準備段では画面のデータを書き換えず、確定時に取得した教室IDでもう一度3者一致を照合、教室を開き直したら確認待ちデータも破棄(INV-08)。(src/components/backup-restore/managerSelfRestore.ts `buildManagerSelfRestoreConfirmation`・BackupRestoreScreen.tsx・App.tsx `prepareOwnClassroomRestore`/`confirmOwnClassroomRestore`・App.css・docs/spec-save-restore.md §4-1・確認リスト s-1/s-2 差し替え)
