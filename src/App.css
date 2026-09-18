@@ -3691,6 +3691,88 @@ tr.sa-group-row td {
   background: #f7f8fa;
 }
 
+/* 室長の自教室復元の確認モーダル(オーナー指示 2026-09-18): 画面中央に大きく出し、「復元しても戻らないもの」を目立たせる。 */
+.auto-assign-modal.self-restore-confirm-modal {
+  max-width: 760px;
+  padding: 24px 32px 0;
+  gap: 12px;
+  font-size: 17px;
+  line-height: 1.55;
+  border: 3px solid #d92d20;
+}
+
+.self-restore-confirm-modal p,
+.self-restore-confirm-modal ul {
+  margin: 0;
+}
+
+.self-restore-confirm-modal ul {
+  padding-left: 1.3em;
+}
+
+.self-restore-confirm-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: #16314f;
+}
+
+.self-restore-confirm-headline {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.5;
+  color: #b42318;
+}
+
+.self-restore-confirm-scale {
+  display: grid;
+  gap: 4px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #eef4ff;
+  border: 1px solid #b6cdf5;
+  color: #16314f;
+}
+
+.self-restore-confirm-scale-hint {
+  font-size: 15px;
+}
+
+.self-restore-confirm-not-restored {
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: #fffaeb;
+  border: 2px solid #f79009;
+  color: #7a2e0e;
+}
+
+.self-restore-confirm-not-restored strong {
+  font-size: 19px;
+}
+
+.self-restore-confirm-notes {
+  color: #16314f;
+}
+
+/* ボタン行は常に見えるよう下端へ固定する(768px 高の画面で本文がスクロールしても「やめる／読み込む」が隠れない)。 */
+.self-restore-confirm-actions {
+  position: sticky;
+  bottom: 0;
+  padding: 12px 0 20px;
+  background: #fff;
+}
+
+.self-restore-confirm-actions button {
+  font-size: 17px;
+  padding: 12px 24px;
+}
+
+.self-restore-confirm-button {
+  background: #b42318;
+  border-color: #b42318;
+}
+
 /* 基本データ削除確認モーダル（生徒/講師）: 不可逆・未消化ストック・退塾日での非表示案内を強調する。 */
 .basic-data-delete-modal .basic-data-delete-warning {
   margin: 0;

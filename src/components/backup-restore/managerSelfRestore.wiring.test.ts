@@ -1,7 +1,7 @@
 // 室長の自教室復元の配線ガード(source-scan・2026-09-18・docs/spec-save-restore.md §4-1)。
 //
 // ⚠️ 本番データ保護: 復元は 2026-06-06 に教室取り違え事故を起こした最重要の慎重操作。描画テスト環境が無いので、
-// 落とすと事故になる配線(他教室IDを受け取らない／再認証が取得より先／サーバーへ直接書かない／フラグで入口を閉じる)を
+// 落とすと事故になる配線(他教室IDを受け取らない／確認モーダルを経ないと読み込まない／サーバーへ直接書かない／フラグで入口を閉じる)を
 // App.tsx・BackupRestoreScreen.tsx の字面で固定する(作法は parentPortal.wiring.test.ts と同じ)。
 
 import { readFileSync } from 'node:fs'
@@ -11,66 +11,113 @@ import { describe, expect, it } from 'vitest'
 
 const APP_TSX = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
 const SCREEN_TSX = readFileSync(fileURLToPath(new URL('./BackupRestoreScreen.tsx', import.meta.url)), 'utf8')
+const APP_CSS = readFileSync(fileURLToPath(new URL('../../App.css', import.meta.url)), 'utf8')
 const ADMIN_FUNCTIONS_TS = readFileSync(fileURLToPath(new URL('../../integrations/firebase/adminFunctions.ts', import.meta.url)), 'utf8')
 
-function sliceHandler(): string {
-  const start = APP_TSX.indexOf('const restoreOwnClassroomFromServerBackup = useCallback(')
+function sliceBetween(startNeedle: string, endNeedle: string): string {
+  const start = APP_TSX.indexOf(startNeedle)
   expect(start).toBeGreaterThan(0)
-  const end = APP_TSX.indexOf('const exportBasicDataTemplate = useCallback(', start)
+  const end = APP_TSX.indexOf(endNeedle, start)
   expect(end).toBeGreaterThan(start)
   return APP_TSX.slice(start, end)
 }
+
+// 準備(取得して確認待ちにする)と、確定操作(確認モーダルで押したときだけ読み込む)の 2 段。
+const slicePrepare = () => sliceBetween('const prepareOwnClassroomRestore = useCallback(', 'const cancelOwnClassroomRestore = useCallback(')
+const sliceConfirm = () => sliceBetween('const confirmOwnClassroomRestore = useCallback(', 'const exportBasicDataTemplate = useCallback(')
 
 describe('室長の自教室復元の配線(App.tsx)', () => {
   it('入口フラグはリモート有効 ＋ managerSelfRestore の両方で判定する', () => {
     expect(APP_TSX).toContain("isRemoteBackendEnabled && isFeatureEnabledForClassroom('managerSelfRestore', actingClassroom)")
   })
 
-  it('ハンドラは教室IDを引数に取らない(復元元も復元先も actingClassroomId 固定)', () => {
-    const handler = sliceHandler()
-    expect(handler).toContain('async (backupDateKey: string, password: string): Promise<ManagerSelfRestoreResult>')
-    expect(handler).toContain('const restoreClassroomId = actingClassroomId')
-    expect(handler).toContain('downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, restoreClassroomId)')
+  it('準備ハンドラは教室IDを引数に取らない(復元元も復元先も actingClassroomId 固定)', () => {
+    const prepare = slicePrepare()
+    expect(prepare).toContain('async (backupDateKey: string) => {')
+    expect(prepare).toContain('const restoreClassroomId = actingClassroomId')
+    expect(prepare).toContain('downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, restoreClassroomId)')
   })
 
-  it('ガード → パスワード再認証 → 取得 → 教室ID照合 → 最終確認 → 読込 の順で進む', () => {
-    const handler = sliceHandler()
+  it('準備: ガード → 取得 → 教室ID照合 → 確認待ちに保持、の順。ここでは画面のデータを書き換えない', () => {
+    const prepare = slicePrepare()
     const order = [
       'resolveManagerSelfRestoreGuard({',
-      'await reauthenticateFirebaseUser(password)',
       'await downloadClassroomFromFirebaseServerAutoBackup(',
       'isRestoreSourceForClassroom(source.classroomId, restoreClassroomId)',
-      'window.confirm(buildManagerSelfRestoreConfirmLines({',
-      "saveUndoSnapshot(`サーバーバックアップ復元",
-      'applyClassroomPayloadToState(restoredPayload',
-    ].map((needle) => handler.indexOf(needle))
+      'setManagerSelfRestorePending({',
+    ].map((needle) => prepare.indexOf(needle))
     order.forEach((index) => expect(index).toBeGreaterThan(0))
     expect([...order].sort((left, right) => left - right)).toEqual(order)
-    // 取得中に開いている教室が変わったら読み込まない。
-    expect(handler).toContain('actingClassroomIdRef.current !== restoreClassroomId')
+    // 取得中に開いている教室が変わったら確認待ちにしない。
+    expect(prepare).toContain('actingClassroomIdRef.current !== restoreClassroomId')
+    // 準備段では読み込まない(確認モーダルを必ず挟む・オーナー指示 2026-09-18)。
+    expect(prepare).not.toContain('applyClassroomPayloadToState(')
+    expect(prepare).not.toContain('setWorkspaceClassrooms(')
+    expect(prepare).not.toContain('saveUndoSnapshot(')
+    expect(prepare).toContain('confirmation: buildManagerSelfRestoreConfirmation({')
   })
 
-  it('室長ガードへ担当教室と開いている教室を渡す(3 者一致の判定材料を落とさない)', () => {
-    const handler = sliceHandler()
-    expect(handler).toContain('role: currentUser?.role')
-    expect(handler).toContain('assignedClassroomId: currentUser?.assignedClassroomId')
+  it('確定操作: 確認待ちが無ければ何もしない → 取得した教室IDでもう一度 3 者一致を照合 → Undo を取ってから読込', () => {
+    const confirm = sliceConfirm()
+    const order = [
+      'if (!pending) return',
+      'resolveManagerSelfRestoreGuard({',
+      'targetClassroomId: pending.classroomId',
+      "saveUndoSnapshot(`サーバーバックアップ復元",
+      'applyClassroomPayloadToState(restoredPayload',
+    ].map((needle) => confirm.indexOf(needle))
+    order.forEach((index) => expect(index).toBeGreaterThan(0))
+    expect([...order].sort((left, right) => left - right)).toEqual(order)
+    expect(confirm).toContain('actingClassroomId: actingClassroomIdRef.current')
+  })
+
+  it('室長ガードへ担当教室と開いている教室を渡す(3 者一致の判定材料を落とさない・準備と確定の両方)', () => {
+    for (const body of [slicePrepare(), sliceConfirm()]) {
+      expect(body).toContain('role: currentUser?.role')
+      expect(body).toContain('assignedClassroomId: currentUser?.assignedClassroomId')
+    }
   })
 
   it('サーバーへ直接書かない(確定は既存の保存経路だけ)・書き換えるのは自教室のスロットだけ', () => {
-    const handler = sliceHandler()
-    expect(handler).not.toContain('saveClassroomSnapshotViaFunction')
-    expect(handler).not.toContain('markStateLoadedClean')
-    expect(handler).toContain('replaceClassroomData(current, restoreClassroomId, restoredPayload)')
-    expect(handler).toContain('loadedEditingClassroomIdRef.current = restoreClassroomId')
+    const confirm = sliceConfirm()
+    for (const body of [slicePrepare(), confirm]) {
+      expect(body).not.toContain('saveClassroomSnapshotViaFunction')
+      expect(body).not.toContain('markStateLoadedClean')
+    }
+    expect(confirm).toContain('replaceClassroomData(current, restoreClassroomId, restoredPayload)')
+    expect(confirm).toContain('loadedEditingClassroomIdRef.current = restoreClassroomId')
   })
 
   it('自教室の復元なので他教室コピー用のトークン剥がしは通さない(参照共有を断つクローンは行う)', () => {
-    const handler = sliceHandler()
-    expect(handler).not.toContain('buildDevelopmentClassroomCopyPayload')
-    expect(handler).toContain("sanitizeClassroomPayload({ ...cloneInitialValue(source.data), screen: 'board' })")
+    const prepare = slicePrepare()
+    expect(prepare).not.toMatch(/buildDevelopmentClassroomCopyPayload\(/u)
+    expect(prepare).toContain("sanitizeClassroomPayload({ ...cloneInitialValue(source.data), screen: 'board' })")
   })
 
-  it('一覧は直近 7 日の範囲問い合わせ＋純関数フィルタで作る', () => {
+  it('パスワード再認証は要求しない(オーナー指示 2026-09-18: 確認モーダルへ変更)', () => {
+    for (const body of [slicePrepare(), sliceConfirm()]) expect(body).not.toContain('reauthenticateFirebaseUser')
+  })
+
+  it('確認待ちの復元データは Undo と同じ 3 経路(教室を開き直す・ワークスペース読込・ログアウト)で破棄する', () => {
+    // 8316830 / v1.5.300 の教訓: 前の状態のデータをメモリに残すものは、全経路で対称に捨てる(1 箇所だけにしない)。
+    for (const startNeedle of ['const openClassroom = useCallback(', 'const applyWorkspaceSnapshot = useCallback(', 'const logout = useCallback(']) {
+      const body = sliceBetween(startNeedle, '\n  }, [')
+      expect(body, startNeedle).toContain('setUndoSnapshot(null)')
+      expect(body, startNeedle).toContain('setManagerSelfRestorePending(null)')
+    }
+  })
+
+  it('確定操作は確認待ちをまず消費し(再入防止)、バックアップ/復元画面以外からは読み込まない', () => {
+    const confirm = sliceConfirm()
+    const consumeIndex = confirm.indexOf('setManagerSelfRestorePending(null)')
+    const screenIndex = confirm.indexOf("if (screenRef.current !== 'backup-restore') return")
+    const applyIndex = confirm.indexOf('applyClassroomPayloadToState(restoredPayload')
+    expect(consumeIndex).toBeGreaterThan(0)
+    expect(screenIndex).toBeGreaterThan(consumeIndex)
+    expect(applyIndex).toBeGreaterThan(screenIndex)
+  })
+
+  it('一覧は直近 3 日の範囲問い合わせ＋純関数フィルタで作る', () => {
     expect(APP_TSX).toContain('listRecentFirebaseServerAutoBackupSummaries(resolveManagerSelfRestoreCutoffIso(now))')
     expect(APP_TSX).toContain('listManagerSelfRestoreCandidates(summaries, now)')
   })
@@ -78,7 +125,7 @@ describe('室長の自教室復元の配線(App.tsx)', () => {
   it('一覧取得(loadManagerSelfRestoreCandidates)も同じガードを通す', () => {
     const start = APP_TSX.indexOf('const loadManagerSelfRestoreCandidates = useCallback(')
     expect(start).toBeGreaterThan(0)
-    const body = APP_TSX.slice(start, APP_TSX.indexOf('const restoreOwnClassroomFromServerBackup = useCallback(', start))
+    const body = APP_TSX.slice(start, APP_TSX.indexOf('const prepareOwnClassroomRestore = useCallback(', start))
     const guardIndex = body.indexOf('resolveManagerSelfRestoreGuard({')
     const listIndex = body.indexOf('listRecentFirebaseServerAutoBackupSummaries(')
     expect(guardIndex).toBeGreaterThan(0)
@@ -105,7 +152,9 @@ describe('室長の自教室復元の配線(App.tsx)', () => {
 
   it('復元画面へフラグとハンドラを渡す', () => {
     expect(APP_TSX).toContain('managerSelfRestoreEnabled={managerSelfRestoreEnabled}')
-    expect(APP_TSX).toContain('onRestoreOwnClassroomFromBackup={restoreOwnClassroomFromServerBackup}')
+    expect(APP_TSX).toContain('managerSelfRestoreConfirmation={managerSelfRestorePending?.confirmation ?? null}')
+    expect(APP_TSX).toContain('onConfirmOwnClassroomRestore={confirmOwnClassroomRestore}')
+    expect(APP_TSX).toContain('onCancelOwnClassroomRestore={cancelOwnClassroomRestore}')
   })
 })
 
@@ -115,10 +164,21 @@ describe('室長の自教室復元の配線(BackupRestoreScreen.tsx)', () => {
     expect(SCREEN_TSX).toContain('data-testid="backup-restore-self-restore-panel"')
   })
 
-  it('パスワード未入力では実行しない・パスワード違いはモーダルに残して打ち直せる', () => {
-    expect(SCREEN_TSX).toContain('if (!selfRestorePassword) {')
-    expect(SCREEN_TSX).toContain("if (!result.ok && result.reason === 'password') {")
-    expect(SCREEN_TSX).toContain('type="password"')
-    expect(SCREEN_TSX).toContain('MANAGER_SELF_RESTORE_MODAL_NOTES.map(')
+  it('確認モーダルは確認待ちがあるときだけ出し、「復元しても戻らないもの」を描く。パスワード欄は無い', () => {
+    expect(SCREEN_TSX).toContain('{managerSelfRestoreEnabled && managerSelfRestoreConfirmation ? (')
+    expect(SCREEN_TSX).toContain('self-restore-confirm-modal')
+    expect(SCREEN_TSX).toContain('role="alertdialog"')
+    expect(SCREEN_TSX).toContain('managerSelfRestoreConfirmation.notRestoredItems.map(')
+    expect(SCREEN_TSX).toContain('onConfirmOwnClassroomRestore?.()')
+    expect(SCREEN_TSX).toContain('onCancelOwnClassroomRestore?.()')
+    expect(SCREEN_TSX).not.toContain('type="password"')
+  })
+
+  it('確認モーダルは大きく出す(幅・文字サイズを専用クラスで上書き)', () => {
+    const start = APP_CSS.indexOf('.auto-assign-modal.self-restore-confirm-modal {')
+    expect(start).toBeGreaterThan(0)
+    const rule = APP_CSS.slice(start, APP_CSS.indexOf('}', start))
+    expect(rule).toContain('max-width: 760px')
+    expect(rule).toContain('font-size: 17px')
   })
 })
