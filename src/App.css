@@ -5583,6 +5583,76 @@ tr.sa-group-row td {
   background: #9a4414;
 }
 
+/* 盤面ツールバー「保護者連絡」の履歴(2026-09-19)。骨格は .submission-acknowledgement-* / .parent-message-modal を流用。 */
+.parent-contact-history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.parent-contact-history-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 7.5em 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid #d7e2f1;
+  border-radius: 12px;
+  background: #f7fafe;
+  color: #16314f;
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+}
+
+.parent-contact-history-row.is-clickable {
+  border-color: #b3541e;
+  background: #fff6ef;
+  cursor: pointer;
+}
+
+.parent-contact-history-row.is-clickable:hover {
+  background: #ffe9d8;
+}
+
+.parent-contact-history-received-at {
+  color: #4a6583;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.parent-contact-history-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.parent-contact-history-status.is-confirmed {
+  background: #e3f4e6;
+  color: #1d6b2f;
+}
+
+.parent-contact-history-status.is-pending-save {
+  background: #fff3c9;
+  color: #7a5a00;
+}
+
+.parent-contact-history-status.is-unconfirmed {
+  background: #b3541e;
+  color: #fff;
+}
+
+.parent-contact-history-empty {
+  margin: 0;
+  color: #4a6583;
+  font-size: 15px;
+}
+
 /* 基本データ画面の保護者用QRモーダル(docs/spec-parent-portal.md §K-6)。骨格は .distribution-qr-* を流用。 */
 .parent-portal-qr-student {
   color: #16314f;

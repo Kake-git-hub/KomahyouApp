@@ -261,6 +261,78 @@ export function splitPendingParentAbsenceFinalize(
   return { toFinalize, returned, remaining }
 }
 
+// --- 「保護者連絡」ボタンの履歴(2026-09-19 オーナー指示) -------------------------------------------
+// 盤面ツールバーの「保護者連絡」ボタンで開く一覧。休み連絡の受信日時を新しい順に並べ、モーダルで処理したものに「確認済」を付ける。
+// - confirmed    = 処理済み(notifiedAt あり)。または処理済み化を送った直後で購読がまだ追いついていない連絡(hiddenIds)。
+// - pending-save = 四択で盤面へ反映済み・保存待ち。盤面を保存すると confirmed になる(保存せず閉じれば unconfirmed へ戻る)。
+// - unconfirmed  = 未処理。クリックで休み連絡のモーダルを開いて同じ四択で処理する(モーダルの一覧と同じ集合になるよう、
+//                  除外条件を parentMessageNotifications と揃える: notifiedAt なし・保存待ちでない・hidden でない)。
+// 確認済は新しい順に confirmedLimit 件まで(古いものは**見た目上**消すだけ。Firestore の doc は消さない)。未確認・保存待ちは件数制限なし。
+export type ParentContactHistoryStatus = 'confirmed' | 'pending-save' | 'unconfirmed'
+
+export type ParentContactHistoryRow = {
+  id: string
+  studentName: string
+  createdAt: string
+  absence: ParentAbsenceDetail
+  status: ParentContactHistoryStatus
+  // 四択のどれで処理したか(確認済・保存待ちの行に添える)。未確認は null。
+  resolution: ParentAbsenceResolution | null
+}
+
+export const PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT = 10
+
+// 未処理の購読(全件)と履歴の購読(直近 N 件)を id で合流する。同じ id は未処理の購読側を優先
+// (どちらもライブだが、モーダルの一覧と同じ doc を見ることで行の状態とモーダルの内容を食い違わせない)。
+export function mergeParentMessageEntries(unnotified: readonly ParentMessageEntry[], history: readonly ParentMessageEntry[]): ParentMessageEntry[] {
+  const byId = new Map<string, ParentMessageEntry>()
+  for (const entry of history) byId.set(entry.id, entry)
+  for (const entry of unnotified) byId.set(entry.id, entry)
+  return Array.from(byId.values())
+}
+
+export function buildParentContactHistory(
+  entries: readonly ParentMessageEntry[],
+  context: {
+    students: readonly StudentRow[]
+    pendingIds?: ReadonlySet<string>
+    hiddenIds?: ReadonlySet<string>
+    confirmedLimit?: number
+  },
+): ParentContactHistoryRow[] {
+  const pendingIds = context.pendingIds ?? new Set<string>()
+  const hiddenIds = context.hiddenIds ?? new Set<string>()
+  const limit = Number.isInteger(context.confirmedLimit) && (context.confirmedLimit as number) >= 0 ? (context.confirmedLimit as number) : PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT
+  const entryById = new Map<string, ParentMessageEntry>()
+  for (const entry of entries) entryById.set(entry.id, entry)
+  // 生徒名の解決(名簿の現在名優先)はモーダルと同じ 1 本を使う。
+  const named = buildParentMessageNotifications(Array.from(entryById.values()), { students: context.students })
+  const rows = named.map<ParentContactHistoryRow>((item) => {
+    const entry = entryById.get(item.id)!
+    const status: ParentContactHistoryStatus = entry.notifiedAt || hiddenIds.has(entry.id) ? 'confirmed' : pendingIds.has(entry.id) ? 'pending-save' : 'unconfirmed'
+    return {
+      id: item.id,
+      studentName: item.studentName,
+      createdAt: item.createdAt,
+      absence: item.absence,
+      status,
+      resolution: status === 'unconfirmed' ? null : entry.resolution,
+    }
+  })
+  // 新しい連絡が上。同時刻は id で安定化。
+  rows.sort((left, right) => {
+    if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? 1 : -1
+    if (left.id === right.id) return 0
+    return left.id < right.id ? -1 : 1
+  })
+  let confirmedCount = 0
+  return rows.filter((row) => {
+    if (row.status !== 'confirmed') return true
+    confirmedCount += 1
+    return confirmedCount <= limit
+  })
+}
+
 // 購読教室と違う教室の連絡を一覧に出さない(INV-08)。教室を切り替えた直後の 1 レンダーは、前の教室の連絡(entries)と
 // 新しい教室の名簿・教室IDが同時に見える。ここで落とさないと、その一瞬に四択を押したとき、前の教室の生徒ID(sNNN は
 // 教室ごとに独立採番)で**新しい教室の別人**を休みにしうる(レビュー指摘 2026-09-19)。購読層の doc.classroomId ガードと対。

@@ -3,6 +3,7 @@ import {
   issueStudentPortalTokenViaFunction,
   markParentMessagesNotifiedViaFunction,
   revokeStudentPortalTokenViaFunction,
+  subscribeParentMessageHistory,
   subscribeParentMessages,
 } from './parentPortal'
 import type { ParentMessageEntry } from '../../utils/parentMessages'
@@ -13,6 +14,8 @@ const callableFactory = vi.fn()
 const callableInvoke = vi.fn()
 const collectionMock = vi.fn((_db: unknown, ...segments: string[]) => ({ path: segments }))
 const whereMock = vi.fn((...args: unknown[]) => ({ where: args }))
+const orderByMock = vi.fn((...args: unknown[]) => ({ orderBy: args }))
+const limitMock = vi.fn((...args: unknown[]) => ({ limit: args }))
 const queryMock = vi.fn((...args: unknown[]) => ({ query: args }))
 let onSnapshotCallback: ((snapshot: unknown) => void) | null = null
 let onSnapshotErrorCallback: ((error: { code?: string }) => void) | null = null
@@ -40,6 +43,8 @@ vi.mock('firebase/firestore', () => ({
   collection: (db: unknown, ...segments: string[]) => collectionMock(db, ...segments),
   query: (...args: unknown[]) => queryMock(...args),
   where: (...args: unknown[]) => whereMock(...args),
+  orderBy: (...args: unknown[]) => orderByMock(...args),
+  limit: (...args: unknown[]) => limitMock(...args),
   onSnapshot: (_query: unknown, callback: (snapshot: unknown) => void, errorCallback?: (error: { code?: string }) => void) => {
     onSnapshotCallback = callback
     onSnapshotErrorCallback = errorCallback ?? null
@@ -53,6 +58,8 @@ beforeEach(() => {
   callableInvoke.mockReset()
   collectionMock.mockClear()
   whereMock.mockClear()
+  orderByMock.mockClear()
+  limitMock.mockClear()
   queryMock.mockClear()
   onSnapshotCallback = null
   onSnapshotErrorCallback = null
@@ -218,6 +225,50 @@ describe('subscribeParentMessages', () => {
     workspaceKey = ''
     subscribeParentMessages('dev', () => {})
     expect(collectionMock).not.toHaveBeenCalled()
+    expect(onSnapshotCallback).toBeNull()
+  })
+})
+
+// 「保護者連絡」ボタンの履歴(2026-09-19)。処理済みも含めて直近だけ読む。
+describe('subscribeParentMessageHistory', () => {
+  function historyDoc(id: string, overrides: Record<string, unknown> = {}) {
+    return {
+      id,
+      data: () => ({
+        classroomId: 'dev',
+        studentId: 's001',
+        studentName: '青木',
+        kind: 'absence',
+        absence: { dateKey: '2026-09-20', slotNumber: 3, subject: '英', lessonKind: 'regular', isTentative: false },
+        createdAt: '2026-09-13T01:00:00.000Z',
+        acknowledgedAt: '2026-09-13T02:00:00.000Z',
+        resolution: 'absent',
+        notifiedAt: '2026-09-13T02:05:00.000Z',
+        ...overrides,
+      }),
+    }
+  }
+
+  it('自教室のパスを createdAt 降順・件数上限つきで購読し、where は使わない(単一フィールドの並べ替え=複合インデックス不要)', () => {
+    subscribeParentMessageHistory('dev', () => {})
+    expect(collectionMock).toHaveBeenCalledWith({ db: true }, 'workspaces', 'main', 'classroomSnapshots', 'dev', 'parentMessages')
+    expect(whereMock).not.toHaveBeenCalled()
+    expect(orderByMock).toHaveBeenCalledWith('createdAt', 'desc')
+    expect(limitMock).toHaveBeenCalledWith(50)
+  })
+
+  it('処理済みの doc も渡す。他教室タグ・旧形式の doc は捨てる(INV-08)', () => {
+    const onChange = vi.fn()
+    subscribeParentMessageHistory('dev', onChange)
+    onSnapshotCallback?.({ docs: [historyDoc('m1'), historyDoc('m2', { classroomId: 'other' }), historyDoc('m3', { kind: undefined })] })
+    const entries = onChange.mock.calls[0]![0] as ParentMessageEntry[]
+    expect(entries.map((entry) => entry.id)).toEqual(['m1'])
+    expect(entries[0]!.notifiedAt).toBe('2026-09-13T02:05:00.000Z')
+  })
+
+  it('接続設定が無ければ購読しない', () => {
+    firestoreInstance = null
+    subscribeParentMessageHistory('dev', () => {})
     expect(onSnapshotCallback).toBeNull()
   })
 })

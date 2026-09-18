@@ -50,9 +50,10 @@ import { buildDeveloperReportRequestBody, formatDeveloperReportResultMessage, pa
 import { DeveloperReportModal } from './components/developer-report/DeveloperReportModal'
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
+import { ParentContactHistoryModal } from './components/parent-portal/ParentContactHistoryModal'
 import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
-import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessages } from './integrations/firebase/parentPortal'
-import { addPendingParentAbsenceFinalize, buildParentMessageNotifications, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
+import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
+import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
@@ -1562,6 +1563,9 @@ function AuthenticatedApp() {
   const [parentAbsenceErrors, setParentAbsenceErrors] = useState<Record<string, string>>({})
   // モーダルを畳んで左下の入口だけにするか。「あとで(盤面を見る)」と「振替先を今決める」で畳み、新着・配置終了で開き直す。
   const [isParentMessagesModalCollapsed, setIsParentMessagesModalCollapsed] = useState(false)
+  // 盤面ツールバー「保護者連絡」の履歴(2026-09-19)。処理済みも含む直近の連絡(読み取りだけ)。未処理の権威は parentMessageEntries のまま。
+  const [parentMessageHistoryEntries, setParentMessageHistoryEntries] = useState<ParentMessageEntry[]>([])
+  const [isParentContactHistoryOpen, setIsParentContactHistoryOpen] = useState(false)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
   const isActingDevelopmentClassroom = useMemo(() => isDevelopmentClassroom(actingClassroom), [actingClassroom])
@@ -1630,6 +1634,17 @@ function AuthenticatedApp() {
     // 生徒名は名簿の現在名を優先する(改名に追従)。
     return mergeParentMessageNotifications([], buildParentMessageNotifications(unread, { students, classroomName: actingClassroom?.name }))
   }, [actingClassroom?.name, actingClassroomId, hiddenParentMessageIds, parentMessageEntries, pendingParentAbsenceFinalize, students])
+  // 「保護者連絡」の履歴の行。未確認の集合は上のモーダルの一覧と同じ除外条件(保存待ち・hidden)で決まる。教室の絞り込みも同じ(INV-08)。
+  const parentContactHistoryRows = useMemo<ParentContactHistoryRow[]>(() => buildParentContactHistory(
+    selectParentMessagesForClassroom(mergeParentMessageEntries(parentMessageEntries, parentMessageHistoryEntries), actingClassroomId),
+    { students, pendingIds: new Set(pendingParentAbsenceFinalize.map((item) => item.messageId)), hiddenIds: new Set(hiddenParentMessageIds) },
+  ), [actingClassroomId, hiddenParentMessageIds, parentMessageEntries, parentMessageHistoryEntries, pendingParentAbsenceFinalize, students])
+  const openParentContactHistory = useCallback(() => setIsParentContactHistoryOpen(true), [])
+  // 未確認の行を押したら履歴を閉じ、休み連絡のモーダルを開く(処理は既存の四択 1 本のまま)。
+  const openParentMessagesFromHistory = useCallback(() => {
+    setIsParentContactHistoryOpen(false)
+    setIsParentMessagesModalCollapsed(false)
+  }, [])
   // 新しい連絡が増えたらモーダルを開き直す。ただし「振替先を今決める」の配置中は盤面操作を遮らないよう開かない
   // (左下の入口の件数だけ増える。配置が終わったら handleParentAbsencePlacementSettled が開く)。
   const knownParentMessageIdsRef = useRef<Set<string>>(new Set())
@@ -1656,6 +1671,8 @@ function AuthenticatedApp() {
   // 教室切替・フラグ OFF・ログアウトで休み連絡の状態をすべて捨てる(前の教室の生徒名・保存待ちを次の教室へ持ち越さない・INV-08)。
   const resetParentAbsenceNoticeState = useCallback(() => {
     setParentMessageEntries([])
+    setParentMessageHistoryEntries([])
+    setIsParentContactHistoryOpen(false)
     setHiddenParentMessageIds([])
     setPendingParentAbsenceFinalize([])
     setParentAbsenceRequest(null)
@@ -1826,7 +1843,7 @@ function AuthenticatedApp() {
       />
     ) : null
 
-    if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}</>
+    if (submissionAcknowledgements.length === 0 && parentMessageNotifications.length === 0 && !isParentContactHistoryOpen && !staleConflictBanner) return <>{suspendedContent}{verificationChecklistPanel}</>
 
     return (
       <>
@@ -1890,9 +1907,12 @@ function AuthenticatedApp() {
           onCollapse={() => setIsParentMessagesModalCollapsed(true)}
           onExpand={() => setIsParentMessagesModalCollapsed(false)}
         />
+        {isParentContactHistoryOpen ? (
+          <ParentContactHistoryModal rows={parentContactHistoryRows} onOpenUnconfirmed={openParentMessagesFromHistory} onClose={() => setIsParentContactHistoryOpen(false)} />
+        ) : null}
       </>
     )
-  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice])
+  }, [acknowledgeAllSubmissions, acknowledgeSubmissionEntry, submissionAcknowledgements, hasRemoteStaleConflict, actingClassroom, actingClassroomId, isActingDevelopmentClassroom, submitVerificationChecklistNote, parentMessageNotifications, isParentMessagesModalCollapsed, parentAbsenceBusyId, parentAbsenceErrors, handleParentAbsenceChoice, isParentContactHistoryOpen, parentContactHistoryRows, openParentMessagesFromHistory])
 
   const buildWorkspaceSnapshot = useCallback((savedAt: string): WorkspaceSnapshot => {
     const latestScreen = screenRef.current
@@ -4622,9 +4642,14 @@ function AuthenticatedApp() {
     const unsubscribe = subscribeParentMessages(actingClassroomId, (entries) => {
       setParentMessageEntries(entries)
     })
+    // 履歴(処理済みも含む直近)は別購読。未処理の権威には使わない(件数上限で古い未処理が落ちるため)。
+    const unsubscribeHistory = subscribeParentMessageHistory(actingClassroomId, (entries) => {
+      setParentMessageHistoryEntries(entries)
+    })
 
     return () => {
       unsubscribe()
+      unsubscribeHistory()
       resetParentAbsenceNoticeState()
     }
   }, [actingClassroomId, isRemoteBackendEnabled, parentPortalQrEnabled, resetParentAbsenceNoticeState])
@@ -5977,6 +6002,8 @@ function AuthenticatedApp() {
       onLogout={logout}
       onCopyDistributionUrl={copyBoardDistributionUrl}
       onReportToDeveloper={openDeveloperReportModal}
+      onOpenParentContactHistory={parentPortalQrEnabled ? openParentContactHistory : undefined}
+      parentContactUnconfirmedCount={parentMessageNotifications.length}
       onSaveBoard={saveBoard}
       isBoardDirty={hasImmediateUnsavedBoardChanges}
       isBoardSaving={isSavingNow || (isRemoteSyncPending && isRemoteSyncVisible)}
