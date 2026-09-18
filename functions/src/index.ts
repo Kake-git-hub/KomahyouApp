@@ -20,7 +20,6 @@ import {
   toJstDateKey as toParentPortalJstDateKey,
 } from './generated/parentSchedule'
 import {
-  buildParentMessageId,
   buildParentPortalTokenFingerprint,
   buildStudentPortalOwnerId,
   decideParentPortalGetThrottle,
@@ -28,10 +27,12 @@ import {
   generateStudentPortalToken,
   handleParentPortalGet,
   handleParentPortalPost,
+  isAlreadyExistsError,
   isParentPortalEnabledForClassroom,
   normalizeIssueRequest,
   normalizeMarkNotifiedRequest,
   normalizeRevokeRequest,
+  PARENT_ABSENCE_NOTICE_QUERY_LIMIT,
   PARENT_PORTAL_ERROR_INTERNAL,
   PARENT_PORTAL_ERROR_METHOD_NOT_ALLOWED,
   PARENT_PORTAL_ERROR_TOO_MANY_REQUESTS,
@@ -39,9 +40,9 @@ import {
   readStudentPortalOwnerDoc,
   readStudentPortalTokenDoc,
   resolveIssueDecision,
+  resolveParentMessageMarkWrites,
   resolveParentMessageRateLimitOutcome,
   resolveRevokeDecision,
-  selectParentMessageIdsToMarkNotified,
   toParentPortalTokenPrefix,
   type ParentPortalDeps,
   type ParentPortalGetThrottleBucket,
@@ -3032,11 +3033,33 @@ function buildParentPortalDeps(): ParentPortalDeps {
         return { allowed: outcome.allowed, error: outcome.error }
       })
     },
-    saveMessage: async ({ workspaceKey, classroomId, doc }) => {
-      // 文書 ID は時系列に並ぶ形(developerReport と同じ作法)。create で既存 ID の上書きを防ぐ。
-      const messageId = buildParentMessageId(doc.createdAt, randomBytes(6).toString('hex'))
-      await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages').doc(messageId).create(doc)
-      return { id: messageId }
+    // 同じコマの連絡が既にあるか(決定的 messageId)。回数制限の**前**に見るので、二重タップで枠を食わない。
+    hasAbsenceNotice: async ({ workspaceKey, classroomId, messageId }) => {
+      const snapshot = await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages').doc(messageId).get()
+      return snapshot.exists
+    },
+    // ★`absenceKey` の**単一フィールド範囲条件だけ**で引く(orderBy を足さない)。
+    //   documentId や別フィールドで並べ替えると複合インデックスが要り、FAILED_PRECONDITION →
+    //   画面には INTERNAL しか出ない(2026-09-12 の教訓)。指紋が先頭なので他生徒の連絡はキー空間ごと外れる。
+    loadAbsenceNotices: async ({ workspaceKey, classroomId, startKey, endKey }) => {
+      const query = await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages')
+        .where('absenceKey', '>=', startKey)
+        .where('absenceKey', '<=', endKey)
+        .limit(PARENT_ABSENCE_NOTICE_QUERY_LIMIT)
+        .get()
+      return query.docs.map((doc) => doc.data())
+    },
+    saveMessage: async ({ workspaceKey, classroomId, messageId, doc }) => {
+      // 文書 ID は決定的(abs-{指紋}-{日付}-{限})。create なので同じコマの二重連絡は Firestore が原子的に弾く。
+      try {
+        await parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages').doc(messageId).create(doc)
+        return { created: true }
+      } catch (error) {
+        // ALREADY_EXISTS だけを「二重連絡(409)」に変える。他の失敗は投げ直して 500 にする
+        // (握り潰すと保存できていないのに「受け付けています」と返してしまう)。
+        if (isAlreadyExistsError(error)) return { created: false }
+        throw error
+      }
     },
   }
 }
@@ -3219,34 +3242,40 @@ export const revokeStudentPortalToken = onCall({ invoker: 'public', timeoutSecon
   }
 })
 
-// 室長がモーダルの「確認」を押したときの既読化(§E-2)。notifiedAt をサーバー時刻で**部分更新**する
-// (本文・送信者名は触らない。QR提出の markNotified と同じ作法)。既読済みは上書きしない。
+// 室長が盤面側で連絡を処理したときの既読化(§E-2・2026-09-18 で 2 段になった)。サーバー時刻で**部分更新**する
+// (他のフィールドは触らない。QR提出の markNotified と同じ作法)。
+//  - stage='acknowledged' … 四択を押した時点。acknowledgedAt(＋resolution)だけ。保護者ページに「教室確認済」が出る。
+//  - stage='notified'(省略時) … 処理完了(盤面保存済み / 「何もしない」)。未読購読から外れる。既読は上書きしない。
+// 書き込み内容の決定は resolveParentMessageMarkWrites(純関数・テスト済み)。
 export const markParentMessagesNotified = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
   try {
     const parsed = normalizeMarkNotifiedRequest(request.data)
     if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
-    const { workspaceKey, classroomId, messageIds } = parsed.value
+    const { workspaceKey, classroomId, messageIds, stage, resolution } = parsed.value
     await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
 
     // 対象は必ず「その教室の」parentMessages(パスで教室分離。他教室の ID を渡しても存在しないので何もしない)。
     const collection = parentPortalClassroomSnapshotRef(workspaceKey, classroomId).collection('parentMessages')
     const snapshots = await firestore.getAll(...messageIds.map((messageId) => collection.doc(messageId)))
-    const targets = selectParentMessageIdsToMarkNotified(snapshots.map((snapshot) => ({
-      id: snapshot.id,
-      exists: snapshot.exists,
-      notifiedAt: snapshot.data()?.notifiedAt,
-    })))
-    if (targets.length > 0) {
-      const nowIso = new Date().toISOString()
+    const writes = resolveParentMessageMarkWrites(
+      snapshots.map((snapshot) => ({
+        id: snapshot.id,
+        exists: snapshot.exists,
+        notifiedAt: snapshot.data()?.notifiedAt,
+        acknowledgedAt: snapshot.data()?.acknowledgedAt,
+      })),
+      { stage, resolution, nowIso: new Date().toISOString() },
+    )
+    if (writes.length > 0) {
       const batch = firestore.batch()
-      for (const messageId of targets) {
-        batch.update(collection.doc(messageId), { notifiedAt: nowIso })
+      for (const write of writes) {
+        batch.update(collection.doc(write.id), write.update)
       }
       await batch.commit()
     }
 
-    logger.info('[markParentMessagesNotified] done', { classroomId, requested: messageIds.length, updated: targets.length })
-    return { updated: targets.length }
+    logger.info('[markParentMessagesNotified] done', { classroomId, stage, requested: messageIds.length, updated: writes.length })
+    return { updated: writes.length }
   } catch (error) {
     throw toParentPortalHttpsError('markParentMessagesNotified', error)
   }

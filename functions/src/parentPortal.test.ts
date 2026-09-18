@@ -5,41 +5,44 @@ import { describe, expect, it, vi } from 'vitest'
 import { isParentStudentActiveOnDate } from './generated/parentSchedule'
 
 import {
+  buildParentAbsenceKey,
+  buildParentAbsenceKeyRange,
+  buildParentAbsenceMessageId,
   buildParentMessageDoc,
-  buildParentMessageId,
   buildParentMessageRateLimitKeys,
   buildParentPortalTokenFingerprint,
   buildStudentPortalOwnerId,
-  containsUrlLike,
-  countCharacters,
   decideParentMessageRateLimit,
   decideParentPortalGetThrottle,
+  findParentAbsenceTargetLesson,
   PARENT_PORTAL_GET_THROTTLE_LIMIT,
   PARENT_PORTAL_GET_THROTTLE_WINDOW_MS,
   pruneParentPortalGetThrottleKeys,
+  readParentAbsenceNotices,
+  resolveParentMessageMarkWrites,
   resolveParentMessageRateLimitOutcome,
   findParentPortalStudent,
   generateStudentPortalToken,
   handleParentPortalGet,
   handleParentPortalPost,
   incrementRateLimitCounterDoc,
+  isAlreadyExistsError,
   isParentPortalEnabledForClassroom,
   isStudentPortalTokenActive,
   isValidParentPortalToken,
   normalizeIssueRequest,
   normalizeMarkNotifiedRequest,
-  normalizeParentMessageInput,
+  normalizeParentAbsenceInput,
   normalizeRevokeRequest,
-  PARENT_MESSAGE_BODY_LIMIT,
+  PARENT_ABSENCE_ERROR_ALREADY_REPORTED,
+  PARENT_ABSENCE_ERROR_NOT_REPORTABLE,
+  PARENT_ABSENCE_MAX_SLOT_NUMBER,
   PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN,
-  PARENT_MESSAGE_ERROR_BODY_EMPTY,
-  PARENT_MESSAGE_ERROR_BODY_TOO_LONG,
   PARENT_MESSAGE_ERROR_INVALID_INPUT,
-  PARENT_MESSAGE_ERROR_SENDER_NAME_TOO_LONG,
   PARENT_MESSAGE_HOURLY_LIMIT_PER_CLASSROOM,
+  PARENT_MESSAGE_ID_PATTERN,
   PARENT_MESSAGE_MARK_NOTIFIED_MAX_IDS,
   PARENT_MESSAGE_RATE_LIMIT_ERROR,
-  PARENT_MESSAGE_SENDER_NAME_LIMIT,
   PARENT_PORTAL_ERROR_DISABLED,
   PARENT_PORTAL_ERROR_GONE,
   PARENT_PORTAL_ERROR_INVALID_TOKEN,
@@ -49,9 +52,6 @@ import {
   resolveIssueDecision,
   resolveJstRateLimitPeriods,
   resolveRevokeDecision,
-  selectParentMessageIdsToMarkNotified,
-  stripAllControlCharacters,
-  stripControlCharactersExceptNewlineAndTab,
   toParentPortalTokenPrefix,
   type ParentPortalDeps,
   type StudentPortalOwnerDoc,
@@ -84,14 +84,23 @@ const snapshotPayload = {
   boardState: { weeks: [] },
 }
 
-function createDeps(overrides: Partial<ParentPortalDeps> = {}): ParentPortalDeps & {
+/** 休み連絡の POST が通る既定の入力(今日 2026-09-13 の 1 週間後・通常授業 1 限)。 */
+const ABSENCE_BODY = { dateKey: '2026-09-20', slotNumber: 1 }
+
+type MockedDeps = ParentPortalDeps & {
   loadSnapshot: ReturnType<typeof vi.fn>
   saveMessage: ReturnType<typeof vi.fn>
   consumeMessageQuota: ReturnType<typeof vi.fn>
-} {
+  hasAbsenceNotice: ReturnType<typeof vi.fn>
+  loadAbsenceNotices: ReturnType<typeof vi.fn>
+}
+
+function createDeps(overrides: Partial<ParentPortalDeps> = {}): MockedDeps {
   const loadSnapshot = vi.fn(async () => ({ payload: snapshotPayload, savedAt: '2026-09-12T10:00:00.000Z' }))
-  const saveMessage = vi.fn(async () => ({ id: 'm1' }))
+  const saveMessage = vi.fn(async () => ({ created: true }))
   const consumeMessageQuota = vi.fn(async () => ({ allowed: true }))
+  const hasAbsenceNotice = vi.fn(async () => false)
+  const loadAbsenceNotices = vi.fn(async () => [] as unknown[])
   return {
     loadToken: async (token) => (token === TOKEN ? activeTokenDoc : null),
     loadClassroom: async () => ({ name: '開発用教室' }),
@@ -105,7 +114,7 @@ function createDeps(overrides: Partial<ParentPortalDeps> = {}): ParentPortalDeps
     resolveRange: (input, todayKey) => ({
       from: typeof input.from === 'string' ? input.from : todayKey,
       to: typeof input.to === 'string' ? input.to : todayKey,
-      bounds: { minFrom: '2026-07-19', maxTo: '2026-12-06' },
+      bounds: { minFrom: '2026-07-19', maxTo: '2026-09-30' },
     }),
     // 本番配線(index.ts)と同じ生成物の在籍判定を使う(2026-09-15: 生徒は退塾日当日から非在籍)。
     isStudentActive: (student, dateKey) => isParentStudentActiveOnDate(student, dateKey),
@@ -113,9 +122,11 @@ function createDeps(overrides: Partial<ParentPortalDeps> = {}): ParentPortalDeps
     todayJst: () => '2026-09-13',
     nowIso: () => '2026-09-13T01:23:45.000Z',
     consumeMessageQuota,
+    hasAbsenceNotice,
+    loadAbsenceNotices,
     saveMessage,
     ...overrides,
-  } as ParentPortalDeps & { loadSnapshot: ReturnType<typeof vi.fn>; saveMessage: ReturnType<typeof vi.fn>; consumeMessageQuota: ReturnType<typeof vi.fn> }
+  } as MockedDeps
 }
 
 describe('トークンの形(§B-1)', () => {
@@ -199,72 +210,82 @@ describe('機能フラグ(§H・第1段 = 開発用教室限定)', () => {
   })
 })
 
-describe('連絡本文の正規化(§E-1・P-3)', () => {
-  it('改行・タブ以外の制御文字を落とし、CRLF を LF に寄せる', () => {
-    expect(stripControlCharactersExceptNewlineAndTab('a\u0001b\u0007c\r\nd\tefg\u007f')).toBe('abc\nd\tefg')
-    expect(stripAllControlCharacters('a\nb\tc\u0000d')).toBe('abcd')
+describe('休み連絡の入力の形(2026-09-18・自由記述の廃止)', () => {
+  it('dateKey(YYYY-MM-DD)と slotNumber(1 以上の整数)だけを受け付ける', () => {
+    expect(normalizeParentAbsenceInput({ dateKey: '2026-09-20', slotNumber: 3 })).toEqual({ ok: true, value: { dateKey: '2026-09-20', slotNumber: 3 } })
+    expect(normalizeParentAbsenceInput({ dateKey: ' 2026-09-20 ', slotNumber: 1 })).toEqual({ ok: true, value: { dateKey: '2026-09-20', slotNumber: 1 } })
   })
 
-  it('文字数はコードポイントで数える', () => {
-    expect(countCharacters('𠮷野家')).toBe(3)
-    expect(countCharacters('abc')).toBe(3)
+  it('形が違えば 400 相当(日付の形・限の型と範囲)', () => {
+    for (const rawBody of [
+      { dateKey: '2026/09/20', slotNumber: 1 },
+      { dateKey: '2026-9-20', slotNumber: 1 },
+      { dateKey: '2026-09-20' },
+      { slotNumber: 1 },
+      { dateKey: 20260920, slotNumber: 1 },
+      { dateKey: '2026-09-20', slotNumber: 0 },
+      { dateKey: '2026-09-20', slotNumber: -1 },
+      { dateKey: '2026-09-20', slotNumber: 1.5 },
+      { dateKey: '2026-09-20', slotNumber: '1' },
+      { dateKey: '2026-09-20', slotNumber: PARENT_ABSENCE_MAX_SLOT_NUMBER + 1 },
+      null,
+      [],
+      '{bad json',
+    ]) {
+      expect(normalizeParentAbsenceInput(rawBody), JSON.stringify(rawBody)).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT })
+    }
   })
 
-  it('本文 0 字は 400 相当', () => {
-    expect(normalizeParentMessageInput({ body: '' })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY })
-    expect(normalizeParentMessageInput({ body: '   \n  ' })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY })
-    expect(normalizeParentMessageInput({})).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY })
-    expect(normalizeParentMessageInput({ body: 123 })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY })
+  // ★限は absenceKey で 2 桁に詰めるので 3 桁を通すとキーの並び(__00〜__99)が壊れて GET から外れる。
+  it('限の上限は 2 桁まで(absenceKey の桁が壊れない)', () => {
+    expect(normalizeParentAbsenceInput({ dateKey: '2026-09-20', slotNumber: PARENT_ABSENCE_MAX_SLOT_NUMBER }).ok).toBe(true)
+    expect(normalizeParentAbsenceInput({ dateKey: '2026-09-20', slotNumber: 100 }).ok).toBe(false)
   })
 
-  it('制御文字のみの本文は 0 字扱いで不可', () => {
-    expect(normalizeParentMessageInput({ body: '\u0001\u0002\u001b\u007f' })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY })
+  it('JSON 文字列で届いた body は一度だけ解釈する(Content-Type 違いの保険)', () => {
+    expect(normalizeParentAbsenceInput(JSON.stringify(ABSENCE_BODY))).toEqual({ ok: true, value: ABSENCE_BODY })
   })
 
-  it('500 字ちょうどは成功・501 字は不可(境界)', () => {
-    const exact = 'あ'.repeat(PARENT_MESSAGE_BODY_LIMIT)
-    const result = normalizeParentMessageInput({ body: exact })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(result.body).toBe(exact)
-    expect(normalizeParentMessageInput({ body: 'あ'.repeat(PARENT_MESSAGE_BODY_LIMIT + 1) })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_BODY_TOO_LONG })
+  // ★回帰防止: 本文・送信者名は**もう受け付けない**(受け取っても doc に入らない)。
+  it('本文・送信者名を添えても入力としては無視される(休み連絡専用)', () => {
+    const result = normalizeParentAbsenceInput({ ...ABSENCE_BODY, body: '休みます', senderName: '母' })
+    expect(result).toEqual({ ok: true, value: ABSENCE_BODY })
+  })
+})
+
+describe('休み連絡できるコマの判定(共有関数 isParentLessonAbsenceReportable の 1 か所経由)', () => {
+  const days = [{
+    dateKey: '2026-09-20',
+    weekday: 0,
+    kind: 'board',
+    lessons: [
+      { slotNumber: 1, timeLabel: '13:00-14:30', subject: '英', kind: 'attended', isTentative: false },
+      { slotNumber: 2, timeLabel: '14:40-16:10', subject: '数', kind: 'regular', isTentative: true },
+      { slotNumber: 3, timeLabel: '16:20-17:50', subject: '国', kind: 'absent', isTentative: false },
+      { slotNumber: 4, timeLabel: '18:00-19:30', subject: '理', kind: 'makeup', isTentative: false },
+    ],
+  }]
+
+  it('科目・種別・予定かどうかは日程計算から引く(リクエストの値を使わない)', () => {
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-13')).toEqual({ subject: '数', lessonKind: 'regular', isTentative: true })
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 4, '2026-09-13')).toEqual({ subject: '理', lessonKind: 'makeup', isTentative: false })
   })
 
-  it('制御文字を除いてから数える(制御文字込みで 501 でも除去後 500 なら成功)', () => {
-    const result = normalizeParentMessageInput({ body: 'あ'.repeat(PARENT_MESSAGE_BODY_LIMIT) + '\u0001' })
-    expect(result.ok).toBe(true)
+  it('出席済み・お休みのコマ、別の日、存在しない限は null', () => {
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 1, '2026-09-13')).toBeNull()
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 3, '2026-09-13')).toBeNull()
+    expect(findParentAbsenceTargetLesson(days, '2026-09-21', 2, '2026-09-13')).toBeNull()
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 5, '2026-09-13')).toBeNull()
   })
 
-  it('送信者名は任意。0 字・30 字は可、31 字は不可、文字列以外は不可', () => {
-    const noName = normalizeParentMessageInput({ body: 'こんにちは' })
-    expect(noName).toEqual({ ok: true, body: 'こんにちは', senderName: '', containsUrl: false })
-    const nullName = normalizeParentMessageInput({ body: 'こんにちは', senderName: null })
-    expect(nullName.ok && nullName.senderName).toBe('')
-    const max = normalizeParentMessageInput({ body: 'x', senderName: 'あ'.repeat(PARENT_MESSAGE_SENDER_NAME_LIMIT) })
-    expect(max.ok).toBe(true)
-    expect(normalizeParentMessageInput({ body: 'x', senderName: 'あ'.repeat(PARENT_MESSAGE_SENDER_NAME_LIMIT + 1) })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_SENDER_NAME_TOO_LONG })
-    expect(normalizeParentMessageInput({ body: 'x', senderName: 42 })).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT })
+  it('過去の日は null・当日は可(共有関数と同じ境界)', () => {
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-21')).toBeNull()
+    expect(findParentAbsenceTargetLesson(days, '2026-09-20', 2, '2026-09-20')).toEqual({ subject: '数', lessonKind: 'regular', isTentative: true })
   })
 
-  it('送信者名は 1 行(改行・制御文字を落として前後空白を除く)', () => {
-    const result = normalizeParentMessageInput({ body: 'x', senderName: '  山田\n\t母 ' })
-    expect(result.ok && result.senderName).toBe('山田母')
-  })
-
-  it('本文以外の形(配列・null・壊れた JSON 文字列)は不可。JSON 文字列は一度だけ解釈する', () => {
-    expect(normalizeParentMessageInput(null)).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT })
-    expect(normalizeParentMessageInput([])).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT })
-    expect(normalizeParentMessageInput('{bad json')).toEqual({ ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT })
-    expect(normalizeParentMessageInput(JSON.stringify({ body: '欠席します' }))).toEqual({ ok: true, body: '欠席します', senderName: '', containsUrl: false })
-  })
-
-  it('URL らしき文字列を検出して containsUrl を立てる', () => {
-    expect(containsUrlLike('明日は休みます')).toBe(false)
-    expect(containsUrlLike('ここを見て https://example.com/x')).toBe(true)
-    expect(containsUrlLike('www.example.jp です')).toBe(true)
-    expect(containsUrlLike('example.co.jp/page')).toBe(true)
-    expect(containsUrlLike('16:00からです。')).toBe(false)
-    const result = normalizeParentMessageInput({ body: 'http://evil.example' })
-    expect(result.ok && result.containsUrl).toBe(true)
+  it('壊れた days は null(型ガード)', () => {
+    expect(findParentAbsenceTargetLesson(undefined, '2026-09-20', 2, '2026-09-13')).toBeNull()
+    expect(findParentAbsenceTargetLesson([null, 'x', { dateKey: '2026-09-20' }], '2026-09-20', 2, '2026-09-13')).toBeNull()
   })
 })
 
@@ -289,7 +310,9 @@ describe('回数制限(§E-1・P-4・JST 境界)', () => {
     expect(after.tokenDayKey).toBe(`t${buildParentPortalTokenFingerprint(TOKEN)}__2026-09-14`)
   })
 
-  it('保存済み 4 件までは許可・5 件保存済み(=6 件目)から拒否(加算前の値で判定)', () => {
+  // ★2026-09-18: 1 件 = 1 コマの休み連絡になったので 1 日の上限を 5 → 10 に上げた(同じ日の複数コマ・数日分)。
+  it('トークン 1 日の上限は 10 件。9 件保存済みまで許可・10 件保存済み(=11 件目)から拒否(加算前の値で判定)', () => {
+    expect(PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN).toBe(10)
     expect(decideParentMessageRateLimit({ tokenCountToday: PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN - 1, classroomCountThisHour: 1 })).toEqual({ allowed: true })
     expect(decideParentMessageRateLimit({ tokenCountToday: PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN, classroomCountThisHour: 1 })).toEqual({ allowed: false, error: PARENT_MESSAGE_RATE_LIMIT_ERROR })
   })
@@ -330,6 +353,8 @@ describe('回数制限(§E-1・P-4・JST 境界)', () => {
       token: { count: 5, createdAt: 'first', updatedAt: '2026-09-13T01:00:00.000Z' },
       classroom: { count: 1, createdAt: '2026-09-13T01:00:00.000Z', updatedAt: '2026-09-13T01:00:00.000Z' },
     })
+    // 上限を 10 にしたので 5 件保存済みでもまだ通る(旧 5 件上限へ戻していないことの回帰防止)。
+    expect(resolveParentMessageRateLimitOutcome({ tokenCounter: { count: 5 }, classroomCounter: null, nowIso: 'now' }).allowed).toBe(true)
   })
 
   // GET は Firestore へ書かないので、回数制限もインスタンス内メモリで数える(§0-2・F-2)。
@@ -370,21 +395,101 @@ describe('回数制限(§E-1・P-4・JST 境界)', () => {
   })
 })
 
-describe('連絡文書(§E-1)', () => {
-  it('tokenPrefix は先頭 6 文字・notifiedAt は null・classroomId/studentId は渡した(トークン doc の)値', () => {
+describe('休み連絡の文書(§E-1 改定 2026-09-18)', () => {
+  const FINGERPRINT = buildParentPortalTokenFingerprint(TOKEN)
+  const absence = { dateKey: '2026-09-20', slotNumber: 3, subject: '英', lessonKind: 'regular' as const, isTentative: true }
+
+  it('doc は kind=absence の形で、本文・送信者名・URL 判定を持たない(旧フィールドを書かない)', () => {
     const doc = buildParentMessageDoc({
-      workspaceKey: WS, classroomId: 'C', studentId: 's', studentName: '山田太', body: '休みます', senderName: '母', containsUrl: false, createdAt: 'T', token: TOKEN,
+      workspaceKey: WS, classroomId: 'C', studentId: 's', studentName: '山田太', absence, createdAt: 'T', token: TOKEN, tokenFingerprint: FINGERPRINT,
     })
     expect(doc).toEqual({
-      workspaceKey: WS, classroomId: 'C', studentId: 's', studentName: '山田太', body: '休みます', senderName: '母', createdAt: 'T', notifiedAt: null, containsUrl: false, tokenPrefix: 'AbCdEf',
+      workspaceKey: WS,
+      classroomId: 'C',
+      studentId: 's',
+      studentName: '山田太',
+      kind: 'absence',
+      absence,
+      absenceKey: `${FINGERPRINT}__2026-09-20__03`,
+      createdAt: 'T',
+      acknowledgedAt: null,
+      resolution: null,
+      notifiedAt: null,
+      tokenPrefix: 'AbCdEf',
     })
+    expect(Object.keys(doc)).not.toContain('body')
+    expect(Object.keys(doc)).not.toContain('senderName')
+    expect(Object.keys(doc)).not.toContain('containsUrl')
     expect(JSON.stringify(doc)).not.toContain(TOKEN)
   })
 
-  it('文書 ID は時系列に並び、ID の形の検証を通る', () => {
-    const id = buildParentMessageId('2026-09-13T01:23:45.678Z', 'abc123')
-    expect(id).toBe('2026-09-13T01-23-45-678Z-abc123')
+  it('absenceKey は 指紋__日付__限2桁 で、同じトークンの 1 か月ぶんが範囲 1 本に収まる', () => {
+    expect(buildParentAbsenceKey(FINGERPRINT, '2026-09-01', 1)).toBe(`${FINGERPRINT}__2026-09-01__01`)
+    expect(buildParentAbsenceKey(FINGERPRINT, '2026-09-30', 10)).toBe(`${FINGERPRINT}__2026-09-30__10`)
+    const range = buildParentAbsenceKeyRange(FINGERPRINT, '2026-09-01', '2026-09-30')
+    expect(range).toEqual({ startKey: `${FINGERPRINT}__2026-09-01__00`, endKey: `${FINGERPRINT}__2026-09-30__99` })
+    for (const key of [buildParentAbsenceKey(FINGERPRINT, '2026-09-01', 1), buildParentAbsenceKey(FINGERPRINT, '2026-09-30', 5)]) {
+      expect(key >= range.startKey && key <= range.endKey, key).toBe(true)
+    }
+    // 範囲外の月・別トークンはキー空間ごと外れる(他の生徒の連絡を引かない)。
+    const inRange = (key: string) => key >= range.startKey && key <= range.endKey
+    expect(inRange(buildParentAbsenceKey(FINGERPRINT, '2026-10-01', 1))).toBe(false)
+    expect(inRange(buildParentAbsenceKey(FINGERPRINT, '2026-08-31', 5))).toBe(false)
+    expect(inRange(buildParentAbsenceKey(buildParentPortalTokenFingerprint('other-token-other-token-other-01'), '2026-09-10', 1))).toBe(false)
+    // ★キーにトークン全文を入れない(文書のパスが例外メッセージ経由でログに流れる・§G-1)。
+    expect(range.startKey).not.toContain(TOKEN)
+  })
+
+  it('文書 ID は決定的(abs-指紋-日付-限)で ID 形式の検証を通る = 二重連絡を create が原子的に弾ける', () => {
+    const id = buildParentAbsenceMessageId(FINGERPRINT, '2026-09-20', 3)
+    expect(id).toBe(`abs-${FINGERPRINT}-2026-09-20-3`)
+    expect(PARENT_MESSAGE_ID_PATTERN.test(id)).toBe(true)
+    expect(id).not.toContain(TOKEN)
+    expect(buildParentAbsenceMessageId(FINGERPRINT, '2026-09-20', 3)).toBe(id)
     expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: [id] }).ok).toBe(true)
+  })
+
+  it('readParentAbsenceNotices: 日付・限・確認済みだけを返し、旧 doc(kind 無し)と壊れた行は捨てる', () => {
+    expect(readParentAbsenceNotices([
+      { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 3 }, acknowledgedAt: null, resolution: null, studentId: 's001' },
+      { kind: 'absence', absence: { dateKey: '2026-09-18', slotNumber: 1 }, acknowledgedAt: '2026-09-17T00:00:00.000Z', resolution: 'absent' },
+      { body: '旧仕様の自由記述', senderName: '母' },
+      { kind: 'absence' },
+      { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 'x' } },
+      null,
+      'x',
+    ])).toEqual([
+      { dateKey: '2026-09-18', slotNumber: 1, acknowledged: true },
+      { dateKey: '2026-09-20', slotNumber: 3, acknowledged: false },
+    ])
+    expect(readParentAbsenceNotices(undefined)).toEqual([])
+  })
+
+  it('readParentAbsenceNotices は内部 ID・resolution・生徒名を載せない(§C)', () => {
+    const notices = readParentAbsenceNotices([
+      { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 3 }, acknowledgedAt: 'x', resolution: 'makeup-now', studentId: 's001', studentName: '山田太', tokenPrefix: 'AbCdEf' },
+    ])
+    expect(notices).toEqual([{ dateKey: '2026-09-20', slotNumber: 3, acknowledged: true }])
+    const json = JSON.stringify(notices)
+    for (const forbidden of ['s001', '山田太', 'AbCdEf', 'makeup-now']) {
+      expect(json, forbidden).not.toContain(forbidden)
+    }
+  })
+
+  it('同じコマの重複 doc は 1 件に畳む', () => {
+    expect(readParentAbsenceNotices([
+      { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 3 }, acknowledgedAt: '2026-09-19T00:00:00.000Z' },
+      { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 3 }, acknowledgedAt: null },
+    ])).toEqual([{ dateKey: '2026-09-20', slotNumber: 3, acknowledged: true }])
+  })
+
+  it('ALREADY_EXISTS だけを二重連絡として扱う(他の失敗は握り潰さない)', () => {
+    expect(isAlreadyExistsError({ code: 6 })).toBe(true)
+    expect(isAlreadyExistsError({ code: 'already-exists' })).toBe(true)
+    expect(isAlreadyExistsError(new Error('6 ALREADY_EXISTS: entity already exists'))).toBe(true)
+    expect(isAlreadyExistsError({ code: 7, message: 'PERMISSION_DENIED' })).toBe(false)
+    expect(isAlreadyExistsError(new Error('DEADLINE_EXCEEDED'))).toBe(false)
+    expect(isAlreadyExistsError(null)).toBe(false)
   })
 })
 
@@ -464,21 +569,59 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
 
   it('検証を通ると 200 で契約どおりのキーだけを返す(講師名・机・ID・トークンを含めない)', async () => {
     const deps = createDeps()
-    const result = await handleParentPortalGet({ token: TOKEN, from: '2026-09-06', to: '2026-10-11' }, deps)
+    const result = await handleParentPortalGet({ token: TOKEN, from: '2026-09-06', to: '2026-09-28' }, deps)
     expect(result.status).toBe(200)
     const body = result.body as Record<string, unknown>
-    expect(Object.keys(body).sort()).toEqual(['bounds', 'classroomName', 'days', 'hasLectureLessons', 'range', 'snapshotSavedAt', 'studentName', 'today'])
+    expect(Object.keys(body).sort()).toEqual(['absenceNotices', 'bounds', 'classroomName', 'days', 'hasLectureLessons', 'range', 'snapshotSavedAt', 'studentName', 'today'])
     // 講習の印は真偽値だけ(講習コマの中身・件数は出さない)。日程計算が印を返さなければ false。
     expect(body.hasLectureLessons).toBe(false)
     expect(body.studentName).toBe('山田太')
     expect(body.classroomName).toBe('開発用教室')
     expect(body.snapshotSavedAt).toBe('2026-09-12T10:00:00.000Z')
     expect(body.today).toBe('2026-09-13')
-    expect(body.range).toEqual({ from: '2026-09-06', to: '2026-10-11' })
-    expect(body.bounds).toEqual({ minFrom: '2026-07-19', maxTo: '2026-12-06' })
+    expect(body.range).toEqual({ from: '2026-09-06', to: '2026-09-28' })
+    expect(body.bounds).toEqual({ minFrom: '2026-07-19', maxTo: '2026-09-30' })
+    expect(body.absenceNotices).toEqual([])
     const json = JSON.stringify(body)
     for (const forbidden of [TOKEN, STUDENT_ID, CLASSROOM_ID, 'teacher', 'desk', 'stock', '講師 秘密', '佐藤', 'mgr-uid', 'createdByUid']) {
       expect(json, forbidden).not.toContain(forbidden)
+    }
+  })
+
+  // 2026-09-18: 保護者ページのバッジ「休み連絡済」/「教室確認済」の元。
+  it('表示範囲の休み連絡を absenceKey の単一フィールド範囲で引き、日付・限・確認済みだけを返す', async () => {
+    const loadAbsenceNotices = vi.fn(async () => [
+      { kind: 'absence', absence: { dateKey: '2026-09-20', slotNumber: 1, subject: '数学', lessonKind: 'regular', isTentative: false }, acknowledgedAt: null, studentId: STUDENT_ID },
+      { kind: 'absence', absence: { dateKey: '2026-09-25', slotNumber: 2 }, acknowledgedAt: '2026-09-24T02:00:00.000Z', resolution: 'makeup-now' },
+    ])
+    const deps = createDeps({ loadAbsenceNotices })
+    const result = await handleParentPortalGet({ token: TOKEN, from: '2026-09-01', to: '2026-09-30' }, deps)
+    const fingerprint = buildParentPortalTokenFingerprint(TOKEN)
+    expect(loadAbsenceNotices).toHaveBeenCalledWith({
+      workspaceKey: WS,
+      classroomId: CLASSROOM_ID,
+      startKey: `${fingerprint}__2026-09-01__00`,
+      endKey: `${fingerprint}__2026-09-30__99`,
+    })
+    const body = result.body as Record<string, unknown>
+    expect(body.absenceNotices).toEqual([
+      { dateKey: '2026-09-20', slotNumber: 1, acknowledged: false },
+      { dateKey: '2026-09-25', slotNumber: 2, acknowledged: true },
+    ])
+    // 室長の処理内容(resolution)・内部 ID は保護者へ出さない(§C)。
+    expect(JSON.stringify(body.absenceNotices)).not.toContain('makeup-now')
+    expect(JSON.stringify(body.absenceNotices)).not.toContain(STUDENT_ID)
+  })
+
+  it('連絡の読み取りは検証を通ったあとだけ(400/410/403 では引かない)', async () => {
+    const invalid = createDeps()
+    await handleParentPortalGet({ token: 'short' }, invalid)
+    const gone = createDeps({ loadToken: async () => null })
+    await handleParentPortalGet({ token: TOKEN }, gone)
+    const off = createDeps({ loadToken: async () => ({ ...activeTokenDoc, classroomId: '5w5OMueETerSKrSf14HC' }), loadClassroom: async () => ({ name: '本番校' }) })
+    await handleParentPortalGet({ token: TOKEN }, off)
+    for (const deps of [invalid, gone, off]) {
+      expect(deps.loadAbsenceNotices).not.toHaveBeenCalled()
     }
   })
 
@@ -512,15 +655,19 @@ describe('handleParentPortalGet: 検証順(§G-2)とスナップショット未�
   })
 })
 
-describe('handleParentPortalPost: 検証順・400/429・保存内容', () => {
-  it('GET と同じ検証順(400/410/403)で、落ちたときは本文検証もカウンタ加算も保存もしない', async () => {
+describe('handleParentPortalPost: 休み連絡の検証順(400 → 409 → 429 → create)', () => {
+  const FINGERPRINT = buildParentPortalTokenFingerprint(TOKEN)
+  const MESSAGE_ID = buildParentAbsenceMessageId(FINGERPRINT, ABSENCE_BODY.dateKey, ABSENCE_BODY.slotNumber)
+
+  it('GET と同じ共通検証(400/410/403)で、落ちたときは入力検証も枠の消費も保存もしない', async () => {
     const invalid = createDeps()
-    expect((await handleParentPortalPost({ token: 'bad', rawBody: { body: 'x' } }, invalid)).status).toBe(400)
+    expect((await handleParentPortalPost({ token: 'bad', rawBody: ABSENCE_BODY }, invalid)).status).toBe(400)
     const gone = createDeps({ loadToken: async () => null })
-    expect((await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'x' } }, gone)).status).toBe(410)
+    expect((await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, gone)).status).toBe(410)
     const off = createDeps({ loadClassroom: async () => ({ name: '本番校' }), loadToken: async () => ({ ...activeTokenDoc, classroomId: 'prod' }) })
-    expect((await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'x' } }, off)).status).toBe(403)
+    expect((await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, off)).status).toBe(403)
     for (const deps of [invalid, gone, off]) {
+      expect(deps.hasAbsenceNotice).not.toHaveBeenCalled()
       expect(deps.consumeMessageQuota).not.toHaveBeenCalled()
       expect(deps.saveMessage).not.toHaveBeenCalled()
     }
@@ -528,40 +675,98 @@ describe('handleParentPortalPost: 検証順・400/429・保存内容', () => {
     expect(off.loadSnapshot).not.toHaveBeenCalled()
   })
 
-  it('本文 0 字・501 字・制御文字のみ・送信者名 31 字は 400 で、枠を消費しない', async () => {
-    for (const rawBody of [{ body: '' }, { body: 'あ'.repeat(501) }, { body: '\u0001\u0002' }, { body: 'x', senderName: 'あ'.repeat(31) }]) {
+  it('入力の形が違えば 400 で、対象コマの検証も枠の消費もしない', async () => {
+    for (const rawBody of [{}, { dateKey: '2026-09-20' }, { dateKey: '20260920', slotNumber: 1 }, { dateKey: '2026-09-20', slotNumber: 0 }, { body: '休みます' }]) {
       const deps = createDeps()
       const result = await handleParentPortalPost({ token: TOKEN, rawBody }, deps)
-      expect(result.status, JSON.stringify(rawBody).slice(0, 30)).toBe(400)
+      expect(result, JSON.stringify(rawBody)).toEqual({ status: 400, body: { error: PARENT_MESSAGE_ERROR_INVALID_INPUT } })
+      expect(deps.hasAbsenceNotice).not.toHaveBeenCalled()
       expect(deps.consumeMessageQuota).not.toHaveBeenCalled()
       expect(deps.saveMessage).not.toHaveBeenCalled()
     }
   })
 
-  it('500 字ちょうどは成功', async () => {
+  it('連絡できるコマなら 200 で、連絡を受けたコマを返す', async () => {
     const deps = createDeps()
-    const result = await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'あ'.repeat(500) } }, deps)
-    expect(result).toEqual({ status: 200, body: { ok: true, createdAt: '2026-09-13T01:23:45.000Z' } })
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
+    expect(result).toEqual({
+      status: 200,
+      body: { ok: true, createdAt: '2026-09-13T01:23:45.000Z', notice: { dateKey: '2026-09-20', slotNumber: 1, acknowledged: false } },
+    })
   })
 
-  it('枠が空いていれば保存し、枠が尽きていたら 429(保存しない)', async () => {
-    const allowed = createDeps()
-    expect((await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'x' } }, allowed)).status).toBe(200)
-    expect(allowed.saveMessage).toHaveBeenCalledTimes(1)
+  it('当日のコマも受け付ける(オーナー確定 3)', async () => {
+    const deps = createDeps()
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey: '2026-09-13', slotNumber: 1 } }, deps)
+    expect(result.status).toBe(200)
+  })
 
+  // ★(3) 対象コマの検証。理由は出し分けない(§F と同じ作法)。
+  it('過去の日・表示できない月・存在しない限・すでに結果が付いたコマは 409 で、枠を消費しない', async () => {
+    const cases: Array<{ label: string; rawBody: { dateKey: string; slotNumber: number }; overrides?: Partial<ParentPortalDeps> }> = [
+      { label: '昨日', rawBody: { dateKey: '2026-09-12', slotNumber: 1 } },
+      { label: '表示範囲(今月末)より先', rawBody: { dateKey: '2026-10-05', slotNumber: 1 } },
+      { label: '存在しない限', rawBody: { dateKey: '2026-09-20', slotNumber: 4 } },
+      {
+        label: 'すでにお休み',
+        rawBody: ABSENCE_BODY,
+        overrides: {
+          buildScheduleView: (_payload, _studentId, range) => ({
+            studentName: '山田太',
+            days: [{ dateKey: range.from, weekday: 0, kind: 'board', lessons: [{ slotNumber: 1, timeLabel: '13:00', subject: '数学', kind: 'absent', isTentative: false }] }],
+          }),
+        },
+      },
+      { label: '生徒が日程計算に無い', rawBody: ABSENCE_BODY, overrides: { buildScheduleView: () => null } },
+    ]
+    for (const testCase of cases) {
+      const deps = createDeps(testCase.overrides ?? {})
+      const result = await handleParentPortalPost({ token: TOKEN, rawBody: testCase.rawBody }, deps)
+      expect(result, testCase.label).toEqual({ status: 409, body: { error: PARENT_ABSENCE_ERROR_NOT_REPORTABLE } })
+      expect(deps.hasAbsenceNotice, testCase.label).not.toHaveBeenCalled()
+      expect(deps.consumeMessageQuota, testCase.label).not.toHaveBeenCalled()
+      expect(deps.saveMessage, testCase.label).not.toHaveBeenCalled()
+    }
+  })
+
+  it('表示範囲外の日は日程計算を呼ばずに 409(無駄な計算をしない)', async () => {
+    const buildScheduleView = vi.fn(() => ({ studentName: 'n', days: [] }))
+    const deps = createDeps({ buildScheduleView })
+    // 共通検証で 1 回呼ばれる…ことはない(GET だけが呼ぶ)。POST は対象コマ検証のときだけ呼ぶ。
+    expect((await handleParentPortalPost({ token: TOKEN, rawBody: { dateKey: '2026-12-01', slotNumber: 1 } }, deps)).status).toBe(409)
+    expect(buildScheduleView).not.toHaveBeenCalled()
+  })
+
+  // ★(4) 二重連絡は枠を消費しない(押し間違い・二重タップで 1 日 10 件を食い潰さない)。
+  it('同じコマの連絡が既にあれば 409 で、枠を消費せず保存もしない', async () => {
+    const deps = createDeps({ hasAbsenceNotice: vi.fn(async () => true) })
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
+    expect(result).toEqual({ status: 409, body: { error: PARENT_ABSENCE_ERROR_ALREADY_REPORTED } })
+    expect(deps.hasAbsenceNotice).toHaveBeenCalledWith({ workspaceKey: WS, classroomId: CLASSROOM_ID, messageId: MESSAGE_ID })
+    expect(deps.consumeMessageQuota).not.toHaveBeenCalled()
+    expect(deps.saveMessage).not.toHaveBeenCalled()
+  })
+
+  it('create が競合(ALREADY_EXISTS)したときも同じ 409 に揃える(原子的な二重防止)', async () => {
+    const deps = createDeps({ saveMessage: vi.fn(async () => ({ created: false })) })
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
+    expect(result).toEqual({ status: 409, body: { error: PARENT_ABSENCE_ERROR_ALREADY_REPORTED } })
+  })
+
+  it('枠が尽きていたら 429(保存しない)', async () => {
     const denied = createDeps({ consumeMessageQuota: vi.fn(async () => ({ allowed: false, error: PARENT_MESSAGE_RATE_LIMIT_ERROR })) })
-    const result = await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'x' } }, denied)
+    const result = await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, denied)
     expect(result).toEqual({ status: 429, body: { error: PARENT_MESSAGE_RATE_LIMIT_ERROR } })
     expect(denied.saveMessage).not.toHaveBeenCalled()
   })
 
   it('カウンタのキーはトークンの指紋(全文ではない)と JST 日・時で組み、教室はトークン doc 由来', async () => {
     const deps = createDeps()
-    await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'x' } }, deps)
+    await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
     expect(deps.consumeMessageQuota).toHaveBeenCalledWith({
       workspaceKey: WS,
       classroomId: CLASSROOM_ID,
-      tokenDayKey: `t${buildParentPortalTokenFingerprint(TOKEN)}__2026-09-13`,
+      tokenDayKey: `t${FINGERPRINT}__2026-09-13`,
       classroomHourKey: 'classroom__2026-09-13T10',
     })
     // ★文書 ID にトークン全文を入れない(Firestore の例外メッセージがパスを含み、ログへ流れる・§G-1)。
@@ -570,38 +775,68 @@ describe('handleParentPortalPost: 検証順・400/429・保存内容', () => {
     expect(keys.classroomHourKey).not.toContain(TOKEN)
   })
 
-  it('保存する classroomId / studentId はリクエスト body ではなくトークン doc 由来。studentName はスナップショットの表示名', async () => {
+  it('保存する classroomId / studentId / 科目 / 種別はリクエスト body ではなくサーバー側の値', async () => {
     const deps = createDeps()
     await handleParentPortalPost({
       token: TOKEN,
-      rawBody: { body: '明日は休みます', senderName: '山田母', classroomId: 'EVIL', studentId: 'EVIL' },
+      // ★リクエストに科目・種別・教室・生徒を混ぜても doc には入らない(すべてサーバーが決める)。
+      rawBody: { ...ABSENCE_BODY, subject: '国', lessonKind: 'extra', isTentative: true, classroomId: 'EVIL', studentId: 'EVIL', body: '休みます', senderName: '母' },
     }, deps)
     expect(deps.saveMessage).toHaveBeenCalledTimes(1)
-    const [call] = deps.saveMessage.mock.calls as unknown as Array<[{ workspaceKey: string; classroomId: string; doc: Record<string, unknown> }]>
+    const [call] = deps.saveMessage.mock.calls as unknown as Array<[{ workspaceKey: string; classroomId: string; messageId: string; doc: Record<string, unknown> }]>
     expect(call[0].workspaceKey).toBe(WS)
     expect(call[0].classroomId).toBe(CLASSROOM_ID)
+    expect(call[0].messageId).toBe(MESSAGE_ID)
     expect(call[0].doc).toEqual({
       workspaceKey: WS,
       classroomId: CLASSROOM_ID,
       studentId: STUDENT_ID,
       studentName: '山田太',
-      body: '明日は休みます',
-      senderName: '山田母',
+      kind: 'absence',
+      // 科目・種別・予定かどうかは日程計算(buildScheduleView)から引いた値。
+      absence: { dateKey: '2026-09-20', slotNumber: 1, subject: '数学', lessonKind: 'regular', isTentative: false },
+      absenceKey: `${FINGERPRINT}__2026-09-20__01`,
       createdAt: '2026-09-13T01:23:45.000Z',
+      acknowledgedAt: null,
+      resolution: null,
       notifiedAt: null,
-      containsUrl: false,
       tokenPrefix: 'AbCdEf',
     })
-    expect(JSON.stringify(call[0].doc)).not.toContain('EVIL')
+    const json = JSON.stringify(call[0].doc)
+    expect(json).not.toContain('EVIL')
+    expect(json).not.toContain('休みます')
+    expect(json).not.toContain(TOKEN)
+  })
+
+  it('テンプレ補完(予定)のコマは isTentative: true で保存する', async () => {
+    const deps = createDeps({
+      buildScheduleView: (_payload, _studentId, range) => ({
+        studentName: '山田太',
+        days: [{ dateKey: range.from, weekday: 0, kind: 'template', lessons: [{ slotNumber: 1, timeLabel: '13:00', subject: '英', kind: 'regular', isTentative: true }] }],
+      }),
+    })
+    await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
+    const [call] = deps.saveMessage.mock.calls as unknown as Array<[{ doc: { absence: Record<string, unknown> } }]>
+    expect(call[0].doc.absence).toEqual({ dateKey: '2026-09-20', slotNumber: 1, subject: '英', lessonKind: 'regular', isTentative: true })
   })
 
   it('表示名が無ければ name を使う', async () => {
     const deps = createDeps({
       loadSnapshot: vi.fn(async () => ({ payload: { students: [{ id: STUDENT_ID, name: '鈴木 一郎', displayName: '  ' }] }, savedAt: null })),
     })
-    await handleParentPortalPost({ token: TOKEN, rawBody: { body: 'x' } }, deps)
+    await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
     const [call] = deps.saveMessage.mock.calls as unknown as Array<[{ doc: { studentName: string } }]>
     expect(call[0].doc.studentName).toBe('鈴木 一郎')
+  })
+
+  it('対象コマの検証は「その日 1 日」だけを計算する(月まるごと計算しない)', async () => {
+    const buildScheduleView = vi.fn((_payload: unknown, _studentId: string, range: { from: string; to: string }) => ({
+      studentName: '山田太',
+      days: [{ dateKey: range.from, weekday: 0, kind: 'board', lessons: [{ slotNumber: 1, timeLabel: '13:00', subject: '数学', kind: 'regular', isTentative: false }] }],
+    }))
+    const deps = createDeps({ buildScheduleView })
+    await handleParentPortalPost({ token: TOKEN, rawBody: ABSENCE_BODY }, deps)
+    expect(buildScheduleView).toHaveBeenCalledWith(snapshotPayload, STUDENT_ID, { from: '2026-09-20', to: '2026-09-20' })
   })
 })
 
@@ -624,7 +859,8 @@ describe('callable の入力正規化', () => {
 
   it('normalizeMarkNotifiedRequest: 配列必須・ID 形式検証・重複排除・最大 50', () => {
     const ok = normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1', 'm2', 'm1'] })
-    expect(ok).toEqual({ ok: true, value: { workspaceKey: WS, classroomId: 'C', messageIds: ['m1', 'm2'] } })
+    // stage 省略は 'notified'(旧クライアント互換)・resolution 省略は null。
+    expect(ok).toEqual({ ok: true, value: { workspaceKey: WS, classroomId: 'C', messageIds: ['m1', 'm2'], stage: 'notified', resolution: null } })
     expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: [] }).ok).toBe(false)
     expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: 'm1' }).ok).toBe(false)
     expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['a/b'] }).ok).toBe(false)
@@ -635,13 +871,53 @@ describe('callable の入力正規化', () => {
     expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: [...fifty, 'extra'] }).ok).toBe(false)
   })
 
-  it('selectParentMessageIdsToMarkNotified: 実在し未読(null)の文書だけ(既読は上書きしない)', () => {
-    expect(selectParentMessageIdsToMarkNotified([
-      { id: 'a', exists: true, notifiedAt: null },
-      { id: 'b', exists: true, notifiedAt: '2026-09-01T00:00:00.000Z' },
+  // 2026-09-18: 「四択を押した(acknowledged)」と「処理完了(notified)」の 2 段。
+  it('normalizeMarkNotifiedRequest: stage / resolution を受け付け、知らない値は弾く', () => {
+    expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], stage: 'acknowledged', resolution: 'makeup-now' }))
+      .toEqual({ ok: true, value: { workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], stage: 'acknowledged', resolution: 'makeup-now' } })
+    for (const resolution of ['absent', 'absent-no-makeup', 'makeup-now', 'manual']) {
+      expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], stage: 'notified', resolution }).ok, resolution).toBe(true)
+    }
+    expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], stage: 'acknowledged', resolution: null }).ok).toBe(true)
+    expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], stage: 'done' }).ok).toBe(false)
+    expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], stage: 1 }).ok).toBe(false)
+    expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], resolution: 'attended' }).ok).toBe(false)
+    expect(normalizeMarkNotifiedRequest({ workspaceKey: WS, classroomId: 'C', messageIds: ['m1'], resolution: 5 }).ok).toBe(false)
+  })
+
+  it("resolveParentMessageMarkWrites('acknowledged'): acknowledgedAt は初回だけ・resolution は毎回上書き・notifiedAt は触らない", () => {
+    const writes = resolveParentMessageMarkWrites([
+      { id: 'a', exists: true, notifiedAt: null, acknowledgedAt: null },
+      { id: 'b', exists: true, notifiedAt: null, acknowledgedAt: '2026-09-17T00:00:00.000Z' },
+      { id: 'c', exists: false, notifiedAt: null, acknowledgedAt: null },
+    ], { stage: 'acknowledged', resolution: 'absent', nowIso: 'NOW' })
+    expect(writes).toEqual([
+      { id: 'a', update: { acknowledgedAt: 'NOW', resolution: 'absent' } },
+      // 最初に確認した時刻は保つ。やり直しで resolution だけ変わる。
+      { id: 'b', update: { acknowledgedAt: '2026-09-17T00:00:00.000Z', resolution: 'absent' } },
+    ])
+    // ★notifiedAt を触らない = 「四択は押したが保存していない」連絡は未読のまま残り、次回また通知が出る(オーナー確定 5)。
+    for (const write of writes) expect(Object.keys(write.update)).not.toContain('notifiedAt')
+  })
+
+  it("resolveParentMessageMarkWrites('acknowledged'): resolution 未指定なら既存を消さない", () => {
+    expect(resolveParentMessageMarkWrites([{ id: 'a', exists: true, notifiedAt: null, acknowledgedAt: null }], { stage: 'acknowledged', nowIso: 'NOW' }))
+      .toEqual([{ id: 'a', update: { acknowledgedAt: 'NOW' } }])
+  })
+
+  it("resolveParentMessageMarkWrites('notified'): 未読だけを既読にし、acknowledgedAt も埋める(既読は上書きしない)", () => {
+    expect(resolveParentMessageMarkWrites([
+      { id: 'a', exists: true, notifiedAt: null, acknowledgedAt: null },
+      { id: 'b', exists: true, notifiedAt: '2026-09-01T00:00:00.000Z', acknowledgedAt: null },
       { id: 'c', exists: false, notifiedAt: null },
-      { id: 'd', exists: true, notifiedAt: undefined },
-    ])).toEqual(['a', 'd'])
+      { id: 'd', exists: true, notifiedAt: undefined, acknowledgedAt: '2026-09-17T00:00:00.000Z' },
+    ], { stage: 'notified', nowIso: 'NOW' })).toEqual([
+      { id: 'a', update: { notifiedAt: 'NOW', acknowledgedAt: 'NOW' } },
+      { id: 'd', update: { notifiedAt: 'NOW', acknowledgedAt: '2026-09-17T00:00:00.000Z' } },
+    ])
+    // 旧クライアント(stage 省略 = notified)でも同じ経路を通る。
+    expect(resolveParentMessageMarkWrites([{ id: 'a', exists: true, notifiedAt: null }], { stage: 'notified', resolution: 'manual', nowIso: 'NOW' }))
+      .toEqual([{ id: 'a', update: { notifiedAt: 'NOW', acknowledgedAt: 'NOW', resolution: 'manual' } }])
   })
 })
 
@@ -770,6 +1046,40 @@ describe('index.ts の配線(文字列走査)', () => {
     expect(section).toContain("collection('studentPortalTokens')")
     expect(section).toContain("collection('studentPortalTokenOwners')")
     expect(section).not.toContain('createStoredSnapshotDoc(')
+  })
+
+  // 2026-09-18(休み連絡専用化)。★ここが崩れると「INTERNAL しか出ない」障害になる。
+  it('休み連絡は決定的 ID の create で、範囲検索は absenceKey の単一フィールドだけ(orderBy を足さない)', () => {
+    const start = source.indexOf('function buildParentPortalDeps')
+    const body = source.slice(start, start + 6000)
+    // 既存 doc の確認 → 回数制限 → create の配線。
+    expect(body).toContain('hasAbsenceNotice: async')
+    expect(body).toContain('loadAbsenceNotices: async')
+    expect(body).toContain("where('absenceKey', '>=', startKey)")
+    expect(body).toContain("where('absenceKey', '<=', endKey)")
+    // ★複合インデックスを要求する並べ替えを足さない(FAILED_PRECONDITION → 画面は INTERNAL・2026-09-12 の教訓)。
+    const noticesStart = body.indexOf('loadAbsenceNotices: async')
+    const noticesBody = body.slice(noticesStart, noticesStart + 900)
+    expect(noticesBody).not.toContain('orderBy(')
+    expect(noticesBody).toContain('.limit(PARENT_ABSENCE_NOTICE_QUERY_LIMIT)')
+    // create + ALREADY_EXISTS の判別(他の失敗を握り潰さない)。
+    expect(body).toContain('.doc(messageId).create(doc)')
+    expect(body).toContain('isAlreadyExistsError(error)')
+    expect(body).toContain('return { created: false }')
+    // 旧実装(ランダム ID)へ戻していないこと = 二重連絡を Firestore が弾けなくなる。
+    expect(body).not.toContain('buildParentMessageId(')
+  })
+
+  it('既読化は stage/resolution を純関数へ渡し、部分更新(update)で他のフィールドを触らない', () => {
+    const start = source.indexOf('export const markParentMessagesNotified = onCall')
+    expect(start).toBeGreaterThan(-1)
+    const body = source.slice(start, start + 2200)
+    expect(body).toContain('resolveParentMessageMarkWrites(')
+    expect(body).toContain('stage, resolution, nowIso:')
+    expect(body).toContain('acknowledgedAt: snapshot.data()?.acknowledgedAt')
+    expect(body).toContain('batch.update(collection.doc(write.id), write.update)')
+    // set(…, { merge: true }) ではなく update(部分更新)を使う(INV-07)。
+    expect(body).not.toContain('batch.set(')
   })
 
   it('callable 3 本は invoker public + requireClassroomAccessMember + HttpsError(internal) 包み', () => {

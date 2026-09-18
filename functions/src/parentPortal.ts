@@ -13,6 +13,9 @@ import { createHash, randomBytes } from 'node:crypto'
 
 import { isDevelopmentClassroomIdentity } from './developmentClassroomIdentity'
 import { resolveCompanyFeatureDefault, resolveFeatureEnabledByLayers } from './generated/companyFeatureDefaults'
+// ★休み連絡できるコマの判定は**公開ページと同じ 1 関数**を使う(判定を分散させない・2026-09-18)。
+//   複製元は src/utils/parentSchedule.ts(sync-shared がここへ写す)。
+import { isParentLessonAbsenceReportable, type ParentScheduleLessonKind } from './generated/parentSchedule'
 
 // ───────────────────────────────────────────────────────────────────────────
 // トークン(§B-1)
@@ -131,60 +134,36 @@ export function isParentPortalEnabledForClassroom(identity: ParentPortalClassroo
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// 連絡本文の正規化(§E-1・P-3)
+// 休み連絡の入力(2026-09-18 オーナー指示で「自由記述の連絡」から**休み連絡専用**へ作り替え)。
+// POST body は `{ dateKey, slotNumber }` だけ。科目・種別・予定かどうかは**サーバーが日程計算から引く**
+// (リクエストの値を信用しない)。本文・送信者名・URL 検出(containsUrl)は廃止した。
+// 旧 doc は Firestore に残るが、新しいクライアントは kind!=='absence' を表示しない。
 // ───────────────────────────────────────────────────────────────────────────
 
-export const PARENT_MESSAGE_BODY_LIMIT = 500
-export const PARENT_MESSAGE_SENDER_NAME_LIMIT = 30
-
 export const PARENT_MESSAGE_ERROR_INVALID_INPUT = '入力の形式が正しくありません。'
-export const PARENT_MESSAGE_ERROR_BODY_EMPTY = '本文を入力してください。'
-export const PARENT_MESSAGE_ERROR_BODY_TOO_LONG = `本文は${PARENT_MESSAGE_BODY_LIMIT}文字以内で入力してください。`
-export const PARENT_MESSAGE_ERROR_SENDER_NAME_TOO_LONG = `お名前は${PARENT_MESSAGE_SENDER_NAME_LIMIT}文字以内で入力してください。`
+/** 409。対象コマが無い・過去・表示範囲外・すでに休み/出席済みなど(保護者へは理由を出し分けない)。 */
+export const PARENT_ABSENCE_ERROR_NOT_REPORTABLE = 'このコマはお休みの連絡ができません。ページを読み込み直して最新の予定をご確認ください。'
+/** 409。同じコマの二重連絡(決定的 messageId の create が衝突したときも同じ文言)。 */
+export const PARENT_ABSENCE_ERROR_ALREADY_REPORTED = 'このコマはすでにお休みの連絡を受け付けています。'
 
-// 見た目が空の連絡を弾くため、ゼロ幅・不可視の書式文字も落とす(U+200B〜U+200F・U+2028/2029・
-// U+2060・U+FEFF)。これを残すと trim() を通り抜けて「本文 1 文字」の空連絡で 1 日 5 件の枠を埋められる。
-const INVISIBLE_FORMAT_CHARS = /[\u200B-\u200F\u2028\u2029\u2060\uFEFF]/g
-
-// C0 制御文字(改行 \n・タブ \t を除く)・DEL・C1 制御文字。\r は CRLF 正規化のあとに残った分を落とす。
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS_EXCEPT_NEWLINE_TAB = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g
-// eslint-disable-next-line no-control-regex
-const ALL_CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/g
-
-/** 改行・タブ以外の制御文字とゼロ幅文字を除去する(本文用)。CRLF / CR は LF に寄せる。 */
-export function stripControlCharactersExceptNewlineAndTab(text: string): string {
-  return text.replace(/\r\n?/g, '\n').replace(CONTROL_CHARS_EXCEPT_NEWLINE_TAB, '').replace(INVISIBLE_FORMAT_CHARS, '')
-}
-
-/** すべての制御文字とゼロ幅文字を除去する(送信者名など 1 行の値用)。 */
-export function stripAllControlCharacters(text: string): string {
-  return text.replace(ALL_CONTROL_CHARS, '').replace(INVISIBLE_FORMAT_CHARS, '')
-}
-
-/** 文字数はコードポイントで数える(サロゲートペアの漢字・絵文字を 2 文字に数えない)。 */
-export function countCharacters(text: string): number {
-  return Array.from(text).length
-}
-
-// URL らしさ(室長側の注意表示用・§E-1 containsUrl)。スキーム付き、www.、または「英数字.英字TLD/」の並び。
-const URL_LIKE_PATTERN = /(?:https?:\/\/|ftp:\/\/|www\.)[^\s]+|\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\.(?:com|net|org|jp|co|io|info|biz|me|app|dev|xyz|link|site|online|club|shop|tokyo)\b(?:\/[^\s]*)?/i
-
-export function containsUrlLike(text: string): boolean {
-  return URL_LIKE_PATTERN.test(text)
-}
-
-export type NormalizedParentMessageInput =
-  | { ok: true; body: string; senderName: string; containsUrl: boolean }
-  | { ok: false; error: string }
+const ABSENCE_DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 /**
- * POST body `{ body: string; senderName?: string }` を検証・正規化する(すべてサーバー側が権威。§E-1)。
- * - body: 制御文字(改行・タブ以外)を除いたうえで前後の空白を落とし、1〜500 字。0 字・制御文字のみ・501 字超は不可。
- * - senderName: 任意。制御文字を除き前後の空白を落として 0〜30 字。文字列以外(数値等)は不可。
+ * 受け付ける時限の上限。`absenceKey` は限を **2 桁** に詰めて範囲検索する(`__00`〜`__99`)ので、
+ * 3 桁になるとキーの並びが壊れて GET の範囲クエリから外れる。盤面は 5 限までなので実害はない。
+ */
+export const PARENT_ABSENCE_MAX_SLOT_NUMBER = 99
+
+export type ParentAbsenceInput = { dateKey: string; slotNumber: number }
+export type NormalizedParentAbsenceInput = { ok: true; value: ParentAbsenceInput } | { ok: false; error: string }
+
+/**
+ * POST body `{ dateKey: string; slotNumber: number }` の**形**だけを見る(400)。
+ * 「そのコマが実在して休み連絡できるか」は次の段(409)で日程計算に照らす
+ * (形の誤りで回数制限の枠を消費させないため、順序は 400 → 409 → 429)。
  * 文字列で届いた body(JSON 文字列)は一度だけ JSON.parse を試みる(Content-Type 違いの保険)。
  */
-export function normalizeParentMessageInput(raw: unknown): NormalizedParentMessageInput {
+export function normalizeParentAbsenceInput(raw: unknown): NormalizedParentAbsenceInput {
   let input: unknown = raw
   if (typeof input === 'string') {
     try {
@@ -197,27 +176,15 @@ export function normalizeParentMessageInput(raw: unknown): NormalizedParentMessa
     return { ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT }
   }
   const data = input as Record<string, unknown>
-  if (typeof data.body !== 'string') {
-    return { ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY }
-  }
-  const body = stripControlCharactersExceptNewlineAndTab(data.body).trim()
-  if (body.length === 0) {
-    return { ok: false, error: PARENT_MESSAGE_ERROR_BODY_EMPTY }
-  }
-  if (countCharacters(body) > PARENT_MESSAGE_BODY_LIMIT) {
-    return { ok: false, error: PARENT_MESSAGE_ERROR_BODY_TOO_LONG }
-  }
-
-  const rawSenderName = data.senderName
-  if (typeof rawSenderName !== 'undefined' && rawSenderName !== null && typeof rawSenderName !== 'string') {
+  const dateKey = typeof data.dateKey === 'string' ? data.dateKey.trim() : ''
+  if (!ABSENCE_DATE_KEY_PATTERN.test(dateKey)) {
     return { ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT }
   }
-  const senderName = typeof rawSenderName === 'string' ? stripAllControlCharacters(rawSenderName).trim() : ''
-  if (countCharacters(senderName) > PARENT_MESSAGE_SENDER_NAME_LIMIT) {
-    return { ok: false, error: PARENT_MESSAGE_ERROR_SENDER_NAME_TOO_LONG }
+  const slotNumber = data.slotNumber
+  if (typeof slotNumber !== 'number' || !Number.isInteger(slotNumber) || slotNumber < 1 || slotNumber > PARENT_ABSENCE_MAX_SLOT_NUMBER) {
+    return { ok: false, error: PARENT_MESSAGE_ERROR_INVALID_INPUT }
   }
-
-  return { ok: true, body, senderName, containsUrl: containsUrlLike(body) }
+  return { ok: true, value: { dateKey, slotNumber } }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -225,7 +192,9 @@ export function normalizeParentMessageInput(raw: unknown): NormalizedParentMessa
 // 全体 1 分 30 件は未実装(maxInstances で代替。k_contract §0)。
 // ───────────────────────────────────────────────────────────────────────────
 
-export const PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN = 5
+// ★休み連絡専用にした 2026-09-18 に 5 → 10 へ引き上げた: 1 件 = 1 コマなので、家族が同じ日の
+//   複数コマ・数日分をまとめて連絡すると 5 件では足りない(旧仕様は自由記述 1 通で済んだ)。
+export const PARENT_MESSAGE_DAILY_LIMIT_PER_TOKEN = 10
 export const PARENT_MESSAGE_HOURLY_LIMIT_PER_CLASSROOM = 60
 export const PARENT_MESSAGE_RATE_LIMIT_ERROR = '本日の送信上限に達しました。お急ぎの場合は教室へお電話ください。'
 
@@ -396,8 +365,30 @@ export function pruneParentPortalGetThrottleKeys(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// 連絡文書(§E-1)。classroomSnapshots/{classroomId}/parentMessages/{messageId}
+// 休み連絡の文書(§E-1 を 2026-09-18 に改定)。classroomSnapshots/{classroomId}/parentMessages/{messageId}
+// 旧フィールド body / senderName / containsUrl は**もう書かない**(旧 doc は残るが kind!=='absence' として扱う)。
 // ───────────────────────────────────────────────────────────────────────────
+
+/** 室長が盤面側モーダルで選んだ処理(四択)。保護者ページには出さない(「教室確認済」だけを出す)。 */
+export type ParentAbsenceResolution = 'absent' | 'absent-no-makeup' | 'makeup-now' | 'manual'
+
+export const PARENT_ABSENCE_RESOLUTIONS: readonly ParentAbsenceResolution[] = ['absent', 'absent-no-makeup', 'makeup-now', 'manual']
+
+export function isParentAbsenceResolution(value: unknown): value is ParentAbsenceResolution {
+  return typeof value === 'string' && (PARENT_ABSENCE_RESOLUTIONS as readonly string[]).includes(value)
+}
+
+/** 休み連絡できる授業の種別(isParentLessonAbsenceReportable が真になる kind と一致させる)。 */
+export type ParentAbsenceLessonKind = 'regular' | 'makeup' | 'extra'
+
+/** 連絡されたコマ。★科目・種別・予定かどうかは**サーバーが日程計算から引いた値**(リクエストの値は入らない)。 */
+export type ParentAbsenceDetail = {
+  dateKey: string
+  slotNumber: number
+  subject: string
+  lessonKind: ParentAbsenceLessonKind
+  isTentative: boolean
+}
 
 export type ParentMessageDoc = {
   workspaceKey: string
@@ -406,14 +397,52 @@ export type ParentMessageDoc = {
   studentId: string
   /** 保存時点の表示名(後で改名されても当時の宛名が分かる) */
   studentName: string
-  body: string
-  senderName: string
+  kind: 'absence'
+  absence: ParentAbsenceDetail
+  /**
+   * GET の範囲検索用のキー `${tokenFingerprint}__${dateKey}__${限2桁}`。
+   * ★**単一フィールドの範囲条件だけ**で引く(orderBy を足さない = 複合インデックス不要)。
+   * ★鍵を studentId にしない: 生徒ID `sNNN` は欠番が再利用されるので、削除→新規登録で
+   *   別の生徒に旧連絡が見えてしまう。トークンは生徒削除・再発行で失効する(§B-2)。
+   */
+  absenceKey: string
   createdAt: string
-  /** null = 室長未確認。markParentMessagesNotified がサーバー時刻で埋める(§E-2) */
+  /** 室長が盤面側モーダルで四択を押した時刻。保護者ページの「教室確認済」の根拠。null = まだ未確認。 */
+  acknowledgedAt: string | null
+  resolution: ParentAbsenceResolution | null
+  /** 処理完了(盤面を保存できた / 「何もしない」)。未読購読 where('notifiedAt','==',null) から外れる。 */
   notifiedAt: string | null
-  containsUrl: boolean
   /** ログ・調査用の先頭 6 文字。全文は持たない(§G-1) */
   tokenPrefix: string
+}
+
+/** 範囲検索キー。限は 2 桁に詰める(1 → '01')。 */
+export function buildParentAbsenceKey(tokenFingerprint: string, dateKey: string, slotNumber: number): string {
+  return `${tokenFingerprint}__${dateKey}__${`${slotNumber}`.padStart(2, '0')}`
+}
+
+/**
+ * 表示範囲 from〜to の連絡を引くための境界キー。`where('absenceKey','>=',startKey)` と
+ * `where('absenceKey','<=',endKey)` の 2 条件だけで引く(同一フィールドの範囲なので複合インデックス不要)。
+ * 指紋を先頭に置いているので、他のトークン(＝他の生徒)の連絡はキー空間ごと外れる。
+ */
+export function buildParentAbsenceKeyRange(tokenFingerprint: string, from: string, to: string): { startKey: string; endKey: string } {
+  return { startKey: `${tokenFingerprint}__${from}__00`, endKey: `${tokenFingerprint}__${to}__99` }
+}
+
+/**
+ * GET 1 回で読む休み連絡の上限。1 か月 = 最大 31 日 × 5 限 = 155 件なので 200 で足りる
+ * (上限が無いと壊れたデータ・将来の仕様変更でスナップショットとは別に読み取りが膨らむ)。
+ */
+export const PARENT_ABSENCE_NOTICE_QUERY_LIMIT = 200
+
+/**
+ * 文書 ID は**決定的**: `abs-{指紋}-{日付}-{限}`。`create()` で作るので、同じコマの二重連絡は
+ * Firestore が原子的に弾く(ALREADY_EXISTS → 409)。`PARENT_MESSAGE_ID_PATTERN` に収まる。
+ * ★トークン全文は入れない(文書 ID はパスの一部で、例外メッセージ経由でログに流れる・§G-1)。
+ */
+export function buildParentAbsenceMessageId(tokenFingerprint: string, dateKey: string, slotNumber: number): string {
+  return `abs-${tokenFingerprint}-${dateKey}-${slotNumber}`
 }
 
 export function buildParentMessageDoc(params: {
@@ -421,29 +450,100 @@ export function buildParentMessageDoc(params: {
   classroomId: string
   studentId: string
   studentName: string
-  body: string
-  senderName: string
-  containsUrl: boolean
+  absence: ParentAbsenceDetail
   createdAt: string
   token: string
+  tokenFingerprint: string
 }): ParentMessageDoc {
   return {
     workspaceKey: params.workspaceKey,
     classroomId: params.classroomId,
     studentId: params.studentId,
     studentName: params.studentName,
-    body: params.body,
-    senderName: params.senderName,
+    kind: 'absence',
+    absence: params.absence,
+    absenceKey: buildParentAbsenceKey(params.tokenFingerprint, params.absence.dateKey, params.absence.slotNumber),
     createdAt: params.createdAt,
+    acknowledgedAt: null,
+    resolution: null,
     notifiedAt: null,
-    containsUrl: params.containsUrl,
     tokenPrefix: toParentPortalTokenPrefix(params.token),
   }
 }
 
-/** 時系列に並ぶ文書 ID(developerReport と同じ作法): ISO の `:` `.` を `-` に置換 + 乱数サフィックス。 */
-export function buildParentMessageId(createdAtIso: string, randomSuffix: string): string {
-  return `${createdAtIso.replace(/[:.]/g, '-')}-${randomSuffix}`
+/** GET の応答に載せる 1 件(保護者ページのバッジ「休み連絡済」/「教室確認済」の元)。 */
+export type ParentAbsenceNotice = { dateKey: string; slotNumber: number; acknowledged: boolean }
+
+/**
+ * 範囲クエリで取れた doc 群を応答用に畳む。★内部 ID・トークン・resolution は載せない(§C)。
+ * kind!=='absence' の旧 doc(自由記述時代)は無視する。同じコマの重複は先勝ちで 1 件に畳む。
+ */
+export function readParentAbsenceNotices(docs: unknown): ParentAbsenceNotice[] {
+  if (!Array.isArray(docs)) return []
+  const notices: ParentAbsenceNotice[] = []
+  const seen = new Set<string>()
+  for (const raw of docs) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const data = raw as Record<string, unknown>
+    if (data.kind !== 'absence') continue
+    const absence = data.absence
+    if (!absence || typeof absence !== 'object' || Array.isArray(absence)) continue
+    const detail = absence as Record<string, unknown>
+    const dateKey = typeof detail.dateKey === 'string' ? detail.dateKey : ''
+    const slotNumber = typeof detail.slotNumber === 'number' && Number.isInteger(detail.slotNumber) ? detail.slotNumber : null
+    if (!dateKey || slotNumber === null) continue
+    const key = `${dateKey}__${slotNumber}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    // 空文字の acknowledgedAt は「未確認」として扱う(バッジを安全側=「休み連絡済」に倒す)。
+    notices.push({ dateKey, slotNumber, acknowledged: typeof data.acknowledgedAt === 'string' && data.acknowledgedAt.trim() !== '' })
+  }
+  return notices.sort((left, right) => (left.dateKey !== right.dateKey ? (left.dateKey < right.dateKey ? -1 : 1) : left.slotNumber - right.slotNumber))
+}
+
+/** 連絡できるコマとして日程計算から引いた値(リクエストの科目・種別は使わない)。 */
+export type ParentAbsenceTargetLesson = { subject: string; lessonKind: ParentAbsenceLessonKind; isTentative: boolean }
+
+/**
+ * `buildParentScheduleView` が返した days(unknown)から、その日・その限の「休み連絡できるコマ」を探す。
+ * 判定は共有の `isParentLessonAbsenceReportable` **だけ**を使う(公開ページのタップ判定と同じ 1 関数)。
+ * 同じ限に複数行あるとき(振替と通常が同じ限に並ぶなど)は最初に見つかった連絡可能な行を採る。
+ */
+export function findParentAbsenceTargetLesson(days: unknown, dateKey: string, slotNumber: number, todayKey: string): ParentAbsenceTargetLesson | null {
+  if (!Array.isArray(days)) return null
+  for (const rawDay of days) {
+    if (!rawDay || typeof rawDay !== 'object' || Array.isArray(rawDay)) continue
+    const day = rawDay as Record<string, unknown>
+    if (day.dateKey !== dateKey) continue
+    const lessons = day.lessons
+    if (!Array.isArray(lessons)) continue
+    for (const rawLesson of lessons) {
+      if (!rawLesson || typeof rawLesson !== 'object' || Array.isArray(rawLesson)) continue
+      const lesson = rawLesson as Record<string, unknown>
+      if (lesson.slotNumber !== slotNumber) continue
+      const kind = lesson.kind
+      if (typeof kind !== 'string') continue
+      if (!isParentLessonAbsenceReportable(kind as ParentScheduleLessonKind, dateKey, todayKey)) continue
+      return {
+        subject: typeof lesson.subject === 'string' ? lesson.subject : '',
+        lessonKind: kind as ParentAbsenceLessonKind,
+        isTentative: lesson.isTentative === true,
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * Firestore の `create()` が「同じ ID が既にある」で失敗したか(gRPC code 6 = ALREADY_EXISTS)。
+ * ★他の失敗(権限・接続)まで「二重連絡」に丸めないよう、コードか文言が一致するときだけ真にする
+ *   (丸めると保存できていないのに保護者へ 409「受け付けています」を返し、連絡が消える)。
+ */
+export function isAlreadyExistsError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const record = error as { code?: unknown; message?: unknown }
+  if (record.code === 6 || record.code === 'already-exists' || record.code === 'ALREADY_EXISTS') return true
+  return typeof record.message === 'string' && record.message.includes('ALREADY_EXISTS')
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -526,8 +626,21 @@ export type ParentPortalDeps = {
    * 拒否のときは**何も書かない**(resolveParentMessageRateLimitOutcome)。
    */
   consumeMessageQuota: (params: { workspaceKey: string; classroomId: string } & ParentMessageRateLimitKeys) => Promise<{ allowed: boolean; error?: string }>
-  /** parentMessages へ追加する。 */
-  saveMessage: (params: { workspaceKey: string; classroomId: string; doc: ParentMessageDoc }) => Promise<unknown>
+  /**
+   * そのコマの休み連絡が既にあるか(決定的 messageId の存在確認)。
+   * ★回数制限より**先**に見る: 二重タップで枠を消費させない。
+   */
+  hasAbsenceNotice: (params: { workspaceKey: string; classroomId: string; messageId: string }) => Promise<boolean>
+  /**
+   * 表示範囲の休み連絡を引く(GET)。`absenceKey` の**単一フィールド範囲条件だけ**で引く実装にする
+   * (orderBy を足すと複合インデックスが要る = FAILED_PRECONDITION で INTERNAL になる・2026-09-12 の教訓)。
+   */
+  loadAbsenceNotices: (params: { workspaceKey: string; classroomId: string; startKey: string; endKey: string }) => Promise<unknown[]>
+  /**
+   * parentMessages へ**決定的 ID** で create する。既に同じ ID があれば `{ created: false }` を返す
+   * (ALREADY_EXISTS の判別は index.ts 側 = Firestore の例外に触れる層で行い、ここは真偽値だけ見る)。
+   */
+  saveMessage: (params: { workspaceKey: string; classroomId: string; messageId: string; doc: ParentMessageDoc }) => Promise<{ created: boolean }>
 }
 
 export type ParentPortalHandlerResult = { status: number; body: unknown }
@@ -592,13 +705,22 @@ export async function handleParentPortalGet(
 ): Promise<ParentPortalHandlerResult> {
   const verified = await verifyParentPortalRequest(req.token, deps)
   if (!verified.ok) return verified.result
-  const { tokenDoc, classroomName, snapshot, student, today } = verified.context
+  const { token, tokenDoc, classroomName, snapshot, student, today } = verified.context
 
   const range = deps.resolveRange({ from: req.from, to: req.to }, today)
   const view = deps.buildScheduleView(snapshot.payload, tokenDoc.studentId, { from: range.from, to: range.to })
   if (!view) {
     return { status: 410, body: { error: PARENT_PORTAL_ERROR_GONE } }
   }
+
+  // 表示範囲に届いている休み連絡(このトークンの分だけ。指紋を先頭に置いた absenceKey の範囲で引く)。
+  const keyRange = buildParentAbsenceKeyRange(buildParentPortalTokenFingerprint(token), range.from, range.to)
+  const noticeDocs = await deps.loadAbsenceNotices({
+    workspaceKey: tokenDoc.workspaceKey,
+    classroomId: tokenDoc.classroomId,
+    startKey: keyRange.startKey,
+    endKey: keyRange.endKey,
+  })
 
   // ★応答に studentId / classroomId / トークン / 講師名 / 机 / 他生徒 / 在庫数を含めない(§C)。
   return {
@@ -613,25 +735,66 @@ export async function handleParentPortalGet(
       days: view.days,
       // 講習だけの月の注記用(講習コマの中身は出さない)。
       hasLectureLessons: view.hasLectureLessons === true,
+      // 届いている休み連絡(日付・限・教室が確認したか)。resolution・内部 ID は出さない(§C)。
+      absenceNotices: readParentAbsenceNotices(noticeDocs),
     },
   }
 }
 
-/** POST `/api/parent/{token}` body `{ body, senderName? }` → 200 `{ ok: true, createdAt }`。 */
+/**
+ * POST `/api/parent/{token}` body `{ dateKey, slotNumber }`(休み連絡・2026-09-18)
+ * → 200 `{ ok: true, createdAt, notice: { dateKey, slotNumber, acknowledged: false } }`。
+ *
+ * 検証順(1 つ落ちたら以降を実行しない):
+ *  (1) GET と同じ共通検証(400 / 410 / 403 / 410)
+ *  (2) 入力の形 → 400
+ *  (3) 対象コマ(today <= dateKey <= bounds.maxTo かつ日程計算に連絡できるコマがある) → 無ければ 409
+ *  (4) 同じコマの連絡が既にある → 409(**回数枠を消費しない**)
+ *  (5) 回数制限 → 429
+ *  (6) 決定的 ID で create。競合(ALREADY_EXISTS)なら (4) と同じ 409
+ * ★(3)(4) を (5) より先に置くのは、押し間違い・二重タップ・古い画面からの再送で
+ *   1 日の枠(10 件)を食い潰させないため。順序を入れ替えない。
+ */
 export async function handleParentPortalPost(
   req: { token: string; rawBody: unknown },
   deps: ParentPortalDeps,
 ): Promise<ParentPortalHandlerResult> {
   const verified = await verifyParentPortalRequest(req.token, deps)
   if (!verified.ok) return verified.result
-  const { token, tokenDoc, student } = verified.context
+  const { token, tokenDoc, snapshot, student, today } = verified.context
 
-  // 本文の検証(400)は回数制限(429)より先。壊れた入力で枠を消費させない。
-  const input = normalizeParentMessageInput(req.rawBody)
+  // (2) 入力の形(400)は回数制限(429)より先。壊れた入力で枠を消費させない。
+  const input = normalizeParentAbsenceInput(req.rawBody)
   if (!input.ok) {
     return { status: 400, body: { error: input.error } }
   }
+  const { dateKey, slotNumber } = input.value
 
+  // (3) 対象コマの検証。表示できない月(来月以降)・過去日は日程を計算するまでもなく弾く。
+  //     科目・種別・予定かどうかは**ここで日程計算から引いた値**を保存する(リクエストの値は使わない)。
+  const maxTo = deps.resolveRange({}, today).bounds.maxTo
+  const target = (dateKey >= today && dateKey <= maxTo)
+    ? findParentAbsenceTargetLesson(
+      deps.buildScheduleView(snapshot.payload, tokenDoc.studentId, { from: dateKey, to: dateKey })?.days,
+      dateKey,
+      slotNumber,
+      today,
+    )
+    : null
+  if (!target) {
+    return { status: 409, body: { error: PARENT_ABSENCE_ERROR_NOT_REPORTABLE } }
+  }
+
+  const tokenFingerprint = buildParentPortalTokenFingerprint(token)
+  const messageId = buildParentAbsenceMessageId(tokenFingerprint, dateKey, slotNumber)
+
+  // (4) 二重連絡(枠を消費しない)。
+  const alreadyReported = await deps.hasAbsenceNotice({ workspaceKey: tokenDoc.workspaceKey, classroomId: tokenDoc.classroomId, messageId })
+  if (alreadyReported) {
+    return { status: 409, body: { error: PARENT_ABSENCE_ERROR_ALREADY_REPORTED } }
+  }
+
+  // (5) 回数制限。
   const nowIso = deps.nowIso()
   const keys = buildParentMessageRateLimitKeys(token, nowIso)
   const quota = await deps.consumeMessageQuota({ workspaceKey: tokenDoc.workspaceKey, classroomId: tokenDoc.classroomId, ...keys })
@@ -639,21 +802,24 @@ export async function handleParentPortalPost(
     return { status: 429, body: { error: quota.error ?? PARENT_MESSAGE_RATE_LIMIT_ERROR } }
   }
 
-  // studentName は保存時点の表示名(スナップショットから)。classroomId / studentId はトークン doc 由来。
+  // (6) studentName は保存時点の表示名(スナップショットから)。classroomId / studentId はトークン doc 由来。
   const doc = buildParentMessageDoc({
     workspaceKey: tokenDoc.workspaceKey,
     classroomId: tokenDoc.classroomId,
     studentId: tokenDoc.studentId,
     studentName: resolveParentPortalStudentName(student),
-    body: input.body,
-    senderName: input.senderName,
-    containsUrl: input.containsUrl,
+    absence: { dateKey, slotNumber, subject: target.subject, lessonKind: target.lessonKind, isTentative: target.isTentative },
     createdAt: nowIso,
     token,
+    tokenFingerprint,
   })
-  await deps.saveMessage({ workspaceKey: tokenDoc.workspaceKey, classroomId: tokenDoc.classroomId, doc })
+  const saved = await deps.saveMessage({ workspaceKey: tokenDoc.workspaceKey, classroomId: tokenDoc.classroomId, messageId, doc })
+  // 同時送信で create が競合したときも「すでに受け付けています」に揃える(原子的な二重防止)。
+  if (!saved.created) {
+    return { status: 409, body: { error: PARENT_ABSENCE_ERROR_ALREADY_REPORTED } }
+  }
 
-  return { status: 200, body: { ok: true, createdAt: nowIso } }
+  return { status: 200, body: { ok: true, createdAt: nowIso, notice: { dateKey, slotNumber, acknowledged: false } } }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -715,13 +881,27 @@ export function normalizeRevokeRequest(raw: unknown): NormalizeResult<RevokeStud
 
 /** 1 回の既読化で受け付ける ID の上限。モーダルの「確認」1 回ぶん(未読が 50 件を超える運用は想定しない)。 */
 export const PARENT_MESSAGE_MARK_NOTIFIED_MAX_IDS = 50
-/** 文書 ID の形(buildParentMessageId の出力 = ISO 由来の英数字と `-`)。パス区切りや空白を弾く。 */
+/**
+ * 文書 ID の形。新しい休み連絡は `abs-{指紋}-{日付}-{限}`、旧(自由記述時代)の doc は ISO 由来の
+ * 英数字と `-`。どちらもこの形に収まる。パス区切りや空白を弾く。
+ */
 export const PARENT_MESSAGE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/
+
+/**
+ * 既読化の段(2026-09-18 で 2 段になった):
+ * - `'acknowledged'` … 室長が盤面側モーダルで四択を押した時点。保護者ページに「教室確認済」が出る。
+ * - `'notified'`     … 処理完了(盤面を保存できた / 「何もしない」)。未読購読から外れる。
+ * 省略時は `'notified'`(旧クライアントとの互換)。
+ */
+export type ParentMessageMarkStage = 'acknowledged' | 'notified'
 
 export type MarkParentMessagesNotifiedRequest = {
   workspaceKey: string
   classroomId: string
   messageIds: string[]
+  stage: ParentMessageMarkStage
+  /** 室長が選んだ処理。未指定なら既存値を触らない。 */
+  resolution: ParentAbsenceResolution | null
 }
 
 export function normalizeMarkNotifiedRequest(raw: unknown): NormalizeResult<MarkParentMessagesNotifiedRequest> {
@@ -743,12 +923,52 @@ export function normalizeMarkNotifiedRequest(raw: unknown): NormalizeResult<Mark
   if (messageIds.length > PARENT_MESSAGE_MARK_NOTIFIED_MAX_IDS) {
     return { ok: false, reason: `messageIds は ${PARENT_MESSAGE_MARK_NOTIFIED_MAX_IDS} 件以内で指定してください。` }
   }
-  return { ok: true, value: { workspaceKey, classroomId, messageIds } }
+  // ★stage 未指定は 'notified'(旧クライアントは stage を送らない)。知らない値は素通しせず弾く。
+  const rawStage = data.stage
+  const stage: ParentMessageMarkStage = (typeof rawStage === 'undefined' || rawStage === null) ? 'notified' : rawStage as ParentMessageMarkStage
+  if (stage !== 'acknowledged' && stage !== 'notified') {
+    return { ok: false, reason: "stage は acknowledged または notified を指定してください。" }
+  }
+  const rawResolution = data.resolution
+  if (typeof rawResolution !== 'undefined' && rawResolution !== null && !isParentAbsenceResolution(rawResolution)) {
+    return { ok: false, reason: `resolution は ${PARENT_ABSENCE_RESOLUTIONS.join(' / ')} のいずれかを指定してください。` }
+  }
+  const resolution = isParentAbsenceResolution(rawResolution) ? rawResolution : null
+  return { ok: true, value: { workspaceKey, classroomId, messageIds, stage, resolution } }
 }
 
-/** 既読化の対象: 実在し、まだ notifiedAt が null の文書だけ(既読は上書きしない = 最初に確認した時刻を保つ)。 */
-export function selectParentMessageIdsToMarkNotified(docs: ReadonlyArray<{ id: string; exists: boolean; notifiedAt: unknown }>): string[] {
-  return docs.filter((doc) => doc.exists && (doc.notifiedAt === null || typeof doc.notifiedAt === 'undefined')).map((doc) => doc.id)
+/** Firestore へ流す部分更新(update)1 件。触らないフィールドは**含めない**(INV-07: 部分更新で他を壊さない)。 */
+export type ParentMessageMarkWrite = { id: string; update: Record<string, string> }
+
+/**
+ * 既読化の書き込み内容を決める(純関数)。実在しない doc は対象外。
+ * - `'acknowledged'`: `acknowledgedAt` は**既にあればそのまま**(最初に確認した時刻を保つ)、無ければ now。
+ *   `resolution` は指定されたときだけ上書きする(やり直しに追従する)。`notifiedAt` は触らない
+ *   ＝「四択を押したがまだ保存していない」連絡は未読のまま残り、次回また通知が出る(オーナー確定 5)。
+ * - `'notified'`: `notifiedAt` が**未設定の doc だけ**。同時に `acknowledgedAt` も埋める
+ *   (盤面保存だけで完了した場合に「確認済み」が空のまま残らないように)。
+ */
+export function resolveParentMessageMarkWrites(
+  docs: ReadonlyArray<{ id: string; exists: boolean; notifiedAt?: unknown; acknowledgedAt?: unknown }>,
+  params: { stage: ParentMessageMarkStage; resolution?: ParentAbsenceResolution | null; nowIso: string },
+): ParentMessageMarkWrite[] {
+  const writes: ParentMessageMarkWrite[] = []
+  for (const doc of docs) {
+    if (!doc.exists) continue
+    const acknowledgedAt = typeof doc.acknowledgedAt === 'string' && doc.acknowledgedAt ? doc.acknowledgedAt : null
+    if (params.stage === 'acknowledged') {
+      const update: Record<string, string> = { acknowledgedAt: acknowledgedAt ?? params.nowIso }
+      if (params.resolution) update.resolution = params.resolution
+      writes.push({ id: doc.id, update })
+      continue
+    }
+    // 'notified': 既読は上書きしない(最初に処理した時刻を保つ)。
+    if (doc.notifiedAt !== null && typeof doc.notifiedAt !== 'undefined') continue
+    const update: Record<string, string> = { notifiedAt: params.nowIso, acknowledgedAt: acknowledgedAt ?? params.nowIso }
+    if (params.resolution) update.resolution = params.resolution
+    writes.push({ id: doc.id, update })
+  }
+  return writes
 }
 
 // ───────────────────────────────────────────────────────────────────────────

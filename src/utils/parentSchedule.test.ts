@@ -4,6 +4,7 @@ import {
   buildManagedOccurrenceKey,
   buildParentScheduleView,
   getWeekdayFromDateKey,
+  isParentLessonAbsenceReportable,
   isParentStudentActiveOnDate,
   normalizeParentDateText,
   PARENT_SCHEDULE_MONTHS_AFTER,
@@ -122,33 +123,71 @@ describe('parentSchedule 日付ユーティリティ', () => {
 describe('resolveParentScheduleRange', () => {
   const today = PARENT_SCHEDULE_FIXTURE_TODAY
 
-  // オーナー指示 2026-09-14(確認リスト k-4/k-5): 表示も移動も暦の 1 か月単位・移動できるのは前後 1 か月だけ。
-  it('既定は今月の 1 日〜末日、限界は先月 1 日〜来月末日', () => {
+  // オーナー指示 2026-09-14(確認リスト k-4/k-5): 表示も移動も暦の 1 か月単位。
+  // オーナー指示 2026-09-18(休み連絡専用化): **来月は開かない**(MONTHS_AFTER = 0)。動かせるのは先月と今月だけ。
+  it('既定は今月の 1 日〜末日、限界は先月 1 日〜今月末日(来月は開かない)', () => {
     expect(PARENT_SCHEDULE_MONTHS_BEFORE).toBe(1)
-    expect(PARENT_SCHEDULE_MONTHS_AFTER).toBe(1)
-    expect(resolveParentScheduleRange({}, today)).toEqual({ from: '2026-09-01', to: '2026-09-30', bounds: { minFrom: '2026-08-01', maxTo: '2026-10-31' } })
+    expect(PARENT_SCHEDULE_MONTHS_AFTER).toBe(0)
+    expect(resolveParentScheduleRange({}, today)).toEqual({ from: '2026-09-01', to: '2026-09-30', bounds: { minFrom: '2026-08-01', maxTo: '2026-09-30' } })
   })
 
   it('from(無ければ to)が属する月の 1 日〜末日に丸める', () => {
-    expect(resolveParentScheduleRange({ from: '2026-10-05', to: '2026-11-09' }, today)).toMatchObject({ from: '2026-10-01', to: '2026-10-31' })
+    expect(resolveParentScheduleRange({ from: '2026-08-05', to: '2026-09-09' }, today)).toMatchObject({ from: '2026-08-01', to: '2026-08-31' })
     expect(resolveParentScheduleRange({ to: '2026-08-10' }, today)).toMatchObject({ from: '2026-08-01', to: '2026-08-31' })
   })
 
-  it('前後 1 か月を超える要求はエラーにせず近い端の月へ寄せる', () => {
+  // ★回帰防止(2026-09-18): 来月を要求しても今月へ寄せる。ここが来月を返すようになると、
+  //   bounds.maxTo が広がって「盤面がまだ無い来月のコマに休み連絡が付く」経路が復活する。
+  it('先月〜今月を超える要求はエラーにせず近い端の月へ寄せる(来月の要求は今月になる)', () => {
     expect(resolveParentScheduleRange({ from: '2026-01-01', to: '2026-01-31' }, today)).toMatchObject({ from: '2026-08-01', to: '2026-08-31' })
-    expect(resolveParentScheduleRange({ from: '2027-01-01' }, today)).toMatchObject({ from: '2026-10-01', to: '2026-10-31' })
+    expect(resolveParentScheduleRange({ from: '2026-10-05', to: '2026-10-31' }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
+    expect(resolveParentScheduleRange({ from: '2027-01-01' }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
   })
 
   it('年またぎ・閏年の月末も正しく出す', () => {
-    expect(resolveParentScheduleRange({}, '2026-12-20')).toEqual({ from: '2026-12-01', to: '2026-12-31', bounds: { minFrom: '2026-11-01', maxTo: '2027-01-31' } })
-    expect(resolveParentScheduleRange({ from: '2028-02-10' }, '2028-01-15')).toMatchObject({ from: '2028-02-01', to: '2028-02-29' })
-    expect(resolveParentScheduleRange({}, '2027-01-05').bounds).toEqual({ minFrom: '2026-12-01', maxTo: '2027-02-28' })
+    expect(resolveParentScheduleRange({}, '2026-12-20')).toEqual({ from: '2026-12-01', to: '2026-12-31', bounds: { minFrom: '2026-11-01', maxTo: '2026-12-31' } })
+    expect(resolveParentScheduleRange({}, '2028-02-10')).toMatchObject({ from: '2028-02-01', to: '2028-02-29' })
+    expect(resolveParentScheduleRange({ from: '2028-02-10' }, '2028-01-15')).toMatchObject({ from: '2028-01-01', to: '2028-01-31' })
+    expect(resolveParentScheduleRange({}, '2027-01-05').bounds).toEqual({ minFrom: '2026-12-01', maxTo: '2027-01-31' })
   })
 
   it('不正な値は無視して今月にする', () => {
     expect(resolveParentScheduleRange({ from: '2026/09/20', to: 123 }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
     expect(resolveParentScheduleRange({ from: ['2026-09-20'], to: null }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
     expect(resolveParentScheduleRange({ from: '2026-02-30' }, today)).toMatchObject({ from: '2026-09-01', to: '2026-09-30' })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 休み連絡できるコマの判定(2026-09-18・サーバー POST 検証とページのタップ判定の唯一の権威)
+// ---------------------------------------------------------------------------
+
+describe('isParentLessonAbsenceReportable', () => {
+  const TODAY = '2026-09-14'
+
+  it('これから受ける授業(通常・振替・増コマ)は当日を含めて連絡できる(オーナー確定 3)', () => {
+    for (const kind of ['regular', 'makeup', 'extra'] as const) {
+      expect(isParentLessonAbsenceReportable(kind, TODAY, TODAY), `${kind} 当日`).toBe(true)
+      expect(isParentLessonAbsenceReportable(kind, '2026-09-30', TODAY), `${kind} 先`).toBe(true)
+      expect(isParentLessonAbsenceReportable(kind, '2026-09-13', TODAY), `${kind} 過去`).toBe(false)
+    }
+  })
+
+  it('すでに結果が付いたコマ(休み・振替なし欠席・出席済み)は連絡できない', () => {
+    for (const kind of ['absent', 'absent-no-makeup', 'attended'] as const) {
+      expect(isParentLessonAbsenceReportable(kind, '2026-09-30', TODAY), kind).toBe(false)
+    }
+  })
+
+  it('テンプレ補完由来(予定)のコマでも連絡できる(盤面がまだ無い先の予定こそ事前連絡が要る)', () => {
+    // isTentative は引数に取らない = 予定でも同じ判定になる、という契約をここで固定する。
+    expect(isParentLessonAbsenceReportable('regular', '2026-09-28', TODAY)).toBe(true)
+  })
+
+  it('壊れた日付は fail-closed(false)', () => {
+    expect(isParentLessonAbsenceReportable('regular', 'bad', TODAY)).toBe(false)
+    expect(isParentLessonAbsenceReportable('regular', '2026-02-30', TODAY)).toBe(false)
+    expect(isParentLessonAbsenceReportable('regular', TODAY, '')).toBe(false)
   })
 })
 

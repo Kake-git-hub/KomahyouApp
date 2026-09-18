@@ -3,6 +3,12 @@
 // ParentPortalPage.tsx から React に依存しない判断・整形をここへ切り出し、単体テストで固定する
 // (E2E 廃止後はユニットが唯一の自動ゲート。.test.tsx は CI で走らないため .test.ts から検証する)。
 // 型は k_contract §1 の API 契約(functions/src/parentPortal.ts の応答)と一致させる。
+//
+// ★2026-09-18(オーナー指示): 自由記述の「教室へ連絡」を廃止し、**授業行をタップ → 休み連絡**だけにした。
+
+// ★「この行をタップして休み連絡できるか」はサーバーの POST 検証と**同じ 1 関数**で決める
+//   (判定を分散させない。片側だけ条件を足すと「押せるのに 409」「押せないのに送れる」の非対称になる)。
+import { isParentLessonAbsenceReportable } from '../../utils/parentSchedule'
 
 export type ParentScheduleLessonKind = 'regular' | 'makeup' | 'extra' | 'absent' | 'absent-no-makeup' | 'attended'
 
@@ -32,6 +38,9 @@ export type ParentScheduleDay = {
   makeupDestinations?: Array<{ dateKey: string; slotNumber: number }>
 }
 
+/** 届いている休み連絡 1 件(GET の応答。旧 functions の応答には無いので省略可)。 */
+export type ParentAbsenceNotice = { dateKey: string; slotNumber: number; acknowledged: boolean }
+
 export type ParentPortalScheduleResponse = {
   studentName: string
   classroomName: string
@@ -42,20 +51,18 @@ export type ParentPortalScheduleResponse = {
   days: ParentScheduleDay[]
   // その月にこの生徒の講習コマがあったか(講習コマ自体は出ない)。旧 functions の応答には無いので省略可。
   hasLectureLessons?: boolean
+  // 表示範囲に届いている休み連絡。旧 functions の応答には無いので省略可(空配列として扱う)。
+  absenceNotices?: ParentAbsenceNotice[]
 }
 
 export type ParentScheduleRange = { from: string; to: string }
 export type ParentScheduleBounds = { minFrom: string; maxTo: string }
 
-// 送信フォームの上限(spec §E-1・サーバー側 PARENT_MESSAGE_BODY_LIMIT / SENDER_NAME_LIMIT と同値。権威はサーバー)。
-export const PARENT_MESSAGE_BODY_LIMIT = 500
-export const PARENT_MESSAGE_SENDER_NAME_LIMIT = 30
-
-// 常時表示する注記 3 種(spec §C)。
+// 常時表示する注記 3 種(spec §C)。③は 2026-09-18 に「下部のフォーム」から「授業行をタップ」へ変えた。
 export const PARENT_PORTAL_NOTES: readonly string[] = [
   '教室で保存された時点の予定です。',
   '予定は変更になることがあります。',
-  '変更・欠席のご連絡はこのページ下部からお送りください（お電話でも受け付けます）。',
+  'お休みのご連絡は、該当する授業の行をタップしてください（お電話でも受け付けます）。',
 ]
 
 // 利用者向け文言(サーバーの error JSON が無いときのフォールバック。理由を出し分けない・§F)。
@@ -67,7 +74,6 @@ export const PARENT_PORTAL_NETWORK_ERROR_MESSAGE = '通信エラーが発生し�
 export const PARENT_MESSAGE_RATE_LIMIT_MESSAGE = '本日の送信上限に達しました。お急ぎの場合は教室へお電話ください。'
 export const PARENT_MESSAGE_SEND_FAILED_MESSAGE = '送信に失敗しました。時間をおいて再度お試しください。'
 export const PARENT_MESSAGE_NETWORK_ERROR_MESSAGE = '通信エラーが発生しました。再度お試しください。'
-export const PARENT_MESSAGE_SENT_MESSAGE = '受け付けました（返信はこのページには届きません。教室から電話・アプリでご連絡します）'
 export const PARENT_SCHEDULE_TENTATIVE_LABEL = '予定（変更の可能性あり）'
 // 1 コマ 1 行の一覧では行ごとに短い「予定」印を付け、意味は一覧の上に 1 回だけ出す。
 export const PARENT_SCHEDULE_TENTATIVE_LEGEND = '「予定」印の授業は、変更になる可能性があります。'
@@ -238,6 +244,9 @@ export function describeParentScheduleDayStatus(day: ParentScheduleDay): string 
   return day.lessons.length === 0 ? PARENT_SCHEDULE_NO_LESSON_MESSAGE : null
 }
 
+/** そのコマに休み連絡が届いているか(バッジの種別)。 */
+export type ParentAbsenceStatus = 'none' | 'reported' | 'acknowledged'
+
 // 一覧は 1 コマ 1 行(確認リスト その他 2026-09-14「スクロール量が短くなるように」)。
 // 日付は同じ日の先頭行だけに出し、教室休み・授業の無い日は 1 行にまとめる。
 export type ParentScheduleRow = {
@@ -255,6 +264,14 @@ export type ParentScheduleRow = {
   sub?: string
   lessonKind?: ParentScheduleLessonKind
   isTentative: boolean
+  /** 授業行だけ。休み連絡の対象を特定するのに使う。 */
+  slotNumber?: number
+  /** 科目(休み連絡の確認モーダルに出す元の値。main は「お休み」等に化けるので別に持つ)。 */
+  subject?: string
+  /** タップして休み連絡できるか(連絡可能なコマ **かつ** まだ連絡していない)。 */
+  canReportAbsence: boolean
+  /** 届いている休み連絡の状態(バッジ)。 */
+  absenceStatus: ParentAbsenceStatus
 }
 
 // '2026-09-14' + 1 → '14日(月)'(月は見出しに出ているので省く)。
@@ -272,7 +289,22 @@ function formatLessonStartTime(timeLabel: string): string {
   return matched ? matched[1] : text
 }
 
-export function buildParentScheduleRows(days: readonly ParentScheduleDay[], today: string): ParentScheduleRow[] {
+/** そのコマに届いている休み連絡の状態を引く(日付＋限の一致)。 */
+export function resolveParentAbsenceStatus(
+  notices: readonly ParentAbsenceNotice[],
+  dateKey: string,
+  slotNumber: number,
+): ParentAbsenceStatus {
+  const notice = notices.find((entry) => entry.dateKey === dateKey && entry.slotNumber === slotNumber)
+  if (!notice) return 'none'
+  return notice.acknowledged ? 'acknowledged' : 'reported'
+}
+
+export function buildParentScheduleRows(
+  days: readonly ParentScheduleDay[],
+  today: string,
+  notices: readonly ParentAbsenceNotice[] = [],
+): ParentScheduleRow[] {
   const rows: ParentScheduleRow[] = []
   for (const day of days) {
     const isToday = day.dateKey === today
@@ -292,11 +324,14 @@ export function buildParentScheduleRows(days: readonly ParentScheduleDay[], toda
           ? { sub: `${day.makeupDestinations.map((destination) => formatParentScheduleLinkedSlot(destination)).join('・')}に振替` }
           : {}),
         isTentative: false,
+        canReportAbsence: false,
+        absenceStatus: 'none',
       })
       continue
     }
     day.lessons.forEach((lesson, index) => {
       const described = describeParentScheduleLesson(lesson)
+      const absenceStatus = resolveParentAbsenceStatus(notices, day.dateKey, lesson.slotNumber)
       rows.push({
         key: `${day.dateKey}-${lesson.slotNumber}-${lesson.kind}-${index}`,
         dateKey: day.dateKey,
@@ -310,32 +345,91 @@ export function buildParentScheduleRows(days: readonly ParentScheduleDay[], toda
         ...(described.sub ? { sub: described.sub } : {}),
         lessonKind: lesson.kind,
         isTentative: lesson.isTentative,
+        slotNumber: lesson.slotNumber,
+        subject: String(lesson.subject ?? '').trim(),
+        // 連絡済みの行はタップ不可(二重連絡の 409 を画面で見せない)。判定の権威は共有純関数。
+        canReportAbsence: absenceStatus === 'none' && isParentLessonAbsenceReportable(lesson.kind, day.dateKey, today),
+        absenceStatus,
       })
     })
   }
   return rows
 }
 
+// ---------------------------------------------------------------------------
+// 休み連絡(2026-09-18)
+// ---------------------------------------------------------------------------
+
+export const PARENT_ABSENCE_BADGE_REPORTED = '休み連絡済'
+export const PARENT_ABSENCE_BADGE_ACKNOWLEDGED = '教室確認済'
+/** タップできる行が 1 つでもあるときだけ一覧の上に出す説明。 */
+export const PARENT_ABSENCE_LIST_HINT = '授業の行をタップすると、お休みの連絡ができます。'
+export const PARENT_ABSENCE_CONFIRM_QUESTION = 'このコマをお休みします。よろしいですか?'
+export const PARENT_ABSENCE_CONFIRM_SUBMIT_LABEL = 'お休みを連絡する'
+export const PARENT_ABSENCE_CONFIRM_CANCEL_LABEL = 'やめる'
+export const PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE = `教室が確認すると、このページに「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」と表示されます。`
+export const PARENT_ABSENCE_CONFIRM_NOTE_CANCEL = '取り消し・変更はお電話でご連絡ください。'
+/** 当日のコマだけ足す注意(授業までに確認が間に合わない可能性がある)。 */
+export const PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY = `当日のご連絡です。授業までに「${PARENT_ABSENCE_BADGE_ACKNOWLEDGED}」にならない場合は、お電話でもご連絡ください。`
+export const PARENT_ABSENCE_SENT_MESSAGE = 'お休みの連絡を送りました。'
+export const PARENT_ABSENCE_CONFLICT_MESSAGE = 'このコマはお休みの連絡ができません。ページを読み込み直して最新の予定をご確認ください。'
+
+/** バッジの文言(none のときは出さない)。 */
+export function describeParentAbsenceBadge(status: ParentAbsenceStatus): string | null {
+  if (status === 'acknowledged') return PARENT_ABSENCE_BADGE_ACKNOWLEDGED
+  if (status === 'reported') return PARENT_ABSENCE_BADGE_REPORTED
+  return null
+}
+
+/** 確認モーダルの対象コマ(POST の body もここから作る)。 */
+export type ParentAbsenceTarget = {
+  dateKey: string
+  weekday: number
+  slotNumber: number
+  timeLabel: string
+  subject: string
+}
+
+/** タップされた行 → モーダルの対象。連絡できない行は null(押せない行が押されても送らない)。 */
+export function toParentAbsenceTarget(row: ParentScheduleRow): ParentAbsenceTarget | null {
+  if (!row.canReportAbsence || typeof row.slotNumber !== 'number') return null
+  return {
+    dateKey: row.dateKey,
+    weekday: row.weekday,
+    slotNumber: row.slotNumber,
+    timeLabel: row.timeLabel,
+    subject: row.subject ?? '',
+  }
+}
+
+/** 対象コマの 1 行表記('9月20日(土) 3限 16:20〜 英')。科目が空でも見出しが崩れないようにする。 */
+export function formatParentAbsenceTargetLabel(target: ParentAbsenceTarget): string {
+  const parts = [
+    formatParentScheduleDayLabel(target.dateKey, target.weekday),
+    `${target.slotNumber}限`,
+    target.timeLabel ? `${target.timeLabel}〜` : '',
+    target.subject,
+  ]
+  return parts.filter((part) => part).join(' ')
+}
+
+/** 行の読み上げ用ラベル(内部 ID は出さない)。 */
+export function buildParentAbsenceRowAriaLabel(row: ParentScheduleRow): string | null {
+  const target = toParentAbsenceTarget(row)
+  if (!target) return null
+  return `${formatParentAbsenceTargetLabel(target)} のお休みを連絡する`
+}
+
+/** 確認モーダルの文言。当日のコマだけ注意を 1 つ足す。 */
+export function describeParentAbsenceConfirm(target: ParentAbsenceTarget, today: string): { target: string; question: string; notes: string[] } {
+  const notes = [PARENT_ABSENCE_CONFIRM_NOTE_ACKNOWLEDGE, PARENT_ABSENCE_CONFIRM_NOTE_CANCEL]
+  if (target.dateKey === today) notes.push(PARENT_ABSENCE_CONFIRM_NOTE_SAME_DAY)
+  return { target: formatParentAbsenceTargetLabel(target), question: PARENT_ABSENCE_CONFIRM_QUESTION, notes }
+}
+
 // その日に「予定(変更の可能性あり)」バッジを出すか。
 export function isParentScheduleDayTentative(day: ParentScheduleDay): boolean {
   return day.lessons.some((lesson) => lesson.isTentative)
-}
-
-// 制御文字(改行・タブ以外)を落とす(サーバー側 normalizeParentMessageInput と同じ規則)。
-function stripControlCharacters(text: string) {
-  // 文字コード直書き(エスケープ)を避け、範囲は fromCharCode で組む: NUL..BS / VT / FF / SO..US / DEL
-  const pattern = new RegExp(`[${String.fromCharCode(0)}-${String.fromCharCode(8)}${String.fromCharCode(11)}${String.fromCharCode(12)}${String.fromCharCode(14)}-${String.fromCharCode(31)}${String.fromCharCode(127)}]`, 'g')
-  return text.replace(pattern, '')
-}
-
-// 送信フォームのクライアント側検証(UX 補助。権威はサーバー・§E-1)。問題なければ null。
-export function validateParentMessageInput(input: { body: string; senderName: string }): string | null {
-  const body = stripControlCharacters(String(input.body ?? ''))
-  if (body.trim().length === 0) return '本文を入力してください。'
-  if (body.length > PARENT_MESSAGE_BODY_LIMIT) return `本文は${PARENT_MESSAGE_BODY_LIMIT}字以内で入力してください。`
-  const senderName = String(input.senderName ?? '').trim()
-  if (senderName.length > PARENT_MESSAGE_SENDER_NAME_LIMIT) return `お名前は${PARENT_MESSAGE_SENDER_NAME_LIMIT}字以内で入力してください。`
-  return null
 }
 
 function readServerError(serverError: unknown): string | null {
@@ -366,12 +460,15 @@ export function resolveParentPortalLoadError(status: number, serverError?: unkno
   }
 }
 
-// POST 失敗時のインライン文言(400=入力・429=回数制限・403/410 は GET と同じ)。
-export function resolveParentMessageSendError(status: number, serverError?: unknown): string {
+// 休み連絡の POST 失敗時にモーダル内へ出す文言(409=連絡できないコマ/二重連絡・429=回数制限・
+// 403/410 は GET と同じ)。★サーバーの `{ error }` を最優先する(理由の言い分けはサーバーが持つ)。
+export function resolveParentAbsenceSendError(status: number, serverError?: unknown): string {
   const fromServer = readServerError(serverError)
   switch (status) {
     case 400:
-      return fromServer ?? '入力内容をご確認ください。'
+      return fromServer ?? PARENT_ABSENCE_CONFLICT_MESSAGE
+    case 409:
+      return fromServer ?? PARENT_ABSENCE_CONFLICT_MESSAGE
     case 429:
       return fromServer ?? PARENT_MESSAGE_RATE_LIMIT_MESSAGE
     case 403:
@@ -384,6 +481,14 @@ export function resolveParentMessageSendError(status: number, serverError?: unkn
   }
 }
 
+/**
+ * 409 のときは画面の日程が古い(教室側が先に処理した / 別端末から送った)。日程を取り直して
+ * バッジ・タップ可否を最新にする(取り直さないと「押せるのに必ず失敗する行」が残る)。
+ */
+export function shouldReloadParentScheduleAfterSendError(status: number): boolean {
+  return status === 409
+}
+
 // 一覧の下に出す一言。講習だけの月は講習の注記、授業も休みも無い月は従来どおりの「予定はありません」。
 // 講習が無く臨時休みだけの月は何も出さない(オーナー回答 2026-09-14「今のまま」)。
 export function resolveParentScheduleMonthNotice(schedule: Pick<ParentPortalScheduleResponse, 'days' | 'hasLectureLessons'>): string | null {
@@ -391,6 +496,26 @@ export function resolveParentScheduleMonthNotice(schedule: Pick<ParentPortalSche
   if (!hasLessonDay && schedule.hasLectureLessons === true) return PARENT_SCHEDULE_LECTURE_ONLY_MONTH_MESSAGE
   if (schedule.days.length === 0) return PARENT_SCHEDULE_EMPTY_MONTH_MESSAGE
   return null
+}
+
+/**
+ * 応答の `absenceNotices` を読む。**欠落は空配列**として扱う(Hosting が先に出て旧 functions が
+ * 応答している間でもページが壊れない・k-4 の hasLectureLessons と同じ作法)。壊れた行は捨てる。
+ */
+export function readParentAbsenceNotices(value: unknown): ParentAbsenceNotice[] {
+  if (!value || typeof value !== 'object') return []
+  const raw = (value as { absenceNotices?: unknown }).absenceNotices
+  if (!Array.isArray(raw)) return []
+  const notices: ParentAbsenceNotice[] = []
+  for (const candidate of raw) {
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+    const entry = candidate as Record<string, unknown>
+    const dateKey = typeof entry.dateKey === 'string' ? entry.dateKey : ''
+    const slotNumber = typeof entry.slotNumber === 'number' && Number.isInteger(entry.slotNumber) ? entry.slotNumber : null
+    if (!dateKey || slotNumber === null) continue
+    notices.push({ dateKey, slotNumber, acknowledged: entry.acknowledged === true })
+  }
+  return notices
 }
 
 // GET 応答の最低限の形チェック(壊れた JSON を画面に流さない)。
