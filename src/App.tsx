@@ -21,9 +21,8 @@ const BillingAutomationScreen = lazy(() => import('./components/billing/BillingA
 import { buildRegularLessonsFromTemplate, hasRegularLessonTemplateAssignments } from './components/regular-template/regularLessonTemplate'
 import { importedMasterData } from './data/importedMasterData.generated'
 import { deleteFirebaseWorkspaceClassroom, deleteFirebaseWorkspaceClassroomDirect, downloadClassroomFromFirebaseServerAutoBackup, downloadFirebaseServerAutoBackup, listDevelopmentClassroomBackupSources, listFirebaseServerAutoBackupSummaries, listRecentFirebaseServerAutoBackupSummaries, provisionFirebaseWorkspaceClassroom, provisionFirebaseWorkspaceClassroomWithExistingUid, reassignFirebaseWorkspaceClassroomManagerWithExistingUid, saveClassroomSnapshotViaFunction, submitDeveloperReportViaFunction, triggerFirebaseServerAutoBackup, updateFirebaseWorkspaceClassroom, type DevelopmentClassroomBackupSources, type ServerAutoBackupSummary } from './integrations/firebase/adminFunctions'
-import { buildManagerSelfRestoreConfirmLines, isRestoreSourceForClassroom, listManagerSelfRestoreCandidates, replaceClassroomData, resolveManagerSelfRestoreCutoffIso, resolveManagerSelfRestoreGuard, type ManagerSelfRestoreSummary } from './components/backup-restore/managerSelfRestore'
+import { buildManagerSelfRestoreConfirmation, isRestoreSourceForClassroom, listManagerSelfRestoreCandidates, replaceClassroomData, resolveManagerSelfRestoreCutoffIso, resolveManagerSelfRestoreGuard, type ManagerSelfRestoreConfirmation, type ManagerSelfRestoreSummary } from './components/backup-restore/managerSelfRestore'
 import { canApplyUndoSnapshotToClassroom } from './utils/classroomScopedUndo'
-import type { ManagerSelfRestoreResult } from './components/backup-restore/BackupRestoreScreen'
 import { createFirebaseAuthUser, getFirebaseCurrentUser, reauthenticateFirebaseUser, sendFirebasePasswordResetEmail, signInToFirebaseWithPassword, signOutFromFirebase, subscribeToFirebaseAuthChanges } from './integrations/firebase/client'
 import { getFirebaseBackendConfig, isFirebaseAdminFunctionsEnabled, isFirebaseBackendEnabled } from './integrations/firebase/config'
 import { loadFirebaseWorkspaceSnapshot } from './integrations/firebase/workspaceStore'
@@ -1582,9 +1581,11 @@ function AuthenticatedApp() {
   // 旧「他教室コピー」(in-memory 参照)を廃止し、Storage の確定データのみを取り込む方式に置換。
   const [developmentBackupSources, setDevelopmentBackupSources] = useState<DevelopmentClassroomBackupSources>({ backups: [], classrooms: [] })
   const [developmentBackupLoading, setDevelopmentBackupLoading] = useState(false)
-  // 室長の自教室復元(docs/spec-save-restore.md §4-1): 直近7日のバックアップ時点と取得中フラグ。
+  // 室長の自教室復元(docs/spec-save-restore.md §4-1): 直近3日のバックアップ時点と取得中フラグ。
   const [managerSelfRestoreCandidates, setManagerSelfRestoreCandidates] = useState<ManagerSelfRestoreSummary[]>([])
   const [managerSelfRestoreLoading, setManagerSelfRestoreLoading] = useState(false)
+  // 取得済み・確認待ちの復元データ。classroomId = 取得した教室(確認時にもう一度 3 者一致を照合する)。
+  const [managerSelfRestorePending, setManagerSelfRestorePending] = useState<{ classroomId: string; backupLabel: string; payload: AppSnapshotPayload; confirmation: ManagerSelfRestoreConfirmation } | null>(null)
   const displayRegularLessons = useMemo(() => {
     const templateRows = buildRegularLessonsFromTemplate({
       template: classroomSettings.regularLessonTemplate,
@@ -2449,6 +2450,8 @@ function AuthenticatedApp() {
     setActingClassroomId(classroomId)
     // INV-08: 教室を開き直したら Undo は破棄する(別教室の盤面に前の教室の「直前の状態に戻す」を残さない)。
     setUndoSnapshot(null)
+    // 同じ理由で、確認待ちの復元データ(前の教室のバックアップ)も破棄する。
+    setManagerSelfRestorePending(null)
     applyClassroomPayloadToState(nextClassroom.data, {
       setScreen: () => setScreen(resolvedNextScreen),
       setManagers,
@@ -2490,6 +2493,8 @@ function AuthenticatedApp() {
     // 前セッションの「直前に戻す(undo)」スナップショットを必ず破棄する。
     // これが残ると別教室の画面で undo バナーが出て、押すと前教室データを現在の教室へ書き込む。
     setUndoSnapshot(null)
+    // 確認待ちの復元データ(室長の自教室復元)も同じ経路で必ず捨てる(openClassroom / applyWorkspaceSnapshot / logout の 3 兄弟)。
+    setManagerSelfRestorePending(null)
     setWorkspaceUsers(sanitizedWorkspaceSnapshot.users)
     setWorkspaceClassrooms(trimmedClassrooms)
     setDeveloperCloudBackupEnabled(sanitizedWorkspaceSnapshot.developerCloudBackupEnabled ?? false)
@@ -3321,6 +3326,8 @@ function AuthenticatedApp() {
     // 別教室にログインした画面にバナーが出て、押すと前教室のデータを現在の教室へ書き込んでしまう。
     // ログアウト時に必ず undo を破棄する(在庫の取り違えを断つ)。
     setUndoSnapshot(null)
+    // 確認待ちの復元データ(室長の自教室復元)も同じ経路で必ず捨てる(openClassroom / applyWorkspaceSnapshot / logout の 3 兄弟)。
+    setManagerSelfRestorePending(null)
     setDeveloperRestoreModalState(null)
     // 操作ログの未送信バッファも破棄する。残すと、保存失敗で戻された前ユーザーの操作が
     // 次にログインした別ユーザーの保存に相乗りし、実行者(updatedBy)を誤記録する(INV 監査 2026-09-04 指摘)。
@@ -5065,7 +5072,7 @@ function AuthenticatedApp() {
     try {
       const loadTargetClassroomId = actingClassroomId
       const source = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, sourceClassroomId)
-      // 自教室復元(restoreOwnClassroomFromServerBackup)と同じ守り: 応答が要求した教室のものでない／取得中に
+      // 自教室復元(prepareOwnClassroomRestore)と同じ守り: 応答が要求した教室のものでない／取得中に
       // 開いている教室が変わった → 読み込まない(同じ callable の 2 経路で守りを非対称にしない)。
       if (!isRestoreSourceForClassroom(source.classroomId, sourceClassroomId) || actingClassroomIdRef.current !== loadTargetClassroomId) {
         setPersistenceMessage('取得したバックアップが選んだ教室のものではない、または取得中に教室が切り替わったため、読み込みを中止しました。')
@@ -5141,7 +5148,7 @@ function AuthenticatedApp() {
       const summaries = await listRecentFirebaseServerAutoBackupSummaries(resolveManagerSelfRestoreCutoffIso(now))
       const candidates = listManagerSelfRestoreCandidates(summaries, now)
       setManagerSelfRestoreCandidates(candidates)
-      setPersistenceMessage(candidates.length > 0 ? `バックアップ時点を取得しました(${candidates.length}件)。` : '直近7日のバックアップが見つかりませんでした。')
+      setPersistenceMessage(candidates.length > 0 ? `バックアップ時点を取得しました(${candidates.length}件)。` : '直近3日のバックアップが見つかりませんでした。')
     } catch (error) {
       const message = error instanceof Error ? error.message : 'バックアップ時点の取得に失敗しました。'
       setPersistenceMessage(`取得エラー: ${message}`)
@@ -5150,11 +5157,10 @@ function AuthenticatedApp() {
     }
   }, [actingClassroomId, currentUser, isRemoteBackendEnabled, managerSelfRestoreEnabled])
 
-  // 室長の自教室復元: パスワード再認証 → 自教室の時点データを取得 → 規模を見せて最終確認 → 【画面へ読込のみ】。
-  // サーバーへは書かない。確定は室長の「保存」(既存の保存経路だけを通す)。保存前は「直前の状態に戻す」で取り消せる。
+  // 室長の自教室復元(1/2・準備): 自教室の時点データを取得 → 教室ID照合 → 確認モーダル用に保持する。ここでは何も書き換えない。
   // ★復元元も復元先も actingClassroomId(= 担当教室)。他教室の ID を渡す引数は持たせない(2026-06-06 取り違え事故の再発防止)。
-  // ★自教室の復元なので共有トークンは剥がさない(剥がすのは他教室→検証用教室コピーの buildDevelopmentClassroomCopyPayload だけ)。
-  const restoreOwnClassroomFromServerBackup = useCallback(async (backupDateKey: string, password: string): Promise<ManagerSelfRestoreResult> => {
+  // ★パスワード要求はやめ、画面中央の大きな確認モーダルを必ず挟む(オーナー指示 2026-09-18)。権限はサーバーの担当教室判定。
+  const prepareOwnClassroomRestore = useCallback(async (backupDateKey: string) => {
     const restoreClassroomId = actingClassroomId
     const guard = resolveManagerSelfRestoreGuard({
       featureEnabled: managerSelfRestoreEnabled,
@@ -5165,75 +5171,96 @@ function AuthenticatedApp() {
       targetClassroomId: restoreClassroomId,
     })
     if (!guard.ok || !restoreClassroomId) {
-      const message = guard.ok ? '復元する教室を確認できませんでした。' : guard.message
-      setPersistenceMessage(message)
-      return { ok: false, reason: 'other', message }
+      setPersistenceMessage(guard.ok ? '復元する教室を確認できませんでした。' : guard.message)
+      return
     }
     const backup = managerSelfRestoreCandidates.find((entry) => entry.backupDateKey === backupDateKey)
     if (!backup) {
-      const message = '選んだバックアップ時点が一覧にありません。「バックアップ時点を取得」からやり直してください。'
-      setPersistenceMessage(message)
-      return { ok: false, reason: 'other', message }
-    }
-    try {
-      await reauthenticateFirebaseUser(password)
-    } catch {
-      return { ok: false, reason: 'password', message: 'ログインパスワードが一致しません。' }
+      setPersistenceMessage('選んだバックアップ時点が一覧にありません。「バックアップ時点を取得」からやり直してください。')
+      return
     }
 
+    setManagerSelfRestorePending(null)
     setManagerSelfRestoreLoading(true)
     setPersistenceMessage('選択した時点のバックアップを取得しています…')
     try {
       const source = await downloadClassroomFromFirebaseServerAutoBackup(backupDateKey, restoreClassroomId)
       // 応答の教室IDが要求と違う / 取得中に開いている教室が変わった → 読み込まない。
       if (!isRestoreSourceForClassroom(source.classroomId, restoreClassroomId) || actingClassroomIdRef.current !== restoreClassroomId) {
-        const message = '取得したバックアップがいま開いている教室のものではないため、復元を中止しました。'
-        setPersistenceMessage(message)
-        return { ok: false, reason: 'other', message }
+        setPersistenceMessage('取得したバックアップがいま開いている教室のものではないため、復元を中止しました。')
+        return
       }
-      const confirmed = window.confirm(buildManagerSelfRestoreConfirmLines({
-        classroomName: source.classroomName,
+      // 自教室の復元なので共有トークンは剥がさない(剥がすのは他教室→検証用教室コピーの buildDevelopmentClassroomCopyPayload だけ)。
+      // 参照共有を断つディープクローンは行う。
+      setManagerSelfRestorePending({
+        classroomId: restoreClassroomId,
         backupLabel: backup.displayLabel,
-        sourceSavedAt: backup.sourceSavedAt,
-        studentCount: source.data?.students?.length ?? 0,
-        teacherCount: source.data?.teachers?.length ?? 0,
-        templateCellCount: source.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0,
-      }).join('\n'))
-      if (!confirmed) {
-        const message = 'バックアップからの復元をキャンセルしました。'
-        setPersistenceMessage(message)
-        return { ok: false, reason: 'other', message }
-      }
-
-      const restoredPayload = sanitizeClassroomPayload({ ...cloneInitialValue(source.data), screen: 'board' })
-      saveUndoSnapshot(`サーバーバックアップ復元 (${backup.displayLabel})`)
-      // 書き込むのは【いま開いている自教室】のスロットだけ。他教室の workspaceClassrooms スロットは触らない。
-      setWorkspaceClassrooms((current) => replaceClassroomData(current, restoreClassroomId, restoredPayload))
-      applyClassroomPayloadToState(restoredPayload, {
-        setScreen: (value) => setScreen(value),
-        setManagers,
-        setTeachers,
-        setStudents,
-        setRegularLessons,
-        setGroupLessons,
-        setSpecialSessions,
-        setAutoAssignRules,
-        setPairConstraints,
-        setClassroomSettings,
-        setBoardState,
-        setBoardMountKey,
+        payload: sanitizeClassroomPayload({ ...cloneInitialValue(source.data), screen: 'board' }),
+        confirmation: buildManagerSelfRestoreConfirmation({
+          classroomName: source.classroomName,
+          backupLabel: backup.displayLabel,
+          sourceSavedAt: backup.sourceSavedAt,
+          studentCount: source.data?.students?.length ?? 0,
+          teacherCount: source.data?.teachers?.length ?? 0,
+          templateCellCount: source.data?.classroomSettings?.regularLessonTemplate?.cells?.length ?? 0,
+        }),
       })
-      loadedEditingClassroomIdRef.current = restoreClassroomId
-      setPersistenceMessage(`${backup.displayLabel} の状態を読み込みました。内容を確認して「保存」で確定してください(保存前なら「直前の状態に戻す」で取り消せます)。`)
-      return { ok: true }
+      setPersistenceMessage('バックアップを取得しました。確認画面の内容を読んでから実行してください。')
     } catch (error) {
-      const message = `復元エラー: ${error instanceof Error ? error.message : 'バックアップの取得に失敗しました。'}`
-      setPersistenceMessage(message)
-      return { ok: false, reason: 'other', message }
+      setPersistenceMessage(`復元エラー: ${error instanceof Error ? error.message : 'バックアップの取得に失敗しました。'}`)
     } finally {
       setManagerSelfRestoreLoading(false)
     }
-  }, [actingClassroomId, actingClassroomIdRef, currentUser, isRemoteBackendEnabled, managerSelfRestoreCandidates, managerSelfRestoreEnabled, saveUndoSnapshot, setWorkspaceClassrooms])
+  }, [actingClassroomId, actingClassroomIdRef, currentUser, isRemoteBackendEnabled, managerSelfRestoreCandidates, managerSelfRestoreEnabled])
+
+  const cancelOwnClassroomRestore = useCallback(() => {
+    setManagerSelfRestorePending(null)
+    setPersistenceMessage('バックアップからの復元をやめました。データは変わっていません。')
+  }, [])
+
+  // 室長の自教室復元(2/2・確定操作): 確認モーダルで「読み込む」を押したときだけ、【画面へ読込のみ】を行う。
+  // サーバーへは書かない。確定は室長の「保存」(既存の保存経路だけを通す)。保存前は「直前の状態に戻す」で取り消せる。
+  const confirmOwnClassroomRestore = useCallback(() => {
+    const pending = managerSelfRestorePending
+    if (!pending) return
+    setManagerSelfRestorePending(null)
+    // 確認モーダルはバックアップ/復元画面でしか描かない。それ以外の画面から呼ばれたら(= モーダルを見ていない)読み込まない。
+    if (screenRef.current !== 'backup-restore') return
+    // 確認中に教室や権限が変わっていないか、取得した教室IDを復元対象としてもう一度 3 者一致を照合する。
+    const guard = resolveManagerSelfRestoreGuard({
+      featureEnabled: managerSelfRestoreEnabled,
+      isRemoteBackendEnabled,
+      role: currentUser?.role,
+      assignedClassroomId: currentUser?.assignedClassroomId,
+      actingClassroomId: actingClassroomIdRef.current,
+      targetClassroomId: pending.classroomId,
+    })
+    if (!guard.ok) {
+      setPersistenceMessage(guard.message)
+      return
+    }
+    const restoreClassroomId = pending.classroomId
+    const restoredPayload = pending.payload
+    saveUndoSnapshot(`サーバーバックアップ復元 (${pending.backupLabel})`)
+    // 書き込むのは【いま開いている自教室】のスロットだけ。他教室の workspaceClassrooms スロットは触らない。
+    setWorkspaceClassrooms((current) => replaceClassroomData(current, restoreClassroomId, restoredPayload))
+    applyClassroomPayloadToState(restoredPayload, {
+      setScreen: (value) => setScreen(value),
+      setManagers,
+      setTeachers,
+      setStudents,
+      setRegularLessons,
+      setGroupLessons,
+      setSpecialSessions,
+      setAutoAssignRules,
+      setPairConstraints,
+      setClassroomSettings,
+      setBoardState,
+      setBoardMountKey,
+    })
+    loadedEditingClassroomIdRef.current = restoreClassroomId
+    setPersistenceMessage(`${pending.backupLabel} の状態を読み込みました。内容を確認して「保存」で確定してください(保存前なら「直前の状態に戻す」で取り消せます)。`)
+  }, [actingClassroomIdRef, currentUser, isRemoteBackendEnabled, managerSelfRestoreEnabled, managerSelfRestorePending, saveUndoSnapshot, screenRef, setWorkspaceClassrooms])
 
   const exportBasicDataTemplate = useCallback(async () => {
     const xlsx = await import('xlsx')
@@ -5742,7 +5769,10 @@ function AuthenticatedApp() {
         managerSelfRestoreCandidates={managerSelfRestoreCandidates}
         managerSelfRestoreLoading={managerSelfRestoreLoading}
         onLoadManagerSelfRestoreCandidates={() => void loadManagerSelfRestoreCandidates()}
-        onRestoreOwnClassroomFromBackup={restoreOwnClassroomFromServerBackup}
+        managerSelfRestoreConfirmation={managerSelfRestorePending?.confirmation ?? null}
+        onPrepareOwnClassroomRestore={(backupDateKey) => void prepareOwnClassroomRestore(backupDateKey)}
+        onConfirmOwnClassroomRestore={confirmOwnClassroomRestore}
+        onCancelOwnClassroomRestore={cancelOwnClassroomRestore}
       />
     )
   }

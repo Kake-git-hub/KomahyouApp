@@ -68,7 +68,11 @@ describe('確認リストの項目定義', () => {
     // 複数会社展開 Phase 1(会社レイヤ): 既定値で見た目が変わらないことの確認 m-1〜m-3(版 v1.5.540 は据え置き)。
     for (const id of ['m-1', 'm-2', 'm-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.544')
     // 室長の自教室復元(2026-09-18)。s-2 は「保存せず取り消す」手順であること(y 系の予行データを消さない)。
-    for (const id of ['s-1', 's-2', 's-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.548')
+    // v1.5.549: s-1/s-2 は「パスワード → 確認モーダル」「7日 → 3日」の変更に合わせて手順を差し替えた。
+    for (const id of ['s-1', 's-2']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.549')
+    expect(byId.get('s-3')!.introducedIn).toBe('v1.5.548')
+    expect(byId.get('s-1')!.title).not.toContain('パスワードは弾かれる')
+    expect(byId.get('s-1')!.check!.join('\n')).toContain('復元しても戻らないもの')
     expect(byId.get('s-2')!.prep).toContain('保存はしない')
     expect((byId.get('m-2')!.check ?? []).join(' / ')).toContain('室長登録')
     for (const id of ['r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.540')

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MANAGER_SELF_RESTORE_MODAL_NOTES,
+  MANAGER_SELF_RESTORE_NOT_RESTORED_ITEMS,
   MANAGER_SELF_RESTORE_WINDOW_DAYS,
-  buildManagerSelfRestoreConfirmLines,
+  buildManagerSelfRestoreConfirmation,
   isRestoreSourceForClassroom,
   listManagerSelfRestoreCandidates,
   replaceClassroomData,
@@ -16,18 +16,19 @@ function summary(backupDateKey: string, savedAt: string) {
   return { backupDateKey, displayLabel: backupDateKey, savedAt, sourceSavedAt: '' }
 }
 
-describe('室長の自教室復元: 候補一覧(直近7日)', () => {
-  it('窓は 7 日(オーナー確定 2026-09-18)。下限 ISO は now - 7日', () => {
-    expect(MANAGER_SELF_RESTORE_WINDOW_DAYS).toBe(7)
-    expect(resolveManagerSelfRestoreCutoffIso(NOW)).toBe('2026-09-11T12:00:00.000Z')
+describe('室長の自教室復元: 候補一覧(直近3日)', () => {
+  it('窓は 3 日(オーナー指示 2026-09-18・当初 7 日から短縮)。下限 ISO は now - 3日', () => {
+    expect(MANAGER_SELF_RESTORE_WINDOW_DAYS).toBe(3)
+    expect(resolveManagerSelfRestoreCutoffIso(NOW)).toBe('2026-09-15T12:00:00.000Z')
   })
 
-  it('7 日より前・未来・時刻不明・キー無しを除き、新しい順に並べる', () => {
+  it('3 日より前・未来・時刻不明・キー無しを除き、新しい順に並べる', () => {
     const result = listManagerSelfRestoreCandidates([
-      summary('old', '2026-09-11T11:59:59.000Z'),
-      summary('edge', '2026-09-11T12:00:00.000Z'),
+      summary('old', '2026-09-15T11:59:59.000Z'),
+      summary('four-days-ago', '2026-09-14T12:00:00.000Z'),
+      summary('edge', '2026-09-15T12:00:00.000Z'),
       summary('recent', '2026-09-18T11:45:00.000Z'),
-      summary('middle', '2026-09-15T00:00:00.000Z'),
+      summary('middle', '2026-09-17T00:00:00.000Z'),
       summary('future', '2026-09-18T12:00:01.000Z'),
       summary('broken', 'not-a-date'),
       summary('', '2026-09-18T10:00:00.000Z'),
@@ -89,6 +90,14 @@ describe('室長の自教室復元: 実行ガード(教室取り違え防止・2
     expect(resolveManagerSelfRestoreGuard({ ...base, role: 'developer', assignedClassroomId: null, targetClassroomId: 'classroom-b' }).ok).toBe(false)
   })
 
+  it('時系列: A 教室で取得して確認待ち → 確定時に B 教室を開いていたら適用しない(確定時の再ガード)', () => {
+    // confirmOwnClassroomRestore は target = 取得した教室(A)、acting = いま開いている教室(B) で照合する。
+    const result = resolveManagerSelfRestoreGuard({ ...base, assignedClassroomId: 'classroom-b', actingClassroomId: 'classroom-b', targetClassroomId: 'classroom-a' })
+    expect(result).toEqual({ ok: false, message: 'いま開いている教室以外は復元できません。' })
+    // 開発者でも同じ(開発者は教室を切り替えられるので、ここが実質の砦)。
+    expect(resolveManagerSelfRestoreGuard({ ...base, role: 'developer', assignedClassroomId: null, actingClassroomId: 'classroom-b', targetClassroomId: 'classroom-a' }).ok).toBe(false)
+  })
+
   it('サーバー応答の教室IDが開いている教室と違えば読み込まない', () => {
     expect(isRestoreSourceForClassroom('classroom-a', 'classroom-a')).toBe(true)
     expect(isRestoreSourceForClassroom('classroom-b', 'classroom-a')).toBe(false)
@@ -97,29 +106,46 @@ describe('室長の自教室復元: 実行ガード(教室取り違え防止・2
   })
 })
 
-describe('室長の自教室復元: 確認文言(spec-save-restore §4 の警告必須)', () => {
-  it('モーダル注意書きは「この教室だけ」「未保存は失われる」「復元対象外」「保存で確定」を含む', () => {
-    const text = MANAGER_SELF_RESTORE_MODAL_NOTES.join('\n')
-    expect(text).toContain('この教室だけ')
-    expect(text).toContain('保存していない編集は失われます')
-    expect(text).toContain('復元の対象外')
-    expect(text).toContain('「保存」を押すと確定')
+describe('室長の自教室復元: 確認モーダルの中身(spec-save-restore §4 の警告必須)', () => {
+  const confirmation = buildManagerSelfRestoreConfirmation({
+    classroomName: '開発用教室',
+    backupLabel: '9/18 11:45',
+    sourceSavedAt: '',
+    studentCount: 12,
+    teacherCount: 3,
+    templateCellCount: 40,
   })
 
-  it('最終確認は規模(取り違え防止)と不可逆警告を含む', () => {
-    const lines = buildManagerSelfRestoreConfirmLines({
-      classroomName: '開発用教室',
-      backupLabel: '9/18 11:45',
-      sourceSavedAt: '',
-      studentCount: 12,
-      teacherCount: 3,
-      templateCellCount: 40,
-    })
-    const text = lines.join('\n')
-    expect(text).toContain('「開発用教室」を 9/18 11:45 の状態へ戻します。')
-    expect(text).toContain('生徒12名 / 講師3名 / テンプレ40コマ')
-    expect(text).toContain('元に戻せません')
-    expect(text).not.toContain('バックアップ内の最終保存')
+  it('「復元しても戻らないもの」を必ず載せる(オーナー指示 2026-09-18)', () => {
+    expect(confirmation.notRestoredTitle).toBe('復元しても戻らないもの')
+    expect(confirmation.notRestoredItems).toBe(MANAGER_SELF_RESTORE_NOT_RESTORED_ITEMS)
+    expect(confirmation.notRestoredItems.length).toBeGreaterThanOrEqual(4)
+    const text = confirmation.notRestoredItems.join('\n')
+    expect(text).toContain('QRで提出された講習の希望')
+    expect(text).toContain('保護者からの連絡')
+    expect(text).toContain('「通常授業履歴」')
+  })
+
+  it('内部用語(授業台帳・操作ログ・lessonLedger 等)を画面の言葉に出さない(オーナー指示「アプリ上の言葉で」)', () => {
+    const text = JSON.stringify(confirmation)
+    for (const internalWord of ['授業台帳', '操作ログ', '台帳', 'lessonLedger', 'operationEvents', 'lectureSubmissions']) {
+      expect(text, internalWord).not.toContain(internalWord)
+    }
+  })
+
+  it('見出しに教室名と時点、規模(取り違え防止)、不可逆警告、保存で確定、を含む', () => {
+    expect(confirmation.headline).toBe('「開発用教室」を 9/18 11:45 の状態へ戻します。')
+    expect(confirmation.scaleLine).toContain('生徒12名 / 講師3名 / 通常授業テンプレ40コマ')
+    expect(confirmation.sourceSavedAtLine).toBe('')
+    const notes = confirmation.notes.join('\n')
+    expect(notes).toContain('この教室だけ')
+    expect(notes).toContain('保存していない編集は失われます')
+    expect(notes).toContain('「保存」を押すと確定')
+    expect(notes).toContain('元に戻せません')
+  })
+
+  it('パスワードを求める文言が無い(確認モーダル方式へ変更)', () => {
+    expect(JSON.stringify(confirmation)).not.toContain('パスワード')
   })
 })
 
