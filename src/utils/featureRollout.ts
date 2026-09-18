@@ -150,6 +150,16 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Show moved-source / holiday records as 休) with destination, source-origin makeup box with 未定, keep records on whole-day transfer and holiday setting.',
   },
+  // 室長による自教室のサーバーバックアップ復元(オーナー確定 2026-09-18・docs/spec-save-restore.md §4-1)。
+  // ON: バックアップ/復元画面に「サーバーバックアップから復元(直近7日)」パネルを出す。ログインパスワードの
+  //     再認証 → 自教室の時点データを画面へ読込 → 室長が保存して確定(サーバーへ直接書く復元関数は作らない)。
+  // ★教室取り違え防止(2026-06-06 事故)の権威は managerSelfRestore.ts の resolveManagerSelfRestoreGuard
+  //   (担当 = 開いている = 復元対象 の 3 者一致)とサーバーの担当教室判定。フラグは入口の表示だけを切り替える。
+  // 開発用教室で先行 → オーナー確認後に全教室へ昇格する(段階公開はオーナー確定)。
+  managerSelfRestore: {
+    scope: 'development-only',
+    description: 'Backup/restore screen: manager restores own classroom from a server auto-backup (last 7 days) after password re-auth; load to screen, commit by manual save.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

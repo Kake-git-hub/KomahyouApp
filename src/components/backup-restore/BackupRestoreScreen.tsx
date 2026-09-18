@@ -7,9 +7,13 @@ import type { ClassroomSettings, InitialSetupMakeupStockRow, InitialSetupLecture
 import type { SubjectLabel } from '../schedule-board/types'
 import { allStudentSubjectOptions } from '../../utils/studentGradeSubject'
 import { getJstTodayDateKey } from '../../utils/jstDate'
+import { MANAGER_SELF_RESTORE_MODAL_NOTES, MANAGER_SELF_RESTORE_WINDOW_DAYS, type ManagerSelfRestoreSummary } from './managerSelfRestore'
 
-// spec-save-restore §4: 教室画面の復元は「JSONバックアップを読み込む」一本。
-// rollback／サーバーバックアップ／ローカル自動バックアップの復元UIは削除済み（サーバー復元は開発者画面のみ）。
+// spec-save-restore §4: 教室画面の復元は「JSONバックアップを読み込む」が基本。
+// rollback／ローカル自動バックアップの復元UIは削除済み。サーバーバックアップ復元は開発者画面に加え、
+// §4-1(2026-09-18)で「室長が自教室だけ・直近7日・パスワード再認証つき」の入口をこの画面へ戻した(機能フラグ managerSelfRestore)。
+export type ManagerSelfRestoreResult = { ok: true } | { ok: false; reason: 'password' | 'other'; message: string }
+
 type BackupRestoreScreenProps = {
   onBackToBoard: () => void
   onOpenBasicData: () => void
@@ -46,6 +50,11 @@ type BackupRestoreScreenProps = {
   developmentBackupLoading?: boolean
   onLoadDevelopmentBackupSources?: () => void
   onLoadClassroomBackupIntoDevelopment?: (backupDateKey: string, sourceClassroomId: string) => void
+  managerSelfRestoreEnabled?: boolean
+  managerSelfRestoreCandidates?: ManagerSelfRestoreSummary[]
+  managerSelfRestoreLoading?: boolean
+  onLoadManagerSelfRestoreCandidates?: () => void
+  onRestoreOwnClassroomFromBackup?: (backupDateKey: string, password: string) => Promise<ManagerSelfRestoreResult>
 }
 
 const dayOptions = [
@@ -77,7 +86,7 @@ function formatSetupStatus(done: boolean) {
   return done ? '設定済み' : '未設定'
 }
 
-export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, isDevelopmentClassroom = false, developmentBackupSources = { backups: [], classrooms: [] }, developmentBackupLoading = false, onLoadDevelopmentBackupSources, onLoadClassroomBackupIntoDevelopment }: BackupRestoreScreenProps) {
+export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onLogout, persistenceMessage, lastSavedAt, onExportBackup, onImportBackup, classroomSettings, students, specialSessions, onUpdateClassroomSettings, onCompleteInitialSetup, onExportBasicDataTemplate, onExportBasicDataCurrent, onImportInitialBasicDataWorkbook, onImportDiffBasicDataWorkbook, onExportSpecialDataTemplate, onExportSpecialDataCurrent, onImportSpecialDataWorkbook, onExportAutoAssignTemplate, onExportAutoAssignCurrent, onImportAutoAssignWorkbook, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, isDevelopmentClassroom = false, developmentBackupSources = { backups: [], classrooms: [] }, developmentBackupLoading = false, onLoadDevelopmentBackupSources, onLoadClassroomBackupIntoDevelopment, managerSelfRestoreEnabled = false, managerSelfRestoreCandidates = [], managerSelfRestoreLoading = false, onLoadManagerSelfRestoreCandidates, onRestoreOwnClassroomFromBackup }: BackupRestoreScreenProps) {
   const backupImportRef = useRef<HTMLInputElement | null>(null)
   const basicInitialImportRef = useRef<HTMLInputElement | null>(null)
   const basicDiffImportRef = useRef<HTMLInputElement | null>(null)
@@ -97,6 +106,12 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const [developmentLoadClassroomId, setDevelopmentLoadClassroomId] = useState('')
   const [developmentLoadBackupDateKey, setDevelopmentLoadBackupDateKey] = useState('')
 
+  const [selfRestoreBackupDateKey, setSelfRestoreBackupDateKey] = useState('')
+  const [selfRestoreModalOpen, setSelfRestoreModalOpen] = useState(false)
+  const [selfRestorePassword, setSelfRestorePassword] = useState('')
+  const [selfRestoreError, setSelfRestoreError] = useState('')
+  const [selfRestoreBusy, setSelfRestoreBusy] = useState(false)
+
   const makeupStockRows = classroomSettings.initialSetupMakeupStocks ?? []
   const lectureStockRows = classroomSettings.initialSetupLectureStocks ?? []
 
@@ -107,6 +122,37 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
   const selectedDevelopmentLoadBackupDateKey = developmentBackupSources.backups.some((backup) => backup.backupDateKey === developmentLoadBackupDateKey)
     ? developmentLoadBackupDateKey
     : (developmentBackupSources.backups[0]?.backupDateKey ?? '')
+
+  const selectedSelfRestoreBackup = managerSelfRestoreCandidates.find((backup) => backup.backupDateKey === selfRestoreBackupDateKey)
+    ?? managerSelfRestoreCandidates[0]
+    ?? null
+
+  const closeSelfRestoreModal = () => {
+    setSelfRestoreModalOpen(false)
+    setSelfRestorePassword('')
+    setSelfRestoreError('')
+  }
+
+  const confirmSelfRestore = async () => {
+    if (!selectedSelfRestoreBackup || !onRestoreOwnClassroomFromBackup || selfRestoreBusy) return
+    if (!selfRestorePassword) {
+      setSelfRestoreError('ログイン中アカウントのパスワードを入力してください。')
+      return
+    }
+    setSelfRestoreBusy(true)
+    try {
+      const result = await onRestoreOwnClassroomFromBackup(selectedSelfRestoreBackup.backupDateKey, selfRestorePassword)
+      // パスワード違いだけはモーダルに残して打ち直せるようにする。それ以外(成功・中止・取得失敗)は閉じ、結果は状態欄に出る。
+      if (!result.ok && result.reason === 'password') {
+        setSelfRestorePassword('')
+        setSelfRestoreError(result.message)
+        return
+      }
+      closeSelfRestoreModal()
+    } finally {
+      setSelfRestoreBusy(false)
+    }
+  }
 
   const addMakeupStockRow = () => {
     if (!makeupDraftStudentId || makeupDraftCount < 1) return
@@ -181,6 +227,34 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
         event.currentTarget.value = ''
       }} />
 
+      {selfRestoreModalOpen && selectedSelfRestoreBackup ? (
+        <div className="auto-assign-modal-overlay" role="presentation">
+          <div className="auto-assign-modal basic-data-delete-modal" role="dialog" aria-modal="true" aria-label="サーバーバックアップから復元" data-testid="backup-restore-self-restore-modal">
+            <div className="auto-assign-modal-title">サーバーバックアップから復元</div>
+            <p className="basic-data-delete-warning">⚠️ {selectedSelfRestoreBackup.displayLabel} の状態へ戻します。</p>
+            <ul className="basic-data-delete-hint">
+              {MANAGER_SELF_RESTORE_MODAL_NOTES.map((note) => <li key={note}>{note}</li>)}
+            </ul>
+            <label className="basic-data-delete-password">
+              <span>ログイン中アカウントのパスワード</span>
+              <input
+                type="password"
+                value={selfRestorePassword}
+                autoComplete="current-password"
+                onChange={(event) => { setSelfRestorePassword(event.target.value); setSelfRestoreError('') }}
+                onKeyDown={(event) => { if (event.key === 'Enter') void confirmSelfRestore() }}
+                data-testid="backup-restore-self-restore-password-input"
+              />
+            </label>
+            {selfRestoreError ? <p className="basic-data-delete-error" role="alert">{selfRestoreError}</p> : null}
+            <div className="auto-assign-modal-actions">
+              <button className="secondary-button" type="button" onClick={closeSelfRestoreModal} disabled={selfRestoreBusy}>キャンセル</button>
+              <button className="primary-button basic-data-delete-confirm" type="button" onClick={() => void confirmSelfRestore()} disabled={selfRestoreBusy} data-testid="backup-restore-self-restore-confirm-button">{selfRestoreBusy ? '確認中…' : 'この時点を読み込む'}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <section className="toolbar-panel" aria-label="バックアップと初期設定の操作バー">
         <div className="toolbar-row toolbar-row-primary">
           <div className="toolbar-group toolbar-group-compact">
@@ -245,6 +319,42 @@ export function BackupRestoreScreen({ onBackToBoard, onOpenBasicData, onOpenSpec
                 <button className="secondary-button slim" type="button" onClick={() => backupImportRef.current?.click()} data-testid="backup-restore-import-button">バックアップを読み込む</button>
               </div>
             </section>
+            {managerSelfRestoreEnabled ? (
+              <section className="basic-data-section-card" data-testid="backup-restore-self-restore-panel">
+                <div className="basic-data-card-head">
+                  <h3>サーバーバックアップから復元(直近{MANAGER_SELF_RESTORE_WINDOW_DAYS}日)</h3>
+                  <p>サーバーが自動で取っているバックアップ(直近24時間は15分毎、それ以前は間引き)から時点を選び、いま開いているこの教室だけを戻します。実行にはログインパスワードが必要です。読み込み後に盤面で確認し、「保存」で確定します。{MANAGER_SELF_RESTORE_WINDOW_DAYS}日より前へ戻したいときは開発者へ依頼してください。</p>
+                </div>
+                <div className="basic-data-form-grid">
+                  <button
+                    className="secondary-button slim"
+                    type="button"
+                    onClick={() => onLoadManagerSelfRestoreCandidates?.()}
+                    disabled={managerSelfRestoreLoading}
+                    data-testid="backup-restore-self-restore-refresh"
+                  >
+                    {managerSelfRestoreLoading ? '取得中…' : 'バックアップ時点を取得'}
+                  </button>
+                  <label className="basic-data-inline-field">
+                    <span>戻したい時点</span>
+                    <select value={selectedSelfRestoreBackup?.backupDateKey ?? ''} onChange={(event) => setSelfRestoreBackupDateKey(event.target.value)} disabled={managerSelfRestoreCandidates.length === 0} data-testid="backup-restore-self-restore-backup">
+                      {managerSelfRestoreCandidates.length > 0 ? managerSelfRestoreCandidates.map((backup) => (
+                        <option key={backup.backupDateKey} value={backup.backupDateKey}>{backup.displayLabel}</option>
+                      )) : <option value="">まず「バックアップ時点を取得」を押してください</option>}
+                    </select>
+                  </label>
+                  <button
+                    className="primary-button"
+                    type="button"
+                    onClick={() => { setSelfRestorePassword(''); setSelfRestoreError(''); setSelfRestoreModalOpen(true) }}
+                    disabled={managerSelfRestoreLoading || !selectedSelfRestoreBackup}
+                    data-testid="backup-restore-self-restore-button"
+                  >
+                    この時点へ復元
+                  </button>
+                </div>
+              </section>
+            ) : null}
             {isDevelopmentClassroom ? (
               <section className="basic-data-section-card" data-testid="backup-restore-development-load-panel">
                 <div className="basic-data-card-head">

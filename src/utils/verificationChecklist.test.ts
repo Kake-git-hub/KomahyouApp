@@ -63,10 +63,13 @@ describe('確認リストの項目定義', () => {
   it('第14版: 結果待ちの b-2、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8、開発用教室での予行 y-1〜y-4(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     // 第16版: 準備 y-1 を先頭に置き、以降は読み込んだ日大前データの上で行う(項目ごとの準備を減らすため)。
-    expect(ids).toEqual(['y-1', 'b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3'])
+    expect(ids).toEqual(['y-1', 'b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3'])
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 複数会社展開 Phase 1(会社レイヤ): 既定値で見た目が変わらないことの確認 m-1〜m-3(版 v1.5.540 は据え置き)。
     for (const id of ['m-1', 'm-2', 'm-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.544')
+    // 室長の自教室復元(2026-09-18)。s-2 は「保存せず取り消す」手順であること(y 系の予行データを消さない)。
+    for (const id of ['s-1', 's-2', 's-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.548')
+    expect(byId.get('s-2')!.prep).toContain('保存はしない')
     expect((byId.get('m-2')!.check ?? []).join(' / ')).toContain('室長登録')
     for (const id of ['r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.540')
     for (const id of ['y-1', 'y-2', 'y-3', 'y-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.541')
