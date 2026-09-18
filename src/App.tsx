@@ -1641,10 +1641,13 @@ function AuthenticatedApp() {
   ), [actingClassroomId, hiddenParentMessageIds, parentMessageEntries, parentMessageHistoryEntries, pendingParentAbsenceFinalize, students])
   const openParentContactHistory = useCallback(() => setIsParentContactHistoryOpen(true), [])
   // 未確認の行を押したら履歴を閉じ、休み連絡のモーダルを開く(処理は既存の四択 1 本のまま)。
+  // ★モーダルに出せる連絡が無い(2 本の購読の配信ずれ等)ときは履歴を閉じない(押したら何も出ずに履歴だけ消える、を作らない)。
+  // ★振替先を選んでいる最中は開かない(モーダルが盤面を覆って席を選べなくなる。v1.5.550 の自動で開かない設計と同じ)。
   const openParentMessagesFromHistory = useCallback(() => {
+    if (parentMessageNotifications.length === 0 || isParentAbsencePlacementActiveRef.current) return
     setIsParentContactHistoryOpen(false)
     setIsParentMessagesModalCollapsed(false)
-  }, [])
+  }, [parentMessageNotifications.length])
   // 新しい連絡が増えたらモーダルを開き直す。ただし「振替先を今決める」の配置中は盤面操作を遮らないよう開かない
   // (左下の入口の件数だけ増える。配置が終わったら handleParentAbsencePlacementSettled が開く)。
   const knownParentMessageIdsRef = useRef<Set<string>>(new Set())

@@ -338,6 +338,35 @@ describe('buildParentContactHistory(保護者連絡の履歴)', () => {
   })
 })
 
+// ★履歴の「未確認」とモーダルの一覧は同じ集合でなければならない(食い違うと、押してもモーダルに居ない行ができる)。
+describe('履歴の未確認 = モーダルの一覧(集合の同値性)', () => {
+  it('処理済み / 四択だけ押した / 保存待ち / hidden / 他教室 / 履歴だけ・未処理購読だけ を混ぜても id が完全一致する', () => {
+    const unnotified = [
+      createEntry({ id: 'plain', createdAt: '2026-09-10T01:00:00.000Z' }),
+      createEntry({ id: 'acked', createdAt: '2026-09-11T01:00:00.000Z', acknowledgedAt: '2026-09-11T02:00:00.000Z', resolution: 'absent' }),
+      createEntry({ id: 'pending', createdAt: '2026-09-12T01:00:00.000Z' }),
+      createEntry({ id: 'hidden', createdAt: '2026-09-13T01:00:00.000Z' }),
+      createEntry({ id: 'foreign', classroomId: 'other', createdAt: '2026-09-14T01:00:00.000Z' }),
+    ]
+    const history = [
+      createEntry({ id: 'plain', createdAt: '2026-09-10T01:00:00.000Z' }),
+      createEntry({ id: 'done', createdAt: '2026-09-09T01:00:00.000Z', notifiedAt: '2026-09-09T03:00:00.000Z' }),
+    ]
+    const pendingIds = new Set(['pending'])
+    const hiddenIds = new Set(['hidden'])
+    const modalIds = buildParentMessageNotifications(
+      selectUnnotifiedParentMessages(selectParentMessagesForClassroom(unnotified, 'dev'), new Set([...pendingIds, ...hiddenIds])),
+      { students: [] },
+    ).map((item) => item.id).sort()
+    const historyUnconfirmedIds = buildParentContactHistory(
+      selectParentMessagesForClassroom(mergeParentMessageEntries(unnotified, history), 'dev'),
+      { students: [], pendingIds, hiddenIds },
+    ).filter((row) => row.status === 'unconfirmed').map((row) => row.id).sort()
+    expect(historyUnconfirmedIds).toEqual(modalIds)
+    expect(modalIds).toEqual(['acked', 'plain'])
+  })
+})
+
 describe('mergeParentMessageEntries(未処理の購読と履歴の購読の合流)', () => {
   it('id で重複を除き、同じ id は未処理の購読側を採る。履歴にしか無い処理済みも残す', () => {
     const merged = mergeParentMessageEntries(

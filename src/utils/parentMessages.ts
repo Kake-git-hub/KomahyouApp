@@ -105,8 +105,14 @@ export function parseParentMessageEntry(id: string, data: unknown): ParentMessag
 // 混ざっても再通知しないよう、ここでもう一度未処理だけに絞る(二重の防波堤)。
 // ★pendingIds = この起動中に四択で盤面へ反映済み・保存待ちの連絡。四択を押すと acknowledgedAt の更新で
 //   'modified' が届くので、ここで除かないと処理したばかりの連絡がモーダルに戻ってくる。
+// ★「未処理」の判定はこの 1 本(モーダルの一覧と「保護者連絡」履歴の未確認が同じ集合になるよう、両方がこれを呼ぶ。
+//   片方だけ条件を足すと、履歴で押してもモーダルに居ない行ができる・レビュー指摘 2026-09-19)。
+export function isUnprocessedParentMessage(entry: ParentMessageEntry, excludedIds: ReadonlySet<string> = new Set()): boolean {
+  return !entry.notifiedAt && !excludedIds.has(entry.id)
+}
+
 export function selectUnnotifiedParentMessages(entries: readonly ParentMessageEntry[], pendingIds: ReadonlySet<string> = new Set()): ParentMessageEntry[] {
-  return entries.filter((entry) => !entry.notifiedAt && !pendingIds.has(entry.id))
+  return entries.filter((entry) => isUnprocessedParentMessage(entry, pendingIds))
 }
 
 // 表示用データの組み立て。生徒名は**名簿の現在名を優先**し(改名に追従)、名簿に居なければ doc の studentName
@@ -303,13 +309,15 @@ export function buildParentContactHistory(
   const pendingIds = context.pendingIds ?? new Set<string>()
   const hiddenIds = context.hiddenIds ?? new Set<string>()
   const limit = Number.isInteger(context.confirmedLimit) && (context.confirmedLimit as number) >= 0 ? (context.confirmedLimit as number) : PARENT_CONTACT_HISTORY_CONFIRMED_LIMIT
+  const excludedIds = new Set([...pendingIds, ...hiddenIds])
   const entryById = new Map<string, ParentMessageEntry>()
   for (const entry of entries) entryById.set(entry.id, entry)
   // 生徒名の解決(名簿の現在名優先)はモーダルと同じ 1 本を使う。
   const named = buildParentMessageNotifications(Array.from(entryById.values()), { students: context.students })
   const rows = named.map<ParentContactHistoryRow>((item) => {
     const entry = entryById.get(item.id)!
-    const status: ParentContactHistoryStatus = entry.notifiedAt || hiddenIds.has(entry.id) ? 'confirmed' : pendingIds.has(entry.id) ? 'pending-save' : 'unconfirmed'
+    // 未確認かどうかはモーダルの一覧と同じ述語で決める。未確認でないものを 確認済 / 保存待ち に分ける。
+    const status: ParentContactHistoryStatus = isUnprocessedParentMessage(entry, excludedIds) ? 'unconfirmed' : entry.notifiedAt || hiddenIds.has(entry.id) ? 'confirmed' : 'pending-save'
     return {
       id: item.id,
       studentName: item.studentName,

@@ -227,7 +227,9 @@ describe('「保護者連絡」ボタンの配線', () => {
 
   it('未確認の行は既存の休み連絡モーダルを開くだけ(履歴側に処理経路を作らない・INV-06)', () => {
     const openIndex = APP_TSX.indexOf('const openParentMessagesFromHistory = useCallback')
-    const body = APP_TSX.slice(openIndex, openIndex + 250)
+    const body = APP_TSX.slice(openIndex, openIndex + 350)
+    // 出せる連絡が無い・振替先を選んでいる最中は開かない(空クリックで履歴だけ消える/盤面を覆う、を作らない)。
+    expect(body).toContain('if (parentMessageNotifications.length === 0 || isParentAbsencePlacementActiveRef.current) return')
     expect(body).toContain('setIsParentContactHistoryOpen(false)')
     expect(body).toContain('setIsParentMessagesModalCollapsed(false)')
     expect(HISTORY_MODAL_TSX).not.toContain('markParentMessagesNotified')
