@@ -125,6 +125,12 @@ describe('buildParentPortalQrPrintHtml', () => {
     expect(html).toContain('@media print { .print-button { display: none; }')
   })
 
+  // 2026-09-18: 自由記述の連絡は廃止(spec-parent-portal §0-5)。紙の案内文が「教室へ何でも連絡できる」と読める文言に戻らないこと。
+  it('案内文は「授業予定の確認とお休みの連絡」で、自由な連絡ができるとは書かない', () => {
+    expect(PARENT_PORTAL_QR_TEXT.guidance).toContain('お休みの連絡')
+    expect(PARENT_PORTAL_QR_TEXT.guidance).not.toContain('教室への連絡')
+  })
+
   it('名前・URL は HTML エスケープする', () => {
     const html = buildParentPortalQrPrintHtml({ classroomName: '<b>x</b>', studentName: 'A&B', url: 'https://x/p/t?a=1&b=2', svg })
     expect(html).not.toContain('<b>x</b>')

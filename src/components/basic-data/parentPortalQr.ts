@@ -14,7 +14,8 @@ export type ParentPortalQrRowState = 'hidden' | 'issue' | 'show' | 'pending-save
 export const PARENT_PORTAL_QR_TEXT = {
   title: '保護者用QR',
   buttonLabel: 'QR',
-  guidance: 'このQRコードを読み取ると、お子さまの授業予定の確認と教室への連絡ができます。',
+  // 2026-09-18: 自由記述の連絡は廃止し、できるのは「授業の行をタップして休みを連絡する」だけ(spec-parent-portal §0-5)。
+  guidance: 'このQRコードを読み取ると、お子さまの授業予定の確認とお休みの連絡ができます。',
   caution: 'QRコードは第三者に見せないでください。紛失した場合は教室へご連絡ください（再発行できます）。',
   issued: '保護者用QRを発行しました。忘れずに保存してください。',
   /** 権威トークンの確認に失敗したとき(写しで描けている場合)の注意文。印刷を止めるため文言を分けている。 */
