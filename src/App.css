@@ -5560,10 +5560,12 @@ tr.sa-group-row td {
   line-height: 1.4;
 }
 
-/* 畳んだときの入口。盤面の操作を邪魔しない右下に固定し、QR提出通知の overlay(z-index:240)より下に置く。 */
+/* 畳んだときの入口。QR提出通知の overlay(z-index:240)より下に置く。
+   ★左下に置く: 右下は開発用教室の確認リスト(.verification-checklist-toggle / -panel・z-index:2000)が使っており、
+     重なるとこの入口が押せなくなる(この機能は開発用教室で確認するので必ず同時に出る・レビュー指摘 2026-09-19)。 */
 .parent-message-pill {
   position: fixed;
-  right: 20px;
+  left: 20px;
   bottom: 20px;
   z-index: 230;
   padding: 10px 18px;

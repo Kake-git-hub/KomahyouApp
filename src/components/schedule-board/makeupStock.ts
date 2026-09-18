@@ -392,6 +392,33 @@ export function buildOriginToken(dateKey: string, slotNumber?: number | null) {
   return slotNumber ? `${dateKey}${ORIGIN_TOKEN_SEPARATOR}${slotNumber}` : dateKey
 }
 
+/**
+ * 「この日付・この時限の元コマ」を、在庫行の残り振替元(remainingOrigin*)の中から探し、**その行自身の値で**選択トークンを作る。
+ * 保護者からの休み連絡の「振替先を今決める」が、休みにした直後のコマを振替元として選ぶのに使う(spec-parent-portal §0-5)。
+ *
+ * なぜ行自身の値で作るか: 残り振替元には「時限つき」(算出 origin)と「時限なし」(台帳へ日付だけで積んだ通常授業の休み)が混在する。
+ * 呼び出し側の日付と時限から素朴に buildOriginToken すると、時限なしの行に対して `日付#限` を渡すことになり
+ * resolveSelectedMakeupOrigin が一致させられず**最古の振替元へフォールバック**する(2026-06 の「常に最古が割り当たる」回帰と同じ症状)。
+ * - 同じ日付で時限まで一致する行があればそれ(同日同科目 2 コマの取り違え防止・2026-07-31 の時限単位化)。
+ * - 無ければ同じ日付の先頭(時限なしの行を含む)。
+ * - その日付が残っていなければ null(呼び出し側は選択なし=最古、にするか配置をやめるかを決める)。
+ */
+export function resolveRemainingOriginToken(
+  entry: Pick<MakeupStockEntry, 'remainingOriginDates'> & Partial<Pick<MakeupStockEntry, 'remainingOriginSlots'>>,
+  originDateKey: string,
+  originSlotNumber: number | null,
+): string | null {
+  const sameDateIndexes = entry.remainingOriginDates
+    .map((dateKey, index) => (dateKey === originDateKey ? index : -1))
+    .filter((index) => index >= 0)
+  if (sameDateIndexes.length === 0) return null
+  const exactIndex = originSlotNumber === null
+    ? undefined
+    : sameDateIndexes.find((index) => (entry.remainingOriginSlots?.[index] ?? null) === originSlotNumber)
+  const pickedIndex = exactIndex ?? sameDateIndexes[0]
+  return buildOriginToken(entry.remainingOriginDates[pickedIndex], entry.remainingOriginSlots?.[pickedIndex] ?? null)
+}
+
 export function parseOriginToken(token: string): { dateKey: string; slotNumber: number | null } {
   const separatorIndex = token.indexOf(ORIGIN_TOKEN_SEPARATOR)
   if (separatorIndex < 0) return { dateKey: token, slotNumber: null }

@@ -14,6 +14,7 @@ import {
   PARENT_MESSAGE_MARK_NOTIFIED_CHUNK_SIZE,
   mergeParentMessageNotifications,
   parseParentMessageEntry,
+  selectParentMessagesForClassroom,
   selectUnnotifiedParentMessages,
   splitPendingParentAbsenceFinalize,
   type ParentAbsenceDetail,
@@ -163,9 +164,11 @@ describe('formatParentAbsenceLessonLabel / 四択の定義', () => {
     expect(PARENT_ABSENCE_CHOICES.map((choice) => choice.resolution)).toEqual(['absent', 'absent-no-makeup', 'makeup-now', 'manual'])
     expect(PARENT_ABSENCE_CHOICES.map((choice) => choice.label)).toEqual(['休み', '振無休', '振替先を今決める', '何もしない'])
   })
-  it('保存されなかった再通知の注意文は盤面を変える 3 種だけ(何もしない・未選択は空)', () => {
+  it('再通知の注意文は盤面を変える 3 種だけ(何もしない・未選択は空)。「保存されなかった」と断定しない', () => {
     expect(buildParentAbsenceUnsavedNote('absent')).toContain('「休み」')
-    expect(buildParentAbsenceUnsavedNote('makeup-now')).toContain('保存されなかった')
+    expect(buildParentAbsenceUnsavedNote('makeup-now')).toContain('保存された盤面で確認が取れなかった')
+    // 保存はできていても確認が取れない経路(ログアウト直前の保存・盤面の「元に戻す」)があるので断定しない(レビュー指摘 2026-09-19)。
+    expect(buildParentAbsenceUnsavedNote('makeup-now')).not.toContain('保存されなかった')
     expect(buildParentAbsenceUnsavedNote('manual')).toBe('')
     expect(buildParentAbsenceUnsavedNote(null)).toBe('')
   })
@@ -196,25 +199,51 @@ describe('mergeParentMessageNotifications', () => {
 // 選んだ瞬間に処理済みにすると、保存し忘れて閉じたとき「連絡は処理済みなのに盤面は休みになっていない」が起きる。
 describe('保存待ち(addPendingParentAbsenceFinalize / splitPendingParentAbsenceFinalize)', () => {
   const pending = (overrides: Partial<PendingParentAbsenceFinalize> = {}): PendingParentAbsenceFinalize =>
-    ({ messageId: 'm1', classroomId: 'dev', processedAt: '2026-09-18T01:00:00.000Z', ...overrides })
+    ({ messageId: 'm1', classroomId: 'dev', processedAt: '2026-09-18T01:00:00.000Z', studentId: 's001', dateKey: '2026-09-20', slotNumber: 3, ...overrides })
+  const recorded = () => true
 
   it('保存した教室・その保存のスナップショット作成時刻以前に処理した分だけ取り出す', () => {
     const current = [pending({ messageId: 'before' }), pending({ messageId: 'same', processedAt: '2026-09-18T01:05:00.000Z' }), pending({ messageId: 'after', processedAt: '2026-09-18T01:05:00.001Z' })]
-    const result = splitPendingParentAbsenceFinalize(current, { classroomId: 'dev', snapshotSavedAt: '2026-09-18T01:05:00.000Z' })
+    const result = splitPendingParentAbsenceFinalize(current, { classroomId: 'dev', snapshotSavedAt: '2026-09-18T01:05:00.000Z', isRecordedInSavedBoard: recorded })
     expect(result.toFinalize).toEqual(['before', 'same'])
     // 保存の通信中に処理した連絡は、その保存の中身に入っていない → 次の保存まで残す
     expect(result.remaining.map((item) => item.messageId)).toEqual(['after'])
+    expect(result.returned).toEqual([])
+  })
+  // レビュー指摘(2026-09-19): 四択で休みにしたあと盤面の「元に戻す」や休み解除で記録を消してから保存すると、
+  // 保存待ちだけが残って連絡が処理済みになり、二度と再通知されなかった。保存した盤面に記録が実在する分だけ処理済みにする。
+  it('保存した盤面に休みの記録が無い連絡は処理済みにせず、保存待ちからも外して一覧へ戻す', () => {
+    const current = [pending({ messageId: 'kept' }), pending({ messageId: 'undone', dateKey: '2026-09-22' })]
+    const result = splitPendingParentAbsenceFinalize(current, {
+      classroomId: 'dev',
+      snapshotSavedAt: '2026-09-18T02:00:00.000Z',
+      isRecordedInSavedBoard: (item) => item.dateKey === '2026-09-20',
+    })
+    expect(result.toFinalize).toEqual(['kept'])
+    expect(result.returned).toEqual(['undone'])
+    expect(result.remaining).toEqual([])
+  })
+  it('まだ判定できない分(他教室・保存の通信中に処理)は、盤面の記録を見ずに残す', () => {
+    const seen: string[] = []
+    const current = [pending({ messageId: 'other', classroomId: 'other' }), pending({ messageId: 'after', processedAt: '2026-09-18T09:00:00.000Z' })]
+    const result = splitPendingParentAbsenceFinalize(current, {
+      classroomId: 'dev',
+      snapshotSavedAt: '2026-09-18T02:00:00.000Z',
+      isRecordedInSavedBoard: (item) => { seen.push(item.messageId); return false },
+    })
+    expect(result).toEqual({ toFinalize: [], returned: [], remaining: current })
+    expect(seen).toEqual([])
   })
   it('別の教室を保存しても処理済みにしない(INV-08)', () => {
     const current = [pending({ messageId: 'dev-notice' }), pending({ messageId: 'other-notice', classroomId: 'other' })]
-    const result = splitPendingParentAbsenceFinalize(current, { classroomId: 'other', snapshotSavedAt: '2026-09-18T02:00:00.000Z' })
+    const result = splitPendingParentAbsenceFinalize(current, { classroomId: 'other', snapshotSavedAt: '2026-09-18T02:00:00.000Z', isRecordedInSavedBoard: recorded })
     expect(result.toFinalize).toEqual(['other-notice'])
     expect(result.remaining.map((item) => item.messageId)).toEqual(['dev-notice'])
   })
   it('教室・時刻が不明なら何も取り出さない(安全側=再通知に任せる)', () => {
     const current = [pending()]
-    expect(splitPendingParentAbsenceFinalize(current, { classroomId: null, snapshotSavedAt: '2026-09-18T02:00:00.000Z' })).toEqual({ toFinalize: [], remaining: current })
-    expect(splitPendingParentAbsenceFinalize(current, { classroomId: 'dev', snapshotSavedAt: '' })).toEqual({ toFinalize: [], remaining: current })
+    expect(splitPendingParentAbsenceFinalize(current, { classroomId: null, snapshotSavedAt: '2026-09-18T02:00:00.000Z', isRecordedInSavedBoard: recorded })).toEqual({ toFinalize: [], returned: [], remaining: current })
+    expect(splitPendingParentAbsenceFinalize(current, { classroomId: 'dev', snapshotSavedAt: '', isRecordedInSavedBoard: recorded })).toEqual({ toFinalize: [], returned: [], remaining: current })
   })
   it('同じ連絡のやり直しは新しい processedAt で置き換える(重複させない)。不完全な入力は足さない', () => {
     const first = addPendingParentAbsenceFinalize([], pending())
@@ -224,6 +253,18 @@ describe('保存待ち(addPendingParentAbsenceFinalize / splitPendingParentAbsen
     expect(addPendingParentAbsenceFinalize(second, pending({ classroomId: '' }))).toEqual(second)
     expect(addPendingParentAbsenceFinalize(second, pending({ processedAt: '' }))).toEqual(second)
     expect(first).toHaveLength(1) // 入力配列を破壊しない
+  })
+})
+
+// INV-08(レビュー指摘 2026-09-19): 教室を切り替えた直後の 1 レンダーは、前の教室の連絡と新しい教室の名簿が同時に見える。
+// 生徒ID sNNN は教室ごとに独立採番なので、その一瞬に四択を押すと新しい教室の別人を休みにしうる。
+describe('selectParentMessagesForClassroom', () => {
+  it('開いている教室の連絡だけを残す。教室が未選択なら 1 件も出さない', () => {
+    const entries = [createEntry({ id: 'own' }), createEntry({ id: 'previous', classroomId: '5w5OMueETerSKrSf14HC' })]
+    expect(selectParentMessagesForClassroom(entries, 'dev').map((entry) => entry.id)).toEqual(['own'])
+    expect(selectParentMessagesForClassroom(entries, '5w5OMueETerSKrSf14HC').map((entry) => entry.id)).toEqual(['previous'])
+    expect(selectParentMessagesForClassroom(entries, null)).toEqual([])
+    expect(selectParentMessagesForClassroom(entries, '')).toEqual([])
   })
 })
 

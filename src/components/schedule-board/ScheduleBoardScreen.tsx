@@ -27,7 +27,7 @@ import {
   type LectureStockPendingItem,
 } from './lectureStock'
 import { cloneGroupClassEntryMap, groupClassBandTimeLabels, groupClassEntryKey, groupClassSubjects, normalizeGroupClassEntryMap, type GroupClassBand, type GroupClassEntry, type GroupClassEntryMap, type GroupClassSubject } from './groupClass'
-import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
+import { buildOutstandingAbsenceEntries, buildMakeupStockEntries, buildMakeupStockKey, buildOriginToken, collectMakeupOriginDatesByKey, normalizeMakeupOriginMapKeys, normalizeManagedMakeupStockKey, parseOriginSlotNumberFromLabel, resolveMakeupStatusOriginToMaterialize, resolveRemainingOriginToken, resolveStoreMakeupOriginDate, toOutstandingMakeupOriginEntries, type MakeupStockEntry, type ManualMakeupOrigin } from './makeupStock'
 import { resolveSelectedLecturePlacementItem, type LecturePlacementSelectionKey } from './lectureStockPlacement'
 import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLabels, resolveLessonMinutesNoteSuffix, shiftDate, teacherTypeLabels } from './mockData'
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
@@ -2274,6 +2274,31 @@ function buildGroupedLectureStockTitle(params: {
 
 function getStockStudentKeyFromEntryKey(entryKey: string) {
   return entryKey.split('__')[0] ?? entryKey
+}
+
+/**
+ * 保護者からの休み連絡「振替先を今決める」(spec-parent-portal §0-5): 休みにした直後のコマを振替元として、
+ * 既存の振替配置モードへ入ってよいか・どの在庫行とどの振替元を選ぶかを決める。
+ * - 判定は**その科目の在庫行(raw)**の残数で行う。生徒単位のグループ残数で見ると、「英は先取り済み(残 0)・数は残 2」の生徒の
+ *   英コマで配置モードへ入ってしまい、在庫の裏付けが無い英の振替が盤面に置かれる(未消化振替一覧の選択は raw.balance > 0 で絞っている)。
+ * - 振替元の選択トークンは在庫行自身の値で作る(resolveRemainingOriginToken)。その日付が残っていない(先取りとの相殺など)ときは
+ *   配置モードへ入らない = 休みの記録だけで終える。最古の振替元へ黙って付け替えない(INV-11)。
+ */
+export function resolveParentMakeupPlacement<Grouped extends { stockStudentKey: string }>(params: {
+  groupedEntries: readonly Grouped[]
+  rawEntries: ReadonlyArray<Pick<MakeupStockEntry, 'key' | 'balance' | 'remainingOriginDates'> & Partial<Pick<MakeupStockEntry, 'remainingOriginSlots'>>>
+  stockKey: string
+  originDate: string
+  originSlotNumber: number | null
+}): { entry: Grouped; rawKey: string; originToken: string } | null {
+  const rawEntry = params.rawEntries.find((raw) => raw.key === params.stockKey)
+  if (!rawEntry || rawEntry.balance <= 0) return null
+  const originToken = resolveRemainingOriginToken(rawEntry, params.originDate, params.originSlotNumber)
+  if (!originToken) return null
+  const stockStudentKey = getStockStudentKeyFromEntryKey(params.stockKey)
+  const entry = params.groupedEntries.find((candidate) => candidate.stockStudentKey === stockStudentKey)
+  if (!entry) return null
+  return { entry, rawKey: params.stockKey, originToken }
 }
 
 function resolveStockComparableStudentKey(student: StudentEntry, managedStudentByAnyName: Map<string, StudentRow>, resolveBoardStudentDisplayName: (name: string) => string) {
@@ -5533,7 +5558,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   const processedParentAbsenceRequestIdRef = useRef<number | null>(null)
   const parentAbsenceJumpedRequestIdRef = useRef<number | null>(null)
   // 「振替先を今決める」: 休みで在庫へ戻した直後、在庫一覧が更新されたレンダーで配置モードへ入るための受け渡し。
-  const [pendingParentMakeupPlacement, setPendingParentMakeupPlacement] = useState<{ stockKey: string; originDate: string } | null>(null)
+  const [pendingParentMakeupPlacement, setPendingParentMakeupPlacement] = useState<{ stockKey: string; originDate: string; originSlotNumber: number | null } | null>(null)
   // 配置モードの終了を App へ知らせるための印。selected=選択(selectedMakeupStockKey)が実際に立ったのを見たか。
   const parentAbsencePlacementActiveRef = useRef(false)
   const parentAbsencePlacementSelectedSeenRef = useRef(false)
@@ -11206,7 +11231,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 「休み」の本体。席(セル・机・生徒枠)を引数で受ける: メニュー(handleMarkStudentAbsent)と、保護者からの休み連絡の
   // 自動処理(parentAbsenceRequest)が**同じ 1 本**を通る(会計 INV-06 の経路を分散させない)。表示中の週(weekIndex)が対象。
   // 戻り値: 席が見つからなければ null。makeupStock は未消化振替へ戻したときの在庫キーと振替元日付(講習コマは null)。
-  const markStudentAbsentAt = (seat: ParentAbsenceTarget): { makeupStock: { stockKey: string; originDate: string } | null } | null => {
+  const markStudentAbsentAt = (seat: ParentAbsenceTarget): { makeupStock: { stockKey: string; originDate: string; originSlotNumber: number | null } | null } | null => {
     const nextWeeks = cloneWeeksForActiveWeek(weeks, weekIndex)
     const targetCell = nextWeeks[weekIndex]?.find((cell) => cell.id === seat.cellId)
     const targetDesk = targetCell?.desks[seat.deskIndex]
@@ -11343,7 +11368,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
     recordOperationEvent('status-mark', buildStatusMarkDetail(targetStudent, targetCell, 'absent', displacedStatusEntry))
     setStatusMessage(`${resolveBoardStudentDisplayName(targetStudent.name)} を休みにし、未消化振替へ戻しました。`)
-    return { makeupStock: { stockKey, originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey) } }
+    // 振替元は日付と**時限**の両方を返す。素の日付だけだと、同じ日に同じ科目の元コマが 2 つあるとき先頭の時限に当たり、
+    // 置いた振替の「元の通常授業」表示と lessonLinks の紐付けが別コマを指す(2026-07-31 の時限単位化・INV-06/INV-11)。
+    // 選択トークンへの変換は、在庫行自身の値で作る resolveRemainingOriginToken に任せる(ここで buildOriginToken しない)。
+    return {
+      makeupStock: {
+        stockKey,
+        originDate: resolveOriginalRegularDate(targetStudent, targetCell.dateKey),
+        originSlotNumber: resolveOriginalRegularSlotNumber(targetStudent, targetCell.slotNumber),
+      },
+    }
   }
 
   const handleMarkStudentAbsent = () => {
@@ -11417,7 +11451,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const request = parentAbsenceRequest!
     const finish = (ok: boolean, message: string) => {
       processedParentAbsenceRequestIdRef.current = request.requestId
-      onParentAbsenceRequestProcessed?.({ requestId: request.requestId, messageId: request.messageId, action: request.action, ok, message })
+      onParentAbsenceRequestProcessed?.({ requestId: request.requestId, messageId: request.messageId, action: request.action, studentId: request.studentId, dateKey: request.dateKey, slotNumber: request.slotNumber, ok, message })
     }
     // テンプレ編集中の cells はテンプレ用で、実日付の盤面ではない。出欠を書き込まない。
     if (isTemplateMode) {
@@ -11432,7 +11466,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         return
       }
       parentAbsenceJumpedRequestIdRef.current = request.requestId
-      jumpToWeekByDate(request.dateKey)
+      // 移れたら、週が変わった次のレンダーでこの effect がもう一度走って続きを行う。移れなければ state が何も変わらず
+      // 再実行されないので、ここで失敗として返す(返さないと App の保険タイマーまで「処理中…」のままになる)。
+      if (!jumpToWeekByDate(request.dateKey)) finish(false, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
       return
     }
 
@@ -11473,24 +11509,29 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 「振替先を今決める」の続き: 在庫一覧にその生徒の残数が現れたら、その振替元日付を選んだ状態で配置モードへ入る。
   useEffect(() => {
     if (!pendingParentMakeupPlacement) return
-    const stockStudentKey = getStockStudentKeyFromEntryKey(pendingParentMakeupPlacement.stockKey)
-    const entry = makeupStockEntries.find((candidate) => candidate.stockStudentKey === stockStudentKey) ?? null
+    const placement = resolveParentMakeupPlacement({
+      groupedEntries: makeupStockEntries,
+      rawEntries: rawMakeupStockEntries,
+      stockKey: pendingParentMakeupPlacement.stockKey,
+      originDate: pendingParentMakeupPlacement.originDate,
+      originSlotNumber: pendingParentMakeupPlacement.originSlotNumber,
+    })
     setPendingParentMakeupPlacement(null)
-    if (!entry || entry.balance <= 0) {
-      // 先取り(残数マイナス)を休みで相殺した等。休みの記録は済んでいるので、配置モードに入らないだけ。
-      setStatusMessage('休みにしました。未消化振替の残数が無いため、振替先の選択には進みません。')
+    if (!placement) {
+      // その科目の残数が無い(先取りを休みで相殺した等)。休みの記録は済んでいるので、配置モードに入らないだけ。
+      setStatusMessage('休みにしました。この科目の未消化振替の残数が無いため、振替先の選択には進みません。')
       onParentAbsencePlacementSettled?.()
       return
     }
     parentAbsencePlacementActiveRef.current = true
-    handleSelectMakeupStockEntry(entry, {
+    handleSelectMakeupStockEntry(placement.entry, {
       hidePanelsDuringPlacement: true,
-      rawKey: pendingParentMakeupPlacement.stockKey,
-      originDate: pendingParentMakeupPlacement.originDate,
+      rawKey: placement.rawKey,
+      originDate: placement.originToken,
     })
-    setStatusMessage(`${entry.displayName} を休みにしました。振替先の空欄セルを左クリックしてください(やめるときはキャンセル)。`)
+    setStatusMessage(`${placement.entry.displayName} を休みにしました。振替先の空欄セルを左クリックしてください(やめるときはキャンセル)。`)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [makeupStockEntries, pendingParentMakeupPlacement])
+  }, [makeupStockEntries, pendingParentMakeupPlacement, rawMakeupStockEntries])
 
   // 振替配置モードが終わった(配置した/キャンセルした)ら App へ知らせ、残りの休み連絡のモーダルを開き直させる。
   // ★選択が実際に立った(selectedSeen)あとで null に戻ったときだけ「終わった」とみなす。配置モードへ入る setState が
@@ -11895,8 +11936,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     )
   }
 
-  const jumpToWeekByDate = (dateKey: string) => {
-    if (!dateKey) return
+  // 戻り値: 対象週へ移れたか。保護者からの休み連絡の自動処理が「移れなかった」を即座に失敗として返すのに使う。
+  const jumpToWeekByDate = (dateKey: string): boolean => {
+    if (!dateKey) return false
     const targetWeekStart = getWeekStart(parseDateKey(dateKey))
     const targetWeekStartKey = toDateKey(targetWeekStart)
     const targetWeekEndKey = toDateKey(shiftDate(targetWeekStart, 6))
@@ -11913,7 +11955,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const resolvedIndex = nextWeeks.findIndex((week) => week[0]?.dateKey === targetWeekStartKey)
     const nextWeekIndex = resolvedIndex >= 0 ? resolvedIndex : weekIndex + coveredWeeks.weekIndexOffset
     const nextWeek = nextWeeks[nextWeekIndex]
-    if (!nextWeek?.length) return
+    if (!nextWeek?.length) return false
 
     if (coveredWeeks.weekIndexOffset > 0 || nextWeeks.length !== weeks.length) setWeeks(nextWeeks)
     setWeekIndex(nextWeekIndex)
@@ -11921,6 +11963,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setSelectedDeskIndex(0)
     setStudentMenu(null)
     setStatusMessage(`${nextWeek[0].dateLabel} 週へジャンプしました。`)
+    return true
   }
 
   const handleUndo = () => {

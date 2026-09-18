@@ -23,6 +23,10 @@ export type ParentAbsenceRequestResult = {
   requestId: number
   messageId: string
   action: ParentAbsenceAction
+  // 対象(コマンドの写し)。App が「保存した盤面に休みの記録が実在するか」を確かめるのに使う。
+  studentId: string
+  dateKey: string
+  slotNumber: number
   ok: boolean
   // ok=false のとき室長へ見せる理由(盤面にコマが無い等)。ok=true のときは空文字。
   message: string
@@ -94,9 +98,45 @@ export function resolveParentAbsenceTarget(params: {
     })
   })
   if (matches.length === 0) return { ok: false, reason: 'student-not-found' }
+  // 在庫は「生徒×科目」の鍵なので、別の科目の席を休みにすると違う科目の在庫へ戻ってしまう。
+  // 席が 1 つなら科目の表記ゆれ(算/数の正規化など)を許してその席を使うが、複数あって科目で決められないときは
+  // 推測せず室長に委ねる(レビュー指摘 2026-09-19)。
   const bySubject = matches.find((match) => match.student.subject === params.subject)
-  const picked = bySubject ?? matches[0]
+  const picked = bySubject ?? (matches.length === 1 ? matches[0] : null)
+  if (!picked) return { ok: false, reason: 'student-not-found' }
   return { ok: true, target: picked.target, student: picked.student }
+}
+
+/**
+ * 保存した盤面に、その連絡の「休み」の記録(休み / 振無休)が実際に入っているか。
+ * 連絡を処理済み(notifiedAt)にしてよいのは、これが真のときだけ(spec-parent-portal §0-5)。
+ * 四択で休みにしたあと、保存までの間に盤面の「元に戻す」や休み解除で記録が消えていたら偽になり、
+ * 連絡は処理済みにならず一覧へ戻る(「連絡は処理済みなのに盤面は休みになっていない」を作らない)。
+ * 生徒の同一性は resolveParentAbsenceTarget と同じ決め方。講習・体験の記録は数えない。
+ */
+export function hasParentAbsenceRecord(params: {
+  weeks: ReadonlyArray<readonly SlotCell[]> | null | undefined
+  students: readonly StudentRow[]
+  studentId: string
+  dateKey: string
+  slotNumber: number
+}): boolean {
+  if (!params.weeks) return false
+  const ownerByName = buildUniqueNameOwnerMap(params.students)
+  for (const week of params.weeks) {
+    for (const cell of week) {
+      if (cell.dateKey !== params.dateKey || cell.slotNumber !== params.slotNumber) continue
+      for (const desk of cell.desks) {
+        for (const status of desk.statusSlots ?? []) {
+          if (!status) continue
+          if (status.status !== 'absent' && status.status !== 'absent-no-makeup') continue
+          if (!PARENT_ABSENCE_LESSON_TYPES.has(status.lessonType)) continue
+          if (isBoardStudentOwnedBy(status, params.studentId, ownerByName)) return true
+        }
+      }
+    }
+  }
+  return false
 }
 
 export const PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE = '盤面にこのコマが見つかりません(すでに休み・移動・削除の処理が済んでいる可能性があります)。盤面を確認して「何もしない」で閉じてください。'

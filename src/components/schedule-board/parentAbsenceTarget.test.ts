@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { StudentRow } from '../basic-data/basicDataModel'
 import {
   consumeParentAbsenceRequest,
+  hasParentAbsenceRecord,
   isBoardStudentOwnedBy,
   resolveParentAbsenceTarget,
   shouldProcessParentAbsenceRequest,
   type ParentAbsenceRequest,
 } from './parentAbsenceTarget'
-import type { DeskCell, SlotCell, StudentEntry } from './types'
+import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 
 // 保護者からの休み連絡(docs/spec-parent-portal.md §0-5)を盤面のどの席へ当てるか。
 function createStudentRow(overrides: Partial<StudentRow> = {}): StudentRow {
@@ -61,10 +62,16 @@ describe('resolveParentAbsenceTarget', () => {
     }
   })
 
-  it('同じコマに本人が 2 席あるときは連絡の科目に一致する席を選ぶ。一致が無ければ先頭', () => {
+  // 在庫は「生徒×科目」の鍵。別の科目の席を休みにすると違う科目の在庫へ戻るので、決められないときは推測しない(レビュー指摘 2026-09-19)。
+  it('同じコマに本人が 2 席あるときは連絡の科目に一致する席を選ぶ。どちらも一致しなければ推測せず student-not-found', () => {
     const cells = [createCell({ desks: [createDesk('d0', [createBoardStudent({ id: 'math', subject: '数' }), null]), createDesk('d1', [createBoardStudent({ id: 'eng', subject: '英' }), null])] })]
     expect(resolveParentAbsenceTarget({ cells, students: [createStudentRow()], ...REQUEST })).toMatchObject({ ok: true, target: { deskIndex: 1 } })
-    expect(resolveParentAbsenceTarget({ cells, students: [createStudentRow()], ...REQUEST, subject: '国' })).toMatchObject({ ok: true, target: { deskIndex: 0 } })
+    expect(resolveParentAbsenceTarget({ cells, students: [createStudentRow()], ...REQUEST, subject: '国' })).toEqual({ ok: false, reason: 'student-not-found' })
+  })
+
+  it('席が 1 つだけなら、科目の表記が連絡と違っていてもその席を使う(算/数の学年正規化などの表記ゆれで取りこぼさない)', () => {
+    const cells = [createCell({ desks: [createDesk('d0', [createBoardStudent({ subject: '算' }), null])] })]
+    expect(resolveParentAbsenceTarget({ cells, students: [createStudentRow()], ...REQUEST, subject: '数' })).toMatchObject({ ok: true, target: { deskIndex: 0, studentIndex: 0 } })
   })
 })
 
@@ -84,6 +91,45 @@ describe('isBoardStudentOwnedBy(生徒の同一性)', () => {
     const students = [createStudentRow(), createStudentRow({ id: 's002', name: '青木 次郎', displayName: '青木' })]
     const cells = [createCell({ desks: [createDesk('d0', [createBoardStudent({ managedStudentId: undefined }), null])] })]
     expect(resolveParentAbsenceTarget({ cells, students, ...REQUEST })).toEqual({ ok: false, reason: 'student-not-found' })
+  })
+})
+
+// 連絡を処理済みにしてよいのは、保存した盤面に休みの記録(休み/振無休)が実在するときだけ(レビュー指摘 2026-09-19)。
+describe('hasParentAbsenceRecord(保存した盤面に休みの記録が実在するか)', () => {
+  function createStatus(overrides: Partial<StudentStatusEntry> = {}): StudentStatusEntry {
+    return {
+      id: 'status-1', studentId: 'entry-1', sourceManagedLesson: true, name: '青木', managedStudentId: 's001', grade: '中2', subject: '英',
+      lessonType: 'regular', teacherType: 'normal', teacherName: '講師', dateKey: '2026-09-20', slotNumber: 3, recordedAt: '2026-09-19T01:00:00.000Z',
+      status: 'absent', sourceLessonId: 'l', ...overrides,
+    }
+  }
+  const weeksWith = (status: StudentStatusEntry | null) => [[createCell({ desks: [{ id: 'd0', teacher: '講師', statusSlots: [status, null] }] })]]
+  const target = { students: [createStudentRow()], studentId: 's001', dateKey: '2026-09-20', slotNumber: 3 }
+
+  it('休み・振無休の記録があれば真', () => {
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus()), ...target })).toBe(true)
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ status: 'absent-no-makeup' })), ...target })).toBe(true)
+  })
+  it('記録が無い(盤面の「元に戻す」・休み解除で消えた)なら偽。盤面が未保存(weeks 無し)でも偽', () => {
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(null), ...target })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: [[createCell({ desks: [createDesk('d0', [createBoardStudent(), null])] })]], ...target })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: null, ...target })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: undefined, ...target })).toBe(false)
+  })
+  it('出席・移動・休日設定の記録は休みの記録に数えない', () => {
+    for (const status of ['attended', 'moved', 'holiday'] as const) {
+      expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ status })), ...target }), status).toBe(false)
+    }
+  })
+  it('別の日・別の時限・別の生徒・講習コマの休みでは真にならない', () => {
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus()), ...target, dateKey: '2026-09-21' })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus()), ...target, slotNumber: 4 })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ managedStudentId: 's002' })), ...target })).toBe(false)
+    expect(hasParentAbsenceRecord({ weeks: weeksWith(createStatus({ lessonType: 'special' })), ...target })).toBe(false)
+  })
+  it('表示中でない週の記録も見つける(保存データは全週を持つ)', () => {
+    const otherWeek = [createCell({ id: 'x', dateKey: '2026-09-27' })]
+    expect(hasParentAbsenceRecord({ weeks: [otherWeek, ...weeksWith(createStatus())], ...target })).toBe(true)
   })
 })
 

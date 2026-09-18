@@ -15,7 +15,7 @@ import { formatJstDateTimeLabel } from './parentPortalPageModel'
 
 type ParentMessagesModalProps = {
   notifications: ParentMessageNotification[]
-  // 畳んでいる間はモーダルの代わりに件数の入口(ピル)だけを出す。盤面を見てから決めたいとき・振替先を選んでいる間に使う。
+  // 畳んでいる間はモーダルの代わりに件数の入口(左下のピル)だけを出す。盤面を見てから決めたいとき・振替先を選んでいる間に使う。
   collapsed: boolean
   // 四択を処理中の連絡 ID(二重実行防止でその連絡のボタンを無効化)。null=処理中なし。
   busyId: string | null

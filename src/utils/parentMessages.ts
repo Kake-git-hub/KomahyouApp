@@ -164,10 +164,12 @@ export const PARENT_ABSENCE_RESOLUTION_LABELS: Record<ParentAbsenceResolution, s
   manual: '何もしない',
 }
 
-// 再通知(前回四択を押したが保存されなかった)のときの注意文。
+// 再通知(前回四択を押したが、保存された盤面に休みの記録が無い)のときの注意文。
+// 「保存されなかった」と断定しない: 保存はできていても、ログアウト直前の保存や盤面の「元に戻す」で
+// 記録の確認が取れなかった場合もここへ来る(レビュー指摘 2026-09-19)。
 export function buildParentAbsenceUnsavedNote(previousResolution: ParentAbsenceResolution | null): string {
   if (!previousResolution || previousResolution === 'manual') return ''
-  return `前回「${PARENT_ABSENCE_RESOLUTION_LABELS[previousResolution]}」を選びましたが、盤面が保存されなかったためもう一度表示しています。`
+  return `前回「${PARENT_ABSENCE_RESOLUTION_LABELS[previousResolution]}」を選びましたが、保存された盤面で確認が取れなかったため、もう一度表示しています。盤面を確認して選び直してください。`
 }
 
 /**
@@ -213,7 +215,15 @@ export function mergeParentMessageNotifications(
 // - classroomId = その連絡を処理した教室。保存した教室と一致する分だけ処理済みにする(INV-08)。
 // - processedAt = 盤面へ反映した時刻(ISO)。**保存したスナップショットの作成時刻以前**の分だけ処理済みにする
 //   (保存の通信中に処理した連絡は、その保存の中身に入っていないので次の保存まで待つ)。
-export type PendingParentAbsenceFinalize = { messageId: string; classroomId: string; processedAt: string }
+// - studentId / dateKey / slotNumber = 保存した盤面に休みの記録が実在するかを確かめるための対象(DOM には出さない)。
+export type PendingParentAbsenceFinalize = {
+  messageId: string
+  classroomId: string
+  processedAt: string
+  studentId: string
+  dateKey: string
+  slotNumber: number
+}
 
 // 同じ連絡をやり直した(見つからず失敗 → もう一度選んだ等)ときは、新しい processedAt で置き換える。
 export function addPendingParentAbsenceFinalize(
@@ -225,19 +235,36 @@ export function addPendingParentAbsenceFinalize(
 }
 
 /**
- * 保存に成功した教室・その保存に含まれる分だけ取り出す。
- * 他教室の分と、スナップショット作成より後に処理した分は残す(次の保存で処理済みにする)。
+ * 保存に成功した教室・その保存に含まれる分を取り出し、**保存した盤面に休みの記録が実在するか**で振り分ける。
+ * - toFinalize: 記録がある → 処理済み(notifiedAt)にしてよい。
+ * - returned:   記録が無い(四択のあと盤面の「元に戻す」や休み解除で消えた)→ 処理済みにせず保存待ちからも外す
+ *               = 一覧へ戻り、室長がもう一度選べる。「連絡は処理済みなのに盤面は休みになっていない」を作らない。
+ * - remaining:  他教室の分と、スナップショット作成より後に処理した分(次の保存で判定する)。
  */
 export function splitPendingParentAbsenceFinalize(
   current: readonly PendingParentAbsenceFinalize[],
-  saved: { classroomId: string | null | undefined; snapshotSavedAt: string | null | undefined },
-): { toFinalize: string[]; remaining: PendingParentAbsenceFinalize[] } {
-  if (!saved.classroomId || !saved.snapshotSavedAt) return { toFinalize: [], remaining: [...current] }
+  saved: {
+    classroomId: string | null | undefined
+    snapshotSavedAt: string | null | undefined
+    isRecordedInSavedBoard: (item: PendingParentAbsenceFinalize) => boolean
+  },
+): { toFinalize: string[]; returned: string[]; remaining: PendingParentAbsenceFinalize[] } {
+  if (!saved.classroomId || !saved.snapshotSavedAt) return { toFinalize: [], returned: [], remaining: [...current] }
   const toFinalize: string[] = []
+  const returned: string[] = []
   const remaining: PendingParentAbsenceFinalize[] = []
   for (const item of current) {
-    if (item.classroomId === saved.classroomId && item.processedAt <= saved.snapshotSavedAt) toFinalize.push(item.messageId)
-    else remaining.push(item)
+    if (item.classroomId !== saved.classroomId || item.processedAt > saved.snapshotSavedAt) remaining.push(item)
+    else if (saved.isRecordedInSavedBoard(item)) toFinalize.push(item.messageId)
+    else returned.push(item.messageId)
   }
-  return { toFinalize, remaining }
+  return { toFinalize, returned, remaining }
+}
+
+// 購読教室と違う教室の連絡を一覧に出さない(INV-08)。教室を切り替えた直後の 1 レンダーは、前の教室の連絡(entries)と
+// 新しい教室の名簿・教室IDが同時に見える。ここで落とさないと、その一瞬に四択を押したとき、前の教室の生徒ID(sNNN は
+// 教室ごとに独立採番)で**新しい教室の別人**を休みにしうる(レビュー指摘 2026-09-19)。購読層の doc.classroomId ガードと対。
+export function selectParentMessagesForClassroom(entries: readonly ParentMessageEntry[], classroomId: string | null | undefined): ParentMessageEntry[] {
+  if (!classroomId) return []
+  return entries.filter((entry) => entry.classroomId === classroomId)
 }

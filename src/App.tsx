@@ -52,8 +52,8 @@ import { VerificationChecklistPanel } from './components/developer-report/Verifi
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
 import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessages } from './integrations/firebase/parentPortal'
-import { addPendingParentAbsenceFinalize, buildParentMessageNotifications, chunkParentMessageIds, mergeParentMessageNotifications, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
-import { consumeParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
+import { addPendingParentAbsenceFinalize, buildParentMessageNotifications, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
+import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
@@ -1560,7 +1560,7 @@ function AuthenticatedApp() {
   // 四択を処理中の連絡 ID(二重実行防止)。連絡ごとのエラー(盤面にコマが無い等)。
   const [parentAbsenceBusyId, setParentAbsenceBusyId] = useState<string | null>(null)
   const [parentAbsenceErrors, setParentAbsenceErrors] = useState<Record<string, string>>({})
-  // モーダルを畳んで右下の入口だけにするか。「あとで(盤面を見る)」と「振替先を今決める」で畳み、新着・配置終了で開き直す。
+  // モーダルを畳んで左下の入口だけにするか。「あとで(盤面を見る)」と「振替先を今決める」で畳み、新着・配置終了で開き直す。
   const [isParentMessagesModalCollapsed, setIsParentMessagesModalCollapsed] = useState(false)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
@@ -1625,12 +1625,13 @@ function AuthenticatedApp() {
   // 保存待ちを捨てれば(教室データの読み直し・復元)、その連絡は自動で一覧へ戻る。
   const parentMessageNotifications = useMemo<ParentMessageNotification[]>(() => {
     const excludedIds = new Set([...pendingParentAbsenceFinalize.map((item) => item.messageId), ...hiddenParentMessageIds])
-    const unread = selectUnnotifiedParentMessages(parentMessageEntries, excludedIds)
+    // INV-08: 教室を切り替えた直後の 1 レンダーは前の教室の連絡と新しい教室の名簿が同時に見える。開いている教室の連絡だけに絞る。
+    const unread = selectUnnotifiedParentMessages(selectParentMessagesForClassroom(parentMessageEntries, actingClassroomId), excludedIds)
     // 生徒名は名簿の現在名を優先する(改名に追従)。
     return mergeParentMessageNotifications([], buildParentMessageNotifications(unread, { students, classroomName: actingClassroom?.name }))
-  }, [actingClassroom?.name, hiddenParentMessageIds, parentMessageEntries, pendingParentAbsenceFinalize, students])
+  }, [actingClassroom?.name, actingClassroomId, hiddenParentMessageIds, parentMessageEntries, pendingParentAbsenceFinalize, students])
   // 新しい連絡が増えたらモーダルを開き直す。ただし「振替先を今決める」の配置中は盤面操作を遮らないよう開かない
-  // (右下の入口の件数だけ増える。配置が終わったら handleParentAbsencePlacementSettled が開く)。
+  // (左下の入口の件数だけ増える。配置が終わったら handleParentAbsencePlacementSettled が開く)。
   const knownParentMessageIdsRef = useRef<Set<string>>(new Set())
   const isParentAbsencePlacementActiveRef = useRef(false)
   useEffect(() => {
@@ -1709,9 +1710,9 @@ function AuthenticatedApp() {
     }
     const classroomId = actingClassroomIdRef.current
     if (!classroomId) return
-    setPendingParentAbsenceFinalize((current) => addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString() }))
+    setPendingParentAbsenceFinalize((current) => addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString(), studentId: result.studentId, dateKey: result.dateKey, slotNumber: result.slotNumber }))
     if (result.action === 'makeup-now') {
-      // 振替先の空席を盤面で選ぶので、モーダルは畳んで右下の入口だけにする。
+      // 振替先の空席を盤面で選ぶので、モーダルは畳んで左下の入口だけにする。
       isParentAbsencePlacementActiveRef.current = true
       setIsParentMessagesModalCollapsed(true)
     }
@@ -1737,11 +1738,19 @@ function AuthenticatedApp() {
   }, [])
   // 盤面の保存に成功した。その保存に含まれる「保存待ち」の連絡を処理済み(notifiedAt)にする。
   // ★callable は 1 回 50 件までなので分割する。失敗した分は保存待ちへ戻し、次の保存で再送する。
-  const finalizeParentAbsenceNoticesAfterSave = useCallback((savedClassroomId: string, snapshotSavedAt: string) => {
+  // ★処理済みにするのは、**保存した盤面に休みの記録(休み/振無休)が実在する**連絡だけ(hasParentAbsenceRecord)。
+  //   四択のあと保存までに盤面の「元に戻す」や休み解除で記録が消えていたら、処理済みにせず保存待ちからも外す = 一覧へ戻る。
+  const finalizeParentAbsenceNoticesAfterSave = useCallback((savedClassroomId: string, snapshotSavedAt: string, savedPayload: AppSnapshotPayload) => {
     const pendingBefore = pendingParentAbsenceFinalizeRef.current
-    const { toFinalize, remaining } = splitPendingParentAbsenceFinalize(pendingBefore, { classroomId: savedClassroomId, snapshotSavedAt })
-    if (toFinalize.length === 0) return
+    const { toFinalize, returned, remaining } = splitPendingParentAbsenceFinalize(pendingBefore, {
+      classroomId: savedClassroomId,
+      snapshotSavedAt,
+      isRecordedInSavedBoard: (item) => hasParentAbsenceRecord({ weeks: savedPayload.boardState?.weeks, students: savedPayload.students, studentId: item.studentId, dateKey: item.dateKey, slotNumber: item.slotNumber }),
+    })
+    if (toFinalize.length === 0 && returned.length === 0) return
     setPendingParentAbsenceFinalize(remaining)
+    if (returned.length > 0) setIsParentMessagesModalCollapsed(false)
+    if (toFinalize.length === 0) return
     // 購読から外れるまでの一瞬、一覧へ戻らないようにする。
     setHiddenParentMessageIds((current) => Array.from(new Set([...current, ...toFinalize])))
     void (async () => {
@@ -2307,7 +2316,13 @@ function AuthenticatedApp() {
               if (lessonLedgerToSend) markStudentLessonLedgerSent(targetClassroom.id, lessonLedgerFingerprint, lessonLedgerDateKey)
               recordOperationTrace('save', `保存成功 savedAt=${nextItem.snapshot.savedAt} version=${typeof result.version === 'number' ? result.version : '?'}`)
               // 保護者からの休み連絡: この保存に含まれる「保存待ち」を処理済みにする(spec-parent-portal §0-5・保存の成功点はここだけ)。
-              finalizeParentAbsenceNoticesAfterSaveRef.current(targetClassroom.id, nextItem.snapshot.savedAt)
+              // ★ここは全教室の保存が通る try の中。休み連絡の後処理で例外が出ても、成功した保存を「保存失敗」にしない
+              //   (握りつぶしても連絡は未処理のまま残り、次回起動で再通知される=安全側)。
+              try {
+                finalizeParentAbsenceNoticesAfterSaveRef.current(targetClassroom.id, nextItem.snapshot.savedAt, targetClassroom.data)
+              } catch (finalizeError) {
+                console.warn('[parentMessages] finalize after save threw', finalizeError instanceof Error ? finalizeError.message : String(finalizeError))
+              }
               break
             } catch (error) {
               if (!manualFirebaseSaveStabilityEnabled || !isTransientFirebaseSyncError(error) || attempt >= maxAttempts) {

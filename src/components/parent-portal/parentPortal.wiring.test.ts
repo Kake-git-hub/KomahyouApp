@@ -69,7 +69,8 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     const memo = APP_TSX.slice(memoIndex, memoIndex + 900)
     expect(memo).toContain('pendingParentAbsenceFinalize.map((item) => item.messageId)')
     expect(memo).toContain('hiddenParentMessageIds')
-    expect(memo).toContain('selectUnnotifiedParentMessages(parentMessageEntries, excludedIds)')
+    // INV-08: 教室切替直後の 1 レンダーに、前の教室の連絡(生徒ID sNNN は教室ごとに独立採番)で新しい教室の別人を休みにしない。
+    expect(memo).toContain('selectUnnotifiedParentMessages(selectParentMessagesForClassroom(parentMessageEntries, actingClassroomId), excludedIds)')
     expect(memo).toContain('buildParentMessageNotifications(unread, { students, classroomName: actingClassroom?.name })')
   })
 
@@ -101,7 +102,7 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     const failIndex = body.indexOf('if (!result.ok) {')
     expect(consumeIndex).toBeGreaterThan(0)
     expect(failIndex).toBeGreaterThan(consumeIndex)
-    expect(body).toContain('addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString() })')
+    expect(body).toContain('addPendingParentAbsenceFinalize(current, { messageId: result.messageId, classroomId, processedAt: new Date().toISOString(), studentId: result.studentId, dateKey: result.dateKey, slotNumber: result.slotNumber })')
     expect(body).toContain("stage: 'acknowledged', resolution: result.action")
     expect(body).not.toContain("stage: 'notified'")
   })
@@ -110,12 +111,22 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     const saveIndex = APP_TSX.indexOf('result = await saveClassroomSnapshotViaFunction({')
     expect(saveIndex).toBeGreaterThan(0)
     const afterSave = APP_TSX.slice(saveIndex, saveIndex + 1400)
-    expect(afterSave).toContain('finalizeParentAbsenceNoticesAfterSaveRef.current(targetClassroom.id, nextItem.snapshot.savedAt)')
+    expect(afterSave).toContain('finalizeParentAbsenceNoticesAfterSaveRef.current(targetClassroom.id, nextItem.snapshot.savedAt, targetClassroom.data)')
+    // ★ここは全教室の保存が通る try の中。休み連絡の後処理の例外で、成功した保存を「保存失敗」にしない(本番教室の保存を巻き込まない)。
+    const finalizeCallIndex = afterSave.indexOf('finalizeParentAbsenceNoticesAfterSaveRef.current(')
+    const guardedCall = afterSave.slice(finalizeCallIndex - 40, finalizeCallIndex + 320)
+    expect(guardedCall).toMatch(/try \{\s+finalizeParentAbsenceNoticesAfterSaveRef\.current\(/u)
+    expect(guardedCall).toContain('} catch (finalizeError) {')
     const finalizeIndex = APP_TSX.indexOf('const finalizeParentAbsenceNoticesAfterSave = useCallback')
     expect(finalizeIndex).toBeGreaterThan(0)
-    const finalize = APP_TSX.slice(finalizeIndex, finalizeIndex + 1700)
+    const finalize = APP_TSX.slice(finalizeIndex, finalizeIndex + 2300)
     // 保存した教室・その保存に含まれる分だけ(INV-08・保存の通信中に処理した分は次の保存へ)。
-    expect(finalize).toContain('splitPendingParentAbsenceFinalize(pendingBefore, { classroomId: savedClassroomId, snapshotSavedAt })')
+    expect(finalize).toContain('splitPendingParentAbsenceFinalize(pendingBefore, {')
+    expect(finalize).toContain('classroomId: savedClassroomId,')
+    // ★保存した盤面に休みの記録が実在する分だけ処理済みにする(盤面の「元に戻す」で消したのに処理済みにしない・レビュー指摘 2026-09-19)。
+    expect(finalize).toContain('isRecordedInSavedBoard: (item) => hasParentAbsenceRecord({ weeks: savedPayload.boardState?.weeks, students: savedPayload.students,')
+    // 記録が無かった連絡は一覧へ戻るので、畳んでいてもモーダルを開き直す。
+    expect(finalize).toContain('if (returned.length > 0) setIsParentMessagesModalCollapsed(false)')
     // ★分割せずに全件渡すと、51 件でサーバーが invalid-argument で丸ごと拒否する。
     expect(finalize).toContain('chunkParentMessageIds(toFinalize)')
     expect(finalize).toContain("markParentMessagesNotifiedViaFunction({ classroomId: savedClassroomId, messageIds: chunk, stage: 'notified' })")
