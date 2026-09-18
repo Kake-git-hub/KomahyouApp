@@ -4630,6 +4630,11 @@ function AuthenticatedApp() {
     setParentAbsenceBusyId(null)
     isParentAbsencePlacementActiveRef.current = false
   }, [boardMountKey, setPendingParentAbsenceFinalize])
+  // 盤面を離れると盤面側の振替配置モードは消え、配置終了の知らせ(handleParentAbsencePlacementSettled)も来ない。
+  // 「配置中」の印を残すと、以後の新着でモーダルが開き直らなくなるので、ここで下ろす。
+  useEffect(() => {
+    if (screen !== 'board') isParentAbsencePlacementActiveRef.current = false
+  }, [screen])
 
   useEffect(() => {
     if (!isRemoteBackendEnabled) return
