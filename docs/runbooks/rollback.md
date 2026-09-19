@@ -18,6 +18,10 @@
 
 複数当てはまる場合は **A → B → C** の順で切り分ける。
 
+> **契約時環境（株式会社アーチ・タグ `contract/arch-2026-09-19`・v1.5.552）へ丸ごと戻す**ときは
+> [contract-baseline-arch.md](./contract-baseline-arch.md) §3。Hosting の履歴が消えていても Git のタグから
+> Actions「Restore contract baseline」で出し直せる（下記 D）。
+
 ---
 
 ## A. フロント（Hosting）のロールバック
@@ -69,6 +73,15 @@
 - 本番への**書き込み復元は行わない**。手順提示と読み取り照合まで。実行はオーナーが行う。
 
 ---
+
+## D. 契約時環境（Git タグ）へ出し直す — Hosting 履歴が無い／main が壊れているとき
+
+1. GitHub → Actions → **「Restore contract baseline」→ Run workflow**。
+   `ref` は既定の `contract/arch-2026-09-19`、`project=komahyouapp-prod`、`target` は症状に応じて
+   `hosting` / `functions` / `hosting+functions` / `rules`、`confirm` に `RESTORE komahyouapp-prod`。
+2. 緑を確認 → 各端末でハードリロード → `version.json` が基準点の版（1.5.552）になっていれば OK。
+3. main には触れないので、恒久対応（`git revert` → main）が済むまで **main に push しない**（push すると最新 main が再デプロイされる）。
+4. 詳細・データ復旧・再構築は [contract-baseline-arch.md](./contract-baseline-arch.md)。
 
 ## ロールバック後にやること
 - [ ] 回復をユーザー影響面で確認（実際の画面/機能）。

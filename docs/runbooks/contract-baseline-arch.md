@@ -1,0 +1,171 @@
+# Runbook: 契約時環境（株式会社アーチ）の固定と復旧計画
+
+> **作成**: 2026-09-19。**対象**: 株式会社アーチ（`workspaces/main`・緑が丘校／日大前校）との契約時点のアプリ環境。
+> **目的**: 「契約した時点のアプリ」を**いつでも同じものとして出し直せる**状態を保ち、万一の障害・誤デプロイ・
+> データ破損のときに**数分〜数十分で復旧**できるようにする。判断フローの正本は
+> [safe-release スキル](../../.claude/skills/safe-release/SKILL.md)、症状別の戻し方は [rollback.md](./rollback.md)。
+> 本書は「基準点の定義（§1）」「復旧計画（§3）」「オーナー作業（§4）」「訓練と更新（§5〜6）」を定める。
+
+---
+
+## 0. 結論（先に要点）
+
+- **契約時環境 ＝ Git タグ `contract/arch-2026-09-19`**（commit `48e9e19`・アプリ版 **v1.5.552**）。ライブ本番と同一。
+- 戻し方は **Actions →「Restore contract baseline」**（`.github/workflows/restore-baseline.yml`）。
+  タグを checkout して Hosting／Functions／ルールをそのまま出し直す。**main には触れない**ので main が壊れていても戻せる。
+- コードは Git（タグ）で守られる。**守られていないのは次の 3 つ**で、§4 のオーナー作業で埋める:
+  1. **データ**（Firestore／Storage）… 自動バックアップはあるが「契約時点」という名前の固定スナップショットは無い。
+  2. **秘密情報**（GitHub Secrets・サービスアカウント JSON・Drive の OAuth）… Git に無く、GitHub からは読み返せない。
+  3. **Hosting のリリース履歴**… Firebase コンソールのロールバックは保持世代（既定 5）を超えると消える。
+
+---
+
+## 1. 契約時環境の定義（台帳）
+
+| 項目 | 値 | 根拠・確認方法 |
+|---|---|---|
+| 基準タグ | **`contract/arch-2026-09-19`** | `git tag -n9 contract/arch-2026-09-19` |
+| 基準コミット | `48e9e19bb3f6727e02103ab553ec72b45fd025d2`（main・2026-09-18 17:20 UTC） | `git log -1 48e9e19` |
+| アプリ版 | **v1.5.552** | `package.json` / 本番 `https://komahyouapp-prod.web.app/version.json` |
+| Hosting の出所 | Deploy to Firebase Hosting run **#240**（commit `899b52d` → bump `48e9e19`） | Actions 履歴 |
+| Cloud Functions の出所 | Deploy Cloud Functions run **#47**（commit `9030104`・v1.5.550 マージ時）。`functions/` はそれ以降タグまで変更なし | Actions 履歴・`git log -- functions/` |
+| Firestore／Storage ルール | タグ時点の `firebase/firestore.rules`・`firebase/storage.rules`（最終変更 `a00eb7e`） | ルールは CI 対象外＝**手動反映**（本番に出ているのはこの内容の想定） |
+| Firebase プロジェクト | 本番 `komahyouapp-prod`（サイト `komahyouapp-prod.web.app`）／検証 `komahyouapp-staging` | `.firebaserc` |
+| データの単位 | `workspaces/main`（会社＝株式会社アーチ）。教室: 緑が丘校 `KzFnOQoTFLsCxwUp1tvh`・日大前校 `5w5OMueETerSKrSf14HC`。薬円台校は削除予定（テスト用・plan-2026-09-18 D-1） | `docs/spec-multi-tenant.md` |
+| 実行環境 | Node 22・firebase-tools 最新（`npx --yes`）・関数リージョン `asia-northeast1` | 各ワークフロー |
+| 必要な Secrets（名前のみ） | 本番: `FIREBASE_WEB_ENV`・`RE_FIREBASE_SERVICE_ACCOUNT`・`PROD_FUNCTIONS_ENV`／staging: `STAGING_FIREBASE_WEB_ENV`・`STAGING_FIREBASE_SERVICE_ACCOUNT`・`STAGING_STORAGE_BUCKET` | GitHub → Settings → Secrets |
+| 契約時データスナップショット | **§4-1 でオーナーが取得**（取得後にここへファイル名・保管場所を追記） | — |
+
+> タグは**動かさない・消さない**。基準点を更新するときは新しいタグを足す（§6）。
+
+---
+
+## 2. 何がどこで守られているか（現状の防御と穴）
+
+| 守る対象 | 今の守り | 穴 | 埋め方 |
+|---|---|---|---|
+| フロントのコード | Git（タグ）＋ Hosting リリース履歴 | Hosting 履歴は保持世代（既定 5）を超えると消える → コンソールでのロールバック先が無くなる | **Restore ワークフロー**（Git から再ビルド）。加えて §4-3 で保持世代を増やす |
+| Cloud Functions | Git（タグ）。デプロイは `deploy-functions.yml` | Functions にリリース履歴の巻き戻し機能は無い | **Restore ワークフロー**（タグから再デプロイ） |
+| ルール | Git（タグ） | CI で出していない＝本番の実物とタグがズレ得る | Restore ワークフローの `rules`／コンソールで手動反映 |
+| 秘密情報 | GitHub Secrets | 読み返せない。GitHub やアカウントを失うと再発行が要る | **§4-2** で控えを保管 |
+| データ（Firestore） | 15 分ごと自動バックアップ（Storage・日次は 400 日）＋ Google Drive ミラー（gz）＋「直前に戻す」1 世代 | 「契約時点」という固定スナップショットが無い。Drive の間引きはフォルダ内のみ | **§4-1** で契約時スナップショットを別置き |
+| データ（Storage 上のバックアップ） | バケットのソフト削除 7 日 | Firebase プロジェクト自体を失うと全滅 | §4-1 の別置き（ローカル＋Drive 別フォルダ） |
+| 監視 | `uptime-check.yml`（15 分ごと・Issue 自動起票） | — | 復旧後の回復確認にも使う |
+
+---
+
+## 3. 復旧計画（症状 → 手順 → 目安時間）
+
+> 大原則: **まず止血（戻す）→ 次に原因調査**。データ復元だけは教室を取り違えると他教室を壊すので、慌てず対象教室を確認する。
+
+### 3-A. 画面が壊れた（真っ白・JS エラー・操作不能）— フロントを契約時に戻す
+
+| 手順 | 所要 |
+|---|---|
+| A-1 直近のデプロイが原因なら [rollback.md A-1](./rollback.md)（Firebase コンソール → Hosting → 前リリースへロールバック） | 1 分 |
+| A-2 それで戻せない（履歴が消えた・複数版前・main が壊れている）なら **Actions →「Restore contract baseline」** を `project=komahyouapp-prod` / `target=hosting` / `confirm=RESTORE komahyouapp-prod` で実行 | 約 3 分 |
+| A-3 各端末でハードリロード（Ctrl+Shift+R）。`version.json` が **1.5.552** を示せば基準点が出ている | 1 分 |
+| A-4 恒久対応: 原因コミットを `git revert` して main へ（通常 CI）。**それまで main に push しない**（push すると最新 main が再デプロイされて基準点を上書きする） | — |
+
+### 3-B. サーバー処理が壊れた（保存・QR 提出・保護者ページ・バックアップが失敗）— Functions を契約時に戻す
+
+| 手順 | 所要 |
+|---|---|
+| B-1 「Restore contract baseline」を `target=functions`（本番なら confirm 必須）で実行 | 約 3〜5 分 |
+| B-2 実反映の確認: 保存 1 回（**開発用教室 `v8OZ7zH8vONNHjjYVcR1` で**）・QR 提出 1 件・`version.json` は無関係なので `gcloud functions describe` の updateTime か実動作で見る | 5 分 |
+| 注意 | `--force` のため、基準点より後に追加された関数は消え、削除された関数は復活する（＝基準点の一式に揃う）。後から追加した機能の画面はエラーになるので、フロントも同時に戻す（`target=hosting+functions`）のが安全 | — |
+
+### 3-C. 権限エラー（保存が permission-denied・他教室が見える）— ルールを契約時に戻す
+
+| 手順 | 所要 |
+|---|---|
+| C-1 「Restore contract baseline」を `target=rules` で実行（SA に権限が無く赤なら Firebase コンソール → Firestore → ルール にタグ時点の `firebase/firestore.rules` を貼って公開） | 3 分 |
+| C-2 `npm run test:rules` が通る内容であることを手元で確認してから出す（ルールは fail-open にすると全教室に波及） | — |
+
+### 3-D. データが壊れた・消えた（教室のデータ／他教室のデータが出る）— 最重要・慎重に
+
+| 手順 | 所要 |
+|---|---|
+| D-1 [rollback.md C](./rollback.md) に従い、**対象教室を開いてから**自動バックアップ（15 分刻み 24h／毎時 72h／日次 400 日）から復元。復元前に incident backup が自動で取られる（90 日） | 10〜30 分 |
+| D-2 契約時点に丸ごと戻したいときだけ **§4-1 の契約時スナップショット**（JSON）を開発者画面「バックアップを読み込む」で取り込む。**契約以降の入力は全部消える**のでオーナー判断で | 10 分 |
+| D-3 Firebase 側が全滅（プロジェクト消失・Storage 消失）なら Drive ミラー／ローカル控え → 新プロジェクトへ（3-E） | — |
+| Claude の制約 | 本番への書き込み復元は行わない。手順提示と**読み取り照合**まで。実行はオーナー | — |
+
+### 3-E. 環境そのものを失った（Firebase プロジェクト・GitHub が使えない）— 再構築
+
+1. **GitHub が使えない**: ローカル clone（§4-5）から `git push` で新リポジトリへ。タグも `git push --tags`。Secrets は §4-2 の控えから再登録。ワークフローはそのまま動く。
+2. **Firebase プロジェクトを失った**: `docs/runbooks/staging-setup.md` の手順（staging を作った手順と同じ）で新プロジェクトを作る → Secrets を新プロジェクトのものに差し替え → 「Restore contract baseline」で `hosting+functions` と `rules` を出す → §4-1 のスナップショットを開発者画面から読み込む → QR・共有リンクは URL が変わるので再配布。所要は半日〜1 日（クラウド側の作成と権限付与が大半）。
+3. **Google アカウント（オーナー）を失った**: 上の両方に波及する。§4-2 の控えを別の管理者にも渡しておく。
+
+---
+
+## 4. オーナー作業（今回やること・チェックリスト）
+
+Claude の実行環境からはできない（本番書き込み・秘密情報・クラウド権限）ため、オーナーに実施してもらう。
+**上から順に、1〜2 は契約直後に必ず**。
+
+### 4-1. 契約時データスナップショットを別置きする（必須）
+- [ ] 本番アプリを**管理者**で開き、開発者画面の「ワークスペース全体 JSON 書き出し」（`docs/spec-save-restore.md` §5-2）で 1 ファイル保存。
+  ファイル名例: `komahyou_契約時環境_arch_2026-09-19.json`。
+- [ ] 保存先を **2 か所**に: ①ローカル PC ②Google Drive の**バックアップ用フォルダの外**に作った `契約時環境/` フォルダ
+  （バックアップ用フォルダ内は自動間引きされる。外に置いたものは間引かれない＝ §8-2 の逃げ道）。
+- [ ] 併せて Drive ミラーの **2026-09-19 JST 3:00 の日次 `.json.gz`** も同じ `契約時環境/` へコピー（サーバー側と同一のバイト列・可逆）。
+- [ ] 本書 §1 の「契約時データスナップショット」行に、ファイル名と保管場所を追記する。
+
+### 4-2. 秘密情報の控え（必須）
+- [ ] 次を**パスワードマネージャ等の安全な場所**に控える（GitHub Secrets は登録後に読み返せない）:
+  `FIREBASE_WEB_ENV`（＝ `.env.local` の内容）、`RE_FIREBASE_SERVICE_ACCOUNT`（SA の JSON・失くしたら GCP で再発行）、
+  `PROD_FUNCTIONS_ENV`（＝ `functions/.env`・Drive の OAuth 一式）、staging の 3 つ。
+- [ ] 契約書・請求担当の連絡先と併せて、**Claude 以外の第三者（自分の予備アカウント等）でも再構築できる**状態にする。
+
+### 4-3. Hosting の保持世代を増やす（推奨・5 分）
+- [ ] 認証済み PC で `node tools/firebase-hosting-retention.mjs --site komahyouapp-prod --count 30`（既定 5 → 30）。
+  これで Firebase コンソールのロールバック先が 30 デプロイ分残る（1 日に数回デプロイしても 1 週間以上）。
+  ※ 既定は `docs/spec-save-restore.md` §8-1 補足の「5 世代・手動運用」。変えたら同節も 30 に直す。
+
+### 4-4. 復旧訓練を 1 回やる（推奨・15 分）
+- [ ] Actions →「Restore contract baseline」を **`project=komahyouapp-staging` / `target=hosting+functions`**（confirm 不要）で実行 → 緑。
+- [ ] `https://komahyouapp-staging.web.app` をハードリロードし、`version.json` が `1.5.552`、教室切替・保存（staging は書き込み自由）・QR 提出が動くことを確認。
+- [ ] `target=rules` も 1 回流し、SA の権限で通るか確認（赤なら §3-C のコンソール手順が本番の手段になる、と本書に追記）。
+- [ ] 訓練結果（日付・所要時間・詰まった点）を本書 §5 の表に 1 行追記。
+
+### 4-5. ローカルに完全な控えを持つ（推奨・5 分）
+- [ ] 手元 PC で `git fetch --all --tags` して `contract/arch-2026-09-19` が見えることを確認（`git tag -l 'contract/*'`）。
+  GitHub が使えなくなっても、この clone から再構築できる。
+
+### 4-6. 任意（月 1・自動化候補）
+- [ ] `gcloud firestore export gs://<別バケット>/firestore-export/$(date +%F)` で Firestore 全体の管理エクスポート
+  （SA に `datastore.importExportAdmin` が要る）。将来 GitHub Actions 化するなら `uptime-check.yml` と同様に schedule で。
+
+---
+
+## 5. 訓練・点検の記録
+
+| 日付 | 内容 | 結果／所要 | 気づき |
+|---|---|---|---|
+| 2026-09-19 | 基準点の定義・Restore ワークフロー作成（Claude） | タグ作成済み・ワークフロー未実行 | 初回訓練は §4-4 |
+
+**周期**: 四半期に 1 回、または基準点を更新したとき（§6）に §4-4 を staging で繰り返す。訓練しない復旧手順は本番で必ず詰まる。
+
+---
+
+## 6. 基準点の更新ルール
+
+- 契約更新・大きな仕様変更（会社レイヤの本格運用、Hosting multi-site 化など）を本番に出して**安定を確認した後**に、
+  新しいタグ `contract/arch-<YYYY-MM-DD>` を打ち、本書 §1 を差し替える。
+- **旧タグは消さない**（当時の環境に戻る手段として残す）。
+- タグは main のリリース版（CI の bump コミット）に打つ。ライブ `version.json` と `package.json` が一致していることを確認してから。
+  ```bash
+  git fetch origin main
+  git tag -a contract/arch-<日付> <bumpコミット> -m "契約時環境(株式会社アーチ) v<版>"
+  git push origin contract/arch-<日付>
+  ```
+- Restore ワークフローの `ref` 既定値も新タグへ更新する（旧タグは `ref` に手入力すれば使える）。
+
+---
+
+## 7. Claude が守ること（自動セッションの制約）
+
+- 本番 Firestore／Storage への**書き込み・復元は行わない**（CLAUDE.md 本番データ保護ルール）。データ復旧はオーナーが実行し、Claude は手順提示と読み取り照合まで。
+- 「Restore contract baseline」の**本番実行**（`confirm=RESTORE komahyouapp-prod`）は本番の配信物を差し替える操作なので、オーナーの明示指示があるときだけ行う。staging への訓練実行は指示なしで行ってよい。
+- タグ `contract/*` の**削除・付け替えはしない**。

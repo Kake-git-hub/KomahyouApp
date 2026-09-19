@@ -153,6 +153,10 @@ Claudeの自動チェックセッションが `actingClassroomId` を適切に�
   UI操作の回帰はユニットが、実環境の通し動作は staging 実機確認が担保。Firestore ルールの教室分離は `npm run test:rules`（手動・要 Java + エミュレータ）。
 
 ### 監視・障害検知 / ロールバック
+- **契約時環境（株式会社アーチ・2026-09-19）**: Git タグ `contract/arch-2026-09-19`（v1.5.552・commit `48e9e19`）を基準点とし、
+  `docs/runbooks/contract-baseline-arch.md` に定義・復旧計画・オーナー作業をまとめている。戻すときは Actions
+  「Restore contract baseline」（`.github/workflows/restore-baseline.yml`・main を触らずタグから出し直す）。
+  本番実行はオーナーの明示指示があるときだけ。`contract/*` タグは消さない・付け替えない。
 - **外形監視**: `.github/workflows/uptime-check.yml`（15分ごと＋手動）が本番の index/version.json/QR API を確認。
   異常時は `incident:uptime` ラベルの Issue を自動起票＋ワークフロー赤（メール通知）、復旧で自動クローズ。詳細 `docs/runbooks/monitoring.md`。
 - **ロールバック**: 症状別の戻し手順は `docs/runbooks/rollback.md`（A=Hosting / B=Functions / C=データ復元）。

@@ -1,0 +1,236 @@
+name: Restore contract baseline (契約時環境へ戻す)
+
+# 「契約時環境」(Git タグで固定した基準点)を本番または staging へ**そのまま出し直す**ための手動ワークフロー。
+# 正本の手順書: docs/runbooks/contract-baseline-arch.md(基準点の定義・復旧計画・訓練手順)。
+#
+# 通常のデプロイ(deploy-firebase-hosting.yml / deploy-functions.yml)は main の最新を出すが、
+# こちらは **指定した ref(既定: 契約時タグ)を checkout して出す**。main には一切書き込まない
+# (version bump もコミット戻しもしない)ので、main が壊れていても・GitHub 上の main を触らずに戻せる。
+#
+# 使い方: Actions → 「Restore contract baseline」 → Run workflow
+#   ref     … 戻したい Git ref(タグ/ブランチ/コミット)。既定は契約時タグ。
+#   project … komahyouapp-staging(訓練・既定) / komahyouapp-prod(本番・要 confirm)
+#   target  … hosting / functions / hosting+functions / rules
+#   confirm … 本番へ出すときだけ `RESTORE komahyouapp-prod` と正確に入力(誤操作防止・fail-closed)
+#
+# 注意:
+#   - functions は --force(通常デプロイと同じ)。基準点より後に main で**追加**された関数は本番から消え、
+#     後で**削除**された関数は復活する(= 基準点の関数一式へ完全に揃える)。意図した挙動だが理解して実行する。
+#   - rules は firestore.rules / storage.rules を出す。サービスアカウントに Firebase Rules の権限が無いと赤になる
+#     (その場合は Firebase コンソールで手動反映。Runbook 参照)。
+#   - 復旧後、main に次の push があると通常 CI が最新 main を再デプロイする。基準点に留めたい間は main を触らない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '戻す Git ref(契約時タグ / ブランチ / コミット)'
+        type: string
+        default: 'contract/arch-2026-09-19'
+        required: true
+      project:
+        description: '出し先(まず staging で訓練)'
+        type: choice
+        default: 'komahyouapp-staging'
+        options:
+          - komahyouapp-staging
+          - komahyouapp-prod
+      target:
+        description: '何を戻すか'
+        type: choice
+        default: 'hosting'
+        options:
+          - hosting
+          - functions
+          - hosting+functions
+          - rules
+      confirm:
+        description: '本番のときだけ `RESTORE komahyouapp-prod` と入力'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-restore-${{ inputs.project }}
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: ${{ inputs.project }}
+      IS_PROD: ${{ inputs.project == 'komahyouapp-prod' }}
+      DO_HOSTING: ${{ inputs.target == 'hosting' || inputs.target == 'hosting+functions' }}
+      DO_FUNCTIONS: ${{ inputs.target == 'functions' || inputs.target == 'hosting+functions' }}
+      DO_RULES: ${{ inputs.target == 'rules' }}
+
+    steps:
+      # 本番へ出すときは確認文字列が完全一致しない限り何もしない(fail-closed)。
+      - name: Guard production confirmation
+        run: |
+          if [ "$IS_PROD" = "true" ] && [ "$CONFIRM" != "RESTORE komahyouapp-prod" ]; then
+            echo "::error::本番(komahyouapp-prod)へ戻すには confirm に 'RESTORE komahyouapp-prod' と正確に入力してください。何もせず終了します。"
+            exit 1
+          fi
+          echo "restore ref=${{ inputs.ref }} project=$PROJECT_ID target=${{ inputs.target }}"
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+
+      - name: Checkout the baseline ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Show what is being restored
+        run: |
+          echo "commit: $(git rev-parse HEAD)"
+          echo "describe: $(git describe --tags --always)"
+          echo "package.json version: $(node -p "require('./package.json').version")"
+          git log -1 --format='%H %ci %s'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        if: ${{ env.DO_HOSTING == 'true' }}
+        run: npm ci
+
+      # フロントの接続設定は出し先ごとの secret から復元する(通常デプロイと同じ検証: 不足/local モード/本番混同で fail-closed)。
+      - name: Write frontend build env
+        if: ${{ env.DO_HOSTING == 'true' }}
+        run: |
+          if [ "$IS_PROD" = "true" ]; then
+            printf '%s\n' "$PROD_WEB_ENV" > .env.production.local
+          else
+            printf '%s\n' "$STAGING_WEB_ENV" > .env.production.local
+          fi
+          node -e '
+            const fs = require("fs");
+            const txt = fs.existsSync(".env.production.local") ? fs.readFileSync(".env.production.local", "utf8") : "";
+            const env = Object.fromEntries(
+              txt.split(/\r?\n/).filter((l) => l && !l.startsWith("#")).map((l) => {
+                const i = l.indexOf("=");
+                return [l.slice(0, i).trim(), l.slice(i + 1).trim()];
+              }),
+            );
+            const required = ["VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_PROJECT_ID", "VITE_FIREBASE_APP_ID", "VITE_FIREBASE_WORKSPACE_KEY"];
+            const missing = required.filter((k) => !env[k]);
+            if ((env.VITE_EXTERNAL_BACKEND_MODE || "").toLowerCase() === "local") {
+              throw new Error("VITE_EXTERNAL_BACKEND_MODE=local では Firebase に接続しません。secret を確認してください。");
+            }
+            if (missing.length) {
+              throw new Error("Firebase 設定が不足しています: " + missing.join(", "));
+            }
+            if (env.VITE_FIREBASE_PROJECT_ID !== process.env.PROJECT_ID) {
+              throw new Error("secret の projectId(" + env.VITE_FIREBASE_PROJECT_ID + ")が出し先(" + process.env.PROJECT_ID + ")と一致しません。中止します。");
+            }
+            console.log("frontend env OK: firebase project=" + env.VITE_FIREBASE_PROJECT_ID);
+          '
+        env:
+          PROD_WEB_ENV: ${{ secrets.FIREBASE_WEB_ENV }}
+          STAGING_WEB_ENV: ${{ secrets.STAGING_FIREBASE_WEB_ENV }}
+
+      # version bump はしない(main を触らない)。version.json は基準点の package.json の版になるので、
+      # ライブの version.json が基準点の版(例 1.5.552)を示していれば「基準点が出ている」と一目で分かる。
+      - name: Build app
+        if: ${{ env.DO_HOSTING == 'true' }}
+        run: npm run build
+
+      - name: Build functions
+        if: ${{ env.DO_FUNCTIONS == 'true' }}
+        run: npm --prefix functions ci && npm --prefix functions run build
+
+      # functions の runtime env(本番: Google Drive 同期の OAuth 一式 / staging: STORAGE_BUCKET)。
+      # deploy-functions.yml / deploy-staging.yml と同じ扱い。未設定なら本番は警告(Drive 同期が無効化される)。
+      - name: Write functions env
+        if: ${{ env.DO_FUNCTIONS == 'true' }}
+        run: |
+          if [ "$IS_PROD" = "true" ]; then
+            if [ -n "$PROD_FUNCTIONS_ENV" ]; then
+              printf '%s\n' "$PROD_FUNCTIONS_ENV" > "functions/.env.${PROJECT_ID}"
+              echo "Wrote functions/.env.${PROJECT_ID} ($(printf '%s' "$PROD_FUNCTIONS_ENV" | grep -c '=') keys)"
+            else
+              echo "::warning::PROD_FUNCTIONS_ENV secret が未設定です。GOOGLE_DRIVE_* が空になり Google Drive 自動同期は無効のままデプロイされます。"
+            fi
+          else
+            BUCKET="${STAGING_STORAGE_BUCKET:-${PROJECT_ID}.firebasestorage.app}"
+            printf 'STORAGE_BUCKET=%s\n' "$BUCKET" > "functions/.env.${PROJECT_ID}"
+            echo "functions/.env.${PROJECT_ID} -> STORAGE_BUCKET=$BUCKET"
+          fi
+        env:
+          PROD_FUNCTIONS_ENV: ${{ secrets.PROD_FUNCTIONS_ENV }}
+          STAGING_STORAGE_BUCKET: ${{ secrets.STAGING_STORAGE_BUCKET }}
+
+      - name: Write Firebase service account credentials
+        run: |
+          if [ "$IS_PROD" = "true" ]; then
+            printf '%s' "$PROD_SA" > "$RUNNER_TEMP/firebase-sa.json"
+          else
+            printf '%s' "$STAGING_SA" > "$RUNNER_TEMP/firebase-sa.json"
+          fi
+          if [ ! -s "$RUNNER_TEMP/firebase-sa.json" ]; then
+            echo "::error::出し先($PROJECT_ID)のサービスアカウント secret が空です。中止します。"
+            exit 1
+          fi
+        env:
+          PROD_SA: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+          STAGING_SA: ${{ secrets.STAGING_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy hosting from the baseline
+        if: ${{ env.DO_HOSTING == 'true' }}
+        run: |
+          set +e
+          npx --yes firebase-tools deploy --project "$PROJECT_ID" --only hosting --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy-hosting.log"
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            if grep -q "is the current active version" "$RUNNER_TEMP/deploy-hosting.log"; then
+              echo "現行ライブと同一内容のため新規リリースはスキップされました(既に基準点が出ています)。成功として続行します。"
+            else
+              echo "hosting の復旧デプロイに失敗しました。"
+              exit "$code"
+            fi
+          fi
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
+
+      - name: Verify live deployment (asset integrity)
+        if: ${{ env.DO_HOSTING == 'true' }}
+        run: node tools/verify-firebase-hosting.mjs --project "$PROJECT_ID" --retries 20 --retryDelayMs 3000
+
+      - name: Deploy functions from the baseline
+        if: ${{ env.DO_FUNCTIONS == 'true' }}
+        run: |
+          set -o pipefail
+          npx --yes firebase-tools deploy --project "$PROJECT_ID" --only functions --non-interactive --force \
+            2>&1 | tee "$RUNNER_TEMP/deploy-functions.log"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
+
+      - name: Deploy Firestore/Storage rules from the baseline
+        if: ${{ env.DO_RULES == 'true' }}
+        run: |
+          set -o pipefail
+          npx --yes firebase-tools deploy --project "$PROJECT_ID" --only firestore:rules,storage --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy-rules.log"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-sa.json
+
+      - name: Summary
+        run: |
+          {
+            echo "## 契約時環境の復旧デプロイ"
+            echo ""
+            echo "- ref: \`${{ inputs.ref }}\` ($(git rev-parse --short HEAD))"
+            echo "- project: \`$PROJECT_ID\`"
+            echo "- target: \`${{ inputs.target }}\`"
+            echo "- package.json version: \`$(node -p "require('./package.json').version")\`"
+            echo ""
+            echo "次: 各端末でハードリロード(Ctrl+Shift+R)し、\`https://$PROJECT_ID.web.app/version.json\` が上の版を示すことを確認。"
+          } >> "$GITHUB_STEP_SUMMARY"
