@@ -15,6 +15,7 @@
 ## 未リリース
 
 - chore: 株式会社アーチとの契約時環境を固定(オーナー指示 2026-09-19)。Git タグ `contract/arch-2026-09-19`(v1.5.552・48e9e19)を基準点にし、タグから Hosting/Functions/ルールを main を触らず出し直す手動ワークフロー `.github/workflows/restore-baseline.yml`(staging 訓練可・本番は confirm 文字列で fail-closed)と Runbook `docs/runbooks/contract-baseline-arch.md`(定義台帳・症状別復旧計画・オーナー作業チェックリスト・訓練記録・基準点更新ルール)を追加。rollback.md に D 節、CLAUDE.md に参照を追記。アプリのコード変更なし。
+- chore: 契約時環境の復旧ワークフローが通常デプロイとズレるのを CI で検知するテストを追加(`tools/restore-baseline-workflow.test.mjs`・新 secret/必須 VITE 変数の取り込み漏れ・push 発火・main 書き換え・confirm ガードを固定)。Runbook に Hosting 保持世代 5→30 の料金実測(dist 4.72MB・30 世代最大 142MB=無料枠 10GB の 1.4%・転送量は不変)と §8「今後の改造との関係」(データ移行・functions の --force・ルール・multi-site の 5 つの干渉点と守り方)を追記。
 
 ## v1.5.552 (2026-09-19)
 
