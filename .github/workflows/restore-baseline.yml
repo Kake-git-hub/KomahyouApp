@@ -8,7 +8,7 @@ name: Restore contract baseline (契約時環境へ戻す)
 # (version bump もコミット戻しもしない)ので、main が壊れていても・GitHub 上の main を触らずに戻せる。
 #
 # 使い方: Actions → 「Restore contract baseline」 → Run workflow
-#   ref     … 戻したい Git ref(タグ/ブランチ/コミット)。既定は契約時タグ。
+#   ref     … 戻したい Git ref(タグ/ブランチ/コミット)。既定は契約時タグ。タグ未登録なら基準コミット 48e9e19 を入力。
 #   project … komahyouapp-staging(訓練・既定) / komahyouapp-prod(本番・要 confirm)
 #   target  … hosting / functions / hosting+functions / rules
 #   confirm … 本番へ出すときだけ `RESTORE komahyouapp-prod` と正確に入力(誤操作防止・fail-closed)
@@ -24,7 +24,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: '戻す Git ref(契約時タグ / ブランチ / コミット)'
+        description: '戻す Git ref(契約時タグ / ブランチ / コミット。タグが無ければ 48e9e19)'
         type: string
         default: 'contract/arch-2026-09-19'
         required: true
