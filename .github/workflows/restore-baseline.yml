@@ -8,7 +8,10 @@ name: Restore contract baseline (契約時環境へ戻す)
 # (version bump もコミット戻しもしない)ので、main が壊れていても・GitHub 上の main を触らずに戻せる。
 #
 # 使い方: Actions → 「Restore contract baseline」 → Run workflow
-#   ref     … 戻したい Git ref(タグ/ブランチ/コミット)。既定は契約時タグ。タグ未登録なら基準コミット 48e9e19 を入力。
+#   ref     … 戻したい Git ref(タグ/ブランチ/コミット)。復旧は二段構え:
+#              ① まず `stable`(= オーナーが「問題なし」と確認した直近の版。Mark live as known-good で進む印)
+#              ② それでも駄目なら既定の契約時タグ(= 必ず動く床)。個別の版は `release/vX.Y.Z` で指せる。
+#              タグ未登録なら基準コミット 48e9e19 を入力。
 #   project … komahyouapp-staging(訓練・既定) / komahyouapp-prod(本番・要 confirm)
 #   target  … hosting / functions / hosting+functions / rules
 #   confirm … 本番へ出すときだけ `RESTORE komahyouapp-prod` と正確に入力(誤操作防止・fail-closed)
@@ -24,7 +27,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: '戻す Git ref(契約時タグ / ブランチ / コミット。タグが無ければ 48e9e19)'
+        description: '戻す Git ref(まず stable → 駄目なら契約時タグ。release/vX.Y.Z や SHA も可)'
         type: string
         default: 'contract/arch-2026-09-19'
         required: true
@@ -233,4 +236,6 @@ jobs:
             echo "- package.json version: \`$(node -p "require('./package.json').version")\`"
             echo ""
             echo "次: 各端末でハードリロード(Ctrl+Shift+R)し、\`https://$PROJECT_ID.web.app/version.json\` が上の版を示すことを確認。"
+            echo ""
+            echo "回復したら、その版を Actions →「Mark live as known-good (stable)」で known-good に記録しておく。"
           } >> "$GITHUB_STEP_SUMMARY"

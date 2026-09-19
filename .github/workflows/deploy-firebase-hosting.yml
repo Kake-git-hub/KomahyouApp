@@ -127,3 +127,27 @@ jobs:
           git add package.json
           git commit -m "chore(release): v${NEXT_VERSION} デプロイに伴うバージョン更新"
           git push origin HEAD:main
+
+      # 本番に出た版とコミットを Git 上で一意に結ぶ印(復旧の戻し先の候補になる)。
+      # 障害時は「直近の正常版へ戻す」が第一手で、その戻し先をコンソールの時刻から人が思い出すのではなく
+      # `release/vX.Y.Z` で機械的に指せるようにする(docs/runbooks/contract-baseline-arch.md §3-0)。
+      # 「どれが正常版か」の印は別ワークフロー(Mark live as known-good)が `stable` タグで進める。
+      # デプロイ自体は既に成功しているので、タグ付けの失敗でこの run を赤にはしない(警告に留める)。
+      - name: Tag this release (release/vX.Y.Z)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="release/v${VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "${TAG} は既に存在します(内容同一の再デプロイ等)。作り直しません。"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "本番デプロイ v${VERSION}"
+          if ! git push origin "refs/tags/${TAG}"; then
+            echo "::warning::${TAG} の作成に失敗しました。本番デプロイ自体は成功しています。復旧の戻し先はコミット SHA で指定できます。"
+            exit 1
+          fi
+          echo "tagged ${TAG} -> $(git rev-parse --short HEAD)"

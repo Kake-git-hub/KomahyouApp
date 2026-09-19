@@ -26,6 +26,9 @@
 
 ## A. フロント（Hosting）のロールバック
 
+> **戻し先は「直近の正常版」が第一手**。Actions「Restore contract baseline」の ref に `stable`
+> （＝オーナーが問題なしと確認した最後の版）を入れる。契約時タグは最後の砦（[contract-baseline-arch.md](./contract-baseline-arch.md) §3-0）。
+
 ### A-1. 最速：Firebase コンソールでロールバック（推奨・1分）
 1. [Firebase コンソール → Hosting](https://console.firebase.google.com/project/komahyouapp-prod/hosting/sites)。
 2. リリース履歴から、**直前の正常リリース**の「︙」→ **「ロールバック」**。
@@ -88,3 +91,4 @@
 - [ ] 原因の Issue を起票（`type:bug` ＋ `severity`）。外形監視由来なら `incident:uptime` の Issue に追記。
 - [ ] 恒久対策は通常フロー（ブランチ → staging 検証 → [release-checklist](./release-checklist.md) → main）。
 - [ ] 同種の再発防止に**回帰防止テストを追加**（regression-guard）。
+- [ ] 回復した版を Actions →「**Mark live as known-good (stable)**」で known-good に記録（次の障害の戻し先になる）。

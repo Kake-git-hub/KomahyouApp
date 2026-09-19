@@ -1,0 +1,95 @@
+name: Mark live as known-good (stable)
+
+# 「今ライブに出ている版は問題ない」とオーナーが確認できたときに、`stable` タグをその版へ進める。
+# 障害時の戻し先の第一候補になる(docs/runbooks/contract-baseline-arch.md §3-0)。
+#
+# 使い方: Actions → 「Mark live as known-good (stable)」 → Run workflow（入力は空のままでよい）。
+#   ref 空  … 本番ライブの version.json を読み、その版の `release/vX.Y.Z` タグへ `stable` を進める。
+#   ref 指定 … そのタグ/コミットへ `stable` を進める(過去の版へ戻したいときなど)。
+#
+# 設計メモ:
+#   - `release/*` は各デプロイの不動の記録(deploy-firebase-hosting.yml が自動で打つ)。消さない・動かさない。
+#   - `stable` は **動く印**。ここで force 更新するのは意図した仕様(履歴の書き換えではなく、印の移動)。
+#   - `contract/*` は契約時環境の床。このワークフローからは絶対に触らない(ガードあり)。
+#   - main の履歴に含まれるコミットにしか印を進めない(未マージのブランチを本番の正常版と誤記録しない)。
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: '印を進める先(空ならライブの version.json から自動判定)'
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mark-stable
+  cancel-in-progress: false
+
+jobs:
+  mark:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve target ref
+        id: resolve
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          TARGET="${INPUT_REF}"
+          if [ -z "$TARGET" ]; then
+            LIVE_VERSION="$(curl -fsSL https://komahyouapp-prod.web.app/version.json | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
+            if [ -z "$LIVE_VERSION" ]; then
+              echo "::error::ライブの version.json から版を読めませんでした。ref を手入力してください。"
+              exit 1
+            fi
+            TARGET="release/v${LIVE_VERSION}"
+            echo "ライブ版 = ${LIVE_VERSION} → ${TARGET}"
+          fi
+          case "$TARGET" in
+            contract/*)
+              echo "::error::契約時タグ($TARGET)へ stable を進めることはできません。契約時環境は最後の砦として別に保ちます。"
+              exit 1
+              ;;
+          esac
+          if ! git rev-parse --verify "${TARGET}^{commit}" >/dev/null 2>&1; then
+            echo "::error::${TARGET} が見つかりません。release タグが未作成の可能性があります(コミット SHA でも指定できます)。"
+            exit 1
+          fi
+          SHA="$(git rev-parse "${TARGET}^{commit}")"
+          if ! git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "::error::${TARGET} は main の履歴に含まれていません。本番に出た版だけを known-good として記録します。"
+            exit 1
+          fi
+          {
+            echo "target=$TARGET"
+            echo "sha=$SHA"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+
+      - name: Move the stable marker
+        run: |
+          set -euo pipefail
+          PREVIOUS="$(git rev-parse --short stable 2>/dev/null || echo 'なし')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f -a stable "${SHA}" -m "known-good: ${TARGET} (marked $(date -u +%Y-%m-%dT%H:%M:%SZ))"
+          git push --force origin refs/tags/stable
+          {
+            echo "## known-good を更新しました"
+            echo ""
+            echo "- 印の先: \`${TARGET}\` ($(git rev-parse --short "${SHA}"))"
+            echo "- 直前の stable: ${PREVIOUS}"
+            echo ""
+            echo "障害時は Actions →「Restore contract baseline」の ref に \`stable\` と入れると、この版へ戻せます。"
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          TARGET: ${{ steps.resolve.outputs.target }}
+          SHA: ${{ steps.resolve.outputs.sha }}
