@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import type { TeacherRow } from '../basic-data/basicDataModel'
+import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import type { ClassroomSettings } from '../../types/appState'
 import {
@@ -15,6 +15,7 @@ import {
   applyHistoryEntry,
   remergeBoardWeekWithManagedData,
   stripWithdrawnStudentsFromBoardWeek,
+  computeStudentWithdrawSweep,
   type HistoryEntry,
 } from './ScheduleBoardScreen'
 import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
@@ -1153,5 +1154,108 @@ describe('INV-02 × 退塾生徒の剥がし(手動編集は消さない・テ�
     // 昨日以前のセルは同じ参照(触っていない)。
     expect(result[0]).toBe(week[0])
     expect(result[1]).toBe(week[1])
+  })
+})
+
+// ============================================================================
+// 行: 退塾スイープ(computeStudentWithdrawSweep) × 手動編集
+//   オーナー確定 2026-09-20(確認リスト b-2 要改善): 「退塾」ボタンは名簿の退塾日を記録するだけでなく、
+//   **その生徒の今日以降の盤面の痕跡**(手置きの講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)も消す。
+//   ここで固定するのは「消してよいものだけ消す」側 ＝ 他の生徒の手動編集・講師・メモ・**昨日以前**は不変で、
+//   再マージを何回通しても結果が変わらないこと(INV-02/INV-03)。在庫側は INV-06 マトリクスが固定する。
+// ============================================================================
+describe('INV-02 × 退塾スイープ(今日以降だけ消す・他の手動編集と昨日以前は不変)', () => {
+  const TODAY = '2026-06-03'
+  const YESTERDAY = '2026-06-02'
+  const roster: StudentRow[] = [
+    { id: 'sW', name: 'sW', displayName: 'sW', email: '', entryDate: '2024-04-01', withdrawDate: TODAY, birthDate: '2012-05-01' },
+    { id: 'sB', name: 'sB', displayName: 'sB', email: '', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2012-06-01' },
+  ]
+  const lessonOf = (id: string, slots: [StudentEntry | null, StudentEntry | null]) => ({ id, note: '', studentSlots: slots })
+  const entryOf = (managedStudentId: string, overrides: Partial<StudentEntry> = {}) => createStudent({
+    id: `${managedStudentId}_seat`, managedStudentId, name: managedStudentId, ...overrides,
+  })
+  const statusOf = (managedStudentId: string, overrides: Partial<StudentStatusEntry> = {}) => createAttendedStatus({
+    id: `status_${managedStudentId}`, studentId: managedStudentId, managedStudentId, name: managedStudentId, ...overrides,
+  })
+  const tracesOf = (cells: SlotCell[], managedStudentId: string) => {
+    const found: string[] = []
+    for (const cell of cells) {
+      for (const desk of cell.desks) {
+        for (const student of desk.lesson?.studentSlots ?? []) {
+          if (student?.managedStudentId === managedStudentId) found.push(`${cell.dateKey}:seat:${student.lessonType}`)
+        }
+        for (const entry of desk.statusSlots ?? []) {
+          if (entry?.managedStudentId === managedStudentId) found.push(`${cell.dateKey}:status:${entry.status}`)
+        }
+      }
+    }
+    return found
+  }
+  const sweepFor = (weeks: SlotCell[][]) => computeStudentWithdrawSweep({
+    weeks,
+    students: roster,
+    studentId: 'sW',
+    fromDateKey: TODAY,
+    suppressedMakeupOrigins: {},
+    resolveStockId: (student) => student.managedStudentId ?? student.id,
+  })
+
+  it('手置きの講習・振替と出欠記録は今日以降だけ消え、他の生徒の手動編集・manualTeacher・メモ・昨日以前は残る', () => {
+    const yesterdayCell = createCell({
+      id: `${YESTERDAY}_1`, dateKey: YESTERDAY, dateLabel: '6/2',
+      desks: [createDesk({
+        id: 'y0', teacher: '講師A',
+        lesson: lessonOf('lesson_y', [entryOf('sW', { id: 'sW_y', lessonType: 'special', specialSessionId: 'sess-1' }), null]),
+        statusSlots: [null, statusOf('sW', { id: 'status_y', dateKey: YESTERDAY, status: 'absent' })],
+      })],
+    })
+    const todayCell = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [
+        createDesk({
+          id: 't0', teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual', memoSlots: ['連絡事項', null],
+          lesson: lessonOf('lesson_t0', [entryOf('sW', { id: 'sW_t0', lessonType: 'makeup', makeupSourceDate: '2026-05-20' }), entryOf('sB', { id: 'sB_t0' })]),
+          statusSlots: [null, statusOf('sB', { id: 'status_sB', dateKey: TODAY })],
+        }),
+        createDesk({ id: 't1', teacher: '講師C', statusSlots: [statusOf('sW', { id: 'status_sW_today', dateKey: TODAY, status: 'moved' }), null] }),
+      ],
+    })
+    const weeks = [[yesterdayCell, todayCell]]
+    const result = sweepFor(weeks)
+
+    expect(result.changed).toBe(true)
+    // 今日以降の痕跡だけが消え、昨日のセルは**同じ参照**で残る。
+    expect(tracesOf(result.nextWeeks[0], 'sW')).toEqual([`${YESTERDAY}:seat:special`, `${YESTERDAY}:status:absent`])
+    expect(result.nextWeeks[0][0]).toBe(yesterdayCell)
+    // 他の生徒の席・出欠記録・手動講師・メモは不変(INV-02/INV-01)。
+    const sweptToday = result.nextWeeks[0][1]
+    expect(tracesOf([sweptToday], 'sB')).toEqual([`${TODAY}:seat:regular`, `${TODAY}:status:attended`])
+    expect(sweptToday.desks[0]).toMatchObject({ teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual' })
+    expect(sweptToday.desks[0].memoSlots).toEqual(['連絡事項', null])
+    expect(sweptToday.desks[1].teacher).toBe('講師C')
+  })
+
+  it('スイープ後にテンプレ再マージを 2 回通しても痕跡は湧かず、昨日以前の記録も消えない(INV-03)', () => {
+    const yesterdayCell = createCell({
+      id: `${YESTERDAY}_1`, dateKey: YESTERDAY, dateLabel: '6/2',
+      desks: [createDesk({ id: 'y0', teacher: '講師A', statusSlots: [statusOf('sW', { id: 'status_y', dateKey: YESTERDAY, status: 'absent' }), null] })],
+    })
+    const todayCell = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [createDesk({
+        id: 't0', teacher: '講師A',
+        lesson: lessonOf('lesson_t0', [entryOf('sW', { id: 'sW_t0', lessonType: 'extra' }), null]),
+        statusSlots: [null, statusOf('sW', { id: 'status_sW_today', dateKey: TODAY })],
+      })],
+    })
+    const swept = sweepFor([[yesterdayCell, todayCell]]).nextWeeks[0]
+    let merged = swept
+    for (let pass = 0; pass < 2; pass += 1) {
+      merged = overlayBoardWeeksOnScheduleCells(merged.map(silentManagedCell), [merged])
+      expect(tracesOf(merged, 'sW')).toEqual([`${YESTERDAY}:status:absent`])
+    }
+    // 退塾生徒の剥がし(再マージの先頭で走る派生処理)を続けて通しても同じ。
+    expect(tracesOf(stripWithdrawnStudentsFromBoardWeek(merged, roster, TODAY), 'sW')).toEqual([`${YESTERDAY}:status:absent`])
   })
 })

@@ -222,6 +222,12 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   `handleBoardStateChange` の配線ロック、及び **INV-03 兄弟**として undo/redo が `commitWeeks` と同じく
   丸ごと振替の選択モード（`wholeDayTransferSourceDate`）と講師メニューを解除すること（undo が commit 等価に
   なったため、選択中の undo で古い振替元のまま誤実行されないよう安全側で解除する）。
+  2026-09-20 に **退塾スイープ × 手動編集** 2 件を追加（確認リスト b-2 要改善・オーナー確定＝「退塾」ボタンで
+  その生徒の **max(退塾日, 今日[JST]) 以降**の手置きのコマと出欠記録も消し切る）＝消えるのは今日以降のその生徒だけで、
+  **昨日以前のセルは同じ参照**・他の生徒の席／出欠記録／`manualTeacher`／メモは不変（INV-01/INV-02）／スイープ後に
+  テンプレ再マージを 2 回通しても痕跡が湧かない（INV-03）。在庫側は INV-06 の
+  `inv06-makeup-absence-stock.matrix.test.ts` に 3 件（誤増しない・誤減もしない）。権威は純関数
+  `computeStudentWithdrawSweep` と一過性コマンド `studentWithdrawSweep.ts`（再マージ・読込の経路へ混ぜない）。
   2026-09-15 に **退塾生徒の剥がし × 手動編集** 6 件を追加（確認リスト v1.5.527 b-2・オーナー決定＝生徒の退塾日は
   「その日から非在籍」。`stripWithdrawnStudentsFromBoardWeek` は**テンプレ由来の通常授業だけ**を max(退塾日, 今日[JST]) 以降で
   外す）＝出欠記録のある机の片側（記録と講師は残る）／manualTeacher の机が空になっても講師は残る（非 manual は外れる＝
@@ -449,6 +455,14 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     holiday 解除は配置を戻さない）で固定し、既存の `inv06-holiday-stock-reconciliation.matrix.test.ts` は改変しない。
     **どちらも「台帳（`ledgers`）が不変であること」を既存 assert のまま維持**する（記録を残す改定で在庫が動いたら
     それ自体が INV-06 違反）。表示ラベル・フラグ scope は `transferSourceRestDisplay.test.ts` で固定。
+- **退塾スイープ（2026-09-20 オーナー確定・確認リスト b-2）**：「退塾」ボタンで消す今日以降の痕跡は
+  **未消化へ戻さない**（台帳 `manualMakeupAdjustments` / `manualLectureStockCounts` / 希望数へ一切足さない・
+  「破棄前に台帳へ確定」もしない）。ただし**消したことで在庫が湧く分**は抑止（`suppressedMakeupOrigins`）へ積む
+  ＝振替コマは振替元日、通常授業は元の通常授業日（1 コマ削除 `handleDeleteStudent`・全コマ削除 Issue #58 と同じ流儀）。
+  `absent` / `moved` / `holiday` の記録には積まない（立っている在庫・移動先が持つ会計を消す誤減になる）。
+  講習在庫は提出希望数 ± デルタ台帳だけで決まり盤面を走査しないので、席を消しても増えない。
+  固定は `inv06-makeup-absence-stock.matrix.test.ts`（3 件）と `studentWithdrawSweep.test.ts`。仕様は
+  `docs/spec-basic-data.md` §B。
 - **違反履歴**（transcribe）：
   - makeup-stock-miscount 群（残数が実態と食い違う）：
     - `a12ee32` / v1.5.65 … stale closure 二重減算。
@@ -781,6 +795,9 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
 - **例外（2026-09-15・v1.5.528）**：テンプレ固定日前の週もテンプレ編集では変わらないが、**生徒の退塾（名簿変更）**では
   max(退塾日, 今日[JST]) 以降のテンプレ由来通常授業だけが `stripWithdrawnStudentsFromBoardWeek` で剥がれる
   （テンプレ再マージではない・昨日以前は不変）。詳細と担保は INV-02 節の「退塾生徒の剥がし × 手動編集」を参照。
+  **2026-09-20 追補**：同じく「退塾」ボタン（ユーザー操作の一過性コマンド＝退塾スイープ）は、固定日の前後を問わず
+  max(退塾日, 今日[JST]) 以降のその生徒の手置きのコマ・出欠記録も消す（**昨日以前は不変**なので固定日以前の
+  コマ表は変わらない。テンプレ編集による変化ではない）。
 - **違反履歴**（transcribe）：
   - `6937a15` / **v1.5.3** … `templateFreezeBeforeDate` 導入（freeze 日以前のセルをオーバーレイから除外する
     仕組みの整備）。

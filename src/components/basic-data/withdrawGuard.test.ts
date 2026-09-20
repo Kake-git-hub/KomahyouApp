@@ -108,10 +108,16 @@ describe('buildStudentWithdrawConfirmation', () => {
     expect(confirmation.message).toContain(TODAY)
     expect(confirmation.message).toContain('削除されず残ります')
     expect(confirmation.message).toContain('非在籍生徒表示')
-    // 2026-09-15 改定: 「本日まで在籍扱い」とは言わず、本日から盤面の通常授業などから外れ、手置きの講習・振替は残ると伝える。
+    // 2026-09-15 改定: 「本日まで在籍扱い」とは言わず、本日から盤面の通常授業などから外れると伝える。
     expect(confirmation.message).not.toContain('本日まで在籍')
     expect(confirmation.message).toContain('本日から非在籍')
-    expect(confirmation.message).toContain('講習・振替のコマは残ります')
+    // 2026-09-20 改定(確認リスト b-2 要改善・オーナー確定): 今日以降の手置きのコマと記録も消える。
+    // ★旧案内「手で置いた講習・振替のコマは残ります」へ戻さない(退塾スイープと食い違って室長が誤解する)。
+    expect(confirmation.message).not.toContain('講習・振替のコマは残ります')
+    expect(confirmation.message).toContain('今日以降の講習・振替などのコマと記録も消えます')
+    expect(confirmation.message).toContain('未消化へは戻りません')
+    expect(confirmation.message).toContain('昨日以前の記録は残ります')
+    expect(confirmation.message).toContain('消えたコマは戻りません')
     expect(confirmation.overwriteNote).toBeNull()
     expect(confirmation.stockWarning).toBeNull()
   })

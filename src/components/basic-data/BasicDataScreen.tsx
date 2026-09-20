@@ -59,6 +59,12 @@ type BasicDataScreenProps = {
   onIssueParentPortalToken?: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
   // 生徒削除の確定時に best-effort で失効させる(§B-2 revokedReason='studentDeleted')。
   onRevokeParentPortalToken?: (studentId: string, reason: 'studentDeleted') => Promise<void>
+  /**
+   * 「退塾」ボタンを押したときに、盤面の痕跡消し(退塾スイープ)を依頼する(オーナー確定 2026-09-20・確認リスト b-2)。
+   * ここでは盤面を直接触らない(基本データ画面では盤面が未マウント)。App が一過性コマンドのキューに積み、
+   * 盤面がマウントされた時点で 1 回だけ処理する。
+   */
+  onRequestStudentWithdrawSweep?: (params: { studentId: string; displayName: string; withdrawDateKey: string }) => void
   onBackToBoard: () => void
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
@@ -901,7 +907,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onRequestStudentWithdrawSweep, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
@@ -1217,6 +1223,9 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     // 記録する日は「押した日」。画面を開いたまま日付をまたいでも正しい日になるよう、確定時に取り直す。
     const today = getReferenceDateKey(new Date())
     onUpdateStudents((current) => applyStudentWithdrawToday(current, withdrawModalState.id, today))
+    // 盤面の痕跡(今日以降の手置きの講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)を消す依頼を出す
+    // (オーナー確定 2026-09-20)。未消化へは戻さない。昨日以前は触らない。通常授業は従来どおり剥がしが外す。
+    onRequestStudentWithdrawSweep?.({ studentId: withdrawModalState.id, displayName: withdrawModalState.name, withdrawDateKey: today })
     setStatusMessage(`${withdrawModalState.name || '生徒'} を ${today} 付けで退塾にしました。`)
     setWithdrawModalState(null)
   }

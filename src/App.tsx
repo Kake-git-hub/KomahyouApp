@@ -55,6 +55,7 @@ import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
 import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
+import { consumeStudentWithdrawSweepRequest, enqueueStudentWithdrawSweepRequest, resolveStudentWithdrawSweepFromDateKey, type StudentWithdrawSweepRequest, type StudentWithdrawSweepResult } from './components/schedule-board/studentWithdrawSweep'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
@@ -1581,6 +1582,12 @@ function AuthenticatedApp() {
   // 盤面への一過性コマンド(Issue #46 同型: 盤面が処理結果を返したら必ず消費=null にする)。
   const [parentAbsenceRequest, setParentAbsenceRequest] = useState<ParentAbsenceRequest | null>(null)
   const parentAbsenceRequestIdRef = useRef(0)
+  // 退塾スイープの待ち行列(オーナー確定 2026-09-20・確認リスト b-2)。基本データで「退塾」を押すと積まれ、盤面が
+  // マウントされた時点で先頭から 1 件ずつ処理される(基本データ画面では盤面が未マウントなので、続けて複数人を退塾に
+  // しても取りこぼさないよう配列で持つ)。結果を受けたら必ずキューから外す(Issue #46 同型の再発火防止)。
+  // ★教室の開き直し・復元・undo(boardMountKey)とログアウトで必ず捨てる(前の教室の掃除を次の教室の盤面へ流さない・INV-08)。
+  const [studentWithdrawSweepRequests, setStudentWithdrawSweepRequests] = useState<StudentWithdrawSweepRequest[]>([])
+  const studentWithdrawSweepRequestIdRef = useRef(0)
   // 四択を処理中の連絡 ID(二重実行防止)。連絡ごとのエラー(盤面にコマが無い等)。
   const [parentAbsenceBusyId, setParentAbsenceBusyId] = useState<string | null>(null)
   const [parentAbsenceErrors, setParentAbsenceErrors] = useState<Record<string, string>>({})
@@ -1763,6 +1770,22 @@ function AuthenticatedApp() {
     void markParentMessagesNotifiedViaFunction({ classroomId, messageIds: [result.messageId], stage: 'acknowledged', resolution: result.action })
       .catch((error) => console.warn('[parentMessages] acknowledge failed', error instanceof Error ? error.message : String(error)))
   }, [actingClassroomIdRef, setParentAbsenceError, setPendingParentAbsenceFinalize])
+  // 基本データの「退塾」ボタン。名簿への退塾日の記録は BasicDataScreen が行い、ここへは「盤面の痕跡を消す」依頼だけが来る。
+  // 消す範囲の開始日は純関数 resolveStudentWithdrawSweepFromDateKey(= max(退塾日, 今日[JST]))で決める(昨日以前は触らない)。
+  const requestStudentWithdrawSweep = useCallback((params: { studentId: string; displayName: string; withdrawDateKey: string }) => {
+    if (!params.studentId) return
+    studentWithdrawSweepRequestIdRef.current += 1
+    setStudentWithdrawSweepRequests((current) => enqueueStudentWithdrawSweepRequest(current, {
+      requestId: studentWithdrawSweepRequestIdRef.current,
+      studentId: params.studentId,
+      displayName: params.displayName,
+      fromDateKey: resolveStudentWithdrawSweepFromDateKey(params.withdrawDateKey),
+    }))
+  }, [])
+  // 盤面が 1 件処理し終えた。キューから外す(＝この依頼はもう二度と流れない)。
+  const handleStudentWithdrawSweepProcessed = useCallback((result: StudentWithdrawSweepResult) => {
+    setStudentWithdrawSweepRequests((current) => consumeStudentWithdrawSweepRequest(current, result.requestId))
+  }, [])
   // 盤面が一定時間内に結果を返さなかった(盤面が開けない等)ときの保険。コマンドを捨てて選び直せるようにする。
   useEffect(() => {
     if (!parentAbsenceRequest) return
@@ -3518,6 +3541,7 @@ function AuthenticatedApp() {
     const queuedSnapshot = queueCurrentWorkspaceSnapshotPersistence()
     setSubmissionAcknowledgements([])
     resetParentAbsenceNoticeState()
+    setStudentWithdrawSweepRequests([])
     // 【本番データ混入防止】アカウント切替で前セッションの「直前に戻す(undo)」が残ると、
     // 別教室にログインした画面にバナーが出て、押すと前教室のデータを現在の教室へ書き込んでしまう。
     // ログアウト時に必ず undo を破棄する(在庫の取り違えを断つ)。
@@ -4703,6 +4727,9 @@ function AuthenticatedApp() {
     setParentAbsenceRequest(null)
     setParentAbsenceBusyId(null)
     isParentAbsencePlacementActiveRef.current = false
+    // 退塾スイープの待ち行列も同じ経路で捨てる(教室切替・復元・undo で盤面が別データに差し替わったあとに
+    // 前の教室の生徒の掃除を流さない・INV-08)。差し替えで名簿ごと変わるため、必要なら退塾をやり直す。
+    setStudentWithdrawSweepRequests([])
   }, [boardMountKey, setPendingParentAbsenceFinalize])
   // 盤面を離れると盤面側の振替配置モードは消え、配置終了の知らせ(handleParentAbsencePlacementSettled)も来ない。
   // 「配置中」の印を残すと、以後の新着でモーダルが開き直らなくなるので、ここで下ろす。
@@ -5898,6 +5925,7 @@ function AuthenticatedApp() {
         savedStudentIds={savedStudentIds}
         onIssueParentPortalToken={parentPortalQrEnabled ? issueParentPortalToken : undefined}
         onRevokeParentPortalToken={parentPortalQrEnabled ? revokeParentPortalToken : undefined}
+        onRequestStudentWithdrawSweep={requestStudentWithdrawSweep}
         onBackToBoard={() => navigateClassroomScreen('board')}
         onOpenSpecialData={() => navigateClassroomScreen('special-data')}
         onOpenAutoAssignRules={() => navigateClassroomScreen('auto-assign-rules')}
@@ -6018,6 +6046,8 @@ function AuthenticatedApp() {
       onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       parentAbsenceRequest={parentAbsenceRequest}
       onParentAbsenceRequestProcessed={handleParentAbsenceRequestProcessed}
+      studentWithdrawSweepRequests={studentWithdrawSweepRequests}
+      onStudentWithdrawSweepProcessed={handleStudentWithdrawSweepProcessed}
       onParentAbsencePlacementSettled={handleParentAbsencePlacementSettled}
       initialBoardState={boardState}
       onBoardStateChange={handleBoardStateChange}

@@ -10,7 +10,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, computeStudentWithdrawSweep, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -1019,5 +1019,94 @@ describe('INV-06 マトリクス: 休みにした授業が未消化振替から�
       const after = stockBalance({ desk: movedDesk! })
       expect(after).toBe(1) // 欠席記録が保持され、未消化振替は消えない(修正なしだと 0 に誤減)
     })
+  })
+})
+
+// ============================================================================
+// 行: 退塾スイープ(オーナー確定 2026-09-20・確認リスト b-2) × 未消化振替の残数
+//   退塾で今日以降の痕跡を消すとき **未消化へは戻さない**(台帳へ +1 しない)。ただし「消したことで在庫が湧く」
+//   のは誤増なので、消す振替コマの振替元日だけ抑止へ積む(1コマ削除 handleDeleteStudent と同じ流儀)。
+//   逆に、立っている在庫(台帳 origin / 昨日以前の記録)は掃除で減らさない(誤減もさせない)。
+// ============================================================================
+describe('INV-06 マトリクス: 退塾スイープは在庫を増やさず減らさない', () => {
+  const SWEEP_FROM = '2026-07-31'
+  const resolveStockIdForSweep = (entry: StudentEntry) => entry.managedStudentId ?? entry.id
+
+  function balanceOf(params: { weeks: SlotCell[][]; suppressedOrigins?: Record<string, ManualMakeupOrigin[]>; manualAdjustments?: Record<string, ManualMakeupOrigin[]>; settings?: ClassroomSettings }) {
+    const entries = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: params.settings ?? createSettings(),
+      weeks: params.weeks,
+      manualAdjustments: params.manualAdjustments ?? {},
+      suppressedOrigins: params.suppressedOrigins ?? {},
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: TODAY,
+    })
+    return entries.find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+  }
+
+  it('在庫由来の振替コマを退塾で消しても未消化は湧かない(抑止を積まないと誤増 +1 になる)', () => {
+    // 元コマ 7/22 を休日設定＝台帳(自動休校日)に origin あり。その振替を 8/5 に置いてあるので残 0。
+    const weeks: SlotCell[][] = [[cellWithDesk(deskWithStudent(boardStudent({ lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE })))]]
+    expect(balanceOf({ weeks, settings: holidaySettings })).toBe(0)
+
+    const sweep = computeStudentWithdrawSweep({
+      weeks,
+      students: [student],
+      studentId: 'student-1',
+      fromDateKey: SWEEP_FROM,
+      suppressedMakeupOrigins: {},
+      resolveStockId: resolveStockIdForSweep,
+    })
+    expect(sweep.changed).toBe(true)
+    expect(sweep.nextSuppressedMakeupOrigins).toEqual({ [STOCK_KEY]: [{ dateKey: HOLIDAY_SOURCE_DATE }] })
+    // 抑止つき(実装)= 0 のまま。抑止なし = 1 に誤増する(＝この抑止を外すとテストが落ちる)。
+    expect(balanceOf({ weeks: sweep.nextWeeks, settings: holidaySettings, suppressedOrigins: sweep.nextSuppressedMakeupOrigins })).toBe(0)
+    expect(balanceOf({ weeks: sweep.nextWeeks, settings: holidaySettings })).toBe(1)
+  })
+
+  it('講習の席・体験・増コマを消しても未消化振替は動かない。既に立っている台帳 origin も減らさない(誤減防止)', () => {
+    const weeks: SlotCell[][] = [[cellWithDesk({
+      id: 'desk-1',
+      teacher: '田中講師',
+      lesson: { id: 'lesson-1', studentSlots: [boardStudent({ lessonType: 'special', specialSessionId: 'sess-1' }), boardStudent({ id: 'entry-extra', lessonType: 'extra' })] },
+    })]]
+    // 台帳に手動 origin が 1 件立っている(退塾前からの未消化振替)。
+    const manualAdjustments = { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }
+    expect(balanceOf({ weeks, manualAdjustments })).toBe(1)
+
+    const sweep = computeStudentWithdrawSweep({
+      weeks,
+      students: [student],
+      studentId: 'student-1',
+      fromDateKey: SWEEP_FROM,
+      suppressedMakeupOrigins: {},
+      resolveStockId: resolveStockIdForSweep,
+    })
+    expect(sweep.removedSeatCount).toBe(2)
+    // 講習・増コマは在庫の抑止対象ではない(講習残数は提出希望数±デルタ台帳で決まり盤面を走査しない)。
+    expect(sweep.nextSuppressedMakeupOrigins).toEqual({})
+    expect(balanceOf({ weeks: sweep.nextWeeks, manualAdjustments, suppressedOrigins: sweep.nextSuppressedMakeupOrigins })).toBe(1)
+  })
+
+  it('休み(absent)の記録を消しても、立っている台帳 origin は抑止しない(誤減させない)', () => {
+    const weeks: SlotCell[][] = [[cellWithDesk(deskWithStatus(boardStatus({ lessonType: 'regular', status: 'absent' })))]]
+    const manualAdjustments = { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] }
+    expect(balanceOf({ weeks, manualAdjustments })).toBe(1)
+
+    const sweep = computeStudentWithdrawSweep({
+      weeks,
+      students: [student],
+      studentId: 'student-1',
+      fromDateKey: SWEEP_FROM,
+      suppressedMakeupOrigins: {},
+      resolveStockId: resolveStockIdForSweep,
+    })
+    expect(sweep.removedStatusCount).toBe(1)
+    expect(sweep.nextSuppressedMakeupOrigins).toEqual({})
+    // 記録は消えるが台帳 origin は残るので残 1(退塾生の在庫は一覧から excludeWithdrawnStudentStockEntries が隠す)。
+    expect(balanceOf({ weeks: sweep.nextWeeks, manualAdjustments, suppressedOrigins: sweep.nextSuppressedMakeupOrigins })).toBe(1)
   })
 })

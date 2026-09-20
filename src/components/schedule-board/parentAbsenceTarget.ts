@@ -47,7 +47,8 @@ function normalizeName(value: string | null | undefined): string {
 
 // 名簿の name / 表示名(空白除去)→ 所有者 id。同じ名前を 2 人以上が持つ場合は '' (=名前では決められない)。
 // scheduleViewData.buildUniqueStudentNameOwnerMap / parentSchedule.ts と同じ決め方(同名別人の混同防止)。
-function buildUniqueNameOwnerMap(students: readonly StudentRow[]): Map<string, string> {
+// ★退塾スイープ(computeStudentWithdrawSweep)も同じ決め方で生徒を拾うため export する(判定を二重定義にしない)。
+export function buildUniqueNameOwnerMap(students: readonly StudentRow[]): Map<string, string> {
   const ownerByName = new Map<string, string>()
   for (const student of students) {
     for (const rawName of [student.name, getStudentDisplayName(student)]) {

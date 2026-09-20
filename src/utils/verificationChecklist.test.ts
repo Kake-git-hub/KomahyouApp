@@ -98,16 +98,20 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('y-1')!.prep).toContain('上書き')
     for (const id of ['y-2', 'y-3', 'y-4']) expect((byId.get(id)!.check ?? []).join(' / '), id).toContain('y-1 の控え')
     const b2 = byId.get('b-2')!
-    expect(b2.introducedIn).toBe('v1.5.528')
+    // 第20版(v1.5.553・オーナー確定 2026-09-20): 退塾スイープの手順へ差し替え(未確認のままなので結果は失われない)。
+    expect(b2.introducedIn).toBe('v1.5.553')
     const steps = [b2.prep ?? '', ...b2.steps, ...(b2.check ?? [])].join(' / ')
     // 旧定義(今日までは在籍・削除ボタンは翌日から)の手順を残さない。
     expect(steps).not.toContain('今日までは在籍')
     expect(steps).not.toContain('翌日から出る')
-    // 新定義の確認観点: 一覧から即消える / 今日から削除ボタン / 今日の通常授業が消える / 手置きの講習・振替は残る。
+    // 旧仕様(手置きのコマは残る)の確認観点へ戻さない。
+    expect(steps).not.toContain('講習・振替のコマは残っている')
+    // 新定義の確認観点: 一覧から即消える / 今日から削除ボタン / 今日以降のコマと記録が消える / 昨日以前は残る / 在庫が増えない。
     expect(steps).toContain('非在籍生徒表示')
     expect(steps).toContain('「削除」ボタンが今日から出ている')
-    expect(steps).toContain('今日以降)の通常授業が消えている')
-    expect(steps).toContain('講習・振替のコマは残っている')
+    expect(steps).toContain('出欠の記録がすべて消えている')
+    expect(steps).toContain('昨日以前の週')
+    expect(steps).toContain('残数が控えより増えていない')
     // 第10版で k-11 / k-12 / h-10 は OK。
     for (const okId of ['k-11', 'k-12', 'h-10']) expect(ids, okId).not.toContain(okId)
     // 第9版で k-10 / h-9 / b-1 は OK。

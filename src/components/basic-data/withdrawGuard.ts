@@ -7,6 +7,10 @@
 //   ・2026-09-15 改定: 生徒の退塾日は「その日から非在籍」。押した瞬間に一覧は非在籍側へ移り、今日の盤面・日程表・
 //     請求・保護者QRからも外れる（spec-basic-data.md §B/§H・isStudentWithdrawnOnDate）。
 //   ・退塾日を消せば在籍に戻せる（可逆）ため、削除時のパスワード再認証は求めない。
+//   ・2026-09-20 改定（確認リスト b-2 要改善・オーナー確定）: 退塾ボタンは名簿の退塾日を記録するだけでなく、
+//     **今日以降の盤面の痕跡**（手で置いた講習・振替・増コマ・体験・手動追加・移動の席と出欠記録）も消す
+//     （退塾スイープ = computeStudentWithdrawSweep）。未消化へは戻さない。昨日以前の記録は残る。
+//     退塾を取り消しても消したコマは戻らない（仕様）ので、確認モーダルで必ずそう案内する。
 import { isStudentDeletedFromApp, resolveManagedStudentRosterStatus } from './basicDataModel'
 import type { StudentDeletionStock } from './deleteGuard'
 
@@ -63,7 +67,7 @@ export function buildStudentWithdrawConfirmation(params: {
 
   return {
     title: `${safeName} を退塾にします`,
-    message: `本日（${today}）を退塾日として記録します。本日から非在籍となり、一覧は「非在籍生徒表示」に移り、本日の盤面の通常授業・日程表・請求・保護者用QRからも外れます（手で置いた講習・振替のコマは残ります）。生徒のデータは削除されず残ります。取り消すときは「編集」から退塾日を消してください。`,
+    message: `本日（${today}）を退塾日として記録します。本日から非在籍となり、一覧は「非在籍生徒表示」に移り、本日の盤面の通常授業・日程表・請求・保護者用QRからも外れます。今日以降の講習・振替などのコマと記録も消えます（未消化へは戻りません）。昨日以前の記録は残ります。生徒のデータは削除されず残ります。取り消すときは「編集」から退塾日を消してください（消えたコマは戻りません）。`,
     overwriteNote,
     stockWarning,
   }
