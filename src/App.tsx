@@ -2508,6 +2508,9 @@ function AuthenticatedApp() {
     }).pendingAfter
     const nextCleanSignature = expectedCleanSignature || buildCurrentDataSignature()
     lastPendingWorkspaceSnapshotWriteAtRef.current = 0
+    // 明示 clean 化(読込/教室切替/ユーザー切替)ではユーザー編集の目印も落とす。署名は教室IDを含まないので、中身が同じ教室を
+    // またぐと目印と clean 署名が一致し、開いただけの教室が未保存扱いになりうる(レビュー指摘 2026-09-20・U-0c の二重防御)。
+    if (expectedCleanSignature) cleanSignatureAtLastUserBoardEditRef.current = null
     setCleanSignature(nextCleanSignature)
   }, [buildCurrentDataSignature, setCleanSignature])
 

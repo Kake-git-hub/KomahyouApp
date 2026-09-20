@@ -886,6 +886,9 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(setIndex).toBeGreaterThan(measureIndex)
       expect(handler).toContain('if (meta.userInitiated) cleanSignatureAtLastUserBoardEditRef.current = cleanSignatureRef.current')
       expect(handler).toContain('hasUnsavedUserEditBeforePublish,')
+      // 明示 clean 化(読込/教室切替/ユーザー切替)では目印を落とす(中身が同じ教室をまたいでも未保存扱いにしない)。
+      const markClean = sliceFunctionBody(appSource, 'const markStateLoadedClean = useCallback(', 'setCleanSignature(nextCleanSignature)')
+      expect(markClean).toContain('if (expectedCleanSignature) cleanSignatureAtLastUserBoardEditRef.current = null')
     })
 
     it('クロス教室汚染ガードは温存する（userInitiated:false では一切書き込まない）', () => {
