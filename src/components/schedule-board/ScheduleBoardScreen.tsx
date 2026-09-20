@@ -1339,7 +1339,9 @@ function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
 //   件数は合うのに**照合先が入れ替わる**（時限なしはその日の全 origin を指すワイルドカードなので、以後の
 //   消化判定がずれて残数が狂う）。積んだときの形＝`appendMakeupOrigin` に渡した slotNumber を鏡にして外す:
 //   時限つきで積んだら「同じ時限 → 時限なし → 同日の先頭」、時限なしで積んだら「時限なし → 同日の先頭」。
-function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string, originSlotNumber?: number | null) {
+// ★export は検証のため(欠席解除 handleClearStudentStatus など、巨大コンポーネント内の呼び出しは
+//   描画テストできないので、この関数自体の挙動を回帰テストで固定する)。
+export function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string, originSlotNumber?: number | null) {
   const currentDates = originMap[key] ?? []
   const indexOf = (predicate: (entry: ManualMakeupOrigin) => boolean) => currentDates.findIndex(predicate)
   let targetIndex = originSlotNumber != null
@@ -2412,6 +2414,24 @@ export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
   })
 }
 
+// 盤面**全体**(全週)を名簿・テンプレと突き合わせ直す合成関数。週ごとの再マージ + 机数の正規化。
+// ★これを 1 か所に寄せている理由(2026-09-21・レビュー指摘・INV-02): 再マージの入口が 3 つある
+//   (① 読込 createInitialBoardSnapshot / ② 名簿・テンプレ・設定変更の effect / ③ 退塾掃除の入力づくり)。
+//   ③ は「掃除の入力を**再マージ適用後の最新 weeks** にする」ために必要で、①② と同じ結果でなければ
+//   掃除の commit が再マージ結果(例: 別の生徒の改名反映)を**明示値で上書きして落とす**。
+//   経路ごとに weeks.map(...) を書き写すとその同一性が静かに壊れるので、複製を作らずここを通すこと
+//   (studentWithdrawSweep.test.ts / studentWithdrawDateExclusive.test.ts が呼び出し箇所を字面で固定している)。
+export function remergeBoardWeeksWithManagedData(weeks: SlotCell[][], params: {
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  suppressedRegularLessonOccurrences: string[]
+  todayKey: string
+}): SlotCell[][] {
+  return normalizeWeeksDeskCount(weeks.map((week) => remergeBoardWeekWithManagedData(week, params)), params.classroomSettings.deskCount)
+}
+
 function createInitialBoardSnapshot(params: {
   classroomSettings: ClassroomSettings
   teachers: TeacherRow[]
@@ -2426,17 +2446,14 @@ function createInitialBoardSnapshot(params: {
     params.regularLessons,
   )
   const weeks = params.initialBoardState?.weeks?.length
-    ? normalizeWeeksDeskCount(
-      params.initialBoardState.weeks.map((week) => remergeBoardWeekWithManagedData(week, {
-        classroomSettings: params.classroomSettings,
-        teachers: params.teachers,
-        students: params.students,
-        regularLessons: params.regularLessons,
-        suppressedRegularLessonOccurrences: params.initialBoardState?.suppressedRegularLessonOccurrences ?? [],
-        todayKey: getJstTodayDateKey(),
-      })),
-      params.classroomSettings.deskCount,
-    )
+    ? remergeBoardWeeksWithManagedData(params.initialBoardState.weeks, {
+      classroomSettings: params.classroomSettings,
+      teachers: params.teachers,
+      students: params.students,
+      regularLessons: params.regularLessons,
+      suppressedRegularLessonOccurrences: params.initialBoardState?.suppressedRegularLessonOccurrences ?? [],
+      todayKey: getJstTodayDateKey(),
+    })
     : fallbackWeeks
   const maxWeekIndex = Math.max(0, weeks.length - 1)
   const weekIndex = Math.min(Math.max(params.initialBoardState?.weekIndex ?? defaultWeekIndex, 0), maxWeekIndex)
@@ -3668,6 +3685,91 @@ export function computeStudentWithdrawSweep(params: {
   if (!changed) return unchanged
 
   return { changed: true, nextWeeks, nextSuppressedMakeupOrigins, removedSeatCount, removedStatusCount }
+}
+
+export type StudentWithdrawSweepBatch = {
+  changed: boolean
+  nextWeeks: SlotCell[][]
+  nextSuppressedMakeupOrigins: MakeupOriginMap
+  /** 実際に何かを消した生徒だけ(メッセージ・操作ログ用)。 */
+  results: Array<{ studentId: string; displayName: string; fromDateKey: string; removedSeatCount: number; removedStatusCount: number }>
+  /** 検出した対象集合の署名(同一マウント内での二重実行を抑える副ガード用。対象 0 なら空文字)。 */
+  signature: string
+}
+
+// 退塾スイープの1回分(検出 → 対象者ぶんの掃除)をまとめた純関数。盤面の effect はこれを呼んで
+// commitWeeks / 操作ログ / メッセージだけを担う(巨大コンポーネントのクロージャを検証できるようにするため)。
+//
+// ★★ 掃除の入力は「**再マージ適用後**の最新 weeks」にする(2026-09-21・レビュー指摘・INV-02) ★★
+//   再マージ effect(deps に students・`setWeeks(updater)` で最新 weeks に適用)と、この掃除(commitWeeks へ
+//   **明示値**を渡す)は、基本データから戻った同じ flush で走る。掃除が「その render の古い weeks」から作った
+//   配列を commit すると、同じ flush で再マージが加えた変更(例: **別の生徒の表示名の直し**)が落ちた盤面が
+//   そのまま自動保存に載る(= 保存された盤面から改名が消える)。そこで掃除も**同じ合成関数**
+//   remergeBoardWeeksWithManagedData を先に通し、「再マージ済みの盤面」を土台に掃除して commit する。
+//   再マージは冪等(読込時にも同じ関数を通してある)なので、掃除だけのときに余計な差分は生まれない。
+//   ※820365d で消えた注意書きの論点をここへ復活させたもの。再マージ側の実装(入口・適用のしかた)を変えるときは
+//     必ずここも合わせて見直す。合成関数を経路ごとに書き写すと、この同一性が静かに壊れる。
+export function applyStudentWithdrawSweepToBoard(params: {
+  weeks: SlotCell[][]
+  students: StudentRow[]
+  teachers: TeacherRow[]
+  regularLessons: RegularLessonRow[]
+  classroomSettings: ClassroomSettings
+  suppressedRegularLessonOccurrences: string[]
+  suppressedMakeupOrigins: MakeupOriginMap
+  todayKey: string
+  resolveStockId: (student: StudentEntry) => string
+}): StudentWithdrawSweepBatch {
+  const unchanged: StudentWithdrawSweepBatch = {
+    changed: false,
+    nextWeeks: params.weeks,
+    nextSuppressedMakeupOrigins: params.suppressedMakeupOrigins,
+    results: [],
+    signature: '',
+  }
+  if (params.students.length === 0) return unchanged
+
+  const remergedWeeks = remergeBoardWeeksWithManagedData(params.weeks, {
+    classroomSettings: params.classroomSettings,
+    teachers: params.teachers,
+    students: params.students,
+    regularLessons: params.regularLessons,
+    suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
+    todayKey: params.todayKey,
+  })
+  const targets = collectStudentWithdrawSweepTargets({ weeks: remergedWeeks, students: params.students, todayKey: params.todayKey })
+  if (targets.length === 0) return unchanged
+  const signature = targets.map((target) => `${target.studentId}@${target.fromDateKey}`).join(',')
+
+  let nextWeeks = remergedWeeks
+  let nextSuppressedMakeupOrigins = params.suppressedMakeupOrigins
+  let changed = false
+  const results: StudentWithdrawSweepBatch['results'] = []
+  for (const target of targets) {
+    const sweep = computeStudentWithdrawSweep({
+      weeks: nextWeeks,
+      students: params.students,
+      studentId: target.studentId,
+      fromDateKey: target.fromDateKey,
+      suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+      resolveStockId: params.resolveStockId,
+    })
+    if (!sweep.changed) continue
+    changed = true
+    nextWeeks = sweep.nextWeeks
+    nextSuppressedMakeupOrigins = sweep.nextSuppressedMakeupOrigins
+    results.push({
+      studentId: target.studentId,
+      displayName: target.displayName,
+      fromDateKey: target.fromDateKey,
+      removedSeatCount: sweep.removedSeatCount,
+      removedStatusCount: sweep.removedStatusCount,
+    })
+  }
+  // 掃除で何も消えなかったときは盤面を差し替えない(再マージだけの差分を userInitiated な commit に載せない
+  // ＝開いただけで未保存にしない。再マージ自体は再マージ effect が受動 publish で反映する)。
+  if (!changed) return { ...unchanged, signature }
+  return { changed: true, nextWeeks, nextSuppressedMakeupOrigins, results, signature }
 }
 
 // 休日(閉じた日)のセルを再マージするときの規則。overlayBoardWeeksOnScheduleCells の休日分岐だけが使う。
@@ -5879,6 +5981,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // OFF の教室は従来どおり(移動元は「移」表示・丸ごと振替は振替元に何も残さない・休日設定は記録を全消去)。
   // ★表示と記録の保持だけを切り替えるフラグ。在庫会計(INV-06)は ON/OFF で同一。
   const transferSourceRestDisplayEnabled = isFeatureEnabledForClassroom('transferSourceRestDisplay', { id: classroomStorageKey })
+  // 退塾の自動掃除(オーナー確定 2026-09-20 夜・段階導入はレビュー指摘 2026-09-21)。ON の教室だけ、盤面が
+  // 「退塾日を過ぎているのに痕跡が残る生徒」を検出して今日以降のコマ・記録を確認なしで消す(自動保存に載る)。
+  // OFF の教室(本番3教室)は従来どおり通常授業の剥がしだけ。退塾生徒の一覧名・行ロック・取り込みガードは
+  // フラグに依らず全教室で有効(確認モーダルの本文だけ App→BasicDataScreen 側でフラグに応じて出し分ける)。
+  const studentWithdrawAutoSweepEnabled = isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: classroomStorageKey })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
@@ -6439,14 +6546,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     bumpMemCounter('overlay-recompute')
     const todayJstKey = getJstTodayDateKey()
     // 退塾ボタン/編集での退塾日入力はどちらも students を更新するので、この effect でその場に盤面へ反映される。
-    setWeeks((currentWeeks) => normalizeWeeksDeskCount(currentWeeks.map((week) => remergeBoardWeekWithManagedData(week, {
+    setWeeks((currentWeeks) => remergeBoardWeeksWithManagedData(currentWeeks, {
       classroomSettings,
       teachers,
       students,
       regularLessons,
       suppressedRegularLessonOccurrences,
       todayKey: todayJstKey,
-    })), classroomSettings.deskCount))
+    }))
   }, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])
 
   useEffect(() => {
@@ -12063,7 +12170,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
   // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を
   // 検出して掃除する**方式(オーナー確定: 日付入力で退塾日を入れた場合も、未来の退塾日がその日を過ぎた場合も、
-  // 確認ダイアログなしで同じ消去が走る)。検出は純関数 collectStudentWithdrawSweepTargets。
+  // 確認ダイアログなしで同じ消去が走る)。検出＋掃除は純関数 applyStudentWithdrawSweepToBoard。
+  // ★フラグ studentWithdrawAutoSweep(開発用教室限定・2026-09-21 レビュー指摘)が OFF の教室では**一切走らせない**。
+  //   確認なしの自動削除＋自動保存なので、本番3教室は従来どおり「退塾生徒の通常授業の剥がしだけ」に保つ。
+  // ★掃除の入力は「再マージ適用後の最新 weeks」(applyStudentWithdrawSweepToBoard のコメント参照・INV-02)。
+  //   ここで古い weeks を明示値で commit すると、同じ flush で再マージが加えた別の生徒の改名反映が落ちる。
   // ★発火点は**マウント時と students 変更時**(基本データから戻った時)。日付をまたいで開きっぱなしのときは
   //   次のマウント/名簿変更で走る(タイマーは置かない)。対象 0 なら commitWeeks しない=開いただけで未保存にしない。
   // ★安全条件(厳守):
@@ -12079,66 +12190,58 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   //   (d) 冪等: 掃除で痕跡が消えるので 2 回目の検出は対象 0。台帳(manualMakeupAdjustments/講習在庫/希望数)は不変で、
   //       抑止(suppressedMakeupOrigins)だけが変わる(在庫へ戻さない・INV-06)。
   useEffect(() => {
+    if (!studentWithdrawAutoSweepEnabled) return
     if (isTemplateMode) return
     if (!isEditingStateLoadedForActingClassroom) return
     if (students.length === 0) return
-    const targets = collectStudentWithdrawSweepTargets({ weeks, students, todayKey: getJstTodayDateKey() })
-    if (targets.length === 0) return
+    const sweep = applyStudentWithdrawSweepToBoard({
+      weeks,
+      students,
+      teachers,
+      regularLessons,
+      classroomSettings,
+      suppressedRegularLessonOccurrences,
+      suppressedMakeupOrigins,
+      todayKey: getJstTodayDateKey(),
+      resolveStockId: resolveBoardStudentStockId,
+    })
+    if (!sweep.signature) return
     // 同じ対象集合で二重に走らせない(掃除しても再レンダーで同じ effect が走るため。掃除後は対象 0 になる)。
-    const signature = targets.map((target) => `${target.studentId}@${target.fromDateKey}`).join(',')
-    if (lastStudentWithdrawSweepSignatureRef.current === signature) return
-    lastStudentWithdrawSweepSignatureRef.current = signature
-
-    let nextWeeks = weeks
-    let nextSuppressedMakeupOrigins = suppressedMakeupOrigins
-    let changed = false
-    const results: Array<{ displayName: string; removedSeatCount: number; removedStatusCount: number }> = []
-    for (const target of targets) {
-      const sweep = computeStudentWithdrawSweep({
-        weeks: nextWeeks,
-        students,
-        studentId: target.studentId,
-        fromDateKey: target.fromDateKey,
-        suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
-        resolveStockId: resolveBoardStudentStockId,
-      })
-      if (!sweep.changed) continue
-      changed = true
-      nextWeeks = sweep.nextWeeks
-      nextSuppressedMakeupOrigins = sweep.nextSuppressedMakeupOrigins
-      results.push({ displayName: target.displayName, removedSeatCount: sweep.removedSeatCount, removedStatusCount: sweep.removedStatusCount })
+    if (lastStudentWithdrawSweepSignatureRef.current === sweep.signature) return
+    lastStudentWithdrawSweepSignatureRef.current = sweep.signature
+    if (!sweep.changed) return
+    for (const result of sweep.results) {
       // 操作ログの種別は既存の 'lesson-delete' を使う(サーバーの受付一覧 functions/src/operationEvents.ts に
       // 無い kind は黙って捨てられるため、新種別は functions のデプロイと同時でないと記録が消える)。
       recordOperationEvent('lesson-delete', {
         source: 'student-withdraw-sweep',
-        managedStudentId: target.studentId,
-        studentName: target.displayName,
-        fromDateKey: target.fromDateKey,
-        removedSeatCount: sweep.removedSeatCount,
-        removedStatusCount: sweep.removedStatusCount,
+        managedStudentId: result.studentId,
+        studentName: result.displayName,
+        fromDateKey: result.fromDateKey,
+        removedSeatCount: result.removedSeatCount,
+        removedStatusCount: result.removedStatusCount,
       })
     }
-    if (!changed) return
     // 対象者ぶんをまとめて 1 回で確定する(Undo も 1 回)。台帳は渡したものがそのまま=不変。
     commitWeeks(
-      nextWeeks,
+      sweep.nextWeeks,
       weekIndex,
       selectedCellId,
       selectedDeskIndex,
       classroomSettings.holidayDates,
       classroomSettings.forceOpenDates,
       manualMakeupAdjustments,
-      nextSuppressedMakeupOrigins,
+      sweep.nextSuppressedMakeupOrigins,
       fallbackMakeupStudents,
       manualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
     )
-    setStatusMessage(buildStudentWithdrawSweepMessage(results))
+    setStatusMessage(buildStudentWithdrawSweepMessage(sweep.results))
     // commitWeeks などは毎レンダー作り直されるクロージャ。deps に入れると毎レンダー再実行になるだけで、
     // 二重実行は「掃除で対象が 0 になる(冪等)」と対象集合の署名 ref で防いでいる。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditingStateLoadedForActingClassroom, isTemplateMode, students, weeks])
+  }, [isEditingStateLoadedForActingClassroom, isTemplateMode, students, studentWithdrawAutoSweepEnabled, weeks])
 
   // 「振替先を今決める」の続き: 在庫一覧にその生徒の残数が現れたら、その振替元日付を選んだ状態で配置モードへ入る。
   useEffect(() => {

@@ -161,6 +161,26 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Backup/restore screen: manager restores own classroom from a server auto-backup (last 3 days) behind a large confirmation modal; load to screen, commit by manual save.',
   },
+  // 退塾の自動掃除(オーナー確定 2026-09-20 夜・docs/spec-basic-data.md §B・§H・レビュー指摘 2026-09-21)。
+  // ON のとき**だけ**次の 2 つが走る:
+  //   (a) 盤面の退塾掃除: 「退塾日を過ぎているのに消去開始日(= max(退塾日, 今日[JST]))以降に痕跡が残る生徒」を
+  //       盤面が検出し、その痕跡(手で置いた講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)を
+  //       確認ダイアログなしで消して commitWeeks する(collectStudentWithdrawSweepTargets →
+  //       computeStudentWithdrawSweep)。
+  //   (b) 高3卒業の退塾日 自動入力: 4/1 を過ぎた高3の withdrawDate へ 3/31 を実データで入れる
+  //       (applyGraduationWithdrawAutoFill)。
+  // ★どちらも「室長の確認なしに実データを書き換え、自動保存へ載る」操作なので、まず開発用教室だけで
+  //   先行検証する(段階導入・昇格はオーナー確認後)。OFF の教室(本番3教室)は従来どおり
+  //   **退塾生徒の通常授業の剥がしだけ**(stripWithdrawnStudentsFromBoardWeek)で、盤面は自動で書き換わらない。
+  // ★フラグに依らず**全教室で有効**なもの(ここへ足して広げない): 「退塾生徒」への改名・退塾後の行ロック
+  //   (isStudentRowLockedByWithdrawal)・削除の確認文言・Excel 差分取り込みの退塾済み行ガード
+  //   (preserveWithdrawnStudentRowsOnImport)・退塾確認モーダルそのもの。
+  //   ただし退塾確認モーダルの**本文だけ**はフラグで出し分ける(OFF の教室で「今日以降のコマと記録も消えます」は
+  //   事実と違うため。buildStudentWithdrawConfirmation の autoSweepEnabled)。
+  studentWithdrawAutoSweep: {
+    scope: 'development-only',
+    description: 'Withdraw auto-sweep: board removes a withdrawn student\'s traces from the sweep start date, and graduated high-school 3rd graders get 3/31 written into withdrawDate.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

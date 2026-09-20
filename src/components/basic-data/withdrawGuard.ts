@@ -84,8 +84,15 @@ export function buildStudentWithdrawConfirmation(params: {
   today: string
   currentWithdrawDate: string
   stock?: StudentDeletionStock
+  /**
+   * 盤面の退塾掃除が有効な教室か(機能フラグ studentWithdrawAutoSweep・開発用教室限定で先行・2026-09-21)。
+   * ★案内文が事実と食い違わないようにするための引数。OFF の教室では今日以降のコマ・記録は**消えない**
+   *   (通常授業の剥がしだけ)ので「今日以降のコマと記録も消えます」と書いてはいけない。
+   *   既定を false にしているのは「フラグを渡し忘れたら消えない側の案内になる」= 安全側に倒すため。
+   */
+  autoSweepEnabled?: boolean
 }): StudentWithdrawConfirmation {
-  const { name, today, currentWithdrawDate, stock } = params
+  const { name, today, currentWithdrawDate, stock, autoSweepEnabled = false } = params
   const safeName = name.trim() || 'この生徒'
   const current = currentWithdrawDate.trim()
   const overwriteNote = current && current !== '未定' && current !== today
@@ -100,10 +107,17 @@ export function buildStudentWithdrawConfirmation(params: {
     if (parts.length > 0) stockWarning = `${safeName} には ${parts.join(' と ')} が残っています。`
   }
 
+  // ★2026-09-20 夜 改定: 退塾は元に戻せない(退塾後の行は編集できず、退塾日も戻せない)。必ずそう案内する。
+  //   これはフラグに依らず全教室で同じ(行ロックは全教室で有効)。
+  const irreversibleNote = '★退塾にすると元に戻せません（退塾後は退塾日も含めてその生徒の行を編集できません）。生徒のデータは削除されず「退塾生徒」に残ります。'
+  const base = `本日（${today}）を退塾日として記録します。本日から非在籍となり、一覧は「退塾生徒」に移り、本日の盤面の通常授業・日程表・請求・保護者用QRからも外れます`
+  // 掃除が有効な教室だけ「今日以降のコマと記録も消える」。OFF の教室は従来どおり手で置いたコマが残る。
+  const sweepNote = autoSweepEnabled
+    ? '。今日以降の講習・振替などのコマと記録も消えます（未消化へは戻りません）。昨日以前の記録は残ります。'
+    : '（手で置いた講習・振替のコマは残ります）。'
   return {
     title: `${safeName} を退塾にします`,
-    // ★2026-09-20 夜 改定: 退塾は元に戻せない(退塾後の行は編集できず、退塾日も戻せない)。必ずそう案内する。
-    message: `本日（${today}）を退塾日として記録します。本日から非在籍となり、一覧は「退塾生徒」に移り、本日の盤面の通常授業・日程表・請求・保護者用QRからも外れます。今日以降の講習・振替などのコマと記録も消えます（未消化へは戻りません）。昨日以前の記録は残ります。★退塾にすると元に戻せません（退塾後は退塾日も含めてその生徒の行を編集できません）。生徒のデータは削除されず「退塾生徒」に残ります。`,
+    message: `${base}${sweepNote}${irreversibleNote}`,
     overwriteNote,
     stockWarning,
   }

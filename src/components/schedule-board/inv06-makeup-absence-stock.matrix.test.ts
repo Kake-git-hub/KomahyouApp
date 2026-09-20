@@ -10,7 +10,7 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, computeStudentWithdrawSweep, reconcileHolidayDeskStockReturns, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, computeStudentWithdrawSweep, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -1108,5 +1108,42 @@ describe('INV-06 マトリクス: 退塾スイープは在庫を増やさず減�
     expect(sweep.nextSuppressedMakeupOrigins).toEqual({})
     // 記録は消えるが台帳 origin は残るので残 1(退塾生の在庫は一覧から excludeWithdrawnStudentStockEntries が隠す)。
     expect(balanceOf({ weeks: sweep.nextWeeks, manualAdjustments, suppressedOrigins: sweep.nextSuppressedMakeupOrigins })).toBe(1)
+  })
+})
+
+// ============================================================================
+// INV-06: 台帳 origin を 1 件外すときは「積んだときと同じ形」を外す(removeMakeupOrigin)
+//
+// なぜ 1 件だけのために表を足すか(レビュー指摘 2026-09-21): 同じ日付には「時限つき」の origin
+// (×/コマ削除の抑制など、時限が特定できる操作)と「時限なし」の origin(休み・休日設定など、その日の
+// 全 origin を指すワイルドカード)が**併存しうる**。件数だけ合わせて先頭を外すと、残数は合っているのに
+// 照合先が入れ替わり(makeupStock.ts resolveEffectiveMakeupOriginDates)、以後の消化判定がずれて残数が狂う。
+// 呼び出し側(欠席解除 handleClearStudentStatus / テンプレ上書き)は時限を渡さない＝「時限なしで積んだ分」を
+// 外す意図なので、時限なしを優先して外すことをここで固定する。
+// ============================================================================
+describe('INV-06: removeMakeupOrigin は積んだときと同じ形の origin を外す', () => {
+  const ORIGIN_DATE = '2026-08-05'
+  const both = { [STOCK_KEY]: [{ dateKey: ORIGIN_DATE, slotNumber: 4 }, { dateKey: ORIGIN_DATE }] }
+
+  it('★同じ日に時限つき/時限なしが併存するとき、時限を渡さない呼び出しは時限なしを外す(削除抑制を巻き込まない)', () => {
+    // 欠席解除・テンプレ上書きの呼び出しは時限を渡さない(= 休み/休日設定が時限なしで積んだ分を外す)。
+    expect(removeMakeupOrigin(both, STOCK_KEY, ORIGIN_DATE)[STOCK_KEY])
+      .toEqual([{ dateKey: ORIGIN_DATE, slotNumber: 4 }])
+    expect(removeMakeupOrigin(both, STOCK_KEY, ORIGIN_DATE, null)[STOCK_KEY])
+      .toEqual([{ dateKey: ORIGIN_DATE, slotNumber: 4 }])
+    // 対照: 時限つきで積んだ分を外すときは同じ時限のものだけが消える(時限なしは残る)。
+    expect(removeMakeupOrigin(both, STOCK_KEY, ORIGIN_DATE, 4)[STOCK_KEY]).toEqual([{ dateKey: ORIGIN_DATE }])
+    // 入力は書き換えない(純関数)。
+    expect(both[STOCK_KEY]).toEqual([{ dateKey: ORIGIN_DATE, slotNumber: 4 }, { dateKey: ORIGIN_DATE }])
+  })
+
+  it('積んだ時限が台帳に無ければ 時限なし → 同日の先頭 の順で落とす。日付が無ければ何も変えない', () => {
+    // 5 限で積んだつもりが台帳に無い(旧データ) → ワイルドカード(時限なし)を外す。
+    expect(removeMakeupOrigin(both, STOCK_KEY, ORIGIN_DATE, 5)[STOCK_KEY]).toEqual([{ dateKey: ORIGIN_DATE, slotNumber: 4 }])
+    // 時限なしも無ければ同日の先頭(件数だけは必ず合わせる=誤増を残さない)。
+    const onlySlotted = { [STOCK_KEY]: [{ dateKey: ORIGIN_DATE, slotNumber: 4 }] }
+    expect(removeMakeupOrigin(onlySlotted, STOCK_KEY, ORIGIN_DATE, 5)[STOCK_KEY]).toBeUndefined()
+    // その日付の origin が無ければ台帳をそのまま返す(別の日を減らさない)。
+    expect(removeMakeupOrigin(both, STOCK_KEY, '2026-08-06', 4)).toBe(both)
   })
 })

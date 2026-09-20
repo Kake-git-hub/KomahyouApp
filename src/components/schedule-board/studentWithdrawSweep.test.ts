@@ -12,9 +12,16 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import type { StudentRow } from '../basic-data/basicDataModel'
+import { initialStudents, initialTeachers, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
+import type { RegularLessonRow } from '../basic-data/regularLessonModel'
+import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import { computeStudentWithdrawSweep, stripWithdrawnStudentsFromBoardWeek } from './ScheduleBoardScreen'
+import {
+  applyStudentWithdrawSweepToBoard,
+  buildManagedScheduleCellsForRange,
+  computeStudentWithdrawSweep,
+  stripWithdrawnStudentsFromBoardWeek,
+} from './ScheduleBoardScreen'
 import {
   buildStudentWithdrawSweepMessage,
   collectStudentWithdrawSweepTargets,
@@ -158,6 +165,31 @@ describe('退塾スイープの開始日と検出(collectStudentWithdrawSweepTar
     expect(collectStudentWithdrawSweepTargets({ weeks, students, todayKey: TODAY })).toEqual([])
     expect(collectStudentWithdrawSweepTargets({ weeks, students, todayKey: TOMORROW }))
       .toEqual([{ studentId: 'sW', displayName: '退塾', fromDateKey: TOMORROW }])
+  })
+
+  // ★退塾日の書式揺れ(レビュー指摘 2026-09-21)。退塾日は日付入力だけでなく Excel 取り込みでも入るので、
+  //   「スラッシュ書式」「未定」「空」「ありえない日付」が来る。検出の権威は共有判定 isStudentWithdrawnOnDate
+  //   (= normalizeDateText)であって、resolveStudentWithdrawSweepFromDateKey の厳格書式ではないことを固定する
+  //   (厳格書式でない値は開始日が今日へ落ちるが、検出済みの候補は必ず「今日 ≧ 退塾日」なので結果は同じ)。
+  it('★書式揺れで誤検出しない: 未定・空は対象外、ありえない日付(2026-13-40)も対象外、スラッシュ書式は正しく対象', () => {
+    const weeks = [[cell(TODAY, [desk({ lesson: lesson([seat(), null]) })])]]
+    const withWithdrawDate = (withdrawDate: string) => collectStudentWithdrawSweepTargets({
+      weeks,
+      students: [{ ...withdrawnStudent, withdrawDate }, stayingStudent],
+      todayKey: TODAY,
+    })
+    // 在籍中(退塾日なし)は掃除しない。「未定」は空と同じ扱い(normalizeDateText)。
+    expect(withWithdrawDate('未定')).toEqual([])
+    expect(withWithdrawDate('')).toEqual([])
+    expect(withWithdrawDate('  ')).toEqual([])
+    // ありえない日付は normalizeDateText が素通しするが、文字列比較で「今日 < 退塾日」になるので対象外(安全側)。
+    // ここが逆に倒れると、月・日が壊れた行の生徒のコマを黙って消してしまう。
+    expect(withWithdrawDate('2026-13-40')).toEqual([])
+    // スラッシュ書式(Excel 由来)は正規化されて「今日 ≧ 退塾日」= 退塾済みなので対象。開始日は今日
+    // (退塾日 2026-09-01 は過去なので max の結果が今日。昨日以前は絶対に触らない)。
+    expect(withWithdrawDate('2026/9/1')).toEqual([{ studentId: 'sW', displayName: '退塾', fromDateKey: TODAY }])
+    // 未来のスラッシュ書式はまだ在籍なので対象外(境界は共有判定と同じ)。
+    expect(withWithdrawDate('2026/9/21')).toEqual([])
   })
 
   it('昨日以前にしか痕跡が無い生徒・在籍中の生徒は対象にしない(開いただけで未保存にしない)', () => {
@@ -347,6 +379,107 @@ describe('computeStudentWithdrawSweep(今日以降の痕跡を消し切る)', ()
 })
 
 // ---------------------------------------------------------------------------
+// ★掃除の入力は「再マージ適用後の最新 weeks」(2026-09-21 レビュー指摘・INV-02)
+//
+// 何が起きていたか: 再マージ effect(deps に students・`setWeeks(updater)` で**最新**の weeks に適用)と
+// 掃除(commitWeeks へ**明示値**を渡す)は、基本データから盤面へ戻った同じ flush で走る。掃除が「その render の
+// 古い weeks」から作った配列を commit すると、同じ flush で再マージが加えた変更が**落ちた盤面が自動保存される**。
+// 例: 基本データで生徒A の通常授業を足す(または表示名を直す) ＋ 生徒B に退塾日を入れる → 盤面へ戻ると
+//     A の変更が反映されないまま保存される。
+// ここでは純関数 applyStudentWithdrawSweepToBoard に「盤面はまだ古い / 名簿・テンプレは新しい」を渡し、
+// 掃除後の weeks に**再マージ結果(A の通常授業)が残っている**ことを固定する(修正前は落ちる)。
+// ---------------------------------------------------------------------------
+describe('★掃除は再マージ適用後の盤面を土台にする(他の生徒の変更を巻き戻さない・INV-02)', () => {
+  const MON = '2026-09-21' // 月(今日)
+  const TUE = '2026-09-22' // 火(A の通常授業を足す日)
+  const boardSettings: ClassroomSettings = { closedWeekdays: [0], holidayDates: [], forceOpenDates: [], deskCount: 6 }
+  const teacher: TeacherRow = {
+    ...initialTeachers[0]!, id: 'teacher-a', name: '講師 太郎', displayName: '講師A', entryDate: '2026-04-01', withdrawDate: '未定',
+  }
+  const studentA: StudentRow = {
+    ...initialStudents[0]!, id: 'sA', name: '在籍 一郎', displayName: '在籍一', entryDate: '2026-04-01', withdrawDate: '未定', birthDate: '2012-05-01',
+  }
+  const studentB: StudentRow = { ...withdrawnStudent }
+  const newRegularLessonForA: RegularLessonRow = {
+    id: 'regular-a', schoolYear: 2026, teacherId: 'teacher-a', student1Id: 'sA', subject1: '数',
+    startDate: '2026-04-01', endDate: '未定', student2Id: '', subject2: '', student2StartDate: '', student2EndDate: '',
+    nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 2, slotNumber: 5,
+  }
+
+  function buildWeek(regularLessons: RegularLessonRow[]): SlotCell[] {
+    return buildManagedScheduleCellsForRange({
+      range: { startDate: MON, endDate: '2026-09-26', periodValue: '' },
+      fallbackStartDate: MON,
+      fallbackEndDate: '2026-09-26',
+      classroomSettings: boardSettings,
+      teachers: [teacher],
+      students: [studentA, studentB],
+      regularLessons,
+      boardWeeks: [],
+      suppressedRegularLessonOccurrences: [],
+    })
+  }
+
+  function regularSeatDatesOfA(weeks: SlotCell[][]) {
+    return weeks.flat()
+      .filter((cell) => cell.desks.some((deskCell) => deskCell.lesson?.studentSlots.some((entry) => entry?.managedStudentId === 'sA' && entry.lessonType === 'regular')))
+      .map((cell) => cell.dateKey)
+  }
+
+  it('名簿・テンプレの変更(生徒A の通常授業追加)と生徒B の退塾を同時に反映しても、A の変更が残る', () => {
+    // 盤面は「A の通常授業を足す前」の状態。B の手置き講習を火曜 5 限へ置いておく。
+    const staleWeek = buildWeek([])
+    const targetCellIndex = staleWeek.findIndex((cell) => cell.dateKey === TUE && cell.slotNumber === 5)
+    expect(targetCellIndex).toBeGreaterThanOrEqual(0)
+    const targetCell = staleWeek[targetCellIndex]!
+    staleWeek[targetCellIndex] = {
+      ...targetCell,
+      desks: targetCell.desks.map((deskCell, deskIndex) => (deskIndex === 5
+        ? { ...deskCell, teacher: '講師A', lesson: lesson([seat({ id: 'b-lecture', lessonType: 'special', specialSessionId: 'sess-1' }), null]) }
+        : deskCell)),
+    }
+    expect(regularSeatDatesOfA([staleWeek])).toEqual([]) // まだ A の通常授業は盤面に無い
+
+    const result = applyStudentWithdrawSweepToBoard({
+      weeks: [staleWeek],
+      students: [studentA, studentB],
+      teachers: [teacher],
+      regularLessons: [newRegularLessonForA], // ★基本データで足したばかりのテンプレ(盤面はまだ古い)
+      classroomSettings: boardSettings,
+      suppressedRegularLessonOccurrences: [],
+      suppressedMakeupOrigins: {},
+      todayKey: MON,
+      resolveStockId,
+    })
+
+    expect(result.changed).toBe(true)
+    expect(result.results.map((entry) => entry.studentId)).toEqual(['sW'])
+    // B の手置き講習は消えている(掃除の本体)。
+    expect(ownedEntries(result.nextWeeks)).toEqual([])
+    // ★A の通常授業(= 同じ flush の再マージ結果)が commit 対象の weeks に残っている。
+    expect(regularSeatDatesOfA(result.nextWeeks)).toEqual([TUE])
+  })
+
+  it('掃除で何も消さないときは盤面を差し替えない(再マージだけの差分を userInitiated な commit に載せない)', () => {
+    const staleWeek = buildWeek([])
+    const result = applyStudentWithdrawSweepToBoard({
+      weeks: [staleWeek],
+      students: [studentA, studentB], // B は退塾済みだが盤面に痕跡が無い
+      teachers: [teacher],
+      regularLessons: [newRegularLessonForA],
+      classroomSettings: boardSettings,
+      suppressedRegularLessonOccurrences: [],
+      suppressedMakeupOrigins: {},
+      todayKey: MON,
+      resolveStockId,
+    })
+    expect(result.changed).toBe(false)
+    expect(result.signature).toBe('') // 検出 0 件
+    expect(result.nextWeeks[0]).toBe(staleWeek)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 配線ガード(source-scan)。巨大コンポーネントのクロージャは描画テストができないので、
 // 落とすと事故になる配線(再マージへ混ぜない・結果を必ず返す・台帳を触らない)を字面で固定する。
 // ---------------------------------------------------------------------------
@@ -387,12 +520,11 @@ describe('退塾スイープの配線', () => {
     expect(apply).toContain('handlers.setBoardMountKey?.((prev) => prev + 1)')
   })
 
-  it('盤面は検出 → 対象者ぶんを適用 → commitWeeks 1 回(台帳・希望数は渡さない・テンプレ編集中は走らせない)', () => {
-    const effect = sliceFrom(BOARD_TSX, 'const targets = collectStudentWithdrawSweepTargets({', 2600)
-    expect(effect).toContain('if (targets.length === 0) return')
-    expect(effect).toContain('computeStudentWithdrawSweep({')
-    expect(effect).toContain('if (!changed) return')
-    expect(effect).toContain('nextSuppressedMakeupOrigins,')
+  it('盤面は純関数で検出＋適用 → commitWeeks 1 回(台帳・希望数は渡さない・テンプレ編集中/フラグ OFF は走らせない)', () => {
+    const effect = sliceFrom(BOARD_TSX, 'const sweep = applyStudentWithdrawSweepToBoard({', 2600)
+    expect(effect).toContain('if (!sweep.signature) return')
+    expect(effect).toContain('if (!sweep.changed) return')
+    expect(effect).toContain('sweep.nextSuppressedMakeupOrigins,')
     // 在庫台帳は現状のまま渡す(増やさない)。「破棄前に台帳へ確定」も講習在庫の +1 もしない。
     expect(effect).toContain('manualMakeupAdjustments,')
     expect(effect).toContain('manualLectureStockCounts,')
@@ -400,17 +532,48 @@ describe('退塾スイープの配線', () => {
     expect(effect).not.toContain('appendLectureStockCount')
     expect(effect).not.toContain('appendDeletedStudentScheduleCountAdjustment')
     expect(effect).not.toContain('scheduleCountAdjustments')
-    // 安全条件(テンプレ編集中・教室切替直後の窓・名簿未ロード)は effect の先頭で弾く。
-    const guards = sliceFrom(BOARD_TSX, 'if (isTemplateMode) return\r\n    if (!isEditingStateLoadedForActingClassroom) return', 200)
+    // 安全条件(フラグ・テンプレ編集中・教室切替直後の窓・名簿未ロード)は effect の先頭で弾く。
+    const guards = sliceFrom(BOARD_TSX, 'if (!studentWithdrawAutoSweepEnabled) return\r\n    if (isTemplateMode) return', 260)
+    expect(guards).toContain('if (!isEditingStateLoadedForActingClassroom) return')
     expect(guards).toContain('if (students.length === 0) return')
   })
 
   it('再マージ・読込の経路にスイープを混ぜない(毎回走ると INV-03/INV-06 違反になる)', () => {
-    // 呼び出しは 1 か所(検出 effect)だけ。
+    // 呼び出しは 1 か所(検出＋適用の純関数)だけ。
     expect([...BOARD_TSX.matchAll(/computeStudentWithdrawSweep\(\{/gu)]).toHaveLength(1)
     expect([...BOARD_TSX.matchAll(/collectStudentWithdrawSweepTargets\(\{/gu)]).toHaveLength(1)
+    expect([...BOARD_TSX.matchAll(/applyStudentWithdrawSweepToBoard\(\{/gu)]).toHaveLength(1)
     const remerge = sliceFrom(BOARD_TSX, 'export function remergeBoardWeekWithManagedData(', 1800)
     expect(remerge).not.toContain('computeStudentWithdrawSweep')
     expect(remerge).toContain('stripWithdrawnStudentsFromBoardWeek(rawWeek, params.students, params.todayKey)')
+  })
+
+  // ★2026-09-21 レビュー指摘(中): 掃除は commitWeeks へ**明示値**を渡すので、同じ flush で走る再マージ
+  //   effect(setWeeks の関数形)の結果を取りこぼすと、その盤面がそのまま自動保存に載る。
+  //   掃除の入力は必ず「再マージ適用後の weeks」= 同じ合成関数を通した結果であること。
+  it('★掃除の入力は再マージ適用後の weeks(合成関数 remergeBoardWeeksWithManagedData を通す)', () => {
+    const sweepFn = sliceFrom(BOARD_TSX, 'export function applyStudentWithdrawSweepToBoard(', 2600)
+    expect(sweepFn).toContain('const remergedWeeks = remergeBoardWeeksWithManagedData(params.weeks, {')
+    expect(sweepFn).toContain('const targets = collectStudentWithdrawSweepTargets({ weeks: remergedWeeks,')
+    expect(sweepFn).toContain('let nextWeeks = remergedWeeks')
+    // 週単位の再マージを呼ぶのは合成関数 1 か所だけ(経路ごとに weeks.map を書き写すと同一性が壊れる)。
+    expect([...BOARD_TSX.matchAll(/remergeBoardWeekWithManagedData\(week, /gu)]).toHaveLength(1)
+    // 合成関数を通る経路は 3 つ: 読込(createInitialBoardSnapshot)・名簿/テンプレ変更 effect・掃除の入力。
+    expect([...BOARD_TSX.matchAll(/remergeBoardWeeksWithManagedData\(/gu)]).toHaveLength(4) // 定義 + 3 経路
+  })
+
+  it('フラグ studentWithdrawAutoSweep は開発用教室限定で、盤面の掃除と高3卒業の自動入力だけをゲートする', () => {
+    // 盤面側(教室ID で判定・ScheduleBoardScreen.featureFlags.wiring.test.ts と同じ作法)。
+    expect(BOARD_TSX).toContain("isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: classroomStorageKey })")
+    // App 側: 高3卒業の退塾日 自動入力もフラグ ON の教室だけ。
+    expect(APP_TSX).toContain("isFeatureEnabledForClassroom('studentWithdrawAutoSweep', actingClassroom)")
+    const graduation = sliceFrom(APP_TSX, 'const result = applyGraduationWithdrawAutoFill({', 400)
+    expect(graduation).toContain('setStudents(result.students)')
+    expect(APP_TSX).toContain('if (!studentWithdrawAutoSweepEnabled) return')
+    // フラグに依らず全教室で有効なもの(ここをフラグで囲うと退塾後の行が編集できる状態へ戻る)。
+    expect(BASIC_TSX).toContain('isStudentRowLockedByWithdrawal(row, todayReferenceDate)')
+    expect(APP_TSX).toContain('preserveWithdrawnStudentRowsOnImport')
+    // 退塾確認モーダルの本文だけはフラグで出し分ける(OFF の教室で「消えます」と書かない)。
+    expect(BASIC_TSX).toContain('autoSweepEnabled: studentWithdrawAutoSweepEnabled,')
   })
 })

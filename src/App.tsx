@@ -1620,6 +1620,15 @@ function AuthenticatedApp() {
     () => isRemoteBackendEnabled && isFeatureEnabledForClassroom('managerSelfRestore', actingClassroom),
     [actingClassroom, isRemoteBackendEnabled],
   )
+  // 退塾の自動掃除(オーナー確定 2026-09-20 夜・段階導入はレビュー指摘 2026-09-21・docs/spec-basic-data.md §B)。
+  // ON の教室だけ (a)盤面の退塾掃除(痕跡の自動削除＋自動保存・ScheduleBoardScreen 側で同じフラグを引く) と
+  // (b)高3卒業の退塾日 自動入力(下の effect) が走る。OFF の教室(本番3教室)は従来どおり通常授業の剥がしだけ。
+  // ★「退塾生徒」への改名・退塾後の行ロック・削除文言・Excel 取り込みガードはフラグに依らず全教室で有効。
+  //   退塾確認モーダルの本文だけは OFF の教室で事実と違うので、このフラグを渡して出し分ける。
+  const studentWithdrawAutoSweepEnabled = useMemo(
+    () => isFeatureEnabledForClassroom('studentWithdrawAutoSweep', actingClassroom),
+    [actingClassroom],
+  )
   // Feature B: 開発用教室へ「他教室 × バックアップ時点」を読み込むための候補(サーバー由来)。
   // 旧「他教室コピー」(in-memory 参照)を廃止し、Storage の確定データのみを取り込む方式に置換。
   const [developmentBackupSources, setDevelopmentBackupSources] = useState<DevelopmentClassroomBackupSources>({ backups: [], classrooms: [] })
@@ -4727,13 +4736,17 @@ function AuthenticatedApp() {
   //   ときだけ(保存側の shouldInjectEditingStateIntoClassroom と同じ判断・INV-08)。
   // ★ユーザー編集として保存される(開いただけで未保存→自動保存が走るのはオーナー了承済み)。冪等なので 2 回目は何もしない。
   useEffect(() => {
+    // ★段階導入(レビュー指摘 2026-09-21): 実データ(withdrawDate)を確認なしで書き換える操作なので、
+    //   フラグ studentWithdrawAutoSweep が ON の教室(開発用教室のみ)だけで走らせる。OFF の教室では
+    //   従来どおり「表示上だけ 3/31 を補完」(resolveEffectiveManagedWithdrawDate)のまま。
+    if (!studentWithdrawAutoSweepEnabled) return
     if (!actingClassroomId) return
     if (loadedEditingClassroomIdRef.current !== actingClassroomId) return
     const result = applyGraduationWithdrawAutoFill({ students, todayKey: getJstTodayDateKey(), nowIso: new Date().toISOString() })
     if (!result.changed) return
     setStudents(result.students)
     setPersistenceMessage(buildGraduationWithdrawAutoFillMessage(result.filledStudentIds.length))
-  }, [actingClassroomId, setStudents, students])
+  }, [actingClassroomId, setStudents, students, studentWithdrawAutoSweepEnabled])
   // 盤面を離れると盤面側の振替配置モードは消え、配置終了の知らせ(handleParentAbsencePlacementSettled)も来ない。
   // 「配置中」の印を残すと、以後の新着でモーダルが開き直らなくなるので、ここで下ろす。
   useEffect(() => {
@@ -5927,6 +5940,7 @@ function AuthenticatedApp() {
         classroomId={actingClassroomId}
         classroomName={actingClassroom?.name}
         parentPortalQrEnabled={parentPortalQrEnabled}
+        studentWithdrawAutoSweepEnabled={studentWithdrawAutoSweepEnabled}
         savedStudentIds={savedStudentIds}
         onIssueParentPortalToken={parentPortalQrEnabled ? issueParentPortalToken : undefined}
         onRevokeParentPortalToken={parentPortalQrEnabled ? revokeParentPortalToken : undefined}

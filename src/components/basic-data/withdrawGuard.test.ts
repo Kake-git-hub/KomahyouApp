@@ -102,8 +102,8 @@ describe('applyStudentWithdrawToday（押した日を退塾日として記録・
 })
 
 describe('buildStudentWithdrawConfirmation', () => {
-  it('今日の日付と「データは削除されず残る」ことを伝える', () => {
-    const confirmation = buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '' })
+  it('今日の日付と「データは削除されず残る」ことを伝える(掃除フラグ ON の教室)', () => {
+    const confirmation = buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '', autoSweepEnabled: true })
     expect(confirmation.title).toBe('生徒A を退塾にします')
     expect(confirmation.message).toContain(TODAY)
     expect(confirmation.message).toContain('削除されず「退塾生徒」に残ります')
@@ -127,6 +127,24 @@ describe('buildStudentWithdrawConfirmation', () => {
   it('将来の退塾日が入っているときは置き換えを明示する（未定は置き換え扱いにしない）', () => {
     expect(buildStudentWithdrawConfirmation({ name: 'A', today: TODAY, currentWithdrawDate: '2026-10-31' }).overwriteNote).toContain('2026-10-31')
     expect(buildStudentWithdrawConfirmation({ name: 'A', today: TODAY, currentWithdrawDate: '未定' }).overwriteNote).toBeNull()
+  })
+
+  // ★段階導入(レビュー指摘 2026-09-21): 盤面の掃除はフラグ studentWithdrawAutoSweep が ON の教室だけで走る。
+  //   OFF の教室で「今日以降のコマと記録も消えます」と案内すると**事実と違う**(手で置いたコマは残る)。
+  //   引数を渡し忘れたときも「消えない側」の案内になること(既定 false = 安全側)をここで固定する。
+  it('★フラグ OFF の教室では「手で置いた講習・振替のコマは残ります」と案内する(既定も OFF 側)', () => {
+    for (const confirmation of [
+      buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '', autoSweepEnabled: false }),
+      buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '' }),
+    ]) {
+      expect(confirmation.message).toContain('手で置いた講習・振替のコマは残ります')
+      expect(confirmation.message).not.toContain('今日以降の講習・振替などのコマと記録も消えます')
+      expect(confirmation.message).not.toContain('未消化へは戻りません')
+      // 退塾後の行ロックはフラグに依らず全教室で有効なので、「元に戻せません」は OFF でも出す。
+      expect(confirmation.message).toContain('退塾にすると元に戻せません')
+      expect(confirmation.message).toContain('本日から非在籍')
+      expect(confirmation.message).toContain('削除されず「退塾生徒」に残ります')
+    }
   })
 
   it('未消化の講習/振替が残るときは件数を出す', () => {
@@ -244,7 +262,7 @@ describe('退塾後の行ロックと取り込みガード(オーナー確定 20
   })
 
   it('退塾の確認文は「元に戻せません」と伝え、一覧の呼び名も「退塾生徒」に揃える', () => {
-    const confirmation = buildStudentWithdrawConfirmation({ name: '山田 太郎', today: TODAY, currentWithdrawDate: '' })
+    const confirmation = buildStudentWithdrawConfirmation({ name: '山田 太郎', today: TODAY, currentWithdrawDate: '', autoSweepEnabled: true })
     expect(confirmation.message).toContain('退塾にすると元に戻せません')
     expect(confirmation.message).toContain('退塾生徒')
     expect(confirmation.message).not.toContain('非在籍生徒表示')

@@ -53,6 +53,13 @@ type BasicDataScreenProps = {
   classroomName?: string
   // フラグ parentPortalQr(featureRollout)の評価結果。OFF の教室では QR ボタン・モーダルを一切出さない(§H)。
   parentPortalQrEnabled?: boolean
+  /**
+   * フラグ studentWithdrawAutoSweep(featureRollout・開発用教室限定で先行・2026-09-21)の評価結果。
+   * この画面では**退塾確認モーダルの本文の出し分けだけ**に使う(OFF の教室では今日以降のコマ・記録は消えないので、
+   * 「消えます」と案内すると事実と食い違う)。「退塾生徒」への改名・退塾後の行ロック・削除文言・Excel 取り込みの
+   * 退塾済み行ガードは**フラグに依らず全教室で有効**なので、ここでゲートしてはいけない。
+   */
+  studentWithdrawAutoSweepEnabled?: boolean
   // 保存済みデータに居る生徒 id(App が保存完了のたびに更新)。居ない生徒の QR は保存待ちのスピナーにする。null=判定しない。
   savedStudentIds?: ReadonlySet<string> | null
   // callable issueStudentPortalToken の薄い wrapper(App が workspaceKey を注入)。未指定=リモート無し(QR 非表示)。
@@ -678,6 +685,14 @@ function pickParentPortalTokenFields(matched: StudentRow | null | undefined): Pi
     : { parentPortalToken: matched.parentPortalToken }
 }
 
+// 高3卒業の退塾日 自動入力の印(graduationWithdrawAutoFilledAt)も Excel の列に無いので、差分取込で一致行を
+// 丸ごと置き換えると消える。消えると「1 人 1 回だけ」が壊れ、室長が退塾日を消した生徒へ 3/31 が**もう一度**
+// 入る(applyGraduationWithdrawAutoFill の唯一のブレーキがこの印)。トークン写しと同じ扱いで引き継ぐ
+// (未設定なら空オブジェクト＝undefined キーを作らない)。
+function pickGraduationWithdrawAutoFillFields(matched: StudentRow | null | undefined): Pick<StudentRow, 'graduationWithdrawAutoFilledAt'> {
+  return matched?.graduationWithdrawAutoFilledAt ? { graduationWithdrawAutoFilledAt: matched.graduationWithdrawAutoFilledAt } : {}
+}
+
 export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDataBundle): BasicDataBundle {
   const managers = fallback.managers.slice()
   for (const importedManager of imported.managers) {
@@ -717,7 +732,12 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
     // 保護者用トークンの写し(spec-parent-portal.md §J-3)は Excel の列に無い(buildWorkbook にも出さない)ため、
     // 差分取込で一致行を丸ごと置き換えると消える。一致行から発行元教室タグと対で引き継ぐ。
     const candidateId = matchedStudent?.id ?? importedStudent.id
-    const nextStudent = { ...importedStudent, ...pickParentPortalTokenFields(matchedStudent), id: deletedStudentIds.has(candidateId) ? studentIdAllocator.next() : candidateId }
+    const nextStudent = {
+      ...importedStudent,
+      ...pickParentPortalTokenFields(matchedStudent),
+      ...pickGraduationWithdrawAutoFillFields(matchedStudent),
+      id: deletedStudentIds.has(candidateId) ? studentIdAllocator.next() : candidateId,
+    }
     mergedStudentIdByImportedId.set(importedStudent.id, nextStudent.id)
     const targetIndex = students.findIndex((row) => row.id === nextStudent.id)
     if (targetIndex >= 0) {
@@ -904,7 +924,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, studentWithdrawAutoSweepEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
@@ -1671,6 +1691,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
           today: getReferenceDateKey(new Date()),
           currentWithdrawDate: withdrawModalState.currentWithdrawDate,
           stock: withdrawModalState.stock,
+          // フラグ OFF の教室では今日以降のコマ・記録は消えない(通常授業の剥がしだけ)ので案内も変える。
+          autoSweepEnabled: studentWithdrawAutoSweepEnabled,
         })
         return (
           <div className="auto-assign-modal-overlay" role="presentation">

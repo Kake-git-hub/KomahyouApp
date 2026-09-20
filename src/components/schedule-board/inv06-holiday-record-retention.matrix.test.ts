@@ -1023,6 +1023,40 @@ describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ
     expect(released.ledgers).toEqual(before)
   })
 
+  // 行(m): (i) の兄弟＝**振無休(absent-no-makeup)**で休みにした在庫由来の振替を別日へ組み直してから解除する。
+  // ★兄弟監査(2026-09-21・レビュー指摘): 在庫へ返す集合 HOLIDAY_STOCK_RETURNABLE_STATUSES は
+  //   attended と absent-no-makeup の 2 つ。控え 'none' の別日検査を「出席済みだけ」で確かめると、
+  //   振無休側が抜けたときに気づけない(1 origin に 2 コマ＝INV-06 違反になる)。同じ形で 1 行固定する。
+  it('★(m) 兄弟: 振無休(absent-no-makeup)の在庫由来の振替を別日へ組み直してから解除でも、別日のコマを消して席へ戻す', () => {
+    const ledgers = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: '2026-09-30' }] } })
+    const weeks = [[
+      cellOn(RELEASE_DATE, 1, [{
+        id: 'desk-1',
+        teacher: '田中講師',
+        statusSlots: [statusEntry({
+          id: 'status-absent-no-makeup', status: 'absent-no-makeup', lessonType: 'makeup', dateKey: RELEASE_DATE, slotNumber: 1,
+          makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限',
+        }), null],
+      }]),
+      cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }]),
+    ]]
+    const set = runHolidaySet({ weeks, ledgers, ledgerOriginDatesByKey: { [STOCK_KEY]: ['2026-09-30'] } })
+    expect(set.ledgers).toEqual(ledgers) // 在庫由来は二重計上しない(再浮上に任せる)
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'none' })
+    // 再浮上した未消化を別日(10/9 2限)へ組み直した状態。
+    findDesk(set.weeks, ALT_DATE).lesson = {
+      id: 'alt-lesson',
+      studentSlots: [makeupOnAltDate({ makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限' }), null],
+    }
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(findDesk(released.nextWeeks, ALT_DATE).lesson).toBeUndefined()
+    expect(released.removedMakeups).toEqual([{ studentName: '大槻 太郎', dateKey: ALT_DATE, slotNumber: 2, lessonType: 'makeup' }])
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+    expect(released.restoredStudentNames).toEqual(['大槻 太郎'])
+    expect(released.ledgers).toEqual(ledgers) // 在庫中立(±0)
+  })
+
   it('★控えが無い記録(この改定より前のデータ)は復元しない: 巻き戻し量が決められないので安全側', () => {
     const ledgers = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: RELEASE_DATE }] } })
     const weeks = [[cellOn(RELEASE_DATE, 1, [{

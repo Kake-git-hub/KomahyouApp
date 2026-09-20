@@ -32,6 +32,14 @@ export type StudentWithdrawSweepTarget = {
  * 消す範囲の開始日 = max(退塾日, 今日[JST])。
  * ★昨日以前は請求・通常授業履歴の根拠なので絶対に触らない(退塾日が過去でも今日から)。
  * 退塾日が未来(日付入力で先の退塾日を入れた場合)はその日から。
+ *
+ * ★書式の扱い(2026-09-21・レビュー指摘): **厳格な `YYYY-MM-DD` 以外は `todayKey` に落とす**。
+ *   在籍判定 `isStudentWithdrawnOnDate` は `normalizeDateText` を通すので `2026/9/1` のような書式も
+ *   「退塾済み」と判定されうるが、ここでは正規化せずに今日へ落として構わない
+ *   (**検出済みの候補は必ず「今日 ≧ 退塾日」だから max の結果は同じ**)。
+ *   ⚠️ この割り切りが成り立つのは `collectStudentWithdrawSweepTargets` の候補に対してだけ。
+ *   「未来の退塾日から消す範囲を決める」など**別用途でこの関数を使わない**
+ *   (使うなら先に `normalizeDateText` を通すこと)。
  */
 export function resolveStudentWithdrawSweepFromDateKey(withdrawDateKey: string, todayKey: string = getJstTodayDateKey()): string {
   const normalized = (withdrawDateKey ?? '').trim()

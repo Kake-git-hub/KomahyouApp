@@ -70,6 +70,43 @@ describe('applyGraduationWithdrawAutoFill(4/1 になったら卒業した高3の
     expect(result.students.map((row) => row.withdrawDate)).toEqual(['', '', ''])
   })
 
+  // ★学年境界を生年月日で固定する(レビュー指摘 2026-09-21)。「高3以外は対象外」を 1 例だけで確かめると、
+  //   学年計算(resolveGradeNumberFromBirthDate: 4月始まり・1〜3月生まれは 1 学年上)の取り違えに気づけない。
+  //   ここが 1 年ずれると**在籍中の高3の退塾日が勝手に入り**、盤面の掃除まで走って今日以降のコマが消える。
+  //   基準日 2026-09-21(学年度 2026)で:
+  //     - 在籍中の高3(2008-05-01 / 早生まれ 2009-02-10) と 高2(2009-05-01) は絶対に入れない。
+  //     - 卒業済み(2007-05-01 / 早生まれ 2008-02-10) は 2026-03-31 が入る。
+  it('★学年境界: 2026-09-21 時点で在籍中の高3・高2には入れない。卒業済みの高3(早生まれ含む)には 3/31 が入る', () => {
+    const REFERENCE = '2026-09-21'
+    const stillEnrolled = [
+      student({ id: 'g3', birthDate: '2008-05-01' }), // 現役高3(2015 年度入学)
+      student({ id: 'g3-early', birthDate: '2009-02-10' }), // 早生まれの現役高3(同じ 2015 年度入学)
+      student({ id: 'g2', birthDate: '2009-05-01' }), // 高2
+    ]
+    const stillEnrolledResult = applyGraduationWithdrawAutoFill({ students: stillEnrolled, todayKey: REFERENCE, nowIso: NOW })
+    expect(stillEnrolledResult.changed).toBe(false)
+    expect(stillEnrolledResult.students.map((row) => row.withdrawDate)).toEqual(['', '', ''])
+
+    const graduated = [
+      student({ id: 'grad', birthDate: '2007-05-01' }), // 2014 年度入学 → 2026-03-31 卒業
+      student({ id: 'grad-early', birthDate: '2008-02-10' }), // 早生まれ(同じ 2014 年度入学)
+    ]
+    const graduatedResult = applyGraduationWithdrawAutoFill({ students: graduated, todayKey: REFERENCE, nowIso: NOW })
+    expect(graduatedResult.filledStudentIds).toEqual(['grad', 'grad-early'])
+    expect(graduatedResult.students.map((row) => row.withdrawDate)).toEqual([GRADUATION_DATE, GRADUATION_DATE])
+  })
+
+  // ⚠️ 既知の割り切り(2026-09-21 時点の既存挙動をそのまま固定): 学年計算は**月だけ**で早生まれを判定するため
+  //   (resolveEnrollmentYearFromBirthDateParts: month < 4 なら 1 学年上)、学校制度で早生まれ扱いになる **4月1日生まれ**は
+  //   1 学年下として扱われる = 卒業が 1 年遅れる。退塾日が入るのが遅れる側＝**安全側**なので直さない
+  //   (直すなら学年表示・請求・合体科目など resolveGradeNumberFromBirthDate の全利用箇所を一緒に見直すこと)。
+  it('4月1日生まれは既存挙動どおり 1 学年下扱い(卒業が 1 年遅れる安全側)', () => {
+    const aprilFirst = student({ id: 'april-1', birthDate: '2008-04-01' })
+    const result = applyGraduationWithdrawAutoFill({ students: [aprilFirst], todayKey: '2026-09-21', nowIso: NOW })
+    expect(result.changed).toBe(false) // 同学年の 2008-02-10 は既に卒業済みだが、4/1 生まれはまだ高3扱い
+    expect(resolveGraduationWithdrawDate('2008-04-01')).toBe('2027-03-31')
+  })
+
   it('入力配列は書き換えない(純関数)。対象が複数なら全員に入る', () => {
     const students = [student(), student({ id: 's002', birthDate: '2006-05-01' }), student({ id: 's003', birthDate: '2012-05-01' })]
     const snapshot = JSON.parse(JSON.stringify(students))
