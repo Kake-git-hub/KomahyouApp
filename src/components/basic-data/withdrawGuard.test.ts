@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { isActiveOnDate, isStudentDeletedFromApp, resolveManagedRosterStatus, resolveManagedStudentRosterStatus } from './basicDataModel'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, markStudentDeletedFromApp } from './withdrawGuard'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp, preserveWithdrawnStudentRowsOnImport } from './withdrawGuard'
 
 const TODAY = '2026-09-13'
 
@@ -106,8 +106,9 @@ describe('buildStudentWithdrawConfirmation', () => {
     const confirmation = buildStudentWithdrawConfirmation({ name: '生徒A', today: TODAY, currentWithdrawDate: '' })
     expect(confirmation.title).toBe('生徒A を退塾にします')
     expect(confirmation.message).toContain(TODAY)
-    expect(confirmation.message).toContain('削除されず残ります')
-    expect(confirmation.message).toContain('非在籍生徒表示')
+    expect(confirmation.message).toContain('削除されず「退塾生徒」に残ります')
+    // 2026-09-20 夜 改定: 一覧の呼び名は「退塾生徒」(旧「非在籍生徒表示」へ戻さない)。
+    expect(confirmation.message).toContain('退塾生徒')
     // 2026-09-15 改定: 「本日まで在籍扱い」とは言わず、本日から盤面の通常授業などから外れると伝える。
     expect(confirmation.message).not.toContain('本日まで在籍')
     expect(confirmation.message).toContain('本日から非在籍')
@@ -117,7 +118,8 @@ describe('buildStudentWithdrawConfirmation', () => {
     expect(confirmation.message).toContain('今日以降の講習・振替などのコマと記録も消えます')
     expect(confirmation.message).toContain('未消化へは戻りません')
     expect(confirmation.message).toContain('昨日以前の記録は残ります')
-    expect(confirmation.message).toContain('消えたコマは戻りません')
+    // 2026-09-20 夜 改定: 退塾後は退塾日も編集できない=取り消せないので「元に戻せません」と伝える。
+    expect(confirmation.message).toContain('退塾にすると元に戻せません')
     expect(confirmation.overwriteNote).toBeNull()
     expect(confirmation.stockWarning).toBeNull()
   })
@@ -176,6 +178,21 @@ describe('基本データ画面: 生徒は削除せず退塾ボタン（オー�
     expect(source).toContain('markStudentDeletedFromApp(current, id, new Date().toISOString())')
   })
 
+  it('★退塾生徒(非在籍)の行は「編集」ボタンを出さず、入力も出さない(オーナー確定 2026-09-20 夜)', () => {
+    // 退塾すると今日以降の盤面の痕跡が消える=元に戻せないので、退塾日も含めて編集不可。残す操作は「削除」だけ。
+    expect(source).toContain('const isStudentRowLocked = (row: StudentRow) => isStudentRowLockedByWithdrawal(row, todayReferenceDate)')
+    expect(source).toContain("const isStudentRowInputVisible = (row: StudentRow) => isRowEditing('student', row.id) && !isStudentRowLocked(row)")
+    expect(source).toContain('{isStudentRowLocked(row) ? null : (')
+    // 生徒行のセルはすべて lock を通した判定を使う(素の isRowEditing で入力を出す穴を残さない)。
+    expect(source.match(/isStudentRowInputVisible\(row\)/g)).toHaveLength(7)
+    expect(source).not.toMatch(/\{isRowEditing\('student', row\.id\)\r?\n {22}\?/)
+    // 文言は「退塾生徒」(testid は変えない)。
+    expect(source).toContain('data-testid="basic-data-student-roster-withdrawn">退塾生徒</button>')
+    expect(source).toContain("'退塾生徒を氏名・表示名で絞り込み'")
+    expect(source).toContain("'退塾生徒はまだありません。'")
+    expect(source).not.toContain('非在籍生徒表示')
+  })
+
   it('削除ボタンは非在籍一覧だけに出し、在籍/非在籍の両一覧から削除済みを外す', () => {
     expect(source).toContain("studentRosterView === 'withdrawn' && canDeleteStudentFromApp(row, todayReferenceDate)")
     expect(source.match(/filterStudentsVisibleInBasicData\(students\)\.filter\(/g)).toHaveLength(2)
@@ -184,5 +201,53 @@ describe('基本データ画面: 生徒は削除せず退塾ボタン（オー�
   it('退塾ボタンが applyStudentWithdrawToday で退塾日を記録する', () => {
     expect(source).toContain('basic-data-withdraw-student-')
     expect(source).toContain('applyStudentWithdrawToday(current, withdrawModalState.id, today)')
+  })
+})
+
+describe('退塾後の行ロックと取り込みガード(オーナー確定 2026-09-20 夜)', () => {
+  const ROW = { id: 's001', withdrawDate: '', birthDate: '2012-05-01' }
+
+  it('在籍中(退塾日が未来)は編集できる。退塾日当日以降(非在籍)はロックする', () => {
+    expect(isStudentRowLockedByWithdrawal({ ...ROW, withdrawDate: '' }, TODAY)).toBe(false)
+    expect(isStudentRowLockedByWithdrawal({ ...ROW, withdrawDate: '未定' }, TODAY)).toBe(false)
+    expect(isStudentRowLockedByWithdrawal({ ...ROW, withdrawDate: '2026-10-31' }, TODAY)).toBe(false)
+    // 退塾日当日から非在籍(共有判定 resolveManagedStudentRosterStatus と同じ境界)。
+    expect(isStudentRowLockedByWithdrawal({ ...ROW, withdrawDate: TODAY }, TODAY)).toBe(true)
+    expect(isStudentRowLockedByWithdrawal({ ...ROW, withdrawDate: '2026-08-31' }, TODAY)).toBe(true)
+    // 高3卒業(退塾日が未入力でも非在籍)もロックする。
+    expect(isStudentRowLockedByWithdrawal({ ...ROW, birthDate: '2000-05-01' }, TODAY)).toBe(true)
+  })
+
+  it('Excel 差分取り込みは退塾済みの行を変更しない(退塾日が消える/変わる裏口を作らない)', () => {
+    const current = [
+      { id: 's001', withdrawDate: '2026-08-31', birthDate: '2012-05-01', name: '退塾済み' },
+      { id: 's002', withdrawDate: '', birthDate: '2012-05-01', name: '在籍' },
+    ]
+    const imported = [
+      { id: 's001', withdrawDate: '', birthDate: '2012-05-01', name: '退塾済み(取り込みで退塾日が消えた)' },
+      { id: 's002', withdrawDate: '2026-12-31', birthDate: '2012-05-01', name: '在籍(更新)' },
+      { id: 's003', withdrawDate: '', birthDate: '2013-05-01', name: '新規' },
+    ]
+    const merged = preserveWithdrawnStudentRowsOnImport(imported, current, TODAY)
+    expect(merged[0]).toBe(current[0]) // 退塾済みは取り込み前のまま(同じ参照)
+    expect(merged[1]).toEqual(imported[1]) // 在籍中は取り込みどおり更新
+    expect(merged[2]).toEqual(imported[2])
+  })
+
+  it('取り込み結果に無い退塾済みの行は落とさずに残す(名簿から消える方が危険=安全側)', () => {
+    const current = [{ id: 's001', withdrawDate: '2026-08-31', birthDate: '2012-05-01' }]
+    const merged = preserveWithdrawnStudentRowsOnImport([], current, TODAY)
+    expect(merged).toEqual([current[0]])
+    // 退塾済みが 1 人も居なければ取り込み結果そのまま(余計なコピー以外の変化なし)。
+    expect(preserveWithdrawnStudentRowsOnImport([{ id: 's002', withdrawDate: '', birthDate: '2012-05-01' }], [], TODAY))
+      .toEqual([{ id: 's002', withdrawDate: '', birthDate: '2012-05-01' }])
+  })
+
+  it('退塾の確認文は「元に戻せません」と伝え、一覧の呼び名も「退塾生徒」に揃える', () => {
+    const confirmation = buildStudentWithdrawConfirmation({ name: '山田 太郎', today: TODAY, currentWithdrawDate: '' })
+    expect(confirmation.message).toContain('退塾にすると元に戻せません')
+    expect(confirmation.message).toContain('退塾生徒')
+    expect(confirmation.message).not.toContain('非在籍生徒表示')
+    expect(confirmation.message).not.toContain('退塾日を消してください')
   })
 })

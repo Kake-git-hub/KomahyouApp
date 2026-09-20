@@ -227,7 +227,19 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   **昨日以前のセルは同じ参照**・他の生徒の席／出欠記録／`manualTeacher`／メモは不変（INV-01/INV-02）／スイープ後に
   テンプレ再マージを 2 回通しても痕跡が湧かない（INV-03）。在庫側は INV-06 の
   `inv06-makeup-absence-stock.matrix.test.ts` に 3 件（誤増しない・誤減もしない）。権威は純関数
-  `computeStudentWithdrawSweep` と一過性コマンド `studentWithdrawSweep.ts`（再マージ・読込の経路へ混ぜない）。
+  `computeStudentWithdrawSweep`（再マージ・読込の経路へ混ぜない）。
+  **2026-09-20 夜 改定（オーナー確定）**：起こし方が「退塾ボタンが一過性コマンドを出す」から
+  **盤面側の検出**（`collectStudentWithdrawSweepTargets`・`studentWithdrawSweep.ts`）へ一般化し、キューは撤去した
+  （**日付入力で退塾日を入れた場合も同じ消去が黙って走る**／未来の退塾日はその日を過ぎてから最初に開いた時点）。
+  同日に 2 件追加＝**日付入力での退塾日も検出して掃除する**／**掃除するものが無ければ何も返さない**
+  （＝盤面を開いただけで未保存にしない。未来の退塾日・昨日以前だけの痕跡・在籍中の生徒は対象 0）。
+  安全条件はテンプレ編集中は走らせない・教室切替直後の窓では走らせない
+  （`isEditingStateLoadedForActingClassroom` ＋ `applyClassroomPayloadToState` が名簿／盤面／`boardMountKey` を
+  同じ更新バッチで差し替えるという不変条件を wiring テストで固定・INV-08）・生徒の特定は managedStudentId 優先で
+  名簿で一意な名前のみ・冪等（掃除後は対象 0）。
+  併せて **高3卒業の退塾日 自動入力**（`applyGraduationWithdrawAutoFill`・4/1 に 3/31 を実データで入れる・1 人 1 回だけ・
+  既存の退塾日は上書きしない）を追加。**判定関数（`isActiveOnDate` 等）は無改変でデータだけを入れる**ため、
+  共有判定のロックテストは維持する（`graduationWithdraw.test.ts`）。
   2026-09-15 に **退塾生徒の剥がし × 手動編集** 6 件を追加（確認リスト v1.5.527 b-2・オーナー決定＝生徒の退塾日は
   「その日から非在籍」。`stripWithdrawnStudentsFromBoardWeek` は**テンプレ由来の通常授業だけ**を max(退塾日, 今日[JST]) 以降で
   外す）＝出欠記録のある机の片側（記録と講師は残る）／manualTeacher の机が空になっても講師は残る（非 manual は外れる＝
@@ -473,14 +485,14 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
   - 固定は `inv06-holiday-record-retention.matrix.test.ts` の新しい行（往復の台帳完全一致・別日振替の削除・
     出欠記録つきは見送り・席が埋まっていれば見送り・absent/moved 不変・解除→再マージ 2 回で不変・フラグ OFF 不変）と
     `holidayReleaseRestoration.wiring.test.ts`（ハンドラ配線）。仕様は `docs/spec-makeup-stock.md` §B-2-2b / §B-2-2c。
-- **退塾スイープ（2026-09-20 オーナー確定・確認リスト b-2）**：「退塾」ボタンで消す今日以降の痕跡は
+- **退塾スイープ（2026-09-20 オーナー確定・確認リスト b-2/b-3。同日夜に「退塾ボタン」限定から**退塾した生徒の検出**へ一般化）**：消す今日以降の痕跡は
   **未消化へ戻さない**（台帳 `manualMakeupAdjustments` / `manualLectureStockCounts` / 希望数へ一切足さない・
   「破棄前に台帳へ確定」もしない）。ただし**消したことで在庫が湧く分**は抑止（`suppressedMakeupOrigins`）へ積む
   ＝振替コマは振替元日、通常授業は元の通常授業日（1 コマ削除 `handleDeleteStudent`・全コマ削除 Issue #58 と同じ流儀）。
   `absent` / `moved` / `holiday` の記録には積まない（立っている在庫・移動先が持つ会計を消す誤減になる）。
   講習在庫は提出希望数 ± デルタ台帳だけで決まり盤面を走査しないので、席を消しても増えない。
-  固定は `inv06-makeup-absence-stock.matrix.test.ts`（3 件）と `studentWithdrawSweep.test.ts`。仕様は
-  `docs/spec-basic-data.md` §B。
+  固定は `inv06-makeup-absence-stock.matrix.test.ts`（3 件）と `studentWithdrawSweep.test.ts`
+  （検出・冪等・メッセージ・配線）。仕様は `docs/spec-basic-data.md` §B。
 - **違反履歴**（transcribe）：
   - makeup-stock-miscount 群（残数が実態と食い違う）：
     - `a12ee32` / v1.5.65 … stale closure 二重減算。
@@ -813,7 +825,7 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
 - **例外（2026-09-15・v1.5.528）**：テンプレ固定日前の週もテンプレ編集では変わらないが、**生徒の退塾（名簿変更）**では
   max(退塾日, 今日[JST]) 以降のテンプレ由来通常授業だけが `stripWithdrawnStudentsFromBoardWeek` で剥がれる
   （テンプレ再マージではない・昨日以前は不変）。詳細と担保は INV-02 節の「退塾生徒の剥がし × 手動編集」を参照。
-  **2026-09-20 追補**：同じく「退塾」ボタン（ユーザー操作の一過性コマンド＝退塾スイープ）は、固定日の前後を問わず
+  **2026-09-20 追補**：同じく退塾スイープ（同日夜の改定でユーザー操作の命令ではなく**退塾した生徒の検出**で起こる）は、固定日の前後を問わず
   max(退塾日, 今日[JST]) 以降のその生徒の手置きのコマ・出欠記録も消す（**昨日以前は不変**なので固定日以前の
   コマ表は変わらない。テンプレ編集による変化ではない）。
 - **違反履歴**（transcribe）：

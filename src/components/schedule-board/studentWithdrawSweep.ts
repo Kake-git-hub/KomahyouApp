@@ -1,35 +1,31 @@
-// 基本データの「退塾」ボタン → 盤面の痕跡消し(退塾スイープ)の一過性コマンド(オーナー確定 2026-09-20・確認リスト b-2)。
+// 退塾した生徒の「今日以降の盤面の痕跡」を消す掃除(退塾スイープ)の**検出**を担う純関数群。
 //
 // 何を解くか: 退塾にした生徒の**今日以降**の盤面の痕跡(手で置いた講習・振替・増コマ・体験・手動追加・移動の席と、
 // 今日以降の出欠記録)を消し切る。通常授業(テンプレ由来)は従来どおり stripWithdrawnStudentsFromBoardWeek が剥がす。
 //
-// ★設計の要点(Issue #46 と同型の再発火を防ぐ):
-//   - 基本データ画面を開いている間は盤面が未マウントなので、命令は **App の state のキュー**に積む。
-//     盤面はマウント後の effect でキューの先頭を 1 件ずつ処理し、結果を App へ返す。App は結果を受けて
-//     **必ずその requestId をキューから外す**(consumeStudentWithdrawSweepRequest)。
-//   - 重複ガードを「盤面ローカル ref だけ」に置くと盤面の再マウントで消えて再発火する。App 側の消費が正本で、
-//     盤面 ref(processedStudentWithdrawSweepIdRef)は同一マウント内の二重実行を防ぐ副ガード。
-//   - 再マージ effect や読込経路に在庫・盤面の破壊的処理を混ぜない(毎回走ると INV-03/INV-06 違反になる)。
-//     この命令はユーザー操作(退塾ボタン)1 回につき 1 回だけ発行される。
+// ★設計の改定(オーナー確定 2026-09-20 夜・確認リスト b-2/b-3):
+//   従来は「退塾ボタンが一過性コマンド(キュー)を出し、盤面がそれを 1 件処理する」方式だった。オーナー確定で
+//   **日付入力で退塾日を直接入れた場合も、未来の退塾日がその日を過ぎた場合も、同じ消去が黙って走る**ことになったため、
+//   「命令を出す」方式をやめ、**盤面側が『退塾日を過ぎているのに痕跡が残る生徒』を検出して掃除する**方式へ一般化した。
+//   - 検出は純関数 `collectStudentWithdrawSweepTargets`(名簿 × 盤面の 1 パス)。対象 0 なら呼び出し側は何もしない
+//     (開いただけで未保存にならない)。
+//   - 発火点は盤面のマウント時と `students` 変更時(基本データから戻った時)。キュー・requestId・消費は**不要になったので撤去**
+//     （二重経路を残さない。Issue #46 型の「一過性コマンドが再マウントで再発火する」問題自体が消える）。
+//   - 冪等: 掃除し終えた生徒は痕跡が無くなるので 2 回目の検出で対象 0。
+// ★境界は既存の在籍判定に必ず合わせる(`isStudentWithdrawnOnDate`: **退塾日当日から非在籍**)。
+//   消す範囲の開始日 = max(退塾日, 今日[JST])。退塾日が未来ならその日が来てから(＝非在籍になってから)初めて対象になる。
+import { getStudentDisplayName, isStudentWithdrawnOnDate, type StudentRow } from '../basic-data/basicDataModel'
 import { getJstTodayDateKey } from '../../utils/jstDate'
+import { buildUniqueNameOwnerMap, resolveBoardStudentOwnerId } from './parentAbsenceTarget'
+import type { SlotCell, StudentEntry } from './types'
 
-export type StudentWithdrawSweepRequest = {
-  requestId: number
+export type StudentWithdrawSweepTarget = {
   /** 名簿の生徒 id(managedStudentId と同じ値)。 */
   studentId: string
   /** 室長へのメッセージ用の表示名(会計には使わない)。 */
   displayName: string
   /** この日以降の痕跡を消す = max(退塾日, 今日[JST])。 */
   fromDateKey: string
-}
-
-export type StudentWithdrawSweepResult = {
-  requestId: number
-  studentId: string
-  /** 消した席(studentSlots)の数。 */
-  removedSeatCount: number
-  /** 消した出欠記録(statusSlots)の数。 */
-  removedStatusCount: number
 }
 
 /**
@@ -44,47 +40,71 @@ export function resolveStudentWithdrawSweepFromDateKey(withdrawDateKey: string, 
 }
 
 /**
- * キューへ積む。複数の生徒を続けて退塾にしても取りこぼさないため配列で持つ。
- * 同じ生徒×同じ開始日が既に待っていれば積まない(同じ掃除を 2 回走らせない)。
+ * 掃除すべき生徒を盤面と名簿から検出する。
+ * 条件は次の 3 つを**すべて**満たすこと:
+ *   1. 退塾日が入っていて、今日[JST]時点で非在籍(`isStudentWithdrawnOnDate`。未来の退塾日はまだ対象外)。
+ *   2. その生徒の席 or 出欠記録が、消去開始日(= max(退塾日, 今日))**以降**のセルに残っている。
+ *   3. 生徒の同一性が決められる: `managedStudentId` 一致、無い席は**名簿で一意な名前**だけ
+ *      (同名 2 人は拾わない = `buildUniqueNameOwnerMap`。sNNN は教室ごと独立採番なので名前だけで別人を消さない)。
+ * 昨日以前の痕跡だけの生徒は対象にしない(触らないので掃除の必要が無い)。
  */
-export function enqueueStudentWithdrawSweepRequest(
-  current: readonly StudentWithdrawSweepRequest[],
-  request: StudentWithdrawSweepRequest,
-): StudentWithdrawSweepRequest[] {
-  if (current.some((entry) => entry.studentId === request.studentId && entry.fromDateKey === request.fromDateKey)) {
-    return [...current]
+export function collectStudentWithdrawSweepTargets(params: {
+  weeks: ReadonlyArray<ReadonlyArray<SlotCell>>
+  students: ReadonlyArray<StudentRow>
+  todayKey?: string
+}): StudentWithdrawSweepTarget[] {
+  const todayKey = params.todayKey ?? getJstTodayDateKey()
+  const candidates = new Map<string, StudentWithdrawSweepTarget>()
+  for (const student of params.students) {
+    if (!student.id) continue
+    if (!isStudentWithdrawnOnDate(student.withdrawDate, todayKey)) continue
+    candidates.set(student.id, {
+      studentId: student.id,
+      displayName: getStudentDisplayName(student),
+      fromDateKey: resolveStudentWithdrawSweepFromDateKey(student.withdrawDate, todayKey),
+    })
   }
-  return [...current, request]
+  if (candidates.size === 0) return []
+
+  const ownerByName = buildUniqueNameOwnerMap(params.students)
+  const foundStudentIds = new Set<string>()
+  const markIfTarget = (entry: Pick<StudentEntry, 'managedStudentId' | 'name'> | null | undefined, cellDateKey: string) => {
+    if (!entry) return
+    const ownerId = resolveBoardStudentOwnerId(entry, ownerByName)
+    if (!ownerId || foundStudentIds.has(ownerId)) return
+    const candidate = candidates.get(ownerId)
+    if (!candidate) return
+    if (cellDateKey < candidate.fromDateKey) return
+    foundStudentIds.add(ownerId)
+  }
+
+  for (const week of params.weeks) {
+    for (const cell of week) {
+      if (!cell.dateKey) continue
+      for (const desk of cell.desks) {
+        for (const seat of desk.lesson?.studentSlots ?? []) markIfTarget(seat, cell.dateKey)
+        for (const statusEntry of desk.statusSlots ?? []) markIfTarget(statusEntry, cell.dateKey)
+      }
+      if (foundStudentIds.size === candidates.size) break
+    }
+  }
+
+  // 名簿順(＝入力順)で返す。掃除の適用順とメッセージの並びを決定的にするため。
+  return params.students
+    .map((student) => candidates.get(student.id))
+    .filter((target): target is StudentWithdrawSweepTarget => Boolean(target && foundStudentIds.has(target.studentId)))
 }
 
-/** 盤面がいま処理すべき 1 件(キューの先頭)。空なら null。 */
-export function selectStudentWithdrawSweepRequest(
-  queue: readonly StudentWithdrawSweepRequest[] | null | undefined,
-): StudentWithdrawSweepRequest | null {
-  return queue?.[0] ?? null
-}
-
-/** 同一マウント内の二重実行を防ぐ副ガード(parentAbsenceRequest と同じ作法)。 */
-export function shouldProcessStudentWithdrawSweepRequest(
-  request: StudentWithdrawSweepRequest | null | undefined,
-  processedRequestId: number | null,
-): boolean {
-  if (!request) return false
-  return processedRequestId !== request.requestId
-}
-
-/** 処理し終えた 1 件をキューから外す(より新しい命令は消さない)。 */
-export function consumeStudentWithdrawSweepRequest(
-  current: readonly StudentWithdrawSweepRequest[],
-  processedRequestId: number,
-): StudentWithdrawSweepRequest[] {
-  return current.filter((entry) => entry.requestId !== processedRequestId)
-}
-
-/** 室長へ出す結果メッセージ。0 件でも「痕跡は無かった」と分かるようにする。 */
-export function buildStudentWithdrawSweepMessage(displayName: string, result: Pick<StudentWithdrawSweepResult, 'removedSeatCount' | 'removedStatusCount'>): string {
-  const name = displayName.trim() || '退塾した生徒'
-  const total = result.removedSeatCount + result.removedStatusCount
-  if (total === 0) return `${name} の今日以降の盤面のコマ・記録はありませんでした。`
-  return `${name} の今日以降のコマ ${result.removedSeatCount} 件・記録 ${result.removedStatusCount} 件を盤面から消しました(未消化へは戻していません)。`
+/** 室長へ出す結果メッセージ。掃除で何かを消したときだけ出す(0 件のときは呼ばない = 黙って何もしない)。 */
+export function buildStudentWithdrawSweepMessage(
+  results: ReadonlyArray<{ displayName: string; removedSeatCount: number; removedStatusCount: number }>,
+): string {
+  const removedSeatCount = results.reduce((total, entry) => total + entry.removedSeatCount, 0)
+  const removedStatusCount = results.reduce((total, entry) => total + entry.removedStatusCount, 0)
+  if (removedSeatCount + removedStatusCount === 0) return ''
+  const names = results
+    .filter((entry) => entry.removedSeatCount + entry.removedStatusCount > 0)
+    .map((entry) => entry.displayName.trim() || '退塾した生徒')
+  const subject = names.length === 1 ? names[0] : `退塾した生徒 ${names.length} 名(${names.join('・')})`
+  return `${subject} の今日以降のコマ ${removedSeatCount} 件・記録 ${removedStatusCount} 件を盤面から消しました(未消化へは戻していません)。保存してください。`
 }

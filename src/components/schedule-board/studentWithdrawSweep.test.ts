@@ -1,10 +1,14 @@
-// 退塾スイープ(基本データの「退塾」→ 盤面の痕跡消し・オーナー確定 2026-09-20・確認リスト b-2 要改善)。
+// 退塾スイープ(退塾した生徒の今日以降の盤面の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3)。
+//
+// 2026-09-20 夜の改定: 「退塾ボタンが一過性コマンドを出す」方式 → **盤面が『退塾日を過ぎているのに痕跡が残る
+// 生徒』を検出して掃除する**方式(日付入力で退塾日を入れた場合・未来の退塾日がその日を過ぎた場合も同じ消去が走る)。
 //
 // 保証(docs/spec-invariants.md):
 //   INV-06 在庫の実態一致 … 痕跡を消しても未消化(振替/講習)へは戻さず、消したことで在庫が湧きもしない。
-//   INV-03 操作の冪等     … 一過性コマンドは 1 回だけ適用される(再マウント・2 回流しで結果が変わらない)。
+//   INV-03 操作の冪等     … 掃除は冪等(2 回目は対象 0・痕跡が無ければ何も変えない)。
 //   INV-02 手動編集の永続化 … 昨日以前の盤面と他の生徒の手動編集は触らない。
 //   INV-01 講師帰属の一意 … 席が空いた机の講師は既存の削除系と同じく触らない。
+//   INV-08 教室分離 … 教室切替直後の窓では走らせない(検出は同じ教室の名簿 × 盤面でだけ行う)。
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -13,12 +17,8 @@ import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './typ
 import { computeStudentWithdrawSweep, stripWithdrawnStudentsFromBoardWeek } from './ScheduleBoardScreen'
 import {
   buildStudentWithdrawSweepMessage,
-  consumeStudentWithdrawSweepRequest,
-  enqueueStudentWithdrawSweepRequest,
+  collectStudentWithdrawSweepTargets,
   resolveStudentWithdrawSweepFromDateKey,
-  selectStudentWithdrawSweepRequest,
-  shouldProcessStudentWithdrawSweepRequest,
-  type StudentWithdrawSweepRequest,
 } from './studentWithdrawSweep'
 
 const YESTERDAY = '2026-09-19'
@@ -133,7 +133,7 @@ function ownedEntries(weeks: SlotCell[][]) {
   return found
 }
 
-describe('退塾スイープの開始日とキュー(一過性コマンド)', () => {
+describe('退塾スイープの開始日と検出(collectStudentWithdrawSweepTargets)', () => {
   it('開始日は max(退塾日, 今日[JST])。過去の退塾日でも昨日以前は対象にしない', () => {
     expect(resolveStudentWithdrawSweepFromDateKey('2026-08-01', TODAY)).toBe(TODAY)
     expect(resolveStudentWithdrawSweepFromDateKey(TODAY, TODAY)).toBe(TODAY)
@@ -143,29 +143,76 @@ describe('退塾スイープの開始日とキュー(一過性コマンド)', ()
     expect(resolveStudentWithdrawSweepFromDateKey('', TODAY)).toBe(TODAY)
   })
 
-  it('複数人を続けて退塾にしても取りこぼさない(キュー)。同じ生徒×同じ開始日は積み直さない', () => {
-    const first: StudentWithdrawSweepRequest = { requestId: 1, studentId: 'sW', displayName: '退塾', fromDateKey: TODAY }
-    const second: StudentWithdrawSweepRequest = { requestId: 2, studentId: 'sB', displayName: '在籍', fromDateKey: TODAY }
-    const queue = enqueueStudentWithdrawSweepRequest(enqueueStudentWithdrawSweepRequest([], first), second)
-    expect(queue.map((entry) => entry.requestId)).toEqual([1, 2])
-    const again = enqueueStudentWithdrawSweepRequest(queue, { ...first, requestId: 3 })
-    expect(again.map((entry) => entry.requestId)).toEqual([1, 2])
-    // 先頭から 1 件ずつ処理し、処理した分だけキューから外す(Issue #46 同型の再発火防止)。
-    expect(selectStudentWithdrawSweepRequest(queue)?.requestId).toBe(1)
-    expect(shouldProcessStudentWithdrawSweepRequest(queue[0], null)).toBe(true)
-    expect(shouldProcessStudentWithdrawSweepRequest(queue[0], 1)).toBe(false)
-    const rest = consumeStudentWithdrawSweepRequest(queue, 1)
-    expect(rest.map((entry) => entry.requestId)).toEqual([2])
-    expect(selectStudentWithdrawSweepRequest([])).toBeNull()
-    expect(shouldProcessStudentWithdrawSweepRequest(null, null)).toBe(false)
+  it('★退塾日当日から対象(共有の在籍判定 isStudentWithdrawnOnDate と同じ境界)。前日は対象外', () => {
+    const weeks = [[cell(TODAY, [desk({ lesson: lesson([seat(), null]) })])]]
+    // 退塾日 = 今日 ⇒ 今日から非在籍なので今日以降を掃除する。
+    expect(collectStudentWithdrawSweepTargets({ weeks, students: roster, todayKey: TODAY }))
+      .toEqual([{ studentId: 'sW', displayName: '退塾', fromDateKey: TODAY }])
+    // 退塾日の前日(まだ在籍)は対象外。境界を「翌日から」へ動かすと在籍判定とずれるので固定する。
+    expect(collectStudentWithdrawSweepTargets({ weeks, students: roster, todayKey: YESTERDAY })).toEqual([])
   })
 
-  it('結果メッセージは件数を出し、0 件でも「痕跡が無かった」と分かる', () => {
-    expect(buildStudentWithdrawSweepMessage('退塾', { removedSeatCount: 0, removedStatusCount: 0 })).toContain('ありませんでした')
-    const message = buildStudentWithdrawSweepMessage('退塾', { removedSeatCount: 2, removedStatusCount: 1 })
-    expect(message).toContain('コマ 2 件')
-    expect(message).toContain('記録 1 件')
-    expect(message).toContain('未消化へは戻していません')
+  it('未来の退塾日は対象外(その日を過ぎてから最初に開いた時点で対象になる)', () => {
+    const students = [{ ...withdrawnStudent, withdrawDate: TOMORROW }, stayingStudent]
+    const weeks = [[cell(TOMORROW, [desk({ lesson: lesson([seat(), null]) })])]]
+    expect(collectStudentWithdrawSweepTargets({ weeks, students, todayKey: TODAY })).toEqual([])
+    expect(collectStudentWithdrawSweepTargets({ weeks, students, todayKey: TOMORROW }))
+      .toEqual([{ studentId: 'sW', displayName: '退塾', fromDateKey: TOMORROW }])
+  })
+
+  it('昨日以前にしか痕跡が無い生徒・在籍中の生徒は対象にしない(開いただけで未保存にしない)', () => {
+    const weeks = [[
+      cell(YESTERDAY, [desk({ lesson: lesson([seat(), null]), statusSlots: [status({ dateKey: YESTERDAY }), null] })]),
+      cell(TODAY, [desk({ id: 'other', lesson: lesson([seat({ id: 'stay', managedStudentId: 'sB', name: '在籍 花子' }), null]) })]),
+    ]]
+    expect(collectStudentWithdrawSweepTargets({ weeks, students: roster, todayKey: TODAY })).toEqual([])
+  })
+
+  it('managedStudentId の無い古い席は名簿で一意な名前で拾う。同名 2 人は拾わない(取り違え防止)', () => {
+    const weeks = [[cell(TODAY, [desk({ lesson: lesson([seat({ managedStudentId: undefined }), null]) })])]]
+    expect(collectStudentWithdrawSweepTargets({ weeks, students: roster, todayKey: TODAY }).map((target) => target.studentId)).toEqual(['sW'])
+    const duplicatedRoster = [withdrawnStudent, { ...stayingStudent, id: 'sC', name: '退塾 太郎', displayName: '退塾' }]
+    expect(collectStudentWithdrawSweepTargets({ weeks, students: duplicatedRoster, todayKey: TODAY })).toEqual([])
+  })
+
+  it('複数人が退塾していれば名簿順にまとめて返し、掃除を通すと 2 回目は対象 0(冪等)', () => {
+    const students = [withdrawnStudent, { ...stayingStudent, withdrawDate: TODAY }]
+    const weeks = [[cell(TODAY, [
+      desk({ lesson: lesson([seat(), seat({ id: 'stay-seat', managedStudentId: 'sB', name: '在籍 花子' })]) }),
+    ])]]
+    const targets = collectStudentWithdrawSweepTargets({ weeks, students, todayKey: TODAY })
+    expect(targets.map((target) => target.studentId)).toEqual(['sW', 'sB'])
+
+    // 盤面側と同じ「対象者ぶんを順に適用して 1 回で確定」の流れ。
+    let nextWeeks = weeks
+    let suppressed: Record<string, Array<{ dateKey: string; slotNumber?: number }>> = {}
+    for (const target of targets) {
+      const result = computeStudentWithdrawSweep({
+        weeks: nextWeeks,
+        students,
+        studentId: target.studentId,
+        fromDateKey: target.fromDateKey,
+        suppressedMakeupOrigins: suppressed,
+        resolveStockId,
+      })
+      nextWeeks = result.nextWeeks
+      suppressed = result.nextSuppressedMakeupOrigins
+    }
+    expect(nextWeeks[0][0].desks[0].lesson).toBeUndefined()
+    expect(collectStudentWithdrawSweepTargets({ weeks: nextWeeks, students, todayKey: TODAY })).toEqual([])
+  })
+
+  it('結果メッセージは合計件数と名前を出す(1 人・複数人)。0 件なら空文字(=何も知らせない)', () => {
+    expect(buildStudentWithdrawSweepMessage([{ displayName: '退塾', removedSeatCount: 0, removedStatusCount: 0 }])).toBe('')
+    const single = buildStudentWithdrawSweepMessage([{ displayName: '退塾', removedSeatCount: 2, removedStatusCount: 1 }])
+    expect(single).toContain('退塾 の今日以降のコマ 2 件・記録 1 件')
+    expect(single).toContain('未消化へは戻していません')
+    const many = buildStudentWithdrawSweepMessage([
+      { displayName: '退塾', removedSeatCount: 1, removedStatusCount: 0 },
+      { displayName: '在籍', removedSeatCount: 2, removedStatusCount: 3 },
+    ])
+    expect(many).toContain('退塾した生徒 2 名(退塾・在籍)')
+    expect(many).toContain('コマ 3 件・記録 3 件')
   })
 })
 
@@ -314,42 +361,38 @@ function sliceFrom(source: string, marker: string, length: number): string {
 }
 
 describe('退塾スイープの配線', () => {
-  it('基本データは盤面を直接触らず、退塾の確定時に一過性コマンドを 1 回だけ依頼する', () => {
+  it('基本データは盤面を直接触らず、名簿に退塾日を記録するだけ(命令を送る経路を作らない)', () => {
     const confirm = sliceFrom(BASIC_TSX, 'const confirmStudentWithdraw = () => {', 1400)
     expect(confirm).toContain('applyStudentWithdrawToday(current, withdrawModalState.id, today)')
-    expect(confirm).toContain('onRequestStudentWithdrawSweep?.({ studentId: withdrawModalState.id, displayName: withdrawModalState.name, withdrawDateKey: today })')
-    // 名簿の更新と依頼だけ。在庫・盤面の帳簿には触らない。
+    // 在庫・盤面の帳簿にも触らない。掃除は盤面側の検出に任せる(日付入力での退塾と同じ経路にするため)。
     expect(confirm).not.toContain('manualMakeupAdjustments')
     expect(confirm).not.toContain('manualLectureStockCounts')
+    expect(BASIC_TSX).not.toContain('onRequestStudentWithdrawSweep')
   })
 
-  it('App はキューへ積み、盤面の結果で必ず消費する。教室の差し替えとログアウトでキューを捨てる(INV-08)', () => {
-    const request = sliceFrom(APP_TSX, 'const requestStudentWithdrawSweep = useCallback(', 900)
-    expect(request).toContain('enqueueStudentWithdrawSweepRequest(current, {')
-    expect(request).toContain('fromDateKey: resolveStudentWithdrawSweepFromDateKey(params.withdrawDateKey)')
-    const processed = sliceFrom(APP_TSX, 'const handleStudentWithdrawSweepProcessed = useCallback(', 400)
-    expect(processed).toContain('consumeStudentWithdrawSweepRequest(current, result.requestId)')
-    // boardMountKey(教室の開き直し・復元・undo)とログアウトで捨てる。
-    const boardMountEnd = APP_TSX.indexOf('}, [boardMountKey, setPendingParentAbsenceFinalize])')
-    expect(boardMountEnd).toBeGreaterThan(0)
-    const boardMountEffect = APP_TSX.slice(Math.max(0, boardMountEnd - 900), boardMountEnd)
-    expect(boardMountEffect).toContain('setParentAbsenceRequest(null)')
-    expect(boardMountEffect).toContain('setStudentWithdrawSweepRequests([])')
-    const logout = sliceFrom(APP_TSX, 'const logout = useCallback(() => {', 900)
-    expect(logout).toContain('setStudentWithdrawSweepRequests([])')
-    // 盤面へ渡している(未マウントのときは処理されずキューで待つ)。
-    expect(APP_TSX).toContain('studentWithdrawSweepRequests={studentWithdrawSweepRequests}')
-    expect(APP_TSX).toContain('onStudentWithdrawSweepProcessed={handleStudentWithdrawSweepProcessed}')
-    expect(APP_TSX).toContain('onRequestStudentWithdrawSweep={requestStudentWithdrawSweep}')
+  it('App はキュー(一過性コマンド)を持たず、教室の一致ガードだけを盤面へ渡す(INV-08)', () => {
+    // 撤去した二重経路を復活させない。
+    expect(APP_TSX).not.toContain('studentWithdrawSweepRequests')
+    expect(APP_TSX).not.toContain('enqueueStudentWithdrawSweepRequest')
+    expect(APP_TSX).not.toContain('onRequestStudentWithdrawSweep')
+    // 掃除を許すのは「いま画面にある編集 state が、開いている教室から読み込まれたもの」のときだけ。
+    expect(APP_TSX).toContain('isEditingStateLoadedForActingClassroom={Boolean(actingClassroomId) && loadedEditingClassroomIdRef.current === actingClassroomId}')
   })
 
-  it('盤面は純関数 1 本で計算し、痕跡があるときだけ commitWeeks を 1 回通す(台帳・希望数は渡さない)', () => {
-    const effect = sliceFrom(BOARD_TSX, 'const request = selectStudentWithdrawSweepRequest(studentWithdrawSweepRequests)', 2600)
-    expect(effect).toContain('if (isTemplateMode) return')
+  it('★教室切替の窓: 名簿と盤面と再マウントは同じ更新バッチで差し替わる(applyClassroomPayloadToState)', () => {
+    // この不変条件が崩れると「前の教室の名簿 × 新しい教室の盤面」で掃除しうる(sNNN は教室ごと独立採番)。
+    const apply = sliceFrom(APP_TSX, 'function applyClassroomPayloadToState(', 2000)
+    expect(apply).toContain('handlers.setStudents(sanitizedPayload.students)')
+    expect(apply).toContain('handlers.setBoardState(sanitizedPayload.boardState)')
+    expect(apply).toContain('handlers.setBoardMountKey?.((prev) => prev + 1)')
+  })
+
+  it('盤面は検出 → 対象者ぶんを適用 → commitWeeks 1 回(台帳・希望数は渡さない・テンプレ編集中は走らせない)', () => {
+    const effect = sliceFrom(BOARD_TSX, 'const targets = collectStudentWithdrawSweepTargets({', 2600)
+    expect(effect).toContain('if (targets.length === 0) return')
     expect(effect).toContain('computeStudentWithdrawSweep({')
-    expect(effect).toContain('processedStudentWithdrawSweepIdRef.current = target.requestId')
-    expect(effect).toContain('if (sweep.changed) {')
-    expect(effect).toContain('sweep.nextSuppressedMakeupOrigins,')
+    expect(effect).toContain('if (!changed) return')
+    expect(effect).toContain('nextSuppressedMakeupOrigins,')
     // 在庫台帳は現状のまま渡す(増やさない)。「破棄前に台帳へ確定」も講習在庫の +1 もしない。
     expect(effect).toContain('manualMakeupAdjustments,')
     expect(effect).toContain('manualLectureStockCounts,')
@@ -357,13 +400,15 @@ describe('退塾スイープの配線', () => {
     expect(effect).not.toContain('appendLectureStockCount')
     expect(effect).not.toContain('appendDeletedStudentScheduleCountAdjustment')
     expect(effect).not.toContain('scheduleCountAdjustments')
-    // 結果は成功/0 件のどちらでも必ず返す(返さないと App が消費できず再マウントで再発火する)。
-    expect(effect).toContain('onStudentWithdrawSweepProcessed?.({')
+    // 安全条件(テンプレ編集中・教室切替直後の窓・名簿未ロード)は effect の先頭で弾く。
+    const guards = sliceFrom(BOARD_TSX, 'if (isTemplateMode) return\r\n    if (!isEditingStateLoadedForActingClassroom) return', 200)
+    expect(guards).toContain('if (students.length === 0) return')
   })
 
   it('再マージ・読込の経路にスイープを混ぜない(毎回走ると INV-03/INV-06 違反になる)', () => {
-    // 呼び出しは 1 か所(退塾コマンドの effect)だけ。
+    // 呼び出しは 1 か所(検出 effect)だけ。
     expect([...BOARD_TSX.matchAll(/computeStudentWithdrawSweep\(\{/gu)]).toHaveLength(1)
+    expect([...BOARD_TSX.matchAll(/collectStudentWithdrawSweepTargets\(\{/gu)]).toHaveLength(1)
     const remerge = sliceFrom(BOARD_TSX, 'export function remergeBoardWeekWithManagedData(', 1800)
     expect(remerge).not.toContain('computeStudentWithdrawSweep')
     expect(remerge).toContain('stripWithdrawnStudentsFromBoardWeek(rawWeek, params.students, params.todayKey)')

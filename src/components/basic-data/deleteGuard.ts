@@ -36,8 +36,10 @@ export const DELETE_IRREVERSIBLE_WARNING = '削除したデータは元に戻せ
 export const DELETE_HIDE_ALTERNATIVE_HINT =
   'データを残したまま名簿・盤面・日程表から外したいだけなら、削除せず「退塾日」を設定してください（在籍者一覧や集計から自動的に外れます）。'
 
-// 生徒の削除は「非在籍一覧からアプリ上だけ消す」(データは deletedAt 付きで残る・2026-09-13)。
-export const STUDENT_DELETE_APP_ONLY_WARNING = 'アプリ上から消え、画面から元に戻すことはできません（データ自体は削除日時とともに記録として残ります）。'
+// 生徒の削除は「退塾生徒一覧からアプリ上だけ消す」(データは deletedAt 付きで残る・2026-09-13)。
+// ★2026-09-20 夜 改定(オーナー確定): 退塾後の行は編集できず、残る操作は削除だけ。取り違えると復旧できないので
+//   「データ上から削除します／元に戻せません」を先頭に明記する(未消化残数の警告は従来どおり併記する)。
+export const STUDENT_DELETE_APP_ONLY_WARNING = 'この生徒をデータ上から削除します。元に戻せません（画面の名簿・「退塾生徒」一覧から消え、戻す操作はありません。過去の記録と削除日時だけがデータに残ります）。'
 
 export type DeleteConfirmation = {
   title: string

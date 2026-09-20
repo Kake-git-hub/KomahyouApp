@@ -62,13 +62,21 @@ export function buildUniqueNameOwnerMap(students: readonly StudentRow[]): Map<st
   return ownerByName
 }
 
-// 盤面の生徒が名簿の studentId 本人か。managedStudentId があればそれだけで決め(名前一致で拾わない)、
-// 無いときだけ「名簿で一意な名前」の一致で拾う。
+// 盤面の席/記録 1 件の「持ち主の生徒 id」。managedStudentId があればそれだけで決め(名前一致で拾わない)、
+// 無いときだけ「名簿で一意な名前」で決める。決められなければ ''(同名 2 人・無名)。
+// ★所有判定の唯一の権威。判定を二重定義しないため、複数生徒を相手にする側(退塾スイープの検出)も
+//   これを 1 回呼んで id を引き、突き合わせる。
+export function resolveBoardStudentOwnerId(entry: Pick<StudentEntry, 'managedStudentId' | 'name'>, ownerByName: ReadonlyMap<string, string>): string {
+  if (entry.managedStudentId) return entry.managedStudentId
+  const key = normalizeName(entry.name)
+  if (!key) return ''
+  return ownerByName.get(key) ?? ''
+}
+
+// 盤面の生徒が名簿の studentId 本人か。
 export function isBoardStudentOwnedBy(entry: Pick<StudentEntry, 'managedStudentId' | 'name'>, studentId: string, ownerByName: ReadonlyMap<string, string>): boolean {
   if (!studentId) return false
-  if (entry.managedStudentId) return entry.managedStudentId === studentId
-  const key = normalizeName(entry.name)
-  return key !== '' && ownerByName.get(key) === studentId
+  return resolveBoardStudentOwnerId(entry, ownerByName) === studentId
 }
 
 /**

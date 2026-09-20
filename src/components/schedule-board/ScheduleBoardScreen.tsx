@@ -35,7 +35,7 @@ export { packSortCellDesks } from './deskSort'
 import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
-import { buildStudentWithdrawSweepMessage, selectStudentWithdrawSweepRequest, shouldProcessStudentWithdrawSweepRequest, type StudentWithdrawSweepRequest, type StudentWithdrawSweepResult } from './studentWithdrawSweep'
+import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
@@ -947,9 +947,13 @@ type ScheduleBoardScreenProps = {
   // Issue #46 同型: 処理し終えたら必ず結果を返し、App 側が state を消費(null)する。
   parentAbsenceRequest?: ParentAbsenceRequest | null
   onParentAbsenceRequestProcessed?: (result: ParentAbsenceRequestResult) => void
-  /** 退塾スイープの待ち行列(オーナー確定 2026-09-20)。先頭から 1 件ずつ処理し、結果を返して App に消費させる。 */
-  studentWithdrawSweepRequests?: StudentWithdrawSweepRequest[] | null
-  onStudentWithdrawSweepProcessed?: (result: StudentWithdrawSweepResult) => void
+  /**
+   * 退塾スイープ(オーナー確定 2026-09-20 夜)の実行可否ガード。
+   * App の `loadedEditingClassroomIdRef === actingClassroomId`(= いま画面にある名簿・盤面が、開いている教室から
+   * 読み込まれたものである)を渡す。**教室切替直後の窓**(actingClassroomId だけ先に新教室へ変わる)で
+   * 前の教室の名簿 × 新しい教室の盤面で掃除しないための保険(INV-08。sNNN は教室ごと独立採番＝別人に当たる)。
+   */
+  isEditingStateLoadedForActingClassroom?: boolean
   // 「振替先を今決める」で入った振替配置モードが終わった(配置した/キャンセルした)ことを App へ知らせる。
   onParentAbsencePlacementSettled?: () => void
   initialBoardState?: PersistedBoardState | null
@@ -5843,7 +5847,7 @@ export function resolvePostLectureAutoAssignView(params: {
   return { openLectureStock: true, openMakeupStock: false }
 }
 
-export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, onParentAbsencePlacementSettled, studentWithdrawSweepRequests, onStudentWithdrawSweepProcessed, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
+export function ScheduleBoardScreen({ classroomSettings, classroomName, classroomStorageKey, teachers, students, regularLessons, specialSessions, autoAssignRules, pairConstraints, teacherAutoAssignRequest, onTeacherAutoAssignRequestProcessed, studentScheduleRequest, onStudentScheduleRequestProcessed, parentAbsenceRequest, onParentAbsenceRequestProcessed, onParentAbsencePlacementSettled, isEditingStateLoadedForActingClassroom = false, initialBoardState, onBoardStateChange, onReplaceRegularLessons, onUpdateSpecialSessions, onApplyReopenedSlots, onUpdateClassroomSettings, onOpenBasicData, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onPreTemplateSaveBackup, undoSnapshotLabel, onRestoreUndoSnapshot, onDismissUndoSnapshot, onLogout, onCopyDistributionUrl, onReportToDeveloper, onOpenParentContactHistory, parentContactUnconfirmedCount, onSaveBoard, isBoardDirty, isBoardSaving, isBoardSaveDisabled, hasPendingSave, syncStatusMessage, syncProgressPercent, syncElapsedSeconds, onDeletionStockSummaryChange }: ScheduleBoardScreenProps) {
   void onUpdateSpecialSessions
   bumpMemCounter('board-render')
   // ⚠️ 機能フラグの教室判定は【教室ID】(会社ごとの登録台帳 src/utils/developmentClassroomRegistry.ts・2026-09-16)。
@@ -6045,8 +6049,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 保護者からの休み連絡の自動処理(spec-parent-portal §0-5)。processed = 重複ガード(再マウントで消えるので App 側の消費と対)、
   // jumped = 対象日の週へジャンプ済みの requestId(ジャンプしても週が無いときに無限に待たないため)。
   const processedParentAbsenceRequestIdRef = useRef<number | null>(null)
-  // 退塾スイープの副ガード(同一マウント内の二重実行防止)。正本は App 側のキュー消費。
-  const processedStudentWithdrawSweepIdRef = useRef<number | null>(null)
+  // 退塾スイープ: 同じ「名簿の内容 × 掃除の対象」で二重に走らせないための署名(同一マウント内の再実行防止)。
+  // 掃除すると痕跡が消えて対象 0 になるので、正しさの保証は冪等性そのもの。これは無駄な再計算を防ぐ副ガード。
+  const lastStudentWithdrawSweepSignatureRef = useRef<string>('')
   const parentAbsenceJumpedRequestIdRef = useRef<number | null>(null)
   // 「振替先を今決める」: 休みで在庫へ戻した直後、在庫一覧が更新されたレンダーで配置モードへ入るための受け渡し。
   const [pendingParentMakeupPlacement, setPendingParentMakeupPlacement] = useState<{ stockKey: string; originDate: string; originSlotNumber: number | null } | null>(null)
@@ -12055,46 +12060,53 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTemplateMode, onParentAbsenceRequestProcessed, parentAbsenceRequest, students, weekIndex, weeks])
 
-  // --- 退塾スイープ(基本データの「退塾」→ 盤面の痕跡消し・オーナー確定 2026-09-20・確認リスト b-2) -------
-  // App のキュー(studentWithdrawSweepRequests)の先頭を 1 件ずつ処理する。基本データ画面を開いている間は盤面が
-  // 未マウントなので、盤面へ戻った(マウントした)時点で処理される。結果を返すと App がその 1 件をキューから外す
-  // (Issue #46 同型: 重複ガードを盤面ローカル ref だけに置くと再マウントで消えて再発火する)。
-  // ★処理本体は純関数 computeStudentWithdrawSweep。痕跡が 0 件なら commitWeeks しない(空の Undo を積まない)。
-  // ★マウント時の実行順(INV-02): 上の再マージ effect(:6079)が先に走るが、初期 weeks は既に同じ入力で
-  //   remergeBoardWeekWithManagedData を通してある(buildInitialBoardSnapshot)ので再マージは冪等＝この commit で
-  //   再マージ結果を取りこぼさない。再マージ側を「マウント時に盤面を書き換える」実装へ変えるなら、ここも合わせて見直す。
+  // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
+  // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を
+  // 検出して掃除する**方式(オーナー確定: 日付入力で退塾日を入れた場合も、未来の退塾日がその日を過ぎた場合も、
+  // 確認ダイアログなしで同じ消去が走る)。検出は純関数 collectStudentWithdrawSweepTargets。
+  // ★発火点は**マウント時と students 変更時**(基本データから戻った時)。日付をまたいで開きっぱなしのときは
+  //   次のマウント/名簿変更で走る(タイマーは置かない)。対象 0 なら commitWeeks しない=開いただけで未保存にしない。
+  // ★安全条件(厳守):
+  //   (a) テンプレ編集中(isTemplateMode)は走らせない。cells はテンプレ用で実日付の盤面ではない。
+  //   (b) 教室切替直後の窓では走らせない: isEditingStateLoadedForActingClassroom(App の
+  //       loadedEditingClassroomIdRef === actingClassroomId)が false の間は何もしない。加えて盤面は boardMountKey で
+  //       再マウントされ、applyClassroomPayloadToState が students / boardState / boardMountKey を**同じ更新バッチ**で
+  //       設定するので、マウント時の props は必ず同じ教室のものが揃う(この不変条件は studentWithdrawSweep の
+  //       wiring テストで固定する)。生徒の特定は managedStudentId 優先・名簿で一意な名前のみ(sNNN は教室ごと独立採番)。
+  //   (c) 自動 commit は既存の「起動時の自己修復」(reconcileSubmittedTeacherPlacements)と同じ作法。commitWeeks は
+  //       userInitiated publish になるが、App 側の保存は shouldInjectEditingStateIntoClassroom で
+  //       「その教室から読み込んだ編集 state か」を必ず確かめてから書く(クロス教室汚染防止のガードを迂回しない)。
+  //   (d) 冪等: 掃除で痕跡が消えるので 2 回目の検出は対象 0。台帳(manualMakeupAdjustments/講習在庫/希望数)は不変で、
+  //       抑止(suppressedMakeupOrigins)だけが変わる(在庫へ戻さない・INV-06)。
   useEffect(() => {
-    const request = selectStudentWithdrawSweepRequest(studentWithdrawSweepRequests)
-    if (!shouldProcessStudentWithdrawSweepRequest(request, processedStudentWithdrawSweepIdRef.current)) return
-    const target = request!
-    // テンプレート編集中の cells はテンプレ用で実日付の盤面ではない。ここで結果を返すと痕跡が残ったまま命令が消えるので、
-    // 処理せずキューで待つ(テンプレ編集を終えて isTemplateMode が変われば、この effect が再び走る)。
     if (isTemplateMode) return
-    const sweep = computeStudentWithdrawSweep({
-      weeks,
-      students,
-      studentId: target.studentId,
-      fromDateKey: target.fromDateKey,
-      suppressedMakeupOrigins,
-      resolveStockId: resolveBoardStudentStockId,
-    })
-    processedStudentWithdrawSweepIdRef.current = target.requestId
-    if (sweep.changed) {
-      // 台帳(manualMakeupAdjustments / 講習在庫 / 希望数)は渡さない＝不変。抑止だけが変わる(在庫へ戻さない・INV-06)。
-      commitWeeks(
-        sweep.nextWeeks,
-        weekIndex,
-        selectedCellId,
-        selectedDeskIndex,
-        classroomSettings.holidayDates,
-        classroomSettings.forceOpenDates,
-        manualMakeupAdjustments,
-        sweep.nextSuppressedMakeupOrigins,
-        fallbackMakeupStudents,
-        manualLectureStockCounts,
-        manualLectureStockOrigins,
-        fallbackLectureStockStudents,
-      )
+    if (!isEditingStateLoadedForActingClassroom) return
+    if (students.length === 0) return
+    const targets = collectStudentWithdrawSweepTargets({ weeks, students, todayKey: getJstTodayDateKey() })
+    if (targets.length === 0) return
+    // 同じ対象集合で二重に走らせない(掃除しても再レンダーで同じ effect が走るため。掃除後は対象 0 になる)。
+    const signature = targets.map((target) => `${target.studentId}@${target.fromDateKey}`).join(',')
+    if (lastStudentWithdrawSweepSignatureRef.current === signature) return
+    lastStudentWithdrawSweepSignatureRef.current = signature
+
+    let nextWeeks = weeks
+    let nextSuppressedMakeupOrigins = suppressedMakeupOrigins
+    let changed = false
+    const results: Array<{ displayName: string; removedSeatCount: number; removedStatusCount: number }> = []
+    for (const target of targets) {
+      const sweep = computeStudentWithdrawSweep({
+        weeks: nextWeeks,
+        students,
+        studentId: target.studentId,
+        fromDateKey: target.fromDateKey,
+        suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
+        resolveStockId: resolveBoardStudentStockId,
+      })
+      if (!sweep.changed) continue
+      changed = true
+      nextWeeks = sweep.nextWeeks
+      nextSuppressedMakeupOrigins = sweep.nextSuppressedMakeupOrigins
+      results.push({ displayName: target.displayName, removedSeatCount: sweep.removedSeatCount, removedStatusCount: sweep.removedStatusCount })
       // 操作ログの種別は既存の 'lesson-delete' を使う(サーバーの受付一覧 functions/src/operationEvents.ts に
       // 無い kind は黙って捨てられるため、新種別は functions のデプロイと同時でないと記録が消える)。
       recordOperationEvent('lesson-delete', {
@@ -12106,17 +12118,27 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         removedStatusCount: sweep.removedStatusCount,
       })
     }
-    setStatusMessage(buildStudentWithdrawSweepMessage(target.displayName, sweep))
-    onStudentWithdrawSweepProcessed?.({
-      requestId: target.requestId,
-      studentId: target.studentId,
-      removedSeatCount: sweep.removedSeatCount,
-      removedStatusCount: sweep.removedStatusCount,
-    })
+    if (!changed) return
+    // 対象者ぶんをまとめて 1 回で確定する(Undo も 1 回)。台帳は渡したものがそのまま=不変。
+    commitWeeks(
+      nextWeeks,
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      classroomSettings.holidayDates,
+      classroomSettings.forceOpenDates,
+      manualMakeupAdjustments,
+      nextSuppressedMakeupOrigins,
+      fallbackMakeupStudents,
+      manualLectureStockCounts,
+      manualLectureStockOrigins,
+      fallbackLectureStockStudents,
+    )
+    setStatusMessage(buildStudentWithdrawSweepMessage(results))
     // commitWeeks などは毎レンダー作り直されるクロージャ。deps に入れると毎レンダー再実行になるだけで、
-    // 二重処理は processedStudentWithdrawSweepIdRef と App 側の消費(キューから外す)で防いでいる。
+    // 二重実行は「掃除で対象が 0 になる(冪等)」と対象集合の署名 ref で防いでいる。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTemplateMode, onStudentWithdrawSweepProcessed, students, studentWithdrawSweepRequests, weekIndex, weeks])
+  }, [isEditingStateLoadedForActingClassroom, isTemplateMode, students, weeks])
 
   // 「振替先を今決める」の続き: 在庫一覧にその生徒の残数が現れたら、その振替元日付を選んだ状態で配置モードへ入る。
   useEffect(() => {

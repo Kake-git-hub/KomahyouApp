@@ -34,10 +34,12 @@ describe('buildDeleteConfirmation', () => {
     expect(confirmation.title).toContain('山田先生')
   })
 
-  it('生徒(非在籍一覧からの削除)は「アプリ上から消えるがデータは残る」警告で、退塾日の案内は出さない(2026-09-13)', () => {
+  it('生徒(退塾生徒一覧からの削除)は「データ上から削除・元に戻せない」警告で、退塾日の案内は出さない(2026-09-13 / 09-20 夜 改定)', () => {
     const confirmation = buildDeleteConfirmation({ scope: 'student', name: '富樫應佑', requiresPassword: false })
     expect(confirmation.irreversibleWarning).toBe(STUDENT_DELETE_APP_ONLY_WARNING)
-    expect(confirmation.irreversibleWarning).toContain('記録として残ります')
+    // 2026-09-20 夜(オーナー確定): 退塾後は編集できず残る操作は削除だけ。先頭で不可逆をはっきり伝える。
+    expect(confirmation.irreversibleWarning).toContain('この生徒をデータ上から削除します。元に戻せません')
+    expect(confirmation.irreversibleWarning).toContain('過去の記録と削除日時だけがデータに残ります')
     expect(confirmation.hideHint).toBe('')
     expect(confirmation.title).toContain('富樫應佑')
   })

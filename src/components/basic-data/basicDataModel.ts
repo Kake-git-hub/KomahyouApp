@@ -42,6 +42,10 @@ export type StudentRow = {
   // 現在日付では既に対象外・過去の記録や名前解決は残る)。判定は isStudentDeletedFromApp に一元化する。
   // 後方互換のため optional(未設定=削除されていない)。
   deletedAt?: string
+  // 高3卒業の退塾日自動入力(オーナー確定 2026-09-20・案A・graduationWithdraw.ts)。卒業年度を過ぎた高3の
+  // withdrawDate へ 3/31 を**実データとして**1 回だけ入れた印(ISO 日時)。印があれば二度と自動入力しない
+  // (室長が後で退塾日を消しても勝手に戻さない)。後方互換のため optional(未設定=自動入力していない)。
+  graduationWithdrawAutoFilledAt?: string
 }
 
 // 基本データ画面から削除済みかの唯一の判定。呼び出し側で row.deletedAt を直読みしない。
@@ -110,7 +114,9 @@ export const initialStudents: StudentRow[] = [
   { id: 's030', name: '森本 陽', displayName: '森本陽', email: 'morimoto@example.com', entryDate: '2024-04-01', withdrawDate: '2026-03-31', birthDate: '2012-10-30' },
 ]
 
-function normalizeDateText(value: string) {
+// 日付テキストの正規化(空欄・「未定」は日付未設定=''・YYYY/M/D も受ける)。退塾日の有無を見る側が
+// 同じ判定を再実装しないよう export する(graduationWithdraw.ts / withdrawGuard.ts)。
+export function normalizeDateText(value: string) {
   const text = value.trim()
   if (!text || text === '未定') return ''
   const directMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)

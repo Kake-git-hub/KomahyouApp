@@ -20,6 +20,7 @@ import {
 } from './ScheduleBoardScreen'
 import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
+import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -1164,6 +1165,8 @@ describe('INV-02 × 退塾生徒の剥がし(手動編集は消さない・テ�
 // 行: 退塾スイープ(computeStudentWithdrawSweep) × 手動編集
 //   オーナー確定 2026-09-20(確認リスト b-2 要改善): 「退塾」ボタンは名簿の退塾日を記録するだけでなく、
 //   **その生徒の今日以降の盤面の痕跡**(手置きの講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)も消す。
+//   2026-09-20 夜 改定: 退塾ボタンだけでなく**日付入力で退塾日を入れた場合・未来の退塾日がその日を過ぎた場合**も
+//   同じ消去が黙って走る。命令(キュー)ではなく盤面側の検出(collectStudentWithdrawSweepTargets)で起こす。
 //   ここで固定するのは「消してよいものだけ消す」側 ＝ 他の生徒の手動編集・講師・メモ・**昨日以前**は不変で、
 //   再マージを何回通しても結果が変わらないこと(INV-02/INV-03)。在庫側は INV-06 マトリクスが固定する。
 // ============================================================================
@@ -1260,5 +1263,46 @@ describe('INV-02 × 退塾スイープ(今日以降だけ消す・他の手動�
     }
     // 退塾生徒の剥がし(再マージの先頭で走る派生処理)を続けて通しても同じ。
     expect(tracesOf(stripWithdrawnStudentsFromBoardWeek(merged, roster, TODAY), 'sW')).toEqual([`${YESTERDAY}:status:absent`])
+  })
+
+  // 行(2026-09-20 夜・オーナー確定): 検出方式。**日付入力での退塾日**も退塾ボタンと同じ扱いで、盤面を開いた時点で
+  // 黙って掃除する。逆に「掃除するものが無いのに盤面を書き換える」のは INV-02 違反(開いただけで未保存になり、
+  // 室長の未保存編集が自動保存に巻き込まれる/「最新データ」の表示が嘘になる)ので、対象 0 を厳格に固定する。
+  it('★日付入力で退塾日を入れた生徒も検出して掃除する(退塾ボタンと同じ扱い・命令は要らない)', () => {
+    const todayCell = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [createDesk({
+        id: 't0', teacher: '講師A',
+        lesson: lessonOf('lesson_t0', [entryOf('sW', { id: 'sW_t0', lessonType: 'special', specialSessionId: 'sess-1' }), entryOf('sB', { id: 'sB_t0' })]),
+      })],
+    })
+    // 退塾日は roster 上に入っているだけ(＝日付入力で入れた状態)。ボタン経由の命令は一切無い。
+    const targets = collectStudentWithdrawSweepTargets({ weeks: [[todayCell]], students: roster, todayKey: TODAY })
+    expect(targets).toEqual([{ studentId: 'sW', displayName: 'sW', fromDateKey: TODAY }])
+    const swept = sweepFor([[todayCell]])
+    expect(tracesOf(swept.nextWeeks[0], 'sW')).toEqual([])
+    expect(tracesOf(swept.nextWeeks[0], 'sB')).toEqual([`${TODAY}:seat:regular`])
+  })
+
+  it('★INV-02: 掃除するものが無ければ何も返さない(盤面を開いただけで未保存にしない)', () => {
+    // 昨日以前にしか痕跡が無い / 在籍中の生徒だけ / 未来の退塾日 のいずれも対象 0。
+    const yesterdayOnly = createCell({
+      id: `${YESTERDAY}_1`, dateKey: YESTERDAY, dateLabel: '6/2',
+      desks: [createDesk({ id: 'y0', teacher: '講師A', lesson: lessonOf('lesson_y', [entryOf('sW', { id: 'sW_y' }), null]) })],
+    })
+    const stayingOnly = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [createDesk({ id: 't0', teacher: '講師A', lesson: lessonOf('lesson_t0', [entryOf('sB', { id: 'sB_t0' }), null]) })],
+    })
+    expect(collectStudentWithdrawSweepTargets({ weeks: [[yesterdayOnly, stayingOnly]], students: roster, todayKey: TODAY })).toEqual([])
+    // 未来の退塾日はまだ在籍＝その日が来るまで触らない(痕跡は残したまま)。
+    const futureRoster = roster.map((row) => (row.id === 'sW' ? { ...row, withdrawDate: '2026-07-01' } : row))
+    const futureCell = createCell({
+      id: '2026-07-02_2', dateKey: '2026-07-02', dateLabel: '7/2', slotNumber: 2,
+      desks: [createDesk({ id: 't1', teacher: '講師A', lesson: lessonOf('lesson_t1', [entryOf('sW', { id: 'sW_t1' }), null]) })],
+    })
+    expect(collectStudentWithdrawSweepTargets({ weeks: [[futureCell]], students: futureRoster, todayKey: TODAY })).toEqual([])
+    expect(collectStudentWithdrawSweepTargets({ weeks: [[futureCell]], students: futureRoster, todayKey: '2026-07-01' }))
+      .toEqual([{ studentId: 'sW', displayName: 'sW', fromDateKey: '2026-07-01' }])
   })
 })
