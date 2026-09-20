@@ -269,12 +269,15 @@ export function splitPendingParentAbsenceFinalize(
 
 // --- 「保護者連絡」ボタンの履歴(2026-09-19 オーナー指示) -------------------------------------------
 // 盤面ツールバーの「保護者連絡」ボタンで開く一覧。休み連絡の受信日時を新しい順に並べ、モーダルで処理したものに「確認済」を付ける。
-// - confirmed    = 処理済み(notifiedAt あり)。または処理済み化を送った直後で購読がまだ追いついていない連絡(hiddenIds)。
-// - pending-save = 四択で盤面へ反映済み・保存待ち。盤面を保存すると confirmed になる(保存せず閉じれば unconfirmed へ戻る)。
+// - confirmed    = **室長がモーダルの四択のいずれかを選んだ時点**で確認済(オーナー指示 2026-09-20。前日の版は保存前を
+//                  「確認済(保存待ち)」と分けていたが、分けない)。= 処理済み(notifiedAt)・処理済み化を送った直後(hiddenIds)・
+//                  四択で盤面へ反映済みで保存待ち(pendingIds)のどれか。
+//                  ★表示だけの話。処理済み(notifiedAt)にするのは従来どおり盤面を保存できた時点で、保存せず閉じた連絡は
+//                    次回モーダルに再表示され、履歴でも unconfirmed へ戻る(モーダルの一覧と同じ集合を保つ)。
 // - unconfirmed  = 未処理。クリックで休み連絡のモーダルを開いて同じ四択で処理する(モーダルの一覧と同じ集合になるよう、
 //                  除外条件を parentMessageNotifications と揃える: notifiedAt なし・保存待ちでない・hidden でない)。
-// 確認済は新しい順に confirmedLimit 件まで(古いものは**見た目上**消すだけ。Firestore の doc は消さない)。未確認・保存待ちは件数制限なし。
-export type ParentContactHistoryStatus = 'confirmed' | 'pending-save' | 'unconfirmed'
+// 確認済は新しい順に confirmedLimit 件まで(古いものは**見た目上**消すだけ。Firestore の doc は消さない)。未確認は件数制限なし。
+export type ParentContactHistoryStatus = 'confirmed' | 'unconfirmed'
 
 export type ParentContactHistoryRow = {
   id: string
@@ -282,7 +285,7 @@ export type ParentContactHistoryRow = {
   createdAt: string
   absence: ParentAbsenceDetail
   status: ParentContactHistoryStatus
-  // 四択のどれで処理したか(確認済・保存待ちの行に添える)。未確認は null。
+  // 四択のどれで処理したか(確認済の行に添える)。未確認は null。
   resolution: ParentAbsenceResolution | null
 }
 
@@ -316,8 +319,8 @@ export function buildParentContactHistory(
   const named = buildParentMessageNotifications(Array.from(entryById.values()), { students: context.students })
   const rows = named.map<ParentContactHistoryRow>((item) => {
     const entry = entryById.get(item.id)!
-    // 未確認かどうかはモーダルの一覧と同じ述語で決める。未確認でないものを 確認済 / 保存待ち に分ける。
-    const status: ParentContactHistoryStatus = isUnprocessedParentMessage(entry, excludedIds) ? 'unconfirmed' : entry.notifiedAt || hiddenIds.has(entry.id) ? 'confirmed' : 'pending-save'
+    // 未確認かどうかはモーダルの一覧と同じ述語で決める。未確認でないもの(処理済み・hidden・保存待ち)はすべて確認済。
+    const status: ParentContactHistoryStatus = isUnprocessedParentMessage(entry, excludedIds) ? 'unconfirmed' : 'confirmed'
     return {
       id: item.id,
       studentName: item.studentName,

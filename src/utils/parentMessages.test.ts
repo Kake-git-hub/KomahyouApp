@@ -299,7 +299,8 @@ describe('chunkParentMessageIds(処理済み化の分割)', () => {
 describe('buildParentContactHistory(保護者連絡の履歴)', () => {
   const at = (n: number) => `2026-09-${String(n).padStart(2, '0')}T01:00:00.000Z`
 
-  it('新しい連絡が上。処理済み=確認済 / 保存待ち / 未確認 を付け、確認済と保存待ちには選んだ処理を添える', () => {
+  // オーナー指示 2026-09-20: 四択のいずれかを選んだ時点で確認済(保存前でも「保存待ち」と分けない)。
+  it('新しい連絡が上。四択を選んだ時点(保存待ち)で確認済になり、選んだ処理を添える', () => {
     const rows = buildParentContactHistory([
       createEntry({ id: 'old', createdAt: at(1), notifiedAt: at(2), acknowledgedAt: at(2), resolution: 'absent' }),
       createEntry({ id: 'new', createdAt: at(5) }),
@@ -307,7 +308,7 @@ describe('buildParentContactHistory(保護者連絡の履歴)', () => {
     ], { students: [], pendingIds: new Set(['mid']) })
     expect(rows.map((row) => [row.id, row.status, row.resolution])).toEqual([
       ['new', 'unconfirmed', null],
-      ['mid', 'pending-save', 'absent-no-makeup'],
+      ['mid', 'confirmed', 'absent-no-makeup'],
       ['old', 'confirmed', 'absent'],
     ])
   })

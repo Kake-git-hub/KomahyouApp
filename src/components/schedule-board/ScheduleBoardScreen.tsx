@@ -5472,6 +5472,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 丸ごと振替の「振替先選択モード」(Issue #40)。振替元の日付キーを持つ間だけモード中。
   // 一時的な UI 状態なので永続化しない。commitWeeks(=盤面が変わる他操作)でも安全側で解除する。
   const [wholeDayTransferSourceDate, setWholeDayTransferSourceDate] = useState<string | null>(null)
+  // 丸ごと振替ができない理由は、上部の状態欄だけだと見落とす(確認リスト r-2 要改善 2026-09-20)ので画面中央のダイアログでも出す。
+  const [wholeDayTransferBlockedNotice, setWholeDayTransferBlockedNotice] = useState<string | null>(null)
+  const notifyWholeDayTransferBlocked = (message: string) => {
+    setStatusMessage(message)
+    setWholeDayTransferBlockedNotice(message)
+  }
   // 選択モード中は Escape でもキャンセルできる(モード中のみ keydown を張る)。
   useEffect(() => {
     if (!wholeDayTransferSourceDate) return
@@ -9209,7 +9215,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (!sourceDateKey) return
 
     if (targetDateKey === sourceDateKey) {
-      setStatusMessage('同じ日へは振替できません。別の日付ヘッダーをクリックしてください。')
+      notifyWholeDayTransferBlocked('同じ日へは振替できません。別の日付ヘッダーをクリックしてください。')
       return
     }
 
@@ -9217,7 +9223,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const isForceOpen = classroomSettings.forceOpenDates.includes(targetDateKey)
     const isClosedWeekday = classroomSettings.closedWeekdays.includes(parseDateKey(targetDateKey).getDay())
     if (isHoliday || (isClosedWeekday && !isForceOpen)) {
-      setStatusMessage(`振替先 ${targetDateKey} は休日です。先に営業日にしてから実行してください。`)
+      notifyWholeDayTransferBlocked(`振替先 ${targetDateKey} は休日です。先に営業日にしてから実行してください。`)
       return
     }
 
@@ -9244,7 +9250,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       leaveSourceRestMarkers: transferSourceRestDisplayEnabled,
     })
     if (result.status === 'blocked') {
-      setStatusMessage(result.message)
+      notifyWholeDayTransferBlocked(result.message)
       return
     }
 
@@ -12490,7 +12496,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                     setDayHeaderMenu(null)
                     const blockReason = resolveWholeDayTransferSourceBlockReason(normalizedWeeks.flat().filter((cell) => cell.dateKey === dk))
                     if (blockReason) {
-                      setStatusMessage(blockReason)
+                      notifyWholeDayTransferBlocked(blockReason)
                       return
                     }
                     setWholeDayTransferSourceDate(dk)
@@ -12810,6 +12816,17 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="secondary-button" onClick={() => setTemplateImportDateOptions(null)}>キャンセル</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+          {wholeDayTransferBlockedNotice ? (
+            <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setWholeDayTransferBlockedNotice(null) }}>
+              <div className="auto-assign-modal" role="alertdialog" aria-modal="true" data-testid="whole-day-transfer-blocked-modal">
+                <div className="auto-assign-modal-title">丸ごと振替はできません</div>
+                <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>{wholeDayTransferBlockedNotice}</div>
+                <div className="student-menu-section student-menu-actions">
+                  <button type="button" className="primary-button" onClick={() => setWholeDayTransferBlockedNotice(null)} data-testid="whole-day-transfer-blocked-close-button">閉じる</button>
                 </div>
               </div>
             </div>

@@ -14,6 +14,9 @@
 
 ## 未リリース
 
+- fix: 「保護者連絡」の履歴は、室長がモーダルの四択のいずれかを選んだ時点で「確認済」にする(オーナー指示 2026-09-20)。「確認済(保存待ち)」の区別を廃止。表示だけの変更で、処理済み(notifiedAt)にするのは従来どおり盤面の保存成功時=保存せず閉じた連絡は次回モーダルに再表示され履歴も未確認へ戻る(未確認の集合はモーダルの一覧と同じ述語のまま) (parentMessages.ts buildParentContactHistory / ParentContactHistoryModal.tsx / spec-parent-portal §0-5)
+- fix: 丸ごと振替ができない理由(出欠記録あり・同日・休日・コマ構成不一致 など)を、上部の状態欄に加えて画面中央のダイアログでも表示(確認リスト r-2 要改善 2026-09-20)。判定ロジックは無変更 (ScheduleBoardScreen.tsx notifyWholeDayTransferBlocked / wholeDayTransferBlockedNotice.wiring.test.ts)
+
 ## v1.5.552 (2026-09-19)
 
 - feat: 盤面ツールバー「通常授業テンプレ作成」の右に「保護者連絡」ボタンを追加(オーナー指示 2026-09-19)。保護者QRからの休み連絡の履歴を受信日時の新しい順に一覧し、モーダルで処理したものに「確認済」(保存前は「確認済(保存待ち)」)を表示。確認済は直近 10 件まで(古いものは見た目上だけ消す)。未確認の行を押すと既存の休み連絡モーダル(四択)が開く=処理経路は増やさない(INV-06)。履歴は別購読(createdAt 降順・limit 50・複合インデックス不要)で読み、未処理の権威は従来の購読のまま。教室の絞り込み・cleanup は既存と同じ(INV-08)。フラグ parentPortalQr(開発用教室＋staging)限定。functions/ルール変更なし。確認リスト q-6 (parentMessages.ts buildParentContactHistory / parentPortal.ts subscribeParentMessageHistory / ParentContactHistoryModal.tsx / BoardToolbar.tsx / App.tsx)

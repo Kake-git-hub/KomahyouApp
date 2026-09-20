@@ -5637,11 +5637,6 @@ tr.sa-group-row td {
   color: #1d6b2f;
 }
 
-.parent-contact-history-status.is-pending-save {
-  background: #fff3c9;
-  color: #7a5a00;
-}
-
 .parent-contact-history-status.is-unconfirmed {
   background: #b3541e;
   color: #fff;

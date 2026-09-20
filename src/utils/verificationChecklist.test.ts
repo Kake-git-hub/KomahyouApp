@@ -75,7 +75,7 @@ describe('確認リストの項目定義', () => {
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。版は据え置き(q-1〜q-5 の結果待ちを消さない)。
     expect(byId.get('q-6')!.introducedIn).toBe('v1.5.552')
-    expect(byId.get('q-6')!.check!.join(' / ')).toContain('確認済(保存待ち)')
+    expect(byId.get('q-6')!.check!.join(' / ')).toContain('四択のどれかを押した時点で')
     expect(byId.get('q-1')!.check!.join(' / ')).toContain('来月へは進めない')
     expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
     // オーナー確定: 処理済みは盤面を保存できた時点。保存せず閉じたら再通知されることを確かめる項目を必ず持つ。
