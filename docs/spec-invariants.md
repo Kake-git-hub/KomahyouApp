@@ -445,16 +445,34 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     `computeOutstandingAbsenceOrigins`（数えない）・`collectClearedDayMakeupSuppressions`（抑制を積まない）・
     `disposeDayDeskEntries`（**処分対象にしない**＝件数にも希望回数 −1 にも入れない。`moved` も同じ）・
     `isStaleSeatMarkerStatus`（着地で消す「前の人の印」＝`moved`/`holiday` のみ）・
-    `carryBoardStatusRecordsOntoClosedDayCell`（休日セルの再マージで記録を消さない＝absent の算出 origin を守る）。
+    `carryBoardStatusRecordsOntoClosedDayCell`（休日セルの再マージで記録を消さない＝absent の算出 origin を守る）・
+    `computeHolidayReleaseRestoration`（**休日解除の逆操作**。控え `holidayStockReturn` どおりにしか台帳を触らない）。
     - `operationTrace.ts` は**表示のみ・変更不要**（盤面差分の要約に名前を出すだけで会計に触れない）。
   - ★`holiday` の**会計ガードと表示は機能フラグ（`transferSourceRestDisplay`）に依らず常に有効**にする。
     フラグが切り替えるのは「記録を作るか・どう見せるか」だけで、**既に存在するデータの扱いは切り替えない**
     （フラグを戻した教室で在庫・回数が狂わないため）。
   - **この改定の回帰固定**：丸ごと振替の記録保持は `inv06-whole-day-transfer.matrix.test.ts`、休日設定の記録変換は
     新設の `inv06-holiday-record-retention.matrix.test.ts`（変換規則を 1 行ずつ・`ledgers` が ON/OFF で完全一致・
-    holiday 解除は配置を戻さない）で固定し、既存の `inv06-holiday-stock-reconciliation.matrix.test.ts` は改変しない。
+    **個別ボタン**「休日記録の表示解除」は配置を戻さない）で固定し、既存の `inv06-holiday-stock-reconciliation.matrix.test.ts` は改変しない。
     **どちらも「台帳（`ledgers`）が不変であること」を既存 assert のまま維持**する（記録を残す改定で在庫が動いたら
     それ自体が INV-06 違反）。表示ラベル・フラグ scope は `transferSourceRestDisplay.test.ts` で固定。
+- **休日解除は休日設定の逆操作（2026-09-20 オーナー確定・確認リスト r-5・改定）**：休日を解除したら
+  `holiday` 記録の生徒を**元の席へ戻し、休日設定で増えた未消化（振替 origin / 講習 +1）を巻き戻す**。
+  2026-09-16 の「解除側は変更しない（`holiday` 記録は残り配置へ戻さない）」は**この改定で置き換え**。
+  - **在庫の巻き戻しは「設定時に返した分」と厳密に対称**にする。根拠は休日設定時に記録へ焼き込んだ控え
+    `holidayStockReturn`（`reconcileHolidayDeskStockReturns` の戻り値 `stockReturnStamps`）**だけ**。
+    記録から再導出してはいけない（配置由来＝無条件に origin を積む／出欠記録由来＝台帳にあれば積まない、の
+    違いが記録からは区別できず、推測で戻すと誤増か誤減になる）。控えの無い旧データは**復元しない**（安全側）。
+  - **その未消化を既に別日へ組んでいたら、その振替/講習コマを盤面から消す**。振替は「コマを消す＝消化 −1」と
+    「origin を外す」で ±0、講習は「設定の +1」と「別日配置の −1」が打ち消し合うので**台帳を触らない**
+    （講習在庫はデルタ台帳で盤面を走査しないため、ここで戻すと誤減）。**出欠記録が付いた別日のコマは消さず
+    復元を見送る**（実施済みの授業を消さない）。席が別の生徒で埋まっている記録も見送る（上書きしない）。
+  - **戻した通常授業の抑止（`suppressedRegularLessonOccurrences`）は積まない・既にあれば外す**。積むと
+    再マージでテンプレ授業が抑止され、戻した席が「テンプレに無い managed lesson」として落ちて消える（INV-03/INV-12）。
+  - **個別ボタン「休日記録の表示解除」は従来どおり記録を消すだけ**（`clearStudentStatusFromDesk`・席も台帳も触らない）。
+  - 固定は `inv06-holiday-record-retention.matrix.test.ts` の新しい行（往復の台帳完全一致・別日振替の削除・
+    出欠記録つきは見送り・席が埋まっていれば見送り・absent/moved 不変・解除→再マージ 2 回で不変・フラグ OFF 不変）と
+    `holidayReleaseRestoration.wiring.test.ts`（ハンドラ配線）。仕様は `docs/spec-makeup-stock.md` §B-2-2b / §B-2-2c。
 - **退塾スイープ（2026-09-20 オーナー確定・確認リスト b-2）**：「退塾」ボタンで消す今日以降の痕跡は
   **未消化へ戻さない**（台帳 `manualMakeupAdjustments` / `manualLectureStockCounts` / 希望数へ一切足さない・
   「破棄前に台帳へ確定」もしない）。ただし**消したことで在庫が湧く分**は抑止（`suppressedMakeupOrigins`）へ積む

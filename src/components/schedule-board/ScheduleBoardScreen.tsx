@@ -33,7 +33,7 @@ import { defaultWeekIndex, getWeekStart, LESSON_TYPES_WITH_MINUTES, lessonTypeLa
 import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort'
 export { packSortCellDesks } from './deskSort'
 import { boardSlotTimes } from './slotTimes'
-import type { DeskCell, DeskLesson, GradeLabel, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
+import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, selectStudentWithdrawSweepRequest, shouldProcessStudentWithdrawSweepRequest, type StudentWithdrawSweepRequest, type StudentWithdrawSweepResult } from './studentWithdrawSweep'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
@@ -1514,11 +1514,20 @@ export function materializeDisplacedStatusEntryIntoLedgers(params: {
   managedStudentByAnyName: Map<string, StudentRow>
   resolveDisplayName: (name: string) => string
   resolveStockId: (student: StudentEntry) => string
-}): { manualMakeupAdjustments: MakeupOriginMap; fallbackMakeupStudents: Record<string, FallbackMakeupStudent>; materialized: boolean } {
+// 戻り値の `stockKey` / `origin` / `fallbackAdded` は**この関数が実際に積んだもの**(2026-09-20)。
+// 休日設定はこれを `holiday` 記録の控えへ焼き込み、休日解除の巻き戻しと1:1で対応させる。
+}): {
+  manualMakeupAdjustments: MakeupOriginMap
+  fallbackMakeupStudents: Record<string, FallbackMakeupStudent>
+  materialized: boolean
+  stockKey: string
+  origin: { dateKey: string; slotNumber: number | null } | null
+  fallbackAdded: boolean
+} {
   const { statusEntry, ledgerOriginDatesByKey, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
   let { manualMakeupAdjustments, fallbackMakeupStudents } = params
   if (statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) {
-    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
+    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false, stockKey: '', origin: null, fallbackAdded: false }
   }
   const stockKey = buildMakeupStockKey(resolveStockId(statusEntry as unknown as StudentEntry), statusEntry.subject)
   const materializedOrigin = resolveMakeupStatusOriginToMaterialize({
@@ -1526,23 +1535,24 @@ export function materializeDisplacedStatusEntryIntoLedgers(params: {
     ledgerOriginDates: ledgerOriginDatesByKey[stockKey] ?? [],
   })
   if (!materializedOrigin) {
-    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
+    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false, stockKey, origin: null, fallbackAdded: false }
   }
   const alreadyMaterialized = (manualMakeupAdjustments[stockKey] ?? []).some((origin) => (
     origin.dateKey === materializedOrigin.dateKey
     && (origin.slotNumber == null || materializedOrigin.slotNumber == null || origin.slotNumber === materializedOrigin.slotNumber)
   ))
   if (alreadyMaterialized) {
-    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false }
+    return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: false, stockKey, origin: null, fallbackAdded: false }
   }
   manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, materializedOrigin.dateKey, materializedOrigin.slotNumber)
+  const fallbackAdded = !managedStudentByAnyName.get(statusEntry.name) && !fallbackMakeupStudents[stockKey]
   if (!managedStudentByAnyName.get(statusEntry.name)) {
     fallbackMakeupStudents = {
       ...fallbackMakeupStudents,
       [stockKey]: { studentName: statusEntry.name, displayName: resolveDisplayName(statusEntry.name), subject: statusEntry.subject },
     }
   }
-  return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: true }
+  return { manualMakeupAdjustments, fallbackMakeupStudents, materialized: true, stockKey, origin: materializedOrigin, fallbackAdded }
 }
 
 // 休日化で「まだ在庫会計されていない1コマ」を未消化在庫へ戻す status（出欠記録）の集合。
@@ -1588,10 +1598,27 @@ export function reconcileHolidayDeskStockReturns(params: {
    *   呼び出し側が日程表の希望回数を −1 する。在庫から出したコマ（振替・講習）だけ返す。
    */
   includeRegularLessons?: boolean
-}): { ledgers: HolidayStockLedgers; movedStudentCount: number; returnedEntryIds: string[] } {
+}): {
+  ledgers: HolidayStockLedgers
+  movedStudentCount: number
+  returnedEntryIds: string[]
+  /**
+   * 休日解除(逆操作)のための控え(2026-09-20・INV-06)。席 index ごとに「この席の配置授業 / 既存の出欠記録で
+   * 何を在庫へ返したか」を返す。`convertHolidayDeskEntriesToRecords` が作る `holiday` 記録へそのまま焼き込む
+   * （＝解除側は控えだけを見て巻き戻す＝設定と厳密に対称）。
+   * ★2つに分かれているのは、同じ席に「配置授業」と「既存の出欠記録」が同居しうるため
+   *   （記録変換は既存記録を優先する＝そのとき残る記録の控えは `statusStamps` 側）。
+   */
+  stockReturnStamps: {
+    placementStamps: Array<HolidayStockReturnStamp | undefined>
+    statusStamps: Array<HolidayStockReturnStamp | undefined>
+  }
+} {
   const { desk, cellDateKey, cellSlotNumber, managedStudentByAnyName, resolveDisplayName, resolveStockId, ledgerOriginDatesByKey, includeRegularLessons = true } = params
   let { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents } = params.ledgers
   let movedStudentCount = 0
+  const placementStamps: Array<HolidayStockReturnStamp | undefined> = [undefined, undefined]
+  const statusStamps: Array<HolidayStockReturnStamp | undefined> = [undefined, undefined]
   // 在庫へ返した記録の id。呼び出し側が「返したものは希望回数を減らさない」を判定するのに使う
   // （返す＝別日にやる／返さない＝もうやらない、の組み合わせを崩さないため）。
   const returnedEntryIds: string[] = []
@@ -1601,7 +1628,7 @@ export function reconcileHolidayDeskStockReturns(params: {
   const returnEntryToStock = (
     entry: Pick<StudentEntry, 'id' | 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'specialStockSource' | 'specialSessionId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'manualAdded'>,
     makeupOriginDateKey: string,
-  ) => {
+  ): HolidayStockReturnStamp => {
     movedStudentCount += 1
     if (entry.lessonType === 'special') {
       if (entry.specialStockSource === 'session') {
@@ -1619,37 +1646,51 @@ export function reconcileHolidayDeskStockReturns(params: {
           originSlotNumber: parseOriginSlotNumber(entry.makeupSourceLabel) ?? cellSlotNumber,
         })
         // fallback は key が `name:` に落ちたときだけ必要（managedStudentId 解決時は roster から表示名を引ける）
+        const lectureFallbackAdded = !entry.managedStudentId && !managedStudentByAnyName.get(entry.name) && !params.ledgers.fallbackLectureStockStudents[lectureStockKey]
         if (!entry.managedStudentId && !managedStudentByAnyName.get(entry.name)) {
           fallbackLectureStockStudents = {
             ...fallbackLectureStockStudents,
             [lectureStockKey]: { displayName: resolveDisplayName(entry.name), subject: entry.subject },
           }
         }
+        return {
+          kind: 'lecture',
+          originDateKey: entry.makeupSourceDate ?? cellDateKey,
+          originSlotNumber: parseOriginSlotNumber(entry.makeupSourceLabel) ?? cellSlotNumber,
+          fallbackAdded: lectureFallbackAdded,
+        }
       }
-      return
+      return { kind: 'none' } // 手動追加の講習は在庫を消費していない＝返す先が無い
     }
     if (!entry.manualAdded) {
       returnedEntryIds.push(entry.id) // 手動追加は在庫を消費していないので返さない＝ここに入れない
       const stockKey = buildMakeupStockKey(resolveStockId(entry as StudentEntry), entry.subject)
       manualMakeupAdjustments = appendMakeupOrigin(manualMakeupAdjustments, stockKey, makeupOriginDateKey)
+      const makeupFallbackAdded = !managedStudentByAnyName.get(entry.name) && !params.ledgers.fallbackMakeupStudents[stockKey]
       if (!managedStudentByAnyName.get(entry.name)) {
         fallbackMakeupStudents = {
           ...fallbackMakeupStudents,
           [stockKey]: { studentName: entry.name, displayName: resolveDisplayName(entry.name), subject: entry.subject },
         }
       }
+      return { kind: 'makeup', originDateKey: makeupOriginDateKey, fallbackAdded: makeupFallbackAdded }
     }
+    return { kind: 'none' } // 手動追加(体験・手置き)は在庫を経由していない
   }
 
-  for (const student of desk.lesson?.studentSlots ?? []) {
+  const studentSlots = desk.lesson?.studentSlots ?? []
+  for (let studentIndex = 0; studentIndex < studentSlots.length; studentIndex += 1) {
+    const student = studentSlots[studentIndex]
     if (!student) continue
     // 在庫から出したコマ（振替・ストック由来の講習）は常に返す。通常・体験・増コマは呼び出し側の方針に従う。
     const isStockBackedLesson = student.lessonType === 'makeup' || student.lessonType === 'special'
     if (!includeRegularLessons && !isStockBackedLesson) continue
-    returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey))
+    placementStamps[studentIndex] = returnEntryToStock(student, resolveOriginalRegularDate(student, cellDateKey))
   }
 
-  for (const statusEntry of desk.statusSlots ?? []) {
+  const statusSlots = desk.statusSlots ?? []
+  for (let studentIndex = 0; studentIndex < statusSlots.length; studentIndex += 1) {
+    const statusEntry = statusSlots[studentIndex]
     if (!statusEntry) continue
     // INV-06（2026-08-01 下流監査 → 2026-08-02 対称性監査で出席済み・振無休へ拡張）:
     // この操作は出欠記録ごと破棄する。**振替コマの出欠記録は、状態を問わず「振替元日」で会計**し、
@@ -1669,21 +1710,41 @@ export function reconcileHolidayDeskStockReturns(params: {
       })
       manualMakeupAdjustments = materializedResult.manualMakeupAdjustments
       fallbackMakeupStudents = materializedResult.fallbackMakeupStudents
-      if (!materializedResult.materialized) continue // 在庫由来（再浮上に任せる）／移動マーカー／手動追加の出席・振無休／確定済み
+      if (!materializedResult.materialized) {
+        // 在庫由来（再浮上に任せる）／移動マーカー／手動追加の出席・振無休／確定済み。
+        // ★在庫由来は「配置が消える＝台帳 origin が自動で再浮上」で返却が済むので、控えは 'none'
+        //   （解除で席へ戻せば自動で再消化される＝台帳を触ってはいけない）。
+        statusStamps[studentIndex] = { kind: 'none' }
+        continue
+      }
       movedStudentCount += 1
       returnedEntryIds.push(statusEntry.id)
+      statusStamps[studentIndex] = {
+        kind: 'makeup',
+        originDateKey: materializedResult.origin?.dateKey,
+        originSlotNumber: materializedResult.origin?.slotNumber ?? undefined,
+        fallbackAdded: materializedResult.fallbackAdded,
+      }
       continue
     }
     if (!HOLIDAY_STOCK_RETURNABLE_STATUSES.has(statusEntry.status)) continue // absent/moved は会計済みなので触らない
     if (!includeRegularLessons && statusEntry.lessonType !== 'special') continue // 全コマ削除では通常・体験・増コマを返さない
-    returnEntryToStock(statusEntry, cellDateKey)
+    statusStamps[studentIndex] = returnEntryToStock(statusEntry, cellDateKey)
   }
 
   return {
     ledgers: { manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, fallbackLectureStockStudents, fallbackMakeupStudents },
     movedStudentCount,
     returnedEntryIds,
+    stockReturnStamps: { placementStamps, statusStamps },
   }
+}
+
+// `holiday` 記録へ「休日設定で在庫へ返した控え」を焼き込む唯一の場所(2026-09-20)。
+// 控えが無い(undefined)ときはフィールドを付けない＝**旧データと同じ形**にする(付ける/付けないの差だけで
+// 「巻き戻せる記録か」を判別するため。空オブジェクトを入れると旧データと区別できなくなる)。
+function withHolidayStockReturnStamp(record: StudentStatusEntry, stamp: HolidayStockReturnStamp | undefined): StudentStatusEntry {
+  return stamp ? { ...record, holidayStockReturn: stamp } : record
 }
 
 // 休日設定(D5・オーナー確定 2026-09-16)で、机1つ分の中身を**記録として残す**純関数。
@@ -1702,8 +1763,20 @@ export function reconcileHolidayDeskStockReturns(params: {
 //     出欠記録があるときは既存を優先**する(会計を持つ記録を表示専用の記録で上書きしない)。
 //   - 体験(trial) … 記録を作らない(日程表に載らず在庫も持たないため)。
 //   - `enabled=false`(機能フラグ OFF) … 従来どおり全消去。既存の挙動と完全に一致させる。
-export function convertHolidayDeskEntriesToRecords(params: { desk: DeskCell; cell: SlotCell; enabled: boolean }) {
-  const { desk, cell, enabled } = params
+//
+// ★2026-09-20(オーナー確定・休日解除は逆操作): 作った `holiday` 記録に、直前の会計点が返した内容の控え
+//   (`stockReturns` = `reconcileHolidayDeskStockReturns` の `stockReturnStamps`)を焼き込む。**台帳は触らない**
+//   (控えを持つだけ)。控えが無い記録は解除で席へ戻さない(この改定より前のデータ＝巻き戻せない・安全側)。
+export function convertHolidayDeskEntriesToRecords(params: {
+  desk: DeskCell
+  cell: SlotCell
+  enabled: boolean
+  stockReturns?: {
+    placementStamps: Array<HolidayStockReturnStamp | undefined>
+    statusStamps: Array<HolidayStockReturnStamp | undefined>
+  }
+}) {
+  const { desk, cell, enabled, stockReturns } = params
   if (!enabled) {
     desk.statusSlots = undefined
     desk.lesson = undefined
@@ -1715,18 +1788,274 @@ export function convertHolidayDeskEntriesToRecords(params: { desk: DeskCell; cel
     const existing = desk.statusSlots?.[studentIndex] ?? null
     if (existing) {
       nextStatusSlots[studentIndex] = HOLIDAY_RECORD_CONVERTED_STATUSES.has(existing.status)
-        ? { ...existing, status: 'holiday' }
+        ? withHolidayStockReturnStamp({ ...existing, status: 'holiday' }, stockReturns?.statusStamps[studentIndex])
         : { ...existing }
       continue
     }
     const student = desk.lesson?.studentSlots[studentIndex] ?? null
     if (!student) continue
     if (student.lessonType === 'trial') continue
-    nextStatusSlots[studentIndex] = buildStudentStatusEntry(student, cell, desk, 'holiday')
+    nextStatusSlots[studentIndex] = withHolidayStockReturnStamp(
+      buildStudentStatusEntry(student, cell, desk, 'holiday'),
+      stockReturns?.placementStamps[studentIndex],
+    )
   }
 
   desk.statusSlots = nextStatusSlots.some((entry) => entry) ? nextStatusSlots : undefined
   desk.lesson = undefined
+}
+
+// 休日解除で復元できなかった理由(メッセージと確認ダイアログに出す)。
+//   'legacy-record'    … 控え(holidayStockReturn)が無い旧データ。巻き戻し量が決められないので触らない。
+//   'seat-taken'       … 休日中/解除後にその席へ別の生徒が入っている。上書きしない。
+//   'makeup-in-record' … 休日で出た振替を別日に組み、そこに出欠記録が付いている(実施済み)。授業を消さない。
+export type HolidayReleaseSkipReason = 'legacy-record' | 'seat-taken' | 'makeup-in-record'
+
+export type HolidayReleaseRemovedMakeup = {
+  studentName: string
+  dateKey: string
+  slotNumber: number
+  lessonType: 'makeup' | 'special'
+}
+
+export type HolidayReleaseRestorationResult = {
+  nextWeeks: SlotCell[][]
+  ledgers: HolidayStockLedgers
+  /** 席へ戻した生徒の表示名(件数とメッセージに使う)。 */
+  restoredStudentNames: string[]
+  /**
+   * 席へ戻した通常授業の抑止キー。呼び出し側は**このキーを抑止へ積まない/既にあれば外す**。
+   * ★積んだままにすると、再マージ(mergeManagedWeek)でテンプレ授業が抑止され、盤面に戻した通常授業が
+   *   「テンプレに無い managed lesson」として落とされて消える(INV-12/INV-03 の穴)。
+   */
+  restoredOccurrenceKeys: string[]
+  /** 別日に組まれていて消した振替/講習コマ。 */
+  removedMakeups: HolidayReleaseRemovedMakeup[]
+  skipped: Array<{ studentName: string; reason: HolidayReleaseSkipReason }>
+}
+
+// 「休日設定で出た未消化を、別日に組んだコマ」を探す。origin の一致条件は控え(stamp)の日付＋時限で、
+// 在庫キー(振替=生徒×科目 / 講習=生徒×科目×講習期間)も突き合わせる。
+// ★素朴に「日付だけ」で探すと同じ日付の別 origin(同日2コマ)を取り違えるので、時限が分かるときは時限一致を優先する
+//   (resolveRemainingOriginToken と同じ「行自身の値で照合する」方針)。
+// ★出欠記録(statusSlots)側に一致するコマがあれば `blocked`。実施済み(出席・休み・振無休)の授業は消さない。
+//   moved / holiday は会計を持たない表示専用記録なので無視する(移動先の配置が別に見つかる)。
+function findHolidayReleaseMakeupConsumption(params: {
+  weeks: SlotCell[][]
+  releasedDateKey: string
+  stamp: HolidayStockReturnStamp
+  record: StudentStatusEntry
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+}): { blocked: boolean; placement: { desk: DeskCell; studentIndex: number; cell: SlotCell; entry: StudentEntry } | null } {
+  const { weeks, releasedDateKey, stamp, record, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
+  const originDateKey = stamp.originDateKey
+  if (!originDateKey) return { blocked: false, placement: null }
+
+  const expectedLessonType = stamp.kind === 'lecture' ? 'special' : 'makeup'
+  const expectedStockKey = stamp.kind === 'lecture'
+    ? buildLectureStockKey(resolveLectureStockStudentKey(record, managedStudentByAnyName, resolveDisplayName), record.subject, record.specialSessionId)
+    : buildMakeupStockKey(resolveStockId(record as unknown as StudentEntry), record.subject)
+
+  const matches = (entry: Pick<StudentEntry, 'name' | 'subject' | 'lessonType' | 'managedStudentId' | 'makeupSourceDate' | 'makeupSourceLabel' | 'specialSessionId'>) => {
+    if (entry.lessonType !== expectedLessonType) return false
+    if (entry.makeupSourceDate !== originDateKey) return false
+    const stockKey = stamp.kind === 'lecture'
+      ? buildLectureStockKey(resolveLectureStockStudentKey(entry, managedStudentByAnyName, resolveDisplayName), entry.subject, entry.specialSessionId)
+      : buildMakeupStockKey(resolveStockId(entry as StudentEntry), entry.subject)
+    return stockKey === expectedStockKey
+  }
+  const isExactSlot = (entry: { makeupSourceLabel?: string }) => (
+    stamp.originSlotNumber != null && parseOriginSlotNumber(entry.makeupSourceLabel) === stamp.originSlotNumber
+  )
+
+  let fallbackPlacement: { desk: DeskCell; studentIndex: number; cell: SlotCell; entry: StudentEntry } | null = null
+  let exactPlacement: { desk: DeskCell; studentIndex: number; cell: SlotCell; entry: StudentEntry } | null = null
+
+  for (const week of weeks) {
+    for (const cell of week) {
+      if (cell.dateKey === releasedDateKey) continue // 解除する日そのもの(戻した席)は「別日」ではない
+      for (const desk of cell.desks) {
+        for (const statusEntry of desk.statusSlots ?? []) {
+          if (!statusEntry) continue
+          if (isStaleSeatMarkerStatus(statusEntry.status)) continue // moved / holiday は会計を持たない
+          if (matches(statusEntry)) return { blocked: true, placement: null }
+        }
+        const studentSlots = desk.lesson?.studentSlots ?? []
+        for (let studentIndex = 0; studentIndex < studentSlots.length; studentIndex += 1) {
+          const entry = studentSlots[studentIndex]
+          if (!entry || !matches(entry)) continue
+          const found = { desk, studentIndex, cell, entry }
+          if (isExactSlot(entry)) exactPlacement = exactPlacement ?? found
+          else fallbackPlacement = fallbackPlacement ?? found
+        }
+      }
+    }
+  }
+
+  return { blocked: false, placement: exactPlacement ?? fallbackPlacement }
+}
+
+// INV-06 / spec-makeup-stock §B-2-2c(オーナー確定 2026-09-20): **休日解除は休日設定の逆操作**。
+// 休日設定で作った `holiday` 記録の生徒を元の席へ戻し、設定時に在庫へ返した分を**控え(holidayStockReturn)
+// どおりに**巻き戻し、その未消化を既に別日へ組んでいたらその振替/講習コマを盤面から消す(在庫は中立)。
+//
+// ★対称性の作り方(往復で台帳が完全一致する根拠):
+//   - 振替(kind:'makeup') … 設定時に積んだ origin を1件外す。**別日のコマを消しても外す**
+//     (振替の消化は盤面走査で決まるので、コマを消せば消化 −1・origin を外して ±0)。
+//   - 講習(kind:'lecture') … 別日のコマを**消していないときだけ** −1 と origin 消費を積み直す。
+//     消したときは「設定時の +1」と「別日配置の −1」が打ち消し合っているので台帳を触ってはいけない
+//     (講習在庫はデルタ台帳＝盤面を走査しないため。触ると誤減する)。
+//   - 未管理生徒の表示名フォールバックは**この休日設定で新規に足した分だけ**消す(`fallbackAdded`)。
+// ★対象は `holiday` 記録だけ。`absent`(会計の根拠)・`moved`(移動先が会計を持つ)・他の記録は触らない。
+// ★席が別の生徒で埋まっている/控えが無い旧データ/別日の振替に出欠記録が付いている場合は**復元しない**
+//   (安全側。台帳も盤面も触らず記録を残し、件数だけ呼び出し側へ返す)。
+// ⚠️ 呼び出しは休日解除ハンドラの1点だけ。再マージ effect や読込経路で走らせてはいけない(INV-03)。
+export function computeHolidayReleaseRestoration(params: {
+  weeks: SlotCell[][]
+  dateKey: string
+  ledgers: HolidayStockLedgers
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveDisplayName: (name: string) => string
+  resolveStockId: (student: StudentEntry) => string
+}): HolidayReleaseRestorationResult {
+  const { dateKey, managedStudentByAnyName, resolveDisplayName, resolveStockId } = params
+  const nextWeeks = cloneWeeks(params.weeks)
+  let ledgers: HolidayStockLedgers = {
+    manualLectureStockCounts: { ...params.ledgers.manualLectureStockCounts },
+    manualLectureStockOrigins: cloneManualLectureStockOrigins(params.ledgers.manualLectureStockOrigins),
+    manualMakeupAdjustments: cloneOriginMap(params.ledgers.manualMakeupAdjustments),
+    fallbackLectureStockStudents: { ...params.ledgers.fallbackLectureStockStudents },
+    fallbackMakeupStudents: { ...params.ledgers.fallbackMakeupStudents },
+  }
+  const restoredStudentNames: string[] = []
+  const restoredOccurrenceKeys: string[] = []
+  const removedMakeups: HolidayReleaseRemovedMakeup[] = []
+  const skipped: Array<{ studentName: string; reason: HolidayReleaseSkipReason }> = []
+
+  const targets: Array<{ desk: DeskCell; studentIndex: number; record: StudentStatusEntry }> = []
+  for (const week of nextWeeks) {
+    for (const cell of week) {
+      if (cell.dateKey !== dateKey) continue
+      for (const desk of cell.desks) {
+        const statusSlots = desk.statusSlots ?? []
+        for (let studentIndex = 0; studentIndex < statusSlots.length; studentIndex += 1) {
+          const record = statusSlots[studentIndex]
+          if (record?.status !== 'holiday') continue
+          targets.push({ desk, studentIndex, record })
+        }
+      }
+    }
+  }
+
+  for (const { desk, studentIndex, record } of targets) {
+    const studentName = resolveDisplayName(record.name)
+    const stamp = record.holidayStockReturn
+    if (!stamp) {
+      skipped.push({ studentName, reason: 'legacy-record' })
+      continue
+    }
+    if (desk.lesson?.studentSlots[studentIndex]) {
+      skipped.push({ studentName, reason: 'seat-taken' })
+      continue
+    }
+
+    // 既に別日へ組んである振替/講習コマを探す(消せないものが見つかったら復元しない)。
+    const consumption = stamp.kind === 'none'
+      ? { blocked: false, placement: null }
+      : findHolidayReleaseMakeupConsumption({
+        weeks: nextWeeks,
+        releasedDateKey: dateKey,
+        stamp,
+        record,
+        managedStudentByAnyName,
+        resolveDisplayName,
+        resolveStockId,
+      })
+    if (consumption.blocked) {
+      skipped.push({ studentName, reason: 'makeup-in-record' })
+      continue
+    }
+
+    if (consumption.placement) {
+      const { desk: placementDesk, studentIndex: placementIndex, cell: placementCell, entry } = consumption.placement
+      removeStudentFromDeskLesson(placementDesk, placementIndex)
+      removedMakeups.push({
+        studentName,
+        dateKey: placementCell.dateKey,
+        slotNumber: placementCell.slotNumber,
+        lessonType: entry.lessonType === 'special' ? 'special' : 'makeup',
+      })
+    }
+
+    if (stamp.kind === 'makeup' && stamp.originDateKey) {
+      const stockKey = buildMakeupStockKey(resolveStockId(record as unknown as StudentEntry), record.subject)
+      ledgers = {
+        ...ledgers,
+        manualMakeupAdjustments: removeMakeupOrigin(ledgers.manualMakeupAdjustments, stockKey, stamp.originDateKey),
+      }
+      if (stamp.fallbackAdded) {
+        const { [stockKey]: _removed, ...restFallback } = ledgers.fallbackMakeupStudents
+        ledgers = { ...ledgers, fallbackMakeupStudents: restFallback }
+      }
+    } else if (stamp.kind === 'lecture') {
+      const lectureStockKey = buildLectureStockKey(
+        resolveLectureStockStudentKey(record, managedStudentByAnyName, resolveDisplayName),
+        record.subject,
+        record.specialSessionId,
+      )
+      if (!consumption.placement) {
+        // 別日に組み直していない＝設定時の「+1 と origin」がそのまま残っているので取り消す。
+        // ★removeLectureStockCount は使わない(0以下でキーが消え配置済みが未消化に再出現する・負値デルタ台帳)。
+        const reconsumed = reconsumeSessionLectureStock({
+          manualLectureStockCounts: ledgers.manualLectureStockCounts,
+          manualLectureStockOrigins: ledgers.manualLectureStockOrigins,
+          stockKey: lectureStockKey,
+          origin: {
+            sessionId: record.specialSessionId,
+            originDateKey: stamp.originDateKey,
+            originSlotNumber: stamp.originSlotNumber,
+          },
+        })
+        ledgers = {
+          ...ledgers,
+          manualLectureStockCounts: reconsumed.nextManualLectureStockCounts,
+          manualLectureStockOrigins: reconsumed.nextManualLectureStockOrigins,
+        }
+      }
+      if (stamp.fallbackAdded) {
+        const { [lectureStockKey]: _removed, ...restFallback } = ledgers.fallbackLectureStockStudents
+        ledgers = { ...ledgers, fallbackLectureStockStudents: restFallback }
+      }
+    }
+
+    // 席へ戻す(記録は消す)。lesson は記録が持つ元の lesson id で作り直すので、テンプレ再マージは
+    // lessonId 一致で同じ授業として畳める＝同じ生徒が同じコマに二重に出ない(INV-12)。
+    restoreStudentToDesk(desk, studentIndex, record)
+    setDeskStudentStatus(desk, studentIndex, null)
+    const restoredStudent = buildStudentEntryFromStatus(record)
+    const occurrenceKey = resolveSuppressedRegularLessonOccurrenceKey(restoredStudent, record.dateKey, record.slotNumber)
+    if (occurrenceKey) restoredOccurrenceKeys.push(occurrenceKey)
+    restoredStudentNames.push(studentName)
+  }
+
+  return { nextWeeks, ledgers, restoredStudentNames, restoredOccurrenceKeys, removedMakeups, skipped }
+}
+
+const HOLIDAY_RELEASE_SKIP_LABELS: Record<HolidayReleaseSkipReason, string> = {
+  'legacy-record': 'この機能より前に作られた記録のため',
+  'seat-taken': '席に別の生徒がいるため',
+  'makeup-in-record': '別日に組んだコマに出欠記録があるため',
+}
+
+// 休日解除で戻せなかった理由を室長向けの1行にまとめる(確認ダイアログと完了メッセージで共有)。
+export function summarizeHolidayReleaseSkips(skipped: Array<{ reason: HolidayReleaseSkipReason }>) {
+  const counts = new Map<HolidayReleaseSkipReason, number>()
+  for (const entry of skipped) counts.set(entry.reason, (counts.get(entry.reason) ?? 0) + 1)
+  return Array.from(counts.entries())
+    .map(([reason, count]) => `${HOLIDAY_RELEASE_SKIP_LABELS[reason]}${count}件`)
+    .join('・')
 }
 
 // spec-lecture-stock §6 / spec-schedule-pdf §D: ストック由来(session)講習の配置時、提出された授業時間を
@@ -9180,10 +9509,50 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         ? [...classroomSettings.forceOpenDates.filter((value) => value !== dateKey), dateKey].sort()
         : classroomSettings.forceOpenDates.filter((value) => value !== dateKey)
 
+      // 休日解除は休日設定の逆操作(オーナー確定 2026-09-20・INV-06 / spec-makeup-stock §B-2-2c):
+      // 「休)」= holiday 記録の生徒を元の席へ戻し、設定時に返した在庫を控えどおり巻き戻し、
+      // 既に別日へ組んでいた振替/講習コマは消す。フラグ OFF / 記録が無い日は従来どおり(復元は起きない)。
+      const restoration = transferSourceRestDisplayEnabled
+        ? computeHolidayReleaseRestoration({
+          weeks,
+          dateKey,
+          ledgers: {
+            manualLectureStockCounts,
+            manualLectureStockOrigins,
+            manualMakeupAdjustments,
+            fallbackLectureStockStudents,
+            fallbackMakeupStudents,
+          },
+          managedStudentByAnyName,
+          resolveDisplayName: resolveBoardStudentDisplayName,
+          resolveStockId: resolveBoardStudentStockId,
+        })
+        : null
+      if (restoration && (restoration.restoredStudentNames.length > 0 || restoration.skipped.length > 0)) {
+        const confirmLines = [`${dateKey} の休日設定を解除します。`]
+        confirmLines.push(`${restoration.restoredStudentNames.length}人を元の席へ戻します。`)
+        if (restoration.removedMakeups.length > 0) {
+          const removedLabel = Array.from(new Set(restoration.removedMakeups.map((removed) => `${removed.dateKey} ${removed.slotNumber}限`))).join('、')
+          confirmLines.push(`うち${restoration.removedMakeups.length}人は別日に組んだコマ(${removedLabel})を消します。`)
+        }
+        if (restoration.skipped.length > 0) {
+          confirmLines.push(`${restoration.skipped.length}人は戻せません(${summarizeHolidayReleaseSkips(restoration.skipped)})。記録はそのまま残します。`)
+        }
+        confirmLines.push('よろしいですか。')
+        if (!window.confirm(confirmLines.join('\n'))) {
+          setStatusMessage('休日設定の解除をキャンセルしました。')
+          return
+        }
+      }
+      const restoredOccurrenceKeys = new Set(restoration?.restoredOccurrenceKeys ?? [])
+
       // Suppress managed regular lessons so they don't get re-placed by the overlay.
       // The manual makeup adjustments added when the holiday was set still apply,
       // and restoring the lessons would double-count.
-      let nextSuppressedRegularLessonOccurrences = [...suppressedRegularLessonOccurrences]
+      // ★席へ戻した通常授業は抑止しない(＝既にある抑止も外す)。抑止したままだと再マージで
+      //   「テンプレに無い managed lesson」として戻した授業が落ち、解除直後の表示から消える。
+      let nextSuppressedRegularLessonOccurrences = suppressedRegularLessonOccurrences
+        .filter((key) => !restoredOccurrenceKeys.has(key))
       const holidayDate = parseDateKey(dateKey)
       const holidayDayOfWeek = holidayDate.getDay()
       const schoolYear = resolveOperationalSchoolYear(holidayDate)
@@ -9207,31 +9576,43 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           if (!student) continue
           if (!isActiveOnDate(student.entryDate, student.withdrawDate, student.birthDate, dateKey)) continue
           const occurrenceKey = `${participant.studentId}__${participant.subject}__${dateKey}__${row.slotNumber}`
+          if (restoredOccurrenceKeys.has(occurrenceKey)) continue // 席へ戻した分は抑止しない(戻した授業が再マージで消える)
           nextSuppressedRegularLessonOccurrences = appendSuppressedRegularLessonOccurrence(nextSuppressedRegularLessonOccurrences, occurrenceKey)
         }
       }
 
       commitWeeks(
-        cloneWeeks(weeks),
+        restoration?.nextWeeks ?? cloneWeeks(weeks),
         weekIndex,
         selectedCellId,
         selectedDeskIndex,
         classroomSettings.holidayDates.filter((value) => value !== dateKey),
         nextForceOpenDates,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
+        restoration?.ledgers.manualMakeupAdjustments,
+        suppressedMakeupOrigins,
+        restoration?.ledgers.fallbackMakeupStudents,
+        restoration?.ledgers.manualLectureStockCounts,
+        restoration?.ledgers.manualLectureStockOrigins,
+        restoration?.ledgers.fallbackLectureStockStudents,
         nextSuppressedRegularLessonOccurrences,
       )
       setSelectedHolidayDate(dateKey)
       setStudentMenu(null)
       setSelectedStudentId(null)
       setSelectedMakeupStockKey(null)
-      recordOperationEvent('holiday-toggle', { action: isClosedWeekday ? 'release-closed-weekday' : 'release-holiday', dateKey })
-      setStatusMessage(isClosedWeekday ? `${dateKey} の休校設定を解除しました。営業日に戻しました。` : `${dateKey} の休日設定を解除しました。通常営業に戻しました。`)
+      recordOperationEvent('holiday-toggle', {
+        action: isClosedWeekday ? 'release-closed-weekday' : 'release-holiday',
+        dateKey,
+        restoredCount: restoration?.restoredStudentNames.length ?? 0,
+        removedMakeupCount: restoration?.removedMakeups.length ?? 0,
+        skippedCount: restoration?.skipped.length ?? 0,
+      })
+      setStatusMessage([
+        isClosedWeekday ? `${dateKey} の休校設定を解除しました。営業日に戻しました。` : `${dateKey} の休日設定を解除しました。通常営業に戻しました。`,
+        ...(restoration && restoration.restoredStudentNames.length > 0 ? [`${restoration.restoredStudentNames.length}件の授業を元の席へ戻しました。`] : []),
+        ...(restoration && restoration.removedMakeups.length > 0 ? [`別日に組んでいた${restoration.removedMakeups.length}件のコマを消しました。`] : []),
+        ...(restoration && restoration.skipped.length > 0 ? [`${restoration.skipped.length}件は戻せませんでした(${summarizeHolidayReleaseSkips(restoration.skipped)})。`] : []),
+      ].join(''))
       return
     }
 
@@ -9290,7 +9671,13 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
           // D5(2026-09-16): 机の中身の破棄は convertHolidayDeskEntriesToRecords へ集約する。
           // フラグ ON なら「在庫へ返し終えた記録」を表示専用(holiday)に変換して残し、
           // OFF なら従来どおり全消去する。★在庫会計はこの上の reconcile が唯一の担当(この関数は触らない)。
-          convertHolidayDeskEntriesToRecords({ desk, cell, enabled: transferSourceRestDisplayEnabled })
+          // 2026-09-20: 返した内容の控え(stockReturnStamps)を記録へ焼き込む＝休日解除の巻き戻しの唯一の根拠。
+          convertHolidayDeskEntriesToRecords({
+            desk,
+            cell,
+            enabled: transferSourceRestDisplayEnabled,
+            stockReturns: result.stockReturnStamps,
+          })
         }
       }
     }

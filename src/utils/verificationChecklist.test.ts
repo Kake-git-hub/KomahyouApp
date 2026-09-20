@@ -84,7 +84,18 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('s-1')!.check!.join('\n')).toContain('復元しても戻らないもの')
     expect(byId.get('s-2')!.prep).toContain('保存はしない')
     expect((byId.get('m-2')!.check ?? []).join(' / ')).toContain('室長登録')
-    for (const id of ['r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.540')
+    for (const id of ['r-1', 'r-2', 'r-3', 'r-4', 'r-6', 'r-7', 'r-8']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.540')
+    // 第20版(v1.5.553・オーナー確定 2026-09-20): r-5 は「休日解除＝休日設定の逆操作」の手順へ差し替え。
+    // 旧定義(席は操作できるが生徒は戻らない)の観点へ戻さない。
+    const r5 = byId.get('r-5')!
+    expect(r5.introducedIn).toBe('v1.5.553')
+    const r5Text = [r5.title, r5.prep ?? '', ...r5.steps, ...(r5.check ?? [])].join(' / ')
+    expect(r5Text).toContain('元の席へ戻る')
+    expect(r5Text).toContain('別の日へ組んでいた振替コマが消え')
+    expect(r5Text).toContain('休日設定前の控えと同じ')
+    expect(r5Text).not.toContain('「生徒追加」で置いた席は「休」が生徒の下に隠れて残り')
+    // y-2 は丸ごと振替の移動元の「休」なので席へ戻らない(r-5 の新仕様と混同しない)。
+    expect((byId.get('y-2')!.check ?? []).join(' / ')).toContain('席へは戻らない')
     for (const id of ['y-1', 'y-2', 'y-3', 'y-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.541')
     // 第15版(v1.5.542): 確認リストの文字拡大の確認項目。版は据え置き(第13版の結果待ちを消さない)。
     const c2 = byId.get('c-2')!

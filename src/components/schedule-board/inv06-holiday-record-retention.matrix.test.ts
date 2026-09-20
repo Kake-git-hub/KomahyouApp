@@ -5,16 +5,20 @@ import type { ClassroomSettings } from '../../types/appState'
 import {
   carryBoardStatusRecordsOntoClosedDayCell,
   clearStudentStatusFromDesk,
+  computeHolidayReleaseRestoration,
   computeStudentMove,
   convertHolidayDeskEntriesToRecords,
   isStaleSeatMarkerStatus,
   materializeDisplacedStatusEntryIntoLedgers,
+  overlayBoardWeeksOnScheduleCells,
   reconcileHolidayDeskStockReturns,
   remergeBoardWeekWithManagedData,
   resolveDisplayRecordClearButton,
   resolveEmptySeatMenuVariant,
+  summarizeHolidayReleaseSkips,
 } from './ScheduleBoardScreen'
-import { collectMakeupOriginDatesByKey } from './makeupStock'
+import { buildLectureStockKey } from './lectureStock'
+import { buildMakeupStockKey, collectMakeupOriginDatesByKey } from './makeupStock'
 
 // ============================================================================
 // INV-06 操作マトリクス（休日設定の「記録保持」・D5 オーナー確定 2026-09-16）
@@ -618,5 +622,346 @@ describe('INV-06 マトリクス: 休日解除後の holiday 記録の席は mov
     expect(resolveDisplayRecordClearButton('holiday', false)).toEqual({ label: '休日記録の表示解除', testId: 'menu-clear-holiday-button' })
     expect(resolveDisplayRecordClearButton('moved', true)).toEqual({ label: '休)表示解除(移動元)', testId: 'menu-clear-moved-button' })
     expect(resolveDisplayRecordClearButton('moved', false)).toEqual({ label: '移動元表示解除', testId: 'menu-clear-moved-button' })
+  })
+})
+
+// ============================================================================
+// 行: 休日解除 × 席の復元・在庫の巻き戻し（オーナー確定 2026-09-20・確認リスト r-5 要改善）
+//
+// 改定: 従来の休日解除は「holidayDates から外して、その曜日のテンプレ通常授業を全部抑止する」だけで、
+// 「休)」= holiday 記録は残ったまま席へ戻らなかった（§B-2-2c 旧「休日解除側は変更しない」）。
+// オーナー確定で **休日解除は休日設定の逆操作** になった:
+//   1. holiday 記録の生徒を元の席・科目・講師の机へ戻す。
+//   2. 休日設定で増えた未消化（振替 origin / 講習 +1）を**控え(holidayStockReturn)どおりに**巻き戻す
+//      ＝設定→解除の往復で台帳が**完全一致**する。
+//   3. その未消化を既に別日へ組んでいたら、その振替/講習コマを盤面から消す（消した件数を室長に知らせる）。
+// 戻せないものは触らない（記録も台帳もそのまま・件数だけ返す）: 控えの無い旧データ／席が別の生徒で埋まっている／
+// 別日のコマに出欠記録がある（実施済みの授業は消さない）。
+//
+// ★個別ボタン「休日記録の表示解除」の仕様は**変えていない**（上の「記録を消すだけ」assert は不変で維持）。
+// ============================================================================
+describe('INV-06 マトリクス: 休日解除は休日設定の逆操作(席へ復元・在庫巻き戻し・別日の振替は消す)', () => {
+  const RELEASE_DATE = '2026-10-07' // 水
+  const ALT_DATE = '2026-10-09' // 金（別日に組んだ振替を置く日）
+  const MANAGED_LESSON_ID = 'managed_row1_2026-10-07'
+  const STOCK_KEY = buildMakeupStockKey('student-1', '数')
+
+  type Ledgers = Parameters<typeof computeHolidayReleaseRestoration>[0]['ledgers']
+
+  const roster = new Map<string, StudentRow>([['大槻 太郎', { id: 'student-1', name: '大槻 太郎' } as StudentRow]])
+  const resolveDisplayName = (name: string) => name
+  const resolveStockId = (entry: StudentEntry) => entry.managedStudentId ?? roster.get(entry.name)?.id ?? `name:${entry.name}`
+
+  function emptyLedgers(overrides: Partial<Ledgers> = {}): Ledgers {
+    return {
+      manualLectureStockCounts: {},
+      manualLectureStockOrigins: {},
+      manualMakeupAdjustments: {},
+      fallbackLectureStockStudents: {},
+      fallbackMakeupStudents: {},
+      ...overrides,
+    }
+  }
+
+  function cellOn(dateKey: string, slotNumber: number, desks: DeskCell[]): SlotCell {
+    return { ...CELL, id: `${dateKey}_${slotNumber}`, dateKey, slotNumber, slotLabel: `${slotNumber}限`, isOpenDay: true, desks }
+  }
+
+  function managedDesk(studentSlots: [StudentEntry | null, StudentEntry | null]): DeskCell {
+    return { id: 'desk-1', teacher: '田中講師', lesson: { id: MANAGED_LESSON_ID, note: '管理データ反映', studentSlots } }
+  }
+
+  function regularStudent(overrides: Partial<StudentEntry> = {}) {
+    return student({ id: `sA_${RELEASE_DATE}_数`, ...overrides })
+  }
+
+  function findDesk(weeks: SlotCell[][], dateKey: string, deskIndex = 0) {
+    const cell = weeks.flat().find((entry) => entry.dateKey === dateKey)
+    if (!cell) throw new Error(`cell not found: ${dateKey}`)
+    return cell.desks[deskIndex]
+  }
+
+  // 休日設定ハンドラと同じ順序（在庫戻し → 記録変換）で 1 日分を休日にする。
+  function runHolidaySet(params: { weeks: SlotCell[][]; ledgers: Ledgers; enabled?: boolean; ledgerOriginDatesByKey?: Record<string, string[]> }) {
+    const nextWeeks = structuredClone(params.weeks)
+    let ledgers = params.ledgers
+    for (const week of nextWeeks) {
+      for (const cell of week) {
+        if (cell.dateKey !== RELEASE_DATE) continue
+        for (const desk of cell.desks) {
+          const result = reconcileHolidayDeskStockReturns({
+            desk,
+            cellDateKey: cell.dateKey,
+            cellSlotNumber: cell.slotNumber,
+            ledgers,
+            managedStudentByAnyName: roster,
+            resolveDisplayName,
+            resolveStockId,
+            ledgerOriginDatesByKey: params.ledgerOriginDatesByKey ?? {},
+          })
+          ledgers = result.ledgers
+          convertHolidayDeskEntriesToRecords({ desk, cell, enabled: params.enabled ?? true, stockReturns: result.stockReturnStamps })
+        }
+      }
+    }
+    return { weeks: nextWeeks, ledgers }
+  }
+
+  function runHolidayRelease(weeks: SlotCell[][], ledgers: Ledgers) {
+    return computeHolidayReleaseRestoration({
+      weeks,
+      dateKey: RELEASE_DATE,
+      ledgers,
+      managedStudentByAnyName: roster,
+      resolveDisplayName,
+      resolveStockId,
+    })
+  }
+
+  function makeupOnAltDate(overrides: Partial<StudentEntry> = {}) {
+    return student({
+      id: `sA_${ALT_DATE}_数`,
+      lessonType: 'makeup',
+      makeupSourceDate: RELEASE_DATE,
+      makeupSourceLabel: '2026/10/7(水) 1限',
+      ...overrides,
+    })
+  }
+
+  it('★(a)(b) 通常授業: 設定→解除の往復で席が元の机・科目・講師で戻り、台帳は休日設定前と完全一致する', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+
+    const set = runHolidaySet({ weeks, ledgers: before })
+    // 休日設定: 振替 origin が 1 件積まれ、記録に「返した控え」が載る。
+    expect(set.ledgers.manualMakeupAdjustments).toEqual({ [STOCK_KEY]: [{ dateKey: RELEASE_DATE }] })
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]).toMatchObject({
+      status: 'holiday',
+      holidayStockReturn: { kind: 'makeup', originDateKey: RELEASE_DATE, fallbackAdded: false },
+    })
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    const desk = findDesk(released.nextWeeks, RELEASE_DATE)
+    expect(desk.lesson?.id).toBe(MANAGED_LESSON_ID)
+    expect(desk.lesson?.studentSlots[0]).toMatchObject({ managedStudentId: 'student-1', subject: '数', lessonType: 'regular' })
+    expect(desk.teacher).toBe('田中講師')
+    expect(desk.statusSlots).toBeUndefined()
+    expect(released.ledgers).toEqual(before) // ★往復で台帳が完全一致（誤増も誤減も無い）
+    expect(released.restoredStudentNames).toEqual(['大槻 太郎'])
+    expect(released.removedMakeups).toEqual([])
+    expect(released.skipped).toEqual([])
+    // 復元した通常授業の抑止キーは呼び出し側で**積まない/外す**ためのもの。
+    expect(released.restoredOccurrenceKeys).toEqual([`student-1__数__${RELEASE_DATE}__1`])
+  })
+
+  it('★(c) 別日に組んだ振替コマは消え、在庫は中立(origin を外す ＋ 消化が減る で ±0)', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    // 未消化になった振替を別日(10/9 2限)へ組んだ状態を作る。
+    findDesk(set.weeks, ALT_DATE).lesson = { id: 'alt-lesson', studentSlots: [makeupOnAltDate(), null] }
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(findDesk(released.nextWeeks, ALT_DATE).lesson).toBeUndefined() // 別日のコマは消える
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]?.managedStudentId).toBe('student-1')
+    expect(released.removedMakeups).toEqual([{ studentName: '大槻 太郎', dateKey: ALT_DATE, slotNumber: 2, lessonType: 'makeup' }])
+    expect(released.ledgers).toEqual(before) // 消化 −1 と origin 除去が打ち消し合う
+  })
+
+  it('★(d) 別日の振替に出欠記録(出席)が付いていたら、そのコマは消さず復元をスキップする', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    findDesk(set.weeks, ALT_DATE).statusSlots = [statusEntry({
+      id: 'alt-attended', status: 'attended', lessonType: 'makeup', dateKey: ALT_DATE, slotNumber: 2,
+      makeupSourceDate: RELEASE_DATE, makeupSourceLabel: '2026/10/7(水) 1限',
+    }), null]
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(released.skipped).toEqual([{ studentName: '大槻 太郎', reason: 'makeup-in-record' }])
+    expect(released.restoredStudentNames).toEqual([])
+    expect(findDesk(released.nextWeeks, ALT_DATE).statusSlots?.[0]?.id).toBe('alt-attended') // 実施済みの授業は消さない
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).statusSlots?.[0]?.status).toBe('holiday') // 記録は残す
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson).toBeUndefined()
+    expect(released.ledgers).toEqual(set.ledgers) // 台帳も触らない
+  })
+
+  it('★(e) absent / moved の記録は復元対象にしない(会計の根拠・移動先の会計を壊さない)', () => {
+    const ledgers = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [{
+      id: 'desk-1',
+      teacher: '田中講師',
+      statusSlots: [
+        statusEntry({ id: 'status-absent', status: 'absent', dateKey: RELEASE_DATE, slotNumber: 1 }),
+        statusEntry({ id: 'status-moved', status: 'moved', dateKey: RELEASE_DATE, slotNumber: 1, moveDestinationDateKey: ALT_DATE, moveDestinationSlotNumber: 2 }),
+      ],
+    }])]]
+
+    const released = runHolidayRelease(weeks, ledgers)
+    const desk = findDesk(released.nextWeeks, RELEASE_DATE)
+    expect(desk.statusSlots?.map((entry) => entry?.id)).toEqual(['status-absent', 'status-moved'])
+    expect(desk.lesson).toBeUndefined()
+    expect(released.restoredStudentNames).toEqual([])
+    expect(released.skipped).toEqual([])
+    expect(released.ledgers).toEqual(ledgers)
+  })
+
+  it('★(f) 席が別の生徒で埋まっていたら復元しない(上書きせず記録も台帳も残す)', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    // 休日中/解除後にその席へ別の生徒を組んだ状態（記録は生徒の下に隠れている）。
+    findDesk(set.weeks, RELEASE_DATE).lesson = {
+      id: 'other-lesson',
+      studentSlots: [student({ id: 'other', name: '別の子', managedStudentId: 'student-2' }), null],
+    }
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(released.skipped).toEqual([{ studentName: '大槻 太郎', reason: 'seat-taken' }])
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]?.managedStudentId).toBe('student-2')
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).statusSlots?.[0]?.status).toBe('holiday')
+    expect(released.ledgers).toEqual(set.ledgers)
+  })
+
+  it('★(g) 解除 → 再マージ 2 回でも席は 1 つだけ・台帳も不変(INV-03 / INV-12)', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+
+    // テンプレ側(管理セル)は同じ managed lesson を持つ。抑止キーは**積まない**(復元したので)。
+    const managedCell = cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])
+    const boardCell = released.nextWeeks.flat().find((cell) => cell.dateKey === RELEASE_DATE)
+    if (!boardCell) throw new Error('board cell not found')
+    const once = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [])[0]
+    const twice = overlayBoardWeeksOnScheduleCells([managedCell], [[once]], [])[0]
+    const placements = twice.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry?.managedStudentId === 'student-1')
+    expect(placements).toHaveLength(1)
+    expect(twice.desks.flatMap((desk) => desk.statusSlots ?? []).filter((entry) => entry)).toEqual([])
+    expect(released.ledgers).toEqual(before)
+
+    // 対照(この改定の要): 復元したのに抑止を積むと、再マージでテンプレ授業が消され戻した席まで落ちる。
+    const suppressed = overlayBoardWeeksOnScheduleCells([managedCell], [[boardCell]], [`student-1__数__${RELEASE_DATE}__1`])[0]
+    expect(suppressed.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry)).toEqual([])
+  })
+
+  it('★(h) 機能フラグ OFF: holiday 記録が作られないので解除は従来どおり何も戻さない', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])]]
+    const set = runHolidaySet({ weeks, ledgers: before, enabled: false })
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots).toBeUndefined()
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(released.restoredStudentNames).toEqual([])
+    expect(released.removedMakeups).toEqual([])
+    expect(released.skipped).toEqual([])
+    expect(released.ledgers).toEqual(set.ledgers) // 休日設定で積んだ origin はそのまま(従来の挙動)
+  })
+
+  it('★講習(session): 往復で希望数デルタと origin が完全一致する(別日に組んでいないとき)', () => {
+    const lectureStockKey = buildLectureStockKey('student-1', '数', 'sess-1')
+    const before = emptyLedgers({ manualLectureStockCounts: { [lectureStockKey]: -1 } }) // 1 コマ配置済み＝消化 −1
+    const lecture = student({
+      id: `sA_${RELEASE_DATE}_講`,
+      lessonType: 'special',
+      specialStockSource: 'session',
+      specialSessionId: 'sess-1',
+      makeupSourceDate: '2026-09-20',
+      makeupSourceLabel: '2026/9/20(日) 3限',
+    })
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([lecture, null])])]]
+
+    const set = runHolidaySet({ weeks, ledgers: before })
+    expect(set.ledgers.manualLectureStockCounts).toEqual({ [lectureStockKey]: 0 }) // 在庫へ +1
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({
+      kind: 'lecture', originDateKey: '2026-09-20', originSlotNumber: 3, fallbackAdded: false,
+    })
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'special', specialSessionId: 'sess-1' })
+    expect(released.ledgers).toEqual(before)
+  })
+
+  it('★講習(session)を別日へ組んでいたとき: そのコマを消し、台帳は触らない(設定の +1 と配置の −1 が打ち消し合う)', () => {
+    const lectureStockKey = buildLectureStockKey('student-1', '数', 'sess-1')
+    const lecture = student({
+      id: `sA_${RELEASE_DATE}_講`,
+      lessonType: 'special',
+      specialStockSource: 'session',
+      specialSessionId: 'sess-1',
+      makeupSourceDate: '2026-09-20',
+      makeupSourceLabel: '2026/9/20(日) 3限',
+    })
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([lecture, null])]), cellOn(ALT_DATE, 2, [{ id: 'alt-desk', teacher: '佐藤講師' }])]]
+    const set = runHolidaySet({ weeks, ledgers: emptyLedgers({ manualLectureStockCounts: { [lectureStockKey]: -1 } }) })
+    // 別日へ組み直した状態: 配置で −1 と origin 消費（= 休日設定の +1 / origin 追加を打ち消した状態）。
+    findDesk(set.weeks, ALT_DATE).lesson = { id: 'alt-lesson', studentSlots: [{ ...lecture, id: `sA_${ALT_DATE}_講` }, null] }
+    const afterPlacement: Ledgers = {
+      ...set.ledgers,
+      manualLectureStockCounts: { [lectureStockKey]: -1 },
+      manualLectureStockOrigins: {},
+    }
+
+    const released = runHolidayRelease(set.weeks, afterPlacement)
+    expect(findDesk(released.nextWeeks, ALT_DATE).lesson).toBeUndefined()
+    expect(released.removedMakeups).toEqual([{ studentName: '大槻 太郎', dateKey: ALT_DATE, slotNumber: 2, lessonType: 'special' }])
+    expect(released.ledgers.manualLectureStockCounts).toEqual({ [lectureStockKey]: -1 })
+    expect(released.ledgers.manualLectureStockOrigins).toEqual({})
+  })
+
+  it('★在庫由来の振替を出席にしてから休日にした記録: 控えは none で、解除は席へ戻すだけ(台帳を触らない)', () => {
+    // 台帳に origin がある＝盤面から外れれば自動で再浮上する振替。設定時に積まないので解除でも外さない。
+    const ledgers = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: '2026-09-30' }] } })
+    const weeks = [[cellOn(RELEASE_DATE, 1, [{
+      id: 'desk-1',
+      teacher: '田中講師',
+      statusSlots: [statusEntry({
+        id: 'status-attended-makeup', status: 'attended', lessonType: 'makeup', dateKey: RELEASE_DATE, slotNumber: 1,
+        makeupSourceDate: '2026-09-30', makeupSourceLabel: '2026/9/30(水) 1限',
+      }), null],
+    }])]]
+
+    const set = runHolidaySet({ weeks, ledgers, ledgerOriginDatesByKey: { [STOCK_KEY]: ['2026-09-30'] } })
+    expect(set.ledgers).toEqual(ledgers) // 二重計上しない(既に台帳にある)
+    expect(findDesk(set.weeks, RELEASE_DATE).statusSlots?.[0]?.holidayStockReturn).toEqual({ kind: 'none' })
+
+    const released = runHolidayRelease(set.weeks, set.ledgers)
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).lesson?.studentSlots[0]).toMatchObject({ lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+    expect(released.ledgers).toEqual(ledgers)
+  })
+
+  it('★控えが無い記録(この改定より前のデータ)は復元しない: 巻き戻し量が決められないので安全側', () => {
+    const ledgers = emptyLedgers({ manualMakeupAdjustments: { [STOCK_KEY]: [{ dateKey: RELEASE_DATE }] } })
+    const weeks = [[cellOn(RELEASE_DATE, 1, [{
+      id: 'desk-1',
+      teacher: '田中講師',
+      statusSlots: [statusEntry({ id: 'legacy-holiday', status: 'holiday', dateKey: RELEASE_DATE, slotNumber: 1 }), null],
+    }])]]
+
+    const released = runHolidayRelease(weeks, ledgers)
+    expect(released.skipped).toEqual([{ studentName: '大槻 太郎', reason: 'legacy-record' }])
+    expect(findDesk(released.nextWeeks, RELEASE_DATE).statusSlots?.[0]?.id).toBe('legacy-holiday')
+    expect(released.ledgers).toEqual(ledgers)
+  })
+
+  it('純関数: 入力の weeks と台帳は書き換えない(commitWeeks 1 回で確定できる形)', () => {
+    const before = emptyLedgers()
+    const weeks = [[cellOn(RELEASE_DATE, 1, [managedDesk([regularStudent(), null])])]]
+    const set = runHolidaySet({ weeks, ledgers: before })
+    const snapshot = structuredClone(set.weeks)
+    const ledgerSnapshot = structuredClone(set.ledgers)
+
+    runHolidayRelease(set.weeks, set.ledgers)
+    expect(set.weeks).toEqual(snapshot)
+    expect(set.ledgers).toEqual(ledgerSnapshot)
+  })
+
+  it('戻せなかった理由のまとめ文(確認ダイアログと完了メッセージで共有)', () => {
+    expect(summarizeHolidayReleaseSkips([
+      { reason: 'seat-taken' },
+      { reason: 'seat-taken' },
+      { reason: 'makeup-in-record' },
+    ])).toBe('席に別の生徒がいるため2件・別日に組んだコマに出欠記録があるため1件')
+    expect(summarizeHolidayReleaseSkips([])).toBe('')
   })
 })
