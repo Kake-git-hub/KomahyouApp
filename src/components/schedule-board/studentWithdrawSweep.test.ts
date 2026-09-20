@@ -483,7 +483,8 @@ describe('★掃除は再マージ適用後の盤面を土台にする(他の生
 // 配線ガード(source-scan)。巨大コンポーネントのクロージャは描画テストができないので、
 // 落とすと事故になる配線(再マージへ混ぜない・結果を必ず返す・台帳を触らない)を字面で固定する。
 // ---------------------------------------------------------------------------
-const BOARD_TSX = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+// 改行差(Windows の作業ツリー=CRLF / CI=LF)で複数行の字面ガードが割れないよう LF に正規化する(v1.5.553 の CI 赤の再発防止)。
+const BOARD_TSX = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
 const APP_TSX = readFileSync(fileURLToPath(new URL('../../App.tsx', import.meta.url)), 'utf8')
 const BASIC_TSX = readFileSync(fileURLToPath(new URL('../basic-data/BasicDataScreen.tsx', import.meta.url)), 'utf8')
 
@@ -533,7 +534,7 @@ describe('退塾スイープの配線', () => {
     expect(effect).not.toContain('appendDeletedStudentScheduleCountAdjustment')
     expect(effect).not.toContain('scheduleCountAdjustments')
     // 安全条件(フラグ・テンプレ編集中・教室切替直後の窓・名簿未ロード)は effect の先頭で弾く。
-    const guards = sliceFrom(BOARD_TSX, 'if (!studentWithdrawAutoSweepEnabled) return\r\n    if (isTemplateMode) return', 260)
+    const guards = sliceFrom(BOARD_TSX, 'if (!studentWithdrawAutoSweepEnabled) return\n    if (isTemplateMode) return', 260)
     expect(guards).toContain('if (!isEditingStateLoadedForActingClassroom) return')
     expect(guards).toContain('if (students.length === 0) return')
   })
