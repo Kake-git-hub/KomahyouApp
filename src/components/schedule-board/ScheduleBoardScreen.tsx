@@ -1329,9 +1329,20 @@ function appendMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate:
   }
 }
 
-function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string) {
+// 1件だけ外す。**外すのは「積んだときと同じ形の origin」**（2026-09-20・INV-06 レビュー指摘）。
+// ★同じ日付に「時限つき」と「時限なし」の origin が併存しうる（同じ日に2コマある生徒・削除抑制は時限つき・
+//   休日設定の配置ぶんは時限なし）。素朴に「同じ日付の先頭」を外すと、残すべき別コマの origin を誤って外して
+//   件数は合うのに**照合先が入れ替わる**（時限なしはその日の全 origin を指すワイルドカードなので、以後の
+//   消化判定がずれて残数が狂う）。積んだときの形＝`appendMakeupOrigin` に渡した slotNumber を鏡にして外す:
+//   時限つきで積んだら「同じ時限 → 時限なし → 同日の先頭」、時限なしで積んだら「時限なし → 同日の先頭」。
+function removeMakeupOrigin(originMap: MakeupOriginMap, key: string, originDate: string, originSlotNumber?: number | null) {
   const currentDates = originMap[key] ?? []
-  const targetIndex = currentDates.findIndex((entry) => entry.dateKey === originDate)
+  const indexOf = (predicate: (entry: ManualMakeupOrigin) => boolean) => currentDates.findIndex(predicate)
+  let targetIndex = originSlotNumber != null
+    ? indexOf((entry) => entry.dateKey === originDate && entry.slotNumber === originSlotNumber)
+    : -1
+  if (targetIndex < 0) targetIndex = indexOf((entry) => entry.dateKey === originDate && entry.slotNumber == null)
+  if (targetIndex < 0) targetIndex = indexOf((entry) => entry.dateKey === originDate)
   if (targetIndex < 0) return originMap
 
   const nextDates = currentDates.filter((_, index) => index !== targetIndex)
@@ -1962,12 +1973,25 @@ export function computeHolidayReleaseRestoration(params: {
     }
 
     // 既に別日へ組んである振替/講習コマを探す(消せないものが見つかったら復元しない)。
-    const consumption = stamp.kind === 'none'
+    // ★`kind:'none'` も検査する(2026-09-20・INV-06 レビュー指摘): 'none' には「**在庫由来**の振替(休日設定では
+    //   台帳を積まない＝配置が消えると台帳 origin が自動で再浮上する)」が含まれる。再浮上した分を別日へ
+    //   組み直してから解除すると、別日のコマが残ったまま元の席も復活して **1 origin に 2 コマ**になる
+    //   (INV-06 の在庫実態一致／INV-12 の一意性が崩れる)。控えに origin を持たないので、記録自身の
+    //   `makeupSourceDate` / `makeupSourceLabel` を origin として同じ検査にかける(「行自身の値で照合する」方針)。
+    //   手動追加(manualAdded)は在庫を消化していない＝再浮上しないので対象外(別日のコマを消してはいけない)。
+    //   講習の 'none'(手動追加の講習)も在庫を経由していないので対象外。
+    //   台帳は触らない: 別日のコマを消す ⇒ origin が再浮上 → 席を戻す ⇒ 再び消化 で ±0(在庫中立)。
+    const consumptionStamp: HolidayStockReturnStamp | null = stamp.kind !== 'none'
+      ? stamp
+      : (record.lessonType === 'makeup' && record.makeupSourceDate && !record.manualAdded
+        ? { kind: 'makeup', originDateKey: record.makeupSourceDate, originSlotNumber: parseOriginSlotNumber(record.makeupSourceLabel) ?? undefined }
+        : null)
+    const consumption = !consumptionStamp
       ? { blocked: false, placement: null }
       : findHolidayReleaseMakeupConsumption({
         weeks: nextWeeks,
         releasedDateKey: dateKey,
-        stamp,
+        stamp: consumptionStamp,
         record,
         managedStudentByAnyName,
         resolveDisplayName,
@@ -1993,7 +2017,8 @@ export function computeHolidayReleaseRestoration(params: {
       const stockKey = buildMakeupStockKey(resolveStockId(record as unknown as StudentEntry), record.subject)
       ledgers = {
         ...ledgers,
-        manualMakeupAdjustments: removeMakeupOrigin(ledgers.manualMakeupAdjustments, stockKey, stamp.originDateKey),
+        // 控えの時限を渡す＝休日設定で積んだ origin と同じ形のものだけを外す(同日2コマの取り違え防止)。
+        manualMakeupAdjustments: removeMakeupOrigin(ledgers.manualMakeupAdjustments, stockKey, stamp.originDateKey, stamp.originSlotNumber),
       }
       if (stamp.fallbackAdded) {
         const { [stockKey]: _removed, ...restFallback } = ledgers.fallbackMakeupStudents
