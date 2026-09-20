@@ -187,6 +187,23 @@ describe('featureRollout: managerSelfRestore（室長の自教室復元）', () 
   })
 })
 
+describe('featureRollout: studentWithdrawAutoSweep（退塾の自動掃除・確認なしの自動削除）', () => {
+  it('開発用/テスト教室でのみ有効。本番3教室では無効(昇格はオーナー確認後)', () => {
+    // レビュー指摘 2026-09-21: 確認ダイアログなしに盤面のコマ・記録を消して自動保存へ載る操作なので、
+    // 段階導入する。本番3教室は従来どおり「退塾生徒の通常授業の剥がしだけ」。ここを勝手に広げないこと。
+    expect(featureRolloutRegistry.studentWithdrawAutoSweep.scope).toBe('development-only')
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
+    // テスト教室は開発用教室と同扱い(オーナー確定 2026-09-16・spec-multi-tenant §4-2-11)。
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'test_classroom_20260507_dai' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
+    // 他社(別 workspace)の同じ教室IDでは有効にならない(会社の壁)。
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'company-b')).toBe(false)
+    expect(isFeatureEnabledForClassroom('studentWithdrawAutoSweep', null, 'main')).toBe(false)
+  })
+})
+
 describe('featureRollout: parentPortalQr（開発用教室・staging での有効範囲）', () => {
   it('開発用/テスト教室では有効・本番3教室では無効(台帳から外せば両側同時に無効になる)', () => {
     // docs/spec-parent-portal.md §H: 公開順は 開発用教室 → staging → 本番1教室 → 全教室。

@@ -47,7 +47,8 @@ function normalizeName(value: string | null | undefined): string {
 
 // 名簿の name / 表示名(空白除去)→ 所有者 id。同じ名前を 2 人以上が持つ場合は '' (=名前では決められない)。
 // scheduleViewData.buildUniqueStudentNameOwnerMap / parentSchedule.ts と同じ決め方(同名別人の混同防止)。
-function buildUniqueNameOwnerMap(students: readonly StudentRow[]): Map<string, string> {
+// ★退塾スイープ(computeStudentWithdrawSweep)も同じ決め方で生徒を拾うため export する(判定を二重定義にしない)。
+export function buildUniqueNameOwnerMap(students: readonly StudentRow[]): Map<string, string> {
   const ownerByName = new Map<string, string>()
   for (const student of students) {
     for (const rawName of [student.name, getStudentDisplayName(student)]) {
@@ -61,13 +62,21 @@ function buildUniqueNameOwnerMap(students: readonly StudentRow[]): Map<string, s
   return ownerByName
 }
 
-// 盤面の生徒が名簿の studentId 本人か。managedStudentId があればそれだけで決め(名前一致で拾わない)、
-// 無いときだけ「名簿で一意な名前」の一致で拾う。
+// 盤面の席/記録 1 件の「持ち主の生徒 id」。managedStudentId があればそれだけで決め(名前一致で拾わない)、
+// 無いときだけ「名簿で一意な名前」で決める。決められなければ ''(同名 2 人・無名)。
+// ★所有判定の唯一の権威。判定を二重定義しないため、複数生徒を相手にする側(退塾スイープの検出)も
+//   これを 1 回呼んで id を引き、突き合わせる。
+export function resolveBoardStudentOwnerId(entry: Pick<StudentEntry, 'managedStudentId' | 'name'>, ownerByName: ReadonlyMap<string, string>): string {
+  if (entry.managedStudentId) return entry.managedStudentId
+  const key = normalizeName(entry.name)
+  if (!key) return ''
+  return ownerByName.get(key) ?? ''
+}
+
+// 盤面の生徒が名簿の studentId 本人か。
 export function isBoardStudentOwnedBy(entry: Pick<StudentEntry, 'managedStudentId' | 'name'>, studentId: string, ownerByName: ReadonlyMap<string, string>): boolean {
   if (!studentId) return false
-  if (entry.managedStudentId) return entry.managedStudentId === studentId
-  const key = normalizeName(entry.name)
-  return key !== '' && ownerByName.get(key) === studentId
+  return resolveBoardStudentOwnerId(entry, ownerByName) === studentId
 }
 
 /**

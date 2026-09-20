@@ -52,4 +52,14 @@ describe('機能フラグの呼び出しは教室ID を渡す(2026-09-16 回帰�
     expect(APP_TSX).toContain('isDevelopmentClassroom(actingClassroom)')
     expect(APP_TSX).toContain("isFeatureEnabledForClassroom('parentPortalQr', actingClassroom)")
   })
+
+  // 退塾の自動掃除(2026-09-21・開発用教室限定で先行)。盤面側(掃除)と App 側(高3卒業の退塾日 自動入力)は
+  // **同じフラグ**で開閉する。片方だけ広げると「盤面は消すのに退塾日が入らない/退塾日は入るのに掃除されない」
+  // の非対称になる(どちらも確認なしで実データを書き換える操作)。
+  it('studentWithdrawAutoSweep は盤面(教室ID)と App(actingClassroom)の両側で同じフラグを引く', () => {
+    expect(BOARD_TSX).toContain("isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: classroomStorageKey })")
+    expect(APP_TSX).toContain("isFeatureEnabledForClassroom('studentWithdrawAutoSweep', actingClassroom)")
+    // 基本データ画面は App から評価結果を受け取る(自前で教室判定を持たない)。
+    expect(APP_TSX).toContain('studentWithdrawAutoSweepEnabled={studentWithdrawAutoSweepEnabled}')
+  })
 })

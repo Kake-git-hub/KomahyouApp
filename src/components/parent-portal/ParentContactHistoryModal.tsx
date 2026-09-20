@@ -19,7 +19,6 @@ type ParentContactHistoryModalProps = {
 
 const STATUS_LABELS: Record<ParentContactHistoryRow['status'], string> = {
   confirmed: '確認済',
-  'pending-save': '確認済(保存待ち)',
   unconfirmed: '未確認',
 }
 

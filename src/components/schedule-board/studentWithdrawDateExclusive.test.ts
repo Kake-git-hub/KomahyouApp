@@ -316,7 +316,11 @@ describe('退塾ボタン/編集の退塾日入力のどちらでも、その場
   const basicDataSource = readFileSync(new URL('../basic-data/BasicDataScreen.tsx', import.meta.url), 'utf8')
 
   it('名簿(students)変更で走る再マージ effect と、盤面を開いたときの読込が同じ関数(剥がし込み)を通る', () => {
-    expect(boardSource.match(/remergeBoardWeekWithManagedData\(week, \{/g)).toHaveLength(2)
+    // 2026-09-21: 週ごとの再マージは合成関数 remergeBoardWeeksWithManagedData へ寄せた(退塾掃除も同じ結果を土台に
+    // するため・INV-02)。週単位の呼び出しは合成関数の中の 1 か所だけで、経路(読込・名簿変更 effect・掃除)は
+    // 合成関数を通る＝3 経路 + 定義 = 4 件。経路ごとに weeks.map を書き写すと同一性が静かに壊れるのでここで固定する。
+    expect(boardSource.match(/remergeBoardWeekWithManagedData\(week, params\)/g)).toHaveLength(1)
+    expect(boardSource.match(/remergeBoardWeeksWithManagedData\(/g)).toHaveLength(4)
     expect(boardSource).toContain('}, [classroomSettings, teachers, students, regularLessons, suppressedRegularLessonOccurrences])')
     expect(boardSource).toContain('const week = stripWithdrawnStudentsFromBoardWeek(rawWeek, params.students, params.todayKey)')
   })

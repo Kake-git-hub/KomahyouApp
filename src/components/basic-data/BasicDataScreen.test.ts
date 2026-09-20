@@ -188,6 +188,32 @@ describe('BasicDataScreen parentPortalToken と Excel 取込/出力 (2026-09-13)
     expect(Object.keys(added ?? {})).not.toContain('parentPortalToken')
   })
 
+  // 高3卒業の退塾日 自動入力の印(graduationWithdrawAutoFilledAt・2026-09-20 夜)も Excel の列に無い。
+  // 差分取込で消えると「1 人 1 回だけ」のブレーキが外れ、室長が退塾日を消した生徒へ 3/31 が再び入る
+  // (レビュー指摘 2026-09-21・トークン写しと同じ扱いで引き継ぐ)。
+  it('★差分取込で一致行の graduationWithdrawAutoFilledAt を引き継ぐ(未設定の行には作らない)', () => {
+    const base = createTemplateBundle()
+    const [first, second, ...rest] = base.students
+    if (!first || !second) throw new Error('template students missing')
+    const fallback = {
+      ...base,
+      students: [{ ...first, graduationWithdrawAutoFilledAt: '2026-04-01T00:00:00.000Z' }, second, ...rest],
+    }
+    const workbook = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(workbook, xlsx.utils.json_to_sheet([
+      { 生徒ID: first.id, 名前: first.name, 表示名: '改名後', メール: '', 入塾日: first.entryDate, 退塾日: '', 生年月日: first.birthDate, 表示: '表示' },
+      { 生徒ID: second.id, 名前: second.name, 表示名: second.displayName, メール: '', 入塾日: second.entryDate, 退塾日: '', 生年月日: second.birthDate, 表示: '表示' },
+    ]), '生徒')
+
+    const merged = mergeImportedBundle(parseImportedBundle(xlsx, workbook, fallback), fallback)
+    expect(merged.students.find((row) => row.id === first.id)).toEqual(expect.objectContaining({
+      displayName: '改名後',
+      graduationWithdrawAutoFilledAt: '2026-04-01T00:00:00.000Z',
+    }))
+    // 印の無い行に undefined キーを作らない(保存 payload と toEqual 比較を汚さない)。
+    expect(Object.keys(merged.students.find((row) => row.id === second.id) ?? {})).not.toContain('graduationWithdrawAutoFilledAt')
+  })
+
   it('Excel 出力(buildWorkbook)にはトークンを一切載せない(ベアラートークンの漏えい防止)', () => {
     const fallback = createFallbackWithToken()
     const workbook = buildWorkbook(xlsx, fallback)

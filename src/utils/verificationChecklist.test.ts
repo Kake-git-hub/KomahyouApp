@@ -63,7 +63,7 @@ describe('確認リストの項目定義', () => {
   it('第14版: 結果待ちの b-2、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8、開発用教室での予行 y-1〜y-4(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     // 第16版: 準備 y-1 を先頭に置き、以降は読み込んだ日大前データの上で行う(項目ごとの準備を減らすため)。
-    expect(ids).toEqual(['y-1', 'b-2', 'r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6'])
+    expect(ids).toEqual(['y-1', 'b-2', 'b-3', 'r-2', 'r-5', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6'])
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 複数会社展開 Phase 1(会社レイヤ): 既定値で見た目が変わらないことの確認 m-1〜m-3(版 v1.5.540 は据え置き)。
     for (const id of ['m-1', 'm-2', 'm-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.544')
@@ -71,11 +71,18 @@ describe('確認リストの項目定義', () => {
     // v1.5.549: s-1/s-2 は「パスワード → 確認モーダル」「7日 → 3日」の変更に合わせて手順を差し替えた。
     for (const id of ['s-1', 's-2']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.549')
     expect(byId.get('s-3')!.introducedIn).toBe('v1.5.548')
+    // 退塾の新仕様(オーナー確定 2026-09-20 夜): b-2 は「元に戻せません」、b-3 は日付入力での退塾と行ロック。
+    for (const id of ['b-2', 'b-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.553')
+    expect(byId.get('b-2')!.check!.join(' / ')).toContain('「退塾生徒」を押すと出る')
+    expect(byId.get('b-2')!.check!.join(' / ')).not.toContain('非在籍生徒表示')
+    expect(byId.get('b-3')!.steps.join(' / ')).toContain('退塾日に**今日**を入力')
+    expect(byId.get('b-3')!.check!.join(' / ')).toContain('確認なしに')
+    expect(byId.get('b-3')!.check!.join(' / ')).toContain('元に戻せません')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。版は据え置き(q-1〜q-5 の結果待ちを消さない)。
     expect(byId.get('q-6')!.introducedIn).toBe('v1.5.552')
-    expect(byId.get('q-6')!.check!.join(' / ')).toContain('確認済(保存待ち)')
+    expect(byId.get('q-6')!.check!.join(' / ')).toContain('四択のどれかを押した時点で')
     expect(byId.get('q-1')!.check!.join(' / ')).toContain('来月へは進めない')
     expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
     // オーナー確定: 処理済みは盤面を保存できた時点。保存せず閉じたら再通知されることを確かめる項目を必ず持つ。
@@ -84,7 +91,21 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('s-1')!.check!.join('\n')).toContain('復元しても戻らないもの')
     expect(byId.get('s-2')!.prep).toContain('保存はしない')
     expect((byId.get('m-2')!.check ?? []).join(' / ')).toContain('室長登録')
-    for (const id of ['r-1', 'r-2', 'r-3', 'r-4', 'r-5', 'r-6', 'r-7', 'r-8']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.540')
+    // 2026-09-20: r-1/r-3/r-4/r-6/r-7 は OK 済みで外した。r-2 は要改善(ブロック理由をダイアログで)の再確認へ差し替え。
+    expect(byId.get('r-8')!.introducedIn).toBe('v1.5.540')
+    expect(byId.get('r-2')!.introducedIn).toBe('v1.5.553')
+    expect(byId.get('r-2')!.check!.join(' / ')).toContain('ダイアログ')
+    // 第20版(v1.5.553・オーナー確定 2026-09-20): r-5 は「休日解除＝休日設定の逆操作」の手順へ差し替え。
+    // 旧定義(席は操作できるが生徒は戻らない)の観点へ戻さない。
+    const r5 = byId.get('r-5')!
+    expect(r5.introducedIn).toBe('v1.5.553')
+    const r5Text = [r5.title, r5.prep ?? '', ...r5.steps, ...(r5.check ?? [])].join(' / ')
+    expect(r5Text).toContain('元の席へ戻る')
+    expect(r5Text).toContain('別の日へ組んでいた振替コマが消え')
+    expect(r5Text).toContain('休日設定前の控えと同じ')
+    expect(r5Text).not.toContain('「生徒追加」で置いた席は「休」が生徒の下に隠れて残り')
+    // y-2 は丸ごと振替の移動元の「休」なので席へ戻らない(r-5 の新仕様と混同しない)。
+    expect((byId.get('y-2')!.check ?? []).join(' / ')).toContain('席へは戻らない')
     for (const id of ['y-1', 'y-2', 'y-3', 'y-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.541')
     // 第15版(v1.5.542): 確認リストの文字拡大の確認項目。版は据え置き(第13版の結果待ちを消さない)。
     const c2 = byId.get('c-2')!
@@ -98,16 +119,23 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('y-1')!.prep).toContain('上書き')
     for (const id of ['y-2', 'y-3', 'y-4']) expect((byId.get(id)!.check ?? []).join(' / '), id).toContain('y-1 の控え')
     const b2 = byId.get('b-2')!
-    expect(b2.introducedIn).toBe('v1.5.528')
+    // 第20版(v1.5.553・オーナー確定 2026-09-20): 退塾スイープの手順へ差し替え(未確認のままなので結果は失われない)。
+    expect(b2.introducedIn).toBe('v1.5.553')
     const steps = [b2.prep ?? '', ...b2.steps, ...(b2.check ?? [])].join(' / ')
     // 旧定義(今日までは在籍・削除ボタンは翌日から)の手順を残さない。
     expect(steps).not.toContain('今日までは在籍')
     expect(steps).not.toContain('翌日から出る')
-    // 新定義の確認観点: 一覧から即消える / 今日から削除ボタン / 今日の通常授業が消える / 手置きの講習・振替は残る。
-    expect(steps).toContain('非在籍生徒表示')
-    expect(steps).toContain('「削除」ボタンが今日から出ている')
-    expect(steps).toContain('今日以降)の通常授業が消えている')
-    expect(steps).toContain('講習・振替のコマは残っている')
+    // 旧仕様(手置きのコマは残る)の確認観点へ戻さない。
+    expect(steps).not.toContain('講習・振替のコマは残っている')
+    // 新定義の確認観点: 一覧から即消える / 今日から削除ボタン / 今日以降のコマと記録が消える / 昨日以前は残る / 在庫が増えない。
+    // 第21版(v1.5.553・オーナー確定 2026-09-20 夜): 一覧の呼び名は「退塾生徒」・退塾後の行は編集不可で削除だけ。
+    expect(steps).toContain('「退塾生徒」を押すと出る')
+    expect(steps).not.toContain('非在籍生徒表示')
+    expect(steps).toContain('「編集」が無く「削除」だけ')
+    expect(steps).toContain('退塾にすると元に戻せません')
+    expect(steps).toContain('出欠の記録がすべて消えている')
+    expect(steps).toContain('昨日以前の週')
+    expect(steps).toContain('残数が控えより増えていない')
     // 第10版で k-11 / k-12 / h-10 は OK。
     for (const okId of ['k-11', 'k-12', 'h-10']) expect(ids, okId).not.toContain(okId)
     // 第9版で k-10 / h-9 / b-1 は OK。

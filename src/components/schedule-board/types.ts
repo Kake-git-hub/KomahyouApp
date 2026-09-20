@@ -51,6 +51,25 @@ export type StudentEntry = {
   teacherType: TeacherType
 }
 
+// 休日設定で「未消化在庫へ返した内容」の控え(2026-09-20 オーナー確定・INV-06)。
+// 休日**解除**を休日設定の逆操作(席へ復元＋在庫巻き戻し)にするため、`reconcileHolidayDeskStockReturns` が
+// 返した会計をそのまま `holiday` 記録へ焼き込み、解除側はこの控えだけを見て巻き戻す。
+// ★再導出しない理由: 同じ `holiday` 記録でも「配置授業から作った」ものと「出席済み記録から変換した」もので
+//   設定時の会計が違い(前者は無条件に origin を積む・後者は台帳に origin があれば積まない)、記録だけからは
+//   区別できない。推測で巻き戻すと誤増/誤減のどちらかになる。
+// ★`kind:'none'`(返していない)も必ず入れる。**控えが無い = この改定より前に作られた記録**で、
+//   巻き戻せないので解除で復元しない(安全側・件数だけ知らせる)という判別に使う。
+export type HolidayStockReturnStamp = {
+  /** 'makeup'=振替 origin を1件積んだ / 'lecture'=講習在庫 +1 と origin を積んだ / 'none'=在庫へ返していない。 */
+  kind: 'none' | 'makeup' | 'lecture'
+  /** 積んだ origin の日付(振替=元の通常授業日 / 講習=未消化講習の origin 日)。 */
+  originDateKey?: string
+  /** 積んだ origin の時限(分かるときだけ。振替は時限なし=同日ワイルドカード)。 */
+  originSlotNumber?: number
+  /** 未管理生徒の表示名フォールバックを**この休日設定で新規に**足したか(解除で消すかの判定)。 */
+  fallbackAdded?: boolean
+}
+
 export type StudentStatusEntry = {
   id: string
   studentId: string
@@ -77,6 +96,11 @@ export type StudentStatusEntry = {
   moveDestinationSlotNumber?: number
   recordedAt: string
   status: StudentStatusKind
+  /**
+   * `status==='holiday'` のときだけ持つ「休日設定で在庫へ返した内容」の控え(2026-09-20)。
+   * 休日解除の巻き戻しが設定時と厳密に対称になるようにするための唯一の根拠。
+   */
+  holidayStockReturn?: HolidayStockReturnStamp
   sourceLessonId: string
   sourceLessonNote?: string
   sourceLessonWarning?: string

@@ -55,6 +55,9 @@ import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
 import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
 import { consumeParentAbsenceRequest, hasParentAbsenceRecord, type ParentAbsenceRequest, type ParentAbsenceRequestResult } from './components/schedule-board/parentAbsenceTarget'
+import { applyGraduationWithdrawAutoFill, buildGraduationWithdrawAutoFillMessage } from './components/basic-data/graduationWithdraw'
+import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/withdrawGuard'
+import { getJstTodayDateKey } from './utils/jstDate'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
@@ -1023,9 +1026,16 @@ export function resolveRestoreFlagLifecycle(params: {
 // clean 化してよい。ただし②一段スナップショット復元（黄バナー「戻す」）の直後だけは例外で、
 // 復元で盤面が再マウントされて発火する false publish で clean 化すると、戻した結果が「保存済み」と
 // 誤認され保存できず、リロードで戻す前の状態が復活する。復元は未保存(dirty)として扱う。
+// ★2026-09-20(INV-02・確認リスト その他「休日設定の直後に『最新データ』なのにリロードで消えた」): ユーザー編集の直後に来る
+//   受動 publish(再マージ effect が classroomSettings 等の変化で盤面を作り直して出す 2 回目の publish)でも clean 化していた。
+//   clean 署名が「いま画面にある未保存データ」へ進むので、保存ボタンは「最新データ」になり、自動保存タイマーも破棄され、
+//   手動保存も離脱時 flush も no-op になる(=保存されない)。休日設定は 2 回目の publish で盤面の中身が変わるので必ず踏む。
+//   → hasUnsavedUserEditBeforePublish(この publish の直前に、まだ保存されていないユーザー編集がある)なら clean 化しない。
+//   ロード/教室切替/マウント直後の受動 publish は直前にユーザー編集が無いので従来どおり clean 化する(U-0c を壊さない)。
 export function resolveBoardStateChangeCleanMarking(params: {
   userInitiated: boolean
   pendingUnsavedRestore: boolean
+  hasUnsavedUserEditBeforePublish: boolean
 }): { markClean: boolean; persist: boolean; consumePendingUnsavedRestore: boolean } {
   const lifecycle = resolveRestoreFlagLifecycle({
     event: 'board-publish',
@@ -1033,7 +1043,21 @@ export function resolveBoardStateChangeCleanMarking(params: {
     userInitiated: params.userInitiated,
   })
   if (params.userInitiated) return { markClean: false, persist: true, consumePendingUnsavedRestore: true }
-  return { markClean: !lifecycle.suppressCleanMarking, persist: false, consumePendingUnsavedRestore: true }
+  return { markClean: !lifecycle.suppressCleanMarking && !params.hasUnsavedUserEditBeforePublish, persist: false, consumePendingUnsavedRestore: true }
+}
+
+// 「この publish の直前に、まだ保存されていないユーザー編集があるか」。
+// - 直前の署名が clean 署名と同じなら未保存は無い。
+// - 違っていても、ユーザー編集(userInitiated publish)のあとで clean 署名が進んでいれば(=保存成功 or 読み直し)、
+//   その差はユーザー編集由来ではない(読込時の正規化差など)ので従来どおり clean 化してよい。
+export function hasUnsavedUserEditBeforeBoardPublish(params: {
+  signatureBeforePublish: string
+  cleanSignature: string
+  cleanSignatureAtLastUserEdit: string | null
+}): boolean {
+  if (params.cleanSignatureAtLastUserEdit === null) return false
+  if (params.signatureBeforePublish === params.cleanSignature) return false
+  return params.cleanSignatureAtLastUserEdit === params.cleanSignature
 }
 
 
@@ -1520,6 +1544,8 @@ function AuthenticatedApp() {
     setIsRemoteSyncVisible(nextIsVisible)
   }, [])
   const lastPendingWorkspaceSnapshotWriteAtRef = useRef(0)
+  // 直近のユーザー編集(盤面の userInitiated publish)の時点の clean 署名。受動 publish が未保存の編集を clean 化しないための目印(INV-02)。
+  const cleanSignatureAtLastUserBoardEditRef = useRef<string | null>(null)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
@@ -1593,6 +1619,15 @@ function AuthenticatedApp() {
   const managerSelfRestoreEnabled = useMemo(
     () => isRemoteBackendEnabled && isFeatureEnabledForClassroom('managerSelfRestore', actingClassroom),
     [actingClassroom, isRemoteBackendEnabled],
+  )
+  // 退塾の自動掃除(オーナー確定 2026-09-20 夜・段階導入はレビュー指摘 2026-09-21・docs/spec-basic-data.md §B)。
+  // ON の教室だけ (a)盤面の退塾掃除(痕跡の自動削除＋自動保存・ScheduleBoardScreen 側で同じフラグを引く) と
+  // (b)高3卒業の退塾日 自動入力(下の effect) が走る。OFF の教室(本番3教室)は従来どおり通常授業の剥がしだけ。
+  // ★「退塾生徒」への改名・退塾後の行ロック・削除文言・Excel 取り込みガードはフラグに依らず全教室で有効。
+  //   退塾確認モーダルの本文だけは OFF の教室で事実と違うので、このフラグを渡して出し分ける。
+  const studentWithdrawAutoSweepEnabled = useMemo(
+    () => isFeatureEnabledForClassroom('studentWithdrawAutoSweep', actingClassroom),
+    [actingClassroom],
   )
   // Feature B: 開発用教室へ「他教室 × バックアップ時点」を読み込むための候補(サーバー由来)。
   // 旧「他教室コピー」(in-memory 参照)を廃止し、Storage の確定データのみを取り込む方式に置換。
@@ -1740,6 +1775,9 @@ function AuthenticatedApp() {
     void markParentMessagesNotifiedViaFunction({ classroomId, messageIds: [result.messageId], stage: 'acknowledged', resolution: result.action })
       .catch((error) => console.warn('[parentMessages] acknowledge failed', error instanceof Error ? error.message : String(error)))
   }, [actingClassroomIdRef, setParentAbsenceError, setPendingParentAbsenceFinalize])
+  // ★退塾スイープの「依頼キュー」は撤去した(オーナー確定 2026-09-20 夜)。退塾ボタンだけでなく**日付入力での退塾日**も
+  //   同じ消去を走らせる仕様になったため、盤面側が「退塾日を過ぎているのに痕跡が残る生徒」を検出する方式へ一般化した
+  //   (collectStudentWithdrawSweepTargets)。命令を運ぶ state を残すと二重経路になるので復活させない。
   // 盤面が一定時間内に結果を返さなかった(盤面が開けない等)ときの保険。コマンドを捨てて選び直せるようにする。
   useEffect(() => {
     if (!parentAbsenceRequest) return
@@ -2462,6 +2500,9 @@ function AuthenticatedApp() {
     }).pendingAfter
     const nextCleanSignature = expectedCleanSignature || buildCurrentDataSignature()
     lastPendingWorkspaceSnapshotWriteAtRef.current = 0
+    // 明示 clean 化(読込/教室切替/ユーザー切替)ではユーザー編集の目印も落とす。署名は教室IDを含まないので、中身が同じ教室を
+    // またぐと目印と clean 署名が一致し、開いただけの教室が未保存扱いになりうる(レビュー指摘 2026-09-20・U-0c の二重防御)。
+    if (expectedCleanSignature) cleanSignatureAtLastUserBoardEditRef.current = null
     setCleanSignature(nextCleanSignature)
   }, [buildCurrentDataSignature, setCleanSignature])
 
@@ -2879,10 +2920,18 @@ function AuthenticatedApp() {
     // 一切の書き込み/リモート同期を起こさない。ここで writePendingWorkspaceSnapshotForRemoteSync
     // を呼ぶと、acting教室とメモリ上データが食い違う切替直後の窓で他教室データを書き込み得る
     // （2026-06-06 / 2026-06-13 のクロス汚染パターン）。集団授業の変更も例外にしない。
+    // ★setBoardState の前に測る(後だと今回の publish の中身が署名に入る)。
+    const hasUnsavedUserEditBeforePublish = hasUnsavedUserEditBeforeBoardPublish({
+      signatureBeforePublish: buildCurrentDataSignature(),
+      cleanSignature: cleanSignatureRef.current,
+      cleanSignatureAtLastUserEdit: cleanSignatureAtLastUserBoardEditRef.current,
+    })
+    if (meta.userInitiated) cleanSignatureAtLastUserBoardEditRef.current = cleanSignatureRef.current
     setBoardState(nextBoardState)
     const cleanMarking = resolveBoardStateChangeCleanMarking({
       userInitiated: meta.userInitiated,
       pendingUnsavedRestore: pendingUnsavedUndoSnapshotRestoreRef.current,
+      hasUnsavedUserEditBeforePublish,
     })
     if (cleanMarking.consumePendingUnsavedRestore) pendingUnsavedUndoSnapshotRestoreRef.current = false
     if (!cleanMarking.persist) {
@@ -2895,7 +2944,7 @@ function AuthenticatedApp() {
       boardShareStateChangePublishTimerRef.current = null
       publishBoardStateSnapshot(nextBoardState)
     }, 250)
-  }, [markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
+  }, [buildCurrentDataSignature, cleanSignatureRef, markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
 
   useEffect(() => {
     if (screen !== 'developer') return
@@ -4672,7 +4721,32 @@ function AuthenticatedApp() {
     setParentAbsenceRequest(null)
     setParentAbsenceBusyId(null)
     isParentAbsencePlacementActiveRef.current = false
+    // 退塾スイープは命令を運ばない(検出方式)ので、ここで捨てるものは無い。教室が差し替わっても
+    // 盤面は新しい名簿 × 新しい盤面で検出し直す(前の教室の掃除が流れることは無い・INV-08)。
   }, [boardMountKey, setPendingParentAbsenceFinalize])
+
+  // --- 高3卒業の退塾日 自動入力(オーナー確定 2026-09-20 夜・案A・graduationWithdraw.ts・INV-02) ---------------
+  // 4/1 になったら、卒業年度を過ぎた高3の withdrawDate へ 3/31 を**実データとして**入れる(従来は管理データ画面の
+  // 表示上だけ補完していた)。これで卒業生も「退塾」として扱われ、盤面の痕跡消し(退塾スイープ)・請求の在籍数・
+  // 日程表のすべてが既存の退塾日の判定に自然に乗る。★判定関数(isActiveOnDate / resolveManagedStudentRosterStatus /
+  //   hasGraduatedHighSchool)は無改変＝ロックテスト維持。**データ(withdrawDate)を入れることで実現する**。
+  // ★1 人につき 1 回だけ(graduationWithdrawAutoFilledAt の印。室長が後で退塾日を消しても再入力しない)。
+  //   既に退塾日が入っている生徒は上書きしない。高3以外・生年月日が無い生徒は対象外。
+  // ★教室切替直後の窓では走らせない: 編集 state の出所(loadedEditingClassroomIdRef)が開いている教室と一致する
+  //   ときだけ(保存側の shouldInjectEditingStateIntoClassroom と同じ判断・INV-08)。
+  // ★ユーザー編集として保存される(開いただけで未保存→自動保存が走るのはオーナー了承済み)。冪等なので 2 回目は何もしない。
+  useEffect(() => {
+    // ★段階導入(レビュー指摘 2026-09-21): 実データ(withdrawDate)を確認なしで書き換える操作なので、
+    //   フラグ studentWithdrawAutoSweep が ON の教室(開発用教室のみ)だけで走らせる。OFF の教室では
+    //   従来どおり「表示上だけ 3/31 を補完」(resolveEffectiveManagedWithdrawDate)のまま。
+    if (!studentWithdrawAutoSweepEnabled) return
+    if (!actingClassroomId) return
+    if (loadedEditingClassroomIdRef.current !== actingClassroomId) return
+    const result = applyGraduationWithdrawAutoFill({ students, todayKey: getJstTodayDateKey(), nowIso: new Date().toISOString() })
+    if (!result.changed) return
+    setStudents(result.students)
+    setPersistenceMessage(buildGraduationWithdrawAutoFillMessage(result.filledStudentIds.length))
+  }, [actingClassroomId, setStudents, students, studentWithdrawAutoSweepEnabled])
   // 盤面を離れると盤面側の振替配置モードは消え、配置終了の知らせ(handleParentAbsencePlacementSettled)も来ない。
   // 「配置中」の印を残すと、以後の新着でモーダルが開き直らなくなるので、ここで下ろす。
   useEffect(() => {
@@ -5545,7 +5619,9 @@ function AuthenticatedApp() {
 
       setManagers(merged.managers)
       setTeachers(merged.teachers)
-      setStudents(merged.students)
+      // 退塾済み(非在籍)の生徒の行は取り込みで書き換えない(オーナー確定 2026-09-20 夜)。退塾後は画面でも編集できない
+      // ので、Excel 経由で退塾日が消える/変わる裏口を作らない(ガードは純関数 preserveWithdrawnStudentRowsOnImport)。
+      setStudents(preserveWithdrawnStudentRowsOnImport(merged.students, students, getJstTodayDateKey()))
       setClassroomSettings(merged.classroomSettings)
       if (!boardState) {
         const mergedBoardRegularLessons = buildRegularLessonsFromTemplate({
@@ -5864,6 +5940,7 @@ function AuthenticatedApp() {
         classroomId={actingClassroomId}
         classroomName={actingClassroom?.name}
         parentPortalQrEnabled={parentPortalQrEnabled}
+        studentWithdrawAutoSweepEnabled={studentWithdrawAutoSweepEnabled}
         savedStudentIds={savedStudentIds}
         onIssueParentPortalToken={parentPortalQrEnabled ? issueParentPortalToken : undefined}
         onRevokeParentPortalToken={parentPortalQrEnabled ? revokeParentPortalToken : undefined}
@@ -5987,6 +6064,7 @@ function AuthenticatedApp() {
       onStudentScheduleRequestProcessed={handleStudentScheduleRequestProcessed}
       parentAbsenceRequest={parentAbsenceRequest}
       onParentAbsenceRequestProcessed={handleParentAbsenceRequestProcessed}
+      isEditingStateLoadedForActingClassroom={Boolean(actingClassroomId) && loadedEditingClassroomIdRef.current === actingClassroomId}
       onParentAbsencePlacementSettled={handleParentAbsencePlacementSettled}
       initialBoardState={boardState}
       onBoardStateChange={handleBoardStateChange}

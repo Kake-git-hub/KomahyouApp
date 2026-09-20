@@ -28,7 +28,7 @@ import {
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, markStudentDeletedFromApp } from './withdrawGuard'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, applyLockedStudentBirthDateCorrection, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp } from './withdrawGuard'
 import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
@@ -53,12 +53,22 @@ type BasicDataScreenProps = {
   classroomName?: string
   // フラグ parentPortalQr(featureRollout)の評価結果。OFF の教室では QR ボタン・モーダルを一切出さない(§H)。
   parentPortalQrEnabled?: boolean
+  /**
+   * フラグ studentWithdrawAutoSweep(featureRollout・開発用教室限定で先行・2026-09-21)の評価結果。
+   * この画面では**退塾確認モーダルの本文の出し分けだけ**に使う(OFF の教室では今日以降のコマ・記録は消えないので、
+   * 「消えます」と案内すると事実と食い違う)。「退塾生徒」への改名・退塾後の行ロック・削除文言・Excel 取り込みの
+   * 退塾済み行ガードは**フラグに依らず全教室で有効**なので、ここでゲートしてはいけない。
+   */
+  studentWithdrawAutoSweepEnabled?: boolean
   // 保存済みデータに居る生徒 id(App が保存完了のたびに更新)。居ない生徒の QR は保存待ちのスピナーにする。null=判定しない。
   savedStudentIds?: ReadonlySet<string> | null
   // callable issueStudentPortalToken の薄い wrapper(App が workspaceKey を注入)。未指定=リモート無し(QR 非表示)。
   onIssueParentPortalToken?: (studentId: string, options: { reissue: boolean }) => Promise<{ token: string }>
   // 生徒削除の確定時に best-effort で失効させる(§B-2 revokedReason='studentDeleted')。
   onRevokeParentPortalToken?: (studentId: string, reason: 'studentDeleted') => Promise<void>
+  // ★盤面の痕跡消し(退塾スイープ)の依頼 prop は撤去した(オーナー確定 2026-09-20 夜)。退塾ボタンでも日付入力でも
+  //   「退塾日が入った名簿」を保存するだけで、盤面側が退塾済みの生徒を検出して掃除する
+  //   (collectStudentWithdrawSweepTargets)。この画面から盤面へ命令を送る経路は作らない(二重経路にしない)。
   onBackToBoard: () => void
   onOpenSpecialData: () => void
   onOpenAutoAssignRules: () => void
@@ -675,6 +685,14 @@ function pickParentPortalTokenFields(matched: StudentRow | null | undefined): Pi
     : { parentPortalToken: matched.parentPortalToken }
 }
 
+// 高3卒業の退塾日 自動入力の印(graduationWithdrawAutoFilledAt)も Excel の列に無いので、差分取込で一致行を
+// 丸ごと置き換えると消える。消えると「1 人 1 回だけ」が壊れ、室長が退塾日を消した生徒へ 3/31 が**もう一度**
+// 入る(applyGraduationWithdrawAutoFill の唯一のブレーキがこの印)。トークン写しと同じ扱いで引き継ぐ
+// (未設定なら空オブジェクト＝undefined キーを作らない)。
+function pickGraduationWithdrawAutoFillFields(matched: StudentRow | null | undefined): Pick<StudentRow, 'graduationWithdrawAutoFilledAt'> {
+  return matched?.graduationWithdrawAutoFilledAt ? { graduationWithdrawAutoFilledAt: matched.graduationWithdrawAutoFilledAt } : {}
+}
+
 export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDataBundle): BasicDataBundle {
   const managers = fallback.managers.slice()
   for (const importedManager of imported.managers) {
@@ -714,7 +732,12 @@ export function mergeImportedBundle(imported: BasicDataBundle, fallback: BasicDa
     // 保護者用トークンの写し(spec-parent-portal.md §J-3)は Excel の列に無い(buildWorkbook にも出さない)ため、
     // 差分取込で一致行を丸ごと置き換えると消える。一致行から発行元教室タグと対で引き継ぐ。
     const candidateId = matchedStudent?.id ?? importedStudent.id
-    const nextStudent = { ...importedStudent, ...pickParentPortalTokenFields(matchedStudent), id: deletedStudentIds.has(candidateId) ? studentIdAllocator.next() : candidateId }
+    const nextStudent = {
+      ...importedStudent,
+      ...pickParentPortalTokenFields(matchedStudent),
+      ...pickGraduationWithdrawAutoFillFields(matchedStudent),
+      id: deletedStudentIds.has(candidateId) ? studentIdAllocator.next() : candidateId,
+    }
     mergedStudentIdByImportedId.set(importedStudent.id, nextStudent.id)
     const targetIndex = students.findIndex((row) => row.id === nextStudent.id)
     if (targetIndex >= 0) {
@@ -901,7 +924,7 @@ function DateAssistInput({ value, emptyLabel, hint, onChange, testIdPrefix }: Da
   )
 }
 
-export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
+export function BasicDataScreen({ classroomSettings, teachers, students, onUpdateTeachers, onUpdateStudents, onUpdateClassroomSettings, studentDeletionStockSummary, requiresDeletePassword = false, onVerifyDeletePassword, classroomId = null, classroomName = '', parentPortalQrEnabled = false, studentWithdrawAutoSweepEnabled = false, savedStudentIds = null, onIssueParentPortalToken, onRevokeParentPortalToken, onBackToBoard, onOpenSpecialData, onOpenAutoAssignRules, onOpenBackupRestore, onLogout }: BasicDataScreenProps) {
   const [activeTab, setActiveTab] = useState<BasicDataTab>('students')
   const [statusMessage, setStatusMessage] = useState('')
   // 保護者用QRモーダル(spec-parent-portal.md §K-6)。写し parentPortalToken は QR 描画用のキャッシュで、
@@ -1217,6 +1240,9 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     // 記録する日は「押した日」。画面を開いたまま日付をまたいでも正しい日になるよう、確定時に取り直す。
     const today = getReferenceDateKey(new Date())
     onUpdateStudents((current) => applyStudentWithdrawToday(current, withdrawModalState.id, today))
+    // ★盤面の痕跡(今日以降の手置きの講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)は、盤面側が
+    //   「退塾日を過ぎているのに痕跡が残る生徒」を検出して消す(オーナー確定 2026-09-20 夜)。ここから命令は送らない
+    //   (日付入力で退塾日を入れた場合と同じ経路にするため)。未消化へは戻さない。昨日以前は触らない。
     setStatusMessage(`${withdrawModalState.name || '生徒'} を ${today} 付けで退塾にしました。`)
     setWithdrawModalState(null)
   }
@@ -1406,6 +1432,17 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
 
   const renderStudents = () => {
     const visibleStudents = studentRosterView === 'active' ? activeStudentRows : withdrawnStudentRows
+    // 退塾後(非在籍)の行は**一切編集できない**(オーナー確定 2026-09-20 夜)。退塾すると今日以降の盤面の痕跡が消える
+    // ＝元に戻せないため、退塾日も含めて入力を出さない(「編集」ボタンも出さない)。残す操作は「削除」だけ。
+    // 在籍中(退塾日が未来)の生徒は従来どおり退塾予定日を早める/遅らせる/消すのが自由(まだ何も消えていない)。
+    const isStudentRowLocked = (row: StudentRow) => isStudentRowLockedByWithdrawal(row, todayReferenceDate)
+    const isStudentRowInputVisible = (row: StudentRow) => isRowEditing('student', row.id) && !isStudentRowLocked(row)
+    // 案2(2026-09-21): 退塾生徒の行でも生年月日だけは直せる(誤入力で卒業扱いになった生徒を救う)。他の項目はロックのまま。
+    const isStudentBirthDateInputVisible = (row: StudentRow) => isRowEditing('student', row.id)
+    const updateStudentBirthDate = (row: StudentRow, value: string) => {
+      if (!isStudentRowLocked(row)) { updateStudent(row.id, { birthDate: value }); return }
+      onUpdateStudents((current) => current.map((entry) => (entry.id === row.id ? applyLockedStudentBirthDateCorrection(entry, value, todayReferenceDate) : entry)))
+    }
     const filteredStudents = filterAndSortRows(
       visibleStudents,
       tableControls.students,
@@ -1471,7 +1508,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
               filterValue={tableControls.students.filterText}
               sortKey={tableControls.students.sortKey}
               direction={tableControls.students.direction}
-              filterPlaceholder={studentRosterView === 'active' ? '生徒名・表示名・学年で絞り込み' : '非在籍生徒を氏名・表示名で絞り込み'}
+              filterPlaceholder={studentRosterView === 'active' ? '生徒名・表示名・学年で絞り込み' : '退塾生徒を氏名・表示名で絞り込み'}
               sortOptions={[{ value: 'name', label: '表示名' }, { value: 'entryDate', label: '入塾日' }, { value: 'withdrawDate', label: '退塾日' }, { value: 'birthDate', label: '生年月日' }, { value: 'status', label: '学年/状態' }]}
               onFilterChange={(value) => updateTableControl('students', { filterText: value })}
               onSortKeyChange={(value) => updateTableControl('students', { sortKey: value })}
@@ -1479,7 +1516,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
             />
             <div className="basic-data-table-visibility-toggle" data-testid="basic-data-student-roster-toggle">
               <button type="button" className={`basic-data-chip${studentRosterView === 'active' ? ' active' : ''}`} onClick={() => setStudentRosterView('active')} data-testid="basic-data-student-roster-active">在籍生徒</button>
-              <button type="button" className={`basic-data-chip${studentRosterView === 'withdrawn' ? ' active' : ''}`} onClick={() => setStudentRosterView('withdrawn')} data-testid="basic-data-student-roster-withdrawn">非在籍生徒表示</button>
+              <button type="button" className={`basic-data-chip${studentRosterView === 'withdrawn' ? ' active' : ''}`} onClick={() => setStudentRosterView('withdrawn')} data-testid="basic-data-student-roster-withdrawn">退塾生徒</button>
             </div>
           </div>
           <table className="basic-data-table" data-testid={studentRosterView === 'active' ? 'basic-data-students-table' : 'basic-data-withdrawn-students-table'}>
@@ -1488,38 +1525,38 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
               {orderedStudents.map((row) => (
                 <tr key={row.id}>
                   <td>
-                    {isRowEditing('student', row.id)
+                    {isStudentRowInputVisible(row)
                       ? <input value={row.name} onChange={(event) => updateStudent(row.id, { name: event.target.value })} data-testid={`basic-data-student-name-input-${row.id}`} />
                       : <span className="basic-data-cell-summary" data-testid={`basic-data-student-name-${row.id}`}>{row.name}</span>}
                   </td>
                   <td>
-                    {isRowEditing('student', row.id)
+                    {isStudentRowInputVisible(row)
                       ? <input value={row.displayName} onChange={(event) => updateStudent(row.id, { displayName: event.target.value })} />
                       : <span className="basic-data-cell-summary">{getStudentDisplayName(row)}</span>}
                   </td>
                   <td>
-                    {isRowEditing('student', row.id)
+                    {isStudentRowInputVisible(row)
                       ? <input value={row.email} onChange={(event) => updateStudent(row.id, { email: event.target.value })} type="email" />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.email)}</span>}
                   </td>
                   <td>
-                    {isRowEditing('student', row.id)
+                    {isStudentRowInputVisible(row)
                       ? <DateAssistInput value={row.entryDate} emptyLabel="入塾日を選択" onChange={(value) => updateStudent(row.id, { entryDate: value })} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.entryDate)}</span>}
                   </td>
                   <td>
-                    {isRowEditing('student', row.id)
+                    {isStudentRowInputVisible(row)
                       ? <DateAssistInput value={row.withdrawDate} emptyLabel="退塾日を選択" hint="未定の場合未入力(高3卒業後は卒業日を自動表示)" onChange={(value) => updateStudent(row.id, { withdrawDate: value })} />
                       : <span className="basic-data-cell-summary">{formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate))}</span>}
                   </td>
                   <td>
-                    {isRowEditing('student', row.id)
-                      ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudent(row.id, { birthDate: value })} />
+                    {isStudentBirthDateInputVisible(row)
+                      ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudentBirthDate(row, value)} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.birthDate)}</span>}
                   </td>
                   <td>
                     {/* 外部生チェック: 既存生徒も「編集」から後付けでチェックでき、コマ表の授業区分表記が即 外) になる。 */}
-                    {isRowEditing('student', row.id)
+                    {isStudentRowInputVisible(row)
                       ? <input
                           type="checkbox"
                           checked={isExternalStudentRow(row)}
@@ -1531,7 +1568,9 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                   <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{resolveManagedStudentGradeLabel(row, todayReferenceDate)}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
-                      <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
+                      {(
+                        <button className="secondary-button slim" type="button" title={isStudentRowLocked(row) ? '退塾生徒は生年月日だけ修正できます' : undefined} onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : isStudentRowLocked(row) ? '生年月日を修正' : '編集'}</button>
+                      )}
                       {/* 保護者用QR: 在籍タブ・フラグ ON・リモート有り・在籍中(isActiveOnDate)の生徒だけ(spec-parent-portal.md §K-6)。 */}
                       {(() => {
                         if (studentRosterView !== 'active') return null
@@ -1559,7 +1598,7 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                   </td>
                 </tr>
               ))}
-              {orderedStudents.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '非在籍生徒はまだありません。'}</td></tr> : null}
+              {orderedStudents.length === 0 ? <tr><td colSpan={9} className="basic-data-empty-row">{studentRosterView === 'active' ? '在籍生徒はまだありません。' : '退塾生徒はまだありません。'}</td></tr> : null}
             </tbody>
           </table>
         </section>
@@ -1658,6 +1697,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
           today: getReferenceDateKey(new Date()),
           currentWithdrawDate: withdrawModalState.currentWithdrawDate,
           stock: withdrawModalState.stock,
+          // フラグ OFF の教室では今日以降のコマ・記録は消えない(通常授業の剥がしだけ)ので案内も変える。
+          autoSweepEnabled: studentWithdrawAutoSweepEnabled,
         })
         return (
           <div className="auto-assign-modal-overlay" role="presentation">

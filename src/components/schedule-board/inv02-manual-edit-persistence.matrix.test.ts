@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import type { TeacherRow } from '../basic-data/basicDataModel'
+import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import type { ClassroomSettings } from '../../types/appState'
 import {
@@ -15,10 +15,12 @@ import {
   applyHistoryEntry,
   remergeBoardWeekWithManagedData,
   stripWithdrawnStudentsFromBoardWeek,
+  computeStudentWithdrawSweep,
   type HistoryEntry,
 } from './ScheduleBoardScreen'
-import { resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
+import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
+import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -828,15 +830,15 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
     })
 
     it('②一段スナップショット復元[兄弟]: 復元直後の受動 publish では clean 署名を更新しない（＝未保存のまま）', () => {
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true })).toEqual({
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true, hasUnsavedUserEditBeforePublish: false })).toEqual({
         markClean: false,
         persist: false,
         consumePendingUnsavedRestore: true,
       })
       // 通常のロード/教室切替（復元直後でない）は従来どおり clean 化する
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).markClean).toBe(true)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false }).markClean).toBe(true)
       // userInitiated は従来どおり保存対象（clean 化しない）
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: true, pendingUnsavedRestore: false })).toEqual({
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: true, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false })).toEqual({
         markClean: false,
         persist: true,
         consumePendingUnsavedRestore: true,
@@ -851,9 +853,48 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(restore).toMatch(/pendingUnsavedUndoSnapshotRestoreRef\.current = resolveRestoreFlagLifecycle\(/)
     })
 
+    // 2026-09-20(確認リスト その他): 休日設定の直後、再マージ effect が出す 2 回目の受動 publish が未保存の編集を clean 化し、
+    // 保存ボタンが「最新データ」になって自動保存も手動保存も走らなかった(リロードで休日設定が消える)。
+    it('ユーザー編集の直後の受動 publish[兄弟: 休日設定/丸ごと振替/全コマ削除の再マージ]: 未保存の編集があれば clean 化しない', () => {
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: true })).toEqual({
+        markClean: false,
+        persist: false,
+        consumePendingUnsavedRestore: true,
+      })
+      // 直前に未保存の編集が無い受動 publish(ロード/教室切替/マウント)は従来どおり clean 化する(U-0c を壊さない)。
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false }).markClean).toBe(true)
+    })
+
+    it('「未保存のユーザー編集があるか」は、直前の署名が clean と違い、かつ編集後に clean 署名が進んでいないときだけ true', () => {
+      // 休日設定の直後: 編集時の clean 署名のまま・署名は clean と違う → 未保存あり。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'edited', cleanSignature: 'saved-1', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(true)
+      // 保存が成功して clean 署名が進んだあとの受動 publish → 未保存なし。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'edited', cleanSignature: 'edited', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(false)
+      // 教室切替/読み直しで clean 署名が差し替わったあと、読込時の正規化差で署名がずれていても、ユーザー編集由来ではない → 未保存扱いにしない
+      // (開いただけの教室が未保存になって自動保存が走るのを防ぐ・U-0c / クロス教室汚染ガード)。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'normalized-diff', cleanSignature: 'other-classroom', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(false)
+      // この起動で一度もユーザー編集していない → 未保存なし。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'x', cleanSignature: 'y', cleanSignatureAtLastUserEdit: null })).toBe(false)
+      // 編集して元に戻した(署名が clean と同じ)→ 未保存なし。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'saved-1', cleanSignature: 'saved-1', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(false)
+    })
+
+    it('handleBoardStateChange は setBoardState の前に未保存判定を測り、ユーザー編集時の clean 署名を控える', () => {
+      const handler = sliceFunctionBody(appSource, 'const handleBoardStateChange = useCallback(', 'writePendingWorkspaceSnapshotForRemoteSync()')
+      const measureIndex = handler.indexOf('hasUnsavedUserEditBeforeBoardPublish({')
+      const setIndex = handler.indexOf('setBoardState(nextBoardState)')
+      expect(measureIndex).toBeGreaterThan(0)
+      expect(setIndex).toBeGreaterThan(measureIndex)
+      expect(handler).toContain('if (meta.userInitiated) cleanSignatureAtLastUserBoardEditRef.current = cleanSignatureRef.current')
+      expect(handler).toContain('hasUnsavedUserEditBeforePublish,')
+      // 明示 clean 化(読込/教室切替/ユーザー切替)では目印を落とす(中身が同じ教室をまたいでも未保存扱いにしない)。
+      const markClean = sliceFunctionBody(appSource, 'const markStateLoadedClean = useCallback(', 'setCleanSignature(nextCleanSignature)')
+      expect(markClean).toContain('if (expectedCleanSignature) cleanSignatureAtLastUserBoardEditRef.current = null')
+    })
+
     it('クロス教室汚染ガードは温存する（userInitiated:false では一切書き込まない）', () => {
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true }).persist).toBe(false)
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).persist).toBe(false)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true, hasUnsavedUserEditBeforePublish: false }).persist).toBe(false)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false }).persist).toBe(false)
     })
 
     // ======================================================================
@@ -873,7 +914,7 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       const publishResults: Array<'clean' | 'dirty'> = []
       for (const step of steps) {
         if (step.type === 'board-publish') {
-          const marking = resolveBoardStateChangeCleanMarking({ userInitiated: step.userInitiated, pendingUnsavedRestore: pending })
+          const marking = resolveBoardStateChangeCleanMarking({ userInitiated: step.userInitiated, pendingUnsavedRestore: pending, hasUnsavedUserEditBeforePublish: false })
           publishResults.push(marking.markClean ? 'clean' : 'dirty')
           pending = resolveRestoreFlagLifecycle({ event: 'board-publish', pending, userInitiated: step.userInitiated }).pendingAfter
           continue
@@ -1117,5 +1158,151 @@ describe('INV-02 × 退塾生徒の剥がし(手動編集は消さない・テ�
     // 昨日以前のセルは同じ参照(触っていない)。
     expect(result[0]).toBe(week[0])
     expect(result[1]).toBe(week[1])
+  })
+})
+
+// ============================================================================
+// 行: 退塾スイープ(computeStudentWithdrawSweep) × 手動編集
+//   オーナー確定 2026-09-20(確認リスト b-2 要改善): 「退塾」ボタンは名簿の退塾日を記録するだけでなく、
+//   **その生徒の今日以降の盤面の痕跡**(手置きの講習・振替・増コマ・体験・手動追加・移動の席と出欠記録)も消す。
+//   2026-09-20 夜 改定: 退塾ボタンだけでなく**日付入力で退塾日を入れた場合・未来の退塾日がその日を過ぎた場合**も
+//   同じ消去が黙って走る。命令(キュー)ではなく盤面側の検出(collectStudentWithdrawSweepTargets)で起こす。
+//   ここで固定するのは「消してよいものだけ消す」側 ＝ 他の生徒の手動編集・講師・メモ・**昨日以前**は不変で、
+//   再マージを何回通しても結果が変わらないこと(INV-02/INV-03)。在庫側は INV-06 マトリクスが固定する。
+// ============================================================================
+describe('INV-02 × 退塾スイープ(今日以降だけ消す・他の手動編集と昨日以前は不変)', () => {
+  const TODAY = '2026-06-03'
+  const YESTERDAY = '2026-06-02'
+  const roster: StudentRow[] = [
+    { id: 'sW', name: 'sW', displayName: 'sW', email: '', entryDate: '2024-04-01', withdrawDate: TODAY, birthDate: '2012-05-01' },
+    { id: 'sB', name: 'sB', displayName: 'sB', email: '', entryDate: '2024-04-01', withdrawDate: '未定', birthDate: '2012-06-01' },
+  ]
+  const lessonOf = (id: string, slots: [StudentEntry | null, StudentEntry | null]) => ({ id, note: '', studentSlots: slots })
+  const entryOf = (managedStudentId: string, overrides: Partial<StudentEntry> = {}) => createStudent({
+    id: `${managedStudentId}_seat`, managedStudentId, name: managedStudentId, ...overrides,
+  })
+  const statusOf = (managedStudentId: string, overrides: Partial<StudentStatusEntry> = {}) => createAttendedStatus({
+    id: `status_${managedStudentId}`, studentId: managedStudentId, managedStudentId, name: managedStudentId, ...overrides,
+  })
+  const tracesOf = (cells: SlotCell[], managedStudentId: string) => {
+    const found: string[] = []
+    for (const cell of cells) {
+      for (const desk of cell.desks) {
+        for (const student of desk.lesson?.studentSlots ?? []) {
+          if (student?.managedStudentId === managedStudentId) found.push(`${cell.dateKey}:seat:${student.lessonType}`)
+        }
+        for (const entry of desk.statusSlots ?? []) {
+          if (entry?.managedStudentId === managedStudentId) found.push(`${cell.dateKey}:status:${entry.status}`)
+        }
+      }
+    }
+    return found
+  }
+  const sweepFor = (weeks: SlotCell[][]) => computeStudentWithdrawSweep({
+    weeks,
+    students: roster,
+    studentId: 'sW',
+    fromDateKey: TODAY,
+    suppressedMakeupOrigins: {},
+    resolveStockId: (student) => student.managedStudentId ?? student.id,
+  })
+
+  it('手置きの講習・振替と出欠記録は今日以降だけ消え、他の生徒の手動編集・manualTeacher・メモ・昨日以前は残る', () => {
+    const yesterdayCell = createCell({
+      id: `${YESTERDAY}_1`, dateKey: YESTERDAY, dateLabel: '6/2',
+      desks: [createDesk({
+        id: 'y0', teacher: '講師A',
+        lesson: lessonOf('lesson_y', [entryOf('sW', { id: 'sW_y', lessonType: 'special', specialSessionId: 'sess-1' }), null]),
+        statusSlots: [null, statusOf('sW', { id: 'status_y', dateKey: YESTERDAY, status: 'absent' })],
+      })],
+    })
+    const todayCell = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [
+        createDesk({
+          id: 't0', teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual', memoSlots: ['連絡事項', null],
+          lesson: lessonOf('lesson_t0', [entryOf('sW', { id: 'sW_t0', lessonType: 'makeup', makeupSourceDate: '2026-05-20' }), entryOf('sB', { id: 'sB_t0' })]),
+          statusSlots: [null, statusOf('sB', { id: 'status_sB', dateKey: TODAY })],
+        }),
+        createDesk({ id: 't1', teacher: '講師C', statusSlots: [statusOf('sW', { id: 'status_sW_today', dateKey: TODAY, status: 'moved' }), null] }),
+      ],
+    })
+    const weeks = [[yesterdayCell, todayCell]]
+    const result = sweepFor(weeks)
+
+    expect(result.changed).toBe(true)
+    // 今日以降の痕跡だけが消え、昨日のセルは**同じ参照**で残る。
+    expect(tracesOf(result.nextWeeks[0], 'sW')).toEqual([`${YESTERDAY}:seat:special`, `${YESTERDAY}:status:absent`])
+    expect(result.nextWeeks[0][0]).toBe(yesterdayCell)
+    // 他の生徒の席・出欠記録・手動講師・メモは不変(INV-02/INV-01)。
+    const sweptToday = result.nextWeeks[0][1]
+    expect(tracesOf([sweptToday], 'sB')).toEqual([`${TODAY}:seat:regular`, `${TODAY}:status:attended`])
+    expect(sweptToday.desks[0]).toMatchObject({ teacher: '講師M', manualTeacher: true, teacherAssignmentSource: 'manual' })
+    expect(sweptToday.desks[0].memoSlots).toEqual(['連絡事項', null])
+    expect(sweptToday.desks[1].teacher).toBe('講師C')
+  })
+
+  it('スイープ後にテンプレ再マージを 2 回通しても痕跡は湧かず、昨日以前の記録も消えない(INV-03)', () => {
+    const yesterdayCell = createCell({
+      id: `${YESTERDAY}_1`, dateKey: YESTERDAY, dateLabel: '6/2',
+      desks: [createDesk({ id: 'y0', teacher: '講師A', statusSlots: [statusOf('sW', { id: 'status_y', dateKey: YESTERDAY, status: 'absent' }), null] })],
+    })
+    const todayCell = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [createDesk({
+        id: 't0', teacher: '講師A',
+        lesson: lessonOf('lesson_t0', [entryOf('sW', { id: 'sW_t0', lessonType: 'extra' }), null]),
+        statusSlots: [null, statusOf('sW', { id: 'status_sW_today', dateKey: TODAY })],
+      })],
+    })
+    const swept = sweepFor([[yesterdayCell, todayCell]]).nextWeeks[0]
+    let merged = swept
+    for (let pass = 0; pass < 2; pass += 1) {
+      merged = overlayBoardWeeksOnScheduleCells(merged.map(silentManagedCell), [merged])
+      expect(tracesOf(merged, 'sW')).toEqual([`${YESTERDAY}:status:absent`])
+    }
+    // 退塾生徒の剥がし(再マージの先頭で走る派生処理)を続けて通しても同じ。
+    expect(tracesOf(stripWithdrawnStudentsFromBoardWeek(merged, roster, TODAY), 'sW')).toEqual([`${YESTERDAY}:status:absent`])
+  })
+
+  // 行(2026-09-20 夜・オーナー確定): 検出方式。**日付入力での退塾日**も退塾ボタンと同じ扱いで、盤面を開いた時点で
+  // 黙って掃除する。逆に「掃除するものが無いのに盤面を書き換える」のは INV-02 違反(開いただけで未保存になり、
+  // 室長の未保存編集が自動保存に巻き込まれる/「最新データ」の表示が嘘になる)ので、対象 0 を厳格に固定する。
+  it('★日付入力で退塾日を入れた生徒も検出して掃除する(退塾ボタンと同じ扱い・命令は要らない)', () => {
+    const todayCell = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [createDesk({
+        id: 't0', teacher: '講師A',
+        lesson: lessonOf('lesson_t0', [entryOf('sW', { id: 'sW_t0', lessonType: 'special', specialSessionId: 'sess-1' }), entryOf('sB', { id: 'sB_t0' })]),
+      })],
+    })
+    // 退塾日は roster 上に入っているだけ(＝日付入力で入れた状態)。ボタン経由の命令は一切無い。
+    const targets = collectStudentWithdrawSweepTargets({ weeks: [[todayCell]], students: roster, todayKey: TODAY })
+    expect(targets).toEqual([{ studentId: 'sW', displayName: 'sW', fromDateKey: TODAY }])
+    const swept = sweepFor([[todayCell]])
+    expect(tracesOf(swept.nextWeeks[0], 'sW')).toEqual([])
+    expect(tracesOf(swept.nextWeeks[0], 'sB')).toEqual([`${TODAY}:seat:regular`])
+  })
+
+  it('★INV-02: 掃除するものが無ければ何も返さない(盤面を開いただけで未保存にしない)', () => {
+    // 昨日以前にしか痕跡が無い / 在籍中の生徒だけ / 未来の退塾日 のいずれも対象 0。
+    const yesterdayOnly = createCell({
+      id: `${YESTERDAY}_1`, dateKey: YESTERDAY, dateLabel: '6/2',
+      desks: [createDesk({ id: 'y0', teacher: '講師A', lesson: lessonOf('lesson_y', [entryOf('sW', { id: 'sW_y' }), null]) })],
+    })
+    const stayingOnly = createCell({
+      id: `${TODAY}_1`, dateKey: TODAY, dateLabel: '6/3',
+      desks: [createDesk({ id: 't0', teacher: '講師A', lesson: lessonOf('lesson_t0', [entryOf('sB', { id: 'sB_t0' }), null]) })],
+    })
+    expect(collectStudentWithdrawSweepTargets({ weeks: [[yesterdayOnly, stayingOnly]], students: roster, todayKey: TODAY })).toEqual([])
+    // 未来の退塾日はまだ在籍＝その日が来るまで触らない(痕跡は残したまま)。
+    const futureRoster = roster.map((row) => (row.id === 'sW' ? { ...row, withdrawDate: '2026-07-01' } : row))
+    const futureCell = createCell({
+      id: '2026-07-02_2', dateKey: '2026-07-02', dateLabel: '7/2', slotNumber: 2,
+      desks: [createDesk({ id: 't1', teacher: '講師A', lesson: lessonOf('lesson_t1', [entryOf('sW', { id: 'sW_t1' }), null]) })],
+    })
+    expect(collectStudentWithdrawSweepTargets({ weeks: [[futureCell]], students: futureRoster, todayKey: TODAY })).toEqual([])
+    expect(collectStudentWithdrawSweepTargets({ weeks: [[futureCell]], students: futureRoster, todayKey: '2026-07-01' }))
+      .toEqual([{ studentId: 'sW', displayName: 'sW', fromDateKey: '2026-07-01' }])
   })
 })
