@@ -1023,9 +1023,16 @@ export function resolveRestoreFlagLifecycle(params: {
 // clean 化してよい。ただし②一段スナップショット復元（黄バナー「戻す」）の直後だけは例外で、
 // 復元で盤面が再マウントされて発火する false publish で clean 化すると、戻した結果が「保存済み」と
 // 誤認され保存できず、リロードで戻す前の状態が復活する。復元は未保存(dirty)として扱う。
+// ★2026-09-20(INV-02・確認リスト その他「休日設定の直後に『最新データ』なのにリロードで消えた」): ユーザー編集の直後に来る
+//   受動 publish(再マージ effect が classroomSettings 等の変化で盤面を作り直して出す 2 回目の publish)でも clean 化していた。
+//   clean 署名が「いま画面にある未保存データ」へ進むので、保存ボタンは「最新データ」になり、自動保存タイマーも破棄され、
+//   手動保存も離脱時 flush も no-op になる(=保存されない)。休日設定は 2 回目の publish で盤面の中身が変わるので必ず踏む。
+//   → hasUnsavedUserEditBeforePublish(この publish の直前に、まだ保存されていないユーザー編集がある)なら clean 化しない。
+//   ロード/教室切替/マウント直後の受動 publish は直前にユーザー編集が無いので従来どおり clean 化する(U-0c を壊さない)。
 export function resolveBoardStateChangeCleanMarking(params: {
   userInitiated: boolean
   pendingUnsavedRestore: boolean
+  hasUnsavedUserEditBeforePublish: boolean
 }): { markClean: boolean; persist: boolean; consumePendingUnsavedRestore: boolean } {
   const lifecycle = resolveRestoreFlagLifecycle({
     event: 'board-publish',
@@ -1033,7 +1040,21 @@ export function resolveBoardStateChangeCleanMarking(params: {
     userInitiated: params.userInitiated,
   })
   if (params.userInitiated) return { markClean: false, persist: true, consumePendingUnsavedRestore: true }
-  return { markClean: !lifecycle.suppressCleanMarking, persist: false, consumePendingUnsavedRestore: true }
+  return { markClean: !lifecycle.suppressCleanMarking && !params.hasUnsavedUserEditBeforePublish, persist: false, consumePendingUnsavedRestore: true }
+}
+
+// 「この publish の直前に、まだ保存されていないユーザー編集があるか」。
+// - 直前の署名が clean 署名と同じなら未保存は無い。
+// - 違っていても、ユーザー編集(userInitiated publish)のあとで clean 署名が進んでいれば(=保存成功 or 読み直し)、
+//   その差はユーザー編集由来ではない(読込時の正規化差など)ので従来どおり clean 化してよい。
+export function hasUnsavedUserEditBeforeBoardPublish(params: {
+  signatureBeforePublish: string
+  cleanSignature: string
+  cleanSignatureAtLastUserEdit: string | null
+}): boolean {
+  if (params.cleanSignatureAtLastUserEdit === null) return false
+  if (params.signatureBeforePublish === params.cleanSignature) return false
+  return params.cleanSignatureAtLastUserEdit === params.cleanSignature
 }
 
 
@@ -1520,6 +1541,8 @@ function AuthenticatedApp() {
     setIsRemoteSyncVisible(nextIsVisible)
   }, [])
   const lastPendingWorkspaceSnapshotWriteAtRef = useRef(0)
+  // 直近のユーザー編集(盤面の userInitiated publish)の時点の clean 署名。受動 publish が未保存の編集を clean 化しないための目印(INV-02)。
+  const cleanSignatureAtLastUserBoardEditRef = useRef<string | null>(null)
   const [serverAutoBackupSummaries, setServerAutoBackupSummaries] = useState<ServerAutoBackupSummary[]>([])
   const [serverAutoBackupLoading, setServerAutoBackupLoading] = useState(false)
   const [studentHistoryState, setStudentHistoryState] = useState<null | { classroomName: string; entries: Array<{ dateKey: string; count: number }>; loading: boolean }>(null)
@@ -2879,10 +2902,18 @@ function AuthenticatedApp() {
     // 一切の書き込み/リモート同期を起こさない。ここで writePendingWorkspaceSnapshotForRemoteSync
     // を呼ぶと、acting教室とメモリ上データが食い違う切替直後の窓で他教室データを書き込み得る
     // （2026-06-06 / 2026-06-13 のクロス汚染パターン）。集団授業の変更も例外にしない。
+    // ★setBoardState の前に測る(後だと今回の publish の中身が署名に入る)。
+    const hasUnsavedUserEditBeforePublish = hasUnsavedUserEditBeforeBoardPublish({
+      signatureBeforePublish: buildCurrentDataSignature(),
+      cleanSignature: cleanSignatureRef.current,
+      cleanSignatureAtLastUserEdit: cleanSignatureAtLastUserBoardEditRef.current,
+    })
+    if (meta.userInitiated) cleanSignatureAtLastUserBoardEditRef.current = cleanSignatureRef.current
     setBoardState(nextBoardState)
     const cleanMarking = resolveBoardStateChangeCleanMarking({
       userInitiated: meta.userInitiated,
       pendingUnsavedRestore: pendingUnsavedUndoSnapshotRestoreRef.current,
+      hasUnsavedUserEditBeforePublish,
     })
     if (cleanMarking.consumePendingUnsavedRestore) pendingUnsavedUndoSnapshotRestoreRef.current = false
     if (!cleanMarking.persist) {
@@ -2895,7 +2926,7 @@ function AuthenticatedApp() {
       boardShareStateChangePublishTimerRef.current = null
       publishBoardStateSnapshot(nextBoardState)
     }, 250)
-  }, [markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
+  }, [buildCurrentDataSignature, cleanSignatureRef, markStateLoadedClean, publishBoardStateSnapshot, setBoardState, writePendingWorkspaceSnapshotForRemoteSync])
 
   useEffect(() => {
     if (screen !== 'developer') return

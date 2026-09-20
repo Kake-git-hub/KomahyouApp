@@ -17,7 +17,7 @@ import {
   stripWithdrawnStudentsFromBoardWeek,
   type HistoryEntry,
 } from './ScheduleBoardScreen'
-import { resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
+import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 
 // ============================================================================
@@ -828,15 +828,15 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
     })
 
     it('②一段スナップショット復元[兄弟]: 復元直後の受動 publish では clean 署名を更新しない（＝未保存のまま）', () => {
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true })).toEqual({
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true, hasUnsavedUserEditBeforePublish: false })).toEqual({
         markClean: false,
         persist: false,
         consumePendingUnsavedRestore: true,
       })
       // 通常のロード/教室切替（復元直後でない）は従来どおり clean 化する
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).markClean).toBe(true)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false }).markClean).toBe(true)
       // userInitiated は従来どおり保存対象（clean 化しない）
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: true, pendingUnsavedRestore: false })).toEqual({
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: true, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false })).toEqual({
         markClean: false,
         persist: true,
         consumePendingUnsavedRestore: true,
@@ -851,9 +851,45 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       expect(restore).toMatch(/pendingUnsavedUndoSnapshotRestoreRef\.current = resolveRestoreFlagLifecycle\(/)
     })
 
+    // 2026-09-20(確認リスト その他): 休日設定の直後、再マージ effect が出す 2 回目の受動 publish が未保存の編集を clean 化し、
+    // 保存ボタンが「最新データ」になって自動保存も手動保存も走らなかった(リロードで休日設定が消える)。
+    it('ユーザー編集の直後の受動 publish[兄弟: 休日設定/丸ごと振替/全コマ削除の再マージ]: 未保存の編集があれば clean 化しない', () => {
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: true })).toEqual({
+        markClean: false,
+        persist: false,
+        consumePendingUnsavedRestore: true,
+      })
+      // 直前に未保存の編集が無い受動 publish(ロード/教室切替/マウント)は従来どおり clean 化する(U-0c を壊さない)。
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false }).markClean).toBe(true)
+    })
+
+    it('「未保存のユーザー編集があるか」は、直前の署名が clean と違い、かつ編集後に clean 署名が進んでいないときだけ true', () => {
+      // 休日設定の直後: 編集時の clean 署名のまま・署名は clean と違う → 未保存あり。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'edited', cleanSignature: 'saved-1', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(true)
+      // 保存が成功して clean 署名が進んだあとの受動 publish → 未保存なし。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'edited', cleanSignature: 'edited', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(false)
+      // 教室切替/読み直しで clean 署名が差し替わったあと、読込時の正規化差で署名がずれていても、ユーザー編集由来ではない → 未保存扱いにしない
+      // (開いただけの教室が未保存になって自動保存が走るのを防ぐ・U-0c / クロス教室汚染ガード)。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'normalized-diff', cleanSignature: 'other-classroom', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(false)
+      // この起動で一度もユーザー編集していない → 未保存なし。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'x', cleanSignature: 'y', cleanSignatureAtLastUserEdit: null })).toBe(false)
+      // 編集して元に戻した(署名が clean と同じ)→ 未保存なし。
+      expect(hasUnsavedUserEditBeforeBoardPublish({ signatureBeforePublish: 'saved-1', cleanSignature: 'saved-1', cleanSignatureAtLastUserEdit: 'saved-1' })).toBe(false)
+    })
+
+    it('handleBoardStateChange は setBoardState の前に未保存判定を測り、ユーザー編集時の clean 署名を控える', () => {
+      const handler = sliceFunctionBody(appSource, 'const handleBoardStateChange = useCallback(', 'writePendingWorkspaceSnapshotForRemoteSync()')
+      const measureIndex = handler.indexOf('hasUnsavedUserEditBeforeBoardPublish({')
+      const setIndex = handler.indexOf('setBoardState(nextBoardState)')
+      expect(measureIndex).toBeGreaterThan(0)
+      expect(setIndex).toBeGreaterThan(measureIndex)
+      expect(handler).toContain('if (meta.userInitiated) cleanSignatureAtLastUserBoardEditRef.current = cleanSignatureRef.current')
+      expect(handler).toContain('hasUnsavedUserEditBeforePublish,')
+    })
+
     it('クロス教室汚染ガードは温存する（userInitiated:false では一切書き込まない）', () => {
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true }).persist).toBe(false)
-      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false }).persist).toBe(false)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: true, hasUnsavedUserEditBeforePublish: false }).persist).toBe(false)
+      expect(resolveBoardStateChangeCleanMarking({ userInitiated: false, pendingUnsavedRestore: false, hasUnsavedUserEditBeforePublish: false }).persist).toBe(false)
     })
 
     // ======================================================================
@@ -873,7 +909,7 @@ describe('INV-02 手動編集の永続化マトリクス（自動処理で巻き
       const publishResults: Array<'clean' | 'dirty'> = []
       for (const step of steps) {
         if (step.type === 'board-publish') {
-          const marking = resolveBoardStateChangeCleanMarking({ userInitiated: step.userInitiated, pendingUnsavedRestore: pending })
+          const marking = resolveBoardStateChangeCleanMarking({ userInitiated: step.userInitiated, pendingUnsavedRestore: pending, hasUnsavedUserEditBeforePublish: false })
           publishResults.push(marking.markClean ? 'clean' : 'dirty')
           pending = resolveRestoreFlagLifecycle({ event: 'board-publish', pending, userInitiated: step.userInitiated }).pendingAfter
           continue

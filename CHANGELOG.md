@@ -14,6 +14,7 @@
 
 ## 未リリース
 
+- fix: 休日設定の直後に保存ボタンが「最新データ」になるのに保存されておらず、リロードで休日設定が消えることがある不具合を修正(確認リスト その他 2026-09-20・INV-02)。真因=ユーザー編集の直後に再マージ effect が出す 2 回目の受動 publish が未保存の編集を clean 化し、自動保存タイマーも破棄していた(U-0 と同じ機序・v1.5.437 でも再現する潜在不具合)。受動 publish は「直前に未保存のユーザー編集が無いときだけ」clean 化する。ロード/教室切替直後は従来どおり(U-0c 維持)。ローカル実機で 休日設定→「保存」のまま→自動保存後に「最新データ」→リロードで残る を確認 (App.tsx hasUnsavedUserEditBeforeBoardPublish / resolveBoardStateChangeCleanMarking / inv02 マトリクス +3)
 - fix: 「保護者連絡」の履歴は、室長がモーダルの四択のいずれかを選んだ時点で「確認済」にする(オーナー指示 2026-09-20)。「確認済(保存待ち)」の区別を廃止。表示だけの変更で、処理済み(notifiedAt)にするのは従来どおり盤面の保存成功時=保存せず閉じた連絡は次回モーダルに再表示され履歴も未確認へ戻る(未確認の集合はモーダルの一覧と同じ述語のまま) (parentMessages.ts buildParentContactHistory / ParentContactHistoryModal.tsx / spec-parent-portal §0-5)
 - fix: 丸ごと振替ができない理由(出欠記録あり・同日・休日・コマ構成不一致 など)を、上部の状態欄に加えて画面中央のダイアログでも表示(確認リスト r-2 要改善 2026-09-20)。判定ロジックは無変更 (ScheduleBoardScreen.tsx notifyWholeDayTransferBlocked / wholeDayTransferBlockedNotice.wiring.test.ts)
 

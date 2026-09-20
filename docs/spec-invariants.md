@@ -235,6 +235,13 @@ UX に影響するバグを直したら、以下 4 点を満たして初めて�
     正当な `userInitiated:false` publish が clean 化をスキップし、**開いただけの教室が未保存扱い**になって
     自動保存が走る（他教室データへの書き戻しリスク）。明示 clean 化経路で必ず落とす
     （`resolveRestoreFlagLifecycle`）。★フラグを持ち越す実装に戻すと mutation で 2 件落ちる。
+  - **違反履歴（2026-09-20・ユーザー編集直後の受動 publish が未保存を clean 化／確認リスト その他・U-0 と同じ機序の 2 件目）**：
+    休日設定の直後、再マージ effect（`classroomSettings`・`suppressedRegularLessonOccurrences` の変化で再発火）が出す
+    2 回目の `userInitiated:false` publish で `markStateLoadedClean()` が走り、clean 署名が「いま画面にある未保存データ」へ進んだ。
+    保存ボタンは「最新データ」になり、署名が変わるため自動保存タイマーも破棄され、手動保存・離脱時 flush も no-op＝
+    **保存されないままリロードで休日設定が消える**（v1.5.437 でも再現＝長年の潜在）。受動 publish は「直前に未保存の
+    ユーザー編集が無いときだけ」clean 化する（`hasUnsavedUserEditBeforeBoardPublish`／`resolveBoardStateChangeCleanMarking`）。
+    ロード/教室切替/マウント直後は従来どおり clean 化（U-0c 維持）。マトリクスに 3 件追加。
   - **違反履歴（2026-08-02・丸ごと振替 Issue #40 の追随／オーナー確定）**：起動時の自己修復
     `reconcileSubmittedTeacherPlacements` の「配置済み」判定が**講習期間内のセルだけ**を走査していたため、
     丸ごと振替で QR 提出講師の机を期間外へ意図的に移すと「未配置」と誤判定し、起動毎に期間内へ置き直して
