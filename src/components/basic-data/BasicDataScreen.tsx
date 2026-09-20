@@ -28,7 +28,7 @@ import {
 } from './regularLessonModel'
 import { normalizeRegularLessonTemplate, parseRegularLessonTemplateWorkbook } from '../regular-template/regularLessonTemplate'
 import { buildDeleteConfirmation, type DeleteScope, type StudentDeletionStock, type StudentDeletionStockSummary } from './deleteGuard'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp } from './withdrawGuard'
+import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, applyLockedStudentBirthDateCorrection, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp } from './withdrawGuard'
 import { AppMenu } from '../navigation/AppMenu'
 import { buildParentPortalUrl } from '../../utils/scheduleQrConfig'
 import { generateQrSvg } from '../../utils/qrcode'
@@ -1437,6 +1437,12 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
     // 在籍中(退塾日が未来)の生徒は従来どおり退塾予定日を早める/遅らせる/消すのが自由(まだ何も消えていない)。
     const isStudentRowLocked = (row: StudentRow) => isStudentRowLockedByWithdrawal(row, todayReferenceDate)
     const isStudentRowInputVisible = (row: StudentRow) => isRowEditing('student', row.id) && !isStudentRowLocked(row)
+    // 案2(2026-09-21): 退塾生徒の行でも生年月日だけは直せる(誤入力で卒業扱いになった生徒を救う)。他の項目はロックのまま。
+    const isStudentBirthDateInputVisible = (row: StudentRow) => isRowEditing('student', row.id)
+    const updateStudentBirthDate = (row: StudentRow, value: string) => {
+      if (!isStudentRowLocked(row)) { updateStudent(row.id, { birthDate: value }); return }
+      onUpdateStudents((current) => current.map((entry) => (entry.id === row.id ? applyLockedStudentBirthDateCorrection(entry, value, todayReferenceDate) : entry)))
+    }
     const filteredStudents = filterAndSortRows(
       visibleStudents,
       tableControls.students,
@@ -1544,8 +1550,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                       : <span className="basic-data-cell-summary">{formatManagedDateValue(resolveEffectiveManagedWithdrawDate(row.withdrawDate, row.birthDate, todayReferenceDate))}</span>}
                   </td>
                   <td>
-                    {isStudentRowInputVisible(row)
-                      ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudent(row.id, { birthDate: value })} />
+                    {isStudentBirthDateInputVisible(row)
+                      ? <DateAssistInput value={row.birthDate} emptyLabel="生年月日を選択" onChange={(value) => updateStudentBirthDate(row, value)} />
                       : <span className="basic-data-cell-summary">{formatSummaryValue(row.birthDate)}</span>}
                   </td>
                   <td>
@@ -1562,8 +1568,8 @@ export function BasicDataScreen({ classroomSettings, teachers, students, onUpdat
                   <td><span className="status-chip secondary" data-testid={`basic-data-student-grade-${row.id}`}>{resolveManagedStudentGradeLabel(row, todayReferenceDate)}</span></td>
                   <td>
                     <div className="basic-data-row-actions">
-                      {isStudentRowLocked(row) ? null : (
-                        <button className="secondary-button slim" type="button" onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : '編集'}</button>
+                      {(
+                        <button className="secondary-button slim" type="button" title={isStudentRowLocked(row) ? '退塾生徒は生年月日だけ修正できます' : undefined} onClick={() => toggleRowEditing('student', row.id, orderedStudents.map((entry) => entry.id))} data-testid={`basic-data-edit-student-${row.id}`}>{isRowEditing('student', row.id) ? '編集終了' : isStudentRowLocked(row) ? '生年月日を修正' : '編集'}</button>
                       )}
                       {/* 保護者用QR: 在籍タブ・フラグ ON・リモート有り・在籍中(isActiveOnDate)の生徒だけ(spec-parent-portal.md §K-6)。 */}
                       {(() => {

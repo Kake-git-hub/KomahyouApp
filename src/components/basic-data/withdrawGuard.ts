@@ -48,6 +48,27 @@ export function isStudentRowLockedByWithdrawal(student: WithdrawTarget, today: s
   return resolveManagedStudentRosterStatus(student.withdrawDate, student.birthDate, today) === '非在籍'
 }
 
+// ── 退塾後も生年月日だけは直せる(案2・オーナー確定 2026-09-21) ────────────────────────────────
+// 行を完全ロックすると、生年月日の打ち間違い(例: 2017→2007)で誤って卒業=非在籍になった生徒を直す手段が
+// 「削除して作り直す」しか無く、過去の記録や未消化とのつながりが切れる。生年月日だけは退塾後も編集できる。
+// 退塾日・氏名などはロックのまま(退塾は元に戻せない、は変えない)。
+// ★生年月日を直して卒業扱いでなくなったら、**卒業で自動入力された退塾日**(graduationWithdrawAutoFilledAt の印つき)だけ
+//   一緒に外す。外さないと退塾日 3/31 が残って行のロックが解けない。室長が手で入れた退塾日(印なし)は外さない。
+//   印も外す(本当の卒業年度でもう一度自動入力されるように)。盤面で既に消えたコマは戻らない(仕様)。
+export function applyLockedStudentBirthDateCorrection<T extends WithdrawTarget & { graduationWithdrawAutoFilledAt?: string }>(
+  student: T,
+  nextBirthDate: string,
+  today: string,
+): T {
+  const corrected: T = { ...student, birthDate: nextBirthDate }
+  if (!student.graduationWithdrawAutoFilledAt) return corrected
+  // 退塾日を抜いた状態で在籍と判定される = 卒業扱いでなくなった。
+  if (resolveManagedStudentRosterStatus('', nextBirthDate, today) !== '在籍') return corrected
+  const { graduationWithdrawAutoFilledAt: _autoFilledAt, ...rest } = corrected
+  void _autoFilledAt
+  return { ...(rest as T), withdrawDate: '' }
+}
+
 // Excel 差分取り込みなど「名簿をまとめて置き換える」経路のガード。退塾済み(非在籍)の生徒の行は
 // **取り込み前のまま**にする(退塾日が消える/変わる、他の項目が書き換わるのを防ぐ)。
 // 取り込みで新しく現れた行・在籍中の行は従来どおり反映する。行の並びは取り込み結果の並びを保つ。

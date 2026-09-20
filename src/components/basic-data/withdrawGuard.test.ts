@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { isActiveOnDate, isStudentDeletedFromApp, resolveManagedRosterStatus, resolveManagedStudentRosterStatus } from './basicDataModel'
-import { applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp, preserveWithdrawnStudentRowsOnImport } from './withdrawGuard'
+import { applyLockedStudentBirthDateCorrection, applyStudentWithdrawToday, buildStudentWithdrawConfirmation, canDeleteStudentFromApp, canWithdrawStudentToday, filterStudentsVisibleInBasicData, isStudentInWithdrawnRosterList, isStudentRowLockedByWithdrawal, markStudentDeletedFromApp, preserveWithdrawnStudentRowsOnImport } from './withdrawGuard'
 
 const TODAY = '2026-09-13'
 
@@ -196,13 +196,19 @@ describe('基本データ画面: 生徒は削除せず退塾ボタン（オー�
     expect(source).toContain('markStudentDeletedFromApp(current, id, new Date().toISOString())')
   })
 
-  it('★退塾生徒(非在籍)の行は「編集」ボタンを出さず、入力も出さない(オーナー確定 2026-09-20 夜)', () => {
+  it('★退塾生徒(非在籍)の行は生年月日以外の入力を出さない(オーナー確定 2026-09-20 夜・案2 2026-09-21 で生年月日だけ解禁)', () => {
     // 退塾すると今日以降の盤面の痕跡が消える=元に戻せないので、退塾日も含めて編集不可。残す操作は「削除」だけ。
     expect(source).toContain('const isStudentRowLocked = (row: StudentRow) => isStudentRowLockedByWithdrawal(row, todayReferenceDate)')
     expect(source).toContain("const isStudentRowInputVisible = (row: StudentRow) => isRowEditing('student', row.id) && !isStudentRowLocked(row)")
-    expect(source).toContain('{isStudentRowLocked(row) ? null : (')
+    // 案2: 編集ボタンは退塾生徒にも出す(ラベルは「生年月日を修正」)。入力が出るのは生年月日のセルだけ。
+    expect(source).not.toContain('{isStudentRowLocked(row) ? null : (')
+    expect(source).toContain("isStudentRowLocked(row) ? '生年月日を修正' : '編集'")
+    expect(source).toContain("const isStudentBirthDateInputVisible = (row: StudentRow) => isRowEditing('student', row.id)")
+    expect(source.split('{isStudentBirthDateInputVisible(row)')).toHaveLength(2)
+    expect(source).toContain('onChange={(value) => updateStudentBirthDate(row, value)}')
+    expect(source).toContain('applyLockedStudentBirthDateCorrection(entry, value, todayReferenceDate)')
     // 生徒行のセルはすべて lock を通した判定を使う(素の isRowEditing で入力を出す穴を残さない)。
-    expect(source.match(/isStudentRowInputVisible\(row\)/g)).toHaveLength(7)
+    expect(source.match(/isStudentRowInputVisible\(row\)/g)).toHaveLength(6)
     expect(source).not.toMatch(/\{isRowEditing\('student', row\.id\)\r?\n {22}\?/)
     // 文言は「退塾生徒」(testid は変えない)。
     expect(source).toContain('data-testid="basic-data-student-roster-withdrawn">退塾生徒</button>')
@@ -267,5 +273,37 @@ describe('退塾後の行ロックと取り込みガード(オーナー確定 20
     expect(confirmation.message).toContain('退塾生徒')
     expect(confirmation.message).not.toContain('非在籍生徒表示')
     expect(confirmation.message).not.toContain('退塾日を消してください')
+  })
+})
+
+// 案2(オーナー確定 2026-09-21): 退塾後も生年月日だけは直せる。誤入力で卒業扱いになった生徒を「削除して作り直す」以外で救う。
+describe('applyLockedStudentBirthDateCorrection(退塾生徒の生年月日の修正)', () => {
+  const TODAY_KEY = '2027-04-10'
+  const base = { id: 's001', withdrawDate: '2027-03-31', birthDate: '2007-05-01', graduationWithdrawAutoFilledAt: '2027-04-01T00:00:00.000Z' }
+
+  it('卒業で自動入力された退塾日は、生年月日を直して卒業扱いでなくなったら印ごと外す(行のロックが解ける)', () => {
+    const next = applyLockedStudentBirthDateCorrection(base, '2017-05-01', TODAY_KEY)
+    expect(next.birthDate).toBe('2017-05-01')
+    expect(next.withdrawDate).toBe('')
+    expect('graduationWithdrawAutoFilledAt' in next).toBe(false)
+    expect(isStudentRowLockedByWithdrawal(next, TODAY_KEY)).toBe(false)
+  })
+
+  it('直しても卒業扱いのままなら退塾日は外さない', () => {
+    const next = applyLockedStudentBirthDateCorrection(base, '2007-06-01', TODAY_KEY)
+    expect(next).toMatchObject({ birthDate: '2007-06-01', withdrawDate: '2027-03-31', graduationWithdrawAutoFilledAt: base.graduationWithdrawAutoFilledAt })
+  })
+
+  it('★室長が手で入れた退塾日(印なし)は、生年月日を直しても外さない(退塾は元に戻せない)', () => {
+    const manual = { id: 's002', withdrawDate: '2027-03-31', birthDate: '2007-05-01' }
+    const next = applyLockedStudentBirthDateCorrection(manual, '2017-05-01', TODAY_KEY)
+    expect(next.withdrawDate).toBe('2027-03-31')
+    expect(isStudentRowLockedByWithdrawal(next, TODAY_KEY)).toBe(true)
+  })
+
+  it('入力を破壊しない', () => {
+    const frozen = Object.freeze({ ...base })
+    applyLockedStudentBirthDateCorrection(frozen, '2017-05-01', TODAY_KEY)
+    expect(frozen.withdrawDate).toBe('2027-03-31')
   })
 })
