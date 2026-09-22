@@ -63,7 +63,7 @@ describe('確認リストの項目定義', () => {
   it('第14版: 結果待ちの b-2、v1.5.538/539 の「休)」表示・記録保持の r-1〜r-8、開発用教室での予行 y-1〜y-4(オーナー指摘 2026-09-12 の運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     // 第16版: 準備 y-1 を先頭に置き、以降は読み込んだ日大前データの上で行う(項目ごとの準備を減らすため)。
-    expect(ids).toEqual(['y-1', 'b-2', 'b-3', 'r-2', 'r-5', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6'])
+    expect(ids).toEqual(['b-2', 'b-3', 'r-2', 'r-5', 'v-1', 'r-8', 'y-2', 'y-3', 'y-4', 'c-2', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6'])
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 複数会社展開 Phase 1(会社レイヤ): 既定値で見た目が変わらないことの確認 m-1〜m-3(版 v1.5.540 は据え置き)。
     for (const id of ['m-1', 'm-2', 'm-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.544')
@@ -106,7 +106,7 @@ describe('確認リストの項目定義', () => {
     expect(r5Text).not.toContain('「生徒追加」で置いた席は「休」が生徒の下に隠れて残り')
     // y-2 は丸ごと振替の移動元の「休」なので席へ戻らない(r-5 の新仕様と混同しない)。
     expect((byId.get('y-2')!.check ?? []).join(' / ')).toContain('席へは戻らない')
-    for (const id of ['y-1', 'y-2', 'y-3', 'y-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.541')
+    for (const id of ['y-2', 'y-3', 'y-4']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.541')
     // 第15版(v1.5.542): 確認リストの文字拡大の確認項目。版は据え置き(第13版の結果待ちを消さない)。
     const c2 = byId.get('c-2')!
     expect(c2.introducedIn).toBe('v1.5.542')
@@ -115,9 +115,13 @@ describe('確認リストの項目定義', () => {
     const c3 = byId.get('c-3')!
     expect(c3.introducedIn).toBe('v1.5.543')
     expect((c3.check ?? []).join(' / ')).toContain('前提')
-    // y-1 は準備なので前提を持ち、以降の予行項目は y-1 の控えと比べる。
-    expect(byId.get('y-1')!.prep).toContain('上書き')
-    for (const id of ['y-2', 'y-3', 'y-4']) expect((byId.get(id)!.check ?? []).join(' / '), id).toContain('y-1 の控え')
+    // 第22版(v1.5.555): y-1(準備)は OK 済みで外した。予行は y-2 の前提で控えた残数と比べる。
+    expect(ids).not.toContain('y-1')
+    expect(byId.get('y-2')!.prep).toContain('控える')
+    for (const id of ['y-2', 'y-3', 'y-4']) expect((byId.get(id)!.check ?? []).join(' / '), id).toContain('予行前の控え')
+    // 前回その他欄「最新データ表示なのに保存されていない」(v1.5.553 修正・INV-02)の確認項目。
+    expect(byId.get('v-1')!.introducedIn).toBe('v1.5.555')
+    expect((byId.get('v-1')!.check ?? []).join(' / ')).toContain('リロード後も休日設定が残っている')
     const b2 = byId.get('b-2')!
     // 第20版(v1.5.553・オーナー確定 2026-09-20): 退塾スイープの手順へ差し替え(未確認のままなので結果は失われない)。
     expect(b2.introducedIn).toBe('v1.5.553')
@@ -152,14 +156,14 @@ describe('確認リストの項目定義', () => {
     for (const okId of ['k-1', 'k-2', 'k-3', 'k-6', 'k-7', 'k-8', 'k-9']) {
       expect(ids, okId).not.toContain(okId)
     }
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.540')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.555')
   })
 })
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.540')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.540')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.555')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.555')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -231,7 +235,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.540]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.555]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
