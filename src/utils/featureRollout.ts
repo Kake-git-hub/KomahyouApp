@@ -156,9 +156,10 @@ export const featureRolloutRegistry = {
   //     (サーバーへ直接書く復元関数は作らない)。パスワード要求は v1.5.549 でやめた(オーナー指示 2026-09-18)。
   // ★教室取り違え防止(2026-06-06 事故)の権威は managerSelfRestore.ts の resolveManagerSelfRestoreGuard
   //   (担当 = 開いている = 復元対象 の 3 者一致)とサーバーの担当教室判定。フラグは入口の表示だけを切り替える。
-  // 開発用教室で先行 → オーナー確認後に全教室へ昇格する(段階公開はオーナー確定)。
+  // 開発用教室で先行(v1.5.548〜) → 確認リスト s-1〜s-3 OK(2026-09-22・その他欄「機能問題ないので本番へ展開して」)で
+  // 全教室へ昇格(v1.5.556)。functions / Firestore ルールは無変更(元から担当教室のみ許可)。回帰で development-only へ戻さない。
   managerSelfRestore: {
-    scope: 'development-only',
+    scope: 'all-classrooms',
     description: 'Backup/restore screen: manager restores own classroom from a server auto-backup (last 3 days) behind a large confirmation modal; load to screen, commit by manual save.',
   },
   // 退塾の自動掃除(オーナー確定 2026-09-20 夜・docs/spec-basic-data.md §B・§H・レビュー指摘 2026-09-21)。
