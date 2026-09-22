@@ -177,13 +177,15 @@ describe('featureRollout: lessonHistory（講習履歴）', () => {
 })
 
 describe('featureRollout: managerSelfRestore（室長の自教室復元）', () => {
-  it('開発用教室でのみ有効（本番教室へはオーナー確認後に昇格）', () => {
-    // オーナー確定 2026-09-18: 開発用教室 → 全教室の段階公開。復元は最重要の慎重操作なので勝手に広げないこと。
-    expect(featureRolloutRegistry.managerSelfRestore.scope).toBe('development-only')
+  it('全教室で有効（開発用教室で先行 → 確認リスト s-1〜s-3 OK・オーナー指示 2026-09-22 で昇格）', () => {
+    // オーナー確定 2026-09-18: 開発用教室 → 全教室の段階公開。2026-09-22 の確認リスト(v1.5.555)その他欄
+    // 「サーバーバックアップから復元(直近3日)は機能問題ないので本番へ展開して」で昇格した。
+    // 回帰防止: development-only へ戻すと本番教室の入口が消える。戻すのはオーナー指示があるときだけ。
+    expect(featureRolloutRegistry.managerSelfRestore.scope).toBe('all-classrooms')
     expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: 'v8OZ7zH8vONNHjjYVcR1' }, 'main')).toBe(true)
-    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(false)
-    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(false)
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: '5w5OMueETerSKrSf14HC' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: 'KzFnOQoTFLsCxwUp1tvh' }, 'main')).toBe(true)
+    expect(isFeatureEnabledForClassroom('managerSelfRestore', { id: '6xnnbSTbwgGrBLy0EJKb' }, 'main')).toBe(true)
   })
 })
 

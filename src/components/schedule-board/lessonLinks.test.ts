@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildLinkedLessonDestinationMap, resolveVisibleSlotDateLabel } from './lessonLinks'
+import { buildLinkedLessonDestinationMap, resolveMovedSourceDestinationLabel, resolveVisibleSlotDateLabel } from './lessonLinks'
 import type { LessonType, StudentStatusKind } from './types'
 
 // 緑が丘 室長報告(2026-09-04)「休みの振替を他の日に入れて出席にしたら、元コマの振替日が消える」の回帰防止。
@@ -244,5 +244,83 @@ describe('resolveVisibleSlotDateLabel 移動元マーカーは自分の移動先
     })
 
     expect(label).toBe('4/12')
+  })
+})
+
+// 確認リスト v1.5.555 その他欄(2026-09-22)「盤面で振替し、さらにそこから再度別日に振り替えたとき、元の授業の
+// 振替先日が追いついていません。日程表は問題ない」の回帰防止。
+// 通常授業 A(4/1 1限) → B(4/15 4限) へ動かすと A に moved 記録(moveDestinationDateKey = B)が残る。その振替コマを
+// B → C(4/20 5限) へさらに動かしても A の記録が持つ B は書き換わらない(記録は移動時に 1 度だけ作る)。
+// 生徒日程表はリンク解決(今その授業が置かれているコマ = C)を先に見るので正しく、盤面だけが B を出していた。
+describe('resolveMovedSourceDestinationLabel 振替をさらに別日へ動かしたら元コマの日付も追随する(A→B→C)', () => {
+  it('リンク先(今置かれているコマ C)があればそれを出し、自分が持つ移動先 B は使わない', () => {
+    expect(resolveMovedSourceDestinationLabel('2026-04-15', '2026-04-20')).toBe('4/20')
+  })
+
+  it('リンクが引けない(移動先を休みにして未消化へ戻した 等)ときは自分が持つ移動先を出す(従来どおり)', () => {
+    expect(resolveMovedSourceDestinationLabel('2026-04-15', undefined)).toBe('4/15')
+    expect(resolveMovedSourceDestinationLabel('2026-04-15', '')).toBe('4/15')
+  })
+
+  it('★移動先日付を持たない古い moved 記録はリンク先があっても空のまま(2026-09-16 の回帰防止を維持)', () => {
+    expect(resolveMovedSourceDestinationLabel(undefined, '2026-04-20')).toBe('')
+  })
+
+  it('盤面ラベル: 生徒のいない moved 記録のスロットはリンク先 C を出す(修正前は自分の B を出していた)', () => {
+    const label = resolveVisibleSlotDateLabel({
+      hasStudent: false,
+      hasContent: true,
+      resolvedLessonType: 'regular',
+      effectiveMakeupSourceDate: undefined,
+      statusEntry: { status: 'moved', moveDestinationDateKey: '2026-04-15' },
+      linkedDestinationDateKey: '2026-04-20',
+    })
+    expect(label).toBe('4/20')
+  })
+
+  it('盤面ラベル: 実在の生徒がいるスロットでは(前の生徒の)moved 記録の日付をリンク先込みで引き継がない(ee5728c 維持)', () => {
+    const label = resolveVisibleSlotDateLabel({
+      hasStudent: true,
+      hasContent: true,
+      resolvedLessonType: 'regular',
+      effectiveMakeupSourceDate: undefined,
+      statusEntry: { status: 'moved', moveDestinationDateKey: '2026-04-15' },
+      linkedDestinationDateKey: '2026-04-20',
+    })
+    expect(label).toBe('')
+  })
+
+  it('端到端: A の moved 記録は、B から C へ動かした振替コマ(makeupSourceDate は元の A のまま)へリンクする', () => {
+    const student = { managedStudentId: 'student-1', name: '青木 太郎', subject: '数' as const }
+    const movedAtA = {
+      id: 'status-moved-a',
+      ...student,
+      lessonType: 'regular' as LessonType,
+      status: 'moved' as StudentStatusKind,
+      moveDestinationDateKey: '2026-04-15',
+      moveDestinationSlotNumber: 4,
+    }
+    // prepareStudentForMove は振替コマを動かしても makeupSourceDate(元の通常授業 A)を保つ。B には何も残らない。
+    const placedAtC = {
+      ...student,
+      lessonType: 'makeup' as LessonType,
+      makeupSourceDate: '2026-04-01',
+      makeupSourceLabel: '2026/4/1(水) 1限',
+    }
+    const cells = [
+      { dateKey: '2026-04-01', slotNumber: 1, desks: [{ statusSlots: [movedAtA, null] }] },
+      { dateKey: '2026-04-15', slotNumber: 4, desks: [{ lesson: { studentSlots: [null, null] } }] },
+      { dateKey: '2026-04-20', slotNumber: 5, desks: [{ lesson: { studentSlots: [placedAtC, null] } }] },
+    ]
+    const linked = buildLinkedLessonDestinationMap(cells).get('status-moved-a')
+    expect(linked).toEqual({ dateKey: '2026-04-20', slotNumber: 5 })
+    expect(resolveVisibleSlotDateLabel({
+      hasStudent: false,
+      hasContent: true,
+      resolvedLessonType: 'regular',
+      effectiveMakeupSourceDate: undefined,
+      statusEntry: movedAtA,
+      linkedDestinationDateKey: linked?.dateKey,
+    })).toBe('4/20')
   })
 })

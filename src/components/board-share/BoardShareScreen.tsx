@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { isExternalBoardShareStudent, loadBoardShare, subscribeBoardShare, type BoardShareCell, type BoardSharePayload, type BoardShareStatusEntry, type BoardShareStudentEntry } from '../../integrations/firebase/boardShare'
 import { lessonTypeLabels, teacherTypeLabels } from '../schedule-board/mockData'
 import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, type GroupClassEntry } from '../schedule-board/groupClass'
-import { buildLinkedLessonDestinationMap, formatShortDateLabel } from '../schedule-board/lessonLinks'
+import { buildLinkedLessonDestinationMap, formatShortDateLabel, resolveMovedSourceDestinationLabel } from '../schedule-board/lessonLinks'
 import { getBoardSlotTimeLabel } from '../schedule-board/slotTimes'
 import type { LessonType, StudentStatusKind, TeacherType } from '../schedule-board/types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
@@ -92,9 +92,12 @@ export function formatStudentLabel(
   ].filter(Boolean).join(' / ')
 }
 
-function getVisibleDateLabel(student: BoardShareStudentEntry | BoardShareStatusEntry | null | undefined, status: BoardShareStatusEntry | null, cell: BoardShareCell, linkedDestinationDateKey?: string) {
+// 配布用盤面の「日付」ラベル。moved(移動元)は盤面(lessonLinks.ts resolveVisibleSlotDateLabel)と同じ規則
+// resolveMovedSourceDestinationLabel(リンク先 → 自分の移動先。移動先を持たない古い記録は空)で解決する。
+// 2026-09-22: 振替をさらに別日へ動かしたとき(A→B→C)、A の記録が持つ B ではなく今置かれている C を出す(盤面と同じ修正)。
+export function getVisibleDateLabel(student: Pick<BoardShareStudentEntry, 'lessonType' | 'makeupSourceDate'> | BoardShareStatusEntry | null | undefined, status: Pick<BoardShareStatusEntry, 'status' | 'moveDestinationDateKey'> | null, cell: Pick<BoardShareCell, 'dateKey'>, linkedDestinationDateKey?: string) {
   if (!student) return ''
-  if (status?.status === 'moved') return formatShortDateLabel(status.moveDestinationDateKey)
+  if (status?.status === 'moved') return resolveMovedSourceDestinationLabel(status.moveDestinationDateKey, linkedDestinationDateKey)
   if (status) return formatShortDateLabel(linkedDestinationDateKey)
   if (student.lessonType === 'makeup' && student.makeupSourceDate && student.makeupSourceDate !== cell.dateKey) {
     return formatShortDateLabel(student.makeupSourceDate)

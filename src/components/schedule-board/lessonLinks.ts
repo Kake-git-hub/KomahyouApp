@@ -172,12 +172,31 @@ export function resolveVisibleSlotDateLabel(params: {
 }) {
   const { hasStudent, hasContent, resolvedLessonType, effectiveMakeupSourceDate, statusEntry, linkedDestinationDateKey } = params
   const makeupSourceDateLabel = hasContent && resolvedLessonType === 'makeup' ? formatShortDateLabel(effectiveMakeupSourceDate) : ''
-  const moveDestinationDateLabel = !hasStudent && statusEntry?.status === 'moved' ? formatShortDateLabel(statusEntry.moveDestinationDateKey) : ''
-  // 回帰防止(2026-09-16): moved は**自分が持つ移動先日付だけ**を出す。振替元「休)」表示のために moved も
-  // buildLinkedLessonDestinationMap の起点にしたので、ここでリンク先へフォールバックさせると
-  // 「移動先日付を持たない古い moved 記録」の表示が変わってしまう(=機能フラグ OFF で挙動が変わる)。
+  const moveDestinationDateLabel = !hasStudent && statusEntry?.status === 'moved'
+    ? resolveMovedSourceDestinationLabel(statusEntry.moveDestinationDateKey, linkedDestinationDateKey)
+    : ''
+  // 回帰防止(2026-09-16): 移動先日付を持たない古い moved 記録は、リンク先があっても日付を出さない
+  // (振替元「休)」表示のために moved も buildLinkedLessonDestinationMap の起点にしたので、無条件にリンク先へ
+  // フォールバックさせると機能フラグ OFF の教室で古い記録の表示が変わる)。resolveMovedSourceDestinationLabel 参照。
   const linkedDestinationDateLabel = !hasStudent && statusEntry && statusEntry.status !== 'moved'
     ? formatShortDateLabel(linkedDestinationDateKey)
     : ''
   return makeupSourceDateLabel || moveDestinationDateLabel || linkedDestinationDateLabel
+}
+
+// 移動元マーカー(moved)に添える「移動先の日付」。盤面(resolveVisibleSlotDateLabel)と配布用盤面
+// (BoardShareScreen getVisibleDateLabel)が共有する唯一の解決規則。
+// ★確認リスト v1.5.555 その他欄(2026-09-22)「盤面で振替し、さらにそこから再度別日に振り替えたとき、元の授業の
+//   振替先日が追いついていません。日程表は問題ない」の修正:
+//   通常授業 A を別日 B へ動かすと A に moved 記録(moveDestinationDateKey = B)が残る。その振替コマを B から C へ
+//   さらに動かしても、A の記録が持つ B は書き換わらない(記録は移動時に 1 度だけ作る・INV-06 の会計は移動先が持つ)。
+//   一方リンク解決(buildLinkedLessonDestinationMap)は「今その授業が置かれているコマ」= C を指すので、
+//   生徒日程表(scheduleViewData / scheduleHtml: リンク先 → 自分の移動先 の順)は正しく C を出していた。
+//   盤面だけが自分の B を出していたので、同じ順(リンク先 → 自分の移動先)に揃える。
+// ★ただし**移動先日付を持たない古い moved 記録**はリンク先があっても空のまま(2026-09-16 の回帰防止をそのまま維持:
+//   機能フラグ OFF の教室で古い記録の表示を変えない)。リンク先を使うのは「自分の移動先を持つ記録」だけ。
+// ★リンクが引けないとき(移動先を休みにして未消化へ戻した・移動先が消えた 等)は自分の移動先を出す(従来どおり)。
+export function resolveMovedSourceDestinationLabel(moveDestinationDateKey: string | undefined, linkedDestinationDateKey: string | undefined) {
+  if (!moveDestinationDateKey) return ''
+  return formatShortDateLabel(linkedDestinationDateKey) || formatShortDateLabel(moveDestinationDateKey)
 }
