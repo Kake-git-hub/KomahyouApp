@@ -60,12 +60,21 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第23版(v1.5.556): 結果待ちの b-2/b-3・差し替えた c-2・新規 t-1/s-4・結果待ちの q-1〜q-6 だけを載せる(OK 済みは載せない運用)', () => {
+  it('第24版(v1.5.557): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に開発ダッシュボードの d-1 を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6'])
-    // 版は次にデプロイされる版(package.json の patch +1)。差し替えた c-2 の前回の印(要改善)を残さないために上げる。
+    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1'])
+    // ★版は v1.5.556 据え置き: 項目を足しただけ(差し替え・削除なし)のときは上げない(第14版の決まり・CLAUDE.md)。
+    //   上げると結果待ち項目の下書き(localStorage は版ごと)が消え、送信済みの結果もダッシュボードで「未確認」に戻る。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.556')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    // 第24版(2026-09-25): 開発ダッシュボード(開発者画面のサブページ)。読むだけの画面なので「教室のデータは何も変わらない」を必ず見る。
+    const d1 = byId.get('d-1')!
+    expect(d1.introducedIn).toBe('v1.5.557')
+    expect(d1.area).toBe('開発者画面')
+    expect(d1.steps.join(' / ')).toContain('開発ダッシュボード')
+    expect((d1.check ?? []).join(' / ')).toContain('教室のデータは何も変わらない')
+    // 版番号を手順に書かない(版を据え置いたまま項目を足す運用と食い違うため)。
+    expect([d1.prep ?? '', ...d1.steps, ...(d1.check ?? [])].join(' / ')).not.toMatch(/v1\.5\.\d+/u)
     // 退塾の新仕様(オーナー確定 2026-09-20 夜): b-2 は「元に戻せません」、b-3 は日付入力での退塾と行ロック。
     for (const id of ['b-2', 'b-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.553')
     expect(byId.get('b-2')!.check!.join(' / ')).toContain('「退塾生徒」を押すと出る')

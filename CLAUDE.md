@@ -20,6 +20,10 @@
   全チェックする。`src/utils/verificationChecklist.ts` の `VERIFICATION_CHECKLIST` に、その変更を実機で確かめる手順つき項目を
   足し、`VERIFICATION_CHECKLIST_VERSION` を次にデプロイされる版へ上げる(テストも追随。下書きは版ごとに保存されるので、確認中の版へ項目を足すだけなら版は据え置く)。結果待ちの項目は残し、OK 済みは載せない。
   結果は `node tools/verification-checklist-report.mjs --workspace main` で読む(「その他」欄も必ず見る)。
+  同じ結果は開発者画面の**開発ダッシュボード**(右上ボタン・読み取り専用・`docs/spec-developer-report.md` §E-3)でも読める。
+- **進行中テーマ台帳を更新する(2026-09-25)**: 機能フラグの scope を変えた(昇格)・ブランチをマージした・保留を解除した・
+  新しい先行機能や作りかけ・オーナー判断待ちが生まれたら、`src/utils/developmentStatusLedger.ts` の該当行を書き換える／消す／足す
+  (開発ダッシュボードの「進行中テーマ」の正本。完了したテーマは載せない。フラグの scope と段階のズレはテストが検出する)。
 - **コミット〜main マージは Claude の判断で自動実行(常時許可・オーナー指示 2026-06-27)**:
   毎回の明示指示なしに、回帰確認(build/テスト/`git diff`)を通したうえでコミット →
   `CHANGELOG.md` の `## 未リリース` を次の版でラベル付け → main へマージ(= CI 自動デプロイ)まで進める。
