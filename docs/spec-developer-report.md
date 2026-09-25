@@ -101,6 +101,37 @@
   省略、`- <id> OK` / `- <id> 要改善: <メモ>` の圧縮書式。`DEVELOPER_REPORT_NOTE_LIMIT`(2000字)を超える場合は
   複数通に分け、各通の先頭に同じ目印と `(i/n)` を付ける。**送信本文に生徒名は入れない**（項目 id とメモだけ）。
 - 送信できないときの保険として「Markdown をコピー」も用意する。送信後も下書きは残る（再送できる）。
+
+## E-3. 開発ダッシュボード（開発者画面のサブページ・2026-09-25 オーナー指示）
+
+- 目的: 開発者が **会社（workspace）・教室ごとの質問・要望の状況／開発の段階／確認リストの確認済み・未確認** を
+  1 画面で読めるようにする（オーナー指示 2026-09-25「各会社や教室の報告要望状況や、開発状況、確認未確認事項の一覧」）。
+  途中作業の洗い出し（`docs/review-2026-09-25-work-in-progress-inventory.md`）を起点に、以後は画面で追えるようにする。
+- 入口: 開発者画面（教室運営管理）の右上「**開発ダッシュボード**」ボタン。開発者画面自体が `role === 'developer'` に
+  限定されているので室長には出ない。実装は `src/components/developer-admin/DeveloperDashboardScreen.tsx`、
+  集計は純関数 `src/utils/developerDashboard.ts`、配線は `DeveloperDashboardScreen.wiring.test.ts` で固定。
+- **読み取り専用（本番データ保護ルール）**: 取得は (1) Firestore `developerReports` を `getDocs` で読む
+  `src/integrations/firebase/developerReportsStore.ts`（`recordedAt` の範囲＋件数で絞る・既定は直近 90 日・最大 300 件）と、
+  (2) 公開リポジトリの GitHub Issues API を認証なしで GET する `src/integrations/github/issues.ts`（直近更新 100 件・PR は除く）
+  だけ。**この画面から Firestore・callable・GitHub へ書く導線は作らない**（source-scan テストで固定）。
+- 表示（5 欄）:
+  1. **質問・要望の状況（教室別）** … 教室一覧の順に 質問／要望／不具合 の件数、Issue 起票待ち（`notifiedAt` 空）、
+     Issue 対応中（GitHub で open の番号）、確認リスト・テスト送信の件数、最終報告。一覧に無い教室（削除済み）は末尾。
+     直近の報告（新しい順・最大 40 件）は一言をクリックで全文表示。状態は 確認リスト＞テスト＞起票待ち＞Issue open/closed/不明。
+  2. **機能の段階** … `featureRolloutRegistry` を「開発用教室のみ → staging＋検証用教室 → 全教室」の順に並べる。
+  3. **進行中テーマ台帳** … `src/utils/developmentStatusLedger.ts`（正本）を段階（開発用教室で先行中／確認リスト結果待ち／
+     オーナー判断待ち／作業中（未マージ）／未着手／保留）ごとに列挙。**完了したテーマは載せない**（確認リストと同じ運用）。
+     フラグに紐づく行は、フラグが `all-classrooms` に昇格したのに「先行中」のままだとテストが落ちる（更新漏れ防止）。
+     `development-only` / `staging-environment` のフラグはすべて台帳に載っていなければならない（取りこぼし防止）。
+  4. **GitHub Issue** … open を「利用者からの報告（`source:user-report`）」と「開発側の課題」に分け、最近クローズした分も出す。
+     利用者報告のタイトル `📣 [利用者質問] 教室名: …` から教室名を取り出して札で示す。読めないとき（回数制限・オフライン）は理由を出す。
+  5. **確認リスト（現行版）の確認済み／未確認** … 定義 `VERIFICATION_CHECKLIST` の各項目に developerReports の結果を重ねる。
+     **現行版の結果だけ**を OK／要改善に数え、前の版の同じ id の結果は参考表示（版が上がる＝項目の差し替えのため）。
+     「その他の気づき」は新しい順。読み取り規則は `tools/verification-checklist-report.lib.mjs` と同一で、
+     `src/utils/verificationChecklistResults.ts` に移植し `tools/verification-checklist-results.parity.test.mjs` で一致を固定。
+- 運用: 機能フラグの昇格・ブランチのマージ・保留の解除・新しい先行機能の追加のたびに **台帳の行を更新する**
+  （CLAUDE.md「必須手順」）。ダッシュボードは表示するだけで、台帳の内容は判断しない。
+
 ## F. 受け入れ条件（テストで固定）
 
 - 一言が空なら盤面・日程表とも送れない（`validateDeveloperReportNote`。本体側でも日程表経由の空文を弾く）。

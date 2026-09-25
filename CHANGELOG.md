@@ -14,6 +14,13 @@
 
 ## 未リリース
 
+## v1.5.557 (2026-09-25)
+
+- feat: 開発者画面に**開発ダッシュボード**(右上ボタン・読み取り専用)を追加(オーナー指示 2026-09-25「各会社や教室の報告要望状況・開発状況・確認未確認事項の一覧」)。(1) 質問・要望の状況を教室別に集計(質問／要望／不具合の件数・Issue 起票待ち・Issue 対応中・確認リスト／テスト送信の件数・最終報告・直近 40 件の一覧)、(2) 機能フラグの段階(全教室に出ていないものを先に)、(3) 進行中テーマ台帳(開発用教室で先行中／確認リスト結果待ち／オーナー判断待ち／作業中(未マージ)／未着手／保留)、(4) GitHub Issue(公開 API を認証なしで GET・利用者報告と開発側の課題に分ける)、(5) 確認リスト(現行版)の確認済み／未確認と「その他の気づき」。取得は Firestore `developerReports` の getDocs(recordedAt の範囲＋件数で絞る・既定 90 日)と GitHub の GET だけで、**書き込み経路は作らない**(source-scan テストで固定)。確認リストの読み取り規則は tools の .mjs を TS へ移植し、両実装の一致をパリティテストで固定 (DeveloperDashboardScreen.tsx / DeveloperAdminScreen.tsx / developerDashboard.ts / developmentStatusLedger.ts / verificationChecklistResults.ts / developerReportsStore.ts / github/issues.ts / App.css / docs/spec-developer-report.md §E-3)
+- docs: 途中作業の洗い出し `docs/review-2026-09-25-work-in-progress-inventory.md` を追加(開発用教室限定で止まっている機能フラグ 6 件・確認リスト結果待ち 11 項目・未マージブランチ 5 本＋マージ済み 45 本・計画の未着手／保留・open Issue 13 件・同期状態)。進行中テーマ台帳の初期値はこの洗い出しから起こした
+- chore(checklist): 確認リストを第24版(v1.5.557)へ。開発ダッシュボードの確認 d-1 を追加(結果待ちの b-2/b-3/c-2/t-1/s-4/q-1〜q-6 はそのまま) (verificationChecklist.ts / verificationChecklist.test.ts)
+- docs(CLAUDE.md): 必須手順に「進行中テーマ台帳 `developmentStatusLedger.ts` の更新」を追加(フラグ昇格・マージ・保留解除・新しい先行機能のたびに行を書き換える。scope と段階のズレはテストが検出)
+
 ## v1.5.556 (2026-09-22)
 
 確認リスト v1.5.555 の結果(受付 e541141c・2026-09-22)を反映。

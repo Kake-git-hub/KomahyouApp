@@ -760,6 +760,236 @@
   font-weight: 600;
 }
 
+/* 開発ダッシュボード(開発者画面のサブページ・2026-09-25)。読み取り専用の一覧なので、表と札(chip)だけで組む。 */
+.developer-dashboard-range-field {
+  min-width: 160px;
+}
+
+.developer-dashboard-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.developer-dashboard-tile {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid #d5deea;
+  border-radius: 12px;
+  background: #f7f9fc;
+  color: #16314f;
+  text-decoration: none;
+}
+
+.developer-dashboard-tile strong {
+  font-size: 24px;
+  line-height: 1.1;
+}
+
+.developer-dashboard-tile-label {
+  font-size: 12px;
+  color: #49627e;
+}
+
+.developer-dashboard-table-wrap {
+  overflow-x: auto;
+}
+
+.developer-dashboard-table {
+  font-size: 15px;
+}
+
+.developer-dashboard-table th.num,
+.developer-dashboard-table td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.developer-dashboard-table td strong + .status-chip,
+.developer-dashboard-table td .status-chip + .status-chip {
+  margin-left: 6px;
+}
+
+.developer-dashboard-table tr.is-development td {
+  background: #fbfdff;
+}
+
+.developer-dashboard-table tr.is-needs-improvement td {
+  background: #fff8e6;
+}
+
+.developer-dashboard-table td .basic-data-subcopy {
+  display: block;
+}
+
+.developer-dashboard-description {
+  max-width: 520px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.developer-dashboard-subheading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 8px;
+  font-size: 15px;
+  color: #16314f;
+}
+
+.developer-dashboard-count,
+.developer-dashboard-label {
+  font-size: 12px;
+  color: #49627e;
+}
+
+.developer-dashboard-label {
+  margin-right: 6px;
+  font-weight: 700;
+}
+
+.developer-dashboard-report-list,
+.developer-dashboard-issue-list {
+  display: grid;
+  gap: 8px;
+}
+
+.developer-dashboard-report {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #e3e9f2;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.developer-dashboard-report-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.developer-dashboard-report-time {
+  font-size: 13px;
+  color: #49627e;
+  white-space: nowrap;
+}
+
+.developer-dashboard-report-note {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  color: #1f2f44;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: pointer;
+}
+
+.developer-dashboard-issue-link {
+  display: inline-block;
+  margin-right: 6px;
+  color: #2654b9;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.developer-dashboard-ledger-group {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.developer-dashboard-ledger-entry {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-left: 4px solid #d5deea;
+  background: #fbfcfe;
+}
+
+.developer-dashboard-ledger-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.developer-dashboard-ledger-summary,
+.developer-dashboard-ledger-next {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1f2f44;
+}
+
+.developer-dashboard-ledger-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 12px;
+}
+
+.developer-dashboard-issue {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  padding: 8px 12px;
+  border: 1px solid #e3e9f2;
+  border-radius: 10px;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+}
+
+.developer-dashboard-issue-number {
+  font-weight: 700;
+  color: #2654b9;
+}
+
+.developer-dashboard-issue-title {
+  font-size: 15px;
+  word-break: break-word;
+}
+
+.developer-dashboard-issue-meta {
+  grid-column: 2;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.developer-dashboard-checklist-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.developer-dashboard-other-note {
+  padding: 8px 12px;
+  border-left: 4px solid #f2c94c;
+  background: #fffbf0;
+  margin-bottom: 8px;
+}
+
+.developer-dashboard-other-note p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .billing-shell,
 .billing-main,
 .billing-control-panel,

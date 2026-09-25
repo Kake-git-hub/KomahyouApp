@@ -60,12 +60,19 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第23版(v1.5.556): 結果待ちの b-2/b-3・差し替えた c-2・新規 t-1/s-4・結果待ちの q-1〜q-6 だけを載せる(OK 済みは載せない運用)', () => {
+  it('第24版(v1.5.557): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に開発ダッシュボードの d-1 を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6'])
-    // 版は次にデプロイされる版(package.json の patch +1)。差し替えた c-2 の前回の印(要改善)を残さないために上げる。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.556')
+    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1'])
+    // 版は次にデプロイされる版(package.json の patch +1)。新機能(開発ダッシュボード)の追加で上げる。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.557')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
+    // 第24版(2026-09-25): 開発ダッシュボード(開発者画面のサブページ)。読むだけの画面なので「教室のデータは何も変わらない」を必ず見る。
+    const d1 = byId.get('d-1')!
+    expect(d1.introducedIn).toBe('v1.5.557')
+    expect(d1.area).toBe('開発者画面')
+    expect(d1.steps.join(' / ')).toContain('開発ダッシュボード')
+    expect((d1.check ?? []).join(' / ')).toContain('教室のデータは何も変わらない')
+    expect((d1.check ?? []).join(' / ')).toContain('v1.5.557')
     // 退塾の新仕様(オーナー確定 2026-09-20 夜): b-2 は「元に戻せません」、b-3 は日付入力での退塾と行ロック。
     for (const id of ['b-2', 'b-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.553')
     expect(byId.get('b-2')!.check!.join(' / ')).toContain('「退塾生徒」を押すと出る')
@@ -146,8 +153,8 @@ describe('確認リストの項目定義', () => {
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.556')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.556')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.557')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.557')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -219,7 +226,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.556]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.557]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
