@@ -62,8 +62,11 @@ export function normalizeDeveloperReportCategoryLoose(value: unknown): Developer
 
 /**
  * Firestore 文書(developerReports)からダッシュボード用の 1 件へ。壊れた項目は既定値へ丸める(1 件が壊れても
- * 一覧全体を落とさない)。確認リストかどうかは文書のフラグ **または** 本文の先頭マーカーで判定する
- * (フラグが無い古い文書でも取りこぼさない)。
+ * 一覧全体を落とさない)。
+ * ★確認リストかどうかの権威は**サーバーの判定**(functions/src/developerReport.ts isVerificationChecklistReport =
+ *   検証用教室 かつ 先頭行がマーカー)。文書に真偽値 `isVerificationChecklist` があればそれに従い、
+ *   フラグが無い古い文書だけ本文の先頭マーカーで補う(本番教室が同じ書式で送った報告を確認リストに混ぜない・
+ *   regression-reviewer 指摘 2026-09-25)。
  */
 export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | null | undefined, fallbackId: string): DeveloperReportRecord {
   const data = raw ?? {}
@@ -75,7 +78,7 @@ export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | nu
     source: readString(data.source),
     category: normalizeDeveloperReportCategoryLoose(data.category),
     isTest: data.isTest === true,
-    isVerificationChecklist: data.isVerificationChecklist === true || parseChecklistMarker(note) !== null,
+    isVerificationChecklist: typeof data.isVerificationChecklist === 'boolean' ? data.isVerificationChecklist : parseChecklistMarker(note) !== null,
     note,
     reportedAt: readString(data.reportedAt),
     recordedAt: readString(data.recordedAt) || readString(data.reportedAt),
@@ -167,10 +170,17 @@ export function buildGitHubIssueUrl(issueNumber: number): string {
 // 報告の状態と教室別の集計。
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * 報告の状態。
+ *  - awaiting-issue … `notifiedAt` が空 = 起票ワークフロー(.github/workflows/developer-reports.yml・15 分ごと)が未処理。
+ *  - notified-no-issue … 通知済みだが Issue 番号が無い(通常は起きない。起票の失敗や手動対応の名残)。
+ *  - issue-open / issue-closed / issue-unknown … Issue 番号あり。GitHub から取れた open/closed、取れなければ不明。
+ */
 export type DeveloperReportStatus =
   | 'test'
   | 'checklist'
   | 'awaiting-issue'
+  | 'notified-no-issue'
   | 'issue-open'
   | 'issue-closed'
   | 'issue-unknown'
@@ -179,6 +189,7 @@ export const DEVELOPER_REPORT_STATUS_LABELS: Readonly<Record<DeveloperReportStat
   test: 'テスト送信',
   checklist: '確認リスト',
   'awaiting-issue': 'Issue 起票待ち',
+  'notified-no-issue': '通知済み(Issue なし)',
   'issue-open': 'Issue 対応中',
   'issue-closed': 'Issue 完了',
   'issue-unknown': 'Issue あり',
@@ -200,7 +211,9 @@ export function buildIssueStateMap(issues: readonly GitHubIssueRecord[]): IssueS
 export function resolveDeveloperReportStatus(report: DeveloperReportRecord, issueStates: IssueStateMap): DeveloperReportStatus {
   if (report.isVerificationChecklist) return 'checklist'
   if (report.isTest) return 'test'
-  if (report.issueNumber === null) return 'awaiting-issue'
+  // 「起票待ち」の定義は仕様 §E-3 どおり notifiedAt が空(起票ワークフローは notifiedAt==null だけを拾う)。
+  if (report.notifiedAt === null) return 'awaiting-issue'
+  if (report.issueNumber === null) return 'notified-no-issue'
   const state = issueStates.get(report.issueNumber)
   if (state === 'open') return 'issue-open'
   if (state === 'closed') return 'issue-closed'

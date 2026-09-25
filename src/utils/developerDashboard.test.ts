@@ -57,10 +57,12 @@ describe('normalizeDeveloperReportRecord', () => {
     expect(normalizeDeveloperReportRecord({ issueNumber: '12' }, 'x').issueNumber).toBe(12)
   })
 
-  it('確認リストはフラグが無い古い文書でも本文の先頭マーカーで判定する', () => {
+  it('確認リストの判定はサーバーのフラグが権威。フラグが無い古い文書だけ本文の先頭マーカーで補う', () => {
     expect(normalizeDeveloperReportRecord({ note: '[確認リスト v1.5.556]\n- t-1 OK' }, 'x').isVerificationChecklist).toBe(true)
     expect(normalizeDeveloperReportRecord({ isVerificationChecklist: true, note: 'x' }, 'x').isVerificationChecklist).toBe(true)
     expect(normalizeDeveloperReportRecord({ note: '確認リストではない' }, 'x').isVerificationChecklist).toBe(false)
+    // 本番教室が同じ書式で送った報告はサーバーが false と記録する。マーカーがあっても確認リストに混ぜない(regression-reviewer 指摘 2026-09-25)。
+    expect(normalizeDeveloperReportRecord({ isVerificationChecklist: false, note: '[確認リスト v1.5.556]\n- t-1 OK' }, 'x').isVerificationChecklist).toBe(false)
   })
 })
 
@@ -92,22 +94,26 @@ describe('報告の状態と教室別集計', () => {
     { number: 63, title: 'c', state: 'closed', labels: [] },
   ]))
 
-  it('状態は 確認リスト > テスト > 起票待ち > Issue の open/closed/不明 の順に決まる', () => {
+  it('状態は 確認リスト > テスト > 起票待ち(notifiedAt 空) > 通知済み(Issue なし) > Issue の open/closed/不明 の順に決まる', () => {
+    const notified = '2026-09-20T00:15:00.000Z'
     expect(resolveDeveloperReportStatus(report({ reportId: 'a', isVerificationChecklist: true, isTest: true }), issueStates)).toBe('checklist')
-    expect(resolveDeveloperReportStatus(report({ reportId: 'b', isTest: true, issueNumber: 69 }), issueStates)).toBe('test')
+    expect(resolveDeveloperReportStatus(report({ reportId: 'b', isTest: true, issueNumber: 69, notifiedAt: notified }), issueStates)).toBe('test')
+    // 起票待ちは仕様 §E-3 どおり notifiedAt が空で決まる(Issue 番号の有無ではない)。
     expect(resolveDeveloperReportStatus(report({ reportId: 'c' }), issueStates)).toBe('awaiting-issue')
-    expect(resolveDeveloperReportStatus(report({ reportId: 'd', issueNumber: 69 }), issueStates)).toBe('issue-open')
-    expect(resolveDeveloperReportStatus(report({ reportId: 'e', issueNumber: 63 }), issueStates)).toBe('issue-closed')
-    expect(resolveDeveloperReportStatus(report({ reportId: 'f', issueNumber: 999 }), issueStates)).toBe('issue-unknown')
+    expect(resolveDeveloperReportStatus(report({ reportId: 'c2', issueNumber: 69 }), issueStates)).toBe('awaiting-issue')
+    expect(resolveDeveloperReportStatus(report({ reportId: 'g', notifiedAt: notified }), issueStates)).toBe('notified-no-issue')
+    expect(resolveDeveloperReportStatus(report({ reportId: 'd', issueNumber: 69, notifiedAt: notified }), issueStates)).toBe('issue-open')
+    expect(resolveDeveloperReportStatus(report({ reportId: 'e', issueNumber: 63, notifiedAt: notified }), issueStates)).toBe('issue-closed')
+    expect(resolveDeveloperReportStatus(report({ reportId: 'f', issueNumber: 999, notifiedAt: notified }), issueStates)).toBe('issue-unknown')
   })
 
   it('教室一覧の順に並べ、0 件の教室も出し、削除済み教室は末尾に足す。テスト・確認リストは種別に数えない', () => {
     const rows = summarizeDeveloperReportsByClassroom([
-      report({ reportId: 'r1', classroomId: 'c2', classroomName: '緑が丘', category: 'question', issueNumber: 69, reportedAt: '2026-09-16T07:00:00.000Z' }),
+      report({ reportId: 'r1', classroomId: 'c2', classroomName: '緑が丘', category: 'question', issueNumber: 69, notifiedAt: '2026-09-16T07:15:00.000Z', reportedAt: '2026-09-16T07:00:00.000Z' }),
       report({ reportId: 'r2', classroomId: 'c2', classroomName: '緑が丘', category: 'request', reportedAt: '2026-09-17T07:00:00.000Z' }),
       report({ reportId: 'r3', classroomId: 'dev', classroomName: '開発用教室', isVerificationChecklist: true, note: '[確認リスト v1.5.556]\n- t-1 OK', notifiedAt: '2026-09-22T00:00:00.000Z' }),
       report({ reportId: 'r4', classroomId: 'dev', classroomName: '開発用教室', isTest: true, note: '#テスト', notifiedAt: '2026-09-22T00:00:00.000Z' }),
-      report({ reportId: 'r5', classroomId: 'gone', classroomName: '薬円台校', category: 'bug', issueNumber: 63 }),
+      report({ reportId: 'r5', classroomId: 'gone', classroomName: '薬円台校', category: 'bug', issueNumber: 63, notifiedAt: '2026-09-01T00:15:00.000Z' }),
     ], [{ id: 'c1', name: '日大前' }, { id: 'c2', name: '緑が丘' }, { id: 'dev', name: '開発用教室' }], {
       issueStates,
       isDevelopmentClassroom: (id) => id === 'dev',

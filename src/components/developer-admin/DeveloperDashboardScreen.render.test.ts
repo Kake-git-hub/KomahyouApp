@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest'
 import { DeveloperDashboardScreen } from './DeveloperDashboardScreen'
 import { VERIFICATION_CHECKLIST } from '../../utils/verificationChecklist'
 import { DEVELOPMENT_STATUS_LEDGER } from '../../utils/developmentStatusLedger'
+import { FEATURE_SCOPE_LABELS } from '../../utils/developerDashboard'
+import { featureRolloutRegistry } from '../../utils/featureRollout'
 
 describe('DeveloperDashboardScreen の描画', () => {
   it('Firebase モードで 5 つの欄・確認リストの全項目・台帳の全テーマを描く(取得前は読み込み中)', () => {
@@ -34,9 +36,11 @@ describe('DeveloperDashboardScreen の描画', () => {
     expect(html).toContain('検証用')
     for (const item of VERIFICATION_CHECKLIST.items) expect(html, item.id).toContain(`<code>${item.id}</code>`)
     for (const entry of DEVELOPMENT_STATUS_LEDGER) expect(html, entry.id).toContain(entry.title)
-    // 機能フラグの段階(全教室に出ていないものの札)。
-    expect(html).toContain('開発用教室のみ')
-    expect(html).toContain('transferSourceRestDisplay')
+    // 機能フラグの段階: レジストリの全キーと、その scope の札が出る(今のフラグ状態に依存しない)。
+    for (const [key, feature] of Object.entries(featureRolloutRegistry)) {
+      expect(html, key).toContain(`<code>${key}</code>`)
+      expect(html, key).toContain(FEATURE_SCOPE_LABELS[feature.scope])
+    }
   })
 
   it('ローカルモードでは報告を読まず、その旨を出す', () => {

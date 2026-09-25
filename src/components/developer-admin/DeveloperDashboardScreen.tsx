@@ -61,6 +61,7 @@ const REPORT_STATUS_CHIP_CLASS: Readonly<Record<DeveloperReportStatus, string>> 
   test: 'secondary',
   checklist: 'secondary',
   'awaiting-issue': 'warning',
+  'notified-no-issue': 'warning',
   'issue-open': '',
   'issue-closed': 'secondary',
   'issue-unknown': '',
@@ -208,6 +209,9 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
           {authMode !== 'firebase' ? <div className="toolbar-status">ローカルモードでは報告を読み込めません(Firebase 接続時のみ)。</div> : null}
           {reportsLoading ? <div className="toolbar-status">報告を読み込んでいます…</div> : null}
           {reportsError ? <div className="developer-report-error">{reportsError}</div> : null}
+          {reportsReady && reports.length >= DEVELOPER_DASHBOARD_REPORT_LIMIT ? (
+            <div className="developer-report-error">読み込み上限 {DEVELOPER_DASHBOARD_REPORT_LIMIT} 件に達したため、それより古い報告は数えていません。期間を短くしてください。</div>
+          ) : null}
           <div className="developer-dashboard-table-wrap">
             <table className="developer-billing-table developer-dashboard-table">
               <thead>
