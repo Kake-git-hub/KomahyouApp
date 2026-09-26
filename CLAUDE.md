@@ -69,6 +69,12 @@
 
 ### デバッグ・チェック時の読み取り専用ルール
 
+- **本番の読み取り専用トークン(2026-09-26)**: クラウド環境の環境変数 `KOMAHYOU_READONLY_SA_JSON_B64`(読み取り専用サービスアカウント
+  `claude-readonly`・ロールは Cloud Datastore 閲覧者＋Storage オブジェクト閲覧者だけ)から
+  `export FIRESTORE_ACCESS_TOKEN=$(node tools/prod-readonly-token.mjs)` で 1 時間有効のトークンを作り、Firestore REST / Storage JSON API を GET する。
+  利用者報告の操作痕跡(`developerReports/{id}.recentOperations`)と報告時点の教室データ(`snapshotStoragePath`)もこれで読む。
+  取得した教室データ(生徒名を含む)はスクラッチ領域に置き、リポジトリ・Issue・公開ログへ出さない。
+
 - Firestoreデータの**確認・照合は読み取り（GET）のみ**。REST APIで `getDoc` / `getDocs` に相当する照合は可。
 - gcloud / firebase CLI でのデータ参照は読み取り専用コマンドに限定する。
 - **書き込みが必要な確認作業は、必ず開発用教室 `v8OZ7zH8vONNHjjYVcR1` を対象にする**。

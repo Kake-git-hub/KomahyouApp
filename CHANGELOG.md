@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.561 (2026-09-26)
+
+- chore(tools): 本番を**読むだけ**のアクセストークンを作る `tools/prod-readonly-token.mjs` を追加(オーナー指示 2026-09-26「実際のデータを読む環境に」)。クラウド環境の環境変数 `KOMAHYOU_READONLY_SA_JSON_B64`(読み取り専用サービスアカウント claude-readonly の JSON 鍵を base64 にした 1 行)から JWT を署名して 1 時間有効のトークンを得る。要求スコープは datastore と devstorage.read_only だけ(書き込みはアカウントのロールで不可)。貼り間違い(全角括弧・空・JSON でない)は理由つきで止める。既存の `lesson-history-diagnose.mjs` などの `FIRESTORE_ACCESS_TOKEN` にそのまま渡せる。アプリの動作変更なし。テスト 4 件 (tools/prod-readonly-token.mjs / .test.mjs / CLAUDE.md)
+
 ## v1.5.560 (2026-09-26)
 
 - fix: **開発者が本番教室を開いて QR 提出通知を見ると、その教室の室長 PC で次回起動の通知が出なくなる**塞ぎ残し(v1.5.559 の regression-reviewer 指摘 B-1)を、オーナー決定(2026-09-26)「開発者は表示だけで通知済みを記録しない」で修正。純関数 `shouldRecordSubmissionNotified(role, isDevelopmentClassroom)`(室長=常に記録／開発者×開発用教室=記録／開発者×本番教室=記録しない)で `markLectureSubmissionsNotified` を囲む。開発者側は本番教室を開き直すたびに同じ通知が出るが、室長の通知を守る方を優先(仕様)。回帰テスト: 純関数 3 件＋配線ガード 1 件。確認リスト d-3 追加(版は v1.5.556 据え置き) (App.tsx / App.test.ts / submissionNotification.wiring.test.ts / verificationChecklist.ts)
