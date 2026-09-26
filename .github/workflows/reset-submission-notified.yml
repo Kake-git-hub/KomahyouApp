@@ -1,0 +1,55 @@
+# QR 提出通知の「通知済み(notifiedAt)」を 1 件だけ外して、その教室の PC で次回起動時にもう一度通知させる(手動・オーナー実行)。
+# 背景: 開発者画面(〜v1.5.558)や開発者が本番教室を開いたとき(〜v1.5.559)に表示された通知が「通知済み」になり、
+# 室長 PC の次回起動で通知が出なくなっていた(実例: 坂口講師の提出・2026-09-26)。
+# 手順: 1) token 空・apply=false で実行 → ログの一覧から対象 token を控える(renotify=yes なら外す意味がある)
+#       2) token を入れ apply=true で実行 → notifiedAt が消える。室長 PC をハードリロードすると通知が出る。
+# 書き込みは notifiedAt の削除だけ(提出内容は触らない)。教室が一致しない doc には書かない。
+name: Reset QR submission notified flag
+
+on:
+  workflow_dispatch:
+    inputs:
+      classroom_id:
+        description: '教室ID(必須。例: 日大前 5w5OMueETerSKrSf14HC / 緑が丘 KzFnOQoTFLsCxwUp1tvh / 薬円台 6xnnbSTbwgGrBLy0EJKb)'
+        required: true
+      token:
+        description: '外す提出の token(空なら一覧だけ出す)'
+        required: false
+        default: ''
+      apply:
+        description: '実際に書き込む(false なら dry-run)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  reset-notified:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Authenticate to Google Cloud (Firestore access token)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: List / reset notified flag
+        env:
+          FIRESTORE_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          CLASSROOM_ID: ${{ github.event.inputs.classroom_id }}
+          TOKEN: ${{ github.event.inputs.token }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          set -o pipefail
+          args=(--workspace main --classroom "$CLASSROOM_ID")
+          if [ -n "$TOKEN" ]; then args+=(--token "$TOKEN"); fi
+          if [ "$APPLY" = "true" ]; then args+=(--apply); fi
+          node tools/lecture-submission-notified-reset.mjs "${args[@]}"

@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.560 (2026-09-26)
+
+- fix: **開発者が本番教室を開いて QR 提出通知を見ると、その教室の室長 PC で次回起動の通知が出なくなる**塞ぎ残し(v1.5.559 の regression-reviewer 指摘 B-1)を、オーナー決定(2026-09-26)「開発者は表示だけで通知済みを記録しない」で修正。純関数 `shouldRecordSubmissionNotified(role, isDevelopmentClassroom)`(室長=常に記録／開発者×開発用教室=記録／開発者×本番教室=記録しない)で `markLectureSubmissionsNotified` を囲む。開発者側は本番教室を開き直すたびに同じ通知が出るが、室長の通知を守る方を優先(仕様)。回帰テスト: 純関数 3 件＋配線ガード 1 件。確認リスト d-3 追加(版は v1.5.556 据え置き) (App.tsx / App.test.ts / submissionNotification.wiring.test.ts / verificationChecklist.ts)
+- feat: **通知済み(notifiedAt)を外して室長 PC で再通知させる手動ツール**を追加(坂口講師の提出が開発者画面で「通知済み」になった件の復旧用)。`tools/lecture-submission-notified-reset.mjs`(一覧 → `--token --apply` で 1 件だけ notifiedAt を削除。教室不一致・notifiedAt 無しは中止・提出内容は触らない=INV-07/INV-08)と GitHub Actions「Reset QR submission notified flag」(オーナーが実行。Claude は本番書き込みをしない)。一覧に「外せば再通知されるか」(提出が教室の前回保存より後か=App の起動時判定と同じ)を出す。純関数テスト 13 件 (tools/lecture-submission-notified-reset.mjs / .test.mjs / .github/workflows/reset-submission-notified.yml)
+
 ## v1.5.559 (2026-09-26)
 
 - fix: **開発者画面(教室運営管理)に講師の QR 提出通知モーダルが出る**不具合を修正(オーナー報告 2026-09-26)。開発者は教室を開いていなくても actingClassroomId(最後に開いた教室)を持つため、`subscribeLectureSubmissions` の購読 effect が画面を見ずに走り、(1) 室長向けの通知が開発者画面に出る、(2) 表示した提出を `markLectureSubmissionsNotified` が notifiedAt でサーバーへ先取り記録し、**本来の教室の PC が閉じていた提出は次回起動の通知(`selectStartupSubmissionsToNotify`)から外れて室長に届かなくなる**、の 2 つが起きていた(室長の PC が開いていればリアルタイム経路で先に出るので影響なし。提出データ自体は Cloud Functions が反映済みで集計は消えない)。開発者が開発者画面にいる間は購読しない `shouldSubscribeClassroomNotifications(screen, role)` を足し、QR 提出通知と保護者からの休み連絡(兄弟・同じ overlay 構造)の両 effect をこれで止める。教室を開いた時点で購読が始まり、初回スナップショットの起動時経路から改めて通知する。既存 INV に該当なし(開発者画面の表示範囲・台帳追加の要否はオーナー判断)。回帰テスト: 純関数 3 件＋配線ガード 5 件(修正なしで落ちることを確認)。確認リスト d-2 追加(版は v1.5.556 据え置き) (App.tsx / App.test.ts / submissionNotification.wiring.test.ts / parentPortal.wiring.test.ts / verificationChecklist.ts)

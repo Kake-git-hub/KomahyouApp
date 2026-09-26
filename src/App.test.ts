@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSubscribeClassroomNotifications, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldRecordSubmissionNotified, shouldReturnDeveloperOnLogout, shouldSubscribeClassroomNotifications, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import { resolveNewlyUnsubmittedSessionStudents } from './components/schedule-board/ScheduleBoardScreen'
 import { initialStudents, type StudentRow } from './components/basic-data/basicDataModel'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
@@ -148,6 +148,25 @@ describe('shouldSubscribeClassroomNotifications', () => {
     expect(shouldSubscribeClassroomNotifications('developer', 'manager')).toBe(true)
     expect(shouldSubscribeClassroomNotifications('board', null)).toBe(true)
     expect(shouldSubscribeClassroomNotifications('board', undefined)).toBe(true)
+  })
+})
+
+describe('shouldRecordSubmissionNotified', () => {
+  // オーナー決定 2026-09-26: 開発者は本番教室では「表示だけ」で通知済み(notifiedAt)を記録しない。
+  // 記録すると室長 PC が閉じていた提出が次回起動の通知から外れ、室長に届かない(v1.5.559 B-1)。
+  it('室長は常に記録する(従来どおり)', () => {
+    expect(shouldRecordSubmissionNotified('manager', false)).toBe(true)
+    expect(shouldRecordSubmissionNotified('manager', true)).toBe(true)
+    expect(shouldRecordSubmissionNotified(null, false)).toBe(true)
+    expect(shouldRecordSubmissionNotified(undefined, false)).toBe(true)
+  })
+
+  it('開発者 × 本番教室は記録しない(表示だけ)', () => {
+    expect(shouldRecordSubmissionNotified('developer', false)).toBe(false)
+  })
+
+  it('開発者 × 開発用教室は記録する(開発用教室の室長は開発者自身)', () => {
+    expect(shouldRecordSubmissionNotified('developer', true)).toBe(true)
   })
 })
 
