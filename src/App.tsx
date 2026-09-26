@@ -32,7 +32,7 @@ import { getWeekStart, shiftDate } from './components/schedule-board/mockData'
 import { clearDeveloperCloudBackupHandle, clearPendingRemoteWorkspaceSnapshotMarker, loadAppSnapshot, loadDeveloperCloudBackupHandle, loadWorkspaceSnapshot, parseAppSnapshot, parseWorkspaceSnapshot, saveDailyWorkspaceAutoBackup, saveDeveloperCloudBackupHandle, saveWorkspaceSnapshot, serializeAppSnapshot, serializeWorkspaceSnapshot, writeWorkspaceToLocalStorageSync, type PendingRemoteWorkspaceSnapshotMarker } from './data/appSnapshotRepository'
 import type { AppScreen, AppSnapshot, AppSnapshotPayload, ClassroomScreen, ClassroomSettings as SharedClassroomSettings, PersistedBoardState, WorkspaceClassroom, WorkspaceSnapshot, WorkspaceUser } from './types/appState'
 import { formatWeeklyScheduleTitle, resolveDisplayedOverlappingSession, syncStudentScheduleHtml, syncTeacherScheduleHtml } from './utils/scheduleHtml'
-import { compactBoardSharePayload, publishBoardShare } from './integrations/firebase/boardShare'
+import { compactBoardSharePayload, publishBoardShare, selectBoardShareLinkResolutionCells } from './integrations/firebase/boardShare'
 import { getSelectableStudentSubjectsForGrade } from './utils/studentGradeSubject'
 import { buildOccupiedSlotLabel } from './utils/occupiedSlotLabel'
 import { useClassroomTabLock } from './utils/useClassroomTabLock'
@@ -2825,6 +2825,8 @@ function AuthenticatedApp() {
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
       cells: selectBoardShareCells(boardState.weeks),
+      // 振替先日付は盤面の全週から解決する(共有セルは今週以降だけ・緑が丘 室長指摘 2026-09-26)。
+      linkResolutionCells: selectBoardShareLinkResolutionCells(boardState.weeks),
       groupClassEntries: boardState.groupClassEntries ?? {},
       externalStudentIds: boardShareExternalStudentIds,
     })
@@ -2855,6 +2857,7 @@ function AuthenticatedApp() {
       classroomName: actingClassroom.name,
       sharedAt: '',
       cells: sharedCells,
+      linkResolutionCells: selectBoardShareLinkResolutionCells(nextBoardState.weeks),
     }).cells
     // 集団・外部生の変更だけでも再公開されるよう署名に含める。
     // ⚠️ externalStudentIds を署名から外すと、外部生チェックを付け外ししても署名が変わらず
@@ -2877,6 +2880,7 @@ function AuthenticatedApp() {
       classroomName: actingClassroom.name,
       sharedAt: new Date().toISOString(),
       cells: sharedCells,
+      linkResolutionCells: selectBoardShareLinkResolutionCells(nextBoardState.weeks),
       groupClassEntries: sharedGroupClassEntries,
       externalStudentIds: boardShareExternalStudentIds,
     })

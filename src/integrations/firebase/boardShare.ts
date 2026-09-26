@@ -1,6 +1,7 @@
 import { doc, getDoc, onSnapshot, setDoc, type Unsubscribe } from 'firebase/firestore'
 import type { SlotCell, StudentEntry, StudentStatusEntry } from '../../components/schedule-board/types'
 import { normalizeGroupClassEntryMap, type GroupClassEntryMap } from '../../components/schedule-board/groupClass'
+import { buildLinkedLessonDestinationMap } from '../../components/schedule-board/lessonLinks'
 import { getFirebaseFirestoreInstance } from './client'
 import { getFirebaseBackendConfig } from './config'
 import { sanitizeForFirestore } from './firestoreSanitize'
@@ -13,7 +14,13 @@ export type BoardShareStudentEntry = Pick<
 export type BoardShareStatusEntry = Pick<
   StudentStatusEntry,
   'id' | 'name' | 'managedStudentId' | 'grade' | 'noteSuffix' | 'makeupSourceDate' | 'makeupSourceLabel' | 'subject' | 'lessonType' | 'teacherType' | 'moveDestinationDateKey' | 'status'
->
+> & {
+  // 公開時に**盤面の全週**から解決した「この記録が指す授業の今の置き場所(日付)」。共有画面の休)/移) の日付に使う。
+  // 共有するセルは今週以降だけ(App selectBoardShareCells)なので、振替先が今週より前の週にあると
+  // 共有画面側のリンク解決では見つからず、移動元記録が持つ古い移動先日付が出ていた(緑が丘 室長指摘 2026-09-26)。
+  // 旧ドキュメント・リンクが無い記録には無い(optional)。無いときは共有画面が従来どおり共有セルから解決する。
+  linkedDestinationDateKey?: string
+}
 
 export type BoardShareCell = Pick<SlotCell, 'id' | 'dateKey' | 'dayLabel' | 'dateLabel' | 'slotLabel' | 'slotNumber'> & {
   // コマの時間帯(例 16:20-17:50)。共有画面のフッターは「N限」ではなくこれを表示する。
@@ -47,6 +54,9 @@ export type BoardSharePayload = {
 
 export type BoardSharePayloadInput = Omit<BoardSharePayload, 'cells'> & {
   cells: SlotCell[]
+  // 振替先日付の解決に使うセル(盤面の全週)。共有はしない(ドキュメントに載せない)。
+  // 未指定なら cells だけで解決する(従来と同じ結果)。
+  linkResolutionCells?: SlotCell[]
 }
 
 const BOARD_SHARE_GZIP_ENCODING = 'gzip-base64'
@@ -158,15 +168,31 @@ function compactStudentEntry(student: StudentEntry | null): BoardShareStudentEnt
   return { id, name, managedStudentId, grade, noteSuffix, makeupSourceDate, makeupSourceLabel, subject, lessonType, teacherType }
 }
 
-function compactStatusEntry(status: StudentStatusEntry | null): BoardShareStatusEntry | null {
+function compactStatusEntry(status: StudentStatusEntry | null, linkedDestinationDateKey?: string): BoardShareStatusEntry | null {
   if (!status) return null
   const { id, name, managedStudentId, grade, noteSuffix, makeupSourceDate, makeupSourceLabel, subject, lessonType, teacherType, moveDestinationDateKey, status: statusKind } = status
-  return { id, name, managedStudentId, grade, noteSuffix, makeupSourceDate, makeupSourceLabel, subject, lessonType, teacherType, moveDestinationDateKey, status: statusKind }
+  return {
+    id, name, managedStudentId, grade, noteSuffix, makeupSourceDate, makeupSourceLabel, subject, lessonType, teacherType, moveDestinationDateKey, status: statusKind,
+    ...(linkedDestinationDateKey ? { linkedDestinationDateKey } : {}),
+  }
+}
+
+// 公開時のリンク解決に渡す「盤面の全週」(BoardSharePayloadInput.linkResolutionCells)を作る唯一の場所。
+// 盤面(ScheduleBoardScreen → BoardGrid の linkResolutionCells)と同じく全週を使う。壊れた週(配列でない)は飛ばす。
+// ★App の公開 2 経路(URL コピー・盤面変更の自動公開)と、署名用の compact の 3 か所すべてがこれを渡すこと
+//   (署名用が共有セルだけだと、前の週の振替を動かしても署名が変わらず公開がスキップされる)。boardShareLinkedDestination.test.ts で固定。
+export function selectBoardShareLinkResolutionCells(weeks: readonly SlotCell[][]): SlotCell[] {
+  return weeks.filter((week) => Array.isArray(week)).flat()
 }
 
 export function compactBoardSharePayload(payload: BoardSharePayloadInput): BoardSharePayload {
+  // linkResolutionCells は解決にだけ使い、公開ドキュメントには載せない(spread で漏らさない)。
+  const { linkResolutionCells, ...rest } = payload
+  // 盤面(BoardGrid の linkResolutionCells=全週)と同じ範囲でリンクを解決する(INV-04: 盤面と共有画面の一致)。
+  const linkedDestinationByStatusId = buildLinkedLessonDestinationMap(linkResolutionCells ?? payload.cells)
+  const resolveLinkedDateKey = (status: StudentStatusEntry | null) => (status ? linkedDestinationByStatusId.get(status.id)?.dateKey : undefined)
   return {
-    ...payload,
+    ...rest,
     cells: payload.cells.map((cell) => ({
       id: cell.id,
       dateKey: cell.dateKey,
@@ -179,7 +205,10 @@ export function compactBoardSharePayload(payload: BoardSharePayloadInput): Board
         id: desk.id,
         teacher: desk.teacher,
         statusSlots: desk.statusSlots
-          ? [compactStatusEntry(desk.statusSlots[0]), compactStatusEntry(desk.statusSlots[1])]
+          ? [
+              compactStatusEntry(desk.statusSlots[0], resolveLinkedDateKey(desk.statusSlots[0])),
+              compactStatusEntry(desk.statusSlots[1], resolveLinkedDateKey(desk.statusSlots[1])),
+            ]
           : undefined,
         lesson: desk.lesson
           ? {

@@ -105,6 +105,18 @@ export function getVisibleDateLabel(student: Pick<BoardShareStudentEntry, 'lesso
   return ''
 }
 
+// 共有画面で使う「記録が指す授業の今の置き場所」。公開時に盤面の全週から解決した値(linkedDestinationDateKey)を優先し、
+// 無いとき(旧ドキュメント・公開時にもリンクが無い)だけ共有セルから解決する。
+// ★共有セルは今週以降だけなので、共有セルだけで解決すると前の週へ動かした振替を見失い、古い移動先日付が出る
+//   (緑が丘 室長指摘 2026-09-26)。優先順を逆にしないこと。
+export function resolveBoardShareLinkedDestinationDateKey(
+  status: Pick<BoardShareStatusEntry, 'id' | 'linkedDestinationDateKey'> | null | undefined,
+  linkedDestinationByStatusId: ReadonlyMap<string, { dateKey: string }>,
+) {
+  if (!status) return undefined
+  return status.linkedDestinationDateKey || linkedDestinationByStatusId.get(status.id)?.dateKey
+}
+
 // フッターに出すコマの表示ラベル。講師は「何限か」より「何時からか」を見るため時間帯を出す。
 // 公開済みの旧ドキュメントには timeLabel が無いので、slotNumber から盤面と同じ定義で補完する。
 // どちらも取れない場合だけ従来の「N限」に倒す(後方互換・表示が空にならないことを保証)。
@@ -306,7 +318,7 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                       {studentSlots.map(({ student, status }, studentIndex) => {
                         const visibleStudent = student ?? status
                         const isExternalStudent = isExternalBoardShareStudent(externalStudentIds, visibleStudent)
-                        const visibleDateLabel = getVisibleDateLabel(visibleStudent, status, currentCell, status ? linkedLessonDestinationByStatusId.get(status.id)?.dateKey : undefined)
+                        const visibleDateLabel = getVisibleDateLabel(visibleStudent, status, currentCell, resolveBoardShareLinkedDestinationDateKey(status, linkedLessonDestinationByStatusId))
                         return (
                         <div className={`board-share-student${status ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`}>
                           <span className="board-share-student-label">

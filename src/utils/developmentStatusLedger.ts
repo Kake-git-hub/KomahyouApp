@@ -173,6 +173,16 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-09-25',
   },
   {
+    id: 'user-question-issue-70',
+    title: '緑が丘校からの利用者質問(振替を動かし直したときの振替日表示)と講師日程共有の日付ズレ',
+    stage: 'awaiting-checklist',
+    summary: 'Issue #70(2026-09-26・source:user-report)。回答案は用意済み(未投稿)。やり取りで室長から出た「講師日程共有で振替先日付が追従しない」は v1.5.558 で修正(オーナー許可済み)し、確認 t-2 が結果待ち。',
+    checklistItemIds: ['t-2'],
+    nextAction: 'オーナーが回答を承認して Issue に返す。t-2 が OK なら行を消す。',
+    references: ['Issue #70', 'CHANGELOG v1.5.558'],
+    updatedOn: '2026-09-26',
+  },
+  {
     id: 'checklist-issues-cleanup',
     title: '確認リスト由来の Issue #62〜#66 のクローズ',
     stage: 'awaiting-owner',

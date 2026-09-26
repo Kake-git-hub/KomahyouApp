@@ -60,9 +60,9 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第24版(v1.5.557): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に開発ダッシュボードの d-1 を足しただけ(OK 済みは載せない運用)', () => {
+  it('第25版(v1.5.558): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に d-1(第24版)と t-2(第25版)を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1'])
+    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 't-2', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1'])
     // ★版は v1.5.556 据え置き: 項目を足しただけ(差し替え・削除なし)のときは上げない(第14版の決まり・CLAUDE.md)。
     //   上げると結果待ち項目の下書き(localStorage は版ごと)が消え、送信済みの結果もダッシュボードで「未確認」に戻る。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.556')
@@ -105,6 +105,12 @@ describe('確認リストの項目定義', () => {
     expect((t1.check ?? []).join(' / ')).toContain('B ではなく C の日付')
     expect((t1.check ?? []).join(' / ')).toContain('配布用盤面')
     expect((t1.check ?? []).join(' / ')).toContain('生徒日程表')
+    // 第25版(2026-09-26): 緑が丘 室長指摘「講師日程共有で振替先日付が追従しない」の修正確認 t-2。
+    // 共有は今週以降だけなので「先週へ動かし直す」ことと、配布用盤面を見ることが確認の要。
+    const t2 = byId.get('t-2')!
+    expect(t2.introducedIn).toBe('v1.5.558')
+    expect(t2.steps.join(' / ')).toContain('先週の C へドラッグ')
+    expect((t2.check ?? []).join(' / ')).toContain('配布用盤面')
     // その他欄(2026-09-22)「サーバーバックアップから復元(直近3日)は機能問題ないので本番へ展開して」→ 全教室昇格の確認 s-4。
     // ★本番教室では「見るだけ」。復元を確定させる手順を書かない(本番データ保護ルール)。
     const s4 = byId.get('s-4')!
