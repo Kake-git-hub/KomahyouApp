@@ -14,6 +14,13 @@
 
 ## 未リリース
 
+## v1.5.558 (2026-09-26)
+
+- fix: **講師日程共有(配布用盤面)で振替先日付が盤面に追従しない**不具合を修正(緑が丘 室長指摘 2026-09-26・Issue #70 のやり取り)。通常授業 A を B へ振替し、その振替コマを**今週より前の週**の C へ動かし直すと、盤面の A は C を出すのに配布用盤面は B のままだった。真因=共有するセルは今週以降だけ(`selectBoardShareCells`)なのに、共有画面は**共有セルの中だけ**でリンク(授業の今の置き場所)を解決していたため C を見失い、移動元記録の古い移動先 B にフォールバックしていた(v1.5.556 の A→B→C 修正は盤面と共有画面の解決順を揃えたが、共有画面に渡る範囲の差が残っていた)。公開時に**盤面の全週**でリンクを解決し、記録に `linkedDestinationDateKey` として載せ、共有画面はそれを優先する(旧ドキュメントは従来どおり共有セルから解決・解決用セルは公開ドキュメントに載せない・共有範囲は今週以降のまま)。兄弟: 欠席(休)の振替先が前の週にある場合も同じ経路で直る。記録・在庫会計は無変更(表示のみ)。INV-04(盤面／配布用盤面の内容一致)。全週セルの組み立ては `selectBoardShareLinkResolutionCells` に一元化し、App の公開 2 経路＋署名用 compact の 3 か所すべてが渡すことを配線テストで固定(署名用が共有セルだけだと前の週の振替を動かしても公開がスキップされる)。回帰テスト 10 件(修正なしで落ちることを確認・古い moved 記録は空のままも固定) (boardShare.ts / BoardShareScreen.tsx / App.tsx / boardShareLinkedDestination.test.ts)
+- docs: INV-04 の違反履歴へ v1.5.556 / v1.5.558(共有ビューの内容乖離 2 件)を転記。「実バグが出た時点で強制へ昇格」の条件に当たるため、昇格の要否はオーナー判断待ちと明記 (docs/spec-invariants.md)
+- chore(ledger): 進行中テーマ台帳に Issue #70(回答承認待ち・確認 t-2 結果待ち)を追加 (developmentStatusLedger.ts)
+- chore(checklist): 確認リストを第25版へ。上の修正の確認 t-2(振替を先週へ動かし直し、配布用盤面の「休」の日付が盤面と同じ)を追加。**版は v1.5.556 据え置き**(項目を足しただけ) (verificationChecklist.ts / verificationChecklist.test.ts)
+
 ## v1.5.557 (2026-09-25)
 
 - feat: 開発者画面に**開発ダッシュボード**(右上ボタン・読み取り専用)を追加(オーナー指示 2026-09-25「各会社や教室の報告要望状況・開発状況・確認未確認事項の一覧」)。(1) 質問・要望の状況を教室別に集計(質問／要望／不具合の件数・Issue 起票待ち・Issue 対応中・確認リスト／テスト送信の件数・最終報告・直近 40 件の一覧)、(2) 機能フラグの段階(全教室に出ていないものを先に)、(3) 進行中テーマ台帳(開発用教室で先行中／確認リスト結果待ち／オーナー判断待ち／作業中(未マージ)／未着手／保留)、(4) GitHub Issue(公開 API を認証なしで GET・利用者報告と開発側の課題に分ける)、(5) 確認リスト(現行版)の確認済み／未確認と「その他の気づき」。取得は Firestore `developerReports` の getDocs(recordedAt の範囲＋件数で絞る・既定 90 日)と GitHub の GET だけで、**書き込み経路は作らない**(source-scan テストで固定)。確認リストの読み取り規則は tools の .mjs を TS へ移植し、両実装の一致をパリティテストで固定 (DeveloperDashboardScreen.tsx / DeveloperAdminScreen.tsx / developerDashboard.ts / developmentStatusLedger.ts / verificationChecklistResults.ts / developerReportsStore.ts / github/issues.ts / App.css / docs/spec-developer-report.md §E-3)
