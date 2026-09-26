@@ -980,6 +980,23 @@ export function shouldSyncCurrentClassroomBeforeOpen(
   return !(role === 'developer' && currentScreen === 'developer')
 }
 
+/**
+ * 「開いている教室」の通知購読(QR提出通知・保護者からの休み連絡)を動かしてよいか。
+ *
+ * 開発者は教室を開いていなくても actingClassroomId(最後に開いた教室)を持つため、開発者画面(教室運営管理)に
+ * いる間も購読がそのまま走っていた。その結果 (1) 室長向けの QR 提出モーダルが開発者画面に出る、
+ * (2) markLectureSubmissionsNotified が notifiedAt をサーバーへ記録し、本来の教室の PC が閉じていた場合は
+ * 次回起動の通知(selectStartupSubmissionsToNotify)が**出なくなる**(オーナー報告 2026-09-26: 開発者画面に
+ * 講師の QR 提出モーダルが出た)。開発者が開発者画面にいる間は購読しない。教室を開いた時点(screen が
+ * developer 以外)で購読が始まり、初回スナップショットの起動時経路から通知し直す。
+ */
+export function shouldSubscribeClassroomNotifications(
+  currentScreen: AppScreen,
+  role: WorkspaceUser['role'] | null | undefined,
+) {
+  return !(role === 'developer' && currentScreen === 'developer')
+}
+
 export function hasPendingBoardSaveState(params: {
   isDirty: boolean
   isSavingNow: boolean
@@ -1615,6 +1632,9 @@ function AuthenticatedApp() {
     () => isRemoteBackendEnabled && isFeatureEnabledForClassroom('parentPortalQr', actingClassroom),
     [actingClassroom, isRemoteBackendEnabled],
   )
+  // 教室の通知購読(QR提出通知・保護者からの休み連絡)は「教室を開いている」ときだけ。開発者画面では止める
+  // (shouldSubscribeClassroomNotifications のコメント参照・2026-09-26)。
+  const isClassroomNotificationSubscriptionActive = shouldSubscribeClassroomNotifications(screen, currentUser?.role)
   // 室長の自教室復元の入口(フラグ ＋ リモート有効)。教室取り違え防止の権威は resolveManagerSelfRestoreGuard とサーバーの担当教室判定。
   const managerSelfRestoreEnabled = useMemo(
     () => isRemoteBackendEnabled && isFeatureEnabledForClassroom('managerSelfRestore', actingClassroom),
@@ -4544,6 +4564,12 @@ function AuthenticatedApp() {
 
   // Real-time submission reflection from Firestore
   useEffect(() => {
+    if (!isClassroomNotificationSubscriptionActive) {
+      // 開発者画面では購読しない(室長向けの通知を開発者画面に出さない・notifiedAt を先取りして本来の教室の
+      // 起動時通知を潰さない)。教室から戻ってきた直後に残っていた通知も捨てる。
+      setSubmissionAcknowledgements([])
+      return
+    }
     if (!isRemoteBackendEnabled || !actingClassroomId) return
 
     const unsubscribe = subscribeLectureSubmissions(actingClassroomId, (entries, isInitial) => {
@@ -4686,13 +4712,14 @@ function AuthenticatedApp() {
     })
 
     return unsubscribe
-  }, [actingClassroom?.name, actingClassroomId, isRemoteBackendEnabled, specialSessionsRef, studentsRef, teachersRef])
+  }, [actingClassroom?.name, actingClassroomId, isClassroomNotificationSubscriptionActive, isRemoteBackendEnabled, specialSessionsRef, studentsRef, teachersRef])
 
   // 保護者からの連絡(docs/spec-parent-portal.md §E-2 の三点セット: 購読 → 選別 → モーダル → 既読のサーバー記録)。
   // 未読のみを「開いている教室」で購読する(他教室の連絡は購読しない・INV-08)。教室切替・フラグ OFF・ログアウトでは
   // cleanup で購読を切り、前の教室の通知を残さない(他教室の生徒名が画面に残るのを防ぐ)。
   useEffect(() => {
-    if (!isRemoteBackendEnabled || !actingClassroomId || !parentPortalQrEnabled) return
+    // 開発者画面では購読しない(QR提出通知と同じ理由・shouldSubscribeClassroomNotifications)。
+    if (!isRemoteBackendEnabled || !actingClassroomId || !parentPortalQrEnabled || !isClassroomNotificationSubscriptionActive) return
 
     // 購読は毎回「未処理の全件」を渡す。一覧(parentMessageNotifications)はそこから導出する。
     const unsubscribe = subscribeParentMessages(actingClassroomId, (entries) => {
@@ -4708,7 +4735,7 @@ function AuthenticatedApp() {
       unsubscribeHistory()
       resetParentAbsenceNoticeState()
     }
-  }, [actingClassroomId, isRemoteBackendEnabled, parentPortalQrEnabled, resetParentAbsenceNoticeState])
+  }, [actingClassroomId, isClassroomNotificationSubscriptionActive, isRemoteBackendEnabled, parentPortalQrEnabled, resetParentAbsenceNoticeState])
 
   useEffect(() => {
     if (currentUserId) return

@@ -50,7 +50,8 @@ describe('保護者向け固定QRの配線(App.tsx)', () => {
     const subscribeIndex = APP_TSX.indexOf('subscribeParentMessages(actingClassroomId')
     expect(subscribeIndex).toBeGreaterThan(0)
     const effect = APP_TSX.slice(Math.max(0, subscribeIndex - 600), subscribeIndex + 600)
-    expect(effect).toContain('if (!isRemoteBackendEnabled || !actingClassroomId || !parentPortalQrEnabled) return')
+    // 2026-09-26: 開発者画面では購読しない(QR提出通知と同じ・submissionNotification.wiring.test.ts)。
+    expect(effect).toContain('if (!isRemoteBackendEnabled || !actingClassroomId || !parentPortalQrEnabled || !isClassroomNotificationSubscriptionActive) return')
     expect(effect).toContain('setParentMessageEntries(entries)')
     expect(effect).toContain('unsubscribe()')
     expect(effect).toContain('resetParentAbsenceNoticeState()')

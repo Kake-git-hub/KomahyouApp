@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
+import { applyIssuedSubmissionTokensToSessions, buildClassroomScopedBoardShareToken, buildDevelopmentClassroomCopyPayload, buildSubmissionAcknowledgementEntries, selectUnnotifiedSubmissions, selectStartupSubmissionsToNotify, buildTeacherAutoAssignItems, buildWorkspaceNavigationSnapshot, clampScreenForUserRole, hasPendingBoardSaveState, reflectIssuedSubmissionTokens, resolveHydratedScreenForUser, resolveInitialScreenForUser, resolveRemoteWorkspaceSnapshot, resolveWorkspaceSyncTargetClassrooms, sanitizeClassroomSettings, shouldInjectEditingStateIntoClassroom, shouldReturnDeveloperOnLogout, shouldSubscribeClassroomNotifications, shouldSyncCurrentClassroomBeforeOpen, shouldSyncWorkspaceOnVisibilityHidden, type ClassroomSettings } from './App'
 import { resolveNewlyUnsubmittedSessionStudents } from './components/schedule-board/ScheduleBoardScreen'
 import { initialStudents, type StudentRow } from './components/basic-data/basicDataModel'
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceSnapshot } from './types/appState'
@@ -127,6 +127,27 @@ describe('shouldSyncCurrentClassroomBeforeOpen', () => {
   it('keeps sync enabled for classroom sessions', () => {
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'developer')).toBe(true)
     expect(shouldSyncCurrentClassroomBeforeOpen('board', 'manager')).toBe(true)
+  })
+})
+
+describe('shouldSubscribeClassroomNotifications', () => {
+  // オーナー報告 2026-09-26: 開発者画面(教室運営管理)に講師の QR 提出モーダルが出た。開発者は教室を開いていなくても
+  // actingClassroomId(最後に開いた教室)を持つので、購読を画面で止めないと室長向け通知が開発者画面に出て、
+  // さらに notifiedAt をサーバーへ先取り記録して本来の教室の起動時通知(閉PC提出)を潰す。
+  it('開発者が開発者画面にいる間は教室の通知購読(QR提出・保護者連絡)を止める', () => {
+    expect(shouldSubscribeClassroomNotifications('developer', 'developer')).toBe(false)
+  })
+
+  it('開発者でも教室を開いている(盤面・基本データなど)なら購読する=室長と同じ通知を受ける', () => {
+    expect(shouldSubscribeClassroomNotifications('board', 'developer')).toBe(true)
+    expect(shouldSubscribeClassroomNotifications('basic-data', 'developer')).toBe(true)
+  })
+
+  it('室長は常に購読する(室長の screen は developer に clamp されないが、万一でも止めない)', () => {
+    expect(shouldSubscribeClassroomNotifications('board', 'manager')).toBe(true)
+    expect(shouldSubscribeClassroomNotifications('developer', 'manager')).toBe(true)
+    expect(shouldSubscribeClassroomNotifications('board', null)).toBe(true)
+    expect(shouldSubscribeClassroomNotifications('board', undefined)).toBe(true)
   })
 })
 

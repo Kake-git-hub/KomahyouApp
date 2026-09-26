@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- fix: **開発者画面(教室運営管理)に講師の QR 提出通知モーダルが出る**不具合を修正(オーナー報告 2026-09-26)。開発者は教室を開いていなくても actingClassroomId(最後に開いた教室)を持つため、`subscribeLectureSubmissions` の購読 effect が画面を見ずに走り、(1) 室長向けの通知が開発者画面に出る、(2) 表示した提出を `markLectureSubmissionsNotified` が notifiedAt でサーバーへ先取り記録し、**本来の教室の PC が閉じていた提出は次回起動の通知(`selectStartupSubmissionsToNotify`)から外れて室長に届かなくなる**、の 2 つが起きていた(室長の PC が開いていればリアルタイム経路で先に出るので影響なし。提出データ自体は Cloud Functions が反映済みで集計は消えない)。開発者が開発者画面にいる間は購読しない `shouldSubscribeClassroomNotifications(screen, role)` を足し、QR 提出通知と保護者からの休み連絡(兄弟・同じ overlay 構造)の両 effect をこれで止める。教室を開いた時点で購読が始まり、初回スナップショットの起動時経路から改めて通知する。既存 INV に該当なし(開発者画面の表示範囲・台帳追加の要否はオーナー判断)。回帰テスト: 純関数 3 件＋配線ガード 5 件(修正なしで落ちることを確認)。確認リスト d-2 追加(版は v1.5.556 据え置き) (App.tsx / App.test.ts / submissionNotification.wiring.test.ts / parentPortal.wiring.test.ts / verificationChecklist.ts)
+
 ## v1.5.558 (2026-09-26)
 
 - fix: **講師日程共有(配布用盤面)で振替先日付が盤面に追従しない**不具合を修正(緑が丘 室長指摘 2026-09-26・Issue #70 のやり取り)。通常授業 A を B へ振替し、その振替コマを**今週より前の週**の C へ動かし直すと、盤面の A は C を出すのに配布用盤面は B のままだった。真因=共有するセルは今週以降だけ(`selectBoardShareCells`)なのに、共有画面は**共有セルの中だけ**でリンク(授業の今の置き場所)を解決していたため C を見失い、移動元記録の古い移動先 B にフォールバックしていた(v1.5.556 の A→B→C 修正は盤面と共有画面の解決順を揃えたが、共有画面に渡る範囲の差が残っていた)。公開時に**盤面の全週**でリンクを解決し、記録に `linkedDestinationDateKey` として載せ、共有画面はそれを優先する(旧ドキュメントは従来どおり共有セルから解決・解決用セルは公開ドキュメントに載せない・共有範囲は今週以降のまま)。兄弟: 欠席(休)の振替先が前の週にある場合も同じ経路で直る。記録・在庫会計は無変更(表示のみ)。INV-04(盤面／配布用盤面の内容一致)。全週セルの組み立ては `selectBoardShareLinkResolutionCells` に一元化し、App の公開 2 経路＋署名用 compact の 3 か所すべてが渡すことを配線テストで固定(署名用が共有セルだけだと前の週の振替を動かしても公開がスキップされる)。回帰テスト 10 件(修正なしで落ちることを確認・古い moved 記録は空のままも固定) (boardShare.ts / BoardShareScreen.tsx / App.tsx / boardShareLinkedDestination.test.ts)
