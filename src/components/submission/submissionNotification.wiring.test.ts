@@ -58,4 +58,13 @@ describe('QR提出通知の購読配線(App.tsx)', () => {
     const subscribeIndex = APP_TSX.indexOf('subscribeLectureSubmissions(actingClassroomId')
     expect(callIndex).toBeGreaterThan(subscribeIndex)
   })
+
+  it('通知済み記録は shouldRecordSubmissionNotified(ロール・開発用教室)で囲む(開発者は本番教室では表示だけ・2026-09-26)', () => {
+    const callIndex = APP_TSX.indexOf('void markLectureSubmissionsNotified(')
+    const before = APP_TSX.slice(Math.max(0, callIndex - 400), callIndex)
+    expect(before).toContain('if (shouldRecordSubmissionNotified(currentUserRoleRef.current, isActingDevelopmentClassroomRef.current)) {')
+    // ref は最新のロール・教室判定を映す(購読を張り直さずに読む)。
+    expect(APP_TSX).toContain('currentUserRoleRef.current = currentUser?.role')
+    expect(APP_TSX).toContain('isActingDevelopmentClassroomRef.current = isActingDevelopmentClassroom')
+  })
 })

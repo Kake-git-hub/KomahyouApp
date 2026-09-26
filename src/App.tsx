@@ -997,6 +997,23 @@ export function shouldSubscribeClassroomNotifications(
   return !(role === 'developer' && currentScreen === 'developer')
 }
 
+/**
+ * 表示した QR 提出通知を「通知済み(notifiedAt)」としてサーバーへ記録してよいか。
+ *
+ * 通知済みの記録は「その教室の室長が見た」印。開発者が本番教室を開いて表示しただけで記録すると、室長 PC が
+ * 閉じていた提出は次回起動の通知(selectStartupSubmissionsToNotify)から外れ、室長に届かない
+ * (v1.5.559 の regression-reviewer 指摘 B-1・オーナー決定 2026-09-26「開発者は表示だけで通知済みを記録しない」)。
+ *  - 室長(developer 以外): 常に記録する(従来どおり)。
+ *  - 開発者 × 開発用教室: 記録する(開発用教室の室長は開発者自身なので、記録しないと毎リロード同じ通知が出る)。
+ *  - 開発者 × 本番教室: 記録しない(表示だけ。開発者側は教室を開き直すたびに同じ通知が出るが、室長の通知を守る方を優先)。
+ */
+export function shouldRecordSubmissionNotified(
+  role: WorkspaceUser['role'] | null | undefined,
+  isDevelopmentClassroom: boolean,
+) {
+  return role !== 'developer' || isDevelopmentClassroom
+}
+
 export function hasPendingBoardSaveState(params: {
   isDirty: boolean
   isSavingNow: boolean
@@ -1635,6 +1652,11 @@ function AuthenticatedApp() {
   // 教室の通知購読(QR提出通知・保護者からの休み連絡)は「教室を開いている」ときだけ。開発者画面では止める
   // (shouldSubscribeClassroomNotifications のコメント参照・2026-09-26)。
   const isClassroomNotificationSubscriptionActive = shouldSubscribeClassroomNotifications(screen, currentUser?.role)
+  // 購読コールバック内で最新のロール・開発用教室判定を読むための ref(購読を張り直さずに済ませる)。
+  const currentUserRoleRef = useRef(currentUser?.role)
+  currentUserRoleRef.current = currentUser?.role
+  const isActingDevelopmentClassroomRef = useRef(isActingDevelopmentClassroom)
+  isActingDevelopmentClassroomRef.current = isActingDevelopmentClassroom
   // 室長の自教室復元の入口(フラグ ＋ リモート有効)。教室取り違え防止の権威は resolveManagerSelfRestoreGuard とサーバーの担当教室判定。
   const managerSelfRestoreEnabled = useMemo(
     () => isRemoteBackendEnabled && isFeatureEnabledForClassroom('managerSelfRestore', actingClassroom),
@@ -4702,12 +4724,15 @@ function AuthenticatedApp() {
           })
         }
         // 表示した提出をサーバーへ「通知済み」記録(次回起動で再通知しない)。actingClassroomId を渡し他教室 doc は触らない。
-        void markLectureSubmissionsNotified(
-          unnotifiedEntries
-            .filter((entry): entry is SubmissionChangeEntry & { submittedAt: string } => entry.submittedAt != null)
-            .map((entry) => ({ token: entry.token, submittedAt: entry.submittedAt })),
-          actingClassroomId,
-        )
+        // 開発者が本番教室を開いている場合は表示だけで記録しない(shouldRecordSubmissionNotified・室長の起動時通知を潰さない)。
+        if (shouldRecordSubmissionNotified(currentUserRoleRef.current, isActingDevelopmentClassroomRef.current)) {
+          void markLectureSubmissionsNotified(
+            unnotifiedEntries
+              .filter((entry): entry is SubmissionChangeEntry & { submittedAt: string } => entry.submittedAt != null)
+              .map((entry) => ({ token: entry.token, submittedAt: entry.submittedAt })),
+            actingClassroomId,
+          )
+        }
       }
     })
 
