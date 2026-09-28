@@ -60,18 +60,18 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第32版(v1.5.569): 第31版の結果で OK の t-2/t-3/d-1〜d-4/a-1〜a-3 を外し、解決済みの確認 a-4 を足した(OK 済みは載せない運用)', () => {
+  it('第32版(v1.5.570): 第31版の結果で OK の t-2/t-3/d-1〜d-4/a-1〜a-3 を外し、解決済みの確認 a-4 を足した(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
     expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4'])
     // 第31版の結果(2026-09-28・受付 20260928-103642968-d4c32a94)で OK。
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
     // ★OK 済みを外したので版を上げる(据え置くと前回の OK の印がパネルに残る)。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.569')
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.570')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 第32版(2026-09-28): 開発者の「解決済み」(その他欄の要望)。室長の画面に出ないこと・未回答から外れること・戻せることを見る。
     const a4 = byId.get('a-4')!
-    expect(a4.introducedIn).toBe('v1.5.569')
+    expect(a4.introducedIn).toBe('v1.5.570')
     expect(a4.area).toBe('質問・要望')
     expect(a4.steps.join(' / ')).toContain('解決済みにする')
     expect((a4.check ?? []).join(' / ')).toContain('「解決済み」の文字は出ず')
@@ -114,8 +114,8 @@ describe('確認リストの項目定義', () => {
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.569')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.569')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.570')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.570')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -187,7 +187,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.569]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.570]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {

@@ -37,7 +37,7 @@ export type VerificationChecklistDefinition = {
 }
 
 /** 確認リストの版。項目を足したら上げる(下書きは版ごとに分かれる)。 */
-export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.569'
+export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.570'
 
 /**
  * 確認項目の正本(2026-09-12 初版・v1.5.504 で第2版・v1.5.506 で第3版・v1.5.508 で第4版・v1.5.509 で第5版)。
@@ -124,9 +124,9 @@ export const VERIFICATION_CHECKLIST_VERSION = 'v1.5.569'
  * 第19版(v1.5.550・2026-09-19): 保護者QRを「休み連絡」専用へ(docs/spec-parent-portal.md §0-5・開発用教室限定)。q-1〜q-5 を追加
  *   (版は v1.5.540 据え置き・結果待ち項目を消さないため)。スマホ(保護者ページ)と PC(盤面)の両方を使う。
  *   ★Cloud Functions のデプロイが緑になってから確認する(Hosting が先に出た数分間は休み連絡の送信が 400 になる)。
- * 第32版(v1.5.569・2026-09-28): 第31版の結果(受付 20260928-103642968-d4c32a94)で t-2/t-3/d-1〜d-4/a-1〜a-3 が OK → 外す。
+ * 第32版(v1.5.570・2026-09-28): 第31版の結果(受付 20260928-103642968-d4c32a94)で t-2/t-3/d-1〜d-4/a-1〜a-3 が OK → 外す。
  *   その他欄「回答だけでなく解決済みボタンも設けて対応完了したのがわかるように。解決済みは室長側には非表示でOK」の実装確認 a-4 を追加。
- *   q-1〜q-6 は結果待ちのまま残す。版は v1.5.569 へ(OK 済みを外したので上げる)。
+ *   q-1〜q-6 は結果待ちのまま残す。版は v1.5.570 へ(OK 済みを外したので上げる)。
  *   ★Cloud Functions(resolveDeveloperReport)のデプロイが緑になってから確認する。
  */
 export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
@@ -250,7 +250,7 @@ export const VERIFICATION_CHECKLIST: VerificationChecklistDefinition = {
         '室長側: その質問は従来どおり「回答待ち」のまま。「解決済み」の文字は出ず、未読バッジも増えない',
         '教室のデータ(盤面・保存状態)は何も変わらない',
       ],
-      introducedIn: 'v1.5.569',
+      introducedIn: 'v1.5.570',
     },
   ],
 }
