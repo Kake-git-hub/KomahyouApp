@@ -187,6 +187,12 @@ GitHub Actions がリポジトリのシークレット（`RE_FIREBASE_SERVICE_AC
 - 作業ブランチを **`main` にマージ** すると、`.github/workflows/deploy-firebase-hosting.yml` が自動実行され、
   ビルド→本番ホスティングへデプロイ→ライブ検証まで行う（毎回 patch バージョンを自動 bump）。
 
+### Firestore ルール（`firebase/firestore.rules`）
+- ホスティング CI はルールを出さない。ルールは `.github/workflows/deploy-firestore-rules.yml`（2026-09-28）で反映する。
+  - **手動**: Actions → 「Deploy Firestore rules」→ Run workflow（ブランチ=main）。
+  - **自動**: `firebase/firestore.rules` を変更して `main` にマージすると発火。
+  - 反映前に `npm run test:rules` で教室分離を固定する。Storage ルールは対象外。
+
 ### Cloud Functions（`lectureSubmissionApi` ほか）
 - ホスティングCIは **functions を出さない**。functions は専用ワークフロー `.github/workflows/deploy-functions.yml` を使う。
   - **手動**: GitHub アプリ → 対象リポジトリ → **Actions → 「Deploy Cloud Functions」→ Run workflow**（ブランチ=main）。

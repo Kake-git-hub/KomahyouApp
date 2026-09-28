@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.566 (2026-09-28)
+
+- chore(ci): Firestore ルールを GitHub Actions から反映する手動ワークフロー「Deploy Firestore rules」を追加(オーナー指示 2026-09-28「firebase deploy --only firestore:rules はどこで実行する?」→ PC 不要に)。main への push で `firebase/firestore.rules` が変わったときも自動反映。既存 secret `RE_FIREBASE_SERVICE_ACCOUNT` を使う(サービスアカウントに Firebase Rules 権限が無ければ 403 で赤になるので GCP で付与して再実行) (.github/workflows/deploy-firestore-rules.yml / CLAUDE.md / docs/spec-developer-report.md)
+
 ## v1.5.565 (2026-09-28)
 
 - feat: **「質問・要望」への回答を画面で返す**(オーナー指示 2026-09-28「LINE で個別に回答を作っているのを、各室長の画面に出す・ボタンに未読件数・過去の質問と回答も見直せるように」。事前確認で「開発者画面に回答ページ」「バッジだけ・自動では開かない」「全教室で即時」を確定・spec-developer-report §G-3/§G-5)。
