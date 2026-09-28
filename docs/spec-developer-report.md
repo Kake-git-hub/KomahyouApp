@@ -310,7 +310,7 @@
     開発者画面（教室運営管理）では購読しない（`shouldSubscribeClassroomNotifications`）。教室切替・ログアウトで購読を切り履歴を消す。
   - **日程表タブ側の「質問・要望」モーダルは従来どおり送るだけ**（履歴タブ・バッジは盤面側のみ。埋め込みスクリプトの肥大化を避ける）。
 - ルール: `reportAnswers` は**その教室のメンバーだけ read**、**write は Cloud Function のみ**（`npm run test:rules` で固定）。
-  ルール反映は `firebase deploy --only firestore:rules`（main マージでは反映されない）。
+  ルール反映は Actions「Deploy Firestore rules」（`.github/workflows/deploy-firestore-rules.yml`・main マージで `firebase/firestore.rules` が変わると自動発火。2026-09-28 までは PC で `firebase deploy --only firestore:rules`）。
 - 通知は**教室単位**（送信した本人だけでなく、その教室のメンバーが見る）。送信者の個人特定情報は出さない。
 - 実装: 純関数 `src/utils/reportAnswers.ts`（並び・状態・件数・初期タブ・バッジ文字列）／購読と callable `src/integrations/firebase/reportAnswersStore.ts`／
   モーダル `DeveloperReportModal.tsx`／バッジ `BoardToolbar.tsx`／配線 `App.tsx`（source-scan: `reportAnswers.wiring.test.ts`）／
