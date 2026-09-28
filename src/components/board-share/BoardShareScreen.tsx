@@ -46,7 +46,7 @@ function writeStoredSelection(token: string, selection: BoardShareSelection) {
 // ★配布用盤面は公開ページなので教室設定を読めない。判定は共有ドキュメントの classroomId で行う
 //   (盤面側と同じ登録台帳・同じ関数)。両側がズレると同じ記録が盤面では「休」・共有では「移」になる。
 // ★holiday(休日設定で消えたコマの表示専用記録)はフラグに依らず常に「休」。
-function getStudentStatusLabel(status: StudentStatusKind, transferSourceRestDisplayEnabled = false) {
+export function getStudentStatusLabel(status: StudentStatusKind, transferSourceRestDisplayEnabled = false) {
   if (status === 'attended') return '出'
   if (status === 'absent-no-makeup') return '振無休'
   if (status === 'holiday') return '休'
@@ -103,6 +103,21 @@ export function getVisibleDateLabel(student: Pick<BoardShareStudentEntry, 'lesso
     return formatShortDateLabel(student.makeupSourceDate)
   }
   return ''
+}
+
+// 席 1 つ分の「表示に使う生徒」と「表示に使う出欠記録」を決める唯一の規則(盤面 BoardGrid renderStudentCell と同じ)。
+// 盤面は studentSlots に生徒がいれば、同じ index に残った出欠記録を名前・「(休」ラベル・日付のどれにも使わない
+// (記録は hover の補足に出るだけ)。配布用盤面は従来 `student ?? status` で名前だけ生徒を優先し、ラベル・日付・
+// 見た目(board-share-status)は記録があれば無条件に付けていたため、**別の生徒の休み記録が残る席に新しい生徒(体験など)を
+// 置くと、その生徒に「(休」が付いて休み扱いに見えた**(緑が丘 室長報告 2026-09-28: 9/28 4限 体)小5算 が休み表示)。
+// ★配置(lesson.studentSlots)と記録(statusSlots)は別の生徒でも同じ index に同居しうる(休み記録は席を空けるだけで
+//   記録は残る)。index が同じというだけで「同じ生徒の記録」とは限らないので、生徒がいる席では記録を使わない。INV-04。
+export function resolveBoardShareSeatView<
+  TStudent extends object,
+  TStatus extends object,
+>(student: TStudent | null | undefined, status: TStatus | null | undefined): { visibleStudent: TStudent | TStatus | null; visibleStatus: TStatus | null } {
+  if (student) return { visibleStudent: student, visibleStatus: null }
+  return { visibleStudent: status ?? null, visibleStatus: status ?? null }
 }
 
 // 共有画面で使う「記録が指す授業の今の置き場所」。公開時に盤面の全週から解決した値(linkedDestinationDateKey)を優先し、
@@ -316,13 +331,14 @@ export function BoardShareScreen({ token }: BoardShareScreenProps) {
                     <div className="board-share-teacher">{desk.teacher && desk.teacher !== '講師未設定' && desk.teacher !== '講師未割当' ? desk.teacher : ''}</div>
                     <div className="board-share-students">
                       {studentSlots.map(({ student, status }, studentIndex) => {
-                        const visibleStudent = student ?? status
+                        // 生徒がいる席では同じ index の出欠記録を使わない(盤面と同じ・resolveBoardShareSeatView 参照)。
+                        const { visibleStudent, visibleStatus } = resolveBoardShareSeatView(student, status)
                         const isExternalStudent = isExternalBoardShareStudent(externalStudentIds, visibleStudent)
-                        const visibleDateLabel = getVisibleDateLabel(visibleStudent, status, currentCell, resolveBoardShareLinkedDestinationDateKey(status, linkedLessonDestinationByStatusId))
+                        const visibleDateLabel = getVisibleDateLabel(visibleStudent, visibleStatus, currentCell, resolveBoardShareLinkedDestinationDateKey(visibleStatus, linkedLessonDestinationByStatusId))
                         return (
-                        <div className={`board-share-student${status ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`}>
+                        <div className={`board-share-student${visibleStatus ? ' board-share-status' : ''}`} key={`${desk.id}-student-${studentIndex}`}>
                           <span className="board-share-student-label">
-                            {formatStudentLabel(visibleStudent, isExternalStudent)}{status ? `(${getStudentStatusLabel(status.status, transferSourceRestDisplayEnabled)}` : ''}
+                            {formatStudentLabel(visibleStudent, isExternalStudent)}{visibleStatus ? `(${getStudentStatusLabel(visibleStatus.status, transferSourceRestDisplayEnabled)}` : ''}
                           </span>
                           {visibleDateLabel ? <span className="board-share-origin-date">{visibleDateLabel}</span> : null}
                           {visibleStudent ? <span className="board-share-lesson-type">{getLessonTypeLabel(visibleStudent.lessonType, isExternalStudent)}</span> : null}
