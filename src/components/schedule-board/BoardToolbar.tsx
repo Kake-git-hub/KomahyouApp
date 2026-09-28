@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { AppMenu } from '../navigation/AppMenu'
 import { DEVELOPER_REPORT_UI_TEXT } from '../../utils/developerReport'
+import { formatReportAnswerBadge } from '../../utils/reportAnswers'
 import {
   buildMonthMatrix,
   formatMonthLabel,
@@ -40,6 +41,8 @@ type BoardToolbarProps = {
   onCopyDistributionUrl?: () => void
   /** 「質問・要望」(2026-09-04「要望・報告」→ 2026-09-14 改名・旧「開発者へ報告」): 講師日程共有の右に配置。未指定なら出さない。 */
   onReportToDeveloper?: () => void
+  /** 「質問・要望」への未読の回答件数(ボタンのバッジ・spec-developer-report §G-5・2026-09-28)。 */
+  reportAnswerUnreadCount?: number
   /** 「保護者連絡」(2026-09-19): 保護者QRの休み連絡の履歴を開く。通常授業テンプレ作成の右。未指定(機能フラグOFF)なら出さない。 */
   onOpenParentContactHistory?: () => void
   /** 未確認の休み連絡の件数(ボタンのバッジ)。 */
@@ -104,6 +107,7 @@ function BoardToolbarComponent({
   onOpenSortMenu,
   onCopyDistributionUrl,
   onReportToDeveloper,
+  reportAnswerUnreadCount,
   onOpenParentContactHistory,
   parentContactUnconfirmedCount,
   classroomName,
@@ -250,7 +254,10 @@ function BoardToolbarComponent({
             <button className="secondary-button slim" type="button" onClick={onCopyDistributionUrl} data-testid="board-distribution-url-button">講師日程共有</button>
           ) : null}
           {!isTemplateMode && onReportToDeveloper ? (
-            <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title={DEVELOPER_REPORT_UI_TEXT.buttonTooltip}>{DEVELOPER_REPORT_UI_TEXT.title}</button>
+            <button className="secondary-button slim report-developer-button" type="button" onClick={onReportToDeveloper} data-testid="board-report-developer-button" title={DEVELOPER_REPORT_UI_TEXT.buttonTooltip}>
+              {DEVELOPER_REPORT_UI_TEXT.title}
+              {formatReportAnswerBadge(reportAnswerUnreadCount ?? 0) ? <span className="toolbar-inline-count report-developer-badge" data-testid="board-report-developer-badge" title="開発者からの新しい回答">{formatReportAnswerBadge(reportAnswerUnreadCount ?? 0)}</span> : null}
+            </button>
           ) : null}
           {!isTemplateMode ? companyToolbarButtons.map((button) => (
             <button

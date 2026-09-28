@@ -51,6 +51,8 @@ import { DeveloperReportModal } from './components/developer-report/DeveloperRep
 import { VerificationChecklistPanel } from './components/developer-report/VerificationChecklistPanel'
 import { ParentMessagesModal } from './components/parent-portal/ParentMessagesModal'
 import { ParentContactHistoryModal } from './components/parent-portal/ParentContactHistoryModal'
+import { markReportAnswersReadViaFunction, subscribeReportAnswers } from './integrations/firebase/reportAnswersStore'
+import { countUnreadReportAnswers, selectReportAnswersForClassroom, sortReportAnswerEntries, type ReportAnswerEntry } from './utils/reportAnswers'
 import { resolveSavedStudentIds } from './components/basic-data/parentPortalQr'
 import { issueStudentPortalTokenViaFunction, markParentMessagesNotifiedViaFunction, revokeStudentPortalTokenViaFunction, subscribeParentMessageHistory, subscribeParentMessages } from './integrations/firebase/parentPortal'
 import { addPendingParentAbsenceFinalize, buildParentContactHistory, buildParentMessageNotifications, mergeParentMessageEntries, chunkParentMessageIds, mergeParentMessageNotifications, selectParentMessagesForClassroom, selectUnnotifiedParentMessages, splitPendingParentAbsenceFinalize, type ParentAbsenceResolution, type ParentContactHistoryRow, type ParentMessageEntry, type ParentMessageNotification, type PendingParentAbsenceFinalize } from './utils/parentMessages'
@@ -1625,6 +1627,9 @@ function AuthenticatedApp() {
   const [isParentMessagesModalCollapsed, setIsParentMessagesModalCollapsed] = useState(false)
   // 盤面ツールバー「保護者連絡」の履歴(2026-09-19)。処理済みも含む直近の連絡(読み取りだけ)。未処理の権威は parentMessageEntries のまま。
   const [parentMessageHistoryEntries, setParentMessageHistoryEntries] = useState<ParentMessageEntry[]>([])
+  // 「質問・要望」への回答(spec-developer-report §G-5・2026-09-28): 自教室の質問(回答待ち＋回答済み)。購読は下の effect。
+  // 自動で開くモーダルは出さない(オーナー確定 2026-09-28)。ボタンの未読バッジと、同じモーダルの履歴タブに出すだけ。
+  const [reportAnswerEntries, setReportAnswerEntries] = useState<ReportAnswerEntry[]>([])
   const [isParentContactHistoryOpen, setIsParentContactHistoryOpen] = useState(false)
   const currentUser = useMemo(() => workspaceUsers.find((user) => user.id === currentUserId) ?? null, [currentUserId, workspaceUsers])
   const actingClassroom = useMemo(() => workspaceClassrooms.find((classroom) => classroom.id === actingClassroomId) ?? null, [actingClassroomId, workspaceClassrooms])
@@ -1717,6 +1722,20 @@ function AuthenticatedApp() {
     { students, pendingIds: new Set(pendingParentAbsenceFinalize.map((item) => item.messageId)), hiddenIds: new Set(hiddenParentMessageIds) },
   ), [actingClassroomId, hiddenParentMessageIds, parentMessageEntries, parentMessageHistoryEntries, pendingParentAbsenceFinalize, students])
   const openParentContactHistory = useCallback(() => setIsParentContactHistoryOpen(true), [])
+  // 質問・要望の履歴(自教室だけ・新しい順)と未読の回答件数(盤面ツールバー「質問・要望」のバッジ)。教室分離は doc の classroomId でも守る(INV-08)。
+  const reportAnswers = useMemo(() => sortReportAnswerEntries(selectReportAnswersForClassroom(reportAnswerEntries, actingClassroomId)), [actingClassroomId, reportAnswerEntries])
+  const unreadReportAnswerCount = useMemo(() => countUnreadReportAnswers(reportAnswers), [reportAnswers])
+  // 既読(「確認しました」)をサーバーへ記録してよいか。開発者が本番教室を開いて読んだだけで既読にすると、室長のバッジが消えて届かない
+  // (QR 提出通知の shouldRecordSubmissionNotified と同じ判断・オーナー決定 2026-09-26)。記録できないときはボタン自体を出さない。
+  const canMarkReportAnswersRead = shouldRecordSubmissionNotified(currentUser?.role, isActingDevelopmentClassroom)
+  const handleMarkReportAnswersRead = useCallback((reportIds: string[]) => {
+    const classroomId = actingClassroomId
+    if (!classroomId || reportIds.length === 0) return
+    if (!shouldRecordSubmissionNotified(currentUserRoleRef.current, isActingDevelopmentClassroomRef.current)) return
+    recordOperationTrace('navigation', `質問・要望の回答を確認 ${reportIds.length}件`)
+    void markReportAnswersReadViaFunction({ classroomId, reportIds })
+      .catch((error) => console.warn('[reportAnswers] mark read failed', error instanceof Error ? error.message : String(error)))
+  }, [actingClassroomId])
   // 未確認の行を押したら履歴を閉じ、休み連絡のモーダルを開く(処理は既存の四択 1 本のまま)。
   // ★モーダルに出せる連絡が無い(2 本の購読の配信ずれ等)ときは履歴を閉じない(押したら何も出ずに履歴だけ消える、を作らない)。
   // ★振替先を選んでいる最中は開かない(モーダルが盤面を覆って席を選べなくなる。v1.5.550 の自動で開かない設計と同じ)。
@@ -4762,9 +4781,24 @@ function AuthenticatedApp() {
     }
   }, [actingClassroomId, isClassroomNotificationSubscriptionActive, isRemoteBackendEnabled, parentPortalQrEnabled, resetParentAbsenceNoticeState])
 
+  // 「質問・要望」への回答(spec-developer-report §G-5・2026-09-28): 自教室の reportAnswers を購読し、未読件数(バッジ)と履歴を導く。
+  // 開発者画面では購読しない(QR 提出通知・保護者連絡と同じ shouldSubscribeClassroomNotifications)。教室切替・ログアウトでは
+  // cleanup で購読を切り、前の教室の質問文を残さない(INV-08)。ルール未反映(permission-denied)は store 側が code だけ記録する。
+  useEffect(() => {
+    if (!isRemoteBackendEnabled || !actingClassroomId || !isClassroomNotificationSubscriptionActive) return
+    const unsubscribe = subscribeReportAnswers(actingClassroomId, (entries) => {
+      setReportAnswerEntries(entries)
+    })
+    return () => {
+      unsubscribe()
+      setReportAnswerEntries([])
+    }
+  }, [actingClassroomId, isClassroomNotificationSubscriptionActive, isRemoteBackendEnabled])
+
   useEffect(() => {
     if (currentUserId) return
     setSubmissionAcknowledgements([])
+    setReportAnswerEntries([])
     resetParentAbsenceNoticeState()
   }, [currentUserId, resetParentAbsenceNoticeState])
 
@@ -6139,6 +6173,7 @@ function AuthenticatedApp() {
       onLogout={logout}
       onCopyDistributionUrl={copyBoardDistributionUrl}
       onReportToDeveloper={openDeveloperReportModal}
+      reportAnswerUnreadCount={unreadReportAnswerCount}
       onOpenParentContactHistory={parentPortalQrEnabled ? openParentContactHistory : undefined}
       parentContactUnconfirmedCount={parentMessageNotifications.length}
       onSaveBoard={saveBoard}
@@ -6161,6 +6196,9 @@ function AuthenticatedApp() {
         resultMessage={developerReportModal.resultMessage}
         onSubmit={(note, category) => { void handleDeveloperReportSubmit(note, category) }}
         onClose={() => setDeveloperReportModal(null)}
+        answers={isRemoteBackendEnabled ? reportAnswers : undefined}
+        canMarkAnswersRead={canMarkReportAnswersRead}
+        onMarkAnswersRead={handleMarkReportAnswersRead}
       />
     ) : null}
     </>

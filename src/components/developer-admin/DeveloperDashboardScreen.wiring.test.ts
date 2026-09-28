@@ -20,7 +20,7 @@ const SCREEN_SOURCES = [DASHBOARD_TSX, DETAIL_TSX]
 describe('開発ダッシュボードの配線(DeveloperAdminScreen)', () => {
   it('開発者画面のサブページとして import され、切替ボタンから開く', () => {
     expect(ADMIN_TSX).toContain("import { DeveloperDashboardScreen } from './DeveloperDashboardScreen'")
-    expect(ADMIN_TSX).toContain("useState<'main' | 'classrooms' | 'dashboard'>('main')")
+    expect(ADMIN_TSX).toContain("useState<'main' | 'classrooms' | 'dashboard' | 'answers'>('main')")
     expect(ADMIN_TSX).toContain('data-testid="developer-dashboard-toggle-button"')
     expect(ADMIN_TSX).toContain("{subPage === 'dashboard' ? (")
     expect(ADMIN_TSX).toContain('<DeveloperDashboardScreen')

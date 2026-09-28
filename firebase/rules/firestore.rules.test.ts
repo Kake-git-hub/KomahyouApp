@@ -10,7 +10,7 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing'
-import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore'
 
 const WORKSPACE = 'main'
 // 複数会社展開(Phase 0 / T0-3): 会社 = workspace。2 社目をわざと用意し、**同じ教室 ID 'A'** を持たせて
@@ -58,6 +58,9 @@ beforeEach(async () => {
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-A`), { classroomId: 'A', studentId: 's1', body: 'A', notifiedAt: null, createdAt: '2026-09-13T00:00:00.000Z' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/B/parentMessages/m-B`), { classroomId: 'B', studentId: 's9', body: 'B', notifiedAt: null, createdAt: '2026-09-13T00:00:00.000Z' })
     await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/parentPortalRateLimits/classroom__2026-09-13T10`), { count: 1, createdAt: '2026-09-13T01:00:00.000Z', updatedAt: '2026-09-13T01:00:00.000Z' })
+    // 「質問・要望」への回答(spec-developer-report §G-5): 教室 A/B に未読の回答を 1 件ずつ(CF が書く想定)。
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers/r-A`), { reportId: 'r-A', classroomId: 'A', category: 'question', questionNote: 'A?', answer: 'A!', answeredAt: '2026-09-28T00:00:00.000Z', readAt: null, unreadAnswer: true, reportedAt: '2026-09-27T00:00:00.000Z' })
+    await setDoc(doc(db, `workspaces/${WORKSPACE}/classroomSnapshots/B/reportAnswers/r-B`), { reportId: 'r-B', classroomId: 'B', category: 'question', questionNote: 'B?', answer: 'B!', answeredAt: '2026-09-28T00:00:00.000Z', readAt: null, unreadAnswer: true, reportedAt: '2026-09-27T00:00:00.000Z' })
     await setDoc(doc(db, `studentPortalTokens/${PORTAL_TOKEN}`), { workspaceKey: WORKSPACE, classroomId: 'A', studentId: 's1', createdAt: '2026-09-13T00:00:00.000Z', createdByUid: MGR_A, revokedAt: null })
     await setDoc(doc(db, `studentPortalTokenOwners/A__s1`), { workspaceKey: WORKSPACE, classroomId: 'A', studentId: 's1', token: PORTAL_TOKEN, updatedAt: '2026-09-13T00:00:00.000Z' })
     // 2 社目(other)。教室 ID は main とわざと同じ 'A'(会社が違えば別物であることを確かめる)。
@@ -197,6 +200,24 @@ describe('Firestore rules: 保護者向け固定QR(parentMessages は自教室�
     await assertFails(setDoc(doc(devdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-new`), { body: 'x', notifiedAt: null }))
     await assertFails(updateDoc(doc(devdb(), messageA()), { notifiedAt: '2026-09-13T01:00:00.000Z' }))
     await assertFails(setDoc(doc(anondb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/parentMessages/m-new`), { body: 'x' }))
+  })
+
+  it('reportAnswers(質問・要望への回答)は自教室の室長だけ読める・他教室は読めない・書き込みは CF のみ(spec-developer-report §I-5)', async () => {
+    const answerA = `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers/r-A`
+    const answerB = `workspaces/${WORKSPACE}/classroomSnapshots/B/reportAnswers/r-B`
+    await assertSucceeds(getDoc(doc(mgrAdb(), answerA)))
+    // クライアントの購読と同じ形(reportedAt 降順・件数制限。where は使わない)＋将来の未読等値クエリ
+    await assertSucceeds(getDocs(query(collection(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers`), orderBy('reportedAt', 'desc'), limit(100))))
+    await assertSucceeds(getDocs(query(collection(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers`), where('unreadAnswer', '==', true))))
+    await assertFails(getDoc(doc(mgrAdb(), answerB)))
+    await assertFails(getDocs(query(collection(mgrBdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers`), where('unreadAnswer', '==', true))))
+    await assertSucceeds(getDoc(doc(devdb(), answerB)))
+    await assertFails(getDoc(doc(anondb(), answerA)))
+    // 既読化・回答・作成はすべて CF 経由(誰も直接書けない)
+    await assertFails(updateDoc(doc(mgrAdb(), answerA), { readAt: '2026-09-28T01:00:00.000Z', unreadAnswer: false }))
+    await assertFails(updateDoc(doc(devdb(), answerA), { answer: '書き換え' }))
+    await assertFails(setDoc(doc(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers/r-new`), { answer: 'x' }))
+    await assertFails(setDoc(doc(anondb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers/r-new`), { answer: 'x' }))
   })
 
   it('studentPortalTokens は開発者・室長・未認証のいずれも read/write 不可(権威は CF のみ・公開 read 文書を作らない)', async () => {

@@ -60,6 +60,7 @@ import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from 
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
+import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, planReportAnswerWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
 import { generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
@@ -1874,7 +1875,8 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   }
 
   // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
-  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity({ workspaceKey, classroomId }))
+  const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
+  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,
@@ -1910,6 +1912,17 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
     issueNumber: null,
   })
   logger.info(`[DeveloperReport] Recorded report=${reportId} classroom=${classroomId} source=${report.source} category=${report.category} test=${report.isTest} ops=${report.recentOperations.length} snapshotBytes=${snapshotByteLength}`)
+
+  // 室長側の「これまでの質問と回答」履歴(spec-developer-report §G-5・2026-09-28): 回答待ちの軽量文書を教室ごとのパスへ作る。
+  // 教室データ・操作痕跡・送信者は載せない。失敗しても報告本体は成功のまま(履歴に出ないだけ・回答時に作り直される)。
+  if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, reporterRole: member.role, isDevelopmentClassroom })) {
+    try {
+      await firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
+        .set(buildPendingReportAnswerDoc({ reportId, classroomId, category: report.category, source: report.source, note: report.note, reportedAt: report.reportedAt, recordedAt }, recordedAt))
+    } catch (error) {
+      logger.error(`[DeveloperReport] Failed to create pending reportAnswers doc for report=${reportId}`, error)
+    }
+  }
 
   // 質問への AI 即時回答(試験・開発用教室のみ)。報告の記録が済んでから呼ぶ(AI が失敗しても報告は残る)。
   // 結果は利用者へ返すと同時に報告文書へ追記し、開発者が後から「AI が何と答えたか」を確認できるようにする。
@@ -1982,6 +1995,96 @@ export const notifyDeveloperReportByMail = onDocumentCreated({
     const message = error instanceof Error ? error.message : String(error)
     logger.error(`[DeveloperReportMail] Failed report=${reportId}: ${message}`)
     await snapshot.ref.set({ mailError: message.slice(0, 500), mailErrorAt: new Date().toISOString() }, { merge: true })
+  }
+})
+
+// 「質問・要望」への回答(docs/spec-developer-report.md §G-3 / §G-5・オーナー確定 2026-09-28「LINE ではなく画面で返す」)。
+// 開発者だけが書ける(requireDeveloperMember)。権威は developerReports/{reportId} の回答フィールド(既存フィールドは触らない)。
+// 室長の端末が読む軽量文書 classroomSnapshots/{classroomId}/reportAnswers/{reportId} へ同じ内容を写す(教室ごとのパス・INV-08)。
+// 状態遷移は一方向(未回答 → 回答済み)。再回答は本文更新(revision +1)で既読を未読へ戻さない。純粋ロジックは reportAnswers.ts。
+export const answerDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  const parsed = normalizeAnswerDeveloperReportRequest(request.data)
+  if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+  const { workspaceKey, reportId, answer } = parsed.value
+  const memberRef = await requireDeveloperMember(request.auth?.uid, workspaceKey)
+
+  const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
+  try {
+    // ★読み取り→書き込みを 1 トランザクションにする(regression-reviewer 指摘 2026-09-28): get と commit の間に室長が既読にすると、
+    //   改訂時に古い readAt:null を書き戻して未読へ戻してしまう。トランザクション内で読んだ値で計画を作れば競合時は再実行される。
+    const outcome = await firestore.runTransaction(async (tx) => {
+      const reportSnapshot = await tx.get(reportRef)
+      if (!reportSnapshot.exists) throw new HttpsError('not-found', 'この報告は見つかりません。')
+      const reportData = (reportSnapshot.data() ?? {}) as Record<string, unknown>
+      const classroomId = typeof reportData.classroomId === 'string' ? reportData.classroomId : ''
+      if (!classroomId) throw new HttpsError('failed-precondition', 'この報告には教室が記録されていないため回答を返せません。')
+
+      const answerRef = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
+      const answerSnapshot = await tx.get(answerRef)
+      const plan = planReportAnswerWrite({
+        report: {
+          reportId,
+          classroomId,
+          category: typeof reportData.category === 'string' ? reportData.category : 'bug',
+          source: typeof reportData.source === 'string' ? reportData.source : '',
+          note: typeof reportData.note === 'string' ? reportData.note : '',
+          reportedAt: typeof reportData.reportedAt === 'string' ? reportData.reportedAt : '',
+          recordedAt: typeof reportData.recordedAt === 'string' ? reportData.recordedAt : new Date().toISOString(),
+          answerRevision: reportData.answerRevision,
+        },
+        existingAnswerDoc: answerSnapshot.exists ? (answerSnapshot.data() as Partial<ReportAnswerDoc>) : null,
+        answer,
+        answeredBy: memberRef.id,
+        nowIso: new Date().toISOString(),
+      })
+      tx.set(reportRef, plan.reportUpdate, { merge: true })
+      tx.set(answerRef, plan.answerDoc, { merge: true })
+      return { classroomId, plan }
+    })
+    logger.info(`[DeveloperReport] Answered report=${reportId} classroom=${outcome.classroomId} revision=${outcome.plan.reportUpdate.answerRevision} isRevision=${outcome.plan.isRevision}`)
+    return { reportId, classroomId: outcome.classroomId, answeredAt: outcome.plan.reportUpdate.answeredAt, answerRevision: outcome.plan.reportUpdate.answerRevision, isRevision: outcome.plan.isRevision }
+  } catch (error) {
+    // 想定外の例外は原因文つきで返す(画面に INTERNAL しか出ないと調べられない・CLAUDE.md 2026-09-12 の教訓)。
+    if (error instanceof HttpsError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[DeveloperReport] answerDeveloperReport failed report=${reportId}: ${message}`)
+    throw new HttpsError('internal', `回答を保存できませんでした: ${message.slice(0, 300)}`)
+  }
+})
+
+// 室長が回答を「確認しました」(既読)。既読はサーバーが持ち、端末をまたいで同じ状態になる(localStorage を使わない)。
+// 対象は必ず「その教室の」reportAnswers(パスで教室分離。他教室の ID を渡しても存在しないので何もしない)。
+export const markReportAnswersRead = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  const parsed = normalizeMarkReportAnswersReadRequest(request.data)
+  if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+  const { workspaceKey, classroomId, reportIds } = parsed.value
+  await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
+
+  try {
+    const collection = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION)
+    const snapshots = await firestore.getAll(...reportIds.map((reportId) => collection.doc(reportId)))
+    const writes = resolveReportAnswerReadWrites(
+      snapshots.map((snapshot) => ({
+        id: snapshot.id,
+        exists: snapshot.exists,
+        classroomId: snapshot.data()?.classroomId,
+        answeredAt: snapshot.data()?.answeredAt,
+        readAt: snapshot.data()?.readAt,
+      })),
+      { classroomId, nowIso: new Date().toISOString() },
+    )
+    if (writes.length > 0) {
+      const batch = firestore.batch()
+      for (const write of writes) batch.update(collection.doc(write.id), write.update)
+      await batch.commit()
+    }
+    logger.info('[markReportAnswersRead] done', { classroomId, requested: reportIds.length, updated: writes.length })
+    return { updated: writes.length }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[markReportAnswersRead] failed classroom=${classroomId}: ${message}`)
+    throw new HttpsError('internal', `既読を記録できませんでした: ${message.slice(0, 300)}`)
   }
 })
 

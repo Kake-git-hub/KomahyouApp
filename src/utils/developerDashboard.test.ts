@@ -40,6 +40,9 @@ function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }
     aiAnswerError: '',
     mailSentAt: null,
     mailError: '',
+    answerFinal: '',
+    answeredAt: null,
+    answerRevision: 0,
     ...overrides,
   }
 }

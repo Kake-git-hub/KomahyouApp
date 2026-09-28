@@ -101,6 +101,15 @@ service cloud.firestore {
         match /parentPortalRateLimits/{limitKey} {
           allow read, write: if false;
         }
+
+        // 「質問・要望」への回答(docs/spec-developer-report.md §G-5・2026-09-28): 室長の端末が読む軽量文書(質問文＋回答＋既読)。
+        // 書くのは Cloud Function(submitDeveloperReport=回答待ち作成 / answerDeveloperReport=回答 / markReportAnswersRead=既読)だけ。
+        // 教室メンバー(室長)は自教室ぶんを購読してボタンの未読件数と履歴に出す。write:false を緩めない
+        // (クライアントから既読を書けるようにすると「端末ごとの既読」に戻り、他端末で未読が残る)。
+        match /reportAnswers/{reportId} {
+          allow read: if canAccessClassroom(workspaceKey, classroomId);
+          allow write: if false;
+        }
       }
 
       // classroomSettings は現在クライアントから書く経路が無い(読み取りのみの旧フォールバック)。

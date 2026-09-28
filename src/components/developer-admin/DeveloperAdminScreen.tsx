@@ -5,6 +5,7 @@ import type { GoogleDriveBackupDiagnostic, ServerAutoBackupSummary } from '../..
 import type { AppSnapshotPayload, WorkspaceClassroom, WorkspaceUser } from '../../types/appState'
 import { getFirebaseBackendConfig } from '../../integrations/firebase/config'
 import { DeveloperDashboardScreen } from './DeveloperDashboardScreen'
+import { DeveloperReportAnswerScreen } from './DeveloperReportAnswerScreen'
 
 // 仕様(spec-save-restore §4): サーバーバックアップ復元は不可逆のため、確認モーダルで必ず警告する(仕様監査 領域2 A3)
 export const RESTORE_MODAL_IRREVERSIBLE_WARNING = '復元すると、選択した教室の現在のデータはバックアップの内容で上書きされ、元に戻せません。'
@@ -176,7 +177,8 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
   const [showProvisioningGuide, setShowProvisioningGuide] = useState(false)
   const [serverBackupListExpanded, setServerBackupListExpanded] = useState(false)
   // 'dashboard' = 開発ダッシュボード(2026-09-25・docs/spec-developer-report.md §E-3)。読み取り専用のサブページ。
-  const [subPage, setSubPage] = useState<'main' | 'classrooms' | 'dashboard'>('main')
+  // 'answers' = 質問への回答(2026-09-28・spec-developer-report §G-3)。届いた質問・要望に回答を書いて室長へ返すサブページ。
+  const [subPage, setSubPage] = useState<'main' | 'classrooms' | 'dashboard' | 'answers'>('main')
   const [managerUidDrafts, setManagerUidDrafts] = useState<Record<string, string>>({})
   const [managerEmailDrafts, setManagerEmailDrafts] = useState<Record<string, string>>({})
   const [provisionDraft, setProvisionDraft] = useState(() => buildInitialProvisionDraft(classrooms.length))
@@ -247,6 +249,9 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
             <button className="secondary-button slim" type="button" onClick={() => setSubPage(subPage === 'dashboard' ? 'main' : 'dashboard')} data-testid="developer-dashboard-toggle-button">
               {subPage === 'dashboard' ? '管理画面に戻る' : '開発ダッシュボード'}
             </button>
+            <button className="secondary-button slim" type="button" onClick={() => setSubPage(subPage === 'answers' ? 'main' : 'answers')} data-testid="developer-report-answers-toggle-button">
+              {subPage === 'answers' ? '管理画面に戻る' : '質問への回答'}
+            </button>
             <button className="secondary-button slim" type="button" onClick={onLogout}>ログアウト</button>
           </div>
         </div>
@@ -260,6 +265,12 @@ export function DeveloperAdminScreen({ currentUser, authMode, firebaseProjectId,
         authMode={authMode}
         workspaceKey={getFirebaseBackendConfig().workspaceKey}
         appVersion={__APP_VERSION__}
+        classrooms={classrooms}
+        onBack={() => setSubPage('main')}
+      />
+      ) : subPage === 'answers' ? (
+      <DeveloperReportAnswerScreen
+        authMode={authMode}
         classrooms={classrooms}
         onBack={() => setSubPage('main')}
       />

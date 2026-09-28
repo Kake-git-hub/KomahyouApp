@@ -40,6 +40,10 @@ export type DeveloperReportRecord = {
   aiAnswerError: string
   mailSentAt: string | null
   mailError: string
+  /** 開発者の回答(spec-developer-report §G-3・2026-09-28)。空文字/null = 未回答。 */
+  answerFinal: string
+  answeredAt: string | null
+  answerRevision: number
 }
 
 function readString(value: unknown, fallback = ''): string {
@@ -92,6 +96,9 @@ export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | nu
     aiAnswerError: readString(data.aiAnswerError),
     mailSentAt: readNullableString(data.mailSentAt),
     mailError: readString(data.mailError),
+    answerFinal: readString(data.answerFinal),
+    answeredAt: readNullableString(data.answeredAt),
+    answerRevision: typeof data.answerRevision === 'number' && Number.isFinite(data.answerRevision) && data.answerRevision > 0 ? Math.trunc(data.answerRevision) : 0,
   }
 }
 

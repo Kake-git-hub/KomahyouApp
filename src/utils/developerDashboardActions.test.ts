@@ -41,6 +41,10 @@ function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }
     aiAnswerError: '',
     mailSentAt: null,
     mailError: '',
+    // 回答フィールド(v1.5.565・spec-developer-report §G-3)。未回答の既定。
+    answerFinal: '',
+    answeredAt: null,
+    answerRevision: 0,
     ...overrides,
   }
 }

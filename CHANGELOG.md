@@ -14,6 +14,17 @@
 
 ## 未リリース
 
+## v1.5.565 (2026-09-28)
+
+- feat: **「質問・要望」への回答を画面で返す**(オーナー指示 2026-09-28「LINE で個別に回答を作っているのを、各室長の画面に出す・ボタンに未読件数・過去の質問と回答も見直せるように」。事前確認で「開発者画面に回答ページ」「バッジだけ・自動では開かない」「全教室で即時」を確定・spec-developer-report §G-3/§G-5)。
+  - 開発者: 開発者画面(教室運営管理)右上の「**質問への回答**」サブページで、届いた報告(テスト送信・確認リストは除く)を教室・未回答/回答済みで絞って選び、回答を書いて送る。送る前に §G-4 の基準(7 項目)のチェックが必須。再送は改訂(版 +1)で既読を未読に戻さない。callable `answerDeveloperReport`(開発者のみ)が `developerReports/{id}` に `answerFinal / answeredAt / answeredBy / answerRevision` を merge し、室長側の軽量文書へ写す (DeveloperReportAnswerScreen.tsx / developerReportAnswers.ts / reportAnswersStore.ts)
+  - 室長: 盤面ツールバー「質問・要望」に**未読の回答件数バッジ**。同じモーダルに「**これまでの質問と回答**」タブ(未読があるときだけ開いた直後にこのタブ)。質問文・回答・回答日時を新しい順に表示し、回答前の質問は「回答待ち」。「確認しました」で既読(サーバー記録 callable `markReportAnswersRead`・端末をまたいで同じ)。**自動で開くモーダルは作らない**。開発者が本番教室を開いたときは「確認しました」を出さない(室長のバッジを消さない・shouldRecordSubmissionNotified と同じ判断) (DeveloperReportModal.tsx / BoardToolbar.tsx / App.tsx / reportAnswers.ts)
+  - データ: 室長の端末が読む文書は `classroomSnapshots/{classroomId}/reportAnswers/{reportId}`(教室ごとのパス・parentMessages と同じ作法・INV-08)。送信時(`submitDeveloperReport`)に「回答待ち」の文書を作り、教室データ・操作痕跡・送信者は載せない。Firestore ルール: 自教室メンバーのみ read・write は不可(**ルールは main マージでは反映されない → `firebase deploy --only firestore:rules` が必要**)。日程表タブ側のモーダルは従来どおり送るだけ (functions/src/reportAnswers.ts / index.ts / firebase/firestore.rules)
+  - テスト: 純関数 13＋9＋7 件・描画 7 件・配線 source-scan 9 件・ルール 1 件(エミュレータで 36 件通過)。開発ダッシュボードの報告レコードに回答フィールドを追加 (developerDashboard.ts)
+  - regression-reviewer 所見(マージ可・重大なし)の反映: 回答 callable を読み取り→書き込み 1 トランザクションに(競合で改訂が既読を未読へ戻さない)、callable 2 本の想定外例外を原因文つき HttpsError に、開発者が本番教室から送った報告は室長の履歴に載せない、unreadAnswer は常に readAt から導く (functions/src/index.ts / reportAnswers.ts)
+- chore(checklist): 確認リストを第31版へ。上の回答フローの確認 a-1〜a-3 を追加。**版は v1.5.564 据え置き**(項目を足しただけ)。進行中テーマ台帳 `question-answer-flow` を「確認リスト結果待ち」へ (verificationChecklist.ts / developmentStatusLedger.ts)
+- docs: spec-developer-report §G-3/§G-5 をオーナー確定(2026-09-28)の内容で改定(回答案段は省略・自動モーダル無し・教室ごとのパス)。利用者マニュアル §9 に回答の読み方を追記 (docs/spec-developer-report.md / docs/user-manual.md)
+
 ## v1.5.564 (2026-09-28)
 
 - feat: **開発ダッシュボードを確認リスト d-4 の要改善に沿って修正**(オーナー 2026-09-28「内容をクリックすると詳細を表示・Claude に投げる文章はもっとシンプルに・投げる文章を事前にダッシュボードで打てるように・ダッシュボードと確認リストの役割が重複しないように」)。(1) 未対応一覧の行の内容を押すと、その件の詳細(`facts`: メモ全文・現状・次の一手・根拠など)を行の下に開く(画面専用・指示には載せない)。(2) Claude への指示を短く: 冒頭 1 行＋各件の見出しと 1〜3 行だけにし、着手前確認・完了条件などの定型文は CLAUDE.md に任せて削除。(3) 指示欄を常に表示・編集可にし、書き足した文をそのまま URL／コピーに使う(行を選ばず直接書いても投げられる・書き換え後に選択を変えたら「選択から作り直す」)。「指示を見る」ボタンは廃止。(4) 役割分担: 確認リスト=実機で確かめて結果を送る場所、ダッシュボード=要改善を Claude へ投げる場所。未対応一覧から「確認リストの未確認」行を外し、詳細面 5 も項目表を要改善だけに絞った。個人情報の扱い(報告の一言・利用者報告の題名は指示に載せない)は据え置き。回帰テスト: 純関数(未確認を出さない・facts・短い本文)・描画(編集できる textarea・展開ボタン・詳細面は要改善だけ)・配線(送る本文は編集後の promptText) (developerDashboardActions.ts / DeveloperDashboardScreen.tsx / DeveloperDashboardDetail.tsx / App.css / docs/spec-developer-report.md §E-3)

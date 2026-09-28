@@ -60,12 +60,26 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第30版(v1.5.564): 第29版の結果(受付 5e95f35b)で OK の b-2/b-3/c-2/t-1/s-4 を外し、要改善の d-4 を差し替え、結果待ちは残す(OK 済みは載せない運用)', () => {
+  it('第31版(v1.5.565): 第30版(OK の b-2/b-3/c-2/t-1/s-4 を外し d-4 を差し替え)に a-1〜a-3(質問・要望への回答)を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['t-2', 't-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3', 'd-4'])
+    expect(ids).toEqual(['t-2', 't-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3'])
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
     // ★項目を差し替えた(d-4)・外したので版を上げる(据え置くと d-4 の前回の「要改善」の印がパネルに残る)。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.564')
+    // 第31版(2026-09-28): 「質問・要望」への回答を画面で返す(spec-developer-report §G-3/§G-5)。開発者画面で書く → 室長のボタンに未読バッジ → 履歴タブ → 既読はサーバー。
+    //   版は v1.5.564 据え置き(項目を足しただけ・d-4 の結果待ちの下書きを消さない)。
+    for (const id of ['a-1', 'a-2', 'a-3']) {
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === id)!
+      expect(item.introducedIn, id).toBe('v1.5.565')
+      expect(item.area, id).toBe('質問・要望')
+    }
+    const a1 = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'a-1')!
+    expect(a1.steps.join(' / ')).toContain('質問への回答')
+    expect((a1.check ?? []).join(' / ')).toContain('自動では開かない')
+    expect((a1.check ?? []).join(' / ')).toContain('既読はサーバー記録')
+    const a3 = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'a-3')!
+    expect((a3.check ?? []).join(' / ')).toContain('確認しました')
+    expect(a3.prep).toContain('見るだけ')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 第24版(2026-09-25): 開発ダッシュボード(開発者画面のサブページ)。読むだけの画面なので「教室のデータは何も変わらない」を必ず見る。
     const d1 = byId.get('d-1')!
