@@ -67,7 +67,7 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
   const reports = useMemo(() => reportsCurrent?.reports ?? [], [reportsCurrent])
   const visibleReports = useMemo(() => filterReportsForAnswering(reports, { filter, classroomId: classroomFilter || null }), [reports, filter, classroomFilter])
   const selected = useMemo(() => reports.find((record) => record.reportId === selectedReportId) ?? null, [reports, selectedReportId])
-  const classroomNameOf = useCallback((classroomId: string, fallback: string) => classrooms.find((c) => c.id === classroomId)?.name ?? fallback ?? classroomId, [classrooms])
+  const classroomNameOf = useCallback((classroomId: string, fallback: string) => classrooms.find((c) => c.id === classroomId)?.name || fallback || classroomId, [classrooms])
 
   const selectReport = (record: DeveloperReportRecord) => {
     setSelectedReportId(record.reportId)

@@ -10,7 +10,7 @@ import {
   assertSucceeds,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing'
-import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, limit, orderBy, query, setDoc, updateDoc, where } from 'firebase/firestore'
 
 const WORKSPACE = 'main'
 // 複数会社展開(Phase 0 / T0-3): 会社 = workspace。2 社目をわざと用意し、**同じ教室 ID 'A'** を持たせて
@@ -206,7 +206,8 @@ describe('Firestore rules: 保護者向け固定QR(parentMessages は自教室�
     const answerA = `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers/r-A`
     const answerB = `workspaces/${WORKSPACE}/classroomSnapshots/B/reportAnswers/r-B`
     await assertSucceeds(getDoc(doc(mgrAdb(), answerA)))
-    // クライアントの購読と同じ形(未読の等値条件・新しい順の履歴)
+    // クライアントの購読と同じ形(reportedAt 降順・件数制限。where は使わない)＋将来の未読等値クエリ
+    await assertSucceeds(getDocs(query(collection(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers`), orderBy('reportedAt', 'desc'), limit(100))))
     await assertSucceeds(getDocs(query(collection(mgrAdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers`), where('unreadAnswer', '==', true))))
     await assertFails(getDoc(doc(mgrAdb(), answerB)))
     await assertFails(getDocs(query(collection(mgrBdb(), `workspaces/${WORKSPACE}/classroomSnapshots/A/reportAnswers`), where('unreadAnswer', '==', true))))

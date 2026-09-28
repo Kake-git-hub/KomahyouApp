@@ -24,10 +24,13 @@ const report = {
 }
 
 describe('reportAnswers: 送信時の「回答待ち」文書(docs/spec-developer-report.md §G-5)', () => {
-  it('テスト送信と確認リストは室長側の文書を作らない', () => {
+  it('テスト送信と確認リストは室長側の文書を作らない。開発者が本番教室から送った報告も作らない(開発用教室なら作る)', () => {
     expect(shouldCreateReportAnswerDoc({ isTest: false, isVerificationChecklist: false })).toBe(true)
     expect(shouldCreateReportAnswerDoc({ isTest: true })).toBe(false)
     expect(shouldCreateReportAnswerDoc({ isVerificationChecklist: true })).toBe(false)
+    expect(shouldCreateReportAnswerDoc({ reporterRole: 'developer', isDevelopmentClassroom: false })).toBe(false)
+    expect(shouldCreateReportAnswerDoc({ reporterRole: 'developer', isDevelopmentClassroom: true })).toBe(true)
+    expect(shouldCreateReportAnswerDoc({ reporterRole: 'manager', isDevelopmentClassroom: false })).toBe(true)
   })
 
   it('回答待ちの文書は本文・要約・種類・教室だけを持ち、教室データ・操作痕跡・送信者は含まない', () => {
@@ -118,6 +121,19 @@ describe('reportAnswers: 回答の書き込み計画(状態遷移は一方向・
     const stillUnread = planReportAnswerWrite({ report: { ...report, answerRevision: 1 }, existingAnswerDoc: { ...answered, readAt: null, unreadAnswer: true }, answer: '新', answeredBy: 'dev-uid', nowIso: '2026-09-28T11:00:00.000Z' })
     expect(stillUnread.answerDoc.readAt).toBeNull()
     expect(stillUnread.answerDoc.unreadAnswer).toBe(true)
+  })
+
+  it('境界: 報告側に版番号が無いのに室長側文書が既読済み(不整合)なら、初回扱いで未読にし unreadAnswer と readAt は常に整合する', () => {
+    const answered = { ...buildPendingReportAnswerDoc(report, 'x'), answer: '旧', answeredAt: 't', answerRevision: 1, readAt: 'u', unreadAnswer: false }
+    const plan = planReportAnswerWrite({ report, existingAnswerDoc: answered, answer: '新', answeredBy: 'dev-uid', nowIso: '2026-09-28T11:00:00.000Z' })
+    expect(plan.isRevision).toBe(false)
+    expect(plan.answerDoc.readAt).toBeNull()
+    expect(plan.answerDoc.unreadAnswer).toBe(true)
+    // 逆: 版番号はあるが室長側文書が無い(旧報告)改訂 → readAt null と unreadAnswer true で整合(以前は false になっていた)
+    const orphan = planReportAnswerWrite({ report: { ...report, answerRevision: 2 }, existingAnswerDoc: null, answer: '新', answeredBy: 'dev-uid', nowIso: '2026-09-28T11:00:00.000Z' })
+    expect(orphan.isRevision).toBe(true)
+    expect(orphan.answerDoc.readAt).toBeNull()
+    expect(orphan.answerDoc.unreadAnswer).toBe(true)
   })
 
   it('developerReports 側の既存フィールドは計画に含まれない(note / recentOperations 等を上書きしない)', () => {

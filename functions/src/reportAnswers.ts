@@ -34,7 +34,7 @@ export type ReportAnswerDoc = {
   answerRevision: number
   /** 室長が「確認しました」を押した時刻。null = 未読(回答があるときだけ意味を持つ)。 */
   readAt: string | null
-  /** 未読の回答があるか(購読の等値条件用: where('unreadAnswer','==',true))。 */
+  /** 未読の回答があるか(= answeredAt あり && readAt null)。将来の等値クエリ用の写しで、権威は readAt(クライアントも readAt で判定)。 */
   unreadAnswer: boolean
   updatedAt: string
 }
@@ -65,9 +65,13 @@ export function summarizeReportQuestion(note: string, limit: number = REPORT_QUE
 /**
  * 室長側の文書を作るべき報告か。テスト送信(#テスト)と開発用教室の確認リストは履歴に載せない
  * (確認リストは項目 id の羅列で室長の履歴としては意味が無く、テストは開発者の動作確認)。
+ * 開発者が**本番教室を開いて**送った報告も載せない(室長の履歴に開発者の動作確認が混ざる・regression-reviewer 指摘 2026-09-28)。
+ * 開発用教室では開発者が室長役なので載せる。開発者が後から回答を書けば、そのとき文書は作られる(planReportAnswerWrite)。
  */
-export function shouldCreateReportAnswerDoc(report: Pick<ReportAnswerSourceReport, 'isTest' | 'isVerificationChecklist'>): boolean {
-  return report.isTest !== true && report.isVerificationChecklist !== true
+export function shouldCreateReportAnswerDoc(report: Pick<ReportAnswerSourceReport, 'isTest' | 'isVerificationChecklist'> & { reporterRole?: unknown; isDevelopmentClassroom?: boolean }): boolean {
+  if (report.isTest === true || report.isVerificationChecklist === true) return false
+  if (report.reporterRole === 'developer' && report.isDevelopmentClassroom === false) return false
+  return true
 }
 
 /** 送信時に作る「回答待ち」の文書。 */
@@ -140,6 +144,9 @@ export function planReportAnswerWrite(input: {
   const revision = previousRevision + 1
   const base = input.existingAnswerDoc ?? buildPendingReportAnswerDoc(input.report, input.nowIso)
   const previousReadAt = typeof base.readAt === 'string' && base.readAt ? base.readAt : null
+  // 初回回答は未読。改訂は既読状態をそのまま保つ(既読なら既読のまま・未読なら未読のまま)。
+  // unreadAnswer は常に readAt から導く(権威は readAt。クライアントも readAt で未読を判定する・二重管理にしない)。
+  const readAt = isRevision ? previousReadAt : null
   const answerDoc: ReportAnswerDoc = {
     reportId: input.report.reportId,
     classroomId: input.report.classroomId,
@@ -151,9 +158,8 @@ export function planReportAnswerWrite(input: {
     answer: input.answer,
     answeredAt: input.nowIso,
     answerRevision: revision,
-    // 初回回答は未読。改訂は既読状態をそのまま保つ(既読なら既読のまま・未読なら未読のまま)。
-    readAt: isRevision ? previousReadAt : null,
-    unreadAnswer: isRevision ? previousReadAt === null : true,
+    readAt,
+    unreadAnswer: readAt === null,
     updatedAt: input.nowIso,
   }
   return {
@@ -196,7 +202,7 @@ export type ReportAnswerReadSnapshot = {
 
 /**
  * 既読にする文書だけを選ぶ(部分更新)。存在しない・回答が無い・既に既読・教室タグが違う文書は触らない。
- * 更新は readAt / unreadAnswer / updatedAt の 3 フィールドだけ(他フィールドを消さない・INV-07 の部分更新の原則)。
+ * 更新は readAt / unreadAnswer / updatedAt の 3 フィールドだけ(部分更新・他フィールドを消さない)。
  */
 export function resolveReportAnswerReadWrites(
   snapshots: ReportAnswerReadSnapshot[],

@@ -43,10 +43,13 @@ describe('reportAnswers(室長側): 文書の読み取り', () => {
     expect(entry).toMatchObject({ category: 'bug', answer: null, readAt: null, answerRevision: 0 })
   })
 
-  it('教室分離(INV-08): 開いている教室の doc だけを通す。教室未選択なら空', () => {
-    const entries = [base({ id: 'a', classroomId: 'C1' }), base({ id: 'b', classroomId: 'C2' })]
+  it('教室分離(INV-08): 開いている教室の doc だけを通す。教室未選択なら空。他教室の未読はバッジにも数えない', () => {
+    const entries = [base({ id: 'a', classroomId: 'C1' }), base({ id: 'b', classroomId: 'C2', answer: 'x', answeredAt: 't' })]
     expect(selectReportAnswersForClassroom(entries, 'C1').map((e) => e.id)).toEqual(['a'])
     expect(selectReportAnswersForClassroom(entries, null)).toEqual([])
+    // App の useMemo と同じ組み合わせ(select → count): 他教室の未読 1 件は 0 になる
+    expect(countUnreadReportAnswers(selectReportAnswersForClassroom(entries, 'C1'))).toBe(0)
+    expect(countUnreadReportAnswers(selectReportAnswersForClassroom(entries, 'C2'))).toBe(1)
   })
 })
 

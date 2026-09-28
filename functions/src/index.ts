@@ -1875,7 +1875,8 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   }
 
   // 開発用教室の確認リスト送信はメール・Issue 起票の対象外(2026-09-13 オーナー指示)。記録だけ残す。
-  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroomIdentity({ workspaceKey, classroomId }))
+  const isDevelopmentClassroom = isDevelopmentClassroomIdentity({ workspaceKey, classroomId })
+  const isVerificationChecklist = isVerificationChecklistReport(report.note, isDevelopmentClassroom)
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
   await reportRef.set({
     reportId,
@@ -1914,7 +1915,7 @@ export const submitDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
 
   // 室長側の「これまでの質問と回答」履歴(spec-developer-report §G-5・2026-09-28): 回答待ちの軽量文書を教室ごとのパスへ作る。
   // 教室データ・操作痕跡・送信者は載せない。失敗しても報告本体は成功のまま(履歴に出ないだけ・回答時に作り直される)。
-  if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist })) {
+  if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, reporterRole: member.role, isDevelopmentClassroom })) {
     try {
       await firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
         .set(buildPendingReportAnswerDoc({ reportId, classroomId, category: report.category, source: report.source, note: report.note, reportedAt: report.reportedAt, recordedAt }, recordedAt))
@@ -2008,36 +2009,47 @@ export const answerDeveloperReport = onCall({ invoker: 'public', timeoutSeconds:
   const memberRef = await requireDeveloperMember(request.auth?.uid, workspaceKey)
 
   const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
-  const reportSnapshot = await reportRef.get()
-  if (!reportSnapshot.exists) throw new HttpsError('not-found', 'この報告は見つかりません。')
-  const reportData = (reportSnapshot.data() ?? {}) as Record<string, unknown>
-  const classroomId = typeof reportData.classroomId === 'string' ? reportData.classroomId : ''
-  if (!classroomId) throw new HttpsError('failed-precondition', 'この報告には教室が記録されていないため回答を返せません。')
+  try {
+    // ★読み取り→書き込みを 1 トランザクションにする(regression-reviewer 指摘 2026-09-28): get と commit の間に室長が既読にすると、
+    //   改訂時に古い readAt:null を書き戻して未読へ戻してしまう。トランザクション内で読んだ値で計画を作れば競合時は再実行される。
+    const outcome = await firestore.runTransaction(async (tx) => {
+      const reportSnapshot = await tx.get(reportRef)
+      if (!reportSnapshot.exists) throw new HttpsError('not-found', 'この報告は見つかりません。')
+      const reportData = (reportSnapshot.data() ?? {}) as Record<string, unknown>
+      const classroomId = typeof reportData.classroomId === 'string' ? reportData.classroomId : ''
+      if (!classroomId) throw new HttpsError('failed-precondition', 'この報告には教室が記録されていないため回答を返せません。')
 
-  const answerRef = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
-  const answerSnapshot = await answerRef.get()
-  const plan = planReportAnswerWrite({
-    report: {
-      reportId,
-      classroomId,
-      category: typeof reportData.category === 'string' ? reportData.category : 'bug',
-      source: typeof reportData.source === 'string' ? reportData.source : '',
-      note: typeof reportData.note === 'string' ? reportData.note : '',
-      reportedAt: typeof reportData.reportedAt === 'string' ? reportData.reportedAt : '',
-      recordedAt: typeof reportData.recordedAt === 'string' ? reportData.recordedAt : new Date().toISOString(),
-      answerRevision: reportData.answerRevision,
-    },
-    existingAnswerDoc: answerSnapshot.exists ? (answerSnapshot.data() as Partial<ReportAnswerDoc>) : null,
-    answer,
-    answeredBy: memberRef.id,
-    nowIso: new Date().toISOString(),
-  })
-  const batch = firestore.batch()
-  batch.set(reportRef, plan.reportUpdate, { merge: true })
-  batch.set(answerRef, plan.answerDoc, { merge: true })
-  await batch.commit()
-  logger.info(`[DeveloperReport] Answered report=${reportId} classroom=${classroomId} revision=${plan.reportUpdate.answerRevision} isRevision=${plan.isRevision}`)
-  return { reportId, classroomId, answeredAt: plan.reportUpdate.answeredAt, answerRevision: plan.reportUpdate.answerRevision, isRevision: plan.isRevision }
+      const answerRef = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION).doc(reportId)
+      const answerSnapshot = await tx.get(answerRef)
+      const plan = planReportAnswerWrite({
+        report: {
+          reportId,
+          classroomId,
+          category: typeof reportData.category === 'string' ? reportData.category : 'bug',
+          source: typeof reportData.source === 'string' ? reportData.source : '',
+          note: typeof reportData.note === 'string' ? reportData.note : '',
+          reportedAt: typeof reportData.reportedAt === 'string' ? reportData.reportedAt : '',
+          recordedAt: typeof reportData.recordedAt === 'string' ? reportData.recordedAt : new Date().toISOString(),
+          answerRevision: reportData.answerRevision,
+        },
+        existingAnswerDoc: answerSnapshot.exists ? (answerSnapshot.data() as Partial<ReportAnswerDoc>) : null,
+        answer,
+        answeredBy: memberRef.id,
+        nowIso: new Date().toISOString(),
+      })
+      tx.set(reportRef, plan.reportUpdate, { merge: true })
+      tx.set(answerRef, plan.answerDoc, { merge: true })
+      return { classroomId, plan }
+    })
+    logger.info(`[DeveloperReport] Answered report=${reportId} classroom=${outcome.classroomId} revision=${outcome.plan.reportUpdate.answerRevision} isRevision=${outcome.plan.isRevision}`)
+    return { reportId, classroomId: outcome.classroomId, answeredAt: outcome.plan.reportUpdate.answeredAt, answerRevision: outcome.plan.reportUpdate.answerRevision, isRevision: outcome.plan.isRevision }
+  } catch (error) {
+    // 想定外の例外は原因文つきで返す(画面に INTERNAL しか出ないと調べられない・CLAUDE.md 2026-09-12 の教訓)。
+    if (error instanceof HttpsError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[DeveloperReport] answerDeveloperReport failed report=${reportId}: ${message}`)
+    throw new HttpsError('internal', `回答を保存できませんでした: ${message.slice(0, 300)}`)
+  }
 })
 
 // 室長が回答を「確認しました」(既読)。既読はサーバーが持ち、端末をまたいで同じ状態になる(localStorage を使わない)。
@@ -2048,25 +2060,32 @@ export const markReportAnswersRead = onCall({ invoker: 'public', timeoutSeconds:
   const { workspaceKey, classroomId, reportIds } = parsed.value
   await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)
 
-  const collection = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION)
-  const snapshots = await firestore.getAll(...reportIds.map((reportId) => collection.doc(reportId)))
-  const writes = resolveReportAnswerReadWrites(
-    snapshots.map((snapshot) => ({
-      id: snapshot.id,
-      exists: snapshot.exists,
-      classroomId: snapshot.data()?.classroomId,
-      answeredAt: snapshot.data()?.answeredAt,
-      readAt: snapshot.data()?.readAt,
-    })),
-    { classroomId, nowIso: new Date().toISOString() },
-  )
-  if (writes.length > 0) {
-    const batch = firestore.batch()
-    for (const write of writes) batch.update(collection.doc(write.id), write.update)
-    await batch.commit()
+  try {
+    const collection = firestore.collection('workspaces').doc(workspaceKey).collection('classroomSnapshots').doc(classroomId).collection(REPORT_ANSWERS_COLLECTION)
+    const snapshots = await firestore.getAll(...reportIds.map((reportId) => collection.doc(reportId)))
+    const writes = resolveReportAnswerReadWrites(
+      snapshots.map((snapshot) => ({
+        id: snapshot.id,
+        exists: snapshot.exists,
+        classroomId: snapshot.data()?.classroomId,
+        answeredAt: snapshot.data()?.answeredAt,
+        readAt: snapshot.data()?.readAt,
+      })),
+      { classroomId, nowIso: new Date().toISOString() },
+    )
+    if (writes.length > 0) {
+      const batch = firestore.batch()
+      for (const write of writes) batch.update(collection.doc(write.id), write.update)
+      await batch.commit()
+    }
+    logger.info('[markReportAnswersRead] done', { classroomId, requested: reportIds.length, updated: writes.length })
+    return { updated: writes.length }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[markReportAnswersRead] failed classroom=${classroomId}: ${message}`)
+    throw new HttpsError('internal', `既読を記録できませんでした: ${message.slice(0, 300)}`)
   }
-  logger.info('[markReportAnswersRead] done', { classroomId, requested: reportIds.length, updated: writes.length })
-  return { updated: writes.length }
 })
 
 export const deleteWorkspaceClassroom = onCall({ invoker: 'public' }, async (request) => {

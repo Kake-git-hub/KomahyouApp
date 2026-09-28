@@ -100,13 +100,19 @@ describe('質問・要望への回答: 書き込み経路は Cloud Function だ�
 
   it('サーバー: 送信時に回答待ち文書を作り(失敗しても報告は成功)、回答は開発者のみ、既読は教室メンバー', () => {
     expect(FUNCTIONS_INDEX).toContain("import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, planReportAnswerWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'")
-    expect(FUNCTIONS_INDEX).toContain('if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist })) {')
+    expect(FUNCTIONS_INDEX).toContain('if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, reporterRole: member.role')
     expect(FUNCTIONS_INDEX).toContain('Failed to create pending reportAnswers doc')
     const answer = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const answerDeveloperReport'), FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'))
     expect(answer).toContain('await requireDeveloperMember(request.auth?.uid, workspaceKey)')
-    expect(answer).toContain('batch.set(reportRef, plan.reportUpdate, { merge: true })')
+    // 読み取り→書き込みは 1 トランザクション(競合で改訂が既読を未読に戻さない)。想定外の例外は原因文つきの HttpsError に包む。
+    expect(answer).toContain('await firestore.runTransaction(async (tx) => {')
+    expect(answer).toContain('tx.set(reportRef, plan.reportUpdate, { merge: true })')
+    expect(answer).toContain("throw new HttpsError('internal', `回答を保存できませんでした:")
     const markRead = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'), FUNCTIONS_INDEX.indexOf('export const deleteWorkspaceClassroom'))
     expect(markRead).toContain('await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)')
     expect(markRead).toContain('resolveReportAnswerReadWrites(')
+    expect(markRead).toContain("throw new HttpsError('internal', `既読を記録できませんでした:")
+    // 開発者が本番教室から送った報告は室長の履歴に載せない
+    expect(FUNCTIONS_INDEX).toContain('reporterRole: member.role, isDevelopmentClassroom })')
   })
 })
