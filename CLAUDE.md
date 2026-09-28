@@ -210,6 +210,10 @@ GCP コンソール（プロジェクト `komahyouapp-prod`）で以下を付与
 - ロール **Cloud Scheduler 管理者**（`roles/cloudscheduler.admin`）… スケジュール関数（毎時/日次バックアップ・
   saveAttempts掃除）のジョブ更新に必要。2026-07-04 のデプロイで `cloudscheduler.jobs.update` の 403 が初出。
   **オーナーが付与するまで functions デプロイは赤になる**（付与後に Actions → Deploy Cloud Functions を再実行）。
+- ロール **Firebase Rules 管理者**（`roles/firebaserules.admin`）… Firestore ルールを Actions から反映する
+  `.github/workflows/deploy-firestore-rules.yml`（Actions →「Deploy Firestore rules」）に必要。2026-09-28 の初回実行で
+  `firebaserules.googleapis.com …:test had HTTP Error: 403` を確認（**未付与**）。付与されるまでこのワークフローは赤。
+  付与後に Run workflow を再実行すれば v1.5.565 の `reportAnswers` ルールが反映される。
 - ロール **ログ閲覧者**（`roles/logging.viewer`）… 関数の実行ログをスマホから読む手動ワークフロー
   `.github/workflows/functions-logs.yml`（Actions →「Read Cloud Functions logs」）に必要。2026-09-12 の初回実行で
   `PERMISSION_DENIED: Permission denied for all log views` を確認（**未付与**）。付与されるまで read-logs ジョブは赤。
