@@ -1,0 +1,111 @@
+# 古いリモートブランチの一括削除(手動実行・1 回きりの掃除用)。
+#
+# 背景(2026-09-28 オーナー判断): 進行中テーマ台帳 stale-branches-2026-06。
+#   Claude のクラウド環境は作業ブランチ以外へ push できない(削除も 403)ため、GitHub のサーバー上で消す。
+#   対象は docs/review-2026-09-25-work-in-progress-inventory.md §3 の一覧に固定する(入力で任意のブランチは消せない)。
+#
+# 対象:
+#   DISCARD … main に無い変更を持つが「取り込まずに捨てる」と決めた 3 本。確認なしで消す。
+#             中身は下のログに先頭コミットの SHA を出すので、必要なら `git push origin <SHA>:refs/heads/<名前>` で戻せる。
+#   MERGED  … main に取り込み済みの 45 本。消す直前に `git cherry origin/main` で未取り込みのコミットが
+#             **1 つでもあれば消さずにスキップ**する(その後に誰かが push していても失わない)。
+#   存在しないブランチ(すでに消えたもの)は飛ばす。main・作業中の claude/* セッションブランチは一覧に無いので触らない。
+#
+# 使い方: Actions → 「Delete stale branches」→ Run workflow
+#   dry_run … true(既定)なら何も消さず、消す予定の一覧だけログに出す。確認したら false で実行する。
+name: Delete stale branches
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true なら消さずに一覧だけ表示(まず true で確認 → false で実行)'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: delete-stale-branches
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Delete branches
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          DISCARD=(
+            ci/functions-deploy-409-targeted
+            claude/test-procedure-docs-tm1y8t
+            agents/feature-data-integrity-checks
+          )
+          MERGED=(
+            main-yiic87 feat/group-lesson spec-review-2026-06 feat/report-question feat/parent-portal-qr
+            template-lesson-minutes feat/question-ai-answer feat/question-ai-vertex feature/board-sort-modes
+            chore/withdraw-followups feature/student-drag-move fix/firebase-cost-cleanup feature/backup-granularity
+            feature/whole-day-transfer feat/hide-day-spacing-rule feature/schedule-react-view feat/salary-subtotal-manual
+            fix/withdraw-date-exclusive fix/basic-data-delete-guards feat/student-withdraw-button
+            fix/durable-manual-teacher-edits feat/transfer-source-rest-display feat/withdrawn-student-soft-delete
+            fix/checklist-0914-k11-k12-history fix/withdraw-button-immediate-hide chore/checklist-v1.5.541-rehearsal
+            chore/remove-dead-rollback-download claude/uptime-check-failures-91x63r claude/undigested-makeup-bug-o1oldi
+            feature/monthly-student-count-ledger copilot/fix-timetable-operation-issue chore/checklist-v1.5.540-rest-display
+            fix/teacher-auto-assign-request-refire claude/instructor-screen-layout-mtlkql fix/holiday-record-remerge-and-seat-ops
+            copilot/simplify-automatic-assignment-ui copilot/simplify-ui-for-auto-assign-rule claude/phase0-phase1-continuation-1cqr5m
+            claude/koma-schedule-options-field-0hia1q claude/student-schedule-group-sync-oz74nc feature/managed-roster-entrydate-agnostic
+            feature/auto-assign-rule-ui-simplification claude/koma-hyō-repo-firebase-sync-oijmoa claude/previous-session-display-bug-s4qu50
+            claude/training-assignment-revert-bug-48nfel
+          )
+
+          deleted=0; skipped=0; missing=0
+          remove() {
+            local b="$1"
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "  (dry-run) 消す予定: $b"
+            else
+              git push origin --delete "$b"
+              echo "  削除: $b"
+            fi
+            deleted=$((deleted + 1))
+          }
+
+          echo "== 破棄と決めた 3 本"
+          for b in "${DISCARD[@]}"; do
+            if ! git rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null; then
+              echo "  なし(削除済み): $b"; missing=$((missing + 1)); continue
+            fi
+            echo "  $b の先頭コミット: $(git rev-parse "origin/$b")(戻すときに使う)"
+            remove "$b"
+          done
+
+          echo "== main に取り込み済みの一覧"
+          for b in "${MERGED[@]}"; do
+            if ! git rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null; then
+              echo "  なし(削除済み): $b"; missing=$((missing + 1)); continue
+            fi
+            if git cherry origin/main "origin/$b" | grep -q '^+'; then
+              echo "  ⚠️ スキップ(main に無いコミットがある): $b"; skipped=$((skipped + 1)); continue
+            fi
+            remove "$b"
+          done
+
+          echo
+          echo "結果: 削除${DRY_RUN:+(dry-run=$DRY_RUN)} ${deleted} 本 / スキップ ${skipped} 本 / すでに無い ${missing} 本"
+          {
+            echo "### Delete stale branches (dry_run=$DRY_RUN)"
+            echo "- 削除: ${deleted} 本"
+            echo "- スキップ(main に無いコミットあり): ${skipped} 本"
+            echo "- すでに無い: ${missing} 本"
+          } >> "$GITHUB_STEP_SUMMARY"

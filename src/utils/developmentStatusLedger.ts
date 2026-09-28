@@ -163,12 +163,12 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
   {
     id: 'stale-branches-2026-06',
-    title: '6 月の未マージブランチ 3 本(古い・クローズ候補)',
+    title: '古いリモートブランチの削除(3 本は破棄と決定済み・削除操作だけ残り)',
     stage: 'awaiting-owner',
-    summary: 'ci/functions-deploy-409-targeted(PR #31・main では pipefail で別対応済み)、claude/test-procedure-docs-tm1y8t(手順書 Word/Excel)、agents/feature-data-integrity-checks(2026-06-03・盤面の大改修で衝突確実)。他の 45 本はマージ済みで削除してよい。',
-    nextAction: '3 本を捨てるか取り込むかをオーナーが決める。マージ済み 45 本はリモートから削除する。',
-    references: ['PR #31', 'docs/review-2026-09-25-work-in-progress-inventory.md §3'],
-    updatedOn: '2026-09-25',
+    summary: '2026-09-28 オーナー判断で 6 月の 3 本(ci/functions-deploy-409-targeted・claude/test-procedure-docs-tm1y8t・agents/feature-data-integrity-checks)は取り込まず破棄(いずれも main で別対応済み／役目終了)。PR #31 はクローズ済み。Claude のクラウド環境は作業ブランチ以外へ push できないため、リモートからの削除だけ残っている。',
+    nextAction: 'オーナーが Actions →「Delete stale branches」を Run workflow(まず dry_run=true で一覧確認 → false で実行)して 3 本とマージ済み 45 本を削除する。済んだらこの行とワークフローを消す。',
+    references: ['PR #31', '.github/workflows/delete-stale-branches.yml', 'docs/review-2026-09-25-work-in-progress-inventory.md §3'],
+    updatedOn: '2026-09-28',
   },
 
   // ── オーナー判断待ち(Issue) ─────────────────────────────────────────────────

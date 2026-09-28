@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.569 (2026-09-28)
+
+- chore(ci): 古いリモートブランチを GitHub 上で一括削除する手動ワークフロー「Delete stale branches」を追加。対象は inventory §3 の 48 本に固定。既定は dry_run で、何も消さずに一覧だけ出す。マージ済み扱いの 45 本は、消す直前に `git cherry` で main に無いコミットが無いかを確かめ、あれば消さずに飛ばす。破棄する 3 本は先頭 SHA をログに残してから消す(クラウド環境からは削除 push が 403 のため)(.github/workflows/delete-stale-branches.yml / developmentStatusLedger.ts)
+- chore: 進行中テーマ台帳の「6 月の未マージブランチ 3 本」を更新。オーナー判断(2026-09-28)で 3 本とも取り込まずに捨てると決めた。3 本とも main で別に対応済みか、役目を終えている(`git cherry` で確認)。PR #31 はクローズした。リモートからの削除はクラウド環境から push できないため、オーナー操作として残す(`developmentStatusLedger.ts`)
+
 ## v1.5.566 (2026-09-28)
 
 - chore(ci): Firestore ルールを GitHub Actions から反映する手動ワークフロー「Deploy Firestore rules」を追加(オーナー指示 2026-09-28「firebase deploy --only firestore:rules はどこで実行する?」→ PC 不要に)。main への push で `firebase/firestore.rules` が変わったときも自動反映。既存 secret `RE_FIREBASE_SERVICE_ACCOUNT` を使う(サービスアカウントに Firebase Rules 権限が無ければ 403 で赤になるので GCP で付与して再実行) (.github/workflows/deploy-firestore-rules.yml / CLAUDE.md / docs/spec-developer-report.md)
