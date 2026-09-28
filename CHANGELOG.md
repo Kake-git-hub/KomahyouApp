@@ -14,6 +14,12 @@
 
 ## 未リリース
 
+## v1.5.562 (2026-09-28)
+
+- fix: **講師日程共有(配布用盤面)で、別の生徒の休み記録が残る席に置いた生徒が「休み」表示になる**不具合を修正(緑が丘 室長報告 2026-09-28: 9/28(月) 4限 体)小5算 の体験生が休み表示。実データ=同じ席の statusSlots[0] に別生徒(中2 数)の absent 記録が残ったまま studentSlots[0] に体験生を追加)。真因=配布用盤面は名前だけ `student ?? status` で生徒を優先し、「(休」ラベル・振替先日付・灰色スタイルは**記録があれば無条件**に付けていた(配置と記録は別の生徒でも同じ index に同居しうる)。盤面(BoardGrid renderStudentCell)は生徒がいる席では記録を表示に使わないので、配布用盤面だけ休み扱いに見えた(INV-04 準拠・共有ビューの内容乖離 3 件目)。席 1 つ分の規則を純関数 `resolveBoardShareSeatView`(生徒がいれば記録を使わない／いなければ記録を出す)に切り出し、ラベル・日付・スタイルの 3 か所すべてがそれを通る形にした。記録・在庫会計は無変更(表示のみ)。回帰テスト 7 件(修正なしで 4 件落ちることを確認・生徒がいない席の「(休」＋振替先日付は従来どおり) (BoardShareScreen.tsx / boardShareSeatView.test.ts)
+- docs: INV-04 の違反履歴へ上の件(共有ビューの内容乖離 3 件目)を転記 (docs/spec-invariants.md)
+- chore(checklist): 確認リストを第28版へ。上の修正の確認 t-3(休み記録が残る席に体験生を追加し、配布用盤面で「(休」が付かない)を追加。**版は v1.5.556 据え置き**(項目を足しただけ) (verificationChecklist.ts / verificationChecklist.test.ts)
+
 ## v1.5.561 (2026-09-26)
 
 - chore(tools): 本番を**読むだけ**のアクセストークンを作る `tools/prod-readonly-token.mjs` を追加(オーナー指示 2026-09-26「実際のデータを読む環境に」)。クラウド環境の環境変数 `KOMAHYOU_READONLY_SA_JSON_B64`(読み取り専用サービスアカウント claude-readonly の JSON 鍵を base64 にした 1 行)から JWT を署名して 1 時間有効のトークンを得る。要求スコープは datastore と devstorage.read_only だけ(書き込みはアカウントのロールで不可)。貼り間違い(全角括弧・空・JSON でない)は理由つきで止める。既存の `lesson-history-diagnose.mjs` などの `FIRESTORE_ACCESS_TOKEN` にそのまま渡せる。アプリの動作変更なし。テスト 4 件 (tools/prod-readonly-token.mjs / .test.mjs / CLAUDE.md)
