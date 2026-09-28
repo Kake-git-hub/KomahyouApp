@@ -14,6 +14,11 @@
 
 ## 未リリース
 
+## v1.5.569 (2026-09-28)
+
+- feat: 開発者画面「質問への回答」に「解決済みにする／未解決に戻す」ボタンと「解決済み」タブを追加(確認リスト v1.5.564 その他欄・受付 20260928-103642968-d4c32a94「今日までの質問はすべて LINE で対応済みなので、解決済みボタンで対応完了がわかるように。解決済みは室長側には非表示でOK」)。回答とは独立した印で、新 callable `resolveDeveloperReport`(開発者のみ)が developerReports の resolvedAt/resolvedBy だけを書く。室長側の reportAnswers には写さない(室長の画面・未読バッジは変わらない)。解決済みは未回答/回答済みの一覧から外れる。**Cloud Functions のデプロイが必要**(functions/** の変更で main マージ時に自動発火) (functions/src/reportAnswers.ts / functions/src/index.ts / src/utils/developerReportAnswers.ts / src/utils/developerDashboard.ts / src/integrations/firebase/reportAnswersStore.ts / DeveloperReportAnswerScreen.tsx / docs/spec-developer-report.md §G-3)
+- chore: 確認リストを第32版(v1.5.569)へ。第31版の結果で OK の t-2/t-3/d-1〜d-4/a-1〜a-3 を外し、解決済みの確認 a-4 を追加(q-1〜q-6 は結果待ちのまま)。進行中テーマ台帳から開発ダッシュボードの行を消し、回答フロー・Issue #69/#70 の行を更新 (src/utils/verificationChecklist.ts / src/utils/developmentStatusLedger.ts)
+
 ## v1.5.566 (2026-09-28)
 
 - chore(ci): Firestore ルールを GitHub Actions から反映する手動ワークフロー「Deploy Firestore rules」を追加(オーナー指示 2026-09-28「firebase deploy --only firestore:rules はどこで実行する?」→ PC 不要に)。main への push で `firebase/firestore.rules` が変わったときも自動反映。既存 secret `RE_FIREBASE_SERVICE_ACCOUNT` を使う(サービスアカウントに Firebase Rules 権限が無ければ 403 で赤になるので GCP で付与して再実行) (.github/workflows/deploy-firestore-rules.yml / CLAUDE.md / docs/spec-developer-report.md)

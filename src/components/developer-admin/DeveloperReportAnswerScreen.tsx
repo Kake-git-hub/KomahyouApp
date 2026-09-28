@@ -4,20 +4,26 @@
 // - 読み込みは developerReportsStore.listRecentDeveloperReports(読み取りのみ)。書き込みは callable 1 本だけ(Firestore 直書きなし)。
 // - 送信前に「公開してよい回答」の基準(§G-4・7 項目)を確認するチェックを必ず入れる(checkReportAnswerSubmit)。
 // - 開発者画面自体が role === 'developer' に限定されているので室長には出ない。
+// - 「解決済みにする」(2026-09-28・オーナー指示): 回答とは独立した開発者の対応完了の印(LINE で返した質問を未回答から消す)。
+//   callable resolveDeveloperReport が developerReports だけに書く。室長の画面には出ない(reportAnswers に写さない)。
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { listRecentDeveloperReports } from '../../integrations/firebase/developerReportsStore'
-import { answerDeveloperReportViaFunction, type AnswerDeveloperReportResult } from '../../integrations/firebase/reportAnswersStore'
+import { answerDeveloperReportViaFunction, resolveDeveloperReportViaFunction, type AnswerDeveloperReportResult, type ResolveDeveloperReportResult } from '../../integrations/firebase/reportAnswersStore'
 import { DEVELOPER_DASHBOARD_REPORT_LIMIT, DEVELOPER_DASHBOARD_DEFAULT_SINCE_DAYS, resolveDeveloperDashboardSinceIso, type DeveloperReportRecord } from '../../utils/developerDashboard'
 import {
   DEVELOPER_REPORT_ANSWER_LIMIT,
+  REPORT_ANSWER_FILTERS,
   REPORT_ANSWER_FILTER_LABELS,
   REPORT_ANSWER_GUIDELINES,
   buildReportAnswerSentMessage,
+  buildReportResolveMessage,
   checkReportAnswerSubmit,
   filterReportsForAnswering,
+  formatReportAnswerRowStatus,
   isReportAnswered,
+  isReportResolved,
   type ReportAnswerFilter,
 } from '../../utils/developerReportAnswers'
 import { REPORT_ANSWER_CATEGORY_LABELS, formatReportAnswerDateLabel } from '../../utils/reportAnswers'
@@ -30,15 +36,15 @@ export type DeveloperReportAnswerScreenProps = {
   loadReports?: (options: { sinceIso: string; limit: number }) => Promise<DeveloperReportRecord[]>
   /** テスト・差し替え用。既定は reportAnswersStore.answerDeveloperReportViaFunction(callable)。 */
   submitAnswer?: (input: { reportId: string; answer: string }) => Promise<AnswerDeveloperReportResult>
+  /** テスト・差し替え用。既定は reportAnswersStore.resolveDeveloperReportViaFunction(callable)。 */
+  submitResolve?: (input: { reportId: string; resolved: boolean }) => Promise<ResolveDeveloperReportResult>
 }
-
-const FILTERS: readonly ReportAnswerFilter[] = ['unanswered', 'answered', 'all']
 
 function errorMessage(error: unknown, fallback: string) {
   return error instanceof Error && error.message ? error.message : fallback
 }
 
-export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, loadReports = listRecentDeveloperReports, submitAnswer = answerDeveloperReportViaFunction }: DeveloperReportAnswerScreenProps) {
+export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, loadReports = listRecentDeveloperReports, submitAnswer = answerDeveloperReportViaFunction, submitResolve = resolveDeveloperReportViaFunction }: DeveloperReportAnswerScreenProps) {
   const [requestSerial, setRequestSerial] = useState(0)
   const [reportsResult, setReportsResult] = useState<{ serial: number; reports: DeveloperReportRecord[]; error: string } | null>(null)
   const [filter, setFilter] = useState<ReportAnswerFilter>('unanswered')
@@ -49,6 +55,7 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
   const [sending, setSending] = useState(false)
   const [sentMessage, setSentMessage] = useState('')
   const [submitError, setSubmitError] = useState('')
+  const [resolving, setResolving] = useState(false)
 
   const reload = useCallback(() => setRequestSerial((value) => value + 1), [])
 
@@ -79,8 +86,30 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
 
   const submitCheck = checkReportAnswerSubmit({ answer: draft, guidelinesConfirmed, currentAnswer: selected?.answerFinal ?? null })
 
+  const handleToggleResolved = async () => {
+    if (!selected || sending || resolving) return
+    const nextResolved = !isReportResolved(selected)
+    setResolving(true)
+    setSubmitError('')
+    setSentMessage('')
+    try {
+      const result = await submitResolve({ reportId: selected.reportId, resolved: nextResolved })
+      // 再読込なしで一覧と選択中の報告に反映する。選んだ報告は一覧から消えても右の欄には残る(selected は全件から引く)。
+      const resolvedAt = nextResolved ? (result.resolvedAt || new Date().toISOString()) : null
+      setReportsResult((current) => current ? {
+        ...current,
+        reports: current.reports.map((record) => record.reportId === selected.reportId ? { ...record, resolvedAt } : record),
+      } : current)
+      setSentMessage(buildReportResolveMessage(nextResolved))
+    } catch (error) {
+      setSubmitError(errorMessage(error, nextResolved ? '解決済みにできませんでした。' : '未解決に戻せませんでした。'))
+    } finally {
+      setResolving(false)
+    }
+  }
+
   const handleSubmit = async () => {
-    if (!selected || !submitCheck.ok || sending) return
+    if (!selected || !submitCheck.ok || sending || resolving) return
     setSending(true)
     setSubmitError('')
     setSentMessage('')
@@ -108,7 +137,7 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
         <div className="basic-data-header developer-header">
           <div>
             <h2>質問への回答</h2>
-            <p className="page-summary">「質問・要望」で届いた報告に回答を書きます。送った回答は、その教室の「質問・要望」ボタンに未読件数として表示され、同じ画面の「これまでの質問と回答」で読めます。テスト送信(#テスト)と確認リストは載せません。</p>
+            <p className="page-summary">「質問・要望」で届いた報告に回答を書きます。送った回答は、その教室の「質問・要望」ボタンに未読件数として表示され、同じ画面の「これまでの質問と回答」で読めます。LINE などで対応を終えた報告は「解決済みにする」で未回答から外せます(解決済みは室長の画面には出ません)。テスト送信(#テスト)と確認リストは載せません。</p>
           </div>
         </div>
         <div className="developer-header-actions">
@@ -122,7 +151,7 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
               </select>
             </label>
             <div className="report-answer-filters" role="tablist">
-              {FILTERS.map((value) => (
+              {REPORT_ANSWER_FILTERS.map((value) => (
                 <button key={value} type="button" role="tab" aria-selected={filter === value} className={`secondary-button slim${filter === value ? ' active' : ''}`} onClick={() => setFilter(value)} data-testid={`report-answer-filter-${value}`}>
                   {REPORT_ANSWER_FILTER_LABELS[value]}
                 </button>
@@ -146,19 +175,22 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
             </div>
             {reportsCurrent && !reportsCurrent.error && visibleReports.length === 0 ? <p className="report-answer-empty" data-testid="report-answer-empty">該当する報告はありません。</p> : null}
             <ul className="report-answer-list" data-testid="report-answer-list">
-              {visibleReports.map((record) => (
+              {visibleReports.map((record) => {
+                const rowStatus = formatReportAnswerRowStatus(record)
+                return (
                 <li key={record.reportId}>
-                  <button type="button" className={`report-answer-row${record.reportId === selectedReportId ? ' is-selected' : ''}`} onClick={() => selectReport(record)} data-testid="report-answer-row" data-answered={isReportAnswered(record) ? 'true' : 'false'}>
+                  <button type="button" className={`report-answer-row${record.reportId === selectedReportId ? ' is-selected' : ''}`} onClick={() => selectReport(record)} data-testid="report-answer-row" data-answered={isReportAnswered(record) ? 'true' : 'false'} data-resolved={isReportResolved(record) ? 'true' : 'false'}>
                     <span className="report-answer-row-meta">
                       <span className={`developer-report-history-chip is-category-${record.category}`}>{REPORT_ANSWER_CATEGORY_LABELS[record.category]}</span>
                       <span>{classroomNameOf(record.classroomId, record.classroomName)}</span>
                       <span>{formatReportAnswerDateLabel(record.recordedAt || record.reportedAt)}</span>
-                      <span className={`developer-report-history-status is-${isReportAnswered(record) ? 'read' : 'pending'}`}>{isReportAnswered(record) ? `回答済み(${record.answerRevision} 版)` : '未回答'}</span>
+                      <span className={`developer-report-history-status is-${rowStatus.tone}`}>{rowStatus.label}</span>
                     </span>
                     <span className="report-answer-row-note">{record.note}</span>
                   </button>
                 </li>
-              ))}
+                )
+              })}
             </ul>
           </section>
 
@@ -170,6 +202,15 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
                   <p>送信 {formatReportAnswerDateLabel(selected.reportedAt || selected.recordedAt)} / アプリ版 {selected.appVersion || '不明'} / 送信元 {selected.source || '不明'}{selected.issueNumber ? ` / Issue #${selected.issueNumber}` : ''}</p>
                 </div>
                 <p className="report-answer-question" data-testid="report-answer-question">{selected.note}</p>
+                <div className="report-answer-resolve" data-testid="report-answer-resolve">
+                  <span className={`developer-report-history-status is-${isReportResolved(selected) ? 'resolved' : 'pending'}`} data-testid="report-answer-resolve-state">
+                    {isReportResolved(selected) ? `解決済み(${formatReportAnswerDateLabel(selected.resolvedAt)})` : '未解決'}
+                  </span>
+                  <button type="button" className="secondary-button slim" onClick={() => { void handleToggleResolved() }} disabled={sending || resolving} data-testid="report-answer-resolve-button">
+                    {resolving ? '保存中…' : isReportResolved(selected) ? '未解決に戻す' : '解決済みにする'}
+                  </button>
+                  <span className="report-answer-resolve-note">室長の画面には表示されません(回答しなくても押せます)</span>
+                </div>
                 {isReportAnswered(selected) ? (
                   <p className="toolbar-status" data-testid="report-answer-current">現在の回答({selected.answerRevision} 版・{formatReportAnswerDateLabel(selected.answeredAt)})を下の欄に読み込んでいます。書き換えて送ると更新になります(既読の室長には未読として出ません)。</p>
                 ) : null}
@@ -198,7 +239,7 @@ export function DeveloperReportAnswerScreen({ authMode, classrooms, onBack, load
                 {submitError ? <p className="developer-report-error" role="alert" data-testid="report-answer-error">{submitError}</p> : null}
                 {sentMessage ? <p className="report-answer-sent" role="status" data-testid="report-answer-sent">{sentMessage}</p> : null}
                 <div className="basic-data-row-actions">
-                  <button type="button" className="primary-button" onClick={() => { void handleSubmit() }} disabled={!submitCheck.ok || sending} data-testid="report-answer-submit">
+                  <button type="button" className="primary-button" onClick={() => { void handleSubmit() }} disabled={!submitCheck.ok || sending || resolving} data-testid="report-answer-submit">
                     {sending ? '送信中…' : isReportAnswered(selected) ? '回答を更新して送る' : '回答を送る'}
                   </button>
                 </div>

@@ -3,10 +3,15 @@ import { describe, expect, it } from 'vitest'
 import type { DeveloperReportRecord } from './developerDashboard'
 import {
   buildReportAnswerSentMessage,
+  buildReportResolveMessage,
   checkReportAnswerSubmit,
   DEVELOPER_REPORT_ANSWER_LIMIT,
   filterReportsForAnswering,
+  formatReportAnswerRowStatus,
   isReportAnswered,
+  isReportResolved,
+  REPORT_ANSWER_FILTER_LABELS,
+  REPORT_ANSWER_FILTERS,
   REPORT_ANSWER_GUIDELINES,
   REPORT_ANSWER_SUBMIT_ERRORS,
   selectAnswerableReports,
@@ -36,6 +41,7 @@ const record = (overrides: Partial<DeveloperReportRecord> = {}): DeveloperReport
   answerFinal: '',
   answeredAt: null,
   answerRevision: 0,
+  resolvedAt: null,
   ...overrides,
 })
 
@@ -57,6 +63,43 @@ describe('developerReportAnswers: 一覧', () => {
     expect(filterReportsForAnswering(records, { filter: 'all', classroomId: 'C1' }).map((r) => r.reportId)).toEqual(['new', 'answered', 'old'])
     expect(isReportAnswered(record({ answerFinal: 'a' }))).toBe(false)
     expect(isReportAnswered(record({ answerFinal: 'a', answeredAt: 't' }))).toBe(true)
+  })
+})
+
+describe('developerReportAnswers: 解決済み(オーナー指示 2026-09-28「LINE で対応済みの質問を対応完了とわかるように」)', () => {
+  const records = [
+    record({ reportId: 'open', recordedAt: '2026-09-27T00:00:00.000Z' }),
+    record({ reportId: 'answered', recordedAt: '2026-09-26T00:00:00.000Z', answerFinal: 'a', answeredAt: '2026-09-26T01:00:00.000Z', answerRevision: 1 }),
+    // LINE で返したので回答は無いが解決済み
+    record({ reportId: 'line', recordedAt: '2026-09-25T00:00:00.000Z', resolvedAt: '2026-09-28T11:00:00.000Z' }),
+    record({ reportId: 'answered-resolved', recordedAt: '2026-09-24T00:00:00.000Z', answerFinal: 'a', answeredAt: '2026-09-24T01:00:00.000Z', answerRevision: 2, resolvedAt: '2026-09-28T11:00:00.000Z' }),
+  ]
+
+  it('解決済みは「未回答」「回答済み」に出さず「解決済み」にまとまる。「すべて」は全部', () => {
+    expect(filterReportsForAnswering(records, { filter: 'unanswered' }).map((r) => r.reportId)).toEqual(['open'])
+    expect(filterReportsForAnswering(records, { filter: 'answered' }).map((r) => r.reportId)).toEqual(['answered'])
+    expect(filterReportsForAnswering(records, { filter: 'resolved' }).map((r) => r.reportId)).toEqual(['line', 'answered-resolved'])
+    expect(filterReportsForAnswering(records, { filter: 'all' }).map((r) => r.reportId)).toEqual(['open', 'answered', 'line', 'answered-resolved'])
+  })
+
+  it('絞り込みのタブは 未回答 → 回答済み → 解決済み → すべて の順で、全部にラベルがある', () => {
+    expect(REPORT_ANSWER_FILTERS).toEqual(['unanswered', 'answered', 'resolved', 'all'])
+    for (const filter of REPORT_ANSWER_FILTERS) expect(REPORT_ANSWER_FILTER_LABELS[filter].trim()).not.toBe('')
+    expect(REPORT_ANSWER_FILTER_LABELS.resolved).toBe('解決済み')
+  })
+
+  it('状態表示は解決済みを最優先。回答の有無は解決済みの中で補足する', () => {
+    expect(isReportResolved(record({ resolvedAt: null }))).toBe(false)
+    expect(isReportResolved(record({ resolvedAt: '2026-09-28T11:00:00.000Z' }))).toBe(true)
+    expect(formatReportAnswerRowStatus(records[0])).toEqual({ label: '未回答', tone: 'pending' })
+    expect(formatReportAnswerRowStatus(records[1])).toEqual({ label: '回答済み(1 版)', tone: 'read' })
+    expect(formatReportAnswerRowStatus(records[2])).toEqual({ label: '解決済み', tone: 'resolved' })
+    expect(formatReportAnswerRowStatus(records[3])).toEqual({ label: '解決済み(回答あり)', tone: 'resolved' })
+  })
+
+  it('解決済みにしたときの文言は「室長の画面には表示されません」を必ず含む', () => {
+    expect(buildReportResolveMessage(true)).toContain('室長の画面には表示されません')
+    expect(buildReportResolveMessage(false)).toBe('未解決に戻しました。')
   })
 })
 

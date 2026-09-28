@@ -218,3 +218,38 @@ export function resolveReportAnswerReadWrites(
   }
   return writes
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// 「解決済み」(オーナー指示 2026-09-28・確認リスト v1.5.564 その他欄「LINE で対応済みの質問を対応完了とわかるように。
+// 解決済みは室長側には非表示でOK」)。開発者の対応管理だけに使う印で、回答(answerFinal)とは独立。
+// ★developerReports/{reportId} にだけ書く(開発者のみ read)。室長の端末が読む reportAnswers には**写さない**
+//   (室長には見せない・回答待ち/未読バッジの判定も変えない)。回答していない報告も解決済みにできる(LINE で返した分)。
+//   間違えて押したときのために「未解決に戻す」も同じ callable で受ける(resolvedAt / resolvedBy を null に戻す)。
+// ───────────────────────────────────────────────────────────────────────────
+
+export type ResolveDeveloperReportRequest = { workspaceKey: string; reportId: string; resolved: boolean }
+export type NormalizedResolveRequest = { ok: true; value: ResolveDeveloperReportRequest } | { ok: false; reason: string }
+
+/** callable `resolveDeveloperReport` の入力検証。resolved は真偽値だけ受ける(文字列 "false" を真と誤読しない)。 */
+export function normalizeResolveDeveloperReportRequest(raw: unknown): NormalizedResolveRequest {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, reason: '入力の形式が正しくありません。' }
+  const data = raw as Record<string, unknown>
+  const workspaceKey = typeof data.workspaceKey === 'string' ? data.workspaceKey.trim() : ''
+  const reportId = typeof data.reportId === 'string' ? data.reportId.trim() : ''
+  if (!workspaceKey) return { ok: false, reason: 'workspaceKey を指定してください。' }
+  if (!reportId || !/^[A-Za-z0-9_-]{1,80}$/u.test(reportId)) return { ok: false, reason: 'reportId の形式が正しくありません。' }
+  if (typeof data.resolved !== 'boolean') return { ok: false, reason: 'resolved は true / false で指定してください。' }
+  return { ok: true, value: { workspaceKey, reportId, resolved: data.resolved } }
+}
+
+export type ReportResolveUpdate = { resolvedAt: string | null; resolvedBy: string | null }
+
+/**
+ * developerReports/{reportId} へ merge する内容。解決済みにする＝時刻と開発者、未解決に戻す＝両方 null。
+ * 回答フィールド(answerFinal / answeredAt / answerRevision)にも、室長側の reportAnswers にも触らない。
+ */
+export function planReportResolveWrite(input: { resolved: boolean; resolvedBy: string; nowIso: string }): ReportResolveUpdate {
+  return input.resolved
+    ? { resolvedAt: input.nowIso, resolvedBy: input.resolvedBy }
+    : { resolvedAt: null, resolvedBy: null }
+}

@@ -77,17 +77,18 @@ describe('質問・要望への回答: 書き込み経路は Cloud Function だ�
     expect(STORE_TS).not.toContain('where(')
     expect(STORE_TS).toContain("'markReportAnswersRead'")
     expect(STORE_TS).toContain("'answerDeveloperReport'")
+    expect(STORE_TS).toContain("'resolveDeveloperReport'")
   })
 
   it('開発者画面「質問への回答」は読み取り store と callable だけを使い、Firestore へ直接書かない', () => {
     expect(ADMIN_SCREEN_TSX).toContain("import { DeveloperReportAnswerScreen } from './DeveloperReportAnswerScreen'")
     expect(ADMIN_SCREEN_TSX).toContain('data-testid="developer-report-answers-toggle-button"')
     expect(ANSWER_SCREEN_TSX).toContain("import { listRecentDeveloperReports } from '../../integrations/firebase/developerReportsStore'")
-    expect(ANSWER_SCREEN_TSX).toContain("import { answerDeveloperReportViaFunction, type AnswerDeveloperReportResult } from '../../integrations/firebase/reportAnswersStore'")
+    expect(ANSWER_SCREEN_TSX).toContain("import { answerDeveloperReportViaFunction, resolveDeveloperReportViaFunction, type AnswerDeveloperReportResult, type ResolveDeveloperReportResult } from '../../integrations/firebase/reportAnswersStore'")
     expect(ANSWER_SCREEN_TSX).not.toContain("from 'firebase/firestore'")
     // 送る前に基準(§G-4)のチェックを通す
     expect(ANSWER_SCREEN_TSX).toContain('checkReportAnswerSubmit({ answer: draft, guidelinesConfirmed, currentAnswer: selected?.answerFinal ?? null })')
-    expect(ANSWER_SCREEN_TSX).toContain('disabled={!submitCheck.ok || sending}')
+    expect(ANSWER_SCREEN_TSX).toContain('disabled={!submitCheck.ok || sending || resolving}')
   })
 
   it('Firestore ルール: reportAnswers は自教室メンバーのみ read・write は不可', () => {
@@ -99,7 +100,7 @@ describe('質問・要望への回答: 書き込み経路は Cloud Function だ�
   })
 
   it('サーバー: 送信時に回答待ち文書を作り(失敗しても報告は成功)、回答は開発者のみ、既読は教室メンバー', () => {
-    expect(FUNCTIONS_INDEX).toContain("import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, planReportAnswerWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'")
+    expect(FUNCTIONS_INDEX).toContain("import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'")
     expect(FUNCTIONS_INDEX).toContain('if (shouldCreateReportAnswerDoc({ isTest: report.isTest, isVerificationChecklist, reporterRole: member.role')
     expect(FUNCTIONS_INDEX).toContain('Failed to create pending reportAnswers doc')
     const answer = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const answerDeveloperReport'), FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'))
@@ -108,10 +109,17 @@ describe('質問・要望への回答: 書き込み経路は Cloud Function だ�
     expect(answer).toContain('await firestore.runTransaction(async (tx) => {')
     expect(answer).toContain('tx.set(reportRef, plan.reportUpdate, { merge: true })')
     expect(answer).toContain("throw new HttpsError('internal', `回答を保存できませんでした:")
-    const markRead = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'), FUNCTIONS_INDEX.indexOf('export const deleteWorkspaceClassroom'))
+    const markRead = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const markReportAnswersRead'), FUNCTIONS_INDEX.indexOf('export const resolveDeveloperReport'))
     expect(markRead).toContain('await requireClassroomAccessMember(request.auth?.uid, workspaceKey, classroomId)')
     expect(markRead).toContain('resolveReportAnswerReadWrites(')
     expect(markRead).toContain("throw new HttpsError('internal', `既読を記録できませんでした:")
+    // 解決済み(2026-09-28): 開発者のみ・developerReports だけに書き、室長側の reportAnswers には写さない(室長には見せない)。
+    const resolve = FUNCTIONS_INDEX.slice(FUNCTIONS_INDEX.indexOf('export const resolveDeveloperReport'), FUNCTIONS_INDEX.indexOf('export const deleteWorkspaceClassroom'))
+    expect(resolve).toContain('await requireDeveloperMember(request.auth?.uid, workspaceKey)')
+    expect(resolve).toContain('await reportRef.set(update, { merge: true })')
+    expect(resolve).not.toContain('REPORT_ANSWERS_COLLECTION')
+    expect(resolve).not.toContain("collection('classroomSnapshots')")
+    expect(resolve).toContain("throw new HttpsError('internal', `解決済みの印を保存できませんでした:")
     // 開発者が本番教室から送った報告は室長の履歴に載せない
     expect(FUNCTIONS_INDEX).toContain('reporterRole: member.role, isDevelopmentClassroom })')
   })

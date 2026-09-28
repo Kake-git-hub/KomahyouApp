@@ -44,6 +44,8 @@ export type DeveloperReportRecord = {
   answerFinal: string
   answeredAt: string | null
   answerRevision: number
+  /** 開発者の「解決済み」の印(2026-09-28)。null = 未解決。developerReports だけに持ち、室長側には出さない。 */
+  resolvedAt: string | null
 }
 
 function readString(value: unknown, fallback = ''): string {
@@ -99,6 +101,7 @@ export function normalizeDeveloperReportRecord(raw: Record<string, unknown> | nu
     answerFinal: readString(data.answerFinal),
     answeredAt: readNullableString(data.answeredAt),
     answerRevision: typeof data.answerRevision === 'number' && Number.isFinite(data.answerRevision) && data.answerRevision > 0 ? Math.trunc(data.answerRevision) : 0,
+    resolvedAt: readNullableString(data.resolvedAt),
   }
 }
 

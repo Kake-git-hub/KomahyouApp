@@ -266,6 +266,14 @@
   再送は改訂（revision +1）で、室長側の既読を未読へ戻さない（`functions/src/reportAnswers.ts planReportAnswerWrite` がテストで固定）。
 - 送信可否は純関数 `checkReportAnswerSubmit`（空・4000 字超・基準未確認・同じ本文の再送は止める）。
 
+**解決済み（v1.5.569・2026-09-28・オーナー指示「回答だけでなく解決済みボタンも設けて対応完了したのがわかるように。解決済みは室長側には非表示でOK」）**:
+- 回答とは**独立した開発者の対応完了の印**。LINE など画面の外で対応を終えた報告を、回答を書かずに「未回答」から外すために使う。
+- 1 件表示に「**解決済みにする**」／「**未解決に戻す**」（押し間違いの戻し用）。§G-4 の基準チェックは不要（利用者へ何も出さないため）。
+- 記録は callable **`resolveDeveloperReport`**（`requireDeveloperMember`）が `developerReports/{reportId}` に `resolvedAt` / `resolvedBy` を merge するだけ
+  （戻すと両方 null）。回答フィールド・室長側の `reportAnswers` には**触らない** ＝ **室長の画面には出ない**（履歴は回答が無ければ「回答待ち」のまま・未読バッジも変わらない）。
+- 一覧の絞り込みは「未回答／回答済み／**解決済み**／すべて」。解決済みは未回答・回答済みに出さない。状態表示は解決済みを最優先（回答があれば「解決済み(回答あり)」）。
+  純関数 `filterReportsForAnswering` / `formatReportAnswerRowStatus`（`src/utils/developerReportAnswers.ts`）・`planReportResolveWrite`（`functions/src/reportAnswers.ts`）でテスト固定。
+
 ### G-4. 「公開してよい回答」の基準（叩き台・オーナー確定待ち＝仮置き ②）
 
 利用者へ返す**回答本文の内容基準**。**AI へ渡す入力の制限ではない**（入力は §H-1 のとおり無制限）。

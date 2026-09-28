@@ -1,7 +1,7 @@
 // 「質問・要望」への回答(docs/spec-developer-report.md §G-3 / §G-5・2026-09-28)のクライアント側 Firebase 経路。
 // - 室長側: 自教室の `classroomSnapshots/{classroomId}/reportAnswers` を購読し(read のみ)、既読は callable
 //   `markReportAnswersRead` で付ける(write は Cloud Function のみ・localStorage に既読を持たない)。
-// - 開発者側: 回答は callable `answerDeveloperReport`(requireDeveloperMember)だけが書く。
+// - 開発者側: 回答は callable `answerDeveloperReport`、解決済みの印は callable `resolveDeveloperReport`(どちらも requireDeveloperMember)だけが書く。
 // ここに Firestore 直書き(set / update 系の関数)を足さない(parentPortal.ts と同じ作法・INV-08)。
 import { collection, limit, onSnapshot, orderBy, query } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
@@ -96,5 +96,25 @@ export async function answerDeveloperReportViaFunction(input: { reportId: string
     answeredAt: typeof data.answeredAt === 'string' ? data.answeredAt : '',
     answerRevision: typeof data.answerRevision === 'number' ? data.answerRevision : 0,
     isRevision: data.isRevision === true,
+  }
+}
+
+export type ResolveDeveloperReportResult = { reportId: string; resolved: boolean; resolvedAt: string | null }
+
+/**
+ * 開発者が報告を「解決済み」にする／未解決に戻す(callable `resolveDeveloperReport`・requireDeveloperMember・2026-09-28)。
+ * developerReports だけに書き、室長側の reportAnswers には写さない(室長には見せない)。
+ */
+export async function resolveDeveloperReportViaFunction(input: { reportId: string; resolved: boolean }): Promise<ResolveDeveloperReportResult> {
+  await ensureFirebaseAuthenticatedUser()
+  const functions = requireFunctions()
+  const config = getFirebaseBackendConfig()
+  const callable = httpsCallable<{ workspaceKey: string; reportId: string; resolved: boolean }, unknown>(functions, 'resolveDeveloperReport', { timeout: REPORT_ANSWERS_CALLABLE_TIMEOUT_MS })
+  const result = await callable({ workspaceKey: config.workspaceKey, reportId: input.reportId, resolved: input.resolved })
+  const data = readRecord(result.data)
+  return {
+    reportId: typeof data.reportId === 'string' ? data.reportId : input.reportId,
+    resolved: data.resolved === true,
+    resolvedAt: typeof data.resolvedAt === 'string' && data.resolvedAt ? data.resolvedAt : null,
   }
 }

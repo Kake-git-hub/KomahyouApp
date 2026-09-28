@@ -60,7 +60,7 @@ import { requiresClassroomExistenceCheck, resolveClassroomAccessDecision } from 
 import { normalizeClientInfo, normalizeOperationEvents, type NormalizedOperationEvent } from './operationEvents'
 import { buildDeveloperReportId, buildDeveloperReportMail, buildDeveloperReportStoragePath, isMailTransportConfigured, isVerificationChecklistReport, normalizeDeveloperReport, resolveDeveloperReportMailSkipReason, trimDeveloperReportTraceToBudget, type DeveloperReportMailSource } from './developerReport'
 import { createTransport } from 'nodemailer'
-import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, planReportAnswerWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
+import { buildPendingReportAnswerDoc, normalizeAnswerDeveloperReportRequest, normalizeMarkReportAnswersReadRequest, normalizeResolveDeveloperReportRequest, planReportAnswerWrite, planReportResolveWrite, REPORT_ANSWERS_COLLECTION, resolveReportAnswerReadWrites, shouldCreateReportAnswerDoc, type ReportAnswerDoc } from './reportAnswers'
 import { generateQuestionAiAnswer, isQuestionAiAnswerEnabledForClassroom, QUESTION_AI_MODEL, shouldAnswerQuestionWithAi } from './questionAiAnswer'
 import { buildLessonLedgerDayDoc, normalizeLessonLedger, toJstDateKeyFromIso, type NormalizedLessonLedger } from './lessonLedger'
 import { buildEarliestLedgerAfterQuery, buildLatestLedgerQuery, handleGetStudentLessonHistory, isLessonHistoryDateKey, type LessonLedgerDayDocLike } from './lessonLedgerHistory'
@@ -2085,6 +2085,31 @@ export const markReportAnswersRead = onCall({ invoker: 'public', timeoutSeconds:
     const message = error instanceof Error ? error.message : String(error)
     logger.error(`[markReportAnswersRead] failed classroom=${classroomId}: ${message}`)
     throw new HttpsError('internal', `既読を記録できませんでした: ${message.slice(0, 300)}`)
+  }
+})
+
+// 開発者の「解決済み」(オーナー指示 2026-09-28「LINE で対応済みの質問を対応完了とわかるように。室長側には非表示でOK」)。
+// developerReports/{reportId} の resolvedAt / resolvedBy だけを書く(開発者のみ read)。室長側の reportAnswers には写さない
+// (室長には見せない・未読バッジも変えない)。未解決に戻す(resolved: false)も同じ callable。純粋ロジックは reportAnswers.ts。
+export const resolveDeveloperReport = onCall({ invoker: 'public', timeoutSeconds: 60 }, async (request) => {
+  const parsed = normalizeResolveDeveloperReportRequest(request.data)
+  if (!parsed.ok) throw new HttpsError('invalid-argument', parsed.reason)
+  const { workspaceKey, reportId, resolved } = parsed.value
+  const memberRef = await requireDeveloperMember(request.auth?.uid, workspaceKey)
+
+  const reportRef = firestore.collection('workspaces').doc(workspaceKey).collection('developerReports').doc(reportId)
+  try {
+    const reportSnapshot = await reportRef.get()
+    if (!reportSnapshot.exists) throw new HttpsError('not-found', 'この報告は見つかりません。')
+    const update = planReportResolveWrite({ resolved, resolvedBy: memberRef.id, nowIso: new Date().toISOString() })
+    await reportRef.set(update, { merge: true })
+    logger.info(`[DeveloperReport] Resolve report=${reportId} resolved=${resolved}`)
+    return { reportId, resolved, resolvedAt: update.resolvedAt }
+  } catch (error) {
+    if (error instanceof HttpsError) throw error
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error(`[DeveloperReport] resolveDeveloperReport failed report=${reportId}: ${message}`)
+    throw new HttpsError('internal', `解決済みの印を保存できませんでした: ${message.slice(0, 300)}`)
   }
 })
 

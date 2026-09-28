@@ -19,6 +19,9 @@ describe('DeveloperReportAnswerScreen の描画', () => {
     expect(html).toContain('報告を読み込んでいます')
     expect(html).toContain('data-testid="report-answer-placeholder"')
     expect(html).toContain('data-testid="report-answer-filter-unanswered"')
+    // 解決済み(2026-09-28): 絞り込みタブに「解決済み」、説明文に「室長の画面には出ません」
+    expect(html).toContain('data-testid="report-answer-filter-resolved"')
+    expect(html).toContain('解決済みは室長の画面には出ません')
     expect(html).toContain('開発用教室')
   })
 

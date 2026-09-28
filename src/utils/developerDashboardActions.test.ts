@@ -45,6 +45,7 @@ function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }
     answerFinal: '',
     answeredAt: null,
     answerRevision: 0,
+    resolvedAt: null,
     ...overrides,
   }
 }

@@ -43,6 +43,7 @@ function report(overrides: Partial<DeveloperReportRecord> & { reportId: string }
     answerFinal: '',
     answeredAt: null,
     answerRevision: 0,
+    resolvedAt: null,
     ...overrides,
   }
 }
@@ -58,6 +59,10 @@ describe('normalizeDeveloperReportRecord', () => {
     const broken = normalizeDeveloperReportRecord({ category: 'weird', issueNumber: 'abc', aiAnswer: '   ' }, 'doc-id')
     expect(broken).toMatchObject({ reportId: 'doc-id', category: 'bug', issueNumber: null, hasAiAnswer: false, notifiedAt: null })
     expect(normalizeDeveloperReportRecord({ issueNumber: '12' }, 'x').issueNumber).toBe(12)
+    // 解決済みの印(2026-09-28): 文字列だけ受け、空・型違いは未解決(null)。
+    expect(normalizeDeveloperReportRecord({ resolvedAt: '2026-09-28T11:00:00.000Z' }, 'x').resolvedAt).toBe('2026-09-28T11:00:00.000Z')
+    expect(normalizeDeveloperReportRecord({ resolvedAt: ' ' }, 'x').resolvedAt).toBeNull()
+    expect(normalizeDeveloperReportRecord({ resolvedAt: 123 }, 'x').resolvedAt).toBeNull()
   })
 
   it('確認リストの判定はサーバーのフラグが権威。フラグが無い古い文書だけ本文の先頭マーカーで補う', () => {

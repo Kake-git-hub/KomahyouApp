@@ -4,7 +4,9 @@ import {
   buildPendingReportAnswerDoc,
   normalizeAnswerDeveloperReportRequest,
   normalizeMarkReportAnswersReadRequest,
+  normalizeResolveDeveloperReportRequest,
   planReportAnswerWrite,
+  planReportResolveWrite,
   REPORT_ANSWER_ERROR_EMPTY,
   REPORT_ANSWER_ERROR_TOO_LONG,
   REPORT_ANSWER_LIMIT,
@@ -159,5 +161,24 @@ describe('reportAnswers: 既読化(callable markReportAnswersRead・部分更新
       { id: 'missing', exists: false },
     ], { classroomId: 'C1', nowIso: '2026-09-28T12:00:00.000Z' })
     expect(writes).toEqual([{ id: 'unread', update: { readAt: '2026-09-28T12:00:00.000Z', unreadAnswer: false, updatedAt: '2026-09-28T12:00:00.000Z' } }])
+  })
+})
+
+describe('reportAnswers: 解決済み(callable resolveDeveloperReport・オーナー指示 2026-09-28)', () => {
+  it('入力検証: resolved は真偽値だけ受ける(文字列 "false" を解決済みと誤読しない)', () => {
+    expect(normalizeResolveDeveloperReportRequest({ workspaceKey: 'main', reportId: 'r-1', resolved: true })).toEqual({ ok: true, value: { workspaceKey: 'main', reportId: 'r-1', resolved: true } })
+    expect(normalizeResolveDeveloperReportRequest({ workspaceKey: 'main', reportId: 'r-1', resolved: false })).toEqual({ ok: true, value: { workspaceKey: 'main', reportId: 'r-1', resolved: false } })
+    expect(normalizeResolveDeveloperReportRequest({ workspaceKey: 'main', reportId: 'r-1', resolved: 'false' }).ok).toBe(false)
+    expect(normalizeResolveDeveloperReportRequest({ workspaceKey: 'main', reportId: 'r-1' }).ok).toBe(false)
+    expect(normalizeResolveDeveloperReportRequest({ workspaceKey: '', reportId: 'r-1', resolved: true }).ok).toBe(false)
+    expect(normalizeResolveDeveloperReportRequest({ workspaceKey: 'main', reportId: '../x', resolved: true }).ok).toBe(false)
+    expect(normalizeResolveDeveloperReportRequest(null).ok).toBe(false)
+  })
+
+  it('書き込みは resolvedAt / resolvedBy の 2 項目だけ(回答フィールドにも室長側の文書にも触らない)。未解決に戻すと両方 null', () => {
+    expect(planReportResolveWrite({ resolved: true, resolvedBy: 'dev-uid', nowIso: '2026-09-28T11:00:00.000Z' })).toEqual({ resolvedAt: '2026-09-28T11:00:00.000Z', resolvedBy: 'dev-uid' })
+    expect(planReportResolveWrite({ resolved: false, resolvedBy: 'dev-uid', nowIso: '2026-09-28T11:00:00.000Z' })).toEqual({ resolvedAt: null, resolvedBy: null })
+    const keys = Object.keys(planReportResolveWrite({ resolved: true, resolvedBy: 'u', nowIso: 't' }))
+    for (const forbidden of ['answerFinal', 'answeredAt', 'answerRevision', 'readAt', 'unreadAnswer']) expect(keys).not.toContain(forbidden)
   })
 })

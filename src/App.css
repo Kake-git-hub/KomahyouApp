@@ -6232,6 +6232,11 @@ tr.sa-group-row td {
   color: #137333;
 }
 
+/* 開発者の「解決済み」(2026-09-28)。開発者画面「質問への回答」だけで使う(室長側には出ない)。 */
+.developer-report-history-status.is-resolved {
+  color: #6b4fbb;
+}
+
 .developer-report-history-question {
   margin: 0;
   white-space: pre-wrap;
@@ -6380,6 +6385,22 @@ tr.sa-group-row td {
   font-size: 15px;
   line-height: 1.6;
   color: #1f3350;
+}
+
+.report-answer-resolve {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.report-answer-resolve .developer-report-history-status {
+  margin-left: 0;
+}
+
+.report-answer-resolve-note {
+  font-size: 13px;
+  color: #5b6f86;
 }
 
 .report-answer-draft {

@@ -19,11 +19,18 @@ export const REPORT_ANSWER_GUIDELINES: readonly string[] = [
   'メールアドレス・UID・トークン・保存先パス・文書 ID を書いていない',
 ]
 
-export type ReportAnswerFilter = 'unanswered' | 'answered' | 'all'
+/**
+ * 一覧の絞り込み。「解決済み」(2026-09-28・オーナー指示)は回答の有無と独立した開発者の対応完了の印で、
+ * 未回答/回答済み には出さず「解決済み」にまとめる(LINE で対応済みの質問を未回答から消すため)。「すべて」は全部。
+ */
+export type ReportAnswerFilter = 'unanswered' | 'answered' | 'resolved' | 'all'
+
+export const REPORT_ANSWER_FILTERS: readonly ReportAnswerFilter[] = ['unanswered', 'answered', 'resolved', 'all']
 
 export const REPORT_ANSWER_FILTER_LABELS: Readonly<Record<ReportAnswerFilter, string>> = {
   unanswered: '未回答',
   answered: '回答済み',
+  resolved: '解決済み',
   all: 'すべて',
 }
 
@@ -36,6 +43,18 @@ export function isReportAnswered(record: Pick<DeveloperReportRecord, 'answerFina
   return Boolean(record.answerFinal && record.answeredAt)
 }
 
+/** 開発者が「解決済み」にした報告か(室長側には出さない印・developerReports.resolvedAt)。 */
+export function isReportResolved(record: Pick<DeveloperReportRecord, 'resolvedAt'>): boolean {
+  return Boolean(record.resolvedAt)
+}
+
+/** 一覧の状態表示。解決済みを最優先(回答済みでも解決済みなら「解決済み」)。 */
+export function formatReportAnswerRowStatus(record: Pick<DeveloperReportRecord, 'answerFinal' | 'answeredAt' | 'answerRevision' | 'resolvedAt'>): { label: string; tone: 'resolved' | 'read' | 'pending' } {
+  if (isReportResolved(record)) return { label: isReportAnswered(record) ? '解決済み(回答あり)' : '解決済み', tone: 'resolved' }
+  if (isReportAnswered(record)) return { label: `回答済み(${record.answerRevision} 版)`, tone: 'read' }
+  return { label: '未回答', tone: 'pending' }
+}
+
 /** 絞り込み＋並び(新しい順)。教室 ID を渡すとその教室だけ。 */
 export function filterReportsForAnswering(
   records: readonly DeveloperReportRecord[],
@@ -45,6 +64,8 @@ export function filterReportsForAnswering(
     .filter((record) => (options.classroomId ? record.classroomId === options.classroomId : true))
     .filter((record) => {
       if (options.filter === 'all') return true
+      if (options.filter === 'resolved') return isReportResolved(record)
+      if (isReportResolved(record)) return false
       return options.filter === 'answered' ? isReportAnswered(record) : !isReportAnswered(record)
     })
     .sort((a, b) => (b.recordedAt || b.reportedAt).localeCompare(a.recordedAt || a.reportedAt))
@@ -78,4 +99,11 @@ export function buildReportAnswerSentMessage(result: { classroomName: string; is
   return result.isRevision
     ? `回答を更新しました(${result.answerRevision} 版)。${target}の履歴では新しい本文に置き換わります(既読だった場合は未読に戻りません)。`
     : `回答を送りました。${target}の「質問・要望」ボタンに未読 1 件として表示されます。`
+}
+
+/** 「解決済みにする」「未解決に戻す」のあとのメッセージ。室長側には出ないことを必ず添える。 */
+export function buildReportResolveMessage(resolved: boolean): string {
+  return resolved
+    ? '解決済みにしました(室長の画面には表示されません)。一覧の「解決済み」で見られます。'
+    : '未解決に戻しました。'
 }
