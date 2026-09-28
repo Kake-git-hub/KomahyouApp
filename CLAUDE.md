@@ -187,6 +187,12 @@ GitHub Actions がリポジトリのシークレット（`RE_FIREBASE_SERVICE_AC
 - 作業ブランチを **`main` にマージ** すると、`.github/workflows/deploy-firebase-hosting.yml` が自動実行され、
   ビルド→本番ホスティングへデプロイ→ライブ検証まで行う（毎回 patch バージョンを自動 bump）。
 
+### Firestore ルール（`firebase/firestore.rules`）
+- ホスティング CI はルールを出さない。ルールは `.github/workflows/deploy-firestore-rules.yml`（2026-09-28）で反映する。
+  - **手動**: Actions → 「Deploy Firestore rules」→ Run workflow（ブランチ=main）。
+  - **自動**: `firebase/firestore.rules` を変更して `main` にマージすると発火。
+  - 反映前に `npm run test:rules` で教室分離を固定する。Storage ルールは対象外。
+
 ### Cloud Functions（`lectureSubmissionApi` ほか）
 - ホスティングCIは **functions を出さない**。functions は専用ワークフロー `.github/workflows/deploy-functions.yml` を使う。
   - **手動**: GitHub アプリ → 対象リポジトリ → **Actions → 「Deploy Cloud Functions」→ Run workflow**（ブランチ=main）。
@@ -204,6 +210,10 @@ GCP コンソール（プロジェクト `komahyouapp-prod`）で以下を付与
 - ロール **Cloud Scheduler 管理者**（`roles/cloudscheduler.admin`）… スケジュール関数（毎時/日次バックアップ・
   saveAttempts掃除）のジョブ更新に必要。2026-07-04 のデプロイで `cloudscheduler.jobs.update` の 403 が初出。
   **オーナーが付与するまで functions デプロイは赤になる**（付与後に Actions → Deploy Cloud Functions を再実行）。
+- ロール **Firebase Rules 管理者**（`roles/firebaserules.admin`）… Firestore ルールを Actions から反映する
+  `.github/workflows/deploy-firestore-rules.yml`（Actions →「Deploy Firestore rules」）に必要。2026-09-28 の初回実行で
+  `firebaserules.googleapis.com …:test had HTTP Error: 403` を確認 → **同日オーナーが IAM で付与し、再実行で緑**
+  （v1.5.565 の `reportAnswers` ルールが反映され、開発用教室で未読バッジの表示を確認済み）。
 - ロール **ログ閲覧者**（`roles/logging.viewer`）… 関数の実行ログをスマホから読む手動ワークフロー
   `.github/workflows/functions-logs.yml`（Actions →「Read Cloud Functions logs」）に必要。2026-09-12 の初回実行で
   `PERMISSION_DENIED: Permission denied for all log views` を確認（**未付与**）。付与されるまで read-logs ジョブは赤。

@@ -1,0 +1,66 @@
+name: Deploy Firestore rules
+
+# Firestore セキュリティルール(firebase/firestore.rules)を本番(komahyouapp-prod)へ反映する(2026-09-28・オーナー指示)。
+# ホスティング CI(deploy-firebase-hosting.yml)も functions CI(deploy-functions.yml)もルールは出さないため、
+# これまでは認証済み PC で `firebase deploy --only firestore:rules` を打つ必要があった。PC 無しでも
+# GitHub の Actions → 「Deploy Firestore rules」→ Run workflow で反映できるようにする。
+#
+# 必要な設定: リポジトリ secret RE_FIREBASE_SERVICE_ACCOUNT(ホスティング・functions と共用)。
+#   サービスアカウントには Firebase Rules の権限が必要(roles/firebaserules.admin。functions デプロイ用に
+#   付与済みの Cloud Functions 管理者では足りない場合がある)。403 で失敗したら GCP コンソールで付与して再実行する。
+#
+# トリガー:
+#   - 手動(workflow_dispatch)。
+#   - main への push で firebase/firestore.rules(またはこのファイル)が変わったとき: マージで自動反映。
+#     ルールは `npm run test:rules`(エミュレータ)で教室分離を固定してからマージすること。
+#
+# ★Storage ルール(firebase/storage.rules)は対象外(変えたときは別途)。データには一切触れない(ルール本文の置き換えだけ)。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'firebase/firestore.rules'
+      - '.github/workflows/deploy-firestore-rules.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-firestore-rules-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-firestore-rules:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Write Firebase service account credentials
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/firebase-service-account.json"
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.RE_FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy Firestore rules (live)
+        # firebase の終了コードをそのままステップの成否にする(pipefail・deploy-functions.yml と同じ作法)。
+        run: |
+          set -o pipefail
+          npx --yes firebase-tools deploy --project komahyouapp-prod --only firestore:rules --non-interactive \
+            2>&1 | tee "$RUNNER_TEMP/deploy-firestore-rules.log"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ runner.temp }}/firebase-service-account.json
+
+      - name: Show deployed rules head (for the run log)
+        run: |
+          echo "Deployed firebase/firestore.rules from $GITHUB_SHA"
+          head -n 5 firebase/firestore.rules
