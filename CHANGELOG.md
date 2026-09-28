@@ -14,6 +14,16 @@
 
 ## 未リリース
 
+## v1.5.563 (2026-09-28)
+
+- feat: **「質問・要望」への回答を画面で返す**(オーナー指示 2026-09-28「LINE で個別に回答を作っているのを、各室長の画面に出す・ボタンに未読件数・過去の質問と回答も見直せるように」。事前確認で「開発者画面に回答ページ」「バッジだけ・自動では開かない」「全教室で即時」を確定・spec-developer-report §G-3/§G-5)。
+  - 開発者: 開発者画面(教室運営管理)右上の「**質問への回答**」サブページで、届いた報告(テスト送信・確認リストは除く)を教室・未回答/回答済みで絞って選び、回答を書いて送る。送る前に §G-4 の基準(7 項目)のチェックが必須。再送は改訂(版 +1)で既読を未読に戻さない。callable `answerDeveloperReport`(開発者のみ)が `developerReports/{id}` に `answerFinal / answeredAt / answeredBy / answerRevision` を merge し、室長側の軽量文書へ写す (DeveloperReportAnswerScreen.tsx / developerReportAnswers.ts / reportAnswersStore.ts)
+  - 室長: 盤面ツールバー「質問・要望」に**未読の回答件数バッジ**。同じモーダルに「**これまでの質問と回答**」タブ(未読があるときだけ開いた直後にこのタブ)。質問文・回答・回答日時を新しい順に表示し、回答前の質問は「回答待ち」。「確認しました」で既読(サーバー記録 callable `markReportAnswersRead`・端末をまたいで同じ)。**自動で開くモーダルは作らない**。開発者が本番教室を開いたときは「確認しました」を出さない(室長のバッジを消さない・shouldRecordSubmissionNotified と同じ判断) (DeveloperReportModal.tsx / BoardToolbar.tsx / App.tsx / reportAnswers.ts)
+  - データ: 室長の端末が読む文書は `classroomSnapshots/{classroomId}/reportAnswers/{reportId}`(教室ごとのパス・parentMessages と同じ作法・INV-08)。送信時(`submitDeveloperReport`)に「回答待ち」の文書を作り、教室データ・操作痕跡・送信者は載せない。Firestore ルール: 自教室メンバーのみ read・write は不可(**ルールは main マージでは反映されない → `firebase deploy --only firestore:rules` が必要**)。日程表タブ側のモーダルは従来どおり送るだけ (functions/src/reportAnswers.ts / index.ts / firebase/firestore.rules)
+  - テスト: 純関数 12＋9＋7 件・描画 7 件・配線 source-scan 9 件・ルール 1 件(エミュレータで 36 件通過)。開発ダッシュボードの報告レコードに回答フィールドを追加 (developerDashboard.ts)
+- chore(checklist): 確認リストを第29版へ。上の回答フローの確認 a-1〜a-3 を追加。**版は v1.5.556 据え置き**(項目を足しただけ)。進行中テーマ台帳 `question-answer-flow` を「確認リスト結果待ち」へ (verificationChecklist.ts / developmentStatusLedger.ts)
+- docs: spec-developer-report §G-3/§G-5 をオーナー確定(2026-09-28)の内容で改定(回答案段は省略・自動モーダル無し・教室ごとのパス)。利用者マニュアル §9 に回答の読み方を追記 (docs/spec-developer-report.md / docs/user-manual.md)
+
 ## v1.5.562 (2026-09-28)
 
 - fix: **講師日程共有(配布用盤面)で、別の生徒の休み記録が残る席に置いた生徒が「休み」表示になる**不具合を修正(緑が丘 室長報告 2026-09-28: 9/28(月) 4限 体)小5算 の体験生が休み表示。実データ=同じ席の statusSlots[0] に別生徒(中2 数)の absent 記録が残ったまま studentSlots[0] に体験生を追加)。真因=配布用盤面は名前だけ `student ?? status` で生徒を優先し、「(休」ラベル・振替先日付・灰色スタイルは**記録があれば無条件**に付けていた(配置と記録は別の生徒でも同じ index に同居しうる)。盤面(BoardGrid renderStudentCell)は生徒がいる席では記録を表示に使わないので、配布用盤面だけ休み扱いに見えた(INV-04 準拠・共有ビューの内容乖離 3 件目)。席 1 つ分の規則を純関数 `resolveBoardShareSeatView`(生徒がいれば記録を使わない／いなければ記録を出す)に切り出し、ラベル・日付・スタイルの 3 か所すべてがそれを通る形にした。記録・在庫会計は無変更(表示のみ)。回帰テスト 7 件(修正なしで 4 件落ちることを確認・生徒がいない席の「(休」＋振替先日付は従来どおり) (BoardShareScreen.tsx / boardShareSeatView.test.ts)

@@ -158,8 +158,15 @@
 ## ＊ オーナー確認待ち（仮置き。確定までは「暫定」）
 
 計画 §9-2 の未回答 4 点。以下は **spec-curator の推奨で仮置き**したもので、**確定はオーナーに帰属**する。
-確定するまで実装（Q-2 以降）は進めてよいが、**利用者へ回答を返す運用の開始（Q-5 の「承認して返答」）は
-② が確定してから**とする。
+
+> **2026-09-28 オーナー確定（回答を画面で返す・v1.5.563）**: 「LINE で個別に回答を作っているのを、各室長の画面に出す。
+> 質問・要望ボタンに未読件数。過去の質問・回答も見直せるように」。事前確認（AskUserQuestion）で次を確定した。
+> - 回答を書く場所 = **開発者画面のサブページ「質問への回答」**（GitHub Issue コメント同期は不採用）。
+> - 室長側の見せ方 = **バッジだけ・自動では開かない**（起動時／実行中の自動モーダルは作らない。§G-5 を改定）。
+> - 公開範囲 = **全教室で即時**（フラグ無し。室長側に出るのは開発者が回答を書いた教室だけなので露出は回答側で制御できる）。
+> - ② の基準は §G-4 の 7 項目を**1 つのチェック**で確認する暫定運用（オーナー一人で運用するため手数を減らす）。
+> - ③ QA 公開（§G-6）と Q-3/Q-4（ダイジェスト）は**この段では作らない**（未着手のまま）。回答案（answerDraft）の段も省き、
+>   書いた回答をそのまま送る（直すときは改訂＝§G-3）。
 
 | # | 論点 | 推奨（仮置き） | 代替案 | 決めないと困る理由 |
 |---|---|---|---|---|
@@ -221,6 +228,14 @@
 - **質問以外（bug / request）にも同じ回答欄を使ってよい**（「直しました」「要望として登録しました」を返せる）。
   ただし返答は任意で、既定は返さない（§E の「勝手に修正を始めない」と矛盾しないよう、**着手の約束をしない**文面にする）。
 
+**実装（v1.5.563・2026-09-28・オーナー確定に合わせた省略と差し替え）**:
+- サブページ名は `'answers'`「**質問への回答**」（`src/components/developer-admin/DeveloperReportAnswerScreen.tsx`）。入口は開発者画面右上のボタン。
+  一覧（教室・未回答/回答済み/すべて で絞る・新しい順・テスト送信と確認リストは除く）＋1 件表示＋回答欄＋**§G-4 の基準を 1 つのチェックで確認**
+  → 「回答を送る」。**「回答案（answerDraft）」の段・「AI 用プロンプトをコピー」・「QA として公開」は作っていない**（書いた回答をそのまま送る）。
+- 状態は **未回答 → 回答済み** の 2 つ（`answerFinal` / `answeredAt` / `answeredBy` / `answerRevision` を `developerReports/{id}` に merge・既存フィールドは触らない）。
+  再送は改訂（revision +1）で、室長側の既読を未読へ戻さない（`functions/src/reportAnswers.ts planReportAnswerWrite` がテストで固定）。
+- 送信可否は純関数 `checkReportAnswerSubmit`（空・4000 字超・基準未確認・同じ本文の再送は止める）。
+
 ### G-4. 「公開してよい回答」の基準（叩き台・オーナー確定待ち＝仮置き ②）
 
 利用者へ返す**回答本文の内容基準**。**AI へ渡す入力の制限ではない**（入力は §H-1 のとおり無制限）。
@@ -242,19 +257,34 @@
   **特定の教室でしか成り立たない前提を含まない**ことを追加で満たすこと）。
 - 判断に迷うものは**公開しない**（既定 OFF）。基準の改定はオーナー承認事項とする。
 
-### G-5. 返答通知（Q-6）
+### G-5. 返答通知（Q-6）— **2026-09-28 オーナー確定で「バッジ＋履歴タブ」に改定（v1.5.563）**
 
-- 承認済みの回答だけを載せる**軽量コレクション** `workspaces/{ws}/reportAnswers/{answerId}`
-  （`classroomId` / 質問の要約 / 回答本文 / `answeredAt` / `readAt`）。
+- 室長の端末が読む**軽量文書** `workspaces/{ws}/classroomSnapshots/{classroomId}/reportAnswers/{reportId}`
+  （**教室ごとのパス**＝`parentMessages` と同じ作法・INV-08。当初案の `workspaces/{ws}/reportAnswers`＋`classroomId` フィルタは
+  複合インデックスとルールの `resource.data` 参照が要るため不採用）。
+  項目: `reportId` / `classroomId` / `category` / `source` / `questionNote`（利用者が書いた本文）/ `questionSummary` / `reportedAt` /
+  `answer`（null＝回答待ち）/ `answeredAt` / `answerRevision` / `readAt` / `unreadAnswer` / `updatedAt`。
   **教室データ・操作痕跡・送信者情報は載せない**（端末が読む場所なので最小限にする）。
-- 表示は **QR 提出通知と同型**（`App.tsx` の起動時通知と実行中通知）。
-  - 起動時: 未読（`readAt` なし）の回答があればモーダルで見せる。
-  - 実行中: 購読で新着が来たらモーダルで見せる。
-  - 既読は **サーバーの `readAt`**（callable `markReportAnswerRead` の部分更新）で持つ。**localStorage は使わない**
-    （既読が端末間でずれないため。QR 提出通知で確立した作法・INV-07 の部分更新の原則に倣う）。
-- ルール: `reportAnswers` は**その教室のメンバーだけ read**、**write は Cloud Function のみ**。
+- **送信時（`submitDeveloperReport`）に「回答待ち」の文書を作る**（テスト送信 `#テスト`・確認リストは作らない）。これで室長は
+  自分が送った質問も履歴で読み返せる。作成に失敗しても報告本体は成功（回答時に `answerDeveloperReport` が作り直す）。
+- 表示（**オーナー確定 2026-09-28: 自動で開くモーダルは出さない**）:
+  - 盤面ツールバーの「質問・要望」ボタンに**未読の回答件数のバッジ**（`formatReportAnswerBadge`・100 以上は 99+）。
+  - 同じモーダルに「**これまでの質問と回答**」タブ。**未読があるときだけ**開いた直後にこのタブが出る（無ければ従来どおり「送る」）。
+    新しい順（回答日時があればそれ、なければ送信日時）。回答前は「回答待ち」、未読は「新しい回答」、既読は「回答済み」。
+    改訂された回答には「(回答が更新されました)」。
+  - 既読は「**確認しました**」（1 件）／「すべて確認しました」（未読 2 件以上）で **callable `markReportAnswersRead` の部分更新**
+    （`readAt` / `unreadAnswer` / `updatedAt` だけ）。**localStorage は使わない**（端末間で既読がずれない・INV-07 の部分更新の原則）。
+  - **開発者が本番教室を開いているときは「確認しました」を出さない**（表示だけ・室長のバッジを消さない。QR 提出通知の
+    `shouldRecordSubmissionNotified` と同じ判断・オーナー決定 2026-09-26）。開発用教室では開発者でも既読にできる。
+  - 購読は `orderBy('reportedAt','desc') limit 100` の 1 本（where と組み合わせない＝複合インデックス不要）。未読件数はクライアントで数える。
+    開発者画面（教室運営管理）では購読しない（`shouldSubscribeClassroomNotifications`）。教室切替・ログアウトで購読を切り履歴を消す。
+  - **日程表タブ側の「質問・要望」モーダルは従来どおり送るだけ**（履歴タブ・バッジは盤面側のみ。埋め込みスクリプトの肥大化を避ける）。
+- ルール: `reportAnswers` は**その教室のメンバーだけ read**、**write は Cloud Function のみ**（`npm run test:rules` で固定）。
   ルール反映は `firebase deploy --only firestore:rules`（main マージでは反映されない）。
 - 通知は**教室単位**（送信した本人だけでなく、その教室のメンバーが見る）。送信者の個人特定情報は出さない。
+- 実装: 純関数 `src/utils/reportAnswers.ts`（並び・状態・件数・初期タブ・バッジ文字列）／購読と callable `src/integrations/firebase/reportAnswersStore.ts`／
+  モーダル `DeveloperReportModal.tsx`／バッジ `BoardToolbar.tsx`／配線 `App.tsx`（source-scan: `reportAnswers.wiring.test.ts`）／
+  サーバー純関数 `functions/src/reportAnswers.ts`。
 
 ### G-7. 質問への AI 即時回答（試験実装・開発用教室のみ／オーナー指示 2026-09-14）
 
@@ -383,10 +413,11 @@
 - 「QA として公開」は**既定 OFF**で、押したときだけ `qaEntries` を作る。教室名・生徒名が本文に残っていない。
 - 回答本文の更新は `answerRevision` を +1 し、**既読を未読に戻さない**。
 
-### I-5. Q-6（返答通知）
+### I-5. Q-6（返答通知）— 2026-09-28 改定（自動モーダル無し）
 
-- 起動時に未読（`readAt` なし）の承認済み回答だけがモーダルに出る（`selectStartupSubmissionsToNotify` 同型の純関数）。
-- 実行中に新着が来たらモーダルに出る。既読は callable の**部分更新**で付き、他フィールドを消さない。
+- 未読（`readAt` なし・回答あり）の件数だけがボタンのバッジに出る（`countUnreadReportAnswers`）。回答待ち・既読は数えない。
+- 未読があるときだけモーダルは履歴タブから開く（`resolveDeveloperReportModalInitialTab`）。自動で開くモーダルは作らない。
+- 既読は callable の**部分更新**で付き、他フィールドを消さない（`resolveReportAnswerReadWrites`）。改訂は既読を未読に戻さない。
 - 既読状態は**サーバー保持**。別端末で開いても既読が引き継がれる（localStorage を使わない）。
 - `npm run test:rules`: 他教室のメンバーは `reportAnswers` を読めない。クライアントからの write は全て拒否。
 - 回答通知に教室データ・操作痕跡・送信者が含まれない。

@@ -133,6 +133,17 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     updatedOn: '2026-09-25',
   },
 
+  // ── 実装済み・確認リスト結果待ち ──────────────────────────────────────────
+  {
+    id: 'question-answer-flow',
+    title: '質問への回答を画面で返す(開発者画面「質問への回答」→ 室長のボタンに未読バッジ → 履歴タブ)',
+    stage: 'awaiting-checklist',
+    summary: 'v1.5.563(2026-09-28)で Q-5/Q-6 を実装(callable answerDeveloperReport / markReportAnswersRead・開発者画面サブページ・室長側は自動で開くモーダル無し＝バッジ＋同じモーダルの履歴タブ・全教室で即時)。オーナー確定 2026-09-28。QA 公開(§G-6)・ダイジェスト(Q-3/Q-4)・回答案(answerDraft)段は作っていない。Firestore ルール(reportAnswers)は手動反映が要る。',
+    nextAction: '確認リスト a-1〜a-3 の結果を見る。要改善があれば直し、OK なら本行を消す(QA 公開・ダイジェストは別テーマとして必要になったら起こす)。',
+    references: ['docs/spec-developer-report.md §G-3/§G-5', 'src/components/developer-admin/DeveloperReportAnswerScreen.tsx', 'src/utils/reportAnswers.ts', 'functions/src/reportAnswers.ts'],
+    updatedOn: '2026-09-28',
+  },
+
   // ── 作りかけ(未マージのブランチ) ────────────────────────────────────────────
   {
     id: 'contract-baseline-arch',
@@ -193,15 +204,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
 
   // ── 未着手(計画あり) ────────────────────────────────────────────────────────
-  {
-    id: 'question-answer-flow',
-    title: '質問への承認・返答フロー(回答案 → 承認 → 利用者へ通知・QA 公開)',
-    stage: 'planned',
-    summary: 'Q-1/Q-2(質問種別)は実装済み。Q-3〜Q-6(callable answerDeveloperReport・開発者画面の承認サブページ・返答通知)は未着手。§G の「オーナー確認待ち ①〜④」が仮置きのまま。',
-    nextAction: 'オーナーが ①〜④(入口・公開基準・公開範囲・API 自動処理)を確定してから spec-curator → dev-fix。',
-    references: ['docs/spec-developer-report.md §G-3〜G-5', 'docs/plan-2026-09-11-five-requests.md §3'],
-    updatedOn: '2026-09-25',
-  },
   {
     id: 'second-company-onboarding',
     title: '2 社目の受け入れ準備 P-1〜P-12',

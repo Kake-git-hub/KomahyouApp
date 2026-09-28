@@ -60,9 +60,22 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第28版(v1.5.562): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に d-1(第24版)・t-2(第25版)・d-2(第26版)・d-3(第27版)・t-3(第28版)を足しただけ(OK 済みは載せない運用)', () => {
+  it('第29版(v1.5.563): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に d-1(第24版)・t-2(第25版)・d-2(第26版)・d-3(第27版)・t-3(第28版)・a-1〜a-3(第29版)を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 't-2', 't-3', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3'])
+    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 't-2', 't-3', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3', 'a-1', 'a-2', 'a-3'])
+    // 第29版(2026-09-28): 「質問・要望」への回答を画面で返す(spec-developer-report §G-3/§G-5)。開発者画面で書く → 室長のボタンに未読バッジ → 履歴タブ → 既読はサーバー。
+    for (const id of ['a-1', 'a-2', 'a-3']) {
+      const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === id)!
+      expect(item.introducedIn, id).toBe('v1.5.563')
+      expect(item.area, id).toBe('質問・要望')
+    }
+    const a1 = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'a-1')!
+    expect(a1.steps.join(' / ')).toContain('質問への回答')
+    expect((a1.check ?? []).join(' / ')).toContain('自動では開かない')
+    expect((a1.check ?? []).join(' / ')).toContain('既読はサーバー記録')
+    const a3 = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'a-3')!
+    expect((a3.check ?? []).join(' / ')).toContain('確認しました')
+    expect(a3.prep).toContain('見るだけ')
     // ★版は v1.5.556 据え置き: 項目を足しただけ(差し替え・削除なし)のときは上げない(第14版の決まり・CLAUDE.md)。
     //   上げると結果待ち項目の下書き(localStorage は版ごと)が消え、送信済みの結果もダッシュボードで「未確認」に戻る。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.556')

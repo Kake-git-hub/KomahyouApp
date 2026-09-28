@@ -5922,3 +5922,328 @@ tr.sa-group-row td {
   flex-wrap: wrap;
   gap: 10px;
 }
+
+/* 「質問・要望」への回答(spec-developer-report §G-3 / §G-5・2026-09-28)。
+   盤面ツールバーのボタンには未読の回答件数のバッジ(toolbar-inline-count と同じ形・色だけボタンに合わせる)。 */
+.secondary-button.report-developer-button .report-developer-badge {
+  background: #d66a00;
+  color: #fff;
+  font-weight: 700;
+}
+
+/* モーダルのタブ(送る／これまでの質問と回答)。寸法は --developer-report-unit 基準(ズーム対策・既存と同じ)。 */
+.developer-report-tabs {
+  display: flex;
+  gap: calc(8 * var(--developer-report-unit));
+  border-bottom: 1px solid #d6e0ee;
+}
+
+.developer-report-tab {
+  border: none;
+  background: transparent;
+  padding: calc(10 * var(--developer-report-unit)) calc(16 * var(--developer-report-unit));
+  font: inherit;
+  font-size: calc(16 * var(--developer-report-unit));
+  color: #5b6f86;
+  cursor: pointer;
+  border-bottom: calc(3 * var(--developer-report-unit)) solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(8 * var(--developer-report-unit));
+}
+
+.developer-report-tab.is-active {
+  color: #16314f;
+  font-weight: 700;
+  border-bottom-color: #1a73e8;
+}
+
+.developer-report-tab-badge {
+  display: inline-flex;
+  min-width: calc(22 * var(--developer-report-unit));
+  justify-content: center;
+  padding: calc(2 * var(--developer-report-unit)) calc(7 * var(--developer-report-unit));
+  border-radius: calc(999 * var(--developer-report-unit));
+  background: #d66a00;
+  color: #fff;
+  font-size: calc(13 * var(--developer-report-unit));
+  font-weight: 700;
+}
+
+.developer-report-history-empty {
+  margin: 0;
+  color: #36506d;
+  font-size: calc(17 * var(--developer-report-unit));
+  line-height: 1.7;
+}
+
+.developer-report-history-empty span {
+  color: #5b6f86;
+  font-size: calc(14 * var(--developer-report-unit));
+}
+
+.developer-report-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: calc(12 * var(--developer-report-unit));
+  max-height: calc(520 * var(--developer-report-unit));
+  overflow-y: auto;
+}
+
+.developer-report-history-item {
+  border: 1px solid #d6e0ee;
+  border-radius: calc(14 * var(--developer-report-unit));
+  padding: calc(14 * var(--developer-report-unit)) calc(16 * var(--developer-report-unit));
+  display: grid;
+  gap: calc(8 * var(--developer-report-unit));
+  background: #fff;
+}
+
+.developer-report-history-item.is-unread {
+  border-color: #d66a00;
+  box-shadow: 0 0 0 2px rgba(214, 106, 0, 0.15);
+}
+
+.developer-report-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(10 * var(--developer-report-unit));
+  font-size: calc(14 * var(--developer-report-unit));
+  color: #5b6f86;
+}
+
+.developer-report-history-chip {
+  padding: calc(2 * var(--developer-report-unit)) calc(10 * var(--developer-report-unit));
+  border-radius: calc(999 * var(--developer-report-unit));
+  font-size: calc(13 * var(--developer-report-unit));
+  font-weight: 700;
+  background: #e8f0fe;
+  color: #16314f;
+}
+
+.developer-report-history-chip.is-category-request {
+  background: #e6f4ea;
+  color: #137333;
+}
+
+.developer-report-history-chip.is-category-bug {
+  background: #fce8e6;
+  color: #b3261e;
+}
+
+.developer-report-history-status {
+  margin-left: auto;
+  font-weight: 700;
+  font-size: calc(14 * var(--developer-report-unit));
+}
+
+.developer-report-history-status.is-unread {
+  color: #b3541e;
+}
+
+.developer-report-history-status.is-pending {
+  color: #5b6f86;
+}
+
+.developer-report-history-status.is-read {
+  color: #137333;
+}
+
+.developer-report-history-question {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: calc(16 * var(--developer-report-unit));
+  line-height: 1.6;
+  color: #1f3350;
+}
+
+.developer-report-history-pending {
+  margin: 0;
+  font-size: calc(14 * var(--developer-report-unit));
+  color: #5b6f86;
+}
+
+.developer-report-history-answer {
+  border-left: calc(4 * var(--developer-report-unit)) solid #1a73e8;
+  background: #f1f6ff;
+  border-radius: calc(10 * var(--developer-report-unit));
+  padding: calc(12 * var(--developer-report-unit)) calc(14 * var(--developer-report-unit));
+  display: grid;
+  gap: calc(8 * var(--developer-report-unit));
+}
+
+.developer-report-history-answer-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(10 * var(--developer-report-unit));
+  font-size: calc(14 * var(--developer-report-unit));
+  font-weight: 700;
+  color: #16314f;
+}
+
+.developer-report-history-revised {
+  color: #b3541e;
+  font-weight: 600;
+}
+
+.developer-report-history-answer-body {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: calc(17 * var(--developer-report-unit));
+  line-height: 1.7;
+  color: #1f3350;
+}
+
+.developer-report-history-answer-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.developer-report-history-answer-actions .primary-button {
+  font-size: calc(15 * var(--developer-report-unit));
+  padding: calc(8 * var(--developer-report-unit)) calc(18 * var(--developer-report-unit));
+  border-radius: calc(10 * var(--developer-report-unit));
+}
+
+/* 開発者画面「質問への回答」サブページ。モーダル用の単位(--developer-report-unit)をここでは 1px に固定して、
+   モーダルと共用する .developer-report-history-chip / -status / -note などをそのまま使えるようにする。 */
+.report-answer-layout,
+.report-answer-filters {
+  --developer-report-unit: 1px;
+}
+
+.report-answer-filters {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.report-answer-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.4fr);
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 960px) {
+  .report-answer-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.report-answer-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.report-answer-row {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #d6e0ee;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  font: inherit;
+}
+
+.report-answer-row:hover {
+  background: #f5f8fc;
+}
+
+.report-answer-row.is-selected {
+  border-color: #1a73e8;
+  background: #e8f0fe;
+}
+
+.report-answer-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: #5b6f86;
+}
+
+.report-answer-row-note {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1f3350;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.report-answer-empty {
+  margin: 0;
+  color: #5b6f86;
+  font-size: 14px;
+}
+
+.report-answer-question {
+  margin: 0;
+  white-space: pre-wrap;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f8fafd;
+  border: 1px solid #d6e0ee;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #1f3350;
+}
+
+.report-answer-draft {
+  min-height: 160px;
+}
+
+.report-answer-guidelines {
+  border: 1px solid #f0c98a;
+  background: #fff8ec;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.report-answer-guidelines legend {
+  font-weight: 700;
+  color: #7a4a00;
+  padding: 0 4px;
+}
+
+.report-answer-guidelines ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #5b4a2b;
+}
+
+.report-answer-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #16314f;
+  cursor: pointer;
+}
+
+.report-answer-sent {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: #e6f4ea;
+  color: #137333;
+  font-weight: 600;
+}
