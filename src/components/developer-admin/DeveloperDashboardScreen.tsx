@@ -6,6 +6,9 @@
 //     待ち(自動処理待ち・確認リスト結果待ち・保留)は畳んで一画面に収める。
 //   - 行を選んで「Claude Code で開く」を押すと、公式の URL 形式(https://claude.ai/code?prompt=…&repositories=…)で
 //     新セッションが指示入り(入力済み)で開く。URL に載らない長さならクリップボードへ写して素の新セッションを開く。
+//   - 2026-09-28 確認リスト d-4 の要改善: (1) 行の「内容」を押すとその件の詳細を行の下に開く、(2) Claude への指示を短く、
+//     (3) 投げる前に指示をこの画面で書き足し・書き換えできる(常に出ている編集欄。編集後に選択を変えたら「選択から作り直す」)、
+//     (4) 確認リストとの重複をなくす(未確認の項目は出さない = 確認リストパネルが正本)。
 //   - 従来の 5 欄(教室別の報告状況／機能の段階／進行中テーマ／GitHub Issue／確認リスト)は「詳細を見る」で開く
 //     DeveloperDashboardDetail.tsx に移した(内容は据え置き)。
 //
@@ -88,7 +91,9 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   const [issuesResult, setIssuesResult] = useState<{ serial: number; issues: GitHubIssueRecord[]; error: string; loadedAt: string } | null>(null)
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set())
   const [showWaiting, setShowWaiting] = useState(false)
-  const [showPrompt, setShowPrompt] = useState(false)
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set())
+  // 画面で書き換えた指示。null = 選択から作った文をそのまま使う。base = 書き換え始めたときの自動文(選択が変わったかの判定用)。
+  const [editedPrompt, setEditedPrompt] = useState<{ text: string; base: string } | null>(null)
   const [copyStatus, setCopyStatus] = useState<'' | 'copied' | 'failed'>('')
 
   const reload = useCallback(() => setRequestSerial((value) => value + 1), [])
@@ -146,7 +151,10 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
     () => (selectedItems.length === 0 ? '' : buildClaudeCodePrompt(selectedItems, { appVersion, generatedAt: loadedAt })),
     [selectedItems, appVersion, loadedAt],
   )
-  const selectedUrl = useMemo(() => (selectedPrompt ? resolveClaudeCodeSessionUrl(selectedPrompt) : null), [selectedPrompt])
+  const promptText = editedPrompt?.text ?? selectedPrompt
+  const hasPromptText = promptText.trim() !== ''
+  const promptStale = editedPrompt !== null && editedPrompt.base !== selectedPrompt
+  const selectedUrl = useMemo(() => (hasPromptText ? resolveClaudeCodeSessionUrl(promptText) : null), [hasPromptText, promptText])
 
   const toggleSelected = useCallback((id: string) => {
     setSelectedIds((current) => {
@@ -155,6 +163,25 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
       else next.add(id)
       return next
     })
+    setCopyStatus('')
+  }, [])
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
+  const editPrompt = useCallback(
+    (text: string) => {
+      setEditedPrompt((current) => ({ text, base: current?.base ?? selectedPrompt }))
+      setCopyStatus('')
+    },
+    [selectedPrompt],
+  )
+  const rebuildPrompt = useCallback(() => {
+    setEditedPrompt(null)
     setCopyStatus('')
   }, [])
   // 「全選択」は Claude の番の行だけ。オーナーの番(利用者報告 Issue の着手可否・昇格判断など)は 1 件ずつ明示的にチェックする
@@ -168,11 +195,8 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
     setCopyStatus('')
   }, [])
   const copyPrompt = useCallback(() => {
-    void copyToClipboard(selectedPrompt).then((ok) => {
-      setCopyStatus(ok ? 'copied' : 'failed')
-      if (!ok) setShowPrompt(true)
-    })
-  }, [selectedPrompt])
+    void copyToClipboard(promptText).then((ok) => setCopyStatus(ok ? 'copied' : 'failed'))
+  }, [promptText])
 
   const singleItemUrl = useCallback(
     (item: DashboardActionItem) => (item.prompt === null ? null : resolveClaudeCodeSessionUrl(buildClaudeCodePrompt([item], { appVersion, generatedAt: loadedAt }))),
@@ -191,7 +215,7 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
             {view === 'todo' ? (
               <p className="page-summary">会社「{workspaceKey || '(ローカル)'}」で今止まっているものだけを 1 行ずつ出します。行を選んで「Claude Code で開く」を押すと、指示が入った新しいセッションが開きます(この画面は何も書き込みません)。</p>
             ) : (
-              <p className="page-summary">会社「{workspaceKey || '(ローカル)'}」の質問・要望の状況、開発の段階、確認リストの確認済み／未確認の全量です(読み取り専用)。</p>
+              <p className="page-summary">会社「{workspaceKey || '(ローカル)'}」の質問・要望の状況、開発の段階、確認リストの要改善です(読み取り専用。項目ごとの確認は確認リストパネルで)。</p>
             )}
           </div>
         </div>
@@ -263,7 +287,7 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
                   <tr><td colSpan={5} className="developer-dashboard-todo-empty">今すぐ動ける未対応はありません。</td></tr>
                 ) : null}
                 {actions.active.map((item) => (
-                  <TodoRow key={item.id} item={item} selected={selectedIds.has(item.id)} selectable={selectableIds.has(item.id)} onToggle={toggleSelected} claudeUrl={singleItemUrl(item)} />
+                  <TodoRow key={item.id} item={item} selected={selectedIds.has(item.id)} selectable={selectableIds.has(item.id)} expanded={expandedIds.has(item.id)} onToggle={toggleSelected} onToggleExpanded={toggleExpanded} claudeUrl={singleItemUrl(item)} />
                 ))}
                 {actions.waiting.length > 0 ? (
                   <tr className="developer-dashboard-todo-group">
@@ -276,7 +300,7 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
                 ) : null}
                 {showWaiting
                   ? actions.waiting.map((item) => (
-                      <TodoRow key={item.id} item={item} selected={selectedIds.has(item.id)} selectable={selectableIds.has(item.id)} onToggle={toggleSelected} claudeUrl={singleItemUrl(item)} />
+                      <TodoRow key={item.id} item={item} selected={selectedIds.has(item.id)} selectable={selectableIds.has(item.id)} expanded={expandedIds.has(item.id)} onToggle={toggleSelected} onToggleExpanded={toggleExpanded} claudeUrl={singleItemUrl(item)} />
                     ))
                   : null}
               </tbody>
@@ -285,35 +309,43 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
             <div className="developer-dashboard-launch" data-testid="developer-dashboard-launch">
               <span className="developer-dashboard-launch-count">選択 {selectedItems.length} 件</span>
               {selectedUrl ? (
-                <a className="primary-button slim" href={selectedUrl} target="_blank" rel="noreferrer" aria-disabled={selectedItems.length === 0}>Claude Code で開く</a>
+                <a className="primary-button slim" href={selectedUrl} target="_blank" rel="noreferrer">Claude Code で開く</a>
               ) : (
                 <a
-                  className={`primary-button slim ${selectedItems.length === 0 ? 'is-disabled' : ''}`}
+                  className={`primary-button slim ${hasPromptText ? '' : 'is-disabled'}`}
                   href={CLAUDE_CODE_NEW_SESSION_URL}
                   target="_blank"
                   rel="noreferrer"
                   onClick={(event) => {
-                    if (selectedItems.length === 0) {
+                    if (!hasPromptText) {
                       event.preventDefault()
                       return
                     }
                     // 指示が URL に載らない長さ → クリップボードへ写してから素の新セッションを開く(貼り付けで続ける)。
                     copyPrompt()
                   }}
-                  title={selectedItems.length === 0 ? '行を選んでください' : '指示が長いのでクリップボードにコピーして新セッションを開きます(貼り付けてください)'}
+                  title={hasPromptText ? '指示が長いのでクリップボードにコピーして新セッションを開きます(貼り付けてください)' : '行を選ぶか、下の欄に指示を書いてください'}
                 >
-                  {selectedItems.length === 0 ? 'Claude Code で開く' : 'コピーして Claude Code を開く'}
+                  {hasPromptText ? 'コピーして Claude Code を開く' : 'Claude Code で開く'}
                 </a>
               )}
-              <button type="button" className="secondary-button slim" onClick={copyPrompt} disabled={selectedItems.length === 0}>指示をコピー</button>
-              <button type="button" className="secondary-button slim" onClick={() => setShowPrompt(!showPrompt)} disabled={selectedItems.length === 0} aria-expanded={showPrompt}>
-                {showPrompt ? '指示を隠す' : '指示を見る'}
-              </button>
+              <button type="button" className="secondary-button slim" onClick={copyPrompt} disabled={!hasPromptText}>指示をコピー</button>
+              {promptStale ? (
+                <button type="button" className="secondary-button slim" onClick={rebuildPrompt} data-testid="developer-dashboard-prompt-rebuild">選択から作り直す</button>
+              ) : null}
               {copyStatus === 'copied' ? <span className="basic-data-subcopy">コピーしました。新セッションに貼り付けてください。</span> : null}
               {copyStatus === 'failed' ? <span className="developer-report-error">コピーできませんでした。下の文を選んでコピーしてください。</span> : null}
-              <span className="basic-data-subcopy">1 行だけなら右端の「→Claude」でも開けます。</span>
             </div>
-            {showPrompt && selectedPrompt ? <textarea className="developer-dashboard-prompt" readOnly value={selectedPrompt} rows={12} aria-label="Claude Code への指示" /> : null}
+            <textarea
+              className="developer-dashboard-prompt"
+              value={promptText}
+              onChange={(event) => editPrompt(event.target.value)}
+              rows={6}
+              placeholder="行を選ぶとここに指示が入ります。投げる前に自由に書き足し・書き換えできます(行を選ばず直接書いても投げられます)。"
+              aria-label="Claude Code への指示(編集できます)"
+              data-testid="developer-dashboard-prompt"
+            />
+            {promptStale ? <span className="basic-data-subcopy">書き換えたあとに選択が変わりました。今の選択を反映するには「選択から作り直す」(書き換えた分は消えます)。</span> : null}
           </section>
         )}
       </section>
@@ -321,16 +353,35 @@ export function DeveloperDashboardScreen({ authMode, workspaceKey, appVersion, c
   )
 }
 
-function TodoRow({ item, selected, selectable, onToggle, claudeUrl }: { item: DashboardActionItem; selected: boolean; selectable: boolean; onToggle: (id: string) => void; claudeUrl: string | null }) {
+function TodoRow({
+  item,
+  selected,
+  selectable,
+  expanded,
+  onToggle,
+  onToggleExpanded,
+  claudeUrl,
+}: {
+  item: DashboardActionItem
+  selected: boolean
+  selectable: boolean
+  expanded: boolean
+  onToggle: (id: string) => void
+  onToggleExpanded: (id: string) => void
+  claudeUrl: string | null
+}) {
   return (
+    <>
     <tr className={`developer-dashboard-todo-row is-${item.turn} ${selected ? 'is-selected' : ''}`} data-action-id={item.id}>
       <td className="sel">
         {selectable ? <input type="checkbox" checked={selected} onChange={() => onToggle(item.id)} aria-label={`${item.title} を選ぶ`} /> : null}
       </td>
       <td className="kind"><span className={`status-chip ${item.kind === 'checklist-needs-improvement' || item.kind === 'report-delivery-failed' ? 'warning' : 'secondary'}`}>{item.kindLabel}</span></td>
       <td className="body">
-        <span className="developer-dashboard-todo-title">{item.title}</span>
-        {item.detail ? <span className="developer-dashboard-todo-detail">{item.detail}</span> : null}
+        <button type="button" className="developer-dashboard-todo-open" onClick={() => onToggleExpanded(item.id)} aria-expanded={expanded} title={expanded ? '詳細を閉じる' : '押すと詳細を開く'}>
+          <span className="developer-dashboard-todo-title">{expanded ? '▾' : '▸'} {item.title}</span>
+          {item.detail && !expanded ? <span className="developer-dashboard-todo-detail">{item.detail}</span> : null}
+        </button>
       </td>
       <td className="turn"><span className={`status-chip ${TURN_CHIP_CLASS[item.turn]}`}>{DASHBOARD_ACTION_TURN_LABELS[item.turn]}</span></td>
       <td className="act">
@@ -338,5 +389,16 @@ function TodoRow({ item, selected, selectable, onToggle, claudeUrl }: { item: Da
         {claudeUrl ? <a className="developer-dashboard-issue-link" href={claudeUrl} target="_blank" rel="noreferrer" title="この 1 件を Claude Code の新セッションに投げる">→Claude</a> : null}
       </td>
     </tr>
+    {expanded ? (
+      <tr className="developer-dashboard-todo-facts" data-facts-for={item.id}>
+        <td />
+        <td colSpan={4}>
+          <ul>
+            {item.facts.map((fact, index) => <li key={index}>{fact}</li>)}
+          </ul>
+        </td>
+      </tr>
+    ) : null}
+    </>
   )
 }

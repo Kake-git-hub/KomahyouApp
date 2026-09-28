@@ -111,17 +111,17 @@ function build(input: { reports?: DeveloperReportRecord[]; issues?: GitHubIssueR
 }
 
 describe('buildDashboardActions — 何を未対応として出すか', () => {
-  it('材料が空なら未対応 0 件(済んだものを出さない)。定義だけあれば未確認 1 行だけ', () => {
+  it('材料が空なら未対応 0 件(済んだものを出さない)。確認リストの未確認は出さない(確認リストパネルが正本・d-4)', () => {
     const result = build({})
     expect(result.active).toEqual([])
     expect(result.waiting).toEqual([])
     expect(result.counts).toEqual({ total: 0, claude: 0, owner: 0, waiting: 0 })
     const withDefinition = build({ definition: CHECKLIST })
-    expect(withDefinition.active.map((item) => item.id)).toEqual(['checklist-unanswered'])
-    expect(withDefinition.active[0].count).toBe(3)
+    expect(withDefinition.active).toEqual([])
+    expect(withDefinition.waiting).toEqual([])
   })
 
-  it('確認リストの要改善は 1 項目 1 行で Claude の番、未確認は 1 行に畳んでオーナーの番(Claude には投げない)', () => {
+  it('確認リストの要改善は 1 項目 1 行で Claude の番。未確認・OK はどこにも出さない(確認リストとの役割分担・d-4)', () => {
     const reports = [checklistReport('r1', '- t-1 要改善: 日付が 1 日ずれる\n- q-1 OK', '2026-09-27T10:00:00.000Z')]
     const result = build({ reports, definition: CHECKLIST })
     const needs = result.active.find((item) => item.id === 'checklist-t-1')
@@ -131,13 +131,10 @@ describe('buildDashboardActions — 何を未対応として出すか', () => {
     expect(needs!.detail).toContain('日付が 1 日ずれる')
     expect(needs!.prompt).toContain('要改善')
     expect(needs!.prompt).toContain('日付が 1 日ずれる')
-    const unanswered = result.active.find((item) => item.id === 'checklist-unanswered')
-    expect(unanswered).toBeDefined()
-    expect(unanswered!.turn).toBe('owner')
-    expect(unanswered!.count).toBe(1)
-    expect(unanswered!.detail).toContain('d-1')
-    expect(unanswered!.detail).not.toContain('q-1')
-    expect(unanswered!.prompt).toBeNull()
+    // 「内容」を押すと開く詳細にはメモ全文・分類が入る。
+    expect(needs!.facts.join('\n')).toContain('メモ: 日付が 1 日ずれる')
+    // 未確認(d-1 など)は行にならない。
+    expect([...result.active, ...result.waiting].map((item) => item.id)).toEqual(['checklist-t-1'])
     // OK になった q-1 はどこにも出ない。
     expect([...result.active, ...result.waiting].some((item) => item.title.includes('q-1'))).toBe(false)
   })
@@ -204,7 +201,7 @@ describe('buildDashboardActions — 何を未対応として出すか', () => {
     expect(result.active[0].turn).toBe('owner')
     expect(result.active[0].detail).toContain('#69')
     expect(result.active[0].href).toBe('https://github.com/Kake-git-hub/KomahyouApp/issues/69')
-    expect(result.active[0].prompt).toContain('issues/69')
+    expect(result.active[0].prompt).toContain('#69 [利用者質問] 緑が丘校')
   })
 
   it('参照 Issue がすべてクローズ済みの台帳の行は「台帳の行を消す」として Claude の番に変わる(更新漏れ検知)', () => {
@@ -267,6 +264,7 @@ describe('buildClaudeCodePrompt / URL', () => {
     turn: 'claude',
     title: '題名',
     detail: '',
+    facts: [],
     href: null,
     prompt: '本文',
     count: 1,
@@ -274,23 +272,21 @@ describe('buildClaudeCodePrompt / URL', () => {
     ...overrides,
   })
 
-  it('新セッションが単独で動ける本文: リポジトリ名・着手前確認・各件の見出し・完了条件を含み、投げられない件は除く', () => {
+  it('本文は短く(d-4): 件数・CLAUDE.md への一言・各件の見出しと本文だけ。手順や完了条件は繰り返さず、投げられない件は除く', () => {
     const prompt = buildClaudeCodePrompt(
       [item({ id: 'a', kindLabel: '要改善', title: 't-1 日付', prompt: '- メモ: ずれる' }), item({ id: 'b', title: '投げられない', prompt: null })],
       { appVersion: '1.5.562', generatedAt: '2026-09-28T03:00:00.000Z' },
     )
-    expect(prompt).toContain('Kake-git-hub/KomahyouApp')
-    expect(prompt).toContain('未対応 1 件')
+    expect(prompt).toContain('次の 1 件')
     expect(prompt).toContain('CLAUDE.md')
-    expect(prompt).toContain('solo-git-workflow')
     expect(prompt).toContain('v1.5.562')
     expect(prompt).toContain('## 1. [要改善] t-1 日付')
     expect(prompt).toContain('- メモ: ずれる')
     expect(prompt).not.toContain('投げられない')
-    expect(prompt).toContain('CHANGELOG.md')
-    expect(prompt).toContain('verificationChecklist.ts')
-    expect(prompt).toContain('developmentStatusLedger.ts')
-    expect(prompt).toContain('v8OZ7zH8vONNHjjYVcR1')
+    // 以前の長い定型文(着手前確認・完了条件)は載せない。
+    expect(prompt).not.toContain('solo-git-workflow')
+    expect(prompt).not.toContain('終わったら')
+    expect(prompt.split('\n').length).toBeLessThanOrEqual(4)
   })
 
   it('URL は公式の入力済み形式(claude.ai/code?repositories=…&prompt=…)で、本文は URL エンコードされる', () => {
@@ -349,10 +345,12 @@ describe('個人情報を Claude への指示に載せない(regression-reviewer
   })
 
   it('報告を読み終える前(reportsReady=false)は確認リストの行を出さない(全項目が未確認に見える誤表示防止)', () => {
-    const notReady = buildDashboardActions({ reports: [], issues: [], issueStates: new Map(), checklist: summarizeVerificationChecklistStatus([], CHECKLIST), ledger: [], now: NOW, reportsReady: false })
-    expect(notReady.active).toEqual([])
-    const ready = buildDashboardActions({ reports: [], issues: [], issueStates: new Map(), checklist: summarizeVerificationChecklistStatus([], CHECKLIST), ledger: [], now: NOW, reportsReady: true })
-    expect(ready.active.map((item) => item.id)).toEqual(['checklist-unanswered'])
+    const reports = [checklistReport('r1', '- t-1 要改善: ずれる', '2026-09-27T10:00:00.000Z')]
+    const checklist = summarizeVerificationChecklistStatus(reports, CHECKLIST)
+    const notReady = buildDashboardActions({ reports, issues: [], issueStates: new Map(), checklist, ledger: [], now: NOW, reportsReady: false })
+    expect(notReady.active.filter((item) => item.kind === 'checklist-needs-improvement')).toEqual([])
+    const ready = buildDashboardActions({ reports, issues: [], issueStates: new Map(), checklist, ledger: [], now: NOW, reportsReady: true })
+    expect(ready.active.map((item) => item.id)).toEqual(['checklist-t-1'])
   })
 
   it('sanitizeErrorForPrompt はメールアドレスを伏せ、長すぎる文を切る', () => {

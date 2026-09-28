@@ -56,7 +56,20 @@ describe('DeveloperDashboardScreen の描画', () => {
     }
   })
 
-  it('【詳細】面では従来の 5 つの欄・確認リストの全項目・台帳の全テーマ・機能フラグを描く(内容は据え置き)', () => {
+  it('未対応面の指示欄は編集できる textarea で常に出る(投げる前に書き足せる・d-4)。行の内容は押すと詳細が開くボタン', () => {
+    const html = renderToString(createElement(DeveloperDashboardScreen, FIREBASE_PROPS))
+    const textarea = html.match(/<textarea[^>]*data-testid="developer-dashboard-prompt"[^>]*>/u)?.[0] ?? ''
+    expect(textarea).not.toBe('')
+    expect(textarea).not.toContain('readonly')
+    expect(textarea).toContain('編集できます')
+    expect(html).not.toContain('指示を見る')
+    expect(html).toContain('class="developer-dashboard-todo-open"')
+    expect(html).toContain('aria-expanded="false"')
+    // 確認リストの未確認は未対応面に出さない(確認リストパネルが正本)。
+    expect(html).not.toContain('checklist-unanswered')
+  })
+
+  it('【詳細】面では 5 つの欄・台帳の全テーマ・機能フラグを描き、確認リストは要改善だけ(項目ごとの全量は確認リストパネルに任せる・d-4)', () => {
     const html = renderToString(createElement(DeveloperDashboardScreen, { ...FIREBASE_PROPS, initialView: 'detail' }))
     for (const id of ['dashboard-reports', 'dashboard-features', 'dashboard-ledger', 'dashboard-issues', 'dashboard-checklist']) {
       expect(html, id).toContain(`id="${id}"`)
@@ -67,7 +80,8 @@ describe('DeveloperDashboardScreen の描画', () => {
     // 教室一覧の行(報告 0 件でも出る)と検証用教室の札。
     expect(html).toContain('スクールIE 緑が丘校')
     expect(html).toContain('検証用')
-    for (const item of VERIFICATION_CHECKLIST.items) expect(html, item.id).toContain(`<code>${item.id}</code>`)
+    for (const item of VERIFICATION_CHECKLIST.items) expect(html, item.id).not.toContain(`<code>${item.id}</code>`)
+    expect(html).toContain('要改善の項目はありません')
     for (const entry of DEVELOPMENT_STATUS_LEDGER) expect(html, entry.id).toContain(entry.title)
     // 機能フラグの段階: レジストリの全キーと、その scope の札が出る(今のフラグ状態に依存しない)。
     for (const [key, feature] of Object.entries(featureRolloutRegistry)) {

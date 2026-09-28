@@ -5993,6 +5993,35 @@ tr.sa-group-row td {
   white-space: nowrap;
 }
 
+.developer-dashboard-todo-open {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.developer-dashboard-todo-open:hover .developer-dashboard-todo-title {
+  text-decoration: underline;
+}
+
+.developer-dashboard-todo-facts td {
+  background: #fbfcfe;
+  font-size: 13px;
+  color: #1f2f44;
+}
+
+.developer-dashboard-todo-facts ul {
+  margin: 0;
+  padding-left: 18px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .developer-dashboard-todo-row.is-selected td {
   background: #eef4ff;
 }

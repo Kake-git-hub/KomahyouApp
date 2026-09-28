@@ -9,7 +9,6 @@ import { useMemo, useState } from 'react'
 
 import { isDevelopmentClassroom } from '../../utils/developmentClassroom'
 import {
-  CHECKLIST_ITEM_STATUS_LABELS,
   DEVELOPER_DASHBOARD_REPORT_LIMIT,
   DEVELOPER_REPORT_CATEGORY_LABELS,
   DEVELOPER_REPORT_STATUS_LABELS,
@@ -84,6 +83,7 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
   const openIssues = useMemo(() => issues.filter((issue) => issue.state === 'open'), [issues])
   const openUserReportIssues = useMemo(() => openIssues.filter((issue) => issue.isUserReport), [openIssues])
   const openOtherIssues = useMemo(() => openIssues.filter((issue) => !issue.isUserReport), [openIssues])
+  const needsImprovementRows = useMemo(() => checklist.rows.filter((row) => row.status === 'needs-improvement'), [checklist])
   const recentlyClosedIssues = useMemo(() => issues.filter((issue) => issue.state === 'closed').slice(0, CLOSED_ISSUE_DISPLAY_LIMIT), [issues])
   const ledgerByStage = useMemo(
     () => DEVELOPMENT_STATUS_STAGES.map((stage) => ({ stage, entries: DEVELOPMENT_STATUS_LEDGER.filter((entry) => entry.stage === stage) })).filter((group) => group.entries.length > 0),
@@ -257,16 +257,17 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
       {/* ── 5. 確認リスト ─────────────────────────────────────────────── */}
       <section className="basic-data-section-card developer-backup-panel" id="dashboard-checklist">
         <div className="basic-data-card-head">
-          <h3>5. 確認リスト({checklist.version})の確認済み／未確認</h3>
-          <p>開発用教室の確認リストパネルから送られた結果(developerReports)を項目ごとに重ねます。同じ id でも前の版の結果は別物として参考表示だけにします。</p>
+          <h3>5. 確認リスト({checklist.version})の要改善</h3>
+          <p>確認リストパネル(開発用教室)から送られた結果のうち、直す必要がある「要改善」だけを出します。項目ごとの確認・未確認は確認リストパネルが正本です(役割の重複を避ける・2026-09-28 オーナー指示)。</p>
         </div>
         <div className="developer-dashboard-checklist-counts">
           <span className="status-chip secondary">OK {checklist.counts.ok}</span>
           <span className="status-chip warning">要改善 {checklist.counts.needsImprovement}</span>
           <span className="status-chip">未確認 {checklist.counts.unanswered}</span>
           <span className="basic-data-subcopy">最終受付 {formatDashboardDateTime(checklist.latestSubmissionAt)}</span>
-          {checklist.resultsOutsideDefinition > 0 ? <span className="basic-data-subcopy">現行版に無い項目の結果 {checklist.resultsOutsideDefinition} 件は表に出しません</span> : null}
         </div>
+        {needsImprovementRows.length === 0 ? <div className="toolbar-status">要改善の項目はありません。</div> : null}
+        {needsImprovementRows.length > 0 ? (
         <div className="developer-dashboard-table-wrap">
           <table className="developer-billing-table developer-dashboard-table">
             <thead>
@@ -274,18 +275,16 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
                 <th>id</th>
                 <th>分類</th>
                 <th>項目</th>
-                <th>結果</th>
                 <th>メモ</th>
                 <th>受付</th>
               </tr>
             </thead>
             <tbody>
-              {checklist.rows.map((row) => (
+              {needsImprovementRows.map((row) => (
                 <tr key={row.id} className={`is-${row.status}`}>
                   <td><code>{row.id}</code></td>
                   <td>{row.area}</td>
                   <td>{row.title}<span className="basic-data-subcopy">追加 {row.introducedIn}</span></td>
-                  <td><span className={`status-chip ${row.status === 'ok' ? 'secondary' : row.status === 'needs-improvement' ? 'warning' : ''}`}>{CHECKLIST_ITEM_STATUS_LABELS[row.status]}</span></td>
                   <td className="developer-dashboard-description">
                     {row.memo}
                     {row.previousVersionResult ? <span className="basic-data-subcopy">前の版(v{row.previousVersionResult.version})では {row.previousVersionResult.result === 'ok' ? 'OK' : '要改善'}{row.previousVersionResult.memo ? `: ${row.previousVersionResult.memo}` : ''}</span> : null}
@@ -296,6 +295,7 @@ export function DeveloperDashboardDetail({ authMode, workspaceKey, classrooms, r
             </tbody>
           </table>
         </div>
+        ) : null}
         <h4 className="developer-dashboard-subheading">その他の気づき(新しい順)</h4>
         {checklist.otherNotes.length === 0 ? <div className="toolbar-status">この期間に「その他」の記入はありません。</div> : null}
         {checklist.otherNotes.map((note) => (

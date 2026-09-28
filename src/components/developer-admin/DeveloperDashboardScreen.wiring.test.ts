@@ -76,6 +76,19 @@ describe('開発ダッシュボード本体(未対応面＋詳細面)', () => {
     expect(DETAIL_TSX).toContain('id="dashboard-checklist"')
   })
 
+  it('d-4: 行の内容を押すと facts を行の下に開き、投げる本文は画面で編集した文(promptText)を使う', () => {
+    expect(DASHBOARD_TSX).toContain('onClick={() => onToggleExpanded(item.id)}')
+    expect(DASHBOARD_TSX).toContain('item.facts.map(')
+    // 送る本文・URL・コピーはすべて編集後の promptText から作る(自動文 selectedPrompt を直接使わない)。
+    expect(DASHBOARD_TSX).toContain('resolveClaudeCodeSessionUrl(promptText)')
+    expect(DASHBOARD_TSX).toContain('copyToClipboard(promptText)')
+    expect(DASHBOARD_TSX).toContain('value={promptText}')
+    expect(DASHBOARD_TSX).toContain('onChange={(event) => editPrompt(event.target.value)}')
+    expect(DASHBOARD_TSX).not.toContain('readOnly value=')
+    // 確認リストの未確認は未対応一覧に出さない(確認リストパネルとの役割分担)。
+    expect(ACTIONS_TS).not.toContain("'checklist-unanswered'")
+  })
+
   it('検証用教室の判定は教室 ID で行う(名前判定へ戻さない・2026-09-16 の是正を維持)', () => {
     expect(DETAIL_TSX).toContain('isDevelopmentClassroom({ id }, workspaceKey)')
   })
