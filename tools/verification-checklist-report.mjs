@@ -60,6 +60,8 @@ function defaultSinceIso(days) {
 }
 
 function accessToken() {
+  // 読み取り専用トークン(tools/prod-readonly-token.mjs)を環境変数で渡せる(他の tools と同じ作法)。
+  if (process.env.FIRESTORE_ACCESS_TOKEN) return process.env.FIRESTORE_ACCESS_TOKEN.trim()
   // Windows では gcloud が .cmd のため shell 経由で呼ぶ(既存 tools と同じ引数)。
   if (process.platform === 'win32') return execSync('gcloud auth print-access-token', { encoding: 'utf8' }).trim()
   return execFileSync('gcloud', ['auth', 'print-access-token'], { encoding: 'utf8' }).trim()

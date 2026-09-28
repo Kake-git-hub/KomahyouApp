@@ -60,13 +60,17 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第29版(v1.5.563): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に d-1(第24版)・t-2(第25版)・d-2(第26版)・d-3(第27版)・t-3(第28版)・a-1〜a-3(第29版)を足しただけ(OK 済みは載せない運用)', () => {
+  it('第31版(v1.5.565): 第30版(OK の b-2/b-3/c-2/t-1/s-4 を外し d-4 を差し替え)に a-1〜a-3(質問・要望への回答)を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 't-2', 't-3', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3', 'a-1', 'a-2', 'a-3'])
-    // 第29版(2026-09-28): 「質問・要望」への回答を画面で返す(spec-developer-report §G-3/§G-5)。開発者画面で書く → 室長のボタンに未読バッジ → 履歴タブ → 既読はサーバー。
+    expect(ids).toEqual(['t-2', 't-3', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3'])
+    for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
+    // ★項目を差し替えた(d-4)・外したので版を上げる(据え置くと d-4 の前回の「要改善」の印がパネルに残る)。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.564')
+    // 第31版(2026-09-28): 「質問・要望」への回答を画面で返す(spec-developer-report §G-3/§G-5)。開発者画面で書く → 室長のボタンに未読バッジ → 履歴タブ → 既読はサーバー。
+    //   版は v1.5.564 据え置き(項目を足しただけ・d-4 の結果待ちの下書きを消さない)。
     for (const id of ['a-1', 'a-2', 'a-3']) {
       const item = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === id)!
-      expect(item.introducedIn, id).toBe('v1.5.563')
+      expect(item.introducedIn, id).toBe('v1.5.565')
       expect(item.area, id).toBe('質問・要望')
     }
     const a1 = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'a-1')!
@@ -76,9 +80,6 @@ describe('確認リストの項目定義', () => {
     const a3 = VERIFICATION_CHECKLIST.items.find((entry) => entry.id === 'a-3')!
     expect((a3.check ?? []).join(' / ')).toContain('確認しました')
     expect(a3.prep).toContain('見るだけ')
-    // ★版は v1.5.556 据え置き: 項目を足しただけ(差し替え・削除なし)のときは上げない(第14版の決まり・CLAUDE.md)。
-    //   上げると結果待ち項目の下書き(localStorage は版ごと)が消え、送信済みの結果もダッシュボードで「未確認」に戻る。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.556')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 第24版(2026-09-25): 開発ダッシュボード(開発者画面のサブページ)。読むだけの画面なので「教室のデータは何も変わらない」を必ず見る。
     const d1 = byId.get('d-1')!
@@ -102,13 +103,19 @@ describe('確認リストの項目定義', () => {
     expect(d3.prep).toContain('見るだけ')
     expect((d3.check ?? []).join(' / ')).toContain('室長側でも同じ「QR提出通知」が出る')
     expect([d3.prep ?? '', ...d3.steps, ...(d3.check ?? [])].join(' / ')).not.toMatch(/v1\.5\.\d+/u)
-    // 退塾の新仕様(オーナー確定 2026-09-20 夜): b-2 は「元に戻せません」、b-3 は日付入力での退塾と行ロック。
-    for (const id of ['b-2', 'b-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.553')
-    expect(byId.get('b-2')!.check!.join(' / ')).toContain('「退塾生徒」を押すと出る')
-    expect(byId.get('b-2')!.check!.join(' / ')).not.toContain('非在籍生徒表示')
-    expect(byId.get('b-3')!.steps.join(' / ')).toContain('退塾日に**今日**を入力')
-    expect(byId.get('b-3')!.check!.join(' / ')).toContain('確認なしに')
-    expect(byId.get('b-3')!.check!.join(' / ')).toContain('元に戻せません')
+    // 第29版(2026-09-28): 既定を未対応一覧へ。d-1 は「詳細を見る」経由に(id 据え置き)。
+    expect(d1.steps.join(' / ')).toContain('詳細を見る')
+    // 第30版: d-4 の要改善(内容クリックで詳細・短い指示・事前に書き足せる指示欄・確認リストとの重複解消)の確認へ差し替え。
+    const d4 = byId.get('d-4')!
+    expect(d4.introducedIn).toBe('v1.5.564')
+    expect(d4.area).toBe('開発者画面')
+    expect(d4.steps.join(' / ')).toContain('Claude Code で開く')
+    expect(d4.steps.join(' / ')).toContain('内容)を押して詳細を開き')
+    expect(d4.steps.join(' / ')).toContain('指示欄に一言書き足して')
+    expect((d4.check ?? []).join(' / ')).toContain('確認リストの未確認」の行が無い')
+    expect((d4.check ?? []).join(' / ')).toContain('個人情報が無く')
+    expect((d4.check ?? []).join(' / ')).toContain('教室のデータは何も変わらない')
+    expect([d4.prep ?? '', ...d4.steps, ...(d4.check ?? [])].join(' / ')).not.toMatch(/v1\.5\.\d+/u)
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
@@ -118,20 +125,6 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('q-2')!.check!.join(' / ')).toContain('休み／振無休／振替先を今決める／何もしない')
     // オーナー確定: 処理済みは盤面を保存できた時点。保存せず閉じたら再通知されることを確かめる項目を必ず持つ。
     expect(byId.get('q-5')!.steps.join(' / ')).toContain('保存せずにPCをリロード')
-    // 第23版(v1.5.556・2026-09-22): c-2 は要改善「すべての文字サイズが今の倍に」→ 2 倍(24〜36px)・幅 1120px の確認へ差し替え。
-    const c2 = byId.get('c-2')!
-    expect(c2.introducedIn).toBe('v1.5.556')
-    expect((c2.check ?? []).join(' / ')).toContain('2 倍')
-    expect((c2.check ?? []).join(' / ')).toContain('1120px')
-    expect((c2.check ?? []).join(' / ')).not.toContain('本文 15px 程度')
-    // その他欄(2026-09-22)「振替をさらに別日へ動かすと元の授業の振替先日が追いつかない」の修正確認 t-1。
-    // A→B→C の 2 段の移動と、盤面・配布用盤面・生徒日程表の 3 か所を見る(兄弟監査)。
-    const t1 = byId.get('t-1')!
-    expect(t1.introducedIn).toBe('v1.5.556')
-    expect(t1.steps.join(' / ')).toContain('C へドラッグ')
-    expect((t1.check ?? []).join(' / ')).toContain('B ではなく C の日付')
-    expect((t1.check ?? []).join(' / ')).toContain('配布用盤面')
-    expect((t1.check ?? []).join(' / ')).toContain('生徒日程表')
     // 第25版(2026-09-26): 緑が丘 室長指摘「講師日程共有で振替先日付が追従しない」の修正確認 t-2。
     // 共有は今週以降だけなので「先週へ動かし直す」ことと、配布用盤面を見ることが確認の要。
     const t2 = byId.get('t-2')!
@@ -146,35 +139,12 @@ describe('確認リストの項目定義', () => {
     expect(t3.steps.join(' / ')).toContain('体験生を追加')
     expect((t3.check ?? []).join(' / ')).toContain('「(休」も日付も付かない')
     expect((t3.check ?? []).join(' / ')).toContain('配布用盤面')
-    // その他欄(2026-09-22)「サーバーバックアップから復元(直近3日)は機能問題ないので本番へ展開して」→ 全教室昇格の確認 s-4。
-    // ★本番教室では「見るだけ」。復元を確定させる手順を書かない(本番データ保護ルール)。
-    const s4 = byId.get('s-4')!
-    expect(s4.introducedIn).toBe('v1.5.556')
-    expect(s4.title).toContain('本番教室')
-    expect(s4.prep).toContain('「この時点へ復元」は押さない')
-    expect([...s4.steps, ...(s4.check ?? [])].join(' / ')).not.toContain('この時点を読み込む')
-    expect((s4.check ?? []).join(' / ')).toContain('別教室の時点が混ざっていない')
     // 第22版の結果(2026-09-22・受付 e541141c)で OK だった項目は載せない。
     for (const okId of ['r-2', 'r-5', 'v-1', 'r-8', 'c-3', 'm-1', 'm-2', 'm-3', 's-1', 's-2', 's-3']) expect(ids, okId).not.toContain(okId)
     // 予行 y-1〜y-4 はオーナー判断で中止(2026-09-22「本番教室では以降の丸ごと振替だけ今の仕様なら問題ないので、この予行は不要」)。
     for (const okId of ['y-1', 'y-2', 'y-3', 'y-4']) expect(ids, okId).not.toContain(okId)
     // 2026-09-20: r-1/r-3/r-4/r-6/r-7 は OK 済み。
     for (const okId of ['r-1', 'r-3', 'r-4', 'r-6', 'r-7']) expect(ids, okId).not.toContain(okId)
-    const b2 = byId.get('b-2')!
-    const steps = [b2.prep ?? '', ...b2.steps, ...(b2.check ?? [])].join(' / ')
-    // 旧定義(今日までは在籍・削除ボタンは翌日から)の手順を残さない。
-    expect(steps).not.toContain('今日までは在籍')
-    expect(steps).not.toContain('翌日から出る')
-    // 旧仕様(手置きのコマは残る)の確認観点へ戻さない。
-    expect(steps).not.toContain('講習・振替のコマは残っている')
-    // 第21版(v1.5.553・オーナー確定 2026-09-20 夜): 一覧の呼び名は「退塾生徒」・退塾後の行は編集不可で削除だけ。
-    expect(steps).toContain('「退塾生徒」を押すと出る')
-    expect(steps).not.toContain('非在籍生徒表示')
-    expect(steps).toContain('「編集」が無く「削除」だけ')
-    expect(steps).toContain('退塾にすると元に戻せません')
-    expect(steps).toContain('出欠の記録がすべて消えている')
-    expect(steps).toContain('昨日以前の週')
-    expect(steps).toContain('残数が控えより増えていない')
     // 第10版で k-11 / k-12 / h-10 は OK。
     for (const okId of ['k-11', 'k-12', 'h-10']) expect(ids, okId).not.toContain(okId)
     // 第9版で k-10 / h-9 / b-1 は OK。
@@ -196,8 +166,8 @@ describe('確認リストの項目定義', () => {
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.556')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.556')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.564')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.564')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -269,7 +239,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.556]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.564]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
