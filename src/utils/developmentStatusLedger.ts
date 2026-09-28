@@ -126,11 +126,11 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     id: 'developer-dashboard',
     title: '開発ダッシュボード(開発者画面)',
     stage: 'awaiting-checklist',
-    summary: '報告・要望の教室別状況、機能の段階、進行中テーマ、GitHub Issue、確認リストの結果を 1 画面に集約(読み取り専用)。',
-    checklistItemIds: ['d-1'],
-    nextAction: 'd-1(開発者画面から開いて各欄が出る)の結果を待つ。',
+    summary: '報告・要望の教室別状況、機能の段階、進行中テーマ、GitHub Issue、確認リストの結果を集約(読み取り専用)。2026-09-28 に既定を「未対応」一覧(1 行 1 件・誰の番か・行を選んで Claude Code の新セッションへ指示入りで投げる)へ替え、5 欄は「詳細を見る」へ移した。',
+    checklistItemIds: ['d-1', 'd-4'],
+    nextAction: 'd-1(詳細面の各欄)と d-4(未対応一覧から Claude Code へ投げる)の結果を待つ。',
     references: ['docs/spec-developer-report.md §E-3'],
-    updatedOn: '2026-09-25',
+    updatedOn: '2026-09-28',
   },
 
   // ── 作りかけ(未マージのブランチ) ────────────────────────────────────────────

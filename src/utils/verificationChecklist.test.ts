@@ -60,9 +60,9 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第28版(v1.5.562): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に d-1(第24版)・t-2(第25版)・d-2(第26版)・d-3(第27版)・t-3(第28版)を足しただけ(OK 済みは載せない運用)', () => {
+  it('第29版(v1.5.563): 第23版の結果待ち(b-2/b-3/c-2/t-1/s-4/q-1〜q-6)に d-1(第24版)・t-2(第25版)・d-2(第26版)・d-3(第27版)・t-3(第28版)・d-4(第29版)を足しただけ(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 't-2', 't-3', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3'])
+    expect(ids).toEqual(['b-2', 'b-3', 'c-2', 't-1', 't-2', 't-3', 's-4', 'q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'd-1', 'd-2', 'd-3', 'd-4'])
     // ★版は v1.5.556 据え置き: 項目を足しただけ(差し替え・削除なし)のときは上げない(第14版の決まり・CLAUDE.md)。
     //   上げると結果待ち項目の下書き(localStorage は版ごと)が消え、送信済みの結果もダッシュボードで「未確認」に戻る。
     expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.556')
@@ -89,6 +89,15 @@ describe('確認リストの項目定義', () => {
     expect(d3.prep).toContain('見るだけ')
     expect((d3.check ?? []).join(' / ')).toContain('室長側でも同じ「QR提出通知」が出る')
     expect([d3.prep ?? '', ...d3.steps, ...(d3.check ?? [])].join(' / ')).not.toMatch(/v1\.5\.\d+/u)
+    // 第29版(2026-09-28): 既定を未対応一覧へ。d-1 は「詳細を見る」経由に(id 据え置き)、d-4 は「Claude Code へ投げる」と個人情報が載らないことを見る。
+    expect(d1.steps.join(' / ')).toContain('詳細を見る')
+    const d4 = byId.get('d-4')!
+    expect(d4.introducedIn).toBe('v1.5.563')
+    expect(d4.area).toBe('開発者画面')
+    expect(d4.steps.join(' / ')).toContain('Claude Code で開く')
+    expect((d4.check ?? []).join(' / ')).toContain('個人情報が無い')
+    expect((d4.check ?? []).join(' / ')).toContain('教室のデータは何も変わらない')
+    expect([d4.prep ?? '', ...d4.steps, ...(d4.check ?? [])].join(' / ')).not.toMatch(/v1\.5\.\d+/u)
     // 退塾の新仕様(オーナー確定 2026-09-20 夜): b-2 は「元に戻せません」、b-3 は日付入力での退塾と行ロック。
     for (const id of ['b-2', 'b-3']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.553')
     expect(byId.get('b-2')!.check!.join(' / ')).toContain('「退塾生徒」を押すと出る')
