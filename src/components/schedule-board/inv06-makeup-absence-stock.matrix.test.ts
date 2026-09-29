@@ -10,7 +10,8 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, computeStudentWithdrawSweep, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -1145,5 +1146,135 @@ describe('INV-06: removeMakeupOrigin は積んだときと同じ形の origin �
     expect(removeMakeupOrigin(onlySlotted, STOCK_KEY, ORIGIN_DATE, 5)[STOCK_KEY]).toBeUndefined()
     // その日付の origin が無ければ台帳をそのまま返す(別の日を減らさない)。
     expect(removeMakeupOrigin(both, STOCK_KEY, '2026-08-06', 4)).toBe(both)
+  })
+})
+
+// ============================================================================
+// INV-06 拡張（2026-09-29 オーナー確定・Issue #72）: テンプレ差分反映の保存前後で未消化振替の残数が一致する
+//
+// 保証（docs/spec-invariants.md INV-06「テンプレ差分反映と保留（2 行）中の在庫」）:
+//   テンプレ保存そのものでは、どの生徒×科目の未消化振替も増減しない。保留の下段に置かれた振替は消化済みのまま、
+//   机に残した欠席記録・席不足で下段へ入った欠席記録も在庫の根拠のまま。
+// 属人化の注意（台帳の記述どおり）: 振替の残数は盤面の走査で決まるので、下段を別マップに置くと走査から漏れて
+//   保存だけで在庫が増える／欠席由来の在庫が消える。消化・欠席由来の走査に下段を 3 本目として含める
+//   （buildMakeupStockEntries の templatePendingDesks）。各行の最後で「下段を走査しないと食い違う」ことも確かめる。
+// 行: 振替の下段 / 机に残した欠席記録 / 席不足で下段に入った欠席記録 / 同日移動。
+// ============================================================================
+describe('INV-06 拡張: テンプレ差分反映の保存前後で未消化振替の残数が一致する（spec-template-behavior 条件 9・9-2）', () => {
+  const WEEK_START_KEY = '2026-08-03'
+  const WEEK_END_KEY = '2026-08-09'
+  const CELL = `${BOARD_DATE}_5`
+  const extraStudents: StudentRow[] = [
+    { ...student, id: 'student-2', name: '二宮 花子', displayName: '二宮' },
+    { ...student, id: 'student-3', name: '三好 次郎', displayName: '三好' },
+  ]
+  const allStudents = [student, ...extraStudents]
+  const diffSettings = (overrides: Partial<ClassroomSettings> = {}) => createSettings({ deskCount: 2, templateFreezeBeforeDate: BOARD_DATE, ...overrides })
+  const templateRow = (id: string, student1Id: string, student2Id = ''): RegularLessonRow => ({ ...regularLesson, id, student1Id, subject1: '数', student2Id, subject2: student2Id ? '数' : '' })
+
+  function buildBoard(settings: ClassroomSettings, update: (desks: DeskCell[]) => DeskCell[]): SlotCell[] {
+    const week = buildManagedScheduleCellsForRange({
+      range: { startDate: WEEK_START_KEY, endDate: WEEK_END_KEY, periodValue: '', personId: '' },
+      fallbackStartDate: WEEK_START_KEY,
+      fallbackEndDate: WEEK_END_KEY,
+      classroomSettings: settings,
+      teachers: [teacher],
+      students: allStudents,
+      regularLessons: [regularLesson],
+      boardWeeks: [],
+    })
+    return week.map((cell) => (cell.id === CELL ? { ...cell, desks: update(cell.desks) } : cell))
+  }
+
+  function save(week: SlotCell[], settings: ClassroomSettings, rows: RegularLessonRow[], suppressed: string[] = []) {
+    return computeTemplateDiffApplyForBoard({
+      weeks: [week],
+      classroomSettings: settings,
+      teachers: [teacher],
+      students: allStudents,
+      regularLessons: rows,
+      effectiveStartDate: BOARD_DATE,
+      suppressedRegularLessonOccurrences: suppressed,
+      templatePendingDesks: {},
+      createdAt: '2026-07-31T00:00:00.000Z',
+    })
+  }
+
+  function stock(weeks: SlotCell[][], settings: ClassroomSettings, rows: RegularLessonRow[], manualAdjustments: Record<string, ManualMakeupOrigin[]> = {}, templatePendingDesks?: TemplatePendingDeskMap) {
+    return buildMakeupStockEntries({
+      students: allStudents,
+      teachers: [teacher],
+      regularLessons: rows,
+      classroomSettings: settings,
+      weeks,
+      manualAdjustments,
+      resolveStudentKey: (entry) => entry.managedStudentId ?? entry.id,
+      today: TODAY,
+      templatePendingDesks,
+    }).find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+  }
+
+  it('振替の下段: 在庫由来の振替コマが保留の下段へ入っても消化済みのまま（残0のまま・下段を走査しないと残1に増える）', () => {
+    const settings = diffSettings({ holidayDates: [HOLIDAY_SOURCE_DATE] })
+    const week = buildBoard(settings, (desks) => desks.map((desk, index) => (index === 1
+      ? { ...desk, teacher: '田中講師', lesson: { id: 'makeup-lesson', studentSlots: [boardStudent({ id: 'makeup-entry', lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE }), null] } }
+      : desk)))
+    // 新テンプレは机 1 に別の生徒を置く → 中身が違うので保留（下段に振替コマ）
+    const rows = [templateRow('regular-1', 'student-1'), templateRow('regular-2', 'student-2')]
+    const before = stock([week], settings, rows)
+    const result = save(week, settings, rows)
+    const key = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_2`)
+    expect(result.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.lessonType).toBe('makeup')
+    expect(before).toBe(0)
+    expect(stock(result.nextWeeks, settings, rows, {}, result.nextPendingDesks)).toBe(before)
+    expect(stock(result.nextWeeks, settings, rows)).toBe(1)
+  })
+
+  it('机に残した欠席記録: 通常授業の欠席（手動 origin）は保存前後で残1のまま、記録は机に残る', () => {
+    const settings = diffSettings()
+    const suppressed = [buildManagedOccurrenceKey(boardStudent(), BOARD_DATE, 5)]
+    const week = buildBoard(settings, (desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined, statusSlots: [boardStatus({ lessonType: 'regular' }), null] } : desk)))
+    const rows = [templateRow('regular-1', 'student-1'), templateRow('regular-2', 'student-2')]
+    const manual = { [STOCK_KEY]: [{ dateKey: BOARD_DATE }] }
+    const before = stock([week], settings, rows, manual)
+    const result = save(week, settings, rows, suppressed)
+    const desk0 = result.nextWeeks[0].find((cell) => cell.id === CELL)!.desks[0]
+    expect(desk0.statusSlots?.[0]?.status).toBe('absent')
+    expect(before).toBe(1)
+    expect(stock(result.nextWeeks, settings, rows, manual, result.nextPendingDesks)).toBe(before)
+  })
+
+  it('席不足で下段に入った欠席記録: 移動しただけの振替コマの欠席（記録から算出する origin）は下段でも残1のまま（走査しないと残0に消える）', () => {
+    const settings = diffSettings()
+    const week = buildBoard(settings, (desks) => desks.map((desk, index) => (index === 0
+      ? { ...desk, lesson: undefined, statusSlots: [boardStatus({ lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '7/29(水) 5限' }), null] }
+      : desk)))
+    // 新テンプレは机 0 に 2 人（生徒 2・3）→ 上段 2 人＋机に残る会計記録 1 件 > 2 席 → 記録だけ下段へ（Q21-10）
+    const rows = [templateRow('regular-1', 'student-2', 'student-3')]
+    const before = stock([week], settings, rows)
+    const result = save(week, settings, rows)
+    const key = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)
+    expect(result.nextPendingDesks[key]?.lower.statusSlots?.[0]?.status).toBe('absent')
+    expect(result.nextWeeks[0].find((cell) => cell.id === CELL)!.desks[0].statusSlots).toBeUndefined()
+    expect(before).toBe(1)
+    expect(stock(result.nextWeeks, settings, rows, {}, result.nextPendingDesks)).toBe(before)
+    expect(stock(result.nextWeeks, settings, rows)).toBe(0)
+  })
+
+  it('同日移動: 同じコマの別の机へ移した通常授業は、保存後も 1 か所に生きて残数が変わらない', () => {
+    const settings = diffSettings()
+    const suppressed = [buildManagedOccurrenceKey(boardStudent(), BOARD_DATE, 5)]
+    const week = buildBoard(settings, (desks) => desks.map((desk, index) => {
+      if (index === 0) return { ...desk, lesson: undefined }
+      return { ...desk, lesson: { id: 'daymove', studentSlots: [boardStudent({ id: 'moved-entry', sameDayMoveSourceDate: BOARD_DATE, sameDayMoveSourceLabel: '8/5(水) 5限' }), null] } }
+    }))
+    const rows = [templateRow('regular-1', 'student-1')]
+    const manual = { [STOCK_KEY]: [{ dateKey: '2026-07-15' }] }
+    const before = stock([week], settings, rows, manual)
+    const result = save(week, settings, rows, suppressed)
+    const cell = result.nextWeeks[0].find((entry) => entry.id === CELL)!
+    const living = cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry?.managedStudentId === 'student-1')
+    expect(living).toHaveLength(1)
+    expect(stock(result.nextWeeks, settings, rows, manual, result.nextPendingDesks)).toBe(before)
   })
 })
