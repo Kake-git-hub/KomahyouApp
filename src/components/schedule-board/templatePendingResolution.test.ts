@@ -349,6 +349,16 @@ describe('テンプレを採用（条件 12）', () => {
     expect((desk0.statusSlots ?? []).filter(Boolean)).toEqual([])
     expect(result.ledgers.scheduleCountAdjustments).toEqual([])
     expect(balances(result.nextWeeks, setup.newRows, result.nextTemplatePendingDesks, result.ledgers)['sM__数']).toBe((before['sM__数'] ?? 0) + 1)
+    // 再マージの不動点（1 行に戻った机が再マージで書き換わらない）
+    const once = remergeBoardWeeksWithManagedData(result.nextWeeks, {
+      classroomSettings: settings(),
+      teachers,
+      students,
+      regularLessons: setup.newRows,
+      suppressedRegularLessonOccurrences: result.ledgers.suppressedRegularLessonOccurrences,
+      todayKey: TODAY_KEY,
+    })
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
   })
 
   it('出欠枠を超えるなら実行せず「先に下段を片づけてください」が出て、盤面・保留マップ・台帳は変わらない（条件 16）', () => {
@@ -391,6 +401,9 @@ describe('既存を採用（条件 13・14・19）', () => {
     })
     const once = remerge(result.nextWeeks)
     const twice = remerge(once)
+    // 再マージの不動点（Q31・条件 13 の「再マージを 2 回通しても上段が湧かない」）: 机ごと変わらない
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
+    expect(cellOf(twice)).toEqual(cellOf(result.nextWeeks))
     expect(liveIds(deskOf(twice, 0))).toEqual(['sM'])
     expect(cellOf(twice).desks.flatMap(liveIds).filter((id) => id === 'sC')).toHaveLength(0)
   })

@@ -786,7 +786,8 @@ function applyTemplateDiffToCell(context: {
 
 // 再マージ（mergeManagedWeek）は、管理授業でない机（手置きの授業・記録だけの机）の非 manual 講師から
 // teacherAssignmentTeacherId を外す。差分反映の結果を再マージの不動点にするため、同じ形に揃える（講師名は変えない）。
-function alignTeacherIdentityWithRemerge(desk: DeskCell): DeskCell {
+// export は第 1 段 (B) の解決操作（下段を机へ戻した机・templatePendingResolution.ts / computePendingDeskResolution）でも同じ形に揃えるため。
+export function alignTeacherIdentityWithRemerge(desk: DeskCell): DeskCell {
   if (desk.manualTeacher || desk.teacherAssignmentTeacherId === undefined) return desk
   const hasManagedLesson = Boolean(desk.lesson) && isTemplateManagedLesson(desk.lesson)
   if (hasManagedLesson) return desk

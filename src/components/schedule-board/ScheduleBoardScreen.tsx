@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
@@ -5880,7 +5880,7 @@ export function computePendingDeskResolution(params: {
     const names = templatePendingStudentNames(removed, params.resolveDisplayName)
     return {
       status: 'applied',
-      nextWeeks: replaceTemplatePendingBoardDesk(params.weeks, location, collapse.nextDesk),
+      nextWeeks: replaceTemplatePendingBoardDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk)),
       nextTemplatePendingDesks: withoutKey(),
       ledgers: disposal.ledgers,
       collapsed: true,
@@ -5906,7 +5906,8 @@ export function computePendingDeskResolution(params: {
     delete deskWithoutUpper.lesson
     const collapse = computePendingDeskCollapse(deskWithoutUpper, entry, { liveStudentsElsewhere })
     if (!collapse.ok) return { status: 'blocked', message: `既存を採用できません。${describeTemplatePendingCollapseFailure(collapse.reason)}` }
-    const nextWeeks = replaceTemplatePendingBoardDesk(params.weeks, location, collapse.nextDesk)
+    // 戻した下段は管理授業でない机の中身になるので、再マージと同じ形（非 manual 講師の講師 id を外す）に揃える＝再マージの不動点（Q31）。
+    const nextWeeks = replaceTemplatePendingBoardDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk))
 
     let suppressedRegularLessonOccurrences = params.ledgers.suppressedRegularLessonOccurrences
     let suppressedMakeupOrigins = params.ledgers.suppressedMakeupOrigins

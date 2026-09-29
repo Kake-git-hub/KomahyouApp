@@ -11,7 +11,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry } from './types'
-import { computePendingDeskCollapse, type TemplatePendingCollapseResult } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, type TemplatePendingCollapseResult } from './templateDiffApply'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -249,7 +249,8 @@ export function settleTemplatePendingDesk(params: {
   if (!collapse.ok) return { status: 'kept', reason: collapse.reason }
   const nextTemplatePendingDesks = { ...params.templatePendingDesks }
   delete nextTemplatePendingDesks[params.key]
-  return { status: 'collapsed', nextWeeks: replaceDesk(params.weeks, location, collapse.nextDesk), nextTemplatePendingDesks }
+  // 下段を机へ戻した机は管理授業でない机になるので、再マージと同じ形（非 manual 講師の講師 id を外す）に揃えて不動点を保つ。
+  return { status: 'collapsed', nextWeeks: replaceDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk)), nextTemplatePendingDesks }
 }
 
 function isBothRowsLive(weeks: readonly SlotCell[][], map: TemplatePendingDeskMap, key: string) {
