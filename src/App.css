@@ -2610,6 +2610,109 @@ tr.sa-group-row td {
   color: #fff;
 }
 
+/* テンプレ差分反映の保留（2 行表示・Issue #72・spec-template-behavior Q24・Q30 第 1 段・機能フラグ templateDiffApply）。
+   机の背景を緑にし、各席の下に下段（既存）を小さく描く。警告の黄・赤文字と紛れない緑系にする。
+   狭い画面では下段の文字を隠して帯「保留 n」だけ出す（押すと保留の机のメニュー）。
+   ★盤面 PDF は stripTemplatePendingLowerForPdf がクローンから下段と緑を外す（INV-13）。 */
+.sa-seat-number.sa-pending,
+.sa-teacher.sa-pending,
+.sa-student.sa-pending {
+  background: #e3f4e6;
+}
+
+.sa-teacher.sa-pending {
+  cursor: not-allowed;
+}
+
+.sa-student.sa-pending {
+  height: auto;
+  min-height: 56px;
+  vertical-align: top;
+}
+
+.sa-student.sa-pending:hover:not(.sa-inactive) {
+  background: #d4eed9;
+}
+
+.sa-pending-lower {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 16px;
+  margin-top: 2px;
+  padding: 1px 2px;
+  border-top: 1px dashed #2e7d32;
+  background: #c8e6cf;
+  color: #1b5e20;
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.sa-pending-lower-band {
+  display: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #2e7d32;
+  color: #fff;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .sa-pending-lower-detail {
+    display: none;
+  }
+
+  .sa-pending-lower-band {
+    display: inline-block;
+  }
+}
+
+.toolbar-template-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid #2e7d32;
+  background: #e3f4e6;
+  color: #1b5e20;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.template-pending-desk-menu-row-label {
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1b5e20;
+}
+
+.template-pending-desk-menu-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.template-pending-desk-menu-lower {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.template-pending-desk-menu-item {
+  font-size: 13px;
+}
+
+.template-pending-desk-menu-item.muted {
+  color: #69809a;
+}
+
 /* 警告時のセル背景色付けはオーナー指示(2026-07-02)で全条件廃止。警告は名前の赤文字(出席不可コマ配置のみ)
    とツールチップで示す。sa-warning クラスは付与され続けるが視覚効果は持たせない。 */
 

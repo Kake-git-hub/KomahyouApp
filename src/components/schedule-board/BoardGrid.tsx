@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useMemo, useRef } from 'react'
+import { memo, useLayoutEffect, useMemo, useRef, type ReactNode } from 'react'
 import { groupClassBandTimeLabels, groupClassBands, groupClassEntryKey, resolveGroupClassDayFlags, type GroupClassBand, type GroupClassEntryMap } from './groupClass'
 import { buildLinkedLessonDestinationMap, resolveVisibleSlotDateLabel } from './lessonLinks'
 import { lessonTypeLabels, teacherTypeLabels } from './mockData'
@@ -6,6 +6,8 @@ import { getMemoLineHeight, getMemoTextStyle } from './memoText'
 import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, TeacherType } from './types'
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
+import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { countTemplatePendingLowerItems } from './templatePendingResolution'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -222,6 +224,12 @@ type BoardGridProps = {
   // 振替元「休)」表示(2026-09-16・機能フラグ transferSourceRestDisplay)。ON のとき移動元マーカー(moved)を
   // 「移」ではなく「休」と表示する。表示だけの切り替えで記録・在庫会計は不変。
   transferSourceRestDisplayEnabled?: boolean
+  // テンプレ差分反映の保留（2 行表示・Issue #72・spec-template-behavior Q24・Q30 第 1 段）。機能フラグ templateDiffApply が
+  // ON の教室のライブ盤面だけ渡す（未指定なら従来の 1 行表示のまま）。保留の机は背景を緑にし、各席の下に下段（既存）を描く。
+  // 狭い画面では下段を帯「保留 n」にして（CSS）、押すと onTemplatePendingLowerClick で保留の机のメニューを開く。
+  // ★下段は盤面画面専用（INV-13）。盤面 PDF はクローンから .sa-pending-lower を外す（stripTemplatePendingLowerForPdf）。
+  templatePendingDesks?: TemplatePendingDeskMap
+  onTemplatePendingLowerClick?: (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => void
 }
 
 function BoardGridComponent({
@@ -246,6 +254,8 @@ function BoardGridComponent({
   onGroupSubjectClick,
   onGroupTeacherClick,
   transferSourceRestDisplayEnabled = false,
+  templatePendingDesks,
+  onTemplatePendingLowerClick,
 }: BoardGridProps) {
   const gridRef = useRef<HTMLDivElement | null>(null)
   const linkedLessonDestinationByStatusId = useMemo(
@@ -296,6 +306,7 @@ function BoardGridComponent({
     statusEntry: StudentStatusEntry | null = null,
     studentManagedId: string | undefined = undefined,
     extraClassName = '',
+    pendingLowerNode: ReactNode = null,
   ) => {
     const effectiveName = studentName || statusEntry?.name || ''
     const effectiveGrade = studentName ? studentGrade : (statusEntry?.grade ?? studentGrade)
@@ -360,7 +371,7 @@ function BoardGridComponent({
     return (
       <td
         key={`${cell.id}_${deskIndex}_student${studentIndex + 1}`}
-        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${isTrial ? ' sa-student-trial' : ''}${extraClassName ? ` ${extraClassName}` : ''}`}
+        className={`sa-student${!cell.isOpenDay ? ' sa-inactive' : ''}${hasWarning ? ' sa-warning' : ''}${isPicked ? ' sa-student-picked' : ''}${isTrial ? ' sa-student-trial' : ''}${extraClassName ? ` ${extraClassName}` : ''}${pendingLowerNode ? ' sa-pending' : ''}`}
         onClick={(event) => onStudentClick(cell.id, deskIndex, studentIndex, Boolean(studentName), hasMemo, statusEntry?.status ?? null, event.clientX, event.clientY)}
         onMouseDown={onStudentMouseDown ? (event) => onStudentMouseDown(cell.id, deskIndex, studentIndex, Boolean(studentName), statusEntry?.status === 'attended', event.button, event.clientX, event.clientY) : undefined}
         data-cell-id={cell.id}
@@ -423,7 +434,41 @@ function BoardGridComponent({
             </>
           )}
         </div>
+        {pendingLowerNode}
       </td>
+    )
+  }
+
+  // 保留（2 行）の机の下段（既存）1 席分。上段（机の実配置）の下に小さく描き、押すと保留の机のメニューを開く。
+  // ★.sa-student-inner の外に置く（盤面・PDF の文字サイズ合わせは .sa-student-inner だけを見る）。
+  const renderTemplatePendingLower = (cell: SlotCell, deskIndex: number, studentIndex: number, pending: TemplatePendingDesk) => {
+    const lower = pending.lower
+    const student = lower.lesson?.studentSlots[studentIndex] ?? null
+    const memo = lower.memoSlots?.[studentIndex] ?? null
+    const record = lower.statusSlots?.[studentIndex] ?? null
+    let label = ''
+    if (student) {
+      const prefix = getLessonPrefix(student.lessonType, Boolean(isExternalStudentName?.(student.name)))
+      label = `${prefix.text}${resolveStudentDisplayName(student.name, student.managedStudentId)} ${student.subject}`
+    } else if (memo && memo.trim()) {
+      label = memo.replace(/\r/g, '').split('\n')[0] ?? ''
+    } else if (record) {
+      label = `${resolveStudentDisplayName(record.name, record.managedStudentId)}(${getStudentStatusLabel(record.status, transferSourceRestDisplayEnabled)}`
+    }
+    return (
+      <div
+        className="sa-pending-lower"
+        title="保留中の下段（既存）。押すと保留の机のメニューを開きます。"
+        data-testid={`pending-lower-${cell.id}-${deskIndex}-${studentIndex}`}
+        onClick={(event) => {
+          event.stopPropagation()
+          onTemplatePendingLowerClick?.(cell.id, deskIndex, studentIndex, event.clientX, event.clientY)
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <span className="sa-pending-lower-detail">{label}</span>
+        {studentIndex === 0 ? <span className="sa-pending-lower-band">保留 {countTemplatePendingLowerItems(lower)}</span> : null}
+      </div>
     )
   }
 
@@ -631,6 +676,7 @@ function BoardGridComponent({
 
                       const desk = cell.desks[deskIndex]
                       const lesson = desk.lesson
+                      const pendingEntry = templatePendingDesks ? templatePendingDesks[buildTemplatePendingDeskKey(cell.id, desk.id)] : undefined
                       const teacherManualWarning = hasManualTeacherWarning(desk)
                       const teacherUnavailableWarning = hasUnavailableTeacherWarning(desk)
                       const teacherWarning = teacherManualWarning || teacherUnavailableWarning
@@ -639,6 +685,7 @@ function BoardGridComponent({
                         'sa-teacher',
                         !cell.isOpenDay ? 'sa-inactive' : '',
                         teacherWarning ? 'sa-warning' : '',
+                        pendingEntry ? 'sa-pending' : '',
                       ].filter(Boolean).join(' ')
                       const firstStudent = lesson?.studentSlots[0] ?? null
                       const secondStudent = lesson?.studentSlots[1] ?? null
@@ -653,7 +700,7 @@ function BoardGridComponent({
                       return [
                         <td
                           key={`${cell.id}_${deskIndex}_seat`}
-                          className={`sa-seat-number sa-day-group-start${!cell.isOpenDay ? ' sa-inactive' : ''}`}
+                          className={`sa-seat-number sa-day-group-start${!cell.isOpenDay ? ' sa-inactive' : ''}${pendingEntry ? ' sa-pending' : ''}`}
                           data-date-key={cell.dateKey}
                           data-slot-number={slotNumber}
                           data-testid={`seat-number-cell-${cell.id}-${deskIndex}`}
@@ -673,7 +720,7 @@ function BoardGridComponent({
                         >
                           <div
                             className={`sa-teacher-name${teacherWarning ? ' sa-teacher-name-warning' : ''}`}
-                            title={teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : teacherAssignmentHint)}
+                            title={pendingEntry ? '保留（2 行）の机では講師を変更できません' : (teacherUnavailableWarning ? '出席不可コマに講師が配置されています' : (teacherManualWarning ? '手動追加のため注意' : teacherAssignmentHint))}
                           >
                             {cell.isOpenDay ? desk.teacher : ''}
                           </div>
@@ -700,6 +747,8 @@ function BoardGridComponent({
                           firstSelected,
                           firstStatus,
                           firstStudent?.managedStudentId,
+                          '',
+                          pendingEntry ? renderTemplatePendingLower(cell, deskIndex, 0, pendingEntry) : null,
                         ),
                         renderStudentCell(
                           cell,
@@ -724,6 +773,7 @@ function BoardGridComponent({
                           secondStatus,
                           secondStudent?.managedStudentId,
                           'sa-day-group-end',
+                          pendingEntry ? renderTemplatePendingLower(cell, deskIndex, 1, pendingEntry) : null,
                         ),
                       ]
                     })}

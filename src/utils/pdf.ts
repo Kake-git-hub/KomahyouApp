@@ -446,6 +446,14 @@ export function pruneBoardTableForSelection(table: HTMLElement, selection: Board
   }
 }
 
+// テンプレ差分反映の保留（2 行表示・Issue #72）の下段は盤面画面専用（INV-13・spec-template-behavior Q25-1）。
+// 盤面 PDF は画面の DOM を複製して作るため、複製から下段（.sa-pending-lower）と保留の緑（sa-pending）を外して
+// 上段（机の実配置）だけを出す。保留の無い盤面では何もしない。
+export function stripTemplatePendingLowerForPdf(root: HTMLElement) {
+  root.querySelectorAll<HTMLElement>('.sa-pending-lower').forEach((node) => node.remove())
+  root.querySelectorAll<HTMLElement>('.sa-pending').forEach((node) => node.classList.remove('sa-pending'))
+}
+
 // 盤面PDFの本体。selection が null のときは従来の「表示週まるごと」出力(exportBoardPdf)と完全に同じ。
 // selection を渡した場合だけ、クローン側の列/行を間引き・未選択セルを空白化し、解像度と生徒文字の
 // 上限を選択数に応じて上げる。⚠️ 全選択は selection を渡さない経路(exportBoardPdf)へ委譲すること。
@@ -462,6 +470,7 @@ async function runBoardPdfExport({ element, fileName, title }: ExportBoardPdfPar
   exportRoot.style.width = 'max-content'
 
   const clone = element.cloneNode(true) as HTMLElement
+  stripTemplatePendingLowerForPdf(clone)
   clone.querySelector<HTMLElement>('.lecture-stock-panel')?.remove()
   clone.querySelector<HTMLElement>('.makeup-stock-panel')?.remove()
   const grid = clone.querySelector<HTMLElement>('.slot-adjust-grid')
