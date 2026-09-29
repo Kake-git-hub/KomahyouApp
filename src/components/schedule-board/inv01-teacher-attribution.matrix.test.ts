@@ -2,15 +2,18 @@ import { describe, expect, it, vi } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { ClassroomSettings } from '../../types/appState'
-import type { SlotCell, StudentEntry } from './types'
+import type { DeskCell, SlotCell, StudentEntry } from './types'
 import {
   buildManagedScheduleCellsForRange,
   buildScheduleCellsForRange,
   computeStudentMove,
   computeTeacherMove,
+  computeTemplateDiffApplyForBoard,
   ensureWeeksCoverDateRange,
   overlayBoardWeeksOnScheduleCells,
+  remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
+import { buildTemplatePendingDeskKey } from './templatePendingDesks'
 import { openTeacherScheduleHtml } from '../../utils/scheduleHtml'
 import { buildTeacherAssignments, collectTeacherAssignmentEntries } from '../../utils/scheduleViewData'
 
@@ -840,5 +843,125 @@ describe('INV-01 マトリクス: boardOnly の前提 — 範囲内の日付が�
     const fridayCells = cells.filter((cell) => cell.dateKey === FRI)
     expect(boardTeachersHoldingStudent(fridayCells, '井上')).toEqual(['落合'])
     expect(boardTeachersHoldingStudent(fridayCells, '青木')).toEqual(['山本'])
+  })
+})
+
+// ============================================================================
+// 操作8: テンプレ差分反映の講師の揃え（Issue #72・spec-template-behavior Q21-9・受け入れ条件 6(a)〜(f)・regression-reviewer R-4）
+//   テンプレ保存で机の講師がテンプレに揃う／QR 講師が残る／削除記録は復活しない／テンプレ机に講師がいなければ手置き講師は残り足場講師は外れる。
+//   どの場合も、保存 → 盤面の再マージ（保存直後の effect）→ 日程表（boardOnly＝盤面の写し）→ serialize 往復で、
+//   生徒は「盤面の机に実際に居る講師」1 名のページにだけ出て、旧担当（旧テンプレの講師）・新テンプレの講師（机に居ない場合）には出ない。
+//   保留（2 行）の机の下段は日程表に出ない（INV-13）ので、講師のページにも出ない。
+// ============================================================================
+describe('INV-01 マトリクス: テンプレ差分反映の講師の揃え（Q21-9）— 生徒は実際の机の講師 1 名にだけ出る', () => {
+  const studentS3 = createStudent({ id: 'student-miyoshi', name: '三好 三郎', displayName: '三好' })
+  const teacherZ = createTeacher({ id: 't_kato', name: '加藤 次郎', displayName: '加藤', subjectCapabilities: [{ subject: '英', maxGrade: '高3' }, { subject: '数', maxGrade: '高3' }] })
+  const teachers = [teacherX, teacherY, teacherZ]
+  const students = [studentS1, studentS2, studentS3]
+  const diffSettings = { ...classroomSettings, deskCount: 3, templateFreezeBeforeDate: FRI }
+  const row = (id: string, teacherId: string, studentId = '', subject = '英') => createRegularLesson({ id, teacherId, student1Id: studentId, subject1: studentId ? subject : '' })
+  // 旧テンプレ: 机0=落合(井上・英)・机1=山本(青木・数)
+  const oldRows = [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_yamamoto', 'student-aoki', '数')]
+  const makeupMiyoshi = () => mkStudentEntry({ id: 'miyoshi-makeup', name: '三好', managedStudentId: 'student-miyoshi', lessonType: 'makeup', makeupSourceDate: '2026-07-17', makeupSourceLabel: '2026/7/17(金) 5限' })
+
+  function board(update: (desks: DeskCell[]) => DeskCell[]) {
+    const week = buildManagedScheduleCellsForRange({
+      range: RANGE, fallbackStartDate: RANGE.startDate, fallbackEndDate: RANGE.endDate,
+      classroomSettings: { ...classroomSettings, deskCount: 3 }, teachers, students, regularLessons: oldRows, boardWeeks: [], suppressedRegularLessonOccurrences: [],
+    })
+    return week.map((cell) => (cell.id !== CELL_ID ? cell : { ...cell, desks: update(cell.desks) }))
+  }
+
+  // 保存 → 盤面の再マージ 2 回 → 日程表（boardOnly）。newRows は保存した新テンプレ（日程表の regularLessons にも渡す＝旧担当フォールバックの検査）。
+  function saveToSchedule(week: SlotCell[], newRows: RegularLessonRow[]) {
+    const saved = computeTemplateDiffApplyForBoard({
+      weeks: [week], classroomSettings: diffSettings, teachers, students, regularLessons: newRows,
+      effectiveStartDate: FRI, suppressedRegularLessonOccurrences: [], templatePendingDesks: {}, createdAt: '2026-07-20T00:00:00.000Z',
+    })
+    const remerge = (weeks: SlotCell[][]) => remergeBoardWeeksWithManagedData(weeks, {
+      classroomSettings: diffSettings, teachers, students, regularLessons: newRows, suppressedRegularLessonOccurrences: saved.addedSuppressedRegularLessonOccurrences, todayKey: '2026-07-20',
+    })
+    const boardWeeks = remerge(remerge(saved.nextWeeks))
+    const scheduleCells = buildScheduleCellsForRange({
+      range: RANGE, fallbackStartDate: RANGE.startDate, fallbackEndDate: RANGE.endDate, classroomSettings: diffSettings, teachers, students,
+      regularLessons: newRows, boardWeeks, suppressedRegularLessonOccurrences: saved.addedSuppressedRegularLessonOccurrences, boardOnly: true,
+    })
+    const fri5 = scheduleCells.filter((cell) => cell.id === CELL_ID)
+    const pagesOf = (name: string) => teachers.filter((teacher) => serializedTeacherStudentNames(scheduleCells, asTeacherKey(teacher), { teachers, students, regularLessons: newRows }).includes(name)).map((teacher) => teacher.displayName)
+    return { saved, fri5, pagesOf, boardDesk: (index: number) => boardWeeks.flat().find((cell) => cell.id === CELL_ID)!.desks[index] }
+  }
+
+  it('(a) テンプレ机に講師 T・既存が手置き M（印ありで中身が同じ）→ 机の講師は T（手置きの印は外れる）。井上は T のページにだけ出て M・旧担当には出ない', () => {
+    // 机0: 手置き加藤＋井上（メモ＝印）。新テンプレ: 机0=山本(井上)・机1=落合(青木)
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't_kato', memoSlots: ['連絡', null] } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '山本', manualTeacher: false })
+    expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual(['山本'])
+    expect(pagesOf('井上')).toEqual(['山本'])
+    expect(pagesOf('青木')).toEqual(['落合'])
+  })
+
+  it('(a) 2 行の机でも講師は T。上段（テンプレの井上）は T のページにだけ出て、下段（手置きの三好の振替）はどの講師のページにも出ない', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: 'hand', studentSlots: [makeupMiyoshi(), null] } } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { saved, boardDesk, pagesOf } = saveToSchedule(week, newRows)
+    expect(saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, boardDesk(0).id)]).toBeDefined()
+    expect(boardDesk(0).teacher).toBe('山本')
+    expect(pagesOf('井上')).toEqual(['山本'])
+    expect(pagesOf('三好')).toEqual([])
+  })
+
+  it('(b) テンプレ机に講師なし・既存が手置き M（印ありで残す机）→ M が残り、三好の振替は M のページにだけ出る', () => {
+    // 机2（旧テンプレでは空）に手置き加藤＋三好の振替。新テンプレは 2 机だけ（机2 は空）。
+    const week = board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't_kato', lesson: { id: 'hand', studentSlots: [makeupMiyoshi(), null] } } : desk)))
+    const { boardDesk, pagesOf } = saveToSchedule(week, oldRows)
+    expect(boardDesk(2)).toMatchObject({ teacher: '加藤', manualTeacher: true })
+    expect(pagesOf('三好')).toEqual(['加藤'])
+    expect(pagesOf('井上')).toEqual(['落合'])
+  })
+
+  it('(c) テンプレ机に講師なし・既存がテンプレ足場の講師（非 manual・印ありで残す机）→ 講師は外れ、三好の振替は旧担当（足場講師）のページに出ない', () => {
+    // 机1: 旧テンプレの山本（足場）＋三好の振替に差し替え。新テンプレは 1 机だけ（机1 は空）。
+    const week = board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, lesson: { id: 'hand', studentSlots: [makeupMiyoshi(), null] } } : desk)))
+    const newRows = [row('r0', 't_ochiai', 'student-inoue')]
+    const { boardDesk, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(1).teacher).toBe('')
+    expect(pagesOf('三好')).toEqual([])
+    expect(pagesOf('井上')).toEqual(['落合'])
+  })
+
+  it('(d) QR 自動割振り講師 → テンプレ机に講師がいても QR 講師のまま。上段のテンプレ生徒は QR 講師のページにだけ出てテンプレの講師には出ない', () => {
+    // 机0: QR 加藤（講習 ss1）＋三好の振替（印あり・中身違い → 2 行）。新テンプレ: 机0=山本(井上)
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '加藤', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't_kato', lesson: { id: 'hand', studentSlots: [makeupMiyoshi(), null] } } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { boardDesk, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '加藤', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+    expect(pagesOf('井上')).toEqual(['加藤'])
+    expect(pagesOf('三好')).toEqual([])
+  })
+
+  it('(e) 講師の削除記録の机にテンプレの生徒 → 講師欄は空のまま（再マージ 2 回でも T は戻らない）。井上はどの講師のページにも出ない（T・旧担当に漏れない）', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '落合', lesson: undefined, memoSlots: ['欠勤', null] } : desk)))
+    const newRows = [row('r0', 't_yamamoto', 'student-inoue'), row('r1', 't_ochiai', 'student-aoki', '数')]
+    const { boardDesk, fri5, pagesOf } = saveToSchedule(week, newRows)
+    expect(boardDesk(0)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
+    expect(boardTeachersHoldingStudent(fri5, '井上')).toEqual([''])
+    expect(pagesOf('井上')).toEqual([])
+    expect(pagesOf('青木')).toEqual(['落合'])
+  })
+
+  it('(f) 削除記録だけの机: テンプレ机に講師だけ → 削除記録のまま講師なし（T はその机に戻らない）／テンプレ机が空 → 削除記録が外れて空机', () => {
+    const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '山本', lesson: undefined })
+    // 机1（旧: 山本＋青木）を削除記録に（青木は抑止されない前提を避けるため青木をテンプレから外す）。新テンプレ: 机1=加藤(講師だけ)
+    const teacherOnly = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue'), row('r1', 't_kato')])
+    expect(teacherOnly.boardDesk(1)).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
+    expect(teacherOnly.fri5.flatMap((cell) => cell.desks).filter((desk) => desk.teacher === '加藤')).toHaveLength(0)
+    expect(teacherOnly.pagesOf('井上')).toEqual(['落合'])
+    // 新テンプレに机1 が無い（空）→ 削除記録が外れる
+    const empty = saveToSchedule(board((desks) => desks.map((desk, index) => (index === 1 ? tombstone(desk) : desk))), [row('r0', 't_ochiai', 'student-inoue')])
+    expect(empty.boardDesk(1).teacherAssignmentSource).toBeUndefined()
+    expect(empty.boardDesk(1).teacher).toBe('')
+    expect(empty.pagesOf('井上')).toEqual(['落合'])
   })
 })

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { SlotCell, StudentEntry } from './types'
-import { computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
+import type { RegularLessonRow } from '../basic-data/regularLessonModel'
+import type { ClassroomSettings } from '../../types/appState'
+import type { DeskCell, SlotCell, StudentEntry } from './types'
+import { buildManagedScheduleCellsForRange, computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, computeTemplateDiffApplyForBoard, remergeBoardWeeksWithManagedData, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 // ============================================================================
@@ -221,5 +224,105 @@ describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生�
     })
     expect(r.status).toBe('blocked')
     if (r.status === 'blocked') expect(r.message).toContain('移動不可')
+  })
+})
+
+// ============================================================================
+// INV-12 × テンプレ差分反映の**保存**（Issue #72・spec-template-behavior Q21-11 の二段構え・regression-reviewer R-2）
+//
+// 保存経路（computeTemplateDiffApplyForBoard）→ 保存直後の再マージ（remergeBoardWeeksWithManagedData）1 回を通しても、
+// 同じコマの「生きている」同じ生徒は 1 か所だけ（保留中の下段は配置ではない＝INV-13 なので数えない）。
+//   前段: 別の 1 行の机に生きている生徒 → 上段に置かない（置かなかった生徒の抑止キーを保存が積むので、再マージでも湧かない）
+//   後段: 別の机の下段にだけ生きている生徒 → 上段に置く（置かないと保留中に日程表から消え、下段側でテンプレを採用すると無言で消失する）
+// 兄弟: 解決操作の検査は上の describe（Q26-4）。
+// ============================================================================
+describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数は保存 → 再マージの後も 1（Q21-11）', () => {
+  const WEEK_START = '2026-10-05'
+  const WEEK_END = '2026-10-11'
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const studentRows: StudentRow[] = [
+    { id: 'sA', name: '青木', displayName: '青木', email: 'a@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+    { id: 'sB', name: '馬場', displayName: '馬場', email: 'b@example.com', entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01' },
+  ]
+  const teacherRows: TeacherRow[] = ['田中', '鈴木', '佐藤'].map((name, index) => ({
+    id: `t${index + 1}`, name, email: `t${index + 1}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
+  }))
+  const row = (id: string, teacherId: string, student1Id = ''): RegularLessonRow => ({
+    id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id: '', subject2: '',
+    student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5,
+  })
+  const settings = (extra: Partial<ClassroomSettings> = {}) => ({ closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 3, ...extra }) as ClassroomSettings
+  const OLD_ROWS = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')]
+  // 新テンプレ: 机 0 に A（旧テンプレと同じ）・机 1 に B・机 2 は講師だけ
+  const NEW_ROWS = OLD_ROWS
+  const makeupA = (id: string) => mkStudent(id, '青木', { managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+
+  function board(update: (desks: DeskCell[]) => DeskCell[]) {
+    const week = buildManagedScheduleCellsForRange({
+      range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+      fallbackStartDate: WEEK_START,
+      fallbackEndDate: WEEK_END,
+      classroomSettings: settings(),
+      teachers: teacherRows,
+      students: studentRows,
+      regularLessons: OLD_ROWS,
+      boardWeeks: [],
+    })
+    return week.map((cell) => (cell.id === CELL ? { ...cell, desks: update(cell.desks) } : cell))
+  }
+
+  // 保存本体と同じ経路 → 保存直後の再マージ 1 回（教室設定・通常授業の変更 effect と同じ合成関数）。
+  function saveThenRemerge(week: SlotCell[]) {
+    const saved = computeTemplateDiffApplyForBoard({
+      weeks: [week],
+      classroomSettings: settings({ templateFreezeBeforeDate: DATE }),
+      teachers: teacherRows,
+      students: studentRows,
+      regularLessons: NEW_ROWS,
+      effectiveStartDate: DATE,
+      suppressedRegularLessonOccurrences: [],
+      templatePendingDesks: {},
+      createdAt: '2026-09-29T10:00:00.000Z',
+    })
+    const remerged = remergeBoardWeeksWithManagedData(saved.nextWeeks, {
+      classroomSettings: settings({ templateFreezeBeforeDate: DATE }),
+      teachers: teacherRows,
+      students: studentRows,
+      regularLessons: NEW_ROWS,
+      suppressedRegularLessonOccurrences: saved.addedSuppressedRegularLessonOccurrences,
+      todayKey: '2026-09-29',
+    })
+    return { saved, remerged }
+  }
+  const liveCount = (weeks: SlotCell[][], managedId: string) => weeks.flat().filter((cell) => cell.id === CELL)
+    .flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []))
+    .filter((student) => student?.managedStudentId === managedId).length
+  const liveIdsAt = (weeks: SlotCell[][], deskIndex: number) => (weeks.flat().find((cell) => cell.id === CELL)!.desks[deskIndex].lesson?.studentSlots ?? [])
+    .filter(Boolean).map((student) => student!.managedStudentId)
+
+  it('前段: 別の 1 行の机（机 2）に A の振替が生きていれば、机 0 の上段に A を置かない。再マージ 1 回の後も A は 1 か所', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 2 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))
+    const { saved, remerged } = saveThenRemerge(week)
+    expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
+    expect(liveIdsAt(saved.nextWeeks, 2)).toEqual(['sA'])
+    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(saved.addedSuppressedRegularLessonOccurrences).toHaveLength(1)
+    expect(liveCount(remerged, 'sA')).toBe(1)
+    expect(liveIdsAt(remerged, 2)).toEqual(['sA'])
+  })
+
+  it('後段: 別の机（机 1）の下段にだけ A が居るなら、机 0 の上段に A を置く。再マージ 1 回の後も生きている A は 1 か所（下段は数えない）', () => {
+    // 机 1 に A の振替を手置き → 新テンプレの机 1 は B なので中身が違い保留（下段に A）
+    const week = board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))
+    const { saved, remerged } = saveThenRemerge(week)
+    const pendingKey = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_2`)
+    expect(saved.nextPendingDesks[pendingKey]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(saved.addedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
+    expect(liveCount(remerged, 'sA')).toBe(1)
+    expect(liveIdsAt(remerged, 0)).toEqual(['sA'])
   })
 })

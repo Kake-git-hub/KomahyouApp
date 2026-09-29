@@ -5,7 +5,13 @@ import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './typ
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { SpecialSessionRow } from '../special-data/specialSessionModel'
 import type { ClassroomSettings } from '../../types/appState'
+import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import {
+  applyTeacherAutoAssignRequest,
+  buildManagedOccurrenceKey,
+  buildManagedScheduleCellsForRange,
+  computeTemplateDiffApplyForBoard,
+  remergeBoardWeeksWithManagedData,
   overlayBoardWeeksOnScheduleCells,
   packSortCellDesks,
   repackTeacherOnlyDesks,
@@ -24,7 +30,9 @@ import {
 import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, collectTemplatePendingCellIds, collectTemplatePendingDeskIdsInCell, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { seatSortCells } from './deskSort'
+import { trimBoardWeeksForMemory } from './boardWeekTrim'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -1447,5 +1455,343 @@ describe('INV-02 × 保留（2 行）の解決操作: 戻す 1 回で操作前�
     expect(redo.scheduleCountAdjustments).toEqual(result.ledgers.scheduleCountAdjustments)
     expect(redo.suppressedRegularLessonOccurrences).toEqual(result.ledgers.suppressedRegularLessonOccurrences)
     expect(redo.weeks[0][0].desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
+  })
+})
+
+// ============================================================================
+// INV-02 × 列「テンプレ差分反映」（Issue #72・機能フラグ templateDiffApply・regression-reviewer R-3）
+//
+// 保証（docs/spec-invariants.md INV-02「テンプレ差分反映での例外文言（改定）」）:
+//   (1) 机の講師はテンプレ机の講師に揃う（テンプレ机に講師がいなければユーザーが置いた講師は残り、足場講師は外れる）。
+//       QR 自動割振り講師は置き換えず、盤面で削除した講師（削除記録）は保存でも再マージでも戻らない。
+//   (2) 生徒側に手入力の印の無い机だけ生徒がテンプレで置き換わる。講師の配置（手置き・QR）は印に数えない。講師系の印は削除記録だけ。
+//   (3) 印のある机の生徒・出欠記録・メモは保存で消えない（机に残るか下段に残る。会計を持つ出欠記録は机に残す）。
+// 行: 印を 1 種類ずつ × { テンプレ机に生徒なし（残す）/ テンプレ机に別の生徒（保留または即時合流）}・講師系の印・削除記録の机・休日のコマ・QR 講師。
+// 各行で「保存 → 再マージ 2 回」を通し、保存の結果が再マージで書き換わらない（自動処理で巻き戻らない）ことも見る。
+// 出典: templateDiffApply.test.ts の Q22（印）・条件 2〜8・21・22 を、保証の単位でここへ写した（経路テストは元ファイルにも残す）。
+// ============================================================================
+describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存でも再マージでも消えない（列「テンプレ差分反映」）', () => {
+  const WEEK_START = '2026-10-05'
+  const WEEK_END = '2026-10-11'
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const studentRows: StudentRow[] = [['sA', '青木'], ['sB', '馬場'], ['sC', '千葉'], ['sM', '三浦']].map(([id, name]) => ({
+    id, name, displayName: name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', birthDate: '2012-05-01',
+  }))
+  const teacherRows: TeacherRow[] = [['t1', '田中'], ['t2', '鈴木'], ['t3', '佐藤'], ['t4', '高橋']].map(([id, name]) => ({
+    id, name, email: `${id}@example.com`, entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }],
+  }))
+  const row = (id: string, teacherId: string, student1Id = ''): RegularLessonRow => ({
+    id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id: '', subject2: '',
+    student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: 5,
+  })
+  const diffSettings = (extra: Partial<ClassroomSettings> = {}) => ({ closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 3, ...extra }) as ClassroomSettings
+  // 旧テンプレ: 机0=田中(A)・机1=鈴木(B)・机2=佐藤(講師だけ)
+  const OLD_ROWS = [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')]
+  // 新テンプレ（机0 にテンプレの生徒 C＝中身が違う）／（机0 は講師だけ＝テンプレ机に生徒なし）
+  //   （同じコマに同じ講師を 2 机置かない＝再マージの講師重複の整理と混ざらない形にする）
+  const ROWS_WITH_C = [row('r0', 't2', 'sC'), row('r1', 't1', 'sB'), row('r2', 't3')]
+  const ROWS_TEACHER_ONLY = [row('r0', 't3'), row('r1', 't2', 'sB'), row('r2', 't1')]
+  const entry = (studentId: string, overrides: Partial<StudentEntry> = {}): StudentEntry => {
+    const source = studentRows.find((item) => item.id === studentId)!
+    return createStudent({ id: `${studentId}_board_${overrides.lessonType ?? 'regular'}`, name: source.name, managedStudentId: studentId, grade: '中2', ...overrides })
+  }
+  const record = (studentId: string, statusKind: StudentStatusEntry['status']): StudentStatusEntry => {
+    const source = studentRows.find((item) => item.id === studentId)!
+    return createAttendedStatus({ id: `status_${studentId}_${statusKind}`, studentId, name: source.name, managedStudentId: studentId, dateKey: DATE, slotNumber: 5, status: statusKind })
+  }
+
+  function board(update: (desk: DeskCell) => DeskCell, classroom = diffSettings(), deskIndex = 0) {
+    const week = buildManagedScheduleCellsForRange({
+      range: { startDate: WEEK_START, endDate: WEEK_END, periodValue: '', personId: '' },
+      fallbackStartDate: WEEK_START,
+      fallbackEndDate: WEEK_END,
+      classroomSettings: classroom,
+      teachers: teacherRows,
+      students: studentRows,
+      regularLessons: OLD_ROWS,
+      boardWeeks: [],
+    })
+    return week.map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === deskIndex ? update(desk) : desk)) }))
+  }
+
+  // 保存本体（computeTemplateDiffApplyForBoard）→ 保存直後の再マージ 2 回（教室設定・通常授業の変更 effect と同じ合成関数）。
+  // 休日のコマは、再マージが机の講師の手置き印を「未設定」で持つ（差分反映は false）ので、中身（講師・生徒・記録・メモ）で比べる。
+  const contentOf = (cell: SlotCell) => cell.desks.map((desk) => ({
+    id: desk.id, teacher: desk.teacher, manualTeacher: Boolean(desk.manualTeacher), source: desk.teacherAssignmentSource ?? null,
+    students: (desk.lesson?.studentSlots ?? []).map((student) => (student ? `${student.managedStudentId}:${student.lessonType}` : null)),
+    records: (desk.statusSlots ?? []).map((item) => (item ? `${item.managedStudentId}:${item.status}` : null)),
+    memos: desk.memoSlots ?? null,
+  }))
+  function saveAndRemerge(week: SlotCell[], rows: RegularLessonRow[], options: { suppressed?: string[]; classroom?: ClassroomSettings; compare?: 'strict' | 'content' } = {}) {
+    const classroom = options.classroom ?? diffSettings({ templateFreezeBeforeDate: DATE })
+    const saved = computeTemplateDiffApplyForBoard({
+      weeks: [week], classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows,
+      effectiveStartDate: DATE, suppressedRegularLessonOccurrences: options.suppressed ?? [], templatePendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z',
+    })
+    const suppressed = [...(options.suppressed ?? []), ...saved.addedSuppressedRegularLessonOccurrences]
+    const remerge = (weeks: SlotCell[][]) => remergeBoardWeeksWithManagedData(weeks, {
+      classroomSettings: classroom, teachers: teacherRows, students: studentRows, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, todayKey: '2026-09-29',
+    })
+    const once = remerge(saved.nextWeeks)
+    const twice = remerge(once)
+    const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
+    // 再マージで巻き戻らない＝保存の結果が不動点
+    if (options.compare === 'content') {
+      expect(contentOf(cellOf(once))).toEqual(contentOf(cellOf(saved.nextWeeks)))
+      expect(contentOf(cellOf(twice))).toEqual(contentOf(cellOf(saved.nextWeeks)))
+    } else {
+      expect(cellOf(once)).toEqual(cellOf(saved.nextWeeks))
+      expect(cellOf(twice)).toEqual(cellOf(saved.nextWeeks))
+    }
+    const desk0 = cellOf(saved.nextWeeks).desks[0]
+    return { saved, desk0, lower: saved.nextPendingDesks[buildTemplatePendingDeskKey(CELL, desk0.id)]?.lower }
+  }
+  const liveIds = (lesson: DeskCell['lesson'] | undefined) => (lesson?.studentSlots ?? []).filter(Boolean).map((student) => student!.managedStudentId)
+  const statusKinds = (slots: DeskCell['statusSlots'] | undefined) => (slots ?? []).filter(Boolean).map((item) => item!.status)
+  const memos = (slots: DeskCell['memoSlots'] | undefined) => (slots ?? []).filter((memo) => typeof memo === 'string' && memo.trim() !== '')
+
+  // 生徒単位の印（1 種類ずつ・生徒 M を机 0 に置く。旧テンプレの A は外した形）
+  const studentMarks: Array<[string, Partial<StudentEntry>]> = [
+    ['種別 振替（makeup）', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' }],
+    ['種別 講習（special）', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }],
+    ['種別 体験（trial）', { lessonType: 'trial' }],
+    ['種別 増コマ（extra）', { lessonType: 'extra' }],
+    ['手動追加（manualAdded）', { manualAdded: true }],
+    ['同日移動（sameDayMoveSourceDate）', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '10/7(水) 4限' }],
+    ['別日移動（makeupSourceDate）', { makeupSourceDate: '2026-09-30' }],
+  ]
+
+  describe.each(studentMarks)('生徒の印 %s', (_label, overrides) => {
+    const markedDesk = (desk: DeskCell): DeskCell => ({ ...desk, lesson: { id: `${desk.id}_hand`, studentSlots: [entry('sM', overrides), null] } })
+
+    it('テンプレ机に生徒なし → 1 行で残る（講師はテンプレの講師）', () => {
+      const { saved, desk0, lower } = saveAndRemerge(board(markedDesk), ROWS_TEACHER_ONLY)
+      expect(liveIds(desk0.lesson)).toEqual(['sM'])
+      expect(desk0.teacher).toBe('佐藤')
+      expect(lower).toBeUndefined()
+      expect(saved.summary.kept).toBeGreaterThanOrEqual(1)
+    })
+
+    it('テンプレ机に別の生徒 → 保留の下段に残る（上段はテンプレの生徒）', () => {
+      const { desk0, lower } = saveAndRemerge(board(markedDesk), ROWS_WITH_C)
+      expect(liveIds(desk0.lesson)).toEqual(['sC'])
+      expect(liveIds(lower?.lesson)).toEqual(['sM'])
+    })
+  })
+
+  describe.each(['absent', 'absent-no-makeup', 'attended'] as const)('机の印 会計を持つ出欠記録 %s', (statusKind) => {
+    const markedDesk = (desk: DeskCell): DeskCell => ({ ...desk, lesson: undefined, statusSlots: [record('sA', statusKind), null] })
+    it.each([['テンプレ机に生徒なし', ROWS_TEACHER_ONLY], ['テンプレ机に別の生徒', ROWS_WITH_C]] as const)('%s → 記録は机に残る（下段へ入れない）', (_label, rows) => {
+      const { desk0, lower } = saveAndRemerge(board(markedDesk), rows, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(statusKinds(desk0.statusSlots)).toEqual([statusKind])
+      expect(lower?.statusSlots ?? null).toBeNull()
+    })
+  })
+
+  describe.each(['moved', 'holiday'] as const)('机の印 表示専用の出欠記録 %s', (statusKind) => {
+    const markedDesk = (desk: DeskCell): DeskCell => ({ ...desk, lesson: undefined, statusSlots: [record('sA', statusKind), null] })
+    it('テンプレ机に生徒なし → 記録は机に残る', () => {
+      const { desk0 } = saveAndRemerge(board(markedDesk), ROWS_TEACHER_ONLY, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(statusKinds(desk0.statusSlots)).toEqual([statusKind])
+    })
+    it('テンプレ机に別の生徒・生きている生徒なし → その場で 1 行（表示専用の記録は会計を持たないので捨てる＝Q28-6・Q28-3）', () => {
+      const { saved, desk0, lower } = saveAndRemerge(board(markedDesk), ROWS_WITH_C, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(liveIds(desk0.lesson)).toEqual(['sC'])
+      expect(statusKinds(desk0.statusSlots)).toEqual([])
+      expect(lower).toBeUndefined()
+      expect(saved.summary.collapsedOnCreate).toBe(1)
+    })
+  })
+
+  describe('机の印 メモ', () => {
+    const markedDesk = (desk: DeskCell): DeskCell => ({ ...desk, lesson: undefined, memoSlots: ['連絡', null] })
+    it.each([['テンプレ机に生徒なし', ROWS_TEACHER_ONLY], ['テンプレ机に別の生徒（即時合流でメモは空いた席へ）', ROWS_WITH_C]] as const)('%s → メモは机に残る', (_label, rows) => {
+      const { desk0, lower } = saveAndRemerge(board(markedDesk), rows, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(memos(desk0.memoSlots)).toEqual(['連絡'])
+      expect(lower).toBeUndefined()
+    })
+  })
+
+  describe('机の印 その日の通常授業の削除記録（抑止キー）', () => {
+    const suppressed = [buildManagedOccurrenceKey(entry('sA'), DATE, 5)]
+    it('テンプレ机（抑止前）の生徒が削除済み → 印ありとして扱い、削除した A は湧かない。新テンプレの別の生徒は空いた机に即時合流で載る', () => {
+      const { saved, desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, lesson: undefined })), [row('r0', 't1', 'sA'), row('r1', 't2', 'sB'), row('r2', 't3')], { suppressed })
+      expect(liveIds(desk0.lesson)).toEqual([])
+      expect(lower).toBeUndefined()
+      expect(saved.summary.replaced).toBe(0)
+    })
+  })
+
+  describe('講師系の印は削除記録だけ（講師の配置は印に数えない）', () => {
+    it.each([
+      ['手置き（manual）', { manualTeacher: true, teacherAssignmentSource: 'manual' as const }],
+      ['入替（manual-replaced）', { manualTeacher: true, teacherAssignmentSource: 'manual-replaced' as const }],
+    ])('講師 %s だけの机 → 印なし＝生徒はテンプレで置き換わり、講師はテンプレ机の講師に揃う', (_label, teacherFields) => {
+      const { desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '佐藤', ...teacherFields })), ROWS_WITH_C)
+      expect(liveIds(desk0.lesson)).toEqual(['sC'])
+      expect(desk0.teacher).toBe('鈴木')
+      expect(desk0.manualTeacher).toBe(false)
+      expect(lower).toBeUndefined()
+    })
+
+    it('QR 自動割振り講師だけの机 → 印なし＝生徒は置き換わるが、講師は置き換えず QR 講師（由来・講習期間 ID）のまま（例外 1）', () => {
+      const { saved, desk0, lower } = saveAndRemerge(board((desk) => ({ ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't4' })), ROWS_WITH_C)
+      expect(liveIds(desk0.lesson)).toEqual(['sC'])
+      expect(desk0).toMatchObject({ teacher: '高橋', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+      expect(lower).toBeUndefined()
+      expect(saved.summary.qrTeacherKept).toBe(1)
+    })
+
+    it('講師の削除記録の机 → 印あり。テンプレ机に講師がいても講師欄は削除のまま（例外 2）・再マージでも戻らない', () => {
+      const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: 't1', lesson: undefined })
+      const teacherOnly = saveAndRemerge(board(tombstone), ROWS_TEACHER_ONLY, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(teacherOnly.desk0).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
+      const withStudent = saveAndRemerge(board(tombstone), ROWS_WITH_C, { suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, 5)] })
+      expect(withStudent.desk0).toMatchObject({ teacher: '', teacherAssignmentSource: 'deleted' })
+      expect(liveIds(withStudent.desk0.lesson)).toEqual(['sC'])
+      expect(withStudent.saved.summary.deletedTeacherDeskFilled).toBe(1)
+    })
+
+    it('削除記録だけの空き机で、テンプレ机も空 → 削除記録を外す（従来どおり・Q21-3 の 5 行目）', () => {
+      // 机 2（旧テンプレでは講師だけの机）を削除記録にし、新テンプレは 2 行だけ（机 2 は空）。
+      const tombstone = (desk: DeskCell): DeskCell => ({ ...desk, teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', lesson: undefined })
+      const { saved } = saveAndRemerge(board(tombstone, diffSettings(), 2), [row('r0', 't1', 'sA'), row('r1', 't2', 'sB')])
+      const desk2 = saved.nextWeeks.flat().find((cell) => cell.id === CELL)!.desks[2]
+      expect(desk2.teacherAssignmentSource).toBeUndefined()
+      expect(desk2.teacher).toBe('')
+      expect(saved.summary.tombstoneCleared).toBe(1)
+    })
+  })
+
+  describe('QR 講師の机が保留（2 行）になっても講師は QR のまま・下段は講師を持たない', () => {
+    it('再マージ 2 回でも QR 講師が別の机へ動かず、講師も入れ替わらない', () => {
+      const { desk0, lower, saved } = saveAndRemerge(board((desk) => ({
+        ...desk, teacher: '高橋', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't4',
+        lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
+      })), ROWS_WITH_C)
+      expect(desk0.teacher).toBe('高橋')
+      expect(liveIds(lower?.lesson)).toEqual(['sM'])
+      expect(lower).not.toHaveProperty('teacher')
+      expect(saved.nextWeeks.flat().find((cell) => cell.id === CELL)!.desks.filter((desk) => desk.teacher === '高橋')).toHaveLength(1)
+    })
+  })
+
+  // 既知の穴（2026-09-29 R-3 のマトリクス作成で判明・要判断）: 机に残した QR 講師／手置き講師／削除記録の講師名と同じ講師が、
+  // 新テンプレの**別の机に講師だけ**で居ると、差分反映はその足場講師を置くが、再マージ（mergeManagedWeek の「同じコマに既に居る講師・
+  // 削除した講師は足さない」）が外すため、保存の結果が再マージの不動点にならない（中身は失われない・保存直後の effect で足場講師が外れるだけ）。
+  it.todo('QR/手置き/削除記録の講師と同名のテンプレ足場講師（講師だけの机）が同じコマの別の机にあっても、保存結果が再マージの不動点になる')
+
+  describe('休日のコマ（テンプレ机を空とみなす・Q21-6）', () => {
+    it('印ありの机の会計記録は残り、印なしの机は空席になる（再マージでも変わらない）', () => {
+      const holiday = diffSettings({ templateFreezeBeforeDate: DATE, holidayDates: [DATE] })
+      const week = board((desk) => desk).map((cell) => (cell.id !== CELL ? cell : { ...cell, desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, lesson: undefined, statusSlots: [record('sB', 'absent'), null] as DeskCell['statusSlots'] } : desk)) }))
+      const { saved } = saveAndRemerge(week, OLD_ROWS, { classroom: holiday, compare: 'content' })
+      const cell = saved.nextWeeks.flat().find((item) => item.id === CELL)!
+      expect(cell.isOpenDay).toBe(false)
+      expect(liveIds(cell.desks[0].lesson)).toEqual([])
+      expect(statusKinds(cell.desks[1].statusSlots)).toEqual(['absent'])
+    })
+  })
+})
+
+// ============================================================================
+// INV-02 × 列「保留中の自動処理」（Issue #72・spec-template-behavior Q31・regression-reviewer R-3）
+//
+// 保証（INV-02 改定文言の末尾）: 保留の下段は明示の解決操作でしか消えず、再マージ・詰め直し・講習の講師自動割当・QR 提出講師の自己修復・
+// 週トリム・リロードで消えも変わりもしない。保留マップのキーは机 ID なので、「保留の机の講師・位置・ID を動かさない」ことが下段を守ることになる。
+// 行: 詰め直し（repackTeacherOnlyDesks）・講習の講師自動割当（applyTeacherAutoAssignRequest）・QR 自己修復（reconcileSubmittedTeacherPlacements）・
+//     詰め替え（packSortCellDesks）・同席番並べ替え（seatSortCells）・週トリム（trimBoardWeeksForMemory）。
+// 各行の最後で「保留マップを渡さない（固定しない）と保留の机が動く」ことも確かめる（ガードが効いている証拠）。
+// 出典: templatePendingPeripherals.test.ts の該当ケースを保証の単位でここへ写した（経路テストは元ファイルにも残す）。
+// ============================================================================
+describe('INV-02 × 保留中の自動処理: 保留の机（講師・位置・ID）を触らない（列「保留中の自動処理」）', () => {
+  const DATE = '2026-10-07'
+  const CELL = `${DATE}_5`
+  const lowerStudent = createStudent({ id: 'm-lower', name: '生徒M', managedStudentId: 'sM', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+  // 机1 = 保留の机（上段の生徒なし・講師なし）・机2 = 手置き講師だけ・机3 = 空。
+  function stuckPendingCell(): { cell: SlotCell; map: TemplatePendingDeskMap } {
+    const cell = createCell({
+      id: CELL, dateKey: DATE, slotNumber: 5,
+      desks: [
+        createDesk({ id: `${CELL}_desk_1`, teacher: '', memoSlots: ['上段のメモ', '上段のメモ2'] }),
+        createDesk({ id: `${CELL}_desk_2`, teacher: '鈴木', manualTeacher: true, teacherAssignmentSource: 'manual' }),
+        createDesk({ id: `${CELL}_desk_3`, teacher: '' }),
+      ],
+    })
+    const map: TemplatePendingDeskMap = {
+      [buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)]: { lower: { lesson: { id: 'lower', studentSlots: [lowerStudent, null] }, memoSlots: ['下段のメモ', null] }, effectiveStartDate: DATE, createdAt: '2026-09-29T10:00:00.000Z' },
+    }
+    return { cell, map }
+  }
+  const occupiedThirdDesk = (cell: SlotCell): SlotCell => ({ ...cell, desks: [cell.desks[0], cell.desks[1], { ...cell.desks[2], teacher: '田中', lesson: { id: 'x', studentSlots: [createStudent({ id: 'a', managedStudentId: 'sA' }), null] } }] })
+  const sato: TeacherRow = { id: 't3', name: '佐藤', email: 't3@example.com', entryDate: '2025-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] }
+  const session = (): SpecialSessionRow => ({
+    id: 'ss1', label: '秋期講習', startDate: DATE, endDate: DATE,
+    teacherInputs: { t3: { unavailableSlots: [], countSubmitted: true, updatedAt: '' } }, studentInputs: {}, createdAt: '', updatedAt: '',
+  }) as unknown as SpecialSessionRow
+  const settingsFor = { ...classroomSettings, deskCount: 3, closedWeekdays: [] } as ClassroomSettings
+
+  it('詰め直し: 保留の机は講師の入れ先にならず、机に居る講師も抜かれない（固定しないと保留の机の講師が先頭へ詰められる）', () => {
+    const { cell, map } = stuckPendingCell()
+    const withTeacher = [cell.desks[1], { ...cell.desks[0], teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual' as const }, cell.desks[2]]
+    const withoutDeskTwoTeacher = [{ ...withTeacher[0], teacher: '', manualTeacher: false, teacherAssignmentSource: undefined }, withTeacher[1], withTeacher[2]]
+    const locked = repackTeacherOnlyDesks(withoutDeskTwoTeacher, collectTemplatePendingDeskIdsInCell(map, CELL))
+    expect(locked[1]).toBe(withoutDeskTwoTeacher[1])
+    expect(locked.map((desk) => desk.teacher)).toEqual(['', '佐藤', ''])
+    expect(repackTeacherOnlyDesks(withoutDeskTwoTeacher).map((desk) => desk.teacher)).toEqual(['佐藤', '', ''])
+    // 保留の机（上段が空）に講師を詰め込まない
+    const repacked = repackTeacherOnlyDesks(cell.desks, collectTemplatePendingDeskIdsInCell(map, CELL))
+    expect(repacked[0]).toBe(cell.desks[0])
+  })
+
+  it('講習の講師自動割当: 空き机が保留の机だけなら置かない（渡さないと保留の机に置いてしまう）', () => {
+    const { cell, map } = stuckPendingCell()
+    const params = { weeks: [[occupiedThirdDesk(cell)]], items: [{ sessionId: 'ss1', teacherId: 't3', mode: 'assign' as const }], specialSessions: [session()], teachers: [sato], students: [], regularLessons: [], classroomSettings: settingsFor }
+    const locked = applyTeacherAutoAssignRequest({ ...params, templatePendingDesks: map })
+    expect(locked.nextWeeks[0][0].desks[0].teacher).toBe('')
+    expect(locked.hasChanges).toBe(false)
+    expect(applyTeacherAutoAssignRequest(params).nextWeeks[0][0].desks[0].teacher).toBe('佐藤')
+  })
+
+  it('QR 提出講師の自己修復: 上段の空いた保留の机は置き先にしない（渡さないと置いてしまう）', () => {
+    const { cell, map } = stuckPendingCell()
+    const params = { weeks: [[occupiedThirdDesk(cell)]], specialSessions: [session()], teachers: [sato], students: [], regularLessons: [], classroomSettings: settingsFor }
+    const locked = reconcileSubmittedTeacherPlacements({ ...params, templatePendingDesks: map })
+    expect(locked.placedCount).toBe(0)
+    expect(locked.nextWeeks[0][0].desks[0].teacher).toBe('')
+    expect(reconcileSubmittedTeacherPlacements(params).nextWeeks[0][0].desks[0].teacher).toBe('佐藤')
+  })
+
+  it('詰め替え: 保留の机はその位置・その ID・中身のまま（固定しないと先頭へ動き ID が付け替わる）', () => {
+    const pendingDesk = createDesk({ id: `${CELL}_desk_3`, teacher: '鈴木', lesson: { id: 'p', studentSlots: [null, createStudent({ id: 'c', managedStudentId: 'sC' })] } })
+    const cell = createCell({ id: CELL, dateKey: DATE, slotNumber: 5, desks: [createDesk({ id: `${CELL}_desk_1` }), createDesk({ id: `${CELL}_desk_2`, teacher: '田中' }), pendingDesk] })
+    const packed = packSortCellDesks(cell, { skipStatusSlotPack: true, lockedDeskIds: new Set([pendingDesk.id]) })
+    expect(packed[2]).toBe(pendingDesk)
+    expect(packed.map((desk) => desk.id)).toEqual([`${CELL}_desk_1`, `${CELL}_desk_2`, `${CELL}_desk_3`])
+    const unlocked = packSortCellDesks(cell, { skipStatusSlotPack: true })
+    expect(unlocked[0].teacher).toBe('鈴木')
+  })
+
+  it('同席番並べ替え: 保留の机は今の席・今の ID のまま（固定しないと動く）', () => {
+    const lessonOf = (id: string) => ({ id: `l_${id}`, studentSlots: [createStudent({ id, managedStudentId: id }), null] as [StudentEntry | null, StudentEntry | null] })
+    const cell1 = createCell({ id: `${DATE}_4`, dateKey: DATE, slotNumber: 4, desks: [createDesk({ id: `${DATE}_4_desk_1`, teacher: '馬場先生', lesson: lessonOf('sB') }), createDesk({ id: `${DATE}_4_desk_2`, teacher: '青木先生', lesson: lessonOf('sA') })] })
+    const cell2 = createCell({ id: `${DATE}_5`, dateKey: DATE, slotNumber: 5, desks: [createDesk({ id: `${DATE}_5_desk_1`, teacher: '青木先生', lesson: lessonOf('sC') }), createDesk({ id: `${DATE}_5_desk_2`, teacher: '馬場先生', lesson: lessonOf('sD') })] })
+    const pendingId = `${DATE}_4_desk_2`
+    const locked = seatSortCells([cell1, cell2], { skipStatusSlotPack: true, resolveLockedDeskIds: (cellId) => (cellId === cell1.id ? new Set([pendingId]) : undefined) })
+    expect(locked[0].desks[1]).toBe(cell1.desks[1])
+    expect(locked[0].desks.map((desk) => desk.id)).toEqual([`${DATE}_4_desk_1`, pendingId])
+    expect(seatSortCells([cell1, cell2], { skipStatusSlotPack: true })[0].desks[0].teacher).toBe('青木先生')
+  })
+
+  it('週トリム: 手動編集の無い遠い週でも、保留のコマを含む週は破棄しない（守らないと破棄される）', () => {
+    const plainCell = (id: string, dateKey: string) => createCell({ id, dateKey, desks: [createDesk({ id: `${id}_desk_1` })] })
+    const near = [plainCell('2026-09-30_5', '2026-09-30')]
+    const farPending = [plainCell('2027-06-02_5', '2027-06-02')]
+    const farPlain = [plainCell('2027-06-09_5', '2027-06-09')]
+    const pending: TemplatePendingDeskMap = { [buildTemplatePendingDeskKey('2027-06-02_5', '2027-06-02_5_desk_1')]: { lower: { memoSlots: ['x', null] }, effectiveStartDate: '2027-06-02', createdAt: 'x' } }
+    const referenceDate = new Date('2026-09-29T00:00:00')
+    expect(trimBoardWeeksForMemory([near, farPending, farPlain], { referenceDate, protectedCellIds: collectTemplatePendingCellIds(pending) })).toEqual([near, farPending])
+    expect(trimBoardWeeksForMemory([near, farPending, farPlain], { referenceDate })).toEqual([near])
   })
 })

@@ -10,8 +10,9 @@ import {
   resolveStoreMakeupOriginDate,
   type ManualMakeupOrigin,
 } from './makeupStock'
-import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence } from './ScheduleBoardScreen'
+import { buildManagedOccurrenceKey, buildManagedScheduleCellsForRange, clearMakeupOrigins, collectClearedDayMakeupSuppressions, computePendingDeskResolution, computeStudentMove, computeStudentWithdrawSweep, computeTemplateDiffApplyForBoard, reconcileHolidayDeskStockReturns, removeMakeupOrigin, resolveSelectedMakeupOrigin, shouldReturnLectureStockOnAbsence, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { settleTemplatePendingDesksAfterCommit } from './templatePendingResolution'
 
 // ============================================================================
 // INV-06 操作マトリクス（生徒を「休み」にしたときの未消化振替の実態一致）
@@ -1276,5 +1277,312 @@ describe('INV-06 拡張: テンプレ差分反映の保存前後で未消化振�
     const living = cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []).filter((entry) => entry?.managedStudentId === 'student-1')
     expect(living).toHaveLength(1)
     expect(stock(result.nextWeeks, settings, rows, manual, result.nextPendingDesks)).toBe(before)
+  })
+})
+
+// ============================================================================
+// INV-06 拡張（2026-09-29 オーナー確定・Issue #72）: 保留（2 行）の**解決操作**の在庫の動き（regression-reviewer R-1）
+//
+// 保証（docs/spec-invariants.md INV-06「テンプレ差分反映と保留（2 行）中の在庫」）:
+//   在庫が動くのは、上段の休み（既存の欠席処理）・下段の削除（既存の削除処理どおり戻す）・「テンプレを採用」で下段を捨てたとき
+//   （削除と同じ在庫処理）だけ。「既存を採用」は在庫を動かさない。
+// 行（spec-template-behavior 条件 10〜13・15。在庫の権威関数は全コマ削除と同じ reconcileHolidayDeskStockReturns）:
+//   下段の削除 × 在庫由来（自動休校日 origin・手動 origin・振替コマの欠席から算出する origin）→ +1 ちょうど（+2 にならない）／手動追加 → ±0
+//   テンプレを採用 → 在庫由来だけ +1・手動追加 ±0
+//   既存を採用 → 在庫 ±0。取り下げた上段の通常授業は、同じ日に授業が残らなければ希望回数 −1／残れば据え置き（Q26-1）
+//   上段の休み → 1 行の机で休みにしたときと同じ残数（既存の欠席処理どおり）・下段の振替は消化済みのまま
+//   下段の同日移動の通常授業を捨てる（テンプレを採用／下段の削除）→ 在庫 ±0・同じ日に残らなければ希望回数 −1／残れば据え置き（N-2・Q26-1 の拡張）
+// 兄弟監査: 削除⇄テンプレを採用⇄既存を採用⇄上段の休み × 在庫由来の振替・手動追加の振替・同日移動の通常授業。
+// ============================================================================
+describe('INV-06 拡張: 保留（2 行）の解決操作で在庫が動く量（spec-template-behavior 条件 10〜13・15）', () => {
+  const WEEK_START_KEY = '2026-08-03'
+  const WEEK_END_KEY = '2026-08-09'
+  const PREV_WEEK_START_KEY = '2026-07-27'
+  const PREV_WEEK_END_KEY = '2026-08-02'
+  const CELL = `${BOARD_DATE}_5`
+  const DESK1 = `${CELL}_desk_2`
+  const ABSENT_ORIGIN_DATE = '2026-07-15' // 振替コマの欠席から算出する origin の振替元（台帳に無い）
+  const STOCK_KEY_2 = 'student-2__数'
+  const STOCK_KEY_3 = 'student-3__数'
+  const allStudents: StudentRow[] = [
+    student,
+    { ...student, id: 'student-2', name: '二宮 花子', displayName: '二宮' },
+    { ...student, id: 'student-3', name: '三好 次郎', displayName: '三好' },
+  ]
+  const settings = createSettings({ deskCount: 2, templateFreezeBeforeDate: BOARD_DATE, holidayDates: [HOLIDAY_SOURCE_DATE] })
+  const templateRow = (id: string, student1Id: string, extra: Partial<RegularLessonRow> = {}): RegularLessonRow => ({ ...regularLesson, id, student1Id, subject1: '数', ...extra })
+  const entryOf = (studentId: string, overrides: Partial<StudentEntry> = {}): StudentEntry => {
+    const row = allStudents.find((item) => item.id === studentId)!
+    return boardStudent({ id: `${studentId}-${overrides.lessonType ?? 'regular'}-entry`, name: row.name, managedStudentId: studentId, ...overrides })
+  }
+  const context = {
+    managedStudentByAnyName: new Map<string, StudentRow>(allStudents.map((row) => [row.name, row])),
+    resolveDisplayName: (name: string) => name,
+    resolveStockId: (entry: StudentEntry) => entry.managedStudentId ?? entry.id,
+  }
+
+  function week(start: string, end: string) {
+    return buildManagedScheduleCellsForRange({
+      range: { startDate: start, endDate: end, periodValue: '', personId: '' },
+      fallbackStartDate: start,
+      fallbackEndDate: end,
+      classroomSettings: createSettings({ deskCount: 2 }),
+      teachers: [teacher],
+      students: allStudents,
+      regularLessons: [regularLesson],
+      boardWeeks: [],
+    })
+  }
+
+  // 机 1（index 1）に lowerStudents を置いた盤面を差分反映で保存し、机 1 を保留（2 行）にする。
+  function pendingBoard(params: { lowerStudents: [StudentEntry, StudentEntry | null]; rows: RegularLessonRow[]; previousWeek?: SlotCell[]; suppressed?: string[] }) {
+    const board = week(WEEK_START_KEY, WEEK_END_KEY).map((cell) => (cell.id !== CELL ? cell : {
+      ...cell,
+      desks: cell.desks.map((desk, index) => (index === 1 ? { ...desk, teacher: '田中講師', lesson: { id: 'hand-placed', studentSlots: params.lowerStudents } } : desk)),
+    }))
+    const weeks = params.previousWeek ? [params.previousWeek, board] : [board]
+    const diff = computeTemplateDiffApplyForBoard({
+      weeks,
+      classroomSettings: settings,
+      teachers: [teacher],
+      students: allStudents,
+      regularLessons: params.rows,
+      effectiveStartDate: BOARD_DATE,
+      suppressedRegularLessonOccurrences: params.suppressed ?? [],
+      templatePendingDesks: {},
+      createdAt: '2026-07-31T00:00:00.000Z',
+    })
+    const key = buildTemplatePendingDeskKey(CELL, DESK1)
+    expect(diff.nextPendingDesks[key], '机 1 が保留（2 行）になる前提').toBeDefined()
+    return { weeks: diff.nextWeeks, pending: diff.nextPendingDesks, key, rows: params.rows, suppressed: [...(params.suppressed ?? []), ...diff.addedSuppressedRegularLessonOccurrences] }
+  }
+
+  function ledgersOf(manual: Record<string, ManualMakeupOrigin[]>, extra: Partial<TemplatePendingResolutionLedgers> = {}): TemplatePendingResolutionLedgers {
+    return {
+      manualLectureStockCounts: {},
+      manualLectureStockOrigins: {},
+      manualMakeupAdjustments: manual,
+      fallbackLectureStockStudents: {},
+      fallbackMakeupStudents: {},
+      suppressedMakeupOrigins: {},
+      suppressedRegularLessonOccurrences: [],
+      scheduleCountAdjustments: [],
+      ...extra,
+    }
+  }
+
+  // 盤面の useMemo(ledgerMakeupOriginDatesByKey) と同じ: 算出由来(absent)を除いた台帳 origin。
+  function ledgerOrigins(weeks: SlotCell[][], rows: RegularLessonRow[], ledgers: TemplatePendingResolutionLedgers) {
+    return collectMakeupOriginDatesByKey({
+      students: allStudents,
+      regularLessons: rows,
+      classroomSettings: settings,
+      weeks,
+      manualAdjustments: ledgers.manualMakeupAdjustments,
+      suppressedOrigins: ledgers.suppressedMakeupOrigins,
+      resolveStudentKey: context.resolveStockId,
+      today: TODAY,
+      includeAbsentMakeupOrigins: false,
+    })
+  }
+
+  function balances(weeks: SlotCell[][], rows: RegularLessonRow[], pending: TemplatePendingDeskMap, ledgers: TemplatePendingResolutionLedgers) {
+    const entries = buildMakeupStockEntries({
+      students: allStudents,
+      teachers: [teacher],
+      regularLessons: rows,
+      classroomSettings: settings,
+      weeks,
+      manualAdjustments: ledgers.manualMakeupAdjustments,
+      suppressedOrigins: ledgers.suppressedMakeupOrigins,
+      resolveStudentKey: context.resolveStockId,
+      today: TODAY,
+      templatePendingDesks: pending,
+    })
+    const of = (key: string) => entries.find((entry) => entry.key === key)?.balance ?? 0
+    return { s1: of(STOCK_KEY), s2: of(STOCK_KEY_2), s3: of(STOCK_KEY_3) }
+  }
+
+  function resolve(mode: 'adopt-template' | 'adopt-existing' | 'delete-lower-student', setup: ReturnType<typeof pendingBoard>, ledgers: TemplatePendingResolutionLedgers, lowerIndex?: number) {
+    const result = computePendingDeskResolution({
+      mode,
+      weeks: setup.weeks,
+      cellId: CELL,
+      deskId: DESK1,
+      lowerIndex,
+      templatePendingDesks: setup.pending,
+      ledgers,
+      ledgerOriginDatesByKey: ledgerOrigins(setup.weeks, setup.rows, ledgers),
+      ...context,
+    })
+    if (result.status !== 'applied') throw new Error(result.message)
+    return result
+  }
+
+  const liveOnDate = (weeks: SlotCell[][], studentId: string) => weeks.flat().filter((cell) => cell.dateKey === BOARD_DATE)
+    .flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []))
+    .filter((entry) => entry?.managedStudentId === studentId).length
+
+  // 生徒 1 は新テンプレでも水曜 5 限（机 0）＝自動休校日 origin（7/22）がテンプレを根拠に立つ。机 1 はテンプレの生徒 2。
+  const rowsWithStudent1 = [templateRow('regular-1', 'student-1'), templateRow('regular-2', 'student-2')]
+  // 生徒 1 をテンプレから外した版（既存を採用で同じコマに二重に生きないように）。
+  const rowsWithoutStudent1 = [templateRow('regular-1', 'student-3'), templateRow('regular-2', 'student-2')]
+
+  describe('下段の削除（条件 11）: 在庫由来 +1 ちょうど・手動追加 ±0', () => {
+    it.each([
+      ['自動休校日 origin（テンプレ根拠・台帳）', HOLIDAY_SOURCE_DATE, {}],
+      ['手動 origin（台帳）', MAKEUP_SOURCE_DATE, { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }],
+    ] as Array<[string, string, Record<string, ManualMakeupOrigin[]>]>)('在庫由来の振替（%s）を下段から削除 → 未消化 +1 ちょうど（+2 にならない）', (_label, sourceDate, manual) => {
+      const setup = pendingBoard({ lowerStudents: [entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: sourceDate, makeupSourceLabel: '水 5限' }), null], rows: rowsWithStudent1 })
+      const ledgers = ledgersOf({ ...manual })
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      const result = resolve('delete-lower-student', setup, ledgers, 0)
+      expect(result.returnedCount).toBe(1)
+      const after = balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)
+      expect(after.s1).toBe(before.s1 + 1)
+      expect(after.s2).toBe(before.s2)
+      expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    })
+
+    it('欠席由来 origin（振替コマの欠席から算出・台帳に無い）の振替を下段から削除 → 未消化 +1 ちょうど（+2 にならない）', () => {
+      // 前週 7/29 の振替コマ（振替元 7/15・移動しただけ）を休みにした記録 → 7/15 の origin を算出で復元。それを 8/5 へ振替として配置済み。
+      const previousWeek = week(PREV_WEEK_START_KEY, PREV_WEEK_END_KEY).map((cell) => (cell.id !== `${MAKEUP_SOURCE_DATE}_5` ? cell : {
+        ...cell,
+        desks: cell.desks.map((desk, index) => (index === 0 ? { ...desk, lesson: undefined, statusSlots: [boardStatus({ lessonType: 'makeup', dateKey: MAKEUP_SOURCE_DATE, makeupSourceDate: ABSENT_ORIGIN_DATE, makeupSourceLabel: '7/15(水) 5限' }), null] as DeskCell['statusSlots'] } : desk)),
+      }))
+      const setup = pendingBoard({
+        previousWeek,
+        lowerStudents: [entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: ABSENT_ORIGIN_DATE, makeupSourceLabel: '7/15(水) 5限' }), null],
+        rows: rowsWithStudent1,
+      })
+      const ledgers = ledgersOf({})
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      // 前提: 算出 origin（7/15）は下段の振替で消化済み（下段を走査しないと残が 1 多く見える＝保存で増えない側の固定と同じ）
+      expect(balances(setup.weeks, setup.rows, {}, ledgers).s1).toBe(before.s1 + 1)
+      const result = resolve('delete-lower-student', setup, ledgers, 0)
+      const after = balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)
+      expect(after.s1).toBe(before.s1 + 1)
+    })
+
+    it('手動追加の振替を下段から削除 → 未消化 ±0（消化していないので戻さない・振替元も抑制しない）', () => {
+      const setup = pendingBoard({ lowerStudents: [entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true }), null], rows: rowsWithStudent1 })
+      const ledgers = ledgersOf({ [STOCK_KEY]: [{ dateKey: HOLIDAY_SOURCE_DATE, slotNumber: 4 }] })
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      const result = resolve('delete-lower-student', setup, ledgers, 0)
+      expect(result.returnedCount).toBe(0)
+      expect(balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)).toEqual(before)
+      expect(result.ledgers.suppressedMakeupOrigins).toEqual({})
+    })
+  })
+
+  describe('テンプレを採用（条件 12）: 在庫由来だけ +1・手動追加 ±0・希望回数は動かさない', () => {
+    it('下段に在庫由来（生徒 1）と手動追加（生徒 3）の振替 → 生徒 1 だけ +1、生徒 3 は ±0', () => {
+      const setup = pendingBoard({
+        lowerStudents: [
+          entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: HOLIDAY_SOURCE_DATE, makeupSourceLabel: '7/22(水) 5限' }),
+          entryOf('student-3', { lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, manualAdded: true }),
+        ],
+        rows: rowsWithStudent1,
+      })
+      const ledgers = ledgersOf({ [STOCK_KEY_3]: [{ dateKey: '2026-07-08' }] })
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      const result = resolve('adopt-template', setup, ledgers)
+      const after = balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)
+      expect(after.s1).toBe(before.s1 + 1)
+      expect(after.s3).toBe(before.s3)
+      expect(after.s2).toBe(before.s2)
+      expect(result.returnedCount).toBe(1)
+      expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+      expect(result.nextTemplatePendingDesks).toEqual({})
+    })
+  })
+
+  describe('既存を採用（条件 13）: 在庫 ±0・希望回数は同じ日に授業が残るかで決まる（Q26-1）', () => {
+    const lower: [StudentEntry, null] = [entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '7/29(水) 5限' }), null]
+    const manual = { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }
+
+    it('取り下げた上段（生徒 2）が同じ日に残らない → 在庫 ±0・希望回数 −1（単発削除と同じ）', () => {
+      const setup = pendingBoard({ lowerStudents: lower, rows: rowsWithoutStudent1 })
+      const ledgers = ledgersOf({ ...manual })
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      const result = resolve('adopt-existing', setup, ledgers)
+      expect(balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)).toEqual(before)
+      expect(liveOnDate(result.nextWeeks, 'student-2')).toBe(0)
+      expect(result.countAdjustedCount).toBe(1)
+      expect(result.ledgers.scheduleCountAdjustments).toEqual([{ studentKey: 'student-2', subject: '数', countKind: 'regular', dateKey: BOARD_DATE, delta: -1 }])
+    })
+
+    it('取り下げた上段（生徒 2）が同じ日の別の時限に残る → 在庫 ±0・希望回数は据え置き', () => {
+      const rows = [...rowsWithoutStudent1, templateRow('regular-9', 'student-2', { slotNumber: 4 })]
+      const setup = pendingBoard({ lowerStudents: lower, rows })
+      const ledgers = ledgersOf({ ...manual })
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      const result = resolve('adopt-existing', setup, ledgers)
+      expect(balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)).toEqual(before)
+      expect(liveOnDate(result.nextWeeks, 'student-2')).toBe(1)
+      expect(result.countAdjustedCount).toBe(0)
+      expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    })
+  })
+
+  describe('上段の休み（条件 15）: 1 行の机で休みにしたときと同じ残数・下段の振替は消化済みのまま', () => {
+    it('上段の生徒 2 を休み（既存の欠席処理＝当日の手動 origin）→ 1 行に戻り、生徒 2 は +1・生徒 1 の振替は消化済みのまま（1 行の机と同じ）', () => {
+      const setup = pendingBoard({ lowerStudents: [entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '7/29(水) 5限' }), null], rows: rowsWithoutStudent1 })
+      const baseManual = { [STOCK_KEY]: [{ dateKey: MAKEUP_SOURCE_DATE }] }
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgersOf(baseManual))
+      // 既存の欠席処理（markStudentAbsentAt）の結果: 上段の席を出欠記録へ移し、通常授業なので当日の手動 origin を積む。
+      const absent = (weeks: SlotCell[][]) => weeks.map((cells) => cells.map((cell) => (cell.id !== CELL ? cell : {
+        ...cell,
+        desks: cell.desks.map((desk) => (desk.id !== DESK1 ? desk : {
+          ...desk,
+          lesson: undefined,
+          statusSlots: [boardStatus({ id: 'absent-2', studentId: 'student-2', name: '二宮 花子', managedStudentId: 'student-2' }), null] as DeskCell['statusSlots'],
+        })),
+      })))
+      const absentLedgers = ledgersOf({ ...baseManual, [STOCK_KEY_2]: [{ dateKey: BOARD_DATE }] })
+      const settled = settleTemplatePendingDesksAfterCommit({ previousWeeks: setup.weeks, previousTemplatePendingDesks: setup.pending, weeks: absent(setup.weeks), templatePendingDesks: setup.pending })
+      expect(settled.collapsedKeys).toEqual([setup.key])
+      const after = balances(settled.nextWeeks, setup.rows, settled.nextTemplatePendingDesks, absentLedgers)
+      // 兄弟: 保留でない 1 行の机で同じ欠席をした場合と同じ残数（保留は欠席の会計を変えない）
+      //   1 行の机＝席 0 に生徒 2（休み）の記録・席 1 に生徒 1 の振替が同居する形。
+      const oneRow = [week(WEEK_START_KEY, WEEK_END_KEY).map((cell) => (cell.id !== CELL ? cell : {
+        ...cell,
+        desks: cell.desks.map((desk, index) => (index !== 1 ? desk : {
+          ...desk,
+          lesson: { id: 'hand-placed', studentSlots: [null, entryOf('student-1', { lessonType: 'makeup', makeupSourceDate: MAKEUP_SOURCE_DATE, makeupSourceLabel: '7/29(水) 5限' })] as [StudentEntry | null, StudentEntry | null] },
+          statusSlots: [boardStatus({ id: 'absent-2', studentId: 'student-2', name: '二宮 花子', managedStudentId: 'student-2' }), null] as DeskCell['statusSlots'],
+        })),
+      }))]
+      const oneRowAfter = balances(oneRow, setup.rows, {}, absentLedgers)
+      expect(after.s2).toBe(before.s2 + 1)
+      expect(after.s2).toBe(oneRowAfter.s2)
+      expect(after.s1).toBe(before.s1)
+      expect(after.s1).toBe(oneRowAfter.s1)
+    })
+  })
+
+  describe('下段の同日移動の通常授業を捨てる（N-2・Q26-1 の拡張）: 在庫 ±0・希望回数は同じ日に残るかで決まる', () => {
+    // 生徒 1 を同じ日の 4 限から 5 限の机 1 へ移した形（4 限の通常授業は抑止済み）。新テンプレの机 1 は生徒 2 → 保留。
+    const sameDayMove = entryOf('student-1', { sameDayMoveSourceDate: BOARD_DATE, sameDayMoveSourceLabel: '8/5(水) 4限' })
+    const rowsAt4 = [templateRow('regular-1', 'student-3'), templateRow('regular-2', 'student-2'), templateRow('regular-4', 'student-1', { slotNumber: 4 })]
+    const suppressed4 = [buildManagedOccurrenceKey(boardStudent(), BOARD_DATE, 4)]
+
+    it.each(['adopt-template', 'delete-lower-student'] as const)('%s: 同じ日に生徒 1 の授業が残らない → 在庫 ±0・希望回数 −1', (mode) => {
+      const setup = pendingBoard({ lowerStudents: [sameDayMove, null], rows: rowsAt4, suppressed: suppressed4 })
+      expect(liveOnDate(setup.weeks, 'student-1')).toBe(0)
+      const ledgers = ledgersOf({}, { suppressedRegularLessonOccurrences: setup.suppressed })
+      const before = balances(setup.weeks, setup.rows, setup.pending, ledgers)
+      const result = resolve(mode, setup, ledgers, 0)
+      expect(balances(result.nextWeeks, setup.rows, result.nextTemplatePendingDesks, result.ledgers)).toEqual(before)
+      expect(result.ledgers.scheduleCountAdjustments).toEqual([{ studentKey: 'student-1', subject: '数', countKind: 'regular', dateKey: BOARD_DATE, delta: -1 }])
+    })
+
+    it.each(['adopt-template', 'delete-lower-student'] as const)('%s: 同じ日の別の時限に生徒 1 が生きている → 希望回数は据え置き', (mode) => {
+      const setup = pendingBoard({ lowerStudents: [sameDayMove, null], rows: [...rowsAt4, templateRow('regular-3', 'student-1', { slotNumber: 3 })], suppressed: suppressed4 })
+      expect(liveOnDate(setup.weeks, 'student-1')).toBe(1)
+      const ledgers = ledgersOf({}, { suppressedRegularLessonOccurrences: setup.suppressed })
+      const result = resolve(mode, setup, ledgers, 0)
+      expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+    })
   })
 })
