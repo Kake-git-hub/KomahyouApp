@@ -3,6 +3,7 @@ import type { GroupLessonRow } from '../components/basic-data/BasicDataScreen'
 import type { RegularLessonRow } from '../components/basic-data/regularLessonModel'
 import type { SlotCell } from '../components/schedule-board/types'
 import type { GroupClassEntryMap } from '../components/schedule-board/groupClass'
+import type { TemplatePendingDeskMap } from '../components/schedule-board/templatePendingDesks'
 import type { SpecialSessionRow } from '../components/special-data/specialSessionModel'
 import type { AutoAssignRuleRow } from '../components/auto-assign-rules/autoAssignRuleModel'
 import type { RegularLessonTemplate } from '../components/regular-template/regularLessonTemplate'
@@ -109,6 +110,10 @@ export type PersistedBoardState = {
   // spec-group-lesson §A/§G: 集団授業（特別講習・中3向け）の盤面割当と出欠。
   // 既存の個別授業（weeks 内の DeskLesson）とは独立。後方互換のため optional（未設定=空）。
   groupClassEntries?: GroupClassEntryMap
+  // spec-template-behavior §H Q24（Issue #72・2026-09-29）: テンプレ差分反映の保留（2 行表示）の下段。
+  // キー `"<cellId>::<deskId>"`。未設定＝保留なし（後方互換・移行不要）。フラグ templateDiffApply に依らず常に往復させる
+  // （Q33-3。フラグを戻した教室で黙って消さない）。下段は盤面画面専用＝日程表・PDF・回数には渡さない（INV-13）。
+  templatePendingDesks?: TemplatePendingDeskMap
 }
 
 export const APP_SNAPSHOT_SCHEMA_VERSION = 1

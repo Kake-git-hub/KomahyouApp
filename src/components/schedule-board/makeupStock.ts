@@ -2,6 +2,7 @@ import type { ClassroomSettings } from '../../types/appState'
 import { formatStudentSelectionLabel, getStudentDisplayName, isActiveOnDate, type StudentRow, type TeacherRow } from '../basic-data/basicDataModel'
 import { hasManagedRegularLessonPeriod, resolveOperationalSchoolYear, resolveRegularLessonParticipantPeriod, type RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { SlotCell, StudentEntry } from './types'
+import { buildTemplatePendingLowerScanWeeks, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 type OriginMap = Record<string, string[]>
 
@@ -731,6 +732,15 @@ export function resolveEffectiveMakeupOriginDates(params: {
     .sort()
 }
 
+// INV-06（2026-09-29 拡張・spec-template-behavior Q25-4）: 在庫の**消化**と**欠席由来の在庫**の走査対象。
+// `studentSlots` と `statusSlots` の両走査に加え、テンプレ差分反映の保留（2 行）の**下段**を 3 本目の走査対象として足す。
+// 下段の振替は消化済みのまま・席不足で下段へ入った欠席記録も在庫の根拠のまま（保存しただけで在庫が増減しない）。
+// ★在庫の**発生**（テンプレを根拠にした自動振替元）・回数・日程表には渡さない（INV-13）。下段が無ければ盤面の週そのもの。
+export function resolveMakeupScanWeeks(weeks: SlotCell[][], templatePendingDesks?: TemplatePendingDeskMap | null) {
+  const lowerScanWeeks = buildTemplatePendingLowerScanWeeks(weeks, templatePendingDesks)
+  return lowerScanWeeks.length > 0 ? [...weeks, ...lowerScanWeeks] : weeks
+}
+
 function collectMakeupUsageByKey(weeks: SlotCell[][], resolveStudentKey: (student: StudentEntry) => string) {
   const counts: Record<string, number> = {}
   const usedOriginDates: OriginMap = {}
@@ -979,13 +989,15 @@ export function collectMakeupOriginDatesByKey(params: {
    * 記録の破棄と同時に在庫が消える（INV-06 誤減）。
    */
   includeAbsentMakeupOrigins?: boolean
+  /** テンプレ差分反映の保留マップ。下段の欠席記録も欠席由来の origin に数える（resolveMakeupScanWeeks・INV-06）。 */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }) {
-  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true } = params
+  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, resolveStudentKey, today = new Date(), includeAbsentMakeupOrigins = true, templatePendingDesks } = params
   const managedStudentIds = new Set(students.map((student) => student.id))
   const automaticShortages = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today).origins
   const conflictOrigins = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today).origins
   const absentMakeupOrigins = includeAbsentMakeupOrigins
-    ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(weeks, resolveStudentKey), managedStudentIds)
+    ? normalizeStringArrayMapKeys(collectAbsentMakeupOrigins(resolveMakeupScanWeeks(weeks, templatePendingDesks), resolveStudentKey), managedStudentIds)
     : {}
   const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)
   const normalizedSuppressedOrigins = normalizeMakeupOriginMapKeysByIdSet(suppressedOrigins, managedStudentIds)
@@ -1085,15 +1097,18 @@ export function buildMakeupStockEntries(params: {
   fallbackStudents?: Record<string, { studentName: string; displayName: string; subject: string }>
   resolveStudentKey: (student: StudentEntry) => string
   today?: Date
+  /** テンプレ差分反映の保留マップ。下段を消化・欠席由来の走査に含める（resolveMakeupScanWeeks・INV-06 の 3 本目の走査対象）。 */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }) {
   // teachers はパラメータ型に残す(呼び出し側の互換維持)が、空きコマ不足origin廃止に伴い内部では未使用。
-  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date() } = params
+  const { students, regularLessons, classroomSettings, weeks, manualAdjustments, suppressedOrigins = {}, fallbackStudents = {}, resolveStudentKey, today = new Date(), templatePendingDesks } = params
+  const scanWeeks = resolveMakeupScanWeeks(weeks, templatePendingDesks)
   const automaticShortageResult = computeAutomaticShortageOrigins(regularLessons, students, classroomSettings, today)
   const conflictResult = computeScheduleConflictOrigins(regularLessons, students, classroomSettings, today)
-  const absentMakeupResultOrigins = collectAbsentMakeupOrigins(weeks, resolveStudentKey)
+  const absentMakeupResultOrigins = collectAbsentMakeupOrigins(scanWeeks, resolveStudentKey)
   const automaticShortages = automaticShortageResult.origins
   const conflictOrigins = conflictResult.origins
-  const makeupUsage = collectMakeupUsageByKey(weeks, resolveStudentKey)
+  const makeupUsage = collectMakeupUsageByKey(scanWeeks, resolveStudentKey)
   const studentById = new Map(students.map((student) => [student.id, student]))
   const managedStudentIds = new Set(students.map((student) => student.id))
   const normalizedManualAdjustments = normalizeMakeupOriginMapKeysByIdSet(manualAdjustments, managedStudentIds)

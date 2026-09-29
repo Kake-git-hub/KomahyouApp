@@ -58,7 +58,9 @@ export const BOARD_WEEK_TRIM_FUTURE_WEEKS = 26
 
 export function trimBoardWeeksForMemory(
   weeks: SlotCell[][],
-  options: { referenceDate?: Date; pastWeeks?: number; futureWeeks?: number } = {},
+  // protectedCellIds: 必ず保持するコマ ID（テンプレ差分反映の保留マップのキーが指すコマ・spec-template-behavior Q24-4）。
+  // 保留の上段はテンプレ由来の通常授業だけの机になり weekHasManualBoardData では「手動なし」に見えるため、別に守る。
+  options: { referenceDate?: Date; pastWeeks?: number; futureWeeks?: number; protectedCellIds?: ReadonlySet<string> } = {},
 ): SlotCell[][] {
   if (!Array.isArray(weeks) || weeks.length <= 1) return weeks
   const reference = options.referenceDate ?? new Date()
@@ -78,6 +80,7 @@ export function trimBoardWeeksForMemory(
     const overlapsWindow = range.max >= windowStartKey && range.min <= windowEndKey
     if (overlapsWindow) return true
     // ウィンドウ外でも手動編集を持つ週は必ず保持(データ消失防止)
+    if (options.protectedCellIds && options.protectedCellIds.size > 0 && week.some((cell) => options.protectedCellIds!.has(cell.id))) return true
     return weekHasManualBoardData(week)
   })
 

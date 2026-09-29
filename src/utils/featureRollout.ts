@@ -182,6 +182,21 @@ export const featureRolloutRegistry = {
     scope: 'development-only',
     description: 'Withdraw auto-sweep: board removes a withdrawn student\'s traces from the sweep start date, and graduated high-school 3rd graders get 3/31 written into withdrawDate.',
   },
+  // テンプレ保存の差分反映＋保留(2 行表示)(Issue #72・docs/spec-template-behavior.md §H Q21〜Q33・オーナー確定 2026-09-29
+  // 「この機能実装は開発用教室だけで進めて。試用してみて展開するか決めます」)。
+  // ON: テンプレ保存が反映日以降を全消去せず、机ごとに突き合わせる(印の無い机だけ置き換え・印のある机は残す／採用／保留)。
+  //     机の講師はテンプレに揃える(QR 自動割振り講師・盤面で削除した講師は例外)。反映日以降の休日・抑止・希望回数補正・
+  //     手動振替調整は消さず、在庫台帳も触らない(保存で在庫が動かない＝INV-06 拡張)。確認文は件数入り。
+  // OFF(本番 3 教室を含む): 旧方式(上書き＝handleSaveRegularLessonTemplate の既存経路)のまま。
+  // ★既に存在する保留データ(templatePendingDesks)の保存・往復・在庫走査は**フラグに依らず常に有効**(Q33-3。
+  //   フラグを戻した教室で黙って消さない。transferSourceRestDisplay と同じ流儀)。フラグが切り替えるのは
+  //   「保存時に差分反映を使うか」と「保留の解決 UI(第 1 段 B)」だけ。
+  // ★全教室への昇格条件(すべて満たしたうえでオーナーが判断・自動では昇格しない・Q33-2): 開発用教室の確認リストで本機能の
+  //   項目が全部 OK／旧版タブが保留を落とすすき間(Q33-1)の塞ぎ方が決まり実装済み／regression-reviewer の INV 監査を通過。
+  templateDiffApply: {
+    scope: 'development-only',
+    description: 'Template save applies per-desk diffs (replace unmarked desks, keep/adopt/pend marked desks as 2-row pending) instead of overwriting everything on/after the effective date.',
+  },
 } as const satisfies Record<string, FeatureRolloutDefinition>
 
 export type FeatureRolloutKey = keyof typeof featureRolloutRegistry

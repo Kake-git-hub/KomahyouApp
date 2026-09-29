@@ -207,6 +207,8 @@ type FirebaseClassroomBoardStockDoc = Pick<FirebasePersistedBoardState,
   // spec-group-lesson §G: 集団授業の割当/出欠。分割読込(boardUi && boardStock)経路でも
   // 復元されるよう Pick に含める（含めないと往復で消える）。
   | 'groupClassEntries'
+  // spec-template-behavior Q24-3: テンプレ差分反映の保留マップ。分割読込経路でも往復させる（含めないと往復で消える）。
+  | 'templatePendingDesks'
 > & {
   savedAt: string
   splitSetId: string

@@ -127,6 +127,8 @@ export function buildStudentLessonLedger(params: { payload: AppSnapshotPayload; 
     fallbackStudents: boardState.fallbackMakeupStudents ?? {},
     resolveStudentKey: (student) => resolveStudentKey(student),
     today: now,
+    // INV-06（2026-09-29 拡張）: 保留の下段も消化・欠席由来の走査に含める（盤面の未消化一覧と同じ入力）。
+    templatePendingDesks: boardState.templatePendingDesks,
   })
 
   const rowByKey = new Map<string, StudentLessonLedgerRow>()

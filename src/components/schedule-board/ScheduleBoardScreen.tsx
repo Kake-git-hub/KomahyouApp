@@ -36,6 +36,8 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
+import { buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computeTemplateDiffApply, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, normalizeTemplatePendingDeskMap, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDeskMap } from './templatePendingDesks'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
@@ -93,6 +95,9 @@ export type HistoryEntry = {
   // この履歴対の操作が提出データ subjectSlots に行った差分。undo が逆適用・redo が順適用し、
   // undo⇄redo でエントリ間を引き継ぐ(上の SpecialSessionSubjectDelta のコメント参照)。
   specialSessionSubjectDelta?: SpecialSessionSubjectDelta
+  // テンプレ差分反映の保留マップ（spec-template-behavior Q24-3・Q26-6）。戻す/やり直しで盤面と一緒に戻す。
+  // 省略された履歴エントリ（テストの固定値など）は「保留なし」として扱う。
+  templatePendingDesks?: TemplatePendingDeskMap
 }
 
 type StockPanelsRestoreState = {
@@ -130,6 +135,9 @@ type GroupClassMenuState = {
 type TemplateSaveConfirmState = {
   mode: 'overwrite'
   template: RegularLessonTemplate
+  // 機能フラグ templateDiffApply が ON の教室だけ: 差分反映を試し実行した件数（spec-template-behavior Q32-1）。
+  // 保存本体と同じ関数（computeTemplateDiffApplyForBoard）・同じ入力で数える＝確認文と保存結果が食い違わない。
+  diffSummary?: TemplateDiffApplySummary
 }
 
 type PopoverPositionParams = {
@@ -868,6 +876,8 @@ export function applyHistoryEntry(entry: HistoryEntry, context: HistoryApplyCont
       manualLectureStockOrigins: cloneManualLectureStockOrigins(entry.manualLectureStockOrigins),
       fallbackLectureStockStudents: { ...entry.fallbackLectureStockStudents },
       groupClassEntries: cloneGroupClassEntryMap(context.groupClassEntries),
+      // spec-template-behavior Q24-3: 保留マップも戻した時点のものを publish する（空なら項目ごと載せない）。
+      ...buildTemplatePendingDesksPayload(entry.templatePendingDesks),
       isLectureStockOpen: context.isLectureStockOpen,
       isMakeupStockOpen: context.isMakeupStockOpen,
       studentScheduleRange: context.studentScheduleRange,
@@ -2433,7 +2443,74 @@ export function remergeBoardWeeksWithManagedData(weeks: SlotCell[][], params: {
   return normalizeWeeksDeskCount(weeks.map((week) => remergeBoardWeekWithManagedData(week, params)), params.classroomSettings.deskCount)
 }
 
-function createInitialBoardSnapshot(params: {
+// テンプレ差分反映（Issue #72・spec-template-behavior §H・機能フラグ templateDiffApply）の突き合わせ相手を作る。
+// 反映日以降の各コマについて、新テンプレから生成した管理セル（raw＝抑止前）と、盤面の再マージ
+// overlayBoardWeeksOnScheduleCells と**同じ当て方・同じ順序**（通常授業の抑止〔盤面の振替コマ由来を含む〕→
+// 丸ごと振替の日の足場講師 strip）を当てた後の姿（applied）を返す（Q21-5）。
+// ★ここを overlay と別の当て方にすると、差分反映の結果が再マージの不動点でなくなり、保存直後の effect で書き換わる。
+export function buildTemplateDiffTemplateCells(params: {
+  weeks: SlotCell[][]
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  effectiveStartDate: string
+  suppressedRegularLessonOccurrences: string[]
+}): TemplateDiffTemplateCell[] {
+  const result: TemplateDiffTemplateCell[] = []
+  const templateTeacherSuppressedDates = collectTemplateTeacherSuppressedDates(params.suppressedRegularLessonOccurrences)
+  for (const week of params.weeks) {
+    const firstDateKey = week[0]?.dateKey ?? ''
+    if (!firstDateKey) continue
+    const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
+    if (lastDateKey < params.effectiveStartDate) continue
+    const weekStart = getWeekStart(parseDateKey(firstDateKey))
+    const managedWeek = createBoardWeek(weekStart, {
+      classroomSettings: params.classroomSettings,
+      teachers: params.teachers,
+      students: params.students,
+      regularLessons: params.regularLessons,
+    })
+    const postFreezeBoard = week.filter((cell) => cell.dateKey >= params.effectiveStartDate)
+    const postFreezeManaged = managedWeek.filter((cell) => cell.dateKey >= params.effectiveStartDate)
+    const suppressedKeys = buildSuppressedManagedOccurrenceKeys(postFreezeManaged, [postFreezeBoard], params.suppressedRegularLessonOccurrences)
+    for (const managedCell of postFreezeManaged) {
+      const suppressedStudentsCell = suppressManagedStudentsInCell(managedCell, suppressedKeys)
+      const applied = templateTeacherSuppressedDates.has(managedCell.dateKey)
+        ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
+        : suppressedStudentsCell
+      result.push({ raw: cloneSlotCell(managedCell), applied })
+    }
+  }
+  return result
+}
+
+// テンプレ差分反映の入口（保存本体と保存前の確認文の件数＝試し実行の両方がこれを呼ぶ・Q32-1）。
+// classroomSettings には**保存後の**教室設定（新テンプレ・反映日・休日は消さない）を渡す。
+export function computeTemplateDiffApplyForBoard(params: {
+  weeks: SlotCell[][]
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  effectiveStartDate: string
+  suppressedRegularLessonOccurrences: string[]
+  templatePendingDesks: TemplatePendingDeskMap
+  createdAt: string
+}) {
+  const templateCells = buildTemplateDiffTemplateCells(params)
+  return computeTemplateDiffApply({
+    weeks: params.weeks,
+    templateCells,
+    effectiveStartDate: params.effectiveStartDate,
+    suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
+    pendingDesks: params.templatePendingDesks,
+    createdAt: params.createdAt,
+  })
+}
+
+// export はテストの配線確認用（保留マップ templatePendingDesks の読込往復・spec-template-behavior Q24-3）。
+export function createInitialBoardSnapshot(params: {
   classroomSettings: ClassroomSettings
   teachers: TeacherRow[]
   students: StudentRow[]
@@ -2487,6 +2564,8 @@ function createInitialBoardSnapshot(params: {
     teacherScheduleRange: params.initialBoardState?.teacherScheduleRange ?? null,
     // spec-group-lesson §A/§G: 集団授業の割当/出欠を復元（防御的に正規化、未設定=空）。
     groupClassEntries: normalizeGroupClassEntryMap(params.initialBoardState?.groupClassEntries),
+    // spec-template-behavior Q24-3: テンプレ差分反映の保留マップを復元（空なら項目ごと載せない＝保留の無い教室は従来と同一）。
+    ...buildTemplatePendingDesksPayload(normalizeTemplatePendingDeskMap(params.initialBoardState?.templatePendingDesks)),
   }
 }
 
@@ -5987,6 +6066,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // OFF の教室(本番3教室)は従来どおり通常授業の剥がしだけ。退塾生徒の一覧名・行ロック・取り込みガードは
   // フラグに依らず全教室で有効(確認モーダルの本文だけ App→BasicDataScreen 側でフラグに応じて出し分ける)。
   const studentWithdrawAutoSweepEnabled = isFeatureEnabledForClassroom('studentWithdrawAutoSweep', { id: classroomStorageKey })
+  // テンプレ保存の差分反映＋保留(Issue #72・spec-template-behavior §H・オーナー確定 2026-09-29・開発用教室のみ)。
+  // ON の教室だけテンプレ保存が handleSaveRegularLessonTemplateByDiff を通る。OFF の教室(本番 3 教室)は旧方式(上書き)のまま。
+  // ★保留マップ(templatePendingDesks)の保存・往復・在庫走査はフラグに依らず常に有効(Q33-3)。
+  const templateDiffApplyEnabled = isFeatureEnabledForClassroom('templateDiffApply', { id: classroomStorageKey })
   // 対話用日程表は別タブ(生成HTML)経路に一本化済み。かつて検証していた React ビュー
   // (ドック⇄ポップアウト)は 2026-07-14 に撤去した(別ウィンドウへの pointer/D&D が届かず
   // 操作感も別タブに劣ったため)。日程表ボタンは常に従来の生成HTMLタブを開く。
@@ -6098,6 +6181,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // spec-group-lesson §A/§G: 集団授業の盤面割当/出欠。個別授業(weeks)とは独立に保持し、
   // 全 publish 経路で再送出して保存往復で消えないようにする。変更は effect(3244)経由で publish される。
   const [groupClassEntries, setGroupClassEntries] = useState<GroupClassEntryMap>(initialBoardSnapshot.groupClassEntries ?? {})
+  // spec-template-behavior §H Q24（Issue #72）: テンプレ差分反映の保留（2 行表示）の下段。フラグ templateDiffApply に依らず
+  // 全 publish 経路で再送出する（Q33-3。フラグを戻した教室で黙って消さない）。下段は盤面画面専用（INV-13）。
+  const [templatePendingDesks, setTemplatePendingDesks] = useState<TemplatePendingDeskMap>(initialBoardSnapshot.templatePendingDesks ?? {})
   const [isLectureStockOpen, setIsLectureStockOpen] = useState(initialBoardSnapshot.isLectureStockOpen)
   const [isMakeupStockOpen, setIsMakeupStockOpen] = useState(initialBoardSnapshot.isMakeupStockOpen)
   const [isPrintingPdf, setIsPrintingPdf] = useState(false)
@@ -6243,6 +6329,98 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return prev.slice(0, -1)
     })
   }, [templateCells])
+
+  // テンプレ差分反映の保存計画（spec-template-behavior §H・機能フラグ templateDiffApply ON の教室だけ）。
+  // 保存本体（handleSaveRegularLessonTemplateByDiff）と保存前の確認文の件数（試し実行）の両方がこれを呼ぶ（Q32-1）。
+  // ★旧方式との違い: 反映日以降の休日を消さない（Q2 改定）・抑止/希望回数補正/手動振替調整をクリアしない（Q10 改定）・
+  //   在庫台帳を触らない（Q7〜Q9 改定・INV-06 拡張）。履歴・preTemplateRegularLessons・反映日の扱いは旧方式と同じ。
+  const buildTemplateDiffSavePlan = useCallback((template: RegularLessonTemplate, createdAt: string) => {
+    const normalizedTemplateRegularLessons = buildRegularLessonsFromTemplate({
+      template,
+      teachers,
+      students,
+    })
+    // spec-template-behavior Q16/Q18: 履歴は「新反映日以上の旧履歴を捨て新テンプレを追加」・最新3件まで（旧方式と同じ）。
+    const prevHistory = classroomSettings.regularLessonTemplateHistory ?? []
+    const nextHistory = [
+      ...prevHistory.filter((h) => h.effectiveStartDate < template.effectiveStartDate),
+      template,
+    ].slice(-REGULAR_LESSON_TEMPLATE_HISTORY_LIMIT)
+    const preTemplateRegularLessons = prevHistory.length === 0
+      ? (classroomSettings.preTemplateRegularLessons ?? regularLessons)
+      : classroomSettings.preTemplateRegularLessons
+    // ★holidayDates はそのまま（filterTemplateOverwriteHolidayDates を通さない・Q2 改定）。
+    const nextClassroomSettings: ClassroomSettings = {
+      ...classroomSettings,
+      regularLessonTemplate: template,
+      regularLessonTemplateHistory: nextHistory,
+      preTemplateRegularLessons,
+      templateFreezeBeforeDate: template.effectiveStartDate,
+    }
+    const diff = computeTemplateDiffApplyForBoard({
+      weeks,
+      classroomSettings: nextClassroomSettings,
+      teachers,
+      students,
+      regularLessons: normalizedTemplateRegularLessons,
+      effectiveStartDate: template.effectiveStartDate,
+      suppressedRegularLessonOccurrences,
+      templatePendingDesks,
+      createdAt,
+    })
+    return { normalizedTemplateRegularLessons, nextClassroomSettings, diff }
+  }, [classroomSettings, regularLessons, students, suppressedRegularLessonOccurrences, teachers, templatePendingDesks, weeks])
+
+  // テンプレ保存（差分反映＋保留・機能フラグ templateDiffApply ON の教室だけ・Issue #72）。
+  // 反映日以降の机ごとに突き合わせ（印の無い机だけ置き換え・印のある机は残す／採用／保留）、講師はテンプレに揃える。
+  // 在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）・希望回数補正・抑止は触らない（Q21-11 の抑止の追加だけ）。
+  const handleSaveRegularLessonTemplateByDiff = useCallback((template: RegularLessonTemplate) => {
+    // テンプレ保存前にバックアップを保存（非同期、完了を待たない）。旧方式と同じ（Q32-2）。
+    if (onPreTemplateSaveBackup) {
+      void onPreTemplateSaveBackup()
+    }
+    const plan = buildTemplateDiffSavePlan(template, new Date().toISOString())
+    onUpdateClassroomSettings(plan.nextClassroomSettings)
+    onReplaceRegularLessons?.(plan.normalizedTemplateRegularLessons)
+
+    const addedSuppressed = plan.diff.addedSuppressedRegularLessonOccurrences
+    const nextSuppressedRegularLessonOccurrences = addedSuppressed.length > 0
+      ? [...suppressedRegularLessonOccurrences, ...addedSuppressed]
+      : suppressedRegularLessonOccurrences
+    const nextWeeks = plan.diff.nextWeeks
+    setWeeks(nextWeeks)
+    setTemplatePendingDesks(plan.diff.nextPendingDesks)
+    if (nextSuppressedRegularLessonOccurrences !== suppressedRegularLessonOccurrences) {
+      setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
+    }
+    recordOperationTrace('board-rebuild', `通常授業テンプレ保存・差分反映: ${summarizeWeeksDiff(weeks, nextWeeks) || '机の変化なし'}`)
+    committedBoardChangeVersionRef.current += 1
+    onBoardStateChange?.({
+      weeks: cloneWeeksForPublish(applyClassroomAvailability(nextWeeks, plan.nextClassroomSettings)),
+      weekIndex,
+      selectedCellId,
+      selectedDeskIndex,
+      suppressedRegularLessonOccurrences: [...nextSuppressedRegularLessonOccurrences],
+      scheduleCountAdjustments: cloneScheduleCountAdjustments(scheduleCountAdjustments),
+      manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
+      suppressedMakeupOrigins: cloneOriginMap(suppressedMakeupOrigins),
+      fallbackMakeupStudents: { ...fallbackMakeupStudents },
+      manualLectureStockCounts: { ...manualLectureStockCounts },
+      manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
+      fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
+      groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
+      ...buildTemplatePendingDesksPayload(plan.diff.nextPendingDesks),
+      isLectureStockOpen,
+      isMakeupStockOpen,
+      studentScheduleRange,
+      teacherScheduleRange,
+    }, { userInitiated: true })
+    setStatusMessage(buildTemplateDiffSavedMessage(template.effectiveStartDate, plan.diff.summary))
+
+    setIsTemplateMode(false)
+    setTemplateCells([])
+    setTemplateSaveConfirm(null)
+  }, [buildTemplateDiffSavePlan, fallbackLectureStockStudents, fallbackMakeupStudents, groupClassEntries, isLectureStockOpen, isMakeupStockOpen, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onBoardStateChange, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, scheduleCountAdjustments, selectedCellId, selectedDeskIndex, studentScheduleRange, suppressedMakeupOrigins, suppressedRegularLessonOccurrences, teacherScheduleRange, weekIndex, weeks])
 
   const handleSaveRegularLessonTemplate = useCallback((template: RegularLessonTemplate, overwrite: boolean) => {
     // テンプレ上書き前にバックアップを保存（非同期、完了を待たない）
@@ -6456,6 +6634,10 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
       setSuppressedMakeupOrigins(nextSuppressedMakeupOrigins)
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
+      // spec-template-behavior Q33-3: 旧方式(上書き)は反映日以降の机を丸ごと作り直すので、反映日以降の保留も一緒に消す
+      // (反映日より前・盤面に無いキーは残す)。保留の無い教室(本番 3 教室)では何も変わらない(同じ参照が返る)。
+      const nextTemplatePendingDesks = pruneTemplatePendingDesksOnOrAfter(templatePendingDesks, weeks, effectiveStart)
+      if (nextTemplatePendingDesks !== templatePendingDesks) setTemplatePendingDesks(nextTemplatePendingDesks)
       recordOperationTrace('board-rebuild', `通常授業テンプレ保存・反映: ${summarizeWeeksDiff(weeks, overlaidWeeks) || '机の変化なし'}`)
       committedBoardChangeVersionRef.current += 1
       onBoardStateChange?.({
@@ -6472,6 +6654,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         manualLectureStockOrigins: cloneManualLectureStockOrigins(nextManualLectureStockOrigins),
         fallbackLectureStockStudents: { ...nextFallbackLectureStockStudents },
         groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
+        ...buildTemplatePendingDesksPayload(nextTemplatePendingDesks),
         isLectureStockOpen,
         isMakeupStockOpen,
         studentScheduleRange,
@@ -6489,7 +6672,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setIsTemplateMode(false)
     setTemplateCells([])
     setTemplateSaveConfirm(null)
-  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences, scheduleCountAdjustments, suppressedMakeupOrigins])
+  }, [classroomSettings, fallbackLectureStockStudents, fallbackMakeupStudents, manualLectureStockCounts, manualLectureStockOrigins, manualMakeupAdjustments, onPreTemplateSaveBackup, onReplaceRegularLessons, onUpdateClassroomSettings, students, teachers, weeks, suppressedRegularLessonOccurrences, scheduleCountAdjustments, suppressedMakeupOrigins, templatePendingDesks])
 
   useEffect(() => {
     if (!onBoardStateChange) return
@@ -6515,6 +6698,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockOrigins: cloneManualLectureStockOrigins(manualLectureStockOrigins),
       fallbackLectureStockStudents: { ...fallbackLectureStockStudents },
       groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
+      ...buildTemplatePendingDesksPayload(templatePendingDesks),
       isLectureStockOpen,
       isMakeupStockOpen,
       studentScheduleRange,
@@ -6540,6 +6724,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     studentScheduleRange,
     suppressedMakeupOrigins,
     teacherScheduleRange,
+    templatePendingDesks,
     weekIndex,
   ])
 
@@ -7085,7 +7270,9 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     suppressedOrigins: suppressedMakeupOrigins,
     fallbackStudents: fallbackMakeupStudents,
     resolveStudentKey: resolveBoardStudentStockId,
-  }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, teachers])
+    // INV-06（2026-09-29 拡張・spec-template-behavior Q25-4）: 保留の下段も消化・欠席由来の走査に含める。
+    templatePendingDesks,
+  }), [classroomSettings, fallbackMakeupStudents, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, teachers, templatePendingDesks])
 
   // 生徒日程表の振替欄が「未定」(＝振替先がまだ決まっていない)を出すための未消化振替 origin。
   // ★未消化一覧と**同じ算出結果**(rawMakeupStockEntries)から作る。日程表側で在庫を作り直すと
@@ -7107,7 +7294,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     manualAdjustments: manualMakeupAdjustments,
     suppressedOrigins: suppressedMakeupOrigins,
     resolveStudentKey: resolveBoardStudentStockId,
-  }), [classroomSettings, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins])
+    templatePendingDesks,
+  }), [classroomSettings, manualMakeupAdjustments, normalizedWeeks, regularLessons, students, suppressedMakeupOrigins, templatePendingDesks])
 
   // INV-06: 休日設定のように「休みの出欠記録ごと破棄する」操作で使う台帳 origin 一覧。
   // ⚠️ こちらは **算出由来(absent)を除く**。含めると、算出で復元した自分自身を見て
@@ -9274,7 +9462,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       effectiveStartDate: templateEffectiveStartDate,
       deskCount: classroomSettings.deskCount,
     })
-    setTemplateSaveConfirm({ mode: 'overwrite', template })
+    setTemplateSaveConfirm({
+      mode: 'overwrite',
+      template,
+      // spec-template-behavior Q32-1: 差分反映の教室だけ、保存本体と同じ関数を試し実行して確認文の件数を出す。
+      ...(templateDiffApplyEnabled ? { diffSummary: buildTemplateDiffSavePlan(template, '').diff.summary } : {}),
+    })
   }
 
   const handleTemplateSaveConfirm = async () => {
@@ -9290,6 +9483,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       // PDF export failure should not block template save
     } finally {
       setBusyOverlayMessage(null)
+    }
+    // spec-template-behavior §H: 差分反映の教室（機能フラグ templateDiffApply）は新経路。それ以外は旧方式（上書き）のまま。
+    if (templateDiffApplyEnabled) {
+      handleSaveRegularLessonTemplateByDiff(templateSaveConfirm.template)
+      return
     }
     handleSaveRegularLessonTemplate(templateSaveConfirm.template, true)
   }
@@ -9429,6 +9627,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     sourceManualLectureStockOrigins: Record<string, ManualLectureStockOrigin[]>,
     sourceFallbackLectureStockStudents: Record<string, { displayName: string }>,
     sourceSpecialSessionSubjectDelta?: SpecialSessionSubjectDelta,
+    sourceTemplatePendingDesks: TemplatePendingDeskMap = templatePendingDesks,
   ): HistoryEntry => ({
     weeks: cloneWeeks(sourceWeeks),
     weekIndex: sourceWeekIndex,
@@ -9445,6 +9644,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     manualLectureStockOrigins: cloneManualLectureStockOrigins(sourceManualLectureStockOrigins),
     fallbackLectureStockStudents: { ...sourceFallbackLectureStockStudents },
     specialSessionSubjectDelta: sourceSpecialSessionSubjectDelta ? { ...sourceSpecialSessionSubjectDelta } : undefined,
+    templatePendingDesks: cloneTemplatePendingDeskMap(sourceTemplatePendingDesks),
   })
 
   const commitWeeks = (
@@ -9464,6 +9664,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     nextScheduleCountAdjustments: ScheduleCountAdjustmentEntry[] = scheduleCountAdjustments,
     // No.131: この操作が提出データ subjectSlots に行う差分(講習削除の -1 等)。undo/redo が逆・順適用する。
     specialSessionSubjectDelta?: SpecialSessionSubjectDelta,
+    // spec-template-behavior Q26-6: 保留の解決操作(第 1 段 B)が保留マップを変えるときに渡す。既定は現在の保留マップ。
+    nextTemplatePendingDesks: TemplatePendingDeskMap = templatePendingDesks,
   ) => {
     // 操作痕跡(2026-09-04): 盤面が変わる全操作はここを通るので、前後差分を端末内バッファへ残す
     // (「開発者へ報告」に同梱するだけ。サーバーへは送らない)。記録失敗は本体に影響させない。
@@ -9504,6 +9706,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setManualLectureStockCounts({ ...nextManualLectureStockCounts })
     setManualLectureStockOrigins(cloneManualLectureStockOrigins(nextManualLectureStockOrigins))
     setFallbackLectureStockStudents({ ...nextFallbackLectureStockStudents })
+    if (nextTemplatePendingDesks !== templatePendingDesks) setTemplatePendingDesks(cloneTemplatePendingDeskMap(nextTemplatePendingDesks))
     setStudentMenu(null)
     setTeacherMenu(null)
     setEditStudentDraft(null)
@@ -9524,6 +9727,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockOrigins: cloneManualLectureStockOrigins(nextManualLectureStockOrigins),
       fallbackLectureStockStudents: { ...nextFallbackLectureStockStudents },
       groupClassEntries: cloneGroupClassEntryMap(groupClassEntries),
+      ...buildTemplatePendingDesksPayload(nextTemplatePendingDesks),
       isLectureStockOpen,
       isMakeupStockOpen,
       studentScheduleRange,
@@ -12744,6 +12948,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setManualLectureStockCounts({ ...previous.manualLectureStockCounts })
     setManualLectureStockOrigins(cloneManualLectureStockOrigins(previous.manualLectureStockOrigins))
     setFallbackLectureStockStudents({ ...previous.fallbackLectureStockStudents })
+    setTemplatePendingDesks(cloneTemplatePendingDeskMap(previous.templatePendingDesks))
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
     setSelectedLectureStockKey(null)
@@ -12802,6 +13007,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     setManualLectureStockCounts({ ...next.manualLectureStockCounts })
     setManualLectureStockOrigins(cloneManualLectureStockOrigins(next.manualLectureStockOrigins))
     setFallbackLectureStockStudents({ ...next.fallbackLectureStockStudents })
+    setTemplatePendingDesks(cloneTemplatePendingDeskMap(next.templatePendingDesks))
     setSelectedStudentId(null)
     setSelectedMakeupStockKey(null)
     setSelectedLectureStockKey(null)
@@ -13565,14 +13771,16 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             <div className="auto-assign-modal-overlay" onClick={(event) => { if (event.target === event.currentTarget) setTemplateSaveConfirm(null) }}>
               <div className="auto-assign-modal" role="dialog" aria-modal="true" data-testid="template-save-confirm-modal">
                 <div className="auto-assign-modal-title">
-                  テンプレート上書き保存
+                  {templateSaveConfirm.diffSummary ? 'テンプレート保存' : 'テンプレート上書き保存'}
                 </div>
-                <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }}>
-                  {`${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
+                <div className="student-menu-help-text" style={{ whiteSpace: 'pre-wrap' }} data-testid="template-save-confirm-message">
+                  {templateSaveConfirm.diffSummary
+                    ? buildTemplateDiffConfirmMessage(templateSaveConfirm.template.effectiveStartDate, templateSaveConfirm.diffSummary)
+                    : `${templateSaveConfirm.template.effectiveStartDate} 以降のコマ表をすべてテンプレート内容で上書きします。\n\n手入力・メモ・振替・講習を含むすべてのデータが消去され、テンプレートの通常授業のみで再構築されます。\n\n実行しますか？`}
                 </div>
                 <div className="student-menu-section student-menu-actions">
                   <button type="button" className="primary-button" onClick={handleTemplateSaveConfirm} data-testid="template-save-confirm-execute-button">
-                    上書き保存を実行
+                    {templateSaveConfirm.diffSummary ? '保存を実行' : '上書き保存を実行'}
                   </button>
                   <button type="button" className="secondary-button" onClick={() => setTemplateSaveConfirm(null)} data-testid="template-save-confirm-cancel-button">キャンセル</button>
                 </div>

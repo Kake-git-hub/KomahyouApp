@@ -62,6 +62,7 @@ import { preserveWithdrawnStudentRowsOnImport } from './components/basic-data/wi
 import { getJstTodayDateKey } from './utils/jstDate'
 import { buildStudentLessonLedger, clearStudentLessonLedgerSyncState, markStudentLessonLedgerSent, resolveStudentLessonLedgerFingerprint, shouldSendStudentLessonLedger, toJstDateKey } from './utils/studentLessonLedger'
 import { trimBoardWeeksForMemory } from './components/schedule-board/boardWeekTrim'
+import { collectTemplatePendingCellIds, templatePendingDesksForSignature } from './components/schedule-board/templatePendingDesks'
 import { resolveRegisteredGroupClassSubjects } from './components/schedule-board/groupClass'
 import './App.css'
 
@@ -1364,7 +1365,8 @@ function trimBoardStateForMemory(boardState: PersistedBoardState | null | undefi
   if (!boardState) return boardState ?? null
   const weeks = boardState.weeks
   if (!Array.isArray(weeks) || weeks.length <= 1) return boardState
-  const trimmedWeeks = trimBoardWeeksForMemory(weeks)
+  // 保留（テンプレ差分反映の 2 行表示）のある週は破棄しない（spec-template-behavior Q24-4・破棄すると保留マップのキーが宙に浮く）。
+  const trimmedWeeks = trimBoardWeeksForMemory(weeks, { protectedCellIds: collectTemplatePendingCellIds(boardState.templatePendingDesks) })
   if (trimmedWeeks === weeks) return boardState
 
   const prevIndex = Math.min(Math.max(boardState.weekIndex ?? 0, 0), weeks.length - 1)
@@ -1417,6 +1419,8 @@ function buildBoardDataForSignature(boardState: PersistedBoardState | null | und
     // spec-group-lesson §G: 集団授業の変更を未保存(ダーティ)として検知させる。
     // 含めないと集団の科目/講師/出欠を変えても保存対象と認識されない回帰になる。
     groupClassEntries: boardState.groupClassEntries,
+    // spec-template-behavior Q24-3: テンプレ差分反映の保留マップ（空と未設定は同一視＝読込直後に未保存扱いにしない）。
+    templatePendingDesks: templatePendingDesksForSignature(boardState.templatePendingDesks),
   }
 }
 
@@ -3946,6 +3950,8 @@ function AuthenticatedApp() {
       suppressedOrigins: latestBoardState.suppressedMakeupOrigins ?? {},
       fallbackStudents: latestBoardState.fallbackMakeupStudents ?? {},
       resolveStudentKey: createBoardStudentStockIdResolver(students),
+      // INV-06（2026-09-29 拡張）: 保留の下段の振替・欠席記録も消化・欠席由来の走査に含める（盤面画面と同じ入力）。
+      templatePendingDesks: latestBoardState.templatePendingDesks,
     }))
   }, [boardStateRef, classroomSettings, displayRegularLessons, students, teachers])
 
