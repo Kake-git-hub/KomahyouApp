@@ -7,7 +7,12 @@ import {
   buildLectureStockKey,
   buildLecturePendingItemsByEntryKey,
 } from './lectureStock'
-import { appendLectureStockCount, reconsumeSessionLectureStock } from './ScheduleBoardScreen'
+import { appendLectureStockCount, buildManagedScheduleCellsForRange, computePendingDeskResolution, computeTemplateDiffApplyForBoard, reconsumeSessionLectureStock, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import { buildTemplatePendingDeskKey } from './templatePendingDesks'
+import type { TeacherRow } from '../basic-data/basicDataModel'
+import type { RegularLessonRow } from '../basic-data/regularLessonModel'
+import type { ClassroomSettings } from '../../types/appState'
+import type { DeskCell, SlotCell, StudentEntry } from './types'
 
 // ============================================================================
 // INV-06 操作マトリクステスト（保証: 在庫の実態一致＝未消化講習は盤面実配置と一致し、
@@ -140,5 +145,144 @@ describe('INV-06 講習在庫の実態一致（欠席化⇔欠席解除の往復
     expect(fromNegative.nextManualLectureStockCounts[MATH_KEY]).toBe(-1)
     const keyless = reconsumeSessionLectureStock({ manualLectureStockCounts: {}, manualLectureStockOrigins: {}, stockKey: MATH_KEY })
     expect(keyless.nextManualLectureStockCounts[MATH_KEY]).toBe(-1)
+  })
+})
+
+// ============================================================================
+// INV-06（2026-09-29 拡張・Issue #72 第 1 段 (C)）: テンプレ差分反映の保留（2 行）の下段に講習がある場合。
+//   docs/spec-template-behavior.md Q25-3・Q25-4・Q26-1・受け入れ条件 9・11・12。
+//   - テンプレ保存そのものでは講習の残数が増減しない（講習の残数は提出希望数 ± デルタ台帳で決まり盤面を走査しない。
+//     保存は台帳を触らない＝下段の講習は消化済みのまま）。在庫由来（session）・手動追加（manual）のどちらも。
+//   - 「テンプレを採用」で下段の講習を捨てると、既存の削除と同じく**在庫由来だけ**未消化へ戻る（手動追加は戻さない）。
+// ============================================================================
+
+describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保存前後で不変・テンプレを採用で在庫由来だけ戻る）', () => {
+  const AUTUMN_ID = 'sess_autumn'
+  const DATE = '2026-10-07'
+  const SLOT = 5
+  const CELL_ID = `${DATE}_${SLOT}`
+  const diffStudents: StudentRow[] = [student('sA', '青木 一'), student('sC', '千葉 三'), student('sM', '三浦 四'), student('sD', '土屋 五')]
+  const diffTeachers: TeacherRow[] = [
+    { id: 't1', name: '田中', email: 't1@example.com', entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] },
+    { id: 't2', name: '鈴木', email: 't2@example.com', entryDate: '2024-04-01', withdrawDate: '未定', subjectCapabilities: [{ subject: '数', maxGrade: '高3' }] },
+  ]
+  const autumnSessions: SpecialSessionRow[] = [{
+    id: AUTUMN_ID, label: '2026 秋期講習', startDate: '2026-10-01', endDate: '2026-10-31',
+    teacherInputs: {},
+    studentInputs: { sM: studentInput({ subjectSlots: { 数: 2 } }) },
+    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z',
+  }]
+  const autumnRawEntries = buildLectureStockEntries({ specialSessions: autumnSessions, students: diffStudents })
+  const SESSION_KEY = buildLectureStockKey('sM', '数', AUTUMN_ID)
+  const MANUAL_KEY = buildLectureStockKey('sD', '数')
+
+  function rowOf(id: string, teacherId: string, student1Id: string): RegularLessonRow {
+    return {
+      id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id: '', subject2: '',
+      student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: SLOT,
+    }
+  }
+  const settingsOf = (extra: Partial<ClassroomSettings> = {}) => ({ closedWeekdays: [], holidayDates: [], forceOpenDates: [], deskCount: 2, ...extra }) as ClassroomSettings
+
+  function lecture(studentId: 'sM' | 'sD'): StudentEntry {
+    const source = diffStudents.find((item) => item.id === studentId)!
+    return studentId === 'sM'
+      ? { id: 'lec_sM', name: source.name, managedStudentId: 'sM', grade: '中3', subject: '数', lessonType: 'special', teacherType: 'normal', specialStockSource: 'session', specialSessionId: AUTUMN_ID }
+      : { id: 'lec_sD', name: source.name, managedStudentId: 'sD', grade: '中3', subject: '数', lessonType: 'special', teacherType: 'normal', specialStockSource: 'manual', manualAdded: true }
+  }
+
+  function lectureBalances(ledgers: Pick<TemplatePendingResolutionLedgers, 'manualLectureStockCounts' | 'manualLectureStockOrigins'>) {
+    const map = buildLecturePendingItemsByEntryKey({
+      rawLectureStockEntries: autumnRawEntries,
+      specialSessions: autumnSessions,
+      manualLectureStockCounts: ledgers.manualLectureStockCounts,
+      manualLectureStockOrigins: ledgers.manualLectureStockOrigins,
+      fallbackLectureStockStudents: {},
+    })
+    const result: Record<string, number> = {}
+    for (const entry of map.values()) result[entry.studentId ?? ''] = (result[entry.studentId ?? ''] ?? 0) + entry.pendingItems.length
+    return result
+  }
+
+  // 机0 に在庫由来の講習 M（台帳 -1 で消化済み）と手動追加の講習 D（台帳 -1）。新テンプレは机0 に C → 保留（下段に M・D）。
+  function pendingLectureBoard() {
+    let week: SlotCell[] = buildManagedScheduleCellsForRange({
+      range: { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '', personId: '' },
+      fallbackStartDate: '2026-10-05',
+      fallbackEndDate: '2026-10-11',
+      classroomSettings: settingsOf(),
+      teachers: diffTeachers,
+      students: diffStudents,
+      regularLessons: [rowOf('r0', 't1', 'sA'), rowOf('r1', 't2', '')],
+      boardWeeks: [],
+    })
+    week = week.map((cell) => (cell.id !== CELL_ID ? cell : {
+      ...cell,
+      desks: cell.desks.map((desk, index): DeskCell => (index === 0 ? { ...desk, lesson: { id: 'lectures', studentSlots: [lecture('sM'), lecture('sD')] } } : desk)),
+    }))
+    const newRows = [rowOf('r0', 't2', 'sC'), rowOf('r1', 't1', '')]
+    const diff = computeTemplateDiffApplyForBoard({
+      weeks: [week],
+      classroomSettings: settingsOf({ templateFreezeBeforeDate: DATE }),
+      teachers: diffTeachers,
+      students: diffStudents,
+      regularLessons: newRows,
+      effectiveStartDate: DATE,
+      suppressedRegularLessonOccurrences: [],
+      templatePendingDesks: {},
+      createdAt: '2026-09-29T10:00:00.000Z',
+    })
+    const deskId = diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0].id
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskId)
+    return { before: [week], diff, deskId, key }
+  }
+
+  const PLACED_LEDGERS: TemplatePendingResolutionLedgers = {
+    // 在庫から置いた講習 M は -1（消化）。手動追加の講習 D は手動在庫 +1 → 配置で -1＝0 のキー。
+    manualLectureStockCounts: { [SESSION_KEY]: -1, [MANUAL_KEY]: 0 },
+    manualLectureStockOrigins: {},
+    manualMakeupAdjustments: {},
+    fallbackLectureStockStudents: {},
+    fallbackMakeupStudents: {},
+    suppressedMakeupOrigins: {},
+    suppressedRegularLessonOccurrences: [],
+    scheduleCountAdjustments: [],
+  }
+
+  it('保存前後: 在庫由来・手動追加の講習が下段に入っても、講習の残数は保存前と同じ（保存は台帳を触らない）', () => {
+    const { diff, key } = pendingLectureBoard()
+    // 前提: 2 つの講習はどちらも下段（盤面の週データの外）へ入り、上段はテンプレの C。
+    expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots.map((item) => item?.id)).toEqual(['lec_sM', 'lec_sD'])
+    const upper = diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0]
+    expect(upper.lesson?.studentSlots.filter(Boolean).map((item) => item!.managedStudentId)).toEqual(['sC'])
+    // 差分反映の結果は台帳を持たない（在庫台帳に触る入口が無い）＝保存前後で台帳が同じなので残数も同じ。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary'])
+    const before = lectureBalances(PLACED_LEDGERS)
+    expect(before).toEqual({ sM: 1 })
+    expect(lectureBalances(PLACED_LEDGERS)).toEqual(before)
+  })
+
+  it('テンプレを採用: 下段の在庫由来の講習 M だけ未消化へ戻り（残 +1）、手動追加の講習 D は戻らない', () => {
+    const { diff, deskId, key } = pendingLectureBoard()
+    const result = computePendingDeskResolution({
+      mode: 'adopt-template',
+      weeks: diff.nextWeeks,
+      cellId: CELL_ID,
+      deskId,
+      templatePendingDesks: diff.nextPendingDesks,
+      ledgers: PLACED_LEDGERS,
+      managedStudentByAnyName: new Map(diffStudents.map((item) => [item.name, item])),
+      resolveDisplayName: (name: string) => name,
+      resolveStockId: (item: StudentEntry) => item.managedStudentId ?? item.name,
+      ledgerOriginDatesByKey: {},
+    })
+    if (result.status !== 'applied') throw new Error(result.message)
+    expect(result.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(result.returnedCount).toBe(1)
+    expect(result.ledgers.manualLectureStockCounts[SESSION_KEY]).toBe(0)
+    expect(result.ledgers.manualLectureStockCounts[MANUAL_KEY]).toBe(0)
+    expect(lectureBalances(result.ledgers)).toEqual({ sM: 2 })
+    // 希望回数は動かさない（テンプレを採用は下段を捨てるだけ・Q26-1）。
+    expect(result.ledgers.scheduleCountAdjustments).toEqual([])
   })
 })

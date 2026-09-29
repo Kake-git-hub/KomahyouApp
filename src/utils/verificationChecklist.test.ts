@@ -60,14 +60,14 @@ describe('確認リストの項目定義', () => {
     }
   })
 
-  it('第32版(v1.5.570): 第31版の結果で OK の t-2/t-3/d-1〜d-4/a-1〜a-3 を外し、解決済みの確認 a-4 を足した(OK 済みは載せない運用)', () => {
+  it('第34版(v1.5.572): 第32版の結果待ち(q-1〜q-6・a-4)と第33版の tp-1〜tp-6 を残し、テンプレ差分反映 (A)(C) の tp-7〜tp-15 を足した', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4', 'tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4', 'tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6', 'tp-7', 'tp-8', 'tp-9', 'tp-10', 'tp-11', 'tp-12', 'tp-13', 'tp-14', 'tp-15'])
     // 第31版の結果(2026-09-28・受付 20260928-103642968-d4c32a94)で OK。
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
-    // ★OK 済みを外したので版を上げる(据え置くと前回の OK の印がパネルに残る)。
-    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.570')
+    // 第34版(2026-09-29): 次にデプロイされる版 v1.5.572 へ上げた(オーナー指示・Issue #72 第 1 段の (A)(C) の確認項目を載せる版)。
+    expect(VERIFICATION_CHECKLIST.version).toBe('v1.5.572')
     const byId = new Map(VERIFICATION_CHECKLIST.items.map((item) => [item.id, item]))
     // 第32版(2026-09-28): 開発者の「解決済み」(その他欄の要望)。室長の画面に出ないこと・未回答から外れること・戻せることを見る。
     const a4 = byId.get('a-4')!
@@ -85,6 +85,19 @@ describe('確認リストの項目定義', () => {
     }
     expect(byId.get('tp-2')!.check!.join(' / ')).toContain('「元に戻す」1 回で緑の 2 行に戻り')
     expect(byId.get('tp-5')!.check!.join(' / ')).toContain('先に保留を片づけてください')
+    // 第34版(2026-09-29): (A) の実機確認 tp-7〜tp-12 と (C) の tp-13〜tp-15。tp-4 に下段の移動の出席不可コマ確認を足した。
+    for (const id of ['tp-7', 'tp-8', 'tp-9', 'tp-10', 'tp-11', 'tp-12', 'tp-13', 'tp-14', 'tp-15']) {
+      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.572')
+      expect(byId.get(id)!.area, id).toBe('盤面(テンプレ保留)')
+    }
+    expect(byId.get('tp-7')!.check!.join(' / ')).toContain('すべてのデータが消去され」の文言が出ない')
+    expect(byId.get('tp-9')!.check!.join(' / ')).toContain('講師なしのまま')
+    expect(byId.get('tp-11')!.check!.join(' / ')).toContain('別の机に増えない')
+    expect(byId.get('tp-12')!.check!.join(' / ')).toContain('テンプレ保存前の盤面')
+    expect(byId.get('tp-13')!.check!.join(' / ')).toContain('緑の机は同じ位置のまま')
+    expect(byId.get('tp-14')!.check!.join(' / ')).toContain('未消化振替の件数は控えから増えない')
+    expect(byId.get('tp-15')!.check!.join(' / ')).toContain('自動では処理しませんでした')
+    expect(byId.get('tp-4')!.check!.join(' / ')).toContain('出席不可と提出されたコマ')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
@@ -121,8 +134,8 @@ describe('確認リストの項目定義', () => {
 
 describe('下書きの保存キーと往復', () => {
   it('教室別・版別のキーになる', () => {
-    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.570')
-    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.570')
+    expect(verificationChecklistStorageKey('v8OZ7zH8vONNHjjYVcR1')).toBe('verification-checklist:v8OZ7zH8vONNHjjYVcR1:v1.5.572')
+    expect(verificationChecklistStorageKey(null)).toBe('verification-checklist:unknown:v1.5.572')
     expect(VERIFICATION_CHECKLIST_COLLAPSED_STORAGE_KEY).toBe('verification-checklist:collapsed')
   })
 
@@ -194,7 +207,7 @@ describe('送信本文の書式', () => {
       '- その他: 全体的に良い',
     ])
     expect(notes[0]).not.toContain('p-3')
-    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.570]')
+    expect(buildVerificationChecklistMarker()).toBe('[確認リスト v1.5.572]')
   })
 
   it('OK にメモがあれば残す・改行メモは1行に畳む', () => {
