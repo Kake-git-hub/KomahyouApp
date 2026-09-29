@@ -34,7 +34,7 @@ import { packSortCellDesks, seatSortCells, type BoardSortMode } from './deskSort
 export { packSortCellDesks } from './deskSort'
 import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
-import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
+import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
 import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
@@ -50,12 +50,12 @@ import {
   settleTemplatePendingDesksAfterCommit,
   TEMPLATE_PENDING_MESSAGES,
 } from './templatePendingResolution'
-import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
+import { buildTemplatePendingDeskKey, buildTemplatePendingDesksPayload, cloneTemplatePendingDeskMap, collectTemplatePendingDeskIdsInCell, hasTemplatePendingDesks, normalizeTemplatePendingDeskMap, parseTemplatePendingDeskKey, pruneTemplatePendingDesksOnOrAfter, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
 import type { ClassroomSettings, StudentScheduleRequest, TeacherAutoAssignItem, TeacherAutoAssignRequest } from '../../App'
 import type { ManualLectureStockOrigin, PersistedBoardState, ScheduleCountAdjustmentEntry } from '../../types/appState'
 import type { PairConstraintRow } from '../../types/pairConstraint'
 import { resolvePairConstraintCategory } from '../../types/pairConstraint'
-import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport } from '../../utils/pdf'
+import { exportBoardPdf, exportBoardPdfSelection, exportTemplateOverwriteReport, resolveTemplateOverwriteReportLabels } from '../../utils/pdf'
 import { buildBoardPrintGrid, buildBoardPrintTitle, type BoardPrintSelection } from '../../utils/boardPrintSelection'
 import { BoardPrintSelectionModal } from './BoardPrintSelectionModal'
 import { BusyOverlay } from '../common/BusyOverlay'
@@ -3682,10 +3682,16 @@ export function stripWithdrawnStudentsFromBoardWeek(
 //     - 講習(special) … 残数は提出希望数 ± manualLectureStockCounts のデルタ台帳だけで決まり盤面を走査しないので、
 //       席を消しても未消化講習は増えない(希望数 scheduleCountAdjustments / specialSessions も触らない＝オーナー確定)。
 //       体験(trial)・増コマ(extra)は在庫を持たない。
+// ★spec-template-behavior Q31（Issue #72・第 1 段 (C)）: テンプレ差分反映の保留（2 行）の**下段の生徒・記録も同じ規則で消す**
+//   （templatePendingDesks を渡したときだけ。在庫は上と同じ＝未消化へ戻さず、湧く分だけ抑止へ積む。下段の振替は消化に数えている
+//   〔resolveMakeupScanWeeks〕ので、消すと origin が再浮上する＝盤面の振替コマと同じく振替元日を抑止する）。下段に生きている生徒が
+//   いなくなった机は、確定（commitWeeks）の中の Q28 で 1 行へ戻る。消したのは盤面の席・記録と同じく件数に数える。
 export type StudentWithdrawSweepOutcome = {
   changed: boolean
   nextWeeks: SlotCell[][]
   nextSuppressedMakeupOrigins: MakeupOriginMap
+  /** 保留マップ（templatePendingDesks を渡したときだけ。変化が無ければ入力と同じ参照）。 */
+  nextTemplatePendingDesks?: TemplatePendingDeskMap
   removedSeatCount: number
   removedStatusCount: number
 }
@@ -3698,12 +3704,15 @@ export function computeStudentWithdrawSweep(params: {
   fromDateKey: string
   suppressedMakeupOrigins: MakeupOriginMap
   resolveStockId: (student: StudentEntry) => string
+  /** Q31: 保留の下段も消す（機能フラグ templateDiffApply ON の教室だけ渡す）。 */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }): StudentWithdrawSweepOutcome {
   const { weeks, students, studentId, fromDateKey, resolveStockId } = params
   const unchanged: StudentWithdrawSweepOutcome = {
     changed: false,
     nextWeeks: weeks,
     nextSuppressedMakeupOrigins: params.suppressedMakeupOrigins,
+    ...(params.templatePendingDesks ? { nextTemplatePendingDesks: params.templatePendingDesks } : {}),
     removedSeatCount: 0,
     removedStatusCount: 0,
   }
@@ -3775,15 +3784,73 @@ export function computeStudentWithdrawSweep(params: {
     })
     return weekChanged ? nextWeek : week
   })
+
+  // Q31: 保留の下段（盤面のセルの日付で消去開始日以降のものだけ。孤児キーは日付が決まらないので触らない＝Q24-5）。
+  let nextTemplatePendingDesks = params.templatePendingDesks ?? undefined
+  if (params.templatePendingDesks && hasTemplatePendingDesks(params.templatePendingDesks)) {
+    const dateKeyByCellId = new Map<string, string>()
+    for (const week of weeks) for (const cell of week) dateKeyByCellId.set(cell.id, cell.dateKey)
+    let pendingChanged = false
+    const updated: TemplatePendingDeskMap = {}
+    for (const [key, pending] of Object.entries(params.templatePendingDesks)) {
+      const parsed = parseTemplatePendingDeskKey(key)
+      const cellDateKey = parsed ? dateKeyByCellId.get(parsed.cellId) : undefined
+      const lower = pending.lower
+      const ownedSeatIndexes = (lower.lesson?.studentSlots ?? []).map((student, index) => (owns(student) ? index : -1)).filter((index) => index >= 0)
+      const ownedStatusIndexes = (lower.statusSlots ?? []).map((entry, index) => (owns(entry) ? index : -1)).filter((index) => index >= 0)
+      if (!cellDateKey || cellDateKey < fromDateKey || (ownedSeatIndexes.length === 0 && ownedStatusIndexes.length === 0)) {
+        updated[key] = pending
+        continue
+      }
+      pendingChanged = true
+      let nextEntry = pending
+      if (ownedSeatIndexes.length > 0) {
+        for (const index of ownedSeatIndexes) {
+          const seat = lower.lesson?.studentSlots[index]
+          if (seat) suppressForRemovedEntry(seat, cellDateKey)
+        }
+        nextEntry = removeTemplatePendingLowerStudents(nextEntry, ownedSeatIndexes).nextEntry
+        removedSeatCount += ownedSeatIndexes.length
+      }
+      if (ownedStatusIndexes.length > 0) {
+        const statusSlots = [...(nextEntry.lower.statusSlots ?? [null, null])] as [StudentStatusEntry | null, StudentStatusEntry | null]
+        for (const index of ownedStatusIndexes) {
+          const statusEntry = statusSlots[index]
+          if (!statusEntry) continue
+          suppressForRemovedEntry(buildStudentEntryFromStatus(statusEntry), cellDateKey, statusEntry.status)
+          statusSlots[index] = null
+          removedStatusCount += 1
+        }
+        const nextLower = { ...nextEntry.lower }
+        if (statusSlots[0] || statusSlots[1]) nextLower.statusSlots = statusSlots
+        else delete nextLower.statusSlots
+        nextEntry = { ...nextEntry, lower: nextLower }
+      }
+      updated[key] = nextEntry
+    }
+    if (pendingChanged) {
+      changed = true
+      nextTemplatePendingDesks = updated
+    }
+  }
   if (!changed) return unchanged
 
-  return { changed: true, nextWeeks, nextSuppressedMakeupOrigins, removedSeatCount, removedStatusCount }
+  return {
+    changed: true,
+    nextWeeks,
+    nextSuppressedMakeupOrigins,
+    ...(nextTemplatePendingDesks ? { nextTemplatePendingDesks } : {}),
+    removedSeatCount,
+    removedStatusCount,
+  }
 }
 
 export type StudentWithdrawSweepBatch = {
   changed: boolean
   nextWeeks: SlotCell[][]
   nextSuppressedMakeupOrigins: MakeupOriginMap
+  /** Q31: 保留マップ（templatePendingDesks を渡したときだけ）。 */
+  nextTemplatePendingDesks?: TemplatePendingDeskMap
   /** 実際に何かを消した生徒だけ(メッセージ・操作ログ用)。 */
   results: Array<{ studentId: string; displayName: string; fromDateKey: string; removedSeatCount: number; removedStatusCount: number }>
   /** 検出した対象集合の署名(同一マウント内での二重実行を抑える副ガード用。対象 0 なら空文字)。 */
@@ -3812,11 +3879,14 @@ export function applyStudentWithdrawSweepToBoard(params: {
   suppressedMakeupOrigins: MakeupOriginMap
   todayKey: string
   resolveStockId: (student: StudentEntry) => string
+  /** Q31: 保留の下段も検出・掃除の対象にする（機能フラグ templateDiffApply ON の教室だけ渡す。OFF は null＝従来どおり）。 */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }): StudentWithdrawSweepBatch {
   const unchanged: StudentWithdrawSweepBatch = {
     changed: false,
     nextWeeks: params.weeks,
     nextSuppressedMakeupOrigins: params.suppressedMakeupOrigins,
+    ...(params.templatePendingDesks ? { nextTemplatePendingDesks: params.templatePendingDesks } : {}),
     results: [],
     signature: '',
   }
@@ -3830,12 +3900,13 @@ export function applyStudentWithdrawSweepToBoard(params: {
     suppressedRegularLessonOccurrences: params.suppressedRegularLessonOccurrences,
     todayKey: params.todayKey,
   })
-  const targets = collectStudentWithdrawSweepTargets({ weeks: remergedWeeks, students: params.students, todayKey: params.todayKey })
+  const targets = collectStudentWithdrawSweepTargets({ weeks: remergedWeeks, students: params.students, todayKey: params.todayKey, templatePendingDesks: params.templatePendingDesks })
   if (targets.length === 0) return unchanged
   const signature = targets.map((target) => `${target.studentId}@${target.fromDateKey}`).join(',')
 
   let nextWeeks = remergedWeeks
   let nextSuppressedMakeupOrigins = params.suppressedMakeupOrigins
+  let nextTemplatePendingDesks = params.templatePendingDesks ?? undefined
   let changed = false
   const results: StudentWithdrawSweepBatch['results'] = []
   for (const target of targets) {
@@ -3846,11 +3917,13 @@ export function applyStudentWithdrawSweepToBoard(params: {
       fromDateKey: target.fromDateKey,
       suppressedMakeupOrigins: nextSuppressedMakeupOrigins,
       resolveStockId: params.resolveStockId,
+      templatePendingDesks: nextTemplatePendingDesks,
     })
     if (!sweep.changed) continue
     changed = true
     nextWeeks = sweep.nextWeeks
     nextSuppressedMakeupOrigins = sweep.nextSuppressedMakeupOrigins
+    if (sweep.nextTemplatePendingDesks) nextTemplatePendingDesks = sweep.nextTemplatePendingDesks
     results.push({
       studentId: target.studentId,
       displayName: target.displayName,
@@ -3862,7 +3935,7 @@ export function applyStudentWithdrawSweepToBoard(params: {
   // 掃除で何も消えなかったときは盤面を差し替えない(再マージだけの差分を userInitiated な commit に載せない
   // ＝開いただけで未保存にしない。再マージ自体は再マージ effect が受動 publish で反映する)。
   if (!changed) return { ...unchanged, signature }
-  return { changed: true, nextWeeks, nextSuppressedMakeupOrigins, results, signature }
+  return { changed: true, nextWeeks, nextSuppressedMakeupOrigins, ...(nextTemplatePendingDesks ? { nextTemplatePendingDesks } : {}), results, signature }
 }
 
 // 休日(閉じた日)のセルを再マージするときの規則。overlayBoardWeeksOnScheduleCells の休日分岐だけが使う。
@@ -4382,10 +4455,14 @@ function isDeletedTeacherTombstone(desk: DeskCell) {
 // 兄弟監査(2026-08-07・INV-01): 出欠を記録済みの机は「講師だけの机」ではない。
 // lesson が無くても statusSlots に実績が入っており、詰め直しで講師名だけ別の机へ動かすと
 // 記録はその場に残って別講師の実績になる(盤面そのものが壊れる)。tombstone と同じ扱いで固定する。
-export function repackTeacherOnlyDesks(desks: DeskCell[]) {
+// spec-template-behavior Q31（Issue #72・第 1 段 (C)）: lockedDeskIds＝そのコマの保留（2 行）の机。上段が空いた保留の机も
+// 「埋まっている」とみなし、講師を抜かない・講師の入れ先にもしない（保留マップのキーは机 ID なので、講師が動くと
+// 下段が別の講師の下へずれる）。省略時（フラグ OFF・保留の無いコマ）は従来どおり。
+export function repackTeacherOnlyDesks(desks: DeskCell[], lockedDeskIds?: ReadonlySet<string>) {
+  const isLockedDesk = (desk: DeskCell) => Boolean(lockedDeskIds?.has(desk.id))
   const teacherOnlyDesks = desks
     // tombstone(teacher='')は teacher.trim() が空なので元々ここには入らないが、意図を明示して除外する。
-    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && desk.teacher.trim())
+    .filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk) && desk.teacher.trim())
     .map((desk) => ({
       teacher: desk.teacher,
       manualTeacher: Boolean(desk.manualTeacher),
@@ -4400,6 +4477,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[]) {
     if (isDeletedTeacherTombstone(desk)) return desk
     // 出欠記録のある机も同様に据え置く(講師を剥がすと記録だけが講師なしで残る)。
     if (hasRecordedStatusSlots(desk)) return desk
+    // 保留（2 行）の机も据え置く(Q31)。
+    if (isLockedDesk(desk)) return desk
     return {
       ...desk,
       teacher: '',
@@ -4417,6 +4496,8 @@ export function repackTeacherOnlyDesks(desks: DeskCell[]) {
     if (isDeletedTeacherTombstone(nextDesks[deskIndex])) continue
     // 出欠記録のある机も入れ先にしない(記録済みの実績が別講師のものになる)。
     if (hasRecordedStatusSlots(nextDesks[deskIndex])) continue
+    // 保留（2 行）の机も入れ先にしない(Q31)。
+    if (isLockedDesk(nextDesks[deskIndex])) continue
     const teacherOnlyDesk = teacherOnlyDesks[teacherOnlyIndex]
     if (!teacherOnlyDesk) break
     nextDesks[deskIndex] = {
@@ -4437,6 +4518,8 @@ function removeAutoAssignedTeacherFromSpecialSession(params: {
   weeks: SlotCell[][]
   session: SpecialSessionRow
   teacher: TeacherRow
+  /** Q31: 保留（2 行）の机は詰め直しで動かさない。フラグ OFF は null。 */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }) {
   const nextWeeks = cloneWeeks(params.weeks)
   let clearedCellCount = 0
@@ -4457,7 +4540,7 @@ function removeAutoAssignedTeacherFromSpecialSession(params: {
       }
 
       if (cellChanged) {
-        cell.desks = repackTeacherOnlyDesks(cell.desks)
+        cell.desks = repackTeacherOnlyDesks(cell.desks, collectTemplatePendingDeskIdsInCell(params.templatePendingDesks, cell.id))
         hasChanges = true
       }
     }
@@ -4792,6 +4875,11 @@ function autoAssignTeacherToSpecialSession(params: {
   teachers: TeacherRow[]
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
+  /**
+   * spec-template-behavior Q31（Issue #72・第 1 段 (C)）: 保留（2 行）の机は「埋まっている」とみなし、空き机に数えない・
+   * 講師を置かない・詰め直しで動かさない。フラグ templateDiffApply が OFF の教室は null（＝従来どおり）。
+   */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }) {
   const teacherName = getTeacherDisplayName(params.teacher)
   // 実効不可(unavailableSlots − reopenedSlots)。「出席可能に変更」済みコマは自動配置の対象に含める(2026-07-18)。
@@ -4819,9 +4907,11 @@ function autoAssignTeacherToSpecialSession(params: {
       const slotKey = `${cell.dateKey}_${cell.slotNumber}`
       if (unavailableSlots.has(slotKey)) continue
 
+      const lockedDeskIds = collectTemplatePendingDeskIdsInCell(params.templatePendingDesks, cell.id)
+      const isLockedDesk = (desk: DeskCell) => Boolean(lockedDeskIds?.has(desk.id))
       const alreadyAssigned = cell.desks.some((desk) => desk.teacher === teacherName)
       if (alreadyAssigned) {
-        const repackedDesks = repackTeacherOnlyDesks(cell.desks)
+        const repackedDesks = repackTeacherOnlyDesks(cell.desks, lockedDeskIds)
         const repackedChanged = repackedDesks.some((desk, deskIndex) => (
           desk.teacher !== cell.desks[deskIndex]?.teacher || desk.manualTeacher !== Boolean(cell.desks[deskIndex]?.manualTeacher)
         ))
@@ -4832,27 +4922,28 @@ function autoAssignTeacherToSpecialSession(params: {
         continue
       }
 
-      const teacherOnlyDesks = cell.desks.filter((desk) => !desk.lesson && desk.teacher.trim())
+      const teacherOnlyDesks = cell.desks.filter((desk) => !desk.lesson && !isLockedDesk(desk) && desk.teacher.trim())
       // 削除tombstone(teacher='' だが source='deleted'=室長が意図的に消した机)は「空き机」ではない。
       // 空き机としてカウント/配置先に選ぶと、講習の自動割当が tombstone を上書きして削除記録を壊し、
       // 次の再マージで削除した講師が赤く復活する(回帰防止 2026-07-10。repack だけでなくこの経路も塞ぐ)。
       // 出欠記録のある机も「空き机」ではない(講習の自動割当が講師を上書きすると実績の帰属が変わる)。
-      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk)).length
+      // 保留（2 行）の机（上段が空いていても）も「空き机」ではない(Q31)。
+      const emptyDeskCount = cell.desks.filter((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk)).length
       if (teacherOnlyDesks.length >= emptyDeskCount) {
         skippedFullCellCount += 1
         continue
       }
 
       const nextDesks = cell.desks.map((desk) => ({ ...desk }))
-      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk))
-        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk))
+      const candidateDesk = nextDesks.find((desk) => !desk.lesson && !desk.teacher.trim() && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk))
+        ?? nextDesks.find((desk) => !desk.lesson && !isDeletedTeacherTombstone(desk) && !hasRecordedStatusSlots(desk) && !isLockedDesk(desk))
       if (!candidateDesk) {
         skippedFullCellCount += 1
         continue
       }
 
       setScheduleRegistrationTeacherAssignment(candidateDesk, teacherName, params.session.id, params.teacher.id)
-      cell.desks = repackTeacherOnlyDesks(nextDesks)
+      cell.desks = repackTeacherOnlyDesks(nextDesks, lockedDeskIds)
       assignedCellCount += 1
       hasChanges = true
     }
@@ -4880,6 +4971,8 @@ export function applyTeacherAutoAssignRequest(params: {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   classroomSettings: ClassroomSettings
+  /** Q31: 保留（2 行）の机を空き机に数えない・詰め直しで動かさない。フラグ OFF は null。 */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }): { nextWeeks: SlotCell[][]; weekIndexOffset: number; hasChanges: boolean; messages: string[] } {
   let workingWeeks = params.weeks
   let weekIndexOffset = 0
@@ -4892,7 +4985,7 @@ export function applyTeacherAutoAssignRequest(params: {
     if (!session || !teacher) continue
 
     if (item.mode === 'unassign') {
-      const result = removeAutoAssignedTeacherFromSpecialSession({ weeks: workingWeeks, session, teacher })
+      const result = removeAutoAssignedTeacherFromSpecialSession({ weeks: workingWeeks, session, teacher, templatePendingDesks: params.templatePendingDesks })
       if (!result.hasChanges) {
         messages.push(`${session.label} で ${result.teacherName} の日程表登録由来は見つかりませんでした。`)
         continue
@@ -4911,6 +5004,7 @@ export function applyTeacherAutoAssignRequest(params: {
       teachers: params.teachers,
       students: params.students,
       regularLessons: params.regularLessons,
+      templatePendingDesks: params.templatePendingDesks,
     })
     if (!result.hasChanges) {
       messages.push(`${session.label} で ${result.teacherName} の自動登録対象はありませんでした。`)
@@ -4946,6 +5040,12 @@ export function reconcileSubmittedTeacherPlacements(params: {
   students: StudentRow[]
   regularLessons: RegularLessonRow[]
   classroomSettings: ClassroomSettings
+  /**
+   * spec-template-behavior Q31（Issue #72・第 1 段 (C)）: 保留（2 行）の机。Q21-9 の例外で保留の机に残した QR 講師は
+   * 机の講師（schedule-registration＋講習 ID）のままなので下の placedTeacherIds に数えられ「配置済み」になる。
+   * 未配置の講師を置き直すときも保留の机は空き机に数えない。フラグ OFF は null（＝従来どおり）。
+   */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }): { nextWeeks: SlotCell[][]; weekIndexOffset: number; hasChanges: boolean; placedCount: number } {
   let workingWeeks = params.weeks
   let weekIndexOffset = 0
@@ -5000,6 +5100,7 @@ export function reconcileSubmittedTeacherPlacements(params: {
         teachers: params.teachers,
         students: params.students,
         regularLessons: params.regularLessons,
+        templatePendingDesks: params.templatePendingDesks,
       })
       if (result.hasChanges) {
         workingWeeks = result.nextWeeks
@@ -6094,6 +6195,35 @@ export function computePendingLowerStudentMove(params: {
   }
 }
 
+/**
+ * 下段の生徒の移動（Q26-3）の着地が出席不可提出コマかを確かめる対象（通常の移動の collectStudentMoveLandingPlacements と同じ形）。
+ * 下段の移動は空いた席へだけ（入れ替え無し）なので、対象は移す生徒 1 人だけ。同じコマの中の移動（別の机）は対象にしない
+ * （通常の移動と同じ・同じ時限なので出席可否は変わらない）。確認ダイアログ・黄色化は呼び出し側の confirmReopenForPlacements。
+ */
+export function collectPendingLowerMoveLandingPlacements(params: {
+  weeks: SlotCell[][]
+  cells: SlotCell[]
+  templatePendingDesks: TemplatePendingDeskMap
+  source: { cellId: string; deskId: string; lowerIndex: number }
+  cellId: string
+  managedStudentByAnyName: Map<string, StudentRow>
+  resolveBoardStudentDisplayName: (name: string) => string
+}): ReopenPlacementCheck[] {
+  const found = findTemplatePendingDeskEntry(params.templatePendingDesks, params.source.cellId, params.source.deskId)
+  const student = found?.entry.lower.lesson?.studentSlots[params.source.lowerIndex] ?? null
+  const sourceCell = params.weeks.flat().find((cell) => cell.id === params.source.cellId)
+  const targetCell = params.cells.find((cell) => cell.id === params.cellId)
+  if (!student || !sourceCell || !targetCell) return []
+  if (sourceCell.dateKey === targetCell.dateKey && sourceCell.slotNumber === targetCell.slotNumber) return []
+  const byName = params.managedStudentByAnyName.get(student.name) ?? params.managedStudentByAnyName.get(params.resolveBoardStudentDisplayName(student.name))
+  return [{
+    managedStudentId: student.managedStudentId || byName?.id || null,
+    displayName: params.resolveBoardStudentDisplayName(student.name),
+    dateKey: targetCell.dateKey,
+    slotNumber: targetCell.slotNumber,
+  }]
+}
+
 export function computeWholeDayTransfer(params: {
   weeks: SlotCell[][]
   sourceDateKey: string
@@ -7154,6 +7284,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       students,
       regularLessons,
       classroomSettings,
+      // spec-template-behavior Q31: 保留（2 行）の机は空き机に数えない・詰め直しで動かさない（フラグ OFF は null）。
+      templatePendingDesks: activeTemplatePendingDesks,
     })
 
     if (result.hasChanges) {
@@ -7171,7 +7303,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     if (result.messages.length > 0) {
       setStatusMessage(result.messages[result.messages.length - 1])
     }
-  }, [classroomSettings, onTeacherAutoAssignRequestProcessed, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, classroomSettings, onTeacherAutoAssignRequestProcessed, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teacherAutoAssignRequest, teachers, weekIndex, weeks])
 
   // 起動時の自己修復(2026-06-30): 提出済み(countSubmitted=true)なのに盤面に居ない講師を配置し直す。
   // 盤面は boardMountKey で教室ロード/リロード毎に再マウントされ、その時 specialSessions と weeks は
@@ -7189,6 +7321,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       students,
       regularLessons,
       classroomSettings,
+      // spec-template-behavior Q31: 保留（2 行）の机の QR 講師は配置済みに数え、保留の机を置き直し先にしない（フラグ OFF は null）。
+      templatePendingDesks: activeTemplatePendingDesks,
     })
     if (result.hasChanges) {
       commitWeeks(
@@ -7203,7 +7337,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         setStatusMessage(`提出済みで未配置だった講師 ${result.placedCount} 名を出席可能コマへ自動配置しました。保存してください。`)
       }
     }
-  }, [classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teachers, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, classroomSettings, regularLessons, selectedCellId, selectedDeskIndex, specialSessions, students, teachers, weekIndex, weeks])
 
   useEffect(() => {
     // Issue #46: shouldProcess で「未処理の 1 件」だけを対象にする。
@@ -9853,12 +9987,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleTemplateSaveConfirm = async () => {
     if (!templateSaveConfirm) return
-    setBusyOverlayMessage('上書き内容のレポートを PDF 出力中… しばらくお待ちください')
+    // spec-template-behavior Q32-3: 差分反映の教室（機能フラグ templateDiffApply）は見出しを「テンプレ保存前の盤面」にする（OFF は従来の文言）。
+    const templateReportMode = templateDiffApplyEnabled ? 'diff' as const : 'overwrite' as const
+    setBusyOverlayMessage(resolveTemplateOverwriteReportLabels(templateReportMode).busyMessage)
     try {
       await exportTemplateOverwriteReport({
         weeks,
         effectiveStartDate: templateSaveConfirm.template.effectiveStartDate,
         resolveDisplayName: resolveBoardStudentDisplayName,
+        mode: templateReportMode,
       })
     } catch {
       // PDF export failure should not block template save
@@ -11663,6 +11800,21 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       setStatusMessage(result.message)
       return
     }
+    // 通常の移動と同じ「後から出席可能に変更」の確認（2026-07-18 の流儀・Issue #72 第 1 段 (C)）: 移動先が出席不可提出コマなら
+    // 確認ダイアログを出し、承認で黄色化する。キャンセルは選択を維持して選び直せるようにする（通常の移動と同じ）。
+    const reopenTargets = confirmReopenForPlacements(collectPendingLowerMoveLandingPlacements({
+      weeks,
+      cells,
+      templatePendingDesks: activeTemplatePendingDesks,
+      source: { cellId: source.cellId, deskId: source.deskId, lowerIndex: source.lowerIndex },
+      cellId,
+      managedStudentByAnyName,
+      resolveBoardStudentDisplayName,
+    }))
+    if (!reopenTargets) {
+      setStatusMessage('出席不可コマへの移動を取りやめました。')
+      return
+    }
     commitWeeks(
       result.nextWeeks,
       weekIndex,
@@ -11681,6 +11833,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       undefined,
       result.nextTemplatePendingDesks,
     )
+    if (reopenTargets.length > 0) onApplyReopenedSlots?.(reopenTargets)
     setTemplatePendingLowerMove(null)
     setStatusMessage(result.message)
   }
@@ -13026,9 +13179,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       dateKey: request.dateKey,
       slotNumber: request.slotNumber,
       subject: request.subject,
+      // spec-template-behavior Q31: 保留の下段にだけ居る生徒は自動処理せず一覧に残す（フラグ OFF は null＝従来どおり）。
+      templatePendingDesks: activeTemplatePendingDesks,
     })
     if (!resolution.ok) {
-      finish(false, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
+      finish(false, resolution.reason === 'pending-lower-only' ? PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE : PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE)
       return
     }
 
@@ -13090,6 +13245,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       suppressedMakeupOrigins,
       todayKey: getJstTodayDateKey(),
       resolveStockId: resolveBoardStudentStockId,
+      // spec-template-behavior Q31: 保留の下段の生徒・記録も消す（フラグ templateDiffApply OFF の教室は null＝従来どおり）。
+      templatePendingDesks: activeTemplatePendingDesks,
     })
     if (!sweep.signature) return
     // 同じ対象集合で二重に走らせない(掃除しても再レンダーで同じ effect が走るため。掃除後は対象 0 になる)。
@@ -13122,12 +13279,18 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       manualLectureStockCounts,
       manualLectureStockOrigins,
       fallbackLectureStockStudents,
+      // 通常授業の抑止・希望数は渡さない＝既定値（現状のまま）。undefined は既定値になる。
+      undefined,
+      undefined,
+      undefined,
+      // 下段を消した保留の机は commitWeeks の中の Q28 で 1 行へ戻る（同じ 1 操作）。フラグ OFF は従来どおり現在の保留マップ。
+      sweep.nextTemplatePendingDesks ?? templatePendingDesks,
     )
     setStatusMessage(buildStudentWithdrawSweepMessage(sweep.results))
     // commitWeeks などは毎レンダー作り直されるクロージャ。deps に入れると毎レンダー再実行になるだけで、
     // 二重実行は「掃除で対象が 0 になる(冪等)」と対象集合の署名 ref で防いでいる。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEditingStateLoadedForActingClassroom, isTemplateMode, students, studentWithdrawAutoSweepEnabled, weeks])
+  }, [activeTemplatePendingDesks, isEditingStateLoadedForActingClassroom, isTemplateMode, students, studentWithdrawAutoSweepEnabled, weeks])
 
   // 「振替先を今決める」の続き: 在庫一覧にその生徒の残数が現れたら、その振替元日付を選んだ状態で配置モードへ入る。
   useEffect(() => {
@@ -13719,12 +13882,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextWeeks = cloneWeeks(weeks)
     const nextCells = nextWeeks[weekIndex]
 
+    // spec-template-behavior Q31（Issue #72・第 1 段 (C)・フラグ ON の教室だけ）: 保留（2 行）の机は位置・机 ID・中身を固定し、
+    // 他の机だけを並べ替える（保留マップのキーは机 ID）。フラグ OFF は activeTemplatePendingDesks が null＝従来どおり。
+    const resolveLockedDeskIds = (cellId: string) => collectTemplatePendingDeskIdsInCell(activeTemplatePendingDesks, cellId)
     if (mode === 'seat') {
-      const sorted = seatSortCells(nextCells, { skipStatusSlotPack: true })
+      const sorted = seatSortCells(nextCells, { skipStatusSlotPack: true, resolveLockedDeskIds })
       sorted.forEach((cell, index) => { nextCells[index].desks = cell.desks })
     } else {
       for (const cell of nextCells) {
-        cell.desks = packSortCellDesks(cell, { skipStatusSlotPack: true })
+        cell.desks = packSortCellDesks(cell, { skipStatusSlotPack: true, lockedDeskIds: resolveLockedDeskIds(cell.id) })
       }
     }
 

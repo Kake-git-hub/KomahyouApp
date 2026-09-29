@@ -4,6 +4,7 @@
 import type { StudentRow } from '../basic-data/basicDataModel'
 import { getStudentDisplayName } from '../basic-data/basicDataModel'
 import type { LessonType, SlotCell, StudentEntry } from './types'
+import { buildTemplatePendingDeskKey, hasTemplatePendingDesks, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 export type ParentAbsenceAction = 'absent' | 'absent-no-makeup' | 'makeup-now'
 
@@ -36,7 +37,9 @@ export type ParentAbsenceTarget = { cellId: string; deskIndex: number; studentIn
 
 export type ParentAbsenceTargetResolution =
   | { ok: true; target: ParentAbsenceTarget; student: StudentEntry }
-  | { ok: false; reason: 'cell-not-found' | 'student-not-found' }
+  // pending-lower-only: そのコマでは本人がテンプレ差分反映の保留（2 行）の**下段にだけ**居る（spec-template-behavior Q31）。
+  //   下段には休みを付けない（Q26-3）ので自動処理せず、連絡は一覧に残して室長に保留を片づけてもらう。
+  | { ok: false; reason: 'cell-not-found' | 'student-not-found' | 'pending-lower-only' }
 
 // 保護者ページに出るのは通常・振替・増コマだけ(講習 special と体験 trial は出さない)。盤面側も同じ集合に限る。
 const PARENT_ABSENCE_LESSON_TYPES: ReadonlySet<LessonType> = new Set(['regular', 'makeup', 'extra'])
@@ -84,6 +87,9 @@ export function isBoardStudentOwnedBy(entry: Pick<StudentEntry, 'managedStudentI
  * - 日付・時限が一致するセルの中で、本人の通常/振替/増コマを探す。
  * - 同じコマに本人が複数居る(通常ありえないが手動追加で起こりうる)ときは、連絡の科目に一致する席を優先する。
  * - 見つからない = すでに休みにした・別の日へ動かした・削除した、のいずれか。呼び出し側は何も変えず室長へ知らせる。
+ * - 保留（2 行）の机の**上段**に居れば従来どおりその席を返す（上段の休み・振無休は既存の意味どおり・Q26-2）。
+ *   上段に居らず**下段にだけ**居れば 'pending-lower-only'（自動処理しない・Q31）。templatePendingDesks は機能フラグ
+ *   templateDiffApply が ON の教室だけ渡す（OFF は従来どおり 'student-not-found'）。
  */
 export function resolveParentAbsenceTarget(params: {
   cells: readonly SlotCell[]
@@ -92,6 +98,7 @@ export function resolveParentAbsenceTarget(params: {
   dateKey: string
   slotNumber: number
   subject: string
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }): ParentAbsenceTargetResolution {
   const cell = params.cells.find((candidate) => candidate.dateKey === params.dateKey && candidate.slotNumber === params.slotNumber)
   if (!cell) return { ok: false, reason: 'cell-not-found' }
@@ -106,7 +113,18 @@ export function resolveParentAbsenceTarget(params: {
       matches.push({ target: { cellId: cell.id, deskIndex, studentIndex }, student })
     })
   })
-  if (matches.length === 0) return { ok: false, reason: 'student-not-found' }
+  if (matches.length === 0) {
+    if (hasTemplatePendingDesks(params.templatePendingDesks)) {
+      const pendingMap = params.templatePendingDesks
+      const inPendingLower = cell.desks.some((desk) => (
+        (pendingMap[buildTemplatePendingDeskKey(cell.id, desk.id)]?.lower.lesson?.studentSlots ?? []).some((student) => (
+          Boolean(student) && PARENT_ABSENCE_LESSON_TYPES.has(student!.lessonType) && isBoardStudentOwnedBy(student!, params.studentId, ownerByName)
+        ))
+      ))
+      if (inPendingLower) return { ok: false, reason: 'pending-lower-only' }
+    }
+    return { ok: false, reason: 'student-not-found' }
+  }
   // 在庫は「生徒×科目」の鍵なので、別の科目の席を休みにすると違う科目の在庫へ戻ってしまう。
   // 席が 1 つなら科目の表記ゆれ(算/数の正規化など)を許してその席を使うが、複数あって科目で決められないときは
   // 推測せず室長に委ねる(レビュー指摘 2026-09-19)。
@@ -147,6 +165,9 @@ export function hasParentAbsenceRecord(params: {
   }
   return false
 }
+
+// spec-template-behavior Q31: 本人がテンプレ保存の保留（2 行・緑）の下段にだけ居るとき。連絡は一覧に残る（ok=false）。
+export const PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE = 'このコマの生徒はテンプレ保存の保留（2 行・緑）の下段にいるため、自動では処理しませんでした。盤面で「テンプレを採用」「既存を採用」で保留を片づけてから、もう一度選んでください。'
 
 export const PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE = '盤面にこのコマが見つかりません(すでに休み・移動・削除の処理が済んでいる可能性があります)。盤面を確認して「何もしない」で閉じてください。'
 

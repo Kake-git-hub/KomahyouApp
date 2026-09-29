@@ -206,3 +206,20 @@ export function buildTemplatePendingLowerScanWeeks(weeks: SlotCell[][], map: Tem
   }
   return cells.length > 0 ? [cells] : []
 }
+
+// spec-template-behavior Q31（第 1 段 (C)）: 講師だけの机の詰め直し（repackTeacherOnlyDesks）・講習の講師自動割当
+// （autoAssignTeacherToSpecialSession）・ユーザーの詰め替え／同席番並べ替え（packSortCellDesks / seatSortCells）が
+// **動かさない・上書きしない・位置を固定する**机の ID（そのコマの保留の机）。保留マップのキーは机 ID なので、
+// 講師や机の位置を動かすと下段が別の机・別の講師の下へずれる。保留が無いコマは undefined（＝従来どおり）。
+// 呼び出し側は機能フラグ templateDiffApply が ON の教室だけ保留マップを渡す（OFF は null＝挙動不変）。
+export function collectTemplatePendingDeskIdsInCell(map: TemplatePendingDeskMap | null | undefined, cellId: string): ReadonlySet<string> | undefined {
+  if (!hasTemplatePendingDesks(map)) return undefined
+  let ids: Set<string> | undefined
+  for (const key of Object.keys(map)) {
+    const parsed = parseTemplatePendingDeskKey(key)
+    if (!parsed || parsed.cellId !== cellId) continue
+    if (!ids) ids = new Set<string>()
+    ids.add(parsed.deskId)
+  }
+  return ids
+}

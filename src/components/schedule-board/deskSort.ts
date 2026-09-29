@@ -65,24 +65,70 @@ function normalizeCellDesksForSort(cell: SlotCell, options?: { skipStatusSlotPac
   })
 }
 
-export function packSortCellDesks(cell: SlotCell, options?: { skipStatusSlotPack?: boolean }) {
-  return normalizeCellDesksForSort(cell, options)
-    .sort((leftDesk, rightDesk) => {
-      const leftPriority = resolveDeskPackPriority(leftDesk)
-      const rightPriority = resolveDeskPackPriority(rightDesk)
-      if (leftPriority !== rightPriority) return leftPriority - rightPriority
+function compareDesksForPack(leftDesk: DeskCell, rightDesk: DeskCell) {
+  const leftPriority = resolveDeskPackPriority(leftDesk)
+  const rightPriority = resolveDeskPackPriority(rightDesk)
+  if (leftPriority !== rightPriority) return leftPriority - rightPriority
 
-      const leftTeacherLabel = leftDesk.teacher ?? ''
-      const rightTeacherLabel = rightDesk.teacher ?? ''
-      const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
-      if (teacherCompare !== 0) return teacherCompare
+  const leftTeacherLabel = leftDesk.teacher ?? ''
+  const rightTeacherLabel = rightDesk.teacher ?? ''
+  const teacherCompare = leftTeacherLabel.localeCompare(rightTeacherLabel, 'ja')
+  if (teacherCompare !== 0) return teacherCompare
 
-      return parseDeskOrder(leftDesk.id) - parseDeskOrder(rightDesk.id)
-    })
-    .map((desk, index) => ({
-      ...desk,
-      id: `${cell.id}_desk_${index + 1}`,
-    }))
+  return parseDeskOrder(leftDesk.id) - parseDeskOrder(rightDesk.id)
+}
+
+export type DeskSortOptions = {
+  skipStatusSlotPack?: boolean
+  /**
+   * spec-template-behavior Q31（Issue #72・第 1 段 (C)）: 位置を固定する机の ID（そのコマの保留〔2 行〕の机）。
+   * 固定した机は**中身も ID も位置もそのまま**にし、他の机だけを残りの位置へ並べ替える
+   * （保留マップのキーは机 ID なので、机 ID と位置がずれると下段が別の机の下へずれる）。省略時は従来どおり。
+   */
+  lockedDeskIds?: ReadonlySet<string>
+}
+
+// 並べ替えた机へ位置どおりの ID(`<cellId>_desk_<n>`)を振る。固定した机は元の ID のまま。
+// 固定した机の ID が位置どおりでない(旧データ等)ために位置どおりの ID と衝突するときは、
+// 動かした机も元の ID のまま返す(同じコマに同じ机 ID を 2 つ作らない)。
+function assignSortedDeskIds(cellId: string, desks: DeskCell[], lockedIndexes: ReadonlySet<number>) {
+  if (lockedIndexes.size === 0) return desks.map((desk, index) => ({ ...desk, id: `${cellId}_desk_${index + 1}` }))
+  const lockedIds = new Set([...lockedIndexes].map((index) => desks[index].id))
+  const positional = desks.map((desk, index) => (lockedIndexes.has(index) ? desk : { ...desk, id: `${cellId}_desk_${index + 1}` }))
+  const collides = positional.some((desk, index) => !lockedIndexes.has(index) && lockedIds.has(desk.id))
+  return collides ? desks.map((desk, index) => (lockedIndexes.has(index) ? desk : { ...desk })) : positional
+}
+
+function resolveLockedDeskIndexes(desks: readonly DeskCell[], lockedDeskIds: ReadonlySet<string> | undefined) {
+  const indexes = new Set<number>()
+  if (!lockedDeskIds || lockedDeskIds.size === 0) return indexes
+  desks.forEach((desk, index) => {
+    if (lockedDeskIds.has(desk.id)) indexes.add(index)
+  })
+  return indexes
+}
+
+export function packSortCellDesks(cell: SlotCell, options?: DeskSortOptions) {
+  const normalizedDesks = normalizeCellDesksForSort(cell, options)
+  const lockedIndexes = resolveLockedDeskIndexes(cell.desks, options?.lockedDeskIds)
+  if (lockedIndexes.size === 0) {
+    return normalizedDesks
+      .sort(compareDesksForPack)
+      .map((desk, index) => ({
+        ...desk,
+        id: `${cell.id}_desk_${index + 1}`,
+      }))
+  }
+  // 固定した机は元の机(正規化もしない＝席ごとの下段と上段の対応を崩さない)をその位置に置き、残りを詰めて並べる。
+  const sortedMovable = normalizedDesks.filter((_desk, index) => !lockedIndexes.has(index)).sort(compareDesksForPack)
+  let movableIndex = 0
+  const placed = cell.desks.map((desk, index) => {
+    if (lockedIndexes.has(index)) return desk
+    const next = sortedMovable[movableIndex]
+    movableIndex += 1
+    return next
+  })
+  return assignSortedDeskIds(cell.id, placed, lockedIndexes)
 }
 
 // ── 同席番で並べ替え ──
@@ -121,14 +167,21 @@ type SeatCandidate = {
   cellIndexes: number[]
 }
 
-export function computeSeatAssignments(dayCells: SlotCell[], resolveTeacherKey: (desk: DeskCell) => string | null) {
+export function computeSeatAssignments(
+  dayCells: SlotCell[],
+  resolveTeacherKey: (desk: DeskCell) => string | null,
+  // Q31: セルごとの位置固定の机 ID(保留の机)。固定した机の講師は候補にせず、その席はそのセルで埋まっている扱い。
+  lockedDeskIdsByCellIndex?: ReadonlyArray<ReadonlySet<string> | undefined>,
+) {
   const seatCapacity = dayCells.reduce((min, cell) => Math.min(min, cell.desks.length), Number.MAX_SAFE_INTEGER)
   const assignments = new Map<string, number>()
   if (!dayCells.length || !Number.isFinite(seatCapacity) || seatCapacity <= 0) return assignments
 
   const candidateByKey = new Map<string, SeatCandidate>()
   dayCells.forEach((cell, cellIndex) => {
+    const lockedDeskIds = lockedDeskIdsByCellIndex?.[cellIndex]
     for (const desk of cell.desks) {
+      if (lockedDeskIds?.has(desk.id)) continue
       const key = resolveTeacherKey(desk)
       if (!key) continue
       const candidate = candidateByKey.get(key)
@@ -149,7 +202,12 @@ export function computeSeatAssignments(dayCells: SlotCell[], resolveTeacherKey: 
     return left.key.localeCompare(right.key)
   })
 
-  const takenSeatsByCell = dayCells.map(() => new Set<number>())
+  const takenSeatsByCell = dayCells.map((cell, cellIndex) => {
+    const taken = new Set<number>()
+    const lockedDeskIds = lockedDeskIdsByCellIndex?.[cellIndex]
+    if (lockedDeskIds) cell.desks.forEach((desk, deskIndex) => { if (lockedDeskIds.has(desk.id)) taken.add(deskIndex) })
+    return taken
+  })
   for (const candidate of orderedCandidates) {
     for (let seat = 0; seat < seatCapacity; seat += 1) {
       const isFree = candidate.cellIndexes.every((cellIndex) => !takenSeatsByCell[cellIndex].has(seat))
@@ -163,11 +221,15 @@ export function computeSeatAssignments(dayCells: SlotCell[], resolveTeacherKey: 
   return assignments
 }
 
-function placeDesksBySeat(cell: SlotCell, desks: DeskCell[], assignments: Map<string, number>, resolveTeacherKey: (desk: DeskCell) => string | null) {
+function placeDesksBySeat(cell: SlotCell, desks: DeskCell[], assignments: Map<string, number>, resolveTeacherKey: (desk: DeskCell) => string | null, lockedDeskIds?: ReadonlySet<string>) {
   const seats: (DeskCell | null)[] = new Array(desks.length).fill(null)
   const leftovers: DeskCell[] = []
+  // Q31: 位置固定の机(保留の机)は今の席のまま先に置く。
+  const lockedIndexes = resolveLockedDeskIndexes(desks, lockedDeskIds)
+  for (const index of lockedIndexes) seats[index] = desks[index]
 
-  for (const desk of desks) {
+  for (const [deskIndex, desk] of desks.entries()) {
+    if (lockedIndexes.has(deskIndex)) continue
     const key = resolveTeacherKey(desk)
     const seat = key ? assignments.get(key) : undefined
     if (seat != null && seat < seats.length && seats[seat] === null) {
@@ -185,15 +247,26 @@ function placeDesksBySeat(cell: SlotCell, desks: DeskCell[], assignments: Map<st
     leftoverIndex += 1
   }
 
-  return seats
-    .filter((desk): desk is DeskCell => desk !== null)
-    .map((desk, index) => ({ ...desk, id: `${cell.id}_desk_${index + 1}` }))
+  const placed = seats.filter((desk): desk is DeskCell => desk !== null)
+  // 固定した机は席を空けずに置いてあるので、placed の位置は seats の位置と同じ。
+  return assignSortedDeskIds(cell.id, placed, lockedIndexes)
 }
 
 // 与えられたセル群を dateKey ごと(=1日ごと)にまとめ、同席番になるよう机を並べ替える。
 // 机の中身は packSortCellDesks と同じ正規化を通す(=生徒スロットの左詰め)。
-export function seatSortCells(cells: SlotCell[], options?: { skipStatusSlotPack?: boolean }): SlotCell[] {
-  const normalizedCells = cells.map((cell) => ({ ...cell, desks: packSortCellDesks(cell, options) }))
+export function seatSortCells(
+  cells: SlotCell[],
+  options?: {
+    skipStatusSlotPack?: boolean
+    /** Q31: コマごとの位置固定の机 ID(保留の机)。省略時・undefined を返すコマは従来どおり。 */
+    resolveLockedDeskIds?: (cellId: string) => ReadonlySet<string> | undefined
+  },
+): SlotCell[] {
+  const lockedDeskIdsByCell = cells.map((cell) => options?.resolveLockedDeskIds?.(cell.id))
+  const normalizedCells = cells.map((cell, index) => ({
+    ...cell,
+    desks: packSortCellDesks(cell, { skipStatusSlotPack: options?.skipStatusSlotPack, lockedDeskIds: lockedDeskIdsByCell[index] }),
+  }))
 
   const cellIndexesByDate = new Map<string, number[]>()
   normalizedCells.forEach((cell, index) => {
@@ -204,11 +277,12 @@ export function seatSortCells(cells: SlotCell[], options?: { skipStatusSlotPack?
 
   for (const cellIndexes of cellIndexesByDate.values()) {
     const dayCells = cellIndexes.map((index) => normalizedCells[index])
+    const dayLockedDeskIds = cellIndexes.map((index) => lockedDeskIdsByCell[index])
     const resolveTeacherKey = buildTeacherKeyResolver(dayCells)
-    const assignments = computeSeatAssignments(dayCells, resolveTeacherKey)
+    const assignments = computeSeatAssignments(dayCells, resolveTeacherKey, dayLockedDeskIds)
     cellIndexes.forEach((cellIndex, dayIndex) => {
       const dayCell = dayCells[dayIndex]
-      normalizedCells[cellIndex].desks = placeDesksBySeat(dayCell, dayCell.desks, assignments, resolveTeacherKey)
+      normalizedCells[cellIndex].desks = placeDesksBySeat(dayCell, dayCell.desks, assignments, resolveTeacherKey, dayLockedDeskIds[dayIndex])
     })
   }
 

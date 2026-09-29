@@ -18,6 +18,7 @@ import { getStudentDisplayName, isStudentWithdrawnOnDate, type StudentRow } from
 import { getJstTodayDateKey } from '../../utils/jstDate'
 import { buildUniqueNameOwnerMap, resolveBoardStudentOwnerId } from './parentAbsenceTarget'
 import type { SlotCell, StudentEntry } from './types'
+import { hasTemplatePendingDesks, parseTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 export type StudentWithdrawSweepTarget = {
   /** 名簿の生徒 id(managedStudentId と同じ値)。 */
@@ -55,11 +56,16 @@ export function resolveStudentWithdrawSweepFromDateKey(withdrawDateKey: string, 
  *   3. 生徒の同一性が決められる: `managedStudentId` 一致、無い席は**名簿で一意な名前**だけ
  *      (同名 2 人は拾わない = `buildUniqueNameOwnerMap`。sNNN は教室ごと独立採番なので名前だけで別人を消さない)。
  * 昨日以前の痕跡だけの生徒は対象にしない(触らないので掃除の必要が無い)。
+ *
+ * spec-template-behavior Q31（Issue #72・第 1 段 (C)）: テンプレ差分反映の保留（2 行）の**下段の生徒・記録も対象**にする
+ * （下段にしか痕跡が無い生徒も拾う）。下段のコマの日付はキーのコマ（盤面のセル）から引く。盤面に無い（孤児）キーは日付が
+ * 決められないので拾わない（Q24-5 黙って消さない）。呼び出し側は機能フラグ templateDiffApply が ON の教室だけ保留マップを渡す。
  */
 export function collectStudentWithdrawSweepTargets(params: {
   weeks: ReadonlyArray<ReadonlyArray<SlotCell>>
   students: ReadonlyArray<StudentRow>
   todayKey?: string
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }): StudentWithdrawSweepTarget[] {
   const todayKey = params.todayKey ?? getJstTodayDateKey()
   const candidates = new Map<string, StudentWithdrawSweepTarget>()
@@ -94,6 +100,18 @@ export function collectStudentWithdrawSweepTargets(params: {
         for (const statusEntry of desk.statusSlots ?? []) markIfTarget(statusEntry, cell.dateKey)
       }
       if (foundStudentIds.size === candidates.size) break
+    }
+  }
+
+  if (hasTemplatePendingDesks(params.templatePendingDesks) && foundStudentIds.size < candidates.size) {
+    const dateKeyByCellId = new Map<string, string>()
+    for (const week of params.weeks) for (const cell of week) dateKeyByCellId.set(cell.id, cell.dateKey)
+    for (const [key, pending] of Object.entries(params.templatePendingDesks)) {
+      const parsed = parseTemplatePendingDeskKey(key)
+      const cellDateKey = parsed ? dateKeyByCellId.get(parsed.cellId) : undefined
+      if (!cellDateKey) continue
+      for (const seat of pending.lower.lesson?.studentSlots ?? []) markIfTarget(seat, cellDateKey)
+      for (const statusEntry of pending.lower.statusSlots ?? []) markIfTarget(statusEntry, cellDateKey)
     }
   }
 

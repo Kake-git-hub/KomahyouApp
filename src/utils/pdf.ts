@@ -793,7 +793,7 @@ export async function exportBoardPdfSelection(params: ExportBoardPdfParams, sele
 
 const dayLabels = ['日', '月', '火', '水', '木', '金', '土'] as const
 
-type OverwriteReportRow = {
+export type OverwriteReportRow = {
   dateLabel: string
   slotLabel: string
   deskIndex: number
@@ -928,17 +928,40 @@ function escapeHtmlText(text: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function buildOverwriteReportHtml(rows: OverwriteReportRow[], effectiveStartDate: string): string {
+// 保存前レポートの見出し・空のときの文・ファイル名（spec-template-behavior Q32-3・Issue #72 第 1 段 (C)）。
+//  - overwrite（旧方式＝上書き・機能フラグ templateDiffApply OFF の教室）… 従来の文言のまま（1 文字も変えない）。
+//  - diff（差分反映＋保留・フラグ ON の教室）… 保存で消えるデータの一覧ではなく「テンプレ保存前の盤面」の記録として出す。
+export type TemplateOverwriteReportMode = 'overwrite' | 'diff'
+
+export function resolveTemplateOverwriteReportLabels(mode: TemplateOverwriteReportMode = 'overwrite') {
+  if (mode === 'diff') {
+    return {
+      heading: 'テンプレ保存前の盤面',
+      emptyText: '通常授業以外のデータはありません。',
+      fileNamePrefix: 'テンプレ保存前の盤面',
+      busyMessage: 'テンプレ保存前の盤面を PDF 出力中… しばらくお待ちください',
+    }
+  }
+  return {
+    heading: 'テンプレート上書き削除データ一覧',
+    emptyText: '削除される通常授業以外のデータはありません。',
+    fileNamePrefix: 'テンプレ上書き削除データ',
+    busyMessage: '上書き内容のレポートを PDF 出力中… しばらくお待ちください',
+  }
+}
+
+export function buildOverwriteReportHtml(rows: OverwriteReportRow[], effectiveStartDate: string, mode: TemplateOverwriteReportMode = 'overwrite'): string {
+  const labels = resolveTemplateOverwriteReportLabels(mode)
   const headerRow = '<tr><th>日付</th><th>コマ</th><th>机</th><th>種別</th><th>生徒名</th><th>科目</th><th>詳細</th></tr>'
   const bodyRows = rows.map((row) =>
     `<tr><td>${escapeHtmlText(row.dateLabel)}</td><td>${escapeHtmlText(row.slotLabel)}</td><td>${row.deskIndex}</td><td>${escapeHtmlText(row.category)}</td><td>${escapeHtmlText(row.studentName)}</td><td>${escapeHtmlText(row.subject)}</td><td>${escapeHtmlText(row.detail)}</td></tr>`
   ).join('')
 
   return `<div style="font-family:'Hiragino Sans','Meiryo','sans-serif';padding:16px;background:#fff;">
-<h2 style="margin:0 0 8px;font-size:16px;">テンプレート上書き削除データ一覧</h2>
+<h2 style="margin:0 0 8px;font-size:16px;">${labels.heading}</h2>
 <p style="margin:0 0 12px;font-size:12px;color:#555;">反映日: ${escapeHtmlText(effectiveStartDate)} 以降 / 出力日時: ${new Date().toLocaleString('ja-JP')} / ${rows.length}件</p>
 ${rows.length === 0
-    ? '<p style="font-size:13px;color:#888;">削除される通常授業以外のデータはありません。</p>'
+    ? `<p style="font-size:13px;color:#888;">${labels.emptyText}</p>`
     : `<table style="border-collapse:collapse;width:100%;font-size:11px;">
 <thead style="background:#f0f0f0;">${headerRow}</thead>
 <tbody>${bodyRows}</tbody>
@@ -954,9 +977,11 @@ export async function exportTemplateOverwriteReport(params: {
   weeks: SlotCell[][]
   effectiveStartDate: string
   resolveDisplayName: (name: string) => string
+  /** Q32-3: 差分反映の教室（フラグ templateDiffApply ON）は 'diff'。省略時は従来の上書きレポート。 */
+  mode?: TemplateOverwriteReportMode
 }): Promise<void> {
   const rows = collectOverwriteReportRows(params.weeks, params.effectiveStartDate, params.resolveDisplayName)
-  const html = buildOverwriteReportHtml(rows, params.effectiveStartDate)
+  const html = buildOverwriteReportHtml(rows, params.effectiveStartDate, params.mode)
 
   const container = document.createElement('div')
   container.style.position = 'fixed'
@@ -1013,5 +1038,5 @@ export async function exportTemplateOverwriteReport(params: {
   }
 
   const dateLabel = params.effectiveStartDate.replace(/-/g, '')
-  pdf.save(`テンプレ上書き削除データ_${dateLabel}.pdf`)
+  pdf.save(`${resolveTemplateOverwriteReportLabels(params.mode).fileNamePrefix}_${dateLabel}.pdf`)
 }
