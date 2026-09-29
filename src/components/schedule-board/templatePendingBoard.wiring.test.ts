@@ -1,0 +1,223 @@
+// @vitest-environment jsdom
+// テンプレ差分反映の保留（2 行）の盤面表示・解決操作の配線テスト（Issue #72・第 1 段 (B)・
+// docs/spec-template-behavior.md §H Q26〜Q28・Q30・Q31）。
+//
+// 描画テスト環境の無い経路（ScheduleBoardScreen の中のハンドラ・ガード）は字面で固定し、
+// 盤面の描画（BoardGrid）は react-dom/server の静的レンダリング、盤面 PDF の下段外しは jsdom で確かめる。
+// ★機能フラグ templateDiffApply が OFF の教室では描画・メニュー・ハンドラが従来どおり（条件 26）であることも固定する。
+
+import { readFileSync } from 'node:fs'
+// jsdom 環境では global の URL が jsdom 版になり fileURLToPath が受け付けないため、node の URL を明示して使う。
+import { fileURLToPath, URL as NodeURL } from 'node:url'
+
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it, vi } from 'vitest'
+
+import type { SlotCell } from './types'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
+
+vi.mock('html2canvas', () => ({ default: vi.fn() }))
+vi.mock('jspdf', () => ({ default: class {} }))
+
+const { BoardGrid } = await import('./BoardGrid')
+const { stripTemplatePendingLowerForPdf } = await import('../../utils/pdf')
+
+const BOARD_TSX = readFileSync(fileURLToPath(new NodeURL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+const TOOLBAR_TSX = readFileSync(fileURLToPath(new NodeURL('./BoardToolbar.tsx', import.meta.url)), 'utf8')
+const PDF_TS = readFileSync(fileURLToPath(new NodeURL('../../utils/pdf.ts', import.meta.url)), 'utf8')
+
+function sliceBody(source: string, start: string, end: string) {
+  const startIndex = source.indexOf(start)
+  expect(startIndex, start).toBeGreaterThanOrEqual(0)
+  const endIndex = source.indexOf(end, startIndex + start.length)
+  expect(endIndex, end).toBeGreaterThan(startIndex)
+  return source.slice(startIndex, endIndex)
+}
+
+const CELL_ID = '2026-10-07_5'
+
+function boardCell(): SlotCell {
+  return {
+    id: CELL_ID,
+    dateKey: '2026-10-07',
+    dayLabel: '水',
+    dateLabel: '10/7',
+    slotLabel: '5限',
+    slotNumber: 5,
+    timeLabel: '',
+    isOpenDay: true,
+    desks: [
+      { id: `${CELL_ID}_desk_1`, teacher: '鈴木', lesson: { id: 'managed_r0', studentSlots: [{ id: 'c1', name: '千葉', managedStudentId: 'sC', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }, null] } },
+      { id: `${CELL_ID}_desk_2`, teacher: '田中', lesson: { id: 'managed_r1', studentSlots: [{ id: 'b1', name: '馬場', managedStudentId: 'sB', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }, null] } },
+    ],
+  }
+}
+
+const PENDING: TemplatePendingDeskMap = {
+  [buildTemplatePendingDeskKey(CELL_ID, `${CELL_ID}_desk_1`)]: {
+    lower: {
+      lesson: { id: 'l1', studentSlots: [{ id: 'm1', name: '三浦', managedStudentId: 'sM', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30' }, null] },
+      memoSlots: [null, '持ち物'],
+    },
+    effectiveStartDate: '2026-10-07',
+    createdAt: '2026-09-29T10:00:00.000Z',
+  },
+}
+
+function renderGrid(templatePendingDesks?: TemplatePendingDeskMap) {
+  return renderToStaticMarkup(createElement(BoardGrid, {
+    cells: [boardCell()],
+    selectedStudentId: null,
+    highlightedCell: null,
+    highlightedHolidayDate: null,
+    yearLabel: '2026',
+    specialPeriods: [],
+    resolveStudentDisplayName: (name: string) => name,
+    resolveStudentGradeLabel: (_name: string, grade: string) => grade,
+    resolveDisplayedLessonType: (_name: string, _subject: string, lessonType) => lessonType,
+    onDayHeaderClick: () => {},
+    onTeacherClick: () => {},
+    onStudentClick: () => {},
+    templatePendingDesks,
+    onTemplatePendingLowerClick: () => {},
+  }))
+}
+
+describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が緑」）', () => {
+  it('保留の机は緑（sa-pending）になり、各席の下に下段（既存）を描き、帯「保留 n」を持つ', () => {
+    const html = renderGrid(PENDING)
+    expect(html).toContain(`data-testid="pending-lower-${CELL_ID}-0-0"`)
+    expect(html).toContain(`data-testid="pending-lower-${CELL_ID}-0-1"`)
+    expect(html).toContain('三浦')
+    expect(html).toContain('振)')
+    expect(html).toContain('持ち物')
+    expect(html).toContain('保留 2')
+    expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
+    expect(html).toMatch(/class="sa-teacher[^"]*sa-pending/)
+    // 保留でない机（机 2）には下段も緑も付かない
+    expect(html).not.toContain(`pending-lower-${CELL_ID}-1-0`)
+    // 下段は .sa-student-inner の外（盤面・PDF の文字サイズ合わせに混ざらない）
+    const container = document.createElement('div')
+    container.innerHTML = html
+    expect(container.querySelector('.sa-student-inner .sa-pending-lower')).toBeNull()
+    expect(container.querySelectorAll('.sa-pending-lower')).toHaveLength(2)
+  })
+
+  it('保留マップを渡さない（フラグ OFF・テンプレ編集中）なら従来の 1 行表示のまま（緑も下段も無い）', () => {
+    const html = renderGrid(undefined)
+    expect(html).not.toContain('sa-pending')
+    expect(html).not.toContain('三浦')
+    expect(html).toBe(renderGrid({}))
+  })
+})
+
+describe('盤面 PDF は上段だけを出す（INV-13・条件 23 の PDF 分）', () => {
+  it('複製から下段（.sa-pending-lower）と保留の緑を外す。上段の生徒は残る', () => {
+    const container = document.createElement('div')
+    container.innerHTML = renderGrid(PENDING)
+    expect(container.querySelector('.sa-pending-lower')).not.toBeNull()
+    stripTemplatePendingLowerForPdf(container)
+    expect(container.querySelector('.sa-pending-lower')).toBeNull()
+    expect(container.querySelector('.sa-pending')).toBeNull()
+    expect(container.textContent).not.toContain('三浦')
+    expect(container.textContent).not.toContain('持ち物')
+    expect(container.textContent).toContain('千葉')
+  })
+
+  it('盤面 PDF の本体は複製の直後に下段を外す', () => {
+    const body = sliceBody(PDF_TS, 'async function runBoardPdfExport(', 'if (grid && sourceGrid && sourceTable) {')
+    expect(body).toContain('stripTemplatePendingLowerForPdf(clone)')
+  })
+})
+
+describe('フラグ OFF では従来どおり（条件 26）', () => {
+  it('盤面の 2 行表示・解決 UI の入口は activeTemplatePendingDesks（フラグ ON かつ保留あり）だけから出る', () => {
+    expect(BOARD_TSX).toContain('const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null')
+    expect(BOARD_TSX).toContain('templatePendingDesks={isTemplateMode ? undefined : (activeTemplatePendingDesks ?? undefined)}')
+    const resolveAt = sliceBody(BOARD_TSX, 'const resolveTemplatePendingDeskAt = (', 'const templatePendingDeskMenuContext')
+    expect(resolveAt).toContain('if (!activeTemplatePendingDesks) return null')
+  })
+
+  it('commitWeeks の 1 行戻し（Q28）はフラグ ON かつ保留ありのときだけ走る', () => {
+    const commit = sliceBody(BOARD_TSX, 'const commitWeeks = (', 'const handleSelectDesk = (')
+    expect(commit).toContain('if (templateDiffApplyEnabled && hasTemplatePendingDesks(nextTemplatePendingDesks)) {')
+    expect(commit).toContain('settleTemplatePendingDesksAfterCommit({')
+    // 履歴は操作前の盤面・保留マップ（createHistoryEntry の既定＝現在の state）を積む
+    expect(commit).toContain('createHistoryEntry(weeks, weekIndex, selectedCellId, selectedDeskIndex')
+    expect(commit).toContain('...buildTemplatePendingDesksPayload(nextTemplatePendingDesks),')
+    expect(commit).toContain('}, { userInitiated: true })')
+    expect(commit).toContain('committedBoardChangeVersionRef.current += 1')
+  })
+})
+
+describe('解決操作は 1 操作 1 適用で commitWeeks を通る（Q26-6・INV-03・条件 20）', () => {
+  it('採用ボタン・下段の削除は computePendingDeskResolution の結果を commitWeeks へ 1 回だけ渡す（保留マップも）', () => {
+    const body = sliceBody(BOARD_TSX, 'const handleResolveTemplatePendingDesk = (', 'const handleStartTemplatePendingLowerMove = (')
+    expect(body).toContain('computePendingDeskResolution({')
+    expect(body.match(/commitWeeks\(/g)).toHaveLength(1)
+    expect(body).toContain('result.nextTemplatePendingDesks,')
+    expect(body).toContain('result.ledgers.scheduleCountAdjustments,')
+    expect(body).toContain("if (result.status === 'blocked') {")
+  })
+
+  it('下段の移動は computePendingLowerStudentMove の結果を commitWeeks へ 1 回だけ渡す', () => {
+    const body = sliceBody(BOARD_TSX, 'const executeTemplatePendingLowerMove = (', 'const handleStudentClick = (')
+    expect(body).toContain('computePendingLowerStudentMove({')
+    expect(body.match(/commitWeeks\(/g)).toHaveLength(1)
+    expect(body).toContain('result.nextTemplatePendingDesks,')
+  })
+})
+
+describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）', () => {
+  it('上段のメニューは休み・振無休・移動・削除だけ（出席・編集・ストックへ戻すは出さない）', () => {
+    const menu = sliceBody(BOARD_TSX, 'data-testid="template-pending-upper-menu"', ") : studentMenu?.mode === 'root' ? (")
+    expect(menu).toContain('menu-absence-button')
+    expect(menu).toContain('menu-absence-no-makeup-button')
+    expect(menu).toContain('menu-move-button')
+    expect(menu).toContain('menu-delete-button')
+    expect(menu).not.toContain('menu-attendance-button')
+    expect(menu).not.toContain('menu-edit-button')
+    expect(menu).not.toContain('menu-stock-button')
+  })
+
+  it('出席の付与は 2 行の机で止まる（メニュー以外の経路からも）', () => {
+    const body = sliceBody(BOARD_TSX, 'const handleMarkStudentAttended = () => {', 'const attendedStatusEntry')
+    expect(body).toContain('TEMPLATE_PENDING_MESSAGES.attendBlocked')
+  })
+
+  it('講師メニュー・講師 D&D（掴む・離す）は 2 行の机で効かない', () => {
+    const select = sliceBody(BOARD_TSX, 'const handleSelectDesk = (', 'const handleConfirmTeacher = () => {')
+    expect(select).toContain('TEMPLATE_PENDING_MESSAGES.teacherLocked')
+    const teacherDrag = sliceBody(BOARD_TSX, 'const handleTeacherMouseDown = (', 'const executePendingTeacherMove = (')
+    expect(teacherDrag.match(/resolveTemplatePendingDeskAt\(/g)).toHaveLength(2)
+  })
+
+  it('他の机からの生徒の移動・D&D・日程表 D&D・在庫からの配置は 2 行の机に着地しない', () => {
+    const move = sliceBody(BOARD_TSX, 'const executeMoveStudent = (', 'const stableExecuteMoveStudent')
+    expect(move).toContain('resolveTemplatePendingLandingBlock(')
+    const scheduleMove = sliceBody(BOARD_TSX, 'const executeScheduleViewMove = (', 'const sourceHit = findScheduleViewMoveSource(')
+    expect(scheduleMove).toContain('resolveTemplatePendingLandingBlock(activeTemplatePendingDesks, availabilityCell, resolvedSeat.deskIndex)')
+    const click = sliceBody(BOARD_TSX, 'const handleStudentClick = (', 'if (hasStudent) {')
+    expect(click).toContain('TEMPLATE_PENDING_MESSAGES.landingBlocked')
+    expect(click).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y)')
+  })
+
+  it('保留がある日の休日設定・生徒を空にする・丸ごと振替（振替元・振替先）は止まる', () => {
+    expect(sliceBody(BOARD_TSX, 'const handleToggleHolidayDate = (', 'if (isForceOpen) {')).toContain("resolveTemplatePendingDateBlockReason(activeTemplatePendingDesks, weeks, dateKey, '休日設定')")
+    expect(sliceBody(BOARD_TSX, 'const handleClearStudentsOnDate = (', 'const confirmed = window.confirm(')).toContain("resolveTemplatePendingDateBlockReason(activeTemplatePendingDesks, weeks, dateKey, '生徒を空にする')")
+    const transfer = sliceBody(BOARD_TSX, 'const handleWholeDayTransferTargetClick = (', 'const result = computeWholeDayTransfer({')
+    expect(transfer).toContain("resolveTemplatePendingDateBlockReason(activeTemplatePendingDesks, weeks, sourceDateKey, '丸ごと振替')")
+    expect(transfer).toContain("resolveTemplatePendingDateBlockReason(activeTemplatePendingDesks, weeks, targetDateKey, '丸ごと振替')")
+    expect(sliceBody(BOARD_TSX, 'data-testid="day-header-menu-transfer"', '>丸ごと振替</button>')).toContain("resolveTemplatePendingDateBlockReason(activeTemplatePendingDesks, weeks, dk, '丸ごと振替')")
+  })
+})
+
+describe('ツールバーのバッジ（条件 27）', () => {
+  it('件数は countTemplatePendingDesksOnBoard（フラグ ON の保留マップ）から渡し、0 なら出さない', () => {
+    expect(BOARD_TSX).toContain('const templatePendingDeskCount = useMemo(() => countTemplatePendingDesksOnBoard(activeTemplatePendingDesks, weeks), [activeTemplatePendingDesks, weeks])')
+    expect(BOARD_TSX).toContain('templatePendingDeskCount={templatePendingDeskCount}')
+    expect(TOOLBAR_TSX).toContain('{templatePendingDeskCount && templatePendingDeskCount > 0 ? (')
+    expect(TOOLBAR_TSX).toContain('data-testid="board-template-pending-badge"')
+  })
+})

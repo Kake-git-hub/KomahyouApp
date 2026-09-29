@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SlotCell, StudentEntry } from './types'
-import { computeStudentMove } from './ScheduleBoardScreen'
+import { computePendingDeskResolution, computePendingLowerStudentMove, computeStudentMove, type TemplatePendingResolutionLedgers } from './ScheduleBoardScreen'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 // ============================================================================
 // INV-12 操作マトリクス（配置の一意性: 同一生徒を同コマに二重配置しない）
@@ -118,4 +119,107 @@ describe('INV-12 マトリクス: 同一生徒を同コマに二重配置しな�
   // 自動割当候補探索)は findDuplicateStudentInCell が配線済みでコードに穴は無いが、マトリクスでの
   // ロックは未整備(UIハンドラ内のためテスト不能。純関数化とあわせて上の todo と同時に固定する)。
   it.todo('配置/追加系4経路(振替配置・講習配置・手動追加・自動割当)の重複ガードをマトリクスで固定する')
+})
+
+// ============================================================================
+// INV-12 × テンプレ差分反映の保留（2 行）の解決操作（Issue #72・第 1 段 (B)・spec-template-behavior Q26-4・条件 19）
+//
+// 保留中の下段は「配置」ではない（INV-13）ので、上段と下段・別の机の 1 行と下段に同じ生徒が並ぶこと自体は違反ではない。
+// ただし**解決操作の結果**は INV-12 を満たすこと: 下段を机へ戻す「既存を採用」・下段の「移動」が同じコマに同じ生徒を
+// 2 か所で生かすなら止める（findDuplicateStudentInCellByKey と同じ検査）。兄弟: 下段を捨てる「テンプレを採用」は
+// 生徒を増やさないので止めない（上段側の 1 か所が残る）。
+// ============================================================================
+describe('INV-12 × 保留（2 行）の解決操作: 同じコマに同じ生徒を 2 か所で生かさない（Q26-4）', () => {
+  const CELL = 'P1'
+  const DATE = '2026-10-07'
+  const pendingKey = buildTemplatePendingDeskKey(CELL, 'p0')
+  const ledgers: TemplatePendingResolutionLedgers = {
+    manualLectureStockCounts: {},
+    manualLectureStockOrigins: {},
+    manualMakeupAdjustments: {},
+    fallbackLectureStockStudents: {},
+    fallbackMakeupStudents: {},
+    suppressedMakeupOrigins: {},
+    suppressedRegularLessonOccurrences: [],
+    scheduleCountAdjustments: [],
+  }
+  const context = {
+    managedStudentByAnyName: new Map(),
+    resolveDisplayName: (name: string) => name,
+    resolveStockId: (student: StudentEntry) => student.managedStudentId ?? student.name,
+    ledgerOriginDatesByKey: {},
+  }
+  // 机 p0 = 上段 C（テンプレ）＋下段 A（振替）の 2 行。机 p1 に A が 1 行で生きている（Q21-11 後段の形）。机 p2 は空。
+  function fixture(aAlsoOnOneRowDesk: boolean) {
+    const weeks: SlotCell[][] = [[
+      mkCell(CELL, DATE, 5, [
+        { id: 'p0', teacher: '鈴木', lesson: mkLesson('managed_r0', [mkStudent('c1', '千葉', { managedStudentId: 'mC' }), null]) },
+        { id: 'p1', teacher: '田中', lesson: aAlsoOnOneRowDesk ? mkLesson('la', [mkStudent('a-live', '青木', { managedStudentId: 'mA', manualAdded: true }), null]) : undefined },
+        { id: 'p2', teacher: '佐藤', lesson: undefined },
+      ]),
+    ]]
+    const pending: TemplatePendingDeskMap = {
+      [pendingKey]: {
+        lower: { lesson: mkLesson('lower', [mkStudent('a-lower', '青木', { managedStudentId: 'mA', lessonType: 'makeup', makeupSourceDate: '2026-09-30' }), null]) },
+        effectiveStartDate: DATE,
+        createdAt: '2026-09-29T10:00:00.000Z',
+      },
+    }
+    return { weeks, pending }
+  }
+  const liveCount = (weeks: SlotCell[][], managedId: string) => weeks.flat().filter((cell) => cell.id === CELL)
+    .flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? []))
+    .filter((student) => student?.managedStudentId === managedId).length
+  const resolveMode = (mode: 'adopt-existing' | 'adopt-template', weeks: SlotCell[][], pending: TemplatePendingDeskMap) => computePendingDeskResolution({
+    mode, weeks, cellId: CELL, deskId: 'p0', templatePendingDesks: pending, ledgers, ...context,
+  })
+
+  it('既存を採用: 下段の生徒が別の 1 行の机に生きていれば止め、盤面・保留マップ・台帳を変えない', () => {
+    const { weeks, pending } = fixture(true)
+    const snapshot = JSON.stringify({ weeks, pending, ledgers })
+    const r = resolveMode('adopt-existing', weeks, pending)
+    expect(r.status).toBe('blocked')
+    if (r.status !== 'blocked') return
+    expect(r.message).toContain('2 か所')
+    expect(r.message).toContain('先に上段側を片づけてください')
+    expect(JSON.stringify({ weeks, pending, ledgers })).toBe(snapshot)
+  })
+
+  it('既存を採用: 重ならなければ成立し、下段の生徒は同じコマに 1 か所だけ生きる', () => {
+    const { weeks, pending } = fixture(false)
+    const r = resolveMode('adopt-existing', weeks, pending)
+    expect(r.status).toBe('applied')
+    if (r.status !== 'applied') return
+    expect(liveCount(r.nextWeeks, 'mA')).toBe(1)
+    expect(liveCount(r.nextWeeks, 'mC')).toBe(0)
+    expect(r.nextTemplatePendingDesks).toEqual({})
+  })
+
+  it('兄弟: テンプレを採用は下段を捨てるだけなので止めず、別の机の A は 1 か所のまま', () => {
+    const { weeks, pending } = fixture(true)
+    const r = resolveMode('adopt-template', weeks, pending)
+    expect(r.status).toBe('applied')
+    if (r.status !== 'applied') return
+    expect(liveCount(r.nextWeeks, 'mA')).toBe(1)
+    expect(liveCount(r.nextWeeks, 'mC')).toBe(1)
+  })
+
+  it('兄弟: 下段の移動も、移動先のコマに同じ生徒が生きていれば止める（上段・別の机を含む実配置で検査）', () => {
+    const { weeks, pending } = fixture(true)
+    const r = computePendingLowerStudentMove({
+      weeks,
+      weekIndex: 0,
+      cells: weeks[0],
+      templatePendingDesks: pending,
+      source: { cellId: CELL, deskId: 'p0', lowerIndex: 0 },
+      cellId: CELL,
+      deskIndex: 2,
+      studentIndex: 0,
+      suppressedRegularLessonOccurrences: [],
+      managedStudentByAnyName: new Map(),
+      resolveBoardStudentDisplayName: (n: string) => n,
+    })
+    expect(r.status).toBe('blocked')
+    if (r.status === 'blocked') expect(r.message).toContain('移動不可')
+  })
 })

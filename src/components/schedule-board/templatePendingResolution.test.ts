@@ -457,6 +457,28 @@ describe('下段の移動（Q26-3・Q26-5・INV-12）', () => {
     expect(balances(result.nextWeeks, setup.newRows, result.nextTemplatePendingDesks, emptyLedgers())['sM__数'] ?? 0).toBe(before['sM__数'] ?? 0)
   })
 
+  it('下段の通常授業（同日移動）を別の日へ移すと振替になり（既存の移動と同じ形）、振替の残数は変わらず、上段の抑止キーは積まない', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_daymove`, studentSlots: [entry('sD', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '10/7(水) 4限' }), null] } }))
+    const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
+    const diff = applyDiff(week, newRows)
+    const deskId = deskOf(diff.nextWeeks, 0).id
+    const setup = { before: [week], diff, newRows, deskId, key: buildTemplatePendingDeskKey(CELL_ID, deskId) }
+    expect(diff.nextPendingDesks[setup.key]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sD')
+    const before = balances(diff.nextWeeks, newRows, diff.nextPendingDesks, emptyLedgers())
+    const thursday = `2026-10-08_${SLOT}`
+    const result = move(setup, { cellId: thursday, deskIndex: 0, studentIndex: 0 })
+    if (result.status !== 'moved') throw new Error(result.message)
+    const moved = deskOf(result.nextWeeks, 0, thursday).lesson?.studentSlots[0]
+    expect(moved?.managedStudentId).toBe('sD')
+    expect(moved?.lessonType).toBe('makeup')
+    expect(moved?.makeupSourceDate).toBe(DATE)
+    expect(result.nextTemplatePendingDesks[setup.key]).toBeUndefined()
+    expect(liveIds(deskOf(result.nextWeeks, 0))).toEqual(['sC'])
+    expect((deskOf(result.nextWeeks, 0).statusSlots ?? []).filter(Boolean)).toEqual([])
+    expect(balances(result.nextWeeks, newRows, result.nextTemplatePendingDesks, emptyLedgers())['sD__数'] ?? 0).toBe(before['sD__数'] ?? 0)
+  })
+
   it('移動先が 2 行の机（上段の空席を含む）なら不可、生徒のいる席・同じコマに同じ生徒が生きる席も不可', () => {
     const setup = pendingWithMakeupLower()
     const toPending = move(setup, { deskIndex: 0, studentIndex: 1 })

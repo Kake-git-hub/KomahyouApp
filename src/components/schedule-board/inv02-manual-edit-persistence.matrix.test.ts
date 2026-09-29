@@ -16,11 +16,15 @@ import {
   remergeBoardWeekWithManagedData,
   stripWithdrawnStudentsFromBoardWeek,
   computeStudentWithdrawSweep,
+  computePendingDeskResolution,
+  computePendingLowerStudentMove,
   type HistoryEntry,
+  type TemplatePendingResolutionLedgers,
 } from './ScheduleBoardScreen'
 import { hasUnsavedUserEditBeforeBoardPublish, resolveBoardStateChangeCleanMarking, resolveRestoreFlagLifecycle } from '../../App'
 import { resolveSelectedLecturePlacementItem } from './lectureStockPlacement'
 import { collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 // ============================================================================
 // INV-02 操作マトリクステスト（保証: 盤面への手動編集は自動処理で巻き戻らない）
@@ -1304,5 +1308,144 @@ describe('INV-02 × 退塾スイープ(今日以降だけ消す・他の手動�
     expect(collectStudentWithdrawSweepTargets({ weeks: [[futureCell]], students: futureRoster, todayKey: TODAY })).toEqual([])
     expect(collectStudentWithdrawSweepTargets({ weeks: [[futureCell]], students: futureRoster, todayKey: '2026-07-01' }))
       .toEqual([{ studentId: 'sW', displayName: 'sW', fromDateKey: '2026-07-01' }])
+  })
+})
+
+// ============================================================================
+// INV-02 × テンプレ差分反映の保留（2 行）の解決操作（Issue #72・第 1 段 (B)・spec-template-behavior Q26-6・条件 20）
+//
+// 採用ボタン（テンプレを採用／既存を採用）・下段の削除・下段の移動は、どれも純関数の結果を commitWeeks へ 1 回だけ渡す
+// （版数 bump・userInitiated の publish・履歴 1 段＝ templatePendingBoard.wiring.test.ts で字面固定）。
+// ここでは「戻す 1 回で操作前の盤面・保留マップ・台帳（希望回数を含む）へ完全に戻り、やり直しで再適用される」ことを、
+// 操作前・操作後の状態から作った履歴エントリを applyHistoryEntry に通して固定する（commitWeeks が積むのと同じ形）。
+// 純関数は入力（盤面・保留マップ・台帳）を書き換えない＝履歴に積んだ操作前の状態が操作で汚れない。
+// ============================================================================
+describe('INV-02 × 保留（2 行）の解決操作: 戻す 1 回で操作前へ、やり直しで再適用（条件 20・Q26-6）', () => {
+  const DATE = '2026-06-01'
+  const CELL = `${DATE}_1`
+  const pendingKey = buildTemplatePendingDeskKey(CELL, 'q0')
+  const baseLedgers: TemplatePendingResolutionLedgers = {
+    manualLectureStockCounts: {},
+    manualLectureStockOrigins: {},
+    manualMakeupAdjustments: {},
+    fallbackLectureStockStudents: {},
+    fallbackMakeupStudents: {},
+    suppressedMakeupOrigins: {},
+    suppressedRegularLessonOccurrences: [],
+    scheduleCountAdjustments: [],
+  }
+  const context = {
+    managedStudentByAnyName: new Map<string, StudentRow>(),
+    resolveDisplayName: (name: string) => name,
+    resolveStockId: (student: StudentEntry) => student.managedStudentId ?? student.name,
+    ledgerOriginDatesByKey: {} as Record<string, string[]>,
+  }
+  const historyContext = { classroomSettings, groupClassEntries: {}, isLectureStockOpen: false, isMakeupStockOpen: false, studentScheduleRange: null, teacherScheduleRange: null }
+
+  // 机 q0 = 上段 C（テンプレ）＋下段 A（在庫由来の振替）・メモ。机 q1 は空。
+  function fixture() {
+    const weeks: SlotCell[][] = [[createCell({
+      id: CELL,
+      dateKey: DATE,
+      desks: [
+        createDesk({ id: 'q0', teacher: '講師B', lesson: { id: 'managed_r0', studentSlots: [createStudent({ id: 'c-upper', name: '生徒C', managedStudentId: 'sC' }), null] } }),
+        createDesk({ id: 'q1', teacher: '講師A' }),
+      ],
+    })]]
+    const pending: TemplatePendingDeskMap = {
+      [pendingKey]: {
+        lower: {
+          lesson: { id: 'lower', studentSlots: [createStudent({ id: 'a-lower', name: '生徒A', managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: '2026-05-25' }), null] },
+          memoSlots: [null, '連絡'],
+        },
+        effectiveStartDate: DATE,
+        createdAt: '2026-05-30T00:00:00.000Z',
+      },
+    }
+    return { weeks, pending }
+  }
+
+  function entryOf(weeks: SlotCell[][], pending: TemplatePendingDeskMap, ledgers: TemplatePendingResolutionLedgers): HistoryEntry {
+    return {
+      weeks,
+      weekIndex: 0,
+      selectedCellId: CELL,
+      selectedDeskIndex: 0,
+      holidayDates: [],
+      forceOpenDates: [],
+      suppressedRegularLessonOccurrences: ledgers.suppressedRegularLessonOccurrences,
+      scheduleCountAdjustments: ledgers.scheduleCountAdjustments,
+      manualMakeupAdjustments: ledgers.manualMakeupAdjustments,
+      suppressedMakeupOrigins: ledgers.suppressedMakeupOrigins,
+      fallbackMakeupStudents: ledgers.fallbackMakeupStudents,
+      manualLectureStockCounts: ledgers.manualLectureStockCounts,
+      manualLectureStockOrigins: ledgers.manualLectureStockOrigins,
+      fallbackLectureStockStudents: ledgers.fallbackLectureStockStudents,
+      templatePendingDesks: pending,
+    }
+  }
+
+  type Operation = { label: string; run: (weeks: SlotCell[][], pending: TemplatePendingDeskMap) => { nextWeeks: SlotCell[][]; nextTemplatePendingDesks: TemplatePendingDeskMap; ledgers: TemplatePendingResolutionLedgers } }
+  const resolveOrThrow = (mode: 'adopt-template' | 'adopt-existing' | 'delete-lower-student', weeks: SlotCell[][], pending: TemplatePendingDeskMap) => {
+    const r = computePendingDeskResolution({ mode, weeks, cellId: CELL, deskId: 'q0', lowerIndex: 0, templatePendingDesks: pending, ledgers: baseLedgers, ...context })
+    if (r.status !== 'applied') throw new Error(r.message)
+    return r
+  }
+  const operations: Operation[] = [
+    { label: 'テンプレを採用', run: (weeks, pending) => resolveOrThrow('adopt-template', weeks, pending) },
+    { label: '既存を採用（希望回数 −1 を含む）', run: (weeks, pending) => resolveOrThrow('adopt-existing', weeks, pending) },
+    { label: '下段の削除', run: (weeks, pending) => resolveOrThrow('delete-lower-student', weeks, pending) },
+    {
+      label: '下段の移動',
+      run: (weeks, pending) => {
+        const r = computePendingLowerStudentMove({
+          weeks, weekIndex: 0, cells: weeks[0], templatePendingDesks: pending,
+          source: { cellId: CELL, deskId: 'q0', lowerIndex: 0 }, cellId: CELL, deskIndex: 1, studentIndex: 0,
+          suppressedRegularLessonOccurrences: [], managedStudentByAnyName: new Map(), resolveBoardStudentDisplayName: (n: string) => n,
+        })
+        if (r.status !== 'moved') throw new Error(r.message)
+        return { nextWeeks: r.nextWeeks, nextTemplatePendingDesks: r.nextTemplatePendingDesks, ledgers: baseLedgers }
+      },
+    },
+  ]
+
+  for (const operation of operations) {
+    it(`${operation.label}: 入力を書き換えず、戻すで操作前（保留マップ・台帳ごと）へ、やり直しで操作後へ publish される`, () => {
+      const { weeks, pending } = fixture()
+      const before = JSON.stringify({ weeks, pending, baseLedgers })
+      const result = operation.run(weeks, pending)
+      expect(JSON.stringify({ weeks, pending, baseLedgers })).toBe(before)
+      // この操作で保留は解けている（机は 1 行）
+      expect(result.nextTemplatePendingDesks[pendingKey]).toBeUndefined()
+
+      const undo = applyHistoryEntry(entryOf(weeks, pending, baseLedgers), historyContext).publishPayload
+      expect(undo.templatePendingDesks).toEqual(pending)
+      expect(undo.weeks[0][0].desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sC')
+      expect(undo.scheduleCountAdjustments).toEqual([])
+      expect(undo.suppressedRegularLessonOccurrences).toEqual([])
+
+      const redo = applyHistoryEntry(entryOf(result.nextWeeks, result.nextTemplatePendingDesks, result.ledgers), historyContext).publishPayload
+      expect('templatePendingDesks' in redo).toBe(false)
+      // publish の週は教室の机数まで空机で埋まる（applyClassroomAvailability）ので、フィクスチャの机（q0・q1）だけ比べる。
+      const seatsOf = (cellWeeks: SlotCell[][]) => cellWeeks[0][0].desks
+        .filter((desk) => desk.id === 'q0' || desk.id === 'q1')
+        .map((desk) => [desk.id, (desk.lesson?.studentSlots ?? []).map((student) => student?.managedStudentId ?? null), desk.memoSlots ?? null])
+      expect(seatsOf(redo.weeks)).toEqual(seatsOf(result.nextWeeks))
+      expect(redo.scheduleCountAdjustments).toEqual(result.ledgers.scheduleCountAdjustments)
+    })
+  }
+
+  it('既存を採用の希望回数 −1 と抑止キーは、戻すで消え、やり直しで戻る（台帳ごと 1 段）', () => {
+    const { weeks, pending } = fixture()
+    const result = resolveOrThrow('adopt-existing', weeks, pending)
+    expect(result.ledgers.scheduleCountAdjustments).toEqual([{ studentKey: 'sC', subject: '数', countKind: 'regular', dateKey: DATE, delta: -1 }])
+    expect(result.ledgers.suppressedRegularLessonOccurrences).toHaveLength(1)
+    const undo = applyHistoryEntry(entryOf(weeks, pending, baseLedgers), historyContext).publishPayload
+    expect(undo.scheduleCountAdjustments).toEqual([])
+    expect(undo.suppressedRegularLessonOccurrences).toEqual([])
+    const redo = applyHistoryEntry(entryOf(result.nextWeeks, result.nextTemplatePendingDesks, result.ledgers), historyContext).publishPayload
+    expect(redo.scheduleCountAdjustments).toEqual(result.ledgers.scheduleCountAdjustments)
+    expect(redo.suppressedRegularLessonOccurrences).toEqual(result.ledgers.suppressedRegularLessonOccurrences)
+    expect(redo.weeks[0][0].desks[0].lesson?.studentSlots[0]?.managedStudentId).toBe('sA')
   })
 })

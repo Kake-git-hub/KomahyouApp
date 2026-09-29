@@ -114,10 +114,10 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     id: 'template-diff-apply',
     title: 'テンプレ保存の差分反映＋保留(2 行表示)(Issue #72)',
     stage: 'development-only',
-    summary: '第 1 段 (A)(2026-09-29): 機能フラグ・保留マップ(templatePendingDesks)の全経路配線・突き合わせの純関数・保存経路の切替・在庫の走査に下段を含める、を実装。2 行表示(緑)・採用ボタン・既存メニューでの解決・保留件数バッジ(第 1 段 (B))と確認リスト(第 1 段 (C))はこれから。',
+    summary: '第 1 段 (A)(2026-09-29): 機能フラグ・保留マップ(templatePendingDesks)の全経路配線・突き合わせの純関数・保存経路の切替・在庫の走査に下段を含める、を実装。第 1 段 (B)(2026-09-29): 2 行表示(緑・狭い画面は帯)・保留件数バッジ・「テンプレを採用」「既存を採用」・下段の削除/移動・上段が空いたら 1 行へ・2 行の机の制限(出席/講師/着地)・保留のある日の休日設定等の停止、と確認リスト tp-1〜tp-6 を実装。',
     featureKeys: ['templateDiffApply'],
-    nextAction: '第 1 段 (B)(C) を実装 → 開発用教室で試用 → 確認リスト全 OK・Q33-1 のすき間の対処の後、全教室へ広げるかをオーナーが判断。',
-    references: ['docs/spec-template-behavior.md §H', 'Issue #72', 'src/components/schedule-board/templateDiffApply.ts'],
+    nextAction: '開発用教室で試用(確認リスト tp-1〜tp-6) → 確認リスト全 OK・INV-13 マトリクス新設・Q33-1 のすき間の対処の後、全教室へ広げるかをオーナーが判断。',
+    references: ['docs/spec-template-behavior.md §H', 'Issue #72', 'src/components/schedule-board/templateDiffApply.ts', 'src/components/schedule-board/templatePendingResolution.ts'],
     updatedOn: '2026-09-29',
   },
   {

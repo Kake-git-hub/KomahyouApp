@@ -62,7 +62,7 @@ describe('確認リストの項目定義', () => {
 
   it('第32版(v1.5.570): 第31版の結果で OK の t-2/t-3/d-1〜d-4/a-1〜a-3 を外し、解決済みの確認 a-4 を足した(OK 済みは載せない運用)', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4', 'tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6'])
     // 第31版の結果(2026-09-28・受付 20260928-103642968-d4c32a94)で OK。
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
@@ -78,6 +78,13 @@ describe('確認リストの項目定義', () => {
     expect((a4.check ?? []).join(' / ')).toContain('未解決に戻す')
     expect((a4.check ?? []).join(' / ')).toContain('教室のデータ(盤面・保存状態)は何も変わらない')
     expect([a4.prep ?? '', ...a4.steps, ...(a4.check ?? [])].join(' / ')).not.toMatch(/v1\.5\.\d+/u)
+    // 第33版(2026-09-29): テンプレ差分反映の保留(2 行・緑)の盤面表示と解決操作(Issue #72・第 1 段 (B))。版は据え置き(項目を足しただけ)。
+    for (const id of ['tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6']) {
+      expect(byId.get(id)!.introducedIn, id).toBe('v1.5.572')
+      expect(byId.get(id)!.area, id).toBe('盤面(テンプレ保留)')
+    }
+    expect(byId.get('tp-2')!.check!.join(' / ')).toContain('「元に戻す」1 回で緑の 2 行に戻り')
+    expect(byId.get('tp-5')!.check!.join(' / ')).toContain('先に保留を片づけてください')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
