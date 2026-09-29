@@ -14,6 +14,8 @@
 
 ## 未リリース
 
+- docs: テンプレ保存を「反映日以降の上書き」から「差分反映＋保留（2 行表示）」へ変える仕様の下書き(Issue #72・緑が丘校「講師交代のたびに先行生成済みの未来週を毎週手で直している」。オーナー確定 2026-09-29 の方針＝同じコマ内の机番号どうしで突き合わせ、手入力の印の無い机だけ置き換え・印あり＋中身違いは上段テンプレ/下段既存の 2 行で保留・休日は消さない・保存で在庫は動かない)。Q2・Q6〜Q10・Q19 を改定し §H Q21〜Q33・懸案と妥協案・受け入れ条件つき実装タスク・オーナー確認事項 12 件を追加、上位正本 §7-3/7-6 を追随。INV は INV-02 の例外文言改定案・INV-06 拡張案・INV-13 新設案(保留の下段は盤面専用)を**オーナー承認待ちの下書き**として記載。コード変更なし・現状実装は上書きのまま (docs/spec-template-behavior.md / docs/spec-board-regular-placement.md / docs/spec-invariants.md)
+
 ## v1.5.570 (2026-09-28)
 
 - feat: 開発者画面「質問への回答」に「解決済みにする／未解決に戻す」ボタンと「解決済み」タブを追加(確認リスト v1.5.564 その他欄・受付 20260928-103642968-d4c32a94「今日までの質問はすべて LINE で対応済みなので、解決済みボタンで対応完了がわかるように。解決済みは室長側には非表示でOK」)。回答とは独立した印で、新 callable `resolveDeveloperReport`(開発者のみ)が developerReports の resolvedAt/resolvedBy だけを書く。室長側の reportAnswers には写さない(室長の画面・未読バッジは変わらない)。解決済みは未回答/回答済みの一覧から外れる。**Cloud Functions のデプロイが必要**(functions/** の変更で main マージ時に自動発火) (functions/src/reportAnswers.ts / functions/src/index.ts / src/utils/developerReportAnswers.ts / src/utils/developerDashboard.ts / src/integrations/firebase/reportAnswersStore.ts / DeveloperReportAnswerScreen.tsx / docs/spec-developer-report.md §G-3)
