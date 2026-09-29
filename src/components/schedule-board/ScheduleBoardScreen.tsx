@@ -2396,6 +2396,35 @@ function createInitialBoardWeeks(
   ], classroomSettings.deskCount)
 }
 
+// 盤面の 1 週について、固定日（freezeDate。'' なら週全体）以降の管理セルを新テンプレから作り、再マージと同じ当て方・同じ順序
+// （通常授業の抑止〔盤面の振替コマ由来を含む〕→ 丸ごと振替の日の足場講師 strip）を当てる。
+// ★再マージ（remergeBoardWeekWithManagedData）とテンプレ差分反映の突き合わせ相手（buildTemplateDiffTemplateCells・
+//   spec-template-behavior Q21-5）の**共通の準備**。以前は差分反映側が手で写していた（regression-reviewer R-5・2026-09-29 に一本化）。
+//   ここを経路ごとに書き写すと、差分反映の結果が再マージの不動点でなくなる（保存直後の effect で書き換わる＝INV-02/INV-03）。
+export function buildAppliedManagedPostFreezeCells(week: SlotCell[], params: {
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  suppressedRegularLessonOccurrences: string[]
+  freezeDate: string
+}): { postFreezeBoard: SlotCell[]; managedCells: Array<{ raw: SlotCell; applied: SlotCell }> } {
+  const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
+  const weekStart = getWeekStart(parseDateKey(firstDateKey))
+  const managedWeek = createBoardWeek(weekStart, {
+    classroomSettings: params.classroomSettings,
+    teachers: params.teachers,
+    students: params.students,
+    regularLessons: params.regularLessons,
+  })
+  const postFreezeBoard = params.freezeDate ? week.filter((c) => c.dateKey >= params.freezeDate) : week
+  const postFreezeManaged = params.freezeDate ? managedWeek.filter((c) => c.dateKey >= params.freezeDate) : managedWeek
+  return {
+    postFreezeBoard,
+    managedCells: applyManagedCellSuppressions(postFreezeManaged, [postFreezeBoard], params.suppressedRegularLessonOccurrences),
+  }
+}
+
 // 盤面の 1 週を名簿・テンプレと突き合わせ直す(読込時と、名簿/テンプレ/設定変更時の effect で共通)。
 // 旧実装は同じ処理が 2 か所に複製されていた。挙動は同一のまま関数へ寄せ、退塾生徒の剥がしを先頭に足した(2026-09-15)。
 //   1. stripWithdrawnStudentsFromBoardWeek: 今日[JST]以降の退塾生徒のテンプレ由来通常授業を外す(固定日前の週も対象)。
@@ -2415,23 +2444,14 @@ export function remergeBoardWeekWithManagedData(rawWeek: SlotCell[], params: {
   const lastDateKey = week[week.length - 1]?.dateKey ?? ''
   if (freezeDate && lastDateKey < freezeDate) return week
 
-  const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
-  const weekStart = getWeekStart(parseDateKey(firstDateKey))
-  const managedWeek = createBoardWeek(weekStart, {
-    classroomSettings: params.classroomSettings,
-    teachers: params.teachers,
-    students: params.students,
-    regularLessons: params.regularLessons,
-  })
-  const suppressedKeys = params.suppressedRegularLessonOccurrences
+  // 管理セルの準備（createBoardWeek → 固定日で分離 → 抑止 → 足場講師 strip）はテンプレ差分反映と共有する（R-5）。
+  const { postFreezeBoard, managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate })
   if (!freezeDate) {
-    return overlayBoardWeeksOnScheduleCells(managedWeek, [week], suppressedKeys)
+    return overlayPreparedManagedCells(managedCells, [week])
   }
   // Mixed week: セル単位で分離し、pre-freeze セルは board データをそのまま保持
   const preFreezeBoard = week.filter((c) => c.dateKey < freezeDate)
-  const postFreezeBoard = week.filter((c) => c.dateKey >= freezeDate)
-  const postFreezeManaged = managedWeek.filter((c) => c.dateKey >= freezeDate)
-  const postFreezeOverlaid = overlayBoardWeeksOnScheduleCells(postFreezeManaged, [postFreezeBoard], suppressedKeys)
+  const postFreezeOverlaid = overlayPreparedManagedCells(managedCells, [postFreezeBoard])
   return [...preFreezeBoard, ...postFreezeOverlaid].sort((a, b) => {
     if (a.dateKey !== b.dateKey) return a.dateKey.localeCompare(b.dateKey)
     return a.slotNumber - b.slotNumber
@@ -2471,28 +2491,15 @@ export function buildTemplateDiffTemplateCells(params: {
   suppressedRegularLessonOccurrences: string[]
 }): TemplateDiffTemplateCell[] {
   const result: TemplateDiffTemplateCell[] = []
-  const templateTeacherSuppressedDates = collectTemplateTeacherSuppressedDates(params.suppressedRegularLessonOccurrences)
   for (const week of params.weeks) {
     const firstDateKey = week[0]?.dateKey ?? ''
     if (!firstDateKey) continue
     const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
     if (lastDateKey < params.effectiveStartDate) continue
-    const weekStart = getWeekStart(parseDateKey(firstDateKey))
-    const managedWeek = createBoardWeek(weekStart, {
-      classroomSettings: params.classroomSettings,
-      teachers: params.teachers,
-      students: params.students,
-      regularLessons: params.regularLessons,
-    })
-    const postFreezeBoard = week.filter((cell) => cell.dateKey >= params.effectiveStartDate)
-    const postFreezeManaged = managedWeek.filter((cell) => cell.dateKey >= params.effectiveStartDate)
-    const suppressedKeys = buildSuppressedManagedOccurrenceKeys(postFreezeManaged, [postFreezeBoard], params.suppressedRegularLessonOccurrences)
-    for (const managedCell of postFreezeManaged) {
-      const suppressedStudentsCell = suppressManagedStudentsInCell(managedCell, suppressedKeys)
-      const applied = templateTeacherSuppressedDates.has(managedCell.dateKey)
-        ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
-        : suppressedStudentsCell
-      result.push({ raw: cloneSlotCell(managedCell), applied })
+    // 管理セルの準備は再マージと同じ関数（buildAppliedManagedPostFreezeCells）を通す（R-5。手で写さない）。
+    const { managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })
+    for (const { raw, applied } of managedCells) {
+      result.push({ raw: cloneSlotCell(raw), applied })
     }
   }
   return result
@@ -3975,16 +3982,17 @@ export function carryBoardStatusRecordsOntoClosedDayCell(closedManagedCell: Slot
   return changed ? { ...closedManagedCell, desks } : closedManagedCell
 }
 
-export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
+// テンプレから作った管理セルに、盤面の再マージと同じ当て方・同じ順序で抑止を当てる（raw＝抑止前・applied＝当てた後）。
+// ★再マージ（overlayBoardWeeksOnScheduleCells ← remergeBoardWeekWithManagedData）とテンプレ差分反映の突き合わせ相手
+//   （buildTemplateDiffTemplateCells・spec-template-behavior Q21-5）がこの 1 か所を共有する。片方だけ当て方を変えると、
+//   差分反映の結果が再マージの不動点でなくなり、保存直後の effect で書き換わる（regression-reviewer R-5・2026-09-29）。
+function applyManagedCellSuppressions(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []): Array<{ raw: SlotCell; applied: SlotCell }> {
   const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys)
-  const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
-  const managedCellIds = new Set(scheduleCells.map((cell) => cell.id))
-  const managedCellDateSlots = new Set(scheduleCells.map((cell) => buildCellDateSlotKey(cell)))
 
   // 丸ごと振替した日はテンプレ足場講師を足さない（日単位の抑止・オーナー指示 2026-08-03）。
   const templateTeacherSuppressedDates = collectTemplateTeacherSuppressedDates(explicitlySuppressedManagedKeys)
 
-  const mergedCells = scheduleCells.map((managedCell) => {
+  return scheduleCells.map((managedCell) => {
     // ★順序が load-bearing: **必ず suppressManagedStudentsInCell の後に strip する**。
     //   テンプレの管理机は通常「講師＋管理授業(lesson)」の形で、strip は lesson 付きの机を素通しする。
     //   先に strip すると何も落ちず、そのあと抑止で lesson だけ消えて **teacher が残った机**（:2707 付近で
@@ -3994,6 +4002,22 @@ export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boar
     const adjustedManagedCell = templateTeacherSuppressedDates.has(managedCell.dateKey)
       ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
       : suppressedStudentsCell
+    return { raw: managedCell, applied: adjustedManagedCell }
+  })
+}
+
+export function overlayBoardWeeksOnScheduleCells(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []) {
+  return overlayPreparedManagedCells(applyManagedCellSuppressions(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys), boardWeeks)
+}
+
+// 抑止を当て済みの管理セル（applyManagedCellSuppressions の戻り値）へ盤面を重ねる。抑止の当て方はここに書かない（上の 1 か所だけ）。
+function overlayPreparedManagedCells(preparedCells: Array<{ raw: SlotCell; applied: SlotCell }>, boardWeeks: SlotCell[][]) {
+  const boardCellMaps = buildCellLookupMaps(boardWeeks.flat())
+  const managedCellIds = new Set(preparedCells.map(({ raw }) => raw.id))
+  const managedCellDateSlots = new Set(preparedCells.map(({ raw }) => buildCellDateSlotKey(raw)))
+
+  const mergedCells = preparedCells.map(({ raw: managedCell, applied: adjustedManagedCell }) => {
+    // 抑止 → 足場講師 strip の順序（load-bearing）は applyManagedCellSuppressions のコメント参照。
     const boardCell = findMatchingBoardCell(managedCell, boardCellMaps)
     if (!boardCell) return adjustedManagedCell
     // 休日(閉じた日)は盤面の授業・講師・メモを持ち込まない(8559c28)。ただし出欠記録だけは引き継ぐ(2026-09-16)。

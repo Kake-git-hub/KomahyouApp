@@ -7,6 +7,8 @@
 //   - 反映日より前は参照ごと不変（条件 1・INV-10）
 //   - 保存前後で未消化振替が一致（条件 9・9-2・INV-06 拡張）
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
@@ -14,7 +16,10 @@ import type { ClassroomSettings } from '../../types/appState'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import {
   buildManagedOccurrenceKey,
+  buildAppliedManagedPostFreezeCells,
   buildManagedScheduleCellsForRange,
+  buildTemplateDiffTemplateCells,
+  buildTemplateTeacherSuppressionKey,
   computeTemplateDiffApplyForBoard,
   remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
@@ -776,5 +781,66 @@ describe('INV-06 拡張：テンプレ差分反映の保存前後で未消化振
     const result = applyDiff({ week, newRows, suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)] })
     expect(deskOf(result.nextWeeks, 0).statusSlots?.filter(Boolean)).toHaveLength(1)
     expect(balances(result.nextWeeks, newRows, result.nextPendingDesks)).toEqual(before)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 権威関数の一本化（regression-reviewer R-5）: 差分反映の突き合わせ相手（applied）と再マージの管理セル準備は同じ関数を通る
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が同じ当て方をする（Q21-5・R-5）', () => {
+  it('通常授業の抑止・盤面の振替コマ由来の抑止・丸ごと振替の日の足場講師 strip を当てた姿が、空の盤面を再マージした結果と一致する', () => {
+    const THURSDAY = '2026-10-08'
+    const FRIDAY_CELL = `2026-10-09_${SLOT}`
+    let week = buildWeek(OLD_ROWS)
+    // 金曜の机に B の振替（振替元＝水曜 5 限）→ 水曜 5 限の B は盤面の振替コマ由来で抑止される
+    week = mutateDesk(week, 2, (desk) => ({ ...desk, lesson: { id: 'fri_makeup', studentSlots: [entry('sB', { lessonType: 'makeup', makeupSourceDate: DATE, makeupSourceLabel: '10/7(水) 5限' }), null] } }), FRIDAY_CELL)
+    const suppressed = [buildManagedOccurrenceKey(entry('sA'), DATE, SLOT), buildTemplateTeacherSuppressionKey(THURSDAY)]
+    const rows = [...OLD_ROWS, row('r4', 't1', 'sC', '数', '', '', 4, SLOT), row('r5', 't2', '', '', '', '', 4, SLOT)]
+    const templateCells = buildTemplateDiffTemplateCells({
+      weeks: [week],
+      classroomSettings: newSettings(),
+      teachers,
+      students,
+      regularLessons: rows,
+      effectiveStartDate: EFFECTIVE,
+      suppressedRegularLessonOccurrences: suppressed,
+    })
+    // 盤面を「テンプレの管理セルだけ」（利用者の中身なし・金曜の振替だけ）にして再マージすると、管理セルの準備がそのまま出る。
+    const remerged = remerge([week], rows, suppressed)
+    const project = (cell: SlotCell) => cell.desks.map((desk) => ({ teacher: desk.teacher, students: liveNames(desk) }))
+    const checked = templateCells.filter((item) => item.applied.id !== FRIDAY_CELL)
+    expect(checked.length).toBeGreaterThan(0)
+    for (const item of checked) {
+      expect(project(item.applied)).toEqual(project(cellOf(remerged, item.applied.id)))
+    }
+    // 抑止が実際に効いている（A・B は水曜 5 限の applied に居ない／木曜の講師だけの机は足場講師が外れる）
+    const wednesday = templateCells.find((item) => item.applied.id === CELL_ID)!
+    expect(wednesday.raw.desks.flatMap(liveNames)).toEqual(['sA', 'sB'])
+    expect(wednesday.applied.desks.flatMap(liveNames)).toEqual([])
+    const thursday = templateCells.find((item) => item.applied.id === `${THURSDAY}_${SLOT}`)!
+    expect(thursday.applied.desks.map((desk) => desk.teacher)).toEqual(['田中', '', ''])
+    expect(thursday.raw.desks.map((desk) => desk.teacher)).toEqual(['田中', '鈴木', ''])
+    // 共通関数の出力そのもの（再マージもこれを通す）と一致する
+    const shared = buildAppliedManagedPostFreezeCells(week, { classroomSettings: newSettings(), teachers, students, regularLessons: rows, suppressedRegularLessonOccurrences: suppressed, freezeDate: EFFECTIVE })
+    expect(templateCells.map((item) => item.applied)).toEqual(shared.managedCells.map((item) => item.applied))
+    expect(templateCells.map((item) => item.raw)).toEqual(shared.managedCells.map((item) => item.raw))
+  })
+
+  it('配線: 差分反映と再マージは共通関数を呼び、抑止・strip を手で写さない', () => {
+    const board = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
+    const slice = (start: string, length: number) => {
+      const index = board.indexOf(start)
+      expect(index).toBeGreaterThanOrEqual(0)
+      return board.slice(index, index + length)
+    }
+    const templateCellsFn = slice('export function buildTemplateDiffTemplateCells(', 1400)
+    expect(templateCellsFn).toContain('buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })')
+    for (const copied of ['suppressManagedStudentsInCell(', 'stripTemplateScaffoldTeachers(', 'buildSuppressedManagedOccurrenceKeys(', 'createBoardWeek(']) {
+      expect(templateCellsFn).not.toContain(copied)
+    }
+    const remergeFn = slice('export function remergeBoardWeekWithManagedData(', 1800)
+    expect(remergeFn).toContain('buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate })')
+    expect(remergeFn).not.toContain('createBoardWeek(')
   })
 })
