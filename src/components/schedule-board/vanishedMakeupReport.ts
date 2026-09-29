@@ -3,6 +3,7 @@ import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
 import { buildMakeupStockEntries, collectMakeupOriginDatesByKey, originTokenDateKey, type ManualMakeupOrigin } from './makeupStock'
+import { buildTemplatePendingLowerScanWeeks, cloneTemplatePendingDeskMap, hasTemplatePendingDesks, type TemplatePendingDeskMap } from './templatePendingDesks'
 
 // ============================================================================
 // INV-06 の修正（2026-07-31・移動しただけの振替コマを休みにすると未消化振替から消滅する）で
@@ -65,6 +66,12 @@ export type VanishedMakeupReportParams = {
   fallbackStudents?: Record<string, { studentName: string; displayName: string; subject: string }>
   resolveStudentKey: (student: StudentEntry) => string
   today?: Date
+  /**
+   * テンプレ差分反映の保留マップ（Issue #72・regression-reviewer N-5）。盤面と同じく在庫の消化・欠席由来の走査に下段を含める
+   * （makeupStock の resolveMakeupScanWeeks・INV-06 の 3 本目の走査対象）。渡さないと、保留のある教室（開発用教室）で
+   * 盤面の未消化振替とレポートの残数が食い違う。
+   */
+  templatePendingDesks?: TemplatePendingDeskMap | null
 }
 
 export const VANISHED_MAKEUP_REASONS = {
@@ -78,6 +85,17 @@ function stripAbsentMakeupOrigin(statusEntry: StudentStatusEntry | null) {
   if (!statusEntry) return statusEntry
   if (statusEntry.status !== 'absent' || statusEntry.lessonType !== 'makeup' || !statusEntry.makeupSourceDate) return statusEntry
   return { ...statusEntry, makeupSourceDate: undefined }
+}
+
+// 保留の下段の出欠記録にも同じ剥がしを当てる（盤面の週と同じ前提で「修正前」を再現する・N-5）。
+function stripAbsentMakeupOriginsInPendingDesks(map: TemplatePendingDeskMap | null | undefined): TemplatePendingDeskMap | null | undefined {
+  if (!hasTemplatePendingDesks(map)) return map
+  const next = cloneTemplatePendingDeskMap(map)
+  for (const entry of Object.values(next)) {
+    const slots = entry.lower.statusSlots
+    if (slots) entry.lower.statusSlots = [stripAbsentMakeupOrigin(slots[0]), stripAbsentMakeupOrigin(slots[1])]
+  }
+  return next
 }
 
 function stripAbsentMakeupOrigins(weeks: SlotCell[][]): SlotCell[][] {
@@ -135,6 +153,7 @@ export function collectAbsentMakeupCandidates(
  */
 export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): VanishedMakeupReport {
   const strippedWeeks = stripAbsentMakeupOrigins(params.weeks)
+  const strippedPendingDesks = stripAbsentMakeupOriginsInPendingDesks(params.templatePendingDesks)
   const stockParams = {
     students: params.students,
     teachers: params.teachers,
@@ -147,8 +166,8 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
     today: params.today,
   }
 
-  const afterEntries = buildMakeupStockEntries({ ...stockParams, weeks: params.weeks })
-  const beforeEntries = buildMakeupStockEntries({ ...stockParams, weeks: strippedWeeks })
+  const afterEntries = buildMakeupStockEntries({ ...stockParams, weeks: params.weeks, templatePendingDesks: params.templatePendingDesks })
+  const beforeEntries = buildMakeupStockEntries({ ...stockParams, weeks: strippedWeeks, templatePendingDesks: strippedPendingDesks })
   const afterBalances = new Map(afterEntries.map((entry) => [entry.key, entry.balance]))
   const beforeBalances = new Map(beforeEntries.map((entry) => [entry.key, entry.balance]))
   const displayNameByKey = new Map([...beforeEntries, ...afterEntries].map((entry) => [entry.key, entry.studentName]))
@@ -168,6 +187,7 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
     suppressedOrigins: params.suppressedOrigins,
     resolveStudentKey: params.resolveStudentKey,
     today: params.today,
+    templatePendingDesks: strippedPendingDesks,
   }))
   // absent 由来を含めた有効 origin。ここに載らない＝個別抑制（削除）済み。
   const effectiveOriginDates = toDateKeys(collectMakeupOriginDatesByKey({
@@ -179,9 +199,11 @@ export function buildVanishedMakeupReport(params: VanishedMakeupReportParams): V
     suppressedOrigins: params.suppressedOrigins,
     resolveStudentKey: params.resolveStudentKey,
     today: params.today,
+    templatePendingDesks: params.templatePendingDesks,
   }))
 
-  const candidates = collectAbsentMakeupCandidates(params.weeks, params.resolveStudentKey)
+  // 候補も盤面と同じ走査範囲（週＋保留の下段）から拾う（下段の欠席記録が残数に効くのに行が出ない、を防ぐ・N-5）。
+  const candidates = collectAbsentMakeupCandidates([...params.weeks, ...buildTemplatePendingLowerScanWeeks(params.weeks, params.templatePendingDesks)], params.resolveStudentKey)
   const remainingIncreaseByKey = new Map<string, number>()
   for (const candidate of candidates) {
     if (remainingIncreaseByKey.has(candidate.key)) continue

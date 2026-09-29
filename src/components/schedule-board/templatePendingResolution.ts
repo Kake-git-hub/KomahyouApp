@@ -262,9 +262,28 @@ function isBothRowsLive(weeks: readonly SlotCell[][], map: TemplatePendingDeskMa
   return liveStudentsOf(location.desk.lesson).length > 0 && liveStudentsOf(entry.lower.lesson).length > 0
 }
 
+// この確定で触られたコマか（regression-reviewer N-9(b)）。コマの机の中身が変わった、または保留の中身が変わったときだけ真。
+// 同じコマの別の机も数える（Q26-4 の一意性検査は同じコマの別の机を見るので、別の机の操作で合流できるようになることがある）。
+function isTouchedByCommit(
+  previousCellById: ReadonlyMap<string, SlotCell>,
+  cell: SlotCell | undefined,
+  previousEntry: TemplatePendingDesk | undefined,
+  entry: TemplatePendingDesk | undefined,
+) {
+  if (previousEntry !== entry && JSON.stringify(previousEntry) !== JSON.stringify(entry)) return true
+  if (!cell) return false
+  const previousCell = previousCellById.get(cell.id)
+  if (!previousCell) return true
+  if (previousCell === cell) return false
+  return JSON.stringify(previousCell.desks) !== JSON.stringify(cell.desks)
+}
+
 /**
- * 盤面の確定（commitWeeks）ごとに、すべての保留の机へ Q28 を当てる（上段の休み・振無休・移動・削除で上段が空いた机を 1 行へ戻す）。
+ * 盤面の確定（commitWeeks）ごとに、**この確定で触られたコマ**の保留の机へ Q28 を当てる（上段の休み・振無休・移動・削除で上段が空いた机を 1 行へ戻す）。
  * 何も変わらなければ入力と同じ参照を返す。
+ * ★触られていないコマの保留は見ない（regression-reviewer N-9(b)・2026-09-29）。全保留を見ると、再マージ・リアルタイム同期など確定の外で
+ *   上段が空いた別の机の 1 行戻しが、無関係な操作の Undo 1 段に同乗する（戻すと無関係な机まで 2 行へ戻る）。そうした机は、利用者がその
+ *   コマを操作したとき、または採用ボタンで片づく。
  * newlyStuckKeys は「この確定の前は両方の行が生きていて、この確定で片方が空いたのに 1 行へ戻せなかった」机＝利用者へ理由を知らせる対象。
  * （保存直後から戻せずに残っている机〔席不足の下段など〕は毎回知らせない。）
  */
@@ -284,7 +303,14 @@ export function settleTemplatePendingDesksAfterCommit(params: {
   const collapsedKeys: string[] = []
   const newlyStuck: Array<{ key: string; reason: Extract<TemplatePendingCollapseResult, { ok: false }>['reason'] }> = []
   if (!hasTemplatePendingDesks(params.templatePendingDesks)) return { nextWeeks, nextTemplatePendingDesks, collapsedKeys, newlyStuck }
+  const previousCellById = new Map<string, SlotCell>()
+  for (const week of params.previousWeeks) for (const cell of week) previousCellById.set(cell.id, cell)
+  const cellById = new Map<string, SlotCell>()
+  for (const week of params.weeks) for (const cell of week) cellById.set(cell.id, cell)
   for (const key of Object.keys(params.templatePendingDesks)) {
+    const parsed = parseTemplatePendingDeskKey(key)
+    if (!parsed) continue
+    if (!isTouchedByCommit(previousCellById, cellById.get(parsed.cellId), params.previousTemplatePendingDesks[key], params.templatePendingDesks[key])) continue
     const result = settleTemplatePendingDesk({ weeks: nextWeeks, templatePendingDesks: nextTemplatePendingDesks, key })
     if (result.status === 'collapsed') {
       nextWeeks = result.nextWeeks

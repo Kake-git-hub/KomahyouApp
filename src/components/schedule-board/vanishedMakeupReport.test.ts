@@ -3,7 +3,8 @@ import type { ClassroomSettings } from '../../types/appState'
 import type { StudentRow, TeacherRow } from '../basic-data/basicDataModel'
 import type { RegularLessonRow } from '../basic-data/regularLessonModel'
 import type { DeskCell, SlotCell, StudentEntry, StudentStatusEntry } from './types'
-import type { ManualMakeupOrigin } from './makeupStock'
+import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
+import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { VANISHED_MAKEUP_REASONS, buildVanishedMakeupReport, collectAbsentMakeupCandidates } from './vanishedMakeupReport'
 
 // INV-06 の修正で「未消化振替が増えるコマ」を洗い出すレポートの検証。
@@ -119,6 +120,7 @@ function report(params: {
   settings?: ClassroomSettings
   manualAdjustments?: Record<string, ManualMakeupOrigin[]>
   suppressedOrigins?: Record<string, ManualMakeupOrigin[]>
+  templatePendingDesks?: TemplatePendingDeskMap
 }) {
   return buildVanishedMakeupReport({
     students: [student],
@@ -130,6 +132,7 @@ function report(params: {
     suppressedOrigins: params.suppressedOrigins ?? {},
     resolveStudentKey: (entry: StudentEntry) => entry.managedStudentId ?? entry.id,
     today: TODAY,
+    templatePendingDesks: params.templatePendingDesks,
   })
 }
 
@@ -197,5 +200,47 @@ describe('vanishedMakeupReport: INV-06 修正で未消化振替が増えるコ�
 
     expect(collectAbsentMakeupCandidates(weeks, (entry: StudentEntry) => entry.managedStudentId ?? entry.id)).toEqual([])
     expect(report({ weeks }).increasedTotal).toBe(0)
+  })
+})
+
+// Issue #72・regression-reviewer N-5: テンプレ差分反映の保留（2 行）の下段に入った欠席記録（席不足で下段へあふれた会計記録・Q21-10）も、
+// 盤面の未消化振替と同じく数える（makeupStock の resolveMakeupScanWeeks）。渡さないと開発用教室で盤面とレポートの残数が食い違う。
+describe('vanishedMakeupReport × 保留の下段（N-5）', () => {
+  const emptyCell = (): SlotCell => ({ ...cellWithStatus(movedMakeupAbsence), desks: [{ id: `desk-${BOARD_DATE}`, teacher: '田中講師' }] })
+  const pending: TemplatePendingDeskMap = {
+    [buildTemplatePendingDeskKey(`cell-${BOARD_DATE}`, `desk-${BOARD_DATE}`)]: {
+      lower: { statusSlots: [movedMakeupAbsence, null] },
+      effectiveStartDate: BOARD_DATE,
+      createdAt: '2026-07-31T00:00:00.000Z',
+    },
+  }
+
+  it('下段の欠席記録を行として挙げ、修正後の残数が盤面（保留マップ込み）の残数と一致する', () => {
+    const weeks = [[emptyCell()]]
+    const result = report({ weeks, templatePendingDesks: pending })
+    const boardBalance = buildMakeupStockEntries({
+      students: [student],
+      teachers: [teacher],
+      regularLessons: [regularLesson],
+      classroomSettings: createSettings(),
+      weeks,
+      manualAdjustments: {},
+      suppressedOrigins: {},
+      resolveStudentKey: (entry: StudentEntry) => entry.managedStudentId ?? entry.id,
+      today: TODAY,
+      templatePendingDesks: pending,
+    }).find((entry) => entry.key === STOCK_KEY)?.balance ?? 0
+    expect(boardBalance).toBe(1)
+    expect(result.totals).toEqual([
+      { key: STOCK_KEY, studentName: '大槻 太郎', subject: '数', balanceBefore: 0, balanceAfter: boardBalance, increase: 1 },
+    ])
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0]).toMatchObject({ makeupSourceDate: MOVED_SOURCE_DATE, willIncrease: true })
+  })
+
+  it('保留マップを渡さないと下段は見えない（従来どおり＝保留の無い教室の結果は不変）', () => {
+    const result = report({ weeks: [[emptyCell()]] })
+    expect(result.rows).toEqual([])
+    expect(result.increasedTotal).toBe(0)
   })
 })

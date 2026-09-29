@@ -42,7 +42,7 @@ describe('保護者からの休み連絡の自動処理(ScheduleBoardScreen.tsx)
   })
 
   it('自動処理は席を純関数で探し、メニューと同じ本体を呼ぶ。失敗の分岐もすべて finish で結果を返す', () => {
-    const effect = sliceFrom('if (!shouldProcessParentAbsenceRequest(parentAbsenceRequest, processedParentAbsenceRequestIdRef.current)) return', 3200)
+    const effect = sliceFrom('if (!shouldProcessParentAbsenceRequest(parentAbsenceRequest, processedParentAbsenceRequestIdRef.current)) return', 4200)
     expect(effect).toContain('resolveParentAbsenceTarget({')
     expect(effect).toContain('markStudentAbsentNoMakeupAt(resolution.target)')
     expect(effect).toContain('markStudentAbsentAt(resolution.target)')
@@ -50,7 +50,8 @@ describe('保護者からの休み連絡の自動処理(ScheduleBoardScreen.tsx)
     expect(effect).toContain('processedParentAbsenceRequestIdRef.current = request.requestId')
     expect(effect).toContain('onParentAbsenceRequestProcessed?.({ requestId: request.requestId, messageId: request.messageId, action: request.action, studentId: request.studentId, dateKey: request.dateKey, slotNumber: request.slotNumber, ok, message })')
     // 早期 return は「週のジャンプ待ち」の 1 か所を除き、必ず直前の行で finish を呼んでいる(結果を返さない抜け道を作らない)。
-    const bodyEnd = effect.indexOf('}, [isTemplateMode, onParentAbsenceRequestProcessed, parentAbsenceRequest, students, weekIndex, weeks])')
+    // deps には値（保留マップ activeTemplatePendingDesks を含む・Issue #72 N-9(a)）を漏らさない。disable で外すのはクロージャだけ。
+    const bodyEnd = effect.indexOf('}, [activeTemplatePendingDesks, isTemplateMode, onParentAbsenceRequestProcessed, parentAbsenceRequest, students, weekIndex, weeks])')
     expect(bodyEnd).toBeGreaterThan(0)
     const lines = effect.slice(0, bodyEnd).split(/\r?\n/u)
     const returnsWithoutFinish = lines

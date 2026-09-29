@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
@@ -4472,7 +4472,13 @@ function setScheduleRegistrationTeacherAssignment(desk: DeskCell, teacherName: s
 // これは「室長が意図的に講師を消した」手動編集で、テンプレ再マージ(mergeManagedWeek)がテンプレ講師の
 // 再付与を抑止するための唯一のキー。repack で消すと次の overlay で削除した講師が赤く復活する
 // (回帰防止 2026-07-10 / dev-fix: 「消した講師が更新で戻る」本番不具合。落合/永山 が土曜3-4限に赤で復活)。
-function isDeletedTeacherTombstone(desk: DeskCell) {
+// ★意味の区別（regression-reviewer N-4・2026-09-29）: これは「**空き机としての** tombstone」＝授業の無い机を
+//   詰め直し・講習の講師自動割当・QR 自己修復が「空き机」とみなさないための判定（授業のある机はそもそも空き机でないので !lesson を含む）。
+//   テンプレ差分反映の isTemplateDiffTeacherTombstone（templateDiffApply.ts）は「**講師欄の**削除記録」＝生徒が居る机でも
+//   講師欄を削除のまま保つ判定（講師空∧deleted・manualTeacher を問わない）で、目的が違う。正規の tombstone
+//   （applyDeletedTeacherTombstone / handleDeleteTeacher が作る teacher=''∧manualTeacher=true∧source='deleted'）の授業の無い机では
+//   両者は一致する（templateDiffApply.test.ts で固定）。一方で他方を書くと非正規形（講師名あり∧deleted 等）の机で挙動が変わるので統一しない。
+export function isDeletedTeacherTombstone(desk: DeskCell) {
   return !desk.lesson && Boolean(desk.manualTeacher) && desk.teacherAssignmentSource === 'deleted'
 }
 
@@ -6003,15 +6009,18 @@ export function computePendingDeskResolution(params: {
     if (!collapse.ok) return { status: 'blocked', message: `テンプレを採用できません。${describeTemplatePendingCollapseFailure(collapse.reason)}` }
     const disposal = disposeTemplatePendingLowerStudents({ ...params, students: removed, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber })
     const names = templatePendingStudentNames(removed, params.resolveDisplayName)
+    const nextWeeks = replaceTemplatePendingBoardDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk))
+    // 同日移動の通常授業を捨てたときだけ Q26-1 と同じ判定で希望回数 −1（N-2。それ以外の種別は希望回数を動かさない）。
+    const countAdjustment = applyDiscardedLowerSameDayMoveCountAdjustments(disposal.ledgers.scheduleCountAdjustments, removed, cell.dateKey, nextWeeks)
     return {
       status: 'applied',
-      nextWeeks: replaceTemplatePendingBoardDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk)),
+      nextWeeks,
       nextTemplatePendingDesks: withoutKey(),
-      ledgers: disposal.ledgers,
+      ledgers: { ...disposal.ledgers, scheduleCountAdjustments: countAdjustment.scheduleCountAdjustments },
       collapsed: true,
       returnedCount: disposal.returnedCount,
-      countAdjustedCount: 0,
-      message: `テンプレを採用しました。${names ? `下段の ${names} を外しました。` : ''}${disposal.returnedCount > 0 ? `うち${disposal.returnedCount}件を未消化ストックへ戻しました。` : ''}`,
+      countAdjustedCount: countAdjustment.count,
+      message: `テンプレを採用しました。${names ? `下段の ${names} を外しました。` : ''}${disposal.returnedCount > 0 ? `うち${disposal.returnedCount}件を未消化ストックへ戻しました。` : ''}${countAdjustment.count > 0 ? `${countAdjustment.count}件の希望回数を1減らしました。` : ''}`,
     }
   }
 
@@ -6092,31 +6101,50 @@ export function computePendingDeskResolution(params: {
   const disposal = disposeTemplatePendingLowerStudents({ ...params, students: removedStudents, cellDateKey: cell.dateKey, cellSlotNumber: cell.slotNumber })
   const updatedMap = { ...params.templatePendingDesks, [key]: nextEntry }
   const settled = settleTemplatePendingDesk({ weeks: params.weeks, templatePendingDesks: updatedMap, key })
+  const nextWeeks = settled.status === 'collapsed' ? settled.nextWeeks : params.weeks
+  // 同日移動の通常授業を下段から削除したときだけ Q26-1 と同じ判定で希望回数 −1（N-2）。
+  const countAdjustment = applyDiscardedLowerSameDayMoveCountAdjustments(disposal.ledgers.scheduleCountAdjustments, removedStudents, cell.dateKey, nextWeeks)
+  const ledgers = { ...disposal.ledgers, scheduleCountAdjustments: countAdjustment.scheduleCountAdjustments }
+  const countLabel = countAdjustment.count > 0 ? `${countAdjustment.count}件の希望回数を1減らしました。` : ''
   const removedLabel = params.mode === 'delete-lower-student'
-    ? `下段の ${templatePendingStudentNames(removedStudents, params.resolveDisplayName)} を削除しました。${disposal.returnedCount > 0 ? '未消化ストックへ戻しました。' : ''}`
+    ? `下段の ${templatePendingStudentNames(removedStudents, params.resolveDisplayName)} を削除しました。${disposal.returnedCount > 0 ? '未消化ストックへ戻しました。' : ''}${countLabel}`
     : '下段のメモを削除しました。'
   if (settled.status === 'collapsed') {
     return {
       status: 'applied',
-      nextWeeks: settled.nextWeeks,
+      nextWeeks,
       nextTemplatePendingDesks: settled.nextTemplatePendingDesks,
-      ledgers: disposal.ledgers,
+      ledgers,
       collapsed: true,
       returnedCount: disposal.returnedCount,
-      countAdjustedCount: 0,
+      countAdjustedCount: countAdjustment.count,
       message: `${removedLabel}1 行に戻しました。`,
     }
   }
   return {
     status: 'applied',
-    nextWeeks: params.weeks,
+    nextWeeks,
     nextTemplatePendingDesks: updatedMap,
-    ledgers: disposal.ledgers,
+    ledgers,
     collapsed: false,
     returnedCount: disposal.returnedCount,
-    countAdjustedCount: 0,
+    countAdjustedCount: countAdjustment.count,
     message: settled.status === 'kept' ? `${removedLabel}${describeTemplatePendingCollapseFailure(settled.reason)}` : removedLabel,
   }
+}
+
+// N-2: 下段から捨てた同日移動の通常授業に Q26-1 と同じ希望回数の規則を当てる（判定は resolveDiscardedLowerSameDayMoveCountAdjustments・
+// −1 の積み方は単発削除と同じ resolveDeletedStudentCountAccounting）。placementsAfter は操作後の週データ（保留中の下段は含まない）。
+function applyDiscardedLowerSameDayMoveCountAdjustments(
+  scheduleCountAdjustments: ScheduleCountAdjustmentEntry[],
+  discarded: StudentEntry[],
+  dateKey: string,
+  placementsAfter: SlotCell[][],
+) {
+  const targets = resolveDiscardedLowerSameDayMoveCountAdjustments({ discardedLowerStudents: discarded, dateKey, placementsAfterDiscard: placementsAfter.flat() })
+  let next = scheduleCountAdjustments
+  for (const target of targets) next = resolveDeletedStudentCountAccounting(next, target.student, target.dateKey).nextAdjustments
+  return { scheduleCountAdjustments: next, count: targets.length }
 }
 
 export type ComputePendingLowerStudentMoveResult =
@@ -13229,8 +13257,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     finish(true, '')
     // markStudentAbsentAt などは毎レンダー作り直されるクロージャ。deps に入れると毎レンダー再実行になるだけで、
     // 二重処理は processedParentAbsenceRequestIdRef と App 側の消費で防いでいる(teacherAutoAssignRequest と同じ作法)。
+    // 値の deps(activeTemplatePendingDesks を含む)は漏らさない(regression-reviewer N-9(a)・Issue #72)。保留マップが変わって再実行されても
+    // 処理済みの requestId は上の shouldProcessParentAbsenceRequest で弾かれるので無限ループにならない。
+    // 下の disable が外しているのは上記のクロージャ(markStudentAbsentAt / markStudentAbsentNoMakeupAt / jumpToWeekByDate)だけ。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTemplateMode, onParentAbsenceRequestProcessed, parentAbsenceRequest, students, weekIndex, weeks])
+  }, [activeTemplatePendingDesks, isTemplateMode, onParentAbsenceRequestProcessed, parentAbsenceRequest, students, weekIndex, weeks])
 
   // --- 退塾スイープ(退塾した生徒の今日以降の痕跡消し・オーナー確定 2026-09-20 夜・確認リスト b-2/b-3) -------
   // 「退塾ボタンが命令を出す」方式をやめ、**盤面が『退塾日を過ぎているのに消去開始日以降に痕跡が残る生徒』を

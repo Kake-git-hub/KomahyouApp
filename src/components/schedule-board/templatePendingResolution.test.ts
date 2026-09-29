@@ -373,6 +373,54 @@ describe('テンプレを採用（条件 12）', () => {
   })
 })
 
+// N-2（主セッション決定 2026-09-29・Q26-1 の拡張）: 下段の同日移動の通常授業を捨てたときも、同じ日の実配置に同じ生徒×科目が残らなければ −1。
+describe('下段の同日移動の通常授業を捨てたときの希望回数（N-2）', () => {
+  // 机0 の下段に D の同日移動（4 限から 5 限へ・4 限の D は抑止済み）。新テンプレの机0 は C → 保留。
+  function sameDayMoveLower(extraRows: RegularLessonRow[] = [], lowerOverrides: Partial<StudentEntry> = {}) {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_daymove`, studentSlots: [entry('sD', { sameDayMoveSourceDate: DATE, sameDayMoveSourceLabel: '10/7(水) 4限', ...lowerOverrides }), null] } }))
+    const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3'), ...extraRows]
+    const diff = applyDiff(week, newRows, [buildManagedOccurrenceKey(entry('sD'), DATE, 4)])
+    const deskId = deskOf(diff.nextWeeks, 0).id
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskId)
+    expect(diff.nextPendingDesks[key]?.lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sD')
+    return { before: [week], diff, newRows, deskId, key }
+  }
+  const minusD = [{ studentKey: 'sD', subject: '数', countKind: 'regular', dateKey: DATE, delta: -1 }]
+
+  it.each(['adopt-template', 'delete-lower-student'] as const)('%s: 同じ日に D が残らなければ希望回数 −1（単発削除と同じ）', (mode) => {
+    const setup = sameDayMoveLower()
+    const result = resolve(mode, setup, { lowerIndex: 0 })
+    if (result.status !== 'applied') throw new Error(result.message)
+    expect(result.countAdjustedCount).toBe(1)
+    expect(result.ledgers.scheduleCountAdjustments).toEqual(minusD)
+    expect(result.message).toContain('1件の希望回数を1減らしました')
+  })
+
+  it.each(['adopt-template', 'delete-lower-student'] as const)('%s: 同じ日の別の時限に D が生きていれば補正しない', (mode) => {
+    const setup = sameDayMoveLower([row('r9', 't3', 'sD', '数', '', '', 3, 3)])
+    expect(cellOf(setup.diff.nextWeeks, `${DATE}_3`).desks.flatMap(liveIds)).toContain('sD')
+    const result = resolve(mode, setup, { lowerIndex: 0 })
+    if (result.status !== 'applied') throw new Error(result.message)
+    expect(result.countAdjustedCount).toBe(0)
+    expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+  })
+
+  it('旧テンプレ由来の通常授業（同日移動でない）・手動追加の同日移動は対象外（従来どおり希望回数を動かさない）', () => {
+    // 印のある机（メモ）に旧テンプレの B（印なし通常）が残った下段の形を直接作る
+    const setup = sameDayMoveLower()
+    const plainRegular = { ...setup.diff.nextPendingDesks, [setup.key]: { ...setup.diff.nextPendingDesks[setup.key], lower: { lesson: { id: 'old', studentSlots: [entry('sD'), null] as [StudentEntry | null, StudentEntry | null] } } } }
+    const plain = resolve('adopt-template', setup, { pending: plainRegular })
+    if (plain.status !== 'applied') throw new Error(plain.message)
+    expect(plain.ledgers.scheduleCountAdjustments).toEqual([])
+    const manual = sameDayMoveLower([], { manualAdded: true })
+    const manualResult = resolve('adopt-template', manual)
+    if (manualResult.status !== 'applied') throw new Error(manualResult.message)
+    expect(manualResult.ledgers.scheduleCountAdjustments).toEqual([])
+    expect(manualResult.countAdjustedCount).toBe(0)
+  })
+})
+
 describe('既存を採用（条件 13・14・19）', () => {
   it('上段を取り下げて下段を机へ戻す。講師は変わらず、振替在庫は増えず、抑止キーで再マージ 2 回でも上段が湧かない', () => {
     const setup = pendingWithMakeupLower()
@@ -544,5 +592,33 @@ describe('上段の操作の後に 1 行へ戻る（条件 15・Q28）', () => {
     })
     expect(stuck.newlyStuck).toEqual([{ key: setup.key, reason: 'memo-overflow' }])
     expect(stuck.nextTemplatePendingDesks).toBe(setup.diff.nextPendingDesks)
+  })
+
+  it('N-9(b): 確定で触られていないコマの保留は見ない（無関係な操作の Undo 1 段に別の机の 1 行戻しを同乗させない）', () => {
+    const setup = pendingWithMakeupLower()
+    // 確定の外（再マージ・同期など）で上段が空いた保留の机がある盤面
+    const upperEmptied = [mutateDesk(setup.diff.nextWeeks[0], 0, (desk) => ({ ...desk, lesson: undefined }))]
+    // 無関係なコマ（木曜 5 限）だけを変える確定 → この保留は触らない（同じ参照）
+    const thursday = `2026-10-08_${SLOT}`
+    const unrelated = [mutateDesk(upperEmptied[0], 1, (desk) => ({ ...desk, memoSlots: ['連絡', null] }), thursday)]
+    const untouched = settleTemplatePendingDesksAfterCommit({
+      previousWeeks: upperEmptied,
+      previousTemplatePendingDesks: setup.diff.nextPendingDesks,
+      weeks: unrelated,
+      templatePendingDesks: setup.diff.nextPendingDesks,
+    })
+    expect(untouched.collapsedKeys).toEqual([])
+    expect(untouched.nextWeeks).toBe(unrelated)
+    expect(untouched.nextTemplatePendingDesks).toBe(setup.diff.nextPendingDesks)
+    // 同じコマの別の机を変える確定なら見る（Q26-4 の一意性検査が同じコマの別の机を見るため）→ 1 行へ戻る
+    const sameCell = [mutateDesk(upperEmptied[0], 2, (desk) => ({ ...desk, memoSlots: ['連絡', null] }))]
+    const touched = settleTemplatePendingDesksAfterCommit({
+      previousWeeks: upperEmptied,
+      previousTemplatePendingDesks: setup.diff.nextPendingDesks,
+      weeks: sameCell,
+      templatePendingDesks: setup.diff.nextPendingDesks,
+    })
+    expect(touched.collapsedKeys).toEqual([setup.key])
+    expect(liveIds(deskOf(touched.nextWeeks, 0))).toEqual(['sM'])
   })
 })

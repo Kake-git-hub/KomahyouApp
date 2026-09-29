@@ -6,6 +6,7 @@ import { getStudentDisplayName, type StudentRow } from '../src/components/basic-
 import { buildVanishedMakeupReport, type VanishedMakeupReport } from '../src/components/schedule-board/vanishedMakeupReport'
 import type { StudentEntry } from '../src/components/schedule-board/types'
 import type { AppSnapshot } from '../src/types/appState'
+import { normalizeTemplatePendingDeskMap } from '../src/components/schedule-board/templatePendingDesks'
 
 export function buildReportFromSnapshot(snapshot: AppSnapshot, options: { today?: Date } = {}): VanishedMakeupReport {
   const boardState = snapshot.boardState
@@ -44,5 +45,7 @@ export function buildReportFromSnapshot(snapshot: AppSnapshot, options: { today?
     fallbackStudents: boardState.fallbackMakeupStudents ?? {},
     resolveStudentKey,
     today: options.today,
+    // 盤面と同じく保留（2 行）の下段を在庫の走査に含める（Issue #72・N-5。保留の無い教室では {} で従来どおり）。
+    templatePendingDesks: normalizeTemplatePendingDeskMap(boardState.templatePendingDesks),
   })
 }

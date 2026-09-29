@@ -55,6 +55,10 @@ export function isAccountingStatus(status: StudentStatusKind) {
 }
 
 // 講師の削除記録（tombstone: teacher='' かつ teacherAssignmentSource='deleted'。講習 ID つきも同じ）。Q21-9 例外 2・Q22。
+// ★意味の区別（regression-reviewer N-4）: これは「**講師欄の**削除記録」＝机に生徒が居ても講師欄を削除のまま保ち、印に数える判定。
+//   ScheduleBoardScreen の isDeletedTeacherTombstone（授業なし∧manualTeacher∧deleted）は「**空き机としての** tombstone」＝
+//   詰め直し・講習の講師自動割当が空き机とみなさないための判定で、目的が違う。正規の tombstone の授業の無い机では両者が一致する
+//   （templateDiffApply.test.ts で固定）。片方で他方を書くと非正規形の机で挙動が変わるので統一しない。
 export function isTemplateDiffTeacherTombstone(desk: Pick<DeskCell, 'teacher' | 'teacherAssignmentSource'>) {
   return !desk.teacher.trim() && desk.teacherAssignmentSource === 'deleted'
 }
@@ -374,6 +378,27 @@ export function resolveAdoptExistingCountAdjustments(params: {
   return params.withdrawnTemplateStudents
     .filter((student) => !livingOnDate.some((living) => living.subject === student.subject && isSameTemplateStudent(living, student)))
     .map((student) => ({ student, dateKey: params.dateKey }))
+}
+
+/**
+ * 下段から捨てる**同日移動の通常授業**（lessonType='regular' かつ sameDayMoveSourceDate）の希望回数（主セッション決定 2026-09-29・
+ * Q26-1 の拡張・regression-reviewer N-2）。「テンプレを採用」「下段の削除」で捨てたとき、Q26-1 と同じ判定を当てる：
+ * 操作の後の同じ日の実配置（保留中の下段は含まない＝INV-13）に同じ生徒×科目の授業が生きていなければ削除と同じ −1、生きていれば補正しない。
+ * 同日移動の通常授業は元の時限の通常授業が抑止済みで、上段のテンプレの通常授業は別の生徒のことが多い。捨てたのに回数を据え置くと
+ * 予定＝実績が崩れる。旧テンプレ由来の通常授業（同日移動でない）・振替・講習は従来どおり対象外（Q26-1「テンプレを採用」）。
+ * 判定は resolveAdoptExistingCountAdjustments と同じ関数（別の規則を書かない）。
+ */
+export function resolveDiscardedLowerSameDayMoveCountAdjustments(params: {
+  discardedLowerStudents: readonly StudentEntry[]
+  dateKey: string
+  placementsAfterDiscard: readonly SlotCell[]
+}): Array<{ student: StudentEntry; dateKey: string }> {
+  return resolveAdoptExistingCountAdjustments({
+    // 手動追加は希望回数に数えていない（appendDeletedStudentScheduleCountAdjustment も飛ばす）ので対象外＝件数表示と台帳を食い違わせない。
+    withdrawnTemplateStudents: params.discardedLowerStudents.filter((student) => student.lessonType === 'regular' && Boolean(student.sameDayMoveSourceDate) && !student.manualAdded),
+    dateKey: params.dateKey,
+    placementsAfterAdoption: params.placementsAfterDiscard,
+  })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ import {
   buildTemplateDiffTemplateCells,
   buildTemplateTeacherSuppressionKey,
   computeTemplateDiffApplyForBoard,
+  isDeletedTeacherTombstone,
   remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
 import {
@@ -29,6 +30,7 @@ import {
   buildTemplateOccurrenceKey,
   computePendingDeskCollapse,
   isTemplateDeskStudentContentEqual,
+  isTemplateDiffTeacherTombstone,
   isTemplateManagedLesson,
   resolveAdoptExistingCountAdjustments,
   resolveDeskManualInputMark,
@@ -408,6 +410,25 @@ describe('parity: 抑止キー・管理授業の判定', () => {
   it('buildTemplateOccurrenceKey は buildManagedOccurrenceKey と同じ鍵を作る', () => {
     for (const student of [entry('sA'), entry('sB', { managedStudentId: undefined }), entry('sC', { subject: '英' })]) {
       expect(buildTemplateOccurrenceKey(student, DATE, SLOT)).toBe(buildManagedOccurrenceKey(student, DATE, SLOT))
+    }
+  })
+
+  it('N-4: 講師の削除記録の 2 判定は、正規の tombstone の授業の無い机で一致し、目的の違う形でだけ分かれる', () => {
+    // 正規の tombstone（applyDeletedTeacherTombstone / handleDeleteTeacher が作る形。講習 ID つきを含む）
+    const canonical: DeskCell = { id: 'd', teacher: '', manualTeacher: true, teacherAssignmentSource: 'deleted', teacherAssignmentTeacherId: '田中' }
+    const canonicalWithSession: DeskCell = { ...canonical, teacherAssignmentSessionId: 'session-1' }
+    for (const desk of [canonical, canonicalWithSession]) {
+      expect(isDeletedTeacherTombstone(desk)).toBe(true)
+      expect(isTemplateDiffTeacherTombstone(desk)).toBe(true)
+    }
+    // 生徒が居る机: 空き机ではない（前者 false）が、講師欄の削除記録ではある（後者 true＝講師を戻さない・印）
+    const withStudent: DeskCell = { ...canonical, lesson: { id: 'l', studentSlots: [entry('sA'), null] } }
+    expect(isDeletedTeacherTombstone(withStudent)).toBe(false)
+    expect(isTemplateDiffTeacherTombstone(withStudent)).toBe(true)
+    // 削除記録でない机はどちらも false
+    for (const desk of [{ id: 'd', teacher: '' }, { id: 'd', teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'manual' as const }] as DeskCell[]) {
+      expect(isDeletedTeacherTombstone(desk)).toBe(false)
+      expect(isTemplateDiffTeacherTombstone(desk)).toBe(false)
     }
   })
 

@@ -62,7 +62,7 @@ describe('確認リストの項目定義', () => {
 
   it('第34版(v1.5.572): 第32版の結果待ち(q-1〜q-6・a-4)と第33版の tp-1〜tp-6 を残し、テンプレ差分反映 (A)(C) の tp-7〜tp-15 を足した', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4', 'tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6', 'tp-7', 'tp-8', 'tp-9', 'tp-10', 'tp-11', 'tp-12', 'tp-13', 'tp-14', 'tp-15'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'a-4', 'tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6', 'tp-7', 'tp-8', 'tp-9', 'tp-10', 'tp-11', 'tp-12', 'tp-13', 'tp-14', 'tp-15', 'tp-16'])
     // 第31版の結果(2026-09-28・受付 20260928-103642968-d4c32a94)で OK。
     for (const okId of ['t-2', 't-3', 'd-1', 'd-2', 'd-3', 'd-4', 'a-1', 'a-2', 'a-3']) expect(ids, okId).not.toContain(okId)
     for (const okId of ['b-2', 'b-3', 'c-2', 't-1', 's-4']) expect(ids, okId).not.toContain(okId)
@@ -98,6 +98,10 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-14')!.check!.join(' / ')).toContain('未消化振替の件数は控えから増えない')
     expect(byId.get('tp-15')!.check!.join(' / ')).toContain('自動では処理しませんでした')
     expect(byId.get('tp-4')!.check!.join(' / ')).toContain('出席不可と提出されたコマ')
+    // 第34版に追加(2026-09-29・版は据え置き): 監査指摘 N-2＝下段の同日移動の通常授業を捨てたときの希望回数。
+    expect(byId.get('tp-16')!.introducedIn).toBe('v1.5.572')
+    expect(byId.get('tp-16')!.area).toBe('盤面(テンプレ保留)')
+    expect(byId.get('tp-16')!.check!.join(' / ')).toContain('1件の希望回数を1減らしました')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。
