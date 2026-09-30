@@ -35,6 +35,7 @@ import {
   resolveAdoptExistingCountAdjustments,
   resolveDeskManualInputMark,
   resolveTemplateDeskTeacher,
+  shouldSeatSurviveRemerge,
 } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
@@ -823,6 +824,37 @@ describe('席ごとの突き合わせ（2026-09-30）', () => {
     expect(desk0.statusSlots?.filter(Boolean).map((item) => item!.status)).toEqual(['absent'])
     expect(desk0.statusSlots?.[0]).toBeNull()
     expect(result.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0.id)].lower.lesson?.studentSlots[1]?.managedStudentId).toBe('sM')
+  })
+
+  it('L-1: 全員採用で 1 行にできても、会計を持つ記録が席に入らなければ 1 行にせず記録を下段へ（上段の生徒の下に隠さない）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_hand`, studentSlots: [null, entry('sD', { manualAdded: true })] }, statusSlots: [status('sA', 'absent'), null] }))
+    const result = applyDiff({ week, newRows: [row('r0', 't2', 'sC', '数', 'sD', '数'), row('r1', 't1', 'sB', '数')], suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)] })
+    const desk0 = deskOf(result.nextWeeks, 0)
+    expect(liveNames(desk0)).toEqual(['sC', 'sD'])
+    expect((desk0.statusSlots ?? []).filter(Boolean)).toEqual([])
+    expect(result.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0.id)].lower.statusSlots?.filter(Boolean).map((item) => [item!.managedStudentId, item!.status])).toEqual([['sA', 'absent']])
+  })
+
+  it('L-2 parity: shouldSeatSurviveRemerge は「管理授業の空いた席に置いて再マージしたら残るか」と一致する', () => {
+    const cases: Array<[string, StudentEntry]> = [
+      ['振替', entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })],
+      ['講習', entry('sM', { lessonType: 'special', specialSessionId: 'ss1' })],
+      ['体験', entry('sM', { lessonType: 'trial' })],
+      ['増コマ', entry('sM', { lessonType: 'extra' })],
+      ['手動追加の通常', entry('sM', { manualAdded: true })],
+      ['同日移動の通常', entry('sM', { sameDayMoveSourceDate: DATE })],
+      ['元の日付へ戻した通常', entry('sM', { makeupSourceDate: DATE })],
+      ['別日移動の通常', entry('sM', { makeupSourceDate: '2026-09-30' })],
+      ['印のない通常', entry('sM')],
+    ]
+    for (const [label, student] of cases) {
+      const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], student] } }))
+      const once = remerge([week], OLD_ROWS, [], settings())
+      const survived = liveNames(deskOf(once, 0)).includes('sM')
+      expect(survived, label).toBe(shouldSeatSurviveRemerge(student, DATE))
+    }
+    // 日付が無いときは、印のない・手動追加でない通常授業はすべて落ちる側（保守的）
+    expect(shouldSeatSurviveRemerge(entry('sM', { sameDayMoveSourceDate: DATE }))).toBe(false)
   })
 
   it('Q29 再保存: 生徒 2 だけ保留の机で、新しいテンプレの生徒 2 が空になれば自動で 1 行 [A, M] に戻る', () => {

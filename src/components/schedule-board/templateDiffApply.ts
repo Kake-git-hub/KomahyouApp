@@ -297,12 +297,25 @@ function pickSeat(occupancy: SeatOccupancy, preferredIndex: number) {
  * 管理授業（テンプレの授業・id=`managed_…`）の席に置いた生徒が、再マージ（mergeManagedDeskLesson）で落ちずに残るか。
  * 通常授業（印なし・元の日付へ戻したもの以外）は「管理データが配置を決める」ので落ちる＝管理授業に同居させない。
  * mergeManagedDeskLesson の保持条件（lessonType !== 'regular' || manualAdded || isReturnedToOriginalDate）と同じ判定。
- * dateKey が無いときは、元の日付へ戻したかを判定できないので、振替元日つきの通常授業は落ちる側に倒す（保守的）。
+ * dateKey が無いときは、元の日付へ戻したかを判定できないので、印なし・手動追加でない通常授業はすべて落ちる側に倒す（保守的）。
+ * ★同じ条件の写しが ScheduleBoardScreen の mergeManagedDeskLesson／mergeManagedWeek（carryover・fallback）にある。
+ *   templateDiffApply.test.ts の parity テストで「管理授業の空いた席に置いて再マージした結果」と突き合わせて固定している。
  */
 export function shouldSeatSurviveRemerge(student: StudentEntry, dateKey?: string) {
   if (student.lessonType !== 'regular' || student.manualAdded) return true
-  if (!dateKey) return Boolean(student.sameDayMoveSourceDate)
+  if (!dateKey) return false
   return student.makeupSourceDate === dateKey || student.sameDayMoveSourceDate === dateKey
+}
+
+/**
+ * テンプレの生徒（印なし）がいなくなった管理授業を、机固有の授業へ付け替える（冒頭 ★ の「残す机」と同じ約束）。
+ * 「既存を採用」で上段のテンプレ生徒を取り下げ、残した既存の生徒（印あり）だけが残るときに使う（regression-reviewer M-1／L-3・2026-09-30）。
+ * 管理授業の id のまま残すと、後で同じ行 id の管理授業が戻ったとき mergeManagedDeskLesson の上書きで生徒が落ちる余地がある。
+ */
+export function detachTemplateLessonWithoutTemplateStudents(lesson: DeskLesson | undefined, deskId: string): DeskLesson | undefined {
+  if (!lesson || !isTemplateManagedLesson(lesson)) return lesson
+  if (liveStudents(lesson).some((student) => !studentHasManualMark(student))) return lesson
+  return detachManagedLessonIdentity(lesson, deskId)
 }
 
 /** 生徒の印（Q22 生徒単位）があるか。「既存を採用」で取り下げるテンプレの生徒（印なし）を見分けるのに使う。 */
@@ -831,7 +844,10 @@ function applyTemplateDiffToCell(context: {
   let decisions = cell.desks.map((desk, index) => classify(desk, index, templateDesks[index]))
   const skippedByDesk = cell.desks.map(() => [] as StudentEntry[])
   // ── 2. Q21-11：同じコマの別の 1 行の机に生きている生徒は上段に置かない（振り分けが安定するまで繰り返す）。
-  for (let iteration = 0; iteration <= cell.desks.length; iteration += 1) {
+  // テンプレ側の生徒は反復ごとに減るだけ（単調）なので、テンプレの生徒数＋1 回で必ず収束する（席ごとの突き合わせで「残した既存の生徒」が
+  // テンプレの中身に依存するようになったため、机の数では足りない連鎖がありうる・regression-reviewer L-4）。
+  const iterationLimit = appliedTemplateDesks.reduce((sum, desk) => sum + liveStudents(desk.lesson).length, 0) + 1
+  for (let iteration = 0; iteration <= iterationLimit; iteration += 1) {
     const livingByDesk = cell.desks.map((desk, index) => oneRowNonTemplateLiveStudents(desk, decisions[index], templateDesks[index]))
     let changed = false
     const nextTemplateDesks = templateDesks.map((templateDesk, index) => {
@@ -912,12 +928,17 @@ function applyTemplateDiffToCell(context: {
           ],
           keptMemo: collectMemoItems(desk.memoSlots),
         })
-        for (const item of seated.overflowStatus) placeIntoPair(seated.statusSlots, item.index, cloneStatusEntry(item.entry))
-        for (const item of seated.overflowMemo) placeIntoPair(seated.memoSlots, item.index, item.memo)
-        if (filledDeletedTeacherDeskBySeat) summary.deletedTeacherDeskFilled += 1
-        if (plan.kept.length > 0) summary.seatMerged += 1
-        else summary.adopted += 1
-        return withSlots(withTeacher, mergedLesson, seated.statusSlots, seated.memoSlots)
+        // 会計を持つ記録が席に入らないときは 1 行にしない（上段の生徒の下に隠すと、その生徒を休みにしたとき上書きされうる＝INV-06・
+        // regression-reviewer L-1）。下の保留の経路へ回し、あふれた記録は従来どおり下段へ入れる（Q21-10）。
+        const accountingOverflow = seated.overflowStatus.some((item) => isAccountingStatus(item.entry.status))
+        if (!accountingOverflow) {
+          for (const item of seated.overflowStatus) placeIntoPair(seated.statusSlots, item.index, cloneStatusEntry(item.entry))
+          for (const item of seated.overflowMemo) placeIntoPair(seated.memoSlots, item.index, item.memo)
+          if (filledDeletedTeacherDeskBySeat) summary.deletedTeacherDeskFilled += 1
+          if (plan.kept.length > 0) summary.seatMerged += 1
+          else summary.adopted += 1
+          return withSlots(withTeacher, mergedLesson, seated.statusSlots, seated.memoSlots)
+        }
       }
       const pendingUpperLesson = plan && !plan.overflow && upperLesson ? { ...upperLesson, studentSlots: plan.upperSlots } : upperLesson
       // 上段＝テンプレ（＋空いた席に残した既存の生徒）、会計を持つ記録は机に残す（席不足分だけ下段へ）、

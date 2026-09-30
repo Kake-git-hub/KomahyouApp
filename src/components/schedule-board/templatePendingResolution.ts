@@ -205,7 +205,7 @@ export function describeTemplatePendingCollapseFailure(reason: Extract<TemplateP
     case 'duplicate-student':
       return '同じコマに同じ生徒が 2 か所で生きることになるため 1 行に戻せません。先に上段側を片づけてください。'
     case 'both-rows-live':
-      return '上段と下段の両方に生徒がいるため 1 行に戻せません。'
+      return '下段の生徒を戻す席（元の席）が空いていないため 1 行に戻せません。上段の生徒を削除・移動するか、「テンプレを採用」で片づけてください。'
   }
 }
 
@@ -228,8 +228,9 @@ export type TemplatePendingSettleResult =
 /**
  * 1 つの保留の机に Q28 を当てる：上段か下段のどちらかに生きている生徒がいなければ computePendingDeskCollapse で 1 行へ戻す。
  * 成功なら机を差し替えて保留マップからキーを消す（入力は変えない）。失敗なら 2 行のまま理由を返す。
- * 両方の行が生きていても、下段の生徒が机の空いた席へ全員入るなら 1 行へ戻す（席ごと・2026-09-30。上段の生徒を休み・移動・削除して
- * その席が空いたとき）。入らなければ何もしない（'unchanged'・利用者へは知らせない）。
+ * 両方の行が生きていても、下段の生徒が全員元の席へ入るなら 1 行へ戻す（席ごと・2026-09-30。上段の生徒を削除して、または記録を残さずに
+ * 動かしてその席が空いたとき。休み・振無休・別日への移動はその席に出欠記録〔absent / moved 等〕が残るので戻らない）。
+ * 入らなければ何もしない（'unchanged'・利用者へは知らせない）。
  * 盤面に机が無い（孤児）キーは触らない（Q24-5）。
  */
 export function settleTemplatePendingDesk(params: {

@@ -205,7 +205,7 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
   }
 
   // 机0 に在庫由来の講習 M（台帳 -1 で消化済み）と手動追加の講習 D（台帳 -1）。新テンプレは机0 に C → 保留（下段に M・D）。
-  function pendingLectureBoard() {
+  function pendingLectureBoard(options: { templateFillsBothSeats?: boolean } = {}) {
     let week: SlotCell[] = buildManagedScheduleCellsForRange({
       range: { startDate: '2026-10-05', endDate: '2026-10-11', periodValue: '', personId: '' },
       fallbackStartDate: '2026-10-05',
@@ -221,7 +221,9 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
       desks: cell.desks.map((desk, index): DeskCell => (index === 0 ? { ...desk, lesson: { id: 'lectures', studentSlots: [lecture('sM'), lecture('sD')] } } : desk)),
     }))
     // テンプレは机0 の生徒 1・生徒 2 の両方を埋める（席ごとの突き合わせ〔2026-09-30〕で 2 つの講習がどちらも席でぶつかって下段へ入る形）。
-    const newRows = [rowOf('r0', 't2', 'sC', 'sA'), rowOf('r1', 't1', '')]
+    const newRows = options.templateFillsBothSeats === false
+      ? [rowOf('r0', 't2', 'sC'), rowOf('r1', 't1', '')]
+      : [rowOf('r0', 't2', 'sC', 'sA'), rowOf('r1', 't1', '')]
     const diff = computeTemplateDiffApplyForBoard({
       weeks: [week],
       classroomSettings: settingsOf({ templateFreezeBeforeDate: DATE }),
@@ -285,5 +287,33 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     expect(lectureBalances(result.ledgers)).toEqual({ sM: 2 })
     // 希望回数は動かさない（テンプレを採用は下段を捨てるだけ・Q26-1）。
     expect(result.ledgers.scheduleCountAdjustments).toEqual([])
+  })
+
+  // 席ごとの突き合わせ（2026-09-30・Q34）: テンプレが生徒 1 の席だけのとき、生徒 2 の講習 D は 1 行に残り、ぶつかった生徒 1 の講習 M だけが下段へ入る。
+  it('席ごと（テンプレは生徒 1 だけ）: 講習 D は上段に残り M だけ下段。保存は台帳を触らず、テンプレを採用は下段の在庫由来の M だけ戻す（D は上段のまま）', () => {
+    const { diff, deskId, key } = pendingLectureBoard({ templateFillsBothSeats: false })
+    expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots.map((item) => item?.id ?? null)).toEqual(['lec_sM', null])
+    const upper = () => diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0]
+    expect(upper().lesson?.studentSlots.map((item) => item?.managedStudentId ?? null)).toEqual(['sC', 'sD'])
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary'])
+    expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })
+    const result = computePendingDeskResolution({
+      mode: 'adopt-template',
+      weeks: diff.nextWeeks,
+      cellId: CELL_ID,
+      deskId,
+      templatePendingDesks: diff.nextPendingDesks,
+      ledgers: PLACED_LEDGERS,
+      managedStudentByAnyName: new Map(diffStudents.map((item) => [item.name, item])),
+      resolveDisplayName: (name: string) => name,
+      resolveStockId: (item: StudentEntry) => item.managedStudentId ?? item.name,
+      ledgerOriginDatesByKey: {},
+    })
+    if (result.status !== 'applied') throw new Error(result.message)
+    expect(result.returnedCount).toBe(1)
+    expect(result.ledgers.manualLectureStockCounts[SESSION_KEY]).toBe(0)
+    expect(result.ledgers.manualLectureStockCounts[MANUAL_KEY]).toBe(0)
+    expect(lectureBalances(result.ledgers)).toEqual({ sM: 2 })
+    expect(result.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0].lesson?.studentSlots.map((item) => item?.id ?? null)).toEqual([expect.any(String), 'lec_sD'])
   })
 })

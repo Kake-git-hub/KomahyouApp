@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
@@ -5974,6 +5974,34 @@ export function disposeTemplatePendingLowerStudents(params: {
 }
 
 /**
+ * 「既存を採用」で取り下げる上段の生徒と、取り下げた後の合流結果（席ごと・2026-09-30・spec-template-behavior Q34-8）。純関数。
+ * 解決本体（computePendingDeskResolution）と確認文（取り下げる生徒の名前）が同じ関数を使う（Q32-1：表示と結果を食い違わせない・regression-reviewer M-2）。
+ *  1. 下段の生徒の元の席のテンプレ生徒と、下段と同じ生徒のテンプレ生徒だけ取り下げる（resolveAdoptExistingWithdrawSeats）。
+ *  2. 合流できなければ（席・出欠記録・メモの枠が足りない等。同じ生徒の二重生存〔duplicate-student〕は除く）、旧来どおり上段のテンプレ生徒を全部取り下げて
+ *     やり直す（regression-reviewer H-1：v1.5.572 で通っていた「メモ・記録のある机」を止めない）。
+ *  3. 取り下げた後の上段にテンプレ生徒（印なし）が残らなければ、管理授業を机固有の授業へ付け替えてから合流する（M-1／L-3。管理授業に同居できない
+ *     下段の生徒〔別日移動の通常授業〕も戻せ、後で同じ行 id の管理授業が戻っても上書きで落ちない）。
+ */
+export function planTemplatePendingAdoptExisting(params: { cell: SlotCell; desk: DeskCell; entry: TemplatePendingDesk }) {
+  const { cell, desk, entry } = params
+  const liveStudentsElsewhere = collectLiveStudentsElsewhereInCell(cell, desk.id)
+  const withdrawUpper = (seats: number[]) => {
+    const withdrawnStudents = seats.map((seat) => desk.lesson?.studentSlots[seat] ?? null).filter((student): student is StudentEntry => Boolean(student))
+    const remaining = (desk.lesson?.studentSlots ?? [null, null]).map((student, seat) => (seats.includes(seat) ? null : student)) as [StudentEntry | null, StudentEntry | null]
+    const nextUpper: DeskCell = { ...desk }
+    if (desk.lesson && (remaining[0] || remaining[1])) nextUpper.lesson = detachTemplateLessonWithoutTemplateStudents({ ...desk.lesson, studentSlots: remaining }, desk.id)
+    else delete nextUpper.lesson
+    return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey }) }
+  }
+  const first = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower))
+  if (first.collapse.ok || first.collapse.reason === 'duplicate-student') return first
+  const allSeats = resolveAdoptExistingWithdrawSeats(desk, entry.lower, { all: true })
+  const firstSeats = resolveAdoptExistingWithdrawSeats(desk, entry.lower)
+  if (allSeats.length === firstSeats.length) return first
+  return withdrawUpper(allSeats)
+}
+
+/**
  * 保留の机の解決（Q26-1「テンプレを採用」「既存を採用」・Q26-3 下段の削除・Q28 の合流）。純関数。
  *  - adopt-template … 下段の生きている生徒を捨てて 1 行へ。合流できなければ（出欠枠超過）実行しない。
  *  - adopt-existing … 上段を取り下げて下段を机へ戻す。同じコマに同じ生徒が 2 か所で生きるなら実行しない（Q26-4・INV-12）。
@@ -6029,16 +6057,7 @@ export function computePendingDeskResolution(params: {
     // 席ごと（オーナー指示 2026-09-30）: 取り下げるのは、下段の生徒の席にいるテンプレの生徒と下段と同じ生徒のテンプレの生徒だけ。
     // 空いた席に残した既存の生徒・下段と関係のない席のテンプレの生徒はそのまま（resolveAdoptExistingWithdrawSeats）。
     // 席ごとに戻せない（旧形式の保留で、下段の通常授業がテンプレの授業に同居できない等）ときは、旧来どおり上段のテンプレの生徒を全部取り下げる。
-    const withdrawUpper = (seats: number[]) => {
-      const withdrawnStudents = seats.map((seat) => desk.lesson?.studentSlots[seat] ?? null).filter((student): student is StudentEntry => Boolean(student))
-      const remaining = (desk.lesson?.studentSlots ?? [null, null]).map((student, seat) => (seats.includes(seat) ? null : student)) as [StudentEntry | null, StudentEntry | null]
-      const nextUpper: DeskCell = { ...desk }
-      if (desk.lesson && (remaining[0] || remaining[1])) nextUpper.lesson = { ...desk.lesson, studentSlots: remaining }
-      else delete nextUpper.lesson
-      return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey }) }
-    }
-    let attempt = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower))
-    if (!attempt.collapse.ok && attempt.collapse.reason === 'both-rows-live') attempt = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower, { all: true }))
+    const attempt = planTemplatePendingAdoptExisting({ cell, desk, entry })
     const collapse = attempt.collapse
     if (!collapse.ok) return { status: 'blocked', message: `既存を採用できません。${describeTemplatePendingCollapseFailure(collapse.reason)}` }
     const withdrawn = attempt.withdrawnStudents
@@ -11759,7 +11778,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return `テンプレを採用します。\n${lowerNames ? `下段（既存）の ${lowerNames} を削除します（振替・講習は未消化ストックへ戻し、手動追加は戻しません。通常授業の希望回数は変わりません）。\n` : ''}よろしいですか。`
     }
     if (mode === 'adopt-existing') {
-      const upperNames = names(context.desk.lesson?.studentSlots)
+      // 取り下げる生徒は解決本体と同じ関数で決める（上段に残した既存の生徒・関係のない席のテンプレ生徒は出さない・regression-reviewer M-2）。
+      const upperNames = names(planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry }).withdrawnStudents)
       return `既存を採用します。\n${upperNames ? `上段（テンプレ）の ${upperNames} を取り下げ、下段を机へ戻します（同じ日に同じ科目の授業が残らない生徒は希望回数を1減らします）。\n` : '下段を机へ戻します。\n'}よろしいですか。`
     }
     if (mode === 'delete-lower-memo') return '下段のメモを削除します。よろしいですか。'
@@ -14343,7 +14363,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               <div className="student-menu-meta">
                 {`${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目`}
               </div>
-              <div className="template-pending-desk-menu-row-label">上段（テンプレ・実配置）</div>
+              <div className="template-pending-desk-menu-row-label">上段（実配置：テンプレ＋空いた席に残した既存）</div>
               <div className="template-pending-desk-menu-items">
                 {(templatePendingDeskMenuContext.desk.lesson?.studentSlots ?? []).filter(Boolean).length === 0
                   ? <span className="student-menu-help-text">生徒なし</span>
@@ -14957,7 +14977,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 // spec-template-behavior Q26-2・Q27（第 1 段 (B)・フラグ ON の教室だけ）: 保留（2 行）の机の上段は
                 // 休み・振無休・移動・削除だけ（出席は付けない）。操作の後に上段が空けば commitWeeks が 1 行へ戻す（Q28）。
                 <div className="student-menu-section" data-testid="template-pending-upper-menu">
-                  <div className="student-menu-help-text">保留（2 行・緑）の机の上段（テンプレ）です。出席は保留を片づけてから付けてください。</div>
+                  <div className="student-menu-help-text">保留（2 行・緑）の机の上段（実配置）です。出席は保留を片づけてから付けてください。</div>
                   <div className="student-menu-button-row">
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsent} data-testid="menu-absence-button">休み</button>
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsentNoMakeup} data-testid="menu-absence-no-makeup-button">振無休</button>
