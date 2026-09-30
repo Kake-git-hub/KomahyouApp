@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
@@ -6026,8 +6026,24 @@ export function computePendingDeskResolution(params: {
 
   if (params.mode === 'adopt-existing') {
     const lowerStudents = liveTemplatePendingStudents(entry.lower.lesson)
+    // 席ごと（オーナー指示 2026-09-30）: 取り下げるのは、下段の生徒の席にいるテンプレの生徒と下段と同じ生徒のテンプレの生徒だけ。
+    // 空いた席に残した既存の生徒・下段と関係のない席のテンプレの生徒はそのまま（resolveAdoptExistingWithdrawSeats）。
+    // 席ごとに戻せない（旧形式の保留で、下段の通常授業がテンプレの授業に同居できない等）ときは、旧来どおり上段のテンプレの生徒を全部取り下げる。
+    const withdrawUpper = (seats: number[]) => {
+      const withdrawnStudents = seats.map((seat) => desk.lesson?.studentSlots[seat] ?? null).filter((student): student is StudentEntry => Boolean(student))
+      const remaining = (desk.lesson?.studentSlots ?? [null, null]).map((student, seat) => (seats.includes(seat) ? null : student)) as [StudentEntry | null, StudentEntry | null]
+      const nextUpper: DeskCell = { ...desk }
+      if (desk.lesson && (remaining[0] || remaining[1])) nextUpper.lesson = { ...desk.lesson, studentSlots: remaining }
+      else delete nextUpper.lesson
+      return { withdrawnStudents, collapse: computePendingDeskCollapse(nextUpper, entry, { liveStudentsElsewhere, dateKey: cell.dateKey }) }
+    }
+    let attempt = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower))
+    if (!attempt.collapse.ok && attempt.collapse.reason === 'both-rows-live') attempt = withdrawUpper(resolveAdoptExistingWithdrawSeats(desk, entry.lower, { all: true }))
+    const collapse = attempt.collapse
+    if (!collapse.ok) return { status: 'blocked', message: `既存を採用できません。${describeTemplatePendingCollapseFailure(collapse.reason)}` }
+    const withdrawn = attempt.withdrawnStudents
     // Q26-4・INV-12: 下段を机へ戻した結果、同じコマに同じ生徒が 2 か所で生きるなら止める（既存の findDuplicateStudentInCellByKey と同じ検査）。
-    const surfacedCell: SlotCell = { ...cell, desks: cell.desks.map((current) => (current.id === desk.id ? { ...current, lesson: entry.lower.lesson } : current)) }
+    const surfacedCell: SlotCell = { ...cell, desks: cell.desks.map((current) => (current.id === desk.id ? collapse.nextDesk : current)) }
     const resolveComparableKey = (student: StudentEntry) => resolveStockComparableStudentKey(student, params.managedStudentByAnyName, params.resolveDisplayName)
     for (const student of lowerStudents) {
       const duplicate = findDuplicateStudentInCellByKey(surfacedCell, resolveComparableKey(student), resolveComparableKey, [student.id])
@@ -6035,11 +6051,6 @@ export function computePendingDeskResolution(params: {
         return { status: 'blocked', message: `既存を採用できません。同じコマに ${params.resolveDisplayName(student.name)} が 2 か所で生きることになります。先に上段側を片づけてください。` }
       }
     }
-    const withdrawn = liveTemplatePendingStudents(desk.lesson)
-    const deskWithoutUpper: DeskCell = { ...desk }
-    delete deskWithoutUpper.lesson
-    const collapse = computePendingDeskCollapse(deskWithoutUpper, entry, { liveStudentsElsewhere })
-    if (!collapse.ok) return { status: 'blocked', message: `既存を採用できません。${describeTemplatePendingCollapseFailure(collapse.reason)}` }
     // 戻した下段は管理授業でない机の中身になるので、再マージと同じ形（非 manual 講師の講師 id を外す）に揃える＝再マージの不動点（Q31）。
     const nextWeeks = replaceTemplatePendingBoardDesk(params.weeks, location, alignTeacherIdentityWithRemerge(collapse.nextDesk))
 

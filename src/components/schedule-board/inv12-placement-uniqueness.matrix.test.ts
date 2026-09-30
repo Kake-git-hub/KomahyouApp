@@ -312,6 +312,16 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(liveIdsAt(remerged, 2)).toEqual(['sA'])
   })
 
+  it('席ごと（2026-09-30）: 同じ机の生徒 2 の席に A の振替があり、テンプレの生徒 1 が A（通常）なら、生徒 2 の席が空いていても A の振替は 1 行に残さず下段へ。再マージ 1 回の後も A は 1 か所', () => {
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], makeupA('a-makeup')] } } : desk)))
+    const { saved, remerged } = saveThenRemerge(week)
+    const pendingKey = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(saved.nextPendingDesks[pendingKey]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sA'])
+    expect(liveCount(saved.nextWeeks, 'sA')).toBe(1)
+    expect(liveCount(remerged, 'sA')).toBe(1)
+  })
+
   it('後段: 別の机（机 1）の下段にだけ A が居るなら、机 0 の上段に A を置く。再マージ 1 回の後も生きている A は 1 か所（下段は数えない）', () => {
     // 机 1 に A の振替を手置き → 新テンプレの机 1 は B なので中身が違い保留（下段に A）
     const week = board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))

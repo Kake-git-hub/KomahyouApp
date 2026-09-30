@@ -369,6 +369,23 @@ describe('computePendingDeskCollapse（Q28）', () => {
     expect(isTemplateManagedLesson(result.nextDesk.lesson)).toBe(false)
   })
 
+  it('席ごと（2026-09-30）: 両方の行に生きている生徒がいても、下段の生徒の元の席が空いていれば上段の授業に足して 1 行へ', () => {
+    const result = computePendingDeskCollapse(upper, { lower: { lesson: { id: 'l', studentSlots: [null, entry('sM', { lessonType: 'makeup' })] } } }, { dateKey: DATE })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.nextDesk.lesson?.id).toBe('managed_r0_x')
+    expect(result.nextDesk.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sA', 'sM'])
+  })
+
+  it('席ごと: 元の席が埋まっている・上段と同じ生徒・元の席に出欠記録・管理授業で再マージに落ちる通常授業なら戻さない（もう一方の席へはずらさない）', () => {
+    const lowerAt = (student: StudentEntry, seat: 0 | 1) => ({ lower: { lesson: { id: 'l', studentSlots: (seat === 0 ? [student, null] : [null, student]) as [StudentEntry | null, StudentEntry | null] } } })
+    expect(computePendingDeskCollapse(upper, lowerAt(entry('sM', { lessonType: 'makeup' }), 0), { dateKey: DATE })).toEqual({ ok: false, reason: 'both-rows-live' })
+    expect(computePendingDeskCollapse(upper, lowerAt(entry('sA', { lessonType: 'makeup' }), 1), { dateKey: DATE })).toEqual({ ok: false, reason: 'both-rows-live' })
+    expect(computePendingDeskCollapse({ ...upper, statusSlots: [null, status('sC', 'absent')] }, lowerAt(entry('sM', { lessonType: 'makeup' }), 1), { dateKey: DATE })).toEqual({ ok: false, reason: 'both-rows-live' })
+    expect(computePendingDeskCollapse(upper, lowerAt(entry('sM', { makeupSourceDate: '2026-09-30' }), 1), { dateKey: DATE })).toEqual({ ok: false, reason: 'both-rows-live' })
+    expect(computePendingDeskCollapse(upper, lowerAt(entry('sM', { lessonType: 'makeup' }), 1), { dateKey: DATE, liveStudentsElsewhere: [entry('sM')] })).toEqual({ ok: false, reason: 'both-rows-live' })
+  })
+
   it('下段を戻すと同じコマの別の机と生徒が重なるなら止める（INV-12）', () => {
     const result = computePendingDeskCollapse({ id: 'd', teacher: '' }, { lower: { lesson: { id: 'l', studentSlots: [entry('sA', { lessonType: 'makeup' }), null] } } }, { liveStudentsElsewhere: [entry('sA')] })
     expect(result).toEqual({ ok: false, reason: 'duplicate-student' })
@@ -732,7 +749,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
   })
 
   it('条件 25：確認文は 4 件数を出し、「すべてのデータが消去され」を出さない', () => {
-    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0 })
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0 })
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')
@@ -743,6 +760,94 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
     week = mutateDesk(week, 0, (desk) => ({ ...desk, memoSlots: ['連絡', null] }))
     const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数')]
     expect(applyDiff({ week, newRows }).summary).toEqual(applyDiff({ week, newRows }).summary)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 席ごとの突き合わせ（オーナー指示 2026-09-30・確認リスト v1.5.572 その他欄）
+// 「生徒 1 と生徒 2 の重複は別々で処理して。そうすればテンプレ空白なら既存があれば自動で 1 行になるはず。
+//   また片方が通常同士なのに 2 行になることもない。」
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('席ごとの突き合わせ（2026-09-30）', () => {
+  const MAKEUP_M = () => entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+  // 机0: 旧テンプレの A（生徒 1・印なし）＋手で置いた振替 M（生徒 2）
+  const weekWithMakeupInSeat2 = () => mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], MAKEUP_M()] } }))
+
+  it('講師だけ交代（生徒 1 は同じ A・生徒 2 は空）→ 2 行にせず [A, M] の 1 行。確認文・保存後のメッセージに件数が出る', () => {
+    const newRows = [row('r0', 't2', 'sA', '数'), row('r1', 't1', 'sB', '数')]
+    const result = applyDiff({ week: weekWithMakeupInSeat2(), newRows })
+    const desk0 = deskOf(result.nextWeeks, 0)
+    expect(desk0.teacher).toBe('鈴木')
+    expect(desk0.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sA', 'sM'])
+    expect(isTemplateManagedLesson(desk0.lesson)).toBe(true)
+    expect(result.nextPendingDesks).toEqual({})
+    expect(result.summary).toMatchObject({ pending: 0, seatMerged: 1 })
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary)).toContain('テンプレの空いた席に既存の生徒を残して 1 行にする1机')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('テンプレの空いた席に既存の生徒を残して 1 行にした机: 1机')
+    const once = remerge(result.nextWeeks, newRows, result.addedSuppressedRegularLessonOccurrences)
+    expect(byCellId(once)).toEqual(byCellId(result.nextWeeks))
+  })
+
+  it('生徒 1 が別の生徒 C に替わる（生徒 2 は空）→ 生徒 1 は印が無いので C に置き換わり、生徒 2 の M は残る [C, M]', () => {
+    const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数')]
+    const result = applyDiff({ week: weekWithMakeupInSeat2(), newRows })
+    expect(deskOf(result.nextWeeks, 0).lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sC', 'sM'])
+    expect(result.nextPendingDesks).toEqual({})
+    expect(countLiveInCell(result.nextWeeks, 'sA')).toBe(0)
+  })
+
+  it('テンプレが生徒 1・生徒 2 を両方埋める → ぶつかった生徒 2 の M だけが下段（生徒 1 の A は下段に入れない）', () => {
+    const newRows = [row('r0', 't2', 'sA', '数', 'sC', '数'), row('r1', 't1', 'sB', '数')]
+    const result = applyDiff({ week: weekWithMakeupInSeat2(), newRows })
+    const desk0 = deskOf(result.nextWeeks, 0)
+    expect(liveNames(desk0)).toEqual(['sA', 'sC'])
+    const pending = result.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0.id)]
+    expect(pending.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sM'])
+    expect(result.summary.pending).toBe(1)
+  })
+
+  it('生徒 1 の席で振替がテンプレとぶつかったら、テンプレの生徒 2 の席が空いていてもずらさずに保留（席を勝手に動かさない）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_makeup`, studentSlots: [MAKEUP_M(), null] } }))
+    const result = applyDiff({ week, newRows: [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数')] })
+    const desk0 = deskOf(result.nextWeeks, 0)
+    expect(liveNames(desk0)).toEqual(['sC'])
+    expect(result.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0.id)].lower.lesson?.studentSlots[0]?.managedStudentId).toBe('sM')
+  })
+
+  it('机に残す会計記録（欠席）の席を先に確保する: 空き席が記録の分しかなければ、生徒 2 の振替は 1 行に残さず下段へ（記録を上段の生徒の下に隠さない・INV-06）', () => {
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_makeup`, studentSlots: [null, MAKEUP_M()] }, statusSlots: [status('sA', 'absent'), null] }))
+    const result = applyDiff({ week, newRows: [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数')], suppressed: [buildManagedOccurrenceKey(entry('sA'), DATE, SLOT)] })
+    const desk0 = deskOf(result.nextWeeks, 0)
+    expect(liveNames(desk0)).toEqual(['sC'])
+    expect(desk0.statusSlots?.filter(Boolean).map((item) => item!.status)).toEqual(['absent'])
+    expect(desk0.statusSlots?.[0]).toBeNull()
+    expect(result.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0.id)].lower.lesson?.studentSlots[1]?.managedStudentId).toBe('sM')
+  })
+
+  it('Q29 再保存: 生徒 2 だけ保留の机で、新しいテンプレの生徒 2 が空になれば自動で 1 行 [A, M] に戻る', () => {
+    const first = applyDiff({ week: weekWithMakeupInSeat2(), newRows: [row('r0', 't2', 'sA', '数', 'sC', '数'), row('r1', 't1', 'sB', '数')] })
+    expect(first.summary.pending).toBe(1)
+    const secondRows = [row('r0', 't2', 'sA', '数'), row('r1', 't1', 'sB', '数')]
+    const second = applyDiff({ week: first.nextWeeks[0], newRows: secondRows, pending: first.nextPendingDesks })
+    expect(second.nextPendingDesks).toEqual({})
+    expect(deskOf(second.nextWeeks, 0).lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sA', 'sM'])
+    expect(second.summary).toMatchObject({ pending: 0, seatMerged: 1 })
+    const once = remerge(second.nextWeeks, secondRows, [])
+    expect(byCellId(once)).toEqual(byCellId(second.nextWeeks))
+  })
+
+  it('Q29 再保存: テンプレ机が空になれば、上段に残していた既存の生徒と下段の生徒がどちらも机に残る（上段の既存を落とさない）', () => {
+    // 机0: 振替 M（生徒 1）＋手動追加 D（生徒 2）。テンプレ C（生徒 1）→ M だけ下段、D は 1 行側に残る。
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_hand`, studentSlots: [MAKEUP_M(), entry('sD', { manualAdded: true })] } }))
+    const first = applyDiff({ week, newRows: [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数')] })
+    const desk0 = deskOf(first.nextWeeks, 0)
+    expect(desk0.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sC', 'sD'])
+    expect(first.nextPendingDesks[buildTemplatePendingDeskKey(CELL_ID, desk0.id)].lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sM', null])
+    const second = applyDiff({ week: first.nextWeeks[0], newRows: [row('r0', 't2'), row('r1', 't1', 'sB', '数')], pending: first.nextPendingDesks })
+    expect(second.nextPendingDesks).toEqual({})
+    expect(deskOf(second.nextWeeks, 0).lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sM', 'sD'])
+    expect(second.summary.kept).toBe(1)
   })
 })
 

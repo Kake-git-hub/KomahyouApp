@@ -1580,6 +1580,39 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     })
   })
 
+  // 席ごと（オーナー指示 2026-09-30・確認リスト v1.5.572 その他欄「生徒 1 と生徒 2 の重複は別々で処理して」）:
+  // 旧テンプレの A（印なし）が生徒 1、印のある M が生徒 2 の机。テンプレの生徒 2 の席が空なら M は 1 行のまま残り（保留にしない）、
+  // 生徒 1 は印が無いのでテンプレで置き換わる／同じ A なら採用。再マージ 2 回でも変わらない（saveAndRemerge が不動点を見る）。
+  // 例外: テンプレの授業に同居させると再マージで落ちる印（別日移動の通常授業＝元の日付でない makeupSourceDate）は下段へ入れる。
+  const DROPPED_BY_REMERGE_IN_MANAGED_LESSON = new Set(['別日移動（makeupSourceDate）'])
+  const ROWS_SAME_A_NEW_TEACHER = [row('r0', 't2', 'sA'), row('r1', 't1', 'sB'), row('r2', 't3')]
+  describe.each(studentMarks)('席ごと: 生徒の印 %s を生徒 2 の席に（生徒 1 は旧テンプレの A）', (label, overrides) => {
+    const markedSeat2 = (desk: DeskCell): DeskCell => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sM', overrides)] } })
+    it.each([
+      ['テンプレの生徒 1 が別の生徒 C（生徒 2 は空）', ROWS_WITH_C, 'sC'],
+      ['テンプレの生徒 1 が同じ A（講師だけ交代・生徒 2 は空）', ROWS_SAME_A_NEW_TEACHER, 'sA'],
+    ] as const)('%s → 生徒 2 の M は 1 行のまま残る（保留にしない）', (_case, rows, seat1) => {
+      const { saved, desk0, lower } = saveAndRemerge(board(markedSeat2), rows)
+      expect(desk0.teacher).toBe('鈴木')
+      if (DROPPED_BY_REMERGE_IN_MANAGED_LESSON.has(label)) {
+        expect(liveIds(desk0.lesson)).toEqual([seat1])
+        expect(liveIds(lower?.lesson)).toEqual(['sM'])
+        return
+      }
+      expect(desk0.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([seat1, 'sM'])
+      expect(lower).toBeUndefined()
+      expect(saved.summary.pending).toBe(0)
+      expect(saved.summary.seatMerged).toBe(1)
+    })
+
+    it('テンプレが生徒 1・生徒 2 の両方を埋める → 生徒 2 の席だけ保留（下段は M だけ・生徒 1 の A は下段に入れない）', () => {
+      const bothSeats = [{ ...row('r0', 't2', 'sA'), student2Id: 'sC', subject2: '数' }, row('r1', 't1', 'sB'), row('r2', 't3')]
+      const { desk0, lower } = saveAndRemerge(board(markedSeat2), bothSeats)
+      expect(liveIds(desk0.lesson)).toEqual(['sA', 'sC'])
+      expect(lower?.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual([null, 'sM'])
+    })
+  })
+
   describe.each(['absent', 'absent-no-makeup', 'attended'] as const)('机の印 会計を持つ出欠記録 %s', (statusKind) => {
     const markedDesk = (desk: DeskCell): DeskCell => ({ ...desk, lesson: undefined, statusSlots: [record('sA', statusKind), null] })
     it.each([['テンプレ机に生徒なし', ROWS_TEACHER_ONLY], ['テンプレ机に別の生徒', ROWS_WITH_C]] as const)('%s → 記録は机に残る（下段へ入れない）', (_label, rows) => {

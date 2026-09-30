@@ -176,9 +176,9 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
   const SESSION_KEY = buildLectureStockKey('sM', '数', AUTUMN_ID)
   const MANUAL_KEY = buildLectureStockKey('sD', '数')
 
-  function rowOf(id: string, teacherId: string, student1Id: string): RegularLessonRow {
+  function rowOf(id: string, teacherId: string, student1Id: string, student2Id = ''): RegularLessonRow {
     return {
-      id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id: '', subject2: '',
+      id, schoolYear: 2026, teacherId, student1Id, subject1: student1Id ? '数' : '', startDate: '', endDate: '', student2Id, subject2: student2Id ? '数' : '',
       student2StartDate: '', student2EndDate: '', nextStudent1Id: '', nextSubject1: '', nextStudent2Id: '', nextSubject2: '', dayOfWeek: 3, slotNumber: SLOT,
     }
   }
@@ -220,7 +220,8 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
       ...cell,
       desks: cell.desks.map((desk, index): DeskCell => (index === 0 ? { ...desk, lesson: { id: 'lectures', studentSlots: [lecture('sM'), lecture('sD')] } } : desk)),
     }))
-    const newRows = [rowOf('r0', 't2', 'sC'), rowOf('r1', 't1', '')]
+    // テンプレは机0 の生徒 1・生徒 2 の両方を埋める（席ごとの突き合わせ〔2026-09-30〕で 2 つの講習がどちらも席でぶつかって下段へ入る形）。
+    const newRows = [rowOf('r0', 't2', 'sC', 'sA'), rowOf('r1', 't1', '')]
     const diff = computeTemplateDiffApplyForBoard({
       weeks: [week],
       classroomSettings: settingsOf({ templateFreezeBeforeDate: DATE }),
@@ -251,10 +252,10 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
 
   it('保存前後: 在庫由来・手動追加の講習が下段に入っても、講習の残数は保存前と同じ（保存は台帳を触らない）', () => {
     const { diff, key } = pendingLectureBoard()
-    // 前提: 2 つの講習はどちらも下段（盤面の週データの外）へ入り、上段はテンプレの C。
+    // 前提: 2 つの講習はどちらも下段（盤面の週データの外）へ入り、上段はテンプレの C・A。
     expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots.map((item) => item?.id)).toEqual(['lec_sM', 'lec_sD'])
     const upper = diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0]
-    expect(upper.lesson?.studentSlots.filter(Boolean).map((item) => item!.managedStudentId)).toEqual(['sC'])
+    expect(upper.lesson?.studentSlots.filter(Boolean).map((item) => item!.managedStudentId)).toEqual(['sC', 'sA'])
     // 差分反映の結果は台帳を持たない（在庫台帳に触る入口が無い）＝保存前後で台帳が同じなので残数も同じ。
     expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary'])
     const before = lectureBalances(PLACED_LEDGERS)

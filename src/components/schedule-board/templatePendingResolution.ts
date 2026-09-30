@@ -227,7 +227,9 @@ export type TemplatePendingSettleResult =
 
 /**
  * 1 つの保留の机に Q28 を当てる：上段か下段のどちらかに生きている生徒がいなければ computePendingDeskCollapse で 1 行へ戻す。
- * 成功なら机を差し替えて保留マップからキーを消す（入力は変えない）。失敗なら 2 行のまま理由を返す。両方の行が生きていれば何もしない。
+ * 成功なら机を差し替えて保留マップからキーを消す（入力は変えない）。失敗なら 2 行のまま理由を返す。
+ * 両方の行が生きていても、下段の生徒が机の空いた席へ全員入るなら 1 行へ戻す（席ごと・2026-09-30。上段の生徒を休み・移動・削除して
+ * その席が空いたとき）。入らなければ何もしない（'unchanged'・利用者へは知らせない）。
  * 盤面に机が無い（孤児）キーは触らない（Q24-5）。
  */
 export function settleTemplatePendingDesk(params: {
@@ -242,11 +244,11 @@ export function settleTemplatePendingDesk(params: {
   if (!location) return { status: 'unchanged' }
   const upperLive = liveStudentsOf(location.desk.lesson).length
   const lowerLive = liveStudentsOf(entry.lower.lesson).length
-  if (upperLive > 0 && lowerLive > 0) return { status: 'unchanged' }
   const collapse = computePendingDeskCollapse(location.desk, entry, {
     liveStudentsElsewhere: collectLiveStudentsElsewhereInCell(location.cell, location.desk.id),
+    dateKey: location.cell.dateKey,
   })
-  if (!collapse.ok) return { status: 'kept', reason: collapse.reason }
+  if (!collapse.ok) return upperLive > 0 && lowerLive > 0 ? { status: 'unchanged' } : { status: 'kept', reason: collapse.reason }
   const nextTemplatePendingDesks = { ...params.templatePendingDesks }
   delete nextTemplatePendingDesks[params.key]
   // 下段を机へ戻した机は管理授業でない机になるので、再マージと同じ形（非 manual 講師の講師 id を外す）に揃えて不動点を保つ。

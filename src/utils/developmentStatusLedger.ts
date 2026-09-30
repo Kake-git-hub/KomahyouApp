@@ -114,12 +114,12 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
     id: 'template-diff-apply',
     title: 'テンプレ保存の差分反映＋保留(2 行表示)(Issue #72)',
     stage: 'development-only',
-    summary: '第 1 段の (A)(B)(C) 実装済み・開発用教室で試用中(確認リスト第 34 版 v1.5.572・tp-1〜tp-16)。(A) 機能フラグ・保留マップの全経路配線・突き合わせの純関数・保存経路の切替・在庫の走査に下段を含める。(B) 2 行表示(緑・狭い画面は帯)・保留件数バッジ・「テンプレを採用」「既存を採用」・下段の削除/移動・上段が空いたら 1 行へ・2 行の机の制限・保留のある日の休日設定等の停止。(C) 保留の机を詰め直し・講習の講師自動割当・QR 講師の自己修復・並べ替えで動かさない、退塾スイープで下段も消す、保護者の休み連絡は下段の生徒を自動処理しない、下段の移動の出席不可確認、保存前レポートの見出し、INV-13 マトリクス新設。regression-reviewer の INV 監査指摘(R-1〜R-5・N 項目)に対応済み(下段の同日移動を捨てたときの希望回数＝tp-16)。',
+    summary: '第 1 段の (A)(B)(C) 実装済み・開発用教室で試用中。確認リスト第 34 版(v1.5.572)の tp-1〜tp-14・tp-16 は OK(2026-09-30)。同日その他欄の指示で突き合わせを机単位から席単位(生徒 1・生徒 2 を別々)へ変更(v1.5.573・§H Q34): テンプレのその席が空なら既存の生徒は 1 行のまま残し、テンプレと同じ生徒×科目×種別は採用、同じ席がテンプレで埋まる生徒だけ下段へ。「既存を採用」は下段の席のテンプレ生徒だけ取り下げ、上段の操作で元の席が空けば下段が自動で戻る。(A) 機能フラグ・保留マップの全経路配線・突き合わせの純関数・保存経路の切替・在庫の走査に下段を含める。(B) 2 行表示・保留件数バッジ・採用ボタン・下段の削除/移動・2 行の机の制限。(C) 周辺処理(詰め直し・講習の講師自動割当・QR 自己修復・退塾・保護者の休み連絡)と INV-13 マトリクス。',
     featureKeys: ['templateDiffApply'],
-    checklistItemIds: ['tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6', 'tp-7', 'tp-8', 'tp-9', 'tp-10', 'tp-11', 'tp-12', 'tp-13', 'tp-14', 'tp-15', 'tp-16'],
-    nextAction: '開発用教室で試用(確認リスト tp-1〜tp-16) → 確認リスト全 OK・Q33-1 のすき間(旧版タブの保存で保留が落ちる)の塞ぎ方の決定と実装・regression-reviewer の INV 監査の後、全教室へ広げるかをオーナーが判断。第 2 段(保留一覧・一括採用・孤児キーの整合チェック)は未着手。',
+    checklistItemIds: ['tp-15', 'tp-17', 'tp-18', 'tp-19', 'tp-20'],
+    nextAction: '開発用教室で席ごとの突き合わせを試用(確認リスト第 35 版 tp-17〜tp-20・保護者QR欄へ移した tp-15) → 全 OK・Q33-1 のすき間(旧版タブの保存で保留が落ちる)の塞ぎ方の決定と実装・regression-reviewer の INV 監査の後、全教室へ広げるかをオーナーが判断。第 2 段(保留一覧・一括採用・孤児キーの整合チェック)は未着手。',
     references: ['docs/spec-template-behavior.md §H', 'Issue #72', 'src/components/schedule-board/templateDiffApply.ts', 'src/components/schedule-board/templatePendingResolution.ts', 'src/components/schedule-board/inv13-template-pending-scope.matrix.test.ts'],
-    updatedOn: '2026-09-29',
+    updatedOn: '2026-09-30',
   },
   {
     id: 'question-ai-answer',
@@ -133,16 +133,6 @@ export const DEVELOPMENT_STATUS_LEDGER: readonly DevelopmentStatusEntry[] = [
   },
 
   // ── 実装済み・確認リスト結果待ち ──────────────────────────────────────────
-  {
-    id: 'question-answer-flow',
-    title: '質問への回答を画面で返す(開発者画面「質問への回答」→ 室長のボタンに未読バッジ → 履歴タブ)',
-    stage: 'awaiting-checklist',
-    summary: 'v1.5.565(2026-09-28)で Q-5/Q-6 を実装し、確認 a-1〜a-3 は OK。同日その他欄の要望で開発者の「解決済み」(callable resolveDeveloperReport・developerReports だけに記録・室長の画面には出さない)を追加(v1.5.570)。QA 公開(§G-6)・ダイジェスト(Q-3/Q-4)・回答案(answerDraft)段は作っていない。',
-    checklistItemIds: ['a-4'],
-    nextAction: '確認 a-4 の結果を見る(Cloud Functions のデプロイが緑になってから)。OK なら本行を消す。',
-    references: ['docs/spec-developer-report.md §G-3/§G-5', 'src/components/developer-admin/DeveloperReportAnswerScreen.tsx', 'src/utils/developerReportAnswers.ts', 'functions/src/reportAnswers.ts'],
-    updatedOn: '2026-09-28',
-  },
 
   // ── 作りかけ(未マージのブランチ) ────────────────────────────────────────────
   {
