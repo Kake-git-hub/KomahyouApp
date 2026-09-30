@@ -334,6 +334,52 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(liveCount(remerged, 'sB')).toBe(1)
   })
 
+  // regression-reviewer L-7（2026-09-30）: Q21-11 で生徒を全員外した机は「講師だけの机」になる。再マージは抑止で空になった
+  // 管理授業の机を suppressManagedStudentsInCell と同じ形（講師名は残し teacherAssignmentTeacherId は外す）で置き直すので、
+  // 保存結果も同じ形でなければ再マージの不動点にならない（INV-02 / INV-03）。生徒 ID の比較だけでは見えないため、セル丸ごと比べる。
+  const cellOf = (weeks: SlotCell[][]) => weeks.flat().find((cell) => cell.id === CELL)!
+
+  it('不動点（L-7）: Q21-11 で机 1 のテンプレの B を外して講師だけの机になっても、保存 → 再マージ 1 回でセルは丸ごと変わらない（置き換えの経路）', () => {
+    const makeupB = mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+    const week = board((desks) => desks.map((desk, index) => (index === 0 ? { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], makeupB] } } : desk)))
+    const { saved, remerged } = saveThenRemerge(week)
+    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    const savedDesk1 = cellOf(saved.nextWeeks).desks[1]
+    expect(savedDesk1.lesson).toBeUndefined()
+    expect(savedDesk1.teacher).toBe('鈴木')
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  it('不動点（L-7）: 兄弟＝残す（keep）の経路。メモの印がある机 1 のテンプレの B を Q21-11 で外しても、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+    const makeupB = mkStudent('b-makeup', '馬場', { managedStudentId: 'sB', lessonType: 'makeup', makeupSourceDate: '2026-09-30' })
+    const week = board((desks) => desks.map((desk, index) => {
+      if (index === 0) return { ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], makeupB] } }
+      if (index === 1) return { ...desk, memoSlots: ['連絡あり', null] }
+      return desk
+    }))
+    const { saved, remerged } = saveThenRemerge(week)
+    expect(saved.summary.skippedDuplicateStudents).toBe(1)
+    expect(saved.summary.kept).toBe(1)
+    const savedDesk1 = cellOf(saved.nextWeeks).desks[1]
+    expect(savedDesk1.lesson).toBeUndefined()
+    expect(savedDesk1.teacher).toBe('鈴木')
+    expect(savedDesk1.memoSlots).toEqual(['連絡あり', null])
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  it('不動点（L-7）: 兄弟＝Q21-11 に当たらない保存（講師だけのテンプレ机 2 を含む）も、保存 → 再マージ 1 回でセルは丸ごと変わらない', () => {
+    const week = board((desks) => desks)
+    const { saved, remerged } = saveThenRemerge(week)
+    expect(saved.summary.skippedDuplicateStudents).toBe(0)
+    expect(cellOf(saved.nextWeeks).desks[2].teacherAssignmentTeacherId).toBe('t3')
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
+  // L-7 の INV 監査（regression-reviewer 2026-09-30）で残った兄弟。どれも今回の修正の後退ではなく、Q21-11 が新しい発生源になる既存の穴。
+  it.todo('不動点（L-7 兄弟）: 丸ごと振替の日（足場講師 strip）に Q21-11 で講師だけになった机も、保存 → 再マージ 1 回でセル丸ごと不変（今は講師名が消える見込み）')
+  it.todo('不動点（L-7 兄弟）: 講師のいないテンプレ机が Q21-11 で完全に空になり、後ろに講師だけの机があっても、再マージで講師が前の机へずれない')
+  it.todo('不動点（L-7 兄弟）: 保留中の再保存（Q29）で Q21-11 により空になったテンプレ机（下段が 1 行に戻る／保留のまま）も、保存 → 再マージ 1 回でセル丸ごと不変')
+
   it('後段: 別の机（机 1）の下段にだけ A が居るなら、机 0 の上段に A を置く。再マージ 1 回の後も生きている A は 1 か所（下段は数えない）', () => {
     // 机 1 に A の振替を手置き → 新テンプレの机 1 は B なので中身が違い保留（下段に A）
     const week = board((desks) => desks.map((desk, index) => (index === 1 ? { ...desk, lesson: mkLesson('hand-a', [makeupA('a-makeup'), null]) } : desk)))

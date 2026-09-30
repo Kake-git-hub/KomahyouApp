@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
@@ -3498,17 +3498,8 @@ function suppressManagedStudentsInCell(managedCell: SlotCell, suppressedKeys: Se
       return suppressedKeys.has(buildManagedOccurrenceKey(student, nextCell.dateKey, nextCell.slotNumber)) ? null : student
     }) as [StudentEntry | null, StudentEntry | null]
 
-    if (!nextStudentSlots[0] && !nextStudentSlots[1]) {
-      return {
-        ...desk,
-        teacher: desk.teacher,
-        manualTeacher: false,
-        teacherAssignmentSource: undefined,
-        teacherAssignmentSessionId: undefined,
-        teacherAssignmentTeacherId: undefined,
-        lesson: undefined,
-      }
-    }
+    // 差分反映の Q21-11 も同じ関数で空の机を作る（保存結果を再マージの不動点に保つ・regression-reviewer L-7）。
+    if (!nextStudentSlots[0] && !nextStudentSlots[1]) return buildFullySuppressedManagedDesk(desk)
 
     return {
       ...desk,

@@ -647,6 +647,23 @@ function buildDateSlotKey(cell: Pick<SlotCell, 'dateKey' | 'slotNumber'>) {
   return `${cell.dateKey}_${cell.slotNumber}`
 }
 
+/**
+ * 管理授業の生徒が全員抑止された机の形（講師名は残し、授業と講師の割り当て情報を外す）。
+ * 再マージの suppressManagedStudentsInCell（ScheduleBoardScreen.tsx）と差分反映の Q21-11（filterTemplateDeskStudents）の
+ * 両方がこれを呼ぶ。片方だけ形を変えると保存結果が再マージの不動点でなくなる（regression-reviewer L-7・INV-02 / INV-03）。
+ */
+export function buildFullySuppressedManagedDesk(desk: DeskCell): DeskCell {
+  return {
+    ...desk,
+    teacher: desk.teacher,
+    manualTeacher: false,
+    teacherAssignmentSource: undefined,
+    teacherAssignmentSessionId: undefined,
+    teacherAssignmentTeacherId: undefined,
+    lesson: undefined,
+  }
+}
+
 function filterTemplateDeskStudents(desk: DeskCell, excluded: readonly StudentEntry[]): { desk: DeskCell; removed: StudentEntry[] } {
   if (!desk.lesson || excluded.length === 0) return { desk, removed: [] }
   const removed: StudentEntry[] = []
@@ -659,12 +676,10 @@ function filterTemplateDeskStudents(desk: DeskCell, excluded: readonly StudentEn
     return student
   }) as StudentPair
   if (removed.length === 0) return { desk, removed }
-  // 管理授業の生徒が全員抑止されたときの形（suppressManagedStudentsInCell と同じ：講師は残し授業だけ消す）。
-  if (!slots[0] && !slots[1]) {
-    const next = { ...desk }
-    delete next.lesson
-    return { desk: next, removed }
-  }
+  // 管理授業の生徒が全員抑止されたときの形（再マージの suppressManagedStudentsInCell と同じ関数で作る）。
+  // 回帰防止（regression-reviewer L-7・2026-09-30）: teacherAssignmentTeacherId も外す。再マージは抑止で空になった机の講師を
+  // ID なしで置き直すため、ここで ID を残すと保存結果が再マージの不動点にならない（INV-02 / INV-03・置き換えと残すの両経路）。手で写さない。
+  if (!slots[0] && !slots[1]) return { desk: buildFullySuppressedManagedDesk(desk), removed }
   return { desk: { ...desk, lesson: { ...desk.lesson, studentSlots: slots } }, removed }
 }
 

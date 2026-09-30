@@ -14,6 +14,10 @@
 
 ## 未リリース
 
+## v1.5.574 (2026-09-30)
+
+- fix: テンプレ差分反映の Q21-11(同じコマの別の 1 行の机に生きている生徒を上段に置かない)で生徒を全員外した机が講師だけの机になると、保存直後の再マージで `teacherAssignmentTeacherId` が外れ、保存結果が再マージの不動点になっていなかった(講師名は同じ・置き換え/残すの両経路・v1.5.573 の席ごとの突き合わせで起きやすくなった。regression-reviewer L-7・Issue #72・**開発用教室のみ**＝フラグ `templateDiffApply`・INV-02 / INV-03 / INV-12)。全員抑止の机の形(講師名は残し、授業と講師の割り当て情報を外す)を共通関数 `buildFullySuppressedManagedDesk` へ一本化し、再マージの `suppressManagedStudentsInCell` と Q21-11 の `filterTemplateDeskStudents` の両方から呼ぶ(手写しの二重管理をやめる・再マージの出力は同じ形のまま＝本番教室の挙動は変わらない)。INV-12 マトリクスに「保存 → 再マージ 1 回でセル丸ごと不変」3 行(修正前は 2 件落ちる)＋残る兄弟 3 件の todo・配線/形のテスト 2 件・spec-invariants の INV-12 担保状況に追記・確認リスト tp-21 (templateDiffApply.ts / ScheduleBoardScreen.tsx / templateDiffApply.test.ts / inv12-placement-uniqueness.matrix.test.ts / docs/spec-invariants.md / verificationChecklist.ts)
+
 ## v1.5.573 (2026-09-30)
 
 - feat: テンプレ差分反映の突き合わせを机単位から**席単位(生徒 1・生徒 2 を別々)**へ変更(確認リスト v1.5.572 その他欄のオーナー指示「生徒 1 と生徒 2 の重複は別々で処理して。そうすればテンプレ空白なら既存があれば自動で 1 行になるはず。また片方が通常同士なのに 2 行になることもない」・Issue #72・**開発用教室のみ**＝フラグ `templateDiffApply`・INV-02 / INV-12 / INV-06・spec-template-behavior §H Q34)。印のある机で中身が違うとき、テンプレのその席が空いている既存の生徒(印あり)は 1 行のまま残し、テンプレと同じ生徒×科目×種別は採用、同じ席がテンプレで埋まっている生徒だけ下段(緑)へ入れる。印のない旧テンプレの通常生徒は下段に入れず置き換える。もう一方の空いた席へはずらさない・机に残す会計記録の席を先に確保する(記録を上段の生徒の下に隠さない＝INV-06)・同じ生徒は同じ机に 2 人置かない(INV-12)・再マージで落ちる別日移動の通常授業は下段、は主セッション判断。保留中の再保存(Q29)も同じ規則で突き合わせ直し、上段に残した既存の生徒を落とさない。「既存を採用」は下段の生徒の元の席のテンプレ生徒と同じ生徒のテンプレ生徒だけ取り下げ(旧形式の保留は従来どおり全部)、上段の休み・移動・削除で下段の生徒の元の席が空けば両方の行に生徒がいても自動で 1 行へ戻す。確認文・保存後メッセージに「テンプレの空いた席に既存の生徒を残して 1 行にする n机」。回帰防止テスト(経路 14・INV-02 マトリクス「席ごと」21 行・INV-12 1 行。旧実装で 33 件落ちる)、講習の INV-06 マトリクスは席でぶつかる形へフィクスチャを直した(assert は同じ強さ) (templateDiffApply.ts `planTemplateDeskSeats` / `resolveAdoptExistingWithdrawSeats` / `computePendingDeskCollapse` / templatePendingResolution.ts / ScheduleBoardScreen.tsx / templateDiffApply.test.ts / templatePendingResolution.test.ts / inv02・inv06-lecture・inv12 の matrix.test.ts / docs/spec-template-behavior.md / docs/spec-invariants.md)

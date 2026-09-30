@@ -25,6 +25,7 @@ import {
   remergeBoardWeeksWithManagedData,
 } from './ScheduleBoardScreen'
 import {
+  buildFullySuppressedManagedDesk,
   buildTemplateDiffConfirmMessage,
   buildTemplateDiffSavedMessage,
   buildTemplateOccurrenceKey,
@@ -1000,5 +1001,37 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     const remergeFn = slice('export function remergeBoardWeekWithManagedData(', 1800)
     expect(remergeFn).toContain('buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate })')
     expect(remergeFn).not.toContain('createBoardWeek(')
+  })
+
+  // regression-reviewer L-7（2026-09-30）: Q21-11 で生徒を全員外した机と、再マージで全員抑止された管理授業の机は同じ関数で作る
+  // （手で写すと講師の割り当て情報の外し方がずれ、保存結果が再マージの不動点でなくなる）。
+  it('配線: 全員抑止の机の形は再マージ（suppressManagedStudentsInCell）と Q21-11（filterTemplateDeskStudents）で同じ関数を呼ぶ（L-7）', () => {
+    const read = (file: string) => readFileSync(fileURLToPath(new URL(file, import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+    const sliceOf = (source: string, start: string, length: number) => {
+      const index = source.indexOf(start)
+      expect(index).toBeGreaterThanOrEqual(0)
+      return source.slice(index, index + length)
+    }
+    const suppressFn = sliceOf(read('./ScheduleBoardScreen.tsx'), 'function suppressManagedStudentsInCell(', 1000)
+    expect(suppressFn).toContain('return buildFullySuppressedManagedDesk(desk)')
+    expect(suppressFn).not.toContain('teacherAssignmentTeacherId: undefined')
+    const filterFn = sliceOf(read('./templateDiffApply.ts'), 'function filterTemplateDeskStudents(', 1400)
+    expect(filterFn).toContain('buildFullySuppressedManagedDesk(desk)')
+    expect(filterFn).not.toContain('teacherAssignmentTeacherId: undefined')
+  })
+
+  it('全員抑止の机の形: 講師名と机の記録は残し、授業と講師の割り当て情報（手置きの印・由来・講習期間 ID・講師 ID）を外す（L-7）', () => {
+    const desk: DeskCell = {
+      id: 'd1',
+      teacher: '鈴木',
+      manualTeacher: true,
+      teacherAssignmentSource: 'manual',
+      teacherAssignmentSessionId: 'session-1',
+      teacherAssignmentTeacherId: 't2',
+      memoSlots: ['連絡あり', null],
+      lesson: { id: 'managed_r1', studentSlots: [entry('sB'), null] },
+    }
+    expect(buildFullySuppressedManagedDesk(desk)).toEqual({ id: 'd1', teacher: '鈴木', manualTeacher: false, memoSlots: ['連絡あり', null] })
+    expect(desk.teacherAssignmentTeacherId).toBe('t2')
   })
 })
