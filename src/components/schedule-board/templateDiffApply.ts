@@ -581,6 +581,8 @@ export function resolveDiscardedLowerSameDayMoveCountAdjustments(params: {
 export type TemplateDiffTemplateCell = {
   raw: SlotCell
   applied: SlotCell
+  /** applied に丸ごと振替の日の足場講師 strip を当てた日か（Q21-11 で後から空けた机にも同じ strip を当てる・L-7 兄弟 1）。 */
+  scaffoldTeachersStripped?: boolean
 }
 
 export type TemplateDiffApplySummary = {
@@ -664,7 +666,25 @@ export function buildFullySuppressedManagedDesk(desk: DeskCell): DeskCell {
   }
 }
 
-function filterTemplateDeskStudents(desk: DeskCell, excluded: readonly StudentEntry[]): { desk: DeskCell; removed: StudentEntry[] } {
+/**
+ * 丸ごと振替の日の「生徒のいない机の講師（テンプレ足場講師）」を落とした形（授業のある机はそのまま）。
+ * 再マージの stripTemplateScaffoldTeachers（ScheduleBoardScreen.tsx）と差分反映の Q21-11 の両方がこれを呼ぶ。
+ * 再マージは「抑止 → strip」の順なので、Q21-11 で生徒を全員外した机にも strip を当てないと、丸ごと振替の日に
+ * 保存結果の講師名が再マージで消える（regression-reviewer L-7 兄弟 1・INV-02 / INV-03）。
+ */
+export function stripTemplateScaffoldTeacherDesk(desk: DeskCell): DeskCell {
+  if (desk.lesson) return desk
+  return {
+    ...desk,
+    teacher: '',
+    manualTeacher: false,
+    teacherAssignmentSource: undefined,
+    teacherAssignmentSessionId: undefined,
+    teacherAssignmentTeacherId: undefined,
+  }
+}
+
+function filterTemplateDeskStudents(desk: DeskCell, excluded: readonly StudentEntry[], options: { stripScaffoldTeacher: boolean }): { desk: DeskCell; removed: StudentEntry[] } {
   if (!desk.lesson || excluded.length === 0) return { desk, removed: [] }
   const removed: StudentEntry[] = []
   const slots = desk.lesson.studentSlots.map((student) => {
@@ -679,7 +699,11 @@ function filterTemplateDeskStudents(desk: DeskCell, excluded: readonly StudentEn
   // 管理授業の生徒が全員抑止されたときの形（再マージの suppressManagedStudentsInCell と同じ関数で作る）。
   // 回帰防止（regression-reviewer L-7・2026-09-30）: teacherAssignmentTeacherId も外す。再マージは抑止で空になった机の講師を
   // ID なしで置き直すため、ここで ID を残すと保存結果が再マージの不動点にならない（INV-02 / INV-03・置き換えと残すの両経路）。手で写さない。
-  if (!slots[0] && !slots[1]) return { desk: buildFullySuppressedManagedDesk(desk), removed }
+  // 丸ごと振替の日は再マージと同じ順（抑止 → 足場講師 strip）で strip も当てる（L-7 兄弟 1）。
+  if (!slots[0] && !slots[1]) {
+    const suppressed = buildFullySuppressedManagedDesk(desk)
+    return { desk: options.stripScaffoldTeacher ? stripTemplateScaffoldTeacherDesk(suppressed) : suppressed, removed }
+  }
   return { desk: { ...desk, lesson: { ...desk.lesson, studentSlots: slots } }, removed }
 }
 
@@ -867,7 +891,7 @@ function applyTemplateDiffToCell(context: {
     let changed = false
     const nextTemplateDesks = templateDesks.map((templateDesk, index) => {
       const elsewhere = livingByDesk.flatMap((students, otherIndex) => (otherIndex === index ? [] : students))
-      const filtered = filterTemplateDeskStudents(templateDesk, elsewhere)
+      const filtered = filterTemplateDeskStudents(templateDesk, elsewhere, { stripScaffoldTeacher: Boolean(templateCell.scaffoldTeachersStripped) })
       if (filtered.removed.length > 0) {
         changed = true
         skippedByDesk[index].push(...filtered.removed)

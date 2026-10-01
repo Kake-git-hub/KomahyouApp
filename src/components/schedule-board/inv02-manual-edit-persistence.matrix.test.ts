@@ -1710,10 +1710,22 @@ describe('INV-02 × テンプレ差分反映: 印のある机の中身は保存�
     })
   })
 
-  // 既知の穴（2026-09-29 R-3 のマトリクス作成で判明・要判断）: 机に残した QR 講師／手置き講師／削除記録の講師名と同じ講師が、
+  // 旧・既知の穴（2026-09-29 R-3 のマトリクス作成で判明）: 机に残した QR 講師／手置き講師／削除記録の講師名と同じ講師が、
   // 新テンプレの**別の机に講師だけ**で居ると、差分反映はその足場講師を置くが、再マージ（mergeManagedWeek の「同じコマに既に居る講師・
-  // 削除した講師は足さない」）が外すため、保存の結果が再マージの不動点にならない（中身は失われない・保存直後の effect で足場講師が外れるだけ）。
-  it.todo('QR/手置き/削除記録の講師と同名のテンプレ足場講師（講師だけの机）が同じコマの別の机にあっても、保存結果が再マージの不動点になる')
+  // 削除した講師は足さない」）が外すため、保存の結果が再マージの不動点にならなかった（中身は失われない・保存直後の effect で足場講師が外れるだけ）。
+  // 2026-09-30（regression-reviewer L-7 兄弟 2）: 差分反映の入口が保存結果へ再マージの重ね合わせを 1 回当てるようにしたので、保存の時点で
+  // 足場講師は外れた形になる（保存直後の effect の結果と同じ＝利用者に見える結果は従来と同じ）。saveAndRemerge が再マージ 2 回の不動点を検査する。
+  it('QR 講師と同名のテンプレ足場講師（講師だけの机）が同じコマの別の机にあっても、保存結果が再マージの不動点になる（足場講師は置かず QR 講師は 1 人のまま）', () => {
+    const qrDesk = (desk: DeskCell): DeskCell => ({
+      ...desk, teacher: '田中', manualTeacher: true, teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1', teacherAssignmentTeacherId: 't1',
+      lesson: { id: `${desk.id}_special`, studentSlots: [entry('sM', { lessonType: 'special', specialSessionId: 'ss1', specialStockSource: 'session' }), null] },
+    })
+    // 新テンプレ: 机 0＝佐藤（講師だけ）・机 1＝鈴木（B）・机 2＝田中（講師だけ）→ 机 0 の QR 講師 田中と同名の足場講師が机 2 に来る。
+    const { saved, desk0 } = saveAndRemerge(board(qrDesk), ROWS_TEACHER_ONLY)
+    expect(desk0).toMatchObject({ teacher: '田中', teacherAssignmentSource: 'schedule-registration', teacherAssignmentSessionId: 'ss1' })
+    expect(liveIds(desk0.lesson)).toEqual(['sM'])
+    expect(saved.nextWeeks.flat().find((cell) => cell.id === CELL)!.desks.filter((desk) => desk.teacher === '田中')).toHaveLength(1)
+  })
 
   describe('休日のコマ（テンプレ机を空とみなす・Q21-6）', () => {
     it('印ありの机の会計記録は残り、印なしの机は空席になる（再マージでも変わらない）', () => {

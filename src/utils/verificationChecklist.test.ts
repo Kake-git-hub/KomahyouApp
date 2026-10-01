@@ -62,7 +62,7 @@ describe('確認リストの項目定義', () => {
 
   it('第35版(v1.5.573): 第34版で OK の a-4・tp-1〜tp-14・tp-16 を外し、tp-15 を保護者QRの欄へ移し、席ごとの突き合わせの tp-17〜tp-20 を足した', () => {
     const ids = VERIFICATION_CHECKLIST.items.map((item) => item.id)
-    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-17', 'tp-18', 'tp-19', 'tp-20', 'tp-21'])
+    expect(ids).toEqual(['q-1', 'q-2', 'q-3', 'q-4', 'q-5', 'q-6', 'tp-15', 'tp-17', 'tp-18', 'tp-19', 'tp-20', 'tp-21', 'tp-22', 'tp-23'])
     // 第34版の結果(2026-09-30・受付 20260930-024853040-0e2c42f6)で OK。
     for (const okId of ['a-4', 'tp-1', 'tp-2', 'tp-3', 'tp-4', 'tp-5', 'tp-6', 'tp-7', 'tp-8', 'tp-9', 'tp-10', 'tp-11', 'tp-12', 'tp-13', 'tp-14', 'tp-16']) expect(ids, okId).not.toContain(okId)
     // 第31版の結果(2026-09-28・受付 20260928-103642968-d4c32a94)で OK。
@@ -90,6 +90,12 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-21')!.introducedIn).toBe('v1.5.574')
     expect(byId.get('tp-21')!.area).toBe('盤面(テンプレ保留)')
     expect(byId.get('tp-21')!.check!.join(' / ')).toContain('講師だけ残る')
+    // 第35版その3(v1.5.575): L-7 兄弟 1(丸ごと振替の日)の修正確認を足した(版は据え置き)。
+    expect(byId.get('tp-22')!.introducedIn).toBe('v1.5.575')
+    expect(byId.get('tp-22')!.area).toBe('盤面(テンプレ保留)')
+    expect(byId.get('tp-22')!.check!.join(' / ')).toContain('生徒のいない机に講師が出ない')
+    expect(byId.get('tp-23')!.introducedIn).toBe('v1.5.575')
+    expect(byId.get('tp-23')!.check!.join(' / ')).toContain('リロードしても同じ並び')
     // 保護者QRを休み連絡専用へ(2026-09-19・spec-parent-portal §0-5)。スマホ(保護者ページ)と PC(盤面の四択)の両方を確かめる。
     for (const id of ['q-1', 'q-2', 'q-3', 'q-4', 'q-5']) expect(byId.get(id)!.introducedIn, id).toBe('v1.5.550')
     // 「保護者連絡」ボタン(休み連絡の履歴・2026-09-19)。

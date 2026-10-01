@@ -30,6 +30,7 @@ import {
   buildTemplateDiffSavedMessage,
   buildTemplateOccurrenceKey,
   computePendingDeskCollapse,
+  computeTemplateDiffApply,
   isTemplateDeskStudentContentEqual,
   isTemplateDiffTeacherTombstone,
   isTemplateManagedLesson,
@@ -37,6 +38,7 @@ import {
   resolveDeskManualInputMark,
   resolveTemplateDeskTeacher,
   shouldSeatSurviveRemerge,
+  stripTemplateScaffoldTeacherDesk,
 } from './templateDiffApply'
 import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './templatePendingDesks'
 import { buildMakeupStockEntries, type ManualMakeupOrigin } from './makeupStock'
@@ -1018,6 +1020,52 @@ describe('buildTemplateDiffTemplateCells と再マージの管理セル準備が
     const filterFn = sliceOf(read('./templateDiffApply.ts'), 'function filterTemplateDeskStudents(', 1400)
     expect(filterFn).toContain('buildFullySuppressedManagedDesk(desk)')
     expect(filterFn).not.toContain('teacherAssignmentTeacherId: undefined')
+    // 兄弟 1: 丸ごと振替の日の足場講師 strip も机 1 つ分の形を共有し、Q21-11 は再マージと同じ順（抑止 → strip）で当てる。
+    expect(filterFn).toContain('stripTemplateScaffoldTeacherDesk(suppressed)')
+    const stripFn = sliceOf(read('./ScheduleBoardScreen.tsx'), 'function stripTemplateScaffoldTeachers(', 400)
+    expect(stripFn).toContain('cell.desks.map(stripTemplateScaffoldTeacherDesk)')
+    expect(stripFn).not.toContain("teacher: ''")
+  })
+
+  // L-7 兄弟 2（2026-09-30）: 講師だけの机の置き直し（同名は足さない → 先頭の空き机）は机をまたぐ再マージの計算なので差分反映に写さず、
+  // 保存結果の反映日以降へ再マージの重ね合わせそのものを保存と同じ抑止で 1 回当てる。
+  it('配線: 差分反映の入口は保存結果の反映日以降へ再マージの重ね合わせを保存と同じ抑止で当てる（L-7 兄弟 2）', () => {
+    const board = readFileSync(fileURLToPath(new URL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+    const sliceOf = (start: string, length: number) => {
+      const index = board.indexOf(start)
+      expect(index).toBeGreaterThanOrEqual(0)
+      return board.slice(index, index + length)
+    }
+    const entryFn = sliceOf('export function computeTemplateDiffApplyForBoard(', 2600)
+    expect(entryFn).toContain('[...params.suppressedRegularLessonOccurrences, ...diff.addedSuppressedRegularLessonOccurrences]')
+    expect(entryFn).toContain('settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed })')
+    const settleFn = sliceOf('function settleTemplateDiffWeekWithRemerge(', 1400)
+    expect(settleFn).toContain('buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })')
+    expect(settleFn).toContain('overlayPreparedManagedCells(managedCells, [postFreezeBoard])')
+    expect(settleFn).toContain('cell.dateKey < params.effectiveStartDate ? cell')
+    expect(settleFn).not.toContain('mergeManagedWeek(')
+  })
+
+  // 入口の再マージ当て（上の配線）が無くても、差分反映の本体（純関数）だけで丸ごと振替の日の Q21-11 が再マージと同じ形になること（二重の守り）。
+  it('純関数: 丸ごと振替の日に Q21-11 で生徒を全員外した机は、差分反映の本体だけで足場講師も外れる（抑止 → strip の順・L-7 兄弟 1）', () => {
+    const suppressed = [buildTemplateTeacherSuppressionKey(DATE)]
+    const week = mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [desk.lesson!.studentSlots[0], entry('sB', { lessonType: 'makeup', makeupSourceDate: '2026-09-30' })] } }))
+    const templateCells = buildTemplateDiffTemplateCells({
+      weeks: [week], classroomSettings: newSettings(), teachers, students, regularLessons: OLD_ROWS, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: suppressed,
+    })
+    expect(templateCells.find((entry) => entry.applied.id === CELL_ID)?.scaffoldTeachersStripped).toBe(true)
+    const result = computeTemplateDiffApply({ weeks: [week], templateCells, effectiveStartDate: EFFECTIVE, suppressedRegularLessonOccurrences: suppressed, pendingDesks: {}, createdAt: '2026-09-29T10:00:00.000Z' })
+    expect(result.summary.skippedDuplicateStudents).toBe(1)
+    expect(deskOf(result.nextWeeks, 1)).toMatchObject({ teacher: '', manualTeacher: false })
+    expect(deskOf(result.nextWeeks, 1).lesson).toBeUndefined()
+    expect(deskOf(result.nextWeeks, 1).teacherAssignmentTeacherId).toBeUndefined()
+  })
+
+  it('足場講師 strip の机の形: 授業のある机はそのまま、授業のない机は講師名と割り当て情報を外し、記録・メモは残す（L-7 兄弟 1）', () => {
+    const lessonDesk: DeskCell = { id: 'd0', teacher: '田中', teacherAssignmentTeacherId: 't1', lesson: { id: 'managed_r0', studentSlots: [entry('sA'), null] } }
+    expect(stripTemplateScaffoldTeacherDesk(lessonDesk)).toBe(lessonDesk)
+    const teacherOnly: DeskCell = { id: 'd1', teacher: '鈴木', manualTeacher: true, teacherAssignmentSource: 'manual', teacherAssignmentTeacherId: 't2', memoSlots: ['連絡あり', null] }
+    expect(stripTemplateScaffoldTeacherDesk(teacherOnly)).toEqual({ id: 'd1', teacher: '', manualTeacher: false, memoSlots: ['連絡あり', null] })
   })
 
   it('全員抑止の机の形: 講師名と机の記録は残し、授業と講師の割り当て情報（手置きの印・由来・講習期間 ID・講師 ID）を外す（L-7）', () => {

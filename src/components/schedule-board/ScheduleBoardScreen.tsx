@@ -36,7 +36,7 @@ import { boardSlotTimes } from './slotTimes'
 import type { DeskCell, DeskLesson, GradeLabel, HolidayStockReturnStamp, LessonType, SlotCell, StudentEntry, StudentStatusEntry, StudentStatusKind, SubjectLabel, TeacherType } from './types'
 import { buildUniqueNameOwnerMap, isBoardStudentOwnedBy, PARENT_ABSENCE_TARGET_NOT_FOUND_MESSAGE, PARENT_ABSENCE_TARGET_PENDING_LOWER_MESSAGE, resolveParentAbsenceTarget, shouldProcessParentAbsenceRequest, type ParentAbsenceRequest, type ParentAbsenceRequestResult, type ParentAbsenceTarget } from './parentAbsenceTarget'
 import { buildStudentWithdrawSweepMessage, collectStudentWithdrawSweepTargets } from './studentWithdrawSweep'
-import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, buildFullySuppressedManagedDesk, buildTemplateDiffConfirmMessage, buildTemplateDiffSavedMessage, computePendingDeskCollapse, computeTemplateDiffApply, detachTemplateLessonWithoutTemplateStudents, resolveAdoptExistingCountAdjustments, resolveAdoptExistingWithdrawSeats, resolveDiscardedLowerSameDayMoveCountAdjustments, stripTemplateScaffoldTeacherDesk, type TemplateDiffApplySummary, type TemplateDiffTemplateCell } from './templateDiffApply'
 import {
   collectLiveStudentsElsewhereInCell,
   countTemplatePendingDesksOnBoard,
@@ -2408,7 +2408,7 @@ export function buildAppliedManagedPostFreezeCells(week: SlotCell[], params: {
   regularLessons: RegularLessonRow[]
   suppressedRegularLessonOccurrences: string[]
   freezeDate: string
-}): { postFreezeBoard: SlotCell[]; managedCells: Array<{ raw: SlotCell; applied: SlotCell }> } {
+}): { postFreezeBoard: SlotCell[]; managedCells: Array<{ raw: SlotCell; applied: SlotCell; scaffoldTeachersStripped: boolean }> } {
   const firstDateKey = week[0]?.dateKey ?? getReferenceDateKey(new Date())
   const weekStart = getWeekStart(parseDateKey(firstDateKey))
   const managedWeek = createBoardWeek(weekStart, {
@@ -2498,8 +2498,8 @@ export function buildTemplateDiffTemplateCells(params: {
     if (lastDateKey < params.effectiveStartDate) continue
     // 管理セルの準備は再マージと同じ関数（buildAppliedManagedPostFreezeCells）を通す（R-5。手で写さない）。
     const { managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })
-    for (const { raw, applied } of managedCells) {
-      result.push({ raw: cloneSlotCell(raw), applied })
+    for (const { raw, applied, scaffoldTeachersStripped } of managedCells) {
+      result.push({ raw: cloneSlotCell(raw), applied, scaffoldTeachersStripped })
     }
   }
   return result
@@ -2519,7 +2519,7 @@ export function computeTemplateDiffApplyForBoard(params: {
   createdAt: string
 }) {
   const templateCells = buildTemplateDiffTemplateCells(params)
-  return computeTemplateDiffApply({
+  const diff = computeTemplateDiffApply({
     weeks: params.weeks,
     templateCells,
     effectiveStartDate: params.effectiveStartDate,
@@ -2527,6 +2527,33 @@ export function computeTemplateDiffApplyForBoard(params: {
     pendingDesks: params.templatePendingDesks,
     createdAt: params.createdAt,
   })
+  // 保存結果を再マージの不動点にする（regression-reviewer L-7 兄弟 2・INV-02 / INV-03）。差分反映はテンプレを机の位置どおりに置くが、
+  // 再マージ（mergeManagedWeek）は講師だけの管理机を「同じコマに同じ講師名が居れば足さない → 先頭の空き机へ置き直す」ので、講師名が重なる
+  // 講師だけの机（講師のいない行＝「講師未割当」が 2 本・同じ講師が 2 机）が空くと、保存直後の再マージで講師の机がずれていた。
+  // その置き直しを差分反映に書き写さず（机をまたぐ計算なので写すと必ずずれる）、保存と同じ抑止（保存前＋Q21-11 で足した分）で
+  // 再マージの重ね合わせ（overlayPreparedManagedCells）そのものを反映日以降のセルへ 1 回当てる。反映日より前のセル・週は参照ごとそのまま（INV-10）。
+  const settledSuppressed = [...params.suppressedRegularLessonOccurrences, ...diff.addedSuppressedRegularLessonOccurrences]
+  return {
+    ...diff,
+    nextWeeks: diff.nextWeeks.map((week) => settleTemplateDiffWeekWithRemerge(week, { ...params, suppressedRegularLessonOccurrences: settledSuppressed })),
+  }
+}
+
+// 差分反映の結果の 1 週に、保存直後の再マージ（remergeBoardWeekWithManagedData）と同じ管理セル準備・重ね合わせを反映日以降のセルだけ当てる。
+// 退塾生徒の剥がし（今日基準・固定日前の週も対象）は保存と関係なく effect が当てるのでここでは当てない（反映日より前を触らない＝INV-10）。
+function settleTemplateDiffWeekWithRemerge(week: SlotCell[], params: {
+  classroomSettings: ClassroomSettings
+  teachers: TeacherRow[]
+  students: StudentRow[]
+  regularLessons: RegularLessonRow[]
+  suppressedRegularLessonOccurrences: string[]
+  effectiveStartDate: string
+}): SlotCell[] {
+  const lastDateKey = week.reduce((max, cell) => (cell.dateKey > max ? cell.dateKey : max), '')
+  if (lastDateKey < params.effectiveStartDate) return week
+  const { postFreezeBoard, managedCells } = buildAppliedManagedPostFreezeCells(week, { ...params, freezeDate: params.effectiveStartDate })
+  const settledByDateSlot = new Map(overlayPreparedManagedCells(managedCells, [postFreezeBoard]).map((cell) => [buildCellDateSlotKey(cell), cell]))
+  return week.map((cell) => (cell.dateKey < params.effectiveStartDate ? cell : (settledByDateSlot.get(buildCellDateSlotKey(cell)) ?? cell)))
 }
 
 // export はテストの配線確認用（保留マップ templatePendingDesks の読込往復・spec-template-behavior Q24-3）。
@@ -3444,17 +3471,11 @@ export function collectTemplateTeacherSuppressedDates(explicitlySuppressedKeys: 
 // 抑止対象の日の管理セルから「生徒のいない机の講師（＝テンプレ足場講師）」を落とす。
 // mergeManagedWeek の再付与ループは第2引数(調整済み管理セル)の机だけを見るので、ここで落とせば湧かない。
 // 生徒つきの机は落とさない（生徒ごと再配置される経路は通常授業の抑止キー側で止まる）。
+// 机 1 つ分の形は差分反映の Q21-11 と共有する（stripTemplateScaffoldTeacherDesk・regression-reviewer L-7 兄弟 1）。
 function stripTemplateScaffoldTeachers(cell: SlotCell): SlotCell {
   return {
     ...cell,
-    desks: cell.desks.map((desk) => (desk.lesson ? desk : {
-      ...desk,
-      teacher: '',
-      manualTeacher: false,
-      teacherAssignmentSource: undefined,
-      teacherAssignmentSessionId: undefined,
-      teacherAssignmentTeacherId: undefined,
-    })),
+    desks: cell.desks.map(stripTemplateScaffoldTeacherDesk),
   }
 }
 
@@ -3977,7 +3998,9 @@ export function carryBoardStatusRecordsOntoClosedDayCell(closedManagedCell: Slot
 // ★再マージ（overlayBoardWeeksOnScheduleCells ← remergeBoardWeekWithManagedData）とテンプレ差分反映の突き合わせ相手
 //   （buildTemplateDiffTemplateCells・spec-template-behavior Q21-5）がこの 1 か所を共有する。片方だけ当て方を変えると、
 //   差分反映の結果が再マージの不動点でなくなり、保存直後の effect で書き換わる（regression-reviewer R-5・2026-09-29）。
-function applyManagedCellSuppressions(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []): Array<{ raw: SlotCell; applied: SlotCell }> {
+// scaffoldTeachersStripped: その日に足場講師 strip を当てたか。差分反映の Q21-11 が後から空けた机にも同じ strip を当てるために返す
+// （抑止 → strip の順を差分反映でも守る・regression-reviewer L-7 兄弟 1）。再マージ側（overlayPreparedManagedCells）は使わない。
+function applyManagedCellSuppressions(scheduleCells: SlotCell[], boardWeeks: SlotCell[][], explicitlySuppressedManagedKeys: string[] = []): Array<{ raw: SlotCell; applied: SlotCell; scaffoldTeachersStripped: boolean }> {
   const suppressedManagedKeys = buildSuppressedManagedOccurrenceKeys(scheduleCells, boardWeeks, explicitlySuppressedManagedKeys)
 
   // 丸ごと振替した日はテンプレ足場講師を足さない（日単位の抑止・オーナー指示 2026-08-03）。
@@ -3990,10 +4013,11 @@ function applyManagedCellSuppressions(scheduleCells: SlotCell[], boardWeeks: Slo
     //   意図的に teacher を残す仕様）が再付与ループの燃料になり、テンプレ講師が湧く挙動へ戻る。
     //   回帰テスト: inv06-whole-day-transfer「テンプレに授業がある日でも足場講師が湧かない」。
     const suppressedStudentsCell = suppressManagedStudentsInCell(managedCell, suppressedManagedKeys)
-    const adjustedManagedCell = templateTeacherSuppressedDates.has(managedCell.dateKey)
+    const scaffoldTeachersStripped = templateTeacherSuppressedDates.has(managedCell.dateKey)
+    const adjustedManagedCell = scaffoldTeachersStripped
       ? stripTemplateScaffoldTeachers(suppressedStudentsCell)
       : suppressedStudentsCell
-    return { raw: managedCell, applied: adjustedManagedCell }
+    return { raw: managedCell, applied: adjustedManagedCell, scaffoldTeachersStripped }
   })
 }
 
