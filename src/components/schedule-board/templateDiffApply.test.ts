@@ -1176,6 +1176,64 @@ describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテ�
     expect(result.nextPendingDesks[pendingKey]?.lower.lesson?.studentSlots.map((student) => student?.managedStudentId ?? null)).toEqual(['sA', null])
   })
 
+  // regression-reviewer 中-1（2026-10-02）: v1.5.573〜575 の差分反映は、丸ごと振替の日にテンプレの生徒を変えると移送された手置きの講師を
+  // テンプレの講師（manual でない）に置き換えていた。その机を Q35 で再保存しても講師は残る（再マージも名前を残す＝不動点・INV-01 / INV-02）。
+  it('振替の机の講師が manual でない（v1.5.575 までの保存で置き換わった）ままでも、Q35 の保存で講師は残る（保存 → 再マージの不動点）', () => {
+    let week = transferredWeek()
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentTeacherId: 't1' }))
+    const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })
+    expect(result.summary.pending).toBe(0)
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sB'])
+    expect(deskOf(result.nextWeeks, 0).teacher).toBe('田中')
+    const once = remerge(result.nextWeeks, CHANGED_ROWS, [...wholeDaySuppressed, ...result.addedSuppressedRegularLessonOccurrences])
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
+    expect(deskOf(once, 0).teacher).toBe('田中')
+  })
+
+  it('v1.5.575 までに作られた保留の机（上段 D・B振／下段 A振・講師はテンプレの講師）を丸ごと振替の日に再保存すると、1 行 [A振, B振] に戻り講師が残る。D は 0 か所・再マージで不変', () => {
+    let week = transferredWeek()
+    week = mutateDesk(week, 0, (desk) => ({
+      ...desk,
+      manualTeacher: false,
+      teacherAssignmentSource: undefined,
+      teacherAssignmentTeacherId: 't1',
+      lesson: { id: 'managed_r0_x', note: '管理データ反映', studentSlots: [entry('sD'), entry('sB', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE })] },
+    }))
+    const pendingKey = buildTemplatePendingDeskKey(CELL_ID, deskOf([week], 0).id)
+    const pending: TemplatePendingDeskMap = {
+      [pendingKey]: {
+        lower: { lesson: { id: `${deskOf([week], 0).id}_moved`, studentSlots: [entry('sA', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE }), null] } },
+        effectiveStartDate: EFFECTIVE,
+        createdAt: '2026-10-01T10:00:00.000Z',
+      },
+    }
+    const suppressed = [...wholeDaySuppressed, buildManagedOccurrenceKey(entry('sD'), DATE, SLOT)]
+    const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed, pending })
+    expect(result.summary.pending).toBe(0)
+    expect(Object.keys(result.nextPendingDesks)).toEqual([])
+    expect(liveNames(deskOf(result.nextWeeks, 0))).toEqual(['sA', 'sB'])
+    expect(deskOf(result.nextWeeks, 0).teacher).toBe('田中')
+    expect(countLiveInCell(result.nextWeeks, 'sD')).toBe(0)
+    const once = remerge(result.nextWeeks, CHANGED_ROWS, [...suppressed, ...result.addedSuppressedRegularLessonOccurrences])
+    expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
+    expect(countLiveInCell(once, 'sD')).toBe(0)
+  })
+
+  it('同じテンプレで 2 回保存しても丸ごと振替の日の机は変わらず、抑止キーも増えない（INV-03）', () => {
+    const week = transferredWeek()
+    const first = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })
+    const suppressedAfter = [...wholeDaySuppressed, ...first.addedSuppressedRegularLessonOccurrences]
+    const second = applyDiff({ week: first.nextWeeks[0], newRows: CHANGED_ROWS, suppressed: suppressedAfter, pending: first.nextPendingDesks })
+    expect(cellOf(second.nextWeeks)).toEqual(cellOf(first.nextWeeks))
+    expect(second.addedSuppressedRegularLessonOccurrences).toEqual([])
+    expect(second.summary.wholeDayTransferSkippedStudents).toBe(0)
+  })
+
+  // regression-reviewer 中-2 / 中-3（2026-10-02・オーナー判断待ち）: Q35 で置かなかった生徒の希望回数（旧方式の予定数はテンプレを数えるので
+  // 実績より 1 多くなる。盤面ベースの予定数は開発用教室だけ）と、振替元の日を後で休日にしたときの自動 origin（抑止キーを見ない）の扱い。
+  it.todo('INV-05: Q35 で置かなかった生徒の予定数（旧方式）と実績の差をどう扱うか（−1 を積む／盤面ベースの予定数を全教室へ）をオーナー判断で固定する')
+  it.todo('INV-06: 丸ごと振替 → 振替元の日を後で休日にしたとき、Q35 で置かなかった生徒に自動 origin（振替在庫）が生まれる挙動をオーナー判断で固定する')
+
   it('丸ごと振替した日の置き換え（印なし・空の机）にも D を置かない（振替元の日＝空のまま残す）', () => {
     const week = mutateDesk(mutateDesk(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ id: desk.id, teacher: '' })), 1, (desk) => ({ id: desk.id, teacher: '' })), 2, (desk) => ({ id: desk.id, teacher: '' }))
     const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })

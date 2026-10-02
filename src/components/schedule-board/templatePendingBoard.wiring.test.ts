@@ -20,7 +20,7 @@ import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './temp
 vi.mock('html2canvas', () => ({ default: vi.fn() }))
 vi.mock('jspdf', () => ({ default: class {} }))
 
-const { BoardGrid } = await import('./BoardGrid')
+const { BoardGrid, fitStudentNameAndDetailTextForBoard } = await import('./BoardGrid')
 const { stripTemplatePendingLowerForPdf } = await import('../../utils/pdf')
 
 const BOARD_TSX = readFileSync(fileURLToPath(new NodeURL('./ScheduleBoardScreen.tsx', import.meta.url)), 'utf8')
@@ -165,10 +165,43 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
 
     it('盤面の文字サイズ合わせは、上段（.sa-student-inner）と同じ席の下段（.sa-pending-lower-inner）を揃える', () => {
       const GRID_TSX = readFileSync(fileURLToPath(new NodeURL('./BoardGrid.tsx', import.meta.url)), 'utf8')
-      const fit = sliceBody(GRID_TSX, 'function fitStudentNameAndDetailTextForBoard(root: HTMLElement) {', 'function fitMemoTextForBoard(')
+      const fit = sliceBody(GRID_TSX, 'export function fitStudentNameAndDetailTextForBoard(root: HTMLElement) {', 'function fitMemoTextForBoard(')
       expect(fit).toContain("':scope > .sa-pending-lower .sa-pending-lower-inner'")
       expect(fit).toContain('Math.min(upperSize, lowerSize)')
     })
+
+    // regression-reviewer 低-9（2026-10-02）: 振る舞いで固定する。jsdom は幅を測れないので、名前行の scrollWidth を「文字数 × 文字サイズ」、
+    // clientWidth を固定 60px にして、はみ出しが文字サイズに依存するようにする（上段 1 席分の合わせ方は従来どおり・下段は上段と小さい方へ揃う）。
+    it('文字サイズ合わせの振る舞い: 保留でない席は従来どおり、保留の席は上段と下段が小さい方に揃う', () => {
+      const html = renderGrid({
+        [buildTemplatePendingDeskKey(CELL_ID, `${CELL_ID}_desk_1`)]: {
+          lower: { lesson: { id: 'l1', studentSlots: [{ id: 'm1', name: '三浦三浦三浦', managedStudentId: 'sM', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal' }, null] } },
+          effectiveStartDate: '2026-10-07',
+          createdAt: '2026-09-29T10:00:00.000Z',
+        },
+      })
+      const root = document.createElement('div')
+      root.innerHTML = html
+      for (const row of Array.from(root.querySelectorAll<HTMLElement>('.sa-student-name-row'))) {
+        const name = row.querySelector<HTMLElement>('.sa-student-name')!
+        Object.defineProperty(row, 'clientWidth', { get: () => 60 })
+        Object.defineProperty(row, 'scrollWidth', { get: () => (name.textContent?.length ?? 0) * parseFloat(name.style.fontSize || '13') })
+      }
+      fitStudentNameAndDetailTextForBoard(root)
+      const nameOf = (testId: string) => root.querySelector<HTMLElement>(`[data-testid="${testId}"] .sa-student-inner .sa-student-name`)!
+      const lowerName = root.querySelector<HTMLElement>(`[data-testid="pending-lower-${CELL_ID}-0-0"] .sa-student-name`)!
+      // 保留でない机（机 2 の「馬場」）: 2 文字 × 19px = 38 ≤ 60 → 従来どおり最大の 19px
+      expect(nameOf(`student-cell-${CELL_ID}-1-0`).style.fontSize).toBe('19px')
+      // 保留の席: 上段「千葉」は 19px で収まるが、下段「三浦三浦三浦」は縮む → 上段も下段と同じ小さい方に揃う
+      const lowerSize = parseFloat(lowerName.style.fontSize)
+      expect(lowerSize).toBeLessThan(19)
+      expect(lowerSize).toBeGreaterThanOrEqual(7)
+      expect(nameOf(`student-cell-${CELL_ID}-0-0`).style.fontSize).toBe(lowerName.style.fontSize)
+    })
+
+    // regression-reviewer 低-6（2026-10-02）: 席ごと表示にしても、下段の無い白い席の「空席クリック → 保留メニュー（Q26-9）」と
+    // 「在庫からの配置・D&D の着地不可（Q26-5）」は机単位のまま（保留マップのキーは机 ID）。席単位にするかはオーナー判断待ち（Q34-11）。
+    it.todo('下段の無い席の空席クリック → 保留メニュー・着地不可（机単位）を席単位にするか、オーナー判断の後に固定する（Q34-11）')
   })
 })
 

@@ -91,6 +91,7 @@ describe('確認リストの項目定義', () => {
     expect(byId.get('tp-22')!.steps.join(' / ')).toContain('生徒 1 を別の生徒に替えて')
     expect(byId.get('tp-22')!.check!.join(' / ')).toContain('丸ごと振替した日はテンプレの生徒を置かず振替を優先 1名')
     expect(byId.get('tp-22')!.check!.join(' / ')).toContain('生徒のいない机に講師が出ない')
+    expect(byId.get('tp-22')!.check!.join(' / ')).toContain('机の講師も変わらない')
     // 第36版: その他欄の「下段の文字スタイル」「クリックメニューの見切れ」。
     expect(byId.get('tp-24')!.introducedIn).toBe('v1.5.576')
     expect(byId.get('tp-24')!.check!.join(' / ')).toContain('上段と同じ大きさ・同じ太さ')

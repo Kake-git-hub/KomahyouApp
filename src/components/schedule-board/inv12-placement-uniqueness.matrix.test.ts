@@ -423,6 +423,25 @@ describe('INV-12 × テンプレ差分反映の保存: 同じコマの生存数�
     expect(liveCount(remerged, 'sD')).toBe(0)
   })
 
+  it('不動点（Q35・regression-reviewer 中-1）: v1.5.575 までに丸ごと振替の日に作られた保留の机（上段 D／下段 A振・講師はテンプレの講師で manual でない）を再保存すると、1 行 [A振] に戻り講師が残る。D は 0 か所・保存 → 再マージ 1 回でセル丸ごと不変', () => {
+    const rows = [row('r0', 't1', 'sD'), row('r1', 't2', 'sB'), row('r2', 't3')]
+    const week = board((desks) => desks.map((desk, index) => (index === 0
+      ? { ...desk, teacher: '田中', manualTeacher: false, teacherAssignmentSource: undefined, teacherAssignmentTeacherId: 't1', lesson: { id: 'managed_r0_x', studentSlots: [mkStudent('d', '土屋', { managedStudentId: 'sD' }), null] as Slots } }
+      : { id: desk.id, teacher: '' })), rows)
+    const pendingKey = buildTemplatePendingDeskKey(CELL, `${CELL}_desk_1`)
+    const pendingDesks: TemplatePendingDeskMap = {
+      [pendingKey]: { lower: { lesson: { id: 'moved', studentSlots: [mkStudent('a-moved', '青木', { managedStudentId: 'sA', lessonType: 'makeup', makeupSourceDate: '2026-10-05' }), null] } }, effectiveStartDate: DATE, createdAt: '2026-10-01T10:00:00.000Z' },
+    }
+    const suppressed = [buildManagedOccurrenceKey(mkStudent('a', '青木', { managedStudentId: 'sA' }), DATE, 5), buildManagedOccurrenceKey(mkStudent('b', '馬場', { managedStudentId: 'sB' }), DATE, 5), buildTemplateTeacherSuppressionKey(DATE)]
+    const { saved, remerged } = saveThenRemerge(week, { rows, suppressed, pendingDesks })
+    expect(saved.summary.pending).toBe(0)
+    expect(saved.nextPendingDesks[pendingKey]).toBeUndefined()
+    expect(liveIdsAt(saved.nextWeeks, 0)).toEqual(['sA'])
+    expect(cellOf(saved.nextWeeks).desks[0].teacher).toBe('田中')
+    expect(liveCount(saved.nextWeeks, 'sD')).toBe(0)
+    expect(cellOf(remerged)).toEqual(cellOf(saved.nextWeeks))
+  })
+
   // 再マージ（mergeManagedWeek）は講師だけの管理机を、同じコマに同じ講師名が居れば足さず（alreadyPresent）、残りを「先頭から最初の空き机」へ
   // 置き直す。差分反映はテンプレを机の位置どおりに置くので、生徒を全員外した机の講師名が別の机と重なると（講師のいない行が 2 本＝「講師未割当」が 2 つ、
   // 同じ講師が 2 机）、その机が空き机になり後ろの講師だけの机が前へずれる（regression-reviewer 2026-09-30 の反例）。

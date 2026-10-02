@@ -912,6 +912,8 @@ function applyTemplateDiffToCell(context: {
     let changed = false
     const nextTemplateDesks = templateDesks.map((templateDesk, index) => {
       const elsewhere = livingByDesk.flatMap((students, otherIndex) => (otherIndex === index ? [] : students))
+      // stripScaffoldTeacher: 丸ごと振替の日は Q35（手順 0）が先にテンプレの生徒を全員外すので、ここで strip に当たる机は今は無い。
+      // Q35 を狭める・戻すときは、L-7 兄弟 1（21d5573）の「Q21-11 で空けた机にも strip」の assert をこの経路へ戻すこと。
       const filtered = filterTemplateDeskStudents(templateDesk, elsewhere, { stripScaffoldTeacher: Boolean(templateCell.scaffoldTeachersStripped) })
       if (filtered.removed.length > 0) {
         changed = true
@@ -936,7 +938,23 @@ function applyTemplateDiffToCell(context: {
     const templateDesk = templateDesks[index]
     const decision = decisions[index]
     const pendingKey = buildTemplatePendingDeskKey(cell.id, desk.id)
-    const teacher = resolveTemplateDeskTeacher(templateDesk, desk)
+    // Q35-7（regression-reviewer 中-1・2026-10-02）: 丸ごと振替の日は、テンプレにその机の講師が居ても（抑止前の raw で見る）日単位の strip
+    // （applyManagedCellSuppressions または手順 0）で外れる。既存の机に印のある生きている生徒が残る（残す／保留中の再保存）なら、机の講師は
+    // 既存のまま（manual でない講師も外さない）。v1.5.573〜575 の差分反映はこの机の講師をテンプレの講師（manual でない）に置き換えていたため、
+    // Q21-9 の「テンプレ机に講師がいない → 足場講師は外す」をそのまま当てると再保存で振替の机が講師なしになる。
+    // 再マージは管理授業でない机の manual でない講師の名前を残すので、残す方が不動点（INV-01 / INV-02）。
+    const keepsWholeDayTeacher = Boolean(templateCell.scaffoldTeachersStripped)
+      && rawTemplateDesks[index].teacher.trim() !== ''
+      && !templateDesk.teacher.trim()
+      && desk.teacher.trim() !== ''
+      && !isTemplateDiffTeacherTombstone(desk)
+      && (
+        (decision.kind === 'keep' && liveStudents(desk.lesson).some(studentHasManualMark))
+        || (decision.kind === 'pending-rebase' && [...liveStudents(desk.lesson), ...liveStudents(decision.pending.lower.lesson)].some(studentHasManualMark))
+      )
+    const teacher = keepsWholeDayTeacher
+      ? { teacherFields: pickTeacherFields(desk), reason: 'kept-user' as const }
+      : resolveTemplateDeskTeacher(templateDesk, desk)
     if (teacher.reason === 'kept-qr' && templateDesk.teacher.trim()) summary.qrTeacherKept += 1
     const withTeacher = applyTeacherFields(desk, teacher.teacherFields)
     const upperLesson = templateLessonOf(templateDesk)

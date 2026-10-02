@@ -179,7 +179,8 @@ function fitStudentInnerText(inner: HTMLElement): number | null {
   return applied
 }
 
-function fitStudentNameAndDetailTextForBoard(root: HTMLElement) {
+// export はテスト用（上段と保留の下段の文字サイズが揃う振る舞いを jsdom で固定する・templatePendingBoard.wiring.test.ts）。
+export function fitStudentNameAndDetailTextForBoard(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>('.sa-student-inner').forEach((inner) => {
     const upperSize = fitStudentInnerText(inner)
     // 保留（2 行）の下段は上段と同じ文字サイズに揃える（オーナー指示 2026-10-02・確認リスト v1.5.573 その他欄
@@ -317,7 +318,9 @@ function BoardGridComponent({
     // groupClassEntries も依存に含める。集団講師/科目の選択は cells を変えず
     // groupClassEntries だけ更新するため、これが無いと選択直後に講師名の
     // 自動フォントフィットが走らず小さいまま表示される(リロード/週切替で初めて補正)。
-  }, [cells, linkResolutionCells, groupClassEntries])
+    // templatePendingDesks も同じ理由で含める(下段の削除で保留マップだけ変わり 2 行のまま残るとき、下段に合わせて縮んだ
+    // 上段のサイズを合わせ直す・regression-reviewer 低-4・2026-10-02)。
+  }, [cells, linkResolutionCells, groupClassEntries, templatePendingDesks])
 
   const renderStudentCell = (
     cell: SlotCell,
