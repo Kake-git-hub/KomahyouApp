@@ -753,7 +753,7 @@ describe('computeTemplateDiffApplyForBoard（Q21・条件 1〜8・21）', () => 
   })
 
   it('条件 25：確認文は 4 件数を出し、「すべてのデータが消去され」を出さない', () => {
-    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0 })
+    const message = buildTemplateDiffConfirmMessage(EFFECTIVE, { replaced: 3, kept: 2, adopted: 1, pending: 4, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0 })
     expect(message).toContain('3机を置き換え、4机が保留（緑）になります')
     expect(message).toContain('そのまま残す2机・印を外して採用1机')
     expect(message).not.toContain('すべてのデータが消去され')
@@ -1136,8 +1136,21 @@ describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテ�
     const once = remerge(result.nextWeeks, CHANGED_ROWS, suppressedAfter)
     expect(cellOf(once)).toEqual(cellOf(result.nextWeeks))
     expect(countLiveInCell(once, 'sD')).toBe(0)
-    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日はテンプレの生徒を置かず振替を優先1名')
-    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: 1名')
+    // Q35-8（オーナー決定 2026-10-02「希望回数も補正して」）: 置かなかった D は同じ日に授業が残らないので −1 の対象
+    expect(result.wholeDayTransferCountAdjustments.map((item) => [item.student.managedStudentId, item.dateKey])).toEqual([['sD', DATE]])
+    expect(result.summary.wholeDayTransferCountAdjusted).toBe(1)
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日はテンプレの生徒を置かず振替を優先1名（希望回数 −1: 1名）')
+    expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: 1名（希望回数 −1: 1名）')
+  })
+
+  it('Q35-8: 置かなかった生徒が同じ日の別の机に同じ科目で生きている（振替など）なら希望回数は補正しない（「既存を採用」と同じ判定）', () => {
+    let week = transferredWeek()
+    week = mutateDesk(week, 1, (desk) => ({ id: desk.id, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: `${desk.id}_hand`, studentSlots: [entry('sD', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE }), null] } }))
+    const result = applyDiff({ week, newRows: CHANGED_ROWS, suppressed: wholeDaySuppressed })
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(1)
+    expect(result.wholeDayTransferCountAdjustments).toEqual([])
+    expect(result.summary.wholeDayTransferCountAdjusted).toBe(0)
+    expect(buildTemplateDiffConfirmMessage(EFFECTIVE, result.summary)).toContain('（希望回数 −1: 0名）')
   })
 
   it('テンプレの生徒を変えなかったとき（A・B は抑止で元から居ない）と、変えたとき（D）で、丸ごと振替した日の机の形は同じ', () => {
@@ -1229,10 +1242,9 @@ describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテ�
     expect(second.summary.wholeDayTransferSkippedStudents).toBe(0)
   })
 
-  // regression-reviewer 中-2 / 中-3（2026-10-02・オーナー判断待ち）: Q35 で置かなかった生徒の希望回数（旧方式の予定数はテンプレを数えるので
-  // 実績より 1 多くなる。盤面ベースの予定数は開発用教室だけ）と、振替元の日を後で休日にしたときの自動 origin（抑止キーを見ない）の扱い。
-  it.todo('INV-05: Q35 で置かなかった生徒の予定数（旧方式）と実績の差をどう扱うか（−1 を積む／盤面ベースの予定数を全教室へ）をオーナー判断で固定する')
-  it.todo('INV-06: 丸ごと振替 → 振替元の日を後で休日にしたとき、Q35 で置かなかった生徒に自動 origin（振替在庫）が生まれる挙動をオーナー判断で固定する')
+  // regression-reviewer 中-2 → オーナー決定 2026-10-02「希望回数も補正して（盤面の回数と同じ思想）」＝上の Q35-8 のテスト 2 件で固定（INV-05）。
+  // 中-3 → オーナー決定「振替元の日にも置かないで OK」。振替元の日を後で休日にしたときの自動 origin（抑止キーを見ない）は会計として妥当（Q35-5）。
+  it.todo('INV-06: 丸ごと振替 → 振替元の日を後で休日にしたとき、Q35 で置かなかった生徒に自動 origin（振替在庫）が 1 件だけ生まれることを固定する')
 
   it('丸ごと振替した日の置き換え（印なし・空の机）にも D を置かない（振替元の日＝空のまま残す）', () => {
     const week = mutateDesk(mutateDesk(mutateDesk(buildWeek(OLD_ROWS), 0, (desk) => ({ id: desk.id, teacher: '' })), 1, (desk) => ({ id: desk.id, teacher: '' })), 2, (desk) => ({ id: desk.id, teacher: '' }))

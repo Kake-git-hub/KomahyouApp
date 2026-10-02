@@ -74,6 +74,9 @@ type BoardToolbarProps = {
   onDismissUndoSnapshot?: () => void
   onTemplateExport?: () => void
   onTemplateImport?: () => void
+  /** テンプレ編集モードの反映開始日（ボタン行の「エクセル取込」の右・オーナー指示 2026-10-02。見出し行は廃止・机数は出さない）。 */
+  templateEffectiveStartDate?: string
+  onTemplateEffectiveStartDateChange?: (value: string) => void
   onTemplateSaveOverwrite?: () => void
   onTemplateClear?: () => void
   onTemplateClose?: () => void
@@ -137,6 +140,8 @@ function BoardToolbarComponent({
   onDismissUndoSnapshot,
   onTemplateExport,
   onTemplateImport,
+  templateEffectiveStartDate,
+  onTemplateEffectiveStartDateChange,
   onTemplateSaveOverwrite,
   onTemplateClear,
   onTemplateClose,
@@ -299,6 +304,10 @@ function BoardToolbarComponent({
               <button className="secondary-button slim" type="button" onClick={onTemplateClear} data-testid="template-clear-button">テンプレを空にする</button>
               <button className="secondary-button slim" type="button" onClick={onTemplateExport} data-testid="template-export-button">エクセル現状出力</button>
               <button className="secondary-button slim" type="button" onClick={onTemplateImport} data-testid="template-import-button">エクセル取込</button>
+              <label className="toolbar-template-date" data-testid="template-effective-start-date-field">
+                <span>反映開始日</span>
+                <input type="date" value={templateEffectiveStartDate ?? ''} onChange={(event) => onTemplateEffectiveStartDateChange?.(event.target.value)} data-testid="template-effective-start-date" />
+              </label>
               <button className="primary-button danger" type="button" onClick={onTemplateSaveOverwrite} data-testid="template-save-overwrite-button">反映開始日以降をこのテンプレで上書き保存</button>
             </>
           ) : (

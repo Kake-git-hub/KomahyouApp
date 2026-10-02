@@ -259,7 +259,9 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     const upper = diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0]
     expect(upper.lesson?.studentSlots.filter(Boolean).map((item) => item!.managedStudentId)).toEqual(['sC', 'sA'])
     // 差分反映の結果は台帳を持たない（在庫台帳に触る入口が無い）＝保存前後で台帳が同じなので残数も同じ。
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary'])
+    // wholeDayTransferCountAdjustments は Q35-8（2026-10-02）の希望回数 −1 の対象（台帳の書き換えではなく、保存が単発削除と同じ関数で積む判定結果）。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary', 'wholeDayTransferCountAdjustments'])
+    expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     const before = lectureBalances(PLACED_LEDGERS)
     expect(before).toEqual({ sM: 1 })
     expect(lectureBalances(PLACED_LEDGERS)).toEqual(before)
@@ -295,7 +297,9 @@ describe('INV-06 講習在庫: テンプレ差分反映の保留の下段（保�
     expect(diff.nextPendingDesks[key].lower.lesson?.studentSlots.map((item) => item?.id ?? null)).toEqual(['lec_sM', null])
     const upper = () => diff.nextWeeks[0].find((cell) => cell.id === CELL_ID)!.desks[0]
     expect(upper().lesson?.studentSlots.map((item) => item?.managedStudentId ?? null)).toEqual(['sC', 'sD'])
-    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary'])
+    // wholeDayTransferCountAdjustments は Q35-8（2026-10-02）の希望回数 −1 の対象（台帳の書き換えではなく、保存が単発削除と同じ関数で積む判定結果）。
+    expect(Object.keys(diff).sort()).toEqual(['addedSuppressedRegularLessonOccurrences', 'nextPendingDesks', 'nextWeeks', 'summary', 'wholeDayTransferCountAdjustments'])
+    expect(diff.wholeDayTransferCountAdjustments).toEqual([])
     expect(lectureBalances(PLACED_LEDGERS)).toEqual({ sM: 1 })
     const result = computePendingDeskResolution({
       mode: 'adopt-template',

@@ -11,7 +11,7 @@
 // このファイルは純データ・純関数のみ（DOM / ネットワークに触らない）。
 
 import type { DeskCell, SlotCell, StudentEntry } from './types'
-import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, type TemplatePendingCollapseResult } from './templateDiffApply'
+import { alignTeacherIdentityWithRemerge, computePendingDeskCollapse, isSameTemplateStudent, type TemplatePendingCollapseResult } from './templateDiffApply'
 import {
   buildTemplatePendingDeskKey,
   cloneTemplatePendingLower,
@@ -128,22 +128,25 @@ export function resolveTemplatePendingStudentMenuActions(row: 'upper' | 'lower',
 }
 
 export const TEMPLATE_PENDING_MESSAGES = {
-  teacherLocked: '保留（2 行・緑）の机では講師を変更できません。先に「テンプレを採用」「既存を採用」で片づけてください。',
-  landingBlocked: '保留（2 行・緑）の机へは生徒を移動・配置できません。先に「テンプレを採用」「既存を採用」で片づけてください。',
-  attendBlocked: '保留（2 行・緑）の机では出席を付けられません。先に「テンプレを採用」「既存を採用」で片づけてください。',
+  teacherLocked: '保留（2 行・緑）の机では講師を変更できません。先に「テンプレ授業を採用」「手入力データを採用」で片づけてください。',
+  landingBlocked: '保留（2 行・緑）の席へは生徒を移動・配置できません。先に「テンプレ授業を採用」「手入力データを採用」で片づけてください。',
+  attendBlocked: '保留（2 行・緑）の席では出席を付けられません。先に「テンプレ授業を採用」「手入力データを採用」で片づけてください。',
   lowerMoveNeedsEmptySeat: '保留の下段の生徒は、空いている席へだけ移動できます（入れ替えはできません）。',
   closedCell: '休校のコマへは移動できません。',
 } as const
 
 /**
- * Q26-5：他の机から 2 行の机（上段の空席を含む）への生徒の移動・D&D の着地・在庫からの配置を止める理由。
+ * Q26-5：他の机から 2 行の机への生徒の移動・D&D の着地・在庫からの配置を止める理由。
  * 同じ机の中の席の入れ替え（sourceDeskKey が同じ机）は止めない。保留でない机なら null。
+ * seatIndex を渡すと席ごと（2026-10-02・Q34-12）: 保留に関わらない席（下段が無く、上段の生徒も下段と無関係）への着地は止めない。
  */
-export function resolveTemplatePendingLandingBlock(map: TemplatePendingDeskMap | null | undefined, cell: Pick<SlotCell, 'id' | 'desks'> | null | undefined, deskIndex: number, sourceDeskKey?: string | null) {
+export function resolveTemplatePendingLandingBlock(map: TemplatePendingDeskMap | null | undefined, cell: Pick<SlotCell, 'id' | 'desks'> | null | undefined, deskIndex: number, sourceDeskKey?: string | null, seatIndex?: number) {
   if (!cell || !hasTemplatePendingDesks(map)) return null
-  const found = findTemplatePendingDeskEntry(map, cell.id, cell.desks[deskIndex]?.id)
-  if (!found) return null
+  const desk = cell.desks[deskIndex]
+  const found = findTemplatePendingDeskEntry(map, cell.id, desk?.id)
+  if (!found || !desk) return null
   if (sourceDeskKey && sourceDeskKey === found.key) return null
+  if (seatIndex !== undefined && !isTemplatePendingSeatLinked(desk, found.entry.lower, seatIndex)) return null
   return TEMPLATE_PENDING_MESSAGES.landingBlocked
 }
 
@@ -206,6 +209,20 @@ export function hasTemplatePendingLowerSeatContent(lower: TemplatePendingLower, 
 /** 帯「保留 n」（狭い画面）を付ける席＝下段に中身のある最初の席。どの席にも無ければ 0（呼び出し側は描かない）。 */
 export function resolveTemplatePendingBandSeat(lower: TemplatePendingLower) {
   return hasTemplatePendingLowerSeatContent(lower, 0) || !hasTemplatePendingLowerSeatContent(lower, 1) ? 0 : 1
+}
+
+/**
+ * 席ごとの保留（オーナー決定 2026-10-02「席単位にする」・spec-template-behavior Q34-12）: その席が保留に関わるか。
+ *  - 下段のその席に中身（生きている生徒・出欠記録・メモ）がある
+ *  - 上段のその席の生徒が、下段の生きている生徒と同じ生徒（「既存を採用」で取り下げられる席＝resolveAdoptExistingWithdrawSeats と同じ条件）
+ * 関わらない席は 1 行の席と同じ操作（出席・空席メニュー・移動／D&D／在庫からの配置の着地）ができる。講師欄のロックは机単位のまま
+ * （保留マップのキーは机 ID・講師は机に 1 人）。
+ */
+export function isTemplatePendingSeatLinked(desk: Pick<DeskCell, 'lesson'>, lower: TemplatePendingLower, seatIndex: number) {
+  if (hasTemplatePendingLowerSeatContent(lower, seatIndex)) return true
+  const upper = desk.lesson?.studentSlots[seatIndex]
+  if (!upper) return false
+  return liveStudentsOf(lower.lesson).some((student) => isSameTemplateStudent(student, upper))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

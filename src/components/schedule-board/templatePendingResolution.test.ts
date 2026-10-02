@@ -27,6 +27,7 @@ import { buildTemplatePendingDeskKey, type TemplatePendingDeskMap } from './temp
 import {
   countTemplatePendingDesksOnBoard,
   hasTemplatePendingLowerSeatContent,
+  isTemplatePendingSeatLinked,
   resolveTemplatePendingBandSeat,
   resolveTemplatePendingDateBlockReason,
   resolveTemplatePendingLandingBlock,
@@ -825,5 +826,34 @@ describe('hasTemplatePendingLowerSeatContent / resolveTemplatePendingBandSeat（
     expect(resolveTemplatePendingBandSeat({ lesson: { id: 'l', studentSlots: [makeup, null] }, memoSlots: [null, '持ち物'] })).toBe(0)
     expect(resolveTemplatePendingBandSeat({ memoSlots: [null, '持ち物'] })).toBe(1)
     expect(resolveTemplatePendingBandSeat({})).toBe(0)
+  })
+})
+
+// オーナー決定 2026-10-02「席単位にする」（spec-template-behavior Q34-12）。
+describe('isTemplatePendingSeatLinked / resolveTemplatePendingLandingBlock の席ごと判定', () => {
+  const makeupA: StudentEntry = { id: 'a-m', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '数', lessonType: 'makeup', teacherType: 'normal', makeupSourceDate: '2026-09-30' }
+  const regularA: StudentEntry = { id: 'a-r', name: '青木', managedStudentId: 'sA', grade: '中2', subject: '英', lessonType: 'regular', teacherType: 'normal' }
+  const regularB: StudentEntry = { id: 'b-r', name: '馬場', managedStudentId: 'sB', grade: '中2', subject: '数', lessonType: 'regular', teacherType: 'normal' }
+  const lowerSeat1 = { lesson: { id: 'l', studentSlots: [null, makeupA] as [StudentEntry | null, StudentEntry | null] } }
+
+  it('下段のある席は関わる。下段の無い席は、上段の生徒が下段の生徒と同じ生徒のときだけ関わる', () => {
+    const deskBA: DeskCell = { id: 'd', teacher: '田中', lesson: { id: 'managed', studentSlots: [regularB, regularA] } }
+    expect(isTemplatePendingSeatLinked(deskBA, lowerSeat1, 1)).toBe(true)
+    expect(isTemplatePendingSeatLinked(deskBA, lowerSeat1, 0)).toBe(false)
+    // 上段の生徒 1 が下段の A と同じ生徒（科目違い）→ 「手入力データを採用」で取り下げられる席なので関わる
+    const deskAB: DeskCell = { id: 'd', teacher: '田中', lesson: { id: 'managed', studentSlots: [regularA, regularB] } }
+    expect(isTemplatePendingSeatLinked(deskAB, lowerSeat1, 0)).toBe(true)
+    // 上段が空の席で下段も無い → 関わらない（空欄メニュー・配置ができる）
+    const deskEmpty: DeskCell = { id: 'd', teacher: '田中' }
+    expect(isTemplatePendingSeatLinked(deskEmpty, lowerSeat1, 0)).toBe(false)
+  })
+
+  it('着地ガードは seatIndex を渡すと席ごと: 関わらない席への着地は止めず、関わる席は止める。渡さなければ机単位のまま', () => {
+    const cell = { id: 'C1', desks: [{ id: 'd1', teacher: '田中', lesson: { id: 'managed', studentSlots: [regularB, null] as [StudentEntry | null, StudentEntry | null] } }] }
+    const map: TemplatePendingDeskMap = { [buildTemplatePendingDeskKey('C1', 'd1')]: { lower: lowerSeat1, effectiveStartDate: '2026-10-07', createdAt: '' } }
+    expect(resolveTemplatePendingLandingBlock(map, cell, 0, null, 0)).toBeNull()
+    expect(resolveTemplatePendingLandingBlock(map, cell, 0, null, 1)).toBe(TEMPLATE_PENDING_MESSAGES.landingBlocked)
+    expect(resolveTemplatePendingLandingBlock(map, cell, 0)).toBe(TEMPLATE_PENDING_MESSAGES.landingBlocked)
+    expect(resolveTemplatePendingLandingBlock(map, cell, 0, buildTemplatePendingDeskKey('C1', 'd1'), 1)).toBeNull()
   })
 })

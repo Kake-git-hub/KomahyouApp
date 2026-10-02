@@ -2701,33 +2701,16 @@ tr.sa-group-row td {
   white-space: nowrap;
 }
 
-.template-pending-desk-menu-row-label {
-  margin-top: 8px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #1b5e20;
-}
-
-.template-pending-desk-menu-items {
+/* 保留（2 行）の席のメニュー＝4 択だけ（テンプレ授業を採用／手入力データを採用／削除／移動・確認リスト v1.5.576 その他欄・2026-10-02）。 */
+.template-pending-desk-menu-actions {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin: 4px 0;
-}
-
-.template-pending-desk-menu-lower {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  align-items: stretch;
   gap: 6px;
 }
 
-.template-pending-desk-menu-item {
-  font-size: 13px;
-}
-
-.template-pending-desk-menu-item.muted {
-  color: #69809a;
+.template-pending-desk-menu-actions .menu-link-button {
+  text-align: left;
 }
 
 /* 警告時のセル背景色付けはオーナー指示(2026-07-02)で全条件廃止。警告は名前の赤文字(出席不可コマ配置のみ)
@@ -4373,20 +4356,24 @@ tr.sa-group-row td {
   background: #fde8e8;
 }
 
-.template-mode-header-bar {
-  display: flex;
+/* テンプレ編集モードの反映開始日（ボタン行の「エクセル取込」の右・オーナー指示 2026-10-02。見出し行は廃止）。 */
+.toolbar-template-date {
+  display: inline-flex;
   align-items: center;
-  gap: 16px;
-  padding: 6px 16px;
-  background: #f4d4d4;
-  border-bottom: 1px solid #daa;
-  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #8b2020;
+  white-space: nowrap;
 }
 
-.template-mode-title {
-  font-weight: 700;
-  font-size: 1rem;
-  color: #8b2020;
+.toolbar-template-date input[type='date'] {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid #d7b0b0;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
 }
 
 .button-loading-content {

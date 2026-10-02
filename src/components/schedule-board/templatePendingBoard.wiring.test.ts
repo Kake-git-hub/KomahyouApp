@@ -199,9 +199,7 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       expect(nameOf(`student-cell-${CELL_ID}-0-0`).style.fontSize).toBe(lowerName.style.fontSize)
     })
 
-    // regression-reviewer 低-6（2026-10-02）: 席ごと表示にしても、下段の無い白い席の「空席クリック → 保留メニュー（Q26-9）」と
-    // 「在庫からの配置・D&D の着地不可（Q26-5）」は机単位のまま（保留マップのキーは机 ID）。席単位にするかはオーナー判断待ち（Q34-11）。
-    it.todo('下段の無い席の空席クリック → 保留メニュー・着地不可（机単位）を席単位にするか、オーナー判断の後に固定する（Q34-11）')
+    // regression-reviewer 低-6 → オーナー決定 2026-10-02「席単位にする」（Q34-12）。配線は「2 行の机の制限」の describe で固定。
   })
 })
 
@@ -291,10 +289,69 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     const move = sliceBody(BOARD_TSX, 'const executeMoveStudent = (', 'const stableExecuteMoveStudent')
     expect(move).toContain('resolveTemplatePendingLandingBlock(')
     const scheduleMove = sliceBody(BOARD_TSX, 'const executeScheduleViewMove = (', 'const sourceHit = findScheduleViewMoveSource(')
-    expect(scheduleMove).toContain('resolveTemplatePendingLandingBlock(activeTemplatePendingDesks, availabilityCell, resolvedSeat.deskIndex)')
+    expect(scheduleMove).toContain('resolveTemplatePendingLandingBlock(activeTemplatePendingDesks, availabilityCell, resolvedSeat.deskIndex, null, resolvedSeat.studentIndex)')
     const click = sliceBody(BOARD_TSX, 'const handleStudentClick = (', 'if (hasStudent) {')
     expect(click).toContain('TEMPLATE_PENDING_MESSAGES.landingBlocked')
-    expect(click).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y)')
+    expect(click).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y, studentIndex)')
+  })
+
+  // オーナー決定 2026-10-02「席単位にする」（Q34-12）: 保留の制限（出席・空席クリック→保留メニュー・着地不可・上段メニューの制限）は
+  // 保留に関わる席（下段がある席・上段の生徒が下段と同じ生徒の席）だけ。講師ロックは机単位のまま。
+  it('出席・空席クリック・移動/D&D/日程表 D&D/在庫からの配置・上段メニューの制限は席ごと（resolveTemplatePendingSeatAt / isTemplatePendingSeatLinked）', () => {
+    const seatAt = sliceBody(BOARD_TSX, 'const resolveTemplatePendingSeatAt = (', 'const templatePendingDeskMenuContext')
+    expect(seatAt).toContain('isTemplatePendingSeatLinked(desk, found.entry.lower, seatIndex)')
+    const attend = sliceBody(BOARD_TSX, 'const handleMarkStudentAttended = () => {', 'const attendedStatusEntry')
+    expect(attend).toContain('resolveTemplatePendingSeatAt(studentMenu.cellId, studentMenu.deskIndex, studentMenu.studentIndex)')
+    const click = sliceBody(BOARD_TSX, 'const handleStudentClick = (', 'if (hasStudent) {')
+    expect(click).toContain('resolveTemplatePendingSeatAt(cellId, deskIndex, studentIndex)')
+    expect(click).not.toContain('resolveTemplatePendingDeskAt(cellId, deskIndex))')
+    const move = sliceBody(BOARD_TSX, 'const executeMoveStudent = (', 'const stableExecuteMoveStudent')
+    expect(move).toContain('sourceCell && sourceDesk ? buildTemplatePendingDeskKey(sourceCell.id, sourceDesk.id) : null,\n        studentIndex,')
+    const lowerMove = sliceBody(BOARD_TSX, 'export function computePendingLowerStudentMove(', 'const result = computeStudentMove({')
+    expect(lowerMove).toContain('resolveTemplatePendingLandingBlock(params.templatePendingDesks, targetViewCell, params.deskIndex, null, params.studentIndex)')
+    const menuFlag = sliceBody(BOARD_TSX, 'const menuStudentOnTemplatePendingDesk = ', 'const emptyMenuVariant = ')
+    expect(menuFlag).toContain('isTemplatePendingSeatLinked(menuStudent.desk, found.entry.lower, studentMenu.studentIndex)')
+    // 講師ロックは机単位のまま
+    const select = sliceBody(BOARD_TSX, 'const handleSelectDesk = (', 'const handleConfirmTeacher = () => {')
+    expect(select).toContain('resolveTemplatePendingDeskAt(cellId, deskIndex)')
+  })
+
+  // 確認リスト v1.5.576 その他欄「このメニューがわかりにくい。まず選択肢として テンプレ授業を採用／手入力データを採用／手入力データを削除／手入力データを移動 だけを表示して」
+  it('保留の席のメニューは 4 択だけ（上段・下段の一覧と説明文は出さない）。押した席の下段（lowerIndex）が対象', () => {
+    const menu = sliceBody(BOARD_TSX, 'data-testid="template-pending-desk-menu"', '{wholeDayTransferSourceDate && !isTemplateMode ? (')
+    for (const label of ['テンプレ授業を採用', '手入力データを採用', '手入力データを削除', '手入力データを移動']) expect(menu).toContain(label)
+    expect(menu).not.toContain('template-pending-lower-items')
+    expect(menu).not.toContain('上段（実配置')
+    expect(menu).not.toContain('元に戻す」で戻せます')
+    expect(menu).toContain('const index = templatePendingDeskMenu.lowerIndex')
+    expect(menu).toContain("handleResolveTemplatePendingDesk('delete-lower-student', index)")
+    expect(menu).toContain('handleStartTemplatePendingLowerMove(index)')
+    // 下段を押した席がメニューの対象（帯・下段のクリックは lowerIndex を渡す）
+    const lowerClick = sliceBody(BOARD_TSX, 'const handleTemplatePendingLowerClick = (', 'const buildTemplatePendingLedgers = ')
+    expect(lowerClick).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex)')
+  })
+
+  // オーナー指示 2026-10-02: テンプレ編集画面の見出し行（題名・反映開始日・机数）とボタン行を 1 行に。反映開始日はエクセル取込の右・机数は出さない。
+  it('テンプレ編集の反映開始日はツールバーのボタン行（エクセル取込の右）にあり、見出し行と机数は出ない', () => {
+    expect(BOARD_TSX).not.toContain('template-mode-header-bar')
+    expect(BOARD_TSX).not.toContain('机数 {classroomSettings.deskCount}')
+    expect(BOARD_TSX).toContain('templateEffectiveStartDate={isTemplateMode ? templateEffectiveStartDate : undefined}')
+    expect(BOARD_TSX).toContain('onTemplateEffectiveStartDateChange={setTemplateEffectiveStartDate}')
+    const importIndex = TOOLBAR_TSX.indexOf('data-testid="template-import-button"')
+    const dateIndex = TOOLBAR_TSX.indexOf('data-testid="template-effective-start-date"')
+    const saveIndex = TOOLBAR_TSX.indexOf('data-testid="template-save-overwrite-button"')
+    expect(importIndex).toBeGreaterThan(0)
+    expect(dateIndex).toBeGreaterThan(importIndex)
+    expect(saveIndex).toBeGreaterThan(dateIndex)
+    expect(TOOLBAR_TSX).not.toContain('selection-pill">机数')
+  })
+
+  it('テンプレ差分反映の保存は Q35 で置かなかった生徒の希望回数 −1 を単発削除と同じ関数で積み、publish にも載せる（Q35-8）', () => {
+    const save = sliceBody(BOARD_TSX, 'const handleSaveRegularLessonTemplateByDiff = useCallback(', 'const handleSaveRegularLessonTemplate = useCallback(')
+    expect(save).toContain('for (const target of plan.diff.wholeDayTransferCountAdjustments) {')
+    expect(save).toContain('resolveDeletedStudentCountAccounting(nextScheduleCountAdjustments, target.student, target.dateKey).nextAdjustments')
+    expect(save).toContain('setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))')
+    expect(save).toContain('scheduleCountAdjustments: cloneScheduleCountAdjustments(nextScheduleCountAdjustments),')
   })
 
   it('保留がある日の休日設定・生徒を空にする・丸ごと振替（振替元・振替先）は止まる', () => {

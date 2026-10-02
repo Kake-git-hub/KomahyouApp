@@ -267,8 +267,12 @@ describe('機能フラグ templateDiffApply（Q33-2・条件 26）', () => {
     // 保存前の自動バックアップは差分反映でも呼ぶ（Q32-2）
     const byDiff = sliceBody(BOARD_TSX, 'const handleSaveRegularLessonTemplateByDiff = useCallback(', 'const handleSaveRegularLessonTemplate = useCallback(')
     expect(byDiff).toContain('void onPreTemplateSaveBackup()')
-    // 在庫台帳・希望回数補正は差分反映で書き換えない（publish は現在値の複製だけ・INV-06 拡張）
-    expect(byDiff).not.toMatch(/setManualMakeupAdjustments|setManualLectureStockCounts|setManualLectureStockOrigins|setScheduleCountAdjustments|setSuppressedMakeupOrigins|filterTemplateOverwriteHolidayDates/)
+    // 在庫台帳は差分反映で書き換えない（publish は現在値の複製だけ・INV-06 拡張）。希望回数補正は Q35-8（2026-10-02・オーナー決定）の −1 だけ積む
+    // （クリアはしない＝Q10。積み方は単発削除と同じ resolveDeletedStudentCountAccounting・対象は差分反映の wholeDayTransferCountAdjustments だけ）。
+    expect(byDiff).not.toMatch(/setManualMakeupAdjustments|setManualLectureStockCounts|setManualLectureStockOrigins|setSuppressedMakeupOrigins|filterTemplateOverwriteHolidayDates/)
+    expect(byDiff.match(/setScheduleCountAdjustments\(/g)).toHaveLength(1)
+    expect(byDiff).toContain('for (const target of plan.diff.wholeDayTransferCountAdjustments) {')
+    expect(byDiff).not.toContain('setScheduleCountAdjustments([])')
   })
 
   it('確認文の件数（試し実行）は保存本体と同じ計画関数から出す（Q32-1）', () => {

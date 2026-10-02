@@ -614,10 +614,12 @@ export type TemplateDiffApplySummary = {
    * テンプレの生徒を変えなかったとき（抑止で元から居ない）と同じ扱いにするため、重複（Q21-11）とは別に数える。
    */
   wholeDayTransferSkippedStudents: number
+  /** そのうち希望回数を −1 する生徒（同じ日の実配置に同じ生徒×科目が残らない・Q35-8・オーナー決定 2026-10-02「盤面の回数と同じ思想」）。 */
+  wholeDayTransferCountAdjusted: number
 }
 
 export function createEmptyTemplateDiffApplySummary(): TemplateDiffApplySummary {
-  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0 }
+  return { replaced: 0, kept: 0, adopted: 0, pending: 0, tombstoneCleared: 0, collapsedOnCreate: 0, qrTeacherKept: 0, deletedTeacherDeskFilled: 0, skippedDuplicateStudents: 0, seatMerged: 0, wholeDayTransferSkippedStudents: 0, wholeDayTransferCountAdjusted: 0 }
 }
 
 export type ComputeTemplateDiffApplyParams = {
@@ -638,6 +640,12 @@ export type ComputeTemplateDiffApplyResult = {
   summary: TemplateDiffApplySummary
   /** Q21-11（重複）と Q35（丸ごと振替した日）で上段に置かなかった生徒の通常授業の抑止キー（保存時に抑止へ足す）。 */
   addedSuppressedRegularLessonOccurrences: string[]
+  /**
+   * Q35 で置かなかった生徒のうち、希望回数を −1 する生徒×日付（Q35-8・オーナー決定 2026-10-02）。判定は「既存を採用」と同じ
+   * resolveAdoptExistingCountAdjustments（保存後の同じ日の実配置に同じ生徒×科目が生きていなければ −1）。保存が
+   * resolveDeletedStudentCountAccounting（単発削除と同じ）で積む。この関数は台帳を触らない。
+   */
+  wholeDayTransferCountAdjustments: Array<{ student: StudentEntry; dateKey: string }>
 }
 
 type DeskDecision =
@@ -781,6 +789,7 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
   const nextPendingDesks: TemplatePendingDeskMap = { ...params.pendingDesks }
   const addedSuppressed = new Set<string>()
   const existingSuppressed = new Set(params.suppressedRegularLessonOccurrences)
+  const wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string }> = []
   const templateById = new Map(params.templateCells.map((entry) => [entry.applied.id, entry]))
   const templateByDateSlot = new Map(params.templateCells.map((entry) => [buildDateSlotKey(entry.applied), entry]))
 
@@ -803,15 +812,26 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
         createdAt: params.createdAt,
         summary,
         addedSuppressed,
+        wholeDayTransferSkipped,
       })
     })
   })
+
+  // Q35-8: 置かなかった生徒の希望回数（日ごとに「既存を採用」と同じ判定）。
+  const skippedDates = [...new Set(wholeDayTransferSkipped.map((item) => item.dateKey))]
+  const wholeDayTransferCountAdjustments = skippedDates.flatMap((dateKey) => resolveAdoptExistingCountAdjustments({
+    withdrawnTemplateStudents: wholeDayTransferSkipped.filter((item) => item.dateKey === dateKey).map((item) => item.student),
+    dateKey,
+    placementsAfterAdoption: nextWeeks.flat(),
+  }))
+  summary.wholeDayTransferCountAdjusted = wholeDayTransferCountAdjustments.length
 
   return {
     nextWeeks,
     nextPendingDesks,
     summary,
     addedSuppressedRegularLessonOccurrences: [...addedSuppressed],
+    wholeDayTransferCountAdjustments,
   }
 }
 
@@ -826,6 +846,7 @@ function applyTemplateDiffToCell(context: {
   createdAt: string
   summary: TemplateDiffApplySummary
   addedSuppressed: Set<string>
+  wholeDayTransferSkipped: Array<{ student: StudentEntry; dateKey: string }>
 }): SlotCell {
   const { cell, templateCell, summary } = context
   // Q21-6：休日のコマはテンプレ机を「空」とみなす。
@@ -895,6 +916,7 @@ function applyTemplateDiffToCell(context: {
       const filtered = filterTemplateDeskStudents(templateDesk, liveStudents(templateDesk.lesson), { stripScaffoldTeacher: true })
       for (const student of filtered.removed) {
         summary.wholeDayTransferSkippedStudents += 1
+        context.wholeDayTransferSkipped.push({ student, dateKey: cell.dateKey })
         const key = buildTemplateOccurrenceKey(student, cell.dateKey, cell.slotNumber)
         if (!context.existingSuppressed.has(key)) context.addedSuppressed.add(key)
       }
@@ -1176,7 +1198,7 @@ export function buildTemplateDiffConfirmMessage(effectiveStartDate: string, summ
     `${summary.replaced}机を置き換え、${summary.pending}机が保留（緑）になります。`,
     `そのまま残す${summary.kept}机・印を外して採用${summary.adopted}机。`,
     ...(summary.seatMerged > 0 ? [`テンプレの空いた席に既存の生徒を残して 1 行にする${summary.seatMerged}机。`] : []),
-    ...(summary.wholeDayTransferSkippedStudents > 0 ? [`丸ごと振替した日はテンプレの生徒を置かず振替を優先${summary.wholeDayTransferSkippedStudents}名。`] : []),
+    ...(summary.wholeDayTransferSkippedStudents > 0 ? [`丸ごと振替した日はテンプレの生徒を置かず振替を優先${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`] : []),
     '',
     '振替・講習・メモ・出欠の記録は消えません。保留になった机は、あとで机ごとに「テンプレを採用」「既存を採用」で片づけます。',
     '',
@@ -1194,7 +1216,7 @@ export function buildTemplateDiffSavedMessage(effectiveStartDate: string, summar
   if (summary.qrTeacherKept > 0) parts.push(`QR 自動割振りの講師を残した机: ${summary.qrTeacherKept}机。`)
   if (summary.deletedTeacherDeskFilled > 0) parts.push(`講師を削除した机にテンプレの生徒を置いた机: ${summary.deletedTeacherDeskFilled}机。`)
   if (summary.skippedDuplicateStudents > 0) parts.push(`同じコマの別の机に居るため上段に置かなかった生徒: ${summary.skippedDuplicateStudents}名。`)
-  if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名。`)
+  if (summary.wholeDayTransferSkippedStudents > 0) parts.push(`丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: ${summary.wholeDayTransferSkippedStudents}名（希望回数 −1: ${summary.wholeDayTransferCountAdjusted}名）。`)
   if (summary.tombstoneCleared > 0) parts.push(`講師の削除記録だけの空き机 ${summary.tombstoneCleared}机は記録を外しました。`)
   return parts.join('')
 }

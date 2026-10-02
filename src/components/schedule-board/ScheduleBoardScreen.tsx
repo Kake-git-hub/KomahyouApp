@@ -14,7 +14,7 @@ import { bumpMemCounter } from '../../utils/memoryDiagnostics'
 // 操作ログ(在庫が減る・記録が消える操作の監査記録)。詳細は src/utils/operationLog.ts。
 import { recordOperationEvent } from '../../utils/operationLog'
 import { recordOperationTrace, summarizeBoardCommitForTrace, summarizeWeeksDiff } from '../../utils/operationTrace'
-import { BoardGrid, getStudentStatusLabel } from './BoardGrid'
+import { BoardGrid } from './BoardGrid'
 import { BoardToolbar } from './BoardToolbar'
 import { CursorFollowPreview } from './CursorFollowPreview'
 import {
@@ -42,9 +42,11 @@ import {
   countTemplatePendingDesksOnBoard,
   describeTemplatePendingCollapseFailure,
   findTemplatePendingDeskEntry,
+  isTemplatePendingSeatLinked,
   removeTemplatePendingLowerMemo,
   removeTemplatePendingLowerStudents,
   resolveTemplatePendingDateBlockReason,
+  resolveTemplatePendingBandSeat,
   resolveTemplatePendingLandingBlock,
   settleTemplatePendingDesk,
   settleTemplatePendingDesksAfterCommit,
@@ -6277,7 +6279,7 @@ export function computePendingLowerStudentMove(params: {
   const targetViewDesk = targetViewCell?.desks[params.deskIndex]
   if (!targetViewCell || !targetViewDesk) return { status: 'cancelled', message: '移動先の机が見つかりませんでした。' }
   if (!targetViewCell.isOpenDay) return { status: 'blocked', message: TEMPLATE_PENDING_MESSAGES.closedCell }
-  const landingBlock = resolveTemplatePendingLandingBlock(params.templatePendingDesks, targetViewCell, params.deskIndex)
+  const landingBlock = resolveTemplatePendingLandingBlock(params.templatePendingDesks, targetViewCell, params.deskIndex, null, params.studentIndex)
   if (landingBlock) return { status: 'blocked', message: landingBlock }
   if (targetViewDesk.lesson?.studentSlots[params.studentIndex]) return { status: 'blocked', message: TEMPLATE_PENDING_MESSAGES.lowerMoveNeedsEmptySeat }
 
@@ -6832,7 +6834,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   // 描画・メニュー・ハンドラとも従来どおり（保留データの保存・往復だけはフラグに依らず続く＝Q33-3）。
   const activeTemplatePendingDesks = templateDiffApplyEnabled && hasTemplatePendingDesks(templatePendingDesks) ? templatePendingDesks : null
   // 保留の机のメニュー（下段の中身・採用ボタン）。deskId で持つ（机の並べ替えで index がずれても同じ机を指す）。
-  const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; x: number; y: number } | null>(null)
+  const [templatePendingDeskMenu, setTemplatePendingDeskMenu] = useState<{ cellId: string; deskId: string; lowerIndex: number; x: number; y: number } | null>(null)
   const templatePendingDeskMenuRef = useRef<HTMLDivElement | null>(null)
   const templatePendingDeskMenuSize = usePopoverMeasuredSize(templatePendingDeskMenuRef, templatePendingDeskMenu)
   // 下段の生徒の「移動」で移動先を待っている状態（次の生徒セルのクリックが移動先）。
@@ -7028,7 +7030,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   // テンプレ保存（差分反映＋保留・機能フラグ templateDiffApply ON の教室だけ・Issue #72）。
   // 反映日以降の机ごとに突き合わせ（印の無い机だけ置き換え・印のある机は残す／採用／保留）、講師はテンプレに揃える。
-  // 在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）・希望回数補正・抑止は触らない（Q21-11 の抑止の追加だけ）。
+  // 在庫台帳（manualMakeupAdjustments / manualLectureStockCounts 等）は触らない。抑止は Q21-11 / Q35 の追加だけ、希望回数は Q35-8 の −1 だけ。
   const handleSaveRegularLessonTemplateByDiff = useCallback((template: RegularLessonTemplate) => {
     // テンプレ保存前にバックアップを保存（非同期、完了を待たない）。旧方式と同じ（Q32-2）。
     if (onPreTemplateSaveBackup) {
@@ -7042,11 +7044,20 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const nextSuppressedRegularLessonOccurrences = addedSuppressed.length > 0
       ? [...suppressedRegularLessonOccurrences, ...addedSuppressed]
       : suppressedRegularLessonOccurrences
+    // Q35-8（オーナー決定 2026-10-02「希望回数も補正して＝盤面の回数と同じ思想」）: 丸ごと振替した日に置かなかった生徒は、
+    // 同じ日の実配置に同じ生徒×科目が残らなければ単発削除と同じ −1（判定は差分反映が「既存を採用」と同じ関数で済ませている）。
+    let nextScheduleCountAdjustments = scheduleCountAdjustments
+    for (const target of plan.diff.wholeDayTransferCountAdjustments) {
+      nextScheduleCountAdjustments = resolveDeletedStudentCountAccounting(nextScheduleCountAdjustments, target.student, target.dateKey).nextAdjustments
+    }
     const nextWeeks = plan.diff.nextWeeks
     setWeeks(nextWeeks)
     setTemplatePendingDesks(plan.diff.nextPendingDesks)
     if (nextSuppressedRegularLessonOccurrences !== suppressedRegularLessonOccurrences) {
       setSuppressedRegularLessonOccurrences(nextSuppressedRegularLessonOccurrences)
+    }
+    if (nextScheduleCountAdjustments !== scheduleCountAdjustments) {
+      setScheduleCountAdjustments(cloneScheduleCountAdjustments(nextScheduleCountAdjustments))
     }
     recordOperationTrace('board-rebuild', `通常授業テンプレ保存・差分反映: ${summarizeWeeksDiff(weeks, nextWeeks) || '机の変化なし'}`)
     committedBoardChangeVersionRef.current += 1
@@ -7056,7 +7067,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       selectedCellId,
       selectedDeskIndex,
       suppressedRegularLessonOccurrences: [...nextSuppressedRegularLessonOccurrences],
-      scheduleCountAdjustments: cloneScheduleCountAdjustments(scheduleCountAdjustments),
+      scheduleCountAdjustments: cloneScheduleCountAdjustments(nextScheduleCountAdjustments),
       manualMakeupAdjustments: cloneOriginMap(manualMakeupAdjustments),
       suppressedMakeupOrigins: cloneOriginMap(suppressedMakeupOrigins),
       fallbackMakeupStudents: { ...fallbackMakeupStudents },
@@ -9233,7 +9244,11 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
   }, [cells, studentMenu])
 
   // spec-template-behavior Q26-2・Q27（第 1 段 (B)）: 生徒メニューの対象が保留（2 行）の机の上段か（フラグ OFF なら常に false）。
-  const menuStudentOnTemplatePendingDesk = Boolean(activeTemplatePendingDesks && menuStudent && findTemplatePendingDeskEntry(activeTemplatePendingDesks, menuStudent.cell.id, menuStudent.desk.id))
+  // 席ごと（オーナー決定 2026-10-02・Q34-12）: 保留に関わる席（下段がある・上段の生徒が下段と同じ生徒）の上段だけ制限する。
+  const menuStudentOnTemplatePendingDesk = Boolean(activeTemplatePendingDesks && menuStudent && studentMenu && (() => {
+    const found = findTemplatePendingDeskEntry(activeTemplatePendingDesks, menuStudent.cell.id, menuStudent.desk.id)
+    return found ? isTemplatePendingSeatLinked(menuStudent.desk, found.entry.lower, studentMenu.studentIndex) : false
+  })())
   const emptyMenuVariant = resolveEmptySeatMenuVariant(emptyMenuContext?.statusEntry?.status, emptyMenuContext?.cell.isOpenDay ?? true)
   const displayRecordClearButton = resolveDisplayRecordClearButton(emptyMenuContext?.statusEntry?.status, transferSourceRestDisplayEnabled)
 
@@ -11543,6 +11558,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
         cells.find((cell) => cell.id === cellId),
         deskIndex,
         sourceCell && sourceDesk ? buildTemplatePendingDeskKey(sourceCell.id, sourceDesk.id) : null,
+        studentIndex,
       )
       if (landingBlock) {
         setStatusMessage(landingBlock)
@@ -11666,7 +11682,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     }
     // spec-template-behavior Q26-5（第 1 段 (B)・フラグ ON の教室だけ）: 保留（2 行）の机への着地は不可。
     const templatePendingLandingBlock = activeTemplatePendingDesks
-      ? resolveTemplatePendingLandingBlock(activeTemplatePendingDesks, availabilityCell, resolvedSeat.deskIndex)
+      ? resolveTemplatePendingLandingBlock(activeTemplatePendingDesks, availabilityCell, resolvedSeat.deskIndex, null, resolvedSeat.studentIndex)
       : null
     if (templatePendingLandingBlock) {
       return { ok: false, message: templatePendingLandingBlock }
@@ -11810,6 +11826,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return findTemplatePendingDeskEntry(activeTemplatePendingDesks, cellId, cell?.desks[deskIndex]?.id)
   }
 
+  // 席ごと（オーナー決定 2026-10-02・Q34-12）: その席が保留に関わる（下段がある・上段の生徒が下段と同じ生徒）ときだけ保留の制限を当てる。
+  // 関わらない席は 1 行の席と同じ（出席・空席メニュー・着地）。講師欄のロックは机単位（resolveTemplatePendingDeskAt）のまま。
+  const resolveTemplatePendingSeatAt = (cellId: string, deskIndex: number, seatIndex: number) => {
+    const found = resolveTemplatePendingDeskAt(cellId, deskIndex)
+    if (!found) return null
+    const desk = cells.find((item) => item.id === cellId)?.desks[deskIndex]
+    return desk && isTemplatePendingSeatLinked(desk, found.entry.lower, seatIndex) ? found : null
+  }
+
   const templatePendingDeskMenuContext = useMemo(() => {
     if (!templatePendingDeskMenu || !activeTemplatePendingDesks) return null
     const found = findTemplatePendingDeskEntry(activeTemplatePendingDesks, templatePendingDeskMenu.cellId, templatePendingDeskMenu.deskId)
@@ -11819,29 +11844,32 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     return { ...found, cell, deskIndex, desk: cell.desks[deskIndex] }
   }, [activeTemplatePendingDesks, cells, templatePendingDeskMenu])
 
-  const openTemplatePendingDeskMenu = (cellId: string, deskIndex: number, x: number, y: number) => {
+  // lowerIndex＝対象の席（押した下段の席。上段メニューの「保留を片づける」からは下段のある最初の席）。
+  // メニューは 4 択（テンプレ授業を採用／手入力データを採用／手入力データを削除／手入力データを移動・確認リスト v1.5.576 その他欄）。
+  const openTemplatePendingDeskMenu = (cellId: string, deskIndex: number, x: number, y: number, lowerIndex?: number) => {
     const deskId = cells.find((item) => item.id === cellId)?.desks[deskIndex]?.id
-    if (!deskId || !resolveTemplatePendingDeskAt(cellId, deskIndex)) return false
+    const found = deskId ? resolveTemplatePendingDeskAt(cellId, deskIndex) : null
+    if (!deskId || !found) return false
     setStudentMenu(null)
     setTeacherMenu(null)
     setSelectedCellId(cellId)
     setSelectedDeskIndex(deskIndex)
-    setTemplatePendingDeskMenu({ cellId, deskId, x, y })
-    setStatusMessage('保留（2 行・緑）の机のメニューを開きました。下段の生徒を削除・移動するか、「テンプレを採用」「既存を採用」で片づけてください。')
+    setTemplatePendingDeskMenu({ cellId, deskId, lowerIndex: lowerIndex ?? resolveTemplatePendingBandSeat(found.entry.lower), x, y })
+    setStatusMessage('保留（2 行・緑）の席のメニューを開きました。「テンプレ授業を採用」「手入力データを採用」か、手入力データの削除・移動で片づけてください。')
     return true
   }
 
-  const handleTemplatePendingLowerClick = (cellId: string, deskIndex: number, _lowerIndex: number, x: number, y: number) => {
+  const handleTemplatePendingLowerClick = (cellId: string, deskIndex: number, lowerIndex: number, x: number, y: number) => {
     if (suppressNextStudentClickRef.current) {
       suppressNextStudentClickRef.current = false
       return
     }
     // 下段の移動先を待っている間に下段（＝2 行の机）を押したら、移動先として扱う（着地不可の理由が出る）。
     if (templatePendingLowerMove) {
-      executeTemplatePendingLowerMove(cellId, deskIndex, 0)
+      executeTemplatePendingLowerMove(cellId, deskIndex, lowerIndex)
       return
     }
-    openTemplatePendingDeskMenu(cellId, deskIndex, x, y)
+    openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex)
   }
 
   const buildTemplatePendingLedgers = (): TemplatePendingResolutionLedgers => ({
@@ -11861,12 +11889,12 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
     const names = (students: Array<StudentEntry | null> | undefined) => (students ?? []).filter((student): student is StudentEntry => Boolean(student)).map((student) => resolveBoardStudentDisplayName(student.name)).join('・')
     if (mode === 'adopt-template') {
       const lowerNames = names(context.entry.lower.lesson?.studentSlots)
-      return `テンプレを採用します。\n${lowerNames ? `下段（既存）の ${lowerNames} を削除します（振替・講習は未消化ストックへ戻し、手動追加は戻しません。通常授業の希望回数は変わりません）。\n` : ''}よろしいですか。`
+      return `テンプレ授業を採用します。\n${lowerNames ? `手入力データ（下段）の ${lowerNames} を削除します（振替・講習は未消化ストックへ戻し、手動追加は戻しません。通常授業の希望回数は変わりません）。\n` : ''}よろしいですか。`
     }
     if (mode === 'adopt-existing') {
       // 取り下げる生徒は解決本体と同じ関数で決める（上段に残した既存の生徒・関係のない席のテンプレ生徒は出さない・regression-reviewer M-2）。
       const upperNames = names(planTemplatePendingAdoptExisting({ cell: context.cell, desk: context.desk, entry: context.entry }).withdrawnStudents)
-      return `既存を採用します。\n${upperNames ? `上段（テンプレ）の ${upperNames} を取り下げ、下段を机へ戻します（同じ日に同じ科目の授業が残らない生徒は希望回数を1減らします）。\n` : '下段を机へ戻します。\n'}よろしいですか。`
+      return `手入力データを採用します。\n${upperNames ? `テンプレ授業の ${upperNames} を取り下げ、手入力データ（下段）を机へ戻します（同じ日に同じ科目の授業が残らない生徒は希望回数を1減らします）。\n` : '下段を机へ戻します。\n'}よろしいですか。`
     }
     if (mode === 'delete-lower-memo') return '下段のメモを削除します。よろしいですか。'
     const student = lowerIndex === undefined ? null : context.entry.lower.lesson?.studentSlots[lowerIndex] ?? null
@@ -12019,14 +12047,15 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       return
     }
     setTemplatePendingDeskMenu(null)
-    // Q26-5: 保留（2 行）の机の空席・出欠記録・メモの席は、在庫からの配置先にもメニューの入口にもしない（保留メニューを開く）。
+    // Q26-5 / Q26-9（席ごと・2026-10-02）: 保留に関わる席（下段がある席）の空席・出欠記録・メモは、在庫からの配置先にも
+    // メニューの入口にもしない（保留メニューを開く）。下段の無い席は 1 行の席と同じ（空欄メニュー・配置）。
     // 生徒を移動中なら executeMoveStudent 側の着地ガードが理由を出す（同じ机の中の席替えだけ通す）。
-    if (!hasStudent && !selectedStudentId && resolveTemplatePendingDeskAt(cellId, deskIndex)) {
+    if (!hasStudent && !selectedStudentId && resolveTemplatePendingSeatAt(cellId, deskIndex, studentIndex)) {
       if (selectedMakeupStockEntry || selectedLectureStockEntry) {
         setStatusMessage(TEMPLATE_PENDING_MESSAGES.landingBlocked)
         return
       }
-      openTemplatePendingDeskMenu(cellId, deskIndex, x, y)
+      openTemplatePendingDeskMenu(cellId, deskIndex, x, y, studentIndex)
       return
     }
     setSelectedCellId(cellId)
@@ -13508,8 +13537,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
 
   const handleMarkStudentAttended = () => {
     if (!studentMenu || !menuStudent) return
-    // spec-template-behavior Q27（第 1 段 (B)・フラグ ON の教室だけ）: 保留（2 行）の机では出席を付けない。
-    if (resolveTemplatePendingDeskAt(studentMenu.cellId, studentMenu.deskIndex)) {
+    // spec-template-behavior Q27（第 1 段 (B)・フラグ ON の教室だけ）: 保留に関わる席（席ごと・2026-10-02）では出席を付けない。
+    if (resolveTemplatePendingSeatAt(studentMenu.cellId, studentMenu.deskIndex, studentMenu.studentIndex)) {
       setStatusMessage(TEMPLATE_PENDING_MESSAGES.attendBlocked)
       return
     }
@@ -14176,16 +14205,7 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
       <main className={`page-main page-main-board-only${isTemplateMode ? ' template-mode-active' : ''}`} onPointerDownCapture={acquireBoardInteraction}>
         <section className="board-panel board-panel-unified">
           {isBoardInteractionLocked && !isTemplateMode ? <div className="interaction-lock-banner" data-testid="board-interaction-lock-banner">{boardInteractionLockMessage}</div> : null}
-          {isTemplateMode ? (
-            <div className="template-mode-header-bar">
-              <span className="template-mode-title">通常授業テンプレート編集</span>
-              <label className="basic-data-inline-field basic-data-inline-field-short">
-                <span>反映開始日</span>
-                <input type="date" value={templateEffectiveStartDate} onChange={(e) => setTemplateEffectiveStartDate(e.target.value)} data-testid="template-effective-start-date" />
-              </label>
-              <span className="selection-pill">机数 {classroomSettings.deskCount}</span>
-            </div>
-          ) : null}
+          {/* テンプレ編集の見出し行（題名・反映開始日・机数）は廃止し、反映開始日はツールバーのボタン行（エクセル取込の右）へ（オーナー指示 2026-10-02）。 */}
           <input ref={templateFileInputRef} type="file" accept=".xlsx,.xls" style={{ display: 'none' }} onChange={(e) => { void handleTemplateImportFile(e) }} />
           <BoardToolbar
             weekLabel={weekLabel}
@@ -14235,6 +14255,8 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
             onDismissUndoSnapshot={tbOnDismissUndoSnapshot}
             onTemplateExport={tbOnTemplateExport}
             onTemplateImport={tbOnTemplateImport}
+            templateEffectiveStartDate={isTemplateMode ? templateEffectiveStartDate : undefined}
+            onTemplateEffectiveStartDateChange={setTemplateEffectiveStartDate}
             onTemplateSaveOverwrite={tbOnTemplateSaveOverwrite}
             onTemplateClear={tbOnTemplateClear}
             onTemplateClose={tbOnTemplateClose}
@@ -14441,54 +14463,31 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
               data-testid="template-pending-desk-menu"
             >
               <div className="student-menu-head">
-                <strong>保留（2 行）の机</strong>
+                <strong>{`保留 ${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目 生徒${templatePendingDeskMenu.lowerIndex + 1}`}</strong>
                 <button type="button" className="student-menu-close" onClick={() => setTemplatePendingDeskMenu(null)}>x</button>
               </div>
-              <div className="student-menu-meta">
-                {`${templatePendingDeskMenuContext.cell.dateLabel} ${templatePendingDeskMenuContext.cell.slotLabel} / ${templatePendingDeskMenuContext.deskIndex + 1}机目`}
-              </div>
-              <div className="template-pending-desk-menu-row-label">上段（実配置：テンプレ＋空いた席に残した既存）</div>
-              <div className="template-pending-desk-menu-items">
-                {(templatePendingDeskMenuContext.desk.lesson?.studentSlots ?? []).filter(Boolean).length === 0
-                  ? <span className="student-menu-help-text">生徒なし</span>
-                  : (templatePendingDeskMenuContext.desk.lesson?.studentSlots ?? []).map((student, index) => (student ? (
-                    <span key={`upper_${index}`} className="template-pending-desk-menu-item">{`${resolveBoardStudentDisplayName(student.name)} ${student.subject} ${lessonTypeLabels[student.lessonType]}`}</span>
-                  ) : null))}
-              </div>
-              <div className="template-pending-desk-menu-row-label">下段（既存・保留中は盤面だけに表示）</div>
-              <div className="template-pending-desk-menu-items" data-testid="template-pending-lower-items">
-                {[0, 1].map((index) => {
-                  const lower = templatePendingDeskMenuContext.entry.lower
-                  const student = lower.lesson?.studentSlots[index] ?? null
-                  const memo = lower.memoSlots?.[index] ?? null
-                  const record = lower.statusSlots?.[index] ?? null
-                  return (
-                    <div key={`lower_${index}`} className="template-pending-desk-menu-lower">
-                      {student ? (
-                        <>
-                          <span className="template-pending-desk-menu-item">{`${resolveBoardStudentDisplayName(student.name)} ${student.subject} ${lessonTypeLabels[student.lessonType]}`}</span>
-                          <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-student', index)} data-testid={`template-pending-lower-delete-${index}`}>削除</button>
-                          <button type="button" className="menu-link-button" onClick={() => handleStartTemplatePendingLowerMove(index)} data-testid={`template-pending-lower-move-${index}`}>移動</button>
-                        </>
-                      ) : null}
-                      {memo && memo.trim() ? (
-                        <>
-                          <span className="template-pending-desk-menu-item">{`メモ: ${memo.split('\n')[0]}`}</span>
-                          <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-memo', index)} data-testid={`template-pending-lower-memo-delete-${index}`}>削除</button>
-                        </>
-                      ) : null}
-                      {record ? (
-                        <span className="template-pending-desk-menu-item muted">{`${resolveBoardStudentDisplayName(record.name)}（${getStudentStatusLabel(record.status, transferSourceRestDisplayEnabled)}・1 行に戻るとき${record.status === 'moved' || record.status === 'holiday' ? '捨てます' : '机へ戻します'}）`}</span>
-                      ) : null}
-                    </div>
-                  )
-                })}
-              </div>
-              <div className="student-menu-help-text">「テンプレを採用」は下段を捨てて上段で確定、「既存を採用」は上段を取り下げて下段を机へ戻します。どちらも「元に戻す」で戻せます。</div>
-              <div className="student-menu-button-row">
-                <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template')} data-testid="template-pending-adopt-template-button">テンプレを採用</button>
-                <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing')} data-testid="template-pending-adopt-existing-button">既存を採用</button>
-              </div>
+              {/* 4 択だけ（確認リスト v1.5.576 その他欄「このメニューがわかりにくい。まず選択肢として テンプレ授業を採用／手入力データを採用／
+                  手入力データを削除／手入力データを移動 だけを表示して」）。手入力データ＝押した席の下段（生徒・メモ）。確認文はボタンを押したあとに出す。 */}
+              {(() => {
+                const lower = templatePendingDeskMenuContext.entry.lower
+                const index = templatePendingDeskMenu.lowerIndex
+                const lowerStudent = lower.lesson?.studentSlots[index] ?? null
+                const lowerMemo = lower.memoSlots?.[index] ?? null
+                return (
+                  <div className="student-menu-section template-pending-desk-menu-actions" data-testid="template-pending-desk-menu-actions">
+                    <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-template')} data-testid="template-pending-adopt-template-button">テンプレ授業を採用</button>
+                    <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('adopt-existing')} data-testid="template-pending-adopt-existing-button">手入力データを採用</button>
+                    {lowerStudent ? (
+                      <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-student', index)} data-testid={`template-pending-lower-delete-${index}`}>手入力データを削除</button>
+                    ) : lowerMemo && lowerMemo.trim() ? (
+                      <button type="button" className="menu-link-button" onClick={() => handleResolveTemplatePendingDesk('delete-lower-memo', index)} data-testid={`template-pending-lower-memo-delete-${index}`}>手入力データを削除</button>
+                    ) : null}
+                    {lowerStudent ? (
+                      <button type="button" className="menu-link-button" onClick={() => handleStartTemplatePendingLowerMove(index)} data-testid={`template-pending-lower-move-${index}`}>手入力データを移動</button>
+                    ) : null}
+                  </div>
+                )
+              })()}
             </div>
           ) : null}
           {wholeDayTransferSourceDate && !isTemplateMode ? (
@@ -15062,14 +15061,14 @@ export function ScheduleBoardScreen({ classroomSettings, classroomName, classroo
                 // spec-template-behavior Q26-2・Q27（第 1 段 (B)・フラグ ON の教室だけ）: 保留（2 行）の机の上段は
                 // 休み・振無休・移動・削除だけ（出席は付けない）。操作の後に上段が空けば commitWeeks が 1 行へ戻す（Q28）。
                 <div className="student-menu-section" data-testid="template-pending-upper-menu">
-                  <div className="student-menu-help-text">保留（2 行・緑）の机の上段（実配置）です。出席は保留を片づけてから付けてください。</div>
+                  <div className="student-menu-help-text">保留（2 行・緑）の席の上段（テンプレ授業）です。出席は保留を片づけてから付けてください。</div>
                   <div className="student-menu-button-row">
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsent} data-testid="menu-absence-button">休み</button>
                     <button type="button" className="menu-link-button" onClick={handleMarkStudentAbsentNoMakeup} data-testid="menu-absence-no-makeup-button">振無休</button>
                   </div>
                   <button type="button" className="menu-link-button" onClick={handleStartMove} data-testid="menu-move-button">移動</button>
                   <button type="button" className="menu-link-button" onClick={handleDeleteStudent} data-testid="menu-delete-button">削除</button>
-                  <button type="button" className="menu-link-button subtle" onClick={() => openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y)} data-testid="template-pending-open-desk-menu-button">保留の机を片づける</button>
+                  <button type="button" className="menu-link-button subtle" onClick={() => openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y)} data-testid="template-pending-open-desk-menu-button">保留を片づける</button>
                 </div>
               ) : studentMenu?.mode === 'root' ? (
                 <div className="student-menu-section">
