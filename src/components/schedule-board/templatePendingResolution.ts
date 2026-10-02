@@ -206,7 +206,12 @@ export function hasTemplatePendingLowerSeatContent(lower: TemplatePendingLower, 
     || hasMemoText(lower.memoSlots?.[seatIndex])
 }
 
-/** 帯「保留 n」（狭い画面）を付ける席＝下段に中身のある最初の席。どの席にも無ければ 0（呼び出し側は描かない）。 */
+/** 1 席分の下段の中身の数（狭い画面の帯「保留 n」の n・席ごと）。 */
+export function countTemplatePendingLowerSeatItems(lower: TemplatePendingLower, seatIndex: number) {
+  return (lower.lesson?.studentSlots[seatIndex] ? 1 : 0) + (lower.statusSlots?.[seatIndex] ? 1 : 0) + (hasMemoText(lower.memoSlots?.[seatIndex]) ? 1 : 0)
+}
+
+/** 下段に中身のある最初の席（上段メニューの「保留を片づける」の既定の対象）。どの席にも無ければ 0。 */
 export function resolveTemplatePendingBandSeat(lower: TemplatePendingLower) {
   return hasTemplatePendingLowerSeatContent(lower, 0) || !hasTemplatePendingLowerSeatContent(lower, 1) ? 0 : 1
 }

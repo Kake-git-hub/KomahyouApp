@@ -92,7 +92,7 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
     expect(html).toContain('三浦')
     expect(html).toContain('振)')
     expect(html).toContain('持ち物')
-    expect(html).toContain('保留 2')
+    expect(html).toContain('保留 1')
     expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
     expect(html).toMatch(/class="sa-teacher[^"]*sa-pending/)
     // 保留でない机（机 2）には下段も緑も付かない
@@ -135,6 +135,10 @@ describe('盤面の 2 行表示（Q24・Q30 第 1 段・条件 5 の「背景が
       expect(seat2.querySelector('.sa-pending-lower')).not.toBeNull()
       expect(seat2.querySelector('.sa-pending-lower-band')?.textContent).toBe('保留 1')
       expect(container.querySelectorAll('.sa-pending-lower-band')).toHaveLength(1)
+      // 両方の席に下段があれば帯も席ごと（2 つ目の席の下段にも狭い画面で届く・regression-reviewer M-2）
+      const both = document.createElement('div')
+      both.innerHTML = renderGrid(PENDING)
+      expect(Array.from(both.querySelectorAll('.sa-pending-lower-band')).map((node) => node.textContent)).toEqual(['保留 1', '保留 1'])
       // 机の番号・講師欄は机単位の印（講師は保留中は変更不可）のまま緑
       expect(html).toMatch(/class="sa-seat-number[^"]*sa-pending/)
       expect(html).toMatch(/class="sa-teacher[^"]*sa-pending/)
@@ -310,7 +314,7 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     const lowerMove = sliceBody(BOARD_TSX, 'export function computePendingLowerStudentMove(', 'const result = computeStudentMove({')
     expect(lowerMove).toContain('resolveTemplatePendingLandingBlock(params.templatePendingDesks, targetViewCell, params.deskIndex, null, params.studentIndex)')
     const menuFlag = sliceBody(BOARD_TSX, 'const menuStudentOnTemplatePendingDesk = ', 'const emptyMenuVariant = ')
-    expect(menuFlag).toContain('isTemplatePendingSeatLinked(menuStudent.desk, found.entry.lower, studentMenu.studentIndex)')
+    expect(menuFlag).toContain('isTemplatePendingSeatLinked(menuStudent.desk, menuStudentPendingEntry.entry.lower, studentMenu.studentIndex)')
     // 講師ロックは机単位のまま
     const select = sliceBody(BOARD_TSX, 'const handleSelectDesk = (', 'const handleConfirmTeacher = () => {')
     expect(select).toContain('resolveTemplatePendingDeskAt(cellId, deskIndex)')
@@ -329,6 +333,9 @@ describe('2 行の机の制限（Q26-2・Q26-5・Q27・Q31・条件 18・28）',
     // 下段を押した席がメニューの対象（帯・下段のクリックは lowerIndex を渡す）
     const lowerClick = sliceBody(BOARD_TSX, 'const handleTemplatePendingLowerClick = (', 'const buildTemplatePendingLedgers = ')
     expect(lowerClick).toContain('openTemplatePendingDeskMenu(cellId, deskIndex, x, y, lowerIndex)')
+    // 上段メニューの「保留を片づける」は、押した席に下段があればその席を対象にする（regression-reviewer M-2）
+    expect(BOARD_TSX).toContain('const menuStudentPendingLowerSeat = menuStudentPendingEntry && studentMenu && hasTemplatePendingLowerSeatContent(menuStudentPendingEntry.entry.lower, studentMenu.studentIndex) ? studentMenu.studentIndex : null')
+    expect(BOARD_TSX).toContain('openTemplatePendingDeskMenu(studentMenu.cellId, studentMenu.deskIndex, studentMenu.x, studentMenu.y, menuStudentPendingLowerSeat ?? undefined)')
   })
 
   // オーナー指示 2026-10-02: テンプレ編集画面の見出し行（題名・反映開始日・机数）とボタン行を 1 行に。反映開始日はエクセル取込の右・机数は出さない。

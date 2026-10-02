@@ -818,9 +818,15 @@ export function computeTemplateDiffApply(params: ComputeTemplateDiffApplyParams)
   })
 
   // Q35-8: 置かなかった生徒の希望回数（日ごとに「既存を採用」と同じ判定）。
+  // 二重計上の防止（regression-reviewer M-1）: 同じ生徒×科目×日付の抑止キーが**別の時限**で保存前から積まれている生徒は、その日の分を
+  // 丸ごと振替の処分（−1 済み）か移送（振替として別日で行う）で精算済みなので −1 しない（時限だけ変えたテンプレで −2 にならない）。
+  const accountedOnDate = (student: StudentEntry, dateKey: string) => {
+    const prefix = `${student.managedStudentId ?? student.name}__${student.subject}__${dateKey}__`
+    return params.suppressedRegularLessonOccurrences.some((key) => key.startsWith(prefix))
+  }
   const skippedDates = [...new Set(wholeDayTransferSkipped.map((item) => item.dateKey))]
   const wholeDayTransferCountAdjustments = skippedDates.flatMap((dateKey) => resolveAdoptExistingCountAdjustments({
-    withdrawnTemplateStudents: wholeDayTransferSkipped.filter((item) => item.dateKey === dateKey).map((item) => item.student),
+    withdrawnTemplateStudents: wholeDayTransferSkipped.filter((item) => item.dateKey === dateKey && !accountedOnDate(item.student, dateKey)).map((item) => item.student),
     dateKey,
     placementsAfterAdoption: nextWeeks.flat(),
   }))

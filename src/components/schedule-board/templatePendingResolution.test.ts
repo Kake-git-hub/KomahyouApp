@@ -544,6 +544,33 @@ describe('下段の移動（Q26-3・Q26-5・INV-12）', () => {
     expect(balances(result.nextWeeks, newRows, result.nextTemplatePendingDesks, emptyLedgers())['sD__数'] ?? 0).toBe(before['sD__数'] ?? 0)
   })
 
+  // regression-reviewer H-1（2026-10-02・INV-02 / INV-13 / INV-06）: 席単位化で、下段の無い席（上段 [C, 空]・下段 [M, 空] の席 2）への
+  // 「手入力データを移動」が着地ガードを通るようになった。旧経路（下段を一時的に机の中身にして computeStudentMove → 元の机で上書き）では
+  // 移した生徒が盤面から消え、振替の残数が増えていた（修正前は落ちる）。
+  it('下段の生徒を同じ机の上段の空席へ移すと、上段のその席に入って 1 行に戻る（生徒は 1 か所・振替の残数は不変）', () => {
+    let week = buildWeek(OLD_ROWS)
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { id: `${desk.id}_makeup`, studentSlots: [entry('sM', { lessonType: 'makeup', makeupSourceDate: '2026-09-30', makeupSourceLabel: '9/30(水) 5限' }), null] } }))
+    const newRows = [row('r0', 't2', 'sC', '数'), row('r1', 't1', 'sB', '数'), row('r2', 't3')]
+    const diff = applyDiff(week, newRows)
+    const deskId = deskOf(diff.nextWeeks, 0).id
+    const key = buildTemplatePendingDeskKey(CELL_ID, deskId)
+    expect(diff.nextPendingDesks[key]?.lower.lesson?.studentSlots.map((item) => item?.managedStudentId ?? null)).toEqual(['sM', null])
+    const setup = { before: [week], diff, newRows, deskId, key }
+    const before = balances(diff.nextWeeks, newRows, diff.nextPendingDesks, emptyLedgers())
+    const result = move(setup, { deskIndex: 0, studentIndex: 1 })
+    if (result.status !== 'moved') throw new Error(result.message)
+    expect(liveIds(deskOf(result.nextWeeks, 0))).toEqual(['sC', 'sM'])
+    expect(deskOf(result.nextWeeks, 0).lesson?.studentSlots[1]?.lessonType).toBe('makeup')
+    expect(result.nextTemplatePendingDesks[key]).toBeUndefined()
+    expect(result.collapsed).toBe(true)
+    expect(result.message).toContain('同じ机の生徒2の席へ戻しました')
+    const liveCount = result.nextWeeks.flat().filter((cell) => cell.id === CELL_ID).flatMap((cell) => cell.desks.flatMap((desk) => desk.lesson?.studentSlots ?? [])).filter((student) => student?.managedStudentId === 'sM').length
+    expect(liveCount).toBe(1)
+    expect(balances(result.nextWeeks, newRows, result.nextTemplatePendingDesks, emptyLedgers())['sM__数'] ?? 0).toBe(before['sM__数'] ?? 0)
+    // 同じ机でも生徒のいる席（保留に関わる席）へは不可
+    expect(move(setup, { deskIndex: 0, studentIndex: 0 }).status).toBe('blocked')
+  })
+
   it('移動先が 2 行の机（上段の空席を含む）なら不可、生徒のいる席・同じコマに同じ生徒が生きる席も不可', () => {
     const setup = pendingWithMakeupLower()
     const toPending = move(setup, { deskIndex: 0, studentIndex: 1 })

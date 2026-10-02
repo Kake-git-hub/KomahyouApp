@@ -7,7 +7,7 @@ import type { LessonType, SlotCell, StudentStatusEntry, StudentStatusKind, Teach
 import { normalizeRegularLessonNote } from '../basic-data/regularLessonModel'
 import { resolveDisplayedSubjectForGrade } from '../../utils/studentGradeSubject'
 import { buildTemplatePendingDeskKey, type TemplatePendingDesk, type TemplatePendingDeskMap } from './templatePendingDesks'
-import { countTemplatePendingLowerItems, hasTemplatePendingLowerSeatContent, resolveTemplatePendingBandSeat } from './templatePendingResolution'
+import { countTemplatePendingLowerSeatItems, hasTemplatePendingLowerSeatContent } from './templatePendingResolution'
 
 // 生徒名の赤文字ハイライト(sa-student-name-warning)は「出席不可コマに配置された生徒」(オーナー指示 2026-07-02)
 // と「講師未選択の机に配置された生徒」(=講師なし・オーナー指示 2026-07-17)の2条件に限定する。
@@ -481,7 +481,7 @@ function BoardGridComponent({
   // 保留（2 行）の机の下段（既存）1 席分。上段（机の実配置）と同じ構造・同じクラス（名前行＋学年科目行）で描き、押すと保留の机のメニューを開く
   // （オーナー指示 2026-10-02・確認リスト v1.5.573 その他欄「保留の 2 行目も文字サイズや表示方法はテンプレと同じテキストスタイル、サイズにして」）。
   // ★席ごと（オーナー指示 2026-10-02・tp-19 要改善「生徒 1 と生徒 2 の保留状態がリンクしている」）: 下段に中身（生徒・メモ・記録）の無い席は
-  //   null を返し、その席は緑にもならず下段も描かない（テンプレがそのまま入った 1 行の席）。帯「保留 n」は下段のある最初の席に付ける。
+  //   null を返し、その席は緑にもならず下段も描かない（テンプレがそのまま入った 1 行の席）。帯「保留 n」は下段のある席ごとに付ける（n はその席の中身の数）。
   // ★.sa-student-inner の外に置く（盤面の文字サイズ合わせは .sa-student-inner を起点に同じ席の下段を揃える。PDF はクローンから下段を外す）。
   const renderTemplatePendingLower = (cell: SlotCell, deskIndex: number, studentIndex: number, pending: TemplatePendingDesk) => {
     const lower = pending.lower
@@ -549,7 +549,8 @@ function BoardGridComponent({
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="sa-pending-lower-inner">{content}</div>
-        {studentIndex === resolveTemplatePendingBandSeat(lower) ? <span className="sa-pending-lower-band">保留 {countTemplatePendingLowerItems(lower)}</span> : null}
+        {/* 狭い画面の帯は下段のある席ごとに出す（2 つ目の席の下段にも届くように・regression-reviewer M-2）。n はその席の中身の数。 */}
+        <span className="sa-pending-lower-band">保留 {countTemplatePendingLowerSeatItems(lower, studentIndex)}</span>
       </div>
     )
   }

@@ -1143,6 +1143,25 @@ describe('Q35: 丸ごと振替した日（日単位抑止のある日）はテ�
     expect(buildTemplateDiffSavedMessage(EFFECTIVE, result.summary)).toContain('丸ごと振替した日のためテンプレの生徒を置かず振替を優先した生徒: 1名（希望回数 −1: 1名）')
   })
 
+  // regression-reviewer M-1（2026-10-02・INV-05）: 丸ごと振替の振替先で処分済み（−1 済み・抑止キー A__数__D'__5）の A の時限だけを 5 → 4 限に変えると、
+  // 新しいキー A__数__D'__4 は抑止されていないので Q35 が A を外す。ここで −1 すると合計 −2 になるため、同じ生徒×科目×日付の抑止キーが
+  // 別の時限で既にある生徒は −1 しない（その日の分は処分か移送で精算済み）。
+  it('Q35-8: 時限だけ変えたテンプレ（同じ生徒×科目×日付の抑止キーが別の時限に既にある）では希望回数を −1 しない（二重計上の防止）', () => {
+    // 振替先の姿: A は Phase A の処分で −1 済み（抑止キー A__数__D'__5）で、その日に A は生きていない（移送されたのは B の振替だけ）。
+    let week = transferredWeek()
+    week = mutateDesk(week, 0, (desk) => ({ ...desk, lesson: { ...desk.lesson!, studentSlots: [entry('sB', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE }), null] } }))
+    // 4 限のコマも空にしておく（丸ごと振替は全コマを移す）
+    const slot4Cell = `${DATE}_4`
+    const week4 = week.map((cell) => (cell.id !== slot4Cell ? cell : { ...cell, desks: cell.desks.map((desk) => ({ id: desk.id, teacher: '' })) }))
+    const rowsSlot4 = [row('r0', 't1', 'sA', '数', '', '', 3, 4), row('r1', 't2', 'sB', '数'), row('r2', 't3')]
+    const result = applyDiff({ week: week4, newRows: rowsSlot4, suppressed: wholeDaySuppressed })
+    expect(countLiveInCell(result.nextWeeks, 'sA')).toBe(0)
+    expect(result.summary.wholeDayTransferSkippedStudents).toBe(1)
+    expect(result.addedSuppressedRegularLessonOccurrences).toEqual([buildManagedOccurrenceKey(entry('sA'), DATE, 4)])
+    expect(result.wholeDayTransferCountAdjustments).toEqual([])
+    expect(result.summary.wholeDayTransferCountAdjusted).toBe(0)
+  })
+
   it('Q35-8: 置かなかった生徒が同じ日の別の机に同じ科目で生きている（振替など）なら希望回数は補正しない（「既存を採用」と同じ判定）', () => {
     let week = transferredWeek()
     week = mutateDesk(week, 1, (desk) => ({ id: desk.id, teacher: '佐藤', manualTeacher: true, teacherAssignmentSource: 'manual', lesson: { id: `${desk.id}_hand`, studentSlots: [entry('sD', { lessonType: 'makeup', makeupSourceDate: SOURCE_DATE }), null] } }))
